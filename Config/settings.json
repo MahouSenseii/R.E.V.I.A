@@ -1,0 +1,11 @@
+{
+  "activeProfile": "revia",
+  "llm": {
+    "backend": "LLamaCpp",
+    "host" : "127.0.0.1",
+    "port" : 8080,
+    "modelName" : "local-model",
+    "temperature": 0.8,
+    "maxTokens": 512
+  }
+}
