@@ -1,0 +1,20 @@
+# Build output
+cmake-build-*/
+build/
+out/
+*.exe
+*.obj
+*.o
+
+# Runtime data
+Logs/
+Memory/
+
+# IDE
+.idea/workspace.xml
+.vs/
+.vscode/
+
+# OS
+.DS_Store
+Thumbs.db

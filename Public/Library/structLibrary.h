@@ -31,6 +31,9 @@ struct aiProfile
     std::string displayName = "Assistant";
     std::string systemPrompt = "You are a helpful local AI assistant.";
 
+    // H3: when false, user input is not written to long-term memory.
+    bool bMemoryEnabled = true;
+
     bool bHasTemperatureOverride = false;
     bool bHasMaxTokensOverride = false;
 

@@ -30,7 +30,7 @@ const
         return output;
     }
 
-    return llm.GenerateResponse(message, context);
+    return llm.GenerateResponse(context);
 }
 
 bool messageRouter::IsLLMAvailable() const

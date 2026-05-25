@@ -5,8 +5,6 @@
 
 #include "LLM/llmService.h"
 
-
-
 class messageRouter
 {
 public:
@@ -17,9 +15,9 @@ public:
     bool IsLLMAvailable() const;
     healthOutput CheckLLMHealth() const;
     void ApplyLLMSettings(const llmSettings& settings, const aiProfile& profile);
+    bool IsExitCommand(const std::string &input) const;
 
 private:
 
-    bool IsExitCommand(const std::string &input) const;
     llmService llm;
 };

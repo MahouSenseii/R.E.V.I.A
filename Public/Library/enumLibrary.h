@@ -23,11 +23,11 @@ enum class llmBackendType
     None,
     Placeholder,
     LLamaCpp,
+    // Planned backends, not yet implemented:
     Ollama,
     OpenAI,
     LMStudio,
-    CustomHttp,
-    LlamaCpp
+    CustomHttp
 };
 
 enum class systemStatus

@@ -9,10 +9,27 @@ const std::vector<conversationMessage>& context) const
 {
     nlohmann::json messages = nlohmann::json::array();
 
-    messages.push_back({
-        {"role", "system"},
-        {"content", profile.systemPrompt}
-    });
+    std::string systemContent = profile.systemPrompt;
+
+    const std::string memoryBlock = memory.BuildPromptBlock();
+
+    if (!memoryBlock.empty())
+    {
+        if (!systemContent.empty())
+        {
+            systemContent += "\n\n";
+        }
+
+        systemContent += memoryBlock;
+    }
+
+    if (!systemContent.empty())
+    {
+        messages.push_back({
+            {"role", "system"},
+            {"content", systemContent}
+        });
+    }
 
     for (const conversationMessage& message : context)
     {

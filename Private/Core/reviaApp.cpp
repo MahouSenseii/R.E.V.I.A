@@ -16,8 +16,6 @@ void reviaApp::Run()
     appLogger.Log("Starting core...");
     appLogger.Log("Type '/exit' to quit.");
 
-
-
     if (!config.LoadSettings(settings))
     {
         appLogger.Error("Failed to load settings. Exiting application.");
@@ -45,12 +43,6 @@ void reviaApp::Run()
 
     string input;
 
-    if (!appLogger.Check(bIsRunning, logSeverity::Error, "App failed to enter running state."))
-    {
-        return;
-    }
-
-
     while (bIsRunning)
     {
         cout << "You: ";
@@ -62,6 +54,12 @@ void reviaApp::Run()
             continue;
         }
 
+        if (router.IsExitCommand(input))
+        {
+            cout << "Exiting R.E.V.I.A...\n";
+            bIsRunning = false;
+            continue;
+        }
 
         const commandOutput commandResult = commands.HandleCommand(input, settings, profile, config, router);
 
@@ -85,7 +83,7 @@ void reviaApp::Run()
             continue;
         }
 
-        if (memory.ShouldRemember(input))
+        if (profile.bMemoryEnabled && memory.ShouldRemember(input))
         {
             if (!memory.SaveMemory(memoryType::ImportantMemory, "User", input))
             {
@@ -114,40 +112,4 @@ void reviaApp::Run()
     }
 
     appLogger.Log("Shutting down...");
-}
-
-void reviaApp::PrintStatus() const
-{
-    cout << "\n========== R.E.V.I.A Status ==========\n";
-
-    cout << "Active Profile: " << settings.activeProfile << "\n";
-    cout << "Profile Name:   " << profile.displayName << "\n";
-    cout << "Profile ID:     " << profile.id << "\n";
-
-    cout << "\nLLM Settings\n";
-    cout << "Backend:        " << settings.llm.backend << "\n";
-    cout << "Host:           " << settings.llm.host << "\n";
-    cout << "Port:           " << settings.llm.port << "\n";
-    cout << "Model Name:     " << settings.llm.modelName << "\n";
-    cout << "Temperature:    " << settings.llm.temperature << "\n";
-    cout << "Max Tokens:     " << settings.llm.maxTokens << "\n";
-
-    cout << "\nProfile Overrides\n";
-    cout << "Temperature Override: "
-         << (profile.bHasTemperatureOverride ? "true" : "false") << "\n";
-
-    cout << "Max Tokens Override:  "
-         << (profile.bHasMaxTokensOverride ? "true" : "false") << "\n";
-
-    if (profile.bHasTemperatureOverride)
-    {
-        cout << "Profile Temperature:  " << profile.temperature << "\n";
-    }
-
-    if (profile.bHasMaxTokensOverride)
-    {
-        cout << "Profile Max Tokens:   " << profile.maxTokens << "\n";
-    }
-
-    cout << "======================================\n\n";
 }

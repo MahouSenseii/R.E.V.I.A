@@ -31,32 +31,21 @@ void llamaCppService::ApplySettings(const llmSettings& settings, const aiProfile
 
 bool llamaCppService::IsServerAvailable() const
 {
-    httplib::Client client(host, port);
-    client.set_connection_timeout(3);
-    client.set_read_timeout(5);
-
-    const auto result = client.Get("/v1/models");
-
-    if (!result)
-    {
-        return false;
-    }
-
-    return result->status == 200;
+    // L9: single source of truth for the connectivity probe.
+    return CheckHealth().bIsAvailable;
 }
 
 responseOutput llamaCppService::GenerateResponse(
-    const std::string& prompt,
     const std::vector<conversationMessage>& context
 ) const
 {
     responseOutput output;
 
-    if (prompt.empty())
+    if (context.empty())
     {
         output.bSuccess = false;
         output.response = "I need something to respond to.";
-        output.reason = "Prompt was empty.";
+        output.reason = "Conversation context was empty.";
         output.bShouldSpeak = true;
         output.bShouldRemember = false;
 

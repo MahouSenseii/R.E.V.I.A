@@ -41,10 +41,13 @@ target_include_directories(R_E_V_I_A PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/Public"
 )
 
-target_compile_definitions(R_E_V_I_A PRIVATE
-        _WIN32_WINNT=0x0A00
-        WINVER=0x0A00
-)
+# L11: Windows-only definitions are no longer applied unconditionally.
+if(WIN32)
+    target_compile_definitions(R_E_V_I_A PRIVATE
+            _WIN32_WINNT=0x0A00
+            WINVER=0x0A00
+    )
+endif()
 
 target_link_libraries(R_E_V_I_A PRIVATE
         httplib::httplib

@@ -1,5 +1,7 @@
 #include "Core/memoryManager.h"
 
+#include <algorithm>
+#include <cctype>
 #include <filesystem>
 #include <fstream>
 #include <string>
@@ -32,6 +34,10 @@ bool memoryManager::SaveMemory(memoryType type, const string &speaker, const str
         case memoryType::System:
             path = debugPath;
             break;
+
+        default:
+
+            return false;
     }
 
     filesystem::create_directories(filesystem::path(path).parent_path());
@@ -48,30 +54,29 @@ bool memoryManager::SaveMemory(memoryType type, const string &speaker, const str
     return true;
 }
 
-bool memoryManager::ShouldRemember(const std::string &message) {
+bool memoryManager::ShouldRemember(const string &message) {
     if (message.empty())
     {
         return false;
     }
 
-    if (message.find("remember") != std::string::npos)
-    {
-        return true;
-    }
+    string lowered = message;
+    transform(lowered.begin(), lowered.end(), lowered.begin(),
+        [](unsigned char c) { return static_cast<char>(tolower(c)); });
 
-    if (message.find("my name is") != std::string::npos)
-    {
-        return true;
-    }
+    static const string triggers[] = {
+        "remember",
+        "my name is",
+        "i like",
+        "i don't like"
+    };
 
-    if (message.find("I like") != std::string::npos)
+    for (const string& trigger : triggers)
     {
-        return true;
-    }
-
-    if (message.find("I don't like") != std::string::npos)
-    {
-        return true;
+        if (lowered.find(trigger) != string::npos)
+        {
+            return true;
+        }
     }
 
     return false;

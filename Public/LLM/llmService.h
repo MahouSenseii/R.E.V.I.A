@@ -15,10 +15,10 @@ public:
     void ApplySettings(const llmSettings& settings, const aiProfile& profile);
     bool IsBackendAvailable() const;
     healthOutput CheckBackendHealth() const;
-    responseOutput GenerateResponse(const std::string &prompt, const std::vector<conversationMessage> &context) const;
+    responseOutput GenerateResponse(const std::vector<conversationMessage> &context) const;
 private:
-    responseOutput GeneratePlaceholderResponse(const std::string& prompt) const;
-    llmBackendType backendType = llmBackendType::LLamaCpp;
+    responseOutput GeneratePlaceholderResponse(const std::vector<conversationMessage>& context) const;
+    llmBackendType backendType = llmBackendType::None;
     llamaCppService llamaCpp;
-    bool bIsReady = true;
+    bool bIsReady = false;
 };

@@ -1,7 +1,7 @@
 #pragma once
 
-#include "commandManager.h"
-#include "configManager.h"
+#include "Core/commandManager.h"
+#include "Core/configManager.h"
 #include "Core/logger.h"
 #include "Core/memoryManager.h"
 #include "Core/messageRouter.h"
@@ -17,9 +17,6 @@ public:
     void Run();
 
 private:
-
-    // Later will move to a command manager but here now for testing
-    void PrintStatus() const;
 
     logger appLogger;
     memoryManager memory;

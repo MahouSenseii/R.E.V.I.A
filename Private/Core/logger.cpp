@@ -12,7 +12,7 @@ void logger::Log(const std::string &message) {
 }
 
 void logger::Warning(const std::string &reason, const std::source_location &location) {
-    cout <<"[Warning] "
+    cerr <<"[Warning] "
         << "File: " << location.file_name()
         << " Line: " << location.line()
         << " Function: " << location.function_name()
@@ -21,7 +21,7 @@ void logger::Warning(const std::string &reason, const std::source_location &loca
 }
 
 void logger::Error(const std::string &reason, const std::source_location &location) {
-    cout <<"[Error] "
+    cerr <<"[Error] "
     << "File: " << location.file_name()
     << " Line: " << location.line()
     << " Function: " << location.function_name()
@@ -45,5 +45,3 @@ bool logger::Check(bool bCondition, logSeverity severity, const std::string &rea
     }
     return true;
 }
-
-

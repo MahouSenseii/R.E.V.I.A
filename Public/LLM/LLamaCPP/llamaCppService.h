@@ -16,7 +16,7 @@ public:
     bool IsServerAvailable() const;
 
     healthOutput CheckHealth() const;
-    responseOutput GenerateResponse(const std::string& prompt, const std::vector<conversationMessage>& context) const;
+    responseOutput GenerateResponse(const std::vector<conversationMessage>& context) const;
 
 private:
     static responseOutput ParseResponseBody(const std::string& responseBody);

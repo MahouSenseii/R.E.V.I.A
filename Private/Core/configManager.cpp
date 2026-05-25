@@ -1,5 +1,6 @@
 #include "Core/configManager.h"
 
+#include <exception>
 #include <fstream>
 #include <nlohmann/json.hpp>
 
@@ -17,48 +18,57 @@ bool configManager::LoadSettings(appSettings& outSettings) const
 
     if (!file.is_open())
     {
-      return false;
-    }
-    json data;
-    file >> data;
-    if (data.contains("activeProfile"))
-    {
-      outSettings.activeProfile = data["activeProfile"].get<std::string>();
+        return false;
     }
 
-    if (data.contains("llm"))
+    try
     {
-        const json& llmData = data["llm"];
+        json data;
+        file >> data;
 
-        if (llmData.contains("backend"))
+        if (data.contains("activeProfile"))
         {
-            outSettings.llm.backend = llmData["backend"].get<std::string>();
+            outSettings.activeProfile = data["activeProfile"].get<std::string>();
         }
 
-        if (llmData.contains("host"))
+        if (data.contains("llm"))
         {
-            outSettings.llm.host = llmData["host"].get<std::string>();
-        }
+            const json& llmData = data["llm"];
 
-        if (llmData.contains("port"))
-        {
-            outSettings.llm.port = llmData["port"].get<int>();
-        }
+            if (llmData.contains("backend"))
+            {
+                outSettings.llm.backend = llmData["backend"].get<std::string>();
+            }
 
-        if (llmData.contains("modelName"))
-        {
-            outSettings.llm.modelName = llmData["modelName"].get<std::string>();
-        }
+            if (llmData.contains("host"))
+            {
+                outSettings.llm.host = llmData["host"].get<std::string>();
+            }
 
-        if (llmData.contains("temperature"))
-        {
-            outSettings.llm.temperature = llmData["temperature"].get<float>();
-        }
+            if (llmData.contains("port"))
+            {
+                outSettings.llm.port = llmData["port"].get<int>();
+            }
 
-        if (llmData.contains("maxTokens"))
-        {
-            outSettings.llm.maxTokens = llmData["maxTokens"].get<int>();
+            if (llmData.contains("modelName"))
+            {
+                outSettings.llm.modelName = llmData["modelName"].get<std::string>();
+            }
+
+            if (llmData.contains("temperature"))
+            {
+                outSettings.llm.temperature = llmData["temperature"].get<float>();
+            }
+
+            if (llmData.contains("maxTokens"))
+            {
+                outSettings.llm.maxTokens = llmData["maxTokens"].get<int>();
+            }
         }
+    }
+    catch (const std::exception&)
+    {
+        return false;
     }
 
     return true;
@@ -66,6 +76,16 @@ bool configManager::LoadSettings(appSettings& outSettings) const
 
 bool configManager::LoadProfile(const std::string& profileId, aiProfile& outProfile) const
 {
+    // M2: profileId comes from user input (/profile <name>). Reject anything
+    // that could escape the Config/Profiles directory.
+    if (profileId.empty() ||
+        profileId.find('/') != std::string::npos ||
+        profileId.find('\\') != std::string::npos ||
+        profileId.find("..") != std::string::npos)
+    {
+        return false;
+    }
+
     const std::string profileFile = profilePath + "/" + profileId + ".json";
 
     std::ifstream file(profileFile);
@@ -75,34 +95,49 @@ bool configManager::LoadProfile(const std::string& profileId, aiProfile& outProf
         return false;
     }
 
-    json data;
-    file >> data;
-
-    if (data.contains("id"))
+    // H1: Guard against malformed JSON / wrongly-typed values.
+    try
     {
-        outProfile.id = data["id"].get<std::string>();
+        json data;
+        file >> data;
+
+        if (data.contains("id"))
+        {
+            outProfile.id = data["id"].get<std::string>();
+        }
+
+        if (data.contains("displayName"))
+        {
+            outProfile.displayName = data["displayName"].get<std::string>();
+        }
+
+        if (data.contains("systemPrompt"))
+        {
+            outProfile.systemPrompt = data["systemPrompt"].get<std::string>();
+        }
+
+        // H3: memoryEnabled was previously ignored, so profiles that disable
+        // memory had no effect. Parse it into the profile.
+        if (data.contains("memoryEnabled"))
+        {
+            outProfile.bMemoryEnabled = data["memoryEnabled"].get<bool>();
+        }
+
+        if (data.contains("temperature"))
+        {
+            outProfile.temperature = data["temperature"].get<float>();
+            outProfile.bHasTemperatureOverride = true;
+        }
+
+        if (data.contains("maxTokens"))
+        {
+            outProfile.maxTokens = data["maxTokens"].get<int>();
+            outProfile.bHasMaxTokensOverride = true;
+        }
     }
-
-    if (data.contains("displayName"))
+    catch (const std::exception&)
     {
-        outProfile.displayName = data["displayName"].get<std::string>();
-    }
-
-    if (data.contains("systemPrompt"))
-    {
-        outProfile.systemPrompt = data["systemPrompt"].get<std::string>();
-    }
-
-    if (data.contains("temperature"))
-    {
-        outProfile.temperature = data["temperature"].get<float>();
-        outProfile.bHasTemperatureOverride = true;
-    }
-
-    if (data.contains("maxTokens"))
-    {
-        outProfile.maxTokens = data["maxTokens"].get<int>();
-        outProfile.bHasMaxTokensOverride = true;
+        return false;
     }
 
     return true;

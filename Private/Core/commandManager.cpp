@@ -35,9 +35,6 @@ commandOutput commandManager::HandleCommand(const std::string& input,appSettings
     {
         const healthOutput health = router.CheckLLMHealth();
 
-        commandOutput output;
-        output.bWasCommand = true;
-
         std::ostringstream stream;
         stream << "\n========== Backend Health ==========\n";
         stream << "Name:      " << health.name << "\n";
@@ -176,8 +173,6 @@ commandOutput commandManager::BuildStatusOutput(const appSettings &settings, con
 
     return output;
 }
-
-
 
 commandOutput commandManager::HandleProfileCommand(const std::string& input,appSettings& settings,aiProfile& profile,
     configManager& config,messageRouter& router) const

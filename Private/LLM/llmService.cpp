@@ -72,7 +72,7 @@ healthOutput llmService::CheckBackendHealth() const
     }
 }
 
-responseOutput llmService::GenerateResponse(const std::string& prompt,const std::vector<conversationMessage>& context) const
+responseOutput llmService::GenerateResponse(const std::vector<conversationMessage>& context) const
 {
     if (!bIsReady)
     {
@@ -89,10 +89,10 @@ responseOutput llmService::GenerateResponse(const std::string& prompt,const std:
     switch (backendType)
     {
         case llmBackendType::Placeholder:
-            return GeneratePlaceholderResponse(prompt);
+            return GeneratePlaceholderResponse(context);
 
         case llmBackendType::LLamaCpp:
-            return llamaCpp.GenerateResponse(prompt, context);
+            return llamaCpp.GenerateResponse(context);
 
         case llmBackendType::None:
         default:
@@ -109,12 +109,14 @@ responseOutput llmService::GenerateResponse(const std::string& prompt,const std:
     }
 }
 
-responseOutput llmService::GeneratePlaceholderResponse(const std::string& prompt) const
+responseOutput llmService::GeneratePlaceholderResponse(const std::vector<conversationMessage>& context) const
 {
     responseOutput output;
 
+    const std::string lastMessage = context.empty() ? "" : context.back().content;
+
     output.bSuccess = true;
-    output.response = "LLM placeholder response to: " + prompt;
+    output.response = "LLM placeholder response to: " + lastMessage;
     output.reason = "";
     output.bShouldSpeak = true;
     output.bShouldRemember = false;
