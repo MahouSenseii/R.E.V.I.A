@@ -19,7 +19,7 @@ public:
     responseOutput GenerateResponse(const std::vector<conversationMessage>& context) const;
 
 private:
-    static responseOutput ParseResponseBody(const std::string& responseBody);
+    static std::string ParseStreamChunk(const std::string& line);
 
     std::string host = "127.0.0.1";
     int port = 8080;

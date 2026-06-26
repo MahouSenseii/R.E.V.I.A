@@ -65,10 +65,14 @@ bool memoryManager::ShouldRemember(const string &message) {
         [](unsigned char c) { return static_cast<char>(tolower(c)); });
 
     static const string triggers[] = {
-        "remember",
+        "remember that",
+        "please remember",
+        "don't forget",
         "my name is",
         "i like",
-        "i don't like"
+        "i don't like",
+        "i prefer",
+        "i want you to know"
     };
 
     for (const string& trigger : triggers)

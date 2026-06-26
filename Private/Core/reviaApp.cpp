@@ -106,9 +106,13 @@ void reviaApp::Run()
             continue;
         }
 
-        context.AddMessage("assistant", output.response);
+        // Only print if streaming didn't already output the tokens live
+        if (!output.bWasStreamed)
+        {
+            cout << "Revia: " << output.response << "\n\n";
+        }
 
-        cout << "Revia: " << output.response << "\n\n";
+        context.AddMessage("assistant", output.response);
     }
 
     appLogger.Log("Shutting down...");

@@ -9,6 +9,7 @@ struct responseOutput
     bool bSuccess = false;
     bool bShouldRemember = false;
     bool bShouldSpeak = true;
+    bool bWasStreamed = false;  // true if tokens were already printed during generation
 
     std::string response;
     std::string reason;
