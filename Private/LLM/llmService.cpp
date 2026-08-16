@@ -4,12 +4,15 @@ llmService::llmService() = default;
 
 llmService::~llmService() = default;
 
-void llmService::ApplySettings(const llmSettings &settings, const aiProfile &profile)
+void llmService::ApplySettings(
+    const llmSettings& settings,
+    const embeddingSettings& embeddingSettings,
+    const aiProfile& profile)
 {
     if (settings.backend == "LLamaCpp")
     {
         backendType = llmBackendType::LLamaCpp;
-        llamaCpp.ApplySettings(settings, profile);
+        llamaCpp.ApplySettings(settings, embeddingSettings, profile);
         bIsReady = true;
         return;
     }
@@ -23,6 +26,35 @@ void llmService::ApplySettings(const llmSettings &settings, const aiProfile &pro
 
     backendType = llmBackendType::None;
     bIsReady = false;
+}
+
+healthOutput llmService::CheckEmbeddingHealth() const
+{
+    if (backendType == llmBackendType::LLamaCpp)
+    {
+        return llamaCpp.CheckEmbeddingHealth();
+    }
+
+    healthOutput output;
+    output.name = "Embeddings";
+    output.status = systemStatus::Yellow;
+    output.message = "Semantic memory requires the llama.cpp backend.";
+    output.reason = "The active language backend does not expose the configured embedding service.";
+    return output;
+}
+
+embeddingOutput llmService::EmbedMemory(
+    const std::string& summary,
+    const std::stop_token stopToken) const
+{
+    if (backendType == llmBackendType::LLamaCpp)
+    {
+        return llamaCpp.EmbedMemory(summary, stopToken);
+    }
+
+    embeddingOutput output;
+    output.reason = "The active language backend does not support memory embeddings.";
+    return output;
 }
 
 bool llmService::IsBackendAvailable() const
@@ -72,7 +104,9 @@ healthOutput llmService::CheckBackendHealth() const
     }
 }
 
-responseOutput llmService::GenerateResponse(const std::vector<conversationMessage>& context) const
+responseOutput llmService::GenerateResponse(
+    const std::vector<conversationMessage>& context,
+    const std::stop_token stopToken) const
 {
     if (!bIsReady)
     {
@@ -92,7 +126,20 @@ responseOutput llmService::GenerateResponse(const std::vector<conversationMessag
             return GeneratePlaceholderResponse(context);
 
         case llmBackendType::LLamaCpp:
-            return llamaCpp.GenerateResponse(context);
+        {
+            const healthOutput health = llamaCpp.CheckHealth();
+            if (!health.bIsAvailable)
+            {
+                responseOutput output;
+                output.bSuccess = false;
+                output.response = "My configured language model is not available yet.";
+                output.reason = health.reason;
+                output.bShouldSpeak = true;
+                output.bShouldRemember = false;
+                return output;
+            }
+            return llamaCpp.GenerateResponse(context, stopToken);
+        }
 
         case llmBackendType::None:
         default:
@@ -105,6 +152,112 @@ responseOutput llmService::GenerateResponse(const std::vector<conversationMessag
             output.bShouldRemember = false;
 
             return output;
+        }
+    }
+}
+
+responseOutput llmService::GenerateActionProposal(const std::string& userRequest) const
+{
+    if (!bIsReady)
+    {
+        responseOutput output;
+        output.bSuccess = false;
+        output.response = "My language system is not ready to plan an action.";
+        output.reason = "LLM service was not ready.";
+        output.bShouldSpeak = false;
+        return output;
+    }
+
+    switch (backendType)
+    {
+        case llmBackendType::LLamaCpp:
+        {
+            const healthOutput health = llamaCpp.CheckHealth();
+            if (!health.bIsAvailable)
+            {
+                responseOutput output;
+                output.bSuccess = false;
+                output.response = "My configured language model is not available for planning yet.";
+                output.reason = health.reason;
+                output.bShouldSpeak = false;
+                return output;
+            }
+            return llamaCpp.GenerateActionProposal(userRequest);
+        }
+        case llmBackendType::Placeholder:
+        {
+            responseOutput output;
+            output.bSuccess = false;
+            output.response = "The placeholder backend cannot plan filesystem actions.";
+            output.reason = "Action planning requires a structured-output LLM backend.";
+            output.bShouldSpeak = false;
+            return output;
+        }
+        case llmBackendType::None:
+        default:
+        {
+            responseOutput output;
+            output.bSuccess = false;
+            output.response = "No language backend is enabled for action planning.";
+            output.reason = "Unsupported or disabled LLM backend.";
+            output.bShouldSpeak = false;
+            return output;
+        }
+    }
+}
+
+responseOutput llmService::AnalyzeImage(
+    const std::filesystem::path& imagePath,
+    const std::string& prompt,
+    const int maxResponseTokens,
+    const std::stop_token stopToken) const
+{
+    if (!bIsReady || backendType != llmBackendType::LLamaCpp)
+    {
+        responseOutput output;
+        output.response = "My local vision system is not ready.";
+        output.reason = "Vision requires the llama.cpp backend.";
+        return output;
+    }
+    const healthOutput health = llamaCpp.CheckHealth();
+    if (!health.bIsAvailable)
+    {
+        responseOutput output;
+        output.response = "My local vision model is not available yet.";
+        output.reason = health.reason;
+        return output;
+    }
+    return llamaCpp.AnalyzeImage(imagePath, prompt, maxResponseTokens, stopToken);
+}
+
+memoryDecision llmService::EvaluateMemory(
+    const std::string& userMessage,
+    const std::stop_token stopToken) const
+{
+    if (!bIsReady)
+    {
+        memoryDecision decision;
+        decision.reason = "LLM service was not ready for memory evaluation.";
+        return decision;
+    }
+
+    switch (backendType)
+    {
+        case llmBackendType::LLamaCpp:
+            return llamaCpp.EvaluateMemory(userMessage, stopToken);
+        case llmBackendType::Placeholder:
+        {
+            memoryDecision decision;
+            decision.bSuccess = true;
+            decision.reason = "The placeholder backend does not select memories.";
+            return decision;
+        }
+        case llmBackendType::None:
+        default:
+        {
+            memoryDecision decision;
+            decision.reason = "No language backend is enabled for memory evaluation.";
+            return decision;
         }
     }
 }

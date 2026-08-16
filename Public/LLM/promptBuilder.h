@@ -14,8 +14,12 @@ public:
 
     nlohmann::json BuildMessages(
         const aiProfile& profile,
-        const std::vector<conversationMessage>& context
+        const std::vector<conversationMessage>& context,
+        const std::vector<float>& queryEmbedding = {},
+        const std::string& embeddingModel = "",
+        std::vector<latencySample>* timings = nullptr
     ) const;
+    std::string BuildMemoryBlock(const std::string& query = "") const;
 
 private:
 

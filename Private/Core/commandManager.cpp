@@ -28,7 +28,11 @@ commandOutput commandManager::HandleCommand(const std::string& input,appSettings
 
     if (input == "/status")
     {
-        return BuildStatusOutput(settings, profile, router.CheckLLMHealth());
+        return BuildStatusOutput(
+            settings,
+            profile,
+            router.CheckLLMHealth(),
+            router.CheckEmbeddingHealth());
     }
 
     if (input == "/backend")
@@ -110,6 +114,11 @@ commandOutput commandManager::BuildHelpOutput() const
     stream << "/status   - Show loaded profile and LLM settings\n";
     stream << "/backend  - Show LLM backend health\n";
     stream << "/profile  - Change active profile\n";
+    stream << "/capabilities - Show action mode and approved roots\n";
+    stream << "/plan <task> - Ask the LLM for one typed filesystem or desktop action\n";
+    stream << "/action <json> - Validate and execute a structured action\n";
+    stream << "/list, /read, /mkdir, /copy, /move, /rename, /trash - Typed file actions\n";
+    stream << "/inspect-window, /focus-window, /set-text, /invoke-control - Supervised UI Automation\n";
     stream << "/exit     - Exit the application\n";
     stream << "/quit     - Exit the application\n";
     stream << "========================================\n";
@@ -119,7 +128,11 @@ commandOutput commandManager::BuildHelpOutput() const
     return output;
 }
 
-commandOutput commandManager::BuildStatusOutput(const appSettings &settings, const aiProfile &profile, const healthOutput& llmHealth) const
+commandOutput commandManager::BuildStatusOutput(
+    const appSettings& settings,
+    const aiProfile& profile,
+    const healthOutput& llmHealth,
+    const healthOutput& embeddingHealth) const
 {
     commandOutput output;
     output.bWasCommand = true;
@@ -137,17 +150,53 @@ commandOutput commandManager::BuildStatusOutput(const appSettings &settings, con
     stream << "Host:           " << settings.llm.host << "\n";
     stream << "Port:           " << settings.llm.port << "\n";
     stream << "Model Name:     " << settings.llm.modelName << "\n";
+    stream << "Performance:    " << (settings.llm.bAutoTune ? "Auto" : "Manual") << "\n";
+    stream << "Context:        " << (settings.llm.bAutoTune
+        ? "Auto-fit to hardware"
+        : std::to_string(settings.llm.contextSize)) << "\n";
+    stream << "Server Slots:   " << (settings.llm.bAutoTune
+        ? "Auto"
+        : std::to_string(settings.llm.parallelRequests)) << "\n";
     stream << "Temperature:    " << settings.llm.temperature << "\n";
-    stream << "Max Tokens:     " << settings.llm.maxTokens << "\n";
+    stream << "Response Tokens:" << (settings.llm.bAutoMaxTokens ? " Auto, ceiling " : " ")
+           << settings.llm.maxTokens << "\n";
+    stream << "Vision:         " << (settings.vision.bEnabled ? "Enabled" : "Disabled") << "\n";
+    stream << "Voice:          " << (settings.speech.bEnabled ? "Enabled" : "Disabled") << "\n";
+    stream << "Speech Input:   " <<
+        (settings.speechRecognition.bEnabled ? "Enabled" : "Disabled") << "\n";
 
     stream << "\nBackend Health\n";
     stream << "Name:           " << llmHealth.name << "\n";
     stream << "Available:      " << (llmHealth.bIsAvailable ? "true" : "false") << "\n";
     stream << "Message:        " << llmHealth.message << "\n";
     stream << "Status:         " << StatusToString(llmHealth.status) << "\n";
+    if (llmHealth.contextTokens > 0)
+    {
+        stream << "Effective Context: " << llmHealth.contextTokens << " tokens per slot\n";
+    }
+    if (llmHealth.parallelSlots > 0)
+    {
+        stream << "Effective Slots:   " << llmHealth.parallelSlots << "\n";
+    }
+    if (llmHealth.responseTokenLimit > 0)
+    {
+        stream << "Effective Response: " << llmHealth.responseTokenLimit << " tokens\n";
+    }
     if (!llmHealth.reason.empty())
     {
         stream << "Reason:         " << llmHealth.reason << "\n";
+    }
+
+    stream << "\nSemantic Memory\n";
+    stream << "Enabled:        " << (settings.embedding.bEnabled ? "true" : "false") << "\n";
+    stream << "Host:           " << settings.embedding.host << "\n";
+    stream << "Port:           " << settings.embedding.port << "\n";
+    stream << "Model Name:     " << settings.embedding.modelName << "\n";
+    stream << "Available:      " << (embeddingHealth.bIsAvailable ? "true" : "false") << "\n";
+    stream << "Status:         " << StatusToString(embeddingHealth.status) << "\n";
+    if (!embeddingHealth.reason.empty())
+    {
+        stream << "Reason:         " << embeddingHealth.reason << "\n";
     }
 
     stream << "\nProfile Overrides\n";
@@ -204,7 +253,7 @@ commandOutput commandManager::HandleProfileCommand(const std::string& input,appS
     profile = newProfile;
     settings.activeProfile = profileId;
 
-    router.ApplyLLMSettings(settings.llm, profile);
+    router.ApplyLLMSettings(settings.llm, settings.embedding, profile);
 
     output.output = "Loaded profile: " + profile.displayName + " (" + profile.id + ")";
     return output;

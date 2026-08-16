@@ -1,0 +1,15 @@
+{
+  "mode": "supervised",
+  "approvedRoots": [
+    "%USERPROFILE%\\Documents\\ReviaSandbox"
+  ],
+  "approvedApplications": [
+    "notepad.exe",
+    "explorer.exe"
+  ],
+  "autoApproveRiskThrough": "read_only",
+  "createMissingApprovedRoots": true,
+  "maxReadBytes": 1048576,
+  "maxDirectoryEntries": 500,
+  "maxAffectedEntries": 200
+}

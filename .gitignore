@@ -5,10 +5,18 @@ out/
 *.exe
 *.obj
 *.o
+aqtinstall.log
 
 # Runtime data
-Logs/
-Memory/
+/Logs/
+/Memory/
+/Audit/
+/Models/*.gguf
+/Models/*.bin
+/ThirdParty/
+/RuntimeData/
+__pycache__/
+*.pyc
 
 # IDE
 .idea/workspace.xml

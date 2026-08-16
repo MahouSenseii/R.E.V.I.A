@@ -1,8 +1,9 @@
 #pragma once
 
-#include <string>
+#include "Library/structLibrary.h"
+#include "Memory/longTermMemory.h"
 
-enum class memoryType;
+#include <string>
 
 class memoryManager
 {
@@ -10,11 +11,15 @@ public:
     memoryManager();
     ~memoryManager();
 
-    bool SaveMemory(memoryType type,const std::string& speaker,const std::string& message) const;
-
-    bool ShouldRemember(const std::string& message);
+    bool SaveAutomaticMemory(const memoryDecision& decision, bool& outWasAdded) const;
+    std::vector<memoryEntry> LoadMemories() const;
+    std::vector<memoryEntry> LoadMissingEmbeddings(
+        const std::string& embeddingModel,
+        std::size_t maxEntries = 25) const;
+    bool SaveEmbedding(
+        const std::string& memoryId,
+        const std::string& embeddingModel,
+        const std::vector<float>& embedding) const;
 private:
-    std::string chatLogPath = "Logs/chat.log";
-    std::string memoryPath = "Memory/revia_memory.log";
-    std::string debugPath = "Logs/debug.log";
+    longTermMemory store;
 };

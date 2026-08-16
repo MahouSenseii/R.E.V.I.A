@@ -1,8 +1,16 @@
 #pragma once
 
 #include <string>
+#include <vector>
 
 #include "enumLibrary.h"
+
+struct latencySample
+{
+    std::string stage;
+    double milliseconds = 0.0;
+    bool bAggregate = false;
+};
 
 struct responseOutput
 {
@@ -13,6 +21,7 @@ struct responseOutput
 
     std::string response;
     std::string reason;
+    std::vector<latencySample> timings;
 };
 
 struct llmSettings
@@ -21,9 +30,86 @@ struct llmSettings
     std::string host = "127.0.0.1";
     int port = 8080;
     std::string modelName = "local-model";
+    std::string apiKey;
+
+    bool bAutoStartServer = false;
+    std::string serverExecutable;
+    std::string modelPath;
+    bool bAutoTune = true;
+    int autoFitTargetMiB = 1024;
+    int contextSize = 4096;
+    int parallelRequests = 2;
+    int startupTimeoutSeconds = 120;
+    bool bShutdownServerOnExit = true;
+    bool bVisionEnabled = true;
+    std::string multimodalProjectorPath =
+        "Models/Qwen3-VL-8B-Instruct-Unredacted-MAX.mmproj-q8_0.gguf";
+    std::string mediaPath = "RuntimeData/Vision";
 
     float temperature = 0.7f;
-    int maxTokens = 512;
+    bool bAutoMaxTokens = true;
+    int maxTokens = 4096;
+};
+
+struct embeddingSettings
+{
+    bool bEnabled = true;
+    std::string host = "127.0.0.1";
+    int port = 8081;
+    std::string modelName = "nomic-embed-text-v1.5.Q4_K_M.gguf";
+    std::string apiKey;
+
+    bool bAutoStartServer = true;
+    std::string serverExecutable;
+    std::string modelPath;
+    int contextSize = 2048;
+    int parallelRequests = 2;
+    int startupTimeoutSeconds = 60;
+    bool bShutdownServerOnExit = true;
+    std::string pooling = "mean";
+    std::string device = "none";
+    std::string queryPrefix = "search_query: ";
+    std::string documentPrefix = "search_document: ";
+};
+
+struct speechSettings
+{
+    bool bEnabled = true;
+    bool bSpeakGreeting = false;
+    std::string backend = "Auto";
+    std::string pythonExecutable = "python";
+    std::string qwenServiceScript = "Tools/qwen_tts_service.py";
+    std::string qwenHost = "127.0.0.1";
+    int qwenPort = 8092;
+    int qwenStartupTimeoutSeconds = 60;
+    int qwenRequestTimeoutSeconds = 600;
+    std::string qwenDevice = "auto";
+    int qwenMinimumFreeVramMiB = 4600;
+    std::string qwenVoiceDesignModel = "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign";
+    std::string qwenCloneModel = "Qwen/Qwen3-TTS-12Hz-0.6B-Base";
+    std::string voiceDataPath = "RuntimeData/Voices";
+    int volume = 90;
+    int rate = 1;
+    int maxCharacters = 1400;
+    int maxQueuedUtterances = 2;
+};
+
+struct speechRecognitionSettings
+{
+    bool bEnabled = true;
+    std::string executable = "ThirdParty/whisper/whisper-cli.exe";
+    std::string modelPath = "Models/ggml-small.en.bin";
+    std::string language = "en";
+    int sampleRate = 16000;
+    int threads = 6;
+    bool bUseGpu = true;
+};
+
+struct visionSettings
+{
+    bool bEnabled = true;
+    bool bRequireConfirmation = true;
+    int maxResponseTokens = 768;
 };
 
 struct aiProfile
@@ -46,6 +132,10 @@ struct appSettings
 {
     std::string activeProfile = "assistant";
     llmSettings llm;
+    embeddingSettings embedding;
+    speechSettings speech;
+    speechRecognitionSettings speechRecognition;
+    visionSettings vision;
 };
 
 struct commandOutput
@@ -73,13 +163,40 @@ struct healthOutput
     std::string name;
     std::string message;
     std::string reason;
+    int contextTokens = 0;
+    int parallelSlots = 0;
+    int responseTokenLimit = 0;
 };
 
 struct memoryEntry
 {
-    std::string speaker;
-    std::string content;
+    std::string id;
+    std::string category;
+    std::string summary;
     std::string source;
+    std::string createdAt;
 
     memoryImportance importance = memoryImportance::Medium;
+};
+
+struct memoryDecision
+{
+    bool bSuccess = false;
+    bool bShouldRemember = false;
+
+    std::string category;
+    std::string summary;
+    std::string reason;
+    std::vector<float> embedding;
+    std::string embeddingModel;
+    std::vector<latencySample> timings;
+};
+
+struct embeddingOutput
+{
+    bool bSuccess = false;
+    std::vector<float> values;
+    std::string model;
+    std::string reason;
+    double elapsedMilliseconds = 0.0;
 };
