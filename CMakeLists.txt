@@ -8,8 +8,50 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 option(REVIA_BUILD_DESKTOP "Build the optional Qt 6 desktop shell" ON)
-if(WIN32 AND EXISTS "$ENV{USERPROFILE}/Qt/6.8.3/mingw_64")
-    list(PREPEND CMAKE_PREFIX_PATH "$ENV{USERPROFILE}/Qt/6.8.3/mingw_64")
+option(REVIA_REQUIRE_DESKTOP "Fail configuration when the Qt desktop shell cannot be built" OFF)
+set(REVIA_QT_ROOT "" CACHE PATH "Explicit Qt 6 kit directory, e.g. C:/Qt/6.8.3/mingw_64")
+
+# Qt discovery must not be pinned to one version at one path on one machine.
+# Resolution order: explicit cache variable, REVIA_QT_ROOT environment variable,
+# then the newest 6.x mingw_64 kit found in the usual install locations.
+function(revia_resolve_qt_root outVariable)
+    if(REVIA_QT_ROOT)
+        set(${outVariable} "${REVIA_QT_ROOT}" PARENT_SCOPE)
+        return()
+    endif()
+    if(DEFINED ENV{REVIA_QT_ROOT} AND EXISTS "$ENV{REVIA_QT_ROOT}")
+        set(${outVariable} "$ENV{REVIA_QT_ROOT}" PARENT_SCOPE)
+        return()
+    endif()
+
+    set(searchRoots "$ENV{USERPROFILE}/Qt" "C:/Qt" "$ENV{QT_ROOT_DIR}")
+    set(candidates "")
+    foreach(searchRoot IN LISTS searchRoots)
+        if(NOT searchRoot OR NOT IS_DIRECTORY "${searchRoot}")
+            continue()
+        endif()
+        file(GLOB kits "${searchRoot}/6.*/mingw_64")
+        list(APPEND candidates ${kits})
+    endforeach()
+
+    if(NOT candidates)
+        set(${outVariable} "" PARENT_SCOPE)
+        return()
+    endif()
+
+    # Natural sort so 6.10.0 ranks above 6.9.0 rather than below it.
+    list(REMOVE_DUPLICATES candidates)
+    list(SORT candidates COMPARE NATURAL ORDER DESCENDING)
+    list(GET candidates 0 newest)
+    set(${outVariable} "${newest}" PARENT_SCOPE)
+endfunction()
+
+if(WIN32 AND REVIA_BUILD_DESKTOP)
+    revia_resolve_qt_root(REVIA_RESOLVED_QT_ROOT)
+    if(REVIA_RESOLVED_QT_ROOT)
+        message(STATUS "Revia: using Qt kit at ${REVIA_RESOLVED_QT_ROOT}")
+        list(PREPEND CMAKE_PREFIX_PATH "${REVIA_RESOLVED_QT_ROOT}")
+    endif()
 endif()
 
 include(FetchContent)
@@ -88,7 +130,7 @@ add_executable(R_E_V_I_A "${REVIA_MAIN_SOURCE}")
 target_link_libraries(R_E_V_I_A PRIVATE ReviaFoundation)
 
 if(REVIA_BUILD_DESKTOP)
-    find_package(Qt6 6.8 QUIET COMPONENTS Core Gui Widgets)
+    find_package(Qt6 6.8 COMPONENTS Core Gui Widgets)
     if(Qt6_FOUND)
         add_executable(ReviaDesktop WIN32
                 "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/main.cpp"
@@ -104,6 +146,18 @@ if(REVIA_BUILD_DESKTOP)
                 Qt6::Gui
                 Qt6::Widgets
         )
+
+        # A shared Qt build cannot be fully statically linked, but the compiler
+        # runtime can be. Without this the shipped executable depends on
+        # libgcc_s_seh-1.dll, libstdc++-6.dll, and libwinpthread-1.dll being
+        # present on the target machine, which is only true on a dev box.
+        if(MINGW)
+            target_link_options(ReviaDesktop PRIVATE
+                    -static-libgcc
+                    -static-libstdc++
+                    -Wl,-Bstatic,--whole-archive -lwinpthread -Wl,--no-whole-archive
+            )
+        endif()
 
         get_target_property(REVIA_QMAKE_EXECUTABLE Qt6::qmake IMPORTED_LOCATION)
         get_filename_component(REVIA_QT_BIN_DIR "${REVIA_QMAKE_EXECUTABLE}" DIRECTORY)
@@ -131,7 +185,18 @@ if(REVIA_BUILD_DESKTOP)
                 COMMENT "Synchronizing ReviaDesktop runtime configuration"
         )
     else()
-        message(STATUS "Qt 6.8 was not found; building the CLI fallback only.")
+        set(REVIA_QT_HELP
+                "Qt 6.8 or newer was not found, so ReviaDesktop will NOT be built.\n"
+                "  Install it with:  .\\Tools\\InstallQt.ps1\n"
+                "  Or point at an existing kit:  -DREVIA_QT_ROOT=C:/Qt/6.8.3/mingw_64\n"
+                "  The MinGW kit is required; an MSVC kit is ABI-incompatible with this build.\n"
+                "  Configure with -DREVIA_BUILD_DESKTOP=OFF to silence this deliberately.")
+        if(REVIA_REQUIRE_DESKTOP)
+            message(FATAL_ERROR ${REVIA_QT_HELP})
+        endif()
+        # A warning, not a status line: silently degrading to a CLI-only build is
+        # the single most confusing failure mode this project has.
+        message(WARNING ${REVIA_QT_HELP})
     endif()
 endif()
 

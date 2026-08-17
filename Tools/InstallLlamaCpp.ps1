@@ -1,68 +1,91 @@
 param(
-    [switch]$Force
+    [switch]$Force,
+    [ValidateSet('auto', 'cpu', 'vulkan', 'cuda')]
+    [string]$Accelerator = 'auto'
 )
+
+# Installs the llama.cpp Windows runtime matching the accelerator on this
+# machine rather than always fetching the 612 MB CUDA pair. Sizes for b10453:
+#   cuda   239 MB + 373 MB cudart   NVIDIA only, fastest on NVIDIA
+#   vulkan  33 MB                   NVIDIA, AMD, and Intel
+#   cpu     18 MB                   runs anywhere
+#
+# Pass -Accelerator explicitly to override detection, for example when building
+# a redistributable package for a machine other than this one.
 
 $ErrorActionPreference = 'Stop'
 $repoRoot = Split-Path -Parent $PSScriptRoot
-$installRoot = Join-Path $repoRoot 'ThirdParty\llama.cpp'
-$version = 'b10453'
-$llamaUrl = "https://github.com/ggml-org/llama.cpp/releases/download/$version/llama-$version-bin-win-cuda-12.4-x64.zip"
-$llamaSha256 = '84b863f70a8b4c2873e93385d0b208f24776ecd1b946a2cb6d5cda863d143c3d'
-$cudaUrl = "https://github.com/ggml-org/llama.cpp/releases/download/$version/cudart-llama-bin-win-cuda-12.4-x64.zip"
-$cudaSha256 = '8c79a9b226de4b3cacfd1f83d24f962d0773be79f1e7b75c6af4ded7e32ae1d6'
-$llamaArchive = Join-Path $env:TEMP "revia-llama-$version.zip"
-$cudaArchive = Join-Path $env:TEMP "revia-llama-cudart-$version.zip"
-$extractRoot = Join-Path $env:TEMP ("revia-llama-extract-" + [Guid]::NewGuid().ToString('N'))
+. (Join-Path $PSScriptRoot 'ReviaAcceleration.ps1')
 
-function Get-VerifiedDownload {
-    param(
-        [Parameter(Mandatory = $true)][string]$Uri,
-        [Parameter(Mandatory = $true)][string]$Destination,
-        [Parameter(Mandatory = $true)][string]$Sha256
-    )
-    if ((Test-Path -LiteralPath $Destination -PathType Leaf) -and -not $Force) {
-        if ((Get-FileHash -LiteralPath $Destination -Algorithm SHA256).Hash.ToLowerInvariant() -eq $Sha256) {
-            return
+$installRoot = Join-Path $repoRoot 'ThirdParty\llama.cpp'
+$serverPath = Join-Path $installRoot 'llama-server.exe'
+$stampPath = Join-Path $installRoot 'revia-backend.json'
+
+$resolved = Resolve-ReviaAccelerator -Requested $Accelerator
+
+# Reinstall when the accelerator changed even if a server binary is present,
+# otherwise a machine that gained or lost a GPU keeps the wrong runtime.
+if ((Test-Path -LiteralPath $serverPath -PathType Leaf) -and -not $Force) {
+    $installedAccelerator = $null
+    if (Test-Path -LiteralPath $stampPath -PathType Leaf) {
+        try {
+            $installedAccelerator = (Get-Content -LiteralPath $stampPath -Raw | ConvertFrom-Json).accelerator
+        }
+        catch {
+            $installedAccelerator = $null
         }
     }
-    Invoke-WebRequest -Uri $Uri -OutFile $Destination
-    $actual = (Get-FileHash -LiteralPath $Destination -Algorithm SHA256).Hash.ToLowerInvariant()
-    if ($actual -ne $Sha256) {
-        throw "Checksum mismatch for $Destination. Expected $Sha256 but received $actual."
+
+    if ($installedAccelerator -eq $resolved.ToString()) {
+        Write-Host "llama.cpp ($installedAccelerator) is already installed: $serverPath"
+        exit 0
     }
+
+    Write-Host "Replacing the installed llama.cpp runtime ($installedAccelerator) with $resolved."
 }
 
-if ((Test-Path -LiteralPath (Join-Path $installRoot 'llama-server.exe')) -and -not $Force) {
-    Write-Host "llama.cpp is already installed: $installRoot\llama-server.exe"
-    exit 0
+$packages = Get-ReviaLlamaPackages -Accelerator $resolved
+$extractRoot = Join-Path $env:TEMP ('revia-llama-extract-' + [Guid]::NewGuid().ToString('N'))
+
+try {
+    New-Item -ItemType Directory -Path $extractRoot -Force | Out-Null
+    $payloadRoot = Join-Path $extractRoot 'payload'
+    New-Item -ItemType Directory -Path $payloadRoot -Force | Out-Null
+
+    foreach ($package in $packages) {
+        $archivePath = Join-Path $env:TEMP "revia-$($package.Name)"
+        Get-ReviaVerifiedDownload -Uri $package.Uri -Destination $archivePath -Sha256 $package.Sha -Force:$Force
+        Expand-Archive -LiteralPath $archivePath -DestinationPath $payloadRoot -Force
+    }
+
+    $server = Get-ChildItem -LiteralPath $payloadRoot -Filter 'llama-server.exe' -File -Recurse |
+        Select-Object -First 1
+    if ($null -eq $server) {
+        throw "The verified llama.cpp package for $resolved did not contain llama-server.exe."
+    }
+
+    New-Item -ItemType Directory -Path $installRoot -Force | Out-Null
+
+    # Copy the directory holding the server first, then any loose DLLs shipped
+    # elsewhere in the payload, which is how the CUDA runtime archive is laid out.
+    Get-ChildItem -LiteralPath $server.Directory.FullName -File | ForEach-Object {
+        Copy-Item -LiteralPath $_.FullName -Destination $installRoot -Force
+    }
+    Get-ChildItem -LiteralPath $payloadRoot -Filter '*.dll' -File -Recurse | ForEach-Object {
+        Copy-Item -LiteralPath $_.FullName -Destination $installRoot -Force
+    }
+
+    [ordered]@{
+        accelerator = $resolved.ToString()
+        version     = $script:ReviaLlamaVersion
+        installedAt = (Get-Date).ToString('o')
+    } | ConvertTo-Json | Set-Content -LiteralPath $stampPath -Encoding UTF8
+}
+finally {
+    Remove-ReviaTempDirectory -Path $extractRoot
 }
 
-Get-VerifiedDownload -Uri $llamaUrl -Destination $llamaArchive -Sha256 $llamaSha256
-Get-VerifiedDownload -Uri $cudaUrl -Destination $cudaArchive -Sha256 $cudaSha256
-New-Item -ItemType Directory -Path $extractRoot -Force | Out-Null
-$llamaExtract = Join-Path $extractRoot 'llama'
-$cudaExtract = Join-Path $extractRoot 'cuda'
-Expand-Archive -LiteralPath $llamaArchive -DestinationPath $llamaExtract -Force
-Expand-Archive -LiteralPath $cudaArchive -DestinationPath $cudaExtract -Force
-
-$server = Get-ChildItem -LiteralPath $llamaExtract -Filter 'llama-server.exe' -File -Recurse |
-    Select-Object -First 1
-if ($null -eq $server) {
-    throw 'The verified llama.cpp package did not contain llama-server.exe.'
+Write-Host "llama.cpp $script:ReviaLlamaVersion ($resolved) ready: $serverPath"
+if ($resolved -eq [ReviaAccelerator]::Cpu) {
+    Write-Host 'Chat will run on the CPU. Expect slower generation and prefer a smaller quantised model.'
 }
-
-New-Item -ItemType Directory -Path $installRoot -Force | Out-Null
-Get-ChildItem -LiteralPath $server.Directory.FullName -File | ForEach-Object {
-    Copy-Item -LiteralPath $_.FullName -Destination $installRoot -Force
-}
-Get-ChildItem -LiteralPath $cudaExtract -Filter '*.dll' -File -Recurse | ForEach-Object {
-    Copy-Item -LiteralPath $_.FullName -Destination $installRoot -Force
-}
-
-$resolvedExtract = [IO.Path]::GetFullPath($extractRoot)
-$resolvedTemp = [IO.Path]::GetFullPath($env:TEMP).TrimEnd('\') + '\'
-if (-not $resolvedExtract.StartsWith($resolvedTemp, [StringComparison]::OrdinalIgnoreCase)) {
-    throw "Refusing to remove an extraction path outside the temporary directory: $resolvedExtract"
-}
-Remove-Item -LiteralPath $resolvedExtract -Recurse -Force
-Write-Host "llama.cpp $version ready: $installRoot\llama-server.exe"

@@ -29,12 +29,22 @@ The runtime is multi-worker rather than a single blocking pipeline: UI, interact
 - Append-only JSONL action auditing.
 - CTest coverage for policy escapes, parsing, dispatcher gates, filesystem limits, dry runs, audit output, and fail-closed configuration.
 
-## Build and run on this PC
+## Build and run
 
-From PowerShell:
+Requirements: Windows 10 1809 or newer, x64. See [docs/PORTABILITY.md](docs/PORTABILITY.md) for the full story, including CPU-only machines.
+
+**Qt is required for the desktop shell and is not bundled.** Without it the build still succeeds but produces the CLI only. On a clean machine, install it first:
 
 ```powershell
 Set-Location 'C:\Users\USER\Documents\GitHub\R.E.V.I.A'
+.\Tools\InstallQt.ps1
+```
+
+That installs Qt 6.8.3 `mingw_64` plus Qt's own CMake, Ninja, and MinGW 13.1.0 packages, so CLion is not required. It needs Python 3.9+ on PATH. If you already have Qt, skip the script and pass the kit explicitly: `cmake --preset debug -DREVIA_QT_ROOT=C:/Qt/6.8.3/mingw_64`. The MinGW kit is mandatory; an MSVC kit is ABI-incompatible with this build.
+
+Then build and run:
+
+```powershell
 .\Tools\Build.ps1
 .\build\debug\ReviaDesktop.exe
 ```
@@ -45,7 +55,7 @@ The terminal interface remains available as a fallback:
 .\build\debug\R_E_V_I_A.exe
 ```
 
-The build script locates the CMake, Ninja, and MinGW tools bundled with CLion, configures `build/debug`, builds both interfaces, deploys the Qt runtime beside the desktop executable, and runs CTest. The desktop target is optional when Qt is absent; this PC uses Qt `6.8.3` from `C:\Users\USER\Qt\6.8.3\mingw_64`. Pass `-SkipTests` only when you deliberately want a build without verification.
+The build script resolves CMake, Ninja, and MinGW from PATH, then a Qt Tools installation, then CLion's bundled copies; configures `build/debug`; builds both interfaces; deploys the Qt runtime beside the desktop executable; and runs CTest. It prints which toolchain it selected and warns if `ReviaDesktop.exe` was not produced. Pass `-SkipTests` only when you deliberately want a build without verification. Configure with `-DREVIA_REQUIRE_DESKTOP=ON` to make missing Qt a hard error instead of a warning.
 
 Large runtimes and models are ignored by Git. On a new PC, run these installers once before starting Revia:
 
@@ -56,6 +66,8 @@ Large runtimes and models are ignored by Git. On a new PC, run these installers 
 .\Tools\InstallVisionProjector.ps1
 .\Tools\InstallQwenTTS.ps1
 ```
+
+`InstallLlamaCpp.ps1` and `InstallWhisper.ps1` detect the accelerator on this machine and install the matching pinned build: CUDA on NVIDIA, Vulkan on AMD and Intel, or a CPU build otherwise. That is roughly 1.25 GB on NVIDIA versus about 40 MB on a machine with no usable GPU. Override with `-Accelerator cpu|vulkan|cuda`. `InstallQwenTTS.ps1` pulls PyTorch and is only worth running if you want voice cloning; Windows SAPI is the zero-setup fallback.
 
 The scripts install pinned Windows CUDA builds of llama.cpp and whisper.cpp, Nomic Embed Text v1.5, Whisper `small.en`, the exact Q8 multimodal projector for the configured Qwen3-VL model, and an isolated Python 3.12 Qwen3-TTS runtime. The native/model artifact installers validate pinned SHA-256 values; the speech installer pins its PyTorch and Qwen package versions, while official Qwen model weights use the Hugging Face cache. The main chat GGUF is not downloaded automatically because it is large and model choice is personal; place it at the `modelPath` in `Config/settings.json`.
 
@@ -127,4 +139,4 @@ For a later unattended experiment, use a dedicated disposable folder and set:
 
 Keep roots and executable names narrow. `approved_scope` does not mean unrestricted PC control: actions outside approved roots/apps or above the risk ceiling remain blocked, no confirmation prompt can override that block, and all outcomes are audited. Control text values are not copied into the audit log; only their length is recorded.
 
-See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for module boundaries and [docs/ROADMAP.md](docs/ROADMAP.md) for the staged path to a desktop companion and supervised autonomy.
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for module boundaries, [docs/PORTABILITY.md](docs/PORTABILITY.md) for build requirements and low-end machine behaviour, and [docs/ROADMAP.md](docs/ROADMAP.md) for the staged path to a desktop companion and supervised autonomy.
