@@ -14,10 +14,7 @@ void ActionDispatcher::Register(std::unique_ptr<IActionExecutor> executor)
     executors.push_back(std::move(executor));
 }
 
-ActionResult ActionDispatcher::Dispatch(
-    const ActionRequest& request,
-    const PolicyDecision& decision,
-    bool confirmationGranted)
+ActionResult ActionDispatcher::Dispatch(const ActionRequest& request,const PolicyDecision& decision,bool confirmationGranted)
 {
     ActionResult result;
     result.dryRun = request.dryRun;
