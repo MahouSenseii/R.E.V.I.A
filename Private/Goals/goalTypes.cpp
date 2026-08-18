@@ -81,6 +81,7 @@ std::string ToString(const StopReason value)
         case StopReason::BudgetRetries: return "budget_retries";
         case StopReason::BudgetTokens: return "budget_tokens";
         case StopReason::Cancelled: return "cancelled";
+        case StopReason::InvalidPlan: return "invalid_plan";
         case StopReason::StoreError: return "store_error";
     }
     return "none";
@@ -124,6 +125,7 @@ StopReason StopReasonFromString(const std::string& value)
     if (name == "budget_retries") return StopReason::BudgetRetries;
     if (name == "budget_tokens") return StopReason::BudgetTokens;
     if (name == "cancelled" || name == "canceled") return StopReason::Cancelled;
+    if (name == "invalid_plan") return StopReason::InvalidPlan;
     if (name == "store_error") return StopReason::StoreError;
     return StopReason::None;
 }

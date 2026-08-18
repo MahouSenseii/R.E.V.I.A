@@ -46,6 +46,7 @@ enum class StopReason
     BudgetRetries,
     BudgetTokens,
     Cancelled,
+    InvalidPlan,
     StoreError
 };
 

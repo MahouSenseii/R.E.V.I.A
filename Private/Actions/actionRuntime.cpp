@@ -3,6 +3,7 @@
 #include "Filesystem/fileSystemExecutor.h"
 #include "Windows/windowsAutomationExecutor.h"
 
+#include <algorithm>
 #include <nlohmann/json.hpp>
 #include <system_error>
 
@@ -75,6 +76,59 @@ ActionOutcome ActionRuntime::Execute(
 {
     ActionOutcome outcome;
     outcome.policy = Evaluate(request);
+    outcome.result = dispatcher.Dispatch(request, outcome.policy, confirmationGranted);
+    if (auditLogger)
+    {
+        static_cast<void>(auditLogger->Record(request, outcome.policy, outcome.result));
+    }
+    return outcome;
+}
+
+namespace
+{
+
+// Ranked least to most restrictive so two decisions can be combined without
+// assuming which policy produced which verdict.
+int VerdictRank(const PolicyVerdict verdict)
+{
+    switch (verdict)
+    {
+        case PolicyVerdict::Allowed: return 0;
+        case PolicyVerdict::RequiresConfirmation: return 1;
+        case PolicyVerdict::Blocked: return 2;
+    }
+    return 2;
+}
+
+PolicyDecision MoreRestrictive(const PolicyDecision& first, const PolicyDecision& second)
+{
+    PolicyDecision combined =
+        VerdictRank(second.verdict) > VerdictRank(first.verdict) ? second : first;
+    combined.risk = std::max(first.risk, second.risk);
+    return combined;
+}
+
+} // namespace
+
+PolicyDecision ActionRuntime::EvaluateScoped(
+    const ActionRequest& request,
+    const policy::CapabilityPolicy& scopedPolicy) const
+{
+    const PolicyDecision globalDecision = Evaluate(request);
+    if (globalDecision.verdict == PolicyVerdict::Blocked)
+    {
+        return globalDecision;
+    }
+    return MoreRestrictive(globalDecision, scopedPolicy.Evaluate(request));
+}
+
+ActionOutcome ActionRuntime::ExecuteScoped(
+    const ActionRequest& request,
+    const policy::CapabilityPolicy& scopedPolicy,
+    bool confirmationGranted)
+{
+    ActionOutcome outcome;
+    outcome.policy = EvaluateScoped(request, scopedPolicy);
     outcome.result = dispatcher.Dispatch(request, outcome.policy, confirmationGranted);
     if (auditLogger)
     {

@@ -11,6 +11,7 @@ aqtinstall.log
 /Logs/
 /Memory/
 /Audit/
+/Goals/
 /Models/*.gguf
 /Models/*.bin
 /ThirdParty/

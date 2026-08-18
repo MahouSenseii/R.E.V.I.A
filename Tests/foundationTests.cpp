@@ -5,6 +5,9 @@
 #include "Core/localApiKey.h"
 #include "Audit/actionAuditLogger.h"
 #include "Filesystem/fileSystemExecutor.h"
+#include "Goals/goalRunner.h"
+#include "Goals/goalStore.h"
+#include "Goals/goalTypes.h"
 #include "LLM/LLamaCPP/llamaCppServerProcess.h"
 #include "Memory/longTermMemory.h"
 #include "Planning/structuredActionParser.h"
@@ -650,6 +653,287 @@ void TestLocalApiKeys()
         "Per-run llama.cpp API keys were missing, malformed, or repeated.");
 }
 
+
+nlohmann::json CapabilityConfigJson(
+    const std::string& mode,
+    const std::filesystem::path& approvedRoot,
+    const std::string& riskCeiling)
+{
+    return nlohmann::json{
+        {"mode", mode},
+        {"approvedRoots", nlohmann::json::array({revia::actions::PathToUtf8(approvedRoot)})},
+        {"approvedApplications", nlohmann::json::array()},
+        {"autoApproveRiskThrough", riskCeiling},
+        {"createMissingApprovedRoots", false},
+        {"maxReadBytes", 1048576},
+        {"maxDirectoryEntries", 200},
+        {"maxAffectedEntries", 200}
+    };
+}
+
+CapabilitySettings GoalScope(const std::filesystem::path& approvedRoot)
+{
+    CapabilitySettings scope;
+    scope.mode = ExecutionMode::ApprovedScope;
+    scope.approvedRoots = {approvedRoot};
+    scope.autoApproveRiskThrough = RiskLevel::ReversibleWrite;
+    scope.createMissingApprovedRoots = false;
+    return scope;
+}
+
+revia::goals::GoalStep MakeDirectoryStep(
+    const std::filesystem::path& parent,
+    const std::string& folderName)
+{
+    revia::goals::GoalStep step;
+    step.description = "Create " + folderName;
+    step.action = Request(ActionType::CreateDirectory, parent / folderName);
+    step.check = Request(ActionType::ListDirectory, parent);
+    step.expected = folderName;
+    return step;
+}
+
+void TestGoalStoreRoundTrip()
+{
+    ScopedTestDirectory temporary;
+    const revia::goals::GoalStore store((temporary.root / "goals.db").string());
+
+    revia::goals::Goal goal;
+    goal.id = revia::goals::NewGoalId();
+    goal.title = "Create a Notes folder";
+    goal.status = revia::goals::GoalStatus::Running;
+    goal.budget.maxActions = 7;
+    goal.spend.actions = 3;
+    goal.scope = GoalScope(temporary.root);
+
+    revia::goals::GoalStep step = MakeDirectoryStep(temporary.root, "Notes");
+    step.id = revia::goals::NewStepId();
+    step.ordinal = 0;
+    step.status = revia::goals::StepStatus::Failed;
+
+    revia::goals::StepAttempt attempt;
+    attempt.attempt = 1;
+    attempt.actionId = "action-1";
+    attempt.checkActionId = "action-2";
+    attempt.verdict = PolicyVerdict::Allowed;
+    attempt.executed = true;
+    attempt.verified = false;
+    attempt.observation = "[DIR]   Other";
+    attempt.failure = "Verification did not observe: Notes";
+    step.attempts.push_back(attempt);
+    goal.steps.push_back(step);
+
+    Check(store.Save(goal), "The goal store did not save a goal.");
+
+    const auto reloaded = store.Load(goal.id);
+    Check(reloaded.has_value(), "The goal store did not reload a saved goal.");
+    Check(reloaded->title == goal.title &&
+        reloaded->status == revia::goals::GoalStatus::Running &&
+        reloaded->budget.maxActions == 7 &&
+        reloaded->spend.actions == 3,
+        "Goal header fields did not survive a store round trip.");
+    Check(reloaded->steps.size() == 1 &&
+        reloaded->steps.front().action.type == ActionType::CreateDirectory &&
+        reloaded->steps.front().check.type == ActionType::ListDirectory &&
+        reloaded->steps.front().expected == "Notes",
+        "Goal steps did not survive a store round trip.");
+    Check(reloaded->steps.front().attempts.size() == 1 &&
+        reloaded->steps.front().attempts.front().observation == "[DIR]   Other" &&
+        !reloaded->steps.front().attempts.front().verified,
+        "Step evidence did not survive a store round trip.");
+    Check(reloaded->scope.approvedRoots.size() == 1 &&
+        reloaded->scope.mode == ExecutionMode::ApprovedScope,
+        "The per-goal capability scope did not survive a store round trip.");
+
+    const auto resumable = store.LoadResumable();
+    Check(resumable.size() == 1 && resumable.front().id == goal.id,
+        "An unfinished goal was not offered for resume.");
+
+    Check(store.Remove(goal.id) && !store.Load(goal.id).has_value(),
+        "A removed goal was still readable.");
+}
+
+void TestGoalRunnerRejectsUnverifiablePlan()
+{
+    std::string error;
+
+    revia::goals::Goal destructiveCheck;
+    revia::goals::GoalStep step;
+    step.action = Request(ActionType::CreateDirectory, "C:/anything");
+    step.check = Request(ActionType::MoveToRecycleBin, "C:/anything");
+    step.expected = "anything";
+    destructiveCheck.steps.push_back(step);
+    Check(!revia::goals::GoalRunner::Validate(destructiveCheck, error),
+        "A plan that verifies with a destructive action was accepted.");
+
+    revia::goals::Goal missingCheck;
+    revia::goals::GoalStep bare;
+    bare.action = Request(ActionType::CreateDirectory, "C:/anything");
+    bare.expected = "anything";
+    missingCheck.steps.push_back(bare);
+    Check(!revia::goals::GoalRunner::Validate(missingCheck, error),
+        "A plan with no verification action was accepted.");
+
+    revia::goals::Goal noExpectation;
+    revia::goals::GoalStep silent = MakeDirectoryStep("C:/anything", "Notes");
+    silent.expected.clear();
+    noExpectation.steps.push_back(silent);
+    Check(!revia::goals::GoalRunner::Validate(noExpectation, error),
+        "A plan that never says what success looks like was accepted.");
+}
+
+void TestGoalRunnerVerifiesSuccess()
+{
+    ScopedTestDirectory temporary;
+    const auto approved = temporary.root / "sandbox";
+    std::filesystem::create_directories(approved);
+
+    const auto configPath = temporary.root / "capabilities.json";
+    WriteBytes(configPath,
+        CapabilityConfigJson("approved_scope", approved, "reversible_write").dump());
+
+    revia::actions::ActionRuntime runtime;
+    std::string error;
+    const bool initialized =
+        runtime.Initialize(configPath, temporary.root / "audit.jsonl", error);
+    Check(initialized, "The action runtime did not initialize for the goal runner: " + error);
+
+    const revia::goals::GoalStore store((temporary.root / "goals.db").string());
+    revia::goals::GoalRunner runner(runtime, store);
+
+    revia::goals::Goal goal;
+    goal.title = "Create the Notes folder";
+    goal.scope = GoalScope(approved);
+    goal.steps.push_back(MakeDirectoryStep(approved, "Notes"));
+
+    const revia::goals::Goal finished = runner.Run(goal);
+    Check(finished.status == revia::goals::GoalStatus::Succeeded &&
+        finished.stopReason == revia::goals::StopReason::Completed,
+        "A verifiable goal did not complete.");
+    Check(std::filesystem::is_directory(approved / "Notes"),
+        "The goal reported success without creating the directory.");
+    Check(finished.steps.size() == 1 &&
+        finished.steps.front().attempts.size() == 1 &&
+        finished.steps.front().attempts.front().verified,
+        "The completed step did not record verification evidence.");
+    Check(finished.spend.actions == 2,
+        "A verified step did not cost exactly one action and one observation.");
+    Check(store.Load(finished.id).has_value(),
+        "The finished goal was not persisted.");
+}
+
+void TestGoalRunnerStopsOnUnverifiableStep()
+{
+    ScopedTestDirectory temporary;
+    const auto approved = temporary.root / "sandbox";
+    std::filesystem::create_directories(approved);
+
+    const auto configPath = temporary.root / "capabilities.json";
+    WriteBytes(configPath,
+        CapabilityConfigJson("approved_scope", approved, "reversible_write").dump());
+
+    revia::actions::ActionRuntime runtime;
+    std::string error;
+    const bool initialized =
+        runtime.Initialize(configPath, temporary.root / "audit.jsonl", error);
+    Check(initialized, "The action runtime did not initialize for the retry test: " + error);
+
+    const revia::goals::GoalStore store((temporary.root / "goals.db").string());
+    revia::goals::GoalRunner runner(runtime, store);
+
+    revia::goals::Goal goal;
+    goal.title = "Claim a folder that is never created";
+    goal.scope = GoalScope(approved);
+    goal.budget.maxRetriesPerStep = 1;
+
+    revia::goals::GoalStep step = MakeDirectoryStep(approved, "Notes");
+    step.expected = "AFolderThatIsNeverCreated";
+    goal.steps.push_back(step);
+
+    const revia::goals::Goal finished = runner.Run(goal);
+    Check(finished.status == revia::goals::GoalStatus::Failed &&
+        finished.stopReason == revia::goals::StopReason::VerificationFailed,
+        "An unverified step was allowed to complete.");
+    Check(finished.steps.front().attempts.size() == 2,
+        "The runner did not retry an unverified step up to its per-step budget.");
+    Check(finished.spend.retries == 1, "Retry spend was not recorded.");
+}
+
+void TestGoalScopeCannotWidenAuthority()
+{
+    ScopedTestDirectory temporary;
+    const auto approved = temporary.root / "sandbox";
+    const auto outside = temporary.root / "outside";
+    std::filesystem::create_directories(approved);
+    std::filesystem::create_directories(outside);
+
+    const auto configPath = temporary.root / "capabilities.json";
+    WriteBytes(configPath,
+        CapabilityConfigJson("approved_scope", approved, "reversible_write").dump());
+
+    revia::actions::ActionRuntime runtime;
+    std::string error;
+    const bool initialized =
+        runtime.Initialize(configPath, temporary.root / "audit.jsonl", error);
+    Check(initialized, "The action runtime did not initialize for the scope test: " + error);
+
+    const revia::goals::GoalStore store((temporary.root / "goals.db").string());
+    revia::goals::GoalRunner runner(runtime, store);
+
+    revia::goals::Goal goal;
+    goal.title = "Write outside the globally approved root";
+    goal.scope = GoalScope(outside);
+    goal.steps.push_back(MakeDirectoryStep(outside, "Escaped"));
+
+    const revia::goals::Goal finished = runner.Run(goal);
+    Check(finished.status == revia::goals::GoalStatus::Blocked &&
+        finished.stopReason == revia::goals::StopReason::PolicyBlocked,
+        "A per-goal scope widened the globally approved roots.");
+    Check(!std::filesystem::exists(outside / "Escaped"),
+        "A blocked goal still changed the filesystem.");
+}
+
+
+void TestGoalResumesAfterRestart()
+{
+    ScopedTestDirectory temporary;
+    const auto approved = temporary.root / "sandbox";
+    std::filesystem::create_directories(approved);
+
+    const auto configPath = temporary.root / "capabilities.json";
+    WriteBytes(configPath,
+        CapabilityConfigJson("approved_scope", approved, "reversible_write").dump());
+
+    revia::actions::ActionRuntime runtime;
+    std::string error;
+    const bool initialized =
+        runtime.Initialize(configPath, temporary.root / "audit.jsonl", error);
+    Check(initialized, "The action runtime did not initialize for the resume test: " + error);
+
+    const revia::goals::GoalStore store((temporary.root / "goals.db").string());
+
+    // Stands in for a process that died mid-step: persisted as Running with the
+    // step still marked Acting, so nothing about it was ever observed.
+    revia::goals::Goal interrupted;
+    interrupted.id = revia::goals::NewGoalId();
+    interrupted.title = "Interrupted goal";
+    interrupted.status = revia::goals::GoalStatus::Running;
+    interrupted.scope = GoalScope(approved);
+
+    revia::goals::GoalStep step = MakeDirectoryStep(approved, "Notes");
+    step.id = revia::goals::NewStepId();
+    step.status = revia::goals::StepStatus::Acting;
+    interrupted.steps.push_back(step);
+    Check(store.Save(interrupted), "The interrupted goal was not saved.");
+
+    revia::goals::GoalRunner runner(runtime, store);
+    const revia::goals::Goal resumed = runner.Resume(interrupted.id);
+    Check(resumed.status == revia::goals::GoalStatus::Succeeded,
+        "An interrupted goal did not resume to completion after a restart.");
+    Check(std::filesystem::is_directory(approved / "Notes"),
+        "The resumed goal did not retry its unobserved step.");
+}
+
 } // namespace
 
 int main(const int argc, char** argv)
@@ -739,6 +1023,12 @@ int main(const int argc, char** argv)
         TestVoicePresetPersistence();
         TestWindowsSpeechServiceInitialization();
         TestLocalApiKeys();
+        TestGoalStoreRoundTrip();
+        TestGoalRunnerRejectsUnverifiablePlan();
+        TestGoalRunnerVerifiesSuccess();
+        TestGoalRunnerStopsOnUnverifiableStep();
+        TestGoalScopeCannotWidenAuthority();
+        TestGoalResumesAfterRestart();
         std::cout << "All Revia foundation tests passed.\n";
         return 0;
     }
