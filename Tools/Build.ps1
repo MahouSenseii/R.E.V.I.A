@@ -54,11 +54,30 @@ $compilerPath = Resolve-ReviaTool -CommandName 'g++.exe' -Candidates @(
     (Join-Path $clionBin 'mingw\bin\g++.exe')
 )
 
+# The project declares LANGUAGES C CXX because sqlite3.c is compiled as C, so
+# CMake needs both compilers. Passing only CMAKE_CXX_COMPILER lets CMake choose
+# a C compiler by its own search, which can land in a different MinGW
+# installation than the C++ compiler came from. Two MinGW distributions
+# reachable at once break the compiler driver with no diagnostic at all: the
+# try-compile fails with an empty error block. Always take gcc.exe from beside
+# the g++.exe that was selected.
+$compilerDirectory = Split-Path -Parent $compilerPath
+$cCompilerPath = Join-Path $compilerDirectory 'gcc.exe'
+if (-not (Test-Path -LiteralPath $cCompilerPath -PathType Leaf)) {
+    throw @"
+Found g++.exe at $compilerPath but no gcc.exe beside it.
+Revia needs a C and a C++ compiler from the same toolchain.
+Install a complete toolchain with:
+    .\Tools\InstallQt.ps1
+"@
+}
+
 # Printed because an ABI mismatch between the compiler and the Qt kit produces
 # link errors that are otherwise very hard to attribute.
-Write-Host "CMake:    $cmakePath"
-Write-Host "Ninja:    $ninjaPath"
-Write-Host "Compiler: $compilerPath"
+Write-Host "CMake:        $cmakePath"
+Write-Host "Ninja:        $ninjaPath"
+Write-Host "C compiler:   $cCompilerPath"
+Write-Host "C++ compiler: $compilerPath"
 
 $toolDirectories = @(
     (Split-Path -Parent $compilerPath),
@@ -69,7 +88,10 @@ $env:Path = ($toolDirectories -join ';') + ';' + $env:Path
 
 Push-Location $repoRoot
 try {
-    & $cmakePath --preset debug "-DCMAKE_CXX_COMPILER=$compilerPath" "-DCMAKE_MAKE_PROGRAM=$ninjaPath"
+    & $cmakePath --preset debug `
+        "-DCMAKE_C_COMPILER=$cCompilerPath" `
+        "-DCMAKE_CXX_COMPILER=$compilerPath" `
+        "-DCMAKE_MAKE_PROGRAM=$ninjaPath"
     if ($LASTEXITCODE -ne 0) {
         throw "CMake configuration failed with exit code $LASTEXITCODE."
     }

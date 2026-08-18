@@ -257,7 +257,13 @@ void TestLlamaServerProcessStopIsBounded()
 
     llamaCppServerProcess process;
     std::string error;
-    Check(process.Start(settings, error),
+    // The call must complete before the failure message is built. C++ does not
+    // specify the evaluation order of function arguments, and GCC evaluates
+    // them right to left, so passing Start(...) and "..." + error to Check in
+    // one expression formats the message while error is still empty and
+    // discards the actual reason for the failure.
+    const bool bStarted = process.Start(settings, error);
+    Check(bStarted,
         "The Windows child-process lifecycle test could not start: " + error);
     const auto start = std::chrono::steady_clock::now();
     process.Stop();
@@ -595,8 +601,12 @@ void TestVoicePresetPersistence()
 
     revia::speech::VoicePresetStore store(voiceRoot);
     std::string error;
-    Check(store.Save(preset, error), "Voice preset save failed: " + error);
-    Check(store.Assign("revia", preset.id, error), "Voice assignment failed: " + error);
+    // Sequenced for the same reason as the child-process test above: the
+    // message must not be built before the call that populates error.
+    const bool bSaved = store.Save(preset, error);
+    Check(bSaved, "Voice preset save failed: " + error);
+    const bool bAssigned = store.Assign("revia", preset.id, error);
+    Check(bAssigned, "Voice assignment failed: " + error);
 
     revia::speech::VoicePresetStore reopened(voiceRoot);
     const auto loaded = reopened.Find(preset.id);

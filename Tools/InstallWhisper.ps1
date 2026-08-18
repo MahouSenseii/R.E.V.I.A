@@ -62,7 +62,7 @@ if (Test-Path -LiteralPath $settingsPath -PathType Leaf) {
         $settings = Get-Content -LiteralPath $settingsPath -Raw | ConvertFrom-Json
         if ($settings.speechRecognition.useGpu -ne $package.UseGpu) {
             $settings.speechRecognition.useGpu = $package.UseGpu
-            $settings | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $settingsPath -Encoding UTF8
+            Save-ReviaJsonFile -Path $settingsPath -Value $settings
             Write-Host "Set speechRecognition.useGpu to $($package.UseGpu) in Config/settings.json."
             Write-Host 'Rebuild so the post-build copy updates build/debug/Config/.'
         }

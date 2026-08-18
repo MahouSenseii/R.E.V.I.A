@@ -10,61 +10,80 @@
 # Every asset below is pinned by SHA-256 exactly as before. Digests are the
 # values published on the upstream release pages for llama.cpp b10453 and
 # whisper.cpp v1.9.2.
+#
+# Two deliberate constraints on how this file is written:
+#
+#   1. No `enum` or `class`. Windows PowerShell 5.1 resolves type literals when
+#      it compiles the calling script, which happens before the dot-source that
+#      defines them has run. `[ReviaAccelerator]::Cpu` in an installer would
+#      therefore fail with "Unable to find type". Accelerators are plain strings
+#      validated by ValidateSet, which costs a little type safety and removes
+#      the failure mode entirely.
+#
+#   2. No Set-StrictMode. Dot-sourcing executes in the caller's scope, so a
+#      strict mode set here silently applies to every installer that sources
+#      this file. Under -Version Latest that turns a missing JSON property from
+#      a null into a terminating error, which is not a decision this helper
+#      should be making on the caller's behalf.
 
-Set-StrictMode -Version Latest
+$script:ReviaAccelerators = @('cpu', 'vulkan', 'cuda')
 
-enum ReviaAccelerator {
-    Cpu
-    Vulkan
-    Cuda
-}
+function Get-ReviaAcceleratorProbe {
+    <#
+    .SYNOPSIS
+        Inspects the display adapters and reports the best available accelerator.
+    .OUTPUTS
+        An object with Accelerator ('cpu', 'vulkan', or 'cuda') and Reason.
+    #>
 
-class ReviaAcceleratorProbe {
-    [ReviaAccelerator] $Detected
-    [string] $Reason
-
-    ReviaAcceleratorProbe() {
-        $this.Detected = [ReviaAccelerator]::Cpu
-        $this.Reason = 'No hardware acceleration was detected.'
-        $this.Probe()
+    $result = [pscustomobject]@{
+        Accelerator = 'cpu'
+        Reason      = 'No hardware acceleration was detected.'
     }
 
-    hidden [void] Probe() {
-        $adapters = @()
-        try {
-            $adapters = @(Get-CimInstance -ClassName Win32_VideoController -ErrorAction Stop)
-        }
-        catch {
-            $this.Reason = 'The display adapter list could not be queried; assuming CPU only.'
-            return
-        }
-
-        $names = @($adapters | ForEach-Object { $_.Name } | Where-Object { $_ })
-
-        # NVIDIA first: the CUDA build is meaningfully faster than Vulkan on
-        # NVIDIA hardware, which is why it stays the preferred path when present.
-        $nvidia = @($names | Where-Object { $_ -match 'NVIDIA' })
-        if ($nvidia.Count -gt 0) {
-            $this.Detected = [ReviaAccelerator]::Cuda
-            $this.Reason = "NVIDIA adapter detected: $($nvidia[0])."
-            return
-        }
-
-        # vulkan-1.dll is installed by the graphics driver, so its presence is a
-        # far better signal than adapter names for AMD and Intel parts.
-        $vulkanLoader = Join-Path $env:SystemRoot 'System32\vulkan-1.dll'
-        if (Test-Path -LiteralPath $vulkanLoader -PathType Leaf) {
-            $discrete = @($names | Where-Object { $_ -match 'AMD|Radeon|Intel Arc' })
-            $label = if ($discrete.Count -gt 0) { $discrete[0] } elseif ($names.Count -gt 0) { $names[0] } else { 'an unnamed adapter' }
-            $this.Detected = [ReviaAccelerator]::Vulkan
-            $this.Reason = "Vulkan runtime present for $label."
-            return
-        }
-
-        if ($names.Count -gt 0) {
-            $this.Reason = "No CUDA or Vulkan support found for $($names[0]); using the CPU build."
-        }
+    $adapters = @()
+    try {
+        $adapters = @(Get-CimInstance -ClassName Win32_VideoController -ErrorAction Stop)
     }
+    catch {
+        $result.Reason = 'The display adapter list could not be queried; assuming CPU only.'
+        return $result
+    }
+
+    $names = @($adapters | ForEach-Object { $_.Name } | Where-Object { $_ })
+
+    # NVIDIA first: the CUDA build is meaningfully faster than Vulkan on NVIDIA
+    # hardware, which is why it stays the preferred path when present.
+    $nvidia = @($names | Where-Object { $_ -match 'NVIDIA' })
+    if ($nvidia.Count -gt 0) {
+        $result.Accelerator = 'cuda'
+        $result.Reason = "NVIDIA adapter detected: $($nvidia[0])."
+        return $result
+    }
+
+    # vulkan-1.dll is installed by the graphics driver, so its presence is a far
+    # better signal than adapter names for AMD and Intel parts.
+    $vulkanLoader = Join-Path $env:SystemRoot 'System32\vulkan-1.dll'
+    if (Test-Path -LiteralPath $vulkanLoader -PathType Leaf) {
+        $discrete = @($names | Where-Object { $_ -match 'AMD|Radeon|Intel Arc' })
+        if ($discrete.Count -gt 0) {
+            $label = $discrete[0]
+        }
+        elseif ($names.Count -gt 0) {
+            $label = $names[0]
+        }
+        else {
+            $label = 'an unnamed adapter'
+        }
+        $result.Accelerator = 'vulkan'
+        $result.Reason = "Vulkan runtime present for $label."
+        return $result
+    }
+
+    if ($names.Count -gt 0) {
+        $result.Reason = "No CUDA or Vulkan support found for $($names[0]); using the CPU build."
+    }
+    return $result
 }
 
 function Resolve-ReviaAccelerator {
@@ -78,14 +97,13 @@ function Resolve-ReviaAccelerator {
     )
 
     if ($Requested -ne 'auto') {
-        $explicit = [ReviaAccelerator]$Requested
-        Write-Host "Accelerator: $explicit (requested explicitly)."
-        return $explicit
+        Write-Host "Accelerator: $Requested (requested explicitly)."
+        return $Requested
     }
 
-    $probe = [ReviaAcceleratorProbe]::new()
-    Write-Host "Accelerator: $($probe.Detected). $($probe.Reason)"
-    return $probe.Detected
+    $probe = Get-ReviaAcceleratorProbe
+    Write-Host "Accelerator: $($probe.Accelerator). $($probe.Reason)"
+    return $probe.Accelerator
 }
 
 function Get-ReviaVerifiedDownload {
@@ -112,8 +130,8 @@ function Get-ReviaVerifiedDownload {
 
     Write-Host "Downloading $(Split-Path -Leaf $Uri)..."
     $previousProgress = $ProgressPreference
-    # Invoke-WebRequest's progress bar costs more time than the transfer on
-    # large archives when the host is not a real console.
+    # Invoke-WebRequest's progress bar costs more time than the transfer itself
+    # on large archives when the host is not a real console.
     $ProgressPreference = 'SilentlyContinue'
     try {
         Invoke-WebRequest -Uri $Uri -OutFile $Destination
@@ -126,6 +144,27 @@ function Get-ReviaVerifiedDownload {
     if ($actual -ne $expected) {
         throw "Checksum mismatch for $Destination. Expected $expected but received $actual."
     }
+}
+
+function Save-ReviaJsonFile {
+    <#
+    .SYNOPSIS
+        Writes an object as JSON in UTF-8 without a byte-order mark.
+    .NOTES
+        Set-Content -Encoding UTF8 always emits a BOM on Windows PowerShell 5.1.
+        Config/settings.json is tracked in Git and read by nlohmann::json. The
+        parser tolerates a BOM, but silently adding one to a tracked file on
+        every install produces confusing diffs, so write the bytes explicitly.
+    #>
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)]$Value,
+        [int]$Depth = 12
+    )
+
+    $json = $Value | ConvertTo-Json -Depth $Depth
+    $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
+    [System.IO.File]::WriteAllText($Path, $json + [Environment]::NewLine, $utf8NoBom)
 }
 
 function Remove-ReviaTempDirectory {
@@ -154,20 +193,26 @@ function Remove-ReviaTempDirectory {
 
 $script:ReviaLlamaVersion = 'b10453'
 
+function Get-ReviaLlamaVersion {
+    return $script:ReviaLlamaVersion
+}
+
 function Get-ReviaLlamaPackages {
     <#
     .SYNOPSIS
         Returns the archives to install for a given accelerator.
     #>
     param(
-        [Parameter(Mandatory = $true)][ReviaAccelerator]$Accelerator
+        [Parameter(Mandatory = $true)]
+        [ValidateSet('cpu', 'vulkan', 'cuda')]
+        [string]$Accelerator
     )
 
     $version = $script:ReviaLlamaVersion
     $base = "https://github.com/ggml-org/llama.cpp/releases/download/$version"
 
     switch ($Accelerator) {
-        ([ReviaAccelerator]::Cuda) {
+        'cuda' {
             return @(
                 @{ Name = "llama-$version-bin-win-cuda-12.4-x64.zip"
                    Uri  = "$base/llama-$version-bin-win-cuda-12.4-x64.zip"
@@ -177,7 +222,7 @@ function Get-ReviaLlamaPackages {
                    Sha  = '8c79a9b226de4b3cacfd1f83d24f962d0773be79f1e7b75c6af4ded7e32ae1d6' }
             )
         }
-        ([ReviaAccelerator]::Vulkan) {
+        'vulkan' {
             return @(
                 @{ Name = "llama-$version-bin-win-vulkan-x64.zip"
                    Uri  = "$base/llama-$version-bin-win-vulkan-x64.zip"
@@ -192,8 +237,6 @@ function Get-ReviaLlamaPackages {
             )
         }
     }
-
-    throw "Unhandled accelerator: $Accelerator"
 }
 
 function Get-ReviaWhisperPackage {
@@ -206,25 +249,22 @@ function Get-ReviaWhisperPackage {
         faster than the 640 MB cuBLAS package they cannot use.
     #>
     param(
-        [Parameter(Mandatory = $true)][ReviaAccelerator]$Accelerator
+        [Parameter(Mandatory = $true)]
+        [ValidateSet('cpu', 'vulkan', 'cuda')]
+        [string]$Accelerator
     )
 
     $base = 'https://github.com/ggml-org/whisper.cpp/releases/download/v1.9.2'
 
-    switch ($Accelerator) {
-        ([ReviaAccelerator]::Cuda) {
-            return @{ Name  = 'whisper-cublas-12.4.0-bin-x64.zip'
-                      Uri   = "$base/whisper-cublas-12.4.0-bin-x64.zip"
-                      Sha   = '443110ddaad70d4290ab2e77179e31cf712035bbc4fad56bb4519a90c917b39c'
-                      UseGpu = $true }
-        }
-        default {
-            return @{ Name  = 'whisper-blas-bin-x64.zip'
-                      Uri   = "$base/whisper-blas-bin-x64.zip"
-                      Sha   = 'ffe5b47ca8e53a7677949f23a9c4641bbec4eee8a5714c3d14b67bb8d7b24a78'
-                      UseGpu = $false }
-        }
+    if ($Accelerator -eq 'cuda') {
+        return @{ Name   = 'whisper-cublas-12.4.0-bin-x64.zip'
+                  Uri    = "$base/whisper-cublas-12.4.0-bin-x64.zip"
+                  Sha    = '443110ddaad70d4290ab2e77179e31cf712035bbc4fad56bb4519a90c917b39c'
+                  UseGpu = $true }
     }
 
-    throw "Unhandled accelerator: $Accelerator"
+    return @{ Name   = 'whisper-blas-bin-x64.zip'
+              Uri    = "$base/whisper-blas-bin-x64.zip"
+              Sha    = 'ffe5b47ca8e53a7677949f23a9c4641bbec4eee8a5714c3d14b67bb8d7b24a78'
+              UseGpu = $false }
 }

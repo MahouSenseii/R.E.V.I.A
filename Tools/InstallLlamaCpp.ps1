@@ -36,7 +36,7 @@ if ((Test-Path -LiteralPath $serverPath -PathType Leaf) -and -not $Force) {
         }
     }
 
-    if ($installedAccelerator -eq $resolved.ToString()) {
+    if ($installedAccelerator -eq $resolved) {
         Write-Host "llama.cpp ($installedAccelerator) is already installed: $serverPath"
         exit 0
     }
@@ -75,17 +75,17 @@ try {
         Copy-Item -LiteralPath $_.FullName -Destination $installRoot -Force
     }
 
-    [ordered]@{
-        accelerator = $resolved.ToString()
-        version     = $script:ReviaLlamaVersion
+    Save-ReviaJsonFile -Path $stampPath -Value ([ordered]@{
+        accelerator = $resolved
+        version     = Get-ReviaLlamaVersion
         installedAt = (Get-Date).ToString('o')
-    } | ConvertTo-Json | Set-Content -LiteralPath $stampPath -Encoding UTF8
+    })
 }
 finally {
     Remove-ReviaTempDirectory -Path $extractRoot
 }
 
-Write-Host "llama.cpp $script:ReviaLlamaVersion ($resolved) ready: $serverPath"
-if ($resolved -eq [ReviaAccelerator]::Cpu) {
+Write-Host "llama.cpp $(Get-ReviaLlamaVersion) ($resolved) ready: $serverPath"
+if ($resolved -eq 'cpu') {
     Write-Host 'Chat will run on the CPU. Expect slower generation and prefer a smaller quantised model.'
 }
