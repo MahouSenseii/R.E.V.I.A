@@ -152,7 +152,7 @@ bool SpeechRecognitionService::Start(
         return false;
     }
     available.store(true);
-    Notify({"Ready", "Push-to-talk speech recognition is ready."});
+    Notify({"Ready", "Speech recognition is ready."});
     return true;
 }
 
@@ -166,6 +166,7 @@ bool SpeechRecognitionService::BeginRecording()
     {
         recordingWorker.join();
     }
+    discarding.store(false);
 
     std::error_code error;
     const std::filesystem::path captureDirectory =
@@ -198,7 +199,7 @@ bool SpeechRecognitionService::EndRecording()
         recordingWorker.join();
     }
     recording.store(false);
-    if (!std::filesystem::is_regular_file(activeWavePath))
+    if (discarding.load() || !std::filesystem::is_regular_file(activeWavePath))
     {
         return false;
     }
@@ -217,6 +218,9 @@ bool SpeechRecognitionService::EndRecording()
 
 void SpeechRecognitionService::Cancel()
 {
+    // Discarding tells an in-flight capture to drop its audio instead of handing it to
+    // whisper.cpp, so cancelling never produces a transcript the user did not ask for.
+    discarding.store(true);
     recordingWorker.request_stop();
     transcriptionWorker.request_stop();
 }
@@ -355,9 +359,15 @@ void SpeechRecognitionService::Capture(
     waveInClose(input);
     recording.store(false);
 
+    if (discarding.load())
+    {
+        Notify({"Ready", "Listening was cancelled; the audio was discarded.",
+            ElapsedMilliseconds(startedAt)});
+        return;
+    }
     if (pcm.size() < static_cast<std::size_t>(configuration.sampleRate / 2))
     {
-        Notify({"Ready", "Recording was too short; hold the button while speaking.",
+        Notify({"Ready", "That was too short to transcribe; speak, then stop listening.",
             ElapsedMilliseconds(startedAt)});
         return;
     }

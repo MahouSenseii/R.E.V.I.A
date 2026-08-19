@@ -75,6 +75,7 @@ private:
     std::atomic<bool> available = false;
     std::atomic<bool> recording = false;
     std::atomic<bool> transcribing = false;
+    std::atomic<bool> discarding = false;
 };
 
 } // namespace revia::speech

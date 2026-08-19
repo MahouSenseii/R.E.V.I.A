@@ -37,6 +37,11 @@ struct llmSettings
     std::string modelPath;
     bool bAutoTune = true;
     int autoFitTargetMiB = 1024;
+    // Set at runtime, not from settings.json. VRAM that llama.cpp must leave free on top
+    // of autoFitTargetMiB because another local model still has to load into it. The
+    // Qwen3-TTS service chooses CPU over CUDA when free VRAM is below its own threshold,
+    // so without this reservation a voice loaded after llama.cpp would land on the CPU.
+    int reservedVramMiB = 0;
     int contextSize = 4096;
     int parallelRequests = 2;
     int startupTimeoutSeconds = 120;
@@ -112,6 +117,31 @@ struct visionSettings
     int maxResponseTokens = 768;
 };
 
+// Stage 6 Tier 0. Window and focus events only: which application is in front and what
+// its title says. No capture, no pixels, no model.
+//
+// Continuous observation is the most invasive capability in this project, so it is off
+// until asked for, and the exclusion lists deny by default rather than allow by default.
+// An application or title that matches is not recorded in redacted form -- it produces no
+// observation at all, because "the user switched to their bank at 14:02" is the leak.
+struct perceptionSettings
+{
+    bool bEnabled = false;
+    // Coalescing window. Title changes fire per keystroke in some editors, and a
+    // per-keystroke record of a document title is a transcript by another name.
+    int minimumEventIntervalMs = 750;
+    int maxObservationsPerMinute = 60;
+    std::vector<std::string> excludedApplications = {
+        "keepass.exe", "keepassxc.exe", "1password.exe", "bitwarden.exe",
+        "lastpass.exe", "dashlane.exe", "protonpass.exe", "enpass.exe"
+    };
+    std::vector<std::string> excludedTitleFragments = {
+        "incognito", "inprivate", "private browsing", "private window",
+        "password", "passphrase", "seed phrase", "recovery phrase",
+        "authenticator", "one-time code", "bank", "banking", "credit card"
+    };
+};
+
 struct aiProfile
 {
     std::string id = "assistant";
@@ -136,6 +166,7 @@ struct appSettings
     speechSettings speech;
     speechRecognitionSettings speechRecognition;
     visionSettings vision;
+    perceptionSettings perception;
 };
 
 struct commandOutput

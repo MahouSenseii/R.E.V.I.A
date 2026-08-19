@@ -133,4 +133,13 @@ struct Goal
 [[nodiscard]] std::string NewGoalId();
 [[nodiscard]] std::string NewStepId();
 
+// Derives a goal's capability scope from the configured profile settings. The result is
+// never wider than the input: approved roots and applications are carried across
+// unchanged, mode is forced to ApprovedScope, root creation is refused, and the
+// auto-approval ceiling is capped at ReversibleWrite. A goal must not be able to grant
+// itself authority the interactive path does not already have, and a plan the model
+// authored must not be able to name its own scope at all.
+[[nodiscard]] actions::CapabilitySettings NarrowScopeForGoal(
+    actions::CapabilitySettings configured);
+
 } // namespace revia::goals

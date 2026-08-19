@@ -31,11 +31,22 @@ ParsedAction Error(bool recognized, std::string message)
 
 ParsedAction StructuredActionParser::ParseJson(const std::string& input) const
 {
+    try
+    {
+        return ParseObject(nlohmann::json::parse(StripCodeFence(input)));
+    }
+    catch (const std::exception& error)
+    {
+        return Error(true, std::string("Invalid action JSON: ") + error.what());
+    }
+}
+
+ParsedAction StructuredActionParser::ParseObject(const nlohmann::json& data)
+{
     ParsedAction result;
     result.recognized = true;
     try
     {
-        const auto data = nlohmann::json::parse(StripCodeFence(input));
         if (!data.is_object())
         {
             return Error(true, "Action proposal must be a JSON object.");

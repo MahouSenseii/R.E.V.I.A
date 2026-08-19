@@ -357,8 +357,12 @@ bool llamaCppServerProcess::StartInternal(
         }
         if (settings.bAutoTune)
         {
+            // Anything still waiting to load into VRAM is added to the fit target so
+            // llama.cpp leaves room for it rather than claiming it first.
+            const int fitTarget = settings.autoFitTargetMiB +
+                (settings.reservedVramMiB > 0 ? settings.reservedVramMiB : 0);
             commandLine += L" --n-gpu-layers auto --fit on --fit-target " +
-                std::to_wstring(settings.autoFitTargetMiB) +
+                std::to_wstring(fitTarget) +
                 L" --flash-attn auto";
         }
         else

@@ -56,7 +56,7 @@ Revisiting this decision affects Stage 3 and Stage 6's action surface only. The 
 
 - Implemented: a separate Qt desktop module with a translucent companion window, tray controls, chat panel, always-on-top option, and visible states for offline, starting, idle, thinking, responding, remembering, acting, waiting, blocked, error, and stopping.
 - Implemented: a thread-safe runtime event bus, reusable non-CLI session, timestamped activity/timing feed, cooperative stop button, confirmation dialogs, and clean owned-process shutdown. The CLI remains available as a fallback.
-- Implemented: bounded response-posture/affect events, profile-aware Qwen3-TTS voice design/cloning with SAPI fallback, and hold-to-talk CUDA whisper.cpp STT with component telemetry.
+- Implemented: bounded response-posture/affect events, profile-aware Qwen3-TTS voice design/cloning with SAPI fallback, and toggled (Ctrl+Space) CUDA whisper.cpp STT with component telemetry.
 - Implemented: horizontal status/actions and tabbed Chat, Activity, Voice Studio, and Settings presentation without moving runtime ownership into Qt.
 - Remaining shell work: persist window preferences and add a focused audit-history view instead of mixing audit records with general activity.
 
@@ -78,13 +78,26 @@ Exit criteria: Revia can remain on the desktop without stealing focus, the user 
 
 Exit criteria: each supported application has deterministic integration tests and a deny-by-default capability profile, and every vision-resolved action either produces a typed element reference or is refused with the reason recorded.
 
-## Stage 4 — Goal runner and self-testing
+## Stage 4 — Goal runner and self-testing (engine implemented and wired)
 
-- Persist a goal as a state machine: plan, preflight, act, observe, verify, retry with a bound, then complete or stop.
-- Store evidence for every step: action IDs, observations, expected outcome, actual outcome, retry count, and final status.
-- Add budgets for time, tokens, actions, disk changes, and retries.
-- Run goals inside a disposable sandbox before allowing them against real folders or applications.
-- Treat learning as reviewed memory and measured policy updates—not self-modifying executable code.
+- Implemented: a goal persisted as a state machine — validate, act, observe, verify, retry within a bound, then complete or stop — over the existing typed actions. The runner adds no execution authority; every step goes through the same dispatcher, policy, and audit path as an interactive action.
+- Implemented: per-step evidence in SQLite (action IDs joinable against the JSONL audit log, observations, expected vs actual, retry count, verdict, final status), plus a per-goal capability scope that cannot widen the profile's authority.
+- Implemented: budgets for actions, retries per step, total retries, tokens, and duration; a plan is rejected before execution when a step has no read-only verification action or never says what success looks like.
+- Implemented: `ReviaSession` owns the store and runner, republishes step transitions on the runtime event bus as `Goal` component status, routes step confirmations to the same handler interactive actions use, and reports unfinished goals at startup. `/goals` lists them, `/goals resume <id>` continues one.
+- Implemented: **goal authoring.** `/goal <request>` asks the local model for a multi-step plan — each step an action, a read-only check, and a literal expectation — decodes it with `GoalPlanner`, refuses more than twelve steps, then runs it through `GoalRunner::Validate` before anything executes. The plan is shown in full and approved as a whole before the first step, and every step still hits the per-action confirmation path.
+- Implemented: the plan never names its own capability scope. `NarrowScopeForGoal` derives it from configured policy and can only tighten — mode forced to `ApprovedScope`, root creation refused, auto-approval capped at `ReversibleWrite`.
+- Implemented: **the disposable sandbox.** Every `/goal` run is rehearsed first. `GoalSandbox` stages only the paths the plan names into a scratch tree, rewrites the plan onto it, and runs it there. A plan that fails rehearsal is refused and never reaches real folders; a plan that passes is offered for approval *with that evidence attached*, so the user approves an observed result rather than plausible-looking text. The scratch tree is removed by a scope guard, so an exception cannot leave one behind.
+- Remaining: the CLI (`reviaApp`) has none of the goal commands; they exist on `ReviaSession` only.
+- Remaining: rehearsal is filesystem-only. A plan that drives an application has nothing to copy, so it reports that it could not be rehearsed and goes to confirmation without evidence. Rehearsing UIA actions needs a disposable application instance, not a disposable directory.
+
+**A rehearsal needs its own `ActionRuntime`, not the session's.** Scoped execution takes the more restrictive of the global policy and the goal's, and the scratch tree sits outside every configured approved root — so running a rehearsal through the session's runtime blocks every step of a perfectly workable plan. `GoalSandbox::Prepare` therefore emits a capability config approving the scratch tree and nothing else, with no approved applications and the goal's own risk ceiling copied across so the rehearsal is never more permissive than the run it stands in for. Its audit log is discarded with the tree rather than mixed into the real trail.
+
+Only the paths a plan names are staged, one directory level deep. Mirroring an entire approved root to rehearse a two-step plan would cost more than the plan does, and a step that reaches outside what it declared fails in rehearsal instead of succeeding there and surprising someone later.
+
+**Asked something vague, the planner proposes deletion.** "Clean up my desktop" produced a single step recycling the whole Desktop directory. Nothing upstream flags it: the plan is structurally valid, and `move_to_recycle_bin` is classified `ReversibleWrite` because the bin is recoverable, so the risk ceiling does not catch it either. What contains it is the approved-root boundary and the fact that the whole plan is shown before it runs — which is why the approval prompt marks a recycling step `[DELETES FILES]` explicitly. Treat that pairing as load-bearing, not cosmetic.
+- Remaining: treat learning as reviewed memory and measured policy updates—not self-modifying executable code.
+
+Unfinished goals are reported at startup, never auto-resumed. Restarting into unattended execution of work the user has not re-approved is Stage 5, behind its own job contract.
 
 Exit criteria: Revia proves completion through observable checks, stops on repeated failure, and resumes safely after restart.
 
@@ -108,7 +121,7 @@ This stage ports the two-brain design already worked out for AccessMind: a cheap
 
 **Perception tiers, cheapest first.** Each tier only escalates to the next when it finds a reason to.
 
-- **Tier 0 — window and focus events.** `SetWinEventHook` for foreground changes, window creation, and title changes. Effectively free, event-driven, no polling. Knowing the user switched from a browser to Visual Studio, or that a document title gained an asterisk, carries a large fraction of the useful signal at almost no cost. Build this first and resist escalating until it is exhausted.
+- **Tier 0 — window and focus events. Implemented.** `SetWinEventHook` for foreground changes, window creation, and title changes, on a dedicated thread with its own message pump so perception never depends on the Qt window being open. Off by default; deny lists suppress rather than redact; observations are debounced from the last admitted one and capped by a rolling per-minute budget; only counts are logged, never titles. Measured on a real desktop: 22 raw events produced 7 observations and 15 coalesced, and a window whose title matched the deny list was counted as excluded with nothing about it written anywhere. **Resist escalating to Tier 1 until this is exhausted** — most of what the later tiers would ask a model to infer is already available here for free.
 - **Tier 1 — change detection.** Periodic BitBlt capture, downscaled, reduced to a perceptual hash. Discard frames that are materially identical to the last. Bounded to a fixed interval with a hard cap. `gdi32` and `gdiplus` are already linked.
 - **Tier 2 — cheap local analysis.** OCR or a small classifier over changed regions only. Produces structured observations, not prose.
 - **Tier 3 — reasoning.** Wake Qwen3-VL only when lower tiers produce a salience score above threshold, with a hard budget of wakes per hour. Every wake must record what evidence justified it, so false wakes are diagnosable.
@@ -129,7 +142,11 @@ This stage ports the two-brain design already worked out for AccessMind: a cheap
 - Frames are analysed and discarded; only structured observations persist, and those follow the existing memory sensitivity rules.
 - A single global pause that stops perception without stopping Revia.
 
+**Session history (implemented).** Tier 0 observations roll into bounded in-memory spans: consecutive observations of one application merge, and a span runs until the *next* application appears rather than until its own last window event, because a quiet application generates no events and reporting no time for forty minutes of reading answers the question wrongly. That attribution is capped at five minutes so an idle machine does not credit hours to whatever was last in front. Capped at 240 spans, eight hours, and four titles per span; never written to disk; cleared by `/perception forget` and discarded when Revia stops.
+
 Exit criteria: Revia can describe what the user has been doing for the last hour from Tier 0 and Tier 1 evidence alone, with Tier 3 wakes staying inside budget, and observation can be paused instantly and verifiably.
+
+The first half of that is met from Tier 0 alone — `/perception history 60` reports time per application with the files worked on — and pause is immediate. Tier 1 and above remain unbuilt, and the attention/interruption model below applies to none of it yet, because nothing here speaks: this stage only answers when asked.
 
 ## Stage 7 — Self-directed goal formation
 
@@ -164,8 +181,12 @@ Exit criteria: the character runs for a full day without stealing focus or dropp
 
 ## Suggested next implementation slice
 
-Unchanged: build the bounded goal runner from Stage 4 — a persisted plan/act/observe/verify state machine with action, time, token, and retry budgets. Start with a disposable Notepad fixture and require observable success evidence before a goal can complete.
+Stage 4 can execute a goal. Stage 6 Tier 0 can now observe and summarise a working session. The two have never been connected, and connecting them is Stage 7 — the stage that turns a capable assistant into a companion.
 
-It stays first because Stage 7 is the stage that makes Revia feel autonomous, and Stage 7 is worthless without a goal runner to hand its approved proposals to. Perception without a runner produces an assistant that notices things and can do nothing about them.
+**A proposal path** is therefore the next slice, and it is smaller than it sounds because it adds no execution authority whatsoever. A proposal carries the observed evidence (from the session history that now exists), the goal it would pursue, the capability profile it would need, and the budget it would consume. It executes nothing. Approving one hands it to the Stage 4 runner, which already rehearses, confirms, budgets, verifies, and audits. That property — that this stage cannot do anything the user has not already been able to do by typing `/goal` — is what makes it safe to build before the attention model exists.
 
-If a second track is being worked in parallel, take **Tier 0 of Stage 6** — the `SetWinEventHook` layer. It is small, carries no privacy cost, needs no model, and produces the context signal every later stage consumes.
+Deliberately out of scope for that first slice: Revia speaking unprompted. Proposals should be *retrievable* before they are *delivered*. The Stage 6 attention and interruption rules — cooldowns, suppression, dismissal tracking, precision measurement — all belong to delivery, and building them before there is anything worth delivering gets the order backwards.
+
+**Tier 1 perception** stays deferred. Change detection and perceptual hashing add cost and privacy surface, and most of what they would infer is already available for free from window titles.
+
+**Reviewed learning** (Stage 4's last bullet) remains open but still has no consumer: nothing produces enough goal history for a review loop to act on.

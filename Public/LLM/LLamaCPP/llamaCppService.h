@@ -28,6 +28,7 @@ public:
         const std::vector<conversationMessage>& context,
         std::stop_token stopToken = {}) const;
     responseOutput GenerateActionProposal(const std::string& userRequest) const;
+    responseOutput GenerateGoalPlan(const std::string& userRequest) const;
     responseOutput AnalyzeImage(
         const std::filesystem::path& imagePath,
         const std::string& prompt,
@@ -44,6 +45,12 @@ public:
 private:
     static std::string ParseStreamChunk(const std::string& line);
     int ResponseTokenLimit() const;
+    // Shared by both planners: same low temperature, same JSON-object response format,
+    // different contract and token ceiling.
+    responseOutput GeneratePlannerResponse(
+        const std::string& systemPrompt,
+        const std::string& userRequest,
+        int maxTokens) const;
 
     std::string host = "127.0.0.1";
     int port = 8080;

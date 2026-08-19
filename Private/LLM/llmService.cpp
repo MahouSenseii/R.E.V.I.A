@@ -206,6 +206,41 @@ responseOutput llmService::GenerateActionProposal(const std::string& userRequest
     }
 }
 
+responseOutput llmService::GenerateGoalPlan(const std::string& userRequest) const
+{
+    if (!bIsReady)
+    {
+        responseOutput output;
+        output.bSuccess = false;
+        output.response = "My language system is not ready to plan a goal.";
+        output.reason = "LLM service was not ready.";
+        output.bShouldSpeak = false;
+        return output;
+    }
+
+    if (backendType != llmBackendType::LLamaCpp)
+    {
+        responseOutput output;
+        output.bSuccess = false;
+        output.response = "Goal planning requires the local llama.cpp backend.";
+        output.reason = "Goal planning requires a structured-output LLM backend.";
+        output.bShouldSpeak = false;
+        return output;
+    }
+
+    const healthOutput health = llamaCpp.CheckHealth();
+    if (!health.bIsAvailable)
+    {
+        responseOutput output;
+        output.bSuccess = false;
+        output.response = "My configured language model is not available for planning yet.";
+        output.reason = health.reason;
+        output.bShouldSpeak = false;
+        return output;
+    }
+    return llamaCpp.GenerateGoalPlan(userRequest);
+}
+
 responseOutput llmService::AnalyzeImage(
     const std::filesystem::path& imagePath,
     const std::string& prompt,

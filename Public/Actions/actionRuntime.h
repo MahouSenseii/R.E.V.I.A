@@ -41,6 +41,10 @@ public:
     [[nodiscard]] std::string StatusJson() const;
     [[nodiscard]] bool IsInitialized() const;
 
+    // The configured settings, so a caller can derive a narrower scope from them. Returns
+    // defaults when uninitialized, which are the most restrictive values in the struct.
+    [[nodiscard]] CapabilitySettings Settings() const;
+
 private:
     policy::PermissionStore permissionStore;
     std::unique_ptr<policy::CapabilityPolicy> policy;

@@ -71,5 +71,12 @@
     "enabled": true,
     "requireConfirmation": true,
     "maxResponseTokens": 768
+  },
+  "perception": {
+    "enabled": false,
+    "minimumEventIntervalMs": 750,
+    "maxObservationsPerMinute": 60,
+    "excludedApplications": [],
+    "excludedTitleFragments": []
   }
 }

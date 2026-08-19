@@ -11,6 +11,7 @@
 #include <QHBoxLayout>
 #include <QIcon>
 #include <QKeyEvent>
+#include <QKeySequence>
 #include <QLabel>
 #include <QLineEdit>
 #include <QMenu>
@@ -288,7 +289,14 @@ void ReviaWindow::BuildInterface()
     automationLabel->setObjectName("automationChip");
     visionLabel = new QLabel("Vision: Starting", root);
     visionLabel->setObjectName("visionChip");
-    for (QLabel* chip : {affectLabel, speechLabel, microphoneLabel, automationLabel, visionLabel})
+    // Required by Stage 6: while ambient observation is active it must be visible without
+    // opening a tab or reading a log. The chip is always present so its absence can never
+    // be mistaken for "off".
+    perceptionLabel = new QLabel("Watching: Off", root);
+    perceptionLabel->setObjectName("perceptionChip");
+    perceptionLabel->setToolTip("Ambient window observation is off.");
+    for (QLabel* chip : {affectLabel, speechLabel, microphoneLabel, automationLabel,
+        visionLabel, perceptionLabel})
     {
         chip->setMinimumWidth(0);
         chip->setMaximumWidth(180);
@@ -321,9 +329,10 @@ void ReviaWindow::BuildInterface()
     stopButton = new QPushButton("Stop", chatPage);
     stopButton->setObjectName("stopButton");
     stopButton->setEnabled(false);
-    microphoneButton = new QPushButton("Hold to talk", chatPage);
+    microphoneButton = new QPushButton("Listen", chatPage);
     microphoneButton->setObjectName("microphoneButton");
     microphoneButton->setEnabled(false);
+    microphoneButton->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_Space));
     visionButton = new QPushButton("Analyze screen", chatPage);
     visionButton->setObjectName("visionButton");
     visionButton->setEnabled(false);
@@ -419,13 +428,21 @@ void ReviaWindow::BuildInterface()
     alwaysOnTopCheck = new QCheckBox("Keep Revia on top", settingsPage);
     speechCheck = new QCheckBox("Speak replies", settingsPage);
     speechCheck->setChecked(true);
+    autoSendVoiceCheck = new QCheckBox("Send what I say automatically", settingsPage);
+    autoSendVoiceCheck->setChecked(true);
+    autoSendVoiceCheck->setToolTip(
+        "When a transcript arrives, send it to Revia straight away instead of leaving it "
+        "in the message box for editing.");
     preferenceRow->addWidget(alwaysOnTopCheck);
     preferenceRow->addWidget(speechCheck);
+    preferenceRow->addWidget(autoSendVoiceCheck);
     preferenceRow->addStretch();
     settingsLayout->addLayout(preferenceRow);
     auto* settingsHint = new QLabel(
-        "Auto voice mode uses a profile's Qwen3-TTS preset when assigned and keeps Windows "
-        "SAPI as a dependable fallback. Hardware selection is re-evaluated on each model load.",
+        "Listening is a toggle: press Listen (or Ctrl+Space) to start, press it again to stop "
+        "and transcribe. Auto voice mode uses a profile's Qwen3-TTS preset when assigned and "
+        "keeps Windows SAPI as a dependable fallback. Hardware selection is re-evaluated on "
+        "each model load.",
         settingsPage);
     settingsHint->setWordWrap(true);
     settingsHint->setObjectName("secondaryText");
@@ -436,18 +453,7 @@ void ReviaWindow::BuildInterface()
 
     connect(sendButton, &QPushButton::clicked, this, [this]() { SendMessage(); });
     connect(stopButton, &QPushButton::clicked, this, [this]() { session.RequestStop(); });
-    connect(microphoneButton, &QPushButton::pressed, this, [this]()
-    {
-        if (session.BeginListening())
-        {
-            microphoneButton->setText("Listening...");
-        }
-    });
-    connect(microphoneButton, &QPushButton::released, this, [this]()
-    {
-        session.EndListening();
-        microphoneButton->setText("Hold to talk");
-    });
+    connect(microphoneButton, &QPushButton::clicked, this, [this]() { ToggleListening(); });
     connect(visionButton, &QPushButton::clicked, this, [this]() { AnalyzeVisibleScreen(); });
     connect(alwaysOnTopCheck, &QCheckBox::toggled, this, [this](const bool enabled)
     {
@@ -491,7 +497,7 @@ void ReviaWindow::BuildInterface()
         QWidget#titleBar { background: transparent; }
         QLabel#windowTitle { color: #93a4bd; font-size: 12px; }
         QLabel#affectChip, QLabel#voiceChip, QLabel#micChip,
-        QLabel#automationChip, QLabel#visionChip {
+        QLabel#automationChip, QLabel#visionChip, QLabel#perceptionChip {
             background: rgba(25, 36, 55, 205);
             border: 1px solid #293b55;
             border-radius: 8px;
@@ -503,6 +509,13 @@ void ReviaWindow::BuildInterface()
         QLabel#micChip { color: #8ac7ff; }
         QLabel#automationChip { color: #e0bd75; }
         QLabel#visionChip { color: #e69bc4; }
+        QLabel#perceptionChip { color: #93a4bd; }
+        QLabel#perceptionChip[watching="true"] {
+            background: rgba(122, 62, 40, 235);
+            border: 1px solid #d2763f;
+            color: #ffd9b8;
+            font-weight: 700;
+        }
         QLabel#secondaryText { color: #93a4bd; }
         QLabel#sectionTitle { color: #dce9f7; font-size: 15px; font-weight: 700; }
         QLabel#voiceStudioStatus {
@@ -568,7 +581,9 @@ void ReviaWindow::BuildInterface()
         QPushButton#stopButton { background: #7d3d55; }
         QPushButton#stopButton:hover { background: #a64d69; }
         QPushButton#microphoneButton { background: #31556f; }
-        QPushButton#microphoneButton:pressed { background: #2b9a8b; }
+        QPushButton#microphoneButton:hover { background: #3d6b8c; }
+        QPushButton#microphoneButton[listening="true"] { background: #2b9a8b; }
+        QPushButton#microphoneButton[listening="true"]:hover { background: #34b8a6; }
         QPushButton#visionButton { background: #694663; }
         QPushButton#visionButton:hover { background: #8e5b84; }
         QPushButton#secondaryButton { background: #354154; }
@@ -576,6 +591,8 @@ void ReviaWindow::BuildInterface()
         QCheckBox { color: #a9bad2; }
         QToolTip { color: white; background: #182438; border: 1px solid #45607f; }
     )");
+
+    ApplyMicrophoneUi(MicrophoneUi::Unavailable);
 }
 
 void ReviaWindow::BuildTray()
@@ -623,6 +640,9 @@ void ReviaWindow::StartRuntime()
         {
             sendButton->setEnabled(started);
             stopButton->setEnabled(false);
+            // Re-evaluate the microphone now that IsStarted() is finally true; the last
+            // recognition phase event arrived while startup was still in flight.
+            ApplyMicrophoneUi(microphoneUiState);
             if (!greeting.isEmpty())
             {
                 AppendChat(QString::fromStdString(session.DisplayName()), greeting);
@@ -685,6 +705,84 @@ void ReviaWindow::SendMessage()
             }
         }, Qt::QueuedConnection);
     });
+}
+
+void ReviaWindow::ToggleListening()
+{
+    if (shuttingDown.load())
+    {
+        return;
+    }
+
+    if (microphoneUiState == MicrophoneUi::Listening)
+    {
+        listenRequested = false;
+        // EndListening hands the capture to whisper.cpp; the Transcribing phase event
+        // arrives from the worker and repaints the button.
+        ApplyMicrophoneUi(session.EndListening()
+            ? MicrophoneUi::Transcribing
+            : MicrophoneUi::Ready);
+        return;
+    }
+
+    if (microphoneUiState != MicrophoneUi::Ready)
+    {
+        return;
+    }
+    if (session.BeginListening())
+    {
+        listenRequested = true;
+        ApplyMicrophoneUi(MicrophoneUi::Listening);
+    }
+    else
+    {
+        AppendActivity("Microphone: listening could not start right now.");
+    }
+}
+
+void ReviaWindow::ApplyMicrophoneUi(const MicrophoneUi microphoneUi)
+{
+    microphoneUiState = microphoneUi;
+    microphoneActive = microphoneUi == MicrophoneUi::Listening ||
+        microphoneUi == MicrophoneUi::Transcribing;
+
+    switch (microphoneUi)
+    {
+        case MicrophoneUi::Listening:
+            microphoneButton->setText("Stop listening");
+            microphoneButton->setToolTip("Stop listening and transcribe (Ctrl+Space)");
+            microphoneButton->setEnabled(true);
+            break;
+        case MicrophoneUi::Transcribing:
+            microphoneButton->setText("Transcribing...");
+            microphoneButton->setToolTip("Whisper is turning the recording into text.");
+            microphoneButton->setEnabled(false);
+            break;
+        case MicrophoneUi::Ready:
+            microphoneButton->setText("Listen");
+            // Recognition reports Ready partway through startup, while the startup thread
+            // is still running. Taking a turn then would block the UI joining it, so the
+            // button stays disabled until the runtime is actually up.
+            microphoneButton->setToolTip(session.IsStarted()
+                ? "Start listening (Ctrl+Space)"
+                : "Available once Revia has finished starting.");
+            microphoneButton->setEnabled(session.IsStarted());
+            break;
+        case MicrophoneUi::Unavailable:
+        default:
+            microphoneButton->setText("Listen");
+            microphoneButton->setToolTip("Speech recognition is not available.");
+            microphoneButton->setEnabled(false);
+            break;
+    }
+
+    // The pressed-state styling is only meaningful while a press is held, so recolour
+    // the button from its logical state instead.
+    microphoneButton->setProperty("listening", microphoneUi == MicrophoneUi::Listening);
+    microphoneButton->style()->unpolish(microphoneButton);
+    microphoneButton->style()->polish(microphoneButton);
+
+    stopButton->setEnabled(microphoneActive || speechActive || session.IsBusy());
 }
 
 void ReviaWindow::BeginShutdown()
@@ -1020,22 +1118,46 @@ void ReviaWindow::HandleRuntimeEvent(const revia::runtime::RuntimeEvent& event)
             const QString phase = QString::fromStdString(event.phase);
             microphoneLabel->setText(QStringLiteral("Mic: ") + phase);
             microphoneLabel->setToolTip(QString::fromStdString(event.message));
-            microphoneActive = phase == QStringLiteral("Recording") ||
-                phase == QStringLiteral("Captured") || phase == QStringLiteral("Transcribing");
-            microphoneButton->setEnabled(
-                phase != QStringLiteral("Missing") && phase != QStringLiteral("Disabled") &&
-                phase != QStringLiteral("Unavailable") && phase != QStringLiteral("Error") &&
-                !microphoneActive);
-            if (phase == QStringLiteral("Recording"))
+            if (phase == QStringLiteral("Missing") || phase == QStringLiteral("Disabled") ||
+                phase == QStringLiteral("Unavailable"))
             {
-                microphoneButton->setEnabled(true);
+                listenRequested = false;
+                ApplyMicrophoneUi(MicrophoneUi::Unavailable);
+            }
+            else if (phase == QStringLiteral("Recording"))
+            {
+                // The capture thread confirms it opened the microphone. Ignore it if the
+                // user already toggled off, so a late event cannot revive the button.
+                if (listenRequested)
+                {
+                    ApplyMicrophoneUi(MicrophoneUi::Listening);
+                }
+            }
+            else if (phase == QStringLiteral("Captured") ||
+                phase == QStringLiteral("Transcribing"))
+            {
+                ApplyMicrophoneUi(MicrophoneUi::Transcribing);
+            }
+            else
+            {
+                // Ready, Transcript, Stopped, and Error all end the cycle. Error is
+                // recoverable here on purpose: a microphone that failed to open once
+                // should not lock the button for the rest of the session.
+                listenRequested = false;
+                ApplyMicrophoneUi(MicrophoneUi::Ready);
             }
             if (phase == QStringLiteral("Transcript"))
             {
                 const QString transcript = QString::fromStdString(event.message).trimmed();
                 messageInput->setPlainText(transcript);
-                messageInput->setFocus();
-                microphoneButton->setEnabled(true);
+                if (autoSendVoiceCheck->isChecked() && !session.IsBusy())
+                {
+                    SendMessage();
+                }
+                else
+                {
+                    messageInput->setFocus();
+                }
             }
             QString detail = QStringLiteral("Microphone ") + phase + QStringLiteral(": ") +
                 QString::fromStdString(event.message);
@@ -1044,8 +1166,9 @@ void ReviaWindow::HandleRuntimeEvent(const revia::runtime::RuntimeEvent& event)
                 detail += QStringLiteral(" (") +
                     QString::number(event.elapsedMilliseconds, 'f', 1) + QStringLiteral("ms)");
             }
+            // ApplyMicrophoneUi already refreshed the stop button, and it ran before the
+            // transcript may have started a turn, so do not overwrite that here.
             AppendActivity(detail);
-            stopButton->setEnabled(microphoneActive || speechActive || session.IsBusy());
         }
         else if (event.component == "Automation")
         {
@@ -1060,6 +1183,33 @@ void ReviaWindow::HandleRuntimeEvent(const revia::runtime::RuntimeEvent& event)
                     QString::number(event.elapsedMilliseconds, 'f', 1) + QStringLiteral("ms)");
             }
             AppendActivity(detail);
+        }
+        else if (event.component == "Perception")
+        {
+            const QString phase = QString::fromStdString(event.phase);
+            const QString detail = QString::fromStdString(event.message);
+            const bool lifecycle = phase == QStringLiteral("Watching") ||
+                phase == QStringLiteral("Paused") || phase == QStringLiteral("Off") ||
+                phase == QStringLiteral("Error") || phase == QStringLiteral("Unavailable");
+            if (lifecycle)
+            {
+                perceptionLabel->setText(QStringLiteral("Watching: ") +
+                    (phase == QStringLiteral("Watching") ? QStringLiteral("On") : phase));
+                perceptionLabel->setToolTip(detail);
+                perceptionLabel->setProperty(
+                    "watching", phase == QStringLiteral("Watching"));
+                perceptionLabel->style()->unpolish(perceptionLabel);
+                perceptionLabel->style()->polish(perceptionLabel);
+                AppendActivity(QStringLiteral("Perception ") + phase +
+                    QStringLiteral(": ") + detail);
+            }
+            else
+            {
+                // An observation, not a state change. It goes to the activity feed so
+                // there is a visible record of everything perception actually kept.
+                AppendActivity(QStringLiteral("Saw (") + phase + QStringLiteral("): ") +
+                    detail);
+            }
         }
         else if (event.component == "Vision")
         {

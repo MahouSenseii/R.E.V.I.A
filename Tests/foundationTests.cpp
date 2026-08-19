@@ -6,10 +6,14 @@
 #include "Audit/actionAuditLogger.h"
 #include "Filesystem/fileSystemExecutor.h"
 #include "Goals/goalRunner.h"
+#include "Goals/goalSandbox.h"
 #include "Goals/goalStore.h"
 #include "Goals/goalTypes.h"
 #include "LLM/LLamaCPP/llamaCppServerProcess.h"
 #include "Memory/longTermMemory.h"
+#include "Perception/activityHistory.h"
+#include "Perception/windowEventMonitor.h"
+#include "Planning/goalPlanner.h"
 #include "Planning/structuredActionParser.h"
 #include "Policy/capabilityPolicy.h"
 #include "Policy/permissionStore.h"
@@ -934,6 +938,764 @@ void TestGoalResumesAfterRestart()
         "The resumed goal did not retry its unobserved step.");
 }
 
+void TestGoalPlannerParsesMultiStepPlan()
+{
+    const std::string plan = R"({
+        "title": "Set up the Notes folder",
+        "steps": [
+            {
+                "description": "Create the folder",
+                "action": {"action": "create_directory", "path": "C:/Sandbox/Notes"},
+                "check": {"action": "list_directory", "path": "C:/Sandbox"},
+                "expected": "Notes"
+            },
+            {
+                "description": "Copy the template in",
+                "action": {"action": "copy_file", "source": "C:/Sandbox/template.txt",
+                           "destination": "C:/Sandbox/Notes/template.txt"},
+                "check": {"action": "list_directory", "path": "C:/Sandbox/Notes"},
+                "expected": "template.txt"
+            }
+        ]
+    })";
+
+    const auto parsed = revia::planning::GoalPlanner::ParseJson(plan);
+    Check(parsed.succeeded, "A well-formed goal plan was rejected: " + parsed.error);
+    Check(parsed.goal.title == "Set up the Notes folder",
+        "The goal title did not survive planning.");
+    Check(parsed.goal.steps.size() == 2, "The planner lost a step.");
+    Check(!parsed.goal.id.empty() && !parsed.goal.steps.front().id.empty(),
+        "Planned goals and steps must carry generated ids.");
+    Check(parsed.goal.steps[0].ordinal == 0 && parsed.goal.steps[1].ordinal == 1,
+        "Planned steps were not ordered.");
+    Check(parsed.goal.steps[0].action.type == ActionType::CreateDirectory &&
+        parsed.goal.steps[0].check.type == ActionType::ListDirectory &&
+        parsed.goal.steps[0].expected == "Notes",
+        "The first planned step did not decode into action, check, and expectation.");
+    Check(parsed.goal.steps[1].action.type == ActionType::CopyFile &&
+        !parsed.goal.steps[1].action.destination.empty(),
+        "A two-path action lost its destination during planning.");
+
+    // The parser must not invent authority. Scope stays at the struct default until the
+    // session narrows it from configured policy.
+    Check(parsed.goal.scope.approvedRoots.empty(),
+        "A planned goal must not carry an approved root chosen by the model.");
+}
+
+void TestGoalPlannerRejectsUnusablePlans()
+{
+    const auto unknown = revia::planning::GoalPlanner::ParseJson(
+        R"({"goal": "unknown", "reason": "needs a shell command"})");
+    Check(!unknown.succeeded, "A plan the model declined to make was accepted.");
+
+    const auto noSteps = revia::planning::GoalPlanner::ParseJson(
+        R"({"title": "Nothing", "steps": []})");
+    Check(!noSteps.succeeded, "A plan with no steps was accepted.");
+
+    const auto missingCheck = revia::planning::GoalPlanner::ParseJson(
+        R"({"title": "T", "steps": [{"action": {"action": "create_directory",
+            "path": "C:/Sandbox/Notes"}, "expected": "Notes"}]})");
+    Check(!missingCheck.succeeded, "A step with no check was accepted.");
+
+    const auto badAction = revia::planning::GoalPlanner::ParseJson(
+        R"({"title": "T", "steps": [{"action": {"action": "run_shell", "path": "C:/x"},
+            "check": {"action": "list_directory", "path": "C:/x"}, "expected": "x"}]})");
+    Check(!badAction.succeeded, "A step naming an action outside the allowlist was accepted.");
+
+    const auto notJson = revia::planning::GoalPlanner::ParseJson("I'll get right on that!");
+    Check(!notJson.succeeded, "Prose was accepted as a goal plan.");
+
+    // A runaway plan has to be refused at authoring time. The goal budget would only
+    // catch it once execution was already underway.
+    std::string oversized = R"({"title": "Too many", "steps": [)";
+    for (std::size_t index = 0; index <= revia::planning::GoalPlanner::MaximumSteps; ++index)
+    {
+        oversized += R"({"action": {"action": "create_directory", "path": "C:/Sandbox/A"},
+            "check": {"action": "list_directory", "path": "C:/Sandbox"},
+            "expected": "A"},)";
+    }
+    oversized.pop_back();
+    oversized += "]}";
+    const auto tooMany = revia::planning::GoalPlanner::ParseJson(oversized);
+    Check(!tooMany.succeeded, "A plan longer than the step ceiling was accepted.");
+}
+
+void TestGoalPlannerAcceptsRealModelOutput()
+{
+    // Verbatim output from Qwen3-VL-8B for "Make a folder called Reports in C:/Sandbox and
+    // copy C:/Sandbox/summary.txt into it". Pinned because the prompt contract and the
+    // parser have to agree with what the model actually emits, not with what the prompt
+    // asks for -- including its habit of escaping Windows separators.
+    const std::string realOutput =
+        R"({"title":"Create Reports folder and copy summary.txt","steps":[)"
+        R"({"description":"Create the Reports directory in C:/Sandbox",)"
+        R"("action":{"action":"create_directory","path":"C:/Sandbox/Reports"},)"
+        R"("check":{"action":"list_directory","path":"C:/Sandbox"},"expected":"Reports"},)"
+        R"({"description":"Copy summary.txt into the Reports folder",)"
+        R"("action":{"action":"copy_file","source":"C:/Sandbox/summary.txt",)"
+        R"("destination":"C:/Sandbox/Reports/summary.txt"},)"
+        R"("check":{"action":"list_directory","path":"C:/Sandbox/Reports"},)"
+        R"("expected":"summary.txt"}]})";
+
+    const auto parsed = revia::planning::GoalPlanner::ParseJson(realOutput);
+    Check(parsed.succeeded, "Real planner output was rejected: " + parsed.error);
+    Check(parsed.goal.steps.size() == 2, "Real planner output lost a step.");
+    Check(parsed.goal.steps[1].action.type == ActionType::CopyFile &&
+        !parsed.goal.steps[1].action.destination.empty(),
+        "Real planner output lost its copy destination.");
+
+    std::string error;
+    Check(revia::goals::GoalRunner::Validate(parsed.goal, error),
+        "Real planner output failed validation: " + error);
+}
+
+void TestPlannedDestructivePlanIsContained()
+{
+    // Also verbatim, from the request "Clean up my desktop". The planner will propose a
+    // destructive action for a vague request, so the containment has to be structural
+    // rather than a matter of the model behaving well.
+    const std::string realOutput =
+        R"({"title":"Clean Up Desktop","steps":[{"description":"Move all files and folders )"
+        R"(from desktop to recycle bin","action":{"action":"move_to_recycle_bin",)"
+        R"("path":"C:\\Users\\Public\\Desktop"},"check":{"action":"list_directory",)"
+        R"("path":"C:\\Users\\Public\\Desktop"},"expected":"empty"}]})";
+
+    const auto parsed = revia::planning::GoalPlanner::ParseJson(realOutput);
+    Check(parsed.succeeded, "The destructive plan should parse; containment is not the "
+        "parser's job: " + parsed.error);
+
+    // Structurally well formed, so Validate passes it. That is correct and is exactly why
+    // it must not be the only gate.
+    std::string error;
+    Check(revia::goals::GoalRunner::Validate(parsed.goal, error),
+        "This plan is structurally valid; the test's premise is wrong if it is not.");
+
+    // Recycling is classified ReversibleWrite, not Destructive, because the bin is
+    // recoverable. So the risk ceiling does NOT stop this plan, and the containment that
+    // actually load-bears is the approved-root boundary. Assert that directly rather than
+    // assuming the ceiling covers it.
+    ScopedTestDirectory temporary;
+    const auto approved = temporary.root / "sandbox";
+    std::filesystem::create_directories(approved);
+
+    CapabilitySettings wide;
+    wide.mode = ExecutionMode::Supervised;
+    wide.autoApproveRiskThrough = RiskLevel::Destructive;
+    wide.approvedRoots = {approved};
+    wide.createMissingApprovedRoots = false;
+
+    const revia::policy::CapabilityPolicy scopedPolicy(
+        revia::goals::NarrowScopeForGoal(wide));
+    const revia::actions::PolicyDecision outsideRoot =
+        scopedPolicy.Evaluate(parsed.goal.steps.front().action);
+    Check(outsideRoot.verdict == PolicyVerdict::Blocked,
+        "A planned goal was allowed to recycle a path outside every approved root.");
+
+    // Inside an approved root the same action is permitted, which is the point: the plan
+    // is contained by where it may act, and the whole plan is shown for approval before
+    // any of it runs.
+    ActionRequest insideRoot = parsed.goal.steps.front().action;
+    insideRoot.source = approved / "scratch.txt";
+    Check(scopedPolicy.Evaluate(insideRoot).verdict != PolicyVerdict::Blocked,
+        "A goal scope refused a reversible write inside its own approved root.");
+}
+
+void TestPlannedGoalStillFacesValidation()
+{
+    // Authoring and execution must not disagree about what a usable step is. The parser
+    // accepts a structurally complete step; Validate is what refuses a destructive check
+    // or a missing expectation, and it has to still fire on a planner-produced goal.
+    const auto destructiveCheck = revia::planning::GoalPlanner::ParseJson(
+        R"({"title": "T", "steps": [{"action": {"action": "create_directory",
+            "path": "C:/Sandbox/Notes"},
+            "check": {"action": "move_to_recycle_bin", "path": "C:/Sandbox/Notes"},
+            "expected": "Notes"}]})");
+    Check(destructiveCheck.succeeded,
+        "The parser should decode this plan and leave the verdict to Validate.");
+    std::string error;
+    Check(!revia::goals::GoalRunner::Validate(destructiveCheck.goal, error),
+        "A planned goal that verifies with a destructive action passed validation.");
+
+    const auto noExpectation = revia::planning::GoalPlanner::ParseJson(
+        R"({"title": "T", "steps": [{"action": {"action": "create_directory",
+            "path": "C:/Sandbox/Notes"},
+            "check": {"action": "list_directory", "path": "C:/Sandbox"}}]})");
+    Check(noExpectation.succeeded, "The parser should decode a step with no expectation.");
+    Check(!revia::goals::GoalRunner::Validate(noExpectation.goal, error),
+        "A planned goal that never says what success looks like passed validation.");
+}
+
+void TestPlannedGoalRunsEndToEnd()
+{
+    ScopedTestDirectory temporary;
+    const auto approved = temporary.root / "sandbox";
+    std::filesystem::create_directories(approved);
+
+    const auto configPath = temporary.root / "capabilities.json";
+    WriteBytes(configPath,
+        CapabilityConfigJson("approved_scope", approved, "reversible_write").dump());
+
+    revia::actions::ActionRuntime runtime;
+    std::string error;
+    Check(runtime.Initialize(configPath, temporary.root / "audit.jsonl", error),
+        "The action runtime did not initialize for the planned-goal test: " + error);
+
+    // Exactly the shape the planner emits, built against a real sandbox path.
+    nlohmann::json plan;
+    plan["title"] = "Create the Notes folder";
+    plan["steps"] = nlohmann::json::array({{
+        {"description", "Create it"},
+        {"action", {{"action", "create_directory"},
+            {"path", revia::actions::PathToUtf8(approved / "Notes")}}},
+        {"check", {{"action", "list_directory"},
+            {"path", revia::actions::PathToUtf8(approved)}}},
+        {"expected", "Notes"}
+    }});
+
+    auto parsed = revia::planning::GoalPlanner::ParseJson(plan.dump());
+    Check(parsed.succeeded, "The planner rejected its own plan shape: " + parsed.error);
+    parsed.goal.scope = GoalScope(approved);
+
+    const revia::goals::GoalStore store((temporary.root / "goals.db").string());
+    revia::goals::GoalRunner runner(runtime, store);
+    const revia::goals::Goal finished = runner.Run(parsed.goal);
+
+    Check(finished.status == revia::goals::GoalStatus::Succeeded,
+        "A planned goal did not run to completion.");
+    Check(std::filesystem::is_directory(approved / "Notes"),
+        "The planned goal reported success without doing the work.");
+    Check(finished.steps.front().attempts.front().verified,
+        "The planned goal completed without recording verification evidence.");
+}
+
+void TestSandboxRehearsalLeavesRealFoldersAlone()
+{
+    ScopedTestDirectory temporary;
+    const auto approved = temporary.root / "sandbox";
+    std::filesystem::create_directories(approved);
+    WriteBytes(approved / "summary.txt", "quarterly numbers");
+
+    const auto configPath = temporary.root / "capabilities.json";
+    WriteBytes(configPath,
+        CapabilityConfigJson("approved_scope", approved, "reversible_write").dump());
+
+    revia::actions::ActionRuntime runtime;
+    std::string error;
+    Check(runtime.Initialize(configPath, temporary.root / "audit.jsonl", error),
+        "The action runtime did not initialize for the rehearsal test: " + error);
+
+    revia::goals::Goal goal;
+    goal.id = revia::goals::NewGoalId();
+    goal.title = "Create Reports and copy the summary in";
+    goal.scope = GoalScope(approved);
+    goal.steps.push_back(MakeDirectoryStep(approved, "Reports"));
+
+    revia::goals::GoalStep copyStep;
+    copyStep.ordinal = 1;
+    copyStep.description = "Copy the summary in";
+    copyStep.action = Request(ActionType::CopyFile, approved / "summary.txt");
+    copyStep.action.destination = approved / "Reports" / "summary.txt";
+    copyStep.check = Request(ActionType::ListDirectory, approved / "Reports");
+    copyStep.expected = "summary.txt";
+    goal.steps.push_back(copyStep);
+
+    const auto rehearsal = revia::goals::GoalSandbox::Prepare(goal);
+    Check(rehearsal.supported && rehearsal.prepared,
+        "A filesystem plan could not be rehearsed: " + rehearsal.reason);
+    Check(rehearsal.goal.id != goal.id,
+        "A rehearsal reused the real goal's identity.");
+    Check(rehearsal.goal.scope.approvedRoots.size() == 1 &&
+        rehearsal.goal.scope.approvedRoots.front() != approved,
+        "A rehearsal was scoped to the real approved root.");
+    Check(rehearsal.goal.steps.front().action.source != goal.steps.front().action.source,
+        "A rehearsal step still points at the real path.");
+
+    // The source the plan reads must be staged, or verification would observe an empty
+    // tree and the rehearsal would fail for the wrong reason.
+    const auto stagedSummary = rehearsal.goal.steps[1].action.source;
+    Check(std::filesystem::is_regular_file(stagedSummary),
+        "The rehearsal did not stage the file its plan reads.");
+
+    // The rehearsal must carry its own policy. The session's runtime approves only the
+    // real root, so running a rehearsal through it would block every step of a plan that
+    // is perfectly workable.
+    Check(std::filesystem::is_regular_file(rehearsal.capabilityConfig),
+        "The rehearsal did not emit a capability config of its own.");
+    {
+        // A rehearsal that auto-approves more than the real run would clear here and then
+        // stall on confirmations it never faced.
+        std::ifstream configStream(rehearsal.capabilityConfig, std::ios::binary);
+        const auto emitted = nlohmann::json::parse(configStream);
+        Check(emitted.at("approvedApplications").empty(),
+            "The rehearsal policy allowed driving an application.");
+        Check(revia::actions::RiskLevelFromString(
+                emitted.at("autoApproveRiskThrough").get<std::string>()) <=
+            goal.scope.autoApproveRiskThrough,
+            "The rehearsal auto-approved more risk than the real run would.");
+    }
+    Check(runtime.Evaluate(rehearsal.goal.steps.front().action).verdict ==
+        PolicyVerdict::Blocked,
+        "The session's own policy should not reach into the scratch directory.");
+
+    revia::actions::ActionRuntime rehearsalRuntime;
+    Check(rehearsalRuntime.Initialize(
+        rehearsal.capabilityConfig, rehearsal.auditLog, error),
+        "The rehearsal runtime did not initialize: " + error);
+
+    const revia::goals::GoalStore store((temporary.root / "goals.db").string());
+    revia::goals::GoalRunner runner(rehearsalRuntime, store);
+    const revia::goals::Goal finished = runner.Run(rehearsal.goal);
+    Check(finished.status == revia::goals::GoalStatus::Succeeded,
+        "A workable plan failed its rehearsal.");
+
+    // And that policy must not reach back out. The real root stays unreachable from the
+    // rehearsal runtime even though the plan originally named it.
+    Check(rehearsalRuntime.Evaluate(goal.steps.front().action).verdict ==
+        PolicyVerdict::Blocked,
+        "The rehearsal policy could still reach the real approved root.");
+
+    // The whole point: the rehearsal proved the plan without doing any of it for real.
+    Check(!std::filesystem::exists(approved / "Reports"),
+        "The rehearsal created a directory in the real approved root.");
+    Check(std::filesystem::is_regular_file(approved / "summary.txt"),
+        "The rehearsal disturbed the real source file.");
+
+    std::string discardError;
+    Check(revia::goals::GoalSandbox::Discard(rehearsal.root, discardError),
+        "The rehearsal directory could not be removed: " + discardError);
+    Check(!std::filesystem::exists(rehearsal.root),
+        "The rehearsal directory outlived its run.");
+}
+
+void TestSandboxRefusesPlansItCannotCopy()
+{
+    // A plan that drives a real application has nothing to mirror. It must report that it
+    // cannot be rehearsed rather than quietly rehearsing a subset and looking proven.
+    revia::goals::Goal desktopGoal;
+    desktopGoal.id = revia::goals::NewGoalId();
+    desktopGoal.scope = GoalScope("C:/Sandbox");
+    revia::goals::GoalStep step;
+    step.action = Request(ActionType::InvokeControl, "");
+    step.action.application = "notepad.exe";
+    step.action.control = "Save";
+    step.check = Request(ActionType::InspectWindow, "");
+    step.check.application = "notepad.exe";
+    step.expected = "Saved";
+    desktopGoal.steps.push_back(step);
+
+    const auto desktop = revia::goals::GoalSandbox::Prepare(desktopGoal);
+    Check(!desktop.supported,
+        "A plan driving an application claimed it could be rehearsed in a copy.");
+    Check(!desktop.reason.empty(), "An unsupported rehearsal gave no reason.");
+
+    revia::goals::Goal rootless;
+    rootless.id = revia::goals::NewGoalId();
+    rootless.steps.push_back(MakeDirectoryStep("C:/Sandbox", "Notes"));
+    Check(!revia::goals::GoalSandbox::Prepare(rootless).supported,
+        "A goal with no approved root claimed it could be rehearsed.");
+}
+
+void TestSandboxRehearsalCatchesABrokenPlan()
+{
+    ScopedTestDirectory temporary;
+    const auto approved = temporary.root / "sandbox";
+    std::filesystem::create_directories(approved);
+
+    const auto configPath = temporary.root / "capabilities.json";
+    WriteBytes(configPath,
+        CapabilityConfigJson("approved_scope", approved, "reversible_write").dump());
+
+    revia::actions::ActionRuntime runtime;
+    std::string error;
+    Check(runtime.Initialize(configPath, temporary.root / "audit.jsonl", error),
+        "The action runtime did not initialize for the broken-plan test: " + error);
+
+    // Copies a file that does not exist. Structurally valid, so Validate passes it; only
+    // running it reveals the problem, which is what the rehearsal is for.
+    revia::goals::Goal goal;
+    goal.id = revia::goals::NewGoalId();
+    goal.title = "Copy a file that is not there";
+    goal.scope = GoalScope(approved);
+    revia::goals::GoalStep step;
+    step.description = "Copy the missing file";
+    step.action = Request(ActionType::CopyFile, approved / "missing.txt");
+    step.action.destination = approved / "copy.txt";
+    step.check = Request(ActionType::ListDirectory, approved);
+    step.expected = "copy.txt";
+    goal.steps.push_back(step);
+
+    std::string validationError;
+    Check(revia::goals::GoalRunner::Validate(goal, validationError),
+        "This plan is structurally valid; the test's premise is wrong if it is not.");
+
+    const auto rehearsal = revia::goals::GoalSandbox::Prepare(goal);
+    Check(rehearsal.supported && rehearsal.prepared,
+        "The broken plan could not be rehearsed: " + rehearsal.reason);
+
+    revia::actions::ActionRuntime rehearsalRuntime;
+    Check(rehearsalRuntime.Initialize(rehearsal.capabilityConfig, rehearsal.auditLog, error),
+        "The rehearsal runtime did not initialize: " + error);
+
+    const revia::goals::GoalStore store((temporary.root / "goals.db").string());
+    revia::goals::GoalRunner runner(rehearsalRuntime, store);
+    const revia::goals::Goal finished = runner.Run(rehearsal.goal);
+    Check(finished.status != revia::goals::GoalStatus::Succeeded,
+        "A plan that copies a nonexistent file passed its rehearsal.");
+    Check(!std::filesystem::exists(approved / "copy.txt"),
+        "The failed rehearsal still wrote into the real approved root.");
+
+    std::string discardError;
+    revia::goals::GoalSandbox::Discard(rehearsal.root, discardError);
+}
+
+void TestDerivedGoalScopeCannotWiden()
+{
+    ScopedTestDirectory temporary;
+    const auto approved = temporary.root / "sandbox";
+    std::filesystem::create_directories(approved);
+
+    // Configured deliberately wide: supervised mode, destructive auto-approval.
+    const auto configPath = temporary.root / "capabilities.json";
+    WriteBytes(configPath,
+        CapabilityConfigJson("supervised", approved, "destructive").dump());
+
+    revia::actions::ActionRuntime runtime;
+    std::string error;
+    Check(runtime.Initialize(configPath, temporary.root / "audit.jsonl", error),
+        "The action runtime did not initialize for the scope test: " + error);
+
+    const CapabilitySettings configured = runtime.Settings();
+    Check(configured.mode == ExecutionMode::Supervised &&
+        configured.autoApproveRiskThrough == RiskLevel::Destructive,
+        "The test fixture did not produce the wide configuration it intended.");
+
+    const CapabilitySettings scoped = revia::goals::NarrowScopeForGoal(configured);
+    Check(scoped.mode == ExecutionMode::ApprovedScope,
+        "A goal scope derived from supervised mode stayed supervised.");
+    Check(scoped.autoApproveRiskThrough == RiskLevel::ReversibleWrite,
+        "A goal scope inherited destructive auto-approval from the profile.");
+    Check(!scoped.createMissingApprovedRoots,
+        "A goal scope was allowed to create approved roots that do not exist.");
+    Check(scoped.approvedRoots == configured.approvedRoots,
+        "Narrowing a goal scope changed which roots it can reach.");
+
+    // The narrowing must be a floor, not a rewrite: an already-narrow profile keeps its
+    // own lower ceiling rather than being raised to the goal default.
+    CapabilitySettings readOnly = configured;
+    readOnly.autoApproveRiskThrough = RiskLevel::ReadOnly;
+    Check(revia::goals::NarrowScopeForGoal(readOnly).autoApproveRiskThrough ==
+        RiskLevel::ReadOnly,
+        "Narrowing raised a read-only profile's auto-approval ceiling.");
+}
+
+revia::perception::WindowObservation Seen(
+    const std::string& application,
+    const std::string& title)
+{
+    revia::perception::WindowObservation observation;
+    observation.kind = revia::perception::ObservationKind::ForegroundChanged;
+    observation.application = application;
+    observation.windowTitle = title;
+    return observation;
+}
+
+void TestPerceptionIsOffByDefault()
+{
+    // Stage 6 requires opt-in. A default-constructed settings object must not observe.
+    const perceptionSettings defaults;
+    Check(!defaults.bEnabled, "Ambient perception was enabled by default.");
+    Check(!defaults.excludedApplications.empty() && !defaults.excludedTitleFragments.empty(),
+        "The default exclusion lists are empty, which would deny nothing.");
+
+    // The whole appSettings default must agree, not just the sub-struct in isolation.
+    const appSettings applicationDefaults;
+    Check(!applicationDefaults.perception.bEnabled,
+        "Ambient perception was enabled in the default application settings.");
+
+    // configManager::LoadSettings reads a fixed path, so the fail-closed validation for
+    // this section (interval floor, rate ceiling, non-empty deny lists when enabled) is
+    // exercised through the real config rather than from here.
+}
+
+void TestPerceptionExcludesSensitiveWindows()
+{
+    perceptionSettings settings;
+    settings.bEnabled = true;
+    settings.minimumEventIntervalMs = 100;
+
+    using Filter = revia::perception::PerceptionFilter;
+    Check(Filter::IsExcludedApplication(settings, "KeePassXC.exe"),
+        "A password manager was not excluded (match must ignore case).");
+    Check(Filter::IsExcludedApplication(settings, ""),
+        "An unidentifiable application was not excluded; the default must be deny.");
+    Check(!Filter::IsExcludedApplication(settings, "notepad.exe"),
+        "An ordinary application was excluded.");
+
+    Check(Filter::IsExcludedTitle(settings, "Chase Bank - Personal Banking"),
+        "A banking window title was not excluded.");
+    Check(Filter::IsExcludedTitle(settings, "New InPrivate window - Edge"),
+        "A private browsing title was not excluded.");
+    Check(Filter::IsExcludedTitle(settings, "Recovery Phrase Backup.txt - Notepad"),
+        "A recovery-phrase title was not excluded.");
+    Check(!Filter::IsExcludedTitle(settings, "quarterly-report.md - VS Code"),
+        "An ordinary document title was excluded.");
+}
+
+void TestPerceptionSuppressesRatherThanRedacts()
+{
+    // The distinction that matters: an excluded window must produce no observation at
+    // all. Recording "the user switched to something excluded at 14:02" is itself the
+    // leak this stage exists to avoid.
+    perceptionSettings settings;
+    settings.bEnabled = true;
+    settings.minimumEventIntervalMs = 100;
+    revia::perception::PerceptionFilter filter(settings);
+
+    auto now = std::chrono::steady_clock::now();
+    Check(filter.Admit(Seen("1password.exe", "Vault"), now) ==
+        revia::perception::Suppression::ExcludedApplication,
+        "A password manager produced an observation.");
+
+    now += std::chrono::seconds(1);
+    Check(filter.Admit(Seen("msedge.exe", "My Bank - Accounts"), now) ==
+        revia::perception::Suppression::ExcludedTitle,
+        "A banking title produced an observation.");
+
+    // Crucially, an excluded window must not become the "last seen" state either, or the
+    // next ordinary window would be coalesced away against a secret.
+    now += std::chrono::seconds(1);
+    Check(filter.Admit(Seen("notepad.exe", "notes.txt"), now) ==
+        revia::perception::Suppression::None,
+        "An ordinary window was suppressed after an excluded one.");
+}
+
+void TestPerceptionCoalescesAndRateLimits()
+{
+    perceptionSettings settings;
+    settings.bEnabled = true;
+    settings.minimumEventIntervalMs = 750;
+    settings.maxObservationsPerMinute = 3;
+    revia::perception::PerceptionFilter filter(settings);
+
+    const auto start = std::chrono::steady_clock::now();
+    auto now = start;
+    Check(filter.Admit(Seen("code.exe", "main.cpp"), now) ==
+        revia::perception::Suppression::None,
+        "The first observation was suppressed.");
+
+    // Title changes fire per keystroke in some editors. Recording them would be a
+    // transcript by another name, so the debounce runs from the last ADMITTED
+    // observation rather than the last event.
+    now = start + std::chrono::milliseconds(100);
+    Check(filter.Admit(Seen("code.exe", "main.cp"), now) ==
+        revia::perception::Suppression::Unchanged,
+        "A title change inside the coalescing interval was recorded.");
+    now = start + std::chrono::milliseconds(400);
+    Check(filter.Admit(Seen("code.exe", "main.c"), now) ==
+        revia::perception::Suppression::Unchanged,
+        "The debounce restarted from the event instead of the last admission.");
+
+    // Repeats of the same window carry no new information even long afterwards.
+    now = start + std::chrono::seconds(2);
+    Check(filter.Admit(Seen("code.exe", "main.cpp"), now) ==
+        revia::perception::Suppression::Unchanged,
+        "An identical window produced a second observation.");
+
+    now += std::chrono::seconds(2);
+    Check(filter.Admit(Seen("code.exe", "other.cpp"), now) ==
+        revia::perception::Suppression::None,
+        "A genuine title change after the interval was suppressed.");
+
+    now += std::chrono::seconds(2);
+    Check(filter.Admit(Seen("code.exe", "third.cpp"), now) ==
+        revia::perception::Suppression::None,
+        "The third observation within budget was suppressed.");
+
+    now += std::chrono::seconds(2);
+    Check(filter.Admit(Seen("code.exe", "fourth.cpp"), now) ==
+        revia::perception::Suppression::RateLimited,
+        "The per-minute observation budget was not enforced.");
+
+    // The budget is a rolling window, not a permanent ceiling.
+    now += std::chrono::seconds(61);
+    Check(filter.Admit(Seen("code.exe", "fifth.cpp"), now) ==
+        revia::perception::Suppression::None,
+        "The observation budget never refilled.");
+}
+
+void TestPerceptionMonitorStaysSilentWhenDisabled()
+{
+    // Disabled must mean no thread, no hook, and no observations -- not a running
+    // monitor that filters everything out.
+    revia::perception::WindowEventMonitor monitor;
+    std::atomic<int> observations{0};
+    std::string lastPhase;
+
+    perceptionSettings settings;
+    settings.bEnabled = false;
+    Check(monitor.Start(
+        settings,
+        [&observations](const revia::perception::WindowObservation&)
+        {
+            observations.fetch_add(1);
+        },
+        [&lastPhase](const std::string& phase, const std::string&)
+        {
+            lastPhase = phase;
+        }),
+        "Starting a disabled monitor reported failure.");
+
+    Check(lastPhase == "Off", "A disabled monitor did not report itself off.");
+    Check(!monitor.IsObserving(), "A disabled monitor reported that it was observing.");
+    std::this_thread::sleep_for(std::chrono::milliseconds(150));
+    Check(observations.load() == 0, "A disabled monitor produced observations.");
+    monitor.Shutdown();
+}
+
+revia::perception::WindowObservation SeenAt(
+    const std::string& application,
+    const std::string& title,
+    const std::chrono::system_clock::time_point when)
+{
+    revia::perception::WindowObservation observation = Seen(application, title);
+    observation.occurredAt = when;
+    return observation;
+}
+
+void TestActivityHistoryMergesAndSeparatesSpans()
+{
+    revia::perception::ActivityHistorySettings settings;
+    settings.mergeGap = std::chrono::seconds{120};
+    revia::perception::ActivityHistory history(settings);
+
+    const auto start = std::chrono::system_clock::now() - std::chrono::minutes{30};
+    history.Record(SeenAt("code.exe", "main.cpp", start));
+    history.Record(SeenAt("code.exe", "other.cpp", start + std::chrono::minutes{1}));
+    history.Record(SeenAt("code.exe", "third.cpp", start + std::chrono::minutes{2}));
+
+    Check(history.Size() == 1,
+        "Consecutive observations of one application did not merge into a single span.");
+
+    // A different application closes the span.
+    history.Record(SeenAt("msedge.exe", "docs", start + std::chrono::minutes{3}));
+    Check(history.Size() == 2, "A different application did not start a new span.");
+
+    // Returning inside the merge gap continues rather than fragmenting.
+    history.Record(SeenAt("msedge.exe", "docs", start + std::chrono::minutes{4}));
+    Check(history.Size() == 2, "A return inside the merge gap fragmented the session.");
+
+    // Returning after the gap is genuinely a new session.
+    history.Record(SeenAt("msedge.exe", "docs", start + std::chrono::minutes{10}));
+    Check(history.Size() == 3, "A return long after the gap did not start a new span.");
+
+    const auto spans = history.Spans(std::chrono::minutes{60});
+    Check(spans.size() == 3, "The window query lost spans.");
+    Check(spans.front().application == "code.exe" && spans.front().observations == 3,
+        "The merged span did not accumulate its observations.");
+
+    // Time in an application runs until the next one appears, not until its own last
+    // event. The editor was left at minute 2 and the browser arrived at minute 3.
+    Check(spans.front().Duration() == std::chrono::seconds{180},
+        "A span did not end when the next application took over.");
+
+    // But that attribution is capped, so a quiet machine does not credit hours to
+    // whatever was last in front.
+    revia::perception::ActivityHistorySettings capped;
+    capped.maxAttributedGap = std::chrono::seconds{300};
+    revia::perception::ActivityHistory idle(capped);
+    const auto idleStart = std::chrono::system_clock::now() - std::chrono::minutes{200};
+    idle.Record(SeenAt("code.exe", "main.cpp", idleStart));
+    idle.Record(SeenAt("msedge.exe", "docs", idleStart + std::chrono::hours{3}));
+    Check(idle.Spans(std::chrono::minutes{480}).front().Duration() ==
+        std::chrono::seconds{300},
+        "Three idle hours were credited to the last application in front.");
+}
+
+void TestActivityHistoryStaysBounded()
+{
+    revia::perception::ActivityHistorySettings settings;
+    settings.maxSpans = 5;
+    settings.maxTitlesPerSpan = 2;
+    settings.retention = std::chrono::minutes{10};
+    settings.mergeGap = std::chrono::seconds{1};
+    revia::perception::ActivityHistory history(settings);
+
+    const auto start = std::chrono::system_clock::now() - std::chrono::minutes{1};
+
+    // Titles are the part that carries document content, so the per-span cap matters.
+    history.Record(SeenAt("code.exe", "one.cpp", start));
+    history.Record(SeenAt("code.exe", "two.cpp", start));
+    history.Record(SeenAt("code.exe", "three.cpp", start));
+    Check(history.Spans(std::chrono::minutes{10}).front().titles.size() == 2,
+        "The per-span title cap was not enforced.");
+
+    // Span count is capped by evicting the oldest, so memory cannot grow without bound.
+    revia::perception::ActivityHistory capped(settings);
+    for (int index = 0; index < 20; ++index)
+    {
+        capped.Record(SeenAt(
+            "app" + std::to_string(index) + ".exe",
+            "w",
+            start + std::chrono::seconds{index * 5}));
+    }
+    Check(capped.Size() == 5, "The span cap was not enforced.");
+
+    // Anything past the retention window is dropped rather than merely hidden from
+    // queries, so a long-running session does not silently accumulate a day of history.
+    revia::perception::ActivityHistory aged(settings);
+    aged.Record(SeenAt("old.exe", "w", std::chrono::system_clock::now() -
+        std::chrono::minutes{60}));
+    aged.Record(SeenAt("new.exe", "w", std::chrono::system_clock::now()));
+    Check(aged.Size() == 1, "An expired span was retained past the retention window.");
+    Check(aged.Spans(std::chrono::minutes{480}).front().application == "new.exe",
+        "Pruning removed the wrong span.");
+}
+
+void TestActivityHistoryAnswersTheStageQuestion()
+{
+    // Stage 6's exit criterion, in miniature: describe the last hour from Tier 0 evidence
+    // alone, ordered by where the time actually went.
+    revia::perception::ActivityHistory history;
+    const auto start = std::chrono::system_clock::now() - std::chrono::minutes{50};
+
+    // A real editing session: a title change every minute or so as files are switched,
+    // each inside the merge gap, so it accumulates into one span.
+    for (int minute = 0; minute <= 40; ++minute)
+    {
+        history.Record(SeenAt(
+            "code.exe",
+            minute % 2 == 0 ? "reviaSession.cpp" : "goalRunner.cpp",
+            start + std::chrono::minutes{minute}));
+    }
+    history.Record(SeenAt("msedge.exe", "docs", start + std::chrono::minutes{43}));
+    history.Record(SeenAt("msedge.exe", "docs", start + std::chrono::minutes{48}));
+
+    const std::string summary = history.Summarize(std::chrono::minutes{60});
+    Check(summary.find("code.exe") != std::string::npos &&
+        summary.find("msedge.exe") != std::string::npos,
+        "The summary omitted an application that was used.");
+    // 40 minutes of observations, plus the 3 attributed until the browser took over.
+    Check(summary.find("43m") != std::string::npos,
+        "The summary did not report the dominant duration: " + summary);
+    Check(summary.find("reviaSession.cpp") != std::string::npos,
+        "The summary did not name what was being worked on: " + summary);
+    Check(summary.find("code.exe") < summary.find("msedge.exe"),
+        "The summary did not order applications by time spent.");
+
+    // A window with nothing in it must say so rather than fabricate.
+    revia::perception::ActivityHistory empty;
+    Check(empty.Summarize(std::chrono::minutes{60}).find("Nothing observed") !=
+        std::string::npos,
+        "An empty history did not report that it observed nothing.");
+
+    // Forgetting is real, not a filter over retained data.
+    history.Clear();
+    Check(history.Size() == 0 &&
+        history.Summarize(std::chrono::minutes{60}).find("Nothing observed") !=
+            std::string::npos,
+        "Clearing the history left data behind.");
+}
+
 } // namespace
 
 int main(const int argc, char** argv)
@@ -1029,6 +1791,24 @@ int main(const int argc, char** argv)
         TestGoalRunnerStopsOnUnverifiableStep();
         TestGoalScopeCannotWidenAuthority();
         TestGoalResumesAfterRestart();
+        TestGoalPlannerParsesMultiStepPlan();
+        TestGoalPlannerRejectsUnusablePlans();
+        TestGoalPlannerAcceptsRealModelOutput();
+        TestPlannedDestructivePlanIsContained();
+        TestPlannedGoalStillFacesValidation();
+        TestPlannedGoalRunsEndToEnd();
+        TestSandboxRehearsalLeavesRealFoldersAlone();
+        TestSandboxRefusesPlansItCannotCopy();
+        TestSandboxRehearsalCatchesABrokenPlan();
+        TestDerivedGoalScopeCannotWiden();
+        TestPerceptionIsOffByDefault();
+        TestPerceptionExcludesSensitiveWindows();
+        TestPerceptionSuppressesRatherThanRedacts();
+        TestPerceptionCoalescesAndRateLimits();
+        TestPerceptionMonitorStaysSilentWhenDisabled();
+        TestActivityHistoryMergesAndSeparatesSpans();
+        TestActivityHistoryStaysBounded();
+        TestActivityHistoryAnswersTheStageQuestion();
         std::cout << "All Revia foundation tests passed.\n";
         return 0;
     }

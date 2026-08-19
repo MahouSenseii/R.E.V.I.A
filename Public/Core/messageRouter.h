@@ -18,6 +18,7 @@ public:
         const std::vector<conversationMessage>& context,
         std::stop_token stopToken = {}) const;
     responseOutput PlanAction(const std::string& request) const;
+    responseOutput PlanGoal(const std::string& request) const;
     responseOutput AnalyzeImage(
         const std::filesystem::path& imagePath,
         const std::string& prompt,

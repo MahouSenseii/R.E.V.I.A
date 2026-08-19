@@ -1,5 +1,6 @@
 #include "Runtime/reviaSession.h"
 #include "Core/localApiKey.h"
+#include "Planning/goalPlanner.h"
 
 #include <algorithm>
 #include <chrono>
@@ -16,6 +17,16 @@ namespace
     {
         return std::chrono::duration<double, std::milli>(
             std::chrono::steady_clock::now() - start).count();
+    }
+
+    std::string Trim(const std::string& value)
+    {
+        const std::size_t first = value.find_first_not_of(" \t\r\n");
+        if (first == std::string::npos)
+        {
+            return {};
+        }
+        return value.substr(first, value.find_last_not_of(" \t\r\n") - first + 1);
     }
 
     std::string BackendCapacity(const healthOutput& health)
@@ -44,10 +55,34 @@ namespace
 }
 
 ReviaSession::ReviaSession()
+    : goalRunner(actionRuntime, goalStore)
 {
     appLogger.SetSink([this](const std::string& line)
     {
         Publish(RuntimeEventKind::Activity, line);
+    });
+    goalRunner.SetProgressHandler([this](const goals::GoalProgress& progress)
+    {
+        PublishGoalProgress(progress);
+    });
+    // A goal step that needs confirmation asks the same handler an interactive action
+    // does. Without this the runner would see no handler and treat every confirmable
+    // step as refused, which reads as a policy block rather than a missing prompt.
+    goalRunner.SetConfirmationHandler([this](
+        const actions::ActionRequest& request,
+        const actions::PolicyDecision& decision)
+    {
+        ConfirmationHandler handler;
+        {
+            std::lock_guard lock(confirmationMutex);
+            handler = confirmationHandler;
+        }
+        if (!handler)
+        {
+            return false;
+        }
+        SetState(RuntimeState::WaitingForConfirmation, decision.reason);
+        return handler(request, decision);
     });
 }
 
@@ -117,6 +152,24 @@ bool ReviaSession::Start()
     }
     startupTimings.push_back({"action_runtime_init", ElapsedMilliseconds(stageStarted)});
 
+    // Goals are reported, never auto-resumed. Restarting into unattended execution of
+    // work the user has not re-approved belongs to Stage 5, behind its own job contract.
+    stageStarted = std::chrono::steady_clock::now();
+    const std::vector<goals::Goal> resumable = goalStore.LoadResumable();
+    if (!resumable.empty())
+    {
+        std::ostringstream resumeNotice;
+        resumeNotice << resumable.size()
+            << (resumable.size() == 1 ? " goal was" : " goals were")
+            << " left unfinished. Use /goals to list them, /goals resume <id> to continue:";
+        for (const goals::Goal& goal : resumable)
+        {
+            resumeNotice << "\n  " << goal.id << "  " << goal.title;
+        }
+        appLogger.Log(resumeNotice.str());
+    }
+    startupTimings.push_back({"goal_store_scan", ElapsedMilliseconds(stageStarted)});
+
     stageStarted = std::chrono::steady_clock::now();
     speechService.SetActiveProfile(profile.id);
     speechService.Start(settings.speech, [this](const speech::SpeechEvent& speechEvent)
@@ -133,20 +186,19 @@ bool ReviaSession::Start()
     });
     startupTimings.push_back({"speech_service_init", ElapsedMilliseconds(stageStarted)});
 
-    if (speechService.HasActiveQwenVoice())
+    // Loading the Qwen3-TTS voice used to run here, before llama.cpp, purely so llama.cpp
+    // would fit around VRAM the voice model already held. That put 20-70 seconds of model
+    // load on the path to the first message even though nothing about chat needs a voice.
+    // Reserving the voice's VRAM budget in llama.cpp's fit target buys the same guarantee,
+    // so the load can happen in the background once the chat path is up.
+    const bool deferredVoiceLoad = speechService.HasActiveQwenVoice();
+    if (deferredVoiceLoad)
     {
-        stageStarted = std::chrono::steady_clock::now();
-        const speech::VoiceOperationResult preparedVoice = speechService.PrepareActiveVoice();
-        startupTimings.push_back({"qwen_voice_model_load", ElapsedMilliseconds(stageStarted)});
-        if (preparedVoice.succeeded)
-        {
-            appLogger.Log(preparedVoice.message +
-                " llama.cpp will fit around the voice model's current GPU allocation.");
-        }
-        else
-        {
-            appLogger.Warning("Assigned Qwen voice could not load: " + preparedVoice.message);
-        }
+        settings.llm.reservedVramMiB = settings.speech.qwenMinimumFreeVramMiB;
+        appLogger.Log(
+            "Reserving " + std::to_string(settings.speech.qwenMinimumFreeVramMiB) +
+            " MiB of VRAM for the assigned Qwen3-TTS voice; it loads in the background "
+            "once chat is available.");
     }
 
     stageStarted = std::chrono::steady_clock::now();
@@ -166,6 +218,41 @@ bool ReviaSession::Start()
             eventBus.Publish(std::move(event));
         });
     startupTimings.push_back({"speech_recognition_init", ElapsedMilliseconds(stageStarted)});
+
+    stageStarted = std::chrono::steady_clock::now();
+    windowEventMonitor.Start(
+        settings.perception,
+        [this](const perception::WindowObservation& observation)
+        {
+            // Retained in memory only. Excluded windows never reach this handler, so they
+            // cannot enter the history either -- the filter is the single gate.
+            activityHistory.Record(observation);
+
+            // Structured facts only, and only ones that cleared the filter. The activity
+            // feed is the visible record of what perception noticed, which is what makes
+            // the capability auditable rather than merely configurable.
+            RuntimeEvent event;
+            event.kind = RuntimeEventKind::ComponentStatus;
+            event.state = state.load();
+            event.component = "Perception";
+            event.phase = perception::ToString(observation.kind);
+            event.message = observation.application +
+                (observation.windowTitle.empty()
+                    ? std::string()
+                    : " - " + observation.windowTitle);
+            eventBus.Publish(std::move(event));
+        },
+        [this](const std::string& phase, const std::string& detail)
+        {
+            RuntimeEvent event;
+            event.kind = RuntimeEventKind::ComponentStatus;
+            event.state = state.load();
+            event.component = "Perception";
+            event.phase = phase;
+            event.message = detail;
+            eventBus.Publish(std::move(event));
+        });
+    startupTimings.push_back({"perception_init", ElapsedMilliseconds(stageStarted)});
 
     stageStarted = std::chrono::steady_clock::now();
     router.ApplyLLMSettings(settings.llm, settings.embedding, profile);
@@ -230,11 +317,97 @@ bool ReviaSession::Start()
             ? "Local opt-in screen analysis is ready."
             : "Vision requires the configured multimodal llama.cpp server.";
     eventBus.Publish(std::move(visionEvent));
+    if (deferredVoiceLoad)
+    {
+        StartVoiceWarmup();
+    }
     if (settings.speech.bEnabled && settings.speech.bSpeakGreeting && !Greeting().empty())
     {
         speechService.Speak(Greeting(), affectController.Current());
     }
     return true;
+}
+
+void ReviaSession::StartVoiceWarmup()
+{
+    StopVoiceWarmup();
+    voiceWarmupFinished.store(false);
+    voiceWarmupWorker = std::jthread([this](const std::stop_token stopToken)
+    {
+        struct FinishedGuard
+        {
+            std::atomic<bool>& flag;
+            ~FinishedGuard() { flag.store(true); }
+        } finishedGuard{voiceWarmupFinished};
+
+        // Stopping a reply cancels the active Qwen request by killing the worker process,
+        // which also kills a load still in flight. That could not happen while the load
+        // was part of startup; now that it runs alongside chat, it has to survive a Stop.
+        constexpr int MaximumAttempts = 3;
+        const auto startedAt = std::chrono::steady_clock::now();
+        for (int attempt = 1; attempt <= MaximumAttempts; ++attempt)
+        {
+            if (stopToken.stop_requested() || !started.load())
+            {
+                return;
+            }
+            // PrepareActiveVoice publishes its own Loading/Ready voice component events,
+            // so the shell shows the voice arriving without startup having waited for it.
+            const speech::VoiceOperationResult prepared = speechService.PrepareActiveVoice();
+            if (prepared.succeeded)
+            {
+                appLogger.Timing(
+                    "voice_warmup",
+                    {{"qwen_voice_model_load", ElapsedMilliseconds(startedAt), true}});
+                appLogger.Log("Background voice load finished: " + prepared.message);
+                return;
+            }
+            if (stopToken.stop_requested() || !started.load())
+            {
+                return;
+            }
+            if (attempt == MaximumAttempts)
+            {
+                appLogger.Warning(
+                    "Assigned Qwen voice could not load after " +
+                    std::to_string(MaximumAttempts) + " attempts: " + prepared.message +
+                    " Windows SAPI remains available.");
+                return;
+            }
+            appLogger.Log(
+                "Voice load attempt " + std::to_string(attempt) + " did not finish (" +
+                prepared.message + "); retrying in the background.");
+            for (int waited = 0; waited < 8 && !stopToken.stop_requested(); ++waited)
+            {
+                std::this_thread::sleep_for(std::chrono::milliseconds(250));
+            }
+        }
+    });
+}
+
+void ReviaSession::StopVoiceWarmup()
+{
+    if (!voiceWarmupWorker.joinable())
+    {
+        return;
+    }
+    voiceWarmupWorker.request_stop();
+    // The load sits inside a blocking HTTP call to the Qwen worker, so requesting a stop
+    // is not enough on its own; killing that worker is what makes the call return. Repeat
+    // it while waiting, because an attempt that was already past its own cancellation
+    // check can spawn a fresh worker after the first kill. Bounded so a worker that
+    // refuses to die delays shutdown by seconds rather than a whole model load.
+    constexpr int MaximumWaitSlices = 40;
+    for (int slice = 0; slice < MaximumWaitSlices && !voiceWarmupFinished.load(); ++slice)
+    {
+        speechService.StopSpeaking();
+        std::this_thread::sleep_for(std::chrono::milliseconds(250));
+    }
+    if (!voiceWarmupFinished.load())
+    {
+        appLogger.Warning("The background voice load did not stop; waiting for it to finish.");
+    }
+    voiceWarmupWorker.join();
 }
 
 SessionResult ReviaSession::Submit(const std::string& input)
@@ -430,13 +603,26 @@ void ReviaSession::RequestStop()
 
 void ReviaSession::Stop()
 {
+    // Order matters. The warmup is built to survive RequestStop, because stopping a reply
+    // must not cost the session its voice. Shutdown is the one case where it must not
+    // retry, so cancel it first, then let RequestStop kill the Qwen worker so an in-flight
+    // load fails fast and the join returns instead of waiting out a model load.
+    if (voiceWarmupWorker.joinable())
+    {
+        voiceWarmupWorker.request_stop();
+    }
     RequestStop();
+    // Must precede speechService.Shutdown() below, which the worker still calls into.
+    StopVoiceWarmup();
     std::lock_guard operationLock(operationMutex);
     if (!started.load() && !llamaServerProcess.WasStartedByRevia() &&
         !embeddingServerProcess.WasStartedByRevia())
     {
         speechService.Shutdown();
         speechRecognitionService.Shutdown();
+        // This branch must unhook too. A system-wide event hook that is not removed
+        // outlives the process that installed it.
+        windowEventMonitor.Shutdown();
         state.store(RuntimeState::Offline);
         return;
     }
@@ -453,6 +639,23 @@ void ReviaSession::Stop()
     stageStarted = std::chrono::steady_clock::now();
     speechRecognitionService.Shutdown();
     shutdownTimings.push_back({"speech_recognition_stop", ElapsedMilliseconds(stageStarted)});
+
+    // Before the rest: a system-wide event hook outlives the process that installed it if
+    // it is not unhooked, so this is not a step to leave until after something can fail.
+    stageStarted = std::chrono::steady_clock::now();
+    if (settings.perception.bEnabled)
+    {
+        // Counts only. How much was observed is worth recording for transparency; what
+        // was observed is not written to a plaintext log on disk.
+        const perception::PerceptionCounters counters = windowEventMonitor.Counters();
+        appLogger.Log(
+            "Perception this session: observed " + std::to_string(counters.observed) +
+            ", excluded " + std::to_string(counters.excluded) +
+            ", coalesced " + std::to_string(counters.coalesced) +
+            ", rate limited " + std::to_string(counters.rateLimited) + ".");
+    }
+    windowEventMonitor.Shutdown();
+    shutdownTimings.push_back({"perception_stop", ElapsedMilliseconds(stageStarted)});
 
     stageStarted = std::chrono::steady_clock::now();
     turnCoordinator.Stop();
@@ -515,6 +718,67 @@ bool ReviaSession::IsSpeechEnabled() const
 void ReviaSession::SetSpeechEnabled(const bool enabled)
 {
     speechService.SetEnabled(enabled);
+}
+
+bool ReviaSession::IsPerceptionEnabled() const
+{
+    return settings.perception.bEnabled;
+}
+
+bool ReviaSession::IsPerceptionPaused() const
+{
+    return windowEventMonitor.IsPaused();
+}
+
+void ReviaSession::SetPerceptionPaused(const bool paused)
+{
+    windowEventMonitor.SetPaused(paused);
+}
+
+perception::PerceptionCounters ReviaSession::PerceptionCounters() const
+{
+    return windowEventMonitor.Counters();
+}
+
+std::string ReviaSession::PerceptionStatus() const
+{
+    std::ostringstream stream;
+    if (!settings.perception.bEnabled)
+    {
+        stream << "Ambient perception is OFF. Nothing about your windows is observed.\n"
+            << "Enable it in Config/settings.json under \"perception\".";
+        return stream.str();
+    }
+    const perception::PerceptionCounters counters = windowEventMonitor.Counters();
+    stream << "Ambient perception is "
+        << (windowEventMonitor.IsPaused() ? "PAUSED" : "WATCHING")
+        << ". Window and focus events only - no screen capture, no model.\n"
+        << "Observed " << counters.observed << ", excluded " << counters.excluded
+        << ", coalesced " << counters.coalesced
+        << ", rate limited " << counters.rateLimited << ".\n"
+        << settings.perception.excludedApplications.size()
+        << " excluded applications and "
+        << settings.perception.excludedTitleFragments.size()
+        << " excluded title fragments are in effect.\n"
+        << "Retained in memory only: " << activityHistory.Size()
+        << " activity spans, discarded when Revia stops.\n"
+        << "Use /perception pause, resume, history [minutes], or forget.";
+    return stream.str();
+}
+
+std::string ReviaSession::RecentActivity(const std::chrono::minutes window) const
+{
+    if (!settings.perception.bEnabled)
+    {
+        return "Ambient perception is off, so nothing has been observed.";
+    }
+    return activityHistory.Summarize(window);
+}
+
+void ReviaSession::ForgetActivity()
+{
+    activityHistory.Clear();
+    appLogger.Log("Observation history cleared at the user's request.");
 }
 
 bool ReviaSession::BeginListening()
@@ -798,11 +1062,520 @@ bool ReviaSession::EnsureEmbeddingAvailable(const std::stop_token stopToken)
     return false;
 }
 
+goals::Goal ReviaSession::RunGoal(goals::Goal goal)
+{
+    std::lock_guard operationLock(operationMutex);
+    // Entry from outside a turn, so this run owns the cancellation scope. The command
+    // path reaches the Unlocked variants directly and reuses Submit's scope instead.
+    BeginOperation();
+    return RunGoalUnlocked(std::move(goal));
+}
+
+goals::Goal ReviaSession::ResumeGoal(const std::string& goalId)
+{
+    std::lock_guard operationLock(operationMutex);
+    BeginOperation();
+    return ResumeGoalUnlocked(goalId);
+}
+
+std::vector<goals::Goal> ReviaSession::RecentGoals(const std::size_t maxGoals) const
+{
+    return goalStore.LoadRecent(maxGoals);
+}
+
+std::vector<goals::Goal> ReviaSession::ResumableGoals() const
+{
+    return goalStore.LoadResumable();
+}
+
+goals::Goal ReviaSession::RunGoalUnlocked(goals::Goal goal)
+{
+    if (!actionRuntime.IsInitialized())
+    {
+        goal.status = goals::GoalStatus::Failed;
+        goal.stopReason = goals::StopReason::PolicyBlocked;
+        SetState(RuntimeState::Blocked, "Action runtime is not initialized.");
+        return goal;
+    }
+    // Validate before announcing anything, so an unverifiable plan is rejected without
+    // ever entering the Acting state.
+    std::string planError;
+    if (!goals::GoalRunner::Validate(goal, planError))
+    {
+        goal.status = goals::GoalStatus::Failed;
+        goal.stopReason = goals::StopReason::InvalidPlan;
+        appLogger.Warning("Goal plan rejected: " + planError);
+        SetState(RuntimeState::Blocked, "Goal plan rejected: " + planError);
+        return goal;
+    }
+
+    busy.store(true);
+    const std::stop_token stopToken = CurrentOperationToken();
+    const auto startedAt = std::chrono::steady_clock::now();
+    SetState(RuntimeState::Acting, "Running goal: " + goal.title);
+    return FinishGoalRun(goalRunner.Run(std::move(goal), stopToken), startedAt);
+}
+
+goals::Goal ReviaSession::ResumeGoalUnlocked(const std::string& goalId)
+{
+    goals::Goal goal;
+    goal.id = goalId;
+    if (!actionRuntime.IsInitialized())
+    {
+        goal.status = goals::GoalStatus::Failed;
+        goal.stopReason = goals::StopReason::PolicyBlocked;
+        SetState(RuntimeState::Blocked, "Action runtime is not initialized.");
+        return goal;
+    }
+
+    busy.store(true);
+    const std::stop_token stopToken = CurrentOperationToken();
+    const auto startedAt = std::chrono::steady_clock::now();
+    SetState(RuntimeState::Acting, "Resuming goal " + goalId + ".");
+    return FinishGoalRun(goalRunner.Resume(goalId, stopToken), startedAt);
+}
+
+goals::Goal ReviaSession::FinishGoalRun(
+    goals::Goal finished,
+    const std::chrono::steady_clock::time_point startedAt)
+{
+    appLogger.Timing("goal", {
+        {"goal_actions", static_cast<double>(finished.spend.actions)},
+        {"goal_retries", static_cast<double>(finished.spend.retries)},
+        {"goal_run", ElapsedMilliseconds(startedAt), true}});
+    busy.store(false);
+
+    const std::string summary = FormatGoalSummary(finished);
+    if (finished.status == goals::GoalStatus::Succeeded)
+    {
+        appLogger.Log(summary);
+        SetState(RuntimeState::Idle, summary);
+    }
+    else
+    {
+        // Anything other than Succeeded is reported, never retried automatically. A goal
+        // that exhausted its budget stopping quietly is the failure mode Stage 4 exists
+        // to prevent.
+        appLogger.Warning(summary);
+        SetState(
+            finished.status == goals::GoalStatus::Cancelled
+                ? RuntimeState::Idle
+                : RuntimeState::Blocked,
+            summary);
+    }
+    return finished;
+}
+
+void ReviaSession::PublishGoalProgress(const goals::GoalProgress& progress) const
+{
+    RuntimeEvent event;
+    event.kind = RuntimeEventKind::ComponentStatus;
+    event.state = state.load();
+    event.component = "Goal";
+    event.phase = goals::ToString(progress.stepStatus);
+    event.message = "[" + goals::ToString(progress.goalStatus) + "] step " +
+        std::to_string(progress.ordinal + 1) + ": " + progress.message;
+    eventBus.Publish(std::move(event));
+}
+
+std::string ReviaSession::FormatGoalSummary(const goals::Goal& goal)
+{
+    std::ostringstream stream;
+    stream << "Goal '" << goal.title << "' " << goals::ToString(goal.status);
+    if (goal.stopReason != goals::StopReason::None &&
+        goal.stopReason != goals::StopReason::Completed)
+    {
+        stream << " (" << goals::ToString(goal.stopReason) << ")";
+    }
+    stream << ". Steps " << goal.currentStep << '/' << goal.steps.size()
+        << ", actions " << goal.spend.actions << '/' << goal.budget.maxActions
+        << ", retries " << goal.spend.retries << '/' << goal.budget.maxTotalRetries
+        << ", elapsed " << goal.spend.elapsedMs << "ms.";
+    return stream.str();
+}
+
+actions::CapabilitySettings ReviaSession::DeriveGoalScope() const
+{
+    // ExecuteScoped already takes the more restrictive of the global policy and this one,
+    // so a goal cannot reach anything the profile could not. Narrowing here on top of that
+    // keeps a long unattended-looking run from also being a broad one.
+    return goals::NarrowScopeForGoal(actionRuntime.Settings());
+}
+
+bool ReviaSession::TryHandleGoalInput(const std::string& input, SessionResult& result)
+{
+    const std::string request = Trim(input.substr(6));
+    if (request.empty())
+    {
+        result.succeeded = false;
+        result.text = "Usage: /goal <what you want done>";
+        result.reason = "No goal request was given.";
+        SetState(RuntimeState::Blocked, result.reason);
+        return true;
+    }
+    if (!actionRuntime.IsInitialized())
+    {
+        result.succeeded = false;
+        result.text = "Action runtime is not initialized.";
+        result.reason = result.text;
+        SetState(RuntimeState::Blocked, result.reason);
+        return true;
+    }
+
+    SetState(RuntimeState::Thinking, "Planning a goal.");
+    const responseOutput proposal = router.PlanGoal(request);
+    if (!proposal.bSuccess)
+    {
+        result.succeeded = false;
+        result.text = proposal.response;
+        result.reason = proposal.reason;
+        SetState(RuntimeState::Error, result.reason);
+        return true;
+    }
+
+    planning::ParsedGoal parsed = planning::GoalPlanner::ParseJson(proposal.response);
+    if (!parsed.succeeded)
+    {
+        result.succeeded = false;
+        result.text = "Goal plan rejected: " + parsed.error;
+        result.reason = parsed.error;
+        SetState(RuntimeState::Blocked, result.reason);
+        return true;
+    }
+
+    parsed.goal.scope = DeriveGoalScope();
+    for (goals::GoalStep& step : parsed.goal.steps)
+    {
+        step.action.requestedBy = "goal";
+        step.check.requestedBy = "goal";
+    }
+
+    // Validate before asking, so a plan that could never complete is refused without
+    // spending the user's attention on a confirmation prompt.
+    std::string planError;
+    if (!goals::GoalRunner::Validate(parsed.goal, planError))
+    {
+        result.succeeded = false;
+        result.text = "Goal plan rejected: " + planError;
+        result.reason = planError;
+        SetState(RuntimeState::Blocked, result.reason);
+        return true;
+    }
+
+    // Rehearse before asking. Approving a plan on the strength of how reasonable its text
+    // reads is exactly what this stage is meant to replace, and a plan that cannot even
+    // work on a copy should never reach the real folders or the user's attention.
+    std::string rehearsalSummary;
+    const goals::Goal rehearsed = RehearseGoal(parsed.goal, rehearsalSummary);
+    if (rehearsed.status == goals::GoalStatus::Cancelled)
+    {
+        result.succeeded = false;
+        result.text = "Goal cancelled during rehearsal; nothing real was touched.";
+        result.reason = "The rehearsal was stopped.";
+        SetState(RuntimeState::Idle, result.text);
+        return true;
+    }
+    if (rehearsed.status == goals::GoalStatus::Failed ||
+        rehearsed.status == goals::GoalStatus::Blocked ||
+        rehearsed.status == goals::GoalStatus::Exhausted)
+    {
+        result.succeeded = false;
+        result.text = rehearsalSummary + "\nNothing real was touched.";
+        result.reason = goals::ToString(rehearsed.stopReason);
+        appLogger.Warning("Goal refused after a failed rehearsal: " + rehearsalSummary);
+        SetState(RuntimeState::Blocked, result.reason);
+        return true;
+    }
+
+    // The plan is approved as a whole before any step runs. Individual steps still hit the
+    // per-action confirmation path, so this adds a gate rather than replacing one.
+    ConfirmationHandler handler;
+    {
+        std::lock_guard lock(confirmationMutex);
+        handler = confirmationHandler;
+    }
+    if (handler)
+    {
+        actions::ActionRequest summary = parsed.goal.steps.front().action;
+        summary.id = actions::NewActionId();
+        summary.requestedBy = "goal";
+        actions::PolicyDecision decision;
+        decision.verdict = actions::PolicyVerdict::RequiresConfirmation;
+        decision.reason = "Run the goal '" + parsed.goal.title + "' (" +
+            std::to_string(parsed.goal.steps.size()) +
+            (parsed.goal.steps.size() == 1 ? " step" : " steps") + ")?\n" +
+            FormatGoalPlan(parsed.goal) + "\n" + rehearsalSummary;
+        SetState(RuntimeState::WaitingForConfirmation, decision.reason);
+        if (!handler(summary, decision))
+        {
+            parsed.goal.status = goals::GoalStatus::Cancelled;
+            parsed.goal.stopReason = goals::StopReason::Cancelled;
+            result.succeeded = false;
+            result.text = "Goal cancelled before any step ran.";
+            result.reason = "The goal plan was not approved.";
+            SetState(RuntimeState::Idle, result.text);
+            return true;
+        }
+    }
+
+    const goals::Goal finished = RunGoalUnlocked(std::move(parsed.goal));
+    result.succeeded = finished.status == goals::GoalStatus::Succeeded;
+    result.text = FormatGoalSummary(finished);
+    if (!result.succeeded)
+    {
+        result.reason = goals::ToString(finished.stopReason);
+    }
+    return true;
+}
+
+goals::Goal ReviaSession::RehearseGoal(const goals::Goal& goal, std::string& outSummary)
+{
+    goals::Goal rehearsed;
+    const goals::SandboxRehearsal sandbox = goals::GoalSandbox::Prepare(goal);
+    if (!sandbox.supported)
+    {
+        outSummary = "Not rehearsed: " + sandbox.reason + ".";
+        rehearsed.status = goals::GoalStatus::Planned;
+        return rehearsed;
+    }
+    // Disposal is structural rather than a call at the end of each path. A scratch tree
+    // that survives its run is exactly the failure this class is named against, and an
+    // exception between here and the end would otherwise leave one behind.
+    struct ScratchGuard
+    {
+        std::filesystem::path root;
+        logger& log;
+        ~ScratchGuard()
+        {
+            std::string discardError;
+            if (!goals::GoalSandbox::Discard(root, discardError))
+            {
+                log.Warning(
+                    "The goal rehearsal directory could not be removed: " + discardError);
+            }
+        }
+    } scratchGuard{sandbox.root, appLogger};
+
+    if (!sandbox.prepared)
+    {
+        outSummary = "Rehearsal could not be set up: " + sandbox.reason + ".";
+        rehearsed.status = goals::GoalStatus::Failed;
+        return rehearsed;
+    }
+
+    SetState(RuntimeState::Acting, "Rehearsing the goal in a scratch copy.");
+    // Its own runtime, policy, and audit log. Reusing the session's would block every step:
+    // scoped execution takes the more restrictive of global and goal policy, and the
+    // scratch directory is outside every configured approved root.
+    actions::ActionRuntime rehearsalRuntime;
+    std::string runtimeError;
+    if (!rehearsalRuntime.Initialize(
+        sandbox.capabilityConfig, sandbox.auditLog, runtimeError))
+    {
+        outSummary = "Rehearsal could not be set up: " + runtimeError;
+        rehearsed.status = goals::GoalStatus::Failed;
+        return rehearsed;
+    }
+
+    // Its own store too. A rehearsal is not history, and writing it to the real goal
+    // database would put runs in /goals that never touched anything.
+    const goals::GoalStore rehearsalStore((sandbox.root / "rehearsal.db").string());
+    goals::GoalRunner rehearsalRunner(rehearsalRuntime, rehearsalStore);
+    rehearsalRunner.SetProgressHandler([this](const goals::GoalProgress& progress)
+    {
+        goals::GoalProgress annotated = progress;
+        annotated.message = "(rehearsal) " + annotated.message;
+        PublishGoalProgress(annotated);
+    });
+    // Confined to a throwaway directory that only exists for this call, and the scope's
+    // approved roots are that directory, so anything reaching outside is blocked by policy
+    // rather than by asking. Prompting here would train the habit of approving a dialog
+    // twice for one decision.
+    rehearsalRunner.SetConfirmationHandler([](
+        const actions::ActionRequest&,
+        const actions::PolicyDecision&) { return true; });
+
+    rehearsed = rehearsalRunner.Run(sandbox.goal, CurrentOperationToken());
+    if (rehearsed.status == goals::GoalStatus::Succeeded)
+    {
+        outSummary = "Rehearsed successfully in a scratch copy: all " +
+            std::to_string(rehearsed.steps.size()) +
+            (rehearsed.steps.size() == 1 ? " step verified." : " steps verified.");
+    }
+    else
+    {
+        outSummary = "Rehearsal FAILED in a scratch copy - " + FormatGoalSummary(rehearsed);
+        for (const goals::GoalStep& step : rehearsed.steps)
+        {
+            if (step.status == goals::StepStatus::Failed && !step.attempts.empty())
+            {
+                outSummary += "\n   step " + std::to_string(step.ordinal + 1) + ": " +
+                    step.attempts.back().failure;
+                break;
+            }
+        }
+    }
+    return rehearsed;
+}
+
+std::string ReviaSession::FormatGoalPlan(const goals::Goal& goal)
+{
+    std::ostringstream stream;
+    for (const goals::GoalStep& step : goal.steps)
+    {
+        // Marked per step because a plan is approved as a whole. Asked something vague the
+        // planner will propose deletion inside an otherwise ordinary-looking plan, and
+        // recycling is classified ReversibleWrite, so nothing else in the pipeline makes
+        // it stand out. This prompt is where the user sees it or does not see it at all.
+        stream << (step.ordinal + 1) << ". " << step.description;
+        if (step.action.type == actions::ActionType::MoveToRecycleBin)
+        {
+            stream << "  [DELETES FILES]";
+        }
+        else if (actions::RiskForAction(step.action.type) == actions::RiskLevel::Destructive)
+        {
+            stream << "  [DESTRUCTIVE]";
+        }
+        stream << "\n   " << actions::ToString(step.action.type);
+        if (!step.action.source.empty())
+        {
+            stream << ' ' << actions::PathToUtf8(step.action.source);
+        }
+        if (!step.action.destination.empty())
+        {
+            stream << " -> " << actions::PathToUtf8(step.action.destination);
+        }
+        if (!step.action.application.empty())
+        {
+            stream << ' ' << step.action.application;
+        }
+        stream << "\n   verify with " << actions::ToString(step.check.type)
+            << " expecting \"" << step.expected << "\"\n";
+    }
+    return stream.str();
+}
+
+std::string ReviaSession::FormatGoalList(const std::vector<goals::Goal>& goalList)
+{
+    if (goalList.empty())
+    {
+        return "No goals have been recorded yet.";
+    }
+    std::ostringstream stream;
+    for (const goals::Goal& goal : goalList)
+    {
+        stream << goal.id << "  " << goals::ToString(goal.status) << "  " << goal.title;
+        if (!goals::IsTerminal(goal.status))
+        {
+            stream << "  (resumable: /goals resume " << goal.id << ")";
+        }
+        stream << '\n';
+    }
+    return stream.str();
+}
+
 bool ReviaSession::TryHandleActionInput(const std::string& input, SessionResult& result)
 {
     if (input == "/capabilities")
     {
         result.text = actionRuntime.StatusJson();
+        SetState(RuntimeState::Idle);
+        return true;
+    }
+
+    if (input.rfind("/goals resume ", 0) == 0)
+    {
+        const std::string goalId = Trim(input.substr(14));
+        if (goalId.empty())
+        {
+            result.succeeded = false;
+            result.text = "Usage: /goals resume <goal-id>";
+            result.reason = "No goal id was given.";
+            SetState(RuntimeState::Blocked, result.reason);
+            return true;
+        }
+        const goals::Goal finished = ResumeGoalUnlocked(goalId);
+        result.succeeded = finished.status == goals::GoalStatus::Succeeded;
+        result.text = FormatGoalSummary(finished);
+        if (!result.succeeded)
+        {
+            result.reason = goals::ToString(finished.stopReason);
+        }
+        return true;
+    }
+
+    if (input == "/goals")
+    {
+        result.text = FormatGoalList(goalStore.LoadRecent());
+        SetState(RuntimeState::Idle);
+        return true;
+    }
+
+    if (input.rfind("/goal ", 0) == 0)
+    {
+        return TryHandleGoalInput(input, result);
+    }
+
+    if (input == "/perception" || input.rfind("/perception ", 0) == 0)
+    {
+        const std::string argument = input.size() > 11 ? Trim(input.substr(11)) : std::string();
+        if (argument == "forget")
+        {
+            ForgetActivity();
+            result.text = "Observation history cleared. Nothing about earlier windows "
+                "remains in memory.";
+            SetState(RuntimeState::Idle);
+            return true;
+        }
+        if (argument.rfind("history", 0) == 0)
+        {
+            std::chrono::minutes window{60};
+            const std::string tail = Trim(argument.substr(7));
+            if (!tail.empty())
+            {
+                try
+                {
+                    const int requested = std::stoi(tail);
+                    // Clamped rather than rejected: asking for a longer window than is
+                    // retained is a reasonable thing to do, and silently answering from
+                    // less data is worse than answering the question that can be answered.
+                    window = std::chrono::minutes{std::clamp(requested, 1, 480)};
+                }
+                catch (const std::exception&)
+                {
+                    result.succeeded = false;
+                    result.text = "Usage: /perception history [minutes]";
+                    result.reason = "The history window must be a number of minutes.";
+                    SetState(RuntimeState::Blocked, result.reason);
+                    return true;
+                }
+            }
+            result.text = RecentActivity(window);
+            SetState(RuntimeState::Idle);
+            return true;
+        }
+        if (argument == "pause" || argument == "resume")
+        {
+            if (!settings.perception.bEnabled)
+            {
+                result.succeeded = false;
+                result.text = "Ambient perception is off, so there is nothing to " +
+                    argument + ".";
+                result.reason = "Perception is disabled in settings.";
+                SetState(RuntimeState::Blocked, result.reason);
+                return true;
+            }
+            windowEventMonitor.SetPaused(argument == "pause");
+        }
+        else if (!argument.empty())
+        {
+            result.succeeded = false;
+            result.text = "Usage: /perception [pause|resume|history [minutes]|forget]";
+            result.reason = "Unrecognized perception argument.";
+            SetState(RuntimeState::Blocked, result.reason);
+            return true;
+        }
+        result.text = PerceptionStatus();
         SetState(RuntimeState::Idle);
         return true;
     }
@@ -943,6 +1716,12 @@ std::stop_token ReviaSession::BeginOperation()
 {
     std::lock_guard lock(cancellationMutex);
     activeStopSource = std::stop_source{};
+    return activeStopSource.get_token();
+}
+
+std::stop_token ReviaSession::CurrentOperationToken() const
+{
+    std::lock_guard lock(cancellationMutex);
     return activeStopSource.get_token();
 }
 

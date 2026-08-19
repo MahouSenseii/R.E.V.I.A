@@ -35,6 +35,20 @@ responseOutput messageRouter::PlanAction(const std::string& request) const
     return llm.GenerateActionProposal(request);
 }
 
+responseOutput messageRouter::PlanGoal(const std::string& request) const
+{
+    if (request.empty())
+    {
+        responseOutput output;
+        output.bSuccess = false;
+        output.response = "I need a task to plan.";
+        output.reason = "Goal planning request was empty.";
+        output.bShouldSpeak = false;
+        return output;
+    }
+    return llm.GenerateGoalPlan(request);
+}
+
 responseOutput messageRouter::AnalyzeImage(
     const std::filesystem::path& imagePath,
     const std::string& prompt,

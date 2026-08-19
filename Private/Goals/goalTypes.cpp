@@ -159,4 +159,15 @@ std::string NewStepId()
     return MakeId("step");
 }
 
+actions::CapabilitySettings NarrowScopeForGoal(actions::CapabilitySettings configured)
+{
+    configured.mode = actions::ExecutionMode::ApprovedScope;
+    configured.createMissingApprovedRoots = false;
+    if (configured.autoApproveRiskThrough > actions::RiskLevel::ReversibleWrite)
+    {
+        configured.autoApproveRiskThrough = actions::RiskLevel::ReversibleWrite;
+    }
+    return configured;
+}
+
 } // namespace revia::goals

@@ -1,4 +1,5 @@
 #include "LLM/LLamaCPP/llamaCppService.h"
+#include "Planning/goalPlanner.h"
 #include <httplib.h>
 #include <nlohmann/json.hpp>
 #include <algorithm>
@@ -569,6 +570,32 @@ responseOutput llamaCppService::GenerateResponse(
 
 responseOutput llamaCppService::GenerateActionProposal(const std::string& userRequest) const
 {
+    const std::string plannerPrompt =
+        "You are Revia's constrained action planner. Return exactly one JSON object and no markdown. "
+        "Allowed actions are list_directory, read_text_file, create_directory, copy_file, move_file, "
+        "rename_path, move_to_recycle_bin, inspect_window, focus_window, set_control_text, and "
+        "invoke_control. Filesystem actions use an absolute Windows path in source or path. "
+        "copy_file, move_file, and rename_path also require destination. Never emit shell commands, "
+        "scripts, multiple actions, or explanations. Desktop actions require application (an exe name) "
+        "and may use window_title. set_control_text requires control and value; invoke_control requires "
+        "control. If the request cannot map to one allowed action, "
+        "return {\"action\":\"unknown\",\"reason\":\"brief reason\"}.";
+    return GeneratePlannerResponse(plannerPrompt, userRequest, 256);
+}
+
+responseOutput llamaCppService::GenerateGoalPlan(const std::string& userRequest) const
+{
+    // A multi-step plan carries two action objects and an expectation per step, so it needs
+    // materially more room than the single-action planner's 256.
+    return GeneratePlannerResponse(
+        revia::planning::GoalPlanner::PlannerPrompt(), userRequest, 1536);
+}
+
+responseOutput llamaCppService::GeneratePlannerResponse(
+    const std::string& systemPrompt,
+    const std::string& userRequest,
+    const int maxTokens) const
+{
     responseOutput output;
     output.bShouldSpeak = false;
 
@@ -584,25 +611,14 @@ responseOutput llamaCppService::GenerateActionProposal(const std::string& userRe
     client.set_connection_timeout(5);
     client.set_read_timeout(120);
 
-    const std::string plannerPrompt =
-        "You are Revia's constrained action planner. Return exactly one JSON object and no markdown. "
-        "Allowed actions are list_directory, read_text_file, create_directory, copy_file, move_file, "
-        "rename_path, move_to_recycle_bin, inspect_window, focus_window, set_control_text, and "
-        "invoke_control. Filesystem actions use an absolute Windows path in source or path. "
-        "copy_file, move_file, and rename_path also require destination. Never emit shell commands, "
-        "scripts, multiple actions, or explanations. Desktop actions require application (an exe name) "
-        "and may use window_title. set_control_text requires control and value; invoke_control requires "
-        "control. If the request cannot map to one allowed action, "
-        "return {\"action\":\"unknown\",\"reason\":\"brief reason\"}.";
-
     json requestBody = {
         {"model", modelName},
         {"messages", json::array({
-            {{"role", "system"}, {"content", plannerPrompt}},
+            {{"role", "system"}, {"content", systemPrompt}},
             {{"role", "user"}, {"content", userRequest}}
         })},
         {"temperature", 0.1},
-        {"max_tokens", 256},
+        {"max_tokens", maxTokens},
         {"stream", false},
         {"response_format", {{"type", "json_object"}}}
     };

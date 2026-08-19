@@ -344,6 +344,52 @@ bool configManager::LoadSettings(appSettings& outSettings) const
                 outSettings.vision.maxResponseTokens = visionData["maxResponseTokens"].get<int>();
             }
         }
+
+        if (data.contains("perception"))
+        {
+            const json& perceptionData = data["perception"];
+            if (perceptionData.contains("enabled"))
+            {
+                outSettings.perception.bEnabled = perceptionData["enabled"].get<bool>();
+            }
+            if (perceptionData.contains("minimumEventIntervalMs"))
+            {
+                outSettings.perception.minimumEventIntervalMs =
+                    perceptionData["minimumEventIntervalMs"].get<int>();
+            }
+            if (perceptionData.contains("maxObservationsPerMinute"))
+            {
+                outSettings.perception.maxObservationsPerMinute =
+                    perceptionData["maxObservationsPerMinute"].get<int>();
+            }
+            // Configured lists extend the defaults rather than replacing them. A config
+            // that names one more password manager must not silently drop the rest of the
+            // deny list, which is what assignment would do.
+            if (perceptionData.contains("excludedApplications") &&
+                perceptionData["excludedApplications"].is_array())
+            {
+                for (const auto& entry : perceptionData["excludedApplications"])
+                {
+                    if (entry.is_string())
+                    {
+                        outSettings.perception.excludedApplications.push_back(
+                            entry.get<std::string>());
+                    }
+                }
+            }
+            if (perceptionData.contains("excludedTitleFragments") &&
+                perceptionData["excludedTitleFragments"].is_array())
+            {
+                for (const auto& entry : perceptionData["excludedTitleFragments"])
+                {
+                    if (entry.is_string())
+                    {
+                        outSettings.perception.excludedTitleFragments.push_back(
+                            entry.get<std::string>());
+                    }
+                }
+            }
+        }
     }
     catch (const std::exception&)
     {
@@ -413,7 +459,21 @@ bool configManager::LoadSettings(appSettings& outSettings) const
                 outSettings.speechRecognition.threads < 1 ||
                 outSettings.speechRecognition.threads > 64)) ||
         outSettings.vision.maxResponseTokens < 64 ||
-        outSettings.vision.maxResponseTokens > 4096)
+        outSettings.vision.maxResponseTokens > 4096 ||
+        // Fails closed like every other section: a config that would observe faster than
+        // a human can switch windows is rejected rather than quietly clamped into
+        // something reasonable.
+        outSettings.perception.minimumEventIntervalMs < 100 ||
+        outSettings.perception.minimumEventIntervalMs > 60000 ||
+        outSettings.perception.maxObservationsPerMinute < 1 ||
+        outSettings.perception.maxObservationsPerMinute > 600 ||
+        // Config can only extend the deny lists, never shorten them, so this cannot fire
+        // from a settings file. It guards the built-in defaults themselves: if those are
+        // ever emptied in code, perception must refuse to start rather than watch
+        // everything.
+        (outSettings.perception.bEnabled &&
+            (outSettings.perception.excludedApplications.empty() ||
+                outSettings.perception.excludedTitleFragments.empty())))
     {
         return false;
     }

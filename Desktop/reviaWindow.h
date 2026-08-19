@@ -25,6 +25,16 @@ class QWidget;
 class ReviaWindow final : public QMainWindow
 {
 public:
+    // Authoritative microphone presentation state. Phase events from the recognition
+    // service drive it; the toggle only ever requests a transition.
+    enum class MicrophoneUi
+    {
+        Unavailable,
+        Ready,
+        Listening,
+        Transcribing
+    };
+
     explicit ReviaWindow(
         bool startRuntime = true,
         bool buildSystemTray = true,
@@ -43,6 +53,8 @@ private:
     void BuildTray();
     void StartRuntime();
     void SendMessage();
+    void ToggleListening();
+    void ApplyMicrophoneUi(MicrophoneUi microphoneUi);
     void AnalyzeVisibleScreen();
     void RefreshVoiceStudio();
     void CreateVoicePreset();
@@ -71,6 +83,7 @@ private:
     QLabel* microphoneLabel = nullptr;
     QLabel* automationLabel = nullptr;
     QLabel* visionLabel = nullptr;
+    QLabel* perceptionLabel = nullptr;
     QWidget* titleBar = nullptr;
     QToolButton* maximizeButton = nullptr;
     QTextBrowser* chatHistory = nullptr;
@@ -83,6 +96,7 @@ private:
     QPushButton* visionButton = nullptr;
     QCheckBox* alwaysOnTopCheck = nullptr;
     QCheckBox* speechCheck = nullptr;
+    QCheckBox* autoSendVoiceCheck = nullptr;
     QComboBox* voiceProfileCombo = nullptr;
     QComboBox* voicePresetCombo = nullptr;
     QComboBox* voiceLanguageCombo = nullptr;
@@ -105,4 +119,6 @@ private:
     std::atomic<bool> voiceOperationRunning = false;
     bool speechActive = false;
     bool microphoneActive = false;
+    bool listenRequested = false;
+    MicrophoneUi microphoneUiState = MicrophoneUi::Unavailable;
 };

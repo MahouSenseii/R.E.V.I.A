@@ -168,4 +168,9 @@ bool ActionRuntime::IsInitialized() const
     return policy != nullptr;
 }
 
+CapabilitySettings ActionRuntime::Settings() const
+{
+    return policy != nullptr ? policy->Settings() : CapabilitySettings{};
+}
+
 } // namespace revia::actions
