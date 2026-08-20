@@ -95,7 +95,7 @@ Exit criteria: each supported application has deterministic integration tests an
 Only the paths a plan names are staged, one directory level deep. Mirroring an entire approved root to rehearse a two-step plan would cost more than the plan does, and a step that reaches outside what it declared fails in rehearsal instead of succeeding there and surprising someone later.
 
 **Asked something vague, the planner proposes deletion.** "Clean up my desktop" produced a single step recycling the whole Desktop directory. Nothing upstream flags it: the plan is structurally valid, and `move_to_recycle_bin` is classified `ReversibleWrite` because the bin is recoverable, so the risk ceiling does not catch it either. What contains it is the approved-root boundary and the fact that the whole plan is shown before it runs — which is why the approval prompt marks a recycling step `[DELETES FILES]` explicitly. Treat that pairing as load-bearing, not cosmetic.
-- Remaining: treat learning as reviewed memory and measured policy updates—not self-modifying executable code.
+- Implemented: **reviewed learning.** `LearningReview` draws lessons from recorded outcomes — goal stop reasons and proposal accept/dismiss counts — and `/review` offers them with their evidence. Approving one writes an ordinary preference memory through the ordinary memory path; it cannot change a capability, a budget, or a policy. Inference is deliberately kept away from anything that grants authority: the one automatic adjustment, halving the initiative rate below a precision floor, is computed from counted outcomes inside `AttentionPolicy` rather than proposed by a review. A pattern needs at least four samples, unfinished goals are not outcomes, and the review states the unwelcome conclusion when the numbers support it.
 
 Unfinished goals are reported at startup, never auto-resumed. Restarting into unattended execution of work the user has not re-approved is Stage 5, behind its own job contract.
 
@@ -148,7 +148,16 @@ Exit criteria: Revia can describe what the user has been doing for the last hour
 
 The first half of that is met from Tier 0 alone — `/perception history 60` reports time per application with the files worked on — and pause is immediate. Tier 1 and above remain unbuilt, and the attention/interruption model below applies to none of it yet, because nothing here speaks: this stage only answers when asked.
 
-## Stage 7 — Self-directed goal formation
+## Stage 7 — Self-directed goal formation (first slice implemented)
+
+- Implemented: `InitiativeController` forms proposals from Tier 0 session evidence and offers them through `AttentionPolicy`, a deterministic gate. A proposal carries its evidence, executes nothing, and is dismissible in one action. Accepting one that names a goal hands it to the Stage 4 runner under the existing rehearsal, confirmation, budget, and audit path — this stage adds no execution capability whatsoever, which is what makes it safe to build before the delivery model matures.
+- Implemented: confidence threshold rather than a relevance one; cooldown after every utterance and a longer one after dismissal; hourly ceiling; hard suppression during full-screen applications, excluded applications, and active input; refusal to repeat an observation; dismissal recorded; precision tracked and the hourly rate halved automatically below the configured ratio, recovering when proposals land.
+- Implemented: the decision to speak is policy, not a prompt. The model supplies content and a confidence; when it is welcome to interrupt is decided here, for the same reason it does not choose its own capability scope.
+- Implemented: **evidence sources are ranked by how concrete they are.** An unfinished goal outranks a session observation, because a goal is something the user actually asked for while time spent in an editor is only an observation about it. Accepting a goal-backed proposal hands it straight to `ResumeGoal`, which re-verifies every remaining step: accepting is a shortcut for typing the command, never a way around it.
+- Remaining: further evidence sources — a file edited repeatedly by hand that a goal could do, an approved root filling up. Each needs no new authority, and the precision counter is the honest test of whether one earns its place.
+- Remaining: report proposal precision to the user prominently rather than only through `/initiative`.
+
+
 
 *Depends on Stage 4 and Stage 6.*
 
@@ -181,11 +190,13 @@ Exit criteria: the character runs for a full day without stealing focus or dropp
 
 ## Suggested next implementation slice
 
-Stage 4 can execute a goal. Stage 6 Tier 0 can now observe and summarise a working session. The two have never been connected, and connecting them is Stage 7 — the stage that turns a capable assistant into a companion.
+Stage 4 executes goals, Stage 6 Tier 0 observes and summarises a session, and Stage 7's first slice now connects them: Revia can offer something unprompted, behind a deterministic attention gate, and be interrupted mid-sentence.
 
-**A proposal path** is therefore the next slice, and it is smaller than it sounds because it adds no execution authority whatsoever. A proposal carries the observed evidence (from the session history that now exists), the goal it would pursue, the capability profile it would need, and the budget it would consume. It executes nothing. Approving one hands it to the Stage 4 runner, which already rehearses, confirms, budgets, verifies, and audits. That property — that this stage cannot do anything the user has not already been able to do by typing `/goal` — is what makes it safe to build before the attention model exists.
+Stage 4 is complete. The strongest remaining candidate is **Stage 3's vision-to-typed resolver**: both halves exist and have never been connected. A resolver that turns a vision-identified screen region into a typed UIA element reference — matching by bounding-box intersection and name agreement, refusing below a confidence threshold — turns the allowlist from "applications someone profiled by hand" into "applications that expose a UIA tree", without adding any new execution authority. It is also the last thing standing between the goal runner and applications it currently cannot drive at all.
 
-Deliberately out of scope for that first slice: Revia speaking unprompted. Proposals should be *retrievable* before they are *delivered*. The Stage 6 attention and interruption rules — cooldowns, suppression, dismissal tracking, precision measurement — all belong to delivery, and building them before there is anything worth delivering gets the order backwards.
+Two smaller items are ready whenever wanted: the `InputArbiter` is built and tested but not yet wired into `Submit`, and always-on VAD listening has settings but no capture loop.
+
+Measure before adding evidence sources. The precision counter is the honest signal for whether a new source earns its place, and a source that lowers precision should be removed rather than tuned.
 
 **Tier 1 perception** stays deferred. Change detection and perceptual hashing add cost and privacy surface, and most of what they would infer is already available for free from window titles.
 

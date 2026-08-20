@@ -9,10 +9,12 @@ TurnAgentResult TurnCoordinator::Execute(
     const std::vector<conversationMessage>& context,
     const bool evaluateMemory,
     const std::uint64_t turnId,
-    const std::stop_token stopToken) const
+    const std::stop_token stopToken,
+    messageRouter::DeltaHandler onDelta) const
 {
     TurnAgentResult result;
-    result.response = conversationAgent.Execute(router, input, context, stopToken);
+    result.response =
+        conversationAgent.Execute(router, input, context, stopToken, std::move(onDelta));
 
     // The interactive reply owns inference priority. Starting memory classification
     // first can contend with chat and embedding work on the same GPU.

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <functional>
 #include "Library/enumLibrary.h"
 #include "Library/structLibrary.h"
 #include "LLM/LLamaCPP/llamaCppService.h"
@@ -19,10 +20,13 @@ public:
         const embeddingSettings& embeddingSettings,
         const aiProfile& profile);
     bool IsBackendAvailable() const;
+    void SetPosture(std::string posture);
     healthOutput CheckBackendHealth() const;
+    using DeltaHandler = std::function<void(const std::string&)>;
     responseOutput GenerateResponse(
         const std::vector<conversationMessage>& context,
-        std::stop_token stopToken = {}) const;
+        std::stop_token stopToken = {},
+        DeltaHandler onDelta = {}) const;
     responseOutput GenerateActionProposal(const std::string& userRequest) const;
     responseOutput GenerateGoalPlan(const std::string& userRequest) const;
     responseOutput AnalyzeImage(

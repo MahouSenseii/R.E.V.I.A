@@ -21,6 +21,10 @@ struct responseOutput
 
     std::string response;
     std::string reason;
+    // Anything the model produced inside <think> tags, removed from the reply itself.
+    // Reasoning is not an answer: speaking it or showing it inline would be wrong, but
+    // discarding it hides what Revia actually did.
+    std::string reasoning;
     std::vector<latencySample> timings;
 };
 
@@ -96,7 +100,24 @@ struct speechSettings
     int volume = 90;
     int rate = 1;
     int maxCharacters = 1400;
-    int maxQueuedUtterances = 2;
+    // Sized for sentences, not whole replies. Streaming hands the worker one utterance
+    // per sentence, and generation easily outruns realtime playback, so a small cap here
+    // silently drops the OLDEST unsaid sentence -- you would hear a reply start midway.
+    int maxQueuedUtterances = 16;
+};
+
+struct alwaysOnListeningSettings
+{
+    // Opt-in. Continuous listening is a standing microphone, which is a materially larger
+    // promise than a button that opens one for a few seconds.
+    bool bEnabled = false;
+    int energyThreshold = 1400;
+    // Sustained speech before capture starts, so a door does not open a recording.
+    int onsetFramesRequired = 5;
+    // Silence before capture ends. Long enough to survive a pause mid-sentence.
+    int silenceMsToEnd = 900;
+    // Hard ceiling on one utterance, so a noisy room cannot record indefinitely.
+    int maxUtteranceSeconds = 30;
 };
 
 struct speechRecognitionSettings
@@ -108,6 +129,7 @@ struct speechRecognitionSettings
     int sampleRate = 16000;
     int threads = 6;
     bool bUseGpu = true;
+    alwaysOnListeningSettings alwaysOn;
 };
 
 struct visionSettings
@@ -142,6 +164,93 @@ struct perceptionSettings
     };
 };
 
+// Where a reply is going. Revia speaks when she is talking to the person in front of her;
+// text she is composing into someone else's application is not something to read aloud.
+enum class outputChannel
+{
+    LocalVoice,
+    ExternalApplication
+};
+
+struct conversationChannelSettings
+{
+    // Executables Revia may speak for even when composing into them. Empty by default:
+    // typing into Discord or a browser is text, and narrating it is noise.
+    std::vector<std::string> voiceEnabledApplications;
+    // Named so the reason a reply was silent can be reported rather than guessed at.
+    std::vector<std::string> textOnlyApplications = {
+        "discord.exe", "slack.exe", "teams.exe", "telegram.exe", "whatsapp.exe",
+        "msedge.exe", "chrome.exe", "firefox.exe", "thunderbird.exe", "outlook.exe"
+    };
+};
+
+// Merging and filtering what arrives, instead of answering every fragment separately.
+struct inputArbiterSettings
+{
+    // Inputs landing inside this window are treated as one thought. Speaking in three
+    // bursts should not produce three replies.
+    int mergeWindowMs = 1500;
+    // Below this, a fragment is treated as noise unless it is clearly addressed to Revia.
+    int minimumMeaningfulCharacters = 3;
+    int maxQueuedInputs = 8;
+    // Recognisers emit these constantly from room noise. They are dropped rather than
+    // answered.
+    std::vector<std::string> ignoredFragments = {
+        "uh", "um", "erm", "hmm", "mm", "mhm", "ah", "oh", "eh", "huh",
+        "you", "thanks for watching", "thank you", "bye", "[blank_audio]", "..."
+    };
+};
+
+// Stage 6's attention model and Stage 7's proposal rate, together: when Revia is allowed
+// to speak first, and how quickly it must back off when it turns out to be wrong.
+//
+// Silence is the default. A proposal has to clear a confidence threshold, not a relevance
+// one -- "this might be related" is not a reason to interrupt someone.
+struct initiativeSettings
+{
+    bool bEnabled = false;
+    // Below this, Revia stays quiet no matter how relevant the observation looks.
+    float minimumConfidence = 0.72f;
+    int maxUtterancesPerHour = 4;
+    int cooldownSeconds = 900;
+    // Longer after a dismissal than after an accepted one. Being told "no" should cost
+    // more than being ignored.
+    int dismissalCooldownSeconds = 3600;
+    // Do not interrupt someone mid-keystroke. Measured from the last input event of any
+    // kind, which needs no keyboard hook and records nothing about what was typed.
+    int quietInputSeconds = 4;
+    // Proposals accepted versus dismissed. Below this, Revia halves its own rate. An
+    // assistant that cannot tell it is being annoying is a defect.
+    float minimumPrecision = 0.34f;
+    int precisionSampleFloor = 5;
+    bool bSuppressWhenFullScreen = true;
+};
+
+// Stopping mid-sentence when the user starts talking, the way a person does.
+//
+// The hard part is that the microphone hears the speakers for the whole utterance, not
+// just the start of it. A fixed threshold therefore cannot separate "the user is talking"
+// from "Revia is talking and the room is echoing it back" -- which is why detection here
+// tracks a rolling noise floor and looks for a step above it, rather than an absolute
+// level. The floor is learned from the frames that did not trigger, so Revia's own voice
+// raises the bar instead of tripping it.
+struct bargeInSettings
+{
+    bool bEnabled = true;
+    // Absolute floor. Nothing below this is ever an interruption regardless of how quiet
+    // the room is, so a silent microphone cannot produce a hair trigger.
+    int energyThreshold = 1400;
+    // How far above the learned floor a frame must sit to count. Speech arrives on top of
+    // the echo, so a genuine interruption is a step change, not a slow drift.
+    float echoMarginMultiplier = 2.6f;
+    // Consecutive qualifying frames before Revia yields, so one cough, a door, or a burst
+    // of laughter from the speakers does not cut a reply short. Frames are ~50 ms.
+    int consecutiveFramesRequired = 8;
+    // Time to learn the floor before any interruption is possible. Must be long enough to
+    // capture what Revia's own playback sounds like through the microphone.
+    int startupGraceMs = 700;
+};
+
 struct aiProfile
 {
     std::string id = "assistant";
@@ -167,6 +276,10 @@ struct appSettings
     speechRecognitionSettings speechRecognition;
     visionSettings vision;
     perceptionSettings perception;
+    initiativeSettings initiative;
+    bargeInSettings bargeIn;
+    conversationChannelSettings channels;
+    inputArbiterSettings inputArbiter;
 };
 
 struct commandOutput

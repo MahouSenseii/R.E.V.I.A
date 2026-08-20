@@ -234,6 +234,36 @@ namespace
             lowered.find("<|im_") != std::string::npos;
     }
 
+    // Pulls <think>...</think> out of a reply and returns it separately. Reasoning models
+    // emit these inline; leaving them in means Revia reads her own deliberation aloud, and
+    // dropping them silently means nobody can see why she answered as she did.
+    std::string ExtractReasoning(std::string& text)
+    {
+        std::string reasoning;
+        for (;;)
+        {
+            const std::size_t open = text.find("<think>");
+            if (open == std::string::npos)
+            {
+                break;
+            }
+            const std::size_t close = text.find("</think>", open);
+            if (close == std::string::npos)
+            {
+                // Still streaming, or the model never closed it. Take the remainder as
+                // reasoning rather than letting an unterminated block become the reply.
+                if (!reasoning.empty()) { reasoning += "\n"; }
+                reasoning += TrimWhitespace(text.substr(open + 7));
+                text.erase(open);
+                break;
+            }
+            if (!reasoning.empty()) { reasoning += "\n"; }
+            reasoning += TrimWhitespace(text.substr(open + 7, close - open - 7));
+            text.erase(open, (close + 8) - open);
+        }
+        return reasoning;
+    }
+
     std::string StripSpecialTokens(const std::string& text)
     {
         const size_t firstStop = FindFirstStopMarker(text);
@@ -243,6 +273,21 @@ namespace
         }
 
         return TrimWhitespace(RemoveEmoji(text.substr(0, firstStop)));
+    }
+
+    // The single definition of what a caller may show or speak: special tokens removed,
+    // reasoning removed, trimmed. Both the streaming loop and the final assembly go
+    // through this, because every truncation bug in this file so far has come from two
+    // consumers computing the visible text slightly differently.
+    std::string VisibleReplyText(const std::string& raw, std::string* outReasoning = nullptr)
+    {
+        std::string text = StripSpecialTokens(raw);
+        const std::string reasoning = ExtractReasoning(text);
+        if (outReasoning != nullptr)
+        {
+            *outReasoning = reasoning;
+        }
+        return TrimWhitespace(text);
     }
 
     std::string ImageDataUrl(const std::filesystem::path& path)
@@ -359,7 +404,8 @@ bool llamaCppService::IsServerAvailable() const
 
 responseOutput llamaCppService::GenerateResponse(
     const std::vector<conversationMessage>& context,
-    const std::stop_token stopToken) const
+    const std::stop_token stopToken,
+    DeltaHandler onDelta) const
 {
     responseOutput output;
 
@@ -404,13 +450,20 @@ responseOutput llamaCppService::GenerateResponse(
         }
     }
 
+    std::string posture;
+    {
+        std::lock_guard postureLock(postureMutex);
+        posture = activePosture;
+    }
+
     json requestBody;
     json messages = builder.BuildMessages(
         activeProfile,
         context,
         queryEmbedding.values,
         queryEmbedding.bSuccess ? queryEmbedding.model : "",
-        &output.timings);
+        &output.timings,
+        posture);
 
     const auto requestPreparationStarted = std::chrono::steady_clock::now();
 
@@ -476,16 +529,26 @@ responseOutput llamaCppService::GenerateResponse(
 
             fullResponse += token;
 
-            const std::string visibleResponse = StripSpecialTokens(fullResponse);
+            // An unterminated <think> keeps its content out of visibleResponse, so nothing
+            // inside one is ever emitted, spoken, or shown while it is still open.
+            const std::string visibleResponse = VisibleReplyText(fullResponse);
             const size_t safeLength = visibleResponse.size() > StreamHoldbackChars
                 ? visibleResponse.size() - StreamHoldbackChars
                 : 0;
 
             if (safeLength > printedLength)
             {
+                const std::string delta =
+                    visibleResponse.substr(printedLength, safeLength - printedLength);
                 startStreaming();
-                std::cout << visibleResponse.substr(printedLength, safeLength - printedLength) << std::flush;
+                std::cout << delta << std::flush;
                 printedLength = safeLength;
+                // Same text the terminal gets. The holdback above has already trimmed
+                // any partial special token, so a caller can speak this safely.
+                if (onDelta)
+                {
+                    onDelta(delta);
+                }
             }
         }
 
@@ -513,7 +576,7 @@ responseOutput llamaCppService::GenerateResponse(
         std::max(0.0, requestMilliseconds - firstTokenMilliseconds)});
     output.timings.push_back({"llama_request_total", requestMilliseconds, true});
 
-    const std::string cleanedResponse = StripSpecialTokens(fullResponse);
+    const std::string cleanedResponse = VisibleReplyText(fullResponse, &output.reasoning);
     if (cleanedResponse.size() > printedLength)
     {
         startStreaming();
@@ -559,6 +622,18 @@ responseOutput llamaCppService::GenerateResponse(
         return output;
     }
 
+    // The stream deliberately holds back the last StreamHoldbackChars characters so a
+    // partial special token is never emitted. That tail is flushed to the terminal above,
+    // and it has to reach onDelta too, or a caller assembling the reply from deltas ends
+    // it mid-word. Emitted here rather than beside the terminal flush so a cancelled or
+    // failed request, which returns above, never delivers a tail for a reply that is not
+    // going to be used.
+    if (onDelta && cleanedResponse.size() > printedLength)
+    {
+        onDelta(cleanedResponse.substr(printedLength));
+        printedLength = cleanedResponse.size();
+    }
+
     output.bSuccess        = true;
     output.response        = cleanedResponse;
     output.bShouldSpeak    = true;
@@ -566,6 +641,12 @@ responseOutput llamaCppService::GenerateResponse(
     output.bWasStreamed     = true;  // tokens already printed live
 
     return output;
+}
+
+void llamaCppService::SetPosture(std::string posture)
+{
+    std::lock_guard postureLock(postureMutex);
+    activePosture = std::move(posture);
 }
 
 responseOutput llamaCppService::GenerateActionProposal(const std::string& userRequest) const

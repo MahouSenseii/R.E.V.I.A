@@ -23,7 +23,8 @@ public:
         const std::vector<conversationMessage>& context,
         bool evaluateMemory,
         std::uint64_t turnId = 0,
-        std::stop_token stopToken = {}) const;
+        std::stop_token stopToken = {},
+        messageRouter::DeltaHandler onDelta = {}) const;
     std::vector<MemoryAgentEvent> DrainMemoryEvents();
     void BackfillMemoryEmbeddings(
         const messageRouter& router,

@@ -6,7 +6,8 @@ messageRouter::~messageRouter() = default;
 responseOutput messageRouter::RouteMessage(
     const std::string& message,
     const std::vector<conversationMessage>& context,
-    const std::stop_token stopToken) const
+    const std::stop_token stopToken,
+    DeltaHandler onDelta) const
 {
     responseOutput output;
 
@@ -18,7 +19,12 @@ responseOutput messageRouter::RouteMessage(
         return output;
     }
 
-    return llm.GenerateResponse(context, stopToken);
+    return llm.GenerateResponse(context, stopToken, std::move(onDelta));
+}
+
+void messageRouter::SetPosture(std::string posture)
+{
+    llm.SetPosture(std::move(posture));
 }
 
 responseOutput messageRouter::PlanAction(const std::string& request) const

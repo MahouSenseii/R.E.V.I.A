@@ -1,15 +1,21 @@
 #include "Actions/IActionExecutor.h"
 #include "Actions/actionDispatcher.h"
 #include "Actions/actionTypes.h"
+#include "Agents/inputArbiter.h"
 #include "Agents/memoryAgent.h"
+#include "Agents/replyFragmenter.h"
 #include "Core/localApiKey.h"
 #include "Audit/actionAuditLogger.h"
 #include "Filesystem/fileSystemExecutor.h"
 #include "Goals/goalRunner.h"
 #include "Goals/goalSandbox.h"
 #include "Goals/goalStore.h"
+#include "Initiative/attentionPolicy.h"
+#include "Initiative/initiativeController.h"
 #include "Goals/goalTypes.h"
 #include "LLM/LLamaCPP/llamaCppServerProcess.h"
+#include "LLM/promptBuilder.h"
+#include "Learning/learningReview.h"
 #include "Memory/longTermMemory.h"
 #include "Perception/activityHistory.h"
 #include "Perception/windowEventMonitor.h"
@@ -21,6 +27,7 @@
 #include "Runtime/runtimeEvents.h"
 #include "Speech/speechService.h"
 #include "Speech/speechRecognitionService.h"
+#include "Speech/voiceActivityMonitor.h"
 #include "Speech/qwenTtsClient.h"
 #include "Speech/voicePresetStore.h"
 #include "Windows/windowsAutomationExecutor.h"
@@ -1696,6 +1703,753 @@ void TestActivityHistoryAnswersTheStageQuestion()
         "Clearing the history left data behind.");
 }
 
+initiativeSettings TalkativeSettings()
+{
+    initiativeSettings settings;
+    settings.bEnabled = true;
+    settings.minimumConfidence = 0.7f;
+    settings.maxUtterancesPerHour = 4;
+    settings.cooldownSeconds = 900;
+    settings.dismissalCooldownSeconds = 3600;
+    settings.quietInputSeconds = 4;
+    settings.minimumPrecision = 0.34f;
+    settings.precisionSampleFloor = 4;
+    return settings;
+}
+
+revia::initiative::AttentionContext QuietDesktop(
+    const std::chrono::system_clock::time_point now)
+{
+    revia::initiative::AttentionContext context;
+    context.now = now;
+    context.sinceLastInput = std::chrono::seconds{30};
+    context.foregroundIsFullScreen = false;
+    context.foregroundIsExcluded = false;
+    return context;
+}
+
+void TestAttentionKeepsSilenceAsTheDefault()
+{
+    using revia::initiative::AttentionPolicy;
+    using revia::initiative::AttentionVerdict;
+
+    // Disabled means silent regardless of how confident anything is.
+    initiativeSettings off;
+    Check(AttentionPolicy(off).Evaluate(1.0f, QuietDesktop(
+        std::chrono::system_clock::now())) == AttentionVerdict::Disabled,
+        "Revia spoke first while initiative was disabled.");
+
+    const AttentionPolicy policy(TalkativeSettings());
+    const auto now = std::chrono::system_clock::now();
+
+    // A confidence threshold, not a relevance one: something merely plausible is not a
+    // reason to interrupt.
+    Check(policy.Evaluate(0.69f, QuietDesktop(now)) == AttentionVerdict::BelowConfidence,
+        "Revia spoke on a proposal below the confidence floor.");
+    Check(policy.Evaluate(0.71f, QuietDesktop(now)) == AttentionVerdict::Speak,
+        "Revia stayed silent on a confident proposal on an idle desktop.");
+}
+
+void TestAttentionHardSuppressions()
+{
+    using revia::initiative::AttentionPolicy;
+    using revia::initiative::AttentionVerdict;
+    const AttentionPolicy policy(TalkativeSettings());
+    const auto now = std::chrono::system_clock::now();
+
+    auto typing = QuietDesktop(now);
+    typing.sinceLastInput = std::chrono::seconds{1};
+    Check(policy.Evaluate(0.99f, typing) == AttentionVerdict::UserIsBusy,
+        "Revia interrupted someone mid-keystroke.");
+
+    auto fullScreen = QuietDesktop(now);
+    fullScreen.foregroundIsFullScreen = true;
+    Check(policy.Evaluate(0.99f, fullScreen) == AttentionVerdict::FullScreen,
+        "Revia spoke over a full-screen application.");
+
+    auto excluded = QuietDesktop(now);
+    excluded.foregroundIsExcluded = true;
+    Check(policy.Evaluate(0.99f, excluded) == AttentionVerdict::ExcludedApplication,
+        "Revia spoke while an excluded application was in front.");
+
+    // These are hard, not weighted: maximum confidence does not buy past them.
+    Check(revia::initiative::IsSuppression(policy.Evaluate(1.0f, typing)),
+        "Certainty overrode a hard suppression.");
+}
+
+void TestAttentionCooldownsAndBudget()
+{
+    using revia::initiative::AttentionPolicy;
+    using revia::initiative::AttentionVerdict;
+    AttentionPolicy policy(TalkativeSettings());
+    auto now = std::chrono::system_clock::now();
+
+    Check(policy.Evaluate(0.9f, QuietDesktop(now)) == AttentionVerdict::Speak,
+        "The first proposal was suppressed.");
+    policy.RecordSpoken(now);
+
+    now += std::chrono::minutes{5};
+    Check(policy.Evaluate(0.9f, QuietDesktop(now)) == AttentionVerdict::Cooldown,
+        "Revia spoke again inside its cooldown.");
+
+    now += std::chrono::minutes{11};
+    Check(policy.Evaluate(0.9f, QuietDesktop(now)) == AttentionVerdict::Speak,
+        "Revia stayed silent after its cooldown expired.");
+
+    // Being told "no" costs more than being ignored.
+    policy.RecordDismissed(now);
+    now += std::chrono::minutes{20};
+    Check(policy.Evaluate(0.9f, QuietDesktop(now)) == AttentionVerdict::DismissalCooldown,
+        "A dismissal did not buy a longer silence than an ordinary utterance.");
+
+    now += std::chrono::hours{2};
+    Check(policy.Evaluate(0.9f, QuietDesktop(now)) == AttentionVerdict::Speak,
+        "The dismissal cooldown never expired.");
+}
+
+void TestAttentionReducesItsOwnRateWhenWrong()
+{
+    using revia::initiative::AttentionPolicy;
+    AttentionPolicy policy(TalkativeSettings());
+
+    // Precision is not measurable yet, so Revia is not muted by an early dismissal.
+    policy.RecordDismissed(std::chrono::system_clock::now());
+    Check(policy.Precision() == 1.0f && !policy.IsRateReduced(),
+        "One early dismissal silenced Revia before precision could mean anything.");
+    Check(policy.EffectiveHourlyBudget() == 4,
+        "The hourly budget changed before precision was measurable.");
+
+    // Four judged, one accepted: 25%, below the 34% floor.
+    policy.RecordDismissed(std::chrono::system_clock::now());
+    policy.RecordDismissed(std::chrono::system_clock::now());
+    policy.RecordAccepted();
+    Check(policy.Precision() < 0.34f, "Precision was not computed from judged proposals.");
+    Check(policy.IsRateReduced(),
+        "Revia did not notice it was being dismissed more often than accepted.");
+    Check(policy.EffectiveHourlyBudget() == 2,
+        "Revia did not reduce its own rate after being repeatedly dismissed.");
+
+    // Being accepted earns the rate back.
+    for (int index = 0; index < 6; ++index)
+    {
+        policy.RecordAccepted();
+    }
+    Check(!policy.IsRateReduced() && policy.EffectiveHourlyBudget() == 4,
+        "Revia never recovered its rate after its proposals started landing.");
+}
+
+void TestProposalsCarryTheirEvidence()
+{
+    using revia::initiative::InitiativeController;
+    using revia::initiative::Proposal;
+
+    // A short, scattered session is not worth interrupting for.
+    std::vector<revia::perception::ActivitySpan> scattered;
+    revia::perception::ActivitySpan brief;
+    brief.application = "explorer.exe";
+    brief.startedAt = std::chrono::system_clock::now() - std::chrono::minutes{3};
+    brief.endedAt = std::chrono::system_clock::now();
+    scattered.push_back(brief);
+    Proposal ignored;
+    InitiativeController::Evidence scatteredEvidence;
+    scatteredEvidence.recentActivity = scattered;
+    Check(!InitiativeController::BuildProposal(scatteredEvidence, ignored),
+        "A three-minute session produced a proposal.");
+
+    // A long concentrated one is, and the proposal must carry the evidence rather than
+    // just the conclusion.
+    std::vector<revia::perception::ActivitySpan> focused;
+    revia::perception::ActivitySpan work;
+    work.application = "code.exe";
+    work.titles = {"reviaSession.cpp", "goalRunner.cpp"};
+    work.startedAt = std::chrono::system_clock::now() - std::chrono::minutes{50};
+    work.endedAt = std::chrono::system_clock::now() - std::chrono::minutes{5};
+    focused.push_back(work);
+
+    Proposal proposal;
+    InitiativeController::Evidence focusedEvidence;
+    focusedEvidence.recentActivity = focused;
+    Check(InitiativeController::BuildProposal(focusedEvidence, proposal),
+        "A concentrated 45-minute session produced no proposal.");
+    Check(proposal.evidence.find("code.exe") != std::string::npos &&
+        proposal.evidence.find("reviaSession.cpp") != std::string::npos,
+        "The proposal did not carry the evidence behind it: " + proposal.evidence);
+    Check(proposal.confidence > 0.9f,
+        "A session spent almost entirely in one application scored low confidence.");
+    Check(!proposal.message.empty(), "The proposal had nothing to say.");
+}
+
+revia::goals::Goal FinishedGoal(
+    const revia::goals::GoalStatus status,
+    const revia::goals::StopReason stopReason)
+{
+    revia::goals::Goal goal;
+    goal.id = revia::goals::NewGoalId();
+    goal.title = "Some goal";
+    goal.status = status;
+    goal.stopReason = stopReason;
+    goal.steps.resize(2);
+    return goal;
+}
+
+void TestLearningNeedsEnoughEvidence()
+{
+    using revia::learning::LearningReview;
+
+    // Two runs is a coincidence, not a pattern. Drawing a conclusion from them is how a
+    // review loop teaches itself something false and then acts on it forever.
+    std::vector<revia::goals::Goal> tooFew;
+    for (std::size_t index = 0; index < LearningReview::MinimumSamples - 1; ++index)
+    {
+        tooFew.push_back(FinishedGoal(
+            revia::goals::GoalStatus::Failed,
+            revia::goals::StopReason::VerificationFailed));
+    }
+    Check(LearningReview::Draw(tooFew, {}).empty(),
+        "A lesson was drawn from fewer samples than the floor allows.");
+
+    // A goal still running has produced no outcome, so it must not be counted as one.
+    std::vector<revia::goals::Goal> running;
+    for (std::size_t index = 0; index < 8; ++index)
+    {
+        revia::goals::Goal goal = FinishedGoal(
+            revia::goals::GoalStatus::Running, revia::goals::StopReason::None);
+        running.push_back(goal);
+    }
+    Check(LearningReview::Draw(running, {}).empty(),
+        "Unfinished goals were treated as outcomes to learn from.");
+
+    // Proposals need the same floor.
+    revia::initiative::InitiativeCounters thin;
+    thin.accepted = 1;
+    thin.dismissed = 1;
+    Check(LearningReview::Draw({}, thin).empty(),
+        "A lesson about speaking first was drawn from two judged proposals.");
+}
+
+void TestLearningDrawsTheUncomfortableConclusion()
+{
+    using revia::learning::LearningReview;
+    using revia::learning::LessonKind;
+
+    // A review that only ever confirms itself is not a review. When proposals are mostly
+    // dismissed, the lesson has to say so.
+    revia::initiative::InitiativeCounters unwelcome;
+    unwelcome.accepted = 1;
+    unwelcome.dismissed = 7;
+    const auto lessons = LearningReview::Draw({}, unwelcome);
+    Check(lessons.size() == 1 && lessons.front().kind == LessonKind::Initiative,
+        "No lesson was drawn from a clear run of dismissals.");
+    Check(lessons.front().statement.find("mostly unwanted") != std::string::npos,
+        "The review declined to conclude that speaking first was unwelcome: " +
+            lessons.front().statement);
+    Check(lessons.front().evidence.find("7 dismissed") != std::string::npos,
+        "The lesson did not carry the counts it was drawn from.");
+
+    // And the opposite reading when they land.
+    revia::initiative::InitiativeCounters welcome;
+    welcome.accepted = 6;
+    welcome.dismissed = 1;
+    const auto positive = LearningReview::Draw({}, welcome);
+    Check(!positive.empty() &&
+        positive.front().statement.find("landing more often") != std::string::npos,
+        "The review did not recognise that proposals were being accepted.");
+
+    // A majority stopping at verification is a statement about the plans.
+    std::vector<revia::goals::Goal> failing;
+    for (int index = 0; index < 5; ++index)
+    {
+        failing.push_back(FinishedGoal(
+            revia::goals::GoalStatus::Failed,
+            revia::goals::StopReason::VerificationFailed));
+    }
+    const auto planning = LearningReview::Draw(failing, {});
+    Check(!planning.empty() && planning.front().kind == LessonKind::Planning,
+        "No planning lesson was drawn from repeated verification failures.");
+    Check(planning.front().evidence.find("5 of 5") != std::string::npos,
+        "The planning lesson did not carry its sample: " + planning.front().evidence);
+}
+
+void TestApprovedLessonIsMemoryNotPolicy()
+{
+    using revia::learning::LearningReview;
+    revia::initiative::InitiativeCounters unwelcome;
+    unwelcome.accepted = 1;
+    unwelcome.dismissed = 7;
+    const auto lessons = LearningReview::Draw({}, unwelcome);
+    Check(!lessons.empty(), "No lesson to check.");
+
+    // What approving one actually writes: an ordinary preference memory carrying its
+    // evidence. Stage 4 is explicit that learning is reviewed memory, never self-modifying
+    // executable code, so a lesson must not be able to become a capability or a budget.
+    const std::string summary = LearningReview::MemorySummary(lessons.front());
+    Check(summary.find(lessons.front().statement) != std::string::npos,
+        "The stored summary lost the lesson itself.");
+    Check(summary.find("learned from") != std::string::npos &&
+        summary.find("dismissed") != std::string::npos,
+        "The stored summary dropped the evidence, so a stale lesson could not be judged "
+        "later: " + summary);
+    Check(LearningReview::MemoryCategory(lessons.front()) == "preference",
+        "A lesson was filed as something other than a standing preference.");
+}
+
+void TestUnfinishedGoalOutranksAnObservation()
+{
+    using revia::initiative::InitiativeController;
+    using revia::initiative::Proposal;
+
+    // A long concentrated session on its own is worth an observation.
+    std::vector<revia::perception::ActivitySpan> focused;
+    revia::perception::ActivitySpan work;
+    work.application = "code.exe";
+    work.titles = {"reviaSession.cpp"};
+    work.startedAt = std::chrono::system_clock::now() - std::chrono::minutes{50};
+    work.endedAt = std::chrono::system_clock::now() - std::chrono::minutes{5};
+    focused.push_back(work);
+
+    revia::goals::Goal stalled;
+    stalled.id = revia::goals::NewGoalId();
+    stalled.title = "Create the Reports folder";
+    stalled.status = revia::goals::GoalStatus::Blocked;
+    stalled.stopReason = revia::goals::StopReason::VerificationFailed;
+    stalled.currentStep = 2;
+    stalled.steps.resize(3);
+
+    InitiativeController::Evidence evidence;
+    evidence.recentActivity = focused;
+    evidence.unfinishedGoals = {stalled};
+
+    Proposal proposal;
+    Check(InitiativeController::BuildProposal(evidence, proposal),
+        "No proposal was built from an unfinished goal.");
+
+    // The goal wins. It is something the user actually asked for; time spent in an editor
+    // is only an observation about it.
+    Check(proposal.resumeGoalId == stalled.id,
+        "A session observation displaced an unfinished goal: " + proposal.evidence);
+    Check(proposal.evidence.find("Create the Reports folder") != std::string::npos &&
+        proposal.evidence.find("step 2 of 3") != std::string::npos,
+        "The proposal did not carry the goal's progress: " + proposal.evidence);
+    Check(proposal.confidence > 0.9f,
+        "An unfinished goal scored lower than a vague observation.");
+
+    // A finished goal is not unfinished business, so it falls back to the observation.
+    revia::goals::Goal done = stalled;
+    done.status = revia::goals::GoalStatus::Succeeded;
+    InitiativeController::Evidence finishedEvidence;
+    finishedEvidence.recentActivity = focused;
+    finishedEvidence.unfinishedGoals = {done};
+    Proposal fallback;
+    Check(InitiativeController::BuildProposal(finishedEvidence, fallback),
+        "A completed goal suppressed the activity observation entirely.");
+    Check(fallback.resumeGoalId.empty() &&
+        fallback.evidence.find("code.exe") != std::string::npos,
+        "A completed goal was offered for resuming: " + fallback.evidence);
+
+    // Of several unfinished goals, the most advanced one is the one worth finishing.
+    revia::goals::Goal barelyStarted = stalled;
+    barelyStarted.id = revia::goals::NewGoalId();
+    barelyStarted.title = "Barely started";
+    barelyStarted.currentStep = 0;
+    InitiativeController::Evidence several;
+    several.unfinishedGoals = {barelyStarted, stalled};
+    Proposal chosen;
+    Check(InitiativeController::BuildProposal(several, chosen) &&
+        chosen.resumeGoalId == stalled.id,
+        "The least advanced goal was chosen over the one nearly finished.");
+}
+
+void TestControllerRespectsTheGateAndRecordsOutcomes()
+{
+    revia::initiative::InitiativeController controller;
+    controller.Configure(TalkativeSettings());
+
+    std::vector<revia::perception::ActivitySpan> focused;
+    revia::perception::ActivitySpan work;
+    work.application = "code.exe";
+    work.titles = {"reviaSession.cpp"};
+    work.startedAt = std::chrono::system_clock::now() - std::chrono::minutes{50};
+    work.endedAt = std::chrono::system_clock::now() - std::chrono::minutes{5};
+    focused.push_back(work);
+
+    revia::initiative::InitiativeController::Evidence evidence;
+    evidence.recentActivity = focused;
+
+    const auto now = std::chrono::system_clock::now();
+    auto busy = QuietDesktop(now);
+    busy.sinceLastInput = std::chrono::seconds{1};
+    Check(!controller.Consider(evidence, busy).hasProposal,
+        "The controller proposed while the user was mid-input.");
+
+    const auto first = controller.Consider(evidence, QuietDesktop(now));
+    Check(first.hasProposal, "The controller never proposed on an idle desktop.");
+    Check(controller.Pending().size() == 1, "The proposal was not recorded as pending.");
+
+    // The same observation must not be offered twice; repeating is how an assistant
+    // becomes noise.
+    const auto repeat = controller.Consider(
+        evidence, QuietDesktop(now + std::chrono::hours{2}));
+    Check(!repeat.hasProposal, "The controller offered the same observation twice.");
+
+    controller.Dismiss(first.proposal.id, now);
+    Check(controller.Pending().empty(), "A dismissed proposal stayed pending.");
+    Check(controller.Counters().dismissed == 1, "The dismissal was not recorded.");
+}
+
+void TestBargeInIgnoresReviaHearingHerself()
+{
+    // The failure this exists to prevent: the microphone hears the speakers for the whole
+    // utterance, so a fixed threshold makes Revia interrupt herself a second into every
+    // reply. Observed in practice as Speaking followed immediately by Interrupted.
+    using Detector = revia::speech::VoiceActivityMonitor::Detector;
+    bargeInSettings settings;
+    settings.energyThreshold = 1400;
+    settings.echoMarginMultiplier = 2.6f;
+    settings.consecutiveFramesRequired = 8;
+
+    Detector detector(settings);
+    // Grace window: Revia's own playback, well above the old fixed threshold.
+    for (int index = 0; index < 14; ++index)
+    {
+        Check(!detector.Observe(3000, true), "The grace window triggered an interrupt.");
+    }
+    Check(detector.NoiseFloor() > 2500,
+        "The detector did not learn what Revia's own voice measures.");
+
+    // That same level, for the rest of a long reply, must never trigger.
+    for (int index = 0; index < 400; ++index)
+    {
+        Check(!detector.Observe(3000 + (index % 7) * 60, false),
+            "Revia interrupted herself while her own speech was playing.");
+    }
+
+    // A real interruption arrives on top of the echo and is a step above it.
+    bool interrupted = false;
+    for (int index = 0; index < 8; ++index)
+    {
+        interrupted = detector.Observe(11000, false);
+    }
+    Check(interrupted, "Someone speaking over Revia did not interrupt her.");
+}
+
+void TestBargeInNeedsSustainedSpeech()
+{
+    using Detector = revia::speech::VoiceActivityMonitor::Detector;
+    using revia::speech::VoiceActivityMonitor;
+    bargeInSettings settings;
+    settings.energyThreshold = 1400;
+    settings.consecutiveFramesRequired = 8;
+
+    // A quiet room: the floor stays low, so the absolute threshold governs.
+    Detector quietRoom(settings);
+    for (int index = 0; index < 10; ++index)
+    {
+        quietRoom.Observe(120, true);
+    }
+    for (int index = 0; index < 50; ++index)
+    {
+        Check(!quietRoom.Observe(150, false), "Background hiss interrupted Revia.");
+    }
+
+    // A single loud transient is not an interruption: a door, a cough, a dropped mug.
+    Detector transient(settings);
+    for (int index = 0; index < 10; ++index)
+    {
+        transient.Observe(120, true);
+    }
+    for (int index = 0; index < 5; ++index)
+    {
+        Check(!transient.Observe(9000, false),
+            "Revia yielded before the sound was sustained.");
+    }
+    Check(!transient.Observe(130, false),
+        "A quiet frame after loud ones triggered an interrupt.");
+    // The run must have reset, so the next burst starts counting from zero.
+    for (int index = 0; index < 7; ++index)
+    {
+        Check(!transient.Observe(9000, false),
+            "The run of loud frames did not reset after a quiet one.");
+    }
+
+    // And the energy measure has to actually distinguish the two.
+    std::vector<std::int16_t> quiet(320, 0);
+    std::vector<std::int16_t> loud(320, 6000);
+    Check(VoiceActivityMonitor::FrameEnergy(quiet.data(), quiet.size()) <
+        settings.energyThreshold,
+        "Silence measured above the speech threshold.");
+    Check(VoiceActivityMonitor::FrameEnergy(loud.data(), loud.size()) >
+        settings.energyThreshold,
+        "Speech-level audio measured below the speech threshold.");
+    Check(VoiceActivityMonitor::FrameEnergy(nullptr, 0) == 0,
+        "An empty frame did not measure as silent.");
+}
+
+void TestFragmenterStartsSpeakingBeforeGenerationEnds()
+{
+    revia::agents::ReplyFragmenter fragmenter(20);
+
+    // Tokens arrive a few characters at a time, as they do from the stream.
+    auto first = fragmenter.Consume("I looked at the file you mentioned. ");
+    Check(first.size() == 1,
+        "The first complete sentence was not released while more was still coming.");
+    Check(first.front() == "I looked at the file you mentioned.",
+        "The released fragment was not a clean sentence: " + first.front());
+
+    // A sentence still in progress is held: speaking half a clause is worse than waiting.
+    Check(fragmenter.Consume("It looks like the parser").empty(),
+        "An incomplete sentence was released.");
+    Check(fragmenter.Consume(" drops the last field.").empty(),
+        "A terminal with no following whitespace was treated as a boundary.");
+
+    // The completed sentence is released; the short one behind it is not, because a
+    // two-word utterance of its own would sound clipped. It merges or flushes instead.
+    const auto second = fragmenter.Consume(" Then it returns.\n");
+    Check(second.size() == 1,
+        "The completed sentence was not released: got " + std::to_string(second.size()));
+    Check(second.front() == "It looks like the parser drops the last field.",
+        "The released fragment was wrong: " + second.front());
+    Check(fragmenter.Flush() == "Then it returns.",
+        "The short trailing sentence was lost rather than held for the flush.");
+
+    // Two long sentences arriving together do come out together.
+    revia::agents::ReplyFragmenter pair(20);
+    const auto both = pair.Consume(
+        "The first change landed cleanly. The second one needs another look. ");
+    Check(both.size() == 2,
+        "Two completed sentences were not released together: " +
+            std::to_string(both.size()));
+}
+
+void TestFragmenterDoesNotCutMidClause()
+{
+    revia::agents::ReplyFragmenter fragmenter(10);
+
+    // Decimals, versions, abbreviations: a full stop that is not a sentence end.
+    Check(fragmenter.Consume("The value is 3.14 and stable. ").size() == 1,
+        "A decimal point split a sentence.");
+    fragmenter.Reset();
+
+    Check(fragmenter.Consume("Ask Dr. Smith about it later. ").size() == 1,
+        "An abbreviation split a sentence.");
+    fragmenter.Reset();
+
+    // An ellipsis is one boundary, not three.
+    const auto ellipsis = fragmenter.Consume("Well... that is unexpected. ");
+    Check(ellipsis.size() == 1,
+        "An ellipsis produced multiple fragments: " + std::to_string(ellipsis.size()));
+    fragmenter.Reset();
+
+    // Punctuation stays with its sentence.
+    const auto quoted = fragmenter.Consume("She said \"it works.\" I checked it. ");
+    Check(!quoted.empty() && quoted.front().back() == '"',
+        "A closing quote was separated from its sentence.");
+    fragmenter.Reset();
+
+    // A trailing partial is never lost. The first sentence clears the minimum here, so it
+    // is released and only the incomplete tail remains for the flush.
+    const auto released = fragmenter.Consume("Everything is finished. And one more thing");
+    Check(released.size() == 1 && released.front() == "Everything is finished.",
+        "The completed sentence was not released before the partial one.");
+    Check(fragmenter.Flush() == "And one more thing",
+        "The trailing partial sentence was lost at the end of the stream.");
+
+    // A sentence under the minimum is held rather than dropped, and still reaches the
+    // flush, so nothing is ever silently discarded.
+    revia::agents::ReplyFragmenter shortFirst(20);
+    Check(shortFirst.Consume("Sure. ").empty(),
+        "A very short sentence was released as its own utterance.");
+    Check(shortFirst.Flush() == "Sure.", "A short sentence was dropped instead of held.");
+}
+
+void TestPostureReachesTheModel()
+{
+    // Revia's affect used to drive only the status chip and the speech rate: the model
+    // never saw it, so her stated posture had no effect on what she actually said. This
+    // asserts it now reaches the system prompt.
+    ScopedTestDirectory temporary;
+    const auto previous = std::filesystem::current_path();
+    std::filesystem::current_path(temporary.root);
+
+    promptBuilder builder;
+    aiProfile profile;
+    profile.systemPrompt = "You are Revia.";
+    std::vector<conversationMessage> context;
+    context.push_back({"user", "what do you make of this?"});
+
+    const std::string posture =
+        "Your current response posture is Curious at 66% intensity, because "
+        "the turn invites investigation.";
+    const nlohmann::json withPosture =
+        builder.BuildMessages(profile, context, {}, "", nullptr, posture);
+
+    Check(!withPosture.empty() && withPosture[0].contains("content"),
+        "The prompt had no system message to carry a posture.");
+    const std::string systemContent = withPosture[0]["content"].get<std::string>();
+    Check(systemContent.find("You are Revia.") != std::string::npos,
+        "Adding a posture displaced the profile's own system prompt.");
+    Check(systemContent.find("Curious at 66%") != std::string::npos,
+        "The posture never reached the system prompt: " + systemContent);
+
+    // And omitting it changes nothing, so a neutral turn carries no extra instruction.
+    const nlohmann::json withoutPosture = builder.BuildMessages(profile, context);
+    const std::string plainContent = withoutPosture[0]["content"].get<std::string>();
+    Check(plainContent.find("posture") == std::string::npos,
+        "A prompt with no posture still mentioned one: " + plainContent);
+
+    std::filesystem::current_path(previous);
+}
+
+void TestStreamedReplyIsNeverTruncated()
+{
+    // Reproduces the real generator's behaviour: it holds back the last N characters so a
+    // partial special token is never emitted, and releases them only at the end. A
+    // consumer that trusts the deltas to be complete ends the reply mid-word -- observed
+    // as a sentence finishing on "wi" instead of "with".
+    constexpr std::size_t Holdback = 32;
+    const std::string complete =
+        "I looked at the goal runner and the rehearsal step. "
+        "It stages only the paths the plan names, which keeps it cheap. "
+        "That should be enough to start with.";
+
+    // What a caller actually receives while streaming: everything except the tail.
+    std::string streamed;
+    for (std::size_t index = 0; index < complete.size(); index += 7)
+    {
+        const std::string chunk = complete.substr(index, 7);
+        const std::string soFar = complete.substr(0, std::min(index + 7, complete.size()));
+        const std::size_t safe = soFar.size() > Holdback ? soFar.size() - Holdback : 0;
+        if (safe > streamed.size())
+        {
+            streamed = soFar.substr(0, safe);
+        }
+    }
+    Check(streamed.size() < complete.size(),
+        "The test fixture did not actually hold anything back.");
+
+    revia::agents::ReplyFragmenter fragmenter;
+    std::string spoken;
+    for (const std::string& fragment : fragmenter.Consume(streamed))
+    {
+        spoken += fragment;
+    }
+
+    // The session recovers the shortfall from the finished reply rather than trusting the
+    // stream, then flushes what is left.
+    if (complete.size() > streamed.size() &&
+        complete.compare(0, streamed.size(), streamed) == 0)
+    {
+        for (const std::string& fragment :
+            fragmenter.Consume(complete.substr(streamed.size())))
+        {
+            spoken += fragment;
+        }
+    }
+    spoken += fragmenter.Flush();
+
+    // Every word survives. Whitespace differs because fragments are trimmed, so compare
+    // on content rather than byte equality.
+    const auto strip = [](const std::string& value)
+    {
+        std::string output;
+        for (const unsigned char character : value)
+        {
+            if (std::isspace(character) == 0)
+            {
+                output.push_back(static_cast<char>(character));
+            }
+        }
+        return output;
+    };
+    Check(strip(spoken) == strip(complete),
+        "The streamed reply lost content. Got: " + spoken);
+    Check(spoken.find("start with.") != std::string::npos,
+        "The held-back tail never arrived, so the reply ended mid-word: " + spoken);
+}
+
+void TestArbiterMergesOneThought()
+{
+    inputArbiterSettings settings;
+    settings.mergeWindowMs = 1500;
+    revia::agents::InputArbiter arbiter(settings);
+    using revia::agents::InputSource;
+    using revia::agents::InputVerdict;
+
+    const auto start = std::chrono::system_clock::now();
+    Check(arbiter.Offer("can you check", InputSource::Voice, start) == InputVerdict::Queued,
+        "A real utterance was rejected.");
+    Check(arbiter.Offer("the goal runner", InputSource::Voice,
+        start + std::chrono::milliseconds(600)) == InputVerdict::Queued,
+        "A continuation was rejected.");
+
+    // Still speaking: not ready yet.
+    Check(!arbiter.IsReady(start + std::chrono::milliseconds(900)),
+        "The arbiter answered while the user was still talking.");
+    Check(arbiter.IsReady(start + std::chrono::milliseconds(2200)),
+        "The arbiter never became ready after the user stopped.");
+
+    const std::string merged = arbiter.Take();
+    Check(merged.find("can you check") != std::string::npos &&
+        merged.find("the goal runner") != std::string::npos,
+        "Merging lost part of the thought: " + merged);
+    Check(arbiter.Size() == 0, "Taking the merged turn did not empty the queue.");
+}
+
+void TestArbiterIgnoresNoiseButNeverTypedInput()
+{
+    inputArbiterSettings settings;
+    revia::agents::InputArbiter arbiter(settings);
+    using revia::agents::InputSource;
+    using revia::agents::InputVerdict;
+    const auto now = std::chrono::system_clock::now();
+
+    // Room noise and recogniser filler.
+    Check(arbiter.Offer("uh", InputSource::Voice, now) == InputVerdict::IgnoredNoise,
+        "Filler was treated as a question.");
+    Check(arbiter.Offer("[BLANK_AUDIO]", InputSource::Voice, now) ==
+        InputVerdict::IgnoredNoise,
+        "A blank-audio marker was treated as input.");
+    Check(arbiter.Offer("Thanks for watching!", InputSource::Voice, now) ==
+        InputVerdict::IgnoredNoise,
+        "A known recogniser hallucination was treated as input.");
+    Check(arbiter.Offer("   ", InputSource::Voice, now) == InputVerdict::IgnoredEmpty,
+        "Whitespace was treated as input.");
+
+    // A short question is a real one.
+    Check(arbiter.Offer("why?", InputSource::Voice, now) == InputVerdict::Queued,
+        "A short question was discarded as noise.");
+
+    // Typed input is never filtered, however short.
+    revia::agents::InputArbiter typed(settings);
+    Check(typed.Offer("ok", InputSource::Typed, now) == InputVerdict::Queued,
+        "Deliberately typed input was filtered as noise.");
+    Check(typed.Offer("uh", InputSource::Typed, now) == InputVerdict::Queued,
+        "Typed input was subjected to the voice noise filter.");
+}
+
+void TestArbiterDropsRepeatsAndOverflow()
+{
+    inputArbiterSettings settings;
+    settings.maxQueuedInputs = 3;
+    revia::agents::InputArbiter arbiter(settings);
+    using revia::agents::InputSource;
+    using revia::agents::InputVerdict;
+    const auto now = std::chrono::system_clock::now();
+
+    Check(arbiter.Offer("open the report", InputSource::Voice, now) == InputVerdict::Queued,
+        "The first utterance was rejected.");
+    // Recognisers routinely emit one utterance twice.
+    Check(arbiter.Offer("Open the report.", InputSource::Voice,
+        now + std::chrono::milliseconds(200)) == InputVerdict::IgnoredDuplicate,
+        "The same utterance was queued twice.");
+
+    Check(arbiter.Offer("second", InputSource::Voice, now) == InputVerdict::Queued,
+        "A distinct utterance was rejected.");
+    Check(arbiter.Offer("third", InputSource::Voice, now) == InputVerdict::Queued,
+        "A distinct utterance was rejected.");
+    Check(arbiter.Offer("fourth", InputSource::Voice, now) == InputVerdict::DroppedOverflow,
+        "The queue grew past its cap.");
+}
+
 } // namespace
 
 int main(const int argc, char** argv)
@@ -1809,6 +2563,25 @@ int main(const int argc, char** argv)
         TestActivityHistoryMergesAndSeparatesSpans();
         TestActivityHistoryStaysBounded();
         TestActivityHistoryAnswersTheStageQuestion();
+        TestAttentionKeepsSilenceAsTheDefault();
+        TestAttentionHardSuppressions();
+        TestAttentionCooldownsAndBudget();
+        TestAttentionReducesItsOwnRateWhenWrong();
+        TestProposalsCarryTheirEvidence();
+        TestLearningNeedsEnoughEvidence();
+        TestLearningDrawsTheUncomfortableConclusion();
+        TestApprovedLessonIsMemoryNotPolicy();
+        TestUnfinishedGoalOutranksAnObservation();
+        TestControllerRespectsTheGateAndRecordsOutcomes();
+        TestBargeInIgnoresReviaHearingHerself();
+        TestBargeInNeedsSustainedSpeech();
+        TestFragmenterStartsSpeakingBeforeGenerationEnds();
+        TestFragmenterDoesNotCutMidClause();
+        TestPostureReachesTheModel();
+        TestStreamedReplyIsNeverTruncated();
+        TestArbiterMergesOneThought();
+        TestArbiterIgnoresNoiseButNeverTypedInput();
+        TestArbiterDropsRepeatsAndOverflow();
         std::cout << "All Revia foundation tests passed.\n";
         return 0;
     }

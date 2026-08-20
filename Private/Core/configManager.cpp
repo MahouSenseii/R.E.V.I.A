@@ -345,6 +345,79 @@ bool configManager::LoadSettings(appSettings& outSettings) const
             }
         }
 
+        if (data.contains("initiative"))
+        {
+            const json& initiativeData = data["initiative"];
+            if (initiativeData.contains("enabled"))
+            {
+                outSettings.initiative.bEnabled = initiativeData["enabled"].get<bool>();
+            }
+            if (initiativeData.contains("minimumConfidence"))
+            {
+                outSettings.initiative.minimumConfidence =
+                    initiativeData["minimumConfidence"].get<float>();
+            }
+            if (initiativeData.contains("maxUtterancesPerHour"))
+            {
+                outSettings.initiative.maxUtterancesPerHour =
+                    initiativeData["maxUtterancesPerHour"].get<int>();
+            }
+            if (initiativeData.contains("cooldownSeconds"))
+            {
+                outSettings.initiative.cooldownSeconds =
+                    initiativeData["cooldownSeconds"].get<int>();
+            }
+            if (initiativeData.contains("dismissalCooldownSeconds"))
+            {
+                outSettings.initiative.dismissalCooldownSeconds =
+                    initiativeData["dismissalCooldownSeconds"].get<int>();
+            }
+            if (initiativeData.contains("quietInputSeconds"))
+            {
+                outSettings.initiative.quietInputSeconds =
+                    initiativeData["quietInputSeconds"].get<int>();
+            }
+            if (initiativeData.contains("minimumPrecision"))
+            {
+                outSettings.initiative.minimumPrecision =
+                    initiativeData["minimumPrecision"].get<float>();
+            }
+            if (initiativeData.contains("suppressWhenFullScreen"))
+            {
+                outSettings.initiative.bSuppressWhenFullScreen =
+                    initiativeData["suppressWhenFullScreen"].get<bool>();
+            }
+        }
+
+        if (data.contains("bargeIn"))
+        {
+            const json& bargeInData = data["bargeIn"];
+            if (bargeInData.contains("enabled"))
+            {
+                outSettings.bargeIn.bEnabled = bargeInData["enabled"].get<bool>();
+            }
+            if (bargeInData.contains("energyThreshold"))
+            {
+                outSettings.bargeIn.energyThreshold =
+                    bargeInData["energyThreshold"].get<int>();
+            }
+            if (bargeInData.contains("echoMarginMultiplier"))
+            {
+                outSettings.bargeIn.echoMarginMultiplier =
+                    bargeInData["echoMarginMultiplier"].get<float>();
+            }
+            if (bargeInData.contains("consecutiveFramesRequired"))
+            {
+                outSettings.bargeIn.consecutiveFramesRequired =
+                    bargeInData["consecutiveFramesRequired"].get<int>();
+            }
+            if (bargeInData.contains("startupGraceMs"))
+            {
+                outSettings.bargeIn.startupGraceMs =
+                    bargeInData["startupGraceMs"].get<int>();
+            }
+        }
+
         if (data.contains("perception"))
         {
             const json& perceptionData = data["perception"];
@@ -473,7 +546,28 @@ bool configManager::LoadSettings(appSettings& outSettings) const
         // everything.
         (outSettings.perception.bEnabled &&
             (outSettings.perception.excludedApplications.empty() ||
-                outSettings.perception.excludedTitleFragments.empty())))
+                outSettings.perception.excludedTitleFragments.empty())) ||
+        // Speaking first fails closed too. A confidence floor at zero or an unbounded
+        // hourly rate would turn "may occasionally offer something" into a nuisance, and
+        // a config typo should not be the thing that decides that.
+        outSettings.initiative.minimumConfidence < 0.1f ||
+        outSettings.initiative.minimumConfidence > 1.0f ||
+        outSettings.initiative.maxUtterancesPerHour < 1 ||
+        outSettings.initiative.maxUtterancesPerHour > 30 ||
+        outSettings.initiative.cooldownSeconds < 30 ||
+        outSettings.initiative.quietInputSeconds < 1 ||
+        outSettings.initiative.minimumPrecision < 0.0f ||
+        outSettings.initiative.minimumPrecision > 1.0f ||
+        outSettings.bargeIn.energyThreshold < 100 ||
+        outSettings.bargeIn.energyThreshold > 30000 ||
+        outSettings.bargeIn.consecutiveFramesRequired < 1 ||
+        outSettings.bargeIn.consecutiveFramesRequired > 200 ||
+        // Below 1.0 the adaptive threshold would sit under the measured echo, which is
+        // the configuration that makes Revia interrupt herself.
+        outSettings.bargeIn.echoMarginMultiplier < 1.2f ||
+        outSettings.bargeIn.echoMarginMultiplier > 20.0f ||
+        outSettings.bargeIn.startupGraceMs < 200 ||
+        outSettings.bargeIn.startupGraceMs > 10000)
     {
         return false;
     }

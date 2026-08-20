@@ -11,6 +11,8 @@
 #include "Goals/goalSandbox.h"
 #include "Goals/goalStore.h"
 #include "LLM/LLamaCPP/llamaCppServerProcess.h"
+#include "Initiative/initiativeController.h"
+#include "Learning/learningReview.h"
 #include "Perception/activityHistory.h"
 #include "Perception/windowEventMonitor.h"
 #include "Runtime/affectController.h"
@@ -36,10 +38,25 @@ struct SessionResult
 {
     bool succeeded = true;
     bool shouldExit = false;
+    // Set by the CLI streaming path: tokens were already printed live to the terminal.
+    // Do not use it to decide what the desktop shell has shown -- it is true for every
+    // llama.cpp reply, streamed to the UI or not.
     bool wasStreamed = false;
+    // Set only when this reply was published sentence by sentence as it was spoken, so
+    // the shell has already displayed all of it and must not append it a second time.
+    bool spokenAsFragments = false;
+    // What Revia did to produce this reply: her posture, any reasoning the model emitted,
+    // and where the time went. Shown collapsed in the shell so it is available without
+    // being in the way.
+    std::string reasoning;
     bool fromAssistant = false;
     std::string text;
     std::string reason;
+    // Set when this reply was handed to the speech worker. The shell holds the text until
+    // the matching Speaking event so the words appear with the voice rather than well
+    // ahead of it. A reply that will not be spoken leaves this false and is shown at once.
+    bool speechPending = false;
+    std::uint64_t utteranceId = 0;
 };
 
 class ReviaSession
@@ -68,6 +85,8 @@ public:
     bool IsBusy() const;
     bool IsSpeechEnabled() const;
     void SetSpeechEnabled(bool enabled);
+    void SetBargeInEnabled(bool enabled);
+    [[nodiscard]] bool IsBargeInEnabled() const;
     bool BeginListening();
     bool EndListening();
     SessionResult AnalyzeScreen(const std::string& prompt);
@@ -90,6 +109,24 @@ public:
     // Tier 0 evidence alone, with no model and no capture.
     [[nodiscard]] std::string RecentActivity(std::chrono::minutes window) const;
     void ForgetActivity();
+
+    // Where Revia is talking. Composing into another application is text; only the local
+    // channel is read aloud, unless that executable is explicitly opted in.
+    void SetOutputChannel(outputChannel channel, const std::string& applicationName = {});
+    [[nodiscard]] bool ShouldSpeakOnCurrentChannel() const;
+    [[nodiscard]] std::string OutputChannelStatus() const;
+
+    // Stage 7. Revia offers, the user disposes. A proposal executes nothing on its own.
+    [[nodiscard]] std::string InitiativeStatus() const;
+    [[nodiscard]] std::vector<initiative::Proposal> PendingProposals() const;
+    SessionResult AcceptProposal(const std::string& proposalId);
+
+    // Stage 4's reviewed learning. Lessons are drawn from recorded outcomes and offered;
+    // approving one writes an ordinary memory entry. Nothing here changes a capability, a
+    // budget, or a policy, and nothing is stored without being approved.
+    [[nodiscard]] std::vector<learning::Lesson> DrawLessons() const;
+    bool ApproveLesson(const std::string& lessonId, std::string& outSummary);
+    void DismissProposal(const std::string& proposalId);
     std::string DisplayName() const;
     std::string Greeting() const;
     speech::VoiceStudioSnapshot VoiceStudio() const;
@@ -130,6 +167,10 @@ private:
     bool TryHandleGoalInput(const std::string& input, SessionResult& result);
     void StartVoiceWarmup();
     void StopVoiceWarmup();
+    // Its own thread, not the shell's poll timer. A companion that only considers speaking
+    // while a debug window happens to be open is not a companion.
+    void StartInitiativeLoop();
+    void StopInitiativeLoop();
     std::stop_token BeginOperation();
     // The token for the operation already in flight. BeginOperation replaces the stop
     // source, so a nested run must not call it: doing so would discard a stop the user
@@ -156,6 +197,7 @@ private:
     speech::SpeechRecognitionService speechRecognitionService;
     perception::WindowEventMonitor windowEventMonitor;
     perception::ActivityHistory activityHistory;
+    initiative::InitiativeController initiativeController;
     vision::ScreenCaptureService screenCaptureService;
     llamaCppServerProcess llamaServerProcess;
     llamaCppServerProcess embeddingServerProcess;
@@ -165,16 +207,21 @@ private:
     mutable std::mutex cancellationMutex;
     mutable std::mutex confirmationMutex;
     mutable std::mutex voiceStudioMutex;
+    mutable std::mutex channelMutex;
+    outputChannel outputTarget = outputChannel::LocalVoice;
+    std::string outputApplication;
     std::stop_source activeStopSource;
     ConfirmationHandler confirmationHandler;
     // Loads the assigned Qwen3-TTS voice after startup has already reported ready.
     std::jthread voiceWarmupWorker;
     std::atomic<bool> voiceWarmupFinished = true;
+    std::jthread initiativeWorker;
     std::atomic<RuntimeState> state = RuntimeState::Offline;
     std::atomic<bool> started = false;
     std::atomic<bool> busy = false;
     bool llmAvailable = false;
     std::uint64_t turnCounter = 0;
+    std::uint64_t utteranceCounter = 0;
 };
 
 } // namespace revia::runtime

@@ -1,8 +1,11 @@
 #include "Runtime/reviaSession.h"
 #include "Core/localApiKey.h"
+#include "Agents/replyFragmenter.h"
+#include "Memory/longTermMemory.h"
 #include "Planning/goalPlanner.h"
 
 #include <algorithm>
+#include <cctype>
 #include <chrono>
 #include <sstream>
 #include <thread>
@@ -17,6 +20,16 @@ namespace
     {
         return std::chrono::duration<double, std::milli>(
             std::chrono::steady_clock::now() - start).count();
+    }
+
+    std::string ToLowerCopy(std::string value)
+    {
+        std::transform(value.begin(), value.end(), value.begin(),
+            [](const unsigned char character)
+            {
+                return static_cast<char>(std::tolower(character));
+            });
+        return value;
     }
 
     std::string Trim(const std::string& value)
@@ -182,7 +195,21 @@ bool ReviaSession::Start()
         event.phase = speechEvent.phase;
         event.elapsedMilliseconds = speechEvent.elapsedMilliseconds;
         event.queueDepth = speechEvent.queueDepth;
+        // Reuses turnId as the correlation field rather than adding a parallel one; the
+        // shell only ever needs to match a reply to the audio for it.
+        event.turnId = speechEvent.utteranceId;
         eventBus.Publish(std::move(event));
+    });
+    // Barge-in arms the microphone only while Revia is speaking, and hands the floor back
+    // by starting a capture so the interruption is actually heard rather than just
+    // silencing the reply.
+    speechService.ConfigureBargeIn(settings.bargeIn, settings.speechRecognition.sampleRate);
+    speechService.SetBargeInHandler([this]()
+    {
+        if (settings.speechRecognition.bEnabled)
+        {
+            speechRecognitionService.BeginRecording();
+        }
     });
     startupTimings.push_back({"speech_service_init", ElapsedMilliseconds(stageStarted)});
 
@@ -321,11 +348,177 @@ bool ReviaSession::Start()
     {
         StartVoiceWarmup();
     }
+    StartInitiativeLoop();
     if (settings.speech.bEnabled && settings.speech.bSpeakGreeting && !Greeting().empty())
     {
         speechService.Speak(Greeting(), affectController.Current());
     }
     return true;
+}
+
+void ReviaSession::StartInitiativeLoop()
+{
+    StopInitiativeLoop();
+    if (!settings.initiative.bEnabled)
+    {
+        return;
+    }
+    initiativeController.Configure(settings.initiative);
+    initiativeWorker = std::jthread([this](const std::stop_token stopToken)
+    {
+        while (!stopToken.stop_requested())
+        {
+            // Slow on purpose. Nothing here is time critical, and a companion that
+            // evaluates whether to speak several times a second is one bug away from
+            // being unbearable.
+            for (int slice = 0; slice < 120 && !stopToken.stop_requested(); ++slice)
+            {
+                std::this_thread::sleep_for(std::chrono::milliseconds(250));
+            }
+            if (stopToken.stop_requested() || !started.load() || busy.load())
+            {
+                continue;
+            }
+            // Never interrupt while Revia is already talking or listening.
+            if (speechRecognitionService.IsRecording())
+            {
+                continue;
+            }
+
+            initiative::AttentionContext context = initiative::SampleDesktop();
+            initiative::InitiativeController::Evidence evidence;
+            evidence.recentActivity = activityHistory.Spans(std::chrono::minutes{90});
+            // A goal an earlier run left unfinished is the strongest thing Revia knows:
+            // the user asked for it, and it is still incomplete.
+            evidence.unfinishedGoals = goalStore.LoadResumable();
+            const auto consideration = initiativeController.Consider(evidence, context);
+            if (!consideration.hasProposal)
+            {
+                continue;
+            }
+
+            RuntimeEvent event;
+            event.kind = RuntimeEventKind::Proposal;
+            event.state = state.load();
+            event.component = "Initiative";
+            event.phase = consideration.proposal.id;
+            event.message = consideration.proposal.message;
+            event.detail = consideration.proposal.evidence;
+            eventBus.Publish(std::move(event));
+
+            appLogger.Log("Proposal offered: " + consideration.proposal.evidence);
+            if (speechService.IsEnabled())
+            {
+                speechService.Speak(
+                    consideration.proposal.message, affectController.Current());
+            }
+        }
+    });
+}
+
+void ReviaSession::StopInitiativeLoop()
+{
+    if (initiativeWorker.joinable())
+    {
+        initiativeWorker.request_stop();
+        initiativeWorker.join();
+    }
+}
+
+std::string ReviaSession::InitiativeStatus() const
+{
+    return initiativeController.Status();
+}
+
+std::vector<initiative::Proposal> ReviaSession::PendingProposals() const
+{
+    return initiativeController.Pending();
+}
+
+SessionResult ReviaSession::AcceptProposal(const std::string& proposalId)
+{
+    SessionResult result;
+    std::string goalRequest;
+    std::string resumeGoalId;
+    for (const initiative::Proposal& proposal : initiativeController.Pending())
+    {
+        if (proposal.id == proposalId)
+        {
+            goalRequest = proposal.goalRequest;
+            resumeGoalId = proposal.resumeGoalId;
+            break;
+        }
+    }
+    initiativeController.Accept(proposalId);
+    result.text = "Noted.";
+    if (!resumeGoalId.empty())
+    {
+        // Straight to the runner, which re-verifies every remaining step. Accepting a
+        // proposal is a shortcut for typing the command, never a way around it.
+        const goals::Goal finished = ResumeGoalUnlocked(resumeGoalId);
+        result.succeeded = finished.status == goals::GoalStatus::Succeeded;
+        result.text = FormatGoalSummary(finished);
+        if (!result.succeeded)
+        {
+            result.reason = goals::ToString(finished.stopReason);
+        }
+        return result;
+    }
+    // A proposal that names a goal hands it to the runner, which rehearses, confirms,
+    // budgets, and audits exactly as it would for a typed request. Accepting adds no
+    // authority; it only saves the typing.
+    if (!goalRequest.empty())
+    {
+        return TryHandleGoalInput("/goal " + goalRequest, result) ? result : result;
+    }
+    return result;
+}
+
+std::vector<learning::Lesson> ReviaSession::DrawLessons() const
+{
+    return learning::LearningReview::Draw(
+        goalStore.LoadRecent(50), initiativeController.Counters());
+}
+
+bool ReviaSession::ApproveLesson(const std::string& lessonId, std::string& outSummary)
+{
+    for (const learning::Lesson& lesson : DrawLessons())
+    {
+        if (lesson.id != lessonId)
+        {
+            continue;
+        }
+        // Written through the ordinary memory path as an ordinary preference. A lesson is
+        // a sentence to remember, not a policy: nothing here can widen a capability,
+        // change a budget, or alter how an action is authorised.
+        memoryDecision decision;
+        decision.bSuccess = true;
+        decision.bShouldRemember = true;
+        decision.category = learning::LearningReview::MemoryCategory(lesson);
+        decision.summary = learning::LearningReview::MemorySummary(lesson);
+        decision.reason = "Reviewed and approved by the user.";
+
+        bool added = false;
+        longTermMemory memory;
+        if (!memory.Save(decision, added))
+        {
+            outSummary = "The lesson could not be saved to memory.";
+            return false;
+        }
+        outSummary = added
+            ? "Remembered: " + decision.summary
+            : "Already remembered something equivalent.";
+        appLogger.Log("Approved lesson " + lesson.id + ": " + decision.summary);
+        return true;
+    }
+    outSummary = "No lesson with that id is currently on offer.";
+    return false;
+}
+
+void ReviaSession::DismissProposal(const std::string& proposalId)
+{
+    initiativeController.Dismiss(proposalId, std::chrono::system_clock::now());
+    appLogger.Log("Proposal dismissed. Revia will wait longer before offering again.");
 }
 
 void ReviaSession::StartVoiceWarmup()
@@ -431,6 +624,9 @@ SessionResult ReviaSession::Submit(const std::string& input)
 
     busy.store(true);
     const std::stop_token stopToken = BeginOperation();
+    // Counts sentences already spoken from the stream, so the completed reply is not
+    // said a second time at the end of the turn.
+    std::uint64_t streamedUtterances = 0;
     const auto finish = [&](SessionResult finished)
     {
         if (!finished.shouldExit)
@@ -442,7 +638,22 @@ SessionResult ReviaSession::Submit(const std::string& input)
             PublishAffect(affect);
             if (finished.fromAssistant && finished.succeeded && !finished.text.empty())
             {
-                speechService.Speak(finished.text, affect);
+                if (streamedUtterances > 0)
+                {
+                    // Already said, sentence by sentence, while it was being generated.
+                    // The shell has been showing those fragments as they were spoken, so
+                    // there is nothing left to say or to reveal.
+                    finished.spokenAsFragments = true;
+                }
+                else if (speechService.IsEnabled() && ShouldSpeakOnCurrentChannel())
+                {
+                    // Only claim the text is pending on speech when speech is actually
+                    // going to happen. Anything else would hold a reply the user is never
+                    // going to hear, which is worse than text arriving early.
+                    finished.utteranceId = ++utteranceCounter;
+                    finished.speechPending = true;
+                    speechService.Speak(finished.text, affect, finished.utteranceId);
+                }
             }
         }
         busy.store(false);
@@ -485,9 +696,56 @@ SessionResult ReviaSession::Submit(const std::string& input)
     }
 
     context.AddMessage("user", input);
+    // Revia's own posture reaches the model, not just the status chip and the speech rate.
+    // Phrased as her stance rather than a claim about the user: the affect controller
+    // describes how she is approaching this turn and never infers what the user feels.
+    {
+        const AffectSnapshot posture = affectController.Current();
+        std::ostringstream postureLine;
+        postureLine << "Your current response posture is "
+            << ToString(posture.state) << " at "
+            << static_cast<int>(posture.intensity * 100.0F) << "% intensity, because "
+            << posture.reason
+            << " Let it colour your tone and pacing. Do not name it, do not describe your "
+               "own feelings, and do not assume anything about how the user feels.";
+        router.SetPosture(postureLine.str());
+    }
     const std::uint64_t currentTurn = ++turnCounter;
     const auto turnStarted = std::chrono::steady_clock::now();
     SetState(RuntimeState::Thinking, "Thinking about turn #" + std::to_string(currentTurn) + ".");
+
+    // Speak each sentence as soon as it is complete, rather than waiting for the whole
+    // reply. The first sentence usually exists long before the last one, so this cuts the
+    // wait before Revia starts talking from the length of a paragraph to the length of a
+    // sentence. Only worth doing when there is a voice to speak it.
+    const bool streamSpeech = speechService.IsEnabled() && ShouldSpeakOnCurrentChannel();
+    agents::ReplyFragmenter fragmenter;
+    std::string streamedText;
+    const auto emitFragment = [&](const std::string& fragment)
+    {
+        const std::uint64_t utteranceId = ++utteranceCounter;
+        ++streamedUtterances;
+        speechService.Speak(fragment, affectController.Current(), utteranceId);
+        RuntimeEvent partial;
+        partial.kind = RuntimeEventKind::ReplyFragment;
+        partial.state = RuntimeState::Responding;
+        partial.message = fragment;
+        partial.turnId = utteranceId;
+        eventBus.Publish(std::move(partial));
+    };
+
+    messageRouter::DeltaHandler onDelta;
+    if (streamSpeech)
+    {
+        onDelta = [&](const std::string& delta)
+        {
+            streamedText += delta;
+            for (const std::string& fragment : fragmenter.Consume(delta))
+            {
+                emitFragment(fragment);
+            }
+        };
+    }
 
     const agents::TurnAgentResult turnResult = turnCoordinator.Execute(
         router,
@@ -495,8 +753,59 @@ SessionResult ReviaSession::Submit(const std::string& input)
         context.GetRecentMessages(),
         profile.bMemoryEnabled,
         currentTurn,
-        stopToken);
+        stopToken,
+        onDelta);
+    if (streamSpeech && turnResult.response.bSuccess)
+    {
+        // Safety net, not an optimisation. The deltas are supposed to sum to the finished
+        // reply, but the generator holds characters back to avoid emitting a partial
+        // special token, and anything it fails to release would end a sentence mid-word.
+        // The finished response is the source of truth, so recover any shortfall from it
+        // rather than trusting the stream to have been complete.
+        const std::string& complete = turnResult.response.response;
+        if (complete.size() > streamedText.size() &&
+            complete.compare(0, streamedText.size(), streamedText) == 0)
+        {
+            for (const std::string& fragment :
+                fragmenter.Consume(complete.substr(streamedText.size())))
+            {
+                emitFragment(fragment);
+            }
+        }
+
+        // Whatever did not end on a sentence boundary still has to be said.
+        const std::string remainder = fragmenter.Flush();
+        if (!remainder.empty())
+        {
+            emitFragment(remainder);
+        }
+    }
     const responseOutput& output = turnResult.response;
+    {
+        const AffectSnapshot posture = affectController.Current();
+        std::ostringstream trace;
+        trace << "Posture: " << ToString(posture.state) << " at "
+            << static_cast<int>(posture.intensity * 100.0F) << "% - " << posture.reason;
+        if (!output.reasoning.empty())
+        {
+            trace << "\n\nReasoning:\n" << output.reasoning;
+        }
+        if (streamedUtterances > 0)
+        {
+            trace << "\n\nSpoken in " << streamedUtterances
+                << (streamedUtterances == 1 ? " fragment" : " fragments")
+                << " as it was generated.";
+        }
+        if (!output.timings.empty())
+        {
+            trace << "\n\nTiming:";
+            for (const latencySample& sample : output.timings)
+            {
+                trace << "\n  " << sample.stage << " " << sample.milliseconds << "ms";
+            }
+        }
+        result.reasoning = trace.str();
+    }
     std::vector<latencySample> turnTimings = output.timings;
     turnTimings.push_back({"turn_total", ElapsedMilliseconds(turnStarted), true});
     appLogger.Timing("turn #" + std::to_string(currentTurn), turnTimings);
@@ -612,7 +921,8 @@ void ReviaSession::Stop()
         voiceWarmupWorker.request_stop();
     }
     RequestStop();
-    // Must precede speechService.Shutdown() below, which the worker still calls into.
+    // Must precede speechService.Shutdown() below, which both workers still call into.
+    StopInitiativeLoop();
     StopVoiceWarmup();
     std::lock_guard operationLock(operationMutex);
     if (!started.load() && !llamaServerProcess.WasStartedByRevia() &&
@@ -720,6 +1030,59 @@ void ReviaSession::SetSpeechEnabled(const bool enabled)
     speechService.SetEnabled(enabled);
 }
 
+bool ReviaSession::ShouldSpeakOnCurrentChannel() const
+{
+    std::lock_guard lock(channelMutex);
+    if (outputTarget == outputChannel::LocalVoice)
+    {
+        return true;
+    }
+    // Composing into somebody else's application. Reading Discord messages aloud as they
+    // are typed is noise, so speech is off unless this executable was explicitly opted in.
+    const std::string lowered = ToLowerCopy(outputApplication);
+    for (const std::string& allowed : settings.channels.voiceEnabledApplications)
+    {
+        if (ToLowerCopy(allowed) == lowered)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+void ReviaSession::SetOutputChannel(
+    const outputChannel channel,
+    const std::string& applicationName)
+{
+    {
+        std::lock_guard lock(channelMutex);
+        outputTarget = channel;
+        outputApplication = applicationName;
+    }
+    RuntimeEvent event;
+    event.kind = RuntimeEventKind::ComponentStatus;
+    event.state = state.load();
+    event.component = "Channel";
+    event.phase = channel == outputChannel::LocalVoice ? "Voice" : "TextOnly";
+    event.message = channel == outputChannel::LocalVoice
+        ? std::string("Talking here, with voice.")
+        : "Composing into " + (applicationName.empty() ? "another application"
+            : applicationName) + "; replies are text only.";
+    eventBus.Publish(std::move(event));
+}
+
+std::string ReviaSession::OutputChannelStatus() const
+{
+    std::lock_guard lock(channelMutex);
+    if (outputTarget == outputChannel::LocalVoice)
+    {
+        return "Talking here. Replies are spoken when voice is enabled.";
+    }
+    return "Composing into " +
+        (outputApplication.empty() ? "another application" : outputApplication) +
+        ". Replies are text only and are not read aloud.";
+}
+
 bool ReviaSession::IsPerceptionEnabled() const
 {
     return settings.perception.bEnabled;
@@ -779,6 +1142,19 @@ void ReviaSession::ForgetActivity()
 {
     activityHistory.Clear();
     appLogger.Log("Observation history cleared at the user's request.");
+}
+
+void ReviaSession::SetBargeInEnabled(const bool enabled)
+{
+    speechService.SetBargeInEnabled(enabled);
+    appLogger.Log(enabled
+        ? "Barge-in enabled: speaking over Revia will stop her."
+        : "Barge-in disabled: Revia will finish what she is saying.");
+}
+
+bool ReviaSession::IsBargeInEnabled() const
+{
+    return speechService.IsBargeInEnabled();
 }
 
 bool ReviaSession::BeginListening()
@@ -1514,6 +1890,142 @@ bool ReviaSession::TryHandleActionInput(const std::string& input, SessionResult&
     if (input.rfind("/goal ", 0) == 0)
     {
         return TryHandleGoalInput(input, result);
+    }
+
+    if (input == "/bargein" || input.rfind("/bargein ", 0) == 0)
+    {
+        const std::string argument = input.size() > 9 ? Trim(input.substr(9)) : std::string();
+        if (argument == "on" || argument == "off")
+        {
+            SetBargeInEnabled(argument == "on");
+        }
+        else if (!argument.empty())
+        {
+            result.succeeded = false;
+            result.text = "Usage: /bargein [on|off]";
+            result.reason = "Unrecognized barge-in argument.";
+            SetState(RuntimeState::Blocked, result.reason);
+            return true;
+        }
+        result.text = speechService.IsBargeInEnabled()
+            ? "Barge-in is ON. Speaking over Revia stops her mid-sentence."
+            : "Barge-in is OFF. Revia finishes what she is saying.";
+        SetState(RuntimeState::Idle);
+        return true;
+    }
+
+    if (input == "/review" || input.rfind("/review ", 0) == 0)
+    {
+        const std::string argument = input.size() > 7 ? Trim(input.substr(7)) : std::string();
+        if (argument.rfind("accept", 0) == 0)
+        {
+            const std::string lessonId = Trim(argument.substr(6));
+            if (lessonId.empty())
+            {
+                result.succeeded = false;
+                result.text = "Usage: /review accept <lesson-id>";
+                result.reason = "No lesson id was given.";
+                SetState(RuntimeState::Blocked, result.reason);
+                return true;
+            }
+            std::string summary;
+            result.succeeded = ApproveLesson(lessonId, summary);
+            result.text = summary;
+            if (!result.succeeded)
+            {
+                result.reason = summary;
+            }
+            SetState(RuntimeState::Idle);
+            return true;
+        }
+        if (!argument.empty())
+        {
+            result.succeeded = false;
+            result.text = "Usage: /review [accept <lesson-id>]";
+            result.reason = "Unrecognized review argument.";
+            SetState(RuntimeState::Blocked, result.reason);
+            return true;
+        }
+
+        const std::vector<learning::Lesson> lessons = DrawLessons();
+        std::ostringstream stream;
+        if (lessons.empty())
+        {
+            stream << "Nothing to review yet. Lessons need at least "
+                << learning::LearningReview::MinimumSamples
+                << " finished goals or judged proposals before a pattern means anything.";
+        }
+        else
+        {
+            stream << "Lessons drawn from what has actually happened. Nothing is "
+                      "remembered until you approve it, and approving one stores a note "
+                      "-- it never changes a capability or a budget.";
+            for (const learning::Lesson& lesson : lessons)
+            {
+                stream << "\n\n  " << lesson.id << "  ["
+                    << learning::ToString(lesson.kind) << "]\n  "
+                    << lesson.statement << "\n  because " << lesson.evidence
+                    << "\n  /review accept " << lesson.id;
+            }
+        }
+        result.text = stream.str();
+        SetState(RuntimeState::Idle);
+        return true;
+    }
+
+    if (input == "/initiative" || input.rfind("/initiative ", 0) == 0)
+    {
+        const std::string argument = input.size() > 11 ? Trim(input.substr(11)) : std::string();
+        if (argument.rfind("accept", 0) == 0 || argument.rfind("dismiss", 0) == 0)
+        {
+            const bool accepting = argument.rfind("accept", 0) == 0;
+            std::string proposalId = Trim(argument.substr(accepting ? 6 : 7));
+            if (proposalId.empty())
+            {
+                const auto pending = initiativeController.Pending();
+                if (pending.empty())
+                {
+                    result.text = "There is nothing waiting for an answer.";
+                    SetState(RuntimeState::Idle);
+                    return true;
+                }
+                proposalId = pending.back().id;
+            }
+            if (accepting)
+            {
+                result = AcceptProposal(proposalId);
+            }
+            else
+            {
+                DismissProposal(proposalId);
+                result.text = "Dismissed. I will wait longer before offering again.";
+            }
+            SetState(RuntimeState::Idle);
+            return true;
+        }
+        if (!argument.empty())
+        {
+            result.succeeded = false;
+            result.text = "Usage: /initiative [accept|dismiss] [proposal-id]";
+            result.reason = "Unrecognized initiative argument.";
+            SetState(RuntimeState::Blocked, result.reason);
+            return true;
+        }
+        std::ostringstream stream;
+        stream << InitiativeStatus();
+        const auto pending = initiativeController.Pending();
+        if (!pending.empty())
+        {
+            stream << "\nWaiting on you:";
+            for (const initiative::Proposal& proposal : pending)
+            {
+                stream << "\n  " << proposal.id << "  " << proposal.message
+                    << "\n      because " << proposal.evidence;
+            }
+        }
+        result.text = stream.str();
+        SetState(RuntimeState::Idle);
+        return true;
     }
 
     if (input == "/perception" || input.rfind("/perception ", 0) == 0)

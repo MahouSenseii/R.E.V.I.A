@@ -22,6 +22,7 @@
 #include <QPlainTextEdit>
 #include <QPushButton>
 #include <QPixmap>
+#include <QScrollArea>
 #include <QScrollBar>
 #include <QSignalBlocker>
 #include <QSizePolicy>
@@ -63,6 +64,17 @@ namespace
         }
     }
 
+    // Escapes text and turns line breaks into <br>, so a reply can never inject markup
+    // into the transcript and its own paragraphing survives.
+    QString HtmlParagraph(const QString& text)
+    {
+        QString html = text.toHtmlEscaped();
+        html.replace(QStringLiteral("\r\n"), QStringLiteral("\n"));
+        html.replace(QLatin1Char('\r'), QLatin1Char('\n'));
+        html.replace(QLatin1Char('\n'), QStringLiteral("<br>"));
+        return html;
+    }
+
     QString EventTime(const revia::runtime::RuntimeEvent& event)
     {
         const auto milliseconds = std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -102,6 +114,18 @@ ReviaWindow::ReviaWindow(
         const revia::actions::PolicyDecision& decision)
     {
         return ConfirmAction(request, decision);
+    });
+
+    // Upper bound on how long a reply waits for its audio. Qwen generation can take
+    // seconds; silence for longer than this reads as the reply having been lost.
+    pendingSpeechTimer = new QTimer(this);
+    pendingSpeechTimer->setSingleShot(true);
+    pendingSpeechTimer->setInterval(9000);
+    connect(pendingSpeechTimer, &QTimer::timeout, this, [this]()
+    {
+        // Zero: release everything still waiting. A stalled voice must not cost the user
+        // the reply itself.
+        ReleasePendingSpeechText(0);
     });
 
     pollTimer = new QTimer(this);
@@ -315,6 +339,25 @@ void ReviaWindow::BuildInterface()
 
     chatHistory = new QTextBrowser(chatPage);
     chatHistory->setOpenExternalLinks(false);
+    // Links here are toggles, not destinations. Without this QTextBrowser tries to
+    // navigate and clears the transcript.
+    chatHistory->setOpenLinks(false);
+    connect(chatHistory, &QTextBrowser::anchorClicked, this, [this](const QUrl& link)
+    {
+        const QString target = link.toString();
+        if (!target.startsWith(QStringLiteral("thought:")))
+        {
+            return;
+        }
+        bool parsed = false;
+        const std::size_t index =
+            static_cast<std::size_t>(target.mid(8).toULongLong(&parsed));
+        if (parsed && index < chatEntries.size())
+        {
+            chatEntries[index].expanded = !chatEntries[index].expanded;
+            RenderChat();
+        }
+    });
     chatHistory->setPlaceholderText("Revia's conversation will appear here.");
     chatLayout->addWidget(chatHistory, 1);
 
@@ -352,7 +395,14 @@ void ReviaWindow::BuildInterface()
     activityLayout->addWidget(activityFeed);
     tabs->addTab(activityPage, "Activity");
 
-    auto* voicePage = new QWidget(tabs);
+    // The tab has three sections and does not fit a short window. Without a scroll area
+    // the layout steals height from every field until the forms collapse into unreadable
+    // slivers, which is what happens as soon as the window is not tall enough.
+    auto* voiceScroll = new QScrollArea(tabs);
+    voiceScroll->setWidgetResizable(true);
+    voiceScroll->setFrameShape(QFrame::NoFrame);
+    voiceScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    auto* voicePage = new QWidget(voiceScroll);
     auto* voiceLayout = new QVBoxLayout(voicePage);
     voiceLayout->setContentsMargins(0, 10, 0, 0);
     voiceLayout->setSpacing(10);
@@ -366,6 +416,20 @@ void ReviaWindow::BuildInterface()
     voiceStudioStatus->setObjectName("voiceStudioStatus");
     voiceStudioStatus->setWordWrap(true);
     voiceLayout->addWidget(voiceStudioStatus);
+
+    // Two distinct jobs share this tab, and without headings they read as one long
+    // creation form -- which makes the assignment controls, the ones used most often,
+    // easy to miss entirely.
+    auto* assignTitle = new QLabel("Assign a voice to a profile", voicePage);
+    assignTitle->setObjectName("sectionTitle");
+    voiceLayout->addWidget(assignTitle);
+    auto* assignHint = new QLabel(
+        "Pick a profile, choose one of your created voices, then Assign voice. "
+        "Use Windows fallback clears the assignment and returns that profile to SAPI.",
+        voicePage);
+    assignHint->setWordWrap(true);
+    assignHint->setObjectName("secondaryText");
+    voiceLayout->addWidget(assignHint);
 
     auto* assignmentForm = new QFormLayout();
     assignmentForm->setHorizontalSpacing(12);
@@ -383,18 +447,31 @@ void ReviaWindow::BuildInterface()
     assignmentButtons->addStretch();
     voiceLayout->addLayout(assignmentButtons);
 
+    auto* createTitle = new QLabel("Create a new voice", voicePage);
+    createTitle->setObjectName("sectionTitle");
+    voiceLayout->addWidget(createTitle);
+    auto* createHint = new QLabel(
+        "Describe a voice and Revia designs it locally. A created voice appears in the "
+        "Assigned voice list above.", voicePage);
+    createHint->setWordWrap(true);
+    createHint->setObjectName("secondaryText");
+    voiceLayout->addWidget(createHint);
+
     auto* studioForm = new QFormLayout();
     studioForm->setHorizontalSpacing(12);
     voiceNameInput = new QLineEdit(voicePage);
+    voiceNameInput->setMinimumHeight(32);
     voiceNameInput->setPlaceholderText("Revia Bright");
     voiceLanguageCombo = new QComboBox(voicePage);
     voiceLanguageCombo->addItems({"English", "Chinese", "Japanese", "Korean", "German",
         "French", "Russian", "Portuguese", "Spanish", "Italian"});
     voiceDescriptionInput = new QPlainTextEdit(voicePage);
+    voiceDescriptionInput->setMinimumHeight(70);
     voiceDescriptionInput->setMaximumHeight(86);
     voiceDescriptionInput->setPlaceholderText(
         "A bright youthful synthetic voice, curious and clear, gently playful, never babyish.");
     voiceReferenceInput = new QPlainTextEdit(voicePage);
+    voiceReferenceInput->setMinimumHeight(58);
     voiceReferenceInput->setMaximumHeight(64);
     voiceReferenceInput->setPlainText(
         "Wait, I found it. The pattern is clearer now, and I think this part matters.");
@@ -406,8 +483,13 @@ void ReviaWindow::BuildInterface()
     createVoiceButton = new QPushButton("Create voice", voicePage);
     voiceLayout->addWidget(createVoiceButton, 0, Qt::AlignLeft);
 
+    auto* previewTitle = new QLabel("Preview a voice", voicePage);
+    previewTitle->setObjectName("sectionTitle");
+    voiceLayout->addWidget(previewTitle);
+
     auto* previewRow = new QHBoxLayout();
     voicePreviewInput = new QPlainTextEdit(voicePage);
+    voicePreviewInput->setMinimumHeight(58);
     voicePreviewInput->setMaximumHeight(62);
     voicePreviewInput->setPlainText("Hi. I'm Revia. Oh, this voice fits much better.");
     previewVoiceButton = new QPushButton("Generate preview", voicePage);
@@ -415,7 +497,8 @@ void ReviaWindow::BuildInterface()
     previewRow->addWidget(previewVoiceButton);
     voiceLayout->addLayout(previewRow);
     voiceLayout->addStretch();
-    tabs->addTab(voicePage, "Voice Studio");
+    voiceScroll->setWidget(voicePage);
+    tabs->addTab(voiceScroll, "Voice Studio");
 
     auto* settingsPage = new QWidget(tabs);
     auto* settingsLayout = new QVBoxLayout(settingsPage);
@@ -683,11 +766,40 @@ void ReviaWindow::SendMessage()
         const revia::runtime::SessionResult result = session.Submit(input);
         QMetaObject::invokeMethod(this, [this, result]()
         {
-            if (!result.text.empty())
+            const QString reasoning = QString::fromStdString(result.reasoning);
+            // Already shown sentence by sentence while it was being spoken.
+            if (!result.text.empty() && !result.spokenAsFragments)
             {
-                AppendChat(
-                    result.fromAssistant ? QString::fromStdString(session.DisplayName()) : "System",
-                    QString::fromStdString(result.text));
+                const QString speaker = result.fromAssistant
+                    ? QString::fromStdString(session.DisplayName())
+                    : QStringLiteral("System");
+                const QString body = QString::fromStdString(result.text);
+                if (result.speechPending && result.utteranceId != 0)
+                {
+                    // Hold it. The Speaking event for this utterance releases it, so the
+                    // words appear as Revia starts saying them.
+                    if (lastSpeakingUtteranceId == result.utteranceId)
+                    {
+                        // Audio already started while this was being handed over.
+                        AppendChat(speaker, body, false, reasoning);
+                    }
+                    else
+                    {
+                        pendingUtterances[result.utteranceId] = {speaker, body, reasoning};
+                        pendingSpeechTimer->start();
+                    }
+                }
+                else
+                {
+                    AppendChat(speaker, body, false, reasoning);
+                }
+            }
+            else if (result.spokenAsFragments && !reasoning.isEmpty())
+            {
+                // The reply was shown a sentence at a time, so the trace for the turn as a
+                // whole gets its own collapsed line rather than being attached to whichever
+                // fragment happened to be last.
+                AppendChat(QString(), QString(), false, reasoning);
             }
             if (!result.succeeded && !result.reason.empty())
             {
@@ -705,6 +817,48 @@ void ReviaWindow::SendMessage()
             }
         }, Qt::QueuedConnection);
     });
+}
+
+void ReviaWindow::ReleasePendingSpeechText(const std::uint64_t utteranceId)
+{
+    if (pendingUtterances.empty())
+    {
+        return;
+    }
+    if (utteranceId == 0)
+    {
+        // Everything waiting, oldest first. Used by the fallback timer and by any speech
+        // failure, because text that is never shown is the worst outcome available.
+        auto waiting = std::move(pendingUtterances);
+        pendingUtterances.clear();
+        pendingSpeechTimer->stop();
+        for (const auto& entry : waiting)
+        {
+            AppendChat(entry.second.speaker, entry.second.text, false,
+                entry.second.reasoning);
+        }
+        return;
+    }
+
+    const auto found = pendingUtterances.find(utteranceId);
+    if (found == pendingUtterances.end())
+    {
+        return;
+    }
+    // Anything queued before this one has been overtaken; show it first so the order of
+    // the conversation is never scrambled by a dropped utterance.
+    for (auto entry = pendingUtterances.begin(); entry != found;)
+    {
+        AppendChat(entry->second.speaker, entry->second.text, false,
+            entry->second.reasoning);
+        entry = pendingUtterances.erase(entry);
+    }
+    AppendChat(found->second.speaker, found->second.text, false, found->second.reasoning);
+    pendingUtterances.erase(found);
+    if (pendingUtterances.empty())
+    {
+        pendingSpeechTimer->stop();
+    }
 }
 
 void ReviaWindow::ToggleListening()
@@ -1063,6 +1217,34 @@ void ReviaWindow::HandleRuntimeEvent(const revia::runtime::RuntimeEvent& event)
         UpdateState(event.state, QString::fromStdString(event.message));
         return;
     }
+    if (event.kind == revia::runtime::RuntimeEventKind::ReplyFragment)
+    {
+        // Handed to speech, not yet spoken. Speak() only queues, and with Qwen the audio
+        // begins seconds later, so this waits for its own Speaking event.
+        const QString speaker = QString::fromStdString(session.DisplayName());
+        const QString body = QString::fromStdString(event.message);
+        if (event.turnId != 0 && event.turnId != lastSpeakingUtteranceId)
+        {
+            pendingUtterances[event.turnId] = {speaker, body};
+            pendingSpeechTimer->start();
+        }
+        else
+        {
+            AppendChat(speaker, body);
+        }
+        return;
+    }
+    if (event.kind == revia::runtime::RuntimeEventKind::Proposal)
+    {
+        // Revia speaking first. Shown with its evidence and dismissible in one action,
+        // which is the whole contract: it offers, it never acts.
+        const QString message = QString::fromStdString(event.message);
+        AppendChat(QString::fromStdString(session.DisplayName()), message);
+        AppendActivity(QStringLiteral("Proposal ") + QString::fromStdString(event.phase) +
+            QStringLiteral(" because ") + QString::fromStdString(event.detail) +
+            QStringLiteral(" - /initiative accept or /initiative dismiss"));
+        return;
+    }
     if (event.kind == revia::runtime::RuntimeEventKind::Memory)
     {
         AppendActivity(QString::fromStdString(event.message));
@@ -1094,6 +1276,25 @@ void ReviaWindow::HandleRuntimeEvent(const revia::runtime::RuntimeEvent& event)
             speechActive = phase == QStringLiteral("Queued") ||
                 phase == QStringLiteral("Loading") || phase == QStringLiteral("Designing") ||
                 phase == QStringLiteral("Generating") || phase == QStringLiteral("Speaking");
+
+            speechPhase = phase;
+            RefreshStateBadge();
+            if (phase == QStringLiteral("Speaking"))
+            {
+                // The sync point: audio has started, so show the words now.
+                lastSpeakingUtteranceId = event.turnId;
+                ReleasePendingSpeechText(event.turnId);
+            }
+            else if (phase == QStringLiteral("Error") ||
+                phase == QStringLiteral("Unavailable") ||
+                phase == QStringLiteral("Disabled") ||
+                phase == QStringLiteral("Stopped") ||
+                phase == QStringLiteral("Interrupted"))
+            {
+                // Speech is not coming, or has ended early. Never leave the reply unshown
+                // because the audio failed.
+                ReleasePendingSpeechText(0);
+            }
             {
                 const QSignalBlocker blocker(speechCheck);
                 speechCheck->setChecked(phase != QStringLiteral("Disabled") &&
@@ -1246,8 +1447,26 @@ void ReviaWindow::UpdateState(
     const revia::runtime::RuntimeState newState,
     const QString& detail)
 {
-    const QString name = QString::fromStdString(revia::runtime::ToString(newState));
-    const QString color = StateColor(newState);
+    lastRuntimeState = newState;
+    lastRuntimeDetail = detail;
+    RefreshStateBadge();
+}
+
+void ReviaWindow::RefreshStateBadge()
+{
+    const revia::runtime::RuntimeState newState = lastRuntimeState;
+    const QString& detail = lastRuntimeDetail;
+    QString name = QString::fromStdString(revia::runtime::ToString(newState));
+    QString color = StateColor(newState);
+    // Speech outlives the turn that produced it. While it is queued, generating, or
+    // playing, say so rather than reporting Idle at someone who is about to be spoken to.
+    if (speechActive && newState == revia::runtime::RuntimeState::Idle)
+    {
+        name = speechPhase == QStringLiteral("Speaking")
+            ? QStringLiteral("Speaking")
+            : QStringLiteral("Preparing voice");
+        color = QStringLiteral("#85d7c8");
+    }
     stateLabel->setText("●  " + name);
     stateLabel->setStyleSheet("color: " + color + "; font-weight: 700;");
     const QString cleanDetail = detail.trimmed().compare(name, Qt::CaseInsensitive) == 0
@@ -1270,39 +1489,62 @@ void ReviaWindow::UpdateState(
 void ReviaWindow::AppendChat(
     const QString& speaker,
     const QString& message,
-    const bool userMessage)
+    const bool userMessage,
+    const QString& reasoning)
 {
-    QTextCursor cursor(chatHistory->document());
-    cursor.movePosition(QTextCursor::End);
+    chatEntries.push_back({speaker, message, reasoning, userMessage, false});
+    RenderChat();
+}
 
-    QTextBlockFormat blockFormat;
-    blockFormat.setAlignment(userMessage ? Qt::AlignRight : Qt::AlignLeft);
-    blockFormat.setTopMargin(8.0);
-    blockFormat.setBottomMargin(4.0);
-    if (chatHistory->document()->isEmpty())
+void ReviaWindow::RenderChat()
+{
+    // Rebuilt in full rather than appended, because expanding one entry changes the
+    // document and QTextBrowser has no way to toggle a region in place.
+    QString html;
+    html.reserve(4096);
+    for (std::size_t index = 0; index < chatEntries.size(); ++index)
     {
-        cursor.setBlockFormat(blockFormat);
+        const ChatEntry& entry = chatEntries[index];
+        const QString align = entry.userMessage ? "right" : "left";
+        const QString speakerColour = entry.userMessage ? "#9dd7ff" : "#70e0ca";
+
+        if (!entry.speaker.isEmpty())
+        {
+            html += QStringLiteral(
+                "<p style=\"margin-top:8px; margin-bottom:2px; text-align:%1;\">"
+                "<b><span style=\"color:%2;\">%3</span></b></p>")
+                .arg(align, speakerColour, entry.speaker.toHtmlEscaped());
+        }
+
+        if (!entry.body.isEmpty())
+        {
+            html += QStringLiteral(
+                "<p style=\"margin-top:0px; margin-bottom:2px; text-align:%1; "
+                "color:#dce9f7;\">%2</p>")
+                .arg(align, HtmlParagraph(entry.body));
+        }
+
+        if (entry.reasoning.isEmpty())
+        {
+            continue;
+        }
+        // The anchor carries the entry index; anchorClicked toggles it and re-renders.
+        html += QStringLiteral(
+            "<p style=\"margin-top:0px; margin-bottom:2px; text-align:%1;\">"
+            "<a href=\"thought:%2\" style=\"color:#8390a3; text-decoration:none;\">"
+            "%3 Thought process</a></p>")
+            .arg(align, QString::number(index),
+                entry.expanded ? QStringLiteral("&#9662;") : QStringLiteral("&#9656;"));
+
+        if (entry.expanded)
+        {
+            html += QStringLiteral(
+                "<p style=\"margin-top:0px; margin-bottom:6px; color:#8390a3; "
+                "font-size:11px;\">%1</p>").arg(HtmlParagraph(entry.reasoning));
+        }
     }
-    else
-    {
-        cursor.insertBlock(blockFormat);
-    }
 
-    QTextCharFormat speakerFormat;
-    speakerFormat.setFontWeight(QFont::Bold);
-    speakerFormat.setForeground(QColor(userMessage ? "#9dd7ff" : "#70e0ca"));
-    cursor.insertText(speaker, speakerFormat);
-    cursor.insertText(QString(QChar::LineSeparator));
-
-    QTextCharFormat messageFormat;
-    messageFormat.setForeground(QColor("#dce9f7"));
-    QString visibleMessage = message;
-    visibleMessage.replace("\r\n", "\n");
-    visibleMessage.replace('\r', '\n');
-    visibleMessage.replace('\n', QChar::LineSeparator);
-    cursor.insertText(visibleMessage, messageFormat);
-
-    chatHistory->setTextCursor(cursor);
+    chatHistory->setHtml(html);
     chatHistory->verticalScrollBar()->setValue(chatHistory->verticalScrollBar()->maximum());
 }
 

@@ -19,11 +19,20 @@ nlohmann::json promptBuilder::BuildMessages(const aiProfile& profile,
 const std::vector<conversationMessage>& context,
 const std::vector<float>& queryEmbedding,
 const std::string& embeddingModel,
-std::vector<latencySample>* timings) const
+std::vector<latencySample>* timings,
+const std::string& posture) const
 {
     nlohmann::json messages = nlohmann::json::array();
 
     std::string systemContent = profile.systemPrompt;
+    if (!posture.empty())
+    {
+        if (!systemContent.empty())
+        {
+            systemContent += "\n\n";
+        }
+        systemContent += posture;
+    }
 
     std::string retrievalQuery;
     for (auto message = context.rbegin(); message != context.rend(); ++message)

@@ -28,6 +28,12 @@ void llmService::ApplySettings(
     bIsReady = false;
 }
 
+void llmService::SetPosture(std::string posture)
+{
+    // Only the local backend assembles its own prompt; the others have nowhere to put it.
+    llamaCpp.SetPosture(std::move(posture));
+}
+
 healthOutput llmService::CheckEmbeddingHealth() const
 {
     if (backendType == llmBackendType::LLamaCpp)
@@ -106,7 +112,8 @@ healthOutput llmService::CheckBackendHealth() const
 
 responseOutput llmService::GenerateResponse(
     const std::vector<conversationMessage>& context,
-    const std::stop_token stopToken) const
+    const std::stop_token stopToken,
+    DeltaHandler onDelta) const
 {
     if (!bIsReady)
     {
@@ -138,7 +145,7 @@ responseOutput llmService::GenerateResponse(
                 output.bShouldRemember = false;
                 return output;
             }
-            return llamaCpp.GenerateResponse(context, stopToken);
+            return llamaCpp.GenerateResponse(context, stopToken, std::move(onDelta));
         }
 
         case llmBackendType::None:

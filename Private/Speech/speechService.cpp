@@ -357,7 +357,10 @@ bool SpeechService::IsEnabled() const
     return enabled.load();
 }
 
-void SpeechService::Speak(std::string text, const runtime::AffectSnapshot affect)
+void SpeechService::Speak(
+    std::string text,
+    const runtime::AffectSnapshot affect,
+    const std::uint64_t utteranceId)
 {
     if (!enabled.load())
     {
@@ -376,10 +379,10 @@ void SpeechService::Speak(std::string text, const runtime::AffectSnapshot affect
         {
             queue.pop_front();
         }
-        queue.push_back({std::move(text), affect, generation.load()});
+        queue.push_back({std::move(text), affect, generation.load(), utteranceId});
         depth = static_cast<int>(queue.size());
     }
-    Notify({"Queued", "Assistant reply queued for speech.", -1.0, depth});
+    Notify({"Queued", "Assistant reply queued for speech.", -1.0, depth, utteranceId});
     condition.notify_all();
 }
 
@@ -395,6 +398,71 @@ void SpeechService::StopSpeaking()
 #ifdef _WIN32
     PlaySoundW(nullptr, nullptr, 0);
 #endif
+}
+
+void SpeechService::ConfigureBargeIn(const bargeInSettings& settings, const int sampleRate)
+{
+    bargeInMonitor.Configure(settings, sampleRate);
+}
+
+void SpeechService::SetBargeInHandler(std::function<void()> handler)
+{
+    std::lock_guard lock(mutex);
+    bargeInHandler = std::move(handler);
+}
+
+void SpeechService::SetBargeInEnabled(const bool enabled)
+{
+    bargeInMonitor.SetEnabled(enabled);
+    if (!enabled)
+    {
+        // Disarm whatever is listening right now, so turning this off takes effect in the
+        // middle of the reply that prompted the user to turn it off.
+        bargeInMonitor.End();
+    }
+}
+
+bool SpeechService::IsBargeInEnabled() const
+{
+    return bargeInMonitor.IsEnabled();
+}
+
+void SpeechService::YieldToUser()
+{
+    generation.fetch_add(1);
+    {
+        std::lock_guard lock(mutex);
+        queue.clear();
+    }
+    condition.notify_all();
+#ifdef _WIN32
+    PlaySoundW(nullptr, nullptr, 0);
+#endif
+}
+
+void SpeechService::ArmBargeIn()
+{
+    bargeInMonitor.Begin([this]()
+    {
+        // Stop first, then tell anyone listening. The gap between the user speaking and
+        // Revia going quiet is the whole quality of this feature.
+        YieldToUser();
+        Notify({"Interrupted", "You started speaking, so I stopped."});
+        std::function<void()> handler;
+        {
+            std::lock_guard lock(mutex);
+            handler = bargeInHandler;
+        }
+        if (handler)
+        {
+            handler();
+        }
+    });
+}
+
+void SpeechService::DisarmBargeIn()
+{
+    bargeInMonitor.End();
 }
 
 void SpeechService::Shutdown()
@@ -518,6 +586,14 @@ void SpeechService::Run(const std::stop_token stopToken)
             utterance = std::move(queue.front());
             queue.pop_front();
         }
+        activeUtteranceId.store(utterance.utteranceId);
+        // Cleared however this iteration ends, so an event published between utterances is
+        // never mislabelled as belonging to the last reply.
+        struct ActiveGuard
+        {
+            std::atomic<std::uint64_t>& id;
+            ~ActiveGuard() { id.store(0); }
+        } activeGuard{activeUtteranceId};
 
         std::optional<VoicePreset> qwenPreset;
         {
@@ -551,6 +627,7 @@ void SpeechService::Run(const std::stop_token stopToken)
             Notify({"Error", "Windows SAPI could not start the utterance."});
             continue;
         }
+        ArmBargeIn();
 
         bool cancelled = false;
         while (!stopToken.stop_requested())
@@ -566,14 +643,19 @@ void SpeechService::Run(const std::stop_token stopToken)
                 break;
             }
         }
+        const bool interrupted = bargeInMonitor.Triggered();
+        DisarmBargeIn();
         if (stopToken.stop_requested())
         {
             voice->Speak(nullptr, SPF_PURGEBEFORESPEAK, nullptr);
             break;
         }
         const double elapsed = ElapsedMilliseconds(startedAt);
-        Notify({cancelled ? "Stopped" : "Ready",
-            cancelled ? "Speech was stopped." : "Speech completed.", elapsed});
+        Notify({interrupted ? "Interrupted" : (cancelled ? "Stopped" : "Ready"),
+            interrupted
+                ? "You started speaking, so I stopped."
+                : (cancelled ? "Speech was stopped." : "Speech completed."),
+            elapsed});
     }
 
     voice->Speak(nullptr, SPF_PURGEBEFORESPEAK, nullptr);
@@ -625,6 +707,7 @@ bool SpeechService::SpeakWithQwen(const Utterance& utterance, const VoicePreset&
         Notify({"Fallback", "Windows could not play the Qwen3-TTS WAV; using SAPI."});
         return false;
     }
+    ArmBargeIn();
     const double duration = std::max(250.0, WavDurationMilliseconds(output));
     const auto deadline = std::chrono::steady_clock::now() +
         std::chrono::milliseconds(static_cast<long long>(duration + 150.0));
@@ -639,9 +722,13 @@ bool SpeechService::SpeakWithQwen(const Utterance& utterance, const VoicePreset&
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(30));
     }
+    const bool interrupted = bargeInMonitor.Triggered();
+    DisarmBargeIn();
     std::filesystem::remove(output, error);
-    Notify({cancelled ? "Stopped" : "Ready",
-        cancelled ? "Speech was stopped." : "Qwen3-TTS speech completed.",
+    Notify({interrupted ? "Interrupted" : (cancelled ? "Stopped" : "Ready"),
+        interrupted
+            ? "You started speaking, so I stopped."
+            : (cancelled ? "Speech was stopped." : "Qwen3-TTS speech completed."),
         ElapsedMilliseconds(startedAt)});
     return true;
 #endif
@@ -649,6 +736,10 @@ bool SpeechService::SpeakWithQwen(const Utterance& utterance, const VoicePreset&
 
 void SpeechService::Notify(SpeechEvent event) const
 {
+    if (event.utteranceId == 0)
+    {
+        event.utteranceId = activeUtteranceId.load();
+    }
     EventHandler handler;
     {
         std::lock_guard lock(mutex);

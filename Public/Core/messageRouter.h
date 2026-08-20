@@ -13,10 +13,13 @@ public:
     messageRouter();
     ~messageRouter();
 
+    using DeltaHandler = std::function<void(const std::string&)>;
     responseOutput RouteMessage(
         const std::string& message,
         const std::vector<conversationMessage>& context,
-        std::stop_token stopToken = {}) const;
+        std::stop_token stopToken = {},
+        DeltaHandler onDelta = {}) const;
+    void SetPosture(std::string posture);
     responseOutput PlanAction(const std::string& request) const;
     responseOutput PlanGoal(const std::string& request) const;
     responseOutput AnalyzeImage(

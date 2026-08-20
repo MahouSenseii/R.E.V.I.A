@@ -56,7 +56,7 @@
     "volume": 90,
     "rate": 1,
     "maxCharacters": 1400,
-    "maxQueuedUtterances": 2
+    "maxQueuedUtterances": 16
   },
   "speechRecognition": {
     "enabled": true,
@@ -71,6 +71,23 @@
     "enabled": true,
     "requireConfirmation": true,
     "maxResponseTokens": 768
+  },
+  "initiative": {
+    "enabled": false,
+    "minimumConfidence": 0.72,
+    "maxUtterancesPerHour": 4,
+    "cooldownSeconds": 900,
+    "dismissalCooldownSeconds": 3600,
+    "quietInputSeconds": 4,
+    "minimumPrecision": 0.34,
+    "suppressWhenFullScreen": true
+  },
+  "bargeIn": {
+    "enabled": true,
+    "energyThreshold": 1400,
+    "echoMarginMultiplier": 2.6,
+    "consecutiveFramesRequired": 8,
+    "startupGraceMs": 700
   },
   "perception": {
     "enabled": false,

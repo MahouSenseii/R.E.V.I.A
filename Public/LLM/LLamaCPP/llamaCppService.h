@@ -2,6 +2,7 @@
 
 #include "Library/structLibrary.h"
 #include <atomic>
+#include <functional>
 #include <filesystem>
 #include <string>
 #include <mutex>
@@ -22,11 +23,19 @@ public:
         const embeddingSettings& embeddingSettings,
         const aiProfile& profile);
     bool IsServerAvailable() const;
+    // Revia's own response posture for the next turn, already formatted. Stored rather
+    // than threaded through every call because it changes per turn while the rest of the
+    // request shape does not.
+    void SetPosture(std::string posture);
 
     healthOutput CheckHealth() const;
+    // onDelta receives visible text as it is generated, so a caller can begin speaking
+    // the first sentence while the rest is still being produced.
+    using DeltaHandler = std::function<void(const std::string&)>;
     responseOutput GenerateResponse(
         const std::vector<conversationMessage>& context,
-        std::stop_token stopToken = {}) const;
+        std::stop_token stopToken = {},
+        DeltaHandler onDelta = {}) const;
     responseOutput GenerateActionProposal(const std::string& userRequest) const;
     responseOutput GenerateGoalPlan(const std::string& userRequest) const;
     responseOutput AnalyzeImage(
@@ -66,5 +75,7 @@ private:
     promptBuilder builder;
     llamaCppEmbeddingService embeddings;
     aiProfile activeProfile;
+    mutable std::mutex postureMutex;
+    std::string activePosture;
     mutable std::mutex inferenceMutex;
 };

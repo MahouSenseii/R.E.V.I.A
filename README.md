@@ -8,7 +8,8 @@ The runtime is multi-worker rather than a single blocking pipeline: UI, interact
 
 - Local llama.cpp chat through its OpenAI-compatible chat-completions endpoint.
 - A Qt 6 desktop window with horizontal component status and chat controls plus matching Chat, Activity, Voice Studio, and Settings tabs, stop control, always-on-top option, and tray controls.
-- A bounded affect controller for Revia's own response posture (neutral, curious, pleased, concerned, focused, or confused), with hysteresis, decay, reasons, and visible intensity. It does not infer or invent the user's emotions.
+- A bounded affect controller for Revia's own response posture (neutral, curious, pleased, concerned, focused, or confused), with hysteresis, decay, reasons, and visible intensity. It does not infer or invent the user's emotions. The posture is **fed into the model** as a system line each turn, so it colours tone and pacing rather than only driving the status chip and the speech rate. It is phrased as Revia's own stance and explicitly forbids her from naming it, describing her feelings, or assuming anything about the user's.
+- A collapsible **Thought process** line under each reply. It carries the posture that shaped the turn, any reasoning the model emitted in `<think>` tags, whether the reply was spoken in fragments, and where the time went. Reasoning is stripped from the reply itself, so it is never read aloud and never shown inline as if it were an answer.
 - Profile-aware speech on a dedicated worker. Windows SAPI remains the zero-setup fallback; Qwen3-TTS can design a reusable local character voice, clone it for replies, preview it, and assign it independently to each profile. Markdown, code blocks, and raw URLs are removed before speaking, and the UI reports model loading, generation, playback, fallback, and timing.
 - Hold-to-talk microphone input using 16 kHz mono PCM and a local CUDA whisper.cpp `small.en` model. Transcripts are placed in the input box for review before sending, while capture and transcription timings remain visible.
 - Opt-in full virtual-desktop capture and local Qwen3-VL analysis. Every capture requires confirmation, stays inside llama.cpp's allowed media directory, and is deleted after the request.
@@ -22,6 +23,7 @@ The runtime is multi-worker rather than a single blocking pipeline: UI, interact
 - Direct, typed filesystem actions: list, read text, create directory, copy file, move, rename, and move to the Windows Recycle Bin.
 - One-action natural-language planning with `/plan <task>` when llama.cpp is running.
 - Bounded multi-step goals with `/goal <task>`: the model plans act/verify steps, the plan is **rehearsed against a disposable copy first**, and only a plan that verified there is offered for approval — with that result attached, so approval rests on an observed outcome rather than on plausible-looking text. Each step must then prove it happened before the next begins, and action/retry/time budgets stop a run that is not converging. `/goals` lists them and `/goals resume <id>` continues one an earlier process left unfinished. These are desktop-session commands; the CLI does not have them yet.
+- Reviewed learning with `/review`: Revia draws conclusions from what actually happened — goal outcomes and whether her unprompted proposals were accepted or dismissed — and offers them with the evidence attached. **Nothing is remembered until you approve it**, and approving one writes an ordinary preference memory. A lesson can never change a capability, a budget, or a policy; the single automatic adjustment in the system (halving the initiative rate below a precision floor) is computed from counted outcomes, not inferred here. Patterns need at least four finished goals or judged proposals, unfinished goals are not counted as outcomes, and the review will conclude that speaking first is unwelcome when that is what the numbers say.
 - Approved-root enforcement for both source and destination paths.
 - Windows reparse-point/symbolic-link escape checks.
 - Supervised confirmation for writes; read-only actions can run automatically.
@@ -109,6 +111,13 @@ Paths containing spaces must be quoted.
 /perception resume
 /perception history 60
 /perception forget
+/initiative
+/initiative accept
+/initiative dismiss
+/review
+/review accept lesson-verification
+/bargein
+/bargein off
 /list "C:\Users\USER\Documents\ReviaSandbox"
 /read "C:\Users\USER\Documents\ReviaSandbox\notes.txt"
 /mkdir "C:\Users\USER\Documents\ReviaSandbox\New Folder"
@@ -146,6 +155,27 @@ For a later unattended experiment, use a dedicated disposable folder and set:
   "autoApproveRiskThrough": "reversible_write"
 }
 ```
+
+## Speaking first, and being interrupted
+
+Two halves of the same thing: Revia can start a conversation, and can be stopped mid-sentence the way a person can.
+
+**Barge-in** is on by default and costs nothing when idle. The microphone is armed only for the duration of each spoken reply — not whenever Revia is running — and only measures frame energy; nothing is transcribed or stored by the monitor. When it fires, Revia stops talking and starts listening. It stops playback without cancelling the Qwen request that produced the audio, because killing that worker would make the next reply pay a full model reload.
+
+The hard part is that **the microphone hears the speakers for the whole utterance**, not just its opening moments — so a fixed threshold cannot separate "the user is talking" from "Revia is talking and the room is echoing it back". An earlier version used a fixed threshold with a short grace window and consequently interrupted itself about a second into every reply. Detection now learns a noise floor during `startupGraceMs` — which is precisely when it can measure what Revia's own playback sounds like through this microphone — and then requires `echoMarginMultiplier` times that floor, sustained across `consecutiveFramesRequired` frames of roughly 50 ms each. Frames that qualify never update the floor, or someone talking steadily would teach the detector to ignore them. `energyThreshold` remains an absolute floor so a silent microphone cannot produce a hair trigger.
+
+If it still misfires on your hardware, `/bargein off` disarms it immediately, mid-reply, without editing config or restarting. Raise `echoMarginMultiplier` for loud speakers or a microphone close to them.
+
+**Text and speech are synchronised.** A reply that is going to be spoken is held until its audio actually starts, so the words appear as Revia says them rather than several seconds ahead. A reply that will *not* be spoken — speech disabled, a command result, a system message — is shown immediately and never waits. If speech fails, is disabled mid-flight, or is interrupted, the text is released at once; a nine-second timer guarantees a reply is never lost to a stalled voice.
+
+**Initiative is off by default.** When enabled, Revia may offer an observation unprompted, but the decision to speak is deterministic policy rather than a model's opinion of its own interestingness — the same reason a model does not choose its own capability scope. A proposal must clear a *confidence* threshold, not a relevance one, and is then subject to:
+
+- a cooldown after every utterance, and a much longer one after a dismissal — being told "no" costs more than being ignored
+- an hourly ceiling
+- hard suppression while a full-screen application is in front, while an excluded application is in front, and while the user is mid-input (measured from `GetLastInputInfo`, which reports *when* the last input happened and never what it was, so there is no keyboard hook)
+- refusal to repeat an observation already offered
+
+Evidence sources are ranked by how concrete they are. An **unfinished goal outranks a session observation**, because a goal is something you actually asked for while time spent in an editor is only an observation about it; accepting a goal-backed proposal hands it straight to the runner, which re-verifies every remaining step. Every proposal carries the evidence behind it, so the reasoning can be judged rather than just the conclusion, and `/initiative dismiss` answers it in one action. Revia tracks its own precision — accepted over judged — and **halves its own hourly rate** when it falls below `minimumPrecision`, recovering it when proposals start landing. An assistant that cannot tell it is being annoying is a defect. Accepting a proposal that names a goal hands it to the Stage 4 runner, which rehearses, confirms, budgets, and audits exactly as for a typed `/goal`; accepting adds no authority, it only saves the typing.
 
 ## Ambient perception
 

@@ -3,6 +3,7 @@
 #include "Library/structLibrary.h"
 #include "Runtime/affectTypes.h"
 #include "Speech/qwenTtsClient.h"
+#include "Speech/voiceActivityMonitor.h"
 #include "Speech/voicePresetStore.h"
 
 #include <atomic>
@@ -23,6 +24,9 @@ struct SpeechEvent
     std::string detail;
     double elapsedMilliseconds = -1.0;
     int queueDepth = 0;
+    // Which reply this event belongs to, so the shell can hold that reply's text until
+    // the audio for it actually starts. Zero when the event is not about an utterance.
+    std::uint64_t utteranceId = 0;
 };
 
 class SpeechService
@@ -50,8 +54,22 @@ public:
     VoiceOperationResult AssignVoice(const std::string& profileId, const std::string& presetId);
     void SetEnabled(bool enabled);
     bool IsEnabled() const;
-    void Speak(std::string text, runtime::AffectSnapshot affect);
+    // utteranceId correlates the resulting Speaking event back to the reply, so the shell
+    // can reveal text in step with the audio instead of well before it.
+    void Speak(std::string text, runtime::AffectSnapshot affect, std::uint64_t utteranceId = 0);
     void StopSpeaking();
+
+    // Barge-in. Arms a microphone energy monitor only for the duration of each utterance,
+    // and yields the floor when the user starts talking over Revia.
+    void ConfigureBargeIn(const bargeInSettings& settings, int sampleRate);
+    void SetBargeInHandler(std::function<void()> handler);
+    void SetBargeInEnabled(bool enabled);
+    [[nodiscard]] bool IsBargeInEnabled() const;
+    // Stops talking without cancelling the Qwen request that produced the audio. Killing
+    // that worker would make the next reply pay a full model reload, which is far too
+    // expensive a price for the user having spoken.
+    void YieldToUser();
+
     void Shutdown();
 
     static std::string NormalizeForSpeech(const std::string& text, std::size_t maxCharacters);
@@ -62,11 +80,14 @@ private:
         std::string text;
         runtime::AffectSnapshot affect;
         std::uint64_t generation = 0;
+        std::uint64_t utteranceId = 0;
     };
 
     void Run(std::stop_token stopToken);
     bool SpeakWithQwen(const Utterance& utterance, const VoicePreset& preset);
     void Notify(SpeechEvent event) const;
+    void ArmBargeIn();
+    void DisarmBargeIn();
 
     mutable std::mutex mutex;
     std::condition_variable_any condition;
@@ -77,10 +98,15 @@ private:
     EventHandler eventHandler;
     VoicePresetStore presetStore;
     QwenTtsClient qwenClient;
+    VoiceActivityMonitor bargeInMonitor;
+    std::function<void()> bargeInHandler;
     std::jthread worker;
     std::atomic<bool> enabled = false;
     std::atomic<bool> ready = false;
     std::atomic<std::uint64_t> generation = 1;
+    // Stamped onto every event while an utterance is in flight, so callers do not have to
+    // thread the id through each Notify call site.
+    std::atomic<std::uint64_t> activeUtteranceId = 0;
 };
 
 } // namespace revia::speech
