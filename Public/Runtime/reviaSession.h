@@ -2,6 +2,7 @@
 
 #include "Actions/actionRuntime.h"
 #include "Agents/turnCoordinator.h"
+#include "Agents/inputArbiter.h"
 #include "Core/commandManager.h"
 #include "Core/configManager.h"
 #include "Core/conversationContext.h"
@@ -12,16 +13,22 @@
 #include "Goals/goalStore.h"
 #include "LLM/LLamaCPP/llamaCppServerProcess.h"
 #include "Initiative/initiativeController.h"
+#include "Initiative/conversationStarter.h"
 #include "Learning/learningReview.h"
 #include "Perception/activityHistory.h"
 #include "Perception/windowEventMonitor.h"
 #include "Runtime/affectController.h"
+#include "Runtime/conversationRuntime.h"
 #include "Runtime/runtimeEvents.h"
+#include "Runtime/sessionResult.h"
 #include "Speech/speechService.h"
 #include "Speech/speechRecognitionService.h"
 #include "Vision/screenCaptureService.h"
+#include "Vision/visionActionParser.h"
+#include "Windows/visionUiaResolver.h"
 
 #include <atomic>
+#include <condition_variable>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -33,31 +40,6 @@
 
 namespace revia::runtime
 {
-
-struct SessionResult
-{
-    bool succeeded = true;
-    bool shouldExit = false;
-    // Set by the CLI streaming path: tokens were already printed live to the terminal.
-    // Do not use it to decide what the desktop shell has shown -- it is true for every
-    // llama.cpp reply, streamed to the UI or not.
-    bool wasStreamed = false;
-    // Set only when this reply was published sentence by sentence as it was spoken, so
-    // the shell has already displayed all of it and must not append it a second time.
-    bool spokenAsFragments = false;
-    // What Revia did to produce this reply: her posture, any reasoning the model emitted,
-    // and where the time went. Shown collapsed in the shell so it is available without
-    // being in the way.
-    std::string reasoning;
-    bool fromAssistant = false;
-    std::string text;
-    std::string reason;
-    // Set when this reply was handed to the speech worker. The shell holds the text until
-    // the matching Speaking event so the words appear with the voice rather than well
-    // ahead of it. A reply that will not be spoken leaves this false and is shown at once.
-    bool speechPending = false;
-    std::uint64_t utteranceId = 0;
-};
 
 class ReviaSession
 {
@@ -73,7 +55,15 @@ public:
     ReviaSession& operator=(const ReviaSession&) = delete;
 
     bool Start();
-    SessionResult Submit(const std::string& input);
+    SessionResult Submit(
+        const std::string& input,
+        agents::InputSource source = agents::InputSource::Typed);
+
+    // Voice arrives as a stream, not as questions. Offering it here lets several bursts
+    // merge into one turn and lets room noise be dropped before it becomes a reply. The
+    // answer arrives as an AssistantMessage event rather than a return value, because the
+    // turn starts when the merge window closes rather than when the caller asks.
+    agents::InputVerdict OfferInput(const std::string& text, agents::InputSource source);
     void PollBackgroundEvents();
     void RequestStop();
     void Stop();
@@ -89,7 +79,12 @@ public:
     [[nodiscard]] bool IsBargeInEnabled() const;
     bool BeginListening();
     bool EndListening();
+    [[nodiscard]] bool IsVisionAvailable() const;
     SessionResult AnalyzeScreen(const std::string& prompt);
+    // The model may locate a target, but it cannot click it. A successful request must
+    // resolve to an exact UIA runtime id and then pass through ordinary action policy,
+    // confirmation, dispatch, and audit.
+    SessionResult ActOnScreen(const std::string& instruction);
 
     // Stage 4. The runner itself adds no authority: every step goes through the same
     // dispatcher, policy, and audit path as an interactive action, and has to prove it
@@ -167,10 +162,18 @@ private:
     bool TryHandleGoalInput(const std::string& input, SessionResult& result);
     void StartVoiceWarmup();
     void StopVoiceWarmup();
+    // Shared by the immediate typed path and the merged voice path. Callers hold
+    // operationMutex; the arbiter has already decided what the turn's text is.
+    SessionResult RunTurnLocked(const std::string& acceptedInput);
+    // Runs merged voice turns once their window closes. Its own thread rather than the
+    // shell's timer, so listening does not depend on a debug window being open.
+    void StartInputDrain();
+    void StopInputDrain();
     // Its own thread, not the shell's poll timer. A companion that only considers speaking
     // while a debug window happens to be open is not a companion.
     void StartInitiativeLoop();
     void StopInitiativeLoop();
+    void SignalInitiative(const std::string& reason);
     std::stop_token BeginOperation();
     // The token for the operation already in flight. BeginOperation replaces the stop
     // source, so a nested run must not call it: doing so would discard a stop the user
@@ -179,6 +182,13 @@ private:
     void SetState(RuntimeState newState, const std::string& activity = "");
     void PublishAffect(const AffectSnapshot& affect);
     void Publish(RuntimeEventKind kind, const std::string& message, std::uint64_t turnId = 0) const;
+    void PublishComponent(
+        const std::string& component,
+        const std::string& phase,
+        const std::string& message,
+        double elapsedMilliseconds = -1.0,
+        int queueDepth = 0,
+        std::uint64_t turnId = 0) const;
 
     RuntimeEventBus eventBus;
     logger appLogger;
@@ -198,16 +208,25 @@ private:
     perception::WindowEventMonitor windowEventMonitor;
     perception::ActivityHistory activityHistory;
     initiative::InitiativeController initiativeController;
+    initiative::ConversationStarter conversationStarter;
     vision::ScreenCaptureService screenCaptureService;
+    vision::VisionActionParser visionActionParser;
+    actions::windows::VisionUiaResolver visionUiaResolver;
     llamaCppServerProcess llamaServerProcess;
     llamaCppServerProcess embeddingServerProcess;
     agents::TurnCoordinator turnCoordinator;
+    ConversationRuntime conversationRuntime;
+    agents::InputArbiter inputArbiter;
 
     mutable std::mutex operationMutex;
     mutable std::mutex cancellationMutex;
     mutable std::mutex confirmationMutex;
     mutable std::mutex voiceStudioMutex;
     mutable std::mutex channelMutex;
+    mutable std::mutex initiativeSignalMutex;
+    std::condition_variable_any initiativeCondition;
+    std::uint64_t initiativeSignalVersion = 0;
+    std::string initiativeSignalReason;
     outputChannel outputTarget = outputChannel::LocalVoice;
     std::string outputApplication;
     std::stop_source activeStopSource;
@@ -216,12 +235,11 @@ private:
     std::jthread voiceWarmupWorker;
     std::atomic<bool> voiceWarmupFinished = true;
     std::jthread initiativeWorker;
+    std::jthread inputDrainWorker;
     std::atomic<RuntimeState> state = RuntimeState::Offline;
     std::atomic<bool> started = false;
     std::atomic<bool> busy = false;
-    bool llmAvailable = false;
-    std::uint64_t turnCounter = 0;
-    std::uint64_t utteranceCounter = 0;
+    std::atomic<bool> llmAvailable = false;
 };
 
 } // namespace revia::runtime

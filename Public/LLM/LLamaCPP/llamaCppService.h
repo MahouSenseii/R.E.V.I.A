@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Library/structLibrary.h"
+#include "LLM/inferenceScheduler.h"
 #include <atomic>
 #include <functional>
 #include <filesystem>
@@ -77,5 +78,5 @@ private:
     aiProfile activeProfile;
     mutable std::mutex postureMutex;
     std::string activePosture;
-    mutable std::mutex inferenceMutex;
+    mutable revia::llm::InferenceScheduler inferenceScheduler;
 };

@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -48,6 +49,28 @@ enum class ExecutionMode
 
 struct ActionRequest
 {
+    struct ElementResolutionEvidence
+    {
+        bool visionResolved = false;
+        std::string modelTarget;
+        int regionLeft = 0;
+        int regionTop = 0;
+        int regionRight = 0;
+        int regionBottom = 0;
+        double modelConfidence = 0.0;
+        std::string resolvedName;
+        std::string resolvedAutomationId;
+        std::string resolvedRuntimeId;
+        int resolvedControlType = 0;
+        int boundsLeft = 0;
+        int boundsTop = 0;
+        int boundsRight = 0;
+        int boundsBottom = 0;
+        double spatialAgreement = 0.0;
+        double nameAgreement = 0.0;
+        double matchConfidence = 0.0;
+    };
+
     std::string id;
     ActionType type = ActionType::Unknown;
     std::filesystem::path source;
@@ -56,6 +79,9 @@ struct ActionRequest
     std::string windowTitle;
     std::string control;
     std::string value;
+    // Present only after the vision-to-UIA resolver has produced a typed element
+    // reference. Execution re-finds this exact runtime id and fails closed if it changed.
+    ElementResolutionEvidence resolution;
     bool dryRun = false;
     std::string requestedBy = "user";
 };
@@ -90,11 +116,16 @@ struct CapabilitySettings
     ExecutionMode mode = ExecutionMode::Supervised;
     std::vector<std::filesystem::path> approvedRoots;
     std::vector<std::string> approvedApplications;
+    // Per executable, exact accessible names/automation ids or an explicit "*". Merely
+    // approving an executable does not silently approve every mutable control it exposes.
+    std::map<std::string, std::vector<std::string>> approvedControls;
     RiskLevel autoApproveRiskThrough = RiskLevel::ReadOnly;
     bool createMissingApprovedRoots = true;
     std::uintmax_t maxReadBytes = 1024U * 1024U;
     std::size_t maxDirectoryEntries = 500;
     std::size_t maxAffectedEntries = 200;
+    int maxDesktopActionsPerMinute = 12;
+    int minimumDesktopActionIntervalMs = 250;
 };
 
 [[nodiscard]] std::string ToString(ActionType value);

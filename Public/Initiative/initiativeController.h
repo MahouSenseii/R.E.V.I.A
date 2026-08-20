@@ -2,6 +2,7 @@
 
 #include "Goals/goalTypes.h"
 #include "Initiative/attentionPolicy.h"
+#include "Initiative/conversationStarter.h"
 #include "Perception/activityHistory.h"
 
 #include <chrono>
@@ -20,6 +21,12 @@ namespace revia::initiative
 // after the fact instead of only irritating.
 struct Proposal
 {
+    enum class Kind
+    {
+        ActionOffer,
+        ConversationStarter
+    };
+
     std::string id;
     std::string message;
     std::string evidence;
@@ -32,6 +39,7 @@ struct Proposal
     // for a typed /goals resume.
     std::string resumeGoalId;
     std::chrono::system_clock::time_point createdAt = std::chrono::system_clock::now();
+    Kind kind = Kind::ActionOffer;
 };
 
 enum class ProposalOutcome
@@ -72,6 +80,9 @@ public:
         // Goals an earlier run left unfinished. Concrete and actionable, so they outrank
         // an observation about how the session has been spent.
         std::vector<goals::Goal> unfinishedGoals;
+        // Event-derived reasons to begin ordinary conversation. These are not timers and
+        // not action requests; a natural user reply continues the normal dialogue.
+        std::vector<StarterCue> conversationCues;
     };
 
     [[nodiscard]] Consideration Consider(
@@ -79,7 +90,13 @@ public:
         const AttentionContext& context);
 
     void Accept(const std::string& proposalId);
+    // A normal reply accepts a conversational opening; a natural refusal such as "not
+    // now" dismisses it. Neither path requires a slash command.
+    void RecordConversationResponse(
+        const std::string& response,
+        std::chrono::system_clock::time_point when);
     void Dismiss(const std::string& proposalId, std::chrono::system_clock::time_point when);
+    void Expire(const std::string& proposalId);
 
     [[nodiscard]] std::vector<Proposal> Pending() const;
     [[nodiscard]] InitiativeCounters Counters() const;
@@ -98,6 +115,9 @@ public:
         Proposal& outProposal);
     [[nodiscard]] static bool BuildUnfinishedGoalProposal(
         const std::vector<goals::Goal>& unfinishedGoals,
+        Proposal& outProposal);
+    [[nodiscard]] static bool BuildConversationProposal(
+        const std::vector<StarterCue>& cues,
         Proposal& outProposal);
 
 private:

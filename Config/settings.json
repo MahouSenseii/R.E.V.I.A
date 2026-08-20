@@ -9,7 +9,7 @@
     "serverExecutable": "ThirdParty/llama.cpp/llama-server.exe",
     "modelPath": "Models/Qwen3-VL-8B-Instruct-Unredacted-MAX.Q4_K_M.gguf",
     "autoTune": true,
-    "autoFitTargetMiB": 1024,
+    "autoFitTargetMiB": 2048,
     "contextSize": 4096,
     "parallelRequests": 1,
     "startupTimeoutSeconds": 120,
@@ -70,17 +70,26 @@
   "vision": {
     "enabled": true,
     "requireConfirmation": true,
-    "maxResponseTokens": 768
+    "maxResponseTokens": 768,
+    "resolutionConfidence": 0.72,
+    "minimumNameAgreement": 0.35,
+    "ambiguityMargin": 0.08,
+    "maxResolverElements": 500
   },
   "initiative": {
-    "enabled": false,
+    "enabled": true,
     "minimumConfidence": 0.72,
     "maxUtterancesPerHour": 4,
     "cooldownSeconds": 900,
     "dismissalCooldownSeconds": 3600,
     "quietInputSeconds": 4,
     "minimumPrecision": 0.34,
-    "suppressWhenFullScreen": true
+    "suppressWhenFullScreen": true,
+    "focusSessionMinutes": 12,
+    "returnAfterMinutes": 20,
+    "contextSwitchWindowSeconds": 300,
+    "contextSwitchCount": 6,
+    "cueMaxAgeMinutes": 10
   },
   "bargeIn": {
     "enabled": true,
@@ -90,10 +99,16 @@
     "startupGraceMs": 700
   },
   "perception": {
-    "enabled": false,
+    "enabled": true,
     "minimumEventIntervalMs": 750,
     "maxObservationsPerMinute": 60,
-    "excludedApplications": [],
+    "excludedApplications": ["ReviaDesktop.exe", "R_E_V_I_A.exe", "llama-server.exe"],
     "excludedTitleFragments": []
+  },
+  "inputArbiter": {
+    "mergeWindowMs": 1500,
+    "minimumMeaningfulCharacters": 3,
+    "maxQueuedInputs": 8,
+    "ignoredFragments": []
   }
 }

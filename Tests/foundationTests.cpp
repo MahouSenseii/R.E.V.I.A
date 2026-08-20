@@ -3,17 +3,21 @@
 #include "Actions/actionTypes.h"
 #include "Agents/inputArbiter.h"
 #include "Agents/memoryAgent.h"
+#include "Agents/conversationStylePolicy.h"
 #include "Agents/replyFragmenter.h"
 #include "Core/localApiKey.h"
+#include "Core/conversationContext.h"
 #include "Audit/actionAuditLogger.h"
 #include "Filesystem/fileSystemExecutor.h"
 #include "Goals/goalRunner.h"
 #include "Goals/goalSandbox.h"
 #include "Goals/goalStore.h"
 #include "Initiative/attentionPolicy.h"
+#include "Initiative/conversationStarter.h"
 #include "Initiative/initiativeController.h"
 #include "Goals/goalTypes.h"
 #include "LLM/LLamaCPP/llamaCppServerProcess.h"
+#include "LLM/inferenceScheduler.h"
 #include "LLM/promptBuilder.h"
 #include "Learning/learningReview.h"
 #include "Memory/longTermMemory.h"
@@ -22,8 +26,10 @@
 #include "Planning/goalPlanner.h"
 #include "Planning/structuredActionParser.h"
 #include "Policy/capabilityPolicy.h"
+#include "Policy/desktopActionRateLimiter.h"
 #include "Policy/permissionStore.h"
 #include "Runtime/affectController.h"
+#include "Runtime/reviaSession.h"
 #include "Runtime/runtimeEvents.h"
 #include "Speech/speechService.h"
 #include "Speech/speechRecognitionService.h"
@@ -31,17 +37,31 @@
 #include "Speech/qwenTtsClient.h"
 #include "Speech/voicePresetStore.h"
 #include "Windows/windowsAutomationExecutor.h"
+#include "Windows/visionUiaResolver.h"
+#include "Vision/visionActionParser.h"
 
 #include <filesystem>
 #include <atomic>
+#include <condition_variable>
+#include <cwctype>
 #include <fstream>
 #include <chrono>
 #include <iostream>
 #include <memory>
+#include <mutex>
 #include <nlohmann/json.hpp>
 #include <stdexcept>
 #include <string>
 #include <thread>
+#include <vector>
+
+#ifdef _WIN32
+#include <windows.h>
+// Win32's generic-text aliases collide with scoped ActionType members below.
+#undef CopyFile
+#undef CreateDirectory
+#undef MoveFile
+#endif
 
 namespace
 {
@@ -205,6 +225,7 @@ void TestDesktopActionPolicy()
     ScopedTestDirectory temporary;
     auto settings = SupervisedSettings(temporary.root);
     settings.approvedApplications = {"notepad.exe"};
+    settings.approvedControls["notepad.exe"] = {"Text editor", "Save"};
     revia::policy::CapabilityPolicy policy(std::move(settings));
 
     ActionRequest inspect;
@@ -220,6 +241,10 @@ void TestDesktopActionPolicy()
     setText.value = "hello";
     Check(policy.Evaluate(setText).verdict == PolicyVerdict::RequiresConfirmation,
         "A desktop write did not require supervised confirmation.");
+
+    setText.control = "Delete account";
+    Check(policy.Evaluate(setText).verdict == PolicyVerdict::Blocked,
+        "A mutable control escaped its per-application control scope.");
 
     inspect.application = "powershell.exe";
     Check(policy.Evaluate(inspect).verdict == PolicyVerdict::Blocked,
@@ -238,6 +263,84 @@ void TestConfigurationFailsClosed()
     std::string error;
     Check(!store.Load(configPath, settings, error),
         "Unknown automatic risk ceiling did not fail closed.");
+
+    WriteBytes(configPath,
+        R"({"mode":"supervised","approvedRoots":["C:\\Safe"],"approvedApplications":["notepad.exe"],"autoApproveRiskThrough":"read_only"})");
+    Check(!store.Load(configPath, settings, error) &&
+        error.find("approvedControls") != std::string::npos,
+        "An approved application without a control scope did not fail closed.");
+}
+
+void TestDesktopActionRateLimitsAreDeterministic()
+{
+    revia::policy::DesktopActionRateLimiter limiter;
+    limiter.Configure(2, 250);
+    ActionRequest request;
+    request.type = ActionType::InvokeControl;
+    request.application = "notepad.exe";
+    request.control = "Save";
+    const auto start = std::chrono::steady_clock::time_point{} + std::chrono::seconds(10);
+    std::string reason;
+    Check(limiter.Admit(request, start, reason),
+        "The first desktop action was rate limited.");
+    Check(!limiter.Admit(request, start + std::chrono::milliseconds(100), reason) &&
+        reason.find("quickly") != std::string::npos,
+        "The minimum desktop-action interval was not enforced.");
+    Check(limiter.Admit(request, start + std::chrono::milliseconds(300), reason),
+        "A spaced desktop action was incorrectly refused.");
+    Check(!limiter.Admit(request, start + std::chrono::milliseconds(600), reason) &&
+        reason.find("per-minute") != std::string::npos,
+        "The rolling desktop-action budget was not enforced.");
+
+    ActionRequest inspection = request;
+    inspection.type = ActionType::InspectWindow;
+    Check(limiter.Admit(inspection, start + std::chrono::milliseconds(601), reason),
+        "Read-only inspection consumed the mutable desktop-action budget.");
+}
+
+void TestDesktopRateLimitIsAudited()
+{
+    ScopedTestDirectory temporary;
+    const auto configPath = temporary.root / "capabilities.json";
+    const auto auditPath = temporary.root / "actions.jsonl";
+    WriteBytes(configPath, nlohmann::json{
+        {"mode", "supervised"},
+        {"approvedRoots", nlohmann::json::array({
+            revia::actions::PathToUtf8(temporary.root)})},
+        {"approvedApplications", nlohmann::json::array({"revia-rate-fixture.exe"})},
+        {"approvedControls", {{
+            "revia-rate-fixture.exe", nlohmann::json::array({"Save"})}}},
+        {"autoApproveRiskThrough", "read_only"},
+        {"createMissingApprovedRoots", false},
+        {"maxDesktopActionsPerMinute", 1},
+        {"minimumDesktopActionIntervalMs", 0}
+    }.dump());
+    revia::actions::ActionRuntime runtime;
+    std::string error;
+    Check(runtime.Initialize(configPath, auditPath, error),
+        "Rate-limit audit fixture did not initialize: " + error);
+    ActionRequest request;
+    request.id = "rate-one";
+    request.type = ActionType::InvokeControl;
+    request.application = "revia-rate-fixture.exe";
+    request.control = "Save";
+    const auto first = runtime.Execute(request, true);
+    Check(first.policy.verdict == PolicyVerdict::RequiresConfirmation,
+        "The first admitted desktop action did not reach ordinary policy.");
+    request.id = "rate-two";
+    const auto refused = runtime.Execute(request, true);
+    Check(refused.policy.verdict == PolicyVerdict::Blocked && !refused.result.attempted &&
+        refused.policy.reason.find("per-minute") != std::string::npos,
+        "The action runtime did not convert a rate refusal into a blocked outcome.");
+
+    std::ifstream audit(auditPath);
+    std::string line;
+    std::getline(audit, line);
+    std::getline(audit, line);
+    const auto entry = nlohmann::json::parse(line);
+    Check(entry.at("policy_verdict") == "blocked" &&
+        entry.at("policy_reason").get<std::string>().find("per-minute") != std::string::npos,
+        "The desktop rate refusal was not visible in the action audit.");
 }
 
 void TestLlamaServerProcessRejectsMissingFiles()
@@ -505,7 +608,473 @@ void TestFilesystemExecutorAndAudit()
     const auto entry = nlohmann::json::parse(line);
     Check(entry.at("action") == "read_text_file" && entry.at("succeeded") == true,
         "Audit record did not preserve action outcome.");
+
+    ActionRequest resolved;
+    resolved.id = "vision-action-test";
+    resolved.type = ActionType::InvokeControl;
+    resolved.application = "notepad.exe";
+    resolved.windowTitle = "note.txt - Notepad";
+    resolved.control = "Save";
+    resolved.resolution.visionResolved = true;
+    resolved.resolution.modelTarget = "Save";
+    resolved.resolution.regionLeft = 100;
+    resolved.resolution.regionTop = 20;
+    resolved.resolution.regionRight = 160;
+    resolved.resolution.regionBottom = 50;
+    resolved.resolution.resolvedName = "Save";
+    resolved.resolution.resolvedAutomationId = "FileSave";
+    resolved.resolution.resolvedRuntimeId = "42.7.9";
+    resolved.resolution.matchConfidence = 0.94;
+    revia::actions::PolicyDecision confirmable;
+    confirmable.verdict = PolicyVerdict::RequiresConfirmation;
+    revia::actions::ActionResult invoked;
+    invoked.attempted = true;
+    invoked.succeeded = true;
+    invoked.message = "invoked";
+    Check(audit.Record(resolved, confirmable, invoked),
+        "Vision-resolved audit record was not written.");
+    std::getline(auditFile, line);
+    const auto resolvedEntry = nlohmann::json::parse(line);
+    Check(resolvedEntry.contains("vision_resolution") &&
+        resolvedEntry["vision_resolution"].at("resolved_runtime_id") == "42.7.9" &&
+        resolvedEntry["vision_resolution"].at("match_confidence") == 0.94,
+        "Audit record did not preserve vision-to-UIA resolution evidence.");
 }
+
+void TestVisionActionParserFailsClosed()
+{
+    revia::vision::VisionActionParser parser;
+    const auto parsed = parser.Parse(
+        "```json\n{\"action\":\"invoke_control\",\"target_name\":\"Save\","
+        "\"target_description\":\"toolbar button\",\"region\":{\"left\":100,"
+        "\"top\":20,\"right\":160,\"bottom\":52},\"value\":\"\","
+        "\"confidence\":0.91}\n```");
+    Check(parsed.succeeded && parsed.intent.action == ActionType::InvokeControl &&
+        parsed.intent.targetName == "Save" && parsed.intent.region.right == 160,
+        "A valid bounded vision action did not parse.");
+
+    Check(!parser.Parse(
+        R"({"action":"none","reason":"target is hidden"})").succeeded,
+        "A vision refusal was incorrectly treated as an executable action.");
+    Check(!parser.Parse(
+        R"({"action":"invoke_control","target_name":"Save","region":{"left":5,"top":5,"right":5,"bottom":8},"confidence":0.9})").succeeded,
+        "A zero-width vision region was accepted.");
+    Check(!parser.Parse(
+        R"({"action":"set_control_text","target_name":"Name","region":{"left":5,"top":5,"right":50,"bottom":30},"value":"","confidence":0.9})").succeeded,
+        "An empty set-text value was accepted.");
+}
+
+void TestVisionResolverRequiresGeometryNameAndIdentity()
+{
+    using revia::actions::windows::VisionResolverSettings;
+    using revia::actions::windows::VisionUiaResolver;
+    using revia::vision::UiaCandidate;
+    using revia::vision::VisionActionIntent;
+
+    VisionActionIntent intent;
+    intent.action = ActionType::InvokeControl;
+    intent.targetName = "Save";
+    intent.region = {100, 20, 160, 52};
+    intent.modelConfidence = 0.9;
+
+    UiaCandidate save;
+    save.name = "Save";
+    save.automationId = "FileSave";
+    save.runtimeId = "42.7.9";
+    save.bounds = {101, 21, 159, 51};
+    save.enabled = true;
+    save.offscreen = false;
+    save.supportsInvoke = true;
+
+    UiaCandidate deleteButton = save;
+    deleteButton.name = "Delete";
+    deleteButton.automationId = "Delete";
+    deleteButton.runtimeId = "42.7.10";
+
+    UiaCandidate distantSave = save;
+    distantSave.runtimeId = "42.7.11";
+    distantSave.bounds = {500, 500, 560, 532};
+
+    VisionResolverSettings settings;
+    const auto resolved = VisionUiaResolver::SelectBest(
+        "notepad.exe",
+        "note.txt - Notepad",
+        intent,
+        {deleteButton, distantSave, save},
+        settings);
+    Check(resolved.succeeded && resolved.reference.element.runtimeId == "42.7.9" &&
+        resolved.reference.score.nameAgreement == 1.0,
+        "Resolver did not require both spatial and accessible-name agreement.");
+
+    UiaCandidate ambiguous = save;
+    ambiguous.runtimeId = "42.7.12";
+    const auto refusedAmbiguity = VisionUiaResolver::SelectBest(
+        "notepad.exe",
+        "note.txt - Notepad",
+        intent,
+        {save, ambiguous},
+        settings);
+    Check(!refusedAmbiguity.succeeded &&
+        refusedAmbiguity.reason.find("ambiguous") != std::string::npos,
+        "Two indistinguishable UIA elements did not fail closed.");
+
+    save.runtimeId.clear();
+    const auto refusedUntyped = VisionUiaResolver::SelectBest(
+        "notepad.exe",
+        "note.txt - Notepad",
+        intent,
+        {save},
+        settings);
+    Check(!refusedUntyped.succeeded,
+        "A candidate without a stable UIA runtime id was accepted.");
+}
+
+#ifdef _WIN32
+std::atomic<int>* UiaFixtureInvocations = nullptr;
+
+LRESULT CALLBACK UiaFixtureWindowProcedure(
+    const HWND window,
+    const UINT message,
+    const WPARAM word,
+    const LPARAM parameter)
+{
+    if (message == WM_COMMAND && HIWORD(word) == BN_CLICKED && UiaFixtureInvocations != nullptr)
+    {
+        UiaFixtureInvocations->fetch_add(1);
+        return 0;
+    }
+    if (message == WM_DESTROY)
+    {
+        PostQuitMessage(0);
+        return 0;
+    }
+    return DefWindowProcW(window, message, word, parameter);
+}
+
+void RunVisionUiaLiveFixture()
+{
+    struct Fixture
+    {
+        std::mutex mutex;
+        std::condition_variable ready;
+        HWND window = nullptr;
+        HWND button = nullptr;
+        bool created = false;
+        std::atomic<int> invocations = 0;
+    } fixture;
+    UiaFixtureInvocations = &fixture.invocations;
+
+    std::jthread windowThread([&fixture]()
+    {
+        const HINSTANCE instance = GetModuleHandleW(nullptr);
+        WNDCLASSW windowClass{};
+        windowClass.lpfnWndProc = UiaFixtureWindowProcedure;
+        windowClass.hInstance = instance;
+        windowClass.lpszClassName = L"ReviaUiaResolverFixture";
+        RegisterClassW(&windowClass);
+        const HWND window = CreateWindowExW(
+            0,
+            windowClass.lpszClassName,
+            L"Revia UIA Fixture",
+            WS_OVERLAPPEDWINDOW,
+            200,
+            200,
+            420,
+            240,
+            nullptr,
+            nullptr,
+            instance,
+            nullptr);
+        const HWND button = window == nullptr ? nullptr : CreateWindowExW(
+            0,
+            L"BUTTON",
+            L"Save",
+            WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
+            120,
+            80,
+            100,
+            36,
+            window,
+            reinterpret_cast<HMENU>(1001),
+            instance,
+            nullptr);
+        if (window != nullptr)
+        {
+            ShowWindow(window, SW_SHOW);
+            UpdateWindow(window);
+        }
+        {
+            std::lock_guard lock(fixture.mutex);
+            fixture.window = window;
+            fixture.button = button;
+            fixture.created = window != nullptr && button != nullptr;
+        }
+        fixture.ready.notify_one();
+        MSG message{};
+        while (window != nullptr && GetMessageW(&message, nullptr, 0, 0) > 0)
+        {
+            TranslateMessage(&message);
+            DispatchMessageW(&message);
+        }
+        UnregisterClassW(windowClass.lpszClassName, instance);
+    });
+
+    const auto stopFixture = [&fixture, &windowThread]()
+    {
+        if (fixture.window != nullptr)
+        {
+            PostMessageW(fixture.window, WM_CLOSE, 0, 0);
+        }
+        if (windowThread.joinable())
+        {
+            windowThread.join();
+        }
+        UiaFixtureInvocations = nullptr;
+    };
+
+    try
+    {
+      {
+        std::unique_lock lock(fixture.mutex);
+        fixture.ready.wait_for(lock, std::chrono::seconds(3), [&fixture]()
+        {
+            return fixture.created;
+        });
+      }
+    Check(fixture.created, "The live UIA fixture window could not be created.");
+
+    RECT bounds{};
+    Check(GetWindowRect(fixture.button, &bounds),
+        "The live UIA fixture button bounds were unavailable.");
+    revia::vision::VisionActionIntent intent;
+    intent.action = ActionType::InvokeControl;
+    intent.targetName = "Save";
+    intent.region = {bounds.left, bounds.top, bounds.right, bounds.bottom};
+    intent.modelConfidence = 0.99;
+    revia::actions::windows::VisionUiaResolver resolver;
+    const auto resolved = resolver.Resolve(
+        "ReviaTests.exe",
+        "Revia UIA Fixture",
+        intent,
+        {});
+    Check(resolved.succeeded && !resolved.reference.element.runtimeId.empty(),
+        "Live vision-to-UIA resolution failed: " + resolved.reason);
+
+    ActionRequest request;
+    request.type = ActionType::InvokeControl;
+    request.application = resolved.reference.application;
+    request.windowTitle = resolved.reference.windowTitle;
+    request.control = resolved.reference.element.name;
+    request.resolution.visionResolved = true;
+    request.resolution.resolvedName = resolved.reference.element.name;
+    request.resolution.resolvedAutomationId = resolved.reference.element.automationId;
+    request.resolution.resolvedRuntimeId = resolved.reference.element.runtimeId;
+    request.resolution.resolvedControlType = resolved.reference.element.controlType;
+    revia::actions::PolicyDecision allowed;
+    allowed.verdict = PolicyVerdict::Allowed;
+    revia::actions::windows::WindowsAutomationExecutor executor;
+    const auto invoked = executor.Execute(request, allowed);
+    for (int attempt = 0; attempt < 100 && fixture.invocations.load() == 0; ++attempt)
+    {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    Check(invoked.succeeded && fixture.invocations.load() == 1,
+        "The exact live UIA element was not invoked.");
+
+    SetWindowTextW(fixture.button, L"Changed after resolution");
+    const auto stale = executor.Execute(request, allowed);
+    Check(!stale.succeeded && fixture.invocations.load() == 1,
+        "A changed UIA element bypassed the typed-identity recheck.");
+    }
+    catch (...)
+    {
+        stopFixture();
+        throw;
+    }
+    stopFixture();
+}
+
+std::wstring ProcessExecutableName(const DWORD processId)
+{
+    HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, processId);
+    if (process == nullptr)
+    {
+        return {};
+    }
+    std::wstring path(32768, L'\0');
+    DWORD length = static_cast<DWORD>(path.size());
+    const bool queried = QueryFullProcessImageNameW(process, 0, path.data(), &length);
+    CloseHandle(process);
+    if (!queried)
+    {
+        return {};
+    }
+    path.resize(length);
+    return std::filesystem::path(path).filename().wstring();
+}
+
+BOOL CALLBACK CollectNotepadWindows(const HWND window, const LPARAM parameter)
+{
+    if (!IsWindowVisible(window))
+    {
+        return TRUE;
+    }
+    DWORD processId = 0;
+    GetWindowThreadProcessId(window, &processId);
+    std::wstring executable = ProcessExecutableName(processId);
+    std::transform(executable.begin(), executable.end(), executable.begin(), ::towlower);
+    if (executable == L"notepad.exe")
+    {
+        reinterpret_cast<std::vector<HWND>*>(parameter)->push_back(window);
+    }
+    return TRUE;
+}
+
+void RunVisionActionNotepadLive()
+{
+    revia::runtime::ReviaSession session;
+    std::vector<HWND> existingNotepadWindows;
+    EnumWindows(
+        CollectNotepadWindows,
+        reinterpret_cast<LPARAM>(&existingNotepadWindows));
+
+    STARTUPINFOW startup{};
+    startup.cb = sizeof(startup);
+    PROCESS_INFORMATION process{};
+    std::wstring command = L"C:\\Windows\\System32\\notepad.exe /new";
+    const bool launched = CreateProcessW(
+        nullptr,
+        command.data(),
+        nullptr,
+        nullptr,
+        FALSE,
+        0,
+        nullptr,
+        nullptr,
+        &startup,
+        &process) != FALSE;
+    if (launched)
+    {
+        CloseHandle(process.hThread);
+        CloseHandle(process.hProcess);
+    }
+
+    HWND notepad = nullptr;
+    for (int attempt = 0; attempt < 100 && notepad == nullptr; ++attempt)
+    {
+        std::vector<HWND> currentNotepadWindows;
+        EnumWindows(
+            CollectNotepadWindows,
+            reinterpret_cast<LPARAM>(&currentNotepadWindows));
+        const auto newWindow = std::find_if(
+            currentNotepadWindows.begin(),
+            currentNotepadWindows.end(),
+            [&](const HWND candidate)
+            {
+                return std::find(
+                    existingNotepadWindows.begin(),
+                    existingNotepadWindows.end(),
+                    candidate) == existingNotepadWindows.end();
+            });
+        if (newWindow != currentNotepadWindows.end())
+        {
+            notepad = *newWindow;
+        }
+        if (notepad == nullptr)
+        {
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
+    }
+    const auto cleanup = [&]()
+    {
+        if (notepad != nullptr)
+        {
+            PostMessageW(notepad, WM_CLOSE, 0, 0);
+        }
+        session.Stop();
+    };
+    try
+    {
+        Check(launched && notepad != nullptr,
+            "A controlled Notepad window could not be opened.");
+        ShowWindow(notepad, SW_MAXIMIZE);
+        SetWindowPos(
+            notepad,
+            HWND_TOPMOST,
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
+        SetWindowPos(
+            notepad,
+            HWND_NOTOPMOST,
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
+        MSG queuedMessage{};
+        PeekMessageW(&queuedMessage, nullptr, 0, 0, PM_NOREMOVE);
+        const DWORD currentThread = GetCurrentThreadId();
+        const DWORD foregroundThread = GetWindowThreadProcessId(GetForegroundWindow(), nullptr);
+        const DWORD notepadThread = GetWindowThreadProcessId(notepad, nullptr);
+        if (foregroundThread != 0 && foregroundThread != currentThread)
+        {
+            AttachThreadInput(currentThread, foregroundThread, TRUE);
+        }
+        if (notepadThread != 0 && notepadThread != currentThread)
+        {
+            AttachThreadInput(currentThread, notepadThread, TRUE);
+        }
+        BringWindowToTop(notepad);
+        SetForegroundWindow(notepad);
+        SetFocus(notepad);
+        if (notepadThread != 0 && notepadThread != currentThread)
+        {
+            AttachThreadInput(currentThread, notepadThread, FALSE);
+        }
+        if (foregroundThread != 0 && foregroundThread != currentThread)
+        {
+            AttachThreadInput(currentThread, foregroundThread, FALSE);
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(750));
+        if (GetForegroundWindow() != notepad)
+        {
+            cleanup();
+            std::cout << "Vision-action Notepad fixture skipped: Windows did not grant "
+                "the background test process foreground focus.\n";
+            return;
+        }
+        Check(session.Start(),
+            "ReviaSession could not start for the live Notepad vision test.");
+        session.SetConfirmationHandler([](
+            const revia::actions::ActionRequest&,
+            const revia::actions::PolicyDecision&)
+        {
+            return true;
+        });
+        if (GetForegroundWindow() != notepad)
+        {
+            cleanup();
+            std::cout << "Vision-action Notepad fixture skipped: foreground focus changed "
+                "while the local model started.\n";
+            return;
+        }
+        const revia::runtime::SessionResult action = session.ActOnScreen(
+            "Open Notepad's File menu by pressing the visible File menu control.");
+        Check(action.succeeded,
+            "The end-to-end Notepad screen action failed: " + action.reason);
+    }
+    catch (...)
+    {
+        cleanup();
+        throw;
+    }
+    cleanup();
+    std::cout << "Vision-grounded Notepad action passed.\n";
+}
+#endif
 
 void TestRuntimeEventBus()
 {
@@ -674,11 +1243,14 @@ nlohmann::json CapabilityConfigJson(
         {"mode", mode},
         {"approvedRoots", nlohmann::json::array({revia::actions::PathToUtf8(approvedRoot)})},
         {"approvedApplications", nlohmann::json::array()},
+        {"approvedControls", nlohmann::json::object()},
         {"autoApproveRiskThrough", riskCeiling},
         {"createMissingApprovedRoots", false},
         {"maxReadBytes", 1048576},
         {"maxDirectoryEntries", 200},
-        {"maxAffectedEntries", 200}
+        {"maxAffectedEntries", 200},
+        {"maxDesktopActionsPerMinute", 12},
+        {"minimumDesktopActionIntervalMs", 250}
     };
 }
 
@@ -2144,7 +2716,7 @@ void TestBargeInNeedsSustainedSpeech()
     Detector quietRoom(settings);
     for (int index = 0; index < 10; ++index)
     {
-        quietRoom.Observe(120, true);
+        (void)quietRoom.Observe(120, true);
     }
     for (int index = 0; index < 50; ++index)
     {
@@ -2155,7 +2727,7 @@ void TestBargeInNeedsSustainedSpeech()
     Detector transient(settings);
     for (int index = 0; index < 10; ++index)
     {
-        transient.Observe(120, true);
+        (void)transient.Observe(120, true);
     }
     for (int index = 0; index < 5; ++index)
     {
@@ -2297,6 +2869,328 @@ void TestPostureReachesTheModel()
         "A prompt with no posture still mentioned one: " + plainContent);
 
     std::filesystem::current_path(previous);
+}
+
+void TestConversationStartersNeedARealTransition()
+{
+    using revia::initiative::ConversationStarter;
+    using revia::initiative::StarterCueKind;
+
+    initiativeSettings settings = TalkativeSettings();
+    settings.focusSessionMinutes = 12;
+    ConversationStarter starter;
+    starter.Configure(settings);
+
+    const auto now = std::chrono::system_clock::now();
+    starter.Observe(SeenAt("code.exe", "Revia", now));
+    // Merely asking later cannot create a cue. The detector is event-driven; elapsed
+    // time qualifies evidence but never acts as the trigger.
+    Check(starter.RecentCues(now + std::chrono::minutes{20}).empty(),
+        "Elapsed time alone created a conversation starter.");
+
+    starter.Observe(SeenAt("msedge.exe", "Docs", now + std::chrono::minutes{13}));
+    const auto cues = starter.RecentCues(now + std::chrono::minutes{13});
+    Check(cues.size() == 1 && cues.front().kind == StarterCueKind::FocusCompleted,
+        "Leaving a meaningful focus stretch produced no conversation cue.");
+    Check(cues.front().evidence.find("code") != std::string::npos &&
+        cues.front().evidence.find("13 minutes") != std::string::npos,
+        "The focus cue did not carry its observable evidence.");
+}
+
+void TestConversationStartersRecognizeReturnAndSwitching()
+{
+    using revia::initiative::ConversationStarter;
+    using revia::initiative::StarterCueKind;
+
+    initiativeSettings settings = TalkativeSettings();
+    settings.focusSessionMinutes = 60;
+    settings.returnAfterMinutes = 20;
+    settings.contextSwitchWindowSeconds = 300;
+    settings.contextSwitchCount = 6;
+    const auto now = std::chrono::system_clock::now();
+
+    ConversationStarter returning;
+    returning.Configure(settings);
+    returning.Observe(SeenAt("code.exe", "Revia", now));
+    returning.Observe(SeenAt("explorer.exe", "Files", now + std::chrono::minutes{1}));
+    returning.Observe(SeenAt("code.exe", "Revia", now + std::chrono::minutes{22}));
+    const auto returnCues = returning.RecentCues(now + std::chrono::minutes{22});
+    Check(returnCues.size() == 1 &&
+        returnCues.front().kind == StarterCueKind::ReturnedToApplication,
+        "Returning to an application after a meaningful absence produced no cue.");
+
+    settings.returnAfterMinutes = 120;
+    ConversationStarter switching;
+    switching.Configure(settings);
+    for (int index = 0; index < 6; ++index)
+    {
+        switching.Observe(SeenAt(
+            index % 2 == 0 ? "code.exe" : "msedge.exe",
+            "",
+            now + std::chrono::seconds(index * 30)));
+    }
+    const auto switchCues = switching.RecentCues(now + std::chrono::minutes{3});
+    Check(!switchCues.empty() &&
+        switchCues.back().kind == StarterCueKind::ContextSwitching,
+        "Repeated context switching produced no bounded conversation cue.");
+    Check(switchCues.back().messageIntent.find("Do not call the user distracted") !=
+        std::string::npos,
+        "The switching cue did not guard against judging the user.");
+}
+
+void TestConversationStarterContinuesWithoutSlashCommands()
+{
+    revia::initiative::InitiativeController controller;
+    controller.Configure(TalkativeSettings());
+
+    revia::initiative::StarterCue cue;
+    cue.messageIntent = "Ask how the focus stretch went.";
+    cue.evidence = "The user left code after 18 minutes.";
+    cue.confidence = 0.82f;
+    cue.occurredAt = std::chrono::system_clock::now();
+
+    revia::initiative::InitiativeController::Evidence evidence;
+    evidence.conversationCues = {cue};
+    const auto considered = controller.Consider(
+        evidence,
+        QuietDesktop(cue.occurredAt));
+    Check(considered.hasProposal &&
+        considered.proposal.kind ==
+            revia::initiative::Proposal::Kind::ConversationStarter,
+        "A conversation cue did not become a conversational opening.");
+    Check(controller.Pending().size() == 1,
+        "The opening was not tracked for initiative precision.");
+
+    // A normal reply is engagement. Requiring `/initiative accept` here would make the
+    // exchange feel like a command interface rather than conversation.
+    controller.RecordConversationResponse("Yeah, I finally found it.", cue.occurredAt);
+    Check(controller.Pending().empty() && controller.Counters().accepted == 1,
+        "A natural user reply did not accept the conversational opening.");
+
+    revia::initiative::InitiativeController dismissing;
+    dismissing.Configure(TalkativeSettings());
+    const auto second = dismissing.Consider(evidence, QuietDesktop(cue.occurredAt));
+    Check(second.hasProposal, "No second opening existed to test natural dismissal.");
+    dismissing.RecordConversationResponse("Not now, maybe later.", cue.occurredAt);
+    Check(dismissing.Pending().empty() && dismissing.Counters().dismissed == 1,
+        "A natural refusal did not dismiss the conversational opening.");
+}
+
+void TestConversationStyleRepairsAndVaries()
+{
+    revia::agents::ConversationStylePolicy policy;
+    const std::vector<conversationMessage> context = {
+        {"user", "How are you?"},
+        {"assistant", "I'm running smoothly."},
+        {"user", "I'm not down. I was asking how you are."}
+    };
+
+    const std::string guidance = policy.BuildTurnGuidance(context.back().content, context);
+    Check(guidance.find("correct a mistaken assumption") != std::string::npos,
+        "A direct user correction did not produce repair guidance.");
+    Check(guidance.find("I'm running smoothly.") != std::string::npos,
+        "Recent assistant phrasing was not supplied to the variation policy.");
+    Check(guidance.find("generic invitation") != std::string::npos,
+        "The turn policy did not prohibit canned follow-up prompts.");
+
+    const std::string preference = policy.BuildTurnGuidance(
+        "I prefer dark themes.", context);
+    Check(preference.find("not an action request") != std::string::npos,
+        "A preference statement could still be mistaken for an executed setting change.");
+    const std::string motive = policy.BuildTurnGuidance(
+        "Why do you think I prefer them?", context);
+    Check(motive.find("Do not infer a reason") != std::string::npos,
+        "A question about the user's motive could still trigger an invented explanation.");
+    const std::string acknowledgement = policy.BuildTurnGuidance("Good.", context);
+    Check(acknowledgement.find("at most one short sentence") != std::string::npos,
+        "A brief social acknowledgement did not request a brief response.");
+}
+
+void TestConversationStyleRemovesOnlyStockTail()
+{
+    revia::agents::ConversationStylePolicy policy;
+    const std::vector<conversationMessage> emptyContext;
+    const std::string cleaned = policy.RefineReply(
+        "",
+        emptyContext,
+        "I'm running smoothly. What's on your mind?");
+    Check(cleaned == "I'm running smoothly.",
+        "A stock follow-up survived reply refinement: " + cleaned);
+    Check(policy.IsGenericContinuation("What are we working on?"),
+        "A known stock question would still be spoken as a streamed fragment.");
+    Check(policy.IsGenericContinuation("What’s on your mind?"),
+        "A curly apostrophe bypassed the stock-question filter.");
+    Check(policy.RefineReply("", emptyContext,
+        "Glad to hear it. If you need anything, I'm here.") ==
+        "Glad to hear it.",
+        "A stock support offer survived reply refinement.");
+
+    const std::string usefulQuestion =
+        "The server is reachable. Which port did you configure?";
+    Check(policy.RefineReply("", emptyContext, usefulQuestion) == usefulQuestion,
+        "A necessary, specific clarification question was removed.");
+    Check(policy.RefineReply("", emptyContext, "What's next?") == "What's next?",
+        "A reply made entirely of a question was erased instead of preserved.");
+
+    const std::vector<conversationMessage> preferenceContext = {
+        {"user", "I prefer dark themes."}
+    };
+    Check(policy.RefineReply(
+        "I prefer dark themes.", preferenceContext, "Okay. Dark mode is on.") ==
+        "Got it. I'll treat that as a preference, not a request to change anything.",
+        "A preference statement was allowed to become a fabricated action.");
+    Check(policy.RefineReply(
+        "How are you?", {}, "No alerts. Dark mode is still active and code is compiling.") ==
+        "I'm doing well. Curious, focused, and glad to be here with you.",
+        "A social wellbeing question was allowed to fabricate runtime state.");
+    Check(policy.RefineReply(
+        "I'm not down. I was only asking how you are.", {},
+        "Oh. I'm good. Just sitting here, watching the code compile.") ==
+        "Got it—you weren't saying you were down. I'm doing well.",
+        "A corrected wellbeing question retained a fabricated physical scene.");
+    Check(policy.RefineReply(
+        "I'm not down. I was only asking how you are.", {},
+        "Right. I was just checking in. You're not down.") ==
+        "Got it—you weren't saying you were down. I'm doing well.",
+        "Correction repair reversed who was asking about whom.");
+    Check(policy.RefineReply(
+        "Good.", {}, "No pending tasks. If you need anything, I'm here.") ==
+        "Glad to hear it.",
+        "A brief acknowledgement expanded into a fabricated status report.");
+
+    const std::vector<conversationMessage> unknownMotiveContext = {
+        {"user", "I prefer dark themes."},
+        {"assistant", "Got it."},
+        {"user", "Why do you think I prefer them?"}
+    };
+    Check(policy.RefineReply(
+        "Why do you think I prefer them?",
+        unknownMotiveContext,
+        "You probably find bright screens distracting.") ==
+        "I don't know yet—you've told me the preference, not the reason.",
+        "An unsupported explanation of the user's motive survived refinement.");
+    Check(policy.RefineReply(
+        "Why do you think I prefer them?",
+        unknownMotiveContext,
+        "I don't know yet. Maybe it is the contrast.") ==
+        "I don't know yet—you've told me the preference, not the reason.",
+        "A hedge was allowed to introduce an unsupported motive afterward.");
+
+    const std::vector<conversationMessage> knownMotiveContext = {
+        {"user", "I prefer dark themes because bright screens hurt my eyes."},
+        {"assistant", "That makes sense."},
+        {"user", "Why do you think I prefer them?"}
+    };
+    const std::string groundedMotive = "Because you said bright screens hurt your eyes.";
+    Check(policy.RefineReply(
+        "Why do you think I prefer them?", knownMotiveContext, groundedMotive) == groundedMotive,
+        "A motive grounded in explicit conversation context was incorrectly replaced.");
+}
+
+void TestConversationContextKeepsCoherentRecentTurns()
+{
+    conversationContext context;
+    for (int turn = 0; turn < 20; ++turn)
+    {
+        context.AddMessage("user", "user turn " + std::to_string(turn));
+        context.AddMessage("assistant", "assistant turn " + std::to_string(turn));
+    }
+    const std::vector<conversationMessage> recent = context.GetRecentMessages();
+    Check(recent.size() == 24,
+        "Conversation history did not keep twelve recent exchanges.");
+    Check(!recent.empty() && recent.front().role == "user" &&
+        recent.front().content == "user turn 8",
+        "Conversation trimming left an orphaned reply or removed the wrong turns.");
+    Check(recent.back().content == "assistant turn 19",
+        "Conversation trimming discarded the newest reply.");
+}
+
+void TestHardwarePlanScalesParallelLanesConservatively()
+{
+    const llamaHardwarePlan laptop = PlanLlamaHardware(8192, 16384, 4600);
+    Check(laptop.parallelRequests == 1 && laptop.contextTokens == 4096,
+        "An 8-GiB laptop should keep one latency-first slot and a safe context.");
+
+    const llamaHardwarePlan desktop = PlanLlamaHardware(24576, 65536, 4600);
+    Check(desktop.parallelRequests == 2 && desktop.contextTokens == 65536,
+        "A high-memory desktop did not gain a second inference slot.");
+
+    const llamaHardwarePlan workstation = PlanLlamaHardware(49152, 131072, 4096);
+    Check(workstation.parallelRequests == 3,
+        "A workstation-class GPU did not gain three bounded inference slots.");
+}
+
+void TestInferenceSchedulerPrioritizesConversation()
+{
+    using revia::llm::InferencePriority;
+    revia::llm::InferenceScheduler scheduler;
+    scheduler.SetCapacity(1);
+    auto held = scheduler.Acquire(InferencePriority::Interactive);
+    Check(static_cast<bool>(held), "The first inference slot was not granted.");
+
+    std::mutex orderMutex;
+    std::vector<std::string> order;
+    std::jthread background([&]()
+    {
+        auto lease = scheduler.Acquire(InferencePriority::Background);
+        if (lease)
+        {
+            std::lock_guard lock(orderMutex);
+            order.push_back("background");
+        }
+    });
+    for (int attempt = 0; attempt < 100 && scheduler.Snapshot().waitingBackground == 0; ++attempt)
+    {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+
+    std::jthread interactive([&]()
+    {
+        auto lease = scheduler.Acquire(InferencePriority::Interactive);
+        if (lease)
+        {
+            std::lock_guard lock(orderMutex);
+            order.push_back("interactive");
+        }
+    });
+    for (int attempt = 0; attempt < 100 && scheduler.Snapshot().waitingInteractive == 0; ++attempt)
+    {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+
+    held = {};
+    interactive.join();
+    background.join();
+    Check(order.size() == 2 && order.front() == "interactive",
+        "Background memory inference entered before a waiting conversation turn.");
+}
+
+void TestInferenceSchedulerPreemptsBackgroundForConversation()
+{
+    using revia::llm::InferencePriority;
+    revia::llm::InferenceScheduler scheduler;
+    scheduler.SetCapacity(1);
+    auto background = scheduler.Acquire(InferencePriority::Background);
+    const std::stop_token preemption = background.PreemptionToken();
+    Check(background && preemption.stop_possible(),
+        "A background inference lease had no preemption token.");
+
+    std::atomic<bool> interactiveEntered = false;
+    std::jthread interactive([&]()
+    {
+        auto lease = scheduler.Acquire(InferencePriority::Interactive);
+        interactiveEntered.store(static_cast<bool>(lease));
+    });
+    for (int attempt = 0; attempt < 100 && scheduler.Snapshot().waitingInteractive == 0; ++attempt)
+    {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    Check(preemption.stop_requested(),
+        "A waiting conversation did not ask active background inference to yield.");
+    background = {};
+    interactive.join();
+    Check(interactiveEntered.load(),
+        "Conversation did not enter after background inference yielded.");
 }
 
 void TestStreamedReplyIsNeverTruncated()
@@ -2521,10 +3415,25 @@ int main(const int argc, char** argv)
             std::cout << detail << '\n';
             return 0;
         }
+#ifdef _WIN32
+        if (argc > 1 && std::string(argv[1]) == "--uia-resolver-live")
+        {
+            RunVisionUiaLiveFixture();
+            std::cout << "Vision-to-UIA live fixture passed.\n";
+            return 0;
+        }
+        if (argc > 1 && std::string(argv[1]) == "--vision-action-notepad-live")
+        {
+            RunVisionActionNotepadLive();
+            return 0;
+        }
+#endif
         TestPolicyBoundaries();
         TestParser();
         TestDesktopActionPolicy();
         TestConfigurationFailsClosed();
+        TestDesktopActionRateLimitsAreDeterministic();
+        TestDesktopRateLimitIsAudited();
         TestLlamaServerProcessRejectsMissingFiles();
         TestLlamaServerProcessStopIsBounded();
         TestStructuredLongTermMemory();
@@ -2532,6 +3441,8 @@ int main(const int argc, char** argv)
         TestBackgroundMemoryAgentLifecycle();
         TestDispatcherGate();
         TestFilesystemExecutorAndAudit();
+        TestVisionActionParserFailsClosed();
+        TestVisionResolverRequiresGeometryNameAndIdentity();
         TestRuntimeEventBus();
         TestAffectController();
         TestSpeechTextNormalization();
@@ -2564,6 +3475,9 @@ int main(const int argc, char** argv)
         TestActivityHistoryStaysBounded();
         TestActivityHistoryAnswersTheStageQuestion();
         TestAttentionKeepsSilenceAsTheDefault();
+        TestConversationStartersNeedARealTransition();
+        TestConversationStartersRecognizeReturnAndSwitching();
+        TestConversationStarterContinuesWithoutSlashCommands();
         TestAttentionHardSuppressions();
         TestAttentionCooldownsAndBudget();
         TestAttentionReducesItsOwnRateWhenWrong();
@@ -2578,6 +3492,12 @@ int main(const int argc, char** argv)
         TestFragmenterStartsSpeakingBeforeGenerationEnds();
         TestFragmenterDoesNotCutMidClause();
         TestPostureReachesTheModel();
+        TestConversationStyleRepairsAndVaries();
+        TestConversationStyleRemovesOnlyStockTail();
+        TestConversationContextKeepsCoherentRecentTurns();
+        TestHardwarePlanScalesParallelLanesConservatively();
+        TestInferenceSchedulerPrioritizesConversation();
+        TestInferenceSchedulerPreemptsBackgroundForConversation();
         TestStreamedReplyIsNeverTruncated();
         TestArbiterMergesOneThought();
         TestArbiterIgnoresNoiseButNeverTypedInput();

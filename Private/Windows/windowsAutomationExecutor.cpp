@@ -86,6 +86,52 @@ namespace
         return result;
     }
 
+    std::wstring ElementAutomationId(IUIAutomationElement* element)
+    {
+        BSTR value = nullptr;
+        if (FAILED(element->get_CurrentAutomationId(&value)) || value == nullptr)
+        {
+            return {};
+        }
+        std::wstring result(value, SysStringLen(value));
+        SysFreeString(value);
+        return result;
+    }
+
+    std::string ElementRuntimeId(IUIAutomationElement* element)
+    {
+        SAFEARRAY* values = nullptr;
+        if (FAILED(element->GetRuntimeId(&values)) || values == nullptr)
+        {
+            return {};
+        }
+        LONG lower = 0;
+        LONG upper = -1;
+        if (FAILED(SafeArrayGetLBound(values, 1, &lower)) ||
+            FAILED(SafeArrayGetUBound(values, 1, &upper)))
+        {
+            SafeArrayDestroy(values);
+            return {};
+        }
+        std::ostringstream stream;
+        for (LONG index = lower; index <= upper; ++index)
+        {
+            int value = 0;
+            if (FAILED(SafeArrayGetElement(values, &index, &value)))
+            {
+                SafeArrayDestroy(values);
+                return {};
+            }
+            if (index > lower)
+            {
+                stream << '.';
+            }
+            stream << value;
+        }
+        SafeArrayDestroy(values);
+        return stream.str();
+    }
+
     std::wstring ProcessFileName(const int processId)
     {
         HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE,
@@ -154,12 +200,67 @@ namespace
         return match;
     }
 
+    IUIAutomationElement* FindResolvedControl(
+        IUIAutomation* automation,
+        IUIAutomationElement* window,
+        const ActionRequest& request)
+    {
+        IUIAutomationCondition* condition = nullptr;
+        IUIAutomationElementArray* elements = nullptr;
+        if (FAILED(automation->CreateTrueCondition(&condition)) || condition == nullptr ||
+            FAILED(window->FindAll(TreeScope_Descendants, condition, &elements)) ||
+            elements == nullptr)
+        {
+            Release(elements);
+            Release(condition);
+            return nullptr;
+        }
+
+        IUIAutomationElement* match = nullptr;
+        int count = 0;
+        elements->get_Length(&count);
+        for (int index = 0; index < count; ++index)
+        {
+            IUIAutomationElement* candidate = nullptr;
+            if (FAILED(elements->GetElement(index, &candidate)) || candidate == nullptr)
+            {
+                continue;
+            }
+            CONTROLTYPEID controlType = 0;
+            candidate->get_CurrentControlType(&controlType);
+            const bool matches =
+                ElementRuntimeId(candidate) == request.resolution.resolvedRuntimeId &&
+                (request.resolution.resolvedName.empty() ||
+                    WideToUtf8(ElementName(candidate)) == request.resolution.resolvedName) &&
+                (request.resolution.resolvedAutomationId.empty() ||
+                    WideToUtf8(ElementAutomationId(candidate)) ==
+                        request.resolution.resolvedAutomationId) &&
+                (request.resolution.resolvedControlType == 0 ||
+                    controlType == request.resolution.resolvedControlType);
+            if (matches)
+            {
+                match = candidate;
+                break;
+            }
+            Release(candidate);
+        }
+        Release(elements);
+        Release(condition);
+        return match;
+    }
+
     IUIAutomationElement* FindControl(
         IUIAutomation* automation,
         IUIAutomationElement* window,
-        const std::string& control)
+        const ActionRequest& request)
     {
-        const std::wstring wanted = Utf8ToWide(control);
+        if (request.resolution.visionResolved)
+        {
+            // Never fall back to a name or coordinate after a typed resolution. If the
+            // exact element disappeared while confirmation was open, refusing is safer.
+            return FindResolvedControl(automation, window, request);
+        }
+        const std::wstring wanted = Utf8ToWide(request.control);
         VARIANT nameValue;
         VariantInit(&nameValue);
         nameValue.vt = VT_BSTR;
@@ -293,11 +394,13 @@ ActionResult WindowsAutomationExecutor::Execute(
     }
     else
     {
-        IUIAutomationElement* control = FindControl(automation, window, request.control);
+        IUIAutomationElement* control = FindControl(automation, window, request);
         result.attempted = true;
         if (control == nullptr)
         {
-            result.message = "No matching control was found.";
+            result.message = request.resolution.visionResolved
+                ? "The vision-resolved UI Automation element changed or disappeared; no action was taken."
+                : "No matching control was found.";
         }
         else if (request.type == ActionType::SetControlText)
         {

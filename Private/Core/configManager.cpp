@@ -343,6 +343,26 @@ bool configManager::LoadSettings(appSettings& outSettings) const
             {
                 outSettings.vision.maxResponseTokens = visionData["maxResponseTokens"].get<int>();
             }
+            if (visionData.contains("resolutionConfidence"))
+            {
+                outSettings.vision.resolutionConfidence =
+                    visionData["resolutionConfidence"].get<double>();
+            }
+            if (visionData.contains("minimumNameAgreement"))
+            {
+                outSettings.vision.minimumNameAgreement =
+                    visionData["minimumNameAgreement"].get<double>();
+            }
+            if (visionData.contains("ambiguityMargin"))
+            {
+                outSettings.vision.ambiguityMargin =
+                    visionData["ambiguityMargin"].get<double>();
+            }
+            if (visionData.contains("maxResolverElements"))
+            {
+                outSettings.vision.maxResolverElements =
+                    visionData["maxResolverElements"].get<int>();
+            }
         }
 
         if (data.contains("initiative"))
@@ -386,6 +406,31 @@ bool configManager::LoadSettings(appSettings& outSettings) const
             {
                 outSettings.initiative.bSuppressWhenFullScreen =
                     initiativeData["suppressWhenFullScreen"].get<bool>();
+            }
+            if (initiativeData.contains("focusSessionMinutes"))
+            {
+                outSettings.initiative.focusSessionMinutes =
+                    initiativeData["focusSessionMinutes"].get<int>();
+            }
+            if (initiativeData.contains("returnAfterMinutes"))
+            {
+                outSettings.initiative.returnAfterMinutes =
+                    initiativeData["returnAfterMinutes"].get<int>();
+            }
+            if (initiativeData.contains("contextSwitchWindowSeconds"))
+            {
+                outSettings.initiative.contextSwitchWindowSeconds =
+                    initiativeData["contextSwitchWindowSeconds"].get<int>();
+            }
+            if (initiativeData.contains("contextSwitchCount"))
+            {
+                outSettings.initiative.contextSwitchCount =
+                    initiativeData["contextSwitchCount"].get<int>();
+            }
+            if (initiativeData.contains("cueMaxAgeMinutes"))
+            {
+                outSettings.initiative.cueMaxAgeMinutes =
+                    initiativeData["cueMaxAgeMinutes"].get<int>();
             }
         }
 
@@ -463,6 +508,38 @@ bool configManager::LoadSettings(appSettings& outSettings) const
                 }
             }
         }
+
+        if (data.contains("inputArbiter"))
+        {
+            const json& arbiterData = data["inputArbiter"];
+            if (arbiterData.contains("mergeWindowMs"))
+            {
+                outSettings.inputArbiter.mergeWindowMs =
+                    arbiterData["mergeWindowMs"].get<int>();
+            }
+            if (arbiterData.contains("minimumMeaningfulCharacters"))
+            {
+                outSettings.inputArbiter.minimumMeaningfulCharacters =
+                    arbiterData["minimumMeaningfulCharacters"].get<int>();
+            }
+            if (arbiterData.contains("maxQueuedInputs"))
+            {
+                outSettings.inputArbiter.maxQueuedInputs =
+                    arbiterData["maxQueuedInputs"].get<int>();
+            }
+            if (arbiterData.contains("ignoredFragments") &&
+                arbiterData["ignoredFragments"].is_array())
+            {
+                for (const auto& entry : arbiterData["ignoredFragments"])
+                {
+                    if (entry.is_string())
+                    {
+                        outSettings.inputArbiter.ignoredFragments.push_back(
+                            entry.get<std::string>());
+                    }
+                }
+            }
+        }
     }
     catch (const std::exception&)
     {
@@ -533,6 +610,20 @@ bool configManager::LoadSettings(appSettings& outSettings) const
                 outSettings.speechRecognition.threads > 64)) ||
         outSettings.vision.maxResponseTokens < 64 ||
         outSettings.vision.maxResponseTokens > 4096 ||
+        outSettings.vision.resolutionConfidence < 0.5 ||
+        outSettings.vision.resolutionConfidence > 1.0 ||
+        outSettings.vision.minimumNameAgreement < 0.1 ||
+        outSettings.vision.minimumNameAgreement > 1.0 ||
+        outSettings.vision.ambiguityMargin < 0.0 ||
+        outSettings.vision.ambiguityMargin > 0.5 ||
+        outSettings.vision.maxResolverElements < 25 ||
+        outSettings.vision.maxResolverElements > 5000 ||
+        outSettings.inputArbiter.mergeWindowMs < 0 ||
+        outSettings.inputArbiter.mergeWindowMs > 10000 ||
+        outSettings.inputArbiter.minimumMeaningfulCharacters < 1 ||
+        outSettings.inputArbiter.minimumMeaningfulCharacters > 64 ||
+        outSettings.inputArbiter.maxQueuedInputs < 1 ||
+        outSettings.inputArbiter.maxQueuedInputs > 64 ||
         // Fails closed like every other section: a config that would observe faster than
         // a human can switch windows is rejected rather than quietly clamped into
         // something reasonable.
@@ -556,6 +647,16 @@ bool configManager::LoadSettings(appSettings& outSettings) const
         outSettings.initiative.maxUtterancesPerHour > 30 ||
         outSettings.initiative.cooldownSeconds < 30 ||
         outSettings.initiative.quietInputSeconds < 1 ||
+        outSettings.initiative.focusSessionMinutes < 2 ||
+        outSettings.initiative.focusSessionMinutes > 240 ||
+        outSettings.initiative.returnAfterMinutes < 2 ||
+        outSettings.initiative.returnAfterMinutes > 1440 ||
+        outSettings.initiative.contextSwitchWindowSeconds < 60 ||
+        outSettings.initiative.contextSwitchWindowSeconds > 3600 ||
+        outSettings.initiative.contextSwitchCount < 4 ||
+        outSettings.initiative.contextSwitchCount > 30 ||
+        outSettings.initiative.cueMaxAgeMinutes < 1 ||
+        outSettings.initiative.cueMaxAgeMinutes > 60 ||
         outSettings.initiative.minimumPrecision < 0.0f ||
         outSettings.initiative.minimumPrecision > 1.0f ||
         outSettings.bargeIn.energyThreshold < 100 ||

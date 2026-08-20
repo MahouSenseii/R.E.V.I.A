@@ -17,6 +17,10 @@ public:
     std::vector<conversationMessage> GetRecentMessages() const;
 
 private:
+    [[nodiscard]] std::size_t CharacterCount() const;
+    void TrimToBudget();
+
     std::vector<conversationMessage> messages;
-    int maxMessages = 10;
+    std::size_t maxMessages = 24;
+    std::size_t maxCharacters = 14000;
 };

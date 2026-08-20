@@ -10,7 +10,13 @@ responseOutput ConversationAgent::Execute(
     const std::stop_token stopToken,
     messageRouter::DeltaHandler onDelta) const
 {
-    return router.RouteMessage(input, context, stopToken, std::move(onDelta));
+    responseOutput output =
+        router.RouteMessage(input, context, stopToken, std::move(onDelta));
+    if (output.bSuccess)
+    {
+        output.response = stylePolicy.RefineReply(input, context, output.response);
+    }
+    return output;
 }
 
 } // namespace revia::agents

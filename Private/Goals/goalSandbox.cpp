@@ -245,11 +245,14 @@ SandboxRehearsal GoalSandbox::Prepare(const Goal& goal)
         {"mode", "approved_scope"},
         {"approvedRoots", approvedRootsJson},
         {"approvedApplications", nlohmann::json::array()},
+        {"approvedControls", nlohmann::json::object()},
         {"autoApproveRiskThrough", actions::ToString(goal.scope.autoApproveRiskThrough)},
         {"createMissingApprovedRoots", false},
         {"maxReadBytes", goal.scope.maxReadBytes},
         {"maxDirectoryEntries", goal.scope.maxDirectoryEntries},
-        {"maxAffectedEntries", goal.scope.maxAffectedEntries}
+        {"maxAffectedEntries", goal.scope.maxAffectedEntries},
+        {"maxDesktopActionsPerMinute", goal.scope.maxDesktopActionsPerMinute},
+        {"minimumDesktopActionIntervalMs", goal.scope.minimumDesktopActionIntervalMs}
     };
     result.capabilityConfig = root / "capabilities.json";
     {

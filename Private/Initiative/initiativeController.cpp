@@ -1,7 +1,9 @@
 #include "Initiative/initiativeController.h"
 
 #include <algorithm>
+#include <cctype>
 #include <sstream>
+#include <string_view>
 #include <utility>
 
 namespace revia::initiative
@@ -27,6 +29,9 @@ void InitiativeController::Configure(initiativeSettings settings)
     std::lock_guard lock(mutex);
     configuration = settings;
     policy = AttentionPolicy(std::move(settings));
+    proposals.clear();
+    lastSubject.clear();
+    nextId = 1;
 }
 
 bool InitiativeController::BuildActivityProposal(
@@ -170,12 +175,42 @@ bool InitiativeController::BuildUnfinishedGoalProposal(
     return true;
 }
 
+bool InitiativeController::BuildConversationProposal(
+    const std::vector<StarterCue>& cues,
+    Proposal& outProposal)
+{
+    if (cues.empty())
+    {
+        return false;
+    }
+    const auto strongest = std::max_element(
+        cues.begin(),
+        cues.end(),
+        [](const StarterCue& left, const StarterCue& right)
+        {
+            if (left.confidence != right.confidence)
+            {
+                return left.confidence < right.confidence;
+            }
+            return left.occurredAt < right.occurredAt;
+        });
+    outProposal.kind = Proposal::Kind::ConversationStarter;
+    outProposal.message = strongest->messageIntent;
+    outProposal.evidence = strongest->evidence;
+    outProposal.confidence = strongest->confidence;
+    return true;
+}
+
 bool InitiativeController::BuildProposal(const Evidence& evidence, Proposal& outProposal)
 {
     // Ordered by how concrete the evidence is, not by how interesting it sounds. An
     // unfinished goal is something the user actually asked for; a busy session is only an
     // observation about it, so it never displaces one.
     if (BuildUnfinishedGoalProposal(evidence.unfinishedGoals, outProposal))
+    {
+        return true;
+    }
+    if (BuildConversationProposal(evidence.conversationCues, outProposal))
     {
         return true;
     }
@@ -237,6 +272,49 @@ void InitiativeController::Accept(const std::string& proposalId)
     }
 }
 
+void InitiativeController::RecordConversationResponse(
+    const std::string& response,
+    const std::chrono::system_clock::time_point when)
+{
+    std::string normalized;
+    normalized.reserve(response.size());
+    for (const unsigned char character : response)
+    {
+        if (std::isalnum(character) != 0 || std::isspace(character) != 0)
+        {
+            normalized.push_back(static_cast<char>(std::tolower(character)));
+        }
+    }
+    constexpr std::string_view Dismissals[] = {
+        "not now", "no thanks", "maybe later", "leave me alone", "dont interrupt",
+        "do not interrupt", "stop interrupting", "quiet please"
+    };
+    const bool dismissed = std::any_of(std::begin(Dismissals), std::end(Dismissals),
+        [&normalized](const std::string_view phrase)
+        {
+            return normalized.find(phrase) != std::string::npos;
+        });
+
+    std::lock_guard lock(mutex);
+    for (auto& entry : proposals)
+    {
+        if (entry.second == ProposalOutcome::Pending &&
+            entry.first.kind == Proposal::Kind::ConversationStarter)
+        {
+            if (dismissed)
+            {
+                entry.second = ProposalOutcome::Dismissed;
+                policy.RecordDismissed(when);
+            }
+            else
+            {
+                entry.second = ProposalOutcome::Accepted;
+                policy.RecordAccepted();
+            }
+        }
+    }
+}
+
 void InitiativeController::Dismiss(
     const std::string& proposalId,
     const std::chrono::system_clock::time_point when)
@@ -248,6 +326,19 @@ void InitiativeController::Dismiss(
         {
             entry.second = ProposalOutcome::Dismissed;
             policy.RecordDismissed(when);
+            return;
+        }
+    }
+}
+
+void InitiativeController::Expire(const std::string& proposalId)
+{
+    std::lock_guard lock(mutex);
+    for (auto& entry : proposals)
+    {
+        if (entry.first.id == proposalId && entry.second == ProposalOutcome::Pending)
+        {
+            entry.second = ProposalOutcome::Expired;
             return;
         }
     }

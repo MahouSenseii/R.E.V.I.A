@@ -49,6 +49,8 @@ public:
     InputArbiter() = default;
     explicit InputArbiter(inputArbiterSettings settings);
 
+    void Configure(inputArbiterSettings settings);
+
     [[nodiscard]] InputVerdict Offer(
         const std::string& text,
         InputSource source,

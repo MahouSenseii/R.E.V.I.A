@@ -3,6 +3,28 @@
 #include "Library/structLibrary.h"
 
 #include <string>
+#include <cstdint>
+
+struct llamaHardwarePlan
+{
+    int contextTokens = 4096;
+    int parallelRequests = 1;
+};
+
+struct llamaHardwareMemory
+{
+    std::uint64_t dedicatedVideoMemoryMiB = 0;
+    std::uint64_t systemMemoryMiB = 0;
+};
+
+[[nodiscard]] llamaHardwareMemory DetectLlamaHardwareMemory();
+
+// Pure hardware policy used by automatic startup and tests. Parallel slots are granted
+// conservatively after subtracting VRAM reserved for another local model such as Qwen TTS.
+[[nodiscard]] llamaHardwarePlan PlanLlamaHardware(
+    std::uint64_t dedicatedVideoMemoryMiB,
+    std::uint64_t systemMemoryMiB,
+    int reservedVramMiB);
 
 class llamaCppServerProcess
 {

@@ -155,6 +155,44 @@ actions::PolicyDecision CapabilityPolicy::Evaluate(
             decision.reason = "The desktop action requires a control name or automation id.";
             return decision;
         }
+        if (request.type == actions::ActionType::SetControlText ||
+            request.type == actions::ActionType::InvokeControl)
+        {
+            const auto controlScope = std::find_if(
+                settings.approvedControls.begin(),
+                settings.approvedControls.end(),
+                [&requestedApplication](const auto& entry)
+                {
+                    return Lower(entry.first) == requestedApplication;
+                });
+            if (controlScope == settings.approvedControls.end())
+            {
+                decision.reason = "The application has no approved control scope.";
+                return decision;
+            }
+            const auto matchesApprovedControl = [&](const std::string& candidate)
+            {
+                if (candidate.empty())
+                {
+                    return false;
+                }
+                const std::string loweredCandidate = Lower(candidate);
+                return std::any_of(
+                    controlScope->second.begin(),
+                    controlScope->second.end(),
+                    [&loweredCandidate](const std::string& allowed)
+                    {
+                        return allowed == "*" || Lower(allowed) == loweredCandidate;
+                    });
+            };
+            if (!matchesApprovedControl(request.control) &&
+                !matchesApprovedControl(request.resolution.resolvedName) &&
+                !matchesApprovedControl(request.resolution.resolvedAutomationId))
+            {
+                decision.reason = "The target control is outside the application's approved control list.";
+                return decision;
+            }
+        }
         if (request.type == actions::ActionType::SetControlText && request.value.empty())
         {
             decision.reason = "Setting control text requires a non-empty value.";

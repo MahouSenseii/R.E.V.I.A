@@ -26,6 +26,15 @@ InputArbiter::InputArbiter(inputArbiterSettings settings)
 {
 }
 
+void InputArbiter::Configure(inputArbiterSettings settings)
+{
+    std::lock_guard lock(mutex);
+    configuration = std::move(settings);
+    queued.clear();
+    lastAccepted.clear();
+    lastAcceptedAt = {};
+}
+
 std::string InputArbiter::Normalize(const std::string& text)
 {
     std::string normalized;

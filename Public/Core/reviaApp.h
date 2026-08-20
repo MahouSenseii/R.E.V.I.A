@@ -1,47 +1,19 @@
 #pragma once
-#include "Agents/turnCoordinator.h"
 
-#include "Core/commandManager.h"
-#include "Core/configManager.h"
-#include "Core/logger.h"
-#include "Core/messageRouter.h"
-#include "Core/conversationContext.h"
-#include "Library/enumLibrary.h"
-#include "Actions/actionRuntime.h"
-#include "LLM/LLamaCPP/llamaCppServerProcess.h"
+#include "Runtime/reviaSession.h"
 
-#include <string>
-#include <cstdint>
-
+// Thin terminal shell. ReviaSession is the only runtime owner used by both desktop and
+// CLI, so behavior, workers, cancellation, memory, and shutdown cannot drift between two
+// separate application implementations.
 class reviaApp
 {
 public:
-    reviaApp();
-    ~reviaApp();
-
     void Run();
 
 private:
+    bool ConfirmAction(
+        const revia::actions::ActionRequest& request,
+        const revia::actions::PolicyDecision& decision) const;
 
-    bool TryHandleActionInput(const std::string& input);
-    bool EnsureLLMAvailable();
-    bool EnsureEmbeddingAvailable();
-    void PrintMemoryAgentEvents();
-    void ExecuteAction(revia::actions::ActionRequest request);
-    static void PrintActionOutcome(const revia::actions::ActionOutcome& outcome);
-
-    logger appLogger;
-    messageRouter router;
-    configManager config;
-    commandManager commands;
-    conversationContext context;
-    appSettings settings;
-    aiProfile profile;
-    revia::actions::ActionRuntime actionRuntime;
-    llamaCppServerProcess llamaServerProcess;
-    llamaCppServerProcess embeddingServerProcess;
-    revia::agents::TurnCoordinator turnCoordinator;
-
-    bool bIsRunning = false;
-    std::uint64_t turnCounter = 0;
+    revia::runtime::ReviaSession session;
 };

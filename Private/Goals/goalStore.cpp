@@ -221,11 +221,14 @@ nlohmann::json ScopeToJson(const actions::CapabilitySettings& scope)
         {"mode", actions::ToString(scope.mode)},
         {"approved_roots", roots},
         {"approved_applications", scope.approvedApplications},
+        {"approved_controls", scope.approvedControls},
         {"auto_approve_risk_through", actions::ToString(scope.autoApproveRiskThrough)},
         {"create_missing_approved_roots", scope.createMissingApprovedRoots},
         {"max_read_bytes", scope.maxReadBytes},
         {"max_directory_entries", scope.maxDirectoryEntries},
-        {"max_affected_entries", scope.maxAffectedEntries}
+        {"max_affected_entries", scope.maxAffectedEntries},
+        {"max_desktop_actions_per_minute", scope.maxDesktopActionsPerMinute},
+        {"minimum_desktop_action_interval_ms", scope.minimumDesktopActionIntervalMs}
     };
 }
 
@@ -260,6 +263,24 @@ actions::CapabilitySettings ScopeFromJson(const nlohmann::json& value)
             }
         }
     }
+    if (value.contains("approved_controls") && value.at("approved_controls").is_object())
+    {
+        for (auto entry = value.at("approved_controls").begin();
+             entry != value.at("approved_controls").end(); ++entry)
+        {
+            if (!entry.value().is_array())
+            {
+                continue;
+            }
+            for (const auto& control : entry.value())
+            {
+                if (control.is_string())
+                {
+                    scope.approvedControls[entry.key()].push_back(control.get<std::string>());
+                }
+            }
+        }
+    }
     scope.autoApproveRiskThrough = actions::RiskLevelFromString(
         value.value("auto_approve_risk_through", std::string()));
     scope.createMissingApprovedRoots =
@@ -267,6 +288,12 @@ actions::CapabilitySettings ScopeFromJson(const nlohmann::json& value)
     scope.maxReadBytes = value.value("max_read_bytes", scope.maxReadBytes);
     scope.maxDirectoryEntries = value.value("max_directory_entries", scope.maxDirectoryEntries);
     scope.maxAffectedEntries = value.value("max_affected_entries", scope.maxAffectedEntries);
+    scope.maxDesktopActionsPerMinute = value.value(
+        "max_desktop_actions_per_minute",
+        scope.maxDesktopActionsPerMinute);
+    scope.minimumDesktopActionIntervalMs = value.value(
+        "minimum_desktop_action_interval_ms",
+        scope.minimumDesktopActionIntervalMs);
     return scope;
 }
 

@@ -1,6 +1,7 @@
 #include "Policy/permissionStore.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cstdlib>
 #include <fstream>
 #include <limits>
@@ -90,6 +91,10 @@ bool PermissionStore::Load(
             data, "maxDirectoryEntries", 500U, 1U, 10000U);
         settings.maxAffectedEntries = BoundedInteger<std::size_t>(
             data, "maxAffectedEntries", 200U, 1U, 100000U);
+        settings.maxDesktopActionsPerMinute = BoundedInteger<int>(
+            data, "maxDesktopActionsPerMinute", 12, 1, 600);
+        settings.minimumDesktopActionIntervalMs = BoundedInteger<int>(
+            data, "minimumDesktopActionIntervalMs", 250, 0, 60000);
 
         if (!data.contains("approvedRoots") || !data["approvedRoots"].is_array())
         {
@@ -128,6 +133,65 @@ bool PermissionStore::Load(
                     return false;
                 }
                 settings.approvedApplications.push_back(application.get<std::string>());
+            }
+        }
+
+        if (data.contains("approvedControls"))
+        {
+            if (!data["approvedControls"].is_object())
+            {
+                outError = "approvedControls must be an object keyed by executable name.";
+                return false;
+            }
+            for (auto entry = data["approvedControls"].begin();
+                 entry != data["approvedControls"].end(); ++entry)
+            {
+                if (entry.key().empty() || !entry.value().is_array() || entry.value().empty())
+                {
+                    outError = "Each approvedControls entry requires a non-empty control array.";
+                    return false;
+                }
+                std::vector<std::string> controls;
+                for (const auto& control : entry.value())
+                {
+                    if (!control.is_string() || control.get<std::string>().empty())
+                    {
+                        outError = "Every approved control must be a non-empty string.";
+                        return false;
+                    }
+                    controls.push_back(control.get<std::string>());
+                }
+                settings.approvedControls.emplace(entry.key(), std::move(controls));
+            }
+        }
+
+        for (const std::string& application : settings.approvedApplications)
+        {
+            const std::string loweredApplication = [&application]()
+            {
+                std::string value = application;
+                std::transform(value.begin(), value.end(), value.begin(), [](const unsigned char c)
+                {
+                    return static_cast<char>(std::tolower(c));
+                });
+                return value;
+            }();
+            const bool hasControlScope = std::any_of(
+                settings.approvedControls.begin(),
+                settings.approvedControls.end(),
+                [&loweredApplication](const auto& entry)
+                {
+                    std::string key = entry.first;
+                    std::transform(key.begin(), key.end(), key.begin(), [](const unsigned char c)
+                    {
+                        return static_cast<char>(std::tolower(c));
+                    });
+                    return key == loweredApplication;
+                });
+            if (!hasControlScope)
+            {
+                outError = "Every approved application requires an approvedControls entry.";
+                return false;
             }
         }
 

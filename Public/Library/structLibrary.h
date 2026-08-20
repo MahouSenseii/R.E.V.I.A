@@ -17,7 +17,7 @@ struct responseOutput
     bool bSuccess = false;
     bool bShouldRemember = false;
     bool bShouldSpeak = true;
-    bool bWasStreamed = false;  // true if tokens were already printed during generation
+    bool bWasStreamed = false;  // true when visible deltas were delivered to a consumer
 
     std::string response;
     std::string reason;
@@ -40,7 +40,9 @@ struct llmSettings
     std::string serverExecutable;
     std::string modelPath;
     bool bAutoTune = true;
-    int autoFitTargetMiB = 1024;
+    // Leave enough room for normal desktop GPU use to grow after startup. A one-GiB
+    // reserve proved too narrow on an 8-GiB laptop once the compositor and UI changed.
+    int autoFitTargetMiB = 2048;
     // Set at runtime, not from settings.json. VRAM that llama.cpp must leave free on top
     // of autoFitTargetMiB because another local model still has to load into it. The
     // Qwen3-TTS service chooses CPU over CUDA when free VRAM is below its own threshold,
@@ -137,6 +139,10 @@ struct visionSettings
     bool bEnabled = true;
     bool bRequireConfirmation = true;
     int maxResponseTokens = 768;
+    double resolutionConfidence = 0.72;
+    double minimumNameAgreement = 0.35;
+    double ambiguityMargin = 0.08;
+    int maxResolverElements = 500;
 };
 
 // Stage 6 Tier 0. Window and focus events only: which application is in front and what
@@ -197,7 +203,7 @@ struct inputArbiterSettings
     // answered.
     std::vector<std::string> ignoredFragments = {
         "uh", "um", "erm", "hmm", "mm", "mhm", "ah", "oh", "eh", "huh",
-        "you", "thanks for watching", "thank you", "bye", "[blank_audio]", "..."
+        "you", "thanks for watching", "thank you", "[blank_audio]", "..."
     };
 };
 
@@ -224,6 +230,14 @@ struct initiativeSettings
     float minimumPrecision = 0.34f;
     int precisionSampleFloor = 5;
     bool bSuppressWhenFullScreen = true;
+    // Event-pattern thresholds. Time constrains what counts as meaningful evidence; it
+    // never creates an utterance by itself. A foreground transition must complete the
+    // pattern and wake the initiative worker.
+    int focusSessionMinutes = 12;
+    int returnAfterMinutes = 20;
+    int contextSwitchWindowSeconds = 300;
+    int contextSwitchCount = 6;
+    int cueMaxAgeMinutes = 10;
 };
 
 // Stopping mid-sentence when the user starts talking, the way a person does.

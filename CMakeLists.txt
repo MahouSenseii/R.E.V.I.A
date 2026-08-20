@@ -134,6 +134,8 @@ if(REVIA_BUILD_DESKTOP)
     if(Qt6_FOUND)
         add_executable(ReviaDesktop WIN32
                 "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/main.cpp"
+                "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/pipelinePanel.cpp"
+                "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/pipelinePanel.h"
                 "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/reviaWindow.cpp"
                 "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/reviaWindow.h"
         )

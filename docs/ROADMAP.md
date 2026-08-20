@@ -71,9 +71,23 @@ Exit criteria: Revia can remain on the desktop without stealing focus, the user 
 - Implemented: Microsoft UI Automation inspection, focus, Value-pattern text setting, and Invoke-pattern control activation.
 - Implemented: deny-by-default executable allowlist, supervised confirmation, redacted audit fields, parser tests, and runtime telemetry.
 - Implemented: opt-in local Qwen3-VL screen capture/analysis as a separate perception path, not coordinate-click authority.
-- Remaining: add per-control/rate limits and deterministic app integration fixtures before enabling more applications.
-- Remaining: **wire the vision path to the typed path.** Both halves exist and are not connected. Add a resolver that takes a vision-identified screen region and returns a typed UIA element reference, matching by bounding-box intersection and name agreement, with a confidence threshold below which it refuses. This is what turns the allowlist from "applications someone profiled by hand" into "applications that expose a UIA tree," which is a far larger set, without adding any new execution authority.
-- Remaining: record the resolution evidence in the audit entry — what the model identified, which element it resolved to, and the match confidence — so a wrong resolution is diagnosable after the fact rather than only observable in its consequences.
+- Implemented: **vision-to-typed UIA resolution.** The desktop's `Use screen` path pins the
+  foreground executable from Windows, captures only that foreground window with its real
+  screen-space origin, and discards the capture if focus changes mid-frame. It rejects
+  unapproved applications before model/UIA work, parses only one bounded invoke/value
+  intent, and matches its region against enabled UIA elements using geometry plus
+  accessible-name agreement. Low-confidence and ambiguous matches refuse, with no
+  coordinate fallback.
+- Implemented: execution rechecks the resolved runtime id, name, automation id, and control
+  type after confirmation. Resolution evidence and component scores are written into the
+  ordinary action audit entry. A live Win32 fixture proves the exact element invokes and a
+  changed element refuses.
+- Implemented: every approved application now requires a per-executable control scope.
+  Mutable Focus/Value/Invoke actions share a configurable rolling per-minute budget and
+  minimum interval; rate refusals are blocked policy outcomes and audit-visible.
+- Remaining: replace the current explicit compatibility wildcards with deterministic
+  Notepad and Explorer integration fixtures and exact tested control scopes before enabling
+  more applications.
 - Require confirmation before authentication, purchases, publishing, sending messages, privilege elevation, security-setting changes, or irreversible operations.
 
 Exit criteria: each supported application has deterministic integration tests and a deny-by-default capability profile, and every vision-resolved action either produces a typed element reference or is refused with the reason recorded.
@@ -121,7 +135,7 @@ This stage ports the two-brain design already worked out for AccessMind: a cheap
 
 **Perception tiers, cheapest first.** Each tier only escalates to the next when it finds a reason to.
 
-- **Tier 0 — window and focus events. Implemented.** `SetWinEventHook` for foreground changes, window creation, and title changes, on a dedicated thread with its own message pump so perception never depends on the Qt window being open. Off by default; deny lists suppress rather than redact; observations are debounced from the last admitted one and capped by a rolling per-minute budget; only counts are logged, never titles. Measured on a real desktop: 22 raw events produced 7 observations and 15 coalesced, and a window whose title matched the deny list was counted as excluded with nothing about it written anywhere. **Resist escalating to Tier 1 until this is exhausted** — most of what the later tiers would ask a model to infer is already available here for free.
+- **Tier 0 — window and focus events. Implemented.** `SetWinEventHook` for foreground changes, window creation, and title changes, on a dedicated thread with its own message pump so perception never depends on the Qt window being open. The capability default remains off; the checked-in local profile is enabled at the user's request for context-driven conversation. Deny lists suppress rather than redact; observations are debounced from the last admitted one and capped by a rolling per-minute budget; only counts are logged, never titles. Measured on a real desktop: 22 raw events produced 7 observations and 15 coalesced, and a window whose title matched the deny list was counted as excluded with nothing about it written anywhere. **Resist escalating to Tier 1 until this is exhausted** — most of what the later tiers would ask a model to infer is already available here for free.
 - **Tier 1 — change detection.** Periodic BitBlt capture, downscaled, reduced to a perceptual hash. Discard frames that are materially identical to the last. Bounded to a fixed interval with a hard cap. `gdi32` and `gdiplus` are already linked.
 - **Tier 2 — cheap local analysis.** OCR or a small classifier over changed regions only. Produces structured observations, not prose.
 - **Tier 3 — reasoning.** Wake Qwen3-VL only when lower tiers produce a salience score above threshold, with a hard budget of wakes per hour. Every wake must record what evidence justified it, so false wakes are diagnosable.
@@ -136,7 +150,7 @@ This stage ports the two-brain design already worked out for AccessMind: a cheap
 
 **Privacy.** Continuous screen observation is the most invasive capability in this project and must be treated as more sensitive than filesystem writes.
 
-- Off by default, with explicit opt-in separate from Stage 3's per-capture consent.
+- Off at the capability default, with explicit opt-in separate from Stage 3's per-capture consent. The repository's current settings opt in because the user requested event-driven conversation starters.
 - A persistent, unmissable indicator while observation is active.
 - An exclusion list by executable and window title, defaulting to deny for password managers, banking, and private browsing.
 - Frames are analysed and discarded; only structured observations persist, and those follow the existing memory sensitivity rules.
@@ -146,7 +160,7 @@ This stage ports the two-brain design already worked out for AccessMind: a cheap
 
 Exit criteria: Revia can describe what the user has been doing for the last hour from Tier 0 and Tier 1 evidence alone, with Tier 3 wakes staying inside budget, and observation can be paused instantly and verifiably.
 
-The first half of that is met from Tier 0 alone — `/perception history 60` reports time per application with the files worked on — and pause is immediate. Tier 1 and above remain unbuilt, and the attention/interruption model below applies to none of it yet, because nothing here speaks: this stage only answers when asked.
+The first half of that is met from Tier 0 alone — `/perception history 60` reports time per application with the files worked on — and pause is immediate. Tier 1 and above remain unbuilt. Tier 0 now feeds only bounded event patterns into the Stage 7 attention gate; it still cannot speak or wake a model directly.
 
 ## Stage 7 — Self-directed goal formation (first slice implemented)
 
@@ -154,6 +168,8 @@ The first half of that is met from Tier 0 alone — `/perception history 60` rep
 - Implemented: confidence threshold rather than a relevance one; cooldown after every utterance and a longer one after dismissal; hourly ceiling; hard suppression during full-screen applications, excluded applications, and active input; refusal to repeat an observation; dismissal recorded; precision tracked and the hourly rate halved automatically below the configured ratio, recovering when proposals land.
 - Implemented: the decision to speak is policy, not a prompt. The model supplies content and a confidence; when it is welcome to interrupt is decided here, for the same reason it does not choose its own capability scope.
 - Implemented: **evidence sources are ranked by how concrete they are.** An unfinished goal outranks a session observation, because a goal is something the user actually asked for while time spent in an editor is only an observation about it. Accepting a goal-backed proposal hands it straight to `ResumeGoal`, which re-verifies every remaining step: accepting is a shortcut for typing the command, never a way around it.
+- Implemented: **event-driven conversation openings.** A completed focus stretch, returning to an application after an absence, repeated movement between two applications, or an unfinished goal is the cause. A condition-variable worker sleeps indefinitely without one of those signals. Quiet-input delay and cooldown only debounce or suppress an event; they never manufacture one. Conversation cues are one-shot and expire instead of resurfacing when a timer ends.
+- Implemented: ordinary openings are generated through `ConversationRuntime`, enter dialogue history as Revia's line, and continue from a natural user reply. “Not now” and similar natural refusals record a dismissal; slash commands remain only for action-backed proposals.
 - Remaining: further evidence sources — a file edited repeatedly by hand that a goal could do, an approved root filling up. Each needs no new authority, and the precision counter is the honest test of whether one earns its place.
 - Remaining: report proposal precision to the user prominently rather than only through `/initiative`.
 
@@ -192,9 +208,14 @@ Exit criteria: the character runs for a full day without stealing focus or dropp
 
 Stage 4 executes goals, Stage 6 Tier 0 observes and summarises a session, and Stage 7's first slice now connects them: Revia can offer something unprompted, behind a deterministic attention gate, and be interrupted mid-sentence.
 
-Stage 4 is complete. The strongest remaining candidate is **Stage 3's vision-to-typed resolver**: both halves exist and have never been connected. A resolver that turns a vision-identified screen region into a typed UIA element reference — matching by bounding-box intersection and name agreement, refusing below a confidence threshold — turns the allowlist from "applications someone profiled by hand" into "applications that expose a UIA tree", without adding any new execution authority. It is also the last thing standing between the goal runner and applications it currently cannot drive at all.
+The vision-to-typed resolver, per-control policy, and desktop rate budgets are now connected
+and live-fixture validated. The strongest remaining Stage 3 slice is **deterministic Notepad
+and Explorer integration fixtures**. Those fixtures should discover exact accessible names
+and automation ids on this Windows version, exercise read/value/invoke success and stale
+element refusal, and then replace the two compatibility `"*"` scopes. Do not add another
+application until its own fixture passes.
 
-Two smaller items are ready whenever wanted: the `InputArbiter` is built and tested but not yet wired into `Submit`, and always-on VAD listening has settings but no capture loop.
+The `InputArbiter` is now wired into `Submit`: typed input is preserved exactly, while final voice transcripts pass through noise and duplicate admission before they become turns. Always-on VAD listening still has settings but no continuous capture loop; push-to-talk/toggle recording remains the enabled path because a standing microphone needs its own explicit privacy control.
 
 Measure before adding evidence sources. The precision counter is the honest signal for whether a new source earns its place, and a source that lowers precision should be removed rather than tuned.
 

@@ -4,6 +4,7 @@
 #include "Windows/windowsAutomationExecutor.h"
 
 #include <algorithm>
+#include <chrono>
 #include <nlohmann/json.hpp>
 #include <system_error>
 
@@ -37,6 +38,9 @@ bool ActionRuntime::Initialize(
     }
 
     policy = std::make_unique<policy::CapabilityPolicy>(settings);
+    desktopRateLimiter.Configure(
+        settings.maxDesktopActionsPerMinute,
+        settings.minimumDesktopActionIntervalMs);
     dispatcher.Register(std::make_unique<filesystem::FileSystemExecutor>(
         settings.maxReadBytes,
         settings.maxDirectoryEntries,
@@ -76,6 +80,18 @@ ActionOutcome ActionRuntime::Execute(
 {
     ActionOutcome outcome;
     outcome.policy = Evaluate(request);
+    const bool otherwiseExecutable =
+        outcome.policy.verdict == PolicyVerdict::Allowed ||
+        (outcome.policy.verdict == PolicyVerdict::RequiresConfirmation && confirmationGranted);
+    std::string rateReason;
+    if (otherwiseExecutable && !desktopRateLimiter.Admit(
+            request,
+            std::chrono::steady_clock::now(),
+            rateReason))
+    {
+        outcome.policy.verdict = PolicyVerdict::Blocked;
+        outcome.policy.reason = rateReason;
+    }
     outcome.result = dispatcher.Dispatch(request, outcome.policy, confirmationGranted);
     if (auditLogger)
     {
@@ -129,6 +145,18 @@ ActionOutcome ActionRuntime::ExecuteScoped(
 {
     ActionOutcome outcome;
     outcome.policy = EvaluateScoped(request, scopedPolicy);
+    const bool otherwiseExecutable =
+        outcome.policy.verdict == PolicyVerdict::Allowed ||
+        (outcome.policy.verdict == PolicyVerdict::RequiresConfirmation && confirmationGranted);
+    std::string rateReason;
+    if (otherwiseExecutable && !desktopRateLimiter.Admit(
+            request,
+            std::chrono::steady_clock::now(),
+            rateReason))
+    {
+        outcome.policy.verdict = PolicyVerdict::Blocked;
+        outcome.policy.reason = rateReason;
+    }
     outcome.result = dispatcher.Dispatch(request, outcome.policy, confirmationGranted);
     if (auditLogger)
     {
@@ -151,15 +179,19 @@ std::string ActionRuntime::StatusJson() const
         roots.push_back(PathToUtf8(root));
     }
     nlohmann::json applications = settings.approvedApplications;
+    nlohmann::json controls = settings.approvedControls;
     return nlohmann::json({
         {"initialized", true},
         {"mode", ToString(settings.mode)},
         {"approved_roots", roots},
         {"approved_applications", applications},
+        {"approved_controls", controls},
         {"auto_approve_risk_through", ToString(settings.autoApproveRiskThrough)},
         {"max_read_bytes", settings.maxReadBytes},
         {"max_directory_entries", settings.maxDirectoryEntries},
-        {"max_affected_entries", settings.maxAffectedEntries}
+        {"max_affected_entries", settings.maxAffectedEntries},
+        {"max_desktop_actions_per_minute", settings.maxDesktopActionsPerMinute},
+        {"minimum_desktop_action_interval_ms", settings.minimumDesktopActionIntervalMs}
     }).dump(2);
 }
 

@@ -211,7 +211,7 @@ VoiceOperationResult SpeechService::PrepareActiveVoice()
     {
         return {true, "No Qwen3-TTS profile voice is assigned; Windows SAPI is ready.", {}, 0.0};
     }
-    Notify({"Loading", "Loading the assigned Qwen3-TTS voice before llama.cpp hardware fitting."});
+    Notify({"Loading", "Loading the assigned Qwen3-TTS voice on the selected device."});
     VoiceOperationResult result = qwenClient.PrepareCloneModel();
     Notify({result.succeeded ? "Ready" : "Fallback",
         result.succeeded

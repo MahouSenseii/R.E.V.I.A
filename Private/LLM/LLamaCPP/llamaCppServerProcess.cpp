@@ -170,11 +170,10 @@ std::uint64_t SystemMemoryMiB()
         : 0;
 }
 
-int AutomaticContextSize()
+int AutomaticContextSize(
+    const std::uint64_t videoMemory,
+    const std::uint64_t systemMemory)
 {
-    const std::uint64_t videoMemory = DedicatedVideoMemoryMiB();
-    const std::uint64_t systemMemory = SystemMemoryMiB();
-
     int gpuLimit = 4096;
     if (videoMemory >= 23500)
     {
@@ -188,10 +187,9 @@ int AutomaticContextSize()
     {
         gpuLimit = 16384;
     }
-    else if (videoMemory >= 7500)
-    {
-        gpuLimit = 8192;
-    }
+    // An 8-GiB adapter can run the 8B Q4 model well, but an 8192-token KV cache plus
+    // normal desktop VRAM growth left too little transient allocation room. Keep this
+    // tier latency-first; larger adapters still scale their context automatically.
 
     int memoryLimit = 4096;
     if (systemMemory >= 60000)
@@ -211,6 +209,47 @@ int AutomaticContextSize()
 #endif
 
 } // namespace
+
+llamaHardwareMemory DetectLlamaHardwareMemory()
+{
+#ifdef _WIN32
+    return {DedicatedVideoMemoryMiB(), SystemMemoryMiB()};
+#else
+    return {};
+#endif
+}
+
+llamaHardwarePlan PlanLlamaHardware(
+    const std::uint64_t dedicatedVideoMemoryMiB,
+    const std::uint64_t systemMemoryMiB,
+    const int reservedVramMiB)
+{
+    llamaHardwarePlan plan;
+#ifdef _WIN32
+    plan.contextTokens = AutomaticContextSize(
+        dedicatedVideoMemoryMiB,
+        systemMemoryMiB);
+#else
+    (void)dedicatedVideoMemoryMiB;
+    (void)systemMemoryMiB;
+#endif
+
+    const std::uint64_t reservation = reservedVramMiB > 0
+        ? static_cast<std::uint64_t>(reservedVramMiB)
+        : 0;
+    const std::uint64_t usableVideoMemory = dedicatedVideoMemoryMiB > reservation
+        ? dedicatedVideoMemoryMiB - reservation
+        : 0;
+    if (usableVideoMemory >= 43000 && systemMemoryMiB >= 60000)
+    {
+        plan.parallelRequests = 3;
+    }
+    else if (usableVideoMemory >= 19000 && systemMemoryMiB >= 30000)
+    {
+        plan.parallelRequests = 2;
+    }
+    return plan;
+}
 
 llamaCppServerProcess::~llamaCppServerProcess()
 {
@@ -281,8 +320,15 @@ bool llamaCppServerProcess::StartInternal(
 #else
     if (processHandle != nullptr)
     {
-        outError = "Revia already owns a llama.cpp server process.";
-        return false;
+        if (IsRunning())
+        {
+            outError = "Revia already owns a llama.cpp server process.";
+            return false;
+        }
+
+        // A crashed child still leaves a valid Windows process handle. Release that
+        // stale handle so the same owner can relaunch the server on the next turn.
+        Stop();
     }
 
     const std::filesystem::path executable = ResolveRuntimePath(settings.serverExecutable);
@@ -309,11 +355,16 @@ bool llamaCppServerProcess::StartInternal(
         return false;
     }
 
+    const llamaHardwareMemory hardwareMemory = DetectLlamaHardwareMemory();
+    const llamaHardwarePlan hardwarePlan = PlanLlamaHardware(
+        hardwareMemory.dedicatedVideoMemoryMiB,
+        hardwareMemory.systemMemoryMiB,
+        settings.reservedVramMiB);
     const int contextSize = !embeddingMode && settings.bAutoTune
-        ? AutomaticContextSize()
+        ? hardwarePlan.contextTokens
         : settings.contextSize;
     const int parallelRequests = !embeddingMode && settings.bAutoTune
-        ? 1
+        ? hardwarePlan.parallelRequests
         : settings.parallelRequests;
     std::wstring commandLine = QuoteWindowsArgument(executableWide) +
         L" --model " + QuoteWindowsArgument(modelWide) +

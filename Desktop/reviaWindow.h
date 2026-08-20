@@ -22,6 +22,7 @@ class QTextBrowser;
 class QTimer;
 class QToolButton;
 class QWidget;
+class PipelinePanel;
 
 class ReviaWindow final : public QMainWindow
 {
@@ -53,10 +54,11 @@ private:
     void BuildInterface();
     void BuildTray();
     void StartRuntime();
-    void SendMessage();
+    void SendMessage(bool voiceInput = false);
     void ToggleListening();
     void ApplyMicrophoneUi(MicrophoneUi microphoneUi);
     void AnalyzeVisibleScreen();
+    void UseVisibleScreen();
     void RefreshVoiceStudio();
     void CreateVoicePreset();
     void PreviewVoice();
@@ -115,11 +117,13 @@ private:
     QTextBrowser* chatHistory = nullptr;
     QPlainTextEdit* messageInput = nullptr;
     QPlainTextEdit* activityFeed = nullptr;
+    PipelinePanel* pipelinePanel = nullptr;
     QTabWidget* tabs = nullptr;
     QPushButton* sendButton = nullptr;
     QPushButton* stopButton = nullptr;
     QPushButton* microphoneButton = nullptr;
     QPushButton* visionButton = nullptr;
+    QPushButton* screenActionButton = nullptr;
     QCheckBox* alwaysOnTopCheck = nullptr;
     QCheckBox* speechCheck = nullptr;
     QCheckBox* autoSendVoiceCheck = nullptr;

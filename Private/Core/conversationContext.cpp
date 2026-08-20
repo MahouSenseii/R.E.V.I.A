@@ -12,11 +12,7 @@ void conversationContext::AddMessage(const std::string& role, const std::string&
     }
 
     messages.push_back({ role, content });
-
-    while (messages.size() > static_cast<size_t>(maxMessages))
-    {
-        messages.erase(messages.begin());
-    }
+    TrimToBudget();
 }
 
 void conversationContext::Clear()
@@ -27,4 +23,29 @@ void conversationContext::Clear()
 std::vector<conversationMessage> conversationContext::GetRecentMessages() const
 {
     return messages;
+}
+
+std::size_t conversationContext::CharacterCount() const
+{
+    std::size_t total = 0;
+    for (const conversationMessage& message : messages)
+    {
+        total += message.content.size();
+    }
+    return total;
+}
+
+void conversationContext::TrimToBudget()
+{
+    // Keep the newest message even when it alone exceeds the soft character budget. The
+    // current request must never be removed in order to preserve older context.
+    while (messages.size() > 1 &&
+        (messages.size() > maxMessages || CharacterCount() > maxCharacters))
+    {
+        // Conversation normally alternates user/assistant. Evict a complete old exchange
+        // when possible so the retained context never begins with an orphaned answer.
+        const bool completePair = messages.size() >= 2 &&
+            messages[0].role == "user" && messages[1].role == "assistant";
+        messages.erase(messages.begin(), messages.begin() + (completePair ? 2 : 1));
+    }
 }

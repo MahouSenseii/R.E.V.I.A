@@ -6,7 +6,6 @@
 #include <cctype>
 #include <chrono>
 #include <cstdint>
-#include <iostream>
 #include <fstream>
 #include <iterator>
 #include <optional>
@@ -393,6 +392,7 @@ void llamaCppService::ApplySettings(
     bAutoMaxTokens = settings.bAutoMaxTokens && !profile.bHasMaxTokensOverride;
     effectiveContextTokens.store(0);
     effectiveParallelSlots.store(0);
+    inferenceScheduler.SetCapacity(settings.parallelRequests);
 
     embeddings.ApplySettings(embeddingSettings);
 }
@@ -481,17 +481,7 @@ responseOutput llamaCppService::GenerateResponse(
     std::string fullResponse;
     std::string buffer;
     size_t printedLength = 0;
-    bool bStartedStreaming = false;
     std::optional<std::chrono::steady_clock::time_point> firstTokenAt;
-
-    const auto startStreaming = [&]()
-    {
-        if (!bStartedStreaming)
-        {
-            std::cout << activeProfile.displayName << ": " << std::flush;
-            bStartedStreaming = true;
-        }
-    };
 
     httplib::Request req;
     req.method  = "POST";
@@ -540,11 +530,10 @@ responseOutput llamaCppService::GenerateResponse(
             {
                 const std::string delta =
                     visibleResponse.substr(printedLength, safeLength - printedLength);
-                startStreaming();
-                std::cout << delta << std::flush;
                 printedLength = safeLength;
-                // Same text the terminal gets. The holdback above has already trimmed
-                // any partial special token, so a caller can speak this safely.
+                // The holdback above has already trimmed any partial special token, so a
+                // presentation or speech consumer can use this safely. The LLM layer
+                // never writes to a terminal or widget itself.
                 if (onDelta)
                 {
                     onDelta(delta);
@@ -559,14 +548,22 @@ responseOutput llamaCppService::GenerateResponse(
         "request_preparation",
         ElapsedMilliseconds(requestPreparationStarted)});
     const auto inferenceQueueStarted = std::chrono::steady_clock::now();
-    std::unique_lock inferenceLock(inferenceMutex);
+    auto inferenceLease = inferenceScheduler.Acquire(
+        revia::llm::InferencePriority::Interactive,
+        stopToken);
     output.timings.push_back({
         "inference_queue_wait",
         ElapsedMilliseconds(inferenceQueueStarted)});
+    if (!inferenceLease)
+    {
+        output.response = "I stopped that response.";
+        output.reason = "Conversation generation was cancelled while waiting for inference.";
+        return output;
+    }
     const auto requestStarted = std::chrono::steady_clock::now();
     const auto result = client.send(req);
     const double requestMilliseconds = ElapsedMilliseconds(requestStarted);
-    inferenceLock.unlock();
+    inferenceLease = {};
     const double firstTokenMilliseconds = firstTokenAt
         ? std::chrono::duration<double, std::milli>(*firstTokenAt - requestStarted).count()
         : requestMilliseconds;
@@ -577,15 +574,6 @@ responseOutput llamaCppService::GenerateResponse(
     output.timings.push_back({"llama_request_total", requestMilliseconds, true});
 
     const std::string cleanedResponse = VisibleReplyText(fullResponse, &output.reasoning);
-    if (cleanedResponse.size() > printedLength)
-    {
-        startStreaming();
-        std::cout << cleanedResponse.substr(printedLength) << std::flush;
-    }
-    if (bStartedStreaming)
-    {
-        std::cout << "\n\n";
-    }
 
     if (!result)
     {
@@ -638,7 +626,7 @@ responseOutput llamaCppService::GenerateResponse(
     output.response        = cleanedResponse;
     output.bShouldSpeak    = true;
     output.bShouldRemember = false;
-    output.bWasStreamed     = true;  // tokens already printed live
+    output.bWasStreamed     = static_cast<bool>(onDelta);
 
     return output;
 }
@@ -704,12 +692,13 @@ responseOutput llamaCppService::GeneratePlannerResponse(
         {"response_format", {{"type", "json_object"}}}
     };
 
-    std::unique_lock inferenceLock(inferenceMutex);
+    auto inferenceLease = inferenceScheduler.Acquire(
+        revia::llm::InferencePriority::Interactive);
     const auto result = client.Post(
         "/v1/chat/completions",
         requestBody.dump(),
         "application/json");
-    inferenceLock.unlock();
+    inferenceLease = {};
     if (!result)
     {
         output.response = "I could not connect to the action-planning model.";
@@ -793,13 +782,21 @@ responseOutput llamaCppService::AnalyzeImage(
     };
 
     const auto queueStarted = std::chrono::steady_clock::now();
-    std::unique_lock inferenceLock(inferenceMutex);
+    auto inferenceLease = inferenceScheduler.Acquire(
+        revia::llm::InferencePriority::Interactive,
+        stopToken);
     output.timings.push_back({"vision_inference_queue_wait", ElapsedMilliseconds(queueStarted)});
+    if (!inferenceLease)
+    {
+        output.response = "I stopped looking at the screen.";
+        output.reason = "Vision analysis was cancelled while waiting for inference.";
+        return output;
+    }
     const auto requestStarted = std::chrono::steady_clock::now();
     const auto result = client.Post(
         "/v1/chat/completions", requestBody.dump(), "application/json");
     output.timings.push_back({"vision_request_total", ElapsedMilliseconds(requestStarted), true});
-    inferenceLock.unlock();
+    inferenceLease = {};
 
     if (!result)
     {
@@ -937,22 +934,37 @@ memoryDecision llamaCppService::EvaluateMemory(
     };
 
     const auto classificationQueueStarted = std::chrono::steady_clock::now();
-    std::unique_lock inferenceLock(inferenceMutex);
+    auto inferenceLease = inferenceScheduler.Acquire(
+        revia::llm::InferencePriority::Background,
+        stopToken);
     decision.timings.push_back({
         "memory_inference_queue_wait",
         ElapsedMilliseconds(classificationQueueStarted)});
+    if (!inferenceLease)
+    {
+        decision.reason = "Memory evaluation was cancelled while waiting for inference.";
+        return finish(std::move(decision));
+    }
+    const std::stop_token preemptionToken = inferenceLease.PreemptionToken();
+    std::stop_callback preemptRequest(preemptionToken, [&client]()
+    {
+        client.stop();
+    });
     const auto classificationStarted = std::chrono::steady_clock::now();
     const auto result = client.Post(
         "/v1/chat/completions",
         requestBody.dump(),
         "application/json");
-    inferenceLock.unlock();
+    inferenceLease = {};
     decision.timings.push_back({
         "memory_classification",
         ElapsedMilliseconds(classificationStarted)});
     if (!result)
     {
-        decision.reason = stopToken.stop_requested()
+        decision.bSuccess = preemptionToken.stop_requested();
+        decision.reason = preemptionToken.stop_requested()
+            ? "Memory evaluation yielded to an interactive conversation turn."
+            : stopToken.stop_requested()
             ? "Memory evaluation was cancelled."
             : "llama.cpp memory request failed: " +
                 std::string(httplib::to_string(result.error())) + ".";
@@ -1207,6 +1219,7 @@ healthOutput llamaCppService::CheckHealth() const
             if (output.parallelSlots > 0)
             {
                 effectiveParallelSlots.store(output.parallelSlots);
+                inferenceScheduler.SetCapacity(output.parallelSlots);
             }
         }
         catch (const std::exception&)

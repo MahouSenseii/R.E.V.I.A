@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Agents/conversationStylePolicy.h"
 #include "Core/messageRouter.h"
 
 namespace revia::agents
@@ -16,6 +17,9 @@ public:
         const std::vector<conversationMessage>& context,
         std::stop_token stopToken = {},
         messageRouter::DeltaHandler onDelta = {}) const;
+
+private:
+    ConversationStylePolicy stylePolicy;
 };
 
 } // namespace revia::agents

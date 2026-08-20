@@ -4,6 +4,7 @@
 #include "Audit/actionAuditLogger.h"
 #include "Planning/structuredActionParser.h"
 #include "Policy/capabilityPolicy.h"
+#include "Policy/desktopActionRateLimiter.h"
 #include "Policy/permissionStore.h"
 
 #include <filesystem>
@@ -51,6 +52,7 @@ private:
     ActionDispatcher dispatcher;
     std::unique_ptr<audit::ActionAuditLogger> auditLogger;
     planning::StructuredActionParser parser;
+    policy::DesktopActionRateLimiter desktopRateLimiter;
 };
 
 } // namespace revia::actions

@@ -25,16 +25,16 @@ flowchart LR
 | `Policy` | Load capability settings, normalize paths, calculate risk and verdict | Prompting the LLM or changing files |
 | `Actions` | Define action/result types, coordinate evaluation and dispatch | Action-specific Windows behavior |
 | `Filesystem` | Perform the supported file operation using the policy-resolved paths | Expanding scope or bypassing confirmation |
-| `Windows` | Inspect or interact with named controls through Microsoft UI Automation | Coordinate clicking, shell execution, or app-scope decisions |
+| `Windows` | Resolve vision regions to typed UIA identities, then inspect or interact through control patterns | Coordinate clicking, shell execution, or app-scope decisions |
 | `Speech` | Own SAPI/Qwen3-TTS output, persistent voice presets and profile assignments, WinMM capture, whisper.cpp transcription, queues, and cancellation | Conversation policy or widget rendering |
-| `Vision` | Capture the virtual desktop to a short-lived PNG after consent | Deciding when consent is optional or retaining captures |
+| `Vision` | Capture the virtual desktop for analysis or the pinned foreground-window crop for actions, then parse bounded target intents | Acting at coordinates, granting application scope, or retaining captures |
 | `Audit` | Append the request, verdict, and result to JSONL | Deciding whether an action is allowed |
 | `Runtime` | Own the reusable session lifecycle, cancellation, state, and thread-safe UI events | Rendering widgets or bypassing policy |
-| `Desktop` | Render tabbed Qt chat, activity, voice-studio, settings, tray, runtime state, and confirmation controls | Model logic, memory ownership, or OS permissions |
-| `Agents` | Run the interactive conversation and queued background memory tasks | OS permissions or long-running hidden work |
+| `Desktop` | Render the Qt shell and narrow panels such as `PipelinePanel` | Model logic, memory ownership, or OS permissions |
+| `Agents` | Run the interactive conversation, conversation-style policy, input arbitration, and queued background memory tasks | OS permissions or hidden unbounded work |
 | `Memory` | Store structured facts and vectors in SQLite, then fuse BM25 and cosine-ranked results | Deciding which raw model text is trustworthy |
-| `LLM` | Chat and propose structured actions | Direct access to the shell or filesystem |
-| `Core` | Configuration, routing, logging, context, and the CLI fallback | Hidden permission escalation |
+| `LLM` | Chat, schedule bounded shared-server slots, and propose structured actions | Terminal/widget output or direct access to the shell/filesystem |
+| `Core` | Configuration, routing, logging, bounded context, and the thin CLI shell | A second runtime lifecycle or hidden permission escalation |
 
 New abilities should follow the same shape: a typed request, capability-specific policy fields, a narrow executor, limits/timeouts, audit fields, and tests proving both the allowed path and denial path.
 
@@ -42,24 +42,64 @@ New abilities should follow the same shape: a typed request, capability-specific
 
 ```mermaid
 flowchart LR
-    U["Qt desktop or CLI input"] --> S["ReviaSession"]
-    S --> T["TurnCoordinator"]
-    T --> C["ConversationAgent"]
-    C --> L["Chat llama.cpp process"]
-    C --> R["Visible response"]
+    U["Qt desktop or thin CLI"] --> S["ReviaSession - sole lifecycle owner"]
+    S --> I["InputArbiter"]
+    I --> CR["ConversationRuntime"]
+    CR --> T["TurnCoordinator"]
+    T --> C["ConversationAgent plus style policy"]
+    C --> G["Capacity-aware inference scheduler"]
+    G --> L["Chat and vision llama.cpp slots"]
+    C --> R["Visible and spoken response"]
     R --> M["Queue MemoryAgent"]
-    M --> L
+    M -->|"background priority"| G
     M --> D["Structured memory decision"]
     D --> DB["SQLite memories plus FTS5 index"]
     E["Dedicated embedding llama.cpp process"] --> DB
     DB -->|"hybrid ranked facts for a later query"| C
+    P["WindowEventMonitor"] --> CS["ConversationStarter event patterns"]
+    CS --> AP["AttentionPolicy"]
+    AP -->|"approved opening"| CR
+    V["One-shot foreground-window capture"] --> VG["Qwen3-VL bounded target region"]
+    VG --> UR["VisionUiaResolver"]
+    UR -->|"exact runtime identity"| CP["Capability policy and confirmation"]
+    CP --> WX["UIA pattern executor and audit"]
 ```
 
-The visible reply runs first and owns inference priority. Only after a successful reply is ready does the coordinator queue automatic memory evaluation on its worker. TTS consumes the finished response on its own cancellable worker; microphone capture and whisper transcription have a separate lifecycle. This keeps speech and memory work from increasing time-to-first-token. It is asynchronous specialization, not autonomous agency. A future long-running agent must have explicit lifecycle ownership, cancellation, budgets, observable health, and must still route every side effect through the capability policy.
+The visible reply runs first and owns inference priority. Only after a successful reply is ready does the coordinator queue automatic memory evaluation on its worker. A shared-server inference scheduler admits no more requests than llama.cpp reports as slots and always admits waiting interactive work before waiting background memory work. Automatic startup keeps one latency-first slot and a 4096-token context on an 8 GB GPU, leaves 2 GB for desktop allocation growth, grants two slots only after roughly 19 GB of usable VRAM and 30 GB of RAM, and grants three only at workstation scale. Larger machines automatically receive larger contexts. If an owned llama.cpp child crashes, its stale process handle is released and the next conversation turn restarts it. The dedicated embedding server is outside this gate and remains parallel on every machine.
 
-Qwen3-TTS runs as an authenticated loopback worker because the official model runtime is Python/PyTorch, while lifecycle, persistence, requests, fallback, and UI remain C++ owned. VoiceDesign creates one reference WAV from a description. The Base model reuses that reference through a cached clone prompt. Only one speech model stays resident, generated audio remains under `RuntimeData/Voices`, and Windows SAPI is the failure fallback. When a profile has a Qwen voice, the speech model loads before llama.cpp so automatic GPU fitting accounts for both allocations.
+TTS consumes sentence fragments on its own cancellable worker; microphone capture and whisper transcription have a separate lifecycle; perception and initiative keep their own bounded workers; Qt has its own operation workers. These are parallel, observable pipelines, not one sequential prompt chain. The `Pipelines` tab is an event-driven view of those lanes and never owns them. Parallelism does not add authority: every side effect still passes through capability policy and audit.
 
-`ReviaSession` is the interface-neutral lifecycle owner. It starts or attaches to the configured llama.cpp processes, accepts one operation at a time, publishes `RuntimeEvent` values, cancels an active request through `std::stop_token`, drains memory results, and shuts down only child processes it owns. Qt receives these events through a queued UI-thread handoff; it never calls model, memory, or filesystem implementation code directly.
+Qwen3-TTS runs as an authenticated loopback worker because the model runtime is Python/PyTorch, while lifecycle, persistence, requests, fallback, and UI remain C++ owned. VoiceDesign creates one reference WAV from a description. The Base model reuses that reference through a cached clone prompt. Only one speech model stays resident, generated audio remains under `RuntimeData/Voices`, and Windows SAPI is the failure fallback. When a profile has a Qwen voice, llama.cpp reserves the configured voice VRAM only if the GPU can also keep a 7 GB chat budget; otherwise conversation gets GPU priority and Qwen Auto is resolved to CPU before the speech service starts. The voice warms in the background after chat is ready, so voice setup cannot delay runtime readiness.
+
+`ReviaSession` is the interface-neutral lifecycle owner. It starts or attaches to the configured llama.cpp processes, accepts one foreground operation at a time, publishes `RuntimeEvent` values, cancels an active request through `std::stop_token`, drains memory results, and shuts down only child processes it owns. `ConversationRuntime` owns approved conversational turns, their context, generation, grounding, streamed speech, and timing. Foreground serialization protects one coherent conversation/action state; it does not stop the independent workers above. Both Qt and the CLI use this same owner. Qt receives events through a queued UI-thread handoff; the CLI is a thin terminal adapter with a poll worker, not a second implementation of Revia.
+
+Speaking first is event-driven. `ConversationStarter` recognizes a completed focus stretch,
+a return to an application, or repeated switching from admitted Tier 0 window events. An
+unfinished goal is another concrete signal. Those events wake the initiative worker;
+elapsed time can qualify the evidence or debounce a click, but it cannot wake the worker
+or create a cue. `AttentionPolicy` still applies confidence, active-input, full-screen,
+exclusion, cooldown, dismissal, hourly-budget, and measured-precision gates. Ordinary
+conversation openings enter `ConversationRuntime` and the next natural user reply
+continues them; action-backed proposals retain explicit accept/dismiss handling.
+
+## Single-purpose construction rule
+
+New behavior is split by reason to change:
+
+- `ConversationStylePolicy` owns repair, variation guidance, and the narrow stock-tail filter; it does not call a model or store memory.
+- `ConversationRuntime` owns approved dialogue turns; it does not start servers, grant capabilities, or decide when interruption is welcome.
+- `ConversationStarter` recognizes meaningful event patterns; it does not generate text or decide permission to speak.
+- `AttentionPolicy` decides whether an observed opportunity may interrupt; timers are limits and never causes.
+- `InputArbiter` owns voice-noise, duplicate, and fragment admission; it does not generate replies.
+- `InferenceScheduler` owns shared llama slot capacity and priority; it does not build prompts or issue HTTP requests.
+- `PipelinePanel` renders runtime events; it does not query or control a worker.
+- `VisionActionParser` accepts only bounded invoke/value intents; it never inspects Windows or executes.
+- `VisionUiaResolver` matches geometry and accessible names and returns a typed runtime identity; it never clicks coordinates or grants application scope.
+- `WindowsAutomationExecutor` rechecks that exact identity and invokes a UIA pattern; it never falls back to a name or coordinate when a resolved element changed.
+- `CapabilityPolicy` owns executable and per-executable control scopes; `DesktopActionRateLimiter` owns rolling mutable-action admission. Neither inspects pixels or invokes UIA.
+- Shells own presentation only. `ReviaSession` remains the sole runtime lifecycle owner.
+
+When a feature needs model logic, persistence, OS authority, and presentation, those are four components connected through typed values or events—not four methods added to one window or service.
 
 The embedding server is a separate owned process from the chat server. Memories are embedded with the configured document prefix, user queries with the configured query prefix, and the SQLite store combines semantic and lexical rankings using reciprocal-rank fusion. Missing vectors are backfilled by the background memory agent. Embedding failures degrade to FTS rather than disabling chat.
 
@@ -68,6 +108,12 @@ The embedding server is a separate owned process from the chat server. Memories 
 - `disabled`: all capability actions are blocked.
 - `supervised`: actions at or below `autoApproveRiskThrough` run; higher-risk in-scope actions require an explicit prompt.
 - `approved_scope`: actions at or below the ceiling run without a prompt; higher-risk actions are blocked instead of falling back to confirmation.
+
+Desktop scope has two keys: an executable must be present in `approvedApplications`, and
+mutable controls must match that executable's `approvedControls` names/automation ids (or
+an explicit `"*"`). A shared rolling limiter caps mutable Focus/Value/Invoke admissions.
+Rate refusal changes the ordinary policy outcome to blocked before dispatch, so it is
+recorded by the same JSONL audit path rather than hidden in a UI-only throttle.
 
 The distinction matters for unattended operation. An autonomous run must not wait forever at a prompt or silently broaden its permissions.
 

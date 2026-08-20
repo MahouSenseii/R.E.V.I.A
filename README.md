@@ -141,10 +141,35 @@ The source configuration is `Config/capabilities.json`. The safe default is:
 - `mode: supervised`
 - only `%USERPROFILE%\Documents\ReviaSandbox` is approved
 - only `notepad.exe` and `explorer.exe` are approved for typed UI Automation by default
+- every approved executable has an explicit `approvedControls` scope; the current two use
+  `"*"` for compatibility and should be narrowed to tested names or automation ids before
+  adding more applications
+- mutable desktop actions are capped at 12 per rolling minute with at least 250 ms between
+  admissions
 - read-only work can run without a prompt
 - filesystem writes require confirmation
 
 After changing the source configuration, rebuild so the post-build copy updates `build/debug/Config/`.
+
+### Vision-grounded screen actions
+
+Type one specific instruction in the chat box, then choose **Use screen**. Revia hides its
+window, captures only the foreground application window once, and asks Qwen3-VL for a
+labelled target region. The window crop keeps its real screen-space origin, and the request
+is discarded if foreground focus changes while capture is in progress.
+The model cannot click that region. `VisionUiaResolver` must match it to an enabled Windows
+UI Automation element using both bounding-box overlap and accessible-name agreement. The
+match must clear `resolutionConfidence`, beat the next candidate by `ambiguityMargin`, and
+carry a UIA runtime id. Otherwise Revia refuses.
+
+The foreground executable is read from Windows rather than model output and is checked
+against `approvedApplications` before inference or UIA enumeration. A successful match
+must also appear in that executable's `approvedControls` scope. It then goes through the
+ordinary capability decision and confirmation dialog. Execution
+rechecks the exact runtime id, name, automation id, and control type after confirmation; a
+changed or vanished element fails closed. The temporary PNG is deleted before execution,
+and the JSONL audit entry records the model target, region, selected element, and component
+scores. There is no coordinate-click fallback.
 
 For a later unattended experiment, use a dedicated disposable folder and set:
 
@@ -168,7 +193,7 @@ If it still misfires on your hardware, `/bargein off` disarms it immediately, mi
 
 **Text and speech are synchronised.** A reply that is going to be spoken is held until its audio actually starts, so the words appear as Revia says them rather than several seconds ahead. A reply that will *not* be spoken — speech disabled, a command result, a system message — is shown immediately and never waits. If speech fails, is disabled mid-flight, or is interrupted, the text is released at once; a nine-second timer guarantees a reply is never lost to a stalled voice.
 
-**Initiative is off by default.** When enabled, Revia may offer an observation unprompted, but the decision to speak is deterministic policy rather than a model's opinion of its own interestingness — the same reason a model does not choose its own capability scope. A proposal must clear a *confidence* threshold, not a relevance one, and is then subject to:
+**Initiative is enabled in the checked-in local settings at the user's request.** The capability default remains off. Revia may offer an observation unprompted, but the decision to speak is deterministic policy rather than a model's opinion of its own interestingness — the same reason a model does not choose its own capability scope. A proposal must clear a *confidence* threshold, not a relevance one, and is then subject to:
 
 - a cooldown after every utterance, and a much longer one after a dismissal — being told "no" costs more than being ignored
 - an hourly ceiling
@@ -215,6 +240,6 @@ The history is **in memory only and never written to disk.** It is capped at 240
 
 ## Capability notes
 
-Keep roots and executable names narrow. `approved_scope` does not mean unrestricted PC control: actions outside approved roots/apps or above the risk ceiling remain blocked, no confirmation prompt can override that block, and all outcomes are audited. Control text values are not copied into the audit log; only their length is recorded.
+Keep roots, executable names, and control scopes narrow. `approved_scope` does not mean unrestricted PC control: actions outside approved roots/apps/controls, above the risk ceiling, or beyond the desktop rate budget remain blocked, no confirmation prompt can override that block, and all outcomes are audited. Control text values are not copied into the audit log; only their length is recorded.
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for module boundaries, [docs/PORTABILITY.md](docs/PORTABILITY.md) for build requirements and low-end machine behaviour, and [docs/ROADMAP.md](docs/ROADMAP.md) for the staged path to a desktop companion and supervised autonomy.

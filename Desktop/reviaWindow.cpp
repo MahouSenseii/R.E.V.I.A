@@ -1,4 +1,5 @@
 #include "reviaWindow.h"
+#include "pipelinePanel.h"
 
 #include <QApplication>
 #include <QCheckBox>
@@ -379,7 +380,14 @@ void ReviaWindow::BuildInterface()
     visionButton = new QPushButton("Analyze screen", chatPage);
     visionButton->setObjectName("visionButton");
     visionButton->setEnabled(false);
-    for (QPushButton* button : {sendButton, stopButton, microphoneButton, visionButton})
+    screenActionButton = new QPushButton("Use screen", chatPage);
+    screenActionButton->setObjectName("screenActionButton");
+    screenActionButton->setToolTip(
+        "Use the instruction in the message box to locate one visible control, then "
+        "resolve it to Windows UI Automation before asking for action confirmation.");
+    screenActionButton->setEnabled(false);
+    for (QPushButton* button : {
+            sendButton, stopButton, microphoneButton, visionButton, screenActionButton})
     {
         buttonRow->addWidget(button, 1);
     }
@@ -394,6 +402,9 @@ void ReviaWindow::BuildInterface()
     activityFeed->setMaximumBlockCount(1000);
     activityLayout->addWidget(activityFeed);
     tabs->addTab(activityPage, "Activity");
+
+    pipelinePanel = new PipelinePanel(tabs);
+    tabs->addTab(pipelinePanel, "Pipelines");
 
     // The tab has three sections and does not fit a short window. Without a scroll area
     // the layout steals height from every field until the forms collapse into unreadable
@@ -538,6 +549,7 @@ void ReviaWindow::BuildInterface()
     connect(stopButton, &QPushButton::clicked, this, [this]() { session.RequestStop(); });
     connect(microphoneButton, &QPushButton::clicked, this, [this]() { ToggleListening(); });
     connect(visionButton, &QPushButton::clicked, this, [this]() { AnalyzeVisibleScreen(); });
+    connect(screenActionButton, &QPushButton::clicked, this, [this]() { UseVisibleScreen(); });
     connect(alwaysOnTopCheck, &QCheckBox::toggled, this, [this](const bool enabled)
     {
         SetAlwaysOnTop(enabled);
@@ -651,6 +663,22 @@ void ReviaWindow::BuildInterface()
             padding: 9px;
             selection-background-color: #315f84;
         }
+        QTableWidget {
+            background: rgba(7, 12, 23, 220);
+            alternate-background-color: rgba(17, 27, 45, 220);
+            color: #dce9f7;
+            border: 1px solid #293b55;
+            border-radius: 10px;
+            outline: none;
+        }
+        QHeaderView::section {
+            background: #182438;
+            color: #a9bad2;
+            border: none;
+            border-bottom: 1px solid #293b55;
+            padding: 8px;
+            font-weight: 600;
+        }
         QPushButton {
             background: #327aa8;
             color: white;
@@ -669,6 +697,8 @@ void ReviaWindow::BuildInterface()
         QPushButton#microphoneButton[listening="true"]:hover { background: #34b8a6; }
         QPushButton#visionButton { background: #694663; }
         QPushButton#visionButton:hover { background: #8e5b84; }
+        QPushButton#screenActionButton { background: #46615f; }
+        QPushButton#screenActionButton:hover { background: #5d817e; }
         QPushButton#secondaryButton { background: #354154; }
         QPushButton#secondaryButton:hover { background: #46556d; }
         QCheckBox { color: #a9bad2; }
@@ -722,6 +752,8 @@ void ReviaWindow::StartRuntime()
         QMetaObject::invokeMethod(this, [this, started, greeting]()
         {
             sendButton->setEnabled(started);
+            visionButton->setEnabled(session.IsVisionAvailable());
+            screenActionButton->setEnabled(session.IsVisionAvailable());
             stopButton->setEnabled(false);
             // Re-evaluate the microphone now that IsStarted() is finally true; the last
             // recognition phase event arrived while startup was still in flight.
@@ -740,9 +772,12 @@ void ReviaWindow::StartRuntime()
     });
 }
 
-void ReviaWindow::SendMessage()
+void ReviaWindow::SendMessage(const bool voiceInput)
 {
-    if (shuttingDown.load() || session.IsBusy())
+    // Voice may arrive while Revia is still replying; that is what the merge window is
+    // for. Typed input still waits, because pressing Enter mid-reply and having it
+    // silently queue would be surprising.
+    if (shuttingDown.load() || (!voiceInput && session.IsBusy()))
     {
         return;
     }
@@ -753,6 +788,28 @@ void ReviaWindow::SendMessage()
         return;
     }
     messageInput->clear();
+
+    if (voiceInput)
+    {
+        // Offered, not submitted. It merges with anything else said in the next moment,
+        // and the reply arrives as an event once that window closes.
+        const revia::agents::InputVerdict verdict =
+            session.OfferInput(text.toStdString(), revia::agents::InputSource::Voice);
+        if (verdict == revia::agents::InputVerdict::Queued)
+        {
+            AppendChat("You", text, true);
+        }
+        else
+        {
+            // Shown rather than dropped in silence, so an over-eager filter is visible.
+            AppendActivity(QStringLiteral("Heard but not answered: \"") + text +
+                QStringLiteral("\" - ") +
+                QString::fromStdString(revia::agents::ToString(verdict)));
+        }
+        messageInput->setFocus();
+        return;
+    }
+
     AppendChat("You", text, true);
     sendButton->setEnabled(false);
     stopButton->setEnabled(true);
@@ -761,9 +818,13 @@ void ReviaWindow::SendMessage()
     {
         operationWorker.join();
     }
-    operationWorker = std::jthread([this, input = text.toStdString()]()
+    operationWorker = std::jthread([this, input = text.toStdString(), voiceInput]()
     {
-        const revia::runtime::SessionResult result = session.Submit(input);
+        const revia::runtime::SessionResult result = session.Submit(
+            input,
+            voiceInput
+                ? revia::agents::InputSource::Voice
+                : revia::agents::InputSource::Typed);
         QMetaObject::invokeMethod(this, [this, result]()
         {
             const QString reasoning = QString::fromStdString(result.reasoning);
@@ -975,6 +1036,7 @@ void ReviaWindow::AnalyzeVisibleScreen()
     showMinimized();
     sendButton->setEnabled(false);
     visionButton->setEnabled(false);
+    screenActionButton->setEnabled(false);
     stopButton->setEnabled(true);
     if (operationWorker.joinable())
     {
@@ -1001,6 +1063,79 @@ void ReviaWindow::AnalyzeVisibleScreen()
                 AppendActivity("Vision failed: " + QString::fromStdString(result.reason));
             }
             sendButton->setEnabled(session.IsStarted());
+            visionButton->setEnabled(session.IsVisionAvailable());
+            screenActionButton->setEnabled(session.IsVisionAvailable());
+            stopButton->setEnabled(false);
+            messageInput->setFocus();
+        }, Qt::QueuedConnection);
+    });
+}
+
+void ReviaWindow::UseVisibleScreen()
+{
+    if (shuttingDown.load() || session.IsBusy())
+    {
+        return;
+    }
+    const QString instruction = messageInput->toPlainText().trimmed();
+    if (instruction.isEmpty())
+    {
+        QMessageBox::information(
+            this,
+            "Screen action instruction",
+            "Write one specific instruction first, such as 'press the Save button'.");
+        messageInput->setFocus();
+        return;
+    }
+    const bool approved = QMessageBox::question(
+        this,
+        "Share and resolve screen control",
+        "Revia will capture all visible monitors once, locate the requested control "
+        "locally, and require a match to a real Windows UI Automation element. The "
+        "temporary PNG is deleted before any action. There is no coordinate-click "
+        "fallback, and the resulting action still requires normal policy approval. "
+        "Continue?",
+        QMessageBox::Yes | QMessageBox::No,
+        QMessageBox::No) == QMessageBox::Yes;
+    if (!approved)
+    {
+        return;
+    }
+
+    messageInput->clear();
+    AppendChat("You", instruction, true);
+    showMinimized();
+    sendButton->setEnabled(false);
+    visionButton->setEnabled(false);
+    screenActionButton->setEnabled(false);
+    stopButton->setEnabled(true);
+    if (operationWorker.joinable())
+    {
+        operationWorker.join();
+    }
+    operationWorker = std::jthread([this, request = instruction.toStdString()]()
+    {
+        std::this_thread::sleep_for(std::chrono::milliseconds(400));
+        const revia::runtime::SessionResult result = session.ActOnScreen(request);
+        QMetaObject::invokeMethod(this, [this, result]()
+        {
+            showNormal();
+            raise();
+            activateWindow();
+            if (!result.text.empty())
+            {
+                AppendChat(
+                    QString::fromStdString(session.DisplayName()),
+                    QString::fromStdString(result.text));
+            }
+            if (!result.succeeded && !result.reason.empty())
+            {
+                AppendActivity(
+                    "Screen action stopped: " + QString::fromStdString(result.reason));
+            }
+            sendButton->setEnabled(session.IsStarted());
+            visionButton->setEnabled(session.IsVisionAvailable());
+            screenActionButton->setEnabled(session.IsVisionAvailable());
             stopButton->setEnabled(false);
             messageInput->setFocus();
         }, Qt::QueuedConnection);
@@ -1212,6 +1347,10 @@ void ReviaWindow::SetAlwaysOnTop(const bool enabled)
 
 void ReviaWindow::HandleRuntimeEvent(const revia::runtime::RuntimeEvent& event)
 {
+    if (pipelinePanel != nullptr)
+    {
+        pipelinePanel->Observe(event);
+    }
     if (event.kind == revia::runtime::RuntimeEventKind::StateChanged)
     {
         UpdateState(event.state, QString::fromStdString(event.message));
@@ -1353,7 +1492,7 @@ void ReviaWindow::HandleRuntimeEvent(const revia::runtime::RuntimeEvent& event)
                 messageInput->setPlainText(transcript);
                 if (autoSendVoiceCheck->isChecked() && !session.IsBusy())
                 {
-                    SendMessage();
+                    SendMessage(true);
                 }
                 else
                 {
@@ -1420,7 +1559,9 @@ void ReviaWindow::HandleRuntimeEvent(const revia::runtime::RuntimeEvent& event)
             visionButton->setEnabled(
                 phase != QStringLiteral("Disabled") && phase != QStringLiteral("Unavailable") &&
                 phase != QStringLiteral("Error") && phase != QStringLiteral("Capturing") &&
-                phase != QStringLiteral("Analyzing") && !session.IsBusy());
+                phase != QStringLiteral("Analyzing") && phase != QStringLiteral("Grounding") &&
+                phase != QStringLiteral("Resolving") && !session.IsBusy());
+            screenActionButton->setEnabled(visionButton->isEnabled());
             QString detail = QStringLiteral("Vision ") + phase + QStringLiteral(": ") +
                 QString::fromStdString(event.message);
             if (event.elapsedMilliseconds >= 0.0)
@@ -1434,6 +1575,21 @@ void ReviaWindow::HandleRuntimeEvent(const revia::runtime::RuntimeEvent& event)
     }
     if (event.kind == revia::runtime::RuntimeEventKind::AssistantMessage)
     {
+        // A reply to merged voice input. Nobody is waiting on a return value for these,
+        // so they arrive here instead. Held for their audio on the same terms as a typed
+        // reply, since a non-zero turnId means speech is coming.
+        const QString speaker = QString::fromStdString(session.DisplayName());
+        const QString body = QString::fromStdString(event.message);
+        const QString reasoning = QString::fromStdString(event.detail);
+        if (event.turnId != 0 && event.turnId != lastSpeakingUtteranceId)
+        {
+            pendingUtterances[event.turnId] = {speaker, body, reasoning};
+            pendingSpeechTimer->start();
+        }
+        else
+        {
+            AppendChat(speaker, body, false, reasoning);
+        }
         return;
     }
 
@@ -1561,6 +1717,15 @@ bool ReviaWindow::ConfirmAction(
     bool confirmed = false;
     const auto showConfirmation = [this, &request, &decision, &confirmed]()
     {
+        // A screen action hides Revia before capture so it cannot obscure the target.
+        // Restore the shell before asking; a confirmation owned by a minimized window is
+        // effectively invisible and would leave the worker waiting forever.
+        if (isMinimized())
+        {
+            showNormal();
+            raise();
+            activateWindow();
+        }
         QString description = "Action: " + QString::fromStdString(revia::actions::ToString(request.type)) +
             (request.application.empty()
                 ? "\nSource: " + QString::fromStdString(revia::actions::PathToUtf8(request.source))
@@ -1573,6 +1738,16 @@ bool ReviaWindow::ConfirmAction(
                 QString::fromStdString(revia::actions::PathToUtf8(request.destination));
         }
         description += "\n\nPolicy: " + QString::fromStdString(decision.reason);
+        if (request.resolution.visionResolved)
+        {
+            description += "\n\nVision target: " +
+                QString::fromStdString(request.resolution.modelTarget) +
+                "\nResolved UIA element: " +
+                QString::fromStdString(request.resolution.resolvedName) +
+                "\nMatch confidence: " +
+                QString::number(request.resolution.matchConfidence * 100.0, 'f', 1) + "%" +
+                "\nThe exact UIA runtime id must still match when you approve.";
+        }
         confirmed = QMessageBox::question(
             this,
             "Confirm Revia action",
