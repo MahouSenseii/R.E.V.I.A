@@ -1,6 +1,7 @@
 #include "Actions/actionRuntime.h"
 
 #include "Filesystem/fileSystemExecutor.h"
+#include "Internet/internetSearchExecutor.h"
 #include "Windows/windowsAutomationExecutor.h"
 
 #include <algorithm>
@@ -13,7 +14,16 @@ namespace revia::actions
 
 bool ActionRuntime::Initialize(
     const std::filesystem::path& capabilityConfig,
-    const std::filesystem::path& auditPath,
+    const std::filesystem::path& inputAuditPath,
+    std::string& outError)
+{
+    std::lock_guard lock(mutex);
+    return InitializeUnlocked(capabilityConfig, inputAuditPath, outError);
+}
+
+bool ActionRuntime::InitializeUnlocked(
+    const std::filesystem::path& capabilityConfig,
+    const std::filesystem::path& inputAuditPath,
     std::string& outError)
 {
     CapabilitySettings settings;
@@ -38,6 +48,7 @@ bool ActionRuntime::Initialize(
     }
 
     policy = std::make_unique<policy::CapabilityPolicy>(settings);
+    dispatcher.Clear();
     desktopRateLimiter.Configure(
         settings.maxDesktopActionsPerMinute,
         settings.minimumDesktopActionIntervalMs);
@@ -45,10 +56,13 @@ bool ActionRuntime::Initialize(
         settings.maxReadBytes,
         settings.maxDirectoryEntries,
         settings.maxAffectedEntries));
+    dispatcher.Register(std::make_unique<internet::InternetSearchExecutor>(settings.internet));
 #ifdef _WIN32
     dispatcher.Register(std::make_unique<windows::WindowsAutomationExecutor>());
 #endif
-    auditLogger = std::make_unique<audit::ActionAuditLogger>(auditPath);
+    auditLogger = std::make_unique<audit::ActionAuditLogger>(inputAuditPath);
+    capabilityConfigPath = capabilityConfig;
+    auditPath = inputAuditPath;
     outError.clear();
     return true;
 }
@@ -65,6 +79,7 @@ planning::ParsedAction ActionRuntime::ParseJson(const std::string& input) const
 
 PolicyDecision ActionRuntime::Evaluate(const ActionRequest& request) const
 {
+    std::lock_guard lock(mutex);
     if (!policy)
     {
         PolicyDecision decision;
@@ -78,6 +93,7 @@ ActionOutcome ActionRuntime::Execute(
     const ActionRequest& request,
     bool confirmationGranted)
 {
+    std::lock_guard lock(mutex);
     ActionOutcome outcome;
     outcome.policy = Evaluate(request);
     const bool otherwiseExecutable =
@@ -130,6 +146,7 @@ PolicyDecision ActionRuntime::EvaluateScoped(
     const ActionRequest& request,
     const policy::CapabilityPolicy& scopedPolicy) const
 {
+    std::lock_guard lock(mutex);
     const PolicyDecision globalDecision = Evaluate(request);
     if (globalDecision.verdict == PolicyVerdict::Blocked)
     {
@@ -143,6 +160,7 @@ ActionOutcome ActionRuntime::ExecuteScoped(
     const policy::CapabilityPolicy& scopedPolicy,
     bool confirmationGranted)
 {
+    std::lock_guard lock(mutex);
     ActionOutcome outcome;
     outcome.policy = EvaluateScoped(request, scopedPolicy);
     const bool otherwiseExecutable =
@@ -167,6 +185,7 @@ ActionOutcome ActionRuntime::ExecuteScoped(
 
 std::string ActionRuntime::StatusJson() const
 {
+    std::lock_guard lock(mutex);
     if (!policy)
     {
         return nlohmann::json({{"initialized", false}}).dump(2);
@@ -191,18 +210,91 @@ std::string ActionRuntime::StatusJson() const
         {"max_directory_entries", settings.maxDirectoryEntries},
         {"max_affected_entries", settings.maxAffectedEntries},
         {"max_desktop_actions_per_minute", settings.maxDesktopActionsPerMinute},
-        {"minimum_desktop_action_interval_ms", settings.minimumDesktopActionIntervalMs}
+        {"minimum_desktop_action_interval_ms", settings.minimumDesktopActionIntervalMs},
+        {"internet", {
+            {"enabled", settings.internet.enabled},
+            {"automatic_lookup", settings.internet.automaticLookup},
+            {"provider", settings.internet.provider},
+            {"approved_hosts", settings.internet.approvedHosts},
+            {"request_timeout_ms", settings.internet.requestTimeoutMs},
+            {"max_response_bytes", settings.internet.maxResponseBytes},
+            {"max_requests_per_minute", settings.internet.maxRequestsPerMinute},
+            {"max_results", settings.internet.maxResults}
+        }}
     }).dump(2);
 }
 
 bool ActionRuntime::IsInitialized() const
 {
+    std::lock_guard lock(mutex);
     return policy != nullptr;
 }
 
 CapabilitySettings ActionRuntime::Settings() const
 {
+    std::lock_guard lock(mutex);
     return policy != nullptr ? policy->Settings() : CapabilitySettings{};
+}
+
+bool ActionRuntime::ReloadUnlocked(std::string& outError)
+{
+    if (capabilityConfigPath.empty() || auditPath.empty())
+    {
+        outError = "Action runtime has no capability configuration to reload.";
+        return false;
+    }
+    return InitializeUnlocked(capabilityConfigPath, auditPath, outError);
+}
+
+bool ActionRuntime::AddApprovedApplication(
+    const std::string& executable,
+    std::string& outError)
+{
+    std::lock_guard lock(mutex);
+    return capabilityEditor.AddApplication(capabilityConfigPath, executable, outError) &&
+        ReloadUnlocked(outError);
+}
+
+bool ActionRuntime::RemoveApprovedApplication(
+    const std::string& executable,
+    std::string& outError)
+{
+    std::lock_guard lock(mutex);
+    return capabilityEditor.RemoveApplication(capabilityConfigPath, executable, outError) &&
+        ReloadUnlocked(outError);
+}
+
+bool ActionRuntime::AddApprovedControl(
+    const std::string& executable,
+    const std::string& control,
+    std::string& outError)
+{
+    std::lock_guard lock(mutex);
+    return capabilityEditor.AddControl(
+            capabilityConfigPath, executable, control, outError) &&
+        ReloadUnlocked(outError);
+}
+
+bool ActionRuntime::RemoveApprovedControl(
+    const std::string& executable,
+    const std::string& control,
+    std::string& outError)
+{
+    std::lock_guard lock(mutex);
+    return capabilityEditor.RemoveControl(
+            capabilityConfigPath, executable, control, outError) &&
+        ReloadUnlocked(outError);
+}
+
+bool ActionRuntime::SetInternetAccess(
+    const bool enabled,
+    const bool automaticLookup,
+    std::string& outError)
+{
+    std::lock_guard lock(mutex);
+    return capabilityEditor.SetInternetAccess(
+            capabilityConfigPath, enabled, automaticLookup, outError) &&
+        ReloadUnlocked(outError);
 }
 
 } // namespace revia::actions

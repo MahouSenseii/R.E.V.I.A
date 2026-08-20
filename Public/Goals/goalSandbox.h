@@ -4,6 +4,7 @@
 
 #include <filesystem>
 #include <string>
+#include <vector>
 
 namespace revia::goals
 {
@@ -25,6 +26,9 @@ struct SandboxRehearsal
     // discarded with it rather than mixed into the real trail.
     std::filesystem::path capabilityConfig;
     std::filesystem::path auditLog;
+    // Desktop goals use disposable application windows created after the scratch tree is
+    // prepared. Only explicitly supported fixture applications may appear here.
+    std::vector<std::string> desktopApplications;
     std::string reason;
 };
 
@@ -46,6 +50,7 @@ public:
     static bool Discard(const std::filesystem::path& root, std::string& outError);
 
     [[nodiscard]] static bool IsFilesystemAction(actions::ActionType type);
+    [[nodiscard]] static bool IsDesktopAction(actions::ActionType type);
 };
 
 } // namespace revia::goals

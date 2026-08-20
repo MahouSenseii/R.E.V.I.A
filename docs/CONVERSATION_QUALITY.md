@@ -37,7 +37,11 @@ Run these against the active local model after prompt or model changes:
 
 Deterministic foundation tests cover repair guidance and pronoun ownership, grounded
 wellbeing/preferences/motives, stock-tail filtering, coherent context trimming, input
-arbitration, scheduler priority, and hardware scaling. Sensitive short turns wait for
-the complete reply before speech so the grounding pass cannot make text and voice
-disagree. A live model check is still required because sampling and model weights can
-regress behavior even when prompt assembly is correct.
+arbitration, scheduler priority, and hardware scaling. `ConversationQualityMonitor` also
+scores successful live replies for invented physical-life claims, user/Revia ownership,
+stock support tails, and repeated openings. Its current snapshot is visible in the
+`Conversation quality` pipeline row and through `/quality`; it diagnoses rather than
+silently rewriting a reply. Sensitive short turns wait for the complete reply before speech
+so the grounding pass cannot make text and voice disagree. A live model check is still
+required because sampling and model weights can regress behavior even when deterministic
+assembly and diagnostics are correct.

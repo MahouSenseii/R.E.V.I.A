@@ -133,6 +133,22 @@ actions::PolicyDecision CapabilityPolicy::Evaluate(
         decision.reason = "Unknown actions are never executable.";
         return decision;
     }
+    if (request.type == actions::ActionType::WebSearch)
+    {
+        if (!settings.internet.enabled)
+        {
+            decision.reason = "Internet access is disabled in capability settings.";
+            return decision;
+        }
+        if (request.value.empty() || request.value.size() > 1024)
+        {
+            decision.reason = "Internet search requires a query no longer than 1024 bytes.";
+            return decision;
+        }
+        decision.verdict = actions::PolicyVerdict::Allowed;
+        decision.reason = "Read-only search approved through the configured bounded provider.";
+        return decision;
+    }
     if (IsDesktopAction(request.type))
     {
         if (request.application.empty() || request.application.find_first_of("/\\") != std::string::npos)

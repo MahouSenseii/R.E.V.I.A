@@ -14,6 +14,11 @@ void ActionDispatcher::Register(std::unique_ptr<IActionExecutor> executor)
     executors.push_back(std::move(executor));
 }
 
+void ActionDispatcher::Clear()
+{
+    executors.clear();
+}
+
 ActionResult ActionDispatcher::Dispatch(const ActionRequest& request,const PolicyDecision& decision,bool confirmationGranted)
 {
     ActionResult result;

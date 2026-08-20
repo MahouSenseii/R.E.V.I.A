@@ -2,11 +2,14 @@
 #include "Core/localApiKey.h"
 #include "Memory/longTermMemory.h"
 #include "Planning/goalPlanner.h"
+#include "Windows/disposableApplicationFixtures.h"
 
 #include <algorithm>
 #include <cctype>
 #include <chrono>
+#include <filesystem>
 #include <sstream>
+#include <system_error>
 #include <thread>
 #include <utility>
 
@@ -15,6 +18,45 @@ namespace revia::runtime
 
 namespace
 {
+    bool EnsureCapabilityConfig(
+        const std::filesystem::path& runtimePath,
+        const std::filesystem::path& templatePath,
+        std::string& outError)
+    {
+        std::error_code error;
+        if (std::filesystem::exists(runtimePath, error) && !error)
+        {
+            outError.clear();
+            return true;
+        }
+        error.clear();
+        std::filesystem::create_directories(runtimePath.parent_path(), error);
+        if (error)
+        {
+            outError = "Could not create the persistent capability directory: " +
+                error.message();
+            return false;
+        }
+        if (!std::filesystem::copy_file(
+                templatePath,
+                runtimePath,
+                std::filesystem::copy_options::none,
+                error))
+        {
+            // Another starting shell may have won the first-run copy race.
+            if (std::filesystem::exists(runtimePath))
+            {
+                outError.clear();
+                return true;
+            }
+            outError = "Could not seed persistent capabilities from " +
+                actions::PathToUtf8(templatePath) + ": " + error.message();
+            return false;
+        }
+        outError.clear();
+        return true;
+    }
+
     double ElapsedMilliseconds(const std::chrono::steady_clock::time_point start)
     {
         return std::chrono::duration<double, std::milli>(
@@ -94,6 +136,20 @@ ReviaSession::ReviaSession()
           [this](const AffectSnapshot& affect)
           {
               PublishAffect(affect);
+          },
+          [this]()
+          {
+              return actionRuntime.Settings().internet;
+          },
+          [this](const std::string& query)
+          {
+              actions::ActionRequest request;
+              request.id = actions::NewActionId();
+              request.type = actions::ActionType::WebSearch;
+              request.application = "bounded_search";
+              request.value = query;
+              request.requestedBy = "conversation_internet";
+              return actionRuntime.Execute(request);
           })
 {
     appLogger.SetSink([this](const std::string& line)
@@ -184,13 +240,29 @@ bool ReviaSession::Start()
 
     std::string actionError;
     stageStarted = std::chrono::steady_clock::now();
-    if (!actionRuntime.Initialize("Config/capabilities.json", "Audit/actions.jsonl", actionError))
+    const std::filesystem::path capabilityPath =
+        "RuntimeData/Capabilities/capabilities.json";
+    if (!EnsureCapabilityConfig(
+            capabilityPath, "Config/capabilities.json", actionError) ||
+        !actionRuntime.Initialize(capabilityPath, "Audit/actions.jsonl", actionError))
     {
         appLogger.Warning("Action runtime disabled: " + actionError);
     }
     else
     {
         appLogger.Log("Capability runtime initialized.");
+        const actions::CapabilitySettings capabilities = actionRuntime.Settings();
+        PublishComponent(
+            "Permissions", "Ready",
+            std::to_string(capabilities.approvedApplications.size()) +
+                " approved applications with editable per-control scopes.");
+        PublishComponent(
+            "Internet", capabilities.internet.enabled ? "Ready" : "Disabled",
+            capabilities.internet.enabled
+                ? capabilities.internet.automaticLookup
+                    ? "Bounded internet lookup is enabled in automatic mode."
+                    : "Bounded internet lookup is enabled for explicit requests."
+                : "Internet lookup is disabled.");
     }
     startupTimings.push_back({"action_runtime_init", ElapsedMilliseconds(stageStarted)});
 
@@ -1683,6 +1755,93 @@ SessionResult ReviaSession::ActOnScreen(const std::string& instruction)
     return result;
 }
 
+actions::CapabilitySettings ReviaSession::Capabilities() const
+{
+    return actionRuntime.Settings();
+}
+
+actions::windows::ApplicationControlInventory
+ReviaSession::DiscoverForegroundApplicationControls() const
+{
+    return applicationControlDiscovery.InspectForeground();
+}
+
+CapabilityUpdateResult ReviaSession::AddApprovedApplication(const std::string& executable)
+{
+    std::string error;
+    CapabilityUpdateResult result;
+    result.succeeded = actionRuntime.AddApprovedApplication(executable, error);
+    result.message = result.succeeded
+        ? "Approved " + executable + " with no mutable controls."
+        : error;
+    PublishComponent(
+        "Permissions", result.succeeded ? "Saved" : "Error", result.message);
+    return result;
+}
+
+CapabilityUpdateResult ReviaSession::RemoveApprovedApplication(const std::string& executable)
+{
+    std::string error;
+    CapabilityUpdateResult result;
+    result.succeeded = actionRuntime.RemoveApprovedApplication(executable, error);
+    result.message = result.succeeded
+        ? "Removed all permissions for " + executable + "."
+        : error;
+    PublishComponent(
+        "Permissions", result.succeeded ? "Saved" : "Error", result.message);
+    return result;
+}
+
+CapabilityUpdateResult ReviaSession::AddApprovedControl(
+    const std::string& executable,
+    const std::string& control)
+{
+    std::string error;
+    CapabilityUpdateResult result;
+    result.succeeded = actionRuntime.AddApprovedControl(executable, control, error);
+    result.message = result.succeeded
+        ? "Approved control '" + control + "' for " + executable + "."
+        : error;
+    PublishComponent(
+        "Permissions", result.succeeded ? "Saved" : "Error", result.message);
+    return result;
+}
+
+CapabilityUpdateResult ReviaSession::RemoveApprovedControl(
+    const std::string& executable,
+    const std::string& control)
+{
+    std::string error;
+    CapabilityUpdateResult result;
+    result.succeeded = actionRuntime.RemoveApprovedControl(executable, control, error);
+    result.message = result.succeeded
+        ? "Removed control '" + control + "' from " + executable + "."
+        : error;
+    PublishComponent(
+        "Permissions", result.succeeded ? "Saved" : "Error", result.message);
+    return result;
+}
+
+CapabilityUpdateResult ReviaSession::SetInternetAccess(
+    const bool enabled,
+    const bool automaticLookup)
+{
+    std::string error;
+    CapabilityUpdateResult result;
+    result.succeeded = actionRuntime.SetInternetAccess(enabled, automaticLookup, error);
+    result.message = result.succeeded
+        ? enabled
+            ? automaticLookup
+                ? "Internet lookup enabled for explicit and automatic knowledge questions."
+                : "Internet lookup enabled only when explicitly requested."
+            : "Internet lookup disabled."
+        : error;
+    PublishComponent(
+        "Internet", result.succeeded ? enabled ? "Ready" : "Disabled" : "Error",
+        result.message);
+    return result;
+}
+
 std::string ReviaSession::DisplayName() const
 {
     return profile.displayName.empty() ? "Revia" : profile.displayName;
@@ -2138,7 +2297,7 @@ bool ReviaSession::TryHandleGoalInput(const std::string& input, SessionResult& r
 goals::Goal ReviaSession::RehearseGoal(const goals::Goal& goal, std::string& outSummary)
 {
     goals::Goal rehearsed;
-    const goals::SandboxRehearsal sandbox = goals::GoalSandbox::Prepare(goal);
+    goals::SandboxRehearsal sandbox = goals::GoalSandbox::Prepare(goal);
     if (!sandbox.supported)
     {
         outSummary = "Not rehearsed: " + sandbox.reason + ".";
@@ -2168,6 +2327,20 @@ goals::Goal ReviaSession::RehearseGoal(const goals::Goal& goal, std::string& out
         outSummary = "Rehearsal could not be set up: " + sandbox.reason + ".";
         rehearsed.status = goals::GoalStatus::Failed;
         return rehearsed;
+    }
+
+    actions::windows::DisposableApplicationFixtures desktopFixtures;
+    if (!sandbox.desktopApplications.empty())
+    {
+        std::string fixtureError;
+        if (!desktopFixtures.Launch(
+                sandbox.desktopApplications, sandbox.root, fixtureError) ||
+            !desktopFixtures.Retarget(sandbox.goal, fixtureError))
+        {
+            outSummary = "Rehearsal could not create a disposable application: " + fixtureError;
+            rehearsed.status = goals::GoalStatus::Failed;
+            return rehearsed;
+        }
     }
 
     SetState(RuntimeState::Acting, "Rehearsing the goal in a scratch copy.");
@@ -2287,6 +2460,57 @@ bool ReviaSession::TryHandleActionInput(const std::string& input, SessionResult&
     {
         result.text = actionRuntime.StatusJson();
         SetState(RuntimeState::Idle);
+        return true;
+    }
+
+    if (input == "/quality")
+    {
+        result.text = conversationRuntime.QualitySnapshot().Summary();
+        SetState(RuntimeState::Idle);
+        return true;
+    }
+
+    if (input == "/internet" || input.rfind("/internet ", 0) == 0)
+    {
+        const std::string argument = input.size() > 10 ? Trim(input.substr(10)) : std::string();
+        actions::CapabilitySettings::InternetAccess current = actionRuntime.Settings().internet;
+        if (argument == "on") current.enabled = true;
+        else if (argument == "off") current.enabled = false;
+        else if (argument == "auto")
+        {
+            current.enabled = true;
+            current.automaticLookup = true;
+        }
+        else if (argument == "manual")
+        {
+            current.enabled = true;
+            current.automaticLookup = false;
+        }
+        else if (!argument.empty())
+        {
+            result.succeeded = false;
+            result.text = "Usage: /internet [on|off|auto|manual]";
+            result.reason = "Unrecognized internet access argument.";
+            SetState(RuntimeState::Blocked, result.reason);
+            return true;
+        }
+        if (!argument.empty())
+        {
+            const CapabilityUpdateResult update =
+                SetInternetAccess(current.enabled, current.automaticLookup);
+            result.succeeded = update.succeeded;
+            result.text = update.message;
+            result.reason = update.succeeded ? std::string() : update.message;
+        }
+        else
+        {
+            result.text = current.enabled
+                ? current.automaticLookup
+                    ? "Internet lookup is ON in automatic mode."
+                    : "Internet lookup is ON for explicit requests only."
+                : "Internet lookup is OFF.";
+        }
+        SetState(result.succeeded ? RuntimeState::Idle : RuntimeState::Blocked, result.reason);
         return true;
     }
 

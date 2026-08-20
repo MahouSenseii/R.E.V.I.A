@@ -26,6 +26,7 @@
 #include "Vision/screenCaptureService.h"
 #include "Vision/visionActionParser.h"
 #include "Windows/visionUiaResolver.h"
+#include "Windows/applicationControlDiscovery.h"
 
 #include <atomic>
 #include <condition_variable>
@@ -40,6 +41,12 @@
 
 namespace revia::runtime
 {
+
+struct CapabilityUpdateResult
+{
+    bool succeeded = false;
+    std::string message;
+};
 
 class ReviaSession
 {
@@ -85,6 +92,19 @@ public:
     // resolve to an exact UIA runtime id and then pass through ordinary action policy,
     // confirmation, dispatch, and audit.
     SessionResult ActOnScreen(const std::string& instruction);
+
+    [[nodiscard]] actions::CapabilitySettings Capabilities() const;
+    [[nodiscard]] actions::windows::ApplicationControlInventory
+        DiscoverForegroundApplicationControls() const;
+    CapabilityUpdateResult AddApprovedApplication(const std::string& executable);
+    CapabilityUpdateResult RemoveApprovedApplication(const std::string& executable);
+    CapabilityUpdateResult AddApprovedControl(
+        const std::string& executable,
+        const std::string& control);
+    CapabilityUpdateResult RemoveApprovedControl(
+        const std::string& executable,
+        const std::string& control);
+    CapabilityUpdateResult SetInternetAccess(bool enabled, bool automaticLookup);
 
     // Stage 4. The runner itself adds no authority: every step goes through the same
     // dispatcher, policy, and audit path as an interactive action, and has to prove it
@@ -212,6 +232,7 @@ private:
     vision::ScreenCaptureService screenCaptureService;
     vision::VisionActionParser visionActionParser;
     actions::windows::VisionUiaResolver visionUiaResolver;
+    actions::windows::ApplicationControlDiscovery applicationControlDiscovery;
     llamaCppServerProcess llamaServerProcess;
     llamaCppServerProcess embeddingServerProcess;
     agents::TurnCoordinator turnCoordinator;

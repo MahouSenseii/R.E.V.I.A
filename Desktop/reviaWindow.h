@@ -23,6 +23,7 @@ class QTimer;
 class QToolButton;
 class QWidget;
 class PipelinePanel;
+class CapabilityPanel;
 
 class ReviaWindow final : public QMainWindow
 {
@@ -59,6 +60,7 @@ private:
     void ApplyMicrophoneUi(MicrophoneUi microphoneUi);
     void AnalyzeVisibleScreen();
     void UseVisibleScreen();
+    void DiscoverApplicationPermissions();
     void RefreshVoiceStudio();
     void CreateVoicePreset();
     void PreviewVoice();
@@ -118,6 +120,7 @@ private:
     QPlainTextEdit* messageInput = nullptr;
     QPlainTextEdit* activityFeed = nullptr;
     PipelinePanel* pipelinePanel = nullptr;
+    CapabilityPanel* capabilityPanel = nullptr;
     QTabWidget* tabs = nullptr;
     QPushButton* sendButton = nullptr;
     QPushButton* stopButton = nullptr;
@@ -145,6 +148,7 @@ private:
     std::jthread operationWorker;
     std::jthread shutdownWorker;
     std::jthread voiceWorker;
+    std::jthread capabilityWorker;
     std::atomic<bool> shuttingDown = false;
     std::atomic<bool> voiceOperationRunning = false;
     // A reply that has been generated but is waiting for its audio to start, so the words

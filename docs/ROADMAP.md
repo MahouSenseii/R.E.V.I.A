@@ -85,9 +85,16 @@ Exit criteria: Revia can remain on the desktop without stealing focus, the user 
 - Implemented: every approved application now requires a per-executable control scope.
   Mutable Focus/Value/Invoke actions share a configurable rolling per-minute budget and
   minimum interval; rate refusals are blocked policy outcomes and audit-visible.
-- Remaining: replace the current explicit compatibility wildcards with deterministic
-  Notepad and Explorer integration fixtures and exact tested control scopes before enabling
-  more applications.
+- Implemented: disposable Explorer windows and eligible Notepad windows are accepted only
+  when their HWNDs are distinct from every pre-existing user window, retargeted into a
+  separate rehearsal runtime, inspected through UI Automation, and closed by RAII. Modern
+  Notepad is additionally rejected when it restores more than one prior document tab; on
+  that Windows setting, Revia refuses Notepad rehearsal instead of reading a user session.
+  The default profile uses exact observed control names rather than compatibility wildcards.
+- Implemented: the Permissions tab inventories enabled foreground Invoke/Value controls
+  without granting them, lists all active app/control scopes, and can atomically add or
+  revoke a scope with immediate policy reload. Editable permissions live under
+  `RuntimeData` so rebuilding cannot silently restore a revoked grant.
 - Require confirmation before authentication, purchases, publishing, sending messages, privilege elevation, security-setting changes, or irreversible operations.
 
 Exit criteria: each supported application has deterministic integration tests and a deny-by-default capability profile, and every vision-resolved action either produces a typed element reference or is refused with the reason recorded.
@@ -100,9 +107,10 @@ Exit criteria: each supported application has deterministic integration tests an
 - Implemented: `ReviaSession` owns the store and runner, republishes step transitions on the runtime event bus as `Goal` component status, routes step confirmations to the same handler interactive actions use, and reports unfinished goals at startup. `/goals` lists them, `/goals resume <id>` continues one.
 - Implemented: **goal authoring.** `/goal <request>` asks the local model for a multi-step plan — each step an action, a read-only check, and a literal expectation — decodes it with `GoalPlanner`, refuses more than twelve steps, then runs it through `GoalRunner::Validate` before anything executes. The plan is shown in full and approved as a whole before the first step, and every step still hits the per-action confirmation path.
 - Implemented: the plan never names its own capability scope. `NarrowScopeForGoal` derives it from configured policy and can only tighten — mode forced to `ApprovedScope`, root creation refused, auto-approval capped at `ReversibleWrite`.
-- Implemented: **the disposable sandbox.** Every `/goal` run is rehearsed first. `GoalSandbox` stages only the paths the plan names into a scratch tree, rewrites the plan onto it, and runs it there. A plan that fails rehearsal is refused and never reaches real folders; a plan that passes is offered for approval *with that evidence attached*, so the user approves an observed result rather than plausible-looking text. The scratch tree is removed by a scope guard, so an exception cannot leave one behind.
+- Implemented: **the disposable sandbox.** Every `/goal` run is rehearsed first. `GoalSandbox` stages only the paths the plan names into a scratch tree, rewrites the plan onto it, and runs it there. Explorer and isolation-safe Notepad steps additionally launch distinct disposable windows and retarget requests to their exact titles; session-restoring Notepad and other desktop applications fail rehearsal rather than inspecting a user window. A plan that fails rehearsal is refused and never reaches real folders or user windows; a plan that passes is offered for approval *with that evidence attached*. Scratch state and owned fixture windows are removed by scope guards.
 - Remaining: the CLI (`reviaApp`) has none of the goal commands; they exist on `ReviaSession` only.
-- Remaining: rehearsal is filesystem-only. A plan that drives an application has nothing to copy, so it reports that it could not be rehearsed and goes to confirmation without evidence. Rehearsing UIA actions needs a disposable application instance, not a disposable directory.
+- Remaining: each application beyond Notepad and Explorer needs its own explicit disposable
+  fixture and control-level verification before goal rehearsal may support it.
 
 **A rehearsal needs its own `ActionRuntime`, not the session's.** Scoped execution takes the more restrictive of the global policy and the goal's, and the scratch tree sits outside every configured approved root — so running a rehearsal through the session's runtime blocks every step of a perfectly workable plan. `GoalSandbox::Prepare` therefore emits a capability config approving the scratch tree and nothing else, with no approved applications and the goal's own risk ceiling copied across so the rehearsal is never more permissive than the run it stands in for. Its audit log is discarded with the tree rather than mixed into the real trail.
 
@@ -208,12 +216,20 @@ Exit criteria: the character runs for a full day without stealing focus or dropp
 
 Stage 4 executes goals, Stage 6 Tier 0 observes and summarises a session, and Stage 7's first slice now connects them: Revia can offer something unprompted, behind a deterministic attention gate, and be interrupted mid-sentence.
 
-The vision-to-typed resolver, per-control policy, and desktop rate budgets are now connected
-and live-fixture validated. The strongest remaining Stage 3 slice is **deterministic Notepad
-and Explorer integration fixtures**. Those fixtures should discover exact accessible names
-and automation ids on this Windows version, exercise read/value/invoke success and stale
-element refusal, and then replace the two compatibility `"*"` scopes. Do not add another
-application until its own fixture passes.
+The vision-to-typed resolver, per-control policy, desktop rate budgets, and disposable
+application safety gate are connected. Explorer is live-fixture validated; Notepad runs
+only when Windows supplies a single isolated document window and otherwise reports a safe
+skip. The next Stage 3 slice
+is **one complete useful application adapter**: choose a narrow workflow, pin its stable
+automation ids through the Permissions inventory, exercise read/value/invoke success and
+stale-element refusal, and add its own disposable fixture. Do not add broad application
+access or a compatibility wildcard.
+
+Bounded internet grounding and live permission editing are now implemented as separate
+single-purpose capabilities. The next quality slice is an evaluation corpus that runs the
+active local model against the conversation contract and records pass/fail alongside the
+runtime quality counters; deterministic heuristics can flag regressions but cannot prove
+that sampling still sounds natural.
 
 The `InputArbiter` is now wired into `Submit`: typed input is preserved exactly, while final voice transcripts pass through noise and duplicate admission before they become turns. Always-on VAD listening still has settings but no continuous capture loop; push-to-talk/toggle recording remains the enabled path because a standing microphone needs its own explicit privacy control.
 

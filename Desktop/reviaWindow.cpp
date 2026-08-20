@@ -1,4 +1,5 @@
 #include "reviaWindow.h"
+#include "capabilityPanel.h"
 #include "pipelinePanel.h"
 
 #include <QApplication>
@@ -156,6 +157,10 @@ ReviaWindow::~ReviaWindow()
     if (operationWorker.joinable())
     {
         operationWorker.join();
+    }
+    if (capabilityWorker.joinable())
+    {
+        capabilityWorker.join();
     }
     session.Stop();
     if (voiceWorker.joinable())
@@ -405,6 +410,12 @@ void ReviaWindow::BuildInterface()
 
     pipelinePanel = new PipelinePanel(tabs);
     tabs->addTab(pipelinePanel, "Pipelines");
+
+    capabilityPanel = new CapabilityPanel(
+        session,
+        [this]() { DiscoverApplicationPermissions(); },
+        tabs);
+    tabs->addTab(capabilityPanel, "Permissions");
 
     // The tab has three sections and does not fit a short window. Without a scroll area
     // the layout steals height from every field until the forms collapse into unreadable
@@ -767,6 +778,10 @@ void ReviaWindow::StartRuntime()
                 AppendActivity("Startup did not complete. Check the activity log.");
             }
             RefreshVoiceStudio();
+            if (capabilityPanel != nullptr)
+            {
+                capabilityPanel->Refresh();
+            }
             messageInput->setFocus();
         }, Qt::QueuedConnection);
     });
@@ -1090,7 +1105,7 @@ void ReviaWindow::UseVisibleScreen()
     const bool approved = QMessageBox::question(
         this,
         "Share and resolve screen control",
-        "Revia will capture all visible monitors once, locate the requested control "
+        "Revia will capture only the foreground application window once, locate the requested control "
         "locally, and require a match to a real Windows UI Automation element. The "
         "temporary PNG is deleted before any action. There is no coordinate-click "
         "fallback, and the resulting action still requires normal policy approval. "
@@ -1138,6 +1153,39 @@ void ReviaWindow::UseVisibleScreen()
             screenActionButton->setEnabled(session.IsVisionAvailable());
             stopButton->setEnabled(false);
             messageInput->setFocus();
+        }, Qt::QueuedConnection);
+    });
+}
+
+void ReviaWindow::DiscoverApplicationPermissions()
+{
+    if (shuttingDown.load() || session.IsBusy())
+    {
+        if (capabilityPanel != nullptr)
+        {
+            capabilityPanel->SetStatus(
+                "Wait for the current Revia operation to finish before discovery.", true);
+        }
+        return;
+    }
+    showMinimized();
+    if (capabilityWorker.joinable())
+    {
+        capabilityWorker.join();
+    }
+    capabilityWorker = std::jthread([this]()
+    {
+        std::this_thread::sleep_for(std::chrono::milliseconds(450));
+        const auto inventory = session.DiscoverForegroundApplicationControls();
+        QMetaObject::invokeMethod(this, [this, inventory]()
+        {
+            showNormal();
+            raise();
+            activateWindow();
+            if (capabilityPanel != nullptr)
+            {
+                capabilityPanel->ShowDiscovery(inventory);
+            }
         }, Qt::QueuedConnection);
     });
 }

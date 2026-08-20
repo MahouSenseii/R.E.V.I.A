@@ -117,7 +117,7 @@ target_link_libraries(ReviaFoundation PUBLIC
 )
 
 if(WIN32)
-    target_link_libraries(ReviaFoundation PUBLIC shell32 dxgi sapi ole32 oleaut32 winmm gdiplus gdi32 bcrypt)
+    target_link_libraries(ReviaFoundation PUBLIC shell32 dxgi sapi ole32 oleaut32 winmm gdiplus gdi32 bcrypt winhttp)
 endif()
 
 if(MSVC)
@@ -133,6 +133,8 @@ if(REVIA_BUILD_DESKTOP)
     find_package(Qt6 6.8 COMPONENTS Core Gui Widgets)
     if(Qt6_FOUND)
         add_executable(ReviaDesktop WIN32
+                "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/capabilityPanel.cpp"
+                "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/capabilityPanel.h"
                 "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/main.cpp"
                 "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/pipelinePanel.cpp"
                 "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/pipelinePanel.h"

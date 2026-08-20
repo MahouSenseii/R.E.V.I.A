@@ -1,13 +1,15 @@
 # R.E.V.I.A
 
-R.E.V.I.A is a modular C++ desktop assistant. Its Qt shell combines local llama.cpp chat and multimodal vision, hybrid structured memory, affect-aware Windows speech, toggled CUDA whisper.cpp speech recognition, and supervised filesystem or Windows UI Automation actions. Every OS action still passes through deterministic policy, confirmation, dispatch, and JSONL audit boundaries.
+R.E.V.I.A is a modular C++ desktop assistant. Its Qt shell combines local llama.cpp chat and multimodal vision, hybrid structured memory, affect-aware Windows speech, toggled CUDA whisper.cpp speech recognition, bounded opt-in internet grounding, and supervised filesystem or Windows UI Automation actions. Every external action still passes through deterministic policy, confirmation, dispatch, and JSONL audit boundaries.
 
 The runtime is multi-worker rather than a single blocking pipeline: UI, interactive inference, TTS, STT, and background memory each have independent lifecycle and cancellation ownership. Long-running goals and avatar rendering remain later work; neither should require giving the model unrestricted shell or administrator access.
 
 ## What works now
 
 - Local llama.cpp chat through its OpenAI-compatible chat-completions endpoint.
-- A Qt 6 desktop window with horizontal component status and chat controls plus matching Chat, Activity, Voice Studio, and Settings tabs, stop control, always-on-top option, and tray controls.
+- A Qt 6 desktop window with horizontal component status and chat controls plus Chat, Activity, Pipelines, Permissions, Voice Studio, and Settings tabs, stop control, always-on-top option, and tray controls.
+- A persistent Permissions tab that lists every approved Windows application and exact mutable control, discovers actionable UI Automation controls from the foreground window without granting them, and supports explicit add/revoke operations. Application approval alone permits inspection only.
+- Opt-in bounded internet grounding. Automatic mode deterministically recognizes current/factual knowledge questions; manual mode leaves ordinary questions local and responds only to explicit web requests. Queries can reach only fixed approved DuckDuckGo and Wikipedia HTTPS APIs, with time, byte, source-count, and rolling request limits. Revia receives sourced text rather than a browser or general socket.
 - A bounded affect controller for Revia's own response posture (neutral, curious, pleased, concerned, focused, or confused), with hysteresis, decay, reasons, and visible intensity. It does not infer or invent the user's emotions. The posture is **fed into the model** as a system line each turn, so it colours tone and pacing rather than only driving the status chip and the speech rate. It is phrased as Revia's own stance and explicitly forbids her from naming it, describing her feelings, or assuming anything about the user's.
 - A collapsible **Thought process** line under each reply. It carries the posture that shaped the turn, any reasoning the model emitted in `<think>` tags, whether the reply was spoken in fragments, and where the time went. Reasoning is stripped from the reply itself, so it is never read aloud and never shown inline as if it were an answer.
 - Profile-aware speech on a dedicated worker. Windows SAPI remains the zero-setup fallback; Qwen3-TTS can design a reusable local character voice, clone it for replies, preview it, and assign it independently to each profile. Markdown, code blocks, and raw URLs are removed before speaking, and the UI reports model loading, generation, playback, fallback, and timing.
@@ -102,6 +104,12 @@ Paths containing spaces must be quoted.
 /status
 /backend
 /capabilities
+/quality
+/internet
+/internet on
+/internet manual
+/internet off
+/web "current llama.cpp release"
 /plan create a folder named Notes in my Revia sandbox
 /goal make a Reports folder in my sandbox and copy summary.txt into it
 /goals
@@ -136,20 +144,29 @@ Every proposal—including one produced by the LLM—must pass through the same 
 
 ## Capability configuration
 
-The source configuration is `Config/capabilities.json`. The safe default is:
+The editable runtime configuration is `RuntimeData/Capabilities/capabilities.json`. It is seeded from the repository once and is never overwritten by later builds. `Config/capabilities.json` remains the checked-in default template. The safe default is:
 
 - `mode: supervised`
 - only `%USERPROFILE%\Documents\ReviaSandbox` is approved
 - only `notepad.exe` and `explorer.exe` are approved for typed UI Automation by default
-- every approved executable has an explicit `approvedControls` scope; the current two use
-  `"*"` for compatibility and should be narrowed to tested names or automation ids before
-  adding more applications
+- every approved executable has an explicit `approvedControls` scope; Notepad and Explorer
+  ship with narrow names observed by the disposable UI Automation fixtures and no wildcard
+- approving an application with an empty control list grants read-only inspection only;
+  mutable Invoke/Value actions require an exact approved accessible name or automation id
 - mutable desktop actions are capped at 12 per rolling minute with at least 250 ms between
   admissions
 - read-only work can run without a prompt
 - filesystem writes require confirmation
 
-After changing the source configuration, rebuild so the post-build copy updates `build/debug/Config/`.
+Use the **Permissions** tab for normal changes. **Inspect foreground app** minimizes Revia, inventories enabled Invoke/Value controls in the application underneath, and changes no permission until selected rows are approved. Removing a control or application takes effect immediately and persists across rebuilds.
+
+Desktop goal rehearsal never attaches to a pre-existing window. Explorer has a disposable
+live fixture. Modern Notepad is used only when the launched window contains a single
+isolated document tab; if Notepad restores previous tabs under the user's startup setting,
+rehearsal refuses it rather than inventorying that session. This does not remove ordinary
+supervised Notepad control from the Permissions tab.
+
+Internet access is disabled by default. Enabling it requires an explicit confirmation because the question text may leave the machine. Automatic lookup can be disabled separately. `/internet` reports the mode, `/internet on|manual|off` changes it, and `/web "query"` always requests one lookup when access is enabled. Results are injected as untrusted reference data and Revia is instructed to cite only the returned URLs. The audit log records the action and query length, not the query text.
 
 ### Vision-grounded screen actions
 

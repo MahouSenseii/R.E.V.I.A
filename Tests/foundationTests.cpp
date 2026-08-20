@@ -4,6 +4,7 @@
 #include "Agents/inputArbiter.h"
 #include "Agents/memoryAgent.h"
 #include "Agents/conversationStylePolicy.h"
+#include "Agents/conversationQualityMonitor.h"
 #include "Agents/replyFragmenter.h"
 #include "Core/localApiKey.h"
 #include "Core/conversationContext.h"
@@ -15,6 +16,8 @@
 #include "Initiative/attentionPolicy.h"
 #include "Initiative/conversationStarter.h"
 #include "Initiative/initiativeController.h"
+#include "Internet/internetLookupPolicy.h"
+#include "Internet/internetSearchExecutor.h"
 #include "Goals/goalTypes.h"
 #include "LLM/LLamaCPP/llamaCppServerProcess.h"
 #include "LLM/inferenceScheduler.h"
@@ -26,6 +29,7 @@
 #include "Planning/goalPlanner.h"
 #include "Planning/structuredActionParser.h"
 #include "Policy/capabilityPolicy.h"
+#include "Policy/capabilityEditor.h"
 #include "Policy/desktopActionRateLimiter.h"
 #include "Policy/permissionStore.h"
 #include "Runtime/affectController.h"
@@ -37,6 +41,8 @@
 #include "Speech/qwenTtsClient.h"
 #include "Speech/voicePresetStore.h"
 #include "Windows/windowsAutomationExecutor.h"
+#include "Windows/applicationControlDiscovery.h"
+#include "Windows/disposableApplicationFixtures.h"
 #include "Windows/visionUiaResolver.h"
 #include "Vision/visionActionParser.h"
 
@@ -269,6 +275,177 @@ void TestConfigurationFailsClosed()
     Check(!store.Load(configPath, settings, error) &&
         error.find("approvedControls") != std::string::npos,
         "An approved application without a control scope did not fail closed.");
+}
+
+void TestCapabilityEditorPersistsNarrowLivePermissions()
+{
+    ScopedTestDirectory temporary;
+    const auto configPath = temporary.root / "capabilities.json";
+    nlohmann::json config = {
+        {"mode", "supervised"},
+        {"approvedRoots", nlohmann::json::array({"%USERPROFILE%\\Documents\\ReviaSandbox"})},
+        {"approvedApplications", nlohmann::json::array()},
+        {"approvedControls", nlohmann::json::object()},
+        {"autoApproveRiskThrough", "read_only"},
+        {"createMissingApprovedRoots", false},
+        {"internet", {
+            {"enabled", false},
+            {"automaticLookup", true},
+            {"provider", "duckduckgo"},
+            {"approvedHosts", {"api.duckduckgo.com", "en.wikipedia.org"}},
+            {"requestTimeoutMs", 8000},
+            {"maxResponseBytes", 262144},
+            {"maxRequestsPerMinute", 12},
+            {"maxResults", 5}}}
+    };
+    WriteBytes(configPath, config.dump(2));
+
+    revia::policy::CapabilityEditor editor;
+    std::string error;
+    Check(editor.AddApplication(configPath, "notepad.exe", error),
+        "The permission editor could not add an application: " + error);
+    Check(editor.AddControl(configPath, "notepad.exe", "Text editor", error),
+        "The permission editor could not add a control: " + error);
+    Check(editor.SetInternetAccess(configPath, true, false, error),
+        "The permission editor could not enable internet access: " + error);
+
+    std::ifstream stream(configPath, std::ios::binary);
+    const nlohmann::json saved = nlohmann::json::parse(stream);
+    stream.close();
+    Check(saved.at("approvedRoots").front() ==
+            "%USERPROFILE%\\Documents\\ReviaSandbox",
+        "Editing permissions expanded and pinned a portable root path.");
+    Check(saved.at("approvedApplications") == nlohmann::json::array({"notepad.exe"}) &&
+        saved.at("approvedControls").at("notepad.exe") ==
+            nlohmann::json::array({"Text editor"}),
+        "The application/control permission did not persist exactly.");
+    Check(saved.at("internet").at("enabled") == true &&
+        saved.at("internet").at("automaticLookup") == false,
+        "The explicit-only internet setting did not persist.");
+
+    const bool removedControl =
+        editor.RemoveControl(configPath, "notepad.exe", "Text editor", error);
+    Check(removedControl,
+        "The permission editor could not remove a control: " + error);
+    const bool removedApplication = editor.RemoveApplication(configPath, "notepad.exe", error);
+    Check(removedApplication,
+        "The permission editor could not remove an application: " + error);
+    revia::policy::PermissionStore store;
+    CapabilitySettings parsed;
+    Check(store.Load(configPath, parsed, error) && parsed.approvedApplications.empty() &&
+        parsed.internet.enabled && !parsed.internet.automaticLookup,
+        "The edited capability file did not reload through the fail-closed parser: " + error);
+}
+
+void TestActionRuntimeReloadsEditedCapabilities()
+{
+    ScopedTestDirectory temporary;
+    const auto configPath = temporary.root / "capabilities.json";
+    const auto auditPath = temporary.root / "actions.jsonl";
+    nlohmann::json config = {
+        {"mode", "supervised"},
+        {"approvedRoots", nlohmann::json::array({
+            revia::actions::PathToUtf8(temporary.root)})},
+        {"approvedApplications", nlohmann::json::array()},
+        {"approvedControls", nlohmann::json::object()},
+        {"autoApproveRiskThrough", "read_only"},
+        {"createMissingApprovedRoots", false}};
+    WriteBytes(configPath, config.dump(2));
+
+    revia::actions::ActionRuntime runtime;
+    std::string error;
+    Check(runtime.Initialize(configPath, auditPath, error),
+        "The editable action runtime did not initialize: " + error);
+    Check(runtime.AddApprovedApplication("notepad.exe", error),
+        "The live runtime could not add an application: " + error);
+    Check(runtime.AddApprovedControl("notepad.exe", "File", error),
+        "The live runtime could not add a control: " + error);
+    Check(runtime.SetInternetAccess(true, false, error),
+        "The live runtime could not enable explicit-only internet: " + error);
+    auto settings = runtime.Settings();
+    Check(settings.approvedApplications == std::vector<std::string>{"notepad.exe"} &&
+        settings.approvedControls.at("notepad.exe") ==
+            std::vector<std::string>{"File"} &&
+        settings.internet.enabled && !settings.internet.automaticLookup,
+        "The in-memory policy did not reload the persisted capability changes.");
+
+    Check(runtime.RemoveApprovedControl("notepad.exe", "File", error) &&
+        runtime.RemoveApprovedApplication("notepad.exe", error),
+        "The live runtime could not revoke permissions: " + error);
+    settings = runtime.Settings();
+    Check(settings.approvedApplications.empty() && settings.approvedControls.empty(),
+        "Revoked application permissions remained active in memory.");
+}
+
+void TestInternetCapabilityIsBoundedAndGrounded()
+{
+    ScopedTestDirectory temporary;
+    CapabilitySettings settings = SupervisedSettings(temporary.root);
+    ActionRequest request;
+    request.type = ActionType::WebSearch;
+    request.value = "current llama.cpp release";
+
+    revia::policy::CapabilityPolicy disabled(settings);
+    Check(disabled.Evaluate(request).verdict == PolicyVerdict::Blocked,
+        "A web search escaped the disabled internet capability.");
+    settings.internet.enabled = true;
+    revia::policy::CapabilityPolicy enabled(settings);
+    Check(enabled.Evaluate(request).verdict == PolicyVerdict::Allowed &&
+        enabled.Evaluate(request).risk == RiskLevel::ReadOnly,
+        "A bounded read-only web search was not admitted after explicit enablement.");
+    request.value = std::string(1025, 'x');
+    Check(enabled.Evaluate(request).verdict == PolicyVerdict::Blocked,
+        "An oversized web query escaped its policy limit.");
+
+    const auto parsed = revia::actions::internet::InternetSearchExecutor::ParseDuckDuckGoResponse(
+        R"({"Heading":"Revia","AbstractText":"A local assistant.","AbstractURL":"https://example.test/revia","RelatedTopics":[{"Text":"Related fact","FirstURL":"https://example.test/fact"}]})",
+        5);
+    Check(parsed.succeeded && parsed.entries.size() == 2 &&
+        parsed.content.find("Source: https://example.test/revia") != std::string::npos,
+        "Grounded search results did not preserve their source URLs.");
+    Check(!revia::actions::internet::InternetSearchExecutor::ParseDuckDuckGoResponse(
+            "not-json", 5).succeeded,
+        "Invalid provider data was accepted as internet grounding.");
+    const auto wikipedia =
+        revia::actions::internet::InternetSearchExecutor::ParseWikipediaResponse(
+            R"({"query":{"pages":[{"title":"Revia","extract":"A local assistant.","fullurl":"https://en.wikipedia.org/wiki/Revia"}]}})",
+            5);
+    Check(wikipedia.succeeded && wikipedia.entries.size() == 1 &&
+        wikipedia.content.find("Source: https://en.wikipedia.org/wiki/Revia") !=
+            std::string::npos,
+        "The approved knowledge fallback did not preserve grounded source URLs.");
+    Check(!revia::actions::internet::InternetSearchExecutor::ParseWikipediaResponse(
+            R"({"query":{"pages":[]}})", 5).succeeded,
+        "An empty knowledge response was accepted as grounding.");
+
+    Check(!revia::internet::InternetLookupPolicy::ShouldLookup("How are you?", true),
+        "A social turn would have left the machine.");
+    Check(revia::internet::InternetLookupPolicy::ShouldLookup(
+            "What is the latest llama.cpp release?", true),
+        "A current knowledge question did not request an enabled lookup.");
+    Check(!revia::internet::InternetLookupPolicy::ShouldLookup(
+            "What is a transformer?", false),
+        "Manual internet mode performed an unrequested automatic lookup.");
+    Check(revia::internet::InternetLookupPolicy::ShouldLookup(
+            "Please search the web for transformer papers", false),
+        "An explicit web request was ignored in manual mode.");
+}
+
+void TestConversationQualityMonitorReportsKnownFailures()
+{
+    revia::agents::ConversationQualityMonitor monitor;
+    auto snapshot = monitor.Observe("How are you?", "I'm online and curious.");
+    Check(snapshot.turns == 1 && snapshot.passingTurns == 1,
+        "A grounded short social reply was flagged.");
+    snapshot = monitor.Observe(
+        "How are you?",
+        "You're feeling down. What's on your mind?");
+    Check(snapshot.ownershipFlags == 1 && snapshot.stockTailFlags == 1 &&
+        !snapshot.lastFlags.empty(),
+        "Known user/Revia ownership and stock-tail failures were not reported.");
+    snapshot = monitor.Observe("Where are you?", "I'm at my favorite cafe.");
+    Check(snapshot.groundednessFlags == 1,
+        "An invented physical scene was not reported.");
 }
 
 void TestDesktopActionRateLimitsAreDeterministic()
@@ -1074,6 +1251,68 @@ void RunVisionActionNotepadLive()
     cleanup();
     std::cout << "Vision-grounded Notepad action passed.\n";
 }
+
+void RunDisposableApplicationFixturesLive()
+{
+    ScopedTestDirectory temporary;
+    const auto run = [&](const std::string& application, const bool required)
+    {
+        revia::actions::windows::DisposableApplicationFixtures fixtures;
+        std::string error;
+        const bool launched = fixtures.Launch({application}, temporary.root, error);
+        if (!launched && !required &&
+            error.find("restored user tabs") != std::string::npos)
+        {
+            std::cout << "[notepad.exe] skipped safely: " << error << '\n';
+            return false;
+        }
+        Check(launched,
+            "Disposable " + application + " fixture did not launch: " + error);
+
+        revia::goals::Goal goal;
+        revia::goals::GoalStep step;
+        step.action.type = ActionType::InspectWindow;
+        step.action.application = application;
+        step.check = step.action;
+        goal.steps.push_back(step);
+        const bool retargeted = fixtures.Retarget(goal, error);
+        Check(retargeted,
+            "Disposable application request was not retargeted: " + error);
+
+        revia::actions::windows::WindowsAutomationExecutor executor;
+        revia::actions::PolicyDecision allowed;
+        allowed.verdict = PolicyVerdict::Allowed;
+        const auto inspected = executor.Execute(goal.steps.front().action, allowed);
+        Check(inspected.succeeded && !inspected.entries.empty(),
+            "Disposable UIA inspection failed for " + application + " at '" +
+                goal.steps.front().action.windowTitle + "': " + inspected.message);
+        std::cout << '[' << application << "] " << goal.steps.front().action.windowTitle <<
+            " - " << inspected.message << '\n';
+        for (const std::string& entry : inspected.entries)
+        {
+            if (entry.starts_with("Text editor [") || entry.starts_with("File [") ||
+                entry.find("id=refreshButton") != std::string::npos ||
+                entry.starts_with("Address Bar ["))
+            {
+                std::cout << "  " << entry << '\n';
+            }
+        }
+        ActionRequest invocation = goal.steps.front().action;
+        invocation.type = ActionType::InvokeControl;
+        invocation.control = application == "notepad.exe"
+            ? "File"
+            : "refreshButton";
+        const auto invoked = executor.Execute(invocation, allowed);
+        Check(invoked.succeeded,
+            "Disposable UIA invocation failed for " + application +
+                ": " + invoked.message);
+        fixtures.Close();
+        return true;
+    };
+
+    static_cast<void>(run("notepad.exe", false));
+    Check(run("explorer.exe", true), "The required Explorer fixture did not run.");
+}
 #endif
 
 void TestRuntimeEventBus()
@@ -1253,6 +1492,55 @@ nlohmann::json CapabilityConfigJson(
         {"minimumDesktopActionIntervalMs", 250}
     };
 }
+
+#ifdef _WIN32
+void RunInternetLookupLive()
+{
+    ScopedTestDirectory temporary;
+    const auto configPath = temporary.root / "capabilities.json";
+    const auto auditPath = temporary.root / "actions.jsonl";
+    nlohmann::json config = CapabilityConfigJson("supervised", temporary.root, "read_only");
+    config["internet"] = {
+        {"enabled", true},
+        {"automaticLookup", true},
+        {"provider", "duckduckgo"},
+        {"approvedHosts", {"api.duckduckgo.com", "en.wikipedia.org"}},
+        {"requestTimeoutMs", 8000},
+        {"maxResponseBytes", 262144},
+        {"maxRequestsPerMinute", 12},
+        {"maxResults", 5}};
+    WriteBytes(configPath, config.dump(2));
+
+    revia::actions::ActionRuntime runtime;
+    std::string error;
+    Check(runtime.Initialize(configPath, auditPath, error),
+        "The live internet capability did not initialize: " + error);
+    ActionRequest request;
+    request.id = revia::actions::NewActionId();
+    request.type = ActionType::WebSearch;
+    request.value = "C++ programming language";
+    request.requestedBy = "internet_live_test";
+    const auto outcome = runtime.Execute(request);
+    Check(outcome.policy.verdict == PolicyVerdict::Allowed &&
+        outcome.result.succeeded && !outcome.result.entries.empty(),
+        "The live bounded lookup failed: " +
+            (outcome.result.message.empty() ? outcome.policy.reason : outcome.result.message));
+
+    std::ifstream audit(auditPath, std::ios::binary);
+    std::string auditLine;
+    std::getline(audit, auditLine);
+    const nlohmann::json record = nlohmann::json::parse(auditLine);
+    Check(record.at("action") == "web_search" &&
+        record.at("value_length") == request.value.size() &&
+        auditLine.find(request.value) == std::string::npos,
+        "The live lookup was not audited without retaining its query text.");
+    std::cout << outcome.result.message << '\n';
+    for (const std::string& source : outcome.result.entries)
+    {
+        std::cout << "  " << source << '\n';
+    }
+}
+#endif
 
 CapabilitySettings GoalScope(const std::filesystem::path& approvedRoot)
 {
@@ -1846,10 +2134,10 @@ void TestSandboxRehearsalLeavesRealFoldersAlone()
         "The rehearsal directory outlived its run.");
 }
 
-void TestSandboxRefusesPlansItCannotCopy()
+void TestSandboxUsesOnlyExplicitDisposableApplicationFixtures()
 {
-    // A plan that drives a real application has nothing to mirror. It must report that it
-    // cannot be rehearsed rather than quietly rehearsing a subset and looking proven.
+    // Notepad and Explorer have explicit disposable-window fixtures. Preparation may
+    // therefore carry them forward, but it must not attach to a real window here.
     revia::goals::Goal desktopGoal;
     desktopGoal.id = revia::goals::NewGoalId();
     desktopGoal.scope = GoalScope("C:/Sandbox");
@@ -1863,9 +2151,20 @@ void TestSandboxRefusesPlansItCannotCopy()
     desktopGoal.steps.push_back(step);
 
     const auto desktop = revia::goals::GoalSandbox::Prepare(desktopGoal);
-    Check(!desktop.supported,
-        "A plan driving an application claimed it could be rehearsed in a copy.");
-    Check(!desktop.reason.empty(), "An unsupported rehearsal gave no reason.");
+    Check(desktop.supported && desktop.prepared &&
+        desktop.desktopApplications == std::vector<std::string>{"notepad.exe"},
+        "A Notepad goal did not request its explicit disposable fixture.");
+
+    revia::goals::Goal unsupported = desktopGoal;
+    unsupported.steps.front().action.application = "browser.exe";
+    unsupported.steps.front().check.application = "browser.exe";
+    const auto refused = revia::goals::GoalSandbox::Prepare(unsupported);
+    Check(!refused.supported && refused.reason.find("no disposable rehearsal fixture") !=
+        std::string::npos,
+        "An unknown application claimed it had a disposable rehearsal fixture.");
+
+    std::string discardError;
+    revia::goals::GoalSandbox::Discard(desktop.root, discardError);
 
     revia::goals::Goal rootless;
     rootless.id = revia::goals::NewGoalId();
@@ -3416,6 +3715,12 @@ int main(const int argc, char** argv)
             return 0;
         }
 #ifdef _WIN32
+        if (argc > 1 && std::string(argv[1]) == "--internet-live")
+        {
+            RunInternetLookupLive();
+            std::cout << "Bounded internet lookup passed.\n";
+            return 0;
+        }
         if (argc > 1 && std::string(argv[1]) == "--uia-resolver-live")
         {
             RunVisionUiaLiveFixture();
@@ -3427,11 +3732,21 @@ int main(const int argc, char** argv)
             RunVisionActionNotepadLive();
             return 0;
         }
+        if (argc > 1 && std::string(argv[1]) == "--uia-fixtures-live")
+        {
+            RunDisposableApplicationFixturesLive();
+            std::cout << "Disposable application fixture checks completed.\n";
+            return 0;
+        }
 #endif
         TestPolicyBoundaries();
         TestParser();
         TestDesktopActionPolicy();
         TestConfigurationFailsClosed();
+        TestCapabilityEditorPersistsNarrowLivePermissions();
+        TestActionRuntimeReloadsEditedCapabilities();
+        TestInternetCapabilityIsBoundedAndGrounded();
+        TestConversationQualityMonitorReportsKnownFailures();
         TestDesktopActionRateLimitsAreDeterministic();
         TestDesktopRateLimitIsAudited();
         TestLlamaServerProcessRejectsMissingFiles();
@@ -3463,7 +3778,7 @@ int main(const int argc, char** argv)
         TestPlannedGoalStillFacesValidation();
         TestPlannedGoalRunsEndToEnd();
         TestSandboxRehearsalLeavesRealFoldersAlone();
-        TestSandboxRefusesPlansItCannotCopy();
+        TestSandboxUsesOnlyExplicitDisposableApplicationFixtures();
         TestSandboxRehearsalCatchesABrokenPlan();
         TestDerivedGoalScopeCannotWiden();
         TestPerceptionIsOffByDefault();

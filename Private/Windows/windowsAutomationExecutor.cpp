@@ -319,9 +319,15 @@ namespace
                 BOOL isEnabled = FALSE;
                 element->get_CurrentControlType(&type);
                 element->get_CurrentIsEnabled(&isEnabled);
+                const std::string automationId = WideToUtf8(ElementAutomationId(element));
                 std::ostringstream line;
                 line << WideToUtf8(name) << " [type=" << type <<
-                    ", enabled=" << (isEnabled ? "true" : "false") << ']';
+                    ", enabled=" << (isEnabled ? "true" : "false");
+                if (!automationId.empty())
+                {
+                    line << ", id=" << automationId;
+                }
+                line << ']';
                 result.entries.push_back(line.str());
             }
             element->Release();

@@ -25,7 +25,7 @@ namespace
             return QColor("#79d9ff");
         }
         if (phase == "Ready" || phase == "Saved" || phase == "Backfilled" ||
-            phase == "Watching")
+            phase == "Watching" || phase == "Healthy")
         {
             return QColor("#69e2c4");
         }
@@ -67,6 +67,8 @@ PipelinePanel::PipelinePanel(QWidget* parent)
         QStringLiteral("Embeddings"), QStringLiteral("Language model"),
         QStringLiteral("Voice"), QStringLiteral("Microphone"),
         QStringLiteral("Vision"), QStringLiteral("Automation"),
+        QStringLiteral("Internet"), QStringLiteral("Permissions"),
+        QStringLiteral("Conversation quality"),
         QStringLiteral("Perception"), QStringLiteral("Initiative"),
         QStringLiteral("Input")})
     {

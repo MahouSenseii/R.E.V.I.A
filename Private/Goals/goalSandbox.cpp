@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cctype>
 #include <fstream>
 #include <string>
 #include <system_error>
@@ -134,19 +135,47 @@ bool GoalSandbox::IsFilesystemAction(const actions::ActionType type)
     }
 }
 
+bool GoalSandbox::IsDesktopAction(const actions::ActionType type)
+{
+    return type == actions::ActionType::InspectWindow ||
+        type == actions::ActionType::FocusWindow ||
+        type == actions::ActionType::SetControlText ||
+        type == actions::ActionType::InvokeControl;
+}
+
 SandboxRehearsal GoalSandbox::Prepare(const Goal& goal)
 {
     if (goal.steps.empty())
     {
         return Unsupported("the plan has no steps");
     }
+    std::vector<std::string> desktopApplications;
     for (const GoalStep& step : goal.steps)
     {
-        if (!IsFilesystemAction(step.action.type) || !IsFilesystemAction(step.check.type))
+        for (const actions::ActionRequest* request : {&step.action, &step.check})
         {
-            return Unsupported(
-                "the plan drives an application, which cannot be copied into a scratch "
-                "directory");
+            if (IsFilesystemAction(request->type))
+            {
+                continue;
+            }
+            if (!IsDesktopAction(request->type))
+            {
+                return Unsupported("the plan contains an action with no rehearsal fixture");
+            }
+            std::string lowered = request->application;
+            std::transform(lowered.begin(), lowered.end(), lowered.begin(),
+                [](const unsigned char c) { return static_cast<char>(std::tolower(c)); });
+            if (lowered != "notepad.exe" && lowered != "explorer.exe")
+            {
+                return Unsupported(
+                    "the application " + request->application +
+                    " has no disposable rehearsal fixture");
+            }
+            if (std::find(desktopApplications.begin(), desktopApplications.end(), lowered) ==
+                desktopApplications.end())
+            {
+                desktopApplications.push_back(lowered);
+            }
         }
     }
     if (goal.scope.approvedRoots.empty())
@@ -172,6 +201,7 @@ SandboxRehearsal GoalSandbox::Prepare(const Goal& goal)
     result.supported = true;
     result.root = root;
     result.goal = goal;
+    result.desktopApplications = desktopApplications;
     // A rehearsal is a separate run: it gets its own identity and a clean budget, so what
     // it spends is never charged against the real attempt.
     result.goal.id = NewGoalId();
@@ -236,16 +266,32 @@ SandboxRehearsal GoalSandbox::Prepare(const Goal& goal)
     {
         approvedRootsJson.push_back(actions::PathToUtf8(mirrored));
     }
-    // approved_scope with no approved applications: the rehearsal can reach the scratch
-    // tree and nothing else, and cannot drive an application even if a step tried to. The
+    // approved_scope with only the plan's disposable application fixtures: the rehearsal
+    // can reach the scratch tree and those new windows, but no other application. The
     // risk ceiling is copied from the goal rather than fixed, so a rehearsal is never more
     // permissive than the run it is standing in for -- otherwise a plan could clear
     // rehearsal and then stall on confirmations it never had to face.
+    nlohmann::json rehearsalControls = nlohmann::json::object();
+    for (const std::string& application : desktopApplications)
+    {
+        const auto scope = std::find_if(
+            goal.scope.approvedControls.begin(), goal.scope.approvedControls.end(),
+            [&](const auto& entry)
+            {
+                std::string key = entry.first;
+                std::transform(key.begin(), key.end(), key.begin(),
+                    [](const unsigned char c) { return static_cast<char>(std::tolower(c)); });
+                return key == application;
+            });
+        rehearsalControls[application] = scope == goal.scope.approvedControls.end()
+            ? nlohmann::json::array()
+            : nlohmann::json(scope->second);
+    }
     const nlohmann::json capabilities = {
         {"mode", "approved_scope"},
         {"approvedRoots", approvedRootsJson},
-        {"approvedApplications", nlohmann::json::array()},
-        {"approvedControls", nlohmann::json::object()},
+        {"approvedApplications", desktopApplications},
+        {"approvedControls", rehearsalControls},
         {"autoApproveRiskThrough", actions::ToString(goal.scope.autoApproveRiskThrough)},
         {"createMissingApprovedRoots", false},
         {"maxReadBytes", goal.scope.maxReadBytes},

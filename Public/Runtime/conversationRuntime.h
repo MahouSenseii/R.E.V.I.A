@@ -1,6 +1,8 @@
 #pragma once
 
+#include "Actions/actionTypes.h"
 #include "Agents/turnCoordinator.h"
+#include "Agents/conversationQualityMonitor.h"
 #include "Core/conversationContext.h"
 #include "Core/logger.h"
 #include "Core/messageRouter.h"
@@ -27,6 +29,10 @@ class ConversationRuntime
 public:
     using StateHandler = std::function<void(RuntimeState, const std::string&)>;
     using AffectHandler = std::function<void(const AffectSnapshot&)>;
+    using InternetSettingsProvider =
+        std::function<actions::CapabilitySettings::InternetAccess()>;
+    using InternetLookupHandler =
+        std::function<actions::ActionOutcome(const std::string&)>;
 
     ConversationRuntime(
         messageRouter& router,
@@ -37,7 +43,9 @@ public:
         RuntimeEventBus& events,
         logger& log,
         StateHandler stateHandler,
-        AffectHandler affectHandler);
+        AffectHandler affectHandler,
+        InternetSettingsProvider internetSettingsProvider,
+        InternetLookupHandler internetLookupHandler);
 
     SessionResult Reply(
         const std::string& input,
@@ -56,6 +64,8 @@ public:
         bool llmAvailable,
         bool shouldSpeak,
         std::stop_token stopToken = {});
+
+    [[nodiscard]] agents::ConversationQualitySnapshot QualitySnapshot() const;
 
 private:
     SessionResult Generate(
@@ -84,6 +94,9 @@ private:
     logger& log;
     StateHandler setState;
     AffectHandler publishAffect;
+    InternetSettingsProvider internetSettings;
+    InternetLookupHandler internetLookup;
+    agents::ConversationQualityMonitor qualityMonitor;
     std::uint64_t turnCounter = 0;
     std::uint64_t utteranceCounter = 0;
 };

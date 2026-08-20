@@ -28,6 +28,18 @@ bool IsSupportedRisk(const std::string& value)
         value == "destructive";
 }
 
+bool IsSafeHost(const std::string& value)
+{
+    if (value.empty() || value.size() > 253 || value.front() == '.' || value.back() == '.')
+    {
+        return false;
+    }
+    return std::all_of(value.begin(), value.end(), [](const unsigned char character)
+    {
+        return std::isalnum(character) || character == '.' || character == '-';
+    });
+}
+
 template <typename T>
 T BoundedInteger(const json& data, const char* key, T fallback, T minimum, T maximum)
 {
@@ -96,6 +108,66 @@ bool PermissionStore::Load(
         settings.minimumDesktopActionIntervalMs = BoundedInteger<int>(
             data, "minimumDesktopActionIntervalMs", 250, 0, 60000);
 
+        if (data.contains("internet"))
+        {
+            const json& internet = data["internet"];
+            if (!internet.is_object())
+            {
+                outError = "internet must be an object.";
+                return false;
+            }
+            settings.internet.enabled = internet.value("enabled", false);
+            settings.internet.automaticLookup = internet.value("automaticLookup", true);
+            settings.internet.provider = internet.value("provider", "duckduckgo");
+            settings.internet.requestTimeoutMs = BoundedInteger<int>(
+                internet, "requestTimeoutMs", 8000, 1000, 30000);
+            settings.internet.maxResponseBytes = BoundedInteger<std::size_t>(
+                internet, "maxResponseBytes", 256U * 1024U, 4096U, 2U * 1024U * 1024U);
+            settings.internet.maxRequestsPerMinute = BoundedInteger<int>(
+                internet, "maxRequestsPerMinute", 12, 1, 120);
+            settings.internet.maxResults = BoundedInteger<int>(
+                internet, "maxResults", 5, 1, 10);
+            settings.internet.approvedHosts.clear();
+            if (!internet.contains("approvedHosts") || !internet["approvedHosts"].is_array())
+            {
+                outError = "internet.approvedHosts must be an array.";
+                return false;
+            }
+            for (const auto& host : internet["approvedHosts"])
+            {
+                if (!host.is_string() || !IsSafeHost(host.get<std::string>()))
+                {
+                    outError = "Every approved internet host must be a plain DNS name.";
+                    return false;
+                }
+                settings.internet.approvedHosts.push_back(host.get<std::string>());
+            }
+            if (settings.internet.provider != "duckduckgo")
+            {
+                outError = "Unsupported internet search provider: " +
+                    settings.internet.provider;
+                return false;
+            }
+            const bool providerAllowed = std::any_of(
+                settings.internet.approvedHosts.begin(),
+                settings.internet.approvedHosts.end(),
+                [](const std::string& host)
+                {
+                    std::string lowered = host;
+                    std::transform(lowered.begin(), lowered.end(), lowered.begin(),
+                        [](const unsigned char c)
+                        {
+                            return static_cast<char>(std::tolower(c));
+                        });
+                    return lowered == "api.duckduckgo.com";
+                });
+            if (settings.internet.enabled && !providerAllowed)
+            {
+                outError = "Enabled DuckDuckGo lookup requires api.duckduckgo.com in approvedHosts.";
+                return false;
+            }
+        }
+
         if (!data.contains("approvedRoots") || !data["approvedRoots"].is_array())
         {
             outError = "Capability configuration requires an approvedRoots array.";
@@ -146,9 +218,9 @@ bool PermissionStore::Load(
             for (auto entry = data["approvedControls"].begin();
                  entry != data["approvedControls"].end(); ++entry)
             {
-                if (entry.key().empty() || !entry.value().is_array() || entry.value().empty())
+                if (entry.key().empty() || !entry.value().is_array())
                 {
-                    outError = "Each approvedControls entry requires a non-empty control array.";
+                    outError = "Each approvedControls entry requires a control array.";
                     return false;
                 }
                 std::vector<std::string> controls;

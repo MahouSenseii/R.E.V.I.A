@@ -139,7 +139,24 @@ ParsedAction StructuredActionParser::ParseCommand(const std::string& input) cons
     else if (command == "/focus-window") type = actions::ActionType::FocusWindow;
     else if (command == "/set-text") type = actions::ActionType::SetControlText;
     else if (command == "/invoke-control") type = actions::ActionType::InvokeControl;
+    else if (command == "/web") type = actions::ActionType::WebSearch;
     else return {};
+
+    if (type == actions::ActionType::WebSearch)
+    {
+        if (tokens.size() != 2)
+        {
+            return Error(true, "Web search requires one quoted query.");
+        }
+        ParsedAction result;
+        result.recognized = true;
+        result.succeeded = true;
+        result.request.id = actions::NewActionId();
+        result.request.type = type;
+        result.request.value = tokens[1];
+        result.request.requestedBy = "user";
+        return result;
+    }
 
     const bool desktopAction = type == actions::ActionType::InspectWindow ||
         type == actions::ActionType::FocusWindow || type == actions::ActionType::SetControlText ||

@@ -42,6 +42,7 @@ std::string ToString(ActionType value)
         case ActionType::FocusWindow: return "focus_window";
         case ActionType::SetControlText: return "set_control_text";
         case ActionType::InvokeControl: return "invoke_control";
+        case ActionType::WebSearch: return "web_search";
         case ActionType::Unknown:
         default: return "unknown";
     }
@@ -97,6 +98,8 @@ ActionType ActionTypeFromString(const std::string& value)
         return ActionType::SetControlText;
     if (normalized == "invoke_control" || normalized == "invoke")
         return ActionType::InvokeControl;
+    if (normalized == "web_search" || normalized == "search_web")
+        return ActionType::WebSearch;
     return ActionType::Unknown;
 }
 
@@ -127,6 +130,7 @@ RiskLevel RiskForAction(ActionType value)
         case ActionType::ListDirectory:
         case ActionType::ReadTextFile:
         case ActionType::InspectWindow:
+        case ActionType::WebSearch:
             return RiskLevel::ReadOnly;
         case ActionType::CreateDirectory:
         case ActionType::CopyFile:

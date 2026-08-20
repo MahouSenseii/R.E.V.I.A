@@ -13,7 +13,7 @@ flowchart LR
     C -->|confirmation required| H["Human confirmation"]
     C -->|allowed| D["ActionDispatcher"]
     H --> D
-    D --> F["Filesystem or UI Automation executor"]
+    D --> F["Filesystem, UI Automation, or bounded internet executor"]
     F --> A
 ```
 
@@ -26,6 +26,7 @@ flowchart LR
 | `Actions` | Define action/result types, coordinate evaluation and dispatch | Action-specific Windows behavior |
 | `Filesystem` | Perform the supported file operation using the policy-resolved paths | Expanding scope or bypassing confirmation |
 | `Windows` | Resolve vision regions to typed UIA identities, then inspect or interact through control patterns | Coordinate clicking, shell execution, or app-scope decisions |
+| `Internet` | Decide when an enabled lookup is useful and query fixed approved HTTPS knowledge endpoints | General sockets, arbitrary URL fetching, or permission changes |
 | `Speech` | Own SAPI/Qwen3-TTS output, persistent voice presets and profile assignments, WinMM capture, whisper.cpp transcription, queues, and cancellation | Conversation policy or widget rendering |
 | `Vision` | Capture the virtual desktop for analysis or the pinned foreground-window crop for actions, then parse bounded target intents | Acting at coordinates, granting application scope, or retaining captures |
 | `Audit` | Append the request, verdict, and result to JSONL | Deciding whether an action is allowed |
@@ -93,6 +94,9 @@ New behavior is split by reason to change:
 - `InputArbiter` owns voice-noise, duplicate, and fragment admission; it does not generate replies.
 - `InferenceScheduler` owns shared llama slot capacity and priority; it does not build prompts or issue HTTP requests.
 - `PipelinePanel` renders runtime events; it does not query or control a worker.
+- `CapabilityPanel` renders and requests explicit permission edits; `CapabilityEditor` atomically validates and persists them, and `ActionRuntime` reloads policy immediately.
+- `InternetLookupPolicy` makes the deterministic local lookup decision; `InternetSearchExecutor` owns fixed hosts, HTTPS, limits, and sourced parsing. Neither one writes conversational memory.
+- `ConversationQualityMonitor` counts groundedness, ownership, stock-tail, and repetition regressions; it reports diagnostics and never rewrites model output.
 - `VisionActionParser` accepts only bounded invoke/value intents; it never inspects Windows or executes.
 - `VisionUiaResolver` matches geometry and accessible names and returns a typed runtime identity; it never clicks coordinates or grants application scope.
 - `WindowsAutomationExecutor` rechecks that exact identity and invokes a UIA pattern; it never falls back to a name or coordinate when a resolved element changed.
@@ -115,6 +119,12 @@ an explicit `"*"`). A shared rolling limiter caps mutable Focus/Value/Invoke adm
 Rate refusal changes the ordinary policy outcome to blocked before dispatch, so it is
 recorded by the same JSONL audit path rather than hidden in a UI-only throttle.
 
+Internet scope is independent and disabled by default. A `WebSearch` request is read-only
+but remains blocked unless `internet.enabled` is true. The executor, not the model, chooses
+the DuckDuckGo or Wikipedia host and path; configuration pins the exact hosts plus timeout,
+response-size, result-count, and rolling request limits. Returned text is labelled untrusted
+grounding before entering the conversation prompt. Audit retains query length but not text.
+
 The distinction matters for unattended operation. An autonomous run must not wait forever at a prompt or silently broaden its permissions.
 
 ## Non-negotiable invariants
@@ -128,3 +138,4 @@ The distinction matters for unattended operation. An autonomous run must not wai
 7. Every dispatched or rejected action is auditable.
 8. Screen capture is opt-in, local, short-lived, and visibly reported.
 9. New capabilities start disabled or supervised and earn unattended access through tests and explicit configuration.
+10. Internet grounding never exposes a general browser, socket, or model-selected URL.

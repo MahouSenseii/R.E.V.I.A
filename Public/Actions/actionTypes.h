@@ -23,7 +23,8 @@ enum class ActionType
     InspectWindow,
     FocusWindow,
     SetControlText,
-    InvokeControl
+    InvokeControl,
+    WebSearch
 };
 
 enum class RiskLevel
@@ -113,6 +114,21 @@ struct ActionOutcome
 
 struct CapabilitySettings
 {
+    struct InternetAccess
+    {
+        // Network access is opt-in. The model never receives a general socket or URL;
+        // it may submit only a search query to this configured provider.
+        bool enabled = false;
+        bool automaticLookup = true;
+        std::string provider = "duckduckgo";
+        std::vector<std::string> approvedHosts = {
+            "api.duckduckgo.com", "en.wikipedia.org"};
+        int requestTimeoutMs = 8000;
+        std::size_t maxResponseBytes = 256U * 1024U;
+        int maxRequestsPerMinute = 12;
+        int maxResults = 5;
+    };
+
     ExecutionMode mode = ExecutionMode::Supervised;
     std::vector<std::filesystem::path> approvedRoots;
     std::vector<std::string> approvedApplications;
@@ -126,6 +142,7 @@ struct CapabilitySettings
     std::size_t maxAffectedEntries = 200;
     int maxDesktopActionsPerMinute = 12;
     int minimumDesktopActionIntervalMs = 250;
+    InternetAccess internet;
 };
 
 [[nodiscard]] std::string ToString(ActionType value);

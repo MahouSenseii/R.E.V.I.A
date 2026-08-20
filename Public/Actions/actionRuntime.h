@@ -3,12 +3,14 @@
 #include "Actions/actionDispatcher.h"
 #include "Audit/actionAuditLogger.h"
 #include "Planning/structuredActionParser.h"
+#include "Policy/capabilityEditor.h"
 #include "Policy/capabilityPolicy.h"
 #include "Policy/desktopActionRateLimiter.h"
 #include "Policy/permissionStore.h"
 
 #include <filesystem>
 #include <memory>
+#include <mutex>
 #include <string>
 
 namespace revia::actions
@@ -45,14 +47,40 @@ public:
     // The configured settings, so a caller can derive a narrower scope from them. Returns
     // defaults when uninitialized, which are the most restrictive values in the struct.
     [[nodiscard]] CapabilitySettings Settings() const;
+    [[nodiscard]] bool AddApprovedApplication(
+        const std::string& executable, std::string& outError);
+    [[nodiscard]] bool RemoveApprovedApplication(
+        const std::string& executable, std::string& outError);
+    [[nodiscard]] bool AddApprovedControl(
+        const std::string& executable,
+        const std::string& control,
+        std::string& outError);
+    [[nodiscard]] bool RemoveApprovedControl(
+        const std::string& executable,
+        const std::string& control,
+        std::string& outError);
+    [[nodiscard]] bool SetInternetAccess(
+        bool enabled,
+        bool automaticLookup,
+        std::string& outError);
 
 private:
+    [[nodiscard]] bool InitializeUnlocked(
+        const std::filesystem::path& capabilityConfig,
+        const std::filesystem::path& auditPath,
+        std::string& outError);
+    [[nodiscard]] bool ReloadUnlocked(std::string& outError);
+
+    mutable std::recursive_mutex mutex;
     policy::PermissionStore permissionStore;
+    policy::CapabilityEditor capabilityEditor;
     std::unique_ptr<policy::CapabilityPolicy> policy;
     ActionDispatcher dispatcher;
     std::unique_ptr<audit::ActionAuditLogger> auditLogger;
     planning::StructuredActionParser parser;
     policy::DesktopActionRateLimiter desktopRateLimiter;
+    std::filesystem::path capabilityConfigPath;
+    std::filesystem::path auditPath;
 };
 
 } // namespace revia::actions

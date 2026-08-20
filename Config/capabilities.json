@@ -8,8 +8,8 @@
     "explorer.exe"
   ],
   "approvedControls": {
-    "notepad.exe": ["*"],
-    "explorer.exe": ["*"]
+    "notepad.exe": ["File", "Edit", "View"],
+    "explorer.exe": ["Address Bar", "backButton", "forwardButton", "upButton", "refreshButton", "New", "SortAndGroupButton", "View"]
   },
   "autoApproveRiskThrough": "read_only",
   "createMissingApprovedRoots": true,
@@ -17,5 +17,15 @@
   "maxDirectoryEntries": 500,
   "maxAffectedEntries": 200,
   "maxDesktopActionsPerMinute": 12,
-  "minimumDesktopActionIntervalMs": 250
+  "minimumDesktopActionIntervalMs": 250,
+  "internet": {
+    "enabled": false,
+    "automaticLookup": true,
+    "provider": "duckduckgo",
+    "approvedHosts": ["api.duckduckgo.com", "en.wikipedia.org"],
+    "requestTimeoutMs": 8000,
+    "maxResponseBytes": 262144,
+    "maxRequestsPerMinute": 12,
+    "maxResults": 5
+  }
 }
