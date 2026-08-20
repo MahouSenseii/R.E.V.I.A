@@ -27,6 +27,27 @@ namespace
             std::chrono::steady_clock::now() - start).count();
     }
 
+    constexpr const char* WindowsSapiResource = "CPU / Windows SAPI";
+
+    std::string PlannedQwenResource(const speechSettings& settings)
+    {
+        return settings.qwenDevice == "cpu" ? "CPU / Qwen3-TTS" : settings.qwenDevice;
+    }
+
+    std::string ActualQwenResource(const VoiceOperationResult& result)
+    {
+        std::string resource = result.device.empty() ? "Qwen3-TTS" : result.device;
+        if (!result.deviceName.empty())
+        {
+            resource += " / " + result.deviceName;
+        }
+        if (!result.dtype.empty())
+        {
+            resource += " / " + result.dtype;
+        }
+        return resource;
+    }
+
 #ifdef _WIN32
     std::wstring Utf8ToWide(const std::string& value)
     {
@@ -211,13 +232,16 @@ VoiceOperationResult SpeechService::PrepareActiveVoice()
     {
         return {true, "No Qwen3-TTS profile voice is assigned; Windows SAPI is ready.", {}, 0.0};
     }
-    Notify({"Loading", "Loading the assigned Qwen3-TTS voice on the selected device."});
+    Notify({"Loading", "Loading the assigned Qwen3-TTS voice on the selected device.",
+        -1.0, 0, 0, PlannedQwenResource(configuration)});
     VoiceOperationResult result = qwenClient.PrepareCloneModel();
-    Notify({result.succeeded ? "Ready" : "Fallback",
+    SpeechEvent prepared{result.succeeded ? "Ready" : "Fallback",
         result.succeeded
             ? result.message
             : result.message + " Windows SAPI remains available.",
-        result.elapsedMilliseconds});
+        result.elapsedMilliseconds};
+    prepared.device = ActualQwenResource(result);
+    Notify(std::move(prepared));
     return result;
 }
 
@@ -245,13 +269,15 @@ VoiceOperationResult SpeechService::CreateVoicePreset(
     {
         return {false, "Could not resolve the voice reference path.", {}, -1.0};
     }
-    Notify({"Designing", "Creating a reusable Qwen3-TTS voice reference. First use downloads the model."});
+    Notify({"Designing", "Creating a reusable Qwen3-TTS voice reference. First use downloads the model.",
+        -1.0, 0, 0, PlannedQwenResource(configuration)});
     VoiceOperationResult result = qwenClient.DesignVoice(
         referenceText, description, language.empty() ? "English" : language,
         referencePath.string());
     if (!result.succeeded)
     {
-        Notify({"Error", result.message, result.elapsedMilliseconds});
+        Notify({"Error", result.message, result.elapsedMilliseconds, 0, 0,
+            ActualQwenResource(result)});
         return result;
     }
     VoicePreset preset;
@@ -269,7 +295,8 @@ VoiceOperationResult SpeechService::CreateVoicePreset(
     }
     result.message = "Created voice preset '" + name + "'.";
     result.outputPath = referencePath.string();
-    Notify({"Ready", result.message, result.elapsedMilliseconds});
+    Notify({"Ready", result.message, result.elapsedMilliseconds, 0, 0,
+        ActualQwenResource(result)});
     return result;
 }
 
@@ -294,7 +321,8 @@ VoiceOperationResult SpeechService::PreviewVoice(
         return {false, "Could not resolve the preview path.", {}, -1.0};
     }
     std::filesystem::create_directories(output.parent_path(), error);
-    Notify({"Generating", "Generating a Qwen3-TTS voice preview."});
+    Notify({"Generating", "Generating a Qwen3-TTS voice preview.", -1.0, 0, 0,
+        PlannedQwenResource(configuration)});
     VoiceOperationResult result = qwenClient.Synthesize(text, *preset, output.string());
 #ifdef _WIN32
     if (result.succeeded)
@@ -302,7 +330,8 @@ VoiceOperationResult SpeechService::PreviewVoice(
         PlaySoundW(output.wstring().c_str(), nullptr, SND_FILENAME | SND_ASYNC | SND_NODEFAULT);
     }
 #endif
-    Notify({result.succeeded ? "Ready" : "Error", result.message, result.elapsedMilliseconds});
+    Notify({result.succeeded ? "Ready" : "Error", result.message,
+        result.elapsedMilliseconds, 0, 0, ActualQwenResource(result)});
     return result;
 }
 
@@ -546,7 +575,8 @@ void SpeechService::Run(const std::stop_token stopToken)
     const HRESULT initialized = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
     if (FAILED(initialized))
     {
-        Notify({"Error", "Windows speech could not initialize."});
+        Notify({"Error", "Windows speech could not initialize.", -1.0, 0, 0,
+            WindowsSapiResource});
         return;
     }
 
@@ -556,7 +586,8 @@ void SpeechService::Run(const std::stop_token stopToken)
         reinterpret_cast<void**>(&voice));
     if (FAILED(created) || voice == nullptr)
     {
-        Notify({"Error", "No Windows SAPI voice is available."});
+        Notify({"Error", "No Windows SAPI voice is available.", -1.0, 0, 0,
+            WindowsSapiResource});
         CoUninitialize();
         return;
     }
@@ -564,7 +595,8 @@ void SpeechService::Run(const std::stop_token stopToken)
     voice->SetVolume(static_cast<USHORT>(configuration.volume));
     ready.store(true);
     Notify({enabled.load() ? "Ready" : "Disabled",
-        enabled.load() ? "Windows SAPI voice is ready." : "Voice output is off."});
+        enabled.load() ? "Windows SAPI voice is ready." : "Voice output is off.",
+        -1.0, 0, 0, WindowsSapiResource});
 
     while (!stopToken.stop_requested())
     {
@@ -612,19 +644,22 @@ void SpeechService::Run(const std::stop_token stopToken)
         const std::wstring speechText = Utf8ToWide(utterance.text);
         if (speechText.empty())
         {
-            Notify({"Error", "The reply could not be converted for speech."});
+            Notify({"Error", "The reply could not be converted for speech.", -1.0, 0, 0,
+                WindowsSapiResource});
             continue;
         }
         voice->SetRate(std::clamp<long>(
             static_cast<long>(configuration.rate) + AffectRateAdjustment(utterance.affect.state),
             -10L, 10L));
         const auto startedAt = std::chrono::steady_clock::now();
-        Notify({"Speaking", "Reading the assistant reply aloud."});
+        Notify({"Speaking", "Reading the assistant reply aloud.", -1.0, 0, 0,
+            WindowsSapiResource});
         const HRESULT spoke = voice->Speak(
             speechText.c_str(), static_cast<DWORD>(SPF_ASYNC | SPF_IS_NOT_XML), nullptr);
         if (FAILED(spoke))
         {
-            Notify({"Error", "Windows SAPI could not start the utterance."});
+            Notify({"Error", "Windows SAPI could not start the utterance.", -1.0, 0, 0,
+                WindowsSapiResource});
             continue;
         }
         ArmBargeIn();
@@ -655,7 +690,7 @@ void SpeechService::Run(const std::stop_token stopToken)
             interrupted
                 ? "You started speaking, so I stopped."
                 : (cancelled ? "Speech was stopped." : "Speech completed."),
-            elapsed});
+            elapsed, 0, 0, WindowsSapiResource});
     }
 
     voice->Speak(nullptr, SPF_PURGEBEFORESPEAK, nullptr);
@@ -685,26 +720,30 @@ bool SpeechService::SpeakWithQwen(const Utterance& utterance, const VoicePreset&
     }
     std::filesystem::create_directories(output.parent_path(), error);
     const auto startedAt = std::chrono::steady_clock::now();
-    Notify({"Generating", "Synthesizing the assistant reply with Qwen3-TTS."});
+    Notify({"Generating", "Synthesizing the assistant reply with Qwen3-TTS.",
+        -1.0, 0, 0, PlannedQwenResource(configuration)});
     const VoiceOperationResult generated = qwenClient.Synthesize(
         utterance.text, preset, output.string());
     if (!generated.succeeded)
     {
         Notify({"Fallback", generated.message + " Using Windows voice for this reply.",
-            generated.elapsedMilliseconds});
+            generated.elapsedMilliseconds, 0, 0, ActualQwenResource(generated)});
         return false;
     }
     if (generation.load() != utterance.generation || !enabled.load())
     {
         std::filesystem::remove(output, error);
         Notify({"Stopped", "Generated speech was cancelled before playback.",
-            ElapsedMilliseconds(startedAt)});
+            ElapsedMilliseconds(startedAt), 0, 0, ActualQwenResource(generated)});
         return true;
     }
-    Notify({"Speaking", "Playing the profile's Qwen3-TTS voice."});
+    SpeechEvent playing{"Speaking", "Playing the profile's Qwen3-TTS voice."};
+    playing.device = ActualQwenResource(generated);
+    Notify(std::move(playing));
     if (!PlaySoundW(output.wstring().c_str(), nullptr, SND_FILENAME | SND_ASYNC | SND_NODEFAULT))
     {
-        Notify({"Fallback", "Windows could not play the Qwen3-TTS WAV; using SAPI."});
+        Notify({"Fallback", "Windows could not play the Qwen3-TTS WAV; using SAPI.",
+            -1.0, 0, 0, WindowsSapiResource});
         return false;
     }
     ArmBargeIn();
@@ -729,7 +768,7 @@ bool SpeechService::SpeakWithQwen(const Utterance& utterance, const VoicePreset&
         interrupted
             ? "You started speaking, so I stopped."
             : (cancelled ? "Speech was stopped." : "Qwen3-TTS speech completed."),
-        ElapsedMilliseconds(startedAt)});
+        ElapsedMilliseconds(startedAt), 0, 0, ActualQwenResource(generated)});
     return true;
 #endif
 }

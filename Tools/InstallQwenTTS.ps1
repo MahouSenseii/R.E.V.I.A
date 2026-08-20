@@ -26,8 +26,10 @@ if ($LASTEXITCODE -ne 0) {
     throw 'Could not update pip in the Qwen3-TTS environment.'
 }
 
-# This is the CUDA/Python combination validated with Revia's local worker.
-& $pythonPath -m pip install torch==2.5.1 torchaudio==2.5.1 --index-url https://download.pytorch.org/whl/cu121
+# CUDA 12.8 wheels include Blackwell/sm_120 kernels for RTX 50-series cards while
+# retaining Turing support for cards such as the RTX 2070. The older cu121 wheel could
+# import on a 5070 but had no compatible kernel image when synthesis actually started.
+& $pythonPath -m pip install torch==2.7.1 torchaudio==2.7.1 --index-url https://download.pytorch.org/whl/cu128
 if ($LASTEXITCODE -ne 0) {
     throw 'Could not install the pinned PyTorch CUDA runtime.'
 }
@@ -36,7 +38,7 @@ if ($LASTEXITCODE -ne 0) {
     throw 'Could not install Qwen3-TTS.'
 }
 
-& $pythonPath -c "import torch, qwen_tts; print('Qwen3-TTS ready; CUDA:', torch.cuda.is_available())"
+& $pythonPath -c "import torch, qwen_tts; print('Qwen3-TTS ready; torch:', torch.__version__, 'CUDA:', torch.cuda.is_available(), 'architectures:', torch.cuda.get_arch_list() if torch.cuda.is_available() else []); [(print('CUDA kernel test:', i, torch.cuda.get_device_name(i), torch.cuda.get_device_capability(i), (torch.ones(1, device=f'cuda:{i}') + 1).item()), torch.cuda.synchronize(i)) for i in range(torch.cuda.device_count())]"
 if ($LASTEXITCODE -ne 0) {
     throw 'The Qwen3-TTS runtime did not pass its import check.'
 }

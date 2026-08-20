@@ -3,10 +3,28 @@
 #include <exception>
 #include <fstream>
 #include <nlohmann/json.hpp>
+#include <regex>
 
 #include "Library/structLibrary.h"
 
 using json = nlohmann::json;
+
+namespace
+{
+    bool IsDeviceSelector(const std::string& value, const bool cudaOnly)
+    {
+        static const std::regex Common(
+            R"(^(auto|auto-primary|auto-secondary|cpu|none)$)");
+        static const std::regex Cuda(
+            R"(^cuda(?::)?[0-9]+$)",
+            std::regex_constants::icase);
+        static const std::regex Backend(
+            R"(^[a-z][a-z0-9_-]*[0-9]+$)",
+            std::regex_constants::icase);
+        return std::regex_match(value, Common) || std::regex_match(value, Cuda) ||
+            (!cudaOnly && std::regex_match(value, Backend));
+    }
+}
 
 configManager::configManager() = default;
 
@@ -325,6 +343,92 @@ bool configManager::LoadSettings(appSettings& outSettings) const
             {
                 outSettings.speechRecognition.bUseGpu = recognitionData["useGpu"].get<bool>();
             }
+            if (recognitionData.contains("device"))
+            {
+                outSettings.speechRecognition.device =
+                    recognitionData["device"].get<std::string>();
+            }
+        }
+
+        if (data.contains("resources"))
+        {
+            const json& resourceData = data["resources"];
+            if (resourceData.contains("autoPlan"))
+            {
+                outSettings.resources.bAutoPlan = resourceData["autoPlan"].get<bool>();
+            }
+            if (resourceData.contains("reserveLogicalCores"))
+            {
+                outSettings.resources.reserveLogicalCores =
+                    resourceData["reserveLogicalCores"].get<int>();
+            }
+            if (resourceData.contains("minimumFreeRamMiB"))
+            {
+                outSettings.resources.minimumFreeRamMiB =
+                    resourceData["minimumFreeRamMiB"].get<int>();
+            }
+            if (resourceData.contains("llamaPromptCacheMiB"))
+            {
+                outSettings.resources.llamaPromptCacheMiB =
+                    resourceData["llamaPromptCacheMiB"].get<int>();
+            }
+            if (resourceData.contains("sqliteCacheMiB"))
+            {
+                outSettings.resources.sqliteCacheMiB =
+                    resourceData["sqliteCacheMiB"].get<int>();
+            }
+            if (resourceData.contains("gpuReserveMiB"))
+            {
+                outSettings.resources.gpuReserveMiB =
+                    resourceData["gpuReserveMiB"].get<int>();
+            }
+            if (resourceData.contains("allowChatModelSplit"))
+            {
+                outSettings.resources.bAllowChatModelSplit =
+                    resourceData["allowChatModelSplit"].get<bool>();
+            }
+            if (resourceData.contains("assignments"))
+            {
+                const json& assignments = resourceData["assignments"];
+                if (assignments.contains("chat"))
+                {
+                    outSettings.resources.chat = assignments["chat"].get<std::string>();
+                }
+                if (assignments.contains("voice"))
+                {
+                    outSettings.resources.voice = assignments["voice"].get<std::string>();
+                }
+                if (assignments.contains("speechRecognition"))
+                {
+                    outSettings.resources.speechRecognition =
+                        assignments["speechRecognition"].get<std::string>();
+                }
+                if (assignments.contains("embeddings"))
+                {
+                    outSettings.resources.embeddings =
+                        assignments["embeddings"].get<std::string>();
+                }
+            }
+        }
+        else
+        {
+            // Backward-compatible migration for configurations written before the
+            // cross-pipeline planner existed. Explicit service choices remain effective.
+            outSettings.resources.voice = outSettings.speech.qwenDevice == "auto"
+                ? "auto-secondary"
+                : (outSettings.speech.qwenDevice == "cuda"
+                    ? "CUDA0"
+                    : outSettings.speech.qwenDevice);
+            outSettings.resources.embeddings = outSettings.embedding.device == "none"
+                ? "cpu"
+                : outSettings.embedding.device;
+            outSettings.resources.speechRecognition = !outSettings.speechRecognition.bUseGpu
+                ? "cpu"
+                : (outSettings.speechRecognition.device == "auto"
+                    ? "auto-secondary"
+                    : (outSettings.speechRecognition.device == "cuda"
+                        ? "CUDA0"
+                        : outSettings.speechRecognition.device));
         }
 
         if (data.contains("vision"))
@@ -607,7 +711,27 @@ bool configManager::LoadSettings(appSettings& outSettings) const
                 outSettings.speechRecognition.language.empty() ||
                 outSettings.speechRecognition.sampleRate != 16000 ||
                 outSettings.speechRecognition.threads < 1 ||
-                outSettings.speechRecognition.threads > 64)) ||
+                outSettings.speechRecognition.threads > 64 ||
+                outSettings.speechRecognition.device.empty())) ||
+        outSettings.resources.reserveLogicalCores < 0 ||
+        outSettings.resources.reserveLogicalCores > 64 ||
+        outSettings.resources.minimumFreeRamMiB < 1024 ||
+        outSettings.resources.minimumFreeRamMiB > 262144 ||
+        outSettings.resources.llamaPromptCacheMiB < 0 ||
+        outSettings.resources.llamaPromptCacheMiB > 65536 ||
+        outSettings.resources.sqliteCacheMiB < 0 ||
+        outSettings.resources.sqliteCacheMiB > 2048 ||
+        outSettings.resources.gpuReserveMiB < 256 ||
+        outSettings.resources.gpuReserveMiB > 32768 ||
+        outSettings.resources.chat.empty() ||
+        outSettings.resources.voice.empty() ||
+        outSettings.resources.speechRecognition.empty() ||
+        outSettings.resources.embeddings.empty() ||
+        !IsDeviceSelector(outSettings.resources.chat, false) ||
+        !IsDeviceSelector(outSettings.resources.voice, true) ||
+        !IsDeviceSelector(outSettings.resources.speechRecognition, true) ||
+        !IsDeviceSelector(outSettings.resources.embeddings, false) ||
+        !IsDeviceSelector(outSettings.speechRecognition.device, true) ||
         outSettings.vision.maxResponseTokens < 64 ||
         outSettings.vision.maxResponseTokens > 4096 ||
         outSettings.vision.resolutionConfidence < 0.5 ||

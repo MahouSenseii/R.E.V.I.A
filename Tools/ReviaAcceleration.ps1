@@ -39,6 +39,7 @@ function Get-ReviaAcceleratorProbe {
     $result = [pscustomobject]@{
         Accelerator = 'cpu'
         Reason      = 'No hardware acceleration was detected.'
+        CudaRuntime = $null
     }
 
     $adapters = @()
@@ -57,7 +58,12 @@ function Get-ReviaAcceleratorProbe {
     $nvidia = @($names | Where-Object { $_ -match 'NVIDIA' })
     if ($nvidia.Count -gt 0) {
         $result.Accelerator = 'cuda'
-        $result.Reason = "NVIDIA adapter detected: $($nvidia[0])."
+        # Blackwell desktop/laptop cards require a CUDA 12.8+ toolchain. llama.cpp's
+        # official Windows releases currently offer 12.4 and 13.3, so mixed 5070+2070
+        # systems use 13.3; it supports both sm_120 and the 2070's sm_75.
+        $blackwell = @($nvidia | Where-Object { $_ -match 'RTX\s*50\d{2}' })
+        $result.CudaRuntime = if ($blackwell.Count -gt 0) { '13.3' } else { '12.4' }
+        $result.Reason = "NVIDIA adapter detected: $($nvidia[0]); CUDA $($result.CudaRuntime) runtime selected."
         return $result
     }
 
@@ -205,7 +211,9 @@ function Get-ReviaLlamaPackages {
     param(
         [Parameter(Mandatory = $true)]
         [ValidateSet('cpu', 'vulkan', 'cuda')]
-        [string]$Accelerator
+        [string]$Accelerator,
+        [ValidateSet('12.4', '13.3')]
+        [string]$CudaRuntime = '12.4'
     )
 
     $version = $script:ReviaLlamaVersion
@@ -213,6 +221,16 @@ function Get-ReviaLlamaPackages {
 
     switch ($Accelerator) {
         'cuda' {
+            if ($CudaRuntime -eq '13.3') {
+                return @(
+                    @{ Name = "llama-$version-bin-win-cuda-13.3-x64.zip"
+                       Uri  = "$base/llama-$version-bin-win-cuda-13.3-x64.zip"
+                       Sha  = '92cb01d69bd52cf307914d7a7fc187d81434269db4fc9561eaa48f6ebdffef06' },
+                    @{ Name = 'cudart-llama-bin-win-cuda-13.3-x64.zip'
+                       Uri  = "$base/cudart-llama-bin-win-cuda-13.3-x64.zip"
+                       Sha  = '1462a050eb4c684921ba51dcc4cc488a036674c3e73e9945ee705b854808d03e' }
+                )
+            }
             return @(
                 @{ Name = "llama-$version-bin-win-cuda-12.4-x64.zip"
                    Uri  = "$base/llama-$version-bin-win-cuda-12.4-x64.zip"

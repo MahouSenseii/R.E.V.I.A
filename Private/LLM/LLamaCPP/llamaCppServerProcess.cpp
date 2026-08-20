@@ -294,6 +294,10 @@ bool llamaCppServerProcess::StartEmbedding(
     launchSettings.modelPath = settings.modelPath;
     launchSettings.contextSize = settings.contextSize;
     launchSettings.parallelRequests = settings.parallelRequests;
+    launchSettings.cpuThreads = settings.cpuThreads;
+    launchSettings.cpuBatchThreads = settings.cpuBatchThreads;
+    launchSettings.ramCacheMiB = settings.ramCacheMiB;
+    launchSettings.modelLoadMode = settings.modelLoadMode;
     launchSettings.bAutoTune = false;
     launchSettings.bShutdownServerOnExit = settings.bShutdownServerOnExit;
     return StartInternal(
@@ -372,6 +376,28 @@ bool llamaCppServerProcess::StartInternal(
         L" --port " + std::to_wstring(settings.port) +
         L" --ctx-size " + std::to_wstring(contextSize) +
         L" --parallel " + std::to_wstring(parallelRequests);
+    if (settings.cpuThreads > 0)
+    {
+        commandLine += L" --threads " + std::to_wstring(settings.cpuThreads);
+    }
+    if (settings.cpuBatchThreads > 0)
+    {
+        commandLine += L" --threads-batch " + std::to_wstring(settings.cpuBatchThreads);
+    }
+    if (settings.ramCacheMiB >= 0)
+    {
+        commandLine += L" --cache-ram " + std::to_wstring(settings.ramCacheMiB);
+    }
+    if (!settings.modelLoadMode.empty() && settings.modelLoadMode != "auto")
+    {
+        const std::wstring loadMode = Utf8ToWide(settings.modelLoadMode);
+        if (loadMode.empty())
+        {
+            outError = "The llama.cpp model load mode could not be encoded by Windows.";
+            return false;
+        }
+        commandLine += L" --load-mode " + QuoteWindowsArgument(loadMode);
+    }
     if (!settings.apiKey.empty())
     {
         const std::wstring apiKey = Utf8ToWide(settings.apiKey);
@@ -384,6 +410,28 @@ bool llamaCppServerProcess::StartInternal(
     }
     if (!embeddingMode)
     {
+        if (!settings.device.empty() && settings.device != "auto")
+        {
+            const std::wstring deviceWide = Utf8ToWide(settings.device);
+            const std::wstring splitModeWide = Utf8ToWide(settings.splitMode);
+            if (deviceWide.empty() || splitModeWide.empty())
+            {
+                outError = "The planned llama.cpp device assignment could not be encoded.";
+                return false;
+            }
+            commandLine += L" --device " + QuoteWindowsArgument(deviceWide) +
+                L" --split-mode " + QuoteWindowsArgument(splitModeWide);
+            if (!settings.tensorSplit.empty())
+            {
+                const std::wstring tensorSplitWide = Utf8ToWide(settings.tensorSplit);
+                if (tensorSplitWide.empty())
+                {
+                    outError = "The planned llama.cpp tensor split could not be encoded.";
+                    return false;
+                }
+                commandLine += L" --tensor-split " + QuoteWindowsArgument(tensorSplitWide);
+            }
+        }
         if (settings.bVisionEnabled)
         {
             const std::filesystem::path projector =
@@ -412,8 +460,11 @@ bool llamaCppServerProcess::StartInternal(
             // llama.cpp leaves room for it rather than claiming it first.
             const int fitTarget = settings.autoFitTargetMiB +
                 (settings.reservedVramMiB > 0 ? settings.reservedVramMiB : 0);
+            const std::wstring fitTargetWide = settings.fitTargetMiB.empty()
+                ? std::to_wstring(fitTarget)
+                : Utf8ToWide(settings.fitTargetMiB);
             commandLine += L" --n-gpu-layers auto --fit on --fit-target " +
-                std::to_wstring(fitTarget) +
+                QuoteWindowsArgument(fitTargetWide) +
                 L" --flash-attn auto";
         }
         else

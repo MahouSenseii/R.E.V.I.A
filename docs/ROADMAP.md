@@ -12,6 +12,11 @@ The work is not one line. It runs on three tracks that progress at different rat
 
 Stage 7 is the convergence point: it needs Stage 4's goal runner *and* Stage 6's perception before it means anything.
 
+Two later stages cut across those tracks. **Stage 8** (distributed presence and remote
+operation) starts in the Presence track and only enters the Authority track at its last
+tier, which is why it is split into four. **Stage 9** (camera input) is a perception source
+that deliberately reuses Stage 3's existing consent path instead of extending Stage 6.
+
 ## Control model: vision-grounded, typed-executed
 
 **Decided.** Vision does the finding. UI Automation does the acting. Revia never synthesises a mouse click at a coordinate.
@@ -194,6 +199,123 @@ Stage 4 executes a goal. It does not decide one. Every stage before this assumes
 - Report proposal precision to the user. If Revia is wrong most of the time, that must be visible rather than inferred from irritation.
 
 Exit criteria: over a working week, Revia's accepted proposals exceed its dismissed ones, and no proposal has ever executed without approval.
+
+## Stage 8 — Distributed presence and remote operation (designed, not implemented)
+
+Revia should be able to appear on another PC, see it, be talked to from it, and eventually
+operate it. Those are four capabilities, not one, and they are separated here because they
+carry very different risk. Only the last one grants authority over a second machine.
+
+### The rule that makes this safe: authority is local to the machine that owns the resource
+
+This is the remote-work equivalent of "vision-grounded, typed-executed", and it is the
+decision everything else in this stage hangs from.
+
+**Revia never carries her authority across the network.** When she asks a remote agent to
+act, that is a *request*, not a command. The remote agent evaluates it against its own
+`capabilities.json`, applies its own approved roots and risk ceiling, raises its own
+confirmation prompt, and writes its own audit entry. It is free to refuse, and a refusal is
+a correct outcome.
+
+The alternative — a trusted controller that tells obedient agents what to do — means a
+compromised link, a stolen pairing token, or a bug in Revia's planner becomes full control
+of every paired machine at once. Under the rule above, the worst case is bounded by what
+the *far* machine already permits to a local user with the same policy file.
+
+Two consequences worth stating plainly, because they are the ones that will feel
+inconvenient later:
+
+- **There is no "just do it on the other PC" mode.** Widening what a remote agent may do
+  is done at that machine, by someone sitting at it, editing its policy.
+- **Pairing is physical.** A code is displayed on both screens and matched by a human. No
+  discovery-and-trust, no pre-shared secret in a config file, no "remember this machine"
+  that survives a policy change.
+
+### Tier A — Presence (lowest risk, no new authority)
+
+Revia's window or avatar renders on a second machine. The runtime, models, memory, and all
+action authority stay on the origin machine; the remote end is a display and a chat
+surface. This is the Embodiment track over a wire, and it needs no capability changes.
+
+Exit criteria: the remote view can be closed or lost without affecting the runtime, and
+nothing on the remote end can invoke an action.
+
+### Tier B — Remote client (adds a listener, not authority)
+
+Text and voice from the second machine reach the runtime; replies come back. Same
+authority as Tier A: none. What is genuinely new is that the runtime now accepts an inbound
+connection, which is the first time this project has had a network listener at all.
+
+- Bound to the local network by default, never to a public interface.
+- Mutual TLS with certificates generated at pairing time. Not a bearer token: a stolen
+  token is replayable, and this is the connection that will later carry action requests.
+- The listener is off until a machine is paired, and unpairing revokes the certificate
+  rather than merely forgetting it.
+
+### Tier C — Remote vision (read-only)
+
+The far machine captures its own screen and sends the image; Revia analyses it locally with
+Qwen3-VL and can describe or advise. She cannot act there.
+
+The consent model has to be the far machine's, not Revia's. A capture is taken because
+someone at that machine allowed it, on the same opt-in terms as local screen capture, with
+the same deletion after analysis. A paired controller must not be able to silently start
+watching a screen.
+
+### Tier D — Remote operation (the authority expansion)
+
+Typed UIA actions execute on the far machine, under that machine's policy. This is the only
+tier that grants anything, and it should not be started until A through C are in use and the
+transport has been exercised.
+
+Everything the local action path already requires applies at the far end and is evaluated
+there: allowlisted executable, approved roots, risk ceiling, supervised confirmation,
+redacted audit fields. Added on top:
+
+- **The request carries provenance.** Which machine asked, which user, and the reasoning or
+  goal step behind it, recorded in the far machine's audit log. A remote action that turns
+  out to be wrong must be traceable to what asked for it.
+- **A remote action is never auto-approved.** Whatever the far machine's `autoApproveRiskThrough`
+  says for local use, a request arriving over the network requires confirmation until this
+  tier has a track record. Read-only inspection is the exception.
+- **The goal runner's rehearsal does not cross machines.** A plan cannot be rehearsed in a
+  disposable copy of somebody else's PC, so a goal whose steps target a remote machine is
+  refused for now, exactly as a plan that drives an application is refused today.
+
+### Transport
+
+Undecided, deliberately. The options are httplib with OpenSSL (already a dependency, but
+the current build skips the OpenSSL backend), Qt Network (already deployed, but would make
+the remote feature depend on Qt and violate "usable without any UI"), or a small dedicated
+socket layer. Pick this when Tier A is built, not before; the choice matters less than the
+authority rule above and should not delay it.
+
+Exit criteria for the stage: a second machine can display Revia and talk to her with no
+capability changes at all; a remote action is refused by the far machine's policy without
+the origin machine being able to override it; and unpairing immediately ends both.
+
+## Stage 9 — Camera input (on-demand)
+
+Revia can look through a local camera when asked, analyse the frame locally with Qwen3-VL,
+and discard it. This is the same shape as the existing screen capture path and should reuse
+it rather than growing a parallel one.
+
+- **Off by default, and per-capture.** A frame is taken when the user asks or confirms,
+  never on a schedule. `/look` is the camera's equivalent of the existing vision confirm.
+- **Analysed and discarded.** The frame lands in llama.cpp's allowed media directory and is
+  deleted after the request, exactly as a screen capture is. No frame is stored, and none
+  reaches the memory database.
+- **The hardware indicator is an advantage worth keeping.** Most webcams light an LED that
+  software cannot suppress. Taking single frames on demand keeps that light meaningful; a
+  continuous feed would leave it on permanently and destroy its value as a signal. That is
+  the main argument for staying on-demand rather than ambient.
+- Device selection is explicit, because "the default camera" on a laptop with an external
+  webcam is not obvious.
+
+Ambient camera perception — presence detection, noticing the user left — is deliberately
+**not** in this stage. It is a standing camera feed, which is a materially larger promise
+than a screenshot, and it belongs with Stage 6's perception tiers under the same indicator,
+exclusion, and pause rules if it is ever wanted.
 
 ## Embodiment track — desktop presence
 

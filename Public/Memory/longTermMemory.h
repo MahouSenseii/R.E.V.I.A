@@ -13,6 +13,10 @@ public:
     explicit longTermMemory(std::string path = "Memory/revia_memory.db");
     ~longTermMemory();
 
+    // Process-wide because prompt construction and the background memory agent own
+    // separate store objects. Applied to every newly opened SQLite connection.
+    static void ConfigureCache(int cacheMiB, int mmapMiB);
+
     std::vector<memoryEntry> Load() const;
     bool Save(const memoryDecision& decision, bool& outWasAdded) const;
     bool HasMemories() const;

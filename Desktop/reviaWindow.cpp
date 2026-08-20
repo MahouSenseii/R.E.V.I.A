@@ -1,6 +1,7 @@
 #include "reviaWindow.h"
 #include "capabilityPanel.h"
 #include "pipelinePanel.h"
+#include "resourcePanel.h"
 
 #include <QApplication>
 #include <QCheckBox>
@@ -410,6 +411,9 @@ void ReviaWindow::BuildInterface()
 
     pipelinePanel = new PipelinePanel(tabs);
     tabs->addTab(pipelinePanel, "Pipelines");
+
+    resourcePanel = new ResourcePanel(tabs);
+    tabs->addTab(resourcePanel, "Resources");
 
     capabilityPanel = new CapabilityPanel(
         session,
@@ -1398,6 +1402,10 @@ void ReviaWindow::HandleRuntimeEvent(const revia::runtime::RuntimeEvent& event)
     if (pipelinePanel != nullptr)
     {
         pipelinePanel->Observe(event);
+    }
+    if (resourcePanel != nullptr)
+    {
+        resourcePanel->Observe(event);
     }
     if (event.kind == revia::runtime::RuntimeEventKind::StateChanged)
     {

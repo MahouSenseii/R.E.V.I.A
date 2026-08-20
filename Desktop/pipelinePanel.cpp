@@ -48,14 +48,16 @@ PipelinePanel::PipelinePanel(QWidget* parent)
     summary->setObjectName("secondaryText");
     layout->addWidget(summary);
 
-    table = new QTableWidget(0, 5, this);
-    table->setHorizontalHeaderLabels({"Pipeline", "State", "Queue", "Last time", "Detail"});
+    table = new QTableWidget(0, 6, this);
+    table->setHorizontalHeaderLabels(
+        {"Pipeline", "Compute", "State", "Queue", "Last time", "Detail"});
     table->verticalHeader()->setVisible(false);
     table->horizontalHeader()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
     table->horizontalHeader()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
     table->horizontalHeader()->setSectionResizeMode(2, QHeaderView::ResizeToContents);
     table->horizontalHeader()->setSectionResizeMode(3, QHeaderView::ResizeToContents);
-    table->horizontalHeader()->setSectionResizeMode(4, QHeaderView::Stretch);
+    table->horizontalHeader()->setSectionResizeMode(4, QHeaderView::ResizeToContents);
+    table->horizontalHeader()->setSectionResizeMode(5, QHeaderView::Stretch);
     table->setSelectionMode(QAbstractItemView::NoSelection);
     table->setEditTriggers(QAbstractItemView::NoEditTriggers);
     table->setAlternatingRowColors(true);
@@ -73,10 +75,11 @@ PipelinePanel::PipelinePanel(QWidget* parent)
         QStringLiteral("Input")})
     {
         const int row = EnsureRow(component);
-        SetCell(row, 1, "Waiting", QColor("#7f91aa"));
-        SetCell(row, 2, "0");
-        SetCell(row, 3, "-");
-        SetCell(row, 4, "No event yet.");
+        SetCell(row, 1, "-");
+        SetCell(row, 2, "Waiting", QColor("#7f91aa"));
+        SetCell(row, 3, "0");
+        SetCell(row, 4, "-");
+        SetCell(row, 5, "No event yet.");
     }
 }
 
@@ -124,10 +127,14 @@ void PipelinePanel::Observe(const revia::runtime::RuntimeEvent& event)
     const QString component = QString::fromStdString(event.component);
     const QString phase = QString::fromStdString(event.phase);
     const int row = EnsureRow(component);
-    SetCell(row, 1, phase, PhaseColor(phase));
-    SetCell(row, 2, QString::number(event.queueDepth));
-    SetCell(row, 3, event.elapsedMilliseconds >= 0.0
+    if (!event.resource.empty())
+    {
+        SetCell(row, 1, QString::fromStdString(event.resource), QColor("#c5d6ea"));
+    }
+    SetCell(row, 2, phase, PhaseColor(phase));
+    SetCell(row, 3, QString::number(event.queueDepth));
+    SetCell(row, 4, event.elapsedMilliseconds >= 0.0
         ? QString::number(event.elapsedMilliseconds, 'f', 1) + " ms"
         : QStringLiteral("-"));
-    SetCell(row, 4, QString::fromStdString(event.message));
+    SetCell(row, 5, QString::fromStdString(event.message));
 }

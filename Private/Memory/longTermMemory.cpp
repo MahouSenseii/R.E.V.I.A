@@ -1,5 +1,7 @@
 #include "Memory/longTermMemory.h"
 
+#include <atomic>
+
 #include <algorithm>
 #include <chrono>
 #include <cctype>
@@ -18,6 +20,8 @@
 
 namespace
 {
+std::atomic<int> ConfiguredCacheMiB = 64;
+std::atomic<int> ConfiguredMmapMiB = 64;
 
 struct DatabaseCloser
 {
@@ -324,6 +328,16 @@ Database OpenDatabase(const std::string& memoryPath)
 
     Database database(rawDatabase);
     sqlite3_busy_timeout(database.get(), 2000);
+    const int cacheMiB = std::clamp(ConfiguredCacheMiB.load(), 0, 2048);
+    const int mmapMiB = std::clamp(ConfiguredMmapMiB.load(), 0, 2048);
+    const std::string cachePolicy =
+        "PRAGMA cache_size=-" + std::to_string(cacheMiB * 1024) + ";" +
+        "PRAGMA mmap_size=" + std::to_string(
+            static_cast<std::uint64_t>(mmapMiB) * 1024ull * 1024ull) + ";";
+    if (!Execute(database.get(), cachePolicy.c_str()))
+    {
+        return {};
+    }
     constexpr const char* Schema =
         "PRAGMA journal_mode=WAL;"
         "PRAGMA foreign_keys=ON;"
@@ -441,6 +455,12 @@ std::string BuildFtsQuery(const std::string& query)
 longTermMemory::longTermMemory(std::string path) : memoryPath(std::move(path)) {}
 
 longTermMemory::~longTermMemory() = default;
+
+void longTermMemory::ConfigureCache(const int cacheMiB, const int mmapMiB)
+{
+    ConfiguredCacheMiB.store(std::clamp(cacheMiB, 0, 2048));
+    ConfiguredMmapMiB.store(std::clamp(mmapMiB, 0, 2048));
+}
 
 std::vector<memoryEntry> longTermMemory::Load() const
 {

@@ -59,8 +59,10 @@ will not link against this build.
 
 ## Phase 2 — CPU and non-NVIDIA runtime (done)
 
-`InstallLlamaCpp.ps1` and `InstallWhisper.ps1` hardcoded CUDA 12.4 builds. On a
-machine without an NVIDIA GPU that was ~1.25 GB of unusable download.
+`InstallLlamaCpp.ps1` and `InstallWhisper.ps1` originally hardcoded CUDA 12.4
+builds. On a machine without an NVIDIA GPU that was ~1.25 GB of unusable
+download, and a CUDA 12.4 llama.cpp binary is not an appropriate Blackwell
+runtime for the target RTX 5070.
 
 Both scripts now share `Tools\ReviaAcceleration.ps1`, which probes the display
 adapters and the presence of `vulkan-1.dll`, then resolves a pinned asset. Every
@@ -76,21 +78,32 @@ whisper.cpp v1.9.2 publishes no Vulkan build for Windows, so Vulkan machines get
 the OpenBLAS CPU build.
 
 Override detection with `-Accelerator cpu|vulkan|cuda`, which is also how you
-build a package for a machine other than the one you are on.
+build a package for a machine other than the one you are on. On CUDA installs,
+`InstallLlamaCpp.ps1` additionally selects CUDA 13.3 for RTX 50-series hardware
+and CUDA 12.4 for earlier cards; `-CudaRuntime 12.4|13.3` overrides it.
 
 `InstallLlamaCpp.ps1` writes `ThirdParty\llama.cpp\revia-backend.json` recording
 which variant is installed, and reinstalls when the accelerator changes rather
 than leaving a stale runtime in place.
 
 `InstallWhisper.ps1` aligns `speechRecognition.useGpu` in `Config\settings.json`
-with what it installed. The C++ side already passes `-ng` when that flag is
-false, so no runtime change was needed.
+with what it installed. The C++ runtime passes `-ng` for CPU or `-dev N` for an
+exact planned CUDA device. On a mixed RTX 5070 + RTX 2070 machine, automatic
+placement keeps this CUDA 12.4 whisper worker on the 2070.
 
-**The C++ runtime already degrades correctly.** `DedicatedVideoMemoryMiB()`
-returns 0 when DXGI finds no hardware adapter, `AutomaticContextSize()` then
-floors at a 4096-token context, and llama.cpp is launched with `--n-gpu-layers
-auto --fit on`, which places zero layers on a GPU that is not there. No changes
-were required in `llamaCppServerProcess.cpp`.
+**The C++ runtime degrades correctly and now understands multiple devices.** It
+asks the installed llama.cpp executable for its backend device inventory rather
+than treating DXGI's largest display adapter as the whole machine. Exact IDs are
+routed to chat/vision, Qwen voice, whisper, and embeddings before their owners
+start. If that inventory is unavailable, placement falls back to backend auto/CPU
+without inventing a CUDA ordinal. CPU thread shares preserve logical cores for
+Windows, and llama/SQLite RAM caches retain configured OS headroom.
+
+Qwen3-TTS uses an isolated PyTorch 2.7.1 + CUDA 12.8 environment so a target
+machine containing both Blackwell (RTX 5070) and Turing (RTX 2070) can load the
+worker on either card. The service selects BF16 only on hardware that reports
+support and uses FP16 on Turing. This is pipeline isolation, not model-parallel
+speech: one conversational utterance remains on one resident voice worker.
 
 ## Phase 3 — redistributable package (not started)
 

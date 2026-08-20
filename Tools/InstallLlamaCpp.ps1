@@ -1,7 +1,9 @@
 param(
     [switch]$Force,
     [ValidateSet('auto', 'cpu', 'vulkan', 'cuda')]
-    [string]$Accelerator = 'auto'
+    [string]$Accelerator = 'auto',
+    [ValidateSet('auto', '12.4', '13.3')]
+    [string]$CudaRuntime = 'auto'
 )
 
 # Installs the llama.cpp Windows runtime matching the accelerator on this
@@ -22,29 +24,52 @@ $serverPath = Join-Path $installRoot 'llama-server.exe'
 $stampPath = Join-Path $installRoot 'revia-backend.json'
 
 $resolved = Resolve-ReviaAccelerator -Requested $Accelerator
+$probe = Get-ReviaAcceleratorProbe
+$resolvedCudaRuntime = if ($resolved -ne 'cuda') {
+    $null
+}
+elseif ($CudaRuntime -ne 'auto') {
+    $CudaRuntime
+}
+elseif ($probe.Accelerator -eq 'cuda' -and $probe.CudaRuntime) {
+    $probe.CudaRuntime
+}
+else {
+    '12.4'
+}
 
 # Reinstall when the accelerator changed even if a server binary is present,
 # otherwise a machine that gained or lost a GPU keeps the wrong runtime.
 if ((Test-Path -LiteralPath $serverPath -PathType Leaf) -and -not $Force) {
     $installedAccelerator = $null
+    $installedCudaRuntime = $null
     if (Test-Path -LiteralPath $stampPath -PathType Leaf) {
         try {
-            $installedAccelerator = (Get-Content -LiteralPath $stampPath -Raw | ConvertFrom-Json).accelerator
+            $stamp = Get-Content -LiteralPath $stampPath -Raw | ConvertFrom-Json
+            $installedAccelerator = $stamp.accelerator
+            $installedCudaRuntime = $stamp.cudaRuntime
         }
         catch {
             $installedAccelerator = $null
         }
     }
 
-    if ($installedAccelerator -eq $resolved) {
-        Write-Host "llama.cpp ($installedAccelerator) is already installed: $serverPath"
+    if ($installedAccelerator -eq $resolved -and
+        ($resolved -ne 'cuda' -or $installedCudaRuntime -eq $resolvedCudaRuntime)) {
+        $runtimeLabel = if ($resolvedCudaRuntime) { ", CUDA $resolvedCudaRuntime" } else { '' }
+        Write-Host "llama.cpp ($installedAccelerator$runtimeLabel) is already installed: $serverPath"
         exit 0
     }
 
     Write-Host "Replacing the installed llama.cpp runtime ($installedAccelerator) with $resolved."
 }
 
-$packages = Get-ReviaLlamaPackages -Accelerator $resolved
+$packages = if ($resolved -eq 'cuda') {
+    Get-ReviaLlamaPackages -Accelerator $resolved -CudaRuntime $resolvedCudaRuntime
+}
+else {
+    Get-ReviaLlamaPackages -Accelerator $resolved
+}
 $extractRoot = Join-Path $env:TEMP ('revia-llama-extract-' + [Guid]::NewGuid().ToString('N'))
 
 try {
@@ -77,6 +102,7 @@ try {
 
     Save-ReviaJsonFile -Path $stampPath -Value ([ordered]@{
         accelerator = $resolved
+        cudaRuntime = $resolvedCudaRuntime
         version     = Get-ReviaLlamaVersion
         installedAt = (Get-Date).ToString('o')
     })
@@ -85,7 +111,8 @@ finally {
     Remove-ReviaTempDirectory -Path $extractRoot
 }
 
-Write-Host "llama.cpp $(Get-ReviaLlamaVersion) ($resolved) ready: $serverPath"
+$runtimeLabel = if ($resolvedCudaRuntime) { ", CUDA $resolvedCudaRuntime" } else { '' }
+Write-Host "llama.cpp $(Get-ReviaLlamaVersion) ($resolved$runtimeLabel) ready: $serverPath"
 if ($resolved -eq 'cpu') {
     Write-Host 'Chat will run on the CPU. Expect slower generation and prefer a smaller quantised model.'
 }

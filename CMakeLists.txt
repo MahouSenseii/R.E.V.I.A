@@ -138,6 +138,8 @@ if(REVIA_BUILD_DESKTOP)
                 "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/main.cpp"
                 "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/pipelinePanel.cpp"
                 "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/pipelinePanel.h"
+                "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/resourcePanel.cpp"
+                "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/resourcePanel.h"
                 "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/reviaWindow.cpp"
                 "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/reviaWindow.h"
         )

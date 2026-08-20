@@ -35,6 +35,7 @@
 #include "Runtime/affectController.h"
 #include "Runtime/reviaSession.h"
 #include "Runtime/runtimeEvents.h"
+#include "Resources/resourcePlanner.h"
 #include "Speech/speechService.h"
 #include "Speech/speechRecognitionService.h"
 #include "Speech/voiceActivityMonitor.h"
@@ -3419,6 +3420,135 @@ void TestHardwarePlanScalesParallelLanesConservatively()
         "A workstation-class GPU did not gain three bounded inference slots.");
 }
 
+void TestResourcePlannerSeparatesUnequalGpus()
+{
+    revia::resources::HardwareInventory hardware;
+    // Deliberately list the slower card first. Selection must be based on capacity, not
+    // enumeration order, because CUDA ordinals can move between machines.
+    hardware.gpus = {
+        {"CUDA1", "NVIDIA GeForce RTX 2070", 1, 8192, 7600},
+        {"CUDA0", "NVIDIA GeForce RTX 5070", 0, 12288, 11600}
+    };
+    hardware.exactBackendDevices = true;
+    hardware.totalSystemMemoryMiB = 65536;
+    hardware.availableSystemMemoryMiB = 48000;
+    hardware.logicalProcessors = 20;
+
+    resourceSettings policy;
+    revia::resources::ResourceRequirements requirements;
+    requirements.chatWorkingSetMiB = 7500;
+    requirements.voiceExpected = true;
+    requirements.voiceMinimumVramMiB = 4600;
+    requirements.baseGpuReserveMiB = 1536;
+    const revia::resources::ResourcePlan plan =
+        revia::resources::PlanResources(hardware, policy, requirements);
+
+    Check(plan.chatDevice == "CUDA0" && plan.chatSplitMode == "none",
+        "The latency-sensitive chat model was not isolated on the larger RTX 5070.");
+    Check(plan.voiceDevice == "cuda:1" &&
+        plan.speechRecognitionDevice == "cuda:1",
+        "The RTX 2070 was not assigned the independent voice and STT pipelines.");
+    Check(plan.embeddingDevice == "none",
+        "Embeddings unexpectedly contended with an interactive GPU pipeline.");
+    Check(plan.llamaPromptCacheMiB == 4096 && plan.sqliteCacheMiB == 256,
+        "A 64-GiB host did not receive bounded llama and SQLite RAM-cache budgets.");
+    Check(plan.chatCpuThreads == 9 && plan.embeddingCpuThreads == 3 &&
+        plan.speechRecognitionThreads == 3 && plan.voiceCpuThreads == 3 &&
+        plan.chatCpuThreads + plan.embeddingCpuThreads +
+            plan.speechRecognitionThreads + plan.voiceCpuThreads == 18,
+        "Independent CPU thread caps exceeded the processors left after the OS reserve.");
+
+    appSettings applied;
+    revia::resources::ApplyResourcePlan(plan, applied);
+    Check(applied.llm.device == "CUDA0" && applied.speech.qwenDevice == "cuda:1" &&
+        applied.speechRecognition.device == "cuda:1" &&
+        applied.llm.ramCacheMiB == 4096 && applied.speech.qwenCpuThreads == 3,
+        "The resolved resource plan was not passed to all service owners.");
+}
+
+void TestResourcePlannerSplitsOnlyForCapacity()
+{
+    revia::resources::HardwareInventory hardware;
+    hardware.gpus = {
+        {"CUDA0", "NVIDIA GeForce RTX 5070", 0, 12288, 11600},
+        {"CUDA1", "NVIDIA GeForce RTX 2070", 1, 8192, 7600}
+    };
+    hardware.exactBackendDevices = true;
+    hardware.totalSystemMemoryMiB = 65536;
+    hardware.availableSystemMemoryMiB = 48000;
+    hardware.logicalProcessors = 20;
+
+    resourceSettings policy;
+    revia::resources::ResourceRequirements requirements;
+    requirements.chatWorkingSetMiB = 15000;
+    requirements.voiceExpected = true;
+    requirements.voiceMinimumVramMiB = 4600;
+    requirements.baseGpuReserveMiB = 1536;
+    const revia::resources::ResourcePlan plan =
+        revia::resources::PlanResources(hardware, policy, requirements);
+
+    Check(plan.chatDevice == "CUDA0,CUDA1" && plan.chatSplitMode == "layer" &&
+        plan.chatTensorSplit == "10064,6064",
+        "A model that only fits combined VRAM did not receive a proportional layer split.");
+    Check(plan.voiceDevice == "cpu",
+        "Voice was overcommitted onto GPUs already required by a split chat model.");
+    Check(plan.speechRecognitionDevice == "cpu",
+        "Whisper was assigned to a GPU already consumed by a capacity-split chat model.");
+}
+
+void TestResourcePlannerPreservesAutoFallbackAndFreeVram()
+{
+    revia::resources::HardwareInventory fallback;
+    fallback.gpus = {{"", "Display adapter reported only by DXGI", -1, 12288, 0}};
+    fallback.totalSystemMemoryMiB = 32768;
+    fallback.availableSystemMemoryMiB = 20000;
+    fallback.logicalProcessors = 16;
+    resourceSettings policy;
+    revia::resources::ResourceRequirements requirements;
+    requirements.chatWorkingSetMiB = 7500;
+    requirements.voiceExpected = true;
+    const revia::resources::ResourcePlan automatic =
+        revia::resources::PlanResources(fallback, policy, requirements);
+    Check(automatic.chatDevice == "auto",
+        "A missing exact backend inventory forced chat to CPU instead of preserving auto offload.");
+
+    revia::resources::HardwareInventory occupied = fallback;
+    occupied.exactBackendDevices = true;
+    occupied.gpus = {
+        {"CUDA0", "NVIDIA GeForce RTX 5070", 0, 12288, 11600},
+        {"CUDA1", "NVIDIA GeForce RTX 2070", 1, 8192, 4000}
+    };
+    const revia::resources::ResourcePlan constrained =
+        revia::resources::PlanResources(occupied, policy, requirements);
+    Check(constrained.chatDevice == "CUDA0" && constrained.voiceDevice == "cpu",
+        "Qwen voice was assigned to a secondary GPU without enough currently free VRAM.");
+}
+
+void TestManualResourcePlanResolvesSymbolicDefaults()
+{
+    revia::resources::HardwareInventory hardware;
+    hardware.gpus = {
+        {"CUDA0", "NVIDIA GeForce RTX 5070", 0, 12288, 11600},
+        {"CUDA1", "NVIDIA GeForce RTX 2070", 1, 8192, 7600}
+    };
+    hardware.exactBackendDevices = true;
+    hardware.totalSystemMemoryMiB = 65536;
+    hardware.availableSystemMemoryMiB = 48000;
+    hardware.logicalProcessors = 20;
+
+    resourceSettings policy;
+    policy.bAutoPlan = false;
+    revia::resources::ResourceRequirements requirements;
+    const revia::resources::ResourcePlan plan =
+        revia::resources::PlanResources(hardware, policy, requirements);
+
+    Check(plan.chatDevice == "CUDA0" && plan.voiceDevice == "cuda:1" &&
+        plan.speechRecognitionDevice == "cuda:1" && plan.embeddingDevice == "none",
+        "Manual mode passed symbolic defaults through as invalid backend device names.");
+    Check(plan.chatSplitMode == "none" && plan.chatGpus.size() == 1,
+        "Manual mode unexpectedly enabled capacity-based model splitting.");
+}
+
 void TestInferenceSchedulerPrioritizesConversation()
 {
     using revia::llm::InferencePriority;
@@ -3811,6 +3941,10 @@ int main(const int argc, char** argv)
         TestConversationStyleRemovesOnlyStockTail();
         TestConversationContextKeepsCoherentRecentTurns();
         TestHardwarePlanScalesParallelLanesConservatively();
+        TestResourcePlannerSeparatesUnequalGpus();
+        TestResourcePlannerSplitsOnlyForCapacity();
+        TestResourcePlannerPreservesAutoFallbackAndFreeVram();
+        TestManualResourcePlanResolvesSymbolicDefaults();
         TestInferenceSchedulerPrioritizesConversation();
         TestInferenceSchedulerPreemptsBackgroundForConversation();
         TestStreamedReplyIsNeverTruncated();

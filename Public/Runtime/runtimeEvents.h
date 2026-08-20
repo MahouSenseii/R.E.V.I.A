@@ -38,6 +38,9 @@ enum class RuntimeEventKind
     ComponentStatus,
     Memory,
     Timing,
+    // Read-only hardware inventory and resolved workload assignments for the Resources
+    // tab. Kept distinct from ComponentStatus so hardware rows do not become pipelines.
+    ResourceStatus,
     // One complete sentence of a reply, published as soon as it exists so the shell can
     // show it in step with the audio instead of after the whole reply is generated.
     ReplyFragment,
@@ -67,11 +70,17 @@ struct RuntimeEvent
     float affectIntensity = 0.0F;
     std::string component;
     std::string phase;
+    // Exact compute assignment such as CUDA0, cuda:1, or CPU. Component events keep the
+    // last non-empty value so transient state updates do not erase startup placement.
+    std::string resource;
     // Supporting text. For a proposal this is the evidence behind it, so the user can
     // judge the reasoning rather than only the conclusion.
     std::string detail;
     double elapsedMilliseconds = -1.0;
     int queueDepth = 0;
+    std::uint64_t totalMemoryMiB = 0;
+    std::uint64_t availableMemoryMiB = 0;
+    std::uint64_t allocatedMemoryMiB = 0;
     std::chrono::system_clock::time_point occurredAt = std::chrono::system_clock::now();
 };
 

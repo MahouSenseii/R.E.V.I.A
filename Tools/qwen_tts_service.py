@@ -26,32 +26,80 @@ class QwenRuntime:
         self.model_kind = ""
         self.model_name = ""
         self.device = "cpu"
+        self.device_name = "CPU"
+        self.dtype_name = "float32"
         self.clone_prompts: dict[tuple[str, str], Any] = {}
+
+    @staticmethod
+    def _cuda_candidate(torch: Any, index: int) -> tuple[str, Any, str, int]:
+        properties = torch.cuda.get_device_properties(index)
+        with torch.cuda.device(index):
+            free_bytes, total_bytes = torch.cuda.mem_get_info()
+            bf16_supported = torch.cuda.is_bf16_supported()
+        # RTX 20-series/Turing supports FP16 but not native BF16. Selecting BF16 for
+        # every CUDA adapter made a perfectly useful secondary 2070 fail at runtime.
+        dtype = torch.bfloat16 if bf16_supported else torch.float16
+        dtype_name = "bfloat16" if bf16_supported else "float16"
+        free_mib = free_bytes // (1024 * 1024)
+        total_mib = total_bytes // (1024 * 1024)
+        detail = (
+            f"{properties.name}, {free_mib}/{total_mib} MiB free, {dtype_name}"
+        )
+        return f"cuda:{index}", dtype, detail, free_mib
 
     def _select_device(self) -> tuple[str, Any, str]:
         import torch
 
         requested = self.args.device.lower()
         if requested == "cpu":
+            self.device_name = "CPU"
+            self.dtype_name = "float32"
             return "cpu", torch.float32, "CPU selected by configuration"
         if requested.startswith("cuda") and torch.cuda.is_available():
-            return requested if ":" in requested else "cuda:0", torch.bfloat16, "CUDA selected by configuration"
+            try:
+                index = int(requested.split(":", 1)[1]) if ":" in requested else 0
+                if index < 0 or index >= torch.cuda.device_count():
+                    raise ValueError(f"CUDA device {index} does not exist")
+                device, dtype, detail, free_mib = self._cuda_candidate(torch, index)
+                if free_mib < self.args.minimum_free_vram_mib:
+                    self.device_name = "CPU"
+                    self.dtype_name = "float32"
+                    return "cpu", torch.float32, (
+                        f"CPU selected because {device} has only {free_mib} MiB free; "
+                        f"{self.args.minimum_free_vram_mib} MiB is required"
+                    )
+                self.device_name = torch.cuda.get_device_name(index)
+                self.dtype_name = "bfloat16" if dtype == torch.bfloat16 else "float16"
+                return device, dtype, f"CUDA selected by resource plan: {detail}"
+            except (TypeError, ValueError, RuntimeError) as exception:
+                self.device_name = "CPU"
+                self.dtype_name = "float32"
+                return "cpu", torch.float32, f"Invalid CUDA assignment; using CPU: {exception}"
         if requested not in ("auto", "cuda"):
+            self.device_name = "CPU"
+            self.dtype_name = "float32"
             return "cpu", torch.float32, f"Unknown device '{requested}'; using CPU"
         if torch.cuda.is_available():
-            free_bytes, _ = torch.cuda.mem_get_info()
-            free_mib = free_bytes // (1024 * 1024)
+            candidates = [self._cuda_candidate(torch, index)
+                          for index in range(torch.cuda.device_count())]
+            candidates.sort(key=lambda candidate: candidate[3], reverse=True)
+            device, dtype, detail, free_mib = candidates[0]
             if free_mib >= self.args.minimum_free_vram_mib:
-                return "cuda:0", torch.bfloat16, f"CUDA selected with {free_mib} MiB free"
+                index = int(device.split(":", 1)[1])
+                self.device_name = torch.cuda.get_device_name(index)
+                self.dtype_name = "bfloat16" if dtype == torch.bfloat16 else "float16"
+                return device, dtype, f"best free CUDA device selected: {detail}"
+            self.device_name = "CPU"
+            self.dtype_name = "float32"
             return "cpu", torch.float32, (
-                f"CPU selected because only {free_mib} MiB GPU memory is free; "
+                f"CPU selected because the freest GPU has only {free_mib} MiB free; "
                 f"{self.args.minimum_free_vram_mib} MiB is required"
             )
+        self.device_name = "CPU"
+        self.dtype_name = "float32"
         return "cpu", torch.float32, "CPU selected because CUDA is unavailable"
 
     def _unload(self) -> None:
-        if self.model is None:
-            return
         self.model = None
         self.model_kind = ""
         self.model_name = ""
@@ -60,8 +108,9 @@ class QwenRuntime:
         try:
             import torch
 
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
+            if torch.cuda.is_available() and self.device.startswith("cuda:"):
+                with torch.cuda.device(int(self.device.split(":", 1)[1])):
+                    torch.cuda.empty_cache()
         except Exception:
             pass
 
@@ -73,6 +122,14 @@ class QwenRuntime:
         self._unload()
         import torch
         from qwen_tts import Qwen3TTSModel
+
+        torch.set_num_threads(max(1, self.args.cpu_threads))
+        try:
+            torch.set_num_interop_threads(1)
+        except RuntimeError:
+            # PyTorch permits this only before inter-op work begins. The intra-op cap
+            # above remains effective if a later model swap reaches this path.
+            pass
 
         self.device, dtype, device_reason = self._select_device()
         print(f"[Qwen3-TTS] Loading {kind} model {model_name} on {self.device}: {device_reason}", flush=True)
@@ -88,6 +145,8 @@ class QwenRuntime:
             print("[Qwen3-TTS] CUDA model load failed; retrying on CPU.", flush=True)
             self._unload()
             self.device = "cpu"
+            self.device_name = "CPU"
+            self.dtype_name = "float32"
             self.model = Qwen3TTSModel.from_pretrained(
                 model_name,
                 device_map="cpu",
@@ -137,6 +196,8 @@ class QwenRuntime:
                 "output_path": str(output),
                 "elapsed_ms": elapsed,
                 "device": self.device,
+                "device_name": self.device_name,
+                "dtype": self.dtype_name,
             }
 
     def synthesize(self, request: dict[str, Any]) -> dict[str, Any]:
@@ -176,6 +237,8 @@ class QwenRuntime:
                 "output_path": str(output),
                 "elapsed_ms": elapsed,
                 "device": self.device,
+                "device_name": self.device_name,
+                "dtype": self.dtype_name,
             }
 
 
@@ -210,6 +273,8 @@ def make_handler(runtime: QwenRuntime, token: str) -> type[BaseHTTPRequestHandle
                 "detail": "Qwen3-TTS worker is ready; models load on demand.",
                 "model_kind": runtime.model_kind,
                 "device": runtime.device,
+                "device_name": runtime.device_name,
+                "dtype": runtime.dtype_name,
             })
 
         def do_POST(self) -> None:  # noqa: N802 - required by BaseHTTPRequestHandler
@@ -243,6 +308,8 @@ def make_handler(runtime: QwenRuntime, token: str) -> type[BaseHTTPRequestHandle
                             "message": f"Qwen3-TTS {model_kind} model loaded on {runtime.device}.",
                             "elapsed_ms": (time.perf_counter() - started) * 1000.0,
                             "device": runtime.device,
+                            "device_name": runtime.device_name,
+                            "dtype": runtime.dtype_name,
                         }
                 else:
                     self._send(404, {"succeeded": False, "message": "Not found."})
@@ -262,6 +329,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--token", required=True)
     parser.add_argument("--device", default="auto")
     parser.add_argument("--minimum-free-vram-mib", type=int, default=4600)
+    parser.add_argument("--cpu-threads", type=int, default=2)
     parser.add_argument("--design-model", default="Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign")
     parser.add_argument("--clone-model", default="Qwen/Qwen3-TTS-12Hz-0.6B-Base")
     return parser.parse_args()
@@ -274,6 +342,9 @@ def main() -> int:
         return 2
     if not (1 <= args.port <= 65535):
         print("Invalid port.", file=sys.stderr)
+        return 2
+    if not (1 <= args.cpu_threads <= 64):
+        print("Invalid CPU thread cap.", file=sys.stderr)
         return 2
     runtime = QwenRuntime(args)
     server = ThreadingHTTPServer((args.host, args.port), make_handler(runtime, args.token))

@@ -21,6 +21,7 @@
 #include "Runtime/conversationRuntime.h"
 #include "Runtime/runtimeEvents.h"
 #include "Runtime/sessionResult.h"
+#include "Resources/resourcePlanner.h"
 #include "Speech/speechService.h"
 #include "Speech/speechRecognitionService.h"
 #include "Vision/screenCaptureService.h"
@@ -208,7 +209,9 @@ private:
         const std::string& message,
         double elapsedMilliseconds = -1.0,
         int queueDepth = 0,
-        std::uint64_t turnId = 0) const;
+        std::uint64_t turnId = 0,
+        const std::string& resource = {}) const;
+    void PublishResourcePlan() const;
 
     RuntimeEventBus eventBus;
     logger appLogger;
@@ -218,6 +221,7 @@ private:
     conversationContext context;
     appSettings settings;
     aiProfile profile;
+    resources::ResourcePlan resourcePlan;
     actions::ActionRuntime actionRuntime;
     // Declared after actionRuntime: GoalRunner holds references to both of these.
     goals::GoalStore goalStore;

@@ -65,7 +65,23 @@
     "language": "en",
     "sampleRate": 16000,
     "threads": 6,
-    "useGpu": true
+    "useGpu": true,
+    "device": "auto"
+  },
+  "resources": {
+    "autoPlan": true,
+    "reserveLogicalCores": 2,
+    "minimumFreeRamMiB": 4096,
+    "llamaPromptCacheMiB": 0,
+    "sqliteCacheMiB": 0,
+    "gpuReserveMiB": 1536,
+    "allowChatModelSplit": true,
+    "assignments": {
+      "chat": "auto-primary",
+      "voice": "auto-secondary",
+      "speechRecognition": "auto-secondary",
+      "embeddings": "cpu"
+    }
   },
   "vision": {
     "enabled": true,

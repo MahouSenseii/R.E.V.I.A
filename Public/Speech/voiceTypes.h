@@ -2,6 +2,7 @@
 
 #include <string>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 namespace revia::speech
@@ -20,10 +21,32 @@ struct VoicePreset
 
 struct VoiceOperationResult
 {
+    VoiceOperationResult() = default;
+    VoiceOperationResult(
+        const bool inputSucceeded,
+        std::string inputMessage,
+        std::string inputOutputPath,
+        const double inputElapsedMilliseconds,
+        std::string inputDevice = {},
+        std::string inputDeviceName = {},
+        std::string inputDtype = {})
+        : succeeded(inputSucceeded),
+          message(std::move(inputMessage)),
+          outputPath(std::move(inputOutputPath)),
+          elapsedMilliseconds(inputElapsedMilliseconds),
+          device(std::move(inputDevice)),
+          deviceName(std::move(inputDeviceName)),
+          dtype(std::move(inputDtype))
+    {
+    }
+
     bool succeeded = false;
     std::string message;
     std::string outputPath;
     double elapsedMilliseconds = -1.0;
+    std::string device;
+    std::string deviceName;
+    std::string dtype;
 };
 
 struct VoiceStudioSnapshot

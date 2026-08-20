@@ -2,8 +2,11 @@
 
 #include <array>
 #include <chrono>
+#include <algorithm>
+#include <cctype>
 #include <cstdint>
 #include <fstream>
+#include <optional>
 #include <sstream>
 #include <system_error>
 #include <utility>
@@ -69,6 +72,33 @@ namespace
         }
         const std::size_t last = value.find_last_not_of(" \t\r\n");
         return value.substr(first, last - first + 1);
+    }
+
+    std::optional<int> CudaOrdinal(const std::string& device)
+    {
+        std::string normalized = device;
+        std::transform(normalized.begin(), normalized.end(), normalized.begin(),
+            [](const unsigned char character)
+            {
+                return static_cast<char>(std::tolower(character));
+            });
+        if (!normalized.starts_with("cuda:") || normalized.size() <= 5)
+        {
+            return std::nullopt;
+        }
+        try
+        {
+            std::size_t consumed = 0;
+            const std::string digits = normalized.substr(5);
+            const int ordinal = std::stoi(digits, &consumed);
+            return ordinal >= 0 && consumed == digits.size()
+                ? std::optional<int>(ordinal)
+                : std::nullopt;
+        }
+        catch (...)
+        {
+            return std::nullopt;
+        }
     }
 
 #ifdef _WIN32
@@ -152,7 +182,8 @@ bool SpeechRecognitionService::Start(
         return false;
     }
     available.store(true);
-    Notify({"Ready", "Speech recognition is ready."});
+    Notify({"Ready", "Speech recognition is ready on " +
+        (settings.device == "cpu" ? std::string("CPU") : settings.device) + "."});
     return true;
 }
 
@@ -401,9 +432,14 @@ void SpeechRecognitionService::Transcribe(
         L" -f " + Quote(wavePath) + L" -l " + Utf8ToWide(configuration.language) +
         L" -otxt -of " + Quote(outputBase) + L" --no-timestamps -t " +
         std::to_wstring(configuration.threads);
-    if (!configuration.bUseGpu)
+    const std::optional<int> deviceOrdinal = CudaOrdinal(configuration.device);
+    if (!configuration.bUseGpu || configuration.device == "cpu")
     {
         command += L" -ng";
+    }
+    else if (deviceOrdinal.has_value())
+    {
+        command += L" -dev " + std::to_wstring(*deviceOrdinal);
     }
     std::vector<wchar_t> mutableCommand(command.begin(), command.end());
     mutableCommand.push_back(L'\0');

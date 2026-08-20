@@ -14,12 +14,30 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <utility>
 
 namespace revia::speech
 {
 
 struct SpeechEvent
 {
+    SpeechEvent() = default;
+    SpeechEvent(
+        std::string inputPhase,
+        std::string inputDetail,
+        const double inputElapsedMilliseconds = -1.0,
+        const int inputQueueDepth = 0,
+        const std::uint64_t inputUtteranceId = 0,
+        std::string inputDevice = {})
+        : phase(std::move(inputPhase)),
+          detail(std::move(inputDetail)),
+          elapsedMilliseconds(inputElapsedMilliseconds),
+          queueDepth(inputQueueDepth),
+          utteranceId(inputUtteranceId),
+          device(std::move(inputDevice))
+    {
+    }
+
     std::string phase;
     std::string detail;
     double elapsedMilliseconds = -1.0;
@@ -27,6 +45,7 @@ struct SpeechEvent
     // Which reply this event belongs to, so the shell can hold that reply's text until
     // the audio for it actually starts. Zero when the event is not about an utterance.
     std::uint64_t utteranceId = 0;
+    std::string device;
 };
 
 class SpeechService

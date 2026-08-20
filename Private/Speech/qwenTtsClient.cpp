@@ -191,6 +191,9 @@ VoiceOperationResult QwenTtsClient::Post(
             : "Qwen3-TTS failed.");
         result.outputPath = data.value("output_path", "");
         result.elapsedMilliseconds = data.value("elapsed_ms", -1.0);
+        result.device = data.value("device", "");
+        result.deviceName = data.value("device_name", "");
+        result.dtype = data.value("dtype", "");
         return result;
     }
     catch (const std::exception& exception)

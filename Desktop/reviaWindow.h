@@ -23,6 +23,7 @@ class QTimer;
 class QToolButton;
 class QWidget;
 class PipelinePanel;
+class ResourcePanel;
 class CapabilityPanel;
 
 class ReviaWindow final : public QMainWindow
@@ -120,6 +121,7 @@ private:
     QPlainTextEdit* messageInput = nullptr;
     QPlainTextEdit* activityFeed = nullptr;
     PipelinePanel* pipelinePanel = nullptr;
+    ResourcePanel* resourcePanel = nullptr;
     CapabilityPanel* capabilityPanel = nullptr;
     QTabWidget* tabs = nullptr;
     QPushButton* sendButton = nullptr;

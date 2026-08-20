@@ -165,6 +165,21 @@ commandOutput commandManager::BuildStatusOutput(
     stream << "Speech Input:   " <<
         (settings.speechRecognition.bEnabled ? "Enabled" : "Disabled") << "\n";
 
+    stream << "\nResource Plan\n";
+    stream << "Mode:           " << (settings.resources.bAutoPlan ? "Auto" : "Manual") << "\n";
+    stream << "Chat Device:    " << settings.llm.device << "\n";
+    stream << "Chat Split:     " << settings.llm.splitMode << "\n";
+    stream << "Voice Device:   " << settings.speech.qwenDevice << "\n";
+    stream << "STT Device:     " << settings.speechRecognition.device << "\n";
+    stream << "Embedding Device: " <<
+        (settings.embedding.device == "none" ? "CPU" : settings.embedding.device) << "\n";
+    stream << "CPU Threads:    chat " << settings.llm.cpuThreads << ", embeddings " <<
+        settings.embedding.cpuThreads << ", STT " << settings.speechRecognition.threads <<
+        ", voice " << settings.speech.qwenCpuThreads << "\n";
+    stream << "RAM Prompt Cache: " << settings.llm.ramCacheMiB << " MiB\n";
+    stream << "SQLite Cache:    " << settings.resources.sqliteCacheMiB <<
+        (settings.resources.sqliteCacheMiB == 0 ? " MiB (auto)\n" : " MiB\n");
+
     stream << "\nBackend Health\n";
     stream << "Name:           " << llmHealth.name << "\n";
     stream << "Available:      " << (llmHealth.bIsAvailable ? "true" : "false") << "\n";

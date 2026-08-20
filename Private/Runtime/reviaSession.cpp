@@ -284,36 +284,31 @@ bool ReviaSession::Start()
     }
     startupTimings.push_back({"goal_store_scan", ElapsedMilliseconds(stageStarted)});
 
-    // Decide shared-model placement before starting speech so Qwen receives the effective
-    // device, not merely the raw setting. This is separate from whether speech is enabled:
-    // an assigned voice still needs a placement plan for later previews and replies.
+    // Resolve the whole machine once, before any model process starts. Static placement
+    // keeps long-lived model weights warm: moving a pipeline whenever utilization changes
+    // would spend more time reloading models than doing useful work.
     const speech::VoicePresetStore configuredVoices(settings.speech.voiceDataPath);
     const bool deferredVoiceLoad = settings.speech.backend != "WindowsSapi" &&
         !configuredVoices.AssignedPresetId(profile.id).empty();
-    if (deferredVoiceLoad)
+    stageStarted = std::chrono::steady_clock::now();
+    const resources::HardwareInventory hardware =
+        resources::DetectHardwareInventory(settings.llm.serverExecutable);
+    resourcePlan = resources::PlanResources(
+        hardware,
+        settings.resources,
+        resources::EstimateResourceRequirements(settings, deferredVoiceLoad));
+    resources::ApplyResourcePlan(resourcePlan, settings);
+    const int sqlitePageCacheMiB = resourcePlan.sqliteCacheMiB / 2;
+    const int sqliteMmapMiB = resourcePlan.sqliteCacheMiB - sqlitePageCacheMiB;
+    longTermMemory::ConfigureCache(sqlitePageCacheMiB, sqliteMmapMiB);
+    startupTimings.push_back({"resource_planning", ElapsedMilliseconds(stageStarted)});
+    appLogger.Log(resourcePlan.Summary());
+    appLogger.Log(hardware.detail);
+    for (const std::string& note : resourcePlan.notes)
     {
-        const llamaHardwareMemory hardware = DetectLlamaHardwareMemory();
-        constexpr std::uint64_t MinimumChatGpuBudgetMiB = 7000;
-        const std::uint64_t combinedBudget = MinimumChatGpuBudgetMiB +
-            static_cast<std::uint64_t>(settings.speech.qwenMinimumFreeVramMiB);
-        if (settings.speech.qwenDevice == "auto" &&
-            hardware.dedicatedVideoMemoryMiB < combinedBudget)
-        {
-            settings.speech.qwenDevice = "cpu";
-            appLogger.Log(
-                "Shared-model performance mode: the " +
-                std::to_string(hardware.dedicatedVideoMemoryMiB) +
-                " MiB GPU is prioritized for conversation; Qwen3-TTS will use CPU.");
-        }
-        else if (settings.speech.qwenDevice != "cpu")
-        {
-            settings.llm.reservedVramMiB = settings.speech.qwenMinimumFreeVramMiB;
-            appLogger.Log(
-                "Reserving " + std::to_string(settings.speech.qwenMinimumFreeVramMiB) +
-                " MiB of VRAM for the assigned Qwen3-TTS voice; chat keeps at least " +
-                std::to_string(MinimumChatGpuBudgetMiB) + " MiB in Auto mode.");
-        }
+        appLogger.Log("Resource planner: " + note);
     }
+    PublishResourcePlan();
 
     stageStarted = std::chrono::steady_clock::now();
     speechService.SetActiveProfile(profile.id);
@@ -325,6 +320,7 @@ bool ReviaSession::Start()
         event.message = speechEvent.detail;
         event.component = "Voice";
         event.phase = speechEvent.phase;
+        event.resource = speechEvent.device;
         event.elapsedMilliseconds = speechEvent.elapsedMilliseconds;
         event.queueDepth = speechEvent.queueDepth;
         // Reuses turnId as the correlation field rather than adding a parallel one; the
@@ -358,6 +354,9 @@ bool ReviaSession::Start()
                 : recognitionEvent.transcript;
             event.component = "Microphone";
             event.phase = recognitionEvent.phase;
+            event.resource = settings.speechRecognition.device == "cpu"
+                ? "CPU"
+                : settings.speechRecognition.device;
             event.elapsedMilliseconds = recognitionEvent.elapsedMilliseconds;
             eventBus.Publish(std::move(event));
         });
@@ -426,7 +425,10 @@ bool ReviaSession::Start()
         llmAvailable ? "Ready" : "Unavailable",
         llmAvailable ? "The local conversation and vision model is ready."
                      : "The configured local language model is unavailable.",
-        startupTimings.back().milliseconds);
+        startupTimings.back().milliseconds,
+        0,
+        0,
+        resourcePlan.ChatLabel());
 
     stageStarted = std::chrono::steady_clock::now();
     const bool embeddingAvailable = EnsureEmbeddingAvailable(stopToken);
@@ -437,7 +439,10 @@ bool ReviaSession::Start()
         embeddingAvailable
             ? "Dedicated semantic retrieval is ready on its own server."
             : "Memory retrieval is using SQLite lexical search.",
-        startupTimings.back().milliseconds);
+        startupTimings.back().milliseconds,
+        0,
+        0,
+        resourcePlan.embeddingDevice == "none" ? "CPU" : resourcePlan.embeddingDevice);
     if (embeddingAvailable && profile.bMemoryEnabled && !stopToken.stop_requested())
     {
         stageStarted = std::chrono::steady_clock::now();
@@ -477,6 +482,7 @@ bool ReviaSession::Start()
         : llmAvailable
             ? "Local opt-in screen analysis is ready."
             : "Vision requires the configured multimodal llama.cpp server.";
+    visionEvent.resource = resourcePlan.ChatLabel();
     eventBus.Publish(std::move(visionEvent));
     if (deferredVoiceLoad)
     {
@@ -2925,7 +2931,8 @@ void ReviaSession::PublishComponent(
     const std::string& message,
     const double elapsedMilliseconds,
     const int queueDepth,
-    const std::uint64_t turnId) const
+    const std::uint64_t turnId,
+    const std::string& resource) const
 {
     RuntimeEvent event;
     event.kind = RuntimeEventKind::ComponentStatus;
@@ -2936,7 +2943,98 @@ void ReviaSession::PublishComponent(
     event.elapsedMilliseconds = elapsedMilliseconds;
     event.queueDepth = queueDepth;
     event.turnId = turnId;
+    event.resource = resource;
     eventBus.Publish(std::move(event));
+}
+
+void ReviaSession::PublishResourcePlan() const
+{
+    std::size_t gpuIndex = 0;
+    for (const resources::GpuDevice& gpu : resourcePlan.hardware.gpus)
+    {
+        RuntimeEvent event;
+        event.kind = RuntimeEventKind::ResourceStatus;
+        event.state = state.load();
+        event.component = gpu.backendId.empty()
+            ? "Display GPU " + std::to_string(gpuIndex)
+            : gpu.backendId;
+        event.phase = "GPU";
+        event.resource = gpu.name;
+        event.message = gpu.backendId.empty()
+            ? "Capacity detected through DXGI; backend identity is unavailable."
+            : "Addressable compute device reported by llama.cpp.";
+        event.totalMemoryMiB = gpu.totalMemoryMiB;
+        event.availableMemoryMiB = gpu.freeMemoryMiB;
+        eventBus.Publish(std::move(event));
+        ++gpuIndex;
+    }
+
+    RuntimeEvent cpu;
+    cpu.kind = RuntimeEventKind::ResourceStatus;
+    cpu.state = state.load();
+    cpu.component = "CPU";
+    cpu.phase = "Hardware";
+    cpu.resource = std::to_string(resourcePlan.hardware.logicalProcessors) +
+        " logical processors";
+    cpu.message = std::to_string(settings.resources.reserveLogicalCores) +
+        " processors reserved for Windows/UI; chat/background/STT/voice caps are " +
+        std::to_string(resourcePlan.chatCpuThreads) + "/" +
+        std::to_string(resourcePlan.embeddingCpuThreads) + "/" +
+        std::to_string(resourcePlan.speechRecognitionThreads) + "/" +
+        std::to_string(resourcePlan.voiceCpuThreads) + ".";
+    eventBus.Publish(std::move(cpu));
+
+    RuntimeEvent ram;
+    ram.kind = RuntimeEventKind::ResourceStatus;
+    ram.state = state.load();
+    ram.component = "System RAM";
+    ram.phase = "Hardware";
+    ram.resource = "Windows mmap + bounded llama cache";
+    ram.message = std::to_string(resourcePlan.llamaPromptCacheMiB) +
+        " MiB maximum prompt cache plus " +
+        std::to_string(resourcePlan.sqliteCacheMiB) +
+        " MiB combined SQLite page/mmap ceiling per connection; " +
+        std::to_string(resourcePlan.reservedSystemMemoryMiB) +
+        " MiB kept free for Windows and other applications.";
+    ram.totalMemoryMiB = resourcePlan.hardware.totalSystemMemoryMiB;
+    ram.availableMemoryMiB = resourcePlan.hardware.availableSystemMemoryMiB;
+    ram.allocatedMemoryMiB = static_cast<std::uint64_t>(
+        std::max(0, resourcePlan.llamaPromptCacheMiB + resourcePlan.sqliteCacheMiB));
+    eventBus.Publish(std::move(ram));
+
+    const auto assignment = [this](
+        const std::string& workload,
+        const std::string& resource,
+        const std::string& detail)
+    {
+        RuntimeEvent event;
+        event.kind = RuntimeEventKind::ResourceStatus;
+        event.state = state.load();
+        event.component = workload;
+        event.phase = "Assignment";
+        event.resource = resource;
+        event.message = detail;
+        eventBus.Publish(std::move(event));
+    };
+    assignment(
+        "Chat + vision",
+        resourcePlan.ChatLabel(),
+        resourcePlan.chatSplitMode == "none"
+            ? "Latency-first single-device placement."
+            : "Model capacity fallback using layer split " +
+                resourcePlan.chatTensorSplit + ".");
+    assignment(
+        "Voice generation",
+        resourcePlan.VoiceLabel(),
+        "Long-lived Qwen3-TTS worker; generation overlaps the chat pipeline.");
+    assignment(
+        "Speech recognition",
+        resourcePlan.speechRecognitionDevice,
+        "Short whisper.cpp bursts use the secondary device when one is available.");
+    assignment(
+        "Semantic embeddings",
+        resourcePlan.embeddingDevice == "none" ? "CPU" : resourcePlan.embeddingDevice,
+        "Independent retrieval server; CPU is preferred to protect interactive GPU latency.");
 }
 
 } // namespace revia::runtime

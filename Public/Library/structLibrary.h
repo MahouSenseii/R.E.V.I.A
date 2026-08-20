@@ -48,6 +48,20 @@ struct llmSettings
     // Qwen3-TTS service chooses CPU over CUDA when free VRAM is below its own threshold,
     // so without this reservation a voice loaded after llama.cpp would land on the CPU.
     int reservedVramMiB = 0;
+    // Filled by the resource planner at startup. "auto" preserves llama.cpp's own
+    // backend choice; an explicit comma-separated list pins this process to those
+    // devices. Keeping placement out of the process owner makes the launch path usable
+    // by both automatic and manual plans.
+    std::string device = "auto";
+    std::string splitMode = "none";
+    std::string tensorSplit;
+    std::string fitTargetMiB;
+    int cpuThreads = 0;
+    int cpuBatchThreads = 0;
+    // -1 leaves the llama.cpp default alone, 0 disables its prompt cache, and a
+    // positive value is the real maximum RAM allocation passed to --cache-ram.
+    int ramCacheMiB = -1;
+    std::string modelLoadMode = "auto";
     int contextSize = 4096;
     int parallelRequests = 2;
     int startupTimeoutSeconds = 120;
@@ -79,6 +93,10 @@ struct embeddingSettings
     bool bShutdownServerOnExit = true;
     std::string pooling = "mean";
     std::string device = "none";
+    int cpuThreads = 0;
+    int cpuBatchThreads = 0;
+    int ramCacheMiB = 0;
+    std::string modelLoadMode = "mmap";
     std::string queryPrefix = "search_query: ";
     std::string documentPrefix = "search_document: ";
 };
@@ -96,6 +114,9 @@ struct speechSettings
     int qwenRequestTimeoutSeconds = 600;
     std::string qwenDevice = "auto";
     int qwenMinimumFreeVramMiB = 4600;
+    // Effective host-thread cap applied inside the PyTorch worker. The resource planner
+    // fills this even for CUDA because model preparation and audio encoding use CPU work.
+    int qwenCpuThreads = 2;
     std::string qwenVoiceDesignModel = "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign";
     std::string qwenCloneModel = "Qwen/Qwen3-TTS-12Hz-0.6B-Base";
     std::string voiceDataPath = "RuntimeData/Voices";
@@ -131,7 +152,31 @@ struct speechRecognitionSettings
     int sampleRate = 16000;
     int threads = 6;
     bool bUseGpu = true;
+    // "cpu", "auto", or "cuda:N". `useGpu` remains as the backward-compatible
+    // coarse switch; the startup resource plan resolves auto to one exact device.
+    std::string device = "auto";
     alwaysOnListeningSettings alwaysOn;
+};
+
+// Cross-pipeline placement policy. These are budgets and preferences, not work queues:
+// each service still owns its process/thread lifecycle and the planner only decides what
+// resources that owner is allowed to consume.
+struct resourceSettings
+{
+    bool bAutoPlan = true;
+    int reserveLogicalCores = 2;
+    int minimumFreeRamMiB = 4096;
+    // 0 derives a bounded value from total and currently available RAM.
+    int llamaPromptCacheMiB = 0;
+    // Combined SQLite page+mmap ceiling per connection. Zero derives 1/256 of system
+    // RAM, capped at 512 MiB; this is a ceiling, not a preallocation.
+    int sqliteCacheMiB = 0;
+    int gpuReserveMiB = 1536;
+    bool bAllowChatModelSplit = true;
+    std::string chat = "auto-primary";
+    std::string voice = "auto-secondary";
+    std::string speechRecognition = "auto-secondary";
+    std::string embeddings = "cpu";
 };
 
 struct visionSettings
@@ -288,6 +333,7 @@ struct appSettings
     embeddingSettings embedding;
     speechSettings speech;
     speechRecognitionSettings speechRecognition;
+    resourceSettings resources;
     visionSettings vision;
     perceptionSettings perception;
     initiativeSettings initiative;
