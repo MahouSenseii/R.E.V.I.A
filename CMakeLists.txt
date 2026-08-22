@@ -229,29 +229,6 @@ add_custom_command(TARGET R_E_V_I_A POST_BUILD
         COMMENT "Synchronizing REVIA runtime configuration"
 )
 
-# RuntimeData is seeded at configure time, per file, and never overwritten.
-#
-# It is deliberately not part of the POST_BUILD copy that keeps Config and Tools in sync.
-# Config is authored in the repository and the build directory's copy is disposable;
-# RuntimeData is the opposite. It holds voice presets created through Voice Studio, their
-# reference audio, and profile assignments, so copying it on every build would destroy
-# work done through the UI. Seeding only what is missing gives a fresh build directory the
-# checked-in starter voice without ever clobbering a created one.
-#
-# Without this, a new build directory starts with no voices at all and Voice Studio shows
-# an empty preset list, which reads as the assigned voice having been deleted.
-file(GLOB_RECURSE REVIA_RUNTIME_SEED_FILES
-        RELATIVE "${CMAKE_CURRENT_SOURCE_DIR}/RuntimeData"
-        "${CMAKE_CURRENT_SOURCE_DIR}/RuntimeData/*")
-foreach(seedFile ${REVIA_RUNTIME_SEED_FILES})
-    if(NOT EXISTS "${CMAKE_CURRENT_BINARY_DIR}/RuntimeData/${seedFile}")
-        get_filename_component(seedDirectory "${seedFile}" DIRECTORY)
-        file(COPY "${CMAKE_CURRENT_SOURCE_DIR}/RuntimeData/${seedFile}"
-                DESTINATION "${CMAKE_CURRENT_BINARY_DIR}/RuntimeData/${seedDirectory}")
-        message(STATUS "Seeded RuntimeData/${seedFile}")
-    endif()
-endforeach()
-
 include(CTest)
 if(BUILD_TESTING)
     file(GLOB_RECURSE REVIA_TEST_SOURCES CONFIGURE_DEPENDS

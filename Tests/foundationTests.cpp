@@ -39,6 +39,7 @@
 #include "Policy/permissionStore.h"
 #include "Runtime/affectController.h"
 #include "Runtime/reviaSession.h"
+#include "Runtime/runtimeDataBootstrap.h"
 #include "Runtime/runtimeEvents.h"
 #include "Resources/resourceMonitor.h"
 #include "Resources/resourcePlanner.h"
@@ -158,6 +159,47 @@ void WriteBytes(const std::filesystem::path& path, const std::string& content)
     Check(file.is_open(), "Could not create a test file.");
     file.write(content.data(), static_cast<std::streamsize>(content.size()));
     Check(file.good(), "Could not write a test file.");
+}
+
+void TestRuntimeDataFirstRunBootstrap()
+{
+    ScopedTestDirectory temporary;
+    const auto runtimeRoot = temporary.root / "RuntimeData";
+    const auto seedRoot = temporary.root / "Config" / "Defaults" / "RuntimeData";
+    const auto seedVoices = seedRoot / "Voices";
+    std::filesystem::create_directories(seedVoices / "revia-bright");
+    WriteBytes(seedVoices / "voices.json", "{\"seed\":true}");
+    WriteBytes(seedVoices / "revia-bright" / "reference.wav", "RIFF-test-audio");
+
+    appSettings settings;
+    settings.speech.voiceDataPath = (runtimeRoot / "Voices").string();
+    settings.llm.mediaPath = (runtimeRoot / "Vision").string();
+
+    const auto first = revia::runtime::BootstrapRuntimeData(settings, runtimeRoot, seedRoot);
+    Check(first.succeeded, "First-run RuntimeData initialization failed: " + first.error);
+    Check(first.defaultVoiceSeeded, "First-run Revia Bright voice was not seeded.");
+    Check(std::filesystem::is_directory(runtimeRoot / "Capabilities"),
+        "First-run Capabilities directory was not created.");
+    Check(std::filesystem::is_directory(runtimeRoot / "Voices"),
+        "First-run Voices directory was not created.");
+    Check(std::filesystem::is_directory(runtimeRoot / "Vision"),
+        "First-run Vision directory was not created.");
+    Check(std::filesystem::is_regular_file(runtimeRoot / "Voices" / "voices.json"),
+        "First-run voice catalog was not copied.");
+    Check(std::filesystem::is_regular_file(
+            runtimeRoot / "Voices" / "revia-bright" / "reference.wav"),
+        "First-run Revia Bright reference audio was not copied.");
+
+    WriteBytes(runtimeRoot / "Voices" / "voices.json", "{\"userChoice\":true}");
+    const auto second = revia::runtime::BootstrapRuntimeData(settings, runtimeRoot, seedRoot);
+    Check(second.succeeded, "Repeated RuntimeData initialization failed: " + second.error);
+    Check(!second.defaultVoiceSeeded,
+        "Repeated RuntimeData initialization incorrectly reported a seed copy.");
+    std::ifstream catalog(runtimeRoot / "Voices" / "voices.json", std::ios::binary);
+    const std::string contents{
+        std::istreambuf_iterator<char>(catalog), std::istreambuf_iterator<char>()};
+    Check(contents == "{\"userChoice\":true}",
+        "RuntimeData initialization overwrote the user's voice catalog.");
 }
 
 void TestPolicyBoundaries()
@@ -4870,6 +4912,7 @@ int main(const int argc, char** argv)
         TestAffectController();
         TestSpeechTextNormalization();
         TestSpeechRuntimePathResolution();
+        TestRuntimeDataFirstRunBootstrap();
         TestVoicePresetPersistence();
         TestWindowsSpeechServiceInitialization();
         TestLocalApiKeys();

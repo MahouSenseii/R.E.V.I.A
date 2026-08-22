@@ -1,4 +1,5 @@
 #include "Runtime/reviaSession.h"
+#include "Runtime/runtimeDataBootstrap.h"
 #include "Core/exitReporter.h"
 #include "Core/localApiKey.h"
 #include "Memory/longTermMemory.h"
@@ -224,6 +225,20 @@ bool ReviaSession::Start()
         SetState(RuntimeState::Error, "Settings could not be loaded.");
         return false;
     }
+    stageStarted = std::chrono::steady_clock::now();
+    const RuntimeDataBootstrapResult runtimeData = BootstrapRuntimeData(settings);
+    startupTimings.push_back({"runtime_data_init", ElapsedMilliseconds(stageStarted)});
+    if (!runtimeData.succeeded)
+    {
+        // Missing optional starter audio must not prevent the SAPI fallback or the
+        // rest of Revia from starting. The directory error remains visible in logs.
+        appLogger.Warning("Runtime data initialization was incomplete: " + runtimeData.error);
+    }
+    else if (runtimeData.defaultVoiceSeeded)
+    {
+        appLogger.Log("Seeded default voice preset: Revia Bright.");
+    }
+
     // Overlaid after the file is parsed and validated, so a stored preference goes
     // through the same validation a configured one does and can never bypass it.
     preferenceStore.Apply(settings);
