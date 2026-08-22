@@ -126,6 +126,65 @@ SessionResult ConversationRuntime::StartConversation(
         stopToken);
 }
 
+std::string ConversationRuntime::BuildTurnPosture(
+    const std::string& policyInput,
+    const std::vector<conversationMessage>& promptContext,
+    const aiProfile& profile,
+    const bool llmAvailable) const
+{
+    const agents::ConversationStylePolicy conversationStyle;
+    const AffectSnapshot posture = affect.Current();
+    std::ostringstream postureLine;
+    postureLine << "Your current response posture is "
+        << ToString(posture.state) << " at "
+        << static_cast<int>(posture.intensity * 100.0F) << "% intensity, because "
+        << posture.reason
+        << " Let it colour your tone and pacing. Do not name it, do not describe your "
+           "own feelings, and do not assume anything about how the user feels.\n\n"
+        << conversationStyle.BuildTurnGuidance(policyInput, promptContext);
+    if (IsExplicitRuntimeQuestion(policyInput))
+    {
+        postureLine << "\n\nRuntime ground truth for this explicit status question: the "
+            "local language model is " << (llmAvailable ? "available" : "unavailable")
+            << "; voice output is " << (speech.IsEnabled() ? "enabled" : "disabled")
+            << "; durable memory is "
+            << (profile.bMemoryEnabled ? "enabled" : "disabled")
+            << "; this conversation turn is active. Mention only details relevant to "
+               "the question and never turn this status into a canned report.";
+    }
+    return postureLine.str();
+}
+
+evaluation::EvaluationReply ConversationRuntime::EvaluateTurn(
+    const std::string& input,
+    const std::vector<conversationMessage>& priorTurns,
+    const aiProfile& profile,
+    const bool llmAvailable,
+    const std::stop_token stopToken)
+{
+    // The case supplies its own history rather than reading the live one, so a suite run
+    // measures the corpus and not whatever the user happened to say beforehand.
+    std::vector<conversationMessage> promptContext = priorTurns;
+    promptContext.push_back({"user", input});
+    router.SetPosture(BuildTurnPosture(input, promptContext, profile, llmAvailable));
+
+    const agents::TurnAgentResult turnResult = coordinator.Execute(
+        router,
+        input,
+        promptContext,
+        false,
+        0,
+        stopToken,
+        {});
+
+    evaluation::EvaluationReply reply;
+    reply.succeeded = turnResult.response.bSuccess;
+    reply.text = turnResult.response.response;
+    reply.rawText = turnResult.response.rawResponse;
+    reply.reason = turnResult.response.reason;
+    return reply;
+}
+
 SessionResult ConversationRuntime::Generate(
     const std::string& policyInput,
     const std::vector<conversationMessage>& promptContext,
@@ -210,25 +269,8 @@ SessionResult ConversationRuntime::Generate(
     const agents::ConversationStylePolicy conversationStyle;
     if (!proactive)
     {
-        const AffectSnapshot posture = affect.Current();
         std::ostringstream postureLine;
-        postureLine << "Your current response posture is "
-            << ToString(posture.state) << " at "
-            << static_cast<int>(posture.intensity * 100.0F) << "% intensity, because "
-            << posture.reason
-            << " Let it colour your tone and pacing. Do not name it, do not describe your "
-               "own feelings, and do not assume anything about how the user feels.\n\n"
-            << conversationStyle.BuildTurnGuidance(policyInput, promptContext);
-        if (IsExplicitRuntimeQuestion(policyInput))
-        {
-            postureLine << "\n\nRuntime ground truth for this explicit status question: the "
-                "local language model is " << (llmAvailable ? "available" : "unavailable")
-                << "; voice output is " << (speech.IsEnabled() ? "enabled" : "disabled")
-                << "; durable memory is "
-                << (profile.bMemoryEnabled ? "enabled" : "disabled")
-                << "; this conversation turn is active. Mention only details relevant to "
-                   "the question and never turn this status into a canned report.";
-        }
+        postureLine << BuildTurnPosture(policyInput, promptContext, profile, llmAvailable);
         if (!internetGrounding.empty())
         {
             postureLine << "\n\n" << internetGrounding;

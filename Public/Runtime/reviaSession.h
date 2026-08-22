@@ -6,8 +6,12 @@
 #include "Core/commandManager.h"
 #include "Core/configManager.h"
 #include "Core/conversationContext.h"
+#include "Content/workingDocument.h"
+#include "Core/preferenceStore.h"
 #include "Core/logger.h"
 #include "Core/messageRouter.h"
+#include "Evaluation/conversationEvaluation.h"
+#include "Memory/conversationArchive.h"
 #include "Goals/goalRunner.h"
 #include "Goals/goalSandbox.h"
 #include "Goals/goalStore.h"
@@ -21,12 +25,15 @@
 #include "Runtime/conversationRuntime.h"
 #include "Runtime/runtimeEvents.h"
 #include "Runtime/sessionResult.h"
+#include "Resources/resourceMonitor.h"
 #include "Resources/resourcePlanner.h"
 #include "Speech/speechService.h"
 #include "Speech/speechRecognitionService.h"
 #include "Vision/screenCaptureService.h"
 #include "Vision/visionActionParser.h"
 #include "Windows/visionUiaResolver.h"
+#include "Visual/imageGenerator.h"
+#include "Visual/svgCanvas.h"
 #include "Windows/applicationControlDiscovery.h"
 
 #include <atomic>
@@ -115,6 +122,47 @@ public:
     [[nodiscard]] std::vector<goals::Goal> RecentGoals(std::size_t maxGoals = 25) const;
     [[nodiscard]] std::vector<goals::Goal> ResumableGoals() const;
 
+    // Live usage measured against the immutable plan. Reading only: the planner decides
+    // placement once at startup and is never re-run from a sample, because moving a
+    // worker because a number moved turns a reproducible plan into a feedback loop.
+    [[nodiscard]] resources::UsageSnapshot ResourceUsage() const;
+    [[nodiscard]] std::string ResourceUsageStatus() const;
+
+    // Durable conversation history. Separate from longTermMemory, which keeps curated
+    // facts: this keeps what was actually said, bounded and forgettable.
+    [[nodiscard]] std::string ConversationHistoryStatus() const;
+    [[nodiscard]] std::vector<memory::ArchivedTurn> SearchConversations(
+        const std::string& query, std::size_t maxTurns = 12) const;
+    [[nodiscard]] std::vector<memory::ArchivedSession> RecentConversations(
+        std::size_t maxSessions = 20) const;
+    std::size_t ForgetConversations();
+
+    // Durable non-authority settings. The store cannot reach a capability, so nothing
+    // here can widen what Revia is permitted to do.
+    core::PreferenceResult SetPreference(const std::string& name, const std::string& value);
+    [[nodiscard]] std::string DescribePreferences() const;
+
+    // Draws an explanatory diagram or interface mockup. The model produces SVG, the
+    // sanitizer refuses anything that would run or fetch, and the result is a file.
+    SessionResult DrawDiagram(const std::string& request);
+    [[nodiscard]] std::vector<visual::Diagram> RecentDiagrams(
+        std::size_t maxDiagrams = 20) const;
+    // Puts an existing picture on the canvas. Read-only and bounded by the same approved
+    // roots that govern reading a file, because displaying one is reading one.
+    SessionResult ShowPicture(const std::string& path);
+    // A generated picture, not a diagram. Separate capability because the two cannot
+    // substitute for each other: a language model emitting SVG draws boxes and arrows and
+    // cannot draw a scene, and an image model draws a scene and cannot lay out a panel.
+    SessionResult GenerateImage(const std::string& prompt);
+
+    // The working document. Generation is wholesale and says so; an edit reaches exactly
+    // one block, because ReplaceBlock is the only mutation the edit path can express.
+    SessionResult ComposeDocument(const std::string& request);
+    SessionResult ReviseDocumentBlock(
+        const std::string& reference,
+        const std::string& instruction);
+    [[nodiscard]] const content::WorkingDocument& Document() const;
+
     // Stage 6 Tier 0. Window and focus events only; no capture and no model.
     [[nodiscard]] bool IsPerceptionEnabled() const;
     [[nodiscard]] bool IsPerceptionPaused() const;
@@ -136,6 +184,17 @@ public:
     [[nodiscard]] std::string InitiativeStatus() const;
     [[nodiscard]] std::vector<initiative::Proposal> PendingProposals() const;
     SessionResult AcceptProposal(const std::string& proposalId);
+
+    // Runs the conversation contract corpus against the active local model.
+    //
+    // Deterministic tests prove the assembly around a reply is correct; they cannot prove
+    // that this model, at this temperature, still honours the contract. This does, at the
+    // cost of real inference time, and it is honest about its ceiling: it detects
+    // known-bad replies and cannot certify a good one.
+    [[nodiscard]] evaluation::EvaluationReport RunConversationEvaluation(
+        const std::vector<evaluation::EvaluationCase>& cases,
+        std::stop_token stopToken = {});
+    [[nodiscard]] evaluation::EvaluationReport LastConversationEvaluation() const;
 
     // Stage 4's reviewed learning. Lessons are drawn from recorded outcomes and offered;
     // approving one writes an ordinary memory entry. Nothing here changes a capability, a
@@ -181,6 +240,20 @@ private:
     // execution path exists to prevent.
     [[nodiscard]] actions::CapabilitySettings DeriveGoalScope() const;
     bool TryHandleGoalInput(const std::string& input, SessionResult& result);
+    // Every archived turn goes through here, so the sensitive-content refusal and the
+    // enabled check live in one place rather than at each call site.
+    void ArchiveTurn(const std::string& role, const std::string& content);
+    // Replays the tail of the previous session into context, so a restart continues a
+    // conversation rather than starting one that has forgotten yesterday.
+    void RestoreConversationContext();
+    // Submit already holds operationMutex when /eval arrives; the public entry point locks.
+    evaluation::EvaluationReport RunConversationEvaluationUnlocked(
+        const std::vector<evaluation::EvaluationCase>& cases,
+        std::stop_token stopToken);
+    // The checked-in corpus unless RuntimeData supplies one, so cases can be added
+    // without a rebuild and an edited corpus cannot be silently restored by one.
+    [[nodiscard]] std::vector<evaluation::EvaluationCase> LoadEvaluationCorpus(
+        std::string& outSource);
     void StartVoiceWarmup();
     void StopVoiceWarmup();
     // Shared by the immediate typed path and the merged voice path. Callers hold
@@ -212,6 +285,8 @@ private:
         std::uint64_t turnId = 0,
         const std::string& resource = {}) const;
     void PublishResourcePlan() const;
+    void PublishResourceUsage(const resources::UsageSnapshot& snapshot) const;
+    void StartResourceMonitor();
 
     RuntimeEventBus eventBus;
     logger appLogger;
@@ -222,6 +297,7 @@ private:
     appSettings settings;
     aiProfile profile;
     resources::ResourcePlan resourcePlan;
+    resources::ResourceMonitor resourceMonitor;
     actions::ActionRuntime actionRuntime;
     // Declared after actionRuntime: GoalRunner holds references to both of these.
     goals::GoalStore goalStore;
@@ -242,6 +318,14 @@ private:
     agents::TurnCoordinator turnCoordinator;
     ConversationRuntime conversationRuntime;
     agents::InputArbiter inputArbiter;
+
+    evaluation::EvaluationReport lastEvaluation;
+    memory::ConversationArchive conversationArchive;
+    core::PreferenceStore preferenceStore;
+    visual::DiagramStore diagramStore;
+    content::WorkingDocument workingDocument;
+    visual::ImageGenerator imageGenerator;
+    std::string conversationSessionId;
 
     mutable std::mutex operationMutex;
     mutable std::mutex cancellationMutex;

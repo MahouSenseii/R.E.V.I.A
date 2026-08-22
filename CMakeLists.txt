@@ -117,7 +117,7 @@ target_link_libraries(ReviaFoundation PUBLIC
 )
 
 if(WIN32)
-    target_link_libraries(ReviaFoundation PUBLIC shell32 dxgi sapi ole32 oleaut32 winmm gdiplus gdi32 bcrypt winhttp)
+    target_link_libraries(ReviaFoundation PUBLIC shell32 dxgi sapi ole32 oleaut32 winmm gdiplus gdi32 bcrypt winhttp psapi pdh dbghelp)
 endif()
 
 if(MSVC)
@@ -130,9 +130,13 @@ add_executable(R_E_V_I_A "${REVIA_MAIN_SOURCE}")
 target_link_libraries(R_E_V_I_A PRIVATE ReviaFoundation)
 
 if(REVIA_BUILD_DESKTOP)
-    find_package(Qt6 6.8 COMPONENTS Core Gui Widgets)
+    # SvgWidgets renders the Canvas tab. It ships with the standard Qt kit, so the
+    # desktop shell still builds from an ordinary install with no extra component.
+    find_package(Qt6 6.8 COMPONENTS Core Gui Widgets Svg SvgWidgets)
     if(Qt6_FOUND)
         add_executable(ReviaDesktop WIN32
+                "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/canvasPanel.cpp"
+                "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/canvasPanel.h"
                 "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/capabilityPanel.cpp"
                 "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/capabilityPanel.h"
                 "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/main.cpp"
@@ -151,6 +155,8 @@ if(REVIA_BUILD_DESKTOP)
                 Qt6::Core
                 Qt6::Gui
                 Qt6::Widgets
+                Qt6::Svg
+                Qt6::SvgWidgets
         )
 
         # A shared Qt build cannot be fully statically linked, but the compiler

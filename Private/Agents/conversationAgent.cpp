@@ -14,6 +14,7 @@ responseOutput ConversationAgent::Execute(
         router.RouteMessage(input, context, stopToken, std::move(onDelta));
     if (output.bSuccess)
     {
+        output.rawResponse = output.response;
         output.response = stylePolicy.RefineReply(input, context, output.response);
     }
     return output;

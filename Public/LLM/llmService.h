@@ -29,6 +29,14 @@ public:
         DeltaHandler onDelta = {}) const;
     responseOutput GenerateActionProposal(const std::string& userRequest) const;
     responseOutput GenerateGoalPlan(const std::string& userRequest) const;
+    responseOutput GenerateDiagram(const std::string& userRequest) const;
+    responseOutput ComposeContent(
+        const std::string& request,
+        const std::string& context) const;
+    responseOutput ReviseBlock(
+        const std::string& instruction,
+        const std::string& neighbourhood,
+        const std::string& target) const;
     responseOutput AnalyzeImage(
         const std::filesystem::path& imagePath,
         const std::string& prompt,

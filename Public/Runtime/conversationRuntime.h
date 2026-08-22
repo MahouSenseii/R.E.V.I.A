@@ -6,6 +6,7 @@
 #include "Core/conversationContext.h"
 #include "Core/logger.h"
 #include "Core/messageRouter.h"
+#include "Evaluation/conversationEvaluation.h"
 #include "Runtime/affectController.h"
 #include "Runtime/runtimeEvents.h"
 #include "Runtime/sessionResult.h"
@@ -15,6 +16,7 @@
 #include <functional>
 #include <stop_token>
 #include <string>
+#include <vector>
 
 namespace revia::runtime
 {
@@ -65,9 +67,31 @@ public:
         bool shouldSpeak,
         std::stop_token stopToken = {});
 
+    // Runs one conversation-contract evaluation turn against the active model.
+    //
+    // It uses the same posture assembly, style guidance, and turn coordinator a real
+    // reply does, and deliberately none of the rest: an evaluation turn never enters
+    // dialogue history, never reaches durable memory, never moves the response posture,
+    // never speaks, and is scored by the caller rather than by the live quality counters.
+    // A regression suite that shifted Revia's mood and filled her memory with test
+    // prompts would be measuring a runtime it had already changed.
+    [[nodiscard]] evaluation::EvaluationReply EvaluateTurn(
+        const std::string& input,
+        const std::vector<conversationMessage>& priorTurns,
+        const aiProfile& profile,
+        bool llmAvailable,
+        std::stop_token stopToken = {});
+
     [[nodiscard]] agents::ConversationQualitySnapshot QualitySnapshot() const;
 
 private:
+    // The system posture a non-proactive turn is generated under. Shared with the
+    // evaluation path so the suite exercises the prompt the user actually gets.
+    [[nodiscard]] std::string BuildTurnPosture(
+        const std::string& policyInput,
+        const std::vector<conversationMessage>& promptContext,
+        const aiProfile& profile,
+        bool llmAvailable) const;
     SessionResult Generate(
         const std::string& policyInput,
         const std::vector<conversationMessage>& promptContext,

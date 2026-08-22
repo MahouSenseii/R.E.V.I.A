@@ -225,6 +225,17 @@ namespace
         return devices;
     }
 
+    // Matches the instance names the GPU performance counters use, so a live reading and
+    // a planned device can be tied together without comparing display names.
+    std::string FormatAdapterLuid(const LUID& luid)
+    {
+        char formatted[64] = {};
+        std::snprintf(formatted, sizeof(formatted), "luid_0x%08lx_0x%08lx",
+            static_cast<unsigned long>(luid.HighPart),
+            static_cast<unsigned long>(luid.LowPart));
+        return formatted;
+    }
+
     std::vector<GpuDevice> DetectDxgiAdapters()
     {
         std::vector<GpuDevice> devices;
@@ -255,12 +266,86 @@ namespace
                 device.name = WideToUtf8(description.Description);
                 device.totalMemoryMiB = description.DedicatedVideoMemory / MiB;
                 device.freeMemoryMiB = device.totalMemoryMiB;
+                device.adapterLuid = FormatAdapterLuid(description.AdapterLuid);
                 devices.push_back(std::move(device));
             }
             adapter->Release();
         }
         factory->Release();
         return devices;
+    }
+
+    // The backend enumerates compute devices; DXGI enumerates adapters. Only DXGI knows
+    // the LUID the live memory counters are keyed by, so the two lists have to be tied
+    // together on what they do agree about: the display name, and failing that a total
+    // memory size that identifies the card uniquely.
+    //
+    // An unmatched device keeps an empty LUID and is reported as unmeasured. On a machine
+    // with two cards, crediting one card's usage to the other would be worse than saying
+    // nothing -- it would look precise and be wrong.
+    void AttachAdapterLuids(
+        std::vector<GpuDevice>& devices,
+        const std::vector<GpuDevice>& adapters)
+    {
+        constexpr std::uint64_t MemoryToleranceMiB = 384;
+        std::vector<bool> claimed(adapters.size(), false);
+
+        const auto claim = [&](GpuDevice& device, const std::size_t index)
+        {
+            claimed[index] = true;
+            device.adapterLuid = adapters[index].adapterLuid;
+        };
+
+        for (GpuDevice& device : devices)
+        {
+            const std::string wanted = ToUpper(device.name);
+            for (std::size_t index = 0; index < adapters.size(); ++index)
+            {
+                if (claimed[index])
+                {
+                    continue;
+                }
+                const std::string candidate = ToUpper(adapters[index].name);
+                if (candidate == wanted ||
+                    (!wanted.empty() && candidate.find(wanted) != std::string::npos) ||
+                    (!candidate.empty() && wanted.find(candidate) != std::string::npos))
+                {
+                    claim(device, index);
+                    break;
+                }
+            }
+        }
+
+        for (GpuDevice& device : devices)
+        {
+            if (!device.adapterLuid.empty() || device.totalMemoryMiB == 0)
+            {
+                continue;
+            }
+            std::size_t match = adapters.size();
+            std::size_t matches = 0;
+            for (std::size_t index = 0; index < adapters.size(); ++index)
+            {
+                if (claimed[index])
+                {
+                    continue;
+                }
+                const std::uint64_t left = adapters[index].totalMemoryMiB;
+                const std::uint64_t right = device.totalMemoryMiB;
+                const std::uint64_t difference = left > right ? left - right : right - left;
+                if (difference <= MemoryToleranceMiB)
+                {
+                    match = index;
+                    ++matches;
+                }
+            }
+            // Two unclaimed adapters of the same size cannot be told apart this way, so
+            // neither is used.
+            if (matches == 1)
+            {
+                claim(device, match);
+            }
+        }
     }
 #endif
 
@@ -462,9 +547,19 @@ HardwareInventory DetectHardwareInventory(const std::string& llamaServerExecutab
     }
     else
     {
+        AttachAdapterLuids(inventory.gpus, DetectDxgiAdapters());
+        const auto identified = std::count_if(inventory.gpus.begin(), inventory.gpus.end(),
+            [](const GpuDevice& device) { return !device.adapterLuid.empty(); });
         inventory.detail = "llama.cpp reported " + std::to_string(inventory.gpus.size()) +
             (inventory.gpus.size() == 1 ? " addressable accelerator." :
                                          " addressable accelerators.");
+        if (static_cast<std::size_t>(identified) < inventory.gpus.size())
+        {
+            inventory.detail += " " +
+                std::to_string(inventory.gpus.size() - static_cast<std::size_t>(identified)) +
+                " could not be matched to a display adapter, so live VRAM is unavailable "
+                "for them.";
+        }
     }
 #else
     (void)llamaServerExecutable;
@@ -508,6 +603,7 @@ ResourcePlan PlanResources(
     plan.hardware = hardware;
     plan.automatic = policy.bAutoPlan;
     plan.reservedSystemMemoryMiB = policy.minimumFreeRamMiB;
+    plan.gpuReserveMiB = std::max(0, requirements.baseGpuReserveMiB);
     plan.llamaPromptCacheMiB = policy.llamaPromptCacheMiB > 0
         ? policy.llamaPromptCacheMiB
         : AutoRamCacheMiB(hardware, policy);

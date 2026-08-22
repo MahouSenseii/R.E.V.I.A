@@ -1,6 +1,7 @@
 #include "reviaWindow.h"
 #include "capabilityPanel.h"
 #include "pipelinePanel.h"
+#include "canvasPanel.h"
 #include "resourcePanel.h"
 
 #include <QApplication>
@@ -170,9 +171,9 @@ ReviaWindow::~ReviaWindow()
     }
 }
 
-void ReviaWindow::RequestShutdown()
+void ReviaWindow::RequestShutdown(const revia::core::ExitReason reason)
 {
-    BeginShutdown();
+    BeginShutdown(reason);
 }
 
 bool ReviaWindow::IsRuntimeStarted() const
@@ -239,6 +240,10 @@ void ReviaWindow::closeEvent(QCloseEvent* event)
         event->ignore();
         return;
     }
+    // No tray icon to retreat to, so this close really does end the session.
+    revia::core::ExitReporter::Record(
+        revia::core::ExitReason::WindowClosed,
+        "the window was closed with no tray icon available");
     event->accept();
 }
 
@@ -414,6 +419,9 @@ void ReviaWindow::BuildInterface()
 
     resourcePanel = new ResourcePanel(tabs);
     tabs->addTab(resourcePanel, "Resources");
+
+    canvasPanel = new CanvasPanel(tabs);
+    tabs->addTab(canvasPanel, "Canvas");
 
     capabilityPanel = new CapabilityPanel(
         session,
@@ -694,6 +702,21 @@ void ReviaWindow::BuildInterface()
             padding: 8px;
             font-weight: 600;
         }
+        QProgressBar {
+            background: rgba(7, 12, 23, 220);
+            border: 1px solid #293b55;
+            border-radius: 6px;
+            color: #dce9f7;
+            text-align: center;
+            font-weight: 600;
+        }
+        QProgressBar::chunk { background: #327aa8; border-radius: 5px; }
+        /* A resource past the budget the plan set aside has to be visible as such at a
+           glance; the bar saturates at full, so colour is what carries the difference. */
+        QProgressBar[overBudget="true"] { border-color: #a64d69; }
+        QProgressBar[overBudget="true"]::chunk { background: #c94b5f; }
+        QProgressBar[unavailable="true"] { color: #7b8a9e; }
+        QProgressBar[unavailable="true"]::chunk { background: transparent; }
         QPushButton {
             background: #327aa8;
             color: white;
@@ -743,7 +766,10 @@ void ReviaWindow::BuildTray()
     });
     connect(alwaysOnTopAction, &QAction::toggled, alwaysOnTopCheck, &QCheckBox::setChecked);
     connect(alwaysOnTopCheck, &QCheckBox::toggled, alwaysOnTopAction, &QAction::setChecked);
-    connect(quitAction, &QAction::triggered, this, [this]() { BeginShutdown(); });
+    connect(quitAction, &QAction::triggered, this, [this]()
+    {
+        BeginShutdown(revia::core::ExitReason::TrayQuit);
+    });
     connect(trayIcon, &QSystemTrayIcon::activated, this, [this](const QSystemTrayIcon::ActivationReason reason)
     {
         if (reason == QSystemTrayIcon::Trigger || reason == QSystemTrayIcon::DoubleClick)
@@ -889,7 +915,8 @@ void ReviaWindow::SendMessage(const bool voiceInput)
             stopButton->setEnabled(false);
             if (result.shouldExit)
             {
-                BeginShutdown();
+                BeginShutdown(revia::core::ExitReason::UserCommand,
+                    "the conversation asked Revia to exit");
             }
             else
             {
@@ -1019,12 +1046,17 @@ void ReviaWindow::ApplyMicrophoneUi(const MicrophoneUi microphoneUi)
     stopButton->setEnabled(microphoneActive || speechActive || session.IsBusy());
 }
 
-void ReviaWindow::BeginShutdown()
+void ReviaWindow::BeginShutdown(
+    const revia::core::ExitReason reason,
+    const std::string& detail)
 {
     if (shuttingDown.exchange(true))
     {
         return;
     }
+    // Recorded here rather than after the workers stop, so the reason survives even if
+    // shutdown itself is what fails.
+    revia::core::ExitReporter::Record(reason, detail);
     sendButton->setEnabled(false);
     stopButton->setEnabled(false);
     session.RequestStop();
@@ -1406,6 +1438,10 @@ void ReviaWindow::HandleRuntimeEvent(const revia::runtime::RuntimeEvent& event)
     if (resourcePanel != nullptr)
     {
         resourcePanel->Observe(event);
+    }
+    if (canvasPanel != nullptr)
+    {
+        canvasPanel->Observe(event);
     }
     if (event.kind == revia::runtime::RuntimeEventKind::StateChanged)
     {

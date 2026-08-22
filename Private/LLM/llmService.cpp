@@ -248,6 +248,79 @@ responseOutput llmService::GenerateGoalPlan(const std::string& userRequest) cons
     return llamaCpp.GenerateGoalPlan(userRequest);
 }
 
+responseOutput llmService::GenerateDiagram(const std::string& userRequest) const
+{
+    if (!bIsReady)
+    {
+        responseOutput output;
+        output.bSuccess = false;
+        output.response = "My language system is not ready to draw yet.";
+        output.reason = "LLM service was not ready.";
+        output.bShouldSpeak = false;
+        return output;
+    }
+
+    if (backendType != llmBackendType::LLamaCpp)
+    {
+        responseOutput output;
+        output.bSuccess = false;
+        output.response = "Drawing requires the local llama.cpp backend.";
+        output.reason = "Diagram generation requires a structured-output LLM backend.";
+        output.bShouldSpeak = false;
+        return output;
+    }
+
+    const healthOutput health = llamaCpp.CheckHealth();
+    if (!health.bIsAvailable)
+    {
+        responseOutput output;
+        output.bSuccess = false;
+        output.response = "My configured language model is not available for drawing yet.";
+        output.reason = health.reason;
+        output.bShouldSpeak = false;
+        return output;
+    }
+    return llamaCpp.GenerateDiagram(userRequest);
+}
+
+namespace
+{
+responseOutput ContentUnavailable(const std::string& what)
+{
+    responseOutput output;
+    output.bSuccess = false;
+    output.response = "My language system is not ready to " + what + " yet.";
+    output.reason = "LLM service was not ready.";
+    output.bShouldSpeak = false;
+    return output;
+}
+}
+
+responseOutput llmService::ComposeContent(
+    const std::string& request,
+    const std::string& context) const
+{
+    if (!bIsReady || backendType != llmBackendType::LLamaCpp ||
+        !llamaCpp.CheckHealth().bIsAvailable)
+    {
+        return ContentUnavailable("draft");
+    }
+    return llamaCpp.ComposeContent(request, context);
+}
+
+responseOutput llmService::ReviseBlock(
+    const std::string& instruction,
+    const std::string& neighbourhood,
+    const std::string& target) const
+{
+    if (!bIsReady || backendType != llmBackendType::LLamaCpp ||
+        !llamaCpp.CheckHealth().bIsAvailable)
+    {
+        return ContentUnavailable("revise");
+    }
+    return llamaCpp.ReviseBlock(instruction, neighbourhood, target);
+}
+
 responseOutput llmService::AnalyzeImage(
     const std::filesystem::path& imagePath,
     const std::string& prompt,

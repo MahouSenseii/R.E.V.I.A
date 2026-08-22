@@ -26,16 +26,6 @@ bool ContainsAny(const std::string& value, const std::initializer_list<std::stri
         return value.find(signal) != std::string::npos;
     });
 }
-
-std::string Opening(const std::string& response)
-{
-    const std::size_t end = response.find_first_of(".!?\n");
-    std::string opening = Lower(response.substr(0, std::min<std::size_t>(
-        end == std::string::npos ? response.size() : end, 96)));
-    opening.erase(opening.begin(), std::find_if(opening.begin(), opening.end(),
-        [](const unsigned char c) { return !std::isspace(c); }));
-    return opening;
-}
 }
 
 std::string ConversationQualitySnapshot::Summary() const
@@ -56,6 +46,45 @@ std::string ConversationQualitySnapshot::Summary() const
     return stream.str();
 }
 
+bool ConversationQualityMonitor::ClaimsInventedPhysicalLife(const std::string& response)
+{
+    return ContainsAny(Lower(response), {
+        "i'm at my favorite", "i am at my favorite", "i'm sitting at",
+        "i am sitting at", "i just ate", "my apartment", "my bedroom",
+        "i'm drinking", "i am drinking"});
+}
+
+bool ConversationQualityMonitor::EndsWithStockTail(const std::string& response)
+{
+    return ContainsAny(Lower(response), {
+        "what are we working on?", "what's on your mind?",
+        "what do you want to figure out?", "how can i help you today?"});
+}
+
+bool ConversationQualityMonitor::ProjectsStateOntoUser(
+    const std::string& userInput,
+    const std::string& response)
+{
+    const std::string input = Lower(userInput);
+    if (input.find("how are you") == std::string::npos &&
+        input.find("asking how you are") == std::string::npos)
+    {
+        return false;
+    }
+    return ContainsAny(Lower(response), {
+        "you're feeling", "you are feeling", "you've been feeling"});
+}
+
+std::string ConversationQualityMonitor::OpeningOf(const std::string& response)
+{
+    const std::size_t end = response.find_first_of(".!?\n");
+    std::string opening = Lower(response.substr(0, std::min<std::size_t>(
+        end == std::string::npos ? response.size() : end, 96)));
+    opening.erase(opening.begin(), std::find_if(opening.begin(), opening.end(),
+        [](const unsigned char c) { return !std::isspace(c); }));
+    return opening;
+}
+
 ConversationQualitySnapshot ConversationQualityMonitor::Observe(
     const std::string& userInput,
     const std::string& response)
@@ -63,33 +92,24 @@ ConversationQualitySnapshot ConversationQualityMonitor::Observe(
     std::lock_guard lock(mutex);
     ++snapshot.turns;
     snapshot.lastFlags.clear();
-    const std::string input = Lower(userInput);
-    const std::string reply = Lower(response);
 
-    if (ContainsAny(reply, {
-            "i'm at my favorite", "i am at my favorite", "i'm sitting at",
-            "i am sitting at", "i just ate", "my apartment", "my bedroom",
-            "i'm drinking", "i am drinking"}))
+    if (ClaimsInventedPhysicalLife(response))
     {
         ++snapshot.groundednessFlags;
         snapshot.lastFlags.push_back("possible invented physical life");
     }
-    if (ContainsAny(reply, {
-            "what are we working on?", "what's on your mind?",
-            "what do you want to figure out?", "how can i help you today?"}))
+    if (EndsWithStockTail(response))
     {
         ++snapshot.stockTailFlags;
         snapshot.lastFlags.push_back("stock support tail");
     }
-    if ((input.find("how are you") != std::string::npos ||
-            input.find("asking how you are") != std::string::npos) &&
-        ContainsAny(reply, {"you're feeling", "you are feeling", "you've been feeling"}))
+    if (ProjectsStateOntoUser(userInput, response))
     {
         ++snapshot.ownershipFlags;
         snapshot.lastFlags.push_back("Revia state projected onto user");
     }
 
-    const std::string opening = Opening(response);
+    const std::string opening = OpeningOf(response);
     if (!opening.empty() && std::find(recentOpenings.begin(), recentOpenings.end(), opening) !=
         recentOpenings.end())
     {

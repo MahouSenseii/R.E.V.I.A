@@ -113,7 +113,7 @@ Exit criteria: each supported application has deterministic integration tests an
 - Implemented: **goal authoring.** `/goal <request>` asks the local model for a multi-step plan — each step an action, a read-only check, and a literal expectation — decodes it with `GoalPlanner`, refuses more than twelve steps, then runs it through `GoalRunner::Validate` before anything executes. The plan is shown in full and approved as a whole before the first step, and every step still hits the per-action confirmation path.
 - Implemented: the plan never names its own capability scope. `NarrowScopeForGoal` derives it from configured policy and can only tighten — mode forced to `ApprovedScope`, root creation refused, auto-approval capped at `ReversibleWrite`.
 - Implemented: **the disposable sandbox.** Every `/goal` run is rehearsed first. `GoalSandbox` stages only the paths the plan names into a scratch tree, rewrites the plan onto it, and runs it there. Explorer and isolation-safe Notepad steps additionally launch distinct disposable windows and retarget requests to their exact titles; session-restoring Notepad and other desktop applications fail rehearsal rather than inspecting a user window. A plan that fails rehearsal is refused and never reaches real folders or user windows; a plan that passes is offered for approval *with that evidence attached*. Scratch state and owned fixture windows are removed by scope guards.
-- Remaining: the CLI (`reviaApp`) has none of the goal commands; they exist on `ReviaSession` only.
+- Implemented: the CLI reaches the goal commands through the same `ReviaSession::Submit` the desktop uses, so `/goal`, `/goals`, and `/goals resume` behave identically on both surfaces and `/help` now lists them.
 - Remaining: each application beyond Notepad and Explorer needs its own explicit disposable
   fixture and control-level verification before goal rehearsal may support it.
 
@@ -348,10 +348,68 @@ stale-element refusal, and add its own disposable fixture. Do not add broad appl
 access or a compatibility wildcard.
 
 Bounded internet grounding and live permission editing are now implemented as separate
-single-purpose capabilities. The next quality slice is an evaluation corpus that runs the
-active local model against the conversation contract and records pass/fail alongside the
-runtime quality counters; deterministic heuristics can flag regressions but cannot prove
-that sampling still sounds natural.
+single-purpose capabilities. **The conversation-contract evaluation corpus is now
+implemented.** `/eval` runs the regression conversations in `docs/CONVERSATION_QUALITY.md`
+against the active local model, scores each delivered reply against the clause it exists to
+defend, and appends the run to `RuntimeData/Evaluations/` as JSONL. The live quality
+counters are quoted beside the result rather than merged into it, because the suite's own
+synthetic turns would corrupt the signal that measures real conversation; for the same
+reason an evaluation turn enters no dialogue history, no durable memory, and no posture
+change, and never speaks. Scoring reuses `ConversationQualityMonitor`'s own signal
+functions so the two can never drift into disagreeing about what a stock tail is.
+
+Two properties there are worth keeping. **A pass carried by deterministic repair is
+reported as a warning, not a success** — the model's unrepaired reply is recorded and
+counted alongside the delivered one, so "the model is still good" stays distinguishable
+from "`ConversationStylePolicy` caught it again". And **an unreachable or stopped model
+produces unjudged cases, never failures**, so the suite cannot report a regression that did
+not happen. The ceiling is unchanged and stated in the report itself: deterministic checks
+detect a stated contract breach and cannot prove that sampling still sounds natural, so a
+passing run means nothing known-bad came back.
+
+**The resource plan is now observable at runtime.** `ResourceMonitor` samples dedicated
+video memory per adapter, the resident set of the whole owned process tree, and processor
+time consumed per second of wall clock, and reports each against the budget the plan set
+aside for it. The Resources tab draws them as bars; `/resources` prints the same reading
+with a per-process breakdown, so the feature does not depend on the Qt window being open.
+
+Three decisions there are load-bearing. **Sampling never re-plans**: the planner runs once
+at startup, and a placement that moved in response to its own measurements would stop being
+reproducible. **Video memory is system-wide per adapter**, because the weights live in a
+worker process and a per-process figure would report Revia using almost none of the VRAM it
+is responsible for. And **an unmeasurable reading is reported as unmeasured**, never
+substituted: a backend device that could not be matched to a display adapter shows nothing
+rather than borrowing the other card's number, which on a two-card machine would look
+precise and be wrong.
+
+**Conversation history, saved preferences, and a drawing surface are implemented.** All
+three were asked for together and are separated here because they carry different risk.
+
+- **Durable conversation history** (`ConversationArchive`, `/history`). Its own database,
+  ceilings, counters, and forget path rather than an enlargement of what "memory" already
+  meant: the fact store keeps what a classifier judged worth remembering, this keeps what
+  was said. Sensitive-marked turns are withheld rather than redacted, the filter itself is
+  shared with the classifier so the two cannot drift, and `/history forget` clears the live
+  context and vacuums the file rather than leaving the text in free space.
+- **Saved preferences** (`PreferenceStore`, `/set`). The load-bearing property is the
+  refusal: approved roots, applications, control scopes, execution mode, risk ceilings,
+  internet, vision, and perception are absent from a fixed compiled allowlist and refused
+  by name. This is the same rule as `NarrowScopeForGoal` in a different costume -- a
+  convenience path must never be able to widen authority -- and it is why capabilities kept
+  their own editor instead of being folded in here.
+- **A drawing surface** (`SvgSanitizer`, `/draw`, Canvas tab). The model writes the markup,
+  so it is untrusted in the same sense a web page is. Script, handlers, external and `file:`
+  references, `foreignObject`, and entity declarations are refused rather than stripped,
+  because the remainder of a document that carried one was written by the same hand.
+
+Remaining: the archive has no retention policy expressed in *time*, only in counts, and a
+conversation worth keeping cannot yet be pinned. Neither matters until the archive is old
+enough to have something worth losing.
+
+The next quality slice is to grow the corpus from real regressions rather than from
+imagination — when a reply is wrong in a way the checks missed, the case that would have
+caught it is worth more than another speculative one — and to decide whether a failing
+`/eval` should surface anywhere other than on demand.
 
 The `InputArbiter` is now wired into `Submit`: typed input is preserved exactly, while final voice transcripts pass through noise and duplicate admission before they become turns. Always-on VAD listening still has settings but no continuous capture loop; push-to-talk/toggle recording remains the enabled path because a standing microphone needs its own explicit privacy control.
 

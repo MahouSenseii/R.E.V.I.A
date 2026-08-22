@@ -31,12 +31,34 @@ flowchart LR
 | `Vision` | Capture the virtual desktop for analysis or the pinned foreground-window crop for actions, then parse bounded target intents | Acting at coordinates, granting application scope, or retaining captures |
 | `Audit` | Append the request, verdict, and result to JSONL | Deciding whether an action is allowed |
 | `Runtime` | Own the reusable session lifecycle, cancellation, state, and thread-safe UI events | Rendering widgets or bypassing policy |
-| `Resources` | Inventory addressable hardware and derive one immutable cross-pipeline placement/budget plan | Starting workers, executing jobs, or changing capability authority |
+| `Resources` | Inventory addressable hardware, derive one immutable cross-pipeline placement/budget plan, and sample live usage against it | Starting workers, executing jobs, changing capability authority, or re-placing a worker because a reading moved |
 | `Desktop` | Render the Qt shell and narrow panels such as `PipelinePanel` | Model logic, memory ownership, or OS permissions |
 | `Agents` | Run the interactive conversation, conversation-style policy, input arbitration, and queued background memory tasks | OS permissions or hidden unbounded work |
-| `Memory` | Store structured facts and vectors in SQLite, then fuse BM25 and cosine-ranked results | Deciding which raw model text is trustworthy |
+| `Memory` | Store structured facts and vectors in SQLite, fuse BM25 and cosine-ranked results, and keep the bounded conversation archive | Deciding which raw model text is trustworthy, or storing what the sensitive-content filter refused |
+| `Visual` | Sanitize model-produced SVG, store accepted diagrams, recognize drawing requests, and own the local image worker's lifecycle | Rendering, executing anything, or reaching a network beyond its own loopback worker |
+| `Content` | Hold the working document and perform block-scoped edits | Calling a model, or offering any mutation that can reach more than one block |
+| `Evaluation` | Hold the conversation-contract corpus, score delivered replies against the clause each case defends, and write the report | Producing replies, owning a runtime, or feeding the live quality counters |
 | `LLM` | Chat, schedule bounded shared-server slots, and propose structured actions | Terminal/widget output or direct access to the shell/filesystem |
-| `Core` | Configuration, routing, logging, bounded context, and the thin CLI shell | A second runtime lifecycle or hidden permission escalation |
+| `Core` | Configuration, routing, logging, bounded context, durable non-authority preferences, crash/exit accounting, and the thin CLI shell | A second runtime lifecycle, or any preference that reaches a capability |
+
+### Store connections are held, not reopened
+
+Both SQLite stores keep one connection per object, opened on first use. This is a
+correctness-neutral change with a large cost attached to getting it wrong the other way:
+an open here re-runs the entire schema DDL and the legacy-JSONL import check before the
+query it was asked for, so reopening per call put that on the critical path of every
+conversation turn. Measured on a 200-row store, a trivial `HasMemories()` cost 2.6ms of
+which almost none was the query.
+
+Both also set `PRAGMA synchronous=NORMAL`. Under a write-ahead log that still survives a
+process crash and risks only the newest commit on power loss, and it removes an fsync from
+every write -- which was most of the ten milliseconds an archived turn used to cost, twice
+per exchange. Connections are opened `SQLITE_OPEN_FULLMUTEX`, so sharing one across the
+prompt path and the background memory worker is serialized by SQLite itself.
+
+Anything that reports a size should ask for a count. `Status()` once loaded every session,
+each carrying a correlated `COUNT` and a lookup of its opening line, and then used only
+`.size()` -- four hundred subqueries to learn one number.
 
 New abilities should follow the same shape: a typed request, capability-specific policy fields, a narrow executor, limits/timeouts, audit fields, and tests proving both the allowed path and denial path.
 

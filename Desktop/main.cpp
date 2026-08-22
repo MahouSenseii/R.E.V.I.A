@@ -1,5 +1,8 @@
 #include "reviaWindow.h"
 
+#include "Core/crashDiagnostics.h"
+#include "Core/exitReporter.h"
+
 #include <QApplication>
 #include <QTimer>
 
@@ -35,10 +38,48 @@ int main(int argc, char** argv)
         // The runtime will surface missing configuration through its normal error state.
     }
 
+    // Installed before the first window exists, so a failure during construction is
+    // still recorded. Until this existed, every kind of fatal ended the same way -- the
+    // window simply disappeared -- which is indistinguishable from the user closing it.
+    revia::core::CrashDiagnostics::Install("logs");
+    // Opens the session ledger and reports the previous run if it never closed its own.
+    const std::string unrecordedPrevious = revia::core::ExitReporter::Begin("logs");
+    if (!unrecordedPrevious.empty())
+    {
+        revia::core::CrashDiagnostics::Record("PreviousExit", unrecordedPrevious);
+    }
+    qInstallMessageHandler([](
+        const QtMsgType type,
+        const QMessageLogContext&,
+        const QString& message)
+    {
+        // Qt's own diagnostics go to the debugger on Windows, which means nothing at all
+        // in a released GUI build. A qFatal aborts the process, so it must not be the one
+        // message nobody can read.
+        const char* category = type == QtFatalMsg ? "QtFatal"
+            : type == QtCriticalMsg ? "QtCritical"
+            : type == QtWarningMsg ? "QtWarning" : nullptr;
+        if (category != nullptr)
+        {
+            revia::core::CrashDiagnostics::Record(category, message.toStdString());
+        }
+    });
+
     QApplication application(argc, argv);
     QApplication::setApplicationName("Revia");
     QApplication::setOrganizationName("R.E.V.I.A");
     QApplication::setQuitOnLastWindowClosed(smokeTest || runtimeSmokeTest);
+
+    // Windows logging out or shutting down closes the application without any of the
+    // ordinary paths running, so it gets its own reason instead of arriving next start
+    // as an unexplained termination.
+    QObject::connect(&application, &QGuiApplication::commitDataRequest,
+        &application, []()
+        {
+            revia::core::ExitReporter::Record(
+                revia::core::ExitReason::SystemShutdown,
+                "Windows asked the application to close");
+        });
 
     ReviaWindow window(!smokeTest, !smokeTest && !runtimeSmokeTest);
     if (!runtimeSmokeTest)
@@ -75,5 +116,11 @@ int main(int argc, char** argv)
             window.RequestShutdown();
         });
     }
-    return application.exec();
+    const int code = application.exec();
+    // Whatever unwound the event loop, the session now has exactly one closing line. If
+    // something more specific already recorded itself, this is ignored.
+    revia::core::ExitReporter::Record(
+        revia::core::ExitReason::EventLoopEnded,
+        "exec() returned " + std::to_string(code));
+    return code;
 }

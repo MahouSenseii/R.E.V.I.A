@@ -340,6 +340,11 @@ Database OpenDatabase(const std::string& memoryPath)
     }
     constexpr const char* Schema =
         "PRAGMA journal_mode=WAL;"
+        // NORMAL rather than the default FULL. Under a write-ahead log this still
+        // survives a process crash -- only a power loss can cost the most recent commit
+        // -- and it removes an fsync from every single write. That fsync was most of
+        // what made archiving a turn cost ten milliseconds.
+        "PRAGMA synchronous=NORMAL;"
         "PRAGMA foreign_keys=ON;"
         "CREATE TABLE IF NOT EXISTS memories ("
         "  id TEXT NOT NULL UNIQUE,"
@@ -452,9 +457,31 @@ std::string BuildFtsQuery(const std::string& query)
 
 } // namespace
 
+struct longTermMemory::Connection
+{
+    Database database;
+};
+
 longTermMemory::longTermMemory(std::string path) : memoryPath(std::move(path)) {}
 
 longTermMemory::~longTermMemory() = default;
+
+sqlite3* longTermMemory::Acquire() const
+{
+    std::lock_guard lock(connectionMutex);
+    if (connection && connection->database)
+    {
+        return connection->database.get();
+    }
+    Database opened = OpenDatabase(memoryPath);
+    if (opened == nullptr)
+    {
+        return nullptr;
+    }
+    connection = std::make_shared<Connection>();
+    connection->database = std::move(opened);
+    return connection->database.get();
+}
 
 void longTermMemory::ConfigureCache(const int cacheMiB, const int mmapMiB)
 {
@@ -464,13 +491,13 @@ void longTermMemory::ConfigureCache(const int cacheMiB, const int mmapMiB)
 
 std::vector<memoryEntry> longTermMemory::Load() const
 {
-    Database database = OpenDatabase(memoryPath);
+    sqlite3* const database = Acquire();
     if (!database)
     {
         return {};
     }
 
-    Statement query = Prepare(database.get(),
+    Statement query = Prepare(database,
         "SELECT id, category, summary, source, created_at "
         "FROM memories WHERE active = 1 "
         "ORDER BY CAST(created_at AS INTEGER), rowid;");
@@ -515,7 +542,7 @@ bool longTermMemory::Save(const memoryDecision& decision, bool& outWasAdded) con
         return true;
     }
 
-    Database database = OpenDatabase(memoryPath);
+    sqlite3* const database = Acquire();
     if (!database)
     {
         return false;
@@ -529,14 +556,14 @@ bool longTermMemory::Save(const memoryDecision& decision, bool& outWasAdded) con
     entry.source = "automatic";
     entry.createdAt = createdAt;
 
-    if (!InsertEntry(database.get(), entry))
+    if (!InsertEntry(database, entry))
     {
         return false;
     }
-    outWasAdded = sqlite3_changes(database.get()) > 0;
+    outWasAdded = sqlite3_changes(database) > 0;
     if (outWasAdded && !decision.embedding.empty() && !decision.embeddingModel.empty() &&
         !UpsertEmbedding(
-            database.get(),
+            database,
             entry.id,
             decision.embeddingModel,
             decision.embedding))
@@ -548,13 +575,13 @@ bool longTermMemory::Save(const memoryDecision& decision, bool& outWasAdded) con
 
 bool longTermMemory::HasMemories() const
 {
-    Database database = OpenDatabase(memoryPath);
+    sqlite3* const database = Acquire();
     if (!database)
     {
         return false;
     }
 
-    Statement query = Prepare(database.get(),
+    Statement query = Prepare(database,
         "SELECT 1 FROM memories WHERE active = 1 LIMIT 1;");
     return query && sqlite3_step(query.get()) == SQLITE_ROW;
 }
@@ -570,7 +597,7 @@ std::vector<memoryEntry> longTermMemory::Search(
         return {};
     }
 
-    Database database = OpenDatabase(memoryPath);
+    sqlite3* const database = Acquire();
     if (!database)
     {
         return {};
@@ -581,7 +608,7 @@ std::vector<memoryEntry> longTermMemory::Search(
     const std::string ftsQuery = BuildFtsQuery(queryText);
     if (!ftsQuery.empty())
     {
-        Statement lexicalQuery = Prepare(database.get(),
+        Statement lexicalQuery = Prepare(database,
             "SELECT memories.id, memories.category, memories.summary, "
             "       memories.source, memories.created_at "
             "FROM memory_search "
@@ -612,7 +639,7 @@ std::vector<memoryEntry> longTermMemory::Search(
     std::vector<SemanticCandidate> semanticEntries;
     if (IsValidEmbedding(queryEmbedding) && !embeddingModel.empty())
     {
-        Statement semanticQuery = Prepare(database.get(),
+        Statement semanticQuery = Prepare(database,
             "SELECT memories.id, memories.category, memories.summary, "
             "       memories.source, memories.created_at, "
             "       memory_embeddings.dimensions, memory_embeddings.vector "
@@ -771,13 +798,13 @@ std::vector<memoryEntry> longTermMemory::LoadMissingEmbeddings(
         return {};
     }
 
-    Database database = OpenDatabase(memoryPath);
+    sqlite3* const database = Acquire();
     if (!database)
     {
         return {};
     }
 
-    Statement query = Prepare(database.get(),
+    Statement query = Prepare(database,
         "SELECT memories.id, memories.category, memories.summary, "
         "       memories.source, memories.created_at "
         "FROM memories "
@@ -806,9 +833,9 @@ bool longTermMemory::SaveEmbedding(
     const std::string& embeddingModel,
     const std::vector<float>& embedding) const
 {
-    Database database = OpenDatabase(memoryPath);
+    sqlite3* const database = Acquire();
     return database && UpsertEmbedding(
-        database.get(),
+        database,
         memoryId,
         embeddingModel,
         embedding);

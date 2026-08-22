@@ -39,6 +39,14 @@ public:
         DeltaHandler onDelta = {}) const;
     responseOutput GenerateActionProposal(const std::string& userRequest) const;
     responseOutput GenerateGoalPlan(const std::string& userRequest) const;
+    responseOutput GenerateDiagram(const std::string& userRequest) const;
+    responseOutput ComposeContent(
+        const std::string& request,
+        const std::string& context) const;
+    responseOutput ReviseBlock(
+        const std::string& instruction,
+        const std::string& neighbourhood,
+        const std::string& target) const;
     responseOutput AnalyzeImage(
         const std::filesystem::path& imagePath,
         const std::string& prompt,
@@ -57,10 +65,15 @@ private:
     int ResponseTokenLimit() const;
     // Shared by both planners: same low temperature, same JSON-object response format,
     // different contract and token ceiling.
+    // structuredJson forces the server's JSON object mode. A diagram turns it off: the
+    // payload is SVG, and making a small local model escape a whole document into a JSON
+    // string burns most of the token budget on backslashes and fails on the first one it
+    // gets wrong.
     responseOutput GeneratePlannerResponse(
         const std::string& systemPrompt,
         const std::string& userRequest,
-        int maxTokens) const;
+        int maxTokens,
+        bool structuredJson = true) const;
 
     std::string host = "127.0.0.1";
     int port = 8080;

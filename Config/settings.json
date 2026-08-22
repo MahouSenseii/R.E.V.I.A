@@ -75,6 +75,7 @@
     "llamaPromptCacheMiB": 0,
     "sqliteCacheMiB": 0,
     "gpuReserveMiB": 1536,
+    "usageSampleSeconds": 2,
     "allowChatModelSplit": true,
     "assignments": {
       "chat": "auto-primary",
@@ -82,6 +83,27 @@
       "speechRecognition": "auto-secondary",
       "embeddings": "cpu"
     }
+  },
+  "image": {
+    "enabled": false,
+    "model": "stabilityai/sd-turbo",
+    "device": "auto",
+    "minimumFreeVramMiB": 4200,
+    "steps": 4,
+    "guidance": 1.0,
+    "width": 512,
+    "height": 512,
+    "port": 8093,
+    "startupTimeoutSeconds": 120,
+    "requestTimeoutSeconds": 900,
+    "shutdownOnExit": true
+  },
+  "conversation": {
+    "archiveEnabled": true,
+    "maxSessions": 200,
+    "maxTurnsPerSession": 500,
+    "maxTurnCharacters": 8000,
+    "restoreTurns": 6
   },
   "vision": {
     "enabled": true,

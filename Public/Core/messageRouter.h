@@ -22,6 +22,14 @@ public:
     void SetPosture(std::string posture);
     responseOutput PlanAction(const std::string& request) const;
     responseOutput PlanGoal(const std::string& request) const;
+    responseOutput DrawDiagram(const std::string& request) const;
+    responseOutput ComposeContent(
+        const std::string& request,
+        const std::string& context) const;
+    responseOutput ReviseBlock(
+        const std::string& instruction,
+        const std::string& neighbourhood,
+        const std::string& target) const;
     responseOutput AnalyzeImage(
         const std::filesystem::path& imagePath,
         const std::string& prompt,

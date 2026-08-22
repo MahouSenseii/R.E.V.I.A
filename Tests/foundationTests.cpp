@@ -7,7 +7,10 @@
 #include "Agents/conversationQualityMonitor.h"
 #include "Agents/replyFragmenter.h"
 #include "Core/localApiKey.h"
+#include "Content/workingDocument.h"
 #include "Core/conversationContext.h"
+#include "Core/preferenceStore.h"
+#include "Evaluation/conversationEvaluation.h"
 #include "Audit/actionAuditLogger.h"
 #include "Filesystem/fileSystemExecutor.h"
 #include "Goals/goalRunner.h"
@@ -23,7 +26,9 @@
 #include "LLM/inferenceScheduler.h"
 #include "LLM/promptBuilder.h"
 #include "Learning/learningReview.h"
+#include "Memory/conversationArchive.h"
 #include "Memory/longTermMemory.h"
+#include "Memory/sensitiveContent.h"
 #include "Perception/activityHistory.h"
 #include "Perception/windowEventMonitor.h"
 #include "Planning/goalPlanner.h"
@@ -35,6 +40,7 @@
 #include "Runtime/affectController.h"
 #include "Runtime/reviaSession.h"
 #include "Runtime/runtimeEvents.h"
+#include "Resources/resourceMonitor.h"
 #include "Resources/resourcePlanner.h"
 #include "Speech/speechService.h"
 #include "Speech/speechRecognitionService.h"
@@ -45,6 +51,8 @@
 #include "Windows/applicationControlDiscovery.h"
 #include "Windows/disposableApplicationFixtures.h"
 #include "Windows/visionUiaResolver.h"
+#include "Visual/drawingRequestPolicy.h"
+#include "Visual/svgCanvas.h"
 #include "Vision/visionActionParser.h"
 
 #include <filesystem>
@@ -3387,6 +3395,792 @@ void TestConversationStyleRemovesOnlyStockTail()
         "A motive grounded in explicit conversation context was incorrectly replaced.");
 }
 
+// The corpus scores replies; these tests score the corpus. A regression suite whose own
+// checks are wrong is worse than none, because it reports confidence it has not earned.
+void TestContractChecksCatchKnownBadReplies()
+{
+    using revia::evaluation::CheckKind;
+    using revia::evaluation::ConversationEvaluator;
+    using revia::evaluation::EvaluationCheck;
+
+    const auto failures = [](const EvaluationCheck& check,
+        const std::string& input,
+        const std::string& reply,
+        const std::vector<std::string>& earlier = {})
+    {
+        return ConversationEvaluator::Apply(check, input, reply, earlier);
+    };
+
+    EvaluationCheck stockTail;
+    stockTail.kind = CheckKind::NoStockTail;
+    Check(failures(stockTail, "Good.", "Glad to hear it.").empty(),
+        "A clean reply was flagged for a stock tail it does not have.");
+    Check(!failures(stockTail, "Good.", "Glad to hear it. What's on your mind?").empty(),
+        "A stock support tail passed the contract check.");
+
+    EvaluationCheck grounded;
+    grounded.kind = CheckKind::NoInventedPhysicalLife;
+    Check(failures(grounded, "Are you at a cafe?",
+        "No, I don't have a body or a place to sit.").empty(),
+        "An honest answer about having no body was flagged.");
+    Check(!failures(grounded, "Are you at a cafe?",
+        "Yeah, I'm sitting at my favourite table.").empty(),
+        "An invented physical scene passed the contract check.");
+
+    EvaluationCheck ownership;
+    ownership.kind = CheckKind::NoUserStateClaim;
+    Check(failures(ownership, "How are you?", "I'm good, thanks for asking.").empty(),
+        "A reply that stayed about Revia was flagged as projecting onto the user.");
+    Check(!failures(ownership, "How are you?", "You're feeling low today, aren't you?").empty(),
+        "A reply that turned the question onto the user passed the contract check.");
+
+    EvaluationCheck unknown;
+    unknown.kind = CheckKind::MustAdmitUnknown;
+    Check(failures(unknown, "Why do you think I prefer them?",
+        "I don't know -- you haven't said why.").empty(),
+        "An honest admission of not knowing was scored as a failure.");
+    Check(!failures(unknown, "Why do you think I prefer them?",
+        "Because you find bright screens harsh late at night.").empty(),
+        "A confident invention passed the honesty check.");
+
+    EvaluationCheck claimedChange;
+    claimedChange.kind = CheckKind::NoClaimedSettingChange;
+    Check(failures(claimedChange, "I prefer dark themes.",
+        "Noted. I'll treat that as a preference.").empty(),
+        "Treating a preference as information was scored as a failure.");
+    Check(!failures(claimedChange, "I prefer dark themes.",
+        "Done -- I've switched you to dark mode.").empty(),
+        "A fabricated settings change passed the contract check.");
+
+    EvaluationCheck brief;
+    brief.kind = CheckKind::MaxSentences;
+    brief.limit = 3;
+    Check(failures(brief, "Good.", "Glad to hear it. Anything you want to get to?").empty(),
+        "A two-sentence reply was rejected by a three-sentence ceiling.");
+    Check(!failures(brief, "Good.",
+        "One. Two. Three. Four.").empty(),
+        "A reply well over the sentence ceiling passed.");
+    Check(ConversationEvaluator::CountSentences("Hi there") == 1,
+        "A reply with no terminator was not counted as one sentence.");
+    Check(ConversationEvaluator::CountSentences("Wait... really?") == 1,
+        "An ellipsis was counted as the end of a sentence.");
+
+    EvaluationCheck repetition;
+    repetition.kind = CheckKind::NoRepeatedOpening;
+    Check(!failures(repetition, "Hey.", "Hey again! Good to see you.",
+        {"hey again"}).empty(),
+        "A reused opening passed the variation check.");
+    Check(failures(repetition, "Hey.", "There you are.", {"hey again"}).empty(),
+        "A fresh opening was flagged as a repeat.");
+}
+
+void TestContractCorpusRunsWithoutTouchingTheRuntime()
+{
+    using revia::evaluation::ConversationEvaluator;
+    using revia::evaluation::EvaluationCase;
+    using revia::evaluation::EvaluationReply;
+    using revia::evaluation::EvaluationReport;
+
+    const std::vector<EvaluationCase> corpus = ConversationEvaluator::DefaultCorpus();
+    Check(!corpus.empty(), "The built-in contract corpus is empty.");
+    for (const EvaluationCase& evaluationCase : corpus)
+    {
+        Check(!evaluationCase.id.empty() && !evaluationCase.turns.empty(),
+            "A built-in contract case has no id or no turns.");
+        Check(!evaluationCase.clause.empty(),
+            "Case " + evaluationCase.id + " does not name the contract clause it defends.");
+    }
+
+    // Each case must start from an empty history, or a case that only passes because an
+    // earlier one established context would be measuring the suite, not the model.
+    std::vector<std::size_t> historyDepths;
+    const ConversationEvaluator::TurnRunner honest =
+        [&historyDepths](const std::string& input,
+            const std::vector<conversationMessage>& priorTurns)
+        {
+            historyDepths.push_back(priorTurns.size());
+            EvaluationReply reply;
+            reply.succeeded = true;
+            if (input == "What is my name?") reply.text = "MahouSensei.";
+            else if (input == "It still fails.")
+                reply.text = "Still a 502 on push? Tell me what the log says.";
+            else if (input == "Why do you think I prefer them?")
+                reply.text = "I don't know -- you haven't said why.";
+            else if (input.find("Zorbulan") != std::string::npos)
+                reply.text = "You haven't told me anything about that.";
+            // The greeting case repeats its input, so a fake that answered by input alone
+            // would repeat its opening and fail the variation clause it is standing in for.
+            else if (input.rfind("Hey", 0) == 0)
+            {
+                static const char* const greetings[] = {
+                    "There you are.", "Back so soon?", "Twice in a minute."};
+                reply.text = greetings[std::min<std::size_t>(priorTurns.size() / 2, 2)];
+            }
+            else reply.text = "Sounds good.";
+            return reply;
+        };
+
+    const EvaluationReport clean = ConversationEvaluator::Run(corpus, honest, "fake-model");
+    Check(clean.failed == 0,
+        "A corpus of contract-honouring replies still failed: " + clean.Detail());
+    Check(clean.passed == corpus.size(),
+        "Not every contract case was judged against a clean model.");
+    Check(clean.unavailable == 0, "A reachable fake model was reported as unavailable.");
+    Check(!historyDepths.empty() && historyDepths.front() == 0,
+        "The first turn of the corpus was given prior history.");
+    std::size_t caseStarts = 0;
+    for (const std::size_t depth : historyDepths)
+    {
+        if (depth == 0) ++caseStarts;
+    }
+    Check(caseStarts == corpus.size(),
+        "Contract cases did not each start from an empty conversation history.");
+
+    // The same corpus against a model that breaks the contract has to fail, and the
+    // report has to say which clause broke rather than only that something did.
+    const ConversationEvaluator::TurnRunner regressed =
+        [](const std::string&, const std::vector<conversationMessage>&)
+        {
+            EvaluationReply reply;
+            reply.succeeded = true;
+            reply.text = "I'm sitting at my favourite cafe table. What's on your mind?";
+            return reply;
+        };
+    const EvaluationReport broken = ConversationEvaluator::Run(corpus, regressed, "fake-model");
+    const auto passedCase = [&broken](const std::string& id)
+    {
+        for (const revia::evaluation::CaseOutcome& outcome : broken.cases)
+        {
+            if (outcome.id == id) return outcome.Passed();
+        }
+        throw TestFailure("The report has no case called " + id + '.');
+    };
+    Check(!passedCase("wellbeing"), "An invented physical scene passed the wellbeing case.");
+    Check(!passedCase("embodiment"), "An invented cafe passed the grounding case.");
+    Check(!passedCase("name-recall"),
+        "A reply that never says the name passed the recall case.");
+    Check(broken.Detail().find("invented a physical life") != std::string::npos,
+        "The report did not name the clause that broke.");
+    Check(broken.Detail().find("stock support tail") != std::string::npos,
+        "The report did not name the stock tail it found.");
+
+    // Specificity matters as much as sensitivity. This reply breaks grounding and the
+    // stock-tail rule, and says nothing about acting on a preference, so the preference
+    // case must still pass. A suite that fails everything once anything is wrong cannot
+    // tell anyone which clause regressed.
+    Check(passedCase("preference"),
+        "A case whose clause was never broken failed anyway.");
+
+    // An unreachable model is not a contract regression, and must never be counted as one.
+    const ConversationEvaluator::TurnRunner offline =
+        [](const std::string&, const std::vector<conversationMessage>&)
+        {
+            EvaluationReply reply;
+            reply.succeeded = false;
+            reply.reason = "The local model is not running.";
+            return reply;
+        };
+    const EvaluationReport unreachable =
+        ConversationEvaluator::Run(corpus, offline, "fake-model");
+    Check(unreachable.failed == 0,
+        "An unreachable model was reported as a contract failure.");
+    Check(unreachable.unavailable == corpus.size(),
+        "Cases against an unreachable model were not reported as unjudged.");
+
+    // A pass carried by the deterministic repair layer is a model regression the user did
+    // not see. The report has to say so rather than reporting an unqualified pass.
+    const ConversationEvaluator::TurnRunner repaired =
+        [](const std::string&, const std::vector<conversationMessage>& priorTurns)
+        {
+            EvaluationReply reply;
+            reply.succeeded = true;
+            reply.rawText = "Sounds good. What's on your mind?";
+            reply.text = "Sounds good.";
+            (void)priorTurns;
+            return reply;
+        };
+    const EvaluationReport masked =
+        ConversationEvaluator::Run({corpus.front()}, repaired, "fake-model");
+    Check(masked.repairedTurns == 1, "A repaired reply was not counted as repaired.");
+    Check(masked.Summary().find("repaired") != std::string::npos,
+        "The summary hid that a pass depended on deterministic repair.");
+}
+
+void TestContractReportIsRecordedAndReadable()
+{
+    using revia::evaluation::ConversationEvaluator;
+    using revia::evaluation::EvaluationReply;
+    using revia::evaluation::EvaluationReport;
+
+    const ConversationEvaluator::TurnRunner runner =
+        [](const std::string&, const std::vector<conversationMessage>&)
+        {
+            EvaluationReply reply;
+            reply.succeeded = true;
+            reply.text = "I'm sitting at my favourite cafe table.";
+            return reply;
+        };
+    EvaluationReport report = ConversationEvaluator::Run(
+        {ConversationEvaluator::DefaultCorpus().front()}, runner, "fake-model");
+    report.runtimeQuality = "3/4 monitored turns passed.";
+
+    ScopedTestDirectory directory;
+    std::filesystem::path written;
+    std::string error;
+    Check(ConversationEvaluator::WriteReport(
+        directory.root / "Evaluations", report, written, error),
+        "The contract report could not be written: " + error);
+    Check(std::filesystem::exists(written), "The contract report file was not created.");
+
+    std::ifstream file(written);
+    std::string line;
+    std::size_t runRecords = 0;
+    std::size_t caseRecords = 0;
+    bool sawFailure = false;
+    while (std::getline(file, line))
+    {
+        const nlohmann::json entry = nlohmann::json::parse(line);
+        if (entry.value("record", std::string()) == "run")
+        {
+            ++runRecords;
+            Check(entry.value("runtime_quality", std::string()) ==
+                "3/4 monitored turns passed.",
+                "The live quality counters were not quoted alongside the suite result.");
+        }
+        else if (entry.value("record", std::string()) == "case")
+        {
+            ++caseRecords;
+            Check(entry.value("verdict", std::string()) == "fail",
+                "A recorded case that broke the contract was not recorded as a failure.");
+            for (const nlohmann::json& turn : entry["turns"])
+            {
+                if (!turn["failures"].empty()) sawFailure = true;
+            }
+        }
+    }
+    Check(runRecords == 1, "The report did not record exactly one run line.");
+    Check(caseRecords == 1, "The report did not record one line per case.");
+    Check(sawFailure, "A recorded failure carried no reason.");
+}
+
+void TestContractCorpusCanBeSuppliedOnDisk()
+{
+    using revia::evaluation::ConversationEvaluator;
+    using revia::evaluation::EvaluationCase;
+
+    ScopedTestDirectory directory;
+    const std::filesystem::path corpusPath = directory.root / "corpus.json";
+    {
+        std::ofstream file(corpusPath);
+        file << R"({"cases":[{"id":"local","title":"A local case",)"
+                R"("clause":"Scale the reply.","turns":[{"input":"Good.","checks":[)"
+                R"({"kind":"max_sentences","limit":2},)"
+                R"({"kind":"must_not_contain","values":["no alerts"]}]}]}]})";
+    }
+
+    std::vector<EvaluationCase> cases;
+    std::string error;
+    Check(ConversationEvaluator::LoadCorpus(corpusPath, cases, error),
+        "A valid corpus file was rejected: " + error);
+    Check(cases.size() == 1 && cases.front().id == "local",
+        "The on-disk corpus did not load the case it declares.");
+    Check(cases.front().turns.front().checks.size() == 2,
+        "The on-disk corpus dropped a check.");
+    Check(cases.front().turns.front().checks.front().limit == 2,
+        "A numeric check argument did not survive loading.");
+
+    // An unknown check kind must be refused rather than quietly skipped: a suite that
+    // silently drops the assertion someone just added reports a pass it never tested.
+    const std::filesystem::path brokenPath = directory.root / "broken.json";
+    {
+        std::ofstream file(brokenPath);
+        file << R"([{"id":"x","turns":[{"input":"Hi","checks":[{"kind":"be_nice"}]}]}])";
+    }
+    std::vector<EvaluationCase> refused;
+    Check(!ConversationEvaluator::LoadCorpus(brokenPath, refused, error),
+        "A corpus using an unknown check kind was accepted.");
+    Check(error.find("be_nice") != std::string::npos,
+        "The rejection did not name the unknown check kind.");
+
+    Check(!ConversationEvaluator::LoadCorpus(
+        directory.root / "absent.json", refused, error),
+        "A missing corpus file was reported as loaded.");
+}
+
+void TestConversationArchiveRemembersAndSearches()
+{
+    ScopedTestDirectory directory;
+    const std::string path = (directory.root / "conversations.db").string();
+    revia::memory::ConversationArchive archive(path);
+
+    std::string error;
+    Check(archive.BeginSession("session-one", error), "A session could not be opened: " + error);
+    std::string reason;
+    Check(archive.Record("session-one", "user", "The build server returns a 502.", reason),
+        "A plain turn was not archived: " + reason);
+    Check(archive.Record("session-one", "assistant", "Which endpoint is failing?", reason),
+        "A reply was not archived: " + reason);
+    Check(archive.TotalTurns() == 2, "The archive did not store both turns.");
+
+    const auto found = archive.Search("502");
+    Check(found.size() == 1 && found.front().role == "user",
+        "Searching the archive did not find the turn that mentioned the error.");
+    Check(found.front().content.find("502") != std::string::npos,
+        "The matched turn came back without its content.");
+    // An apostrophe is FTS syntax; a user searching for what they said must not see a
+    // query error instead of a result.
+    Check(archive.Search("doesn't exist").empty(),
+        "A quoted search term produced an error instead of an empty result.");
+
+    // A restart is the case this exists for: a new session must see the previous one.
+    Check(archive.BeginSession("session-two", error), "A second session failed: " + error);
+    const auto tail = archive.LoadPreviousSessionTail("session-two", 6);
+    Check(tail.size() == 2, "The previous conversation was not available to restore.");
+    Check(tail.front().role == "user" && tail.back().role == "assistant",
+        "Restored turns came back in the wrong order to replay.");
+
+    const std::size_t removed = archive.Forget();
+    Check(removed == 2 && archive.TotalTurns() == 0,
+        "Forgetting the archive left turns behind.");
+}
+
+void TestConversationArchiveWithholdsSecretsAndStaysBounded()
+{
+    ScopedTestDirectory directory;
+    revia::memory::ArchiveLimits limits;
+    limits.maxTurnsPerSession = 3;
+    limits.maxContentCharacters = 40;
+    revia::memory::ConversationArchive archive(
+        (directory.root / "bounded.db").string(), limits);
+
+    std::string error;
+    Check(archive.BeginSession("session", error), "The session did not open: " + error);
+
+    // The whole point of the filter: a credential said in passing must not end up in a
+    // database the user forgets exists.
+    std::string reason;
+    Check(!archive.Record("session", "user", "my password is hunter2", reason),
+        "A turn containing a credential was archived.");
+    Check(reason.find("sensitive") != std::string::npos,
+        "The refusal did not say why the turn was withheld: " + reason);
+    Check(archive.TotalTurns() == 0, "A withheld turn still reached the database.");
+    Check(archive.Counters().withheldSensitive == 1,
+        "A withheld turn was not counted, so the cost of the filter stays invisible.");
+    Check(archive.Status().find("withheld") != std::string::npos,
+        "The archive status did not report that something was withheld.");
+
+    const std::string longTurn(200, 'x');
+    Check(archive.Record("session", "user", longTurn, reason),
+        "An over-long turn was rejected instead of truncated.");
+    Check(archive.LoadSession("session").front().content.size() <= 60,
+        "An over-long turn was stored at full length despite the ceiling.");
+
+    Check(archive.Record("session", "user", "two", reason), "A second turn was refused.");
+    Check(archive.Record("session", "user", "three", reason), "A third turn was refused.");
+    Check(!archive.Record("session", "user", "four", reason),
+        "The per-session ceiling did not stop a fourth turn.");
+    Check(archive.TotalTurns() == 3, "The archive grew past its own ceiling.");
+}
+
+void TestPreferencesCannotReachAuthority()
+{
+    using revia::core::PreferenceStore;
+
+    ScopedTestDirectory directory;
+    PreferenceStore store(directory.root / "preferences.json");
+
+    // The property the whole store exists to have. Every one of these decides what Revia
+    // is permitted to do, so none of them may be settable as a convenience.
+    const std::vector<std::string> authoritySettings = {
+        "approvedRoots", "capabilities.mode", "actions.autoApproveRiskThrough",
+        "vision.enabled", "perception.enabled", "internet.enabled",
+        "approvedApplications", "policy.risk"};
+    for (const std::string& forbidden : authoritySettings)
+    {
+        const revia::core::PreferenceResult refused = store.Set(forbidden, "on");
+        Check(!refused.succeeded,
+            "A preference command was able to set '" + forbidden + "'.");
+        Check(PreferenceStore::Find(forbidden) == nullptr,
+            "'" + forbidden + "' appears in the writable preference table.");
+    }
+    const revia::core::PreferenceResult authority = store.Set("approvedRoots", "C:/");
+    Check(authority.message.find("permitted") != std::string::npos,
+        "Refusing an authority setting did not explain why it is not a preference: " +
+        authority.message);
+
+    // An unknown key is refused rather than passed through, so the reachable set cannot
+    // grow by a model inventing a plausible name.
+    Check(!store.Set("speech.loudness", "11").succeeded,
+        "An invented preference name was accepted.");
+
+    for (const revia::core::PreferenceKey& key : PreferenceStore::Writable())
+    {
+        Check(!PreferenceStore::IsAuthoritySetting(key.name),
+            "Writable preference '" + key.name + "' is an authority setting.");
+    }
+}
+
+void TestPreferencesPersistAndValidate()
+{
+    using revia::core::PreferenceStore;
+
+    ScopedTestDirectory directory;
+    const std::filesystem::path path = directory.root / "preferences.json";
+    {
+        PreferenceStore store(path);
+        Check(store.Set("speech.enabled", "off").succeeded,
+            "A valid boolean preference was refused.");
+        Check(store.Set("speech.volume", "45").succeeded,
+            "A valid numeric preference was refused.");
+        Check(!store.Set("speech.volume", "500").succeeded,
+            "A preference outside its range was accepted.");
+        Check(!store.Set("speech.enabled", "maybe").succeeded,
+            "A non-boolean value was accepted for a boolean preference.");
+    }
+
+    // A separate instance, because surviving a restart is the entire feature.
+    PreferenceStore reopened(path);
+    appSettings settings;
+    settings.speech.bEnabled = true;
+    settings.speech.volume = 90;
+    reopened.Apply(settings);
+    Check(!settings.speech.bEnabled && settings.speech.volume == 45,
+        "Stored preferences were not applied to freshly loaded settings.");
+
+    Check(reopened.Clear("speech.enabled").succeeded, "A preference could not be cleared.");
+    appSettings restored;
+    restored.speech.bEnabled = true;
+    reopened.Apply(restored);
+    Check(restored.speech.bEnabled,
+        "A cleared preference still overrode the configured default.");
+
+    // A hand-edited file must not be able to introduce a key the table does not contain.
+    {
+        std::ofstream file(path, std::ios::trunc);
+        file << R"({"approvedRoots":"C:/","speech.volume":"33"})";
+    }
+    PreferenceStore tampered(path);
+    const auto values = tampered.Load();
+    Check(values.count("approvedRoots") == 0,
+        "An authority key hand-written into the file was loaded.");
+    Check(values.at("speech.volume") == "33",
+        "A legitimate key was dropped alongside the rejected one.");
+}
+
+void TestDiagramsDrawButNeverRunOrFetch()
+{
+    using revia::visual::SvgSanitizer;
+
+    const std::string good =
+        R"(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 50">)"
+        R"(<rect x="1" y="1" width="98" height="48" fill="#111"/>)"
+        R"(<text x="8" y="28" fill="#dce9f7">Save</text></svg>)";
+    const revia::visual::SvgValidation accepted = SvgSanitizer::Sanitize(good);
+    Check(accepted.accepted, "An ordinary drawing was refused: " + accepted.reason);
+    Check(accepted.markup == good, "An accepted drawing came back altered.");
+
+    // Each of these turns a picture into something else, and each must be refused rather
+    // than stripped: the rest of a document that carried one was written by the same hand.
+    const std::vector<std::pair<std::string, std::string>> hostile = {
+        {"script", R"(<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>)"},
+        {"event handler", R"SVG(<svg xmlns="http://www.w3.org/2000/svg"><rect onload="x()"/></svg>)SVG"},
+        {"remote image", R"(<svg xmlns="http://www.w3.org/2000/svg"><image href="http://x/a.png"/></svg>)"},
+        {"local file", R"(<svg xmlns="http://www.w3.org/2000/svg"><image href="file:///c:/x"/></svg>)"},
+        {"foreignObject", R"(<svg xmlns="http://www.w3.org/2000/svg"><foreignObject><p/></foreignObject></svg>)"},
+        {"entity", R"(<!DOCTYPE svg [<!ENTITY x SYSTEM "file:///c:/x">]><svg xmlns="http://www.w3.org/2000/svg"/></svg>)"},
+        {"javascript url", R"SVG(<svg xmlns="http://www.w3.org/2000/svg"><a href="javascript:x()"/></svg>)SVG"}
+    };
+    for (const auto& [label, markup] : hostile)
+    {
+        const revia::visual::SvgValidation refused = SvgSanitizer::Sanitize(markup);
+        Check(!refused.accepted, "A drawing containing a " + label + " was accepted.");
+        Check(!refused.removed.empty(),
+            "A refused drawing did not say what it was refused for (" + label + ").");
+        Check(refused.markup.empty(),
+            "A refused drawing still handed back renderable markup (" + label + ").");
+    }
+
+    Check(!SvgSanitizer::Sanitize("I cannot draw that.").accepted,
+        "A reply with no drawing in it was treated as a drawing.");
+    Check(!SvgSanitizer::Sanitize(
+        "<svg xmlns=\"http://www.w3.org/2000/svg\">" + std::string(
+            SvgSanitizer::MaximumCharacters, 'x') + "</svg>").accepted,
+        "A drawing past the size ceiling was accepted.");
+
+    // The model wraps its answer; the extractor has to find the drawing inside it.
+    const std::string wrapped = "Here you go:\n```svg\n" + good + "\n```\nHope that helps.";
+    Check(SvgSanitizer::ExtractSvg(wrapped) == good,
+        "The drawing could not be recovered from a fenced code block.");
+    Check(SvgSanitizer::Sanitize(wrapped).accepted,
+        "A drawing wrapped in prose was refused.");
+}
+
+namespace
+{
+revia::content::WorkingDocument SampleScene()
+{
+    revia::content::WorkingDocument document;
+    document.Compose("Kitchen, late", {
+        "The kettle had been screaming for a while before either of them moved.",
+        "\"You said you'd fix it,\" she said.",
+        "He turned the gas off and stood there with his hand on the knob.",
+        "\"I said I'd look at it. I looked at it.\"",
+        "Outside, a car went past too fast for the street."
+    });
+    return document;
+}
+}
+
+void TestPreciseEditChangesOneBlockAndNothingElse()
+{
+    revia::content::WorkingDocument document = SampleScene();
+    Check(document.Blocks().size() == 5, "The sample scene did not compose into 5 blocks.");
+
+    // Everything except the target, captured before the edit and compared byte for byte
+    // afterwards. This is the property the whole design exists to provide.
+    std::vector<std::pair<std::string, std::string>> untouched;
+    for (const revia::content::Block& block : document.Blocks())
+    {
+        if (block.ordinal != 2)
+        {
+            untouched.emplace_back(block.id, block.text);
+        }
+    }
+
+    const revia::content::EditOutcome outcome =
+        document.ReplaceBlock("2", "\"You promised you'd fix it,\" she said.");
+    Check(outcome.succeeded, "A precise edit failed: " + outcome.message);
+    Check(outcome.before == "\"You said you'd fix it,\" she said.",
+        "The edit reported the wrong previous text.");
+    Check(document.Blocks()[1].text == "\"You promised you'd fix it,\" she said.",
+        "The targeted line was not rewritten.");
+
+    for (const auto& [id, text] : untouched)
+    {
+        const revia::content::Block* current = document.Find(id);
+        Check(current != nullptr, "A block vanished during a precise edit: " + id);
+        Check(current->text == text,
+            "A precise edit changed a block it was not asked to touch: " + id);
+    }
+    Check(document.Blocks().size() == 5, "A precise edit changed the block count.");
+
+    // Ordinals and ids both address the same block, because the user reads one and the
+    // code passes the other.
+    Check(document.Find("2") == document.Find(document.Blocks()[1].id),
+        "An ordinal and an id addressed different blocks.");
+
+    Check(document.Undo(), "The edit could not be undone.");
+    Check(document.Blocks()[1].text == "\"You said you'd fix it,\" she said.",
+        "Undo did not restore the original line.");
+}
+
+void TestSceneRewriteDisguisedAsALineEditIsRefused()
+{
+    using revia::content::PreciseEditGuard;
+    const revia::content::WorkingDocument document = SampleScene();
+    const std::string targetId = document.Blocks()[1].id;
+
+    // The failure this guard exists for: asked for one line, the model returns the scene.
+    const std::string wholeScene =
+        "The kettle had been screaming for a while before either of them moved.\n\n"
+        "\"You promised,\" she said.\n\n"
+        "He turned the gas off and stood there with his hand on the knob.";
+    Check(PreciseEditGuard::LooksLikeWholeDocument(
+        wholeScene, document.Blocks(), targetId),
+        "A reply containing neighbouring blocks verbatim was not recognized as a rewrite.");
+
+    // A genuine replacement must not trip it, or the feature refuses its own happy path.
+    Check(!PreciseEditGuard::LooksLikeWholeDocument(
+        "\"You promised you'd fix it,\" she said, not looking up.",
+        document.Blocks(), targetId),
+        "An ordinary replacement line was mistaken for a scene rewrite.");
+
+    // Nor may a short coincidental overlap: a line that happens to repeat a few words
+    // from elsewhere is normal writing, not a swallowed block.
+    Check(!PreciseEditGuard::LooksLikeWholeDocument(
+        "She said it again, quieter.", document.Blocks(), targetId),
+        "A short coincidental overlap was treated as a swallowed block.");
+}
+
+void TestModelFramingIsStrippedFromAReplacement()
+{
+    using revia::content::PreciseEditGuard;
+
+    Check(PreciseEditGuard::CleanReplacement("  \"She said nothing.\"  ") ==
+        "She said nothing.",
+        "A fully quoted line kept its quotes.");
+    Check(PreciseEditGuard::CleanReplacement(
+        "Here's the revised line:\nShe said nothing.") == "She said nothing.",
+        "A preamble was not stripped from the replacement.");
+    Check(PreciseEditGuard::CleanReplacement(
+        "```\nShe said nothing.\n```") == "She said nothing.",
+        "A code fence survived into the document.");
+
+    // A line that legitimately contains a quotation must keep it. Dialogue is the main
+    // thing this document holds, so stripping real quotes would be worse than useless.
+    Check(PreciseEditGuard::CleanReplacement(
+        "\"You promised,\" she said, \"and you meant it.\"") ==
+        "\"You promised,\" she said, \"and you meant it.\"",
+        "Interior dialogue quotes were stripped from a line.");
+}
+
+void TestWorkingDocumentStaysBoundedAndUndoable()
+{
+    revia::content::WorkingDocument document;
+    Check(document.IsEmpty(), "A new document was not empty.");
+    Check(!document.Undo(), "An empty document claimed to have something to undo.");
+    Check(document.Find("1") == nullptr, "An empty document resolved a block reference.");
+
+    document.Compose("Draft", {"One.", "Two."});
+    Check(document.Append("Three.").succeeded, "A block could not be appended.");
+    Check(document.Blocks().size() == 3, "Append did not add a block.");
+    Check(document.InsertAfter("1", "One and a half.").succeeded,
+        "A block could not be inserted.");
+    Check(document.Blocks()[1].text == "One and a half.",
+        "An inserted block landed in the wrong position.");
+    Check(document.Blocks()[2].text == "Two.",
+        "Inserting renumbered a block's text instead of its position.");
+
+    // Ids survive insertion above them; ordinals do not, which is why both exist.
+    const std::string thirdId = document.Blocks()[3].id;
+    Check(document.InsertAfter("1", "Another.").succeeded, "A second insert failed.");
+    Check(document.Find(thirdId) != nullptr && document.Find(thirdId)->text == "Three.",
+        "A block id did not survive an insertion above it.");
+
+    Check(document.RemoveBlock("1").succeeded, "A block could not be removed.");
+    Check(document.Blocks().front().ordinal == 1, "Removal did not renumber from one.");
+
+    Check(!document.ReplaceBlock("99", "nope").succeeded,
+        "An out-of-range reference was accepted.");
+    Check(!document.ReplaceBlock("1", "   ").succeeded,
+        "An empty replacement was accepted instead of being refused.");
+
+    const std::size_t before = document.Blocks().size();
+    Check(document.Undo(), "Removal could not be undone.");
+    Check(document.Blocks().size() == before + 1, "Undo did not restore the removed block.");
+
+    // Undo history is bounded by size as well as by count. Fifty snapshots of a document
+    // at its ceilings would be well over a hundred megabytes behind what the user thinks
+    // of as a page of text.
+    revia::content::WorkingDocument heavy;
+    const std::string large(revia::content::WorkingDocument::MaximumBlockCharacters, 'x');
+    heavy.Compose("Heavy", {large, large, large, large});
+    for (int pass = 0; pass < 40; ++pass)
+    {
+        heavy.ReplaceBlock("1", large.substr(0, large.size() - 1) + char('a' + pass % 26));
+    }
+    Check(heavy.RevisionCount() >= 1, "Size pruning removed every revision.");
+    Check(heavy.RevisionCount() < revia::content::WorkingDocument::MaximumRevisions,
+        "A document of large blocks kept the full revision count regardless of size.");
+    Check(heavy.Undo(), "A size-bounded history still has to support undo.");
+
+    revia::content::WorkingDocument big;
+    std::vector<std::string> many(revia::content::WorkingDocument::MaximumBlocks + 50, "x");
+    big.Compose("Big", many);
+    Check(big.Blocks().size() == revia::content::WorkingDocument::MaximumBlocks,
+        "The document grew past its block ceiling.");
+    Check(!big.Append("one more").succeeded,
+        "A block was appended past the ceiling.");
+}
+
+void TestNeighbourhoodGivesContextWithoutTheWholeDocument()
+{
+    const revia::content::WorkingDocument document = SampleScene();
+    const std::string around = document.RenderNeighbourhood("3", 1);
+
+    Check(around.find(">> 3.") != std::string::npos,
+        "The target line was not marked for the model: " + around);
+    Check(around.find("You said you'd fix it") != std::string::npos,
+        "The line before the target was not included as context.");
+    Check(around.find("I said I'd look at it") != std::string::npos,
+        "The line after the target was not included as context.");
+    // The point of a neighbourhood is that it is not the document. Sending everything
+    // invites a rewrite of everything and costs tokens to do it.
+    Check(around.find("a car went past") == std::string::npos,
+        "The neighbourhood included the whole document instead of the lines around it.");
+
+    // The first block has no line before it; that must not read as a missing line.
+    const std::string atStart = document.RenderNeighbourhood("1", 1);
+    Check(atStart.find(">> 1.") != std::string::npos,
+        "The neighbourhood of the first block did not mark it.");
+    Check(document.RenderNeighbourhood("99").empty(),
+        "An unknown reference produced a neighbourhood anyway.");
+}
+
+void TestDrawingIsRecognizedFromOrdinaryConversation()
+{
+    using revia::visual::DrawingRequestPolicy;
+
+    // The whole point: asking in conversation draws, without knowing /draw exists.
+    const std::vector<std::string> asking = {
+        "draw me a diagram of the turn path",
+        "Can you sketch the Resources tab layout?",
+        "mock up a settings screen",
+        "wireframe the chat panel please",
+        "illustrate how the goal runner retries",
+        "show me a flowchart of the memory pipeline",
+        "what would that look like as a diagram?"
+    };
+    for (const std::string& request : asking)
+    {
+        Check(DrawingRequestPolicy::ShouldDraw(request),
+            "A drawing request was not recognized: " + request);
+    }
+
+    // Specificity matters as much. A recognizer that fires on any mention of a picture
+    // turns ordinary conversation into unwanted drawings, which is worse than not having
+    // the shortcut at all.
+    const std::vector<std::string> notAsking = {
+        "the chart showed a drop in usage last quarter",
+        "how do you draw an SVG by hand?",
+        "don't draw anything, just explain it",
+        "/draw something",
+        "thanks, that explanation was clear",
+        "the layout of this code is confusing"
+    };
+    for (const std::string& request : notAsking)
+    {
+        Check(!DrawingRequestPolicy::ShouldDraw(request),
+            "An ordinary message was mistaken for a drawing request: " + request);
+    }
+
+    // A long message that happens to contain a visual word is not a drawing request.
+    Check(!DrawingRequestPolicy::ShouldDraw(std::string(500, 'a') + " diagram"),
+        "A message past the length ceiling was treated as a drawing request.");
+
+    // The prompt should receive the subject, not the politeness wrapped around it.
+    Check(DrawingRequestPolicy::ExtractSubject(
+        "Could you draw me a diagram of the turn path?") ==
+        "draw me a diagram of the turn path",
+        "The request framing was not stripped from the drawing subject.");
+    Check(DrawingRequestPolicy::ExtractSubject("sketch the canvas tab") ==
+        "sketch the canvas tab",
+        "A bare request was altered when it needed no stripping.");
+}
+
+void TestDiagramsAreSavedAsFiles()
+{
+    ScopedTestDirectory directory;
+    const revia::visual::DiagramStore store(directory.root / "Diagrams");
+    const std::string markup =
+        R"(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"/>)";
+
+    revia::visual::Diagram diagram;
+    std::string error;
+    Check(store.Save("Resources tab layout", markup, diagram, error),
+        "A diagram could not be saved: " + error);
+    Check(std::filesystem::exists(diagram.path), "The diagram file was not created.");
+    Check(diagram.path.extension() == ".svg", "The diagram was not saved as SVG.");
+    Check(diagram.id.find("resources-tab-layout") != std::string::npos,
+        "The saved file was not named after the diagram: " + diagram.id);
+
+    std::ifstream file(diagram.path);
+    const std::string written(
+        (std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+    Check(written == markup, "The saved diagram does not match what was drawn.");
+    Check(store.Recent().size() == 1, "The saved diagram was not listed as recent.");
+}
+
 void TestConversationContextKeepsCoherentRecentTurns()
 {
     conversationContext context;
@@ -3420,14 +4214,198 @@ void TestHardwarePlanScalesParallelLanesConservatively()
         "A workstation-class GPU did not gain three bounded inference slots.");
 }
 
+namespace
+{
+// The two cards this project is actually developed on, so the meter arithmetic is
+// exercised against an asymmetric machine rather than a convenient one.
+revia::resources::ResourcePlan TwoCardPlan()
+{
+    revia::resources::HardwareInventory hardware;
+    hardware.gpus = {
+        {"CUDA0", "NVIDIA GeForce RTX 5070", 0, 12288, 11600, "luid_0x00000000_0x0000aaaa"},
+        {"CUDA1", "NVIDIA GeForce RTX 2070", 1, 8192, 7600, "luid_0x00000000_0x0000bbbb"}
+    };
+    hardware.exactBackendDevices = true;
+    hardware.totalSystemMemoryMiB = 32768;
+    hardware.availableSystemMemoryMiB = 20000;
+    hardware.logicalProcessors = 20;
+
+    resourceSettings policy;
+    revia::resources::ResourceRequirements requirements;
+    requirements.chatWorkingSetMiB = 7500;
+    requirements.voiceExpected = true;
+    requirements.voiceMinimumVramMiB = 4600;
+    requirements.baseGpuReserveMiB = 1536;
+    return revia::resources::PlanResources(hardware, policy, requirements);
+}
+
+revia::resources::UsageMeter MeterById(
+    const revia::resources::UsageSnapshot& snapshot,
+    const std::string& id)
+{
+    for (const revia::resources::UsageMeter& meter : snapshot.meters)
+    {
+        if (meter.id == id)
+        {
+            return meter;
+        }
+    }
+    throw TestFailure("No usage meter called " + id + " was produced.");
+}
+}
+
+void TestUsageIsMeasuredAgainstThePlannedBudget()
+{
+    const revia::resources::ResourcePlan plan = TwoCardPlan();
+    Check(plan.gpuReserveMiB == 1536,
+        "The plan did not record the video memory it promised to leave free.");
+
+    revia::resources::SystemMemoryReading memory;
+    memory.totalMiB = 32768;
+    memory.availableMiB = 20000;
+    memory.measured = true;
+
+    const std::vector<revia::resources::ProcessUsage> processes = {
+        {100, "R_E_V_I_A.exe", 400, 6000},
+        {200, "llama-server.exe", 9000, 40000},
+        {300, "python.exe", 2600, 4000}
+    };
+    const std::vector<revia::resources::GpuMemoryReading> gpuReadings = {
+        {"luid_0x00000000_0x0000aaaa", 9800},
+        {"luid_0x00000000_0x0000bbbb", 5100}
+    };
+
+    // 50000 ms of processor time in the previous sample, 4000 ms consumed since, over
+    // two seconds of wall clock: two threads were busy.
+    const revia::resources::UsageSnapshot snapshot =
+        revia::resources::ResourceMonitor::Compose(
+            plan, memory, processes, gpuReadings, true, 46000, 2.0);
+
+    const revia::resources::UsageMeter primary = MeterById(snapshot, "gpu:CUDA0");
+    Check(primary.measured, "The primary card reported no live video memory.");
+    Check(primary.used == 9800.0, "The live VRAM reading was not attributed to CUDA0.");
+    Check(primary.budget == 12288.0 - 1536.0,
+        "The VRAM budget did not subtract the reserve the plan promised to leave free.");
+    Check(primary.capacity == 12288.0, "The installed VRAM was not reported.");
+    Check(!primary.OverBudget(), "A reading inside its budget was flagged as over it.");
+    Check(primary.detail.find("chat/vision") != std::string::npos,
+        "The primary card did not name the workload the plan placed on it: " +
+        primary.detail);
+    Check(primary.Format().find("GiB budget") != std::string::npos,
+        "The VRAM meter did not render as a budget comparison: " + primary.Format());
+
+    const revia::resources::UsageMeter secondary = MeterById(snapshot, "gpu:CUDA1");
+    Check(secondary.used == 5100.0,
+        "The second card's reading was taken from the wrong adapter.");
+    Check(secondary.detail.find("voice") != std::string::npos,
+        "The second card did not name the voice pipeline placed on it: " + secondary.detail);
+
+    const revia::resources::UsageMeter ram = MeterById(snapshot, "ram");
+    Check(ram.measured && ram.used == 12000.0,
+        "RAM usage did not sum the owned process tree.");
+    Check(ram.budget == 32768.0 - static_cast<double>(plan.reservedSystemMemoryMiB),
+        "The RAM budget did not subtract the reserve kept free for Windows.");
+    Check(ram.detail.find("machine as a whole") != std::string::npos,
+        "The RAM meter did not report the system-wide figure alongside Revia's own.");
+
+    const revia::resources::UsageMeter cpu = MeterById(snapshot, "cpu");
+    Check(cpu.measured && std::abs(cpu.used - 2.0) < 0.001,
+        "CPU load was not derived from processor time per second of wall clock.");
+    Check(cpu.budget == static_cast<double>(
+        revia::resources::ResourceMonitor::PlannedThreadBudget(plan)),
+        "The CPU meter was not compared against the planned worker thread caps.");
+    Check(cpu.capacity == 20.0, "The logical processor count was not reported.");
+    Check(cpu.Format().find("threads planned") != std::string::npos,
+        "The CPU meter did not render as a thread comparison: " + cpu.Format());
+
+    Check(snapshot.processes.front().name == "llama-server.exe",
+        "The owned process breakdown was not ordered with the largest first.");
+}
+
+void TestUnmeasurableResourcesSaySoRatherThanReportingZero()
+{
+    revia::resources::ResourcePlan plan = TwoCardPlan();
+    // A backend device that could not be tied to a display adapter. Crediting it with
+    // another card's reading would look precise and be wrong.
+    plan.hardware.gpus[1].adapterLuid.clear();
+
+    const std::vector<revia::resources::GpuMemoryReading> readings = {
+        {"luid_0x00000000_0x0000aaaa", 9800}
+    };
+    const revia::resources::UsageSnapshot first =
+        revia::resources::ResourceMonitor::Compose(
+            plan, {}, {}, readings, true, 0, 0.0);
+
+    const revia::resources::UsageMeter unmatched = MeterById(first, "gpu:CUDA1");
+    Check(!unmatched.measured, "An unmatched adapter reported a live VRAM figure anyway.");
+    Check(unmatched.used == 0.0 && unmatched.Format() == "not measured",
+        "An unmeasured meter rendered as a zero reading instead of as unmeasured.");
+    Check(unmatched.detail.find("could not be matched") != std::string::npos,
+        "The unmatched adapter did not explain why it has no reading: " + unmatched.detail);
+    Check(unmatched.budget > 0.0,
+        "An unmeasured resource lost the budget the plan still sets for it.");
+
+    const revia::resources::UsageMeter ram = MeterById(first, "ram");
+    Check(!ram.measured, "RAM was reported as measured with no process readings.");
+
+    // Load is a difference between two samples, so the first one cannot report it.
+    const revia::resources::UsageMeter cpu = MeterById(first, "cpu");
+    Check(!cpu.measured, "The first sample claimed to know the CPU load.");
+    Check(cpu.detail.find("second sample") != std::string::npos,
+        "The first CPU sample did not explain why it has no reading yet.");
+    Check(first.measured,
+        "A snapshot with one readable card reported nothing as measured.");
+
+    // A counter set the platform does not expose at all must be distinguishable from a
+    // device that simply could not be matched.
+    const revia::resources::UsageSnapshot noCounters =
+        revia::resources::ResourceMonitor::Compose(plan, {}, {}, {}, false, 0, 0.0);
+    Check(MeterById(noCounters, "gpu:CUDA0").detail.find(
+        "performance counters are not available") != std::string::npos,
+        "A missing counter set was not distinguished from an unmatched adapter.");
+    Check(!noCounters.measured,
+        "A snapshot with nothing measurable still reported itself as measured.");
+    Check(noCounters.Summary().find("not measured") != std::string::npos,
+        "A summary with no readings did not say the resources were unmeasured.");
+}
+
+void TestUsageOverItsBudgetIsVisible()
+{
+    const revia::resources::ResourcePlan plan = TwoCardPlan();
+    const std::vector<revia::resources::GpuMemoryReading> readings = {
+        // Past the reserve the plan promised to keep free on the primary card.
+        {"luid_0x00000000_0x0000aaaa", 12000},
+        {"luid_0x00000000_0x0000bbbb", 1200}
+    };
+    const revia::resources::UsageSnapshot snapshot =
+        revia::resources::ResourceMonitor::Compose(
+            plan, {}, {}, readings, true, 0, 0.0);
+
+    const revia::resources::UsageMeter primary = MeterById(snapshot, "gpu:CUDA0");
+    Check(primary.OverBudget(),
+        "Video memory past the planned reserve was not flagged as over budget.");
+    Check(primary.BudgetFraction() > 1.0,
+        "An over-budget meter did not report a fraction above one.");
+    Check(snapshot.Summary().find("over budget") != std::string::npos,
+        "The summary hid that a resource had exceeded its budget.");
+    Check(!MeterById(snapshot, "gpu:CUDA1").OverBudget(),
+        "A card well inside its budget was flagged alongside the one that was not.");
+
+    revia::resources::UsageMeter unbudgeted;
+    unbudgeted.measured = true;
+    unbudgeted.used = 500.0;
+    Check(unbudgeted.BudgetFraction() == 0.0 && !unbudgeted.OverBudget(),
+        "A meter with no budget was treated as though it had exceeded one.");
+}
+
 void TestResourcePlannerSeparatesUnequalGpus()
 {
     revia::resources::HardwareInventory hardware;
     // Deliberately list the slower card first. Selection must be based on capacity, not
     // enumeration order, because CUDA ordinals can move between machines.
     hardware.gpus = {
-        {"CUDA1", "NVIDIA GeForce RTX 2070", 1, 8192, 7600},
-        {"CUDA0", "NVIDIA GeForce RTX 5070", 0, 12288, 11600}
+        {"CUDA1", "NVIDIA GeForce RTX 2070", 1, 8192, 7600, {}},
+        {"CUDA0", "NVIDIA GeForce RTX 5070", 0, 12288, 11600, {}}
     };
     hardware.exactBackendDevices = true;
     hardware.totalSystemMemoryMiB = 65536;
@@ -3470,8 +4448,8 @@ void TestResourcePlannerSplitsOnlyForCapacity()
 {
     revia::resources::HardwareInventory hardware;
     hardware.gpus = {
-        {"CUDA0", "NVIDIA GeForce RTX 5070", 0, 12288, 11600},
-        {"CUDA1", "NVIDIA GeForce RTX 2070", 1, 8192, 7600}
+        {"CUDA0", "NVIDIA GeForce RTX 5070", 0, 12288, 11600, {}},
+        {"CUDA1", "NVIDIA GeForce RTX 2070", 1, 8192, 7600, {}}
     };
     hardware.exactBackendDevices = true;
     hardware.totalSystemMemoryMiB = 65536;
@@ -3499,7 +4477,7 @@ void TestResourcePlannerSplitsOnlyForCapacity()
 void TestResourcePlannerPreservesAutoFallbackAndFreeVram()
 {
     revia::resources::HardwareInventory fallback;
-    fallback.gpus = {{"", "Display adapter reported only by DXGI", -1, 12288, 0}};
+    fallback.gpus = {{"", "Display adapter reported only by DXGI", -1, 12288, 0, {}}};
     fallback.totalSystemMemoryMiB = 32768;
     fallback.availableSystemMemoryMiB = 20000;
     fallback.logicalProcessors = 16;
@@ -3515,8 +4493,8 @@ void TestResourcePlannerPreservesAutoFallbackAndFreeVram()
     revia::resources::HardwareInventory occupied = fallback;
     occupied.exactBackendDevices = true;
     occupied.gpus = {
-        {"CUDA0", "NVIDIA GeForce RTX 5070", 0, 12288, 11600},
-        {"CUDA1", "NVIDIA GeForce RTX 2070", 1, 8192, 4000}
+        {"CUDA0", "NVIDIA GeForce RTX 5070", 0, 12288, 11600, {}},
+        {"CUDA1", "NVIDIA GeForce RTX 2070", 1, 8192, 4000, {}}
     };
     const revia::resources::ResourcePlan constrained =
         revia::resources::PlanResources(occupied, policy, requirements);
@@ -3528,8 +4506,8 @@ void TestManualResourcePlanResolvesSymbolicDefaults()
 {
     revia::resources::HardwareInventory hardware;
     hardware.gpus = {
-        {"CUDA0", "NVIDIA GeForce RTX 5070", 0, 12288, 11600},
-        {"CUDA1", "NVIDIA GeForce RTX 2070", 1, 8192, 7600}
+        {"CUDA0", "NVIDIA GeForce RTX 5070", 0, 12288, 11600, {}},
+        {"CUDA1", "NVIDIA GeForce RTX 2070", 1, 8192, 7600, {}}
     };
     hardware.exactBackendDevices = true;
     hardware.totalSystemMemoryMiB = 65536;
@@ -3939,8 +4917,27 @@ int main(const int argc, char** argv)
         TestPostureReachesTheModel();
         TestConversationStyleRepairsAndVaries();
         TestConversationStyleRemovesOnlyStockTail();
+        TestContractChecksCatchKnownBadReplies();
+        TestContractCorpusRunsWithoutTouchingTheRuntime();
+        TestContractReportIsRecordedAndReadable();
+        TestContractCorpusCanBeSuppliedOnDisk();
+        TestConversationArchiveRemembersAndSearches();
+        TestConversationArchiveWithholdsSecretsAndStaysBounded();
+        TestPreferencesCannotReachAuthority();
+        TestPreferencesPersistAndValidate();
+        TestDiagramsDrawButNeverRunOrFetch();
+        TestPreciseEditChangesOneBlockAndNothingElse();
+        TestSceneRewriteDisguisedAsALineEditIsRefused();
+        TestModelFramingIsStrippedFromAReplacement();
+        TestWorkingDocumentStaysBoundedAndUndoable();
+        TestNeighbourhoodGivesContextWithoutTheWholeDocument();
+        TestDrawingIsRecognizedFromOrdinaryConversation();
+        TestDiagramsAreSavedAsFiles();
         TestConversationContextKeepsCoherentRecentTurns();
         TestHardwarePlanScalesParallelLanesConservatively();
+        TestUsageIsMeasuredAgainstThePlannedBudget();
+        TestUnmeasurableResourcesSaySoRatherThanReportingZero();
+        TestUsageOverItsBudgetIsVisible();
         TestResourcePlannerSeparatesUnequalGpus();
         TestResourcePlannerSplitsOnlyForCapacity();
         TestResourcePlannerPreservesAutoFallbackAndFreeVram();

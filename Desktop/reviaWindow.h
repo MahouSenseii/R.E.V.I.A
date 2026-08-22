@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Core/exitReporter.h"
 #include "Runtime/reviaSession.h"
 
 #include <QMainWindow>
@@ -22,6 +23,7 @@ class QTextBrowser;
 class QTimer;
 class QToolButton;
 class QWidget;
+class CanvasPanel;
 class PipelinePanel;
 class ResourcePanel;
 class CapabilityPanel;
@@ -44,7 +46,8 @@ public:
         bool buildSystemTray = true,
         QWidget* parent = nullptr);
     ~ReviaWindow() override;
-    void RequestShutdown();
+    void RequestShutdown(
+        revia::core::ExitReason reason = revia::core::ExitReason::SmokeTest);
     bool IsRuntimeStarted() const;
 
 protected:
@@ -66,7 +69,9 @@ private:
     void CreateVoicePreset();
     void PreviewVoice();
     void AssignVoice(bool useFallback = false);
-    void BeginShutdown();
+    // Every shutdown names its own cause, so the ledger never has to guess between a
+    // deliberate quit and something that merely looked like one.
+    void BeginShutdown(revia::core::ExitReason reason, const std::string& detail = {});
     void ToggleMaximized();
     void UpdateMaximizeButton();
     void SetAlwaysOnTop(bool enabled);
@@ -122,6 +127,7 @@ private:
     QPlainTextEdit* activityFeed = nullptr;
     PipelinePanel* pipelinePanel = nullptr;
     ResourcePanel* resourcePanel = nullptr;
+    CanvasPanel* canvasPanel = nullptr;
     CapabilityPanel* capabilityPanel = nullptr;
     QTabWidget* tabs = nullptr;
     QPushButton* sendButton = nullptr;

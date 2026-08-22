@@ -1,5 +1,8 @@
 #include "Core/reviaApp.h"
 
+#include "Core/crashDiagnostics.h"
+#include "Core/exitReporter.h"
+
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -10,6 +13,15 @@
 
 void reviaApp::Run()
 {
+    // The terminal shell gets the same accounting as the desktop: a session that ends
+    // without a recorded reason should be as visible here as it is there.
+    revia::core::CrashDiagnostics::Install("logs");
+    const std::string unrecordedPrevious = revia::core::ExitReporter::Begin("logs");
+    if (!unrecordedPrevious.empty())
+    {
+        std::cout << "[Previous session] " << unrecordedPrevious << "\n\n";
+    }
+
     session.SetConfirmationHandler([this](
         const revia::actions::ActionRequest& request,
         const revia::actions::PolicyDecision& decision)
@@ -33,6 +45,9 @@ void reviaApp::Run()
 
     if (!session.Start())
     {
+        revia::core::ExitReporter::Record(
+            revia::core::ExitReason::StartupFailure,
+            "the runtime session could not start");
         session.Events().Unsubscribe(subscription);
         session.Stop();
         return;
@@ -76,9 +91,14 @@ void reviaApp::Run()
         }
         if (result.shouldExit)
         {
+            revia::core::ExitReporter::Record(
+                revia::core::ExitReason::UserCommand, "an exit command was typed");
             break;
         }
     }
+    // Covers end-of-input as well: closing the terminal is still a reason worth naming.
+    revia::core::ExitReporter::Record(
+        revia::core::ExitReason::EventLoopEnded, "the input loop ended");
 
     polling.store(false);
     pollWorker.request_stop();

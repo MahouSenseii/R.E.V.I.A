@@ -1,7 +1,9 @@
 #include "Runtime/reviaSession.h"
+#include "Core/exitReporter.h"
 #include "Core/localApiKey.h"
 #include "Memory/longTermMemory.h"
 #include "Planning/goalPlanner.h"
+#include "Visual/drawingRequestPolicy.h"
 #include "Windows/disposableApplicationFixtures.h"
 
 #include <algorithm>
@@ -200,12 +202,21 @@ bool ReviaSession::Start()
     std::vector<latencySample> startupTimings;
     SetState(RuntimeState::Starting, "Starting Revia core.");
     appLogger.Log("Starting core...");
+    // Put in the log a human actually reads, not only in the ledger. "It closed on its
+    // own again" should be answerable from the same file everything else is in.
+    if (const std::string previousExit = core::ExitReporter::PreviousUncleanExit();
+        !previousExit.empty())
+    {
+        appLogger.Warning(previousExit);
+    }
 
     auto stageStarted = std::chrono::steady_clock::now();
     const bool settingsLoaded = config.LoadSettings(settings);
     startupTimings.push_back({"settings_load", ElapsedMilliseconds(stageStarted)});
     if (!settingsLoaded)
     {
+        core::ExitReporter::Record(
+            core::ExitReason::StartupFailure, "settings could not be loaded");
         appLogger.Error("Failed to load settings.");
         startupTimings.push_back({"startup_total", ElapsedMilliseconds(startupStarted), true});
         appLogger.Timing("startup", startupTimings);
@@ -213,6 +224,10 @@ bool ReviaSession::Start()
         SetState(RuntimeState::Error, "Settings could not be loaded.");
         return false;
     }
+    // Overlaid after the file is parsed and validated, so a stored preference goes
+    // through the same validation a configured one does and can never bypass it.
+    preferenceStore.Apply(settings);
+    imageGenerator.Configure(settings.image);
     inputArbiter.Configure(settings.inputArbiter);
     initiativeController.Configure(settings.initiative);
     conversationStarter.Configure(settings.initiative);
@@ -309,6 +324,28 @@ bool ReviaSession::Start()
         appLogger.Log("Resource planner: " + note);
     }
     PublishResourcePlan();
+    StartResourceMonitor();
+
+    if (settings.conversation.bArchiveEnabled)
+    {
+        conversationSessionId = actions::NewActionId();
+        conversationArchive = memory::ConversationArchive(
+            "Memory/revia_conversations.db",
+            {static_cast<std::size_t>(std::max(1, settings.conversation.maxSessions)),
+             static_cast<std::size_t>(std::max(1, settings.conversation.maxTurnsPerSession)),
+             static_cast<std::size_t>(std::max(256, settings.conversation.maxTurnCharacters))});
+        std::string archiveError;
+        if (!conversationArchive.BeginSession(conversationSessionId, archiveError))
+        {
+            appLogger.Warning("Conversation history is unavailable: " + archiveError);
+            conversationSessionId.clear();
+        }
+        else
+        {
+            RestoreConversationContext();
+            appLogger.Log(conversationArchive.Status());
+        }
+    }
 
     stageStarted = std::chrono::steady_clock::now();
     speechService.SetActiveProfile(profile.id);
@@ -827,6 +864,722 @@ SessionResult ReviaSession::AcceptProposal(const std::string& proposalId)
     return result;
 }
 
+void ReviaSession::ArchiveTurn(const std::string& role, const std::string& content)
+{
+    if (conversationSessionId.empty() || !settings.conversation.bArchiveEnabled)
+    {
+        return;
+    }
+    std::string reason;
+    if (!conversationArchive.Record(conversationSessionId, role, content, reason))
+    {
+        // Only the refusal is logged, never the turn. Recording why a secret was withheld
+        // by writing the secret to the log would defeat the whole point of withholding it.
+        appLogger.Log("A turn was not archived: " + reason);
+    }
+}
+
+void ReviaSession::RestoreConversationContext()
+{
+    const int wanted = std::max(0, settings.conversation.restoreTurns);
+    if (wanted == 0)
+    {
+        return;
+    }
+    const std::vector<memory::ArchivedTurn> tail =
+        conversationArchive.LoadPreviousSessionTail(
+            conversationSessionId, static_cast<std::size_t>(wanted));
+    if (tail.empty())
+    {
+        return;
+    }
+    for (const memory::ArchivedTurn& turn : tail)
+    {
+        context.AddMessage(turn.role, turn.content);
+    }
+    appLogger.Log("Restored " + std::to_string(tail.size()) +
+        " turns from the previous conversation.");
+    PublishComponent(
+        "Conversation history",
+        "Restored",
+        "Continuing from the last " + std::to_string(tail.size()) +
+            (tail.size() == 1 ? " turn" : " turns") + " of the previous conversation.",
+        -1.0,
+        static_cast<int>(tail.size()));
+}
+
+std::string ReviaSession::ConversationHistoryStatus() const
+{
+    if (!settings.conversation.bArchiveEnabled)
+    {
+        return "Conversation history is off. /set conversation.archiveEnabled on turns it "
+               "back on for the next start.";
+    }
+    if (conversationSessionId.empty())
+    {
+        return "Conversation history is enabled but the archive could not be opened.";
+    }
+    return conversationArchive.Status();
+}
+
+std::vector<memory::ArchivedTurn> ReviaSession::SearchConversations(
+    const std::string& query,
+    const std::size_t maxTurns) const
+{
+    return conversationArchive.Search(query, maxTurns);
+}
+
+std::vector<memory::ArchivedSession> ReviaSession::RecentConversations(
+    const std::size_t maxSessions) const
+{
+    return conversationArchive.RecentSessions(maxSessions);
+}
+
+std::size_t ReviaSession::ForgetConversations()
+{
+    const std::size_t removed = conversationArchive.Forget();
+    // The live context is cleared too. Forgetting the file while the current prompt still
+    // carries the same turns would be a forget in name only.
+    context.Clear();
+    if (!conversationSessionId.empty())
+    {
+        std::string error;
+        conversationArchive.BeginSession(conversationSessionId, error);
+    }
+    appLogger.Log("Conversation history cleared: " + std::to_string(removed) +
+        " turns removed.");
+    return removed;
+}
+
+core::PreferenceResult ReviaSession::SetPreference(
+    const std::string& name,
+    const std::string& value)
+{
+    core::PreferenceResult result = preferenceStore.Set(name, value);
+    if (!result.succeeded)
+    {
+        return result;
+    }
+
+    // Applied to the running session where that is safe to do live, so a preference is
+    // not a promise about the next start. Anything that belongs to a worker's startup
+    // configuration says so rather than pretending to have taken effect.
+    appSettings updated = settings;
+    preferenceStore.Apply(updated);
+    const std::string lowered = Trim(name);
+    if (lowered == "speech.enabled")
+    {
+        SetSpeechEnabled(updated.speech.bEnabled);
+    }
+    else if (lowered == "bargeIn.enabled")
+    {
+        SetBargeInEnabled(updated.bargeIn.bEnabled);
+    }
+    else if (lowered == "initiative.enabled" || lowered == "initiative.maxPerHour")
+    {
+        settings.initiative = updated.initiative;
+        initiativeController.Configure(settings.initiative);
+        conversationStarter.Configure(settings.initiative);
+    }
+    else
+    {
+        result.message += " It takes effect the next time Revia starts.";
+    }
+    settings = updated;
+    return result;
+}
+
+std::string ReviaSession::DescribePreferences() const
+{
+    return preferenceStore.Describe();
+}
+
+std::vector<visual::Diagram> ReviaSession::RecentDiagrams(const std::size_t maxDiagrams) const
+{
+    return diagramStore.Recent(maxDiagrams);
+}
+
+const content::WorkingDocument& ReviaSession::Document() const
+{
+    return workingDocument;
+}
+
+SessionResult ReviaSession::ComposeDocument(const std::string& request)
+{
+    SessionResult result;
+    if (request.empty())
+    {
+        result.succeeded = false;
+        result.text = "Usage: /write <what you want drafted>";
+        result.reason = "No drafting request was given.";
+        SetState(RuntimeState::Blocked, result.reason);
+        return result;
+    }
+
+    SetState(RuntimeState::Thinking, "Drafting into the working document.");
+    PublishComponent("Document", "Drafting", "Composing new material.");
+    const auto started = std::chrono::steady_clock::now();
+    // The existing document goes in as context so a second pass matches the voice of the
+    // first rather than starting a new one.
+    const responseOutput composed = router.ComposeContent(request, workingDocument.Render());
+    const double elapsed = ElapsedMilliseconds(started);
+
+    std::ostringstream trace;
+    trace << "Drafting: asked the local model for new material";
+    if (!workingDocument.IsEmpty())
+    {
+        trace << ", with the existing " << workingDocument.Blocks().size()
+            << " blocks supplied as context for voice and continuity";
+    }
+    trace << '.';
+    if (!composed.reasoning.empty())
+    {
+        trace << "\n\nReasoning:\n" << composed.reasoning;
+    }
+
+    if (!composed.bSuccess || Trim(composed.response).empty())
+    {
+        result.succeeded = false;
+        result.text = composed.bSuccess ? "The draft came back empty." : composed.response;
+        result.reason = composed.reason;
+        trace << "\n\nNothing was written: " << result.text;
+        result.reasoning = trace.str();
+        PublishComponent("Document", "Error", result.text);
+        SetState(RuntimeState::Error, result.reason);
+        return result;
+    }
+
+    // Blank lines separate blocks. That is the contract the compose prompt states, and it
+    // is what makes each line separately editable afterwards.
+    std::vector<std::string> paragraphs;
+    std::istringstream lines(composed.response);
+    std::string line;
+    std::string current;
+    while (std::getline(lines, line))
+    {
+        if (!line.empty() && line.back() == '\r')
+        {
+            line.pop_back();
+        }
+        if (Trim(line).empty())
+        {
+            if (!Trim(current).empty())
+            {
+                paragraphs.push_back(Trim(current));
+            }
+            current.clear();
+            continue;
+        }
+        current += current.empty() ? line : "\n" + line;
+    }
+    if (!Trim(current).empty())
+    {
+        paragraphs.push_back(Trim(current));
+    }
+
+    const bool extending = !workingDocument.IsEmpty();
+    if (extending)
+    {
+        for (std::string& paragraph : paragraphs)
+        {
+            workingDocument.Append(std::move(paragraph));
+        }
+    }
+    else
+    {
+        workingDocument.Compose(request, std::move(paragraphs));
+    }
+
+    trace << "\nThe model returned " << composed.response.size() << " characters in "
+        << static_cast<long long>(elapsed) << "ms, split into blocks on blank lines.";
+    trace << "\n" << (extending ? "Appended to" : "Composed") << " the working document; "
+        << "it now holds " << workingDocument.Blocks().size() << " editable blocks.";
+
+    result.succeeded = true;
+    result.reasoning = trace.str();
+    result.text = workingDocument.RenderNumbered() +
+        "\n\n/revise <n> <what to change> rewrites one line and leaves the rest exactly "
+        "as it is. /undo steps back.";
+    PublishComponent("Document", "Ready",
+        std::to_string(workingDocument.Blocks().size()) + " blocks in the working document.",
+        elapsed);
+    SetState(RuntimeState::Idle);
+    return result;
+}
+
+SessionResult ReviaSession::ReviseDocumentBlock(
+    const std::string& reference,
+    const std::string& instruction)
+{
+    SessionResult result;
+    const content::Block* target = workingDocument.Find(reference);
+    if (target == nullptr)
+    {
+        result.succeeded = false;
+        result.text = workingDocument.IsEmpty()
+            ? "There is no working document yet. /write starts one."
+            : "There is no block " + reference + ". /scene lists them.";
+        result.reason = result.text;
+        SetState(RuntimeState::Blocked, result.reason);
+        return result;
+    }
+
+    const std::string targetId = target->id;
+    const std::string before = target->text;
+    const std::string neighbourhood = workingDocument.RenderNeighbourhood(reference);
+
+    SetState(RuntimeState::Thinking, "Revising one line.");
+    PublishComponent("Document", "Revising",
+        "Rewriting block " + std::to_string(target->ordinal) + " only.");
+    const auto started = std::chrono::steady_clock::now();
+    const responseOutput revised =
+        router.ReviseBlock(instruction, neighbourhood, before);
+    const double elapsed = ElapsedMilliseconds(started);
+
+    std::ostringstream trace;
+    trace << "Precise edit: sent block " << target->ordinal
+        << " with two lines either side for continuity, and asked for that line only. "
+           "The reply can only ever be written into that one block -- the edit path has "
+           "no expression for touching another.";
+    if (!revised.reasoning.empty())
+    {
+        trace << "\n\nReasoning:\n" << revised.reasoning;
+    }
+
+    if (!revised.bSuccess)
+    {
+        result.succeeded = false;
+        result.text = revised.response;
+        result.reason = revised.reason;
+        trace << "\n\nThe model could not answer: " << revised.reason;
+        result.reasoning = trace.str();
+        PublishComponent("Document", "Error", revised.reason);
+        SetState(RuntimeState::Error, result.reason);
+        return result;
+    }
+
+    const std::string cleaned =
+        content::PreciseEditGuard::CleanReplacement(revised.response);
+    trace << "\nThe model returned " << revised.response.size() << " characters in "
+        << static_cast<long long>(elapsed) << "ms.";
+
+    // The one failure the block model cannot prevent by itself: a model that was asked
+    // for a line and returned the scene. Storing it would collapse the document into one
+    // paragraph rather than corrupt the others, but that is its own kind of broken.
+    if (content::PreciseEditGuard::LooksLikeWholeDocument(
+            cleaned, workingDocument.Blocks(), targetId))
+    {
+        result.succeeded = false;
+        result.text = "That came back as a rewrite of the surrounding lines rather than "
+            "the one line, so I left the document alone. Try naming the change more "
+            "narrowly.";
+        result.reason = "The replacement contained neighbouring blocks verbatim.";
+        trace << "\nRefused: the replacement contained other blocks verbatim, so it was "
+                 "a scene rewrite wearing the shape of a line edit. Nothing was changed.";
+        result.reasoning = trace.str();
+        PublishComponent("Document", "Refused", result.reason);
+        SetState(RuntimeState::Blocked, result.reason);
+        return result;
+    }
+
+    const content::EditOutcome outcome =
+        workingDocument.ReplaceBlock(reference, cleaned);
+    if (!outcome.succeeded)
+    {
+        result.succeeded = false;
+        result.text = outcome.message;
+        result.reason = outcome.message;
+        trace << "\nThe edit was rejected: " << outcome.message;
+        result.reasoning = trace.str();
+        SetState(RuntimeState::Blocked, result.reason);
+        return result;
+    }
+
+    trace << "\n" << outcome.message;
+    result.succeeded = true;
+    result.reasoning = trace.str();
+    result.text = "Was:  " + outcome.before + "\nNow:  " + outcome.after + "\n\n" +
+        outcome.message + " /undo puts it back.";
+    PublishComponent("Document", "Ready", outcome.message, elapsed);
+    SetState(RuntimeState::Idle);
+    return result;
+}
+
+SessionResult ReviaSession::GenerateImage(const std::string& prompt)
+{
+    SessionResult result;
+    if (prompt.empty())
+    {
+        result.succeeded = false;
+        result.text = "Usage: /imagine <what you want pictured>";
+        result.reason = "No image request was given.";
+        SetState(RuntimeState::Blocked, result.reason);
+        return result;
+    }
+
+    std::string availability;
+    if (!imageGenerator.IsAvailable(availability))
+    {
+        result.succeeded = false;
+        result.text = availability;
+        result.reason = availability;
+        result.reasoning = "Image generation was asked for but the local runtime is not "
+            "ready. This is a separate optional model from the diagram path: /draw can "
+            "still produce a diagram, which is a different thing from a picture.";
+        SetState(RuntimeState::Blocked, result.reason);
+        return result;
+    }
+
+    SetState(RuntimeState::Thinking, "Generating a picture.");
+    PublishComponent("Image", "Generating",
+        "Running the local image model. The first request also loads it.");
+
+    const visual::ImageResult generated = imageGenerator.Generate(prompt);
+    std::ostringstream trace;
+    trace << "Picture: sent \"" << prompt << "\" to the local image model. This is a "
+             "diffusion model in an owned Python worker, not the language model.";
+    if (!generated.detail.empty())
+    {
+        trace << "\n" << generated.detail << '.';
+    }
+
+    if (!generated.succeeded)
+    {
+        result.succeeded = false;
+        result.text = generated.message;
+        result.reason = generated.message;
+        trace << "\n\nNothing was produced: " << generated.message;
+        result.reasoning = trace.str();
+        PublishComponent("Image", "Error", generated.message);
+        SetState(RuntimeState::Error, result.reason);
+        return result;
+    }
+
+    RuntimeEvent event;
+    event.kind = RuntimeEventKind::Diagram;
+    event.state = RuntimeState::Responding;
+    event.component = "Canvas";
+    event.phase = "Image";
+    event.message = prompt.size() > 60 ? prompt.substr(0, 60) + "..." : prompt;
+    event.resource = actions::PathToUtf8(generated.path);
+    eventBus.Publish(std::move(event));
+
+    trace << "\nSaved to " << actions::PathToUtf8(generated.path)
+        << " and published to the Canvas tab. Took "
+        << static_cast<long long>(generated.elapsedMilliseconds / 1000.0) << "s.";
+    result.succeeded = true;
+    result.reasoning = trace.str();
+    result.text = "Pictured that - it's on the Canvas tab. " + generated.message;
+    PublishComponent("Image", "Ready", generated.detail, generated.elapsedMilliseconds);
+    SetState(RuntimeState::Idle);
+    return result;
+}
+
+SessionResult ReviaSession::ShowPicture(const std::string& path)
+{
+    SessionResult result;
+    if (path.empty())
+    {
+        result.succeeded = false;
+        result.text = "Usage: /show <path to an image>";
+        result.reason = "No picture was named.";
+        SetState(RuntimeState::Blocked, result.reason);
+        return result;
+    }
+
+    std::error_code error;
+    const std::filesystem::path requested =
+        std::filesystem::weakly_canonical(std::filesystem::path(path), error);
+    if (error || !std::filesystem::is_regular_file(requested, error))
+    {
+        result.succeeded = false;
+        result.text = "There is no file at " + path + '.';
+        result.reason = result.text;
+        SetState(RuntimeState::Blocked, result.reason);
+        return result;
+    }
+
+    std::string extension = requested.extension().string();
+    std::transform(extension.begin(), extension.end(), extension.begin(),
+        [](const unsigned char character)
+        {
+            return static_cast<char>(std::tolower(character));
+        });
+    const bool isPicture = extension == ".png" || extension == ".jpg" ||
+        extension == ".jpeg" || extension == ".bmp" || extension == ".gif" ||
+        extension == ".webp" || extension == ".svg";
+    if (!isPicture)
+    {
+        result.succeeded = false;
+        result.text = extension.empty()
+            ? "That file has no extension, so I cannot tell whether it is a picture."
+            : "I can show images, not " + extension + " files.";
+        result.reason = result.text;
+        SetState(RuntimeState::Blocked, result.reason);
+        return result;
+    }
+
+    // Displaying a file is reading it, so it is bounded by the same approved roots that
+    // govern reading one. Revia's own output folder is included because she wrote it.
+    std::vector<std::filesystem::path> allowed = actionRuntime.Settings().approvedRoots;
+    allowed.push_back(std::filesystem::weakly_canonical(diagramStore.Root(), error));
+    allowed.push_back(std::filesystem::weakly_canonical(
+        std::filesystem::path(settings.llm.mediaPath), error));
+    const bool inScope = std::any_of(allowed.begin(), allowed.end(),
+        [&requested](const std::filesystem::path& root)
+        {
+            if (root.empty())
+            {
+                return false;
+            }
+            std::error_code rootError;
+            const std::filesystem::path canonicalRoot =
+                std::filesystem::weakly_canonical(root, rootError);
+            if (rootError)
+            {
+                return false;
+            }
+            const std::filesystem::path relative =
+                requested.lexically_relative(canonicalRoot);
+            // An empty result means unrelated paths; a leading ".." means the file sits
+            // outside the root and only looks like it is inside it.
+            return !relative.empty() && *relative.begin() != "..";
+        });
+    if (!inScope)
+    {
+        result.succeeded = false;
+        result.text = "That picture is outside every approved folder, so I will not open "
+            "it. Add its folder as an approved root if you want me to see it.";
+        result.reason = "The picture is outside the approved roots.";
+        SetState(RuntimeState::Blocked, result.reason);
+        return result;
+    }
+
+    RuntimeEvent event;
+    event.kind = RuntimeEventKind::Diagram;
+    event.state = RuntimeState::Responding;
+    event.component = "Canvas";
+    // The phase is what tells the canvas whether to parse markup or load a file.
+    event.phase = "Image";
+    event.message = requested.filename().string();
+    event.resource = actions::PathToUtf8(requested);
+    eventBus.Publish(std::move(event));
+
+    result.succeeded = true;
+    result.reasoning = "Showing a picture: checked that " +
+        actions::PathToUtf8(requested) +
+        " exists, is an image, and sits inside an approved folder, then published it to "
+        "the Canvas tab. The file is displayed from disk and is not copied or altered.";
+    result.text = "Put " + requested.filename().string() + " on the Canvas tab.";
+    SetState(RuntimeState::Idle);
+    return result;
+}
+
+SessionResult ReviaSession::DrawDiagram(const std::string& request)
+{
+    SessionResult result;
+    if (request.empty())
+    {
+        result.succeeded = false;
+        result.text = "Usage: /draw <what you want drawn>";
+        result.reason = "No drawing request was given.";
+        SetState(RuntimeState::Blocked, result.reason);
+        return result;
+    }
+
+    SetState(RuntimeState::Thinking, "Drawing a diagram.");
+    PublishComponent("Canvas", "Drawing", "Generating an SVG diagram.");
+    const auto drawingStarted = std::chrono::steady_clock::now();
+    const responseOutput drawn = router.DrawDiagram(request);
+    const double drawingMilliseconds = ElapsedMilliseconds(drawingStarted);
+
+    // The Thought process is where "what is she actually doing" gets answered, so the
+    // drawing path narrates itself the same way a conversation turn does.
+    std::ostringstream trace;
+    trace << "Drawing: asked the local model for an SVG of \"" << request << "\".";
+    if (!drawn.reasoning.empty())
+    {
+        trace << "\n\nReasoning:\n" << drawn.reasoning;
+    }
+    if (!drawn.bSuccess)
+    {
+        result.succeeded = false;
+        result.text = drawn.response;
+        result.reason = drawn.reason;
+        trace << "\n\nThe model could not answer: " << drawn.reason;
+        result.reasoning = trace.str();
+        PublishComponent("Canvas", "Error", drawn.reason);
+        SetState(RuntimeState::Error, result.reason);
+        return result;
+    }
+    trace << "\nThe model returned " << drawn.response.size() << " characters in "
+        << static_cast<long long>(drawingMilliseconds) << "ms.";
+
+    std::string title = request.size() > 60 ? request.substr(0, 60) : request;
+    std::string markup = drawn.response;
+    try
+    {
+        const nlohmann::json document = nlohmann::json::parse(drawn.response);
+        if (document.is_object())
+        {
+            title = document.value("title", title);
+            markup = document.value("svg", markup);
+        }
+    }
+    catch (const std::exception&)
+    {
+        // The structured request is a request, not a guarantee. A model that answered
+        // with bare SVG still produced something drawable, so the extractor gets a turn
+        // before this is called a failure.
+    }
+
+    const visual::SvgValidation validation = visual::SvgSanitizer::Sanitize(markup);
+    trace << "\nSafety check: " << validation.reason;
+    if (!validation.accepted)
+    {
+        result.succeeded = false;
+        result.text = "That drawing was refused. " + validation.reason;
+        result.reason = validation.reason;
+        result.reasoning = trace.str();
+        appLogger.Warning("Diagram refused: " + validation.reason);
+        PublishComponent("Canvas", "Refused", validation.reason);
+        SetState(RuntimeState::Blocked, result.reason);
+        return result;
+    }
+
+    visual::Diagram diagram;
+    std::string saveError;
+    if (!diagramStore.Save(title, validation.markup, diagram, saveError))
+    {
+        result.succeeded = false;
+        result.text = saveError;
+        result.reason = saveError;
+        PublishComponent("Canvas", "Error", saveError);
+        SetState(RuntimeState::Error, result.reason);
+        return result;
+    }
+
+    RuntimeEvent event;
+    event.kind = RuntimeEventKind::Diagram;
+    event.state = RuntimeState::Responding;
+    event.component = "Canvas";
+    event.phase = "Ready";
+    event.message = diagram.title;
+    event.detail = validation.markup;
+    event.resource = actions::PathToUtf8(diagram.path);
+    eventBus.Publish(std::move(event));
+
+    trace << "\nSaved to " << actions::PathToUtf8(diagram.path)
+        << " and published to the Canvas tab.";
+    result.succeeded = true;
+    result.reasoning = trace.str();
+    result.text = "Drew \"" + diagram.title + "\" - it's on the Canvas tab.";
+    SetState(RuntimeState::Idle);
+    return result;
+}
+
+std::vector<evaluation::EvaluationCase> ReviaSession::LoadEvaluationCorpus(
+    std::string& outSource)
+{
+    const std::filesystem::path corpusPath = "RuntimeData/Evaluations/corpus.json";
+    std::vector<evaluation::EvaluationCase> cases;
+    std::string error;
+    if (evaluation::ConversationEvaluator::LoadCorpus(corpusPath, cases, error))
+    {
+        outSource = corpusPath.string();
+        return cases;
+    }
+
+    std::error_code exists;
+    if (std::filesystem::exists(corpusPath, exists) && !exists)
+    {
+        // A corpus file that is present but unreadable is worth naming. Falling back
+        // silently would run a different suite than the one somebody just edited, and
+        // report its result as though the edit had taken effect.
+        appLogger.Warning("Falling back to the built-in contract corpus: " + error);
+        outSource = "the built-in corpus, because " + error;
+    }
+    else
+    {
+        outSource = "the built-in corpus";
+    }
+    return evaluation::ConversationEvaluator::DefaultCorpus();
+}
+
+evaluation::EvaluationReport ReviaSession::RunConversationEvaluation(
+    const std::vector<evaluation::EvaluationCase>& cases,
+    std::stop_token stopToken)
+{
+    std::lock_guard operationLock(operationMutex);
+    lastEvaluation = RunConversationEvaluationUnlocked(cases, std::move(stopToken));
+    return lastEvaluation;
+}
+
+evaluation::EvaluationReport ReviaSession::LastConversationEvaluation() const
+{
+    std::lock_guard operationLock(operationMutex);
+    return lastEvaluation;
+}
+
+evaluation::EvaluationReport ReviaSession::RunConversationEvaluationUnlocked(
+    const std::vector<evaluation::EvaluationCase>& cases,
+    std::stop_token stopToken)
+{
+    if (!llmAvailable ||
+        (llamaServerProcess.WasStartedByRevia() && !llamaServerProcess.IsRunning()))
+    {
+        llmAvailable = EnsureLLMAvailable(stopToken);
+    }
+
+    SetState(RuntimeState::Thinking, "Running the conversation contract corpus.");
+    const std::size_t totalCases = cases.size();
+    std::size_t turnIndex = 0;
+    const evaluation::ConversationEvaluator::TurnRunner runner =
+        [&](const std::string& input,
+            const std::vector<conversationMessage>& priorTurns)
+        {
+            ++turnIndex;
+            PublishComponent(
+                "Conversation evaluation",
+                "Running",
+                "Contract turn " + std::to_string(turnIndex) + " across " +
+                    std::to_string(totalCases) +
+                    (totalCases == 1 ? " case." : " cases."),
+                -1.0,
+                static_cast<int>(totalCases));
+            return conversationRuntime.EvaluateTurn(
+                input, priorTurns, profile, llmAvailable, stopToken);
+        };
+
+    evaluation::EvaluationReport report = evaluation::ConversationEvaluator::Run(
+        cases, runner, settings.llm.modelName, stopToken);
+    // Quoted, not merged. The live counters measure real conversation; folding synthetic
+    // suite turns into them would corrupt the very signal the report sits beside.
+    report.runtimeQuality = conversationRuntime.QualitySnapshot().Summary();
+
+    std::filesystem::path reportPath;
+    std::string writeError;
+    if (evaluation::ConversationEvaluator::WriteReport(
+            "RuntimeData/Evaluations", report, reportPath, writeError))
+    {
+        appLogger.Log("Contract evaluation recorded in " + reportPath.string());
+    }
+    else
+    {
+        appLogger.Warning("The contract evaluation could not be recorded: " + writeError);
+    }
+
+    PublishComponent(
+        "Conversation evaluation",
+        report.failed > 0 ? "Flagged" : "Ready",
+        report.Summary(),
+        report.elapsedMilliseconds,
+        static_cast<int>(report.failed));
+    appLogger.Log("Contract evaluation: " + report.Summary());
+    SetState(RuntimeState::Idle);
+    return report;
+}
+
 std::vector<learning::Lesson> ReviaSession::DrawLessons() const
 {
     return learning::LearningReview::Draw(
@@ -1049,6 +1802,23 @@ SessionResult ReviaSession::RunTurnLocked(const std::string& acceptedInput)
 
     if (TryHandleActionInput(acceptedInput, result))
     {
+        // Anything that ran without narrating itself still says what it was and how it
+        // ended. A blank Thought process on a command reads as "nothing happened", which
+        // is exactly the wrong impression when something did.
+        if (result.reasoning.empty())
+        {
+            const std::size_t space = acceptedInput.find(' ');
+            std::ostringstream trace;
+            trace << "Ran the "
+                << (space == std::string::npos ? acceptedInput : acceptedInput.substr(0, space))
+                << " command directly. No model call was involved; this path is "
+                   "deterministic code, not a reply.";
+            if (!result.succeeded && !result.reason.empty())
+            {
+                trace << "\n\nRefused: " << result.reason;
+            }
+            result.reasoning = trace.str();
+        }
         return finish(std::move(result));
     }
 
@@ -1090,12 +1860,34 @@ SessionResult ReviaSession::RunTurnLocked(const std::string& acceptedInput)
                          : "The local model could not be restarted.");
     }
 
+    // Archived before the reply so the user's turn survives a generation that fails,
+    // is stopped, or crashes the model. What was asked is worth keeping even when the
+    // answer never arrived.
+    ArchiveTurn("user", acceptedInput);
+
+    // Asking for a drawing in conversation draws. Requiring /draw would make the
+    // capability reachable only by someone who already knew it existed.
+    if (visual::DrawingRequestPolicy::ShouldDraw(acceptedInput))
+    {
+        SessionResult drawn = DrawDiagram(
+            visual::DrawingRequestPolicy::ExtractSubject(acceptedInput));
+        drawn.fromAssistant = true;
+        if (drawn.succeeded)
+        {
+            ArchiveTurn("assistant", drawn.text);
+        }
+        return finish(std::move(drawn));
+    }
     result = conversationRuntime.Reply(
         acceptedInput,
         profile,
         llmAvailable,
         ShouldSpeakOnCurrentChannel(),
         stopToken);
+    if (result.succeeded && result.fromAssistant && !result.text.empty())
+    {
+        ArchiveTurn("assistant", result.text);
+    }
     if (!result.succeeded)
     {
         // A request can be the event that exposes a crashed external server. Remember
@@ -1200,6 +1992,14 @@ void ReviaSession::Stop()
     StopInputDrain();
     StopInitiativeLoop();
     StopVoiceWarmup();
+    // Stopped before the children are torn down, so a sample cannot open a handle to a
+    // process that is being killed underneath it.
+    resourceMonitor.Stop();
+    imageGenerator.Shutdown();
+    if (!conversationSessionId.empty())
+    {
+        conversationArchive.EndSession(conversationSessionId);
+    }
     std::lock_guard operationLock(operationMutex);
     if (!started.load() && !llamaServerProcess.WasStartedByRevia() &&
         !embeddingServerProcess.WasStartedByRevia())
@@ -1216,7 +2016,12 @@ void ReviaSession::Stop()
     const auto shutdownStarted = std::chrono::steady_clock::now();
     std::vector<latencySample> shutdownTimings;
     SetState(RuntimeState::Stopping, "Shutting down Revia.");
-    appLogger.Log("Shutting down...");
+    // The ledger already holds the reason if a caller named one. When nothing did, the
+    // shutdown is happening for a cause nobody recorded, and that is worth saying rather
+    // than letting a clean-looking log imply a deliberate quit.
+    appLogger.Log(core::ExitReporter::HasRecorded()
+        ? "Shutting down..."
+        : "Shutting down without a recorded reason; see session-exits.log.");
 
     auto stageStarted = std::chrono::steady_clock::now();
     speechService.Shutdown();
@@ -2469,9 +3274,284 @@ bool ReviaSession::TryHandleActionInput(const std::string& input, SessionResult&
         return true;
     }
 
+    if (input == "/history" || input.rfind("/history ", 0) == 0)
+    {
+        const std::string argument = input.size() > 9 ? Trim(input.substr(9)) : std::string();
+        if (argument == "forget")
+        {
+            const std::size_t removed = ForgetConversations();
+            result.text = removed == 0
+                ? "There was nothing archived to forget."
+                : "Forgot " + std::to_string(removed) +
+                    " archived turns and cleared the current context. Nothing is kept "
+                    "behind it.";
+            SetState(RuntimeState::Idle);
+            return true;
+        }
+        if (argument.empty())
+        {
+            std::ostringstream stream;
+            stream << ConversationHistoryStatus();
+            const std::vector<memory::ArchivedSession> sessions = RecentConversations(10);
+            if (!sessions.empty())
+            {
+                stream << "\n\nRecent conversations:";
+                for (const memory::ArchivedSession& session : sessions)
+                {
+                    stream << "\n  " << session.turns
+                        << (session.turns == 1 ? " turn  " : " turns  ")
+                        << (session.opening.size() > 70
+                            ? session.opening.substr(0, 70) + "..."
+                            : session.opening);
+                }
+            }
+            stream << "\n\n/history <words> searches them; /history forget clears them.";
+            result.text = stream.str();
+            SetState(RuntimeState::Idle);
+            return true;
+        }
+
+        const std::vector<memory::ArchivedTurn> found = SearchConversations(argument);
+        std::ostringstream stream;
+        if (found.empty())
+        {
+            stream << "Nothing archived matches \"" << argument << "\".";
+        }
+        else
+        {
+            stream << found.size()
+                << (found.size() == 1 ? " archived turn matches \"" : " archived turns match \"")
+                << argument << "\":";
+            for (const memory::ArchivedTurn& turn : found)
+            {
+                stream << "\n\n  " << (turn.role == "user" ? "you" : DisplayName())
+                    << ": " << (turn.content.size() > 240
+                        ? turn.content.substr(0, 240) + "..."
+                        : turn.content);
+            }
+        }
+        result.text = stream.str();
+        SetState(RuntimeState::Idle);
+        return true;
+    }
+
+    if (input == "/prefs" || input == "/preferences")
+    {
+        result.text = DescribePreferences();
+        SetState(RuntimeState::Idle);
+        return true;
+    }
+
+    if (input.rfind("/set ", 0) == 0)
+    {
+        const std::string argument = Trim(input.substr(5));
+        const std::size_t split = argument.find(' ');
+        if (split == std::string::npos)
+        {
+            result.succeeded = false;
+            result.text = "Usage: /set <preference> <value>. /prefs lists them.";
+            result.reason = "A preference needs a name and a value.";
+            SetState(RuntimeState::Blocked, result.reason);
+            return true;
+        }
+        const core::PreferenceResult update = SetPreference(
+            Trim(argument.substr(0, split)), Trim(argument.substr(split + 1)));
+        result.succeeded = update.succeeded;
+        result.text = update.message;
+        result.reason = update.succeeded ? std::string() : update.message;
+        SetState(result.succeeded ? RuntimeState::Idle : RuntimeState::Blocked, result.reason);
+        return true;
+    }
+
+    if (input.rfind("/unset ", 0) == 0)
+    {
+        const core::PreferenceResult update =
+            preferenceStore.Clear(Trim(input.substr(7)));
+        result.succeeded = update.succeeded;
+        result.text = update.message;
+        result.reason = update.succeeded ? std::string() : update.message;
+        SetState(result.succeeded ? RuntimeState::Idle : RuntimeState::Blocked, result.reason);
+        return true;
+    }
+
+    if (input == "/draw" || input.rfind("/draw ", 0) == 0)
+    {
+        result = DrawDiagram(input.size() > 6 ? Trim(input.substr(6)) : std::string());
+        return true;
+    }
+
+    if (input == "/imagine" || input.rfind("/imagine ", 0) == 0)
+    {
+        result = GenerateImage(
+            input.size() > 9 ? Trim(input.substr(9)) : std::string());
+        return true;
+    }
+
+    if (input == "/show" || input.rfind("/show ", 0) == 0)
+    {
+        result = ShowPicture(input.size() > 6 ? Trim(input.substr(6)) : std::string());
+        return true;
+    }
+
+    if (input.rfind("/write ", 0) == 0)
+    {
+        result = ComposeDocument(Trim(input.substr(7)));
+        return true;
+    }
+
+    if (input.rfind("/revise ", 0) == 0)
+    {
+        const std::string argument = Trim(input.substr(8));
+        const std::size_t split = argument.find(' ');
+        if (split == std::string::npos)
+        {
+            result.succeeded = false;
+            result.text = "Usage: /revise <line number> <what to change>";
+            result.reason = "A revision needs a line and an instruction.";
+            SetState(RuntimeState::Blocked, result.reason);
+            return true;
+        }
+        result = ReviseDocumentBlock(
+            argument.substr(0, split), Trim(argument.substr(split + 1)));
+        return true;
+    }
+
+    if (input == "/scene" || input.rfind("/scene ", 0) == 0)
+    {
+        const std::string argument = input.size() > 7 ? Trim(input.substr(7)) : std::string();
+        if (argument == "clear")
+        {
+            workingDocument.Clear();
+            result.text = "Cleared the working document. /undo brings it back.";
+            SetState(RuntimeState::Idle);
+            return true;
+        }
+        if (argument == "text")
+        {
+            result.text = workingDocument.IsEmpty()
+                ? "The working document is empty."
+                : workingDocument.Render();
+            SetState(RuntimeState::Idle);
+            return true;
+        }
+        if (!argument.empty())
+        {
+            result.succeeded = false;
+            result.text = "Usage: /scene [text|clear]";
+            result.reason = "Unrecognized scene argument.";
+            SetState(RuntimeState::Blocked, result.reason);
+            return true;
+        }
+        std::ostringstream stream;
+        stream << workingDocument.RenderNumbered();
+        if (!workingDocument.IsEmpty())
+        {
+            stream << "\n\n" << workingDocument.Blocks().size()
+                << " editable blocks, " << workingDocument.RevisionCount()
+                << " revisions available to undo.";
+        }
+        result.text = stream.str();
+        SetState(RuntimeState::Idle);
+        return true;
+    }
+
+    if (input == "/undo")
+    {
+        result.succeeded = workingDocument.Undo();
+        result.text = result.succeeded
+            ? "Stepped back one revision.\n\n" + workingDocument.RenderNumbered()
+            : "There is nothing left to undo.";
+        SetState(RuntimeState::Idle);
+        return true;
+    }
+
+    if (input == "/canvas")
+    {
+        const std::vector<visual::Diagram> recent = RecentDiagrams();
+        std::ostringstream stream;
+        if (recent.empty())
+        {
+            stream << "Nothing on the canvas yet. Ask me to draw something, or /show a "
+                      "picture from an approved folder.";
+        }
+        else
+        {
+            stream << recent.size() << (recent.size() == 1 ? " drawing" : " drawings")
+                << " in " << actions::PathToUtf8(diagramStore.Root()) << ':';
+            for (const visual::Diagram& diagram : recent)
+            {
+                stream << "\n  " << diagram.id;
+            }
+        }
+        result.text = stream.str();
+        SetState(RuntimeState::Idle);
+        return true;
+    }
+
+    if (input == "/resources")
+    {
+        result.text = ResourceUsageStatus();
+        SetState(RuntimeState::Idle);
+        return true;
+    }
+
     if (input == "/quality")
     {
         result.text = conversationRuntime.QualitySnapshot().Summary();
+        SetState(RuntimeState::Idle);
+        return true;
+    }
+
+    if (input == "/eval" || input.rfind("/eval ", 0) == 0)
+    {
+        const std::string argument = input.size() > 6 ? Trim(input.substr(6)) : std::string();
+        if (argument == "last")
+        {
+            result.text = lastEvaluation.cases.empty()
+                ? "No contract evaluation has been run in this session. /eval runs one."
+                : lastEvaluation.Detail();
+            SetState(RuntimeState::Idle);
+            return true;
+        }
+        if (!argument.empty() && argument != "list")
+        {
+            result.succeeded = false;
+            result.text = "Usage: /eval [list|last]";
+            result.reason = "Unrecognized evaluation argument.";
+            SetState(RuntimeState::Blocked, result.reason);
+            return true;
+        }
+
+        std::string corpusSource;
+        const std::vector<evaluation::EvaluationCase> cases =
+            LoadEvaluationCorpus(corpusSource);
+
+        if (argument == "list")
+        {
+            std::ostringstream stream;
+            stream << cases.size() << " contract cases from " << corpusSource
+                   << ". Running them costs one model reply per turn.";
+            for (const evaluation::EvaluationCase& evaluationCase : cases)
+            {
+                stream << "\n\n  " << evaluationCase.id << "  " << evaluationCase.title
+                       << "\n        " << evaluationCase.clause;
+                for (const evaluation::EvaluationTurn& turn : evaluationCase.turns)
+                {
+                    stream << "\n        you: " << turn.input;
+                }
+            }
+            result.text = stream.str();
+            SetState(RuntimeState::Idle);
+            return true;
+        }
+
+        lastEvaluation = RunConversationEvaluationUnlocked(
+            cases, CurrentOperationToken());
+        // A failed case is a finding, not a broken command. Reporting the run itself as a
+        // failure would put the runtime into an error state because the model said
+        // something wrong, which is exactly the outcome this command exists to surface.
+        result.succeeded = true;
+        result.text = lastEvaluation.Detail();
         SetState(RuntimeState::Idle);
         return true;
     }
@@ -3035,6 +4115,63 @@ void ReviaSession::PublishResourcePlan() const
         "Semantic embeddings",
         resourcePlan.embeddingDevice == "none" ? "CPU" : resourcePlan.embeddingDevice,
         "Independent retrieval server; CPU is preferred to protect interactive GPU latency.");
+}
+
+void ReviaSession::StartResourceMonitor()
+{
+    if (settings.resources.usageSampleSeconds <= 0)
+    {
+        appLogger.Log("Live resource sampling is disabled; the Resources tab will show "
+            "the startup plan only.");
+        return;
+    }
+    resourceMonitor.Start(
+        resourcePlan,
+        std::chrono::seconds(settings.resources.usageSampleSeconds),
+        [this](const resources::UsageSnapshot& snapshot)
+        {
+            PublishResourceUsage(snapshot);
+        });
+}
+
+void ReviaSession::PublishResourceUsage(const resources::UsageSnapshot& snapshot) const
+{
+    for (const resources::UsageMeter& meter : snapshot.meters)
+    {
+        RuntimeEvent event;
+        event.kind = RuntimeEventKind::ResourceStatus;
+        event.state = state.load();
+        event.component = meter.label;
+        event.phase = "Usage";
+        event.resource = meter.id;
+        event.message = meter.detail;
+        event.usedAmount = meter.used;
+        event.budgetAmount = meter.budget;
+        event.capacityAmount = meter.capacity;
+        event.usageUnit = meter.unit == resources::MeterUnit::Threads ? "threads" : "MiB";
+        event.usageMeasured = meter.measured;
+        eventBus.Publish(std::move(event));
+    }
+}
+
+resources::UsageSnapshot ReviaSession::ResourceUsage() const
+{
+    return resourceMonitor.Latest();
+}
+
+std::string ReviaSession::ResourceUsageStatus() const
+{
+    if (settings.resources.usageSampleSeconds <= 0)
+    {
+        return "Live resource sampling is off (resources.usageSampleSeconds is 0).\n\n" +
+            resourcePlan.Summary();
+    }
+    const resources::UsageSnapshot snapshot = resourceMonitor.Latest();
+    if (!snapshot.measured)
+    {
+        return "No live reading has been taken yet.\n\n" + resourcePlan.Summary();
+    }
+    return snapshot.Detail() + "\n\nPlan: " + resourcePlan.Summary();
 }
 
 } // namespace revia::runtime

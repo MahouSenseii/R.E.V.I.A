@@ -55,6 +55,35 @@ responseOutput messageRouter::PlanGoal(const std::string& request) const
     return llm.GenerateGoalPlan(request);
 }
 
+responseOutput messageRouter::DrawDiagram(const std::string& request) const
+{
+    if (request.empty())
+    {
+        responseOutput output;
+        output.bSuccess = false;
+        output.response = "I need to know what to draw.";
+        output.reason = "Diagram request was empty.";
+        output.bShouldSpeak = false;
+        return output;
+    }
+    return llm.GenerateDiagram(request);
+}
+
+responseOutput messageRouter::ComposeContent(
+    const std::string& request,
+    const std::string& context) const
+{
+    return llm.ComposeContent(request, context);
+}
+
+responseOutput messageRouter::ReviseBlock(
+    const std::string& instruction,
+    const std::string& neighbourhood,
+    const std::string& target) const
+{
+    return llm.ReviseBlock(instruction, neighbourhood, target);
+}
+
 responseOutput messageRouter::AnalyzeImage(
     const std::filesystem::path& imagePath,
     const std::string& prompt,

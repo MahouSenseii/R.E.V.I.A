@@ -20,6 +20,11 @@ struct responseOutput
     bool bWasStreamed = false;  // true when visible deltas were delivered to a consumer
 
     std::string response;
+    // What the model actually produced, before the deterministic style repair ran. The
+    // delivered reply is what the user experiences and what quality is scored on, but a
+    // regression suite has to be able to tell "the model is still good" apart from "the
+    // repair layer caught it again", because only one of those keeps working.
+    std::string rawResponse;
     std::string reason;
     // Anything the model produced inside <think> tags, removed from the reply itself.
     // Reasoning is not an answer: speaking it or showing it inline would be wrong, but
@@ -172,6 +177,9 @@ struct resourceSettings
     // RAM, capped at 512 MiB; this is a ceiling, not a preallocation.
     int sqliteCacheMiB = 0;
     int gpuReserveMiB = 1536;
+    // How often live usage is sampled against the plan. Zero turns the monitor off; the
+    // plan itself is unaffected either way, because observing never re-places a worker.
+    int usageSampleSeconds = 2;
     bool bAllowChatModelSplit = true;
     std::string chat = "auto-primary";
     std::string voice = "auto-secondary";
@@ -326,6 +334,52 @@ struct aiProfile
     int maxTokens = 512;
 };
 
+// Local image generation. Off by default: it is an optional Python runtime and a
+// multi-gigabyte model download, and a machine without it should behave as though the
+// feature simply does not exist rather than failing at the moment it is asked.
+struct imageSettings
+{
+    bool bEnabled = false;
+    std::string pythonExecutable = "ThirdParty/ImageGen/.venv/Scripts/python.exe";
+    std::string serviceScript = "Tools/revia_image_service.py";
+    std::string cacheDirectory = "ThirdParty/ImageGen/cache";
+    std::string outputPath = "RuntimeData/Images";
+    std::string host = "127.0.0.1";
+    int port = 8093;
+    std::string model = "stabilityai/sd-turbo";
+    // "auto", "cpu", or "cuda:N". The planner resolves auto against real free VRAM.
+    std::string device = "auto";
+    // Below this much free video memory the worker chooses CPU. Loading onto a card the
+    // chat model has already filled does not fail cleanly; it thrashes or dies mid-step.
+    int minimumFreeVramMiB = 4200;
+    // sd-turbo produces an image in a handful of steps. On CPU that is the difference
+    // between under a minute and several.
+    int steps = 4;
+    float guidance = 1.0f;
+    int width = 512;
+    int height = 512;
+    int startupTimeoutSeconds = 120;
+    // Generation on CPU is slow rather than broken, so the ceiling is generous.
+    int requestTimeoutSeconds = 900;
+    bool bShutdownOnExit = true;
+};
+
+// Durable conversation history. A separate block from memory because it is a separate
+// promise: memory keeps facts a classifier judged worth having, this keeps what was said.
+struct conversationSettings
+{
+    bool bArchiveEnabled = true;
+    // Ceilings, not targets. An archive that grows without bound becomes a liability the
+    // user never agreed to keep.
+    int maxSessions = 200;
+    int maxTurnsPerSession = 500;
+    int maxTurnCharacters = 8000;
+    // How much of the previous session is replayed into context at startup, so a restart
+    // continues a conversation instead of restarting one. Costs prompt tokens every turn
+    // it survives, which is why it is small.
+    int restoreTurns = 6;
+};
+
 struct appSettings
 {
     std::string activeProfile = "assistant";
@@ -339,6 +393,8 @@ struct appSettings
     initiativeSettings initiative;
     bargeInSettings bargeIn;
     conversationChannelSettings channels;
+    conversationSettings conversation;
+    imageSettings image;
     inputArbiterSettings inputArbiter;
 };
 

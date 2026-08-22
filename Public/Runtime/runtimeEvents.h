@@ -47,6 +47,10 @@ enum class RuntimeEventKind
     // Revia offering something unprompted. Distinct from AssistantMessage because it is
     // answerable: the shell must be able to accept or dismiss it in one action.
     Proposal,
+    // A sanitized SVG drawing, ready to render. `detail` carries the markup and
+    // `resource` the file it was saved to. Distinct from AssistantMessage because a
+    // picture belongs on a canvas, not in the middle of a chat transcript.
+    Diagram,
     Error
 };
 
@@ -81,6 +85,16 @@ struct RuntimeEvent
     std::uint64_t totalMemoryMiB = 0;
     std::uint64_t availableMemoryMiB = 0;
     std::uint64_t allocatedMemoryMiB = 0;
+    // Live usage against the budget the resource plan set aside, for ResourceStatus
+    // events in the "Usage" phase. Doubles rather than integers because CPU load is a
+    // fraction of a thread, and unit tells the shell whether to render MiB or threads.
+    double usedAmount = 0.0;
+    double budgetAmount = 0.0;
+    double capacityAmount = 0.0;
+    std::string usageUnit;
+    // False when the platform could not report the reading. The shell must show that
+    // rather than a zero, which would read as "nothing is using it".
+    bool usageMeasured = false;
     std::chrono::system_clock::time_point occurredAt = std::chrono::system_clock::now();
 };
 

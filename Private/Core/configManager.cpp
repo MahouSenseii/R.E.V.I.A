@@ -382,6 +382,11 @@ bool configManager::LoadSettings(appSettings& outSettings) const
                 outSettings.resources.gpuReserveMiB =
                     resourceData["gpuReserveMiB"].get<int>();
             }
+            if (resourceData.contains("usageSampleSeconds"))
+            {
+                outSettings.resources.usageSampleSeconds =
+                    resourceData["usageSampleSeconds"].get<int>();
+            }
             if (resourceData.contains("allowChatModelSplit"))
             {
                 outSettings.resources.bAllowChatModelSplit =
@@ -613,6 +618,73 @@ bool configManager::LoadSettings(appSettings& outSettings) const
             }
         }
 
+        if (data.contains("image"))
+        {
+            const json& imageData = data["image"];
+            const auto text = [&imageData](const char* key, std::string& target)
+            {
+                if (imageData.contains(key)) target = imageData[key].get<std::string>();
+            };
+            const auto number = [&imageData](const char* key, int& target)
+            {
+                if (imageData.contains(key)) target = imageData[key].get<int>();
+            };
+            if (imageData.contains("enabled"))
+            {
+                outSettings.image.bEnabled = imageData["enabled"].get<bool>();
+            }
+            text("pythonExecutable", outSettings.image.pythonExecutable);
+            text("serviceScript", outSettings.image.serviceScript);
+            text("cacheDirectory", outSettings.image.cacheDirectory);
+            text("outputPath", outSettings.image.outputPath);
+            text("host", outSettings.image.host);
+            text("model", outSettings.image.model);
+            text("device", outSettings.image.device);
+            number("port", outSettings.image.port);
+            number("minimumFreeVramMiB", outSettings.image.minimumFreeVramMiB);
+            number("steps", outSettings.image.steps);
+            number("width", outSettings.image.width);
+            number("height", outSettings.image.height);
+            number("startupTimeoutSeconds", outSettings.image.startupTimeoutSeconds);
+            number("requestTimeoutSeconds", outSettings.image.requestTimeoutSeconds);
+            if (imageData.contains("guidance"))
+            {
+                outSettings.image.guidance = imageData["guidance"].get<float>();
+            }
+            if (imageData.contains("shutdownOnExit"))
+            {
+                outSettings.image.bShutdownOnExit = imageData["shutdownOnExit"].get<bool>();
+            }
+        }
+        if (data.contains("conversation"))
+        {
+            const json& conversationData = data["conversation"];
+            if (conversationData.contains("archiveEnabled"))
+            {
+                outSettings.conversation.bArchiveEnabled =
+                    conversationData["archiveEnabled"].get<bool>();
+            }
+            if (conversationData.contains("maxSessions"))
+            {
+                outSettings.conversation.maxSessions =
+                    conversationData["maxSessions"].get<int>();
+            }
+            if (conversationData.contains("maxTurnsPerSession"))
+            {
+                outSettings.conversation.maxTurnsPerSession =
+                    conversationData["maxTurnsPerSession"].get<int>();
+            }
+            if (conversationData.contains("maxTurnCharacters"))
+            {
+                outSettings.conversation.maxTurnCharacters =
+                    conversationData["maxTurnCharacters"].get<int>();
+            }
+            if (conversationData.contains("restoreTurns"))
+            {
+                outSettings.conversation.restoreTurns =
+                    conversationData["restoreTurns"].get<int>();
+            }
+        }
         if (data.contains("inputArbiter"))
         {
             const json& arbiterData = data["inputArbiter"];
@@ -723,6 +795,22 @@ bool configManager::LoadSettings(appSettings& outSettings) const
         outSettings.resources.sqliteCacheMiB > 2048 ||
         outSettings.resources.gpuReserveMiB < 256 ||
         outSettings.resources.gpuReserveMiB > 32768 ||
+        outSettings.resources.usageSampleSeconds < 0 ||
+        outSettings.resources.usageSampleSeconds > 3600 ||
+        outSettings.conversation.maxSessions < 1 ||
+        outSettings.conversation.maxSessions > 10000 ||
+        outSettings.conversation.maxTurnsPerSession < 1 ||
+        outSettings.conversation.maxTurnsPerSession > 100000 ||
+        outSettings.conversation.maxTurnCharacters < 256 ||
+        outSettings.conversation.maxTurnCharacters > 1000000 ||
+        outSettings.conversation.restoreTurns < 0 ||
+        outSettings.conversation.restoreTurns > 40 ||
+        outSettings.image.port < 1 || outSettings.image.port > 65535 ||
+        outSettings.image.steps < 1 || outSettings.image.steps > 100 ||
+        outSettings.image.width < 256 || outSettings.image.width > 1024 ||
+        outSettings.image.height < 256 || outSettings.image.height > 1024 ||
+        outSettings.image.host.empty() || outSettings.image.model.empty() ||
+        !IsDeviceSelector(outSettings.image.device, true) ||
         outSettings.resources.chat.empty() ||
         outSettings.resources.voice.empty() ||
         outSettings.resources.speechRecognition.empty() ||

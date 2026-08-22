@@ -1,4 +1,6 @@
 #include "LLM/LLamaCPP/llamaCppService.h"
+
+#include "Memory/sensitiveContent.h"
 #include "Planning/goalPlanner.h"
 #include <httplib.h>
 #include <nlohmann/json.hpp>
@@ -133,26 +135,11 @@ namespace
         return filtered;
     }
 
+    // Delegates to the shared filter so the classifier and the conversation archive can
+    // never drift into disagreeing about what counts as a secret.
     bool ContainsSensitiveMemoryContent(const std::string& text)
     {
-        std::string lowered = text;
-        std::transform(lowered.begin(), lowered.end(), lowered.begin(),
-            [](const unsigned char character)
-            {
-                return static_cast<char>(std::tolower(character));
-            });
-
-        constexpr const char* SensitiveMarkers[] = {
-            "password", "passcode", "api key", "secret key", "access token",
-            "private key", "credit card", "social security", "recovery code"
-        };
-        return std::any_of(
-            std::begin(SensitiveMarkers),
-            std::end(SensitiveMarkers),
-            [&](const char* marker)
-            {
-                return lowered.find(marker) != std::string::npos;
-            });
+        return revia::memory::ContainsSensitiveContent(text);
     }
 
     bool IsTransientChatMessage(std::string text)
@@ -660,10 +647,77 @@ responseOutput llamaCppService::GenerateGoalPlan(const std::string& userRequest)
         revia::planning::GoalPlanner::PlannerPrompt(), userRequest, 1536);
 }
 
+responseOutput llamaCppService::GenerateDiagram(const std::string& userRequest) const
+{
+    // Raw SVG, not JSON. Escaping a whole document into a JSON string spends most of a
+    // small model's budget on backslashes and fails completely on the first one it gets
+    // wrong -- and a half-escaped diagram is indistinguishable from no diagram. The
+    // sanitizer already lifts the element out of whatever prose surrounds it, so the
+    // structure that mattered was never the JSON.
+    constexpr const char* DiagramPrompt = R"(You draw explanatory diagrams and interface mockups as SVG.
+
+Reply with the SVG element and nothing else: no prose, no code fence, no JSON. Start at <svg and end at </svg>.
+
+Rules:
+- <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 W H"> with an explicit viewBox so it scales. Keep W and H under 1200.
+- Draw only. No <script>, no <foreignObject>, no event handlers, no external images, no links, no web fonts, no <!DOCTYPE>. A drawing that uses any of those is refused and the user sees nothing.
+- Shapes, paths, and <text> with font-family="sans-serif" only.
+- Assume a dark background: light text (#dce9f7), teal accent (#70e0ca), blue accent (#4294c8), panel fill (#111b2d). Never rely on the page colour.
+- Label everything. An unlabelled box explains nothing.
+- For an interface mockup, draw the real layout: panels in proportion, controls where they sit, and the actual text that would appear.
+- Be economical. A clear diagram of a dozen labelled elements beats an elaborate one that gets cut off.)";
+    // No JSON mode, and a budget sized for a real drawing rather than a plan.
+    return GeneratePlannerResponse(DiagramPrompt, userRequest, 2600, false);
+}
+
+responseOutput llamaCppService::ComposeContent(
+    const std::string& request,
+    const std::string& context) const
+{
+    constexpr const char* ComposePrompt = R"(You are drafting content into a working document.
+
+Write the draft and nothing else: no preamble, no commentary, no markdown headings, no numbering. Separate each paragraph, line of dialogue, or beat with a blank line, because each one becomes a separately editable block.
+
+Keep each block short enough to revise on its own -- one line of dialogue, one action beat, one paragraph. A block that contains a whole page cannot be edited without rewriting the page, which is the thing this document exists to avoid.
+
+Match whatever voice, tense, and formatting the existing material already uses. If there is none, follow the request.)";
+
+    std::string composed = request;
+    if (!context.empty())
+    {
+        composed += "\n\nExisting material for voice and continuity:\n" + context;
+    }
+    return GeneratePlannerResponse(ComposePrompt, composed, 1400, false);
+}
+
+responseOutput llamaCppService::ReviseBlock(
+    const std::string& instruction,
+    const std::string& neighbourhood,
+    const std::string& target) const
+{
+    // The neighbourhood is given for continuity and explicitly not for editing. The model
+    // cannot damage it either way -- only the returned line is ever stored, and only into
+    // the one block -- but asking for the line rather than the scene gets a better line
+    // and costs a fraction of the tokens.
+    constexpr const char* RevisePrompt = R"(You rewrite exactly one line of an existing document.
+
+You are shown a few surrounding lines for context and one line marked >>. Rewrite only the marked line.
+
+Reply with the replacement text for that line and nothing else: no preamble, no quotes around it, no explanation, no code fence, and none of the surrounding lines. Whatever you return becomes that line verbatim.
+
+Keep the voice, tense, and formatting of the material around it. Match its rough length unless the instruction asks otherwise.)";
+
+    std::string composed = "Surrounding lines:\n" + neighbourhood +
+        "\n\nThe line to rewrite:\n" + target +
+        "\n\nWhat to change:\n" + instruction;
+    return GeneratePlannerResponse(RevisePrompt, composed, 400, false);
+}
+
 responseOutput llamaCppService::GeneratePlannerResponse(
     const std::string& systemPrompt,
     const std::string& userRequest,
-    const int maxTokens) const
+    const int maxTokens,
+    const bool structuredJson) const
 {
     responseOutput output;
     output.bShouldSpeak = false;
@@ -688,9 +742,12 @@ responseOutput llamaCppService::GeneratePlannerResponse(
         })},
         {"temperature", 0.1},
         {"max_tokens", maxTokens},
-        {"stream", false},
-        {"response_format", {{"type", "json_object"}}}
+        {"stream", false}
     };
+    if (structuredJson)
+    {
+        requestBody["response_format"] = {{"type", "json_object"}};
+    }
 
     auto inferenceLease = inferenceScheduler.Acquire(
         revia::llm::InferencePriority::Interactive);

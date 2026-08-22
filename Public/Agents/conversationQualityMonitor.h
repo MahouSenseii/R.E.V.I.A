@@ -32,6 +32,20 @@ public:
         const std::string& response);
     [[nodiscard]] ConversationQualitySnapshot Snapshot() const;
 
+    // The individual signals behind the counters above, exposed as pure functions.
+    //
+    // The evaluation corpus scores a reply with these rather than keeping its own copy of
+    // the phrase lists. Two lists that are supposed to mean the same thing eventually
+    // disagree, and a suite that disagrees with the live counters is worse than no suite:
+    // it reports a regression the runtime does not see, or misses one it does.
+    [[nodiscard]] static bool ClaimsInventedPhysicalLife(const std::string& response);
+    [[nodiscard]] static bool EndsWithStockTail(const std::string& response);
+    [[nodiscard]] static bool ProjectsStateOntoUser(
+        const std::string& userInput,
+        const std::string& response);
+    // The lowered first clause, which is what "repeated opening" is measured against.
+    [[nodiscard]] static std::string OpeningOf(const std::string& response);
+
 private:
     mutable std::mutex mutex;
     ConversationQualitySnapshot snapshot;

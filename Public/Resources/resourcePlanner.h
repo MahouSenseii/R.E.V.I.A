@@ -16,6 +16,12 @@ struct GpuDevice
     int ordinal = -1;
     std::uint64_t totalMemoryMiB = 0;
     std::uint64_t freeMemoryMiB = 0;
+    // The DXGI adapter LUID, in the form the live performance counters key on. The
+    // backend names a device but does not identify the adapter; without this a live VRAM
+    // reading cannot be attributed to the device the plan assigned work to. Empty when
+    // the backend device could not be matched to an adapter, which reports VRAM as
+    // unmeasured rather than crediting it to the wrong card.
+    std::string adapterLuid;
 
     [[nodiscard]] bool IsCuda() const;
     [[nodiscard]] std::string QwenDevice() const;
@@ -60,6 +66,10 @@ struct ResourcePlan
     int llamaPromptCacheMiB = 0;
     int sqliteCacheMiB = 0;
     int reservedSystemMemoryMiB = 0;
+    // Video memory the plan promises to leave free on any device it places work on.
+    // Recorded here so live usage can be judged against the same number the placement
+    // decision used, rather than against a policy value read separately and drifting.
+    int gpuReserveMiB = 0;
     std::vector<std::string> notes;
 
     [[nodiscard]] std::string ChatLabel() const;
