@@ -9,6 +9,8 @@
 #include "Agents/replyFragmenter.h"
 #include "Agents/responseFilter.h"
 #include "Core/localApiKey.h"
+#include "Diagnostics/issueLog.h"
+#include "Speech/vocalization.h"
 #include "Content/workingDocument.h"
 #include "Core/conversationContext.h"
 #include "Core/preferenceStore.h"
@@ -5414,6 +5416,272 @@ void TestArbiterDropsRepeatsAndOverflow()
 
 } // namespace
 
+
+void TestIssueLogRecordsActionableFaultsOnly()
+{
+    using namespace revia::diagnostics;
+    const std::filesystem::path root =
+        std::filesystem::temp_directory_path() / "revia-issue-log-test";
+    std::filesystem::remove_all(root);
+    std::string error;
+
+    const auto sample = [](const std::string& component, const std::string& code)
+    {
+        Issue issue;
+        issue.component = component;
+        issue.code = code;
+        issue.severity = IssueSeverity::Degraded;
+        issue.summary = "Voice is using the Windows fallback.";
+        issue.detail = "Qwen3-TTS answered 500 for every synthesis request.";
+        issue.remedy = "Restart Revia, then check Logs/qwen-tts.stderr.log.";
+        return issue;
+    };
+
+    // A record with no remedy is a log line, not an issue. Rejecting it is what keeps
+    // this file worth reading.
+    {
+        IssueLog log(root / "reject.jsonl");
+        Issue noRemedy = sample("Voice", "fallback");
+        noRemedy.remedy.clear();
+        Check(!log.Record(noRemedy, error), "An issue without a remedy was accepted.");
+        Check(log.OpenCount() == 0, "A rejected issue was still stored.");
+    }
+
+    // Coalescing is the whole difference from a log: a poisoned CUDA context fails
+    // every later request, and only the first failure carries information.
+    {
+        IssueLog log(root / "coalesce.jsonl");
+        for (int attempt = 0; attempt < 200; ++attempt)
+        {
+            Check(log.Record(sample("Voice", "cuda-assert"), error),
+                "Recording a repeated issue failed: " + error);
+        }
+        Check(log.OpenCount() == 1, "Repeated occurrences did not coalesce into one issue.");
+        const auto found = log.Find("Voice", "cuda-assert");
+        Check(found.has_value() && found->occurrences == 200,
+            "The occurrence count did not accumulate.");
+    }
+
+    // Resolving closes an issue; a recurrence reopens it, because the capability left
+    // again and the panel must say so.
+    {
+        IssueLog log(root / "resolve.jsonl");
+        log.Record(sample("Embeddings", "fts-fallback"), error);
+        Check(log.Resolve("Embeddings", "fts-fallback"), "Resolve did not close an open issue.");
+        Check(log.OpenCount() == 0, "A resolved issue stayed in the open set.");
+        Check(!log.Resolve("Embeddings", "fts-fallback"), "Resolving twice was not a no-op.");
+        log.Record(sample("Embeddings", "fts-fallback"), error);
+        Check(log.OpenCount() == 1, "A recurrence did not reopen the issue.");
+    }
+
+    // State survives a restart, so "this has been broken since Tuesday" is a lookup.
+    {
+        {
+            IssueLog log(root / "restart.jsonl");
+            log.Record(sample("Voice", "worker-exit"), error);
+            log.Record(sample("Voice", "worker-exit"), error);
+            log.Record(sample("Chat", "server-missing"), error);
+            log.Resolve("Chat", "server-missing");
+        }
+        IssueLog reloaded(root / "restart.jsonl");
+        Check(reloaded.Load(error), "Reloading the issue log failed.");
+        Check(reloaded.OpenCount() == 1, "Reload did not preserve which issues are open.");
+        const auto found = reloaded.Find("Voice", "worker-exit");
+        Check(found.has_value() && found->occurrences == 2,
+            "Reload lost the occurrence count.");
+    }
+
+    // A process killed mid-write leaves one torn line. It must cost one record.
+    {
+        std::filesystem::create_directories(root);
+        {
+            std::ofstream file(root / "torn.jsonl");
+            file << R"({"component":"Voice","code":"one","severity":"Failed",)"
+                 << R"("status":"Open","summary":"s","remedy":"r","occurrences":1})" << "\n";
+            file << "{ truncated" << "\n";
+            file << R"({"component":"Chat","code":"two","severity":"Failed",)"
+                 << R"("status":"Open","summary":"s","remedy":"r","occurrences":1})" << "\n";
+        }
+        IssueLog log(root / "torn.jsonl");
+        Check(log.Load(error), "A torn record aborted the whole load.");
+        Check(log.OpenCount() == 2, "A torn record cost more than its own line.");
+        Check(error.find("Skipped 1") != std::string::npos, "The skipped record was hidden.");
+    }
+
+    // Evidence keeps the END of a worker's stderr, which is where the cause is.
+    {
+        std::filesystem::create_directories(root);
+        {
+            std::ofstream file(root / "worker.stderr.log");
+            for (int line = 0; line < 500; ++line)
+            {
+                file << "progress " << line << "\n";
+            }
+            file << "Assertion `input[0] != 0` failed.\n";
+        }
+        const std::string tail = IssueLog::CaptureTail(root / "worker.stderr.log", 5);
+        Check(tail.find("Assertion") != std::string::npos,
+            "Captured evidence dropped the end of stderr.");
+        Check(IssueLog::CaptureTail(root / "absent.log").empty(),
+            "A missing evidence file did not yield empty evidence.");
+    }
+
+    // Failure paths run on worker threads, so recording must be safe under contention.
+    {
+        IssueLog log(root / "threads.jsonl");
+        std::vector<std::thread> writers;
+        for (int worker = 0; worker < 4; ++worker)
+        {
+            writers.emplace_back([&log, &sample, worker]()
+            {
+                std::string threadError;
+                for (int attempt = 0; attempt < 100; ++attempt)
+                {
+                    log.Record(sample("Voice", "race" + std::to_string(worker)), threadError);
+                }
+            });
+        }
+        for (std::thread& writer : writers)
+        {
+            writer.join();
+        }
+        Check(log.OpenCount() == 4, "Concurrent recording produced the wrong issue count.");
+        int total = 0;
+        for (const Issue& issue : log.All())
+        {
+            total += issue.occurrences;
+        }
+        Check(total == 400, "Concurrent recording lost occurrences.");
+    }
+
+    std::filesystem::remove_all(root);
+    std::cout << "Issue log records only actionable faults, coalesces them, and "
+        "survives a restart.\n";
+}
+
+
+void TestVocalizationParsingAndGating()
+{
+    using namespace revia::speech;
+    using revia::runtime::AffectSnapshot;
+    using revia::runtime::AffectState;
+
+    const auto shape = [](const SpokenScript& script)
+    {
+        std::string result;
+        for (const ScriptSegment& segment : script.segments)
+        {
+            result += segment.kind == SegmentKind::Speech
+                ? "S(" + segment.text + ")"
+                : "V(" + ToString(segment.vocalization) + ")";
+        }
+        return result;
+    };
+    const auto affect = [](const AffectState state, const float intensity)
+    {
+        AffectSnapshot snapshot;
+        snapshot.state = state;
+        snapshot.intensity = intensity;
+        return snapshot;
+    };
+
+    // Order is the point: a laugh belongs where the model put it, not appended.
+    const SpokenScript mid = ParseVocalizations("Oh really [laugh] that is perfect.");
+    Check(shape(mid) == "S(Oh really)V(laugh)S(that is perfect.)",
+        "A tagged reply did not split into an ordered script.");
+    Check(mid.spokenText == "Oh really that is perfect.", "The spoken text kept the tag.");
+    Check(mid.displayText == "Oh really *laughs* that is perfect.",
+        "The display text lost its stage direction.");
+
+    Check(shape(ParseVocalizations("Fine <sigh> whatever.")) == "S(Fine)V(sigh)S(whatever.)",
+        "The angle-bracket tag form did not parse.");
+    Check(shape(ParseVocalizations("Fine *sighs* whatever.")) == "S(Fine)V(sigh)S(whatever.)",
+        "The asterisk tag form did not parse.");
+    Check(shape(ParseVocalizations("[CHUCKLING] okay")) == "V(soft-laugh)S(okay)",
+        "Tag matching was not case and inflection tolerant.");
+
+    // The two things the parser must never eat.
+    Check(shape(ParseVocalizations("That is *really* good.")) == "S(That is *really* good.)",
+        "Markdown emphasis was consumed as a vocalization.");
+    Check(shape(ParseVocalizations("Check [section 4] for that.")) ==
+            "S(Check [section 4] for that.)",
+        "An unrecognised bracketed phrase was removed from the reply.");
+    const SpokenScript unclosed = ParseVocalizations("An open [ bracket and more text.");
+    Check(unclosed.segments.size() == 1, "An unclosed bracket swallowed the reply.");
+
+    // Punctuation orphaned by a tag rejoins the clause it ended, rather than being sent
+    // to the TTS on its own or dropped.
+    const SpokenScript orphan = ParseVocalizations("Nice [laugh].");
+    Check(shape(orphan) == "S(Nice.)V(laugh)", "Orphaned punctuation was mishandled.");
+    Check(orphan.spokenText == "Nice.", "The clause lost its full stop.");
+
+    // Affect vetoes contradictions, but only when the state is actually held. Affect
+    // lags the joke, so a barely-registered Concerned must not veto a laugh.
+    Check(!VocalizationPolicy::AffectPermits(
+        VocalizationKind::Laugh, affect(AffectState::Concerned, 0.8F)),
+        "A laugh was permitted while strongly Concerned.");
+    Check(VocalizationPolicy::AffectPermits(
+        VocalizationKind::Laugh, affect(AffectState::Concerned, 0.2F)),
+        "A weakly held Concerned wrongly vetoed a laugh.");
+    Check(VocalizationPolicy::AffectPermits(
+        VocalizationKind::Hmm, affect(AffectState::Concerned, 1.0F)),
+        "A thoughtful hum was vetoed by affect.");
+
+    VocalizationLimits limits;
+    limits.maximumPerReply = 2;
+    limits.minimumInterval = std::chrono::seconds(8);
+    VocalizationPolicy policy(limits);
+    const AffectSnapshot calm = affect(AffectState::Neutral, 0.3F);
+    const auto start = std::chrono::steady_clock::now();
+
+    Check(policy.Evaluate(VocalizationKind::Laugh, calm, start, true) ==
+        VocalizationVerdict::Allowed, "The first vocalization was refused.");
+    Check(policy.Evaluate(VocalizationKind::Laugh, calm, start + std::chrono::seconds(1), true) ==
+        VocalizationVerdict::SuppressedByRate, "An immediate repeat was allowed.");
+    Check(policy.Evaluate(VocalizationKind::Sigh, calm, start + std::chrono::seconds(9), true) ==
+        VocalizationVerdict::Allowed, "A vocalization after the interval was refused.");
+    Check(policy.Evaluate(VocalizationKind::Laugh, calm, start + std::chrono::seconds(30), true) ==
+        VocalizationVerdict::SuppressedByRate, "The per-reply cap did not hold.");
+
+    // A suppressed vocalization must not advance the interval, or one rejected laugh
+    // would silence the sigh that follows it.
+    VocalizationPolicy fresh;
+    Check(fresh.Evaluate(VocalizationKind::Laugh, affect(AffectState::Concerned, 0.9F), start, true) ==
+        VocalizationVerdict::SuppressedByAffect, "Affect suppression was not reported.");
+    Check(fresh.Evaluate(VocalizationKind::Sigh, calm, start, true) ==
+        VocalizationVerdict::Allowed, "A suppressed vocalization consumed the rate budget.");
+    Check(fresh.Evaluate(VocalizationKind::Hmm, calm, start, false) ==
+        VocalizationVerdict::SuppressedByMissingClip,
+        "A missing clip was not reported as such.");
+
+    // The bank rotates every variant before repeating, and stops at the first gap.
+    const std::filesystem::path root =
+        std::filesystem::temp_directory_path() / "revia-vocalization-test";
+    std::filesystem::remove_all(root);
+    const std::filesystem::path clips = root / "revia-bright" / "vocalizations";
+    std::filesystem::create_directories(clips);
+    for (const std::string name : {"laugh-1.wav", "laugh-2.wav", "hmm-1.wav", "hmm-3.wav"})
+    {
+        std::ofstream file(clips / name, std::ios::binary);
+        file << "RIFF";
+    }
+    VocalizationBank bank(root / "revia-bright");
+    Check(bank.VariantCount(VocalizationKind::Laugh) == 2, "Bank variants were not found.");
+    Check(bank.VariantCount(VocalizationKind::Hmm) == 1,
+        "Bank scanning did not stop at the first missing variant.");
+    Check(!bank.Has(VocalizationKind::Gasp), "An unrendered kind was reported present.");
+    Check(bank.Next(VocalizationKind::Gasp).empty(),
+        "A missing kind returned a path instead of nothing.");
+    const std::filesystem::path first = bank.Next(VocalizationKind::Laugh);
+    const std::filesystem::path second = bank.Next(VocalizationKind::Laugh);
+    Check(first != second, "Bank rotation repeated a variant early.");
+    Check(bank.Next(VocalizationKind::Laugh) == first, "Bank rotation did not wrap.");
+    std::filesystem::remove_all(root);
+
+    std::cout << "Vocalization tags parse in order, affect and rate gate them, and the "
+        "clip bank rotates.\n";
+}
+
 int main(const int argc, char** argv)
 {
     try
@@ -5538,6 +5806,8 @@ int main(const int argc, char** argv)
         TestWindowsSpeechServiceInitialization();
         TestQwenPoolShutdownWakesWaitingWork();
         TestLocalApiKeys();
+        TestIssueLogRecordsActionableFaultsOnly();
+        TestVocalizationParsingAndGating();
         TestGoalStoreRoundTrip();
         TestGoalRunnerRejectsUnverifiablePlan();
         TestGoalRunnerVerifiesSuccess();

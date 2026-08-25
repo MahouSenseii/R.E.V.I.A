@@ -12,10 +12,42 @@ import json
 import os
 import sys
 import threading
+import traceback
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
+
+
+
+
+def _is_context_fatal(exception: BaseException) -> bool:
+    """True when the CUDA context cannot serve another request in this process.
+
+    A device-side assert or a sticky CUDA error leaves every subsequent kernel launch
+    failing with the same text. Restarting is the only recovery.
+    """
+    text = str(exception).lower()
+    return (
+        "device-side assert" in text
+        or "cuda error" in text
+        or "unspecified launch failure" in text
+        or "illegal memory access" in text
+    )
+
+
+def _reports_bf16(torch: Any) -> bool:
+    """torch.cuda.is_bf16_supported() for the current device, emulation excluded.
+
+    including_emulation was added in PyTorch 2.4 and defaults to True, which is the
+    permissive answer. Older builds do not accept the argument at all, so fall back
+    to the plain call - the compute-capability check above is what actually protects
+    Turing either way.
+    """
+    try:
+        return bool(torch.cuda.is_bf16_supported(including_emulation=False))
+    except TypeError:
+        return bool(torch.cuda.is_bf16_supported())
 
 
 class QwenRuntime:
@@ -35,15 +67,47 @@ class QwenRuntime:
         properties = torch.cuda.get_device_properties(index)
         with torch.cuda.device(index):
             free_bytes, total_bytes = torch.cuda.mem_get_info()
-            bf16_supported = torch.cuda.is_bf16_supported()
+            reported_bf16 = _reports_bf16(torch)
+
         # RTX 20-series/Turing supports FP16 but not native BF16. Selecting BF16 for
         # every CUDA adapter made a perfectly useful secondary 2070 fail at runtime.
-        dtype = torch.bfloat16 if bf16_supported else torch.float16
-        dtype_name = "bfloat16" if bf16_supported else "float16"
+        #
+        # torch.cuda.is_bf16_supported() alone is NOT a sufficient gate: since PyTorch
+        # 2.4 it defaults to including_emulation=True and answers True on Turing, so
+        # the model loaded as bfloat16 on a 2070 SUPER and every synthesis died with
+        # "GET was unable to find an engine to execute this computation" - the kernel
+        # for that dtype does not exist on sm_75, which surfaces at the first matmul
+        # rather than at load time.
+        #
+        # Compute capability is the authoritative gate. Native BF16 starts at Ampere
+        # (sm_80). Both signals must agree before BF16 is chosen; either one alone can
+        # be wrong in the permissive direction, never in the restrictive one.
+        major, minor = torch.cuda.get_device_capability(index)
+        native_bf16 = major >= 8
+        bf16_supported = native_bf16 and reported_bf16
+
+        # The fallback is FLOAT32, not float16, and that is deliberate.
+        #
+        # FP16 has the same mantissa width as BF16 but a far smaller exponent range
+        # (max ~65504 against ~3.4e38). This model relies on BF16's range: run in FP16
+        # on a 2070 SUPER and the logits overflow to inf, softmax collapses to all
+        # zeros, and sampling dies inside torch.multinomial with
+        #   TensorCompare.cu:112 Assertion `input[0] != 0` failed
+        # reported as "CUDA error: device-side assert triggered" - a message that says
+        # nothing about dtype and costs an afternoon to trace back to one.
+        #
+        # FP32 is slower and doubles the weights (a 0.6B model is ~2.4 GB, which fits
+        # the 8 GB card with room to spare), but it is correct on every architecture.
+        # Speed is worth trading for a voice that actually produces audio.
+        dtype = torch.bfloat16 if bf16_supported else torch.float32
+        dtype_name = "bfloat16" if bf16_supported else "float32"
         free_mib = free_bytes // (1024 * 1024)
         total_mib = total_bytes // (1024 * 1024)
+        # sm_XX is in the log line on purpose: when a dtype problem does appear, the
+        # architecture is the first thing worth knowing and the slowest thing to guess.
         detail = (
-            f"{properties.name}, {free_mib}/{total_mib} MiB free, {dtype_name}"
+            f"{properties.name}, sm_{major}{minor}, "
+            f"{free_mib}/{total_mib} MiB free, {dtype_name}"
         )
         return f"cuda:{index}", dtype, detail, free_mib
 
@@ -69,7 +133,7 @@ class QwenRuntime:
                         f"{self.args.minimum_free_vram_mib} MiB is required"
                     )
                 self.device_name = torch.cuda.get_device_name(index)
-                self.dtype_name = "bfloat16" if dtype == torch.bfloat16 else "float16"
+                self.dtype_name = "bfloat16" if dtype == torch.bfloat16 else "float32"
                 return device, dtype, f"CUDA selected by resource plan: {detail}"
             except (TypeError, ValueError, RuntimeError) as exception:
                 self.device_name = "CPU"
@@ -87,7 +151,7 @@ class QwenRuntime:
             if free_mib >= self.args.minimum_free_vram_mib:
                 index = int(device.split(":", 1)[1])
                 self.device_name = torch.cuda.get_device_name(index)
-                self.dtype_name = "bfloat16" if dtype == torch.bfloat16 else "float16"
+                self.dtype_name = "bfloat16" if dtype == torch.bfloat16 else "float32"
                 return device, dtype, f"best free CUDA device selected: {detail}"
             self.device_name = "CPU"
             self.dtype_name = "float32"
@@ -200,6 +264,81 @@ class QwenRuntime:
                 "dtype": self.dtype_name,
             }
 
+    def vocalizations(self, request: dict[str, Any]) -> dict[str, Any]:
+        """Renders the nonverbal clip bank for one voice preset, once.
+
+        Why this is a batch job at preset-creation time rather than a runtime call:
+        a laugh that arrives a second and a half after the joke is not a laugh, it is a
+        machine catching up. Playing a file that already exists is the only way the
+        timing works, and it also keeps every vocalization on the VoiceDesign model,
+        which is the only one that accepts a style instruction -- generate_voice_clone
+        has no instruct parameter at all.
+
+        Each clip is rendered from a short carrier phrase plus an instruction describing
+        the SOUND. Asking for "a laugh" makes the model read the word; asking for the
+        sound produces the sound.
+        """
+        with self.lock:
+            started = time.perf_counter()
+            directory = Path(self._text(request.get("directory"), "Output directory", 2048))
+            language = self._text(request.get("language", "English"), "Language", 40)
+            requested = request.get("kinds")
+            if not isinstance(requested, list) or not requested:
+                raise ValueError("At least one vocalization kind is required.")
+
+            directory.mkdir(parents=True, exist_ok=True)
+            model = self._load("design")
+            import soundfile as sf
+
+            written: list[str] = []
+            failed: list[dict[str, str]] = []
+            for entry in requested:
+                if not isinstance(entry, dict):
+                    continue
+                kind = self._text(entry.get("kind"), "Vocalization kind", 40)
+                instruct = self._text(entry.get("instruct"), "Style instruction", 1000)
+                carrier = self._text(entry.get("carrier", "Ha."), "Carrier text", 200)
+                variants = int(entry.get("variants", 2))
+                variants = max(1, min(variants, 8))
+
+                for index in range(1, variants + 1):
+                    output = directory / f"{kind}-{index}.wav"
+                    try:
+                        # The instruction is varied per index so the variants differ.
+                        # Identical inputs would give near-identical audio, and two
+                        # indistinguishable clips are worse than one -- rotation would
+                        # promise variety it cannot deliver.
+                        shaped = instruct if index == 1 else f"{instruct} Slightly different delivery, variant {index}."
+                        waveforms, sample_rate = model.generate_voice_design(
+                            text=carrier,
+                            language=language,
+                            instruct=shaped,
+                        )
+                        sf.write(output, waveforms[0], sample_rate)
+                        written.append(str(output))
+                    except Exception as exception:  # noqa: BLE001 - reported, not raised
+                        # One bad clip must not cost the whole bank. A voice with four
+                        # of six vocalizations is usable; a voice with none is not, and
+                        # raising here would have thrown away the ones that worked.
+                        failed.append({"kind": kind, "variant": str(index), "error": str(exception)})
+                        break
+
+            elapsed = (time.perf_counter() - started) * 1000.0
+            return {
+                "succeeded": len(written) > 0,
+                "message": (
+                    f"Rendered {len(written)} vocalization clip(s) with {self.model_name} "
+                    f"on {self.device}." +
+                    (f" {len(failed)} failed." if failed else "")
+                ),
+                "written": written,
+                "failed": failed,
+                "elapsed_ms": elapsed,
+                "device": self.device,
+                "device_name": self.device_name,
+                "dtype": self.dtype_name,
+            }
+
     def synthesize(self, request: dict[str, Any]) -> dict[str, Any]:
         with self.lock:
             started = time.perf_counter()
@@ -296,6 +435,8 @@ def make_handler(runtime: QwenRuntime, token: str) -> type[BaseHTTPRequestHandle
                     with runtime.lock:
                         runtime._unload()
                     result = {"succeeded": True, "message": "Qwen3-TTS model memory released."}
+                elif self.path == "/v1/vocalizations":
+                    result = runtime.vocalizations(payload)
                 elif self.path == "/prepare":
                     model_kind = request.get("model", "clone")
                     if model_kind not in ("clone", "design"):
@@ -316,7 +457,33 @@ def make_handler(runtime: QwenRuntime, token: str) -> type[BaseHTTPRequestHandle
                     return
                 self._send(200, result)
             except Exception as exception:
+                # The message alone loses the frame that actually failed, which is the
+                # one thing worth having. Print the full traceback.
                 print(f"[Qwen3-TTS] Request failed: {exception}", file=sys.stderr, flush=True)
+                traceback.print_exc(file=sys.stderr)
+                sys.stderr.flush()
+
+                if _is_context_fatal(exception):
+                    # A device-side assert poisons the CUDA context for the lifetime of
+                    # the process: every later call on that device raises the same error,
+                    # so the worker would keep answering 500 forever and only the FIRST
+                    # failure would be diagnostic. Answer this request honestly, then
+                    # exit - Revia's EnsureAvailable restarts the worker on next use,
+                    # and a fresh process gets a clean context.
+                    print(
+                        "[Qwen3-TTS] The CUDA context is unrecoverable; exiting so the "
+                        "next request starts a clean worker.",
+                        file=sys.stderr, flush=True)
+                    self._send(500, {
+                        "succeeded": False,
+                        "message": (
+                            f"{exception} -- the CUDA context is unrecoverable, so the "
+                            "voice worker restarted. Retry the request."),
+                    })
+                    sys.stderr.flush()
+                    sys.stdout.flush()
+                    os._exit(70)
+
                 self._send(500, {"succeeded": False, "message": str(exception)})
 
     return Handler
