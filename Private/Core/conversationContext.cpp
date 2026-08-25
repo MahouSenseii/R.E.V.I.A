@@ -15,6 +15,19 @@ void conversationContext::AddMessage(const std::string& role, const std::string&
     TrimToBudget();
 }
 
+bool conversationContext::RemoveLastMessageIf(
+    const std::string& role,
+    const std::string& content)
+{
+    if (messages.empty() || messages.back().role != role ||
+        messages.back().content != content)
+    {
+        return false;
+    }
+    messages.pop_back();
+    return true;
+}
+
 void conversationContext::Clear()
 {
     messages.clear();

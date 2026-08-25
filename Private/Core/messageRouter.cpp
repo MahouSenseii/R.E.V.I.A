@@ -41,6 +41,30 @@ responseOutput messageRouter::PlanAction(const std::string& request) const
     return llm.GenerateActionProposal(request);
 }
 
+responseOutput messageRouter::ReviewConversationReply(
+    const std::string& userInput,
+    const std::string& candidateReply,
+    const std::string& runtimeGroundTruth,
+    const int maxReviewTokens,
+    const std::stop_token stopToken) const
+{
+    return llm.ReviewConversationReply(
+        userInput, candidateReply, runtimeGroundTruth, maxReviewTokens, stopToken);
+}
+
+responseOutput messageRouter::GenerateCuriosityPlan(
+    const std::string& boundedContextPrompt,
+    const std::stop_token stopToken) const
+{
+    if (boundedContextPrompt.empty())
+    {
+        responseOutput output;
+        output.reason = "Curiosity planning context was empty.";
+        return output;
+    }
+    return llm.GenerateCuriosityPlan(boundedContextPrompt, stopToken);
+}
+
 responseOutput messageRouter::PlanGoal(const std::string& request) const
 {
     if (request.empty())
@@ -95,9 +119,10 @@ responseOutput messageRouter::AnalyzeImage(
 
 memoryDecision messageRouter::EvaluateMemory(
     const std::string& userMessage,
+    const std::string& assistantMessage,
     const std::stop_token stopToken) const
 {
-    return llm.EvaluateMemory(userMessage, stopToken);
+    return llm.EvaluateMemory(userMessage, assistantMessage, stopToken);
 }
 
 bool messageRouter::IsLLMAvailable() const

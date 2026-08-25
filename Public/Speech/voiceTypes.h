@@ -29,14 +29,16 @@ struct VoiceOperationResult
         const double inputElapsedMilliseconds,
         std::string inputDevice = {},
         std::string inputDeviceName = {},
-        std::string inputDtype = {})
+        std::string inputDtype = {},
+        std::string inputWorkerId = {})
         : succeeded(inputSucceeded),
           message(std::move(inputMessage)),
           outputPath(std::move(inputOutputPath)),
           elapsedMilliseconds(inputElapsedMilliseconds),
           device(std::move(inputDevice)),
           deviceName(std::move(inputDeviceName)),
-          dtype(std::move(inputDtype))
+          dtype(std::move(inputDtype)),
+          workerId(std::move(inputWorkerId))
     {
     }
 
@@ -47,6 +49,7 @@ struct VoiceOperationResult
     std::string device;
     std::string deviceName;
     std::string dtype;
+    std::string workerId;
 };
 
 struct VoiceStudioSnapshot

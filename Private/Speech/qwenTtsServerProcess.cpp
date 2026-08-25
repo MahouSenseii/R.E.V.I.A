@@ -166,12 +166,15 @@ bool QwenTtsServerProcess::Start(
     SECURITY_ATTRIBUTES attributes{};
     attributes.nLength = sizeof(attributes);
     attributes.bInheritHandle = TRUE;
+    const std::wstring logSuffix = L"-" + std::to_wstring(settings.qwenPort);
+    const std::wstring stdoutPath = L"Logs\\qwen-tts" + logSuffix + L".stdout.log";
+    const std::wstring stderrPath = L"Logs\\qwen-tts" + logSuffix + L".stderr.log";
     const HANDLE output = CreateFileW(
-        L"Logs\\qwen-tts.stdout.log", FILE_APPEND_DATA,
+        stdoutPath.c_str(), FILE_APPEND_DATA,
         FILE_SHARE_READ | FILE_SHARE_WRITE, &attributes, OPEN_ALWAYS,
         FILE_ATTRIBUTE_NORMAL, nullptr);
     const HANDLE errors = CreateFileW(
-        L"Logs\\qwen-tts.stderr.log", FILE_APPEND_DATA,
+        stderrPath.c_str(), FILE_APPEND_DATA,
         FILE_SHARE_READ | FILE_SHARE_WRITE, &attributes, OPEN_ALWAYS,
         FILE_ATTRIBUTE_NORMAL, nullptr);
     const HANDLE input = CreateFileW(

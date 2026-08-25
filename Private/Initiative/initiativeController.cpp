@@ -30,6 +30,7 @@ void InitiativeController::Configure(initiativeSettings settings)
     configuration = settings;
     policy = AttentionPolicy(std::move(settings));
     proposals.clear();
+    committedProposals.clear();
     lastSubject.clear();
     nextId = 1;
 }
@@ -175,6 +176,13 @@ bool InitiativeController::BuildUnfinishedGoalProposal(
     return true;
 }
 
+void InitiativeController::UpdateSettings(initiativeSettings settings)
+{
+    std::lock_guard lock(mutex);
+    configuration = settings;
+    policy.UpdateSettings(std::move(settings));
+}
+
 bool InitiativeController::BuildConversationProposal(
     const std::vector<StarterCue>& cues,
     Proposal& outProposal)
@@ -224,6 +232,19 @@ InitiativeController::Consideration InitiativeController::Consider(
     std::lock_guard lock(mutex);
     Consideration consideration;
 
+    const bool hasUncommittedReservation = std::any_of(
+        proposals.begin(), proposals.end(), [this](const auto& entry)
+        {
+            return entry.second == ProposalOutcome::Pending &&
+                !committedProposals.contains(entry.first.id);
+        });
+    if (hasUncommittedReservation)
+    {
+        consideration.verdict = AttentionVerdict::Cooldown;
+        policy.RecordSuppressed();
+        return consideration;
+    }
+
     Proposal candidate;
     if (!BuildProposal(evidence, candidate))
     {
@@ -250,7 +271,6 @@ InitiativeController::Consideration InitiativeController::Consider(
     candidate.id = "proposal-" + std::to_string(nextId++);
     candidate.createdAt = context.now;
     lastSubject = candidate.evidence;
-    policy.RecordSpoken(context.now);
     proposals.emplace_back(candidate, ProposalOutcome::Pending);
 
     consideration.hasProposal = true;
@@ -258,14 +278,36 @@ InitiativeController::Consideration InitiativeController::Consider(
     return consideration;
 }
 
+bool InitiativeController::Commit(
+    const std::string& proposalId,
+    const std::chrono::system_clock::time_point when)
+{
+    std::lock_guard lock(mutex);
+    for (const auto& entry : proposals)
+    {
+        if (entry.first.id == proposalId && entry.second == ProposalOutcome::Pending)
+        {
+            if (!committedProposals.insert(proposalId).second)
+            {
+                return false;
+            }
+            policy.RecordSpoken(when);
+            return true;
+        }
+    }
+    return false;
+}
+
 void InitiativeController::Accept(const std::string& proposalId)
 {
     std::lock_guard lock(mutex);
     for (auto& entry : proposals)
     {
-        if (entry.first.id == proposalId && entry.second == ProposalOutcome::Pending)
+        if (entry.first.id == proposalId && entry.second == ProposalOutcome::Pending &&
+            committedProposals.contains(proposalId))
         {
             entry.second = ProposalOutcome::Accepted;
+            committedProposals.erase(proposalId);
             policy.RecordAccepted();
             return;
         }
@@ -299,6 +341,7 @@ void InitiativeController::RecordConversationResponse(
     for (auto& entry : proposals)
     {
         if (entry.second == ProposalOutcome::Pending &&
+            committedProposals.contains(entry.first.id) &&
             entry.first.kind == Proposal::Kind::ConversationStarter)
         {
             if (dismissed)
@@ -311,6 +354,7 @@ void InitiativeController::RecordConversationResponse(
                 entry.second = ProposalOutcome::Accepted;
                 policy.RecordAccepted();
             }
+            committedProposals.erase(entry.first.id);
         }
     }
 }
@@ -322,9 +366,11 @@ void InitiativeController::Dismiss(
     std::lock_guard lock(mutex);
     for (auto& entry : proposals)
     {
-        if (entry.first.id == proposalId && entry.second == ProposalOutcome::Pending)
+        if (entry.first.id == proposalId && entry.second == ProposalOutcome::Pending &&
+            committedProposals.contains(proposalId))
         {
             entry.second = ProposalOutcome::Dismissed;
+            committedProposals.erase(proposalId);
             policy.RecordDismissed(when);
             return;
         }
@@ -339,6 +385,11 @@ void InitiativeController::Expire(const std::string& proposalId)
         if (entry.first.id == proposalId && entry.second == ProposalOutcome::Pending)
         {
             entry.second = ProposalOutcome::Expired;
+            committedProposals.erase(proposalId);
+            if (lastSubject == entry.first.evidence)
+            {
+                lastSubject.clear();
+            }
             return;
         }
     }
@@ -350,7 +401,8 @@ std::vector<Proposal> InitiativeController::Pending() const
     std::vector<Proposal> pending;
     for (const auto& entry : proposals)
     {
-        if (entry.second == ProposalOutcome::Pending)
+        if (entry.second == ProposalOutcome::Pending &&
+            committedProposals.contains(entry.first.id))
         {
             pending.push_back(entry.first);
         }

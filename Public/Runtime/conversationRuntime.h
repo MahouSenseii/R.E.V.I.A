@@ -34,7 +34,8 @@ public:
     using InternetSettingsProvider =
         std::function<actions::CapabilitySettings::InternetAccess()>;
     using InternetLookupHandler =
-        std::function<actions::ActionOutcome(const std::string&)>;
+        std::function<actions::ActionOutcome(const std::string&, const std::string&)>;
+    using ResponseFilterSettingsProvider = std::function<responseFilterSettings()>;
 
     ConversationRuntime(
         messageRouter& router,
@@ -47,7 +48,8 @@ public:
         StateHandler stateHandler,
         AffectHandler affectHandler,
         InternetSettingsProvider internetSettingsProvider,
-        InternetLookupHandler internetLookupHandler);
+        InternetLookupHandler internetLookupHandler,
+        ResponseFilterSettingsProvider responseFilterSettingsProvider);
 
     SessionResult Reply(
         const std::string& input,
@@ -62,6 +64,15 @@ public:
     SessionResult StartConversation(
         const std::string& cue,
         const std::string& evidence,
+        const aiProfile& profile,
+        bool llmAvailable,
+        bool shouldSpeak,
+        std::stop_token stopToken = {});
+
+    SessionResult StartCuriosityConversation(
+        const std::string& topic,
+        const std::string& rationale,
+        const std::string& researchGrounding,
         const aiProfile& profile,
         bool llmAvailable,
         bool shouldSpeak,
@@ -92,6 +103,9 @@ private:
         const std::vector<conversationMessage>& promptContext,
         const aiProfile& profile,
         bool llmAvailable) const;
+    [[nodiscard]] agents::ResponseFilterContext BuildResponseFilterContext(
+        const std::string& policyInput,
+        const std::vector<conversationMessage>& promptContext) const;
     SessionResult Generate(
         const std::string& policyInput,
         const std::vector<conversationMessage>& promptContext,
@@ -100,6 +114,8 @@ private:
         bool shouldSpeak,
         bool evaluateMemory,
         bool proactive,
+        const std::string& proactiveInstruction,
+        const std::string& precomputedInternetGrounding,
         std::stop_token stopToken);
     void PublishComponent(
         const std::string& component,
@@ -107,6 +123,14 @@ private:
         const std::string& message,
         double elapsedMilliseconds,
         int queueDepth,
+        std::uint64_t turnId) const;
+    void PublishInternetActivity(
+        const std::string& phase,
+        const std::string& query,
+        const std::string& provider,
+        const std::string& detail,
+        double elapsedMilliseconds,
+        int sourceCount,
         std::uint64_t turnId) const;
 
     messageRouter& router;
@@ -120,6 +144,7 @@ private:
     AffectHandler publishAffect;
     InternetSettingsProvider internetSettings;
     InternetLookupHandler internetLookup;
+    ResponseFilterSettingsProvider filterSettingsProvider;
     agents::ConversationQualityMonitor qualityMonitor;
     std::uint64_t turnCounter = 0;
     std::uint64_t utteranceCounter = 0;

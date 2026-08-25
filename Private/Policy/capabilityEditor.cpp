@@ -158,6 +158,16 @@ bool CapabilityEditor::SetInternetAccess(
     return Apply(path, Mutation::Internet, {}, {}, enabled, automaticLookup, outError);
 }
 
+bool CapabilityEditor::SetInternetBrowser(
+    const std::filesystem::path& path,
+    const bool visibleBrowser,
+    const bool autonomousResearch,
+    std::string& outError) const
+{
+    return Apply(
+        path, Mutation::Browser, {}, {}, visibleBrowser, autonomousResearch, outError);
+}
+
 bool CapabilityEditor::Apply(
     const std::filesystem::path& path,
     const Mutation mutation,
@@ -167,7 +177,8 @@ bool CapabilityEditor::Apply(
     const bool automaticLookup,
     std::string& outError) const
 {
-    if (mutation != Mutation::Internet && !ValidExecutable(executable))
+    if (mutation != Mutation::Internet && mutation != Mutation::Browser &&
+        !ValidExecutable(executable))
     {
         outError = "An application permission requires a plain .exe name.";
         return false;
@@ -263,8 +274,18 @@ bool CapabilityEditor::Apply(
         {
             internet = json::object();
         }
-        internet["enabled"] = enabled;
-        internet["automaticLookup"] = automaticLookup;
+        if (mutation == Mutation::Internet)
+        {
+            internet["enabled"] = enabled;
+            internet["automaticLookup"] = automaticLookup;
+            if (!enabled) internet["autonomousResearch"] = false;
+        }
+        else
+        {
+            internet["visibleBrowser"] = enabled;
+            internet["autonomousResearch"] = enabled && automaticLookup;
+            if (automaticLookup) internet["enabled"] = true;
+        }
         if (!internet.contains("provider")) internet["provider"] = "duckduckgo";
         if (!internet.contains("approvedHosts"))
         {
@@ -274,6 +295,17 @@ bool CapabilityEditor::Apply(
         if (!internet.contains("maxResponseBytes")) internet["maxResponseBytes"] = 262144;
         if (!internet.contains("maxRequestsPerMinute")) internet["maxRequestsPerMinute"] = 12;
         if (!internet.contains("maxResults")) internet["maxResults"] = 5;
+        if (!internet.contains("visibleBrowser")) internet["visibleBrowser"] = false;
+        if (!internet.contains("autonomousResearch")) internet["autonomousResearch"] = false;
+        if (!internet.contains("visibleBrowserPort")) internet["visibleBrowserPort"] = 8095;
+        if (!internet.contains("visibleBrowserStartupTimeoutMs"))
+            internet["visibleBrowserStartupTimeoutMs"] = 8000;
+        if (!internet.contains("visibleBrowserRequestTimeoutMs"))
+            internet["visibleBrowserRequestTimeoutMs"] = 30000;
+        if (!internet.contains("visibleBrowserMaxPages"))
+            internet["visibleBrowserMaxPages"] = 3;
+        if (!internet.contains("visibleBrowserStepDelayMs"))
+            internet["visibleBrowserStepDelayMs"] = 250;
     }
 
     return ReplaceValidated(path, data, outError);

@@ -4,6 +4,8 @@
 #include "Core/exitReporter.h"
 
 #include <QApplication>
+#include <QPixmap>
+#include <QTabWidget>
 #include <QTimer>
 
 #include <exception>
@@ -15,6 +17,8 @@ int main(int argc, char** argv)
     bool smokeTest = false;
     bool runtimeSmokeTest = false;
     bool runtimeReadySmokeTest = false;
+    std::string screenshotPath;
+    std::string screenshotTab;
     for (int index = 1; index < argc; ++index)
     {
         smokeTest = smokeTest || std::string(argv[index]) == "--ui-smoke-test";
@@ -22,6 +26,15 @@ int main(int argc, char** argv)
             std::string(argv[index]) == "--runtime-smoke-test";
         runtimeReadySmokeTest = runtimeReadySmokeTest ||
             std::string(argv[index]) == "--runtime-ready-smoke-test";
+        if (std::string(argv[index]) == "--ui-screenshot" && index + 1 < argc)
+        {
+            screenshotPath = argv[++index];
+            smokeTest = true;
+        }
+        else if (std::string(argv[index]) == "--ui-screenshot-tab" && index + 1 < argc)
+        {
+            screenshotTab = argv[++index];
+        }
     }
     runtimeSmokeTest = runtimeSmokeTest || runtimeReadySmokeTest;
 
@@ -86,7 +99,31 @@ int main(int argc, char** argv)
     {
         window.show();
     }
-    if (smokeTest)
+    if (!screenshotTab.empty())
+    {
+        if (auto* tabs = window.findChild<QTabWidget*>(QStringLiteral("tabs")))
+        {
+            const QString wanted = QString::fromStdString(screenshotTab);
+            for (int index = 0; index < tabs->count(); ++index)
+            {
+                if (tabs->tabText(index).startsWith(wanted, Qt::CaseInsensitive))
+                {
+                    tabs->setCurrentIndex(index);
+                    break;
+                }
+            }
+        }
+    }
+    if (!screenshotPath.empty())
+    {
+        QTimer::singleShot(500, &application, [&application, &window, screenshotPath]()
+        {
+            const bool saved = window.grab().save(QString::fromStdString(screenshotPath));
+            window.hide();
+            application.exit(saved ? 0 : 2);
+        });
+    }
+    else if (smokeTest)
     {
         QTimer::singleShot(900, &application, [&application, &window]()
         {

@@ -56,6 +56,7 @@ struct ResourcePlan
     std::string chatTensorSplit;
     std::string chatFitTargets;
     std::string voiceDevice = "cpu";
+    std::vector<std::string> voiceDevices;
     std::string embeddingDevice = "none";
     std::string speechRecognitionDevice = "cpu";
     int chatCpuThreads = 0;

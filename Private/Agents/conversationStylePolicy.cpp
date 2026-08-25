@@ -32,7 +32,14 @@ namespace
         "feel free to ask",
         "if you want to check something im here",
         "if you want i can help",
-        "whenever youre ready"
+        "whenever youre ready",
+        "you okay with that",
+        "are you okay with that",
+        "should i ask you to take it away again",
+        "or should i ask you to take it away again",
+        "im not complaining",
+        "i am not complaining",
+        "just curious"
     };
 
     std::string Trim(const std::string& value)
@@ -93,6 +100,209 @@ namespace
             ++end;
         }
         return Trim(value.substr(0, end));
+    }
+
+    std::string LimitSentences(const std::string& value, const int maximum)
+    {
+        int sentences = 0;
+        for (std::size_t index = 0; index < value.size(); ++index)
+        {
+            if (value[index] != '.' && value[index] != '!' && value[index] != '?')
+            {
+                continue;
+            }
+            while (index + 1 < value.size() &&
+                (value[index + 1] == '.' || value[index + 1] == '!' ||
+                 value[index + 1] == '?'))
+            {
+                ++index;
+            }
+            ++sentences;
+            if (sentences >= maximum)
+            {
+                return Trim(value.substr(0, index + 1));
+            }
+        }
+        return Trim(value);
+    }
+
+    std::string RemoveTrailingQuestion(const std::string& value)
+    {
+        const std::string trimmed = Trim(value);
+        if (trimmed.empty() || trimmed.back() != '?') return trimmed;
+        const std::size_t previous = trimmed.find_last_of(".!?", trimmed.size() - 2);
+        return previous == std::string::npos
+            ? trimmed
+            : Trim(trimmed.substr(0, previous + 1));
+    }
+
+    std::size_t TrailingSentenceStart(const std::string& value)
+    {
+        if (value.empty()) return 0;
+
+        std::size_t scan = value.size();
+        while (scan > 0 &&
+            (value[scan - 1] == '.' || value[scan - 1] == '!' || value[scan - 1] == '?'))
+        {
+            --scan;
+        }
+        while (scan > 0)
+        {
+            const char character = value[scan - 1];
+            if (character == '\n' || character == '!' || character == '?')
+            {
+                return scan;
+            }
+            if (character != '.')
+            {
+                --scan;
+                continue;
+            }
+
+            std::size_t runStart = scan - 1;
+            while (runStart > 0 && value[runStart - 1] == '.')
+            {
+                --runStart;
+            }
+            // Three dots are an expressive pause inside a sentence, not the start of a
+            // new one. Treating them as a boundary made "Just... curious." evade the
+            // stock-tail remover while the equivalent Unicode ellipsis did not.
+            if (scan - runStart >= 3)
+            {
+                scan = runStart;
+                continue;
+            }
+            return scan;
+        }
+        return 0;
+    }
+
+    bool IsIntentionalShortRepeat(
+        const std::vector<std::string>& sentences,
+        const std::size_t start,
+        const std::size_t length)
+    {
+        const std::string first = NormalizeSentence(sentences[start]);
+        if (first.empty() || first.size() > 24 ||
+            static_cast<int>(std::count(first.begin(), first.end(), ' ')) > 2)
+        {
+            return false;
+        }
+        for (std::size_t offset = 1; offset < length; ++offset)
+        {
+            if (NormalizeSentence(sentences[start + offset]) != first)
+            {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    std::string CollapseRepeatedSentenceRuns(const std::string& value)
+    {
+        // Code and structured lists may intentionally repeat syntax. This repair is for
+        // conversational prose, where a model can duplicate a whole decoded block.
+        if (value.find("```") != std::string::npos)
+        {
+            return value;
+        }
+
+        std::vector<std::string> sentences;
+        std::size_t start = 0;
+        for (std::size_t index = 0; index < value.size(); ++index)
+        {
+            const char character = value[index];
+            if (character != '.' && character != '!' && character != '?' &&
+                character != '\n')
+            {
+                continue;
+            }
+            while (index + 1 < value.size() &&
+                (value[index + 1] == '.' || value[index + 1] == '!' ||
+                 value[index + 1] == '?'))
+            {
+                ++index;
+            }
+            const std::string sentence = Trim(value.substr(start, index - start + 1));
+            if (!sentence.empty()) sentences.push_back(sentence);
+            start = index + 1;
+        }
+        const std::string remainder = Trim(value.substr(start));
+        if (!remainder.empty()) sentences.push_back(remainder);
+        if (sentences.size() < 2)
+        {
+            return value;
+        }
+
+        std::vector<std::string> kept;
+        kept.reserve(sentences.size());
+        bool changed = false;
+        for (std::size_t index = 0; index < sentences.size();)
+        {
+            const std::size_t maximum =
+                std::min<std::size_t>(8, (sentences.size() - index) / 2);
+            std::size_t repeatedLength = 0;
+            for (std::size_t length = 1; length <= maximum; ++length)
+            {
+                bool same = true;
+                for (std::size_t offset = 0; offset < length; ++offset)
+                {
+                    if (NormalizeSentence(sentences[index + offset]) !=
+                        NormalizeSentence(sentences[index + length + offset]))
+                    {
+                        same = false;
+                        break;
+                    }
+                }
+                // Preserve expressive short repetition ("No! No!" or "No way! No way!")
+                // while still catching a duplicated long sentence or a real block.
+                if (same &&
+                    ((length == 1 && sentences[index].size() >= 48) ||
+                     (length > 1 && !IsIntentionalShortRepeat(sentences, index, length))))
+                {
+                    repeatedLength = length;
+                    break;
+                }
+            }
+            if (repeatedLength == 0)
+            {
+                kept.push_back(sentences[index++]);
+                continue;
+            }
+            kept.insert(
+                kept.end(),
+                sentences.begin() + static_cast<std::ptrdiff_t>(index),
+                sentences.begin() + static_cast<std::ptrdiff_t>(index + repeatedLength));
+            const std::size_t firstBlock = index;
+            index += repeatedLength;
+            while (index + repeatedLength <= sentences.size())
+            {
+                bool same = true;
+                for (std::size_t offset = 0; offset < repeatedLength; ++offset)
+                {
+                    if (NormalizeSentence(sentences[firstBlock + offset]) !=
+                        NormalizeSentence(sentences[index + offset]))
+                    {
+                        same = false;
+                        break;
+                    }
+                }
+                if (!same) break;
+                index += repeatedLength;
+            }
+            changed = true;
+        }
+        if (!changed)
+        {
+            return value;
+        }
+        std::ostringstream collapsed;
+        for (std::size_t index = 0; index < kept.size(); ++index)
+        {
+            if (index > 0) collapsed << ' ';
+            collapsed << kept[index];
+        }
+        return collapsed.str();
     }
 }
 
@@ -167,6 +377,35 @@ bool ConversationStylePolicy::LooksLikeWellbeingQuestion(const std::string& inpu
         });
 }
 
+bool ConversationStylePolicy::LooksLikeSocialGreeting(const std::string& input)
+{
+    const std::string normalized = NormalizeSentence(input);
+    constexpr std::string_view Greetings[] = {
+        "hi", "hello", "hey", "morning", "afternoon", "evening",
+        "good morning", "good afternoon", "good evening"
+    };
+    return std::any_of(std::begin(Greetings), std::end(Greetings),
+        [&normalized](const std::string_view greeting)
+        {
+            return normalized == greeting;
+        });
+}
+
+bool ConversationStylePolicy::LooksLikeEmotionQuestion(const std::string& input)
+{
+    const std::string normalized = NormalizeSentence(input);
+    constexpr std::string_view Signals[] = {
+        "would you feel", "how would you feel", "do you feel", "are you lonely",
+        "would you be sad", "feel sad", "feel lonely", "would you miss",
+        "how do you feel"
+    };
+    return std::any_of(std::begin(Signals), std::end(Signals),
+        [&normalized](const std::string_view signal)
+        {
+            return normalized.find(signal) != std::string::npos;
+        });
+}
+
 bool ConversationStylePolicy::ContainsUnsupportedOperationalClaim(const std::string& reply)
 {
     const std::string normalized = NormalizeSentence(reply);
@@ -174,7 +413,8 @@ bool ConversationStylePolicy::ContainsUnsupportedOperationalClaim(const std::str
         "alert", "pending task", "watching", "looking at", "seeing your", "checking log", "monitoring",
         "temperature", "dark mode", "light mode", "theme is", "code is compiling",
         "codes compiling", "compiler", "build is running", "process is running", "files are",
-        "sitting", "standing"
+        "sitting", "standing", "just finished", "finished a", "cleanup on",
+        "cleaned up", "everything is humming", "humming along", "made the upgrades"
     };
     return std::any_of(std::begin(Claims), std::end(Claims),
         [&normalized](const std::string_view claim)
@@ -262,7 +502,9 @@ std::string ConversationStylePolicy::BuildTurnGuidance(
     std::ostringstream guidance;
     guidance << "Turn-local conversation guidance: answer the latest message as a continuation "
         "of the exchange, not as a new support ticket. Do not repeat the user's wording and do "
-        "not add a generic invitation or follow-up question after the answer.";
+        "not add a generic invitation or follow-up question after the answer. Never repeat a "
+        "sentence or block to create emphasis. Avoid reassurance-check loops such as 'You okay "
+        "with that?', 'I'm not complaining', and 'Just curious'.";
 
     if (LooksLikeCorrection(input))
     {
@@ -274,6 +516,19 @@ std::string ConversationStylePolicy::BuildTurnGuidance(
     {
         guidance << " The latest message is a brief social acknowledgement. Reply with at "
             "most one short sentence. Do not add a status report, offer, or question.";
+    }
+    if (LooksLikeSocialGreeting(input))
+    {
+        guidance << " This is a simple social greeting. Answer in one or two natural "
+            "sentences. Do not invent something you were doing, report project or system "
+            "work, or end by asking what the user wants.";
+    }
+    if (LooksLikeEmotionQuestion(input))
+    {
+        guidance << " Answer the question about your own digital conversational feeling "
+            "in a proportionate way. You may be dramatic, childish, sulky, blunt, or use "
+            "an ellipsis when that is genuinely your reaction. Stay grounded in a digital "
+            "mood rather than claiming your survival depends on the user.";
     }
     if (LooksLikePreferenceStatement(input))
     {
@@ -329,7 +584,7 @@ std::string ConversationStylePolicy::RefineReply(
     const std::vector<conversationMessage>& context,
     const std::string& reply) const
 {
-    std::string refined = Trim(reply);
+    std::string refined = CollapseRepeatedSentenceRuns(Trim(reply));
     if (refined.empty())
     {
         return refined;
@@ -355,6 +610,21 @@ std::string ConversationStylePolicy::RefineReply(
     {
         return "I don't know yet—you've told me the preference, not the reason.";
     }
+    if (LooksLikeSocialGreeting(input))
+    {
+        if (ContainsUnsupportedOperationalClaim(refined))
+        {
+            const std::string opening = OpeningOf(refined);
+            return opening.empty() || ContainsUnsupportedOperationalClaim(opening)
+                ? "Hi. Good to see you."
+                : opening + " Good to see you.";
+        }
+        refined = RemoveTrailingQuestion(LimitSentences(refined, 2));
+    }
+    if (LooksLikeEmotionQuestion(input))
+    {
+        refined = LimitSentences(refined, 4);
+    }
     if (LooksLikeBriefAcknowledgement(input))
     {
         if (ContainsUnsupportedOperationalClaim(refined))
@@ -368,19 +638,19 @@ std::string ConversationStylePolicy::RefineReply(
         }
     }
 
-    // Only inspect the final sentence. Removing an identical phrase from quoted or
-    // explanatory material in the middle would change the answer rather than its style.
-    const std::size_t searchFrom = refined.size() > 1 ? refined.size() - 2 : 0;
-    const std::size_t boundary = refined.find_last_of(".!?\n", searchFrom);
-    const std::size_t start = boundary == std::string::npos ? 0 : boundary + 1;
-    const std::string tail = Trim(refined.substr(start));
-    if (!IsGenericContinuation(tail) || start == 0)
+    // Inspect only consecutive final sentences. A model can stack several stock phrases
+    // into one reassurance loop; removing just the final "Just curious" leaves the rest
+    // of that same loop intact. Never erase a reply made entirely of one question.
+    for (;;)
     {
-        return refined;
+        const std::size_t start = TrailingSentenceStart(refined);
+        const std::string tail = Trim(refined.substr(start));
+        if (!IsGenericContinuation(tail) || start == 0)
+        {
+            return refined;
+        }
+        refined = Trim(refined.substr(0, start));
     }
-
-    refined = Trim(refined.substr(0, start));
-    return refined.empty() ? Trim(reply) : refined;
 }
 
 bool ConversationStylePolicy::ShouldSuppressSpokenFragment(
@@ -415,6 +685,8 @@ bool ConversationStylePolicy::CanStreamReply(const std::string& input) const
     // Waiting for their short answer is preferable to speaking text that refinement
     // would immediately retract.
     return !LooksLikeWellbeingQuestion(input) &&
+        !LooksLikeSocialGreeting(input) &&
+        !LooksLikeEmotionQuestion(input) &&
         !LooksLikeBriefAcknowledgement(input) &&
         !LooksLikePreferenceStatement(input) &&
         !LooksLikeMotiveQuestion(input);

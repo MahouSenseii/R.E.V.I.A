@@ -35,6 +35,7 @@ public:
     void Submit(
         const messageRouter& router,
         std::string input,
+        std::string assistantResponse = "",
         std::uint64_t turnId = 0);
     void SubmitEmbeddingBackfill(
         const messageRouter& router,
@@ -47,6 +48,7 @@ private:
     {
         const messageRouter* router = nullptr;
         std::string input;
+        std::string assistantResponse;
         std::string memoryId;
         std::uint64_t turnId = 0;
     };

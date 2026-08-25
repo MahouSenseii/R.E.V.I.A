@@ -16,16 +16,23 @@ namespace
         {
             return QColor("#ff8da1");
         }
+        if (phase == "Degraded" || phase == "Hard only" || phase == "Flagged")
+        {
+            return QColor("#f4c56a");
+        }
         if (phase == "Running" || phase == "Thinking" || phase == "Generating" ||
             phase == "Speaking" || phase == "Recording" || phase == "Transcribing" ||
             phase == "Analyzing" || phase == "Capturing" || phase == "Queued" ||
             phase == "Loading" || phase == "Designing" || phase == "Triggered" ||
-            phase == "Initiating")
+            phase == "Initiating" || phase == "Considering" ||
+            phase == "Researching" || phase == "SpeechDetected" ||
+            phase == "Received")
         {
             return QColor("#79d9ff");
         }
-        if (phase == "Ready" || phase == "Saved" || phase == "Backfilled" ||
-            phase == "Watching" || phase == "Healthy")
+        if (phase == "Ready" || phase == "Generated" || phase == "Saved" || phase == "Backfilled" ||
+            phase == "Watching" || phase == "Healthy" || phase == "HandsFree" ||
+            phase == "Replied" || phase == "Spoke")
         {
             return QColor("#69e2c4");
         }
@@ -70,9 +77,12 @@ PipelinePanel::PipelinePanel(QWidget* parent)
         QStringLiteral("Voice"), QStringLiteral("Microphone"),
         QStringLiteral("Vision"), QStringLiteral("Automation"),
         QStringLiteral("Internet"), QStringLiteral("Permissions"),
+        QStringLiteral("Response filters"),
         QStringLiteral("Conversation quality"),
         QStringLiteral("Perception"), QStringLiteral("Initiative"),
-        QStringLiteral("Input")})
+        QStringLiteral("Curiosity"), QStringLiteral("Browser"),
+        QStringLiteral("Input"), QStringLiteral("Presence"),
+        QStringLiteral("Avatar"), QStringLiteral("Adapters")})
     {
         const int row = EnsureRow(component);
         SetCell(row, 1, "-");

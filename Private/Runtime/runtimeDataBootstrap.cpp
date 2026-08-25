@@ -76,6 +76,9 @@ RuntimeDataBootstrapResult BootstrapRuntimeData(
     const std::array directories = {
         runtimeRoot,
         runtimeRoot / "Capabilities",
+        runtimeRoot / "Browser",
+        runtimeRoot / "Browser" / "Profile",
+        runtimeRoot / "Initiative",
         std::filesystem::path(settings.speech.voiceDataPath),
         std::filesystem::path(settings.llm.mediaPath)
     };

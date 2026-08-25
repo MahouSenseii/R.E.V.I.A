@@ -16,9 +16,16 @@
 namespace revia::actions
 {
 
+namespace internet
+{
+class VisibleBrowserCancellation;
+}
+
 class ActionRuntime
 {
 public:
+    ActionRuntime();
+
     [[nodiscard]] bool Initialize(
         const std::filesystem::path& capabilityConfig,
         const std::filesystem::path& auditPath,
@@ -63,6 +70,13 @@ public:
         bool enabled,
         bool automaticLookup,
         std::string& outError);
+    [[nodiscard]] bool SetInternetBrowser(
+        bool visibleBrowser,
+        bool autonomousResearch,
+        std::string& outError);
+    // Lock-free with respect to Execute(): shutdown must be able to interrupt a browser
+    // request while that request owns the main action-runtime mutex.
+    void CancelActiveInternet();
 
 private:
     [[nodiscard]] bool InitializeUnlocked(
@@ -75,6 +89,7 @@ private:
     policy::PermissionStore permissionStore;
     policy::CapabilityEditor capabilityEditor;
     std::unique_ptr<policy::CapabilityPolicy> policy;
+    std::shared_ptr<internet::VisibleBrowserCancellation> internetCancellation;
     ActionDispatcher dispatcher;
     std::unique_ptr<audit::ActionAuditLogger> auditLogger;
     planning::StructuredActionParser parser;

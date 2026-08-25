@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <mutex>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 namespace revia::initiative
@@ -62,6 +63,7 @@ public:
     InitiativeController() = default;
 
     void Configure(initiativeSettings settings);
+    void UpdateSettings(initiativeSettings settings);
 
     // Considers the recent session and returns a proposal when one clears the gate.
     // Returns no proposal and records the reason otherwise.
@@ -89,6 +91,12 @@ public:
         const Evidence& evidence,
         const AttentionContext& context);
 
+    // Commits a proposal only after its output or private research actually succeeded.
+    // Consider() merely reserves admission, so cancellation and generation failures do
+    // not consume cooldown or the hourly budget.
+    [[nodiscard]] bool Commit(
+        const std::string& proposalId,
+        std::chrono::system_clock::time_point when);
     void Accept(const std::string& proposalId);
     // A normal reply accepts a conversational opening; a natural refusal such as "not
     // now" dismisses it. Neither path requires a slash command.
@@ -125,6 +133,7 @@ private:
     initiativeSettings configuration;
     AttentionPolicy policy;
     std::vector<std::pair<Proposal, ProposalOutcome>> proposals;
+    std::unordered_set<std::string> committedProposals;
     std::string lastSubject;
     std::uint64_t nextId = 1;
 };

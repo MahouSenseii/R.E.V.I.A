@@ -30,6 +30,13 @@ struct responseOutput
     // Reasoning is not an answer: speaking it or showing it inline would be wrong, but
     // discarding it hides what Revia actually did.
     std::string reasoning;
+    // The hard layer is deterministic and always runs. The optional AI review is a
+    // second, independent pass over the completed candidate before it can reach speech,
+    // memory, or dialogue history. These fields are observability, not hidden policy.
+    bool bHardFilterChanged = false;
+    bool bAiFilterReviewed = false;
+    bool bAiFilterChanged = false;
+    std::string filterSummary;
     std::vector<latencySample> timings;
 };
 
@@ -118,6 +125,13 @@ struct speechSettings
     int qwenStartupTimeoutSeconds = 60;
     int qwenRequestTimeoutSeconds = 600;
     std::string qwenDevice = "auto";
+    // One long-lived Qwen process is created per entry. The resource planner replaces
+    // the default with the exact devices that can hold an independent clone model.
+    // Keeping qwenDevice preserves older configurations and the single-worker UI path.
+    std::vector<std::string> qwenDevices = {"auto"};
+    int qwenMaxWorkers = 2;
+    int qwenPrefetchFragments = 3;
+    int qwenMaxBufferedAudioMiB = 128;
     int qwenMinimumFreeVramMiB = 4600;
     // Effective host-thread cap applied inside the PyTorch worker. The resource planner
     // fills this even for CUDA because model preparation and audio encoding use CPU work.
@@ -134,24 +148,16 @@ struct speechSettings
     int maxQueuedUtterances = 16;
 };
 
-struct alwaysOnListeningSettings
-{
-    // Opt-in. Continuous listening is a standing microphone, which is a materially larger
-    // promise than a button that opens one for a few seconds.
-    bool bEnabled = false;
-    int energyThreshold = 1400;
-    // Sustained speech before capture starts, so a door does not open a recording.
-    int onsetFramesRequired = 5;
-    // Silence before capture ends. Long enough to survive a pause mid-sentence.
-    int silenceMsToEnd = 900;
-    // Hard ceiling on one utterance, so a noisy room cannot record indefinitely.
-    int maxUtteranceSeconds = 30;
-};
-
 struct speechRecognitionSettings
 {
     bool bEnabled = true;
     std::string executable = "ThirdParty/whisper/whisper-cli.exe";
+    bool bUseServer = true;
+    std::string serverExecutable = "ThirdParty/whisper/whisper-server.exe";
+    std::string serverHost = "127.0.0.1";
+    int serverPort = 8094;
+    int serverStartupTimeoutSeconds = 60;
+    int requestTimeoutSeconds = 180;
     std::string modelPath = "Models/ggml-small.en.bin";
     std::string language = "en";
     int sampleRate = 16000;
@@ -160,7 +166,33 @@ struct speechRecognitionSettings
     // "cpu", "auto", or "cuda:N". `useGpu` remains as the backward-compatible
     // coarse switch; the startup resource plan resolves auto to one exact device.
     std::string device = "auto";
-    alwaysOnListeningSettings alwaysOn;
+    // Hands-free mode records only voiced segments. It is deliberately a local comfort
+    // setting rather than an authority setting: transcripts still enter the same input
+    // arbiter and cannot widen action permissions.
+    bool bHandsFree = false;
+    int vadEnergyThreshold = 900;
+    int vadSpeechFrames = 3;
+    int vadSilenceMs = 850;
+    int minimumUtteranceMs = 350;
+    int maximumUtteranceSeconds = 24;
+};
+
+// Presence is a presentation and input-routing layer. It never owns inference, memory,
+// actions, or rendering. A VRM renderer and narrow external integrations consume its
+// bounded local files and can disappear without taking down the assistant.
+struct presenceSettings
+{
+    bool bEnabled = true;
+    bool bAvatarBridgeEnabled = true;
+    std::string statePath = "RuntimeData/Presence/avatar_state.json";
+    std::string eventPath = "RuntimeData/Presence/avatar_events.jsonl";
+    bool bExternalAdaptersEnabled = false;
+    std::string inboxPath = "RuntimeData/Presence/Inbox";
+    std::string outboxPath = "RuntimeData/Presence/Outbox";
+    int adapterPollMs = 150;
+    int maxAdapterEventsPerMinute = 30;
+    int maxAdapterTextCharacters = 4000;
+    std::vector<std::string> allowedAdapters = {"discord", "stream", "game"};
 };
 
 // Cross-pipeline placement policy. These are budgets and preferences, not work queues:
@@ -268,6 +300,15 @@ struct inputArbiterSettings
 struct initiativeSettings
 {
     bool bEnabled = false;
+    // Curiosity is a candidate generator, not an interruption permission. It may
+    // consider recent dialogue or a meaningful affect transition, but an empty clock
+    // tick can never create a topic and AttentionPolicy still owns the final gate.
+    bool bCuriosityEnabled = true;
+    bool bSpontaneousSpeechEnabled = true;
+    bool bSpeakWhenUserAway = true;
+    int curiosityCheckSeconds = 30;
+    int autonomousQuietSeconds = 45;
+    int curiosityTopicCooldownMinutes = 1440;
     // Below this, Revia stays quiet no matter how relevant the observation looks.
     float minimumConfidence = 0.72f;
     int maxUtterancesPerHour = 4;
@@ -380,6 +421,17 @@ struct conversationSettings
     int restoreTurns = 6;
 };
 
+// Response filtering is deliberately separate from the personality prompt. A profile
+// may be playful or bratty without being trusted to police its own output. The hard
+// structural/grounding pass cannot be disabled; the model review can be traded for
+// lower latency and is exposed as a live comfort preference.
+struct responseFilterSettings
+{
+    bool bAiReviewEnabled = true;
+    int aiMaxReviewTokens = 192;
+    int maxReplyCharacters = 12000;
+};
+
 struct appSettings
 {
     std::string activeProfile = "assistant";
@@ -387,6 +439,7 @@ struct appSettings
     embeddingSettings embedding;
     speechSettings speech;
     speechRecognitionSettings speechRecognition;
+    presenceSettings presence;
     resourceSettings resources;
     visionSettings vision;
     perceptionSettings perception;
@@ -394,6 +447,7 @@ struct appSettings
     bargeInSettings bargeIn;
     conversationChannelSettings channels;
     conversationSettings conversation;
+    responseFilterSettings responseFilter;
     imageSettings image;
     inputArbiterSettings inputArbiter;
 };

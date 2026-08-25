@@ -21,6 +21,12 @@ void ConversationStarter::Configure(initiativeSettings settings)
     lastCueEvidence.clear();
 }
 
+void ConversationStarter::UpdateSettings(initiativeSettings settings)
+{
+    std::lock_guard lock(mutex);
+    configuration = std::move(settings);
+}
+
 std::string ConversationStarter::FriendlyApplication(const std::string& executable)
 {
     std::string name = executable;

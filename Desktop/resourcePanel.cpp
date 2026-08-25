@@ -1,10 +1,12 @@
 #include "resourcePanel.h"
 
 #include <QAbstractItemView>
+#include <QComboBox>
 #include <QHBoxLayout>
 #include <QHeaderView>
 #include <QLabel>
 #include <QProgressBar>
+#include <QPushButton>
 #include <QScrollArea>
 #include <QStyle>
 #include <QTableWidget>
@@ -13,6 +15,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <utility>
 
 namespace
 {
@@ -114,8 +117,8 @@ namespace
     }
 }
 
-ResourcePanel::ResourcePanel(QWidget* parent)
-    : QWidget(parent)
+ResourcePanel::ResourcePanel(VoiceDeviceHandler voiceDeviceHandler, QWidget* parent)
+    : QWidget(parent), onVoiceDeviceRequested(std::move(voiceDeviceHandler))
 {
     // The panel is a scrolling page. Its three sections are sized by their contents, so
     // the window height decides how much is visible rather than how much is legible.
@@ -163,6 +166,38 @@ ResourcePanel::ResourcePanel(QWidget* parent)
     summary->setObjectName("secondaryText");
     layout->addWidget(summary);
 
+    addSection("Voice generation device",
+        "Auto chooses a safe device on every startup. CPU protects GPU memory but is "
+        "slower. Selecting a GPU reserves room for Qwen3-TTS and may move more chat "
+        "layers to CPU. Changes apply after restarting Revia.");
+    auto* voiceDeviceRow = new QHBoxLayout();
+    voiceDeviceCombo = new QComboBox(page);
+    voiceDeviceCombo->addItem("Auto (recommended)", "auto-secondary");
+    voiceDeviceCombo->addItem("CPU", "cpu");
+    saveVoiceDeviceButton = new QPushButton("Save voice device", page);
+    saveVoiceDeviceButton->setEnabled(static_cast<bool>(onVoiceDeviceRequested));
+    voiceDeviceRow->addWidget(voiceDeviceCombo, 1);
+    voiceDeviceRow->addWidget(saveVoiceDeviceButton);
+    layout->addLayout(voiceDeviceRow);
+    voiceDeviceStatus = new QLabel(
+        "The resolved device remains visible in the assignment table below.", page);
+    voiceDeviceStatus->setWordWrap(true);
+    voiceDeviceStatus->setObjectName("secondaryText");
+    layout->addWidget(voiceDeviceStatus);
+    connect(saveVoiceDeviceButton, &QPushButton::clicked, this, [this]()
+    {
+        if (!onVoiceDeviceRequested)
+        {
+            return;
+        }
+        const std::string device = voiceDeviceCombo->currentData().toString().toStdString();
+        const revia::core::PreferenceResult result = onVoiceDeviceRequested(device);
+        voiceDeviceStatus->setText(QString::fromStdString(result.message));
+        voiceDeviceStatus->setProperty("error", !result.succeeded);
+        voiceDeviceStatus->style()->unpolish(voiceDeviceStatus);
+        voiceDeviceStatus->style()->polish(voiceDeviceStatus);
+    });
+
     addSection("Live usage against the plan",
         "Sampled continuously and compared with the budget the plan set aside. Video "
         "memory is the system-wide figure for the adapter, because the model weights "
@@ -203,6 +238,38 @@ ResourcePanel::ResourcePanel(QWidget* parent)
     layout->addWidget(assignmentTable);
 
     layout->addStretch(1);
+}
+
+void ResourcePanel::AddVoiceGpuChoice(const QString& backendId, const QString& name)
+{
+    if (!backendId.startsWith(QStringLiteral("CUDA")))
+    {
+        return;
+    }
+    const int existing = voiceDeviceCombo->findData(backendId);
+    const QString label = backendId + QStringLiteral(" - ") + name;
+    if (existing >= 0)
+    {
+        voiceDeviceCombo->setItemText(existing, label);
+        return;
+    }
+    voiceDeviceCombo->addItem(label, backendId);
+}
+
+void ResourcePanel::SetVoiceDevicePreference(const std::string& device)
+{
+    const QString wanted = QString::fromStdString(
+        device == "auto" ? std::string("auto-secondary") : device);
+    int index = voiceDeviceCombo->findData(wanted);
+    if (index < 0 && wanted.startsWith(QStringLiteral("CUDA")))
+    {
+        voiceDeviceCombo->addItem(wanted + QStringLiteral(" - selected GPU"), wanted);
+        index = voiceDeviceCombo->count() - 1;
+    }
+    if (index >= 0)
+    {
+        voiceDeviceCombo->setCurrentIndex(index);
+    }
 }
 
 void ResourcePanel::FitToContents(QTableWidget* table)
@@ -349,6 +416,10 @@ void ResourcePanel::Observe(const revia::runtime::RuntimeEvent& event)
     }
 
     const QString component = QString::fromStdString(event.component);
+    if (event.phase == "GPU")
+    {
+        AddVoiceGpuChoice(component, QString::fromStdString(event.resource));
+    }
     if (event.phase == "Assignment")
     {
         const int row = EnsureAssignmentRow(component);

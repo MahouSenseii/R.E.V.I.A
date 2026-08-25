@@ -7,7 +7,9 @@
 
 #include <atomic>
 #include <map>
+#include <memory>
 #include <thread>
+#include <vector>
 
 class QCheckBox;
 class QCloseEvent;
@@ -16,7 +18,9 @@ class QEvent;
 class QLabel;
 class QLineEdit;
 class QPlainTextEdit;
+class QProgressBar;
 class QPushButton;
+class QSpinBox;
 class QSystemTrayIcon;
 class QTabWidget;
 class QTextBrowser;
@@ -24,9 +28,11 @@ class QTimer;
 class QToolButton;
 class QWidget;
 class CanvasPanel;
+class InternetActivityPanel;
 class PipelinePanel;
 class ResourcePanel;
 class CapabilityPanel;
+namespace Ui { class ReviaWindow; }
 
 class ReviaWindow final : public QMainWindow
 {
@@ -37,6 +43,7 @@ public:
     {
         Unavailable,
         Ready,
+        HandsFree,
         Listening,
         Transcribing
     };
@@ -103,7 +110,26 @@ private:
     };
     void RenderChat();
     std::vector<ChatEntry> chatEntries;
-    void AppendActivity(const QString& message);
+    enum class ActivitySeverity
+    {
+        Automatic,
+        Information,
+        Warning,
+        Error
+    };
+    struct ActivityEntry
+    {
+        QString message;
+        ActivitySeverity severity = ActivitySeverity::Information;
+    };
+    void AppendActivity(
+        const QString& message,
+        ActivitySeverity severity = ActivitySeverity::Automatic);
+    void RenderActivity();
+    void UpdateActivitySummary();
+    void ApplyUserPreferences();
+    void RefreshPresenceUi();
+    void ShowPreferenceResult(const revia::core::PreferenceResult& result);
     bool ConfirmAction(
         const revia::actions::ActionRequest& request,
         const revia::actions::PolicyDecision& decision);
@@ -111,6 +137,7 @@ private:
 
     revia::runtime::ReviaSession session;
     revia::runtime::RuntimeEventBus::SubscriptionId subscriptionId = 0;
+    std::unique_ptr<Ui::ReviaWindow> ui;
 
     QLabel* stateLabel = nullptr;
     QLabel* stateDetailLabel = nullptr;
@@ -124,8 +151,17 @@ private:
     QToolButton* maximizeButton = nullptr;
     QTextBrowser* chatHistory = nullptr;
     QPlainTextEdit* messageInput = nullptr;
-    QPlainTextEdit* activityFeed = nullptr;
+    QTextBrowser* activityFeed = nullptr;
+    QLabel* activityIssueSummary = nullptr;
+    QComboBox* activityFilter = nullptr;
+    QCheckBox* activityAutoScroll = nullptr;
+    QPushButton* openLogsButton = nullptr;
+    QPushButton* clearActivityButton = nullptr;
+    std::vector<ActivityEntry> activityEntries;
+    int activityWarningCount = 0;
+    int activityErrorCount = 0;
     PipelinePanel* pipelinePanel = nullptr;
+    InternetActivityPanel* internetActivityPanel = nullptr;
     ResourcePanel* resourcePanel = nullptr;
     CanvasPanel* canvasPanel = nullptr;
     CapabilityPanel* capabilityPanel = nullptr;
@@ -138,6 +174,23 @@ private:
     QCheckBox* alwaysOnTopCheck = nullptr;
     QCheckBox* speechCheck = nullptr;
     QCheckBox* autoSendVoiceCheck = nullptr;
+    QCheckBox* bargeInCheck = nullptr;
+    QCheckBox* handsFreeCheck = nullptr;
+    QCheckBox* avatarBridgeCheck = nullptr;
+    QCheckBox* externalAdaptersCheck = nullptr;
+    QCheckBox* initiativeCheck = nullptr;
+    QCheckBox* curiosityCheck = nullptr;
+    QCheckBox* spontaneousSpeechCheck = nullptr;
+    QCheckBox* speakWhenAwayCheck = nullptr;
+    QCheckBox* aiFilterCheck = nullptr;
+    QSpinBox* initiativeMaxSpin = nullptr;
+    QSpinBox* resourceSampleSpin = nullptr;
+    QLabel* preferenceStatus = nullptr;
+    QLabel* presencePhaseValue = nullptr;
+    QLabel* presenceAffectValue = nullptr;
+    QLabel* presenceAttentionValue = nullptr;
+    QProgressBar* presenceMomentumBar = nullptr;
+    QPushButton* openPresenceFolderButton = nullptr;
     QComboBox* voiceProfileCombo = nullptr;
     QComboBox* voicePresetCombo = nullptr;
     QComboBox* voiceLanguageCombo = nullptr;

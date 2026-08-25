@@ -104,6 +104,9 @@ struct ActionResult
     std::string message;
     std::string content;
     std::vector<std::string> entries;
+    // Machine-readable executor provenance. Internet activity uses this to distinguish
+    // the dedicated visible browser from an explicitly reported API fallback.
+    std::string backend;
 };
 
 struct ActionOutcome
@@ -127,6 +130,18 @@ struct CapabilitySettings
         std::size_t maxResponseBytes = 256U * 1024U;
         int maxRequestsPerMinute = 12;
         int maxResults = 5;
+        // When enabled, the same typed WebSearch action is fulfilled by a dedicated,
+        // visible Edge/Chrome profile. The model still receives only bounded text and
+        // source URLs; it never receives a socket, URL bar, selector, or script surface.
+        bool visibleBrowser = false;
+        // Separate authority: ordinary automatic lookup never silently grants Revia
+        // permission to invent and research topics while no user turn is active.
+        bool autonomousResearch = false;
+        int visibleBrowserPort = 8095;
+        int visibleBrowserStartupTimeoutMs = 8000;
+        int visibleBrowserRequestTimeoutMs = 30000;
+        int visibleBrowserMaxPages = 3;
+        int visibleBrowserStepDelayMs = 250;
     };
 
     ExecutionMode mode = ExecutionMode::Supervised;

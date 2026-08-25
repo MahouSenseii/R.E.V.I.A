@@ -1,11 +1,13 @@
 #pragma once
 
 #include "Library/structLibrary.h"
+#include "Speech/whisperServerProcess.h"
 
 #include <atomic>
 #include <filesystem>
 #include <functional>
 #include <mutex>
+#include <optional>
 #include <stop_token>
 #include <string>
 #include <thread>
@@ -36,6 +38,7 @@ struct RecognitionEvent
     std::string detail;
     std::string transcript;
     double elapsedMilliseconds = -1.0;
+    bool automatic = false;
 };
 
 class SpeechRecognitionService
@@ -52,6 +55,9 @@ public:
     bool Start(const speechRecognitionSettings& settings, EventHandler handler);
     bool BeginRecording();
     bool EndRecording();
+    void SetHandsFreeEnabled(bool enabled);
+    [[nodiscard]] bool IsHandsFreeEnabled() const;
+    void SetOutputActive(bool active);
     void Cancel();
     void Shutdown();
     bool IsAvailable() const;
@@ -61,7 +67,17 @@ public:
 
 private:
     void Capture(std::stop_token stopToken, std::filesystem::path outputPath);
-    void Transcribe(std::stop_token stopToken, std::filesystem::path wavePath);
+    bool CaptureHandsFree(std::stop_token stopToken, std::filesystem::path outputPath);
+    void RunHandsFree(std::stop_token stopToken);
+    void Transcribe(
+        std::stop_token stopToken,
+        std::filesystem::path wavePath,
+        bool automatic = false);
+    bool EnsureServerReady(std::stop_token stopToken, std::string& outError);
+    std::optional<std::string> TranscribeWithServer(
+        const std::filesystem::path& wavePath,
+        std::stop_token stopToken,
+        std::string& outError);
     void Notify(RecognitionEvent event) const;
 
     mutable std::mutex mutex;
@@ -72,10 +88,17 @@ private:
     std::filesystem::path activeWavePath;
     std::jthread recordingWorker;
     std::jthread transcriptionWorker;
+    std::jthread handsFreeWorker;
+    std::jthread serverWarmupWorker;
+    WhisperServerProcess serverProcess;
     std::atomic<bool> available = false;
     std::atomic<bool> recording = false;
     std::atomic<bool> transcribing = false;
+    std::atomic<bool> transcriptionCancelled = false;
     std::atomic<bool> discarding = false;
+    std::atomic<bool> handsFreeEnabled = false;
+    std::atomic<bool> outputActive = false;
+    std::atomic<bool> serverReady = false;
 };
 
 } // namespace revia::speech

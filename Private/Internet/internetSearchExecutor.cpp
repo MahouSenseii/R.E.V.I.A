@@ -1,8 +1,11 @@
 #include "Internet/internetSearchExecutor.h"
+#include "Internet/internetBackend.h"
+#include "Internet/visibleBrowserClient.h"
 
 #include <algorithm>
 #include <cctype>
 #include <iomanip>
+#include <memory>
 #include <nlohmann/json.hpp>
 #include <sstream>
 
@@ -16,6 +19,38 @@ namespace revia::actions::internet
 
 namespace
 {
+bool IsAutonomousCuriosityRequest(const ActionRequest& request)
+{
+    return request.requestedBy.rfind("autonomous_curiosity/", 0) == 0;
+}
+
+class ActiveBrowserRequest final
+{
+public:
+    ActiveBrowserRequest(
+        std::shared_ptr<VisibleBrowserCancellation> inputCancellation,
+        const int port,
+        const std::string& token)
+        : cancellation(std::move(inputCancellation))
+    {
+        if (cancellation) requestId = cancellation->BeginRequest(port, token);
+    }
+
+    ~ActiveBrowserRequest()
+    {
+        if (cancellation) cancellation->EndRequest(requestId);
+    }
+
+    [[nodiscard]] bool IsCancelled() const
+    {
+        return cancellation && cancellation->IsCancelled(requestId);
+    }
+
+private:
+    std::shared_ptr<VisibleBrowserCancellation> cancellation;
+    std::uint64_t requestId = 0;
+};
+
 std::string Lower(std::string value)
 {
     std::transform(value.begin(), value.end(), value.begin(), [](const unsigned char c)
@@ -194,14 +229,24 @@ void AddRelatedTopics(
 }
 }
 
-InternetSearchExecutor::InternetSearchExecutor(CapabilitySettings::InternetAccess inputSettings)
-    : settings(std::move(inputSettings))
+InternetSearchExecutor::InternetSearchExecutor(
+    CapabilitySettings::InternetAccess inputSettings,
+    std::shared_ptr<VisibleBrowserCancellation> inputCancellation)
+    : settings(std::move(inputSettings)),
+      cancellation(inputCancellation
+          ? std::move(inputCancellation)
+          : std::make_shared<VisibleBrowserCancellation>())
 {
 }
 
 bool InternetSearchExecutor::Handles(const ActionType type) const
 {
     return type == ActionType::WebSearch;
+}
+
+void InternetSearchExecutor::CancelActive()
+{
+    if (cancellation) cancellation->CancelActive();
 }
 
 bool InternetSearchExecutor::Admit(std::string& outReason)
@@ -229,9 +274,21 @@ ActionResult InternetSearchExecutor::Execute(
 {
     ActionResult result;
     result.attempted = true;
+    result.backend = std::string(settings.visibleBrowser
+        ? VisibleBrowserBackend
+        : DuckDuckGoApiBackend);
+    const bool autonomousCuriosity = IsAutonomousCuriosityRequest(request);
     if (!settings.enabled)
     {
         result.message = "Internet access is disabled.";
+        return result;
+    }
+    if (autonomousCuriosity && !settings.visibleBrowser)
+    {
+        result.backend = std::string(VisibleBrowserBackend);
+        result.message =
+            "Autonomous research requires the dedicated visible browser; hidden API "
+            "browsing was not used.";
         return result;
     }
     if (request.value.empty())
@@ -245,12 +302,85 @@ ActionResult InternetSearchExecutor::Execute(
         result.message = rateReason;
         return result;
     }
+    std::string browserStartupFailure;
+    if (settings.visibleBrowser)
+    {
+        std::lock_guard browserLock(browserMutex);
+        std::unique_ptr<ActiveBrowserRequest> activeRequest;
+        if (!browserProcess.IsRunning())
+        {
+            if (!browserProcess.Start(settings, browserStartupFailure))
+            {
+                // A missing worker, Node runtime, browser, or occupied service port is a
+                // startup failure. Only this case may use the older bounded API backend.
+            }
+            else
+            {
+                activeRequest = std::make_unique<ActiveBrowserRequest>(
+                    cancellation, browserProcess.Port(), browserProcess.Token());
+                VisibleBrowserClient client(browserProcess.Port(), browserProcess.Token());
+                if (!client.WaitUntilReady(
+                        settings.visibleBrowserStartupTimeoutMs,
+                        browserStartupFailure,
+                        [&activeRequest]() { return activeRequest->IsCancelled(); }))
+                {
+                    browserProcess.Stop();
+                }
+            }
+        }
+        if (browserStartupFailure.empty() && browserProcess.IsRunning())
+        {
+            if (!activeRequest)
+            {
+                activeRequest = std::make_unique<ActiveBrowserRequest>(
+                    cancellation, browserProcess.Port(), browserProcess.Token());
+            }
+            VisibleBrowserClient client(browserProcess.Port(), browserProcess.Token());
+            // Once the visible service has started, request/navigation/extraction errors
+            // are returned as-is. Silently switching to a hidden API after the visible
+            // window failed mid-task would make the activity impossible to understand.
+            ActionResult browserResult = client.Search(
+                request.value,
+                std::min(settings.maxResults, settings.visibleBrowserMaxPages),
+                settings.maxResponseBytes,
+                settings.visibleBrowserRequestTimeoutMs,
+                settings.visibleBrowserStepDelayMs);
+            browserResult.backend = std::string(VisibleBrowserBackend);
+            if (activeRequest->IsCancelled() && !browserResult.succeeded)
+            {
+                browserResult.message = "The visible browser lookup was cancelled.";
+            }
+            return browserResult;
+        }
+        if (browserStartupFailure.empty())
+        {
+            browserStartupFailure = "The visible browser worker exited during startup.";
+        }
+        if (autonomousCuriosity)
+        {
+            result.backend = std::string(VisibleBrowserBackend);
+            result.message = "Visible browser startup failed (" + browserStartupFailure +
+                "). Autonomous research was not sent through a hidden API fallback.";
+            return result;
+        }
+    }
+    const auto apiResult = [&browserStartupFailure](ActionResult fallback)
+    {
+        if (!browserStartupFailure.empty())
+        {
+            fallback.message = "Visible browser startup failed (" + browserStartupFailure +
+                "). Bounded API fallback: " + fallback.message;
+        }
+        return fallback;
+    };
     if (!HostAllowed(settings, "api.duckduckgo.com"))
     {
+        result.backend = std::string(DuckDuckGoApiBackend);
         result.message = "The configured search provider is outside the approved host list.";
-        return result;
+        return apiResult(std::move(result));
     }
 #ifdef _WIN32
+    result.backend = std::string(DuckDuckGoApiBackend);
     const std::string encoded = UrlEncode(request.value);
     const std::string target = "/?q=" + encoded +
         "&format=json&no_html=1&no_redirect=1&skip_disambig=0";
@@ -266,19 +396,20 @@ ActionResult InternetSearchExecutor::Execute(
             error))
     {
         result.message = error;
-        return result;
+        return apiResult(std::move(result));
     }
     result = ParseDuckDuckGoResponse(body, settings.maxResults);
     result.attempted = true;
+    result.backend = std::string(DuckDuckGoApiBackend);
     if (result.succeeded || !HostAllowed(settings, "en.wikipedia.org"))
     {
-        return result;
+        return apiResult(std::move(result));
     }
 
     if (!Admit(rateReason))
     {
         result.message += " Wikipedia fallback was not sent: " + rateReason;
-        return result;
+        return apiResult(std::move(result));
     }
 
     // DuckDuckGo's Instant Answer API intentionally does not behave like a full
@@ -295,6 +426,7 @@ ActionResult InternetSearchExecutor::Execute(
         wikipediaTarget.begin(), wikipediaTarget.end());
     body.clear();
     error.clear();
+    result.backend = std::string(WikipediaApiBackend);
     if (!GetHttps(
             L"en.wikipedia.org",
             wideWikipediaTarget,
@@ -304,14 +436,15 @@ ActionResult InternetSearchExecutor::Execute(
             error))
     {
         result.message += " Wikipedia fallback failed: " + error;
-        return result;
+        return apiResult(std::move(result));
     }
     result = ParseWikipediaResponse(body, settings.maxResults);
     result.attempted = true;
-    return result;
+    result.backend = std::string(WikipediaApiBackend);
+    return apiResult(std::move(result));
 #else
     result.message = "Internet lookup is currently implemented with Windows HTTPS.";
-    return result;
+    return apiResult(std::move(result));
 #endif
 }
 

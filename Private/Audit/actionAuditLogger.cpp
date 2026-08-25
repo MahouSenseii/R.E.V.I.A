@@ -1,6 +1,7 @@
 #include "Audit/actionAuditLogger.h"
 
 #include <chrono>
+#include <algorithm>
 #include <fstream>
 #include <iomanip>
 #include <nlohmann/json.hpp>
@@ -27,6 +28,18 @@ std::string UtcTimestamp()
     return stream.str();
 }
 
+std::string BoundedUtf8Prefix(const std::string& value, const std::size_t maximumBytes)
+{
+    if (value.size() <= maximumBytes) return value;
+    std::size_t end = maximumBytes;
+    while (end > 0 &&
+        (static_cast<unsigned char>(value[end]) & 0xC0U) == 0x80U)
+    {
+        --end;
+    }
+    return value.substr(0, end);
+}
+
 } // namespace
 
 ActionAuditLogger::ActionAuditLogger(std::filesystem::path inputPath)
@@ -37,7 +50,8 @@ ActionAuditLogger::ActionAuditLogger(std::filesystem::path inputPath)
 bool ActionAuditLogger::Record(
     const actions::ActionRequest& request,
     const actions::PolicyDecision& decision,
-    const actions::ActionResult& result)
+    const actions::ActionResult& result,
+    const double elapsedMilliseconds)
 {
     std::lock_guard lock(mutex);
     std::error_code error;
@@ -75,8 +89,35 @@ bool ActionAuditLogger::Record(
         {"policy_reason", decision.reason},
         {"attempted", result.attempted},
         {"succeeded", result.succeeded},
-        {"result", result.message}
+        {"result", result.message},
+        {"backend", result.backend}
     };
+    if (elapsedMilliseconds >= 0.0)
+    {
+        entry["elapsed_ms"] = elapsedMilliseconds;
+    }
+    if (request.type == actions::ActionType::WebSearch)
+    {
+        constexpr std::size_t MaximumQueryBytes = 1024;
+        constexpr std::size_t MaximumAuditedUrls = 10;
+        constexpr std::size_t MaximumUrlBytes = 2048;
+        nlohmann::json visitedUrls = nlohmann::json::array();
+        for (std::size_t index = 0;
+             index < std::min(result.entries.size(), MaximumAuditedUrls);
+             ++index)
+        {
+            visitedUrls.push_back(BoundedUtf8Prefix(
+                result.entries[index], MaximumUrlBytes));
+        }
+        entry["internet_activity"] = {
+            {"query", BoundedUtf8Prefix(request.value, MaximumQueryBytes)},
+            {"query_truncated", request.value.size() > MaximumQueryBytes},
+            {"backend", result.backend},
+            {"visited_urls", std::move(visitedUrls)},
+            {"source_count", result.entries.size()},
+            {"grounding_bytes", result.content.size()}
+        };
+    }
     if (request.resolution.visionResolved)
     {
         entry["vision_resolution"] = {

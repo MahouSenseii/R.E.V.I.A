@@ -16,7 +16,8 @@ public:
     [[nodiscard]] bool Record(
         const actions::ActionRequest& request,
         const actions::PolicyDecision& decision,
-        const actions::ActionResult& result);
+        const actions::ActionResult& result,
+        double elapsedMilliseconds = -1.0);
 
     [[nodiscard]] const std::filesystem::path& Path() const;
 

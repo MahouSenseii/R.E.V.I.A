@@ -15,9 +15,13 @@ class AffectController
 public:
     explicit AffectController(
         std::chrono::milliseconds minimumHold = std::chrono::milliseconds(1500),
-        std::chrono::milliseconds decayAfter = std::chrono::seconds(45));
+        std::chrono::milliseconds decayAfter = std::chrono::seconds(45),
+        std::chrono::milliseconds lonelyAfter = std::chrono::minutes(20));
 
     AffectSnapshot Reset();
+    // Input observation happens before generation, so this turn's emotion can actually
+    // shape this turn's words. ObserveTurn then incorporates the outcome.
+    AffectSnapshot ObserveInput(const std::string& userInput);
     AffectSnapshot ObserveTurn(
         const std::string& userInput,
         const std::string& response,
@@ -42,9 +46,13 @@ private:
     mutable std::mutex mutex;
     AffectSnapshot snapshot;
     std::chrono::steady_clock::time_point lastChanged = std::chrono::steady_clock::now();
-    std::chrono::steady_clock::time_point lastObserved = lastChanged;
+    std::chrono::steady_clock::time_point lastInteraction = lastChanged;
     std::chrono::milliseconds minimumHold;
     std::chrono::milliseconds decayAfter;
+    std::chrono::milliseconds lonelyAfter;
+    // Repeated low-valence turns can deepen into melancholy instead of resetting to
+    // neutral after each reply. Positive turns reduce the momentum again.
+    int negativeMomentum = 0;
 };
 
 } // namespace revia::runtime

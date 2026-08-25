@@ -49,6 +49,10 @@
     "qwenStartupTimeoutSeconds": 60,
     "qwenRequestTimeoutSeconds": 600,
     "qwenDevice": "auto",
+    "qwenDevices": ["auto"],
+    "qwenMaxWorkers": 2,
+    "qwenPrefetchFragments": 3,
+    "qwenMaxBufferedAudioMiB": 128,
     "qwenMinimumFreeVramMiB": 4600,
     "qwenVoiceDesignModel": "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign",
     "qwenCloneModel": "Qwen/Qwen3-TTS-12Hz-0.6B-Base",
@@ -61,12 +65,37 @@
   "speechRecognition": {
     "enabled": true,
     "executable": "ThirdParty/whisper/whisper-cli.exe",
+    "useServer": true,
+    "serverExecutable": "ThirdParty/whisper/whisper-server.exe",
+    "serverHost": "127.0.0.1",
+    "serverPort": 8094,
+    "serverStartupTimeoutSeconds": 60,
+    "requestTimeoutSeconds": 180,
     "modelPath": "Models/ggml-small.en.bin",
     "language": "en",
     "sampleRate": 16000,
     "threads": 6,
     "useGpu": true,
-    "device": "auto"
+    "device": "auto",
+    "handsFree": false,
+    "vadEnergyThreshold": 900,
+    "vadSpeechFrames": 3,
+    "vadSilenceMs": 850,
+    "minimumUtteranceMs": 350,
+    "maximumUtteranceSeconds": 24
+  },
+  "presence": {
+    "enabled": true,
+    "avatarBridgeEnabled": true,
+    "statePath": "RuntimeData/Presence/avatar_state.json",
+    "eventPath": "RuntimeData/Presence/avatar_events.jsonl",
+    "externalAdaptersEnabled": false,
+    "inboxPath": "RuntimeData/Presence/Inbox",
+    "outboxPath": "RuntimeData/Presence/Outbox",
+    "adapterPollMs": 150,
+    "maxAdapterEventsPerMinute": 30,
+    "maxAdapterTextCharacters": 4000,
+    "allowedAdapters": ["discord", "stream", "game"]
   },
   "resources": {
     "autoPlan": true,
@@ -105,6 +134,11 @@
     "maxTurnCharacters": 8000,
     "restoreTurns": 6
   },
+  "responseFilter": {
+    "aiReviewEnabled": true,
+    "aiMaxReviewTokens": 192,
+    "maxReplyCharacters": 12000
+  },
   "vision": {
     "enabled": true,
     "requireConfirmation": true,
@@ -116,6 +150,12 @@
   },
   "initiative": {
     "enabled": true,
+    "curiosityEnabled": true,
+    "spontaneousSpeechEnabled": true,
+    "speakWhenUserAway": true,
+    "curiosityCheckSeconds": 30,
+    "autonomousQuietSeconds": 45,
+    "curiosityTopicCooldownMinutes": 1440,
     "minimumConfidence": 0.72,
     "maxUtterancesPerHour": 4,
     "cooldownSeconds": 900,

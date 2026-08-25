@@ -38,6 +38,15 @@ public:
         std::stop_token stopToken = {},
         DeltaHandler onDelta = {}) const;
     responseOutput GenerateActionProposal(const std::string& userRequest) const;
+    responseOutput ReviewConversationReply(
+        const std::string& userInput,
+        const std::string& candidateReply,
+        const std::string& runtimeGroundTruth,
+        int maxReviewTokens,
+        std::stop_token stopToken = {}) const;
+    responseOutput GenerateCuriosityPlan(
+        const std::string& boundedContextPrompt,
+        std::stop_token stopToken = {}) const;
     responseOutput GenerateGoalPlan(const std::string& userRequest) const;
     responseOutput GenerateDiagram(const std::string& userRequest) const;
     responseOutput ComposeContent(
@@ -54,6 +63,7 @@ public:
         std::stop_token stopToken = {}) const;
     memoryDecision EvaluateMemory(
         const std::string& userMessage,
+        const std::string& assistantMessage = "",
         std::stop_token stopToken = {}) const;
     healthOutput CheckEmbeddingHealth() const;
     embeddingOutput EmbedMemory(
@@ -73,7 +83,11 @@ private:
         const std::string& systemPrompt,
         const std::string& userRequest,
         int maxTokens,
-        bool structuredJson = true) const;
+        bool structuredJson = true,
+        std::stop_token stopToken = {},
+        revia::llm::InferencePriority priority = revia::llm::InferencePriority::Interactive,
+        float requestTemperature = 0.1F,
+        const std::string& operation = "structured planning") const;
 
     std::string host = "127.0.0.1";
     int port = 8080;

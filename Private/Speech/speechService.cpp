@@ -45,6 +45,10 @@ namespace
         {
             resource += " / " + result.dtype;
         }
+        if (!result.workerId.empty())
+        {
+            resource += " / " + result.workerId;
+        }
         return resource;
     }
 
@@ -73,9 +77,17 @@ namespace
         switch (state)
         {
             case runtime::AffectState::Curious:
-            case runtime::AffectState::Pleased: return 1;
+            case runtime::AffectState::Pleased:
+            case runtime::AffectState::Excited:
+            case runtime::AffectState::Playful: return 1;
             case runtime::AffectState::Concerned:
+            case runtime::AffectState::Lonely:
+            case runtime::AffectState::Bored:
+            case runtime::AffectState::Sulky:
+            case runtime::AffectState::Sad:
+            case runtime::AffectState::Melancholy:
             case runtime::AffectState::Confused: return -1;
+            case runtime::AffectState::Angry: return 1;
             default: return 0;
         }
     }
@@ -161,15 +173,29 @@ bool SpeechService::Start(const speechSettings& settings, EventHandler handler)
         std::lock_guard lock(mutex);
         configuration = settings;
         presetStore.SetRoot(settings.voiceDataPath);
-        qwenClient.Configure(settings);
+        qwenPool.Configure(settings);
         const std::string assigned = presetStore.AssignedPresetId(activeProfile);
         activePreset = assigned.empty() ? std::nullopt : presetStore.Find(assigned);
         eventHandler = std::move(handler);
         queue.clear();
+        playbackOrder.clear();
+        prepared.clear();
+        generatingCount = 0;
+        bufferedAudioBytes = 0;
     }
     enabled.store(settings.bEnabled);
     ready.store(false);
     generation.fetch_add(1);
+    const std::size_t generatorCount = std::max<std::size_t>(
+        1, std::min<std::size_t>(qwenPool.WorkerCount(),
+            static_cast<std::size_t>(settings.qwenPrefetchFragments)));
+    generationWorkers.clear();
+    generationWorkers.reserve(generatorCount);
+    for (std::size_t index = 0; index < generatorCount; ++index)
+    {
+        generationWorkers.emplace_back(
+            [this](const std::stop_token stopToken) { Generate(stopToken); });
+    }
     worker = std::jthread([this](const std::stop_token stopToken) { Run(stopToken); });
     return true;
 }
@@ -234,7 +260,7 @@ VoiceOperationResult SpeechService::PrepareActiveVoice()
     }
     Notify({"Loading", "Loading the assigned Qwen3-TTS voice on the selected device.",
         -1.0, 0, 0, PlannedQwenResource(configuration)});
-    VoiceOperationResult result = qwenClient.PrepareCloneModel();
+    VoiceOperationResult result = qwenPool.PrepareCloneModel();
     SpeechEvent prepared{result.succeeded ? "Ready" : "Fallback",
         result.succeeded
             ? result.message
@@ -271,7 +297,7 @@ VoiceOperationResult SpeechService::CreateVoicePreset(
     }
     Notify({"Designing", "Creating a reusable Qwen3-TTS voice reference. First use downloads the model.",
         -1.0, 0, 0, PlannedQwenResource(configuration)});
-    VoiceOperationResult result = qwenClient.DesignVoice(
+    VoiceOperationResult result = qwenPool.DesignVoice(
         referenceText, description, language.empty() ? "English" : language,
         referencePath.string());
     if (!result.succeeded)
@@ -323,7 +349,7 @@ VoiceOperationResult SpeechService::PreviewVoice(
     std::filesystem::create_directories(output.parent_path(), error);
     Notify({"Generating", "Generating a Qwen3-TTS voice preview.", -1.0, 0, 0,
         PlannedQwenResource(configuration)});
-    VoiceOperationResult result = qwenClient.Synthesize(text, *preset, output.string());
+    VoiceOperationResult result = qwenPool.Synthesize(text, *preset, output.string());
 #ifdef _WIN32
     if (result.succeeded)
     {
@@ -406,9 +432,20 @@ void SpeechService::Speak(
         std::lock_guard lock(mutex);
         while (queue.size() >= static_cast<std::size_t>(configuration.maxQueuedUtterances))
         {
+            const std::uint64_t dropped = queue.front().sequence;
             queue.pop_front();
+            playbackOrder.erase(std::remove(
+                playbackOrder.begin(), playbackOrder.end(), dropped), playbackOrder.end());
         }
-        queue.push_back({std::move(text), affect, generation.load(), utteranceId});
+        Utterance utterance;
+        utterance.text = std::move(text);
+        utterance.affect = affect;
+        utterance.generation = generation.load();
+        utterance.utteranceId = utteranceId;
+        utterance.sequence = nextSequence.fetch_add(1);
+        if (configuration.backend != "WindowsSapi") utterance.preset = activePreset;
+        playbackOrder.push_back(utterance.sequence);
+        queue.push_back(std::move(utterance));
         depth = static_cast<int>(queue.size());
     }
     Notify({"Queued", "Assistant reply queued for speech.", -1.0, depth, utteranceId});
@@ -421,9 +458,20 @@ void SpeechService::StopSpeaking()
     {
         std::lock_guard lock(mutex);
         queue.clear();
+        playbackOrder.clear();
+        for (const auto& [sequence, item] : prepared)
+        {
+            (void)sequence;
+            if (!item.audioPath.empty())
+            {
+                std::error_code error;
+                std::filesystem::remove(item.audioPath, error);
+            }
+        }
+        prepared.clear();
+        bufferedAudioBytes = 0;
     }
     condition.notify_all();
-    qwenClient.CancelActiveRequest();
 #ifdef _WIN32
     PlaySoundW(nullptr, nullptr, 0);
 #endif
@@ -462,6 +510,15 @@ void SpeechService::YieldToUser()
     {
         std::lock_guard lock(mutex);
         queue.clear();
+        playbackOrder.clear();
+        for (const auto& [sequence, item] : prepared)
+        {
+            (void)sequence;
+            std::error_code error;
+            if (!item.audioPath.empty()) std::filesystem::remove(item.audioPath, error);
+        }
+        prepared.clear();
+        bufferedAudioBytes = 0;
     }
     condition.notify_all();
 #ifdef _WIN32
@@ -494,6 +551,11 @@ void SpeechService::DisarmBargeIn()
     bargeInMonitor.End();
 }
 
+void SpeechService::CancelVoiceOperationsForShutdown()
+{
+    qwenPool.CancelActiveRequests();
+}
+
 void SpeechService::Shutdown()
 {
     enabled.store(false);
@@ -504,8 +566,19 @@ void SpeechService::Shutdown()
         condition.notify_all();
         worker.join();
     }
+    for (std::jthread& generator : generationWorkers)
+    {
+        generator.request_stop();
+    }
+    qwenPool.RequestShutdown();
+    condition.notify_all();
+    for (std::jthread& generator : generationWorkers)
+    {
+        if (generator.joinable()) generator.join();
+    }
+    generationWorkers.clear();
     ready.store(false);
-    qwenClient.Shutdown();
+    qwenPool.Shutdown();
 }
 
 std::string SpeechService::NormalizeForSpeech(
@@ -600,23 +673,40 @@ void SpeechService::Run(const std::stop_token stopToken)
 
     while (!stopToken.stop_requested())
     {
-        Utterance utterance;
+        PreparedUtterance preparedUtterance;
         {
             std::unique_lock lock(mutex);
             condition.wait(lock, stopToken, [this]
             {
-                return !queue.empty();
+                return !playbackOrder.empty() &&
+                    prepared.contains(playbackOrder.front());
             });
             if (stopToken.stop_requested())
             {
                 break;
             }
-            if (queue.empty() || !enabled.load())
+            if (playbackOrder.empty() || !enabled.load())
             {
                 continue;
             }
-            utterance = std::move(queue.front());
-            queue.pop_front();
+            const std::uint64_t sequence = playbackOrder.front();
+            playbackOrder.pop_front();
+            auto found = prepared.find(sequence);
+            if (found == prepared.end()) continue;
+            preparedUtterance = std::move(found->second);
+            prepared.erase(found);
+            bufferedAudioBytes = preparedUtterance.bufferedBytes >= bufferedAudioBytes
+                ? 0
+                : bufferedAudioBytes - preparedUtterance.bufferedBytes;
+        }
+        condition.notify_all();
+        const Utterance& utterance = preparedUtterance.utterance;
+        if (utterance.generation != generation.load())
+        {
+            std::error_code error;
+            if (!preparedUtterance.audioPath.empty())
+                std::filesystem::remove(preparedUtterance.audioPath, error);
+            continue;
         }
         activeUtteranceId.store(utterance.utteranceId);
         // Cleared however this iteration ends, so an event published between utterances is
@@ -627,17 +717,17 @@ void SpeechService::Run(const std::stop_token stopToken)
             ~ActiveGuard() { id.store(0); }
         } activeGuard{activeUtteranceId};
 
-        std::optional<VoicePreset> qwenPreset;
-        {
-            std::lock_guard lock(mutex);
-            if (configuration.backend != "WindowsSapi")
-            {
-                qwenPreset = activePreset;
-            }
-        }
-        if (qwenPreset && SpeakWithQwen(utterance, *qwenPreset))
+        if (preparedUtterance.qwenAttempted && preparedUtterance.result.succeeded &&
+            PlayPreparedQwen(preparedUtterance))
         {
             continue;
+        }
+        if (preparedUtterance.qwenAttempted && !preparedUtterance.result.succeeded)
+        {
+            Notify({"Fallback", preparedUtterance.result.message +
+                " Using Windows voice for this sentence.",
+                preparedUtterance.result.elapsedMilliseconds, 0, utterance.utteranceId,
+                ActualQwenResource(preparedUtterance.result)});
         }
 
         const std::uint64_t activeGeneration = utterance.generation;
@@ -703,33 +793,99 @@ void SpeechService::Run(const std::stop_token stopToken)
 #endif
 }
 
-bool SpeechService::SpeakWithQwen(const Utterance& utterance, const VoicePreset& preset)
+void SpeechService::Generate(const std::stop_token stopToken)
+{
+    while (!stopToken.stop_requested())
+    {
+        Utterance utterance;
+        int depth = 0;
+        {
+            std::unique_lock lock(mutex);
+            condition.wait(lock, stopToken, [this]
+            {
+                const std::uintmax_t maximumBytes =
+                    static_cast<std::uintmax_t>(configuration.qwenMaxBufferedAudioMiB) *
+                    1024U * 1024U;
+                return !queue.empty() &&
+                    generatingCount + prepared.size() <
+                        static_cast<std::size_t>(configuration.qwenPrefetchFragments) &&
+                    bufferedAudioBytes < maximumBytes;
+            });
+            if (stopToken.stop_requested()) return;
+            if (queue.empty()) continue;
+            utterance = std::move(queue.front());
+            queue.pop_front();
+            ++generatingCount;
+            depth = static_cast<int>(queue.size());
+        }
+
+        PreparedUtterance item;
+        item.utterance = utterance;
+        if (utterance.preset.has_value())
+        {
+            item.qwenAttempted = true;
+            std::error_code error;
+            item.audioPath = std::filesystem::absolute(
+                presetStore.Root() / "Playback" /
+                    (utterance.preset->id + "-" + std::to_string(utterance.generation) +
+                     "-" + std::to_string(utterance.sequence) + ".wav"), error).lexically_normal();
+            if (error)
+            {
+                item.result = {false, "The Qwen playback path could not be resolved.", {}, -1.0};
+            }
+            else
+            {
+                std::filesystem::create_directories(item.audioPath.parent_path(), error);
+                Notify({"Generating", "Synthesizing a sentence ahead with Qwen3-TTS.",
+                    -1.0, depth, utterance.utteranceId,
+                    PlannedQwenResource(configuration)});
+                item.result = qwenPool.Synthesize(
+                    utterance.text, *utterance.preset, item.audioPath.string());
+                if (item.result.succeeded)
+                {
+                    item.bufferedBytes = std::filesystem::file_size(item.audioPath, error);
+                    if (error) item.bufferedBytes = 0;
+                }
+            }
+        }
+
+        const bool stale = utterance.generation != generation.load() || !enabled.load();
+        const VoiceOperationResult completedResult = item.result;
+        {
+            std::lock_guard lock(mutex);
+            if (generatingCount > 0) --generatingCount;
+            if (!stale)
+            {
+                bufferedAudioBytes += item.bufferedBytes;
+                prepared.emplace(utterance.sequence, std::move(item));
+            }
+        }
+        if (stale)
+        {
+            std::error_code error;
+            if (!item.audioPath.empty()) std::filesystem::remove(item.audioPath, error);
+        }
+        else if (utterance.preset.has_value() && completedResult.succeeded)
+        {
+            Notify({"Generated", "Qwen3-TTS sentence audio is ready for ordered playback.",
+                completedResult.elapsedMilliseconds, depth, utterance.utteranceId,
+                ActualQwenResource(completedResult)});
+        }
+        condition.notify_all();
+    }
+}
+
+bool SpeechService::PlayPreparedQwen(const PreparedUtterance& preparedUtterance)
 {
 #ifndef _WIN32
-    (void)utterance;
-    (void)preset;
+    (void)preparedUtterance;
     return false;
 #else
+    const Utterance& utterance = preparedUtterance.utterance;
+    const VoiceOperationResult& generated = preparedUtterance.result;
+    const std::filesystem::path& output = preparedUtterance.audioPath;
     std::error_code error;
-    const std::filesystem::path output = std::filesystem::absolute(
-        presetStore.Root() / "Playback" /
-            (preset.id + "-" + std::to_string(utterance.generation) + ".wav"), error).lexically_normal();
-    if (error)
-    {
-        return false;
-    }
-    std::filesystem::create_directories(output.parent_path(), error);
     const auto startedAt = std::chrono::steady_clock::now();
-    Notify({"Generating", "Synthesizing the assistant reply with Qwen3-TTS.",
-        -1.0, 0, 0, PlannedQwenResource(configuration)});
-    const VoiceOperationResult generated = qwenClient.Synthesize(
-        utterance.text, preset, output.string());
-    if (!generated.succeeded)
-    {
-        Notify({"Fallback", generated.message + " Using Windows voice for this reply.",
-            generated.elapsedMilliseconds, 0, 0, ActualQwenResource(generated)});
-        return false;
-    }
     if (generation.load() != utterance.generation || !enabled.load())
     {
         std::filesystem::remove(output, error);
@@ -738,12 +894,13 @@ bool SpeechService::SpeakWithQwen(const Utterance& utterance, const VoicePreset&
         return true;
     }
     SpeechEvent playing{"Speaking", "Playing the profile's Qwen3-TTS voice."};
+    playing.utteranceId = utterance.utteranceId;
     playing.device = ActualQwenResource(generated);
     Notify(std::move(playing));
     if (!PlaySoundW(output.wstring().c_str(), nullptr, SND_FILENAME | SND_ASYNC | SND_NODEFAULT))
     {
         Notify({"Fallback", "Windows could not play the Qwen3-TTS WAV; using SAPI.",
-            -1.0, 0, 0, WindowsSapiResource});
+            -1.0, 0, utterance.utteranceId, WindowsSapiResource});
         return false;
     }
     ArmBargeIn();
@@ -768,7 +925,8 @@ bool SpeechService::SpeakWithQwen(const Utterance& utterance, const VoicePreset&
         interrupted
             ? "You started speaking, so I stopped."
             : (cancelled ? "Speech was stopped." : "Qwen3-TTS speech completed."),
-        ElapsedMilliseconds(startedAt), 0, 0, ActualQwenResource(generated)});
+        ElapsedMilliseconds(startedAt), 0, utterance.utteranceId,
+        ActualQwenResource(generated)});
     return true;
 #endif
 }

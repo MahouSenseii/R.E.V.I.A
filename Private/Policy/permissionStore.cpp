@@ -127,6 +127,25 @@ bool PermissionStore::Load(
                 internet, "maxRequestsPerMinute", 12, 1, 120);
             settings.internet.maxResults = BoundedInteger<int>(
                 internet, "maxResults", 5, 1, 10);
+            settings.internet.visibleBrowser = internet.value("visibleBrowser", false);
+            settings.internet.autonomousResearch =
+                internet.value("autonomousResearch", false);
+            settings.internet.visibleBrowserPort = BoundedInteger<int>(
+                internet, "visibleBrowserPort", 8095, 1024, 65535);
+            settings.internet.visibleBrowserStartupTimeoutMs = BoundedInteger<int>(
+                internet, "visibleBrowserStartupTimeoutMs", 8000, 1000, 30000);
+            settings.internet.visibleBrowserRequestTimeoutMs = BoundedInteger<int>(
+                internet, "visibleBrowserRequestTimeoutMs", 30000, 5000, 120000);
+            settings.internet.visibleBrowserMaxPages = BoundedInteger<int>(
+                internet, "visibleBrowserMaxPages", 3, 1, 5);
+            settings.internet.visibleBrowserStepDelayMs = BoundedInteger<int>(
+                internet, "visibleBrowserStepDelayMs", 250, 0, 3000);
+            if (settings.internet.autonomousResearch &&
+                (!settings.internet.enabled || !settings.internet.visibleBrowser))
+            {
+                outError = "Autonomous internet research requires enabled visible browsing.";
+                return false;
+            }
             settings.internet.approvedHosts.clear();
             if (!internet.contains("approvedHosts") || !internet["approvedHosts"].is_array())
             {

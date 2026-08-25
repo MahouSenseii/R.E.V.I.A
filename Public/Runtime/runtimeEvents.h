@@ -33,6 +33,12 @@ enum class RuntimeEventKind
 {
     StateChanged,
     Activity,
+    // A logger warning. Kept separate from ordinary activity so presentation layers can
+    // make degraded behavior visible without scraping formatted text.
+    Warning,
+    // Input accepted outside the synchronous typed Submit path (hands-free speech or a
+    // bounded external adapter), so shells can render the user side without owning it.
+    UserMessage,
     AssistantMessage,
     AffectChanged,
     ComponentStatus,
@@ -74,6 +80,9 @@ struct RuntimeEvent
     float affectIntensity = 0.0F;
     std::string component;
     std::string phase;
+    // Human-readable origin for lanes whose local numeric counters can overlap, such as
+    // a user conversation turn and an autonomous curiosity run.
+    std::string initiator;
     // Exact compute assignment such as CUDA0, cuda:1, or CPU. Component events keep the
     // last non-empty value so transient state updates do not erase startup placement.
     std::string resource;

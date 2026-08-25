@@ -34,6 +34,7 @@ private:
     void ApproveSelectedDiscoveredControls();
     void RemoveSelectedPermission();
     void ApplyInternetSettings();
+    void ApplyBrowserSettings();
 
     revia::runtime::ReviaSession& session;
     DiscoveryRequest requestDiscovery;
@@ -43,6 +44,8 @@ private:
     QLabel* statusLabel = nullptr;
     QCheckBox* internetCheck = nullptr;
     QCheckBox* automaticLookupCheck = nullptr;
+    QCheckBox* visibleBrowserCheck = nullptr;
+    QCheckBox* autonomousResearchCheck = nullptr;
     QPushButton* approveDiscoveredButton = nullptr;
     bool refreshing = false;
     std::string discoveredApplication;

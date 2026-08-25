@@ -17,7 +17,8 @@ enum class StarterCueKind
 {
     FocusCompleted,
     ReturnedToApplication,
-    ContextSwitching
+    ContextSwitching,
+    SelfDirectedCuriosity
 };
 
 struct StarterCue
@@ -38,6 +39,7 @@ class ConversationStarter
 {
 public:
     void Configure(initiativeSettings settings);
+    void UpdateSettings(initiativeSettings settings);
     void Observe(const perception::WindowObservation& observation);
     // One-shot opportunities. Once the attention policy considers a cue, a timer cannot
     // revive it later after its conversational moment has passed.

@@ -2,20 +2,22 @@
 #include "capabilityPanel.h"
 #include "pipelinePanel.h"
 #include "canvasPanel.h"
+#include "internetActivityPanel.h"
 #include "resourcePanel.h"
+#include "ui_reviaWindow.h"
 
 #include <QApplication>
 #include <QCheckBox>
 #include <QCloseEvent>
 #include <QComboBox>
 #include <QDateTime>
+#include <QDesktopServices>
+#include <QDir>
 #include <QEvent>
+#include <QFile>
 #include <QFont>
-#include <QFormLayout>
-#include <QHBoxLayout>
 #include <QIcon>
 #include <QKeyEvent>
-#include <QKeySequence>
 #include <QLabel>
 #include <QLineEdit>
 #include <QMenu>
@@ -25,14 +27,14 @@
 #include <QPainter>
 #include <QPlainTextEdit>
 #include <QPushButton>
+#include <QProgressBar>
 #include <QPixmap>
-#include <QScrollArea>
 #include <QScrollBar>
+#include <QSettings>
 #include <QSignalBlocker>
-#include <QSizePolicy>
+#include <QSpinBox>
 #include <QStyle>
 #include <QSystemTrayIcon>
-#include <QTabWidget>
 #include <QTextBrowser>
 #include <QTextBlockFormat>
 #include <QtMath>
@@ -41,10 +43,12 @@
 #include <QThread>
 #include <QTimer>
 #include <QToolButton>
-#include <QVBoxLayout>
+#include <QUrl>
 #include <QWindow>
 
+#include <algorithm>
 #include <chrono>
+#include <cstddef>
 
 namespace
 {
@@ -91,7 +95,7 @@ ReviaWindow::ReviaWindow(
     const bool startRuntime,
     const bool buildSystemTray,
     QWidget* parent)
-    : QMainWindow(parent)
+    : QMainWindow(parent), ui(std::make_unique<Ui::ReviaWindow>())
 {
     setWindowTitle("Revia");
     setWindowIcon(CreateReviaIcon());
@@ -249,111 +253,95 @@ void ReviaWindow::closeEvent(QCloseEvent* event)
 
 void ReviaWindow::BuildInterface()
 {
-    auto* root = new QWidget(this);
-    root->setObjectName("rootPanel");
-    setCentralWidget(root);
+    ui->setupUi(this);
 
-    auto* layout = new QVBoxLayout(root);
-    layout->setContentsMargins(22, 20, 22, 20);
-    layout->setSpacing(12);
+    titleBar = ui->titleBar;
+    maximizeButton = ui->maximizeButton;
+    stateLabel = ui->stateLabel;
+    stateDetailLabel = ui->stateDetailLabel;
+    affectLabel = ui->affectLabel;
+    speechLabel = ui->speechLabel;
+    microphoneLabel = ui->microphoneLabel;
+    automationLabel = ui->automationLabel;
+    visionLabel = ui->visionLabel;
+    perceptionLabel = ui->perceptionLabel;
+    tabs = ui->tabs;
+    chatHistory = ui->chatHistory;
+    messageInput = ui->messageInput;
+    activityFeed = ui->activityFeed;
+    activityIssueSummary = ui->activityIssueSummary;
+    activityFilter = ui->activityFilter;
+    activityAutoScroll = ui->activityAutoScroll;
+    openLogsButton = ui->openLogsButton;
+    clearActivityButton = ui->clearActivityButton;
+    sendButton = ui->sendButton;
+    stopButton = ui->stopButton;
+    microphoneButton = ui->microphoneButton;
+    visionButton = ui->visionButton;
+    screenActionButton = ui->screenActionButton;
+    alwaysOnTopCheck = ui->alwaysOnTopCheck;
+    speechCheck = ui->speechCheck;
+    autoSendVoiceCheck = ui->autoSendVoiceCheck;
+    bargeInCheck = ui->bargeInCheck;
+    handsFreeCheck = ui->handsFreeCheck;
+    avatarBridgeCheck = ui->avatarBridgeCheck;
+    externalAdaptersCheck = ui->externalAdaptersCheck;
+    initiativeCheck = ui->initiativeCheck;
+    curiosityCheck = ui->curiosityCheck;
+    spontaneousSpeechCheck = ui->spontaneousSpeechCheck;
+    speakWhenAwayCheck = ui->speakWhenAwayCheck;
+    aiFilterCheck = ui->aiFilterCheck;
+    initiativeMaxSpin = ui->initiativeMaxSpin;
+    resourceSampleSpin = ui->resourceSampleSpin;
+    preferenceStatus = ui->preferenceStatus;
+    presencePhaseValue = ui->presencePhaseValue;
+    presenceAffectValue = ui->presenceAffectValue;
+    presenceAttentionValue = ui->presenceAttentionValue;
+    presenceMomentumBar = ui->presenceMomentumBar;
+    openPresenceFolderButton = ui->openPresenceFolderButton;
+    voiceProfileCombo = ui->voiceProfileCombo;
+    voicePresetCombo = ui->voicePresetCombo;
+    voiceLanguageCombo = ui->voiceLanguageCombo;
+    voiceNameInput = ui->voiceNameInput;
+    voiceDescriptionInput = ui->voiceDescriptionInput;
+    voiceReferenceInput = ui->voiceReferenceInput;
+    voicePreviewInput = ui->voicePreviewInput;
+    voiceStudioStatus = ui->voiceStudioStatus;
+    createVoiceButton = ui->createVoiceButton;
+    previewVoiceButton = ui->previewVoiceButton;
+    assignVoiceButton = ui->assignVoiceButton;
+    fallbackVoiceButton = ui->fallbackVoiceButton;
 
-    titleBar = new QWidget(root);
-    titleBar->setObjectName("titleBar");
-    titleBar->setFixedHeight(30);
+    ui->titleIcon->setPixmap(CreateReviaIcon().pixmap(20, 20));
     titleBar->installEventFilter(this);
-    auto* titleBarLayout = new QHBoxLayout(titleBar);
-    titleBarLayout->setContentsMargins(2, 0, 0, 0);
-    titleBarLayout->setSpacing(6);
+    messageInput->installEventFilter(this);
 
-    auto* titleIcon = new QLabel(titleBar);
-    titleIcon->setPixmap(CreateReviaIcon().pixmap(20, 20));
-    titleBarLayout->addWidget(titleIcon);
-    auto* windowTitle = new QLabel("Revia", titleBar);
-    windowTitle->setObjectName("windowTitle");
-    titleBarLayout->addWidget(windowTitle);
-    titleBarLayout->addStretch();
+    pipelinePanel = new PipelinePanel(ui->pipelinePage);
+    ui->pipelineHostLayout->addWidget(pipelinePanel);
+    internetActivityPanel = new InternetActivityPanel(ui->internetActivityPage);
+    ui->internetActivityHostLayout->addWidget(internetActivityPanel);
+    resourcePanel = new ResourcePanel(
+        [this](const std::string& device)
+        {
+            return session.SetPreference("resources.voiceDevice", device);
+        },
+        ui->resourcePage);
+    ui->resourceHostLayout->addWidget(resourcePanel);
+    canvasPanel = new CanvasPanel(ui->canvasPage);
+    ui->canvasHostLayout->addWidget(canvasPanel);
+    capabilityPanel = new CapabilityPanel(
+        session,
+        [this]() { DiscoverApplicationPermissions(); },
+        ui->permissionsPage);
+    ui->permissionsHostLayout->addWidget(capabilityPanel);
 
-    auto* minimizeButton = new QToolButton(titleBar);
-    minimizeButton->setObjectName("windowControl");
-    minimizeButton->setText(QString::fromUtf8("\xE2\x80\x94"));
-    minimizeButton->setToolTip("Minimize");
-    maximizeButton = new QToolButton(titleBar);
-    maximizeButton->setObjectName("windowControl");
-    maximizeButton->setText(QString::fromUtf8("\xE2\x96\xA1"));
-    maximizeButton->setToolTip("Maximize");
-    auto* closeButton = new QToolButton(titleBar);
-    closeButton->setObjectName("closeControl");
-    closeButton->setText(QString::fromUtf8("\xC3\x97"));
-    closeButton->setToolTip("Close to tray");
-    for (QToolButton* button : {minimizeButton, maximizeButton, closeButton})
-    {
-        button->setFixedSize(40, 28);
-        button->setAutoRaise(true);
-        titleBarLayout->addWidget(button);
-    }
-    connect(minimizeButton, &QToolButton::clicked, this, &QWidget::showMinimized);
+    voiceLanguageCombo->addItems({"English", "Chinese", "Japanese", "Korean", "German",
+        "French", "Russian", "Portuguese", "Spanish", "Italian"});
+
+    connect(ui->minimizeButton, &QToolButton::clicked, this, &QWidget::showMinimized);
     connect(maximizeButton, &QToolButton::clicked, this, [this]() { ToggleMaximized(); });
-    connect(closeButton, &QToolButton::clicked, this, &QWidget::close);
-    layout->addWidget(titleBar);
+    connect(ui->closeButton, &QToolButton::clicked, this, &QWidget::close);
 
-    auto* header = new QHBoxLayout();
-    auto* title = new QLabel("REVIA", root);
-    QFont titleFont = title->font();
-    titleFont.setPointSize(18);
-    titleFont.setBold(true);
-    title->setFont(titleFont);
-    title->setStyleSheet("color: #e8f4ff; letter-spacing: 4px;");
-    header->addWidget(title);
-
-    stateLabel = new QLabel("Offline", root);
-    stateDetailLabel = new QLabel("Waiting to start", root);
-    stateDetailLabel->setStyleSheet("color: #93a4bd; font-size: 11px;");
-    header->addStretch();
-    header->addWidget(stateLabel);
-    header->addWidget(stateDetailLabel);
-    layout->addLayout(header);
-
-    auto* statusStrip = new QHBoxLayout();
-    statusStrip->setSpacing(8);
-    affectLabel = new QLabel("Affect: Neutral", root);
-    affectLabel->setObjectName("affectChip");
-    speechLabel = new QLabel("Voice: Starting", root);
-    speechLabel->setObjectName("voiceChip");
-    microphoneLabel = new QLabel("Mic: Starting", root);
-    microphoneLabel->setObjectName("micChip");
-    automationLabel = new QLabel("Actions: Ready", root);
-    automationLabel->setObjectName("automationChip");
-    visionLabel = new QLabel("Vision: Starting", root);
-    visionLabel->setObjectName("visionChip");
-    // Required by Stage 6: while ambient observation is active it must be visible without
-    // opening a tab or reading a log. The chip is always present so its absence can never
-    // be mistaken for "off".
-    perceptionLabel = new QLabel("Watching: Off", root);
-    perceptionLabel->setObjectName("perceptionChip");
-    perceptionLabel->setToolTip("Ambient window observation is off.");
-    for (QLabel* chip : {affectLabel, speechLabel, microphoneLabel, automationLabel,
-        visionLabel, perceptionLabel})
-    {
-        chip->setMinimumWidth(0);
-        chip->setMaximumWidth(180);
-        chip->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
-        chip->setAlignment(Qt::AlignCenter);
-        statusStrip->addWidget(chip, 1);
-    }
-    layout->addLayout(statusStrip);
-
-    tabs = new QTabWidget(root);
-    tabs->setDocumentMode(true);
-    auto* chatPage = new QWidget(tabs);
-    auto* chatLayout = new QVBoxLayout(chatPage);
-    chatLayout->setContentsMargins(0, 10, 0, 0);
-    chatLayout->setSpacing(10);
-
-    chatHistory = new QTextBrowser(chatPage);
-    chatHistory->setOpenExternalLinks(false);
-    // Links here are toggles, not destinations. Without this QTextBrowser tries to
-    // navigate and clears the transcript.
-    chatHistory->setOpenLinks(false);
     connect(chatHistory, &QTextBrowser::anchorClicked, this, [this](const QUrl& link)
     {
         const QString target = link.toString();
@@ -370,216 +358,140 @@ void ReviaWindow::BuildInterface()
             RenderChat();
         }
     });
-    chatHistory->setPlaceholderText("Revia's conversation will appear here.");
-    chatLayout->addWidget(chatHistory, 1);
 
-    messageInput = new QPlainTextEdit(chatPage);
-    messageInput->setPlaceholderText("Talk to Revia...  (Shift+Enter for a new line)");
-    messageInput->setMaximumHeight(78);
-    messageInput->installEventFilter(this);
-    chatLayout->addWidget(messageInput);
-
-    auto* buttonRow = new QHBoxLayout();
-    sendButton = new QPushButton("Send", chatPage);
-    stopButton = new QPushButton("Stop", chatPage);
-    stopButton->setObjectName("stopButton");
-    stopButton->setEnabled(false);
-    microphoneButton = new QPushButton("Listen", chatPage);
-    microphoneButton->setObjectName("microphoneButton");
-    microphoneButton->setEnabled(false);
-    microphoneButton->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_Space));
-    visionButton = new QPushButton("Analyze screen", chatPage);
-    visionButton->setObjectName("visionButton");
-    visionButton->setEnabled(false);
-    screenActionButton = new QPushButton("Use screen", chatPage);
-    screenActionButton->setObjectName("screenActionButton");
-    screenActionButton->setToolTip(
-        "Use the instruction in the message box to locate one visible control, then "
-        "resolve it to Windows UI Automation before asking for action confirmation.");
-    screenActionButton->setEnabled(false);
-    for (QPushButton* button : {
-            sendButton, stopButton, microphoneButton, visionButton, screenActionButton})
+    QSettings shellSettings;
+    const int savedActivityFilter = std::clamp(
+        shellSettings.value("activity/filter", 0).toInt(), 0, activityFilter->count() - 1);
+    activityFilter->setCurrentIndex(savedActivityFilter);
+    activityAutoScroll->setChecked(
+        shellSettings.value("activity/follow", true).toBool());
+    connect(activityFilter, &QComboBox::currentIndexChanged, this, [this](const int index)
     {
-        buttonRow->addWidget(button, 1);
-    }
-    chatLayout->addLayout(buttonRow);
-    tabs->addTab(chatPage, "Chat");
-
-    auto* activityPage = new QWidget(tabs);
-    auto* activityLayout = new QVBoxLayout(activityPage);
-    activityLayout->setContentsMargins(0, 10, 0, 0);
-    activityFeed = new QPlainTextEdit(activityPage);
-    activityFeed->setReadOnly(true);
-    activityFeed->setMaximumBlockCount(1000);
-    activityLayout->addWidget(activityFeed);
-    tabs->addTab(activityPage, "Activity");
-
-    pipelinePanel = new PipelinePanel(tabs);
-    tabs->addTab(pipelinePanel, "Pipelines");
-
-    resourcePanel = new ResourcePanel(tabs);
-    tabs->addTab(resourcePanel, "Resources");
-
-    canvasPanel = new CanvasPanel(tabs);
-    tabs->addTab(canvasPanel, "Canvas");
-
-    capabilityPanel = new CapabilityPanel(
-        session,
-        [this]() { DiscoverApplicationPermissions(); },
-        tabs);
-    tabs->addTab(capabilityPanel, "Permissions");
-
-    // The tab has three sections and does not fit a short window. Without a scroll area
-    // the layout steals height from every field until the forms collapse into unreadable
-    // slivers, which is what happens as soon as the window is not tall enough.
-    auto* voiceScroll = new QScrollArea(tabs);
-    voiceScroll->setWidgetResizable(true);
-    voiceScroll->setFrameShape(QFrame::NoFrame);
-    voiceScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-    auto* voicePage = new QWidget(voiceScroll);
-    auto* voiceLayout = new QVBoxLayout(voicePage);
-    voiceLayout->setContentsMargins(0, 10, 0, 0);
-    voiceLayout->setSpacing(10);
-    auto* voiceIntro = new QLabel(
-        "Design a voice with Qwen3-TTS, preview it, then assign it to any Revia profile. "
-        "Models stay local and download on first use.", voicePage);
-    voiceIntro->setWordWrap(true);
-    voiceIntro->setObjectName("secondaryText");
-    voiceLayout->addWidget(voiceIntro);
-    voiceStudioStatus = new QLabel("Voice Studio is ready.", voicePage);
-    voiceStudioStatus->setObjectName("voiceStudioStatus");
-    voiceStudioStatus->setWordWrap(true);
-    voiceLayout->addWidget(voiceStudioStatus);
-
-    // Two distinct jobs share this tab, and without headings they read as one long
-    // creation form -- which makes the assignment controls, the ones used most often,
-    // easy to miss entirely.
-    auto* assignTitle = new QLabel("Assign a voice to a profile", voicePage);
-    assignTitle->setObjectName("sectionTitle");
-    voiceLayout->addWidget(assignTitle);
-    auto* assignHint = new QLabel(
-        "Pick a profile, choose one of your created voices, then Assign voice. "
-        "Use Windows fallback clears the assignment and returns that profile to SAPI.",
-        voicePage);
-    assignHint->setWordWrap(true);
-    assignHint->setObjectName("secondaryText");
-    voiceLayout->addWidget(assignHint);
-
-    auto* assignmentForm = new QFormLayout();
-    assignmentForm->setHorizontalSpacing(12);
-    voiceProfileCombo = new QComboBox(voicePage);
-    voicePresetCombo = new QComboBox(voicePage);
-    assignmentForm->addRow("Profile", voiceProfileCombo);
-    assignmentForm->addRow("Assigned voice", voicePresetCombo);
-    voiceLayout->addLayout(assignmentForm);
-    auto* assignmentButtons = new QHBoxLayout();
-    assignVoiceButton = new QPushButton("Assign voice", voicePage);
-    fallbackVoiceButton = new QPushButton("Use Windows fallback", voicePage);
-    fallbackVoiceButton->setObjectName("secondaryButton");
-    assignmentButtons->addWidget(assignVoiceButton);
-    assignmentButtons->addWidget(fallbackVoiceButton);
-    assignmentButtons->addStretch();
-    voiceLayout->addLayout(assignmentButtons);
-
-    auto* createTitle = new QLabel("Create a new voice", voicePage);
-    createTitle->setObjectName("sectionTitle");
-    voiceLayout->addWidget(createTitle);
-    auto* createHint = new QLabel(
-        "Describe a voice and Revia designs it locally. A created voice appears in the "
-        "Assigned voice list above.", voicePage);
-    createHint->setWordWrap(true);
-    createHint->setObjectName("secondaryText");
-    voiceLayout->addWidget(createHint);
-
-    auto* studioForm = new QFormLayout();
-    studioForm->setHorizontalSpacing(12);
-    voiceNameInput = new QLineEdit(voicePage);
-    voiceNameInput->setMinimumHeight(32);
-    voiceNameInput->setPlaceholderText("Revia Bright");
-    voiceLanguageCombo = new QComboBox(voicePage);
-    voiceLanguageCombo->addItems({"English", "Chinese", "Japanese", "Korean", "German",
-        "French", "Russian", "Portuguese", "Spanish", "Italian"});
-    voiceDescriptionInput = new QPlainTextEdit(voicePage);
-    voiceDescriptionInput->setMinimumHeight(70);
-    voiceDescriptionInput->setMaximumHeight(86);
-    voiceDescriptionInput->setPlaceholderText(
-        "A bright youthful synthetic voice, curious and clear, gently playful, never babyish.");
-    voiceReferenceInput = new QPlainTextEdit(voicePage);
-    voiceReferenceInput->setMinimumHeight(58);
-    voiceReferenceInput->setMaximumHeight(64);
-    voiceReferenceInput->setPlainText(
-        "Wait, I found it. The pattern is clearer now, and I think this part matters.");
-    studioForm->addRow("Preset name", voiceNameInput);
-    studioForm->addRow("Language", voiceLanguageCombo);
-    studioForm->addRow("Voice description", voiceDescriptionInput);
-    studioForm->addRow("Reference line", voiceReferenceInput);
-    voiceLayout->addLayout(studioForm);
-    createVoiceButton = new QPushButton("Create voice", voicePage);
-    voiceLayout->addWidget(createVoiceButton, 0, Qt::AlignLeft);
-
-    auto* previewTitle = new QLabel("Preview a voice", voicePage);
-    previewTitle->setObjectName("sectionTitle");
-    voiceLayout->addWidget(previewTitle);
-
-    auto* previewRow = new QHBoxLayout();
-    voicePreviewInput = new QPlainTextEdit(voicePage);
-    voicePreviewInput->setMinimumHeight(58);
-    voicePreviewInput->setMaximumHeight(62);
-    voicePreviewInput->setPlainText("Hi. I'm Revia. Oh, this voice fits much better.");
-    previewVoiceButton = new QPushButton("Generate preview", voicePage);
-    previewRow->addWidget(voicePreviewInput, 1);
-    previewRow->addWidget(previewVoiceButton);
-    voiceLayout->addLayout(previewRow);
-    voiceLayout->addStretch();
-    voiceScroll->setWidget(voicePage);
-    tabs->addTab(voiceScroll, "Voice Studio");
-
-    auto* settingsPage = new QWidget(tabs);
-    auto* settingsLayout = new QVBoxLayout(settingsPage);
-    settingsLayout->setContentsMargins(0, 14, 0, 0);
-    auto* settingsTitle = new QLabel("Window and speech", settingsPage);
-    settingsTitle->setObjectName("sectionTitle");
-    settingsLayout->addWidget(settingsTitle);
-
-    auto* preferenceRow = new QHBoxLayout();
-    alwaysOnTopCheck = new QCheckBox("Keep Revia on top", settingsPage);
-    speechCheck = new QCheckBox("Speak replies", settingsPage);
-    speechCheck->setChecked(true);
-    autoSendVoiceCheck = new QCheckBox("Send what I say automatically", settingsPage);
-    autoSendVoiceCheck->setChecked(true);
-    autoSendVoiceCheck->setToolTip(
-        "When a transcript arrives, send it to Revia straight away instead of leaving it "
-        "in the message box for editing.");
-    preferenceRow->addWidget(alwaysOnTopCheck);
-    preferenceRow->addWidget(speechCheck);
-    preferenceRow->addWidget(autoSendVoiceCheck);
-    preferenceRow->addStretch();
-    settingsLayout->addLayout(preferenceRow);
-    auto* settingsHint = new QLabel(
-        "Listening is a toggle: press Listen (or Ctrl+Space) to start, press it again to stop "
-        "and transcribe. Auto voice mode uses a profile's Qwen3-TTS preset when assigned and "
-        "keeps Windows SAPI as a dependable fallback. Hardware selection is re-evaluated on "
-        "each model load.",
-        settingsPage);
-    settingsHint->setWordWrap(true);
-    settingsHint->setObjectName("secondaryText");
-    settingsLayout->addWidget(settingsHint);
-    settingsLayout->addStretch();
-    tabs->addTab(settingsPage, "Settings");
-    layout->addWidget(tabs, 1);
+        QSettings().setValue("activity/filter", index);
+        RenderActivity();
+    });
+    connect(activityAutoScroll, &QCheckBox::toggled, this, [](const bool enabled)
+    {
+        QSettings().setValue("activity/follow", enabled);
+    });
+    connect(clearActivityButton, &QPushButton::clicked, this, [this]()
+    {
+        activityEntries.clear();
+        activityWarningCount = 0;
+        activityErrorCount = 0;
+        RenderActivity();
+        UpdateActivitySummary();
+    });
+    connect(openLogsButton, &QPushButton::clicked, this, [this]()
+    {
+        const QString path = QDir::current().filePath(QStringLiteral("Logs"));
+        QDir().mkpath(path);
+        if (!QDesktopServices::openUrl(QUrl::fromLocalFile(path)))
+        {
+            AppendActivity(
+                QStringLiteral("The Logs folder could not be opened: ") + path,
+                ActivitySeverity::Warning);
+        }
+    });
+    UpdateActivitySummary();
 
     connect(sendButton, &QPushButton::clicked, this, [this]() { SendMessage(); });
     connect(stopButton, &QPushButton::clicked, this, [this]() { session.RequestStop(); });
     connect(microphoneButton, &QPushButton::clicked, this, [this]() { ToggleListening(); });
     connect(visionButton, &QPushButton::clicked, this, [this]() { AnalyzeVisibleScreen(); });
     connect(screenActionButton, &QPushButton::clicked, this, [this]() { UseVisibleScreen(); });
+    alwaysOnTopCheck->setChecked(shellSettings.value("window/alwaysOnTop", false).toBool());
+    autoSendVoiceCheck->setChecked(shellSettings.value("input/autoSendVoice", true).toBool());
     connect(alwaysOnTopCheck, &QCheckBox::toggled, this, [this](const bool enabled)
     {
+        QSettings().setValue("window/alwaysOnTop", enabled);
         SetAlwaysOnTop(enabled);
     });
+    connect(autoSendVoiceCheck, &QCheckBox::toggled, this, [](const bool enabled)
+    {
+        QSettings().setValue("input/autoSendVoice", enabled);
+    });
+    if (alwaysOnTopCheck->isChecked())
+    {
+        SetAlwaysOnTop(true);
+    }
     connect(speechCheck, &QCheckBox::toggled, this, [this](const bool enabled)
     {
-        session.SetSpeechEnabled(enabled);
+        ShowPreferenceResult(
+            session.SetPreference("speech.enabled", enabled ? "on" : "off"));
+    });
+    connect(bargeInCheck, &QCheckBox::toggled, this, [this](const bool enabled)
+    {
+        ShowPreferenceResult(
+            session.SetPreference("bargeIn.enabled", enabled ? "on" : "off"));
+    });
+    connect(handsFreeCheck, &QCheckBox::toggled, this, [this](const bool enabled)
+    {
+        ShowPreferenceResult(session.SetPreference(
+            "speechRecognition.handsFree", enabled ? "on" : "off"));
+        autoSendVoiceCheck->setEnabled(!enabled);
+    });
+    connect(avatarBridgeCheck, &QCheckBox::toggled, this, [this](const bool enabled)
+    {
+        ShowPreferenceResult(session.SetPreference(
+            "presence.avatarBridgeEnabled", enabled ? "on" : "off"));
+    });
+    connect(externalAdaptersCheck, &QCheckBox::toggled, this, [this](const bool enabled)
+    {
+        ShowPreferenceResult(session.SetPreference(
+            "presence.externalAdaptersEnabled", enabled ? "on" : "off"));
+    });
+    connect(openPresenceFolderButton, &QPushButton::clicked, this, [this]()
+    {
+        const QString path = QDir::current().filePath(QStringLiteral("RuntimeData/Presence"));
+        QDir().mkpath(path);
+        if (!QDesktopServices::openUrl(QUrl::fromLocalFile(path)))
+        {
+            AppendActivity(
+                QStringLiteral("The Presence folder could not be opened: ") + path,
+                ActivitySeverity::Warning);
+        }
+    });
+    connect(initiativeCheck, &QCheckBox::toggled, this, [this](const bool enabled)
+    {
+        initiativeMaxSpin->setEnabled(enabled);
+        curiosityCheck->setEnabled(enabled);
+        spontaneousSpeechCheck->setEnabled(enabled && curiosityCheck->isChecked());
+        speakWhenAwayCheck->setEnabled(enabled && curiosityCheck->isChecked());
+        ShowPreferenceResult(
+            session.SetPreference("initiative.enabled", enabled ? "on" : "off"));
+    });
+    connect(curiosityCheck, &QCheckBox::toggled, this, [this](const bool enabled)
+    {
+        spontaneousSpeechCheck->setEnabled(initiativeCheck->isChecked() && enabled);
+        speakWhenAwayCheck->setEnabled(initiativeCheck->isChecked() && enabled);
+        ShowPreferenceResult(session.SetPreference(
+            "initiative.curiosityEnabled", enabled ? "on" : "off"));
+    });
+    connect(spontaneousSpeechCheck, &QCheckBox::toggled, this, [this](const bool enabled)
+    {
+        ShowPreferenceResult(session.SetPreference(
+            "initiative.spontaneousSpeechEnabled", enabled ? "on" : "off"));
+    });
+    connect(speakWhenAwayCheck, &QCheckBox::toggled, this, [this](const bool enabled)
+    {
+        ShowPreferenceResult(session.SetPreference(
+            "initiative.speakWhenUserAway", enabled ? "on" : "off"));
+    });
+    connect(aiFilterCheck, &QCheckBox::toggled, this, [this](const bool enabled)
+    {
+        ShowPreferenceResult(session.SetPreference(
+            "responseFilter.aiReviewEnabled", enabled ? "on" : "off"));
+    });
+    connect(initiativeMaxSpin, &QSpinBox::editingFinished, this, [this]()
+    {
+        ShowPreferenceResult(session.SetPreference(
+            "initiative.maxPerHour", std::to_string(initiativeMaxSpin->value())));
+    });
+    connect(resourceSampleSpin, &QSpinBox::editingFinished, this, [this]()
+    {
+        ShowPreferenceResult(session.SetPreference(
+            "resources.usageSampleSeconds", std::to_string(resourceSampleSpin->value())));
     });
     connect(createVoiceButton, &QPushButton::clicked, this, [this]() { CreateVoicePreset(); });
     connect(previewVoiceButton, &QPushButton::clicked, this, [this]() { PreviewVoice(); });
@@ -607,141 +519,15 @@ void ReviaWindow::BuildInterface()
     });
     RefreshVoiceStudio();
 
-    setStyleSheet(R"(
-        QWidget#rootPanel {
-            background: rgba(14, 20, 34, 242);
-            border-radius: 16px;
-        }
-        QWidget#titleBar { background: transparent; }
-        QLabel#windowTitle { color: #93a4bd; font-size: 12px; }
-        QLabel#affectChip, QLabel#voiceChip, QLabel#micChip,
-        QLabel#automationChip, QLabel#visionChip, QLabel#perceptionChip {
-            background: rgba(25, 36, 55, 205);
-            border: 1px solid #293b55;
-            border-radius: 8px;
-            padding: 6px 7px;
-            font-size: 10px;
-        }
-        QLabel#affectChip { color: #c3a6ff; }
-        QLabel#voiceChip { color: #85d7c8; }
-        QLabel#micChip { color: #8ac7ff; }
-        QLabel#automationChip { color: #e0bd75; }
-        QLabel#visionChip { color: #e69bc4; }
-        QLabel#perceptionChip { color: #93a4bd; }
-        QLabel#perceptionChip[watching="true"] {
-            background: rgba(122, 62, 40, 235);
-            border: 1px solid #d2763f;
-            color: #ffd9b8;
-            font-weight: 700;
-        }
-        QLabel#secondaryText { color: #93a4bd; }
-        QLabel#sectionTitle { color: #dce9f7; font-size: 15px; font-weight: 700; }
-        QLabel#voiceStudioStatus {
-            color: #85d7c8;
-            background: rgba(20, 48, 57, 180);
-            border: 1px solid #2f625f;
-            border-radius: 8px;
-            padding: 8px;
-        }
-        QTabWidget::pane { border: none; background: transparent; }
-        QTabBar::tab {
-            color: #93a4bd;
-            background: transparent;
-            border: none;
-            border-bottom: 2px solid transparent;
-            padding: 9px 18px;
-            margin-right: 3px;
-            font-weight: 600;
-        }
-        QTabBar::tab:hover { color: #dce9f7; background: rgba(35, 54, 78, 100); }
-        QTabBar::tab:selected { color: #70e0ca; border-bottom-color: #70e0ca; }
-        QComboBox, QLineEdit {
-            color: #dce9f7;
-            background: rgba(7, 12, 23, 220);
-            border: 1px solid #293b55;
-            border-radius: 8px;
-            padding: 8px;
-            selection-background-color: #315f84;
-        }
-        QComboBox QAbstractItemView {
-            color: #dce9f7;
-            background: #111b2d;
-            border: 1px solid #38506e;
-            selection-background-color: #315f84;
-        }
-        QToolButton#windowControl, QToolButton#closeControl {
-            color: #b8c6d9;
-            background: transparent;
-            border: none;
-            border-radius: 6px;
-            font-size: 16px;
-        }
-        QToolButton#windowControl:hover { background: rgba(93, 119, 151, 90); color: white; }
-        QToolButton#closeControl:hover { background: #c94b5f; color: white; }
-        QTextBrowser, QPlainTextEdit {
-            background: rgba(7, 12, 23, 220);
-            color: #dce9f7;
-            border: 1px solid #293b55;
-            border-radius: 10px;
-            padding: 9px;
-            selection-background-color: #315f84;
-        }
-        QTableWidget {
-            background: rgba(7, 12, 23, 220);
-            alternate-background-color: rgba(17, 27, 45, 220);
-            color: #dce9f7;
-            border: 1px solid #293b55;
-            border-radius: 10px;
-            outline: none;
-        }
-        QHeaderView::section {
-            background: #182438;
-            color: #a9bad2;
-            border: none;
-            border-bottom: 1px solid #293b55;
-            padding: 8px;
-            font-weight: 600;
-        }
-        QProgressBar {
-            background: rgba(7, 12, 23, 220);
-            border: 1px solid #293b55;
-            border-radius: 6px;
-            color: #dce9f7;
-            text-align: center;
-            font-weight: 600;
-        }
-        QProgressBar::chunk { background: #327aa8; border-radius: 5px; }
-        /* A resource past the budget the plan set aside has to be visible as such at a
-           glance; the bar saturates at full, so colour is what carries the difference. */
-        QProgressBar[overBudget="true"] { border-color: #a64d69; }
-        QProgressBar[overBudget="true"]::chunk { background: #c94b5f; }
-        QProgressBar[unavailable="true"] { color: #7b8a9e; }
-        QProgressBar[unavailable="true"]::chunk { background: transparent; }
-        QPushButton {
-            background: #327aa8;
-            color: white;
-            border: none;
-            border-radius: 8px;
-            padding: 10px 18px;
-            font-weight: 600;
-        }
-        QPushButton:hover { background: #4294c8; }
-        QPushButton:disabled { background: #354154; color: #8390a3; }
-        QPushButton#stopButton { background: #7d3d55; }
-        QPushButton#stopButton:hover { background: #a64d69; }
-        QPushButton#microphoneButton { background: #31556f; }
-        QPushButton#microphoneButton:hover { background: #3d6b8c; }
-        QPushButton#microphoneButton[listening="true"] { background: #2b9a8b; }
-        QPushButton#microphoneButton[listening="true"]:hover { background: #34b8a6; }
-        QPushButton#visionButton { background: #694663; }
-        QPushButton#visionButton:hover { background: #8e5b84; }
-        QPushButton#screenActionButton { background: #46615f; }
-        QPushButton#screenActionButton:hover { background: #5d817e; }
-        QPushButton#secondaryButton { background: #354154; }
-        QPushButton#secondaryButton:hover { background: #46556d; }
-        QCheckBox { color: #a9bad2; }
-        QToolTip { color: white; background: #182438; border: 1px solid #45607f; }
-    )");
+    QFile theme(":/revia/revia.qss");
+    if (theme.open(QIODevice::ReadOnly | QIODevice::Text))
+    {
+        setStyleSheet(QString::fromUtf8(theme.readAll()));
+    }
+    else
+    {
+        AppendActivity("The embedded Revia theme could not be loaded.");
+    }
 
     ApplyMicrophoneUi(MicrophoneUi::Unavailable);
 }
@@ -766,6 +552,7 @@ void ReviaWindow::BuildTray()
     });
     connect(alwaysOnTopAction, &QAction::toggled, alwaysOnTopCheck, &QCheckBox::setChecked);
     connect(alwaysOnTopCheck, &QCheckBox::toggled, alwaysOnTopAction, &QAction::setChecked);
+    alwaysOnTopAction->setChecked(alwaysOnTopCheck->isChecked());
     connect(quitAction, &QAction::triggered, this, [this]()
     {
         BeginShutdown(revia::core::ExitReason::TrayQuit);
@@ -805,9 +592,19 @@ void ReviaWindow::StartRuntime()
             }
             if (!started)
             {
-                AppendActivity("Startup did not complete. Check the activity log.");
+                AppendActivity(
+                    "Startup did not complete. Check the activity log.",
+                    ActivitySeverity::Error);
+            }
+            else
+            {
+                ApplyUserPreferences();
             }
             RefreshVoiceStudio();
+            if (resourcePanel != nullptr && started)
+            {
+                resourcePanel->SetVoiceDevicePreference(session.VoiceDevicePreference());
+            }
             if (capabilityPanel != nullptr)
             {
                 capabilityPanel->Refresh();
@@ -1009,6 +806,13 @@ void ReviaWindow::ApplyMicrophoneUi(const MicrophoneUi microphoneUi)
 
     switch (microphoneUi)
     {
+        case MicrophoneUi::HandsFree:
+            microphoneButton->setText("Hands-free on");
+            microphoneButton->setToolTip(
+                "Voice activity detection is waiting for a complete spoken thought. "
+                "Turn it off from the Presence tab to use push-to-talk.");
+            microphoneButton->setEnabled(false);
+            break;
         case MicrophoneUi::Listening:
             microphoneButton->setText("Stop listening");
             microphoneButton->setToolTip("Stop listening and transcribe (Ctrl+Space)");
@@ -1423,14 +1227,19 @@ void ReviaWindow::UpdateMaximizeButton()
 
 void ReviaWindow::SetAlwaysOnTop(const bool enabled)
 {
+    const bool wasVisible = isVisible();
     const QRect previousGeometry = geometry();
     setWindowFlag(Qt::WindowStaysOnTopHint, enabled);
-    show();
-    setGeometry(previousGeometry);
+    if (wasVisible)
+    {
+        show();
+        setGeometry(previousGeometry);
+    }
 }
 
 void ReviaWindow::HandleRuntimeEvent(const revia::runtime::RuntimeEvent& event)
 {
+    RefreshPresenceUi();
     if (pipelinePanel != nullptr)
     {
         pipelinePanel->Observe(event);
@@ -1439,9 +1248,20 @@ void ReviaWindow::HandleRuntimeEvent(const revia::runtime::RuntimeEvent& event)
     {
         resourcePanel->Observe(event);
     }
+    if (internetActivityPanel != nullptr)
+    {
+        internetActivityPanel->Observe(event);
+    }
     if (canvasPanel != nullptr)
     {
         canvasPanel->Observe(event);
+    }
+    if (event.kind == revia::runtime::RuntimeEventKind::UserMessage)
+    {
+        const bool adapter = event.component == "Adapters";
+        AppendChat(adapter ? QStringLiteral("External") : QStringLiteral("You"),
+            QString::fromStdString(event.message), true);
+        return;
     }
     if (event.kind == revia::runtime::RuntimeEventKind::StateChanged)
     {
@@ -1506,7 +1326,8 @@ void ReviaWindow::HandleRuntimeEvent(const revia::runtime::RuntimeEvent& event)
             speechLabel->setToolTip(QString::fromStdString(event.message));
             speechActive = phase == QStringLiteral("Queued") ||
                 phase == QStringLiteral("Loading") || phase == QStringLiteral("Designing") ||
-                phase == QStringLiteral("Generating") || phase == QStringLiteral("Speaking");
+                phase == QStringLiteral("Generating") || phase == QStringLiteral("Generated") ||
+                phase == QStringLiteral("Speaking");
 
             speechPhase = phase;
             RefreshStateBadge();
@@ -1556,6 +1377,15 @@ void ReviaWindow::HandleRuntimeEvent(const revia::runtime::RuntimeEvent& event)
                 listenRequested = false;
                 ApplyMicrophoneUi(MicrophoneUi::Unavailable);
             }
+            else if (phase == QStringLiteral("HandsFree"))
+            {
+                listenRequested = false;
+                ApplyMicrophoneUi(MicrophoneUi::HandsFree);
+            }
+            else if (phase == QStringLiteral("SpeechDetected"))
+            {
+                ApplyMicrophoneUi(MicrophoneUi::Listening);
+            }
             else if (phase == QStringLiteral("Recording"))
             {
                 // The capture thread confirms it opened the microphone. Ignore it if the
@@ -1581,14 +1411,21 @@ void ReviaWindow::HandleRuntimeEvent(const revia::runtime::RuntimeEvent& event)
             if (phase == QStringLiteral("Transcript"))
             {
                 const QString transcript = QString::fromStdString(event.message).trimmed();
-                messageInput->setPlainText(transcript);
-                if (autoSendVoiceCheck->isChecked() && !session.IsBusy())
+                if (event.detail == "hands-free")
                 {
-                    SendMessage(true);
+                    ApplyMicrophoneUi(MicrophoneUi::HandsFree);
                 }
                 else
                 {
-                    messageInput->setFocus();
+                    messageInput->setPlainText(transcript);
+                    if (autoSendVoiceCheck->isChecked() && !session.IsBusy())
+                    {
+                        SendMessage(true);
+                    }
+                    else
+                    {
+                        messageInput->setFocus();
+                    }
                 }
             }
             QString detail = QStringLiteral("Microphone ") + phase + QStringLiteral(": ") +
@@ -1663,6 +1500,22 @@ void ReviaWindow::HandleRuntimeEvent(const revia::runtime::RuntimeEvent& event)
             }
             AppendActivity(detail);
         }
+        else
+        {
+            QString detail = QString::fromStdString(event.component) + QStringLiteral(" ") +
+                QString::fromStdString(event.phase) + QStringLiteral(": ") +
+                QString::fromStdString(event.message);
+            if (event.elapsedMilliseconds >= 0.0)
+            {
+                detail += QStringLiteral(" (") +
+                    QString::number(event.elapsedMilliseconds, 'f', 1) + QStringLiteral("ms)");
+            }
+            if (event.queueDepth > 0)
+            {
+                detail += QStringLiteral(" queue=") + QString::number(event.queueDepth);
+            }
+            AppendActivity(detail);
+        }
         return;
     }
     if (event.kind == revia::runtime::RuntimeEventKind::AssistantMessage)
@@ -1686,9 +1539,16 @@ void ReviaWindow::HandleRuntimeEvent(const revia::runtime::RuntimeEvent& event)
     }
 
     const QString message = QString::fromStdString(event.message);
-    AppendActivity(message.startsWith('[')
+    const QString timestamped = message.startsWith('[')
         ? message
-        : '[' + EventTime(event) + "] " + message);
+        : '[' + EventTime(event) + "] " + message;
+    AppendActivity(
+        timestamped,
+        event.kind == revia::runtime::RuntimeEventKind::Error
+            ? ActivitySeverity::Error
+            : (event.kind == revia::runtime::RuntimeEventKind::Warning
+                ? ActivitySeverity::Warning
+                : ActivitySeverity::Automatic));
 }
 
 void ReviaWindow::UpdateState(
@@ -1796,10 +1656,226 @@ void ReviaWindow::RenderChat()
     chatHistory->verticalScrollBar()->setValue(chatHistory->verticalScrollBar()->maximum());
 }
 
-void ReviaWindow::AppendActivity(const QString& message)
+void ReviaWindow::AppendActivity(
+    const QString& inputMessage,
+    ActivitySeverity severity)
 {
-    activityFeed->appendPlainText(message);
-    activityFeed->verticalScrollBar()->setValue(activityFeed->verticalScrollBar()->maximum());
+    QString message = inputMessage.trimmed();
+    if (message.isEmpty())
+    {
+        return;
+    }
+    if (!message.startsWith(QLatin1Char('[')))
+    {
+        message = QStringLiteral("[") +
+            QDateTime::currentDateTime().toString(QStringLiteral("HH:mm:ss.zzz")) +
+            QStringLiteral("] ") + message;
+    }
+    if (severity == ActivitySeverity::Automatic)
+    {
+        const QString lowered = message.toLower();
+        if (lowered.contains(QStringLiteral("] [error]")) ||
+            lowered.contains(QStringLiteral(" error:")) ||
+            lowered.contains(QStringLiteral(" failed")) ||
+            lowered.contains(QStringLiteral(" failure")) ||
+            lowered.contains(QStringLiteral(" could not")))
+        {
+            severity = ActivitySeverity::Error;
+        }
+        else if (lowered.contains(QStringLiteral("] [warning]")) ||
+            lowered.contains(QStringLiteral(" warning")) ||
+            lowered.contains(QStringLiteral(" degraded")) ||
+            lowered.contains(QStringLiteral(" fallback")) ||
+            lowered.contains(QStringLiteral(" unavailable")) ||
+            lowered.contains(QStringLiteral(" blocked")) ||
+            lowered.contains(QStringLiteral(" refused")) ||
+            lowered.contains(QStringLiteral(" missing")))
+        {
+            severity = ActivitySeverity::Warning;
+        }
+        else
+        {
+            severity = ActivitySeverity::Information;
+        }
+    }
+
+    activityEntries.push_back({message, severity});
+    if (severity == ActivitySeverity::Warning)
+    {
+        ++activityWarningCount;
+    }
+    else if (severity == ActivitySeverity::Error)
+    {
+        ++activityErrorCount;
+    }
+    constexpr std::size_t MaximumVisibleLogEntries = 2000;
+    bool trimmedOldEntries = false;
+    if (activityEntries.size() > MaximumVisibleLogEntries)
+    {
+        trimmedOldEntries = true;
+        activityEntries.erase(
+            activityEntries.begin(),
+            activityEntries.begin() +
+                static_cast<std::ptrdiff_t>(activityEntries.size() - MaximumVisibleLogEntries));
+    }
+    const int filter = activityFilter == nullptr ? 0 : activityFilter->currentIndex();
+    const bool visible = (filter == 0) ||
+        (filter == 1 && severity != ActivitySeverity::Information) ||
+        (filter == 2 && severity == ActivitySeverity::Error);
+    if (trimmedOldEntries)
+    {
+        RenderActivity();
+    }
+    else if (visible && activityFeed != nullptr)
+    {
+        const QString color = severity == ActivitySeverity::Error
+            ? QStringLiteral("#ff7b88")
+            : (severity == ActivitySeverity::Warning
+                ? QStringLiteral("#e8c56d")
+                : QStringLiteral("#c7d5e8"));
+        activityFeed->append(QStringLiteral(
+            "<span style=\"color:%1; white-space:pre-wrap;\">%2</span>")
+            .arg(color, message.toHtmlEscaped()));
+        if (activityAutoScroll != nullptr && activityAutoScroll->isChecked())
+        {
+            activityFeed->verticalScrollBar()->setValue(
+                activityFeed->verticalScrollBar()->maximum());
+        }
+    }
+    UpdateActivitySummary();
+}
+
+void ReviaWindow::RenderActivity()
+{
+    if (activityFeed == nullptr || activityFilter == nullptr)
+    {
+        return;
+    }
+    const int previousScroll = activityFeed->verticalScrollBar()->value();
+    const int filter = activityFilter->currentIndex();
+    QString html;
+    html.reserve(static_cast<qsizetype>(activityEntries.size() * 96));
+    for (const ActivityEntry& entry : activityEntries)
+    {
+        if ((filter == 1 && entry.severity == ActivitySeverity::Information) ||
+            (filter == 2 && entry.severity != ActivitySeverity::Error))
+        {
+            continue;
+        }
+        const QString color = entry.severity == ActivitySeverity::Error
+            ? QStringLiteral("#ff7b88")
+            : (entry.severity == ActivitySeverity::Warning
+                ? QStringLiteral("#e8c56d")
+                : QStringLiteral("#c7d5e8"));
+        html += QStringLiteral(
+            "<div style=\"color:%1; margin:0 0 4px 0; white-space:pre-wrap;\">%2</div>")
+            .arg(color, entry.message.toHtmlEscaped());
+    }
+    activityFeed->setHtml(html);
+    if (activityAutoScroll != nullptr && activityAutoScroll->isChecked())
+    {
+        activityFeed->verticalScrollBar()->setValue(
+            activityFeed->verticalScrollBar()->maximum());
+    }
+    else
+    {
+        activityFeed->verticalScrollBar()->setValue(previousScroll);
+    }
+}
+
+void ReviaWindow::UpdateActivitySummary()
+{
+    if (activityIssueSummary == nullptr)
+    {
+        return;
+    }
+    const bool hasErrors = activityErrorCount > 0;
+    const bool hasWarnings = activityWarningCount > 0;
+    activityIssueSummary->setText(!hasErrors && !hasWarnings
+        ? QStringLiteral("No warnings or errors")
+        : QStringLiteral("%1 error%2  •  %3 warning%4")
+            .arg(activityErrorCount)
+            .arg(activityErrorCount == 1 ? QString() : QStringLiteral("s"))
+            .arg(activityWarningCount)
+            .arg(activityWarningCount == 1 ? QString() : QStringLiteral("s")));
+    activityIssueSummary->setProperty("level", hasErrors
+        ? QStringLiteral("error")
+        : (hasWarnings ? QStringLiteral("warning") : QStringLiteral("ok")));
+    activityIssueSummary->style()->unpolish(activityIssueSummary);
+    activityIssueSummary->style()->polish(activityIssueSummary);
+
+    const int runtimeIndex = tabs == nullptr ? -1 : tabs->indexOf(ui->runtimePage);
+    if (runtimeIndex >= 0)
+    {
+        const int issueCount = activityErrorCount + activityWarningCount;
+        tabs->setTabText(runtimeIndex, issueCount == 0
+            ? QStringLiteral("Runtime")
+            : QStringLiteral("Runtime (%1)").arg(issueCount));
+        tabs->setTabToolTip(runtimeIndex, issueCount == 0
+            ? QStringLiteral("No warnings or errors in this UI session.")
+            : activityIssueSummary->text());
+    }
+}
+
+void ReviaWindow::ApplyUserPreferences()
+{
+    const revia::runtime::UserPreferenceSnapshot snapshot = session.UserPreferences();
+    const QSignalBlocker speechBlocker(speechCheck);
+    const QSignalBlocker bargeInBlocker(bargeInCheck);
+    const QSignalBlocker handsFreeBlocker(handsFreeCheck);
+    const QSignalBlocker avatarBlocker(avatarBridgeCheck);
+    const QSignalBlocker adapterBlocker(externalAdaptersCheck);
+    const QSignalBlocker initiativeBlocker(initiativeCheck);
+    const QSignalBlocker curiosityBlocker(curiosityCheck);
+    const QSignalBlocker spontaneousBlocker(spontaneousSpeechCheck);
+    const QSignalBlocker awayBlocker(speakWhenAwayCheck);
+    const QSignalBlocker aiFilterBlocker(aiFilterCheck);
+    const QSignalBlocker initiativeMaxBlocker(initiativeMaxSpin);
+    const QSignalBlocker sampleBlocker(resourceSampleSpin);
+    speechCheck->setChecked(snapshot.speechEnabled);
+    bargeInCheck->setChecked(snapshot.bargeInEnabled);
+    handsFreeCheck->setChecked(snapshot.handsFreeEnabled);
+    avatarBridgeCheck->setChecked(snapshot.avatarBridgeEnabled);
+    externalAdaptersCheck->setChecked(snapshot.externalAdaptersEnabled);
+    autoSendVoiceCheck->setEnabled(!snapshot.handsFreeEnabled);
+    initiativeCheck->setChecked(snapshot.initiativeEnabled);
+    curiosityCheck->setChecked(snapshot.curiosityEnabled);
+    spontaneousSpeechCheck->setChecked(snapshot.spontaneousSpeechEnabled);
+    speakWhenAwayCheck->setChecked(snapshot.speakWhenUserAway);
+    aiFilterCheck->setChecked(snapshot.aiResponseReviewEnabled);
+    initiativeMaxSpin->setValue(snapshot.initiativeMaxPerHour);
+    initiativeMaxSpin->setEnabled(snapshot.initiativeEnabled);
+    curiosityCheck->setEnabled(snapshot.initiativeEnabled);
+    spontaneousSpeechCheck->setEnabled(
+        snapshot.initiativeEnabled && snapshot.curiosityEnabled);
+    speakWhenAwayCheck->setEnabled(snapshot.initiativeEnabled && snapshot.curiosityEnabled);
+    resourceSampleSpin->setValue(snapshot.resourceSampleSeconds);
+    RefreshPresenceUi();
+}
+
+void ReviaWindow::RefreshPresenceUi()
+{
+    if (presencePhaseValue == nullptr) return;
+    const revia::presence::PresenceSnapshot snapshot = session.Presence();
+    presencePhaseValue->setText(QString::fromStdString(snapshot.phase));
+    presenceAffectValue->setText(
+        QString::fromStdString(revia::runtime::ToString(snapshot.affect)) +
+        QStringLiteral(" %1%").arg(qRound(snapshot.affectIntensity * 100.0F)));
+    presenceAttentionValue->setText(QString::fromStdString(snapshot.attention));
+    presenceAttentionValue->setToolTip(QString::fromStdString(snapshot.attention));
+    presenceMomentumBar->setValue(qRound(snapshot.conversationMomentum * 100.0F));
+}
+
+void ReviaWindow::ShowPreferenceResult(const revia::core::PreferenceResult& result)
+{
+    const QString message = QString::fromStdString(result.message);
+    preferenceStatus->setText(message);
+    preferenceStatus->setProperty("error", !result.succeeded);
+    preferenceStatus->style()->unpolish(preferenceStatus);
+    preferenceStatus->style()->polish(preferenceStatus);
+    AppendActivity(
+        QStringLiteral("Setting: ") + message,
+        result.succeeded ? ActivitySeverity::Information : ActivitySeverity::Warning);
 }
 
 bool ReviaWindow::ConfirmAction(

@@ -44,11 +44,20 @@ CapabilityPanel::CapabilityPanel(
     internetCheck = new QCheckBox("Allow bounded internet lookup", this);
     automaticLookupCheck = new QCheckBox(
         "Automatically look up current and factual knowledge questions", this);
+    visibleBrowserCheck = new QCheckBox(
+        "Use a dedicated visible browser window", this);
+    autonomousResearchCheck = new QCheckBox(
+        "Allow Revia to research her own topics", this);
     auto* internetRow = new QHBoxLayout();
     internetRow->addWidget(internetCheck);
     internetRow->addWidget(automaticLookupCheck);
     internetRow->addStretch();
     layout->addLayout(internetRow);
+    auto* browserRow = new QHBoxLayout();
+    browserRow->addWidget(visibleBrowserCheck);
+    browserRow->addWidget(autonomousResearchCheck);
+    browserRow->addStretch();
+    layout->addLayout(browserRow);
 
     auto* body = new QHBoxLayout();
     auto* approvedColumn = new QVBoxLayout();
@@ -110,6 +119,10 @@ CapabilityPanel::CapabilityPanel(
 
     connect(internetCheck, &QCheckBox::toggled, this, [this]() { ApplyInternetSettings(); });
     connect(automaticLookupCheck, &QCheckBox::toggled, this, [this]() { ApplyInternetSettings(); });
+    connect(visibleBrowserCheck, &QCheckBox::toggled,
+        this, [this]() { ApplyBrowserSettings(); });
+    connect(autonomousResearchCheck, &QCheckBox::toggled,
+        this, [this]() { ApplyBrowserSettings(); });
     connect(addApplicationButton, &QPushButton::clicked, this,
         [this]() { AddApplicationManually(); });
     connect(removeButton, &QPushButton::clicked, this,
@@ -156,7 +169,12 @@ void CapabilityPanel::Refresh()
     }
     internetCheck->setChecked(settings.internet.enabled);
     automaticLookupCheck->setChecked(settings.internet.automaticLookup);
+    visibleBrowserCheck->setChecked(settings.internet.visibleBrowser);
+    autonomousResearchCheck->setChecked(settings.internet.autonomousResearch);
     automaticLookupCheck->setEnabled(settings.internet.enabled);
+    visibleBrowserCheck->setEnabled(settings.internet.enabled);
+    autonomousResearchCheck->setEnabled(
+        settings.internet.enabled && settings.internet.visibleBrowser);
     refreshing = false;
 }
 
@@ -268,8 +286,8 @@ void CapabilityPanel::ApplyInternetSettings()
             this,
             "Enable internet lookup",
             "Knowledge questions may be sent to the configured DuckDuckGo and Wikipedia "
-            "HTTPS endpoints. Revia receives only bounded text results, never a general "
-            "browser or socket, and every lookup is rate limited and audited. Enable this "
+            "HTTPS endpoints or, when selected below, to Revia's dedicated visible browser. "
+            "Every lookup is read-only, bounded, rate limited, and audited. Enable this "
             "capability?",
             QMessageBox::Yes | QMessageBox::No,
             QMessageBox::No) == QMessageBox::Yes;
@@ -282,8 +300,58 @@ void CapabilityPanel::ApplyInternetSettings()
         }
     }
     automaticLookupCheck->setEnabled(internetCheck->isChecked());
+    visibleBrowserCheck->setEnabled(internetCheck->isChecked());
+    autonomousResearchCheck->setEnabled(
+        internetCheck->isChecked() && visibleBrowserCheck->isChecked());
     const auto result = session.SetInternetAccess(
         internetCheck->isChecked(), automaticLookupCheck->isChecked());
     SetStatus(QString::fromStdString(result.message), !result.succeeded);
-    if (!result.succeeded) Refresh();
+    Refresh();
+}
+
+void CapabilityPanel::ApplyBrowserSettings()
+{
+    if (refreshing) return;
+    const auto previous = session.Capabilities().internet;
+    if (!previous.visibleBrowser && visibleBrowserCheck->isChecked())
+    {
+        const bool approved = QMessageBox::question(
+            this,
+            "Enable visible browsing",
+            "Revia will open a separate, visible Edge or Chrome window using a dedicated "
+            "RuntimeData browser profile. She may search public HTTPS pages and read bounded "
+            "page text, but cannot use your personal cookies, downloads, uploads, passwords, "
+            "payments, localhost, or private-network pages. Queries, pages, results, timing, "
+            "and failures remain visible and audited. Enable it?",
+            QMessageBox::Yes | QMessageBox::No,
+            QMessageBox::No) == QMessageBox::Yes;
+        if (!approved)
+        {
+            Refresh();
+            return;
+        }
+    }
+    if (!previous.autonomousResearch && autonomousResearchCheck->isChecked())
+    {
+        const bool approved = QMessageBox::question(
+            this,
+            "Allow autonomous research",
+            "This allows Revia to choose a read-only web query without a new message from "
+            "you when recent conversation or a meaningful emotion creates a concrete topic. "
+            "A timer alone cannot create a topic, and attention, cooldown, deduplication, "
+            "hourly, browser, and network limits still apply. Allow this separate permission?",
+            QMessageBox::Yes | QMessageBox::No,
+            QMessageBox::No) == QMessageBox::Yes;
+        if (!approved)
+        {
+            Refresh();
+            return;
+        }
+    }
+
+    const auto result = session.SetInternetBrowser(
+        visibleBrowserCheck->isChecked(),
+        autonomousResearchCheck->isChecked());
+    SetStatus(QString::fromStdString(result.message), !result.succeeded);
+    Refresh();
 }

@@ -35,6 +35,11 @@ public:
         bool enabled,
         bool automaticLookup,
         std::string& outError) const;
+    [[nodiscard]] bool SetInternetBrowser(
+        const std::filesystem::path& path,
+        bool visibleBrowser,
+        bool autonomousResearch,
+        std::string& outError) const;
 
 private:
     enum class Mutation
@@ -43,7 +48,8 @@ private:
         RemoveApplication,
         AddControl,
         RemoveControl,
-        Internet
+        Internet,
+        Browser
     };
 
     [[nodiscard]] bool Apply(

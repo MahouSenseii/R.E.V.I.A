@@ -213,6 +213,45 @@ responseOutput llmService::GenerateActionProposal(const std::string& userRequest
     }
 }
 
+responseOutput llmService::ReviewConversationReply(
+    const std::string& userInput,
+    const std::string& candidateReply,
+    const std::string& runtimeGroundTruth,
+    const int maxReviewTokens,
+    const std::stop_token stopToken) const
+{
+    if (!bIsReady || backendType != llmBackendType::LLamaCpp)
+    {
+        responseOutput output;
+        output.reason = "AI response review requires the active llama.cpp backend.";
+        return output;
+    }
+    return llamaCpp.ReviewConversationReply(
+        userInput, candidateReply, runtimeGroundTruth, maxReviewTokens, stopToken);
+}
+
+responseOutput llmService::GenerateCuriosityPlan(
+    const std::string& boundedContextPrompt,
+    const std::stop_token stopToken) const
+{
+    if (!bIsReady || backendType != llmBackendType::LLamaCpp)
+    {
+        responseOutput output;
+        output.reason = "Curiosity planning requires the active llama.cpp backend.";
+        return output;
+    }
+    const healthOutput health = llamaCpp.CheckHealth();
+    if (!health.bIsAvailable)
+    {
+        responseOutput output;
+        output.reason = health.reason.empty()
+            ? "The local model is unavailable for curiosity planning."
+            : health.reason;
+        return output;
+    }
+    return llamaCpp.GenerateCuriosityPlan(boundedContextPrompt, stopToken);
+}
+
 responseOutput llmService::GenerateGoalPlan(const std::string& userRequest) const
 {
     if (!bIsReady)
@@ -347,6 +386,7 @@ responseOutput llmService::AnalyzeImage(
 
 memoryDecision llmService::EvaluateMemory(
     const std::string& userMessage,
+    const std::string& assistantMessage,
     const std::stop_token stopToken) const
 {
     if (!bIsReady)
@@ -359,7 +399,7 @@ memoryDecision llmService::EvaluateMemory(
     switch (backendType)
     {
         case llmBackendType::LLamaCpp:
-            return llamaCpp.EvaluateMemory(userMessage, stopToken);
+            return llamaCpp.EvaluateMemory(userMessage, assistantMessage, stopToken);
         case llmBackendType::Placeholder:
         {
             memoryDecision decision;

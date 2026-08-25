@@ -497,7 +497,17 @@ std::string ResourcePlan::ChatLabel() const
 
 std::string ResourcePlan::VoiceLabel() const
 {
-    return voiceDevice == "cpu" ? "CPU" : voiceDevice;
+    if (voiceDevices.empty())
+    {
+        return voiceDevice == "cpu" ? "CPU" : voiceDevice;
+    }
+    std::ostringstream stream;
+    for (std::size_t index = 0; index < voiceDevices.size(); ++index)
+    {
+        if (index > 0) stream << " + ";
+        stream << (voiceDevices[index] == "cpu" ? "CPU" : voiceDevices[index]);
+    }
+    return stream.str();
 }
 
 std::string ResourcePlan::Summary() const
@@ -669,6 +679,7 @@ ResourcePlan PlanResources(
         plan.voiceDevice = voice != nullptr
             ? voice->QwenDevice()
             : (policy.voice == "auto-secondary" ? "auto" : policy.voice);
+        plan.voiceDevices = {plan.voiceDevice};
 
         const GpuDevice* embedding = FindDevice(ranked, policy.embeddings, 1);
         plan.embeddingDevice = policy.embeddings == "cpu"
@@ -742,9 +753,37 @@ ResourcePlan PlanResources(
     const bool chatUsesAll = plan.chatSplitMode != "none" && !ranked.empty() &&
         plan.chatGpus.size() == ranked.size();
     const GpuDevice* secondary = FindDevice(ranked, policy.voice, 1);
+    const bool explicitVoiceDevice = policy.voice != "auto" &&
+        policy.voice != "auto-primary" && policy.voice != "auto-secondary" &&
+        policy.voice != "cpu";
     if (policy.voice == "cpu")
     {
         plan.voiceDevice = "cpu";
+    }
+    else if (explicitVoiceDevice && secondary != nullptr && secondary->IsCuda() && !chatUsesAll)
+    {
+        // An explicit UI choice is a placement request, not a hint. Reserve the voice
+        // budget on this card and let llama.cpp --fit leave that space free, even when
+        // both workloads share one GPU. Capacity is still checked so a stale selection
+        // cannot turn into an avoidable CUDA allocation failure on another machine.
+        const std::uint64_t availableForVoice = UsableGpuMiB(
+            *secondary,
+            static_cast<std::uint64_t>(std::max(0, requirements.baseGpuReserveMiB)));
+        if (availableForVoice >=
+            static_cast<std::uint64_t>(std::max(0, requirements.voiceMinimumVramMiB)))
+        {
+            plan.voiceDevice = secondary->QwenDevice();
+            plan.notes.push_back(
+                "Voice generation was pinned to " + secondary->backendId +
+                "; chat fitting reserves its Qwen3-TTS VRAM budget.");
+        }
+        else
+        {
+            plan.voiceDevice = "cpu";
+            plan.notes.push_back(
+                "The selected voice GPU lacks the configured free VRAM budget, so the "
+                "resolved voice assignment is CPU.");
+        }
     }
     else if (secondary != nullptr && secondary->IsCuda() && !chatUsesAll)
     {
@@ -785,6 +824,67 @@ ResourcePlan PlanResources(
         }
     }
 
+    if (requirements.voiceExpected && plan.voiceDevice == "cpu" && usableCores >= 8)
+    {
+        // CPU Qwen is latency-sensitive once the user chooses it; two background-lane
+        // threads made even the 0.6B model unnecessarily slow. Rebalance the existing
+        // fixed budget rather than oversubscribing the machine. Chat keeps at least a
+        // third of usable processors, embeddings one, and bursty STT two.
+        const int wantedVoiceThreads = static_cast<int>(usableCores / 2);
+        const int minimumChatThreads = std::max(2, static_cast<int>(usableCores / 3));
+        const int minimumEmbeddingThreads = 1;
+        const int minimumRecognitionThreads = 2;
+        plan.chatCpuThreads = minimumChatThreads;
+        plan.chatBatchThreads = minimumChatThreads;
+        plan.embeddingCpuThreads = minimumEmbeddingThreads;
+        plan.speechRecognitionThreads = minimumRecognitionThreads;
+        plan.voiceCpuThreads = std::max(1, std::min(
+            wantedVoiceThreads,
+            static_cast<int>(usableCores) - minimumChatThreads -
+                minimumEmbeddingThreads - minimumRecognitionThreads));
+        plan.notes.push_back(
+            "CPU voice mode received a latency-first thread budget without exceeding "
+            "the processors left after the system reserve.");
+    }
+
+    plan.voiceDevices = {plan.voiceDevice};
+    const bool automaticVoicePool = requirements.voiceExpected && !chatUsesAll &&
+        (policy.voice == "auto" || policy.voice == "auto-primary" ||
+         policy.voice == "auto-secondary");
+    if (automaticVoicePool && plan.voiceDevice != "cpu")
+    {
+        for (const GpuDevice& candidate : ranked)
+        {
+            const std::string qwenDevice = candidate.QwenDevice();
+            if (!candidate.IsCuda() || qwenDevice == plan.voiceDevice ||
+                plan.voiceDevices.size() >= 2)
+            {
+                continue;
+            }
+            const bool usedByChat = std::any_of(
+                plan.chatGpus.begin(), plan.chatGpus.end(),
+                [&candidate](const GpuDevice& chat)
+                {
+                    return chat.backendId == candidate.backendId;
+                });
+            const std::uint64_t need = static_cast<std::uint64_t>(
+                std::max(0, requirements.voiceMinimumVramMiB));
+            const std::uint64_t reserve = static_cast<std::uint64_t>(
+                std::max(0, requirements.baseGpuReserveMiB));
+            const bool fits = usedByChat
+                ? UsableGpuMiB(candidate, 0) >=
+                    requirements.chatWorkingSetMiB + need + reserve
+                : UsableGpuMiB(candidate, reserve) >= need;
+            if (fits)
+            {
+                plan.voiceDevices.push_back(qwenDevice);
+                plan.notes.push_back(
+                    "A second independent Qwen voice worker was assigned to " +
+                    candidate.backendId + " for sentence-ahead generation.");
+            }
+        }
+    }
+
     const GpuDevice* embedding = FindDevice(ranked, policy.embeddings, 1);
     plan.embeddingDevice = policy.embeddings == "cpu" || embedding == nullptr
         ? "none"
@@ -816,7 +916,9 @@ ResourcePlan PlanResources(
         {
             std::uint64_t target = static_cast<std::uint64_t>(
                 std::max(0, requirements.baseGpuReserveMiB));
-            if (requirements.voiceExpected && device.QwenDevice() == plan.voiceDevice)
+            if (requirements.voiceExpected && std::find(
+                plan.voiceDevices.begin(), plan.voiceDevices.end(),
+                device.QwenDevice()) != plan.voiceDevices.end())
             {
                 target += static_cast<std::uint64_t>(
                     std::max(0, requirements.voiceMinimumVramMiB));
@@ -843,6 +945,9 @@ void ApplyResourcePlan(const ResourcePlan& plan, appSettings& settings)
     settings.llm.reservedVramMiB = 0;
 
     settings.speech.qwenDevice = plan.voiceDevice;
+    settings.speech.qwenDevices = plan.voiceDevices.empty()
+        ? std::vector<std::string>{plan.voiceDevice}
+        : plan.voiceDevices;
     settings.speech.qwenCpuThreads = plan.voiceCpuThreads;
     settings.embedding.device = plan.embeddingDevice;
     settings.embedding.cpuThreads = plan.embeddingCpuThreads;

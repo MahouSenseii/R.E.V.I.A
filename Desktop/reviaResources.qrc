@@ -1,0 +1,5 @@
+<RCC>
+  <qresource prefix="/revia">
+    <file>revia.qss</file>
+  </qresource>
+</RCC>

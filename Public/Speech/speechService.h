@@ -2,7 +2,7 @@
 
 #include "Library/structLibrary.h"
 #include "Runtime/affectTypes.h"
-#include "Speech/qwenTtsClient.h"
+#include "Speech/qwenTtsPool.h"
 #include "Speech/voiceActivityMonitor.h"
 #include "Speech/voicePresetStore.h"
 
@@ -11,10 +11,14 @@
 #include <cstdint>
 #include <deque>
 #include <functional>
+#include <filesystem>
+#include <map>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <thread>
 #include <utility>
+#include <vector>
 
 namespace revia::speech
 {
@@ -89,6 +93,10 @@ public:
     // expensive a price for the user having spoken.
     void YieldToUser();
 
+    // Shutdown-only escape hatch for a model load or synthesis blocked inside the
+    // Python worker. Normal Stop/Yield deliberately keep the warm workers alive.
+    void CancelVoiceOperationsForShutdown();
+
     void Shutdown();
 
     static std::string NormalizeForSpeech(const std::string& text, std::size_t maxCharacters);
@@ -100,10 +108,22 @@ private:
         runtime::AffectSnapshot affect;
         std::uint64_t generation = 0;
         std::uint64_t utteranceId = 0;
+        std::uint64_t sequence = 0;
+        std::optional<VoicePreset> preset;
+    };
+
+    struct PreparedUtterance
+    {
+        Utterance utterance;
+        std::filesystem::path audioPath;
+        VoiceOperationResult result;
+        bool qwenAttempted = false;
+        std::uintmax_t bufferedBytes = 0;
     };
 
     void Run(std::stop_token stopToken);
-    bool SpeakWithQwen(const Utterance& utterance, const VoicePreset& preset);
+    void Generate(std::stop_token stopToken);
+    bool PlayPreparedQwen(const PreparedUtterance& prepared);
     void Notify(SpeechEvent event) const;
     void ArmBargeIn();
     void DisarmBargeIn();
@@ -111,18 +131,24 @@ private:
     mutable std::mutex mutex;
     std::condition_variable_any condition;
     std::deque<Utterance> queue;
+    std::deque<std::uint64_t> playbackOrder;
+    std::map<std::uint64_t, PreparedUtterance> prepared;
+    std::size_t generatingCount = 0;
+    std::uintmax_t bufferedAudioBytes = 0;
     speechSettings configuration;
     std::string activeProfile;
     std::optional<VoicePreset> activePreset;
     EventHandler eventHandler;
     VoicePresetStore presetStore;
-    QwenTtsClient qwenClient;
+    QwenTtsPool qwenPool;
     VoiceActivityMonitor bargeInMonitor;
     std::function<void()> bargeInHandler;
     std::jthread worker;
+    std::vector<std::jthread> generationWorkers;
     std::atomic<bool> enabled = false;
     std::atomic<bool> ready = false;
     std::atomic<std::uint64_t> generation = 1;
+    std::atomic<std::uint64_t> nextSequence = 1;
     // Stamped onto every event while an utterance is in flight, so callers do not have to
     // thread the id through each Notify call site.
     std::atomic<std::uint64_t> activeUtteranceId = 0;

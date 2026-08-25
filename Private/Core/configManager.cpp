@@ -16,7 +16,7 @@ namespace
         static const std::regex Common(
             R"(^(auto|auto-primary|auto-secondary|cpu|none)$)");
         static const std::regex Cuda(
-            R"(^cuda(?::)?[0-9]+$)",
+            R"(^cuda:[0-9]+$)",
             std::regex_constants::icase);
         static const std::regex Backend(
             R"(^[a-z][a-z0-9_-]*[0-9]+$)",
@@ -270,6 +270,31 @@ bool configManager::LoadSettings(appSettings& outSettings) const
             {
                 outSettings.speech.qwenDevice = speechData["qwenDevice"].get<std::string>();
             }
+            if (speechData.contains("qwenDevices") && speechData["qwenDevices"].is_array())
+            {
+                outSettings.speech.qwenDevices.clear();
+                for (const auto& device : speechData["qwenDevices"])
+                {
+                    if (device.is_string())
+                    {
+                        outSettings.speech.qwenDevices.push_back(device.get<std::string>());
+                    }
+                }
+            }
+            if (speechData.contains("qwenMaxWorkers"))
+            {
+                outSettings.speech.qwenMaxWorkers = speechData["qwenMaxWorkers"].get<int>();
+            }
+            if (speechData.contains("qwenPrefetchFragments"))
+            {
+                outSettings.speech.qwenPrefetchFragments =
+                    speechData["qwenPrefetchFragments"].get<int>();
+            }
+            if (speechData.contains("qwenMaxBufferedAudioMiB"))
+            {
+                outSettings.speech.qwenMaxBufferedAudioMiB =
+                    speechData["qwenMaxBufferedAudioMiB"].get<int>();
+            }
             if (speechData.contains("qwenMinimumFreeVramMiB"))
             {
                 outSettings.speech.qwenMinimumFreeVramMiB =
@@ -321,6 +346,36 @@ bool configManager::LoadSettings(appSettings& outSettings) const
                 outSettings.speechRecognition.executable =
                     recognitionData["executable"].get<std::string>();
             }
+            if (recognitionData.contains("useServer"))
+            {
+                outSettings.speechRecognition.bUseServer =
+                    recognitionData["useServer"].get<bool>();
+            }
+            if (recognitionData.contains("serverExecutable"))
+            {
+                outSettings.speechRecognition.serverExecutable =
+                    recognitionData["serverExecutable"].get<std::string>();
+            }
+            if (recognitionData.contains("serverHost"))
+            {
+                outSettings.speechRecognition.serverHost =
+                    recognitionData["serverHost"].get<std::string>();
+            }
+            if (recognitionData.contains("serverPort"))
+            {
+                outSettings.speechRecognition.serverPort =
+                    recognitionData["serverPort"].get<int>();
+            }
+            if (recognitionData.contains("serverStartupTimeoutSeconds"))
+            {
+                outSettings.speechRecognition.serverStartupTimeoutSeconds =
+                    recognitionData["serverStartupTimeoutSeconds"].get<int>();
+            }
+            if (recognitionData.contains("requestTimeoutSeconds"))
+            {
+                outSettings.speechRecognition.requestTimeoutSeconds =
+                    recognitionData["requestTimeoutSeconds"].get<int>();
+            }
             if (recognitionData.contains("modelPath"))
             {
                 outSettings.speechRecognition.modelPath =
@@ -347,6 +402,76 @@ bool configManager::LoadSettings(appSettings& outSettings) const
             {
                 outSettings.speechRecognition.device =
                     recognitionData["device"].get<std::string>();
+            }
+            if (recognitionData.contains("handsFree"))
+            {
+                outSettings.speechRecognition.bHandsFree =
+                    recognitionData["handsFree"].get<bool>();
+            }
+            if (recognitionData.contains("vadEnergyThreshold"))
+            {
+                outSettings.speechRecognition.vadEnergyThreshold =
+                    recognitionData["vadEnergyThreshold"].get<int>();
+            }
+            if (recognitionData.contains("vadSpeechFrames"))
+            {
+                outSettings.speechRecognition.vadSpeechFrames =
+                    recognitionData["vadSpeechFrames"].get<int>();
+            }
+            if (recognitionData.contains("vadSilenceMs"))
+            {
+                outSettings.speechRecognition.vadSilenceMs =
+                    recognitionData["vadSilenceMs"].get<int>();
+            }
+            if (recognitionData.contains("minimumUtteranceMs"))
+            {
+                outSettings.speechRecognition.minimumUtteranceMs =
+                    recognitionData["minimumUtteranceMs"].get<int>();
+            }
+            if (recognitionData.contains("maximumUtteranceSeconds"))
+            {
+                outSettings.speechRecognition.maximumUtteranceSeconds =
+                    recognitionData["maximumUtteranceSeconds"].get<int>();
+            }
+        }
+
+        if (data.contains("presence"))
+        {
+            const json& presenceData = data["presence"];
+            const auto text = [&presenceData](const char* key, std::string& target)
+            {
+                if (presenceData.contains(key)) target = presenceData[key].get<std::string>();
+            };
+            const auto number = [&presenceData](const char* key, int& target)
+            {
+                if (presenceData.contains(key)) target = presenceData[key].get<int>();
+            };
+            if (presenceData.contains("enabled"))
+                outSettings.presence.bEnabled = presenceData["enabled"].get<bool>();
+            if (presenceData.contains("avatarBridgeEnabled"))
+                outSettings.presence.bAvatarBridgeEnabled =
+                    presenceData["avatarBridgeEnabled"].get<bool>();
+            if (presenceData.contains("externalAdaptersEnabled"))
+                outSettings.presence.bExternalAdaptersEnabled =
+                    presenceData["externalAdaptersEnabled"].get<bool>();
+            text("statePath", outSettings.presence.statePath);
+            text("eventPath", outSettings.presence.eventPath);
+            text("inboxPath", outSettings.presence.inboxPath);
+            text("outboxPath", outSettings.presence.outboxPath);
+            number("adapterPollMs", outSettings.presence.adapterPollMs);
+            number("maxAdapterEventsPerMinute",
+                outSettings.presence.maxAdapterEventsPerMinute);
+            number("maxAdapterTextCharacters",
+                outSettings.presence.maxAdapterTextCharacters);
+            if (presenceData.contains("allowedAdapters") &&
+                presenceData["allowedAdapters"].is_array())
+            {
+                outSettings.presence.allowedAdapters.clear();
+                for (const auto& adapter : presenceData["allowedAdapters"])
+                {
+                    if (adapter.is_string())
+                        outSettings.presence.allowedAdapters.push_back(adapter.get<std::string>());
+                }
             }
         }
 
@@ -422,7 +547,7 @@ bool configManager::LoadSettings(appSettings& outSettings) const
             outSettings.resources.voice = outSettings.speech.qwenDevice == "auto"
                 ? "auto-secondary"
                 : (outSettings.speech.qwenDevice == "cuda"
-                    ? "CUDA0"
+                    ? "cuda:0"
                     : outSettings.speech.qwenDevice);
             outSettings.resources.embeddings = outSettings.embedding.device == "none"
                 ? "cpu"
@@ -432,7 +557,7 @@ bool configManager::LoadSettings(appSettings& outSettings) const
                 : (outSettings.speechRecognition.device == "auto"
                     ? "auto-secondary"
                     : (outSettings.speechRecognition.device == "cuda"
-                        ? "CUDA0"
+                        ? "cuda:0"
                         : outSettings.speechRecognition.device));
         }
 
@@ -480,6 +605,36 @@ bool configManager::LoadSettings(appSettings& outSettings) const
             if (initiativeData.contains("enabled"))
             {
                 outSettings.initiative.bEnabled = initiativeData["enabled"].get<bool>();
+            }
+            if (initiativeData.contains("curiosityEnabled"))
+            {
+                outSettings.initiative.bCuriosityEnabled =
+                    initiativeData["curiosityEnabled"].get<bool>();
+            }
+            if (initiativeData.contains("spontaneousSpeechEnabled"))
+            {
+                outSettings.initiative.bSpontaneousSpeechEnabled =
+                    initiativeData["spontaneousSpeechEnabled"].get<bool>();
+            }
+            if (initiativeData.contains("speakWhenUserAway"))
+            {
+                outSettings.initiative.bSpeakWhenUserAway =
+                    initiativeData["speakWhenUserAway"].get<bool>();
+            }
+            if (initiativeData.contains("curiosityCheckSeconds"))
+            {
+                outSettings.initiative.curiosityCheckSeconds =
+                    initiativeData["curiosityCheckSeconds"].get<int>();
+            }
+            if (initiativeData.contains("autonomousQuietSeconds"))
+            {
+                outSettings.initiative.autonomousQuietSeconds =
+                    initiativeData["autonomousQuietSeconds"].get<int>();
+            }
+            if (initiativeData.contains("curiosityTopicCooldownMinutes"))
+            {
+                outSettings.initiative.curiosityTopicCooldownMinutes =
+                    initiativeData["curiosityTopicCooldownMinutes"].get<int>();
             }
             if (initiativeData.contains("minimumConfidence"))
             {
@@ -685,6 +840,25 @@ bool configManager::LoadSettings(appSettings& outSettings) const
                     conversationData["restoreTurns"].get<int>();
             }
         }
+        if (data.contains("responseFilter"))
+        {
+            const json& filterData = data["responseFilter"];
+            if (filterData.contains("aiReviewEnabled"))
+            {
+                outSettings.responseFilter.bAiReviewEnabled =
+                    filterData["aiReviewEnabled"].get<bool>();
+            }
+            if (filterData.contains("aiMaxReviewTokens"))
+            {
+                outSettings.responseFilter.aiMaxReviewTokens =
+                    filterData["aiMaxReviewTokens"].get<int>();
+            }
+            if (filterData.contains("maxReplyCharacters"))
+            {
+                outSettings.responseFilter.maxReplyCharacters =
+                    filterData["maxReplyCharacters"].get<int>();
+            }
+        }
         if (data.contains("inputArbiter"))
         {
             const json& arbiterData = data["inputArbiter"];
@@ -770,6 +944,15 @@ bool configManager::LoadSettings(appSettings& outSettings) const
         outSettings.speech.qwenRequestTimeoutSeconds > 3600 ||
         outSettings.speech.qwenMinimumFreeVramMiB < 512 ||
         outSettings.speech.qwenMinimumFreeVramMiB > 65536 ||
+        outSettings.speech.qwenDevices.empty() ||
+        std::any_of(outSettings.speech.qwenDevices.begin(),
+            outSettings.speech.qwenDevices.end(),
+            [](const std::string& device) { return !IsDeviceSelector(device, true); }) ||
+        outSettings.speech.qwenMaxWorkers < 1 || outSettings.speech.qwenMaxWorkers > 8 ||
+        outSettings.speech.qwenPrefetchFragments < 1 ||
+        outSettings.speech.qwenPrefetchFragments > 16 ||
+        outSettings.speech.qwenMaxBufferedAudioMiB < 16 ||
+        outSettings.speech.qwenMaxBufferedAudioMiB > 2048 ||
         outSettings.speech.qwenVoiceDesignModel.empty() ||
         outSettings.speech.qwenCloneModel.empty() ||
         outSettings.speech.voiceDataPath.empty() ||
@@ -781,10 +964,43 @@ bool configManager::LoadSettings(appSettings& outSettings) const
             (outSettings.speechRecognition.executable.empty() ||
                 outSettings.speechRecognition.modelPath.empty() ||
                 outSettings.speechRecognition.language.empty() ||
+                (outSettings.speechRecognition.bUseServer &&
+                    (outSettings.speechRecognition.serverExecutable.empty() ||
+                     outSettings.speechRecognition.serverHost != "127.0.0.1" ||
+                     outSettings.speechRecognition.serverPort < 1 ||
+                     outSettings.speechRecognition.serverPort > 65535 ||
+                     outSettings.speechRecognition.serverPort == outSettings.llm.port ||
+                     outSettings.speechRecognition.serverPort == outSettings.embedding.port ||
+                     outSettings.speechRecognition.serverPort == outSettings.speech.qwenPort ||
+                     outSettings.speechRecognition.serverStartupTimeoutSeconds < 1 ||
+                     outSettings.speechRecognition.serverStartupTimeoutSeconds > 300 ||
+                     outSettings.speechRecognition.requestTimeoutSeconds < 10 ||
+                     outSettings.speechRecognition.requestTimeoutSeconds > 1800)) ||
                 outSettings.speechRecognition.sampleRate != 16000 ||
                 outSettings.speechRecognition.threads < 1 ||
                 outSettings.speechRecognition.threads > 64 ||
-                outSettings.speechRecognition.device.empty())) ||
+                outSettings.speechRecognition.device.empty() ||
+                outSettings.speechRecognition.vadEnergyThreshold < 100 ||
+                outSettings.speechRecognition.vadEnergyThreshold > 30000 ||
+                outSettings.speechRecognition.vadSpeechFrames < 1 ||
+                outSettings.speechRecognition.vadSpeechFrames > 50 ||
+                outSettings.speechRecognition.vadSilenceMs < 200 ||
+                outSettings.speechRecognition.vadSilenceMs > 5000 ||
+                outSettings.speechRecognition.minimumUtteranceMs < 100 ||
+                outSettings.speechRecognition.minimumUtteranceMs > 5000 ||
+                outSettings.speechRecognition.maximumUtteranceSeconds < 2 ||
+                outSettings.speechRecognition.maximumUtteranceSeconds > 120)) ||
+        outSettings.presence.statePath.empty() ||
+        outSettings.presence.eventPath.empty() ||
+        outSettings.presence.inboxPath.empty() ||
+        outSettings.presence.outboxPath.empty() ||
+        outSettings.presence.adapterPollMs < 50 ||
+        outSettings.presence.adapterPollMs > 10000 ||
+        outSettings.presence.maxAdapterEventsPerMinute < 1 ||
+        outSettings.presence.maxAdapterEventsPerMinute > 600 ||
+        outSettings.presence.maxAdapterTextCharacters < 64 ||
+        outSettings.presence.maxAdapterTextCharacters > 20000 ||
+        outSettings.presence.allowedAdapters.empty() ||
         outSettings.resources.reserveLogicalCores < 0 ||
         outSettings.resources.reserveLogicalCores > 64 ||
         outSettings.resources.minimumFreeRamMiB < 1024 ||
@@ -805,6 +1021,10 @@ bool configManager::LoadSettings(appSettings& outSettings) const
         outSettings.conversation.maxTurnCharacters > 1000000 ||
         outSettings.conversation.restoreTurns < 0 ||
         outSettings.conversation.restoreTurns > 40 ||
+        outSettings.responseFilter.aiMaxReviewTokens < 64 ||
+        outSettings.responseFilter.aiMaxReviewTokens > 512 ||
+        outSettings.responseFilter.maxReplyCharacters < 256 ||
+        outSettings.responseFilter.maxReplyCharacters > 100000 ||
         outSettings.image.port < 1 || outSettings.image.port > 65535 ||
         outSettings.image.steps < 1 || outSettings.image.steps > 100 ||
         outSettings.image.width < 256 || outSettings.image.width > 1024 ||
@@ -859,6 +1079,12 @@ bool configManager::LoadSettings(appSettings& outSettings) const
         outSettings.initiative.maxUtterancesPerHour > 30 ||
         outSettings.initiative.cooldownSeconds < 30 ||
         outSettings.initiative.quietInputSeconds < 1 ||
+        outSettings.initiative.curiosityCheckSeconds < 5 ||
+        outSettings.initiative.curiosityCheckSeconds > 3600 ||
+        outSettings.initiative.autonomousQuietSeconds < 5 ||
+        outSettings.initiative.autonomousQuietSeconds > 3600 ||
+        outSettings.initiative.curiosityTopicCooldownMinutes < 10 ||
+        outSettings.initiative.curiosityTopicCooldownMinutes > 10080 ||
         outSettings.initiative.focusSessionMinutes < 2 ||
         outSettings.initiative.focusSessionMinutes > 240 ||
         outSettings.initiative.returnAfterMinutes < 2 ||

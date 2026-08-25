@@ -139,6 +139,8 @@ if(REVIA_BUILD_DESKTOP)
                 "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/canvasPanel.h"
                 "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/capabilityPanel.cpp"
                 "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/capabilityPanel.h"
+                "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/internetActivityPanel.cpp"
+                "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/internetActivityPanel.h"
                 "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/main.cpp"
                 "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/pipelinePanel.cpp"
                 "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/pipelinePanel.h"
@@ -146,7 +148,10 @@ if(REVIA_BUILD_DESKTOP)
                 "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/resourcePanel.h"
                 "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/reviaWindow.cpp"
                 "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/reviaWindow.h"
+                "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/reviaWindow.ui"
+                "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/reviaResources.qrc"
         )
+        set_target_properties(ReviaDesktop PROPERTIES AUTOUIC ON AUTORCC ON)
         target_include_directories(ReviaDesktop PRIVATE
                 "${CMAKE_CURRENT_SOURCE_DIR}/Desktop"
         )
@@ -245,6 +250,14 @@ if(BUILD_TESTING)
         target_compile_options(ReviaTests PRIVATE -Wall -Wextra -Wpedantic)
     endif()
     add_test(NAME Revia.Foundation COMMAND ReviaTests)
+    find_program(REVIA_NODE_EXECUTABLE NAMES node node.exe)
+    if(REVIA_NODE_EXECUTABLE)
+        add_test(
+                NAME Revia.BrowserWorkerPolicy
+                COMMAND "${REVIA_NODE_EXECUTABLE}" --test
+                        "${CMAKE_CURRENT_SOURCE_DIR}/Tools/Browser/browserHost.test.mjs"
+        )
+    endif()
     if(TARGET ReviaDesktop)
         add_test(NAME Revia.DesktopSmoke COMMAND ReviaDesktop --ui-smoke-test)
         set_tests_properties(Revia.DesktopSmoke PROPERTIES

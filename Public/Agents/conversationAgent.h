@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Agents/conversationStylePolicy.h"
+#include "Agents/responseFilter.h"
 #include "Core/messageRouter.h"
 
 namespace revia::agents
@@ -15,11 +16,14 @@ public:
         const messageRouter& router,
         const std::string& input,
         const std::vector<conversationMessage>& context,
+        const responseFilterSettings& filterSettings,
+        const ResponseFilterContext& filterContext,
         std::stop_token stopToken = {},
         messageRouter::DeltaHandler onDelta = {}) const;
 
 private:
     ConversationStylePolicy stylePolicy;
+    ResponseFilter responseFilter;
 };
 
 } // namespace revia::agents

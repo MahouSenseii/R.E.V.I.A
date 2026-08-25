@@ -1,6 +1,8 @@
 #include "Initiative/attentionPolicy.h"
+#include "Perception/windowEventMonitor.h"
 
 #include <algorithm>
+#include <array>
 #include <utility>
 
 #ifdef _WIN32
@@ -10,7 +12,47 @@
 namespace revia::initiative
 {
 
-AttentionContext SampleDesktop()
+namespace
+{
+#ifdef _WIN32
+std::string WideToUtf8(const std::wstring& value)
+{
+    if (value.empty()) return {};
+    const int count = WideCharToMultiByte(
+        CP_UTF8, 0, value.data(), static_cast<int>(value.size()),
+        nullptr, 0, nullptr, nullptr);
+    if (count <= 0) return {};
+    std::string output(static_cast<std::size_t>(count), '\0');
+    WideCharToMultiByte(
+        CP_UTF8, 0, value.data(), static_cast<int>(value.size()),
+        output.data(), count, nullptr, nullptr);
+    return output;
+}
+
+std::string ForegroundExecutable(const HWND window)
+{
+    if (window == nullptr) return {};
+    DWORD processId = 0;
+    GetWindowThreadProcessId(window, &processId);
+    if (processId == 0) return {};
+    const HANDLE process =
+        OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, processId);
+    if (process == nullptr) return {};
+    std::array<wchar_t, 32768> path{};
+    DWORD size = static_cast<DWORD>(path.size());
+    const BOOL queried = QueryFullProcessImageNameW(process, 0, path.data(), &size);
+    CloseHandle(process);
+    if (!queried || size == 0) return {};
+    const std::wstring full(path.data(), size);
+    const std::size_t separator = full.find_last_of(L"\\/");
+    return WideToUtf8(
+        separator == std::wstring::npos ? full : full.substr(separator + 1));
+}
+#endif
+} // namespace
+
+AttentionContext SampleDesktop(
+    const perceptionSettings& perceptionConfiguration)
 {
     AttentionContext context;
     context.now = std::chrono::system_clock::now();
@@ -24,6 +66,9 @@ AttentionContext SampleDesktop()
     }
 
     const HWND foreground = GetForegroundWindow();
+    context.foregroundIsExcluded =
+        revia::perception::PerceptionFilter::IsExcludedApplication(
+            perceptionConfiguration, ForegroundExecutable(foreground));
     if (foreground != nullptr)
     {
         // Full screen means covering its whole monitor, which is what a game, a
@@ -44,6 +89,7 @@ AttentionContext SampleDesktop()
         }
     }
 #endif
+    (void)perceptionConfiguration;
     return context;
 }
 
@@ -73,6 +119,11 @@ bool IsSuppression(const AttentionVerdict value)
 AttentionPolicy::AttentionPolicy(initiativeSettings settings)
     : configuration(std::move(settings))
 {
+}
+
+void AttentionPolicy::UpdateSettings(initiativeSettings settings)
+{
+    configuration = std::move(settings);
 }
 
 float AttentionPolicy::Precision() const

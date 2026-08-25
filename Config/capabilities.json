@@ -26,6 +26,13 @@
     "requestTimeoutMs": 8000,
     "maxResponseBytes": 262144,
     "maxRequestsPerMinute": 12,
-    "maxResults": 5
+    "maxResults": 5,
+    "visibleBrowser": true,
+    "autonomousResearch": false,
+    "visibleBrowserPort": 8095,
+    "visibleBrowserStartupTimeoutMs": 8000,
+    "visibleBrowserRequestTimeoutMs": 30000,
+    "visibleBrowserMaxPages": 3,
+    "visibleBrowserStepDelayMs": 250
   }
 }

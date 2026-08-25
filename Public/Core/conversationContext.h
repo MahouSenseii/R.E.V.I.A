@@ -12,6 +12,12 @@ public:
     ~conversationContext();
 
     void AddMessage(const std::string& role, const std::string& content);
+    // Rolls back only the exact newest message. Used when fresh user input cancels an
+    // autonomous result during its final commit race; older dialogue is never searched
+    // or removed by content.
+    [[nodiscard]] bool RemoveLastMessageIf(
+        const std::string& role,
+        const std::string& content);
     void Clear();
 
     std::vector<conversationMessage> GetRecentMessages() const;

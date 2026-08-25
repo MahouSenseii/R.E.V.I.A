@@ -2,6 +2,7 @@
 
 #include "Filesystem/fileSystemExecutor.h"
 #include "Internet/internetSearchExecutor.h"
+#include "Internet/visibleBrowserClient.h"
 #include "Windows/windowsAutomationExecutor.h"
 
 #include <algorithm>
@@ -11,6 +12,11 @@
 
 namespace revia::actions
 {
+
+ActionRuntime::ActionRuntime()
+    : internetCancellation(std::make_shared<internet::VisibleBrowserCancellation>())
+{
+}
 
 bool ActionRuntime::Initialize(
     const std::filesystem::path& capabilityConfig,
@@ -56,7 +62,8 @@ bool ActionRuntime::InitializeUnlocked(
         settings.maxReadBytes,
         settings.maxDirectoryEntries,
         settings.maxAffectedEntries));
-    dispatcher.Register(std::make_unique<internet::InternetSearchExecutor>(settings.internet));
+    dispatcher.Register(std::make_unique<internet::InternetSearchExecutor>(
+        settings.internet, internetCancellation));
 #ifdef _WIN32
     dispatcher.Register(std::make_unique<windows::WindowsAutomationExecutor>());
 #endif
@@ -94,6 +101,7 @@ ActionOutcome ActionRuntime::Execute(
     bool confirmationGranted)
 {
     std::lock_guard lock(mutex);
+    const auto executionStarted = std::chrono::steady_clock::now();
     ActionOutcome outcome;
     outcome.policy = Evaluate(request);
     const bool otherwiseExecutable =
@@ -111,7 +119,10 @@ ActionOutcome ActionRuntime::Execute(
     outcome.result = dispatcher.Dispatch(request, outcome.policy, confirmationGranted);
     if (auditLogger)
     {
-        static_cast<void>(auditLogger->Record(request, outcome.policy, outcome.result));
+        const double elapsedMilliseconds = std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - executionStarted).count();
+        static_cast<void>(auditLogger->Record(
+            request, outcome.policy, outcome.result, elapsedMilliseconds));
     }
     return outcome;
 }
@@ -161,6 +172,7 @@ ActionOutcome ActionRuntime::ExecuteScoped(
     bool confirmationGranted)
 {
     std::lock_guard lock(mutex);
+    const auto executionStarted = std::chrono::steady_clock::now();
     ActionOutcome outcome;
     outcome.policy = EvaluateScoped(request, scopedPolicy);
     const bool otherwiseExecutable =
@@ -178,7 +190,10 @@ ActionOutcome ActionRuntime::ExecuteScoped(
     outcome.result = dispatcher.Dispatch(request, outcome.policy, confirmationGranted);
     if (auditLogger)
     {
-        static_cast<void>(auditLogger->Record(request, outcome.policy, outcome.result));
+        const double elapsedMilliseconds = std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - executionStarted).count();
+        static_cast<void>(auditLogger->Record(
+            request, outcome.policy, outcome.result, elapsedMilliseconds));
     }
     return outcome;
 }
@@ -219,7 +234,9 @@ std::string ActionRuntime::StatusJson() const
             {"request_timeout_ms", settings.internet.requestTimeoutMs},
             {"max_response_bytes", settings.internet.maxResponseBytes},
             {"max_requests_per_minute", settings.internet.maxRequestsPerMinute},
-            {"max_results", settings.internet.maxResults}
+            {"max_results", settings.internet.maxResults},
+            {"visible_browser", settings.internet.visibleBrowser},
+            {"autonomous_research", settings.internet.autonomousResearch}
         }}
     }).dump(2);
 }
@@ -295,6 +312,24 @@ bool ActionRuntime::SetInternetAccess(
     return capabilityEditor.SetInternetAccess(
             capabilityConfigPath, enabled, automaticLookup, outError) &&
         ReloadUnlocked(outError);
+}
+
+bool ActionRuntime::SetInternetBrowser(
+    const bool visibleBrowser,
+    const bool autonomousResearch,
+    std::string& outError)
+{
+    std::lock_guard lock(mutex);
+    return capabilityEditor.SetInternetBrowser(
+            capabilityConfigPath, visibleBrowser, autonomousResearch, outError) &&
+        ReloadUnlocked(outError);
+}
+
+void ActionRuntime::CancelActiveInternet()
+{
+    // Deliberately do not acquire `mutex`: Execute() owns it for the full synchronous
+    // request, and cancellation exists specifically to interrupt that wait.
+    if (internetCancellation) internetCancellation->CancelActive();
 }
 
 } // namespace revia::actions

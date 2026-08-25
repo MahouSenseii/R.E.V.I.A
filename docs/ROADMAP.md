@@ -61,8 +61,9 @@ Revisiting this decision affects Stage 3 and Stage 6's action surface only. The 
 
 - Implemented: a separate Qt desktop module with a translucent companion window, tray controls, chat panel, always-on-top option, and visible states for offline, starting, idle, thinking, responding, remembering, acting, waiting, blocked, error, and stopping.
 - Implemented: a thread-safe runtime event bus, reusable non-CLI session, timestamped activity/timing feed, cooperative stop button, confirmation dialogs, and clean owned-process shutdown. The CLI remains available as a fallback.
-- Implemented: bounded response-posture/affect events, profile-aware Qwen3-TTS voice design/cloning with SAPI fallback, and toggled (Ctrl+Space) CUDA whisper.cpp STT with component telemetry.
+- Implemented: current-turn response posture with playful, lonely, and frustrated states; an always-on deterministic response filter plus optional pre-delivery AI review; a data-parallel Qwen3-TTS sentence pool with ordered playback and SAPI fallback; and hold-to-talk or hands-free VAD through a persistent CUDA whisper.cpp service with CLI fallback and component telemetry.
 - Implemented: horizontal status/actions and tabbed Chat, Activity, Voice Studio, and Settings presentation without moving runtime ownership into Qt.
+- Implemented: a Presence tab and isolated avatar/adapter bridge. The runtime publishes atomic state and bounded conversation-only JSON; a renderer or platform connector can disappear without taking down inference or gaining action authority.
 - Remaining shell work: persist window preferences and add a focused audit-history view instead of mixing audit records with general activity.
 
 **The Qt window is transitional.** It exists so a human can watch what the runtime is doing and chat with it during development. The intended long-term interface is the embodied 3D character described in the Embodiment track, at which point this window is demoted to a debug and inspection surface rather than the primary experience.
@@ -183,6 +184,7 @@ The first half of that is met from Tier 0 alone — `/perception history 60` rep
 - Implemented: **evidence sources are ranked by how concrete they are.** An unfinished goal outranks a session observation, because a goal is something the user actually asked for while time spent in an editor is only an observation about it. Accepting a goal-backed proposal hands it straight to `ResumeGoal`, which re-verifies every remaining step: accepting is a shortcut for typing the command, never a way around it.
 - Implemented: **event-driven conversation openings.** A completed focus stretch, returning to an application after an absence, repeated movement between two applications, or an unfinished goal is the cause. A condition-variable worker sleeps indefinitely without one of those signals. Quiet-input delay and cooldown only debounce or suppress an event; they never manufacture one. Conversation cues are one-shot and expire instead of resurfacing when a timer ends.
 - Implemented: ordinary openings are generated through `ConversationRuntime`, enter dialogue history as Revia's line, and continue from a natural user reply. “Not now” and similar natural refusals record a dismissal; slash commands remain only for action-backed proposals.
+- Implemented: **self-directed conversational curiosity.** A separate background planner can nominate silence, a grounded spontaneous thought, or one bounded research query after real dialogue, a durable memory, or a meaningful affect transition. Elapsed time alone cannot create a topic. New user input cancels stale planning, browser research runs outside the conversation lock, the attention/hourly/cooldown gates still decide whether Revia may speak, and a bounded JSONL topic journal prevents restart loops. Research additionally requires the dedicated visible-browser and autonomous-research permissions.
 - Remaining: further evidence sources — a file edited repeatedly by hand that a goal could do, an approved root filling up. Each needs no new authority, and the precision counter is the honest test of whether one earns its place.
 - Remaining: report proposal precision to the user prominently rather than only through `/initiative`.
 
@@ -190,7 +192,7 @@ The first half of that is met from Tier 0 alone — `/perception history 60` rep
 
 *Depends on Stage 4 and Stage 6.*
 
-Stage 4 executes a goal. It does not decide one. Every stage before this assumes the user supplied the intent, which is the line between an agent and an autonomous companion — currently uncrossed.
+Stage 4 executes a goal. It does not decide one. Revia may now form a bounded conversational curiosity or research nomination, but she still cannot turn that thought into an action goal or broaden her own authority. That remaining line separates spontaneous companionship from autonomous machine control.
 
 - Revia emits **proposals, never actions**. A proposal carries the observed evidence, the goal it would pursue, the capability profile it would need, and the budget it would consume. It executes nothing.
 - The user approves **intent, not each action**. Once approved, the proposal becomes a Stage 4 goal and runs under the existing policy, dispatcher, and audit path with no new authority whatsoever. This stage adds no execution capability — that property is what makes it safe to build.
@@ -320,6 +322,12 @@ exclusion, and pause rules if it is ever wanted.
 ## Embodiment track — desktop presence
 
 *Depends only on Stage 2's event bus. Fully parallel; touches no policy code.*
+
+The presentation contract is implemented: `PresenceRuntime` reduces the event bus into an
+atomic latest-state file plus ordered transitions, and the Qt Presence tab exposes its
+phase, affect, attention, momentum, hands-free input, and bridge health. The remaining
+work in this track is the isolated overlay/VRM renderer itself; the runtime side no longer
+needs to change to begin that work.
 
 The target is a character occupying the desktop itself rather than a window on it — closer to Desktop Mate than to a chat client. This is almost entirely independent of the AI work, which makes it the safest track to develop in parallel and the easiest to hand off.
 

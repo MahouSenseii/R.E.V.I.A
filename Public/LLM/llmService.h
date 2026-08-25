@@ -28,6 +28,15 @@ public:
         std::stop_token stopToken = {},
         DeltaHandler onDelta = {}) const;
     responseOutput GenerateActionProposal(const std::string& userRequest) const;
+    responseOutput ReviewConversationReply(
+        const std::string& userInput,
+        const std::string& candidateReply,
+        const std::string& runtimeGroundTruth,
+        int maxReviewTokens,
+        std::stop_token stopToken = {}) const;
+    responseOutput GenerateCuriosityPlan(
+        const std::string& boundedContextPrompt,
+        std::stop_token stopToken = {}) const;
     responseOutput GenerateGoalPlan(const std::string& userRequest) const;
     responseOutput GenerateDiagram(const std::string& userRequest) const;
     responseOutput ComposeContent(
@@ -44,6 +53,7 @@ public:
         std::stop_token stopToken = {}) const;
     memoryDecision EvaluateMemory(
         const std::string& userMessage,
+        const std::string& assistantMessage = "",
         std::stop_token stopToken = {}) const;
     healthOutput CheckEmbeddingHealth() const;
     embeddingOutput EmbedMemory(

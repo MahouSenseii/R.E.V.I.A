@@ -83,18 +83,35 @@ const std::vector<PreferenceKey>& PreferenceStore::Writable()
             "Speak the greeting when Revia comes online.", 0, 0, {}},
         {"speechRecognition.enabled", PreferenceType::Boolean,
             "Accept microphone input.", 0, 0, {}},
+        {"speechRecognition.handsFree", PreferenceType::Boolean,
+            "Use local VAD to listen for complete spoken thoughts without a button.", 0, 0, {}},
         {"bargeIn.enabled", PreferenceType::Boolean,
             "Let speaking over Revia interrupt her.", 0, 0, {}},
         {"initiative.enabled", PreferenceType::Boolean,
             "Allow Revia to start a conversation.", 0, 0, {}},
+        {"initiative.curiosityEnabled", PreferenceType::Boolean,
+            "Let Revia form evidence-based topics from conversation and affect.", 0, 0, {}},
+        {"initiative.spontaneousSpeechEnabled", PreferenceType::Boolean,
+            "Let an admitted curiosity become a spontaneous line.", 0, 0, {}},
+        {"initiative.speakWhenUserAway", PreferenceType::Boolean,
+            "Let Revia speak when Windows reports that the user is away.", 0, 0, {}},
         {"initiative.maxPerHour", PreferenceType::Integer,
             "Ceiling on unprompted openings per hour.", 0, 60, {}},
+        {"presence.avatarBridgeEnabled", PreferenceType::Boolean,
+            "Publish isolated avatar state and animation events.", 0, 0, {}},
+        {"presence.externalAdaptersEnabled", PreferenceType::Boolean,
+            "Accept conversation-only events from the bounded local adapter inbox.", 0, 0, {}},
         {"llm.temperature", PreferenceType::Decimal,
             "Sampling temperature for replies.", 0.0, 2.0, {}},
         {"resources.usageSampleSeconds", PreferenceType::Integer,
             "How often live resource usage is sampled; 0 turns it off.", 0, 3600, {}},
+        {"resources.voiceDevice", PreferenceType::Text,
+            "Voice generation device: auto-secondary, cpu, or CUDA followed by an index.",
+            0, 0, {}},
         {"conversation.archiveEnabled", PreferenceType::Boolean,
             "Keep a durable, searchable record of conversations.", 0, 0, {}},
+        {"responseFilter.aiReviewEnabled", PreferenceType::Boolean,
+            "Run the AI response review after the always-on hard filter.", 0, 0, {}},
         {"activeProfile", PreferenceType::Text,
             "Which profile Revia loads at startup.", 0, 0, {}}
     };
@@ -280,6 +297,22 @@ PreferenceResult PreferenceStore::Set(const std::string& name, const std::string
                 result.message = key->name + " does not accept '" + value + "'.";
                 return result;
             }
+            if (key->name == "resources.voiceDevice")
+            {
+                const bool automatic = value == "auto" || value == "auto-secondary";
+                const bool cpu = Lower(value) == "cpu";
+                const bool cuda = value.size() > 4 && value.rfind("CUDA", 0) == 0 &&
+                    std::all_of(value.begin() + 4, value.end(),
+                        [](const unsigned char character) { return std::isdigit(character); });
+                if (!automatic && !cpu && !cuda)
+                {
+                    result.message = key->name +
+                        " takes auto-secondary, cpu, or an exact device such as CUDA0.";
+                    return result;
+                }
+                stored = automatic ? "auto-secondary" : (cpu ? "cpu" : value);
+                break;
+            }
             stored = value;
             break;
         }
@@ -350,11 +383,27 @@ void PreferenceStore::Apply(appSettings& settings) const
     integer("speech.rate", settings.speech.rate);
     boolean("speech.speakGreeting", settings.speech.bSpeakGreeting);
     boolean("speechRecognition.enabled", settings.speechRecognition.bEnabled);
+    boolean("speechRecognition.handsFree", settings.speechRecognition.bHandsFree);
     boolean("bargeIn.enabled", settings.bargeIn.bEnabled);
     boolean("initiative.enabled", settings.initiative.bEnabled);
+    boolean("initiative.curiosityEnabled", settings.initiative.bCuriosityEnabled);
+    boolean("initiative.spontaneousSpeechEnabled",
+        settings.initiative.bSpontaneousSpeechEnabled);
+    boolean("initiative.speakWhenUserAway", settings.initiative.bSpeakWhenUserAway);
     integer("initiative.maxPerHour", settings.initiative.maxUtterancesPerHour);
+    boolean("presence.avatarBridgeEnabled", settings.presence.bAvatarBridgeEnabled);
+    boolean("presence.externalAdaptersEnabled", settings.presence.bExternalAdaptersEnabled);
     integer("resources.usageSampleSeconds", settings.resources.usageSampleSeconds);
     boolean("conversation.archiveEnabled", settings.conversation.bArchiveEnabled);
+    boolean("responseFilter.aiReviewEnabled", settings.responseFilter.bAiReviewEnabled);
+
+    const auto voiceDevice = values.find("resources.voiceDevice");
+    if (voiceDevice != values.end() && !voiceDevice->second.empty())
+    {
+        settings.resources.voice = voiceDevice->second == "auto"
+            ? "auto-secondary"
+            : voiceDevice->second;
+    }
 
     const auto temperature = values.find("llm.temperature");
     double parsedTemperature = 0.0;

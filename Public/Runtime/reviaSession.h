@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Actions/actionRuntime.h"
+#include "Agents/curiosityAgent.h"
 #include "Agents/turnCoordinator.h"
 #include "Agents/inputArbiter.h"
 #include "Core/commandManager.h"
@@ -18,9 +19,11 @@
 #include "LLM/LLamaCPP/llamaCppServerProcess.h"
 #include "Initiative/initiativeController.h"
 #include "Initiative/conversationStarter.h"
+#include "Initiative/curiosityJournal.h"
 #include "Learning/learningReview.h"
 #include "Perception/activityHistory.h"
 #include "Perception/windowEventMonitor.h"
+#include "Presence/presenceRuntime.h"
 #include "Runtime/affectController.h"
 #include "Runtime/conversationRuntime.h"
 #include "Runtime/runtimeEvents.h"
@@ -40,6 +43,7 @@
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
+#include <deque>
 #include <functional>
 #include <mutex>
 #include <stop_token>
@@ -54,6 +58,24 @@ struct CapabilityUpdateResult
 {
     bool succeeded = false;
     std::string message;
+};
+
+// Small read-only view for desktop controls. It contains comfort/diagnostic preferences
+// only; capability authority continues to live behind CapabilityEditor.
+struct UserPreferenceSnapshot
+{
+    bool speechEnabled = true;
+    bool bargeInEnabled = true;
+    bool handsFreeEnabled = false;
+    bool avatarBridgeEnabled = true;
+    bool externalAdaptersEnabled = false;
+    bool initiativeEnabled = false;
+    bool curiosityEnabled = false;
+    bool spontaneousSpeechEnabled = false;
+    bool speakWhenUserAway = false;
+    bool aiResponseReviewEnabled = true;
+    int initiativeMaxPerHour = 0;
+    int resourceSampleSeconds = 0;
 };
 
 class ReviaSession
@@ -92,6 +114,9 @@ public:
     void SetSpeechEnabled(bool enabled);
     void SetBargeInEnabled(bool enabled);
     [[nodiscard]] bool IsBargeInEnabled() const;
+    void SetHandsFreeEnabled(bool enabled);
+    [[nodiscard]] bool IsHandsFreeEnabled() const;
+    [[nodiscard]] presence::PresenceSnapshot Presence() const;
     bool BeginListening();
     bool EndListening();
     [[nodiscard]] bool IsVisionAvailable() const;
@@ -113,6 +138,7 @@ public:
         const std::string& executable,
         const std::string& control);
     CapabilityUpdateResult SetInternetAccess(bool enabled, bool automaticLookup);
+    CapabilityUpdateResult SetInternetBrowser(bool visibleBrowser, bool autonomousResearch);
 
     // Stage 4. The runner itself adds no authority: every step goes through the same
     // dispatcher, policy, and audit path as an interactive action, and has to prove it
@@ -141,6 +167,8 @@ public:
     // here can widen what Revia is permitted to do.
     core::PreferenceResult SetPreference(const std::string& name, const std::string& value);
     [[nodiscard]] std::string DescribePreferences() const;
+    [[nodiscard]] std::string VoiceDevicePreference() const;
+    [[nodiscard]] UserPreferenceSnapshot UserPreferences() const;
 
     // Draws an explanatory diagram or interface mockup. The model produces SVG, the
     // sanitizer refuses anything that would run or fetch, and the result is a file.
@@ -268,6 +296,12 @@ private:
     void StartInitiativeLoop();
     void StopInitiativeLoop();
     void SignalInitiative(const std::string& reason);
+    void StartCuriosityLoop();
+    void StopCuriosityLoop();
+    void SignalCuriosity(const std::string& reason);
+    void StartExternalAdapterLoop();
+    void StopExternalAdapterLoop();
+    void QueueExternalAdapterEvent(const presence::ExternalAdapterEvent& event);
     std::stop_token BeginOperation();
     // The token for the operation already in flight. BeginOperation replaces the stop
     // source, so a nested run must not call it: doing so would discard a stop the user
@@ -305,10 +339,13 @@ private:
     AffectController affectController;
     speech::SpeechService speechService;
     speech::SpeechRecognitionService speechRecognitionService;
+    presence::PresenceRuntime presenceRuntime;
     perception::WindowEventMonitor windowEventMonitor;
     perception::ActivityHistory activityHistory;
     initiative::InitiativeController initiativeController;
     initiative::ConversationStarter conversationStarter;
+    initiative::CuriosityJournal curiosityJournal;
+    agents::CuriosityAgent curiosityAgent;
     vision::ScreenCaptureService screenCaptureService;
     vision::VisionActionParser visionActionParser;
     actions::windows::VisionUiaResolver visionUiaResolver;
@@ -333,9 +370,17 @@ private:
     mutable std::mutex voiceStudioMutex;
     mutable std::mutex channelMutex;
     mutable std::mutex initiativeSignalMutex;
+    mutable std::mutex curiositySignalMutex;
+    mutable std::mutex externalAdapterMutex;
+    std::condition_variable_any externalAdapterCondition;
+    std::deque<presence::ExternalAdapterEvent> externalAdapterQueue;
     std::condition_variable_any initiativeCondition;
+    std::condition_variable_any curiosityCondition;
     std::uint64_t initiativeSignalVersion = 0;
     std::string initiativeSignalReason;
+    std::uint64_t curiositySignalVersion = 0;
+    std::string curiositySignalReason;
+    std::stop_source curiosityAttemptStopSource;
     outputChannel outputTarget = outputChannel::LocalVoice;
     std::string outputApplication;
     std::stop_source activeStopSource;
@@ -344,11 +389,23 @@ private:
     std::jthread voiceWarmupWorker;
     std::atomic<bool> voiceWarmupFinished = true;
     std::jthread initiativeWorker;
+    std::jthread curiosityWorker;
     std::jthread inputDrainWorker;
+    std::jthread externalAdapterWorker;
+    RuntimeEventBus::SubscriptionId presenceSubscriptionId = 0;
     std::atomic<RuntimeState> state = RuntimeState::Offline;
     std::atomic<bool> started = false;
     std::atomic<bool> busy = false;
     std::atomic<bool> llmAvailable = false;
+    std::atomic<std::uint64_t> userInteractionGeneration = 0;
+    std::atomic<std::uint64_t> curiosityRunCounter = 0;
+    std::atomic<std::int64_t> lastUserInteractionSteadyMs = 0;
+    // Live response-filter controls are read by the conversation worker while the UI may
+    // change the preference. Keep that handoff atomic instead of reading appSettings
+    // concurrently; token/length ceilings are immutable after startup.
+    std::atomic<bool> responseAiReviewEnabled = true;
+    int responseAiMaxReviewTokens = 192;
+    int responseMaxReplyCharacters = 12000;
 };
 
 } // namespace revia::runtime

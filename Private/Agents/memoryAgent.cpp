@@ -19,6 +19,7 @@ MemoryAgent::~MemoryAgent()
 void MemoryAgent::Submit(
     const messageRouter& router,
     std::string input,
+    std::string assistantResponse,
     const std::uint64_t turnId)
 {
     if (input.empty() || worker.get_stop_token().stop_requested())
@@ -28,7 +29,8 @@ void MemoryAgent::Submit(
 
     {
         std::lock_guard lock(mutex);
-        tasks.push_front(Task{&router, std::move(input), "", turnId});
+        tasks.push_front(Task{
+            &router, std::move(input), std::move(assistantResponse), "", turnId});
     }
     taskAvailable.notify_one();
 }
@@ -53,7 +55,7 @@ void MemoryAgent::SubmitEmbeddingBackfill(
         std::lock_guard lock(mutex);
         for (const memoryEntry& entry : missing)
         {
-            tasks.push_back(Task{&router, entry.summary, entry.id, 0});
+            tasks.push_back(Task{&router, entry.summary, "", entry.id, 0});
         }
     }
     taskAvailable.notify_one();
@@ -136,7 +138,8 @@ void MemoryAgent::Run(const std::stop_token stopToken)
 
         MemoryAgentEvent event;
         event.turnId = task.turnId;
-        event.decision = task.router->EvaluateMemory(task.input, stopToken);
+        event.decision = task.router->EvaluateMemory(
+            task.input, task.assistantResponse, stopToken);
         if (stopToken.stop_requested())
         {
             return;

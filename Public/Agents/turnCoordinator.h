@@ -21,6 +21,8 @@ public:
         const messageRouter& router,
         const std::string& input,
         const std::vector<conversationMessage>& context,
+        const responseFilterSettings& filterSettings,
+        const ResponseFilterContext& filterContext,
         bool evaluateMemory,
         std::uint64_t turnId = 0,
         std::stop_token stopToken = {},

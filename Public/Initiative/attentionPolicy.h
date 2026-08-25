@@ -33,7 +33,8 @@ struct AttentionContext;
 // Reads how busy the desktop looks right now. Idle time comes from GetLastInputInfo,
 // which reports only *when* the last input happened and never what it was, so this needs
 // no keyboard hook and creates no keylogging surface.
-[[nodiscard]] AttentionContext SampleDesktop();
+[[nodiscard]] AttentionContext SampleDesktop(
+    const perceptionSettings& perceptionConfiguration);
 
 // What the desktop looks like right now. Gathered by the caller so the policy itself
 // stays pure and testable without a live desktop.
@@ -66,6 +67,8 @@ class AttentionPolicy
 public:
     AttentionPolicy() = default;
     explicit AttentionPolicy(initiativeSettings settings);
+    // Live comfort changes must not erase cooldowns, dismissals, or precision history.
+    void UpdateSettings(initiativeSettings settings);
 
     [[nodiscard]] AttentionVerdict Evaluate(
         float confidence,
