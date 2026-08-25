@@ -597,6 +597,8 @@ ResourceRequirements EstimateResourceRequirements(
     }
     requirements.voiceExpected = voiceExpected;
     requirements.speechRecognitionGpuEnabled = settings.speechRecognition.bUseGpu;
+    requirements.voiceMayShareChatGpu =
+        settings.speech.bQwenParallelLongReplies;
     requirements.voiceMinimumVramMiB = settings.speech.qwenMinimumFreeVramMiB;
     requirements.baseGpuReserveMiB = std::max(
         settings.resources.gpuReserveMiB,
@@ -867,6 +869,16 @@ ResourcePlan PlanResources(
                 {
                     return chat.backendId == candidate.backendId;
                 });
+            // Sharing the chat card is opt-in. When enabled, llama.cpp's fit target below
+            // reserves the complete voice budget before either process starts. This lets
+            // the faster primary synthesize the first phrase while the independent card
+            // works ahead on later phrases without turning an optimistic paper fit into
+            // an allocation failure.
+            if (usedByChat && ranked.size() > 1 &&
+                !requirements.voiceMayShareChatGpu)
+            {
+                continue;
+            }
             const std::uint64_t need = static_cast<std::uint64_t>(
                 std::max(0, requirements.voiceMinimumVramMiB));
             const std::uint64_t reserve = static_cast<std::uint64_t>(
@@ -877,10 +889,20 @@ ResourcePlan PlanResources(
                 : UsableGpuMiB(candidate, reserve) >= need;
             if (fits)
             {
-                plan.voiceDevices.push_back(qwenDevice);
+                if (usedByChat && requirements.voiceMayShareChatGpu)
+                {
+                    // The pool treats its first entry as the latency-first worker. Put the
+                    // newer chat GPU first for a short reply; the existing secondary is
+                    // still available as soon as a long reply queues another phrase.
+                    plan.voiceDevices.insert(plan.voiceDevices.begin(), qwenDevice);
+                }
+                else
+                {
+                    plan.voiceDevices.push_back(qwenDevice);
+                }
                 plan.notes.push_back(
-                    "A second independent Qwen voice worker was assigned to " +
-                    candidate.backendId + " for sentence-ahead generation.");
+                    "A second Qwen voice worker was assigned to " +
+                    candidate.backendId + " for ordered phrase-ahead generation.");
             }
         }
     }

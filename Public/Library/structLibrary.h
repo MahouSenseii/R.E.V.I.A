@@ -37,6 +37,16 @@ struct responseOutput
     bool bAiFilterReviewed = false;
     bool bAiFilterChanged = false;
     std::string filterSummary;
+    // Pre-generation routing telemetry. Strings keep this transport structure independent
+    // of the router implementation while still making every fallback auditable.
+    std::string requestedTier;
+    std::string selectedTier;
+    std::string selectedModel;
+    std::string reasoningMode;
+    std::string routingReason;
+    float routingConfidence = 0.0F;
+    bool bRoutingFallback = false;
+    std::string routingFallbackReason;
     std::vector<latencySample> timings;
 };
 
@@ -88,6 +98,57 @@ struct llmSettings
     int maxTokens = 4096;
 };
 
+// The three conversational roles share one profile, prompt builder, memory store, and
+// humanization state. These settings describe only the extra model endpoints; hardware
+// placement is resolved at runtime so a one-GPU laptop never inherits workstation GPU
+// ordinals.
+struct modelTierSettings
+{
+    bool bEnabled = false;
+    std::string host = "127.0.0.1";
+    int port = 0;
+    std::string modelName;
+    std::string modelPath;
+    bool bVisionEnabled = false;
+    std::string multimodalProjectorPath;
+    int contextSize = 4096;
+    int maxTokens = 384;
+    float temperature = 0.75F;
+    int startupTimeoutSeconds = 120;
+    bool bWarmAtStartup = true;
+};
+
+struct intelligenceSettings
+{
+    bool bEnabled = true;
+    modelTierSettings fast = {
+        true,
+        "127.0.0.1",
+        8082,
+        "Qwen3.5-0.8B-Q4_K_M.gguf",
+        "Models/Qwen3.5-0.8B-Q4_K_M.gguf",
+        false,
+        "",
+        4096,
+        256,
+        0.78F,
+        90,
+        true};
+    modelTierSettings expert = {
+        true,
+        "127.0.0.1",
+        8083,
+        "Qwen3-VL-8B-Instruct-Unredacted-MAX.Q4_K_M.gguf",
+        "Models/Qwen3-VL-8B-Instruct-Unredacted-MAX.Q4_K_M.gguf",
+        true,
+        "Models/Qwen3-VL-8B-Instruct-Unredacted-MAX.mmproj-q8_0.gguf",
+        4096,
+        1024,
+        0.72F,
+        180,
+        true};
+};
+
 struct embeddingSettings
 {
     bool bEnabled = true;
@@ -131,6 +192,11 @@ struct speechSettings
     std::vector<std::string> qwenDevices = {"auto"};
     int qwenMaxWorkers = 2;
     int qwenPrefetchFragments = 3;
+    // Short replies stay on the fastest worker. Longer replies are split into bounded
+    // phrases, allowing additional local workers to synthesize ahead while playback
+    // remains sequence-ordered.
+    int qwenPhraseCharacters = 96;
+    bool bQwenParallelLongReplies = false;
     int qwenMaxBufferedAudioMiB = 128;
     int qwenMinimumFreeVramMiB = 4600;
     // Effective host-thread cap applied inside the PyTorch worker. The resource planner
@@ -172,7 +238,7 @@ struct speechRecognitionSettings
     bool bHandsFree = false;
     int vadEnergyThreshold = 900;
     int vadSpeechFrames = 3;
-    int vadSilenceMs = 850;
+    int vadSilenceMs = 350;
     int minimumUtteranceMs = 350;
     int maximumUtteranceSeconds = 24;
 };
@@ -212,7 +278,7 @@ struct resourceSettings
     // How often live usage is sampled against the plan. Zero turns the monitor off; the
     // plan itself is unaffected either way, because observing never re-places a worker.
     int usageSampleSeconds = 2;
-    bool bAllowChatModelSplit = true;
+    bool bAllowChatModelSplit = false;
     std::string chat = "auto-primary";
     std::string voice = "auto-secondary";
     std::string speechRecognition = "auto-secondary";
@@ -224,14 +290,21 @@ struct visionSettings
     bool bEnabled = true;
     bool bRequireConfirmation = true;
     int maxResponseTokens = 768;
+    // Event-driven continuous awareness is separate from action authority. It may keep a
+    // short local description of the virtual desktop, but it can never click or type.
+    bool bContinuousAwareness = false;
+    int awarenessDebounceMs = 1500;
+    int awarenessMinimumIntervalMs = 6000;
+    int awarenessMaxResponseTokens = 160;
     double resolutionConfidence = 0.72;
     double minimumNameAgreement = 0.35;
     double ambiguityMargin = 0.08;
     int maxResolverElements = 500;
 };
 
-// Stage 6 Tier 0. Window and focus events only: which application is in front and what
-// its title says. No capture, no pixels, no model.
+// Stage 6 Tier 0 records window and focus events. When vision's separately configured
+// continuous-awareness layer is enabled, accepted events may also trigger a temporary
+// local virtual-desktop capture whose bounded summary is kept in memory.
 //
 // Continuous observation is the most invasive capability in this project, so it is off
 // until asked for, and the exclusion lists deny by default rather than allow by default.
@@ -280,7 +353,7 @@ struct inputArbiterSettings
 {
     // Inputs landing inside this window are treated as one thought. Speaking in three
     // bursts should not produce three replies.
-    int mergeWindowMs = 1500;
+    int mergeWindowMs = 350;
     // Below this, a fragment is treated as noise unless it is clearly addressed to Revia.
     int minimumMeaningfulCharacters = 3;
     int maxQueuedInputs = 8;
@@ -306,6 +379,10 @@ struct initiativeSettings
     bool bCuriosityEnabled = true;
     bool bSpontaneousSpeechEnabled = true;
     bool bSpeakWhenUserAway = true;
+    // When a permitted autonomous lookup produces a grounded spoken finding, keep a
+    // bounded model-written summary plus source URLs as durable memory. Raw page bodies
+    // and private reasoning are never stored.
+    bool bAutonomousLearningEnabled = false;
     int curiosityCheckSeconds = 30;
     int autonomousQuietSeconds = 45;
     int curiosityTopicCooldownMinutes = 1440;
@@ -427,7 +504,7 @@ struct conversationSettings
 // lower latency and is exposed as a live comfort preference.
 struct responseFilterSettings
 {
-    bool bAiReviewEnabled = true;
+    bool bAiReviewEnabled = false;
     int aiMaxReviewTokens = 192;
     int maxReplyCharacters = 12000;
 };
@@ -436,6 +513,7 @@ struct appSettings
 {
     std::string activeProfile = "assistant";
     llmSettings llm;
+    intelligenceSettings intelligence;
     embeddingSettings embedding;
     speechSettings speech;
     speechRecognitionSettings speechRecognition;
@@ -501,6 +579,9 @@ struct memoryDecision
     std::string category;
     std::string summary;
     std::string reason;
+    // Identifies how a preclassified memory entered the store. Ordinary conversation
+    // remains "automatic"; sourced background findings use "autonomous_research".
+    std::string source = "automatic";
     std::vector<float> embedding;
     std::string embeddingModel;
     std::vector<latencySample> timings;

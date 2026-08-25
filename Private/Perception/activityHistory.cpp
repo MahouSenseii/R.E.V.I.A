@@ -26,6 +26,16 @@ std::string FormatDuration(const std::chrono::seconds value)
     return std::to_string(minutes / 60) + "h" + std::to_string(minutes % 60) + "m";
 }
 
+void RememberMonitor(std::vector<int>& monitors, const int monitorIndex)
+{
+    if (monitorIndex <= 0 || monitors.size() >= 8 ||
+        std::find(monitors.begin(), monitors.end(), monitorIndex) != monitors.end())
+    {
+        return;
+    }
+    monitors.push_back(monitorIndex);
+}
+
 } // namespace
 
 std::chrono::seconds ActivitySpan::Duration() const
@@ -67,6 +77,7 @@ void ActivityHistory::Record(const WindowObservation& observation)
         {
             current.titles.push_back(observation.windowTitle);
         }
+        RememberMonitor(current.monitors, observation.monitorIndex);
     }
     else
     {
@@ -91,6 +102,7 @@ void ActivityHistory::Record(const WindowObservation& observation)
         {
             opened.titles.push_back(observation.windowTitle);
         }
+        RememberMonitor(opened.monitors, observation.monitorIndex);
         spans.push_back(std::move(opened));
     }
 
@@ -153,6 +165,7 @@ std::string ActivityHistory::Summarize(const std::chrono::minutes window) const
         std::chrono::seconds duration{0};
         std::uint32_t visits = 0;
         std::vector<std::string> titles;
+        std::vector<int> monitors;
     };
     std::vector<Total> totals;
     for (const ActivitySpan& span : selected)
@@ -163,7 +176,7 @@ std::string ActivityHistory::Summarize(const std::chrono::minutes window) const
             [&span](const Total& total) { return total.application == span.application; });
         Total& total = existing != totals.end()
             ? *existing
-            : totals.emplace_back(Total{span.application, {}, 0, {}});
+            : totals.emplace_back(Total{span.application, {}, 0, {}, {}});
         total.duration += span.Duration();
         ++total.visits;
         for (const std::string& title : span.titles)
@@ -173,6 +186,10 @@ std::string ActivityHistory::Summarize(const std::chrono::minutes window) const
             {
                 total.titles.push_back(title);
             }
+        }
+        for (const int monitor : span.monitors)
+        {
+            RememberMonitor(total.monitors, monitor);
         }
     }
 
@@ -193,6 +210,15 @@ std::string ActivityHistory::Summarize(const std::chrono::minutes window) const
         if (total.visits > 1)
         {
             stream << " (" << total.visits << " visits)";
+        }
+        if (!total.monitors.empty())
+        {
+            stream << " [monitor" << (total.monitors.size() == 1 ? " " : "s ");
+            for (std::size_t index = 0; index < total.monitors.size(); ++index)
+            {
+                stream << (index == 0 ? "" : ", ") << total.monitors[index];
+            }
+            stream << "]";
         }
         if (!total.titles.empty())
         {

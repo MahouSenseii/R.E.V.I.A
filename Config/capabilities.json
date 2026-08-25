@@ -19,7 +19,7 @@
   "maxDesktopActionsPerMinute": 12,
   "minimumDesktopActionIntervalMs": 250,
   "internet": {
-    "enabled": false,
+    "enabled": true,
     "automaticLookup": true,
     "provider": "duckduckgo",
     "approvedHosts": ["api.duckduckgo.com", "en.wikipedia.org"],
@@ -28,7 +28,7 @@
     "maxRequestsPerMinute": 12,
     "maxResults": 5,
     "visibleBrowser": true,
-    "autonomousResearch": false,
+    "autonomousResearch": true,
     "visibleBrowserPort": 8095,
     "visibleBrowserStartupTimeoutMs": 8000,
     "visibleBrowserRequestTimeoutMs": 30000,

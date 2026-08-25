@@ -47,7 +47,7 @@ enum class RuntimeEventKind
     // Read-only hardware inventory and resolved workload assignments for the Resources
     // tab. Kept distinct from ComponentStatus so hardware rows do not become pipelines.
     ResourceStatus,
-    // One complete sentence of a reply, published as soon as it exists so the shell can
+    // One complete speech phrase of a reply, published as soon as it exists so the shell can
     // show it in step with the audio instead of after the whole reply is generated.
     ReplyFragment,
     // Revia offering something unprompted. Distinct from AssistantMessage because it is

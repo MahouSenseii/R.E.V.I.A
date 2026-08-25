@@ -4,6 +4,7 @@
 #include <cctype>
 #include <sstream>
 #include <string_view>
+#include <utility>
 
 namespace revia::agents
 {
@@ -198,15 +199,8 @@ namespace
         return true;
     }
 
-    std::string CollapseRepeatedSentenceRuns(const std::string& value)
+    std::vector<std::string> SplitSentences(const std::string& value)
     {
-        // Code and structured lists may intentionally repeat syntax. This repair is for
-        // conversational prose, where a model can duplicate a whole decoded block.
-        if (value.find("```") != std::string::npos)
-        {
-            return value;
-        }
-
         std::vector<std::string> sentences;
         std::size_t start = 0;
         for (std::size_t index = 0; index < value.size(); ++index)
@@ -229,6 +223,142 @@ namespace
         }
         const std::string remainder = Trim(value.substr(start));
         if (!remainder.empty()) sentences.push_back(remainder);
+        return sentences;
+    }
+
+    std::vector<std::string> Words(const std::string& normalized)
+    {
+        std::vector<std::string> words;
+        std::istringstream stream(normalized);
+        for (std::string word; stream >> word;)
+        {
+            words.push_back(std::move(word));
+        }
+        return words;
+    }
+
+    bool SharesLongOpening(const std::string& left, const std::string& right)
+    {
+        const std::vector<std::string> leftWords = Words(left);
+        const std::vector<std::string> rightWords = Words(right);
+        if (leftWords.size() < 10 || rightWords.size() < 10)
+        {
+            return false;
+        }
+        std::size_t shared = 0;
+        while (shared < leftWords.size() && shared < rightWords.size() &&
+            leftWords[shared] == rightWords[shared])
+        {
+            ++shared;
+        }
+        return shared >= 8;
+    }
+
+    bool IsSubstantialRepeat(
+        const std::string& normalized,
+        const std::string& normalizedReference,
+        const bool allowSharedOpening)
+    {
+        if (normalized.size() < 40 || normalizedReference.size() < 40)
+        {
+            return false;
+        }
+        if (normalized == normalizedReference ||
+            normalizedReference.find(normalized) != std::string::npos)
+        {
+            return true;
+        }
+        return allowSharedOpening && SharesLongOpening(normalized, normalizedReference);
+    }
+
+    std::string RemoveRedundantSentences(
+        const std::string& value,
+        const std::vector<conversationMessage>& context,
+        const bool removeRecentAssistantReuse)
+    {
+        if (value.find("```") != std::string::npos)
+        {
+            return value;
+        }
+
+        const std::vector<std::string> sentences = SplitSentences(value);
+        if (sentences.size() < 2)
+        {
+            return value;
+        }
+
+        std::vector<std::string> recentAssistantReplies;
+        if (removeRecentAssistantReuse)
+        {
+            for (auto message = context.rbegin();
+                message != context.rend() && recentAssistantReplies.size() < 3;
+                ++message)
+            {
+                if (message->role == "assistant" && !message->content.empty())
+                {
+                    recentAssistantReplies.push_back(NormalizeSentence(message->content));
+                }
+            }
+        }
+
+        std::vector<std::string> kept;
+        std::vector<std::string> normalizedKept;
+        kept.reserve(sentences.size());
+        normalizedKept.reserve(sentences.size());
+        bool changed = false;
+        for (const std::string& sentence : sentences)
+        {
+            const std::string normalized = NormalizeSentence(sentence);
+            const bool repeatedHere = std::any_of(
+                normalizedKept.begin(), normalizedKept.end(),
+                [&normalized](const std::string& previous)
+                {
+                    return IsSubstantialRepeat(normalized, previous, true);
+                });
+            const bool repeatedRecently = std::any_of(
+                recentAssistantReplies.begin(), recentAssistantReplies.end(),
+                [&normalized](const std::string& previousReply)
+                {
+                    return IsSubstantialRepeat(normalized, previousReply, false);
+                });
+            if (repeatedHere || repeatedRecently)
+            {
+                changed = true;
+                continue;
+            }
+            kept.push_back(sentence);
+            normalizedKept.push_back(normalized);
+        }
+        if (!changed)
+        {
+            return value;
+        }
+        // If a correction reply consisted entirely of copied history, retain one
+        // sentence rather than turning a model failure into an empty chat bubble.
+        if (kept.empty())
+        {
+            return sentences.front();
+        }
+
+        std::ostringstream repaired;
+        for (std::size_t index = 0; index < kept.size(); ++index)
+        {
+            if (index > 0) repaired << ' ';
+            repaired << kept[index];
+        }
+        return repaired.str();
+    }
+
+    std::string CollapseRepeatedSentenceRuns(const std::string& value)
+    {
+        // Code and structured lists may intentionally repeat syntax. This repair is for
+        // conversational prose, where a model can duplicate a whole decoded block.
+        if (value.find("```") != std::string::npos)
+        {
+            return value;
+        }
+
+        const std::vector<std::string> sentences = SplitSentences(value);
         if (sentences.size() < 2)
         {
             return value;
@@ -312,7 +442,9 @@ bool ConversationStylePolicy::LooksLikeCorrection(const std::string& input)
     constexpr std::string_view CorrectionSignals[] = {
         "no,", "no ", "that's not", "that is not", "i'm not", "i am not",
         "wait what", "you misunderstood", "you misread", "i didn't say",
-        "i did not say", "not what i", "that's wrong", "that is wrong"
+        "i did not say", "not what i", "that's wrong", "that is wrong",
+        "you repeated", "you just repeated", "don't repeat", "do not repeat",
+        "no need to repeat", "you reepated", "you just reepated"
     };
     return std::any_of(std::begin(CorrectionSignals), std::end(CorrectionSignals),
         [&lowered](const std::string_view signal)
@@ -510,7 +642,9 @@ std::string ConversationStylePolicy::BuildTurnGuidance(
     {
         guidance << " The latest message appears to correct a mistaken assumption. Briefly accept "
             "the correction, replace the mistaken interpretation, and continue from the corrected "
-            "fact. Do not defend, restate, or preserve the earlier assumption.";
+            "fact. Do not defend, restate, or preserve the earlier assumption. Keep relationship "
+            "roles and possessives pointed in the direction the user stated; do not swap who is "
+            "whose parent, child, creator, partner, friend, or favorite.";
     }
     if (LooksLikeBriefAcknowledgement(input))
     {
@@ -585,6 +719,10 @@ std::string ConversationStylePolicy::RefineReply(
     const std::string& reply) const
 {
     std::string refined = CollapseRepeatedSentenceRuns(Trim(reply));
+    refined = RemoveRedundantSentences(
+        refined,
+        context,
+        LooksLikeCorrection(input));
     if (refined.empty())
     {
         return refined;
@@ -689,7 +827,8 @@ bool ConversationStylePolicy::CanStreamReply(const std::string& input) const
         !LooksLikeEmotionQuestion(input) &&
         !LooksLikeBriefAcknowledgement(input) &&
         !LooksLikePreferenceStatement(input) &&
-        !LooksLikeMotiveQuestion(input);
+        !LooksLikeMotiveQuestion(input) &&
+        !LooksLikeCorrection(input);
 }
 
 } // namespace revia::agents

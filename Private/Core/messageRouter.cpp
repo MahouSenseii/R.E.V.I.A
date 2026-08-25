@@ -1,4 +1,26 @@
 #include "Core/messageRouter.h"
+
+#include <algorithm>
+#include <cctype>
+
+namespace
+{
+std::uint64_t ArtifactMiB(
+    const std::string& modelPath,
+    const std::string& projectorPath = {})
+{
+    std::error_code error;
+    std::uintmax_t bytes = std::filesystem::file_size(modelPath, error);
+    if (error) bytes = 0;
+    if (!projectorPath.empty())
+    {
+        error.clear();
+        const std::uintmax_t projector = std::filesystem::file_size(projectorPath, error);
+        if (!error) bytes += projector;
+    }
+    return static_cast<std::uint64_t>((bytes + 1024 * 1024 - 1) / (1024 * 1024));
+}
+}
 messageRouter::messageRouter() = default;
 
 messageRouter::~messageRouter() = default;
@@ -7,7 +29,8 @@ responseOutput messageRouter::RouteMessage(
     const std::string& message,
     const std::vector<conversationMessage>& context,
     const std::stop_token stopToken,
-    DeltaHandler onDelta) const
+    DeltaHandler onDelta,
+    const revia::intelligence::IntelligenceDecision& decision) const
 {
     responseOutput output;
 
@@ -19,12 +42,79 @@ responseOutput messageRouter::RouteMessage(
         return output;
     }
 
-    return llm.GenerateResponse(context, stopToken, std::move(onDelta));
+    const llmService* selected = &llm;
+    revia::intelligence::IntelligenceTier effectiveTier =
+        revia::intelligence::IntelligenceTier::Main;
+    std::string selectedTier = "Main";
+    std::string fallbackReason;
+    switch (decision.selectedTier)
+    {
+        case revia::intelligence::IntelligenceTier::Fast:
+            if (fastConfigured && fastLlm.IsBackendAvailable())
+            {
+                selected = &fastLlm;
+                effectiveTier = revia::intelligence::IntelligenceTier::Fast;
+                selectedTier = "Fast";
+            }
+            else fallbackReason = "Fast endpoint unavailable; used Main.";
+            break;
+        case revia::intelligence::IntelligenceTier::Expert:
+        case revia::intelligence::IntelligenceTier::ExpertVision:
+            if (expertConfigured && expertLlm.IsBackendAvailable())
+            {
+                selected = &expertLlm;
+                effectiveTier = revia::intelligence::IntelligenceTier::Expert;
+                selectedTier = decision.selectedTier ==
+                    revia::intelligence::IntelligenceTier::ExpertVision
+                        ? "ExpertVision" : "Expert";
+            }
+            else fallbackReason = "Expert endpoint unavailable; used Main in Deep mode.";
+            break;
+        case revia::intelligence::IntelligenceTier::Vision:
+            selectedTier = "Vision";
+            break;
+        default:
+            break;
+    }
+
+    if (!selected->IsBackendAvailable() && selected != &fastLlm &&
+        fastConfigured && fastLlm.IsBackendAvailable())
+    {
+        selected = &fastLlm;
+        effectiveTier = revia::intelligence::IntelligenceTier::Fast;
+        selectedTier = "Fast";
+        fallbackReason = "Preferred endpoint unavailable; used the Fast brain.";
+    }
+
+    residency.BeginInference(effectiveTier, "interactive");
+    responseOutput routed = selected->GenerateResponse(
+        context,
+        stopToken,
+        std::move(onDelta),
+        decision.mode == revia::intelligence::ReasoningMode::Deep ||
+            (!fallbackReason.empty() &&
+             decision.requestedTier == revia::intelligence::IntelligenceTier::Expert));
+    residency.EndInference(effectiveTier);
+    routed.requestedTier = revia::intelligence::ToString(decision.requestedTier);
+    routed.selectedTier = selectedTier;
+    routed.selectedModel = selected == &fastLlm
+        ? "Qwen3.5-0.8B-Q4_K_M.gguf"
+        : selected == &expertLlm
+            ? "Qwen3-VL-8B-Instruct-Unredacted-MAX.Q4_K_M.gguf"
+            : "Qwen3.5-4B-Q4_K_M.gguf";
+    routed.routingReason = decision.reason;
+    routed.routingConfidence = decision.confidence;
+    routed.bRoutingFallback = !fallbackReason.empty();
+    routed.routingFallbackReason = std::move(fallbackReason);
+    routed.reasoningMode = revia::intelligence::ToString(decision.mode);
+    return routed;
 }
 
 void messageRouter::SetPosture(std::string posture)
 {
-    llm.SetPosture(std::move(posture));
+    llm.SetPosture(posture);
+    if (fastConfigured) fastLlm.SetPosture(posture);
+    if (expertConfigured) expertLlm.SetPosture(std::move(posture));
 }
 
 responseOutput messageRouter::PlanAction(const std::string& request) const
@@ -62,7 +152,26 @@ responseOutput messageRouter::GenerateCuriosityPlan(
         output.reason = "Curiosity planning context was empty.";
         return output;
     }
-    return llm.GenerateCuriosityPlan(boundedContextPrompt, stopToken);
+    if (fastConfigured && fastLlm.IsBackendAvailable())
+    {
+        residency.BeginInference(
+            revia::intelligence::IntelligenceTier::Fast, "background");
+        responseOutput output = fastLlm.GenerateCuriosityPlan(
+            boundedContextPrompt, stopToken);
+        residency.EndInference(revia::intelligence::IntelligenceTier::Fast);
+        output.requestedTier = "Fast";
+        output.selectedTier = "Fast";
+        output.selectedModel = "Qwen3.5-0.8B-Q4_K_M.gguf";
+        output.routingReason = "Bounded curiosity nomination is a Fast background task.";
+        return output;
+    }
+    responseOutput output = llm.GenerateCuriosityPlan(boundedContextPrompt, stopToken);
+    output.requestedTier = "Fast";
+    output.selectedTier = "Main";
+    output.selectedModel = "Qwen3.5-4B-Q4_K_M.gguf";
+    output.bRoutingFallback = true;
+    output.routingFallbackReason = "Fast background brain was unavailable.";
+    return output;
 }
 
 responseOutput messageRouter::PlanGoal(const std::string& request) const
@@ -114,7 +223,37 @@ responseOutput messageRouter::AnalyzeImage(
     const int maxResponseTokens,
     const std::stop_token stopToken) const
 {
-    return llm.AnalyzeImage(imagePath, prompt, maxResponseTokens, stopToken);
+    std::string lowered = prompt;
+    std::transform(lowered.begin(), lowered.end(), lowered.begin(),
+        [](const unsigned char character)
+        {
+            return static_cast<char>(std::tolower(character));
+        });
+    const bool expertRequested =
+        lowered.find("blueprint") != std::string::npos ||
+        lowered.find("architecture") != std::string::npos ||
+        lowered.find("difficult") != std::string::npos ||
+        lowered.find("expert") != std::string::npos;
+    const bool expertAvailable = expertRequested && expertConfigured &&
+        expertLlm.IsBackendAvailable();
+    responseOutput output = (expertAvailable ? expertLlm : llm).AnalyzeImage(
+        imagePath, prompt, maxResponseTokens, stopToken);
+    output.requestedTier = expertRequested ? "ExpertVision" : "Vision";
+    output.selectedTier = expertAvailable ? "ExpertVision" : "Vision";
+    output.selectedModel = expertAvailable
+        ? "Qwen3-VL-8B-Instruct-Unredacted-MAX.Q4_K_M.gguf"
+        : "Qwen3.5-4B-Q4_K_M.gguf";
+    output.reasoningMode = expertRequested ? "Deep" : "Fast";
+    output.routingReason = expertRequested
+        ? "The visual prompt contains difficult architecture or Blueprint signals."
+        : "Normal desktop perception uses the Main model and matching projector.";
+    if (expertRequested && !expertAvailable)
+    {
+        output.bRoutingFallback = true;
+        output.routingFallbackReason =
+            "Expert vision was unavailable; used normal Main vision.";
+    }
+    return output;
 }
 
 memoryDecision messageRouter::EvaluateMemory(
@@ -122,6 +261,15 @@ memoryDecision messageRouter::EvaluateMemory(
     const std::string& assistantMessage,
     const std::stop_token stopToken) const
 {
+    if (fastConfigured && fastLlm.IsBackendAvailable())
+    {
+        residency.BeginInference(
+            revia::intelligence::IntelligenceTier::Fast, "background");
+        memoryDecision decision = fastLlm.EvaluateMemory(
+            userMessage, assistantMessage, stopToken);
+        residency.EndInference(revia::intelligence::IntelligenceTier::Fast);
+        return decision;
+    }
     return llm.EvaluateMemory(userMessage, assistantMessage, stopToken);
 }
 
@@ -130,9 +278,67 @@ bool messageRouter::IsLLMAvailable() const
     return llm.IsBackendAvailable();
 }
 
+bool messageRouter::WarmUpLLM(
+    const std::stop_token stopToken,
+    std::string& outError) const
+{
+    return llm.WarmUp(stopToken, outError);
+}
+
+bool messageRouter::WarmUpFast(
+    const std::stop_token stopToken,
+    std::string& outError) const
+{
+    if (!fastConfigured)
+    {
+        outError = "The Fast brain is not configured.";
+        return false;
+    }
+    return fastLlm.WarmUp(stopToken, outError);
+}
+
+bool messageRouter::WarmUpExpert(
+    const std::stop_token stopToken,
+    std::string& outError) const
+{
+    if (!expertConfigured)
+    {
+        outError = "The Expert brain is not configured.";
+        return false;
+    }
+    return expertLlm.WarmUp(stopToken, outError);
+}
+
 healthOutput messageRouter::CheckLLMHealth() const
 {
     return llm.CheckBackendHealth();
+}
+
+healthOutput messageRouter::CheckFastHealth() const
+{
+    return fastConfigured ? fastLlm.CheckBackendHealth() : healthOutput{};
+}
+
+healthOutput messageRouter::CheckExpertHealth() const
+{
+    return expertConfigured ? expertLlm.CheckBackendHealth() : healthOutput{};
+}
+
+void messageRouter::SetTierResidency(
+    const revia::intelligence::IntelligenceTier tier,
+    const bool available,
+    const bool warm,
+    const double loadMilliseconds,
+    const std::string& detail)
+{
+    if (available) residency.MarkReady(tier, loadMilliseconds, warm);
+    else residency.MarkFailed(tier, detail.empty() ? "The model is unavailable." : detail);
+}
+
+std::vector<revia::intelligence::ModelResidency>
+messageRouter::ModelResidencySnapshot() const
+{
+    return residency.Snapshot();
 }
 
 healthOutput messageRouter::CheckEmbeddingHealth() const
@@ -154,8 +360,75 @@ bool messageRouter::IsExitCommand(const std::string& input) const
 
 void messageRouter::ApplyLLMSettings(
     const llmSettings& settings,
+    const llmSettings& fastSettings,
+    const llmSettings& expertSettings,
+    const embeddingSettings& embeddingSettings,
+    const aiProfile& profile,
+    const bool fastEnabled,
+    const bool expertEnabled)
+{
+    mainConfiguration = settings;
+    fastConfiguration = fastSettings;
+    expertConfiguration = expertSettings;
+    embeddingConfiguration = embeddingSettings;
+    llm.ApplySettings(settings, embeddingSettings, profile);
+    fastConfigured = fastEnabled;
+    expertConfigured = expertEnabled;
+    if (fastConfigured) fastLlm.ApplySettings(fastSettings, embeddingSettings, profile);
+    if (expertConfigured) expertLlm.ApplySettings(expertSettings, embeddingSettings, profile);
+    revia::intelligence::ModelResidency mainResidency;
+    mainResidency.tier = revia::intelligence::IntelligenceTier::Main;
+    mainResidency.role = "Main";
+    mainResidency.model = settings.modelName;
+    mainResidency.projector = settings.bVisionEnabled
+        ? settings.multimodalProjectorPath : "";
+    mainResidency.device = settings.device;
+    mainResidency.artifactMiB = ArtifactMiB(
+        settings.modelPath, mainResidency.projector);
+    residency.Register(std::move(mainResidency));
+
+    revia::intelligence::ModelResidency fastResidency;
+    fastResidency.tier = revia::intelligence::IntelligenceTier::Fast;
+    fastResidency.role = "Fast";
+    fastResidency.model = fastSettings.modelName;
+    fastResidency.device = fastSettings.device;
+    fastResidency.artifactMiB = ArtifactMiB(fastSettings.modelPath);
+    fastResidency.state = fastConfigured
+        ? revia::intelligence::ResidencyState::Cold
+        : revia::intelligence::ResidencyState::Disabled;
+    residency.Register(std::move(fastResidency));
+
+    revia::intelligence::ModelResidency expertResidency;
+    expertResidency.tier = revia::intelligence::IntelligenceTier::Expert;
+    expertResidency.role = "Expert";
+    expertResidency.model = expertSettings.modelName;
+    expertResidency.projector = expertSettings.bVisionEnabled
+        ? expertSettings.multimodalProjectorPath : "";
+    expertResidency.device = expertSettings.device;
+    expertResidency.artifactMiB = ArtifactMiB(
+        expertSettings.modelPath, expertResidency.projector);
+    expertResidency.state = expertConfigured
+        ? revia::intelligence::ResidencyState::Cold
+        : revia::intelligence::ResidencyState::Disabled;
+    residency.Register(std::move(expertResidency));
+}
+
+void messageRouter::ApplyProfile(const aiProfile& profile)
+{
+    ApplyLLMSettings(
+        mainConfiguration,
+        fastConfiguration,
+        expertConfiguration,
+        embeddingConfiguration,
+        profile,
+        fastConfigured,
+        expertConfigured);
+}
+
+void messageRouter::ApplyLLMSettings(
+    const llmSettings& settings,
     const embeddingSettings& embeddingSettings,
     const aiProfile& profile)
 {
-    llm.ApplySettings(settings, embeddingSettings, profile);
+    ApplyLLMSettings(settings, {}, {}, embeddingSettings, profile, false, false);
 }

@@ -42,6 +42,7 @@ struct ResourceRequirements
     std::uint64_t chatWorkingSetMiB = 0;
     bool voiceExpected = false;
     bool speechRecognitionGpuEnabled = true;
+    bool voiceMayShareChatGpu = false;
     int voiceMinimumVramMiB = 4600;
     int baseGpuReserveMiB = 1536;
 };

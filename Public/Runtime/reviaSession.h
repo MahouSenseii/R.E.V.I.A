@@ -21,6 +21,7 @@
 #include "Initiative/conversationStarter.h"
 #include "Initiative/curiosityJournal.h"
 #include "Learning/learningReview.h"
+#include "Learning/selfAssessment.h"
 #include "Perception/activityHistory.h"
 #include "Perception/windowEventMonitor.h"
 #include "Presence/presenceRuntime.h"
@@ -40,6 +41,7 @@
 #include "Windows/applicationControlDiscovery.h"
 
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
@@ -120,7 +122,6 @@ public:
     bool BeginListening();
     bool EndListening();
     [[nodiscard]] bool IsVisionAvailable() const;
-    SessionResult AnalyzeScreen(const std::string& prompt);
     // The model may locate a target, but it cannot click it. A successful request must
     // resolve to an exact UIA runtime id and then pass through ordinary action policy,
     // confirmation, dispatch, and audit.
@@ -191,7 +192,8 @@ public:
         const std::string& instruction);
     [[nodiscard]] const content::WorkingDocument& Document() const;
 
-    // Stage 6 Tier 0. Window and focus events only; no capture and no model.
+    // Stage 6. Tier 0 window/focus events optionally wake a bounded local visual summary;
+    // neither observation path grants action authority.
     [[nodiscard]] bool IsPerceptionEnabled() const;
     [[nodiscard]] bool IsPerceptionPaused() const;
     void SetPerceptionPaused(bool paused);
@@ -247,6 +249,8 @@ public:
 
 private:
     bool EnsureLLMAvailable(std::stop_token stopToken);
+    bool EnsureFastBrainAvailable(std::stop_token stopToken);
+    bool EnsureExpertBrainAvailable(std::stop_token stopToken);
     bool EnsureEmbeddingAvailable(std::stop_token stopToken);
     bool TryHandleActionInput(const std::string& input, SessionResult& result);
     SessionResult ExecuteAction(actions::ActionRequest request);
@@ -291,6 +295,11 @@ private:
     // shell's timer, so listening does not depend on a debug window being open.
     void StartInputDrain();
     void StopInputDrain();
+    void StartScreenAwareness();
+    void StopScreenAwareness();
+    void SignalScreenAwareness(const std::string& reason);
+    void CancelScreenAwarenessAttempt();
+    [[nodiscard]] std::string CurrentScreenContext() const;
     // Its own thread, not the shell's poll timer. A companion that only considers speaking
     // while a debug window happens to be open is not a companion.
     void StartInitiativeLoop();
@@ -351,7 +360,13 @@ private:
     actions::windows::VisionUiaResolver visionUiaResolver;
     actions::windows::ApplicationControlDiscovery applicationControlDiscovery;
     llamaCppServerProcess llamaServerProcess;
+    llamaCppServerProcess fastServerProcess;
+    llamaCppServerProcess expertServerProcess;
     llamaCppServerProcess embeddingServerProcess;
+    llmSettings fastLlmSettings;
+    llmSettings expertLlmSettings;
+    bool fastBrainConfigured = false;
+    bool expertBrainConfigured = false;
     agents::TurnCoordinator turnCoordinator;
     ConversationRuntime conversationRuntime;
     agents::InputArbiter inputArbiter;
@@ -359,6 +374,7 @@ private:
     evaluation::EvaluationReport lastEvaluation;
     memory::ConversationArchive conversationArchive;
     core::PreferenceStore preferenceStore;
+    learning::SelfAssessmentEngine selfAssessment;
     visual::DiagramStore diagramStore;
     content::WorkingDocument workingDocument;
     visual::ImageGenerator imageGenerator;
@@ -372,7 +388,9 @@ private:
     mutable std::mutex initiativeSignalMutex;
     mutable std::mutex curiositySignalMutex;
     mutable std::mutex externalAdapterMutex;
+    mutable std::mutex screenAwarenessMutex;
     std::condition_variable_any externalAdapterCondition;
+    std::condition_variable_any screenAwarenessCondition;
     std::deque<presence::ExternalAdapterEvent> externalAdapterQueue;
     std::condition_variable_any initiativeCondition;
     std::condition_variable_any curiosityCondition;
@@ -381,6 +399,11 @@ private:
     std::uint64_t curiositySignalVersion = 0;
     std::string curiositySignalReason;
     std::stop_source curiosityAttemptStopSource;
+    std::stop_source screenAwarenessAttemptStopSource;
+    std::uint64_t screenAwarenessSignalVersion = 0;
+    std::string screenAwarenessSignalReason;
+    std::string latestScreenContext;
+    std::chrono::steady_clock::time_point latestScreenContextAt{};
     outputChannel outputTarget = outputChannel::LocalVoice;
     std::string outputApplication;
     std::stop_source activeStopSource;
@@ -388,11 +411,13 @@ private:
     // Loads the assigned Qwen3-TTS voice after startup has already reported ready.
     std::jthread voiceWarmupWorker;
     std::atomic<bool> voiceWarmupFinished = true;
+    std::jthread screenAwarenessWorker;
     std::jthread initiativeWorker;
     std::jthread curiosityWorker;
     std::jthread inputDrainWorker;
     std::jthread externalAdapterWorker;
     RuntimeEventBus::SubscriptionId presenceSubscriptionId = 0;
+    RuntimeEventBus::SubscriptionId selfAssessmentSubscriptionId = 0;
     std::atomic<RuntimeState> state = RuntimeState::Offline;
     std::atomic<bool> started = false;
     std::atomic<bool> busy = false;

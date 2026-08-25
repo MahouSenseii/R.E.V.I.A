@@ -79,6 +79,18 @@ bool llmService::IsBackendAvailable() const
     }
 }
 
+bool llmService::WarmUp(
+    const std::stop_token stopToken,
+    std::string& outError) const
+{
+    if (!bIsReady || backendType != llmBackendType::LLamaCpp)
+    {
+        outError = "A ready llama.cpp backend is required for warmup.";
+        return false;
+    }
+    return llamaCpp.WarmUp(stopToken, outError);
+}
+
 healthOutput llmService::CheckBackendHealth() const
 {
     switch (backendType)
@@ -113,7 +125,8 @@ healthOutput llmService::CheckBackendHealth() const
 responseOutput llmService::GenerateResponse(
     const std::vector<conversationMessage>& context,
     const std::stop_token stopToken,
-    DeltaHandler onDelta) const
+    DeltaHandler onDelta,
+    const bool forceDeepReasoning) const
 {
     if (!bIsReady)
     {
@@ -145,7 +158,8 @@ responseOutput llmService::GenerateResponse(
                 output.bShouldRemember = false;
                 return output;
             }
-            return llamaCpp.GenerateResponse(context, stopToken, std::move(onDelta));
+            return llamaCpp.GenerateResponse(
+                context, stopToken, std::move(onDelta), forceDeepReasoning);
         }
 
         case llmBackendType::None:

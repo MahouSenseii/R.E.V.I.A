@@ -14,6 +14,11 @@ bool IsTerminal(const char value)
     return value == '.' || value == '!' || value == '?';
 }
 
+bool IsClausePunctuation(const char value)
+{
+    return value == ',' || value == ';' || value == ':' || value == '-';
+}
+
 std::string Trim(const std::string& value)
 {
     const std::size_t first = value.find_first_not_of(" \t\r\n");
@@ -55,8 +60,11 @@ bool EndsWithAbbreviation(const std::string& text, const std::size_t terminalInd
 
 } // namespace
 
-ReplyFragmenter::ReplyFragmenter(const std::size_t minimumFragmentCharacters)
-    : minimumCharacters(minimumFragmentCharacters)
+ReplyFragmenter::ReplyFragmenter(
+    const std::size_t minimumFragmentCharacters,
+    const std::size_t maximumPhraseCharacters)
+    : minimumCharacters(minimumFragmentCharacters),
+      maximumCharacters(maximumPhraseCharacters)
 {
 }
 
@@ -121,6 +129,44 @@ std::vector<std::string> ReplyFragmenter::Consume(const std::string& incoming)
                 }
                 boundary = end;
                 break;
+            }
+        }
+        if (maximumCharacters > minimumCharacters &&
+            (boundary == std::string::npos || boundary + 1 > maximumCharacters) &&
+            pending.size() > maximumCharacters)
+        {
+            // Prefer a natural clause pause. If a very long clause has no punctuation,
+            // wait for some look-ahead and then use its last word boundary; bounded audio
+            // reaching the first worker is more useful than holding an entire paragraph.
+            const std::size_t limit = std::min(maximumCharacters, pending.size() - 1);
+            std::size_t phraseBoundary = std::string::npos;
+            for (std::size_t index = minimumCharacters;
+                 index <= limit && index + 1 < pending.size(); ++index)
+            {
+                if (IsClausePunctuation(pending[index]) &&
+                    std::isspace(static_cast<unsigned char>(pending[index + 1])) != 0)
+                {
+                    phraseBoundary = index;
+                }
+            }
+            const bool completeSentencePastLimit = boundary != std::string::npos &&
+                boundary + 1 > maximumCharacters;
+            if (phraseBoundary == std::string::npos &&
+                (completeSentencePastLimit ||
+                    pending.size() >= maximumCharacters + minimumCharacters))
+            {
+                for (std::size_t index = limit; index > minimumCharacters; --index)
+                {
+                    if (std::isspace(static_cast<unsigned char>(pending[index])) != 0)
+                    {
+                        phraseBoundary = index - 1;
+                        break;
+                    }
+                }
+            }
+            if (phraseBoundary != std::string::npos)
+            {
+                boundary = phraseBoundary;
             }
         }
         if (boundary == std::string::npos)

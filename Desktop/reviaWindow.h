@@ -69,7 +69,6 @@ private:
     void SendMessage(bool voiceInput = false);
     void ToggleListening();
     void ApplyMicrophoneUi(MicrophoneUi microphoneUi);
-    void AnalyzeVisibleScreen();
     void UseVisibleScreen();
     void DiscoverApplicationPermissions();
     void RefreshVoiceStudio();
@@ -169,7 +168,6 @@ private:
     QPushButton* sendButton = nullptr;
     QPushButton* stopButton = nullptr;
     QPushButton* microphoneButton = nullptr;
-    QPushButton* visionButton = nullptr;
     QPushButton* screenActionButton = nullptr;
     QCheckBox* alwaysOnTopCheck = nullptr;
     QCheckBox* speechCheck = nullptr;

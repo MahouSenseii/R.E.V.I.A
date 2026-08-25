@@ -46,6 +46,16 @@ bool InternetLookupPolicy::ShouldLookup(
     {
         return false;
     }
+    // These are questions about Revia's retained local visual context, not requests for
+    // fresh public facts. Words such as "current" and "right now" must not turn the
+    // user's desktop into a DuckDuckGo query or add a browser round trip to the answer.
+    if (ContainsAny(lowered, {
+            "my screen", "my screens", "on screen", "on my monitor",
+            "on my monitors", "what am i doing", "what i am doing",
+            "what i'm doing", "what do you see", "can you see"}))
+    {
+        return false;
+    }
     if (ContainsAny(lowered, {
             "latest", "today", "current ", "currently", "right now", "recent",
             "news", "weather", "forecast", "price", "release date", "version",
@@ -58,7 +68,9 @@ bool InternetLookupPolicy::ShouldLookup(
     // contain a question mark.
     if (ContainsAny(lowered, {
             "how are you", "what do you think", "do you remember", "my name",
-            "i feel", "i am ", "i'm ", "we were", "what are we working on"}))
+            "i feel", "i am ", "i'm ", "we were", "what are we working on",
+            "do you ", "did you ", "are you ", "have you ", "would you ",
+            "could you ", "your ", " you ", "who did you"}))
     {
         return false;
     }

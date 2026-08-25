@@ -6,6 +6,8 @@
 #include <vector>
 
 #include "LLM/llmService.h"
+#include "Intelligence/intelligenceTypes.h"
+#include "Intelligence/modelResidencyManager.h"
 
 class messageRouter
 {
@@ -18,7 +20,8 @@ public:
         const std::string& message,
         const std::vector<conversationMessage>& context,
         std::stop_token stopToken = {},
-        DeltaHandler onDelta = {}) const;
+        DeltaHandler onDelta = {},
+        const revia::intelligence::IntelligenceDecision& decision = {}) const;
     void SetPosture(std::string posture);
     responseOutput PlanAction(const std::string& request) const;
     responseOutput ReviewConversationReply(
@@ -51,18 +54,51 @@ public:
         const std::string& assistantMessage = "",
         std::stop_token stopToken = {}) const;
     bool IsLLMAvailable() const;
+    bool WarmUpLLM(std::stop_token stopToken, std::string& outError) const;
+    bool WarmUpFast(std::stop_token stopToken, std::string& outError) const;
+    bool WarmUpExpert(std::stop_token stopToken, std::string& outError) const;
     healthOutput CheckLLMHealth() const;
+    healthOutput CheckFastHealth() const;
+    healthOutput CheckExpertHealth() const;
+    void SetTierResidency(
+        revia::intelligence::IntelligenceTier tier,
+        bool available,
+        bool warm,
+        double loadMilliseconds,
+        const std::string& detail = {});
+    [[nodiscard]] std::vector<revia::intelligence::ModelResidency>
+        ModelResidencySnapshot() const;
     healthOutput CheckEmbeddingHealth() const;
     embeddingOutput EmbedMemory(
         const std::string& summary,
         std::stop_token stopToken = {}) const;
     void ApplyLLMSettings(
         const llmSettings& settings,
+        const llmSettings& fastSettings,
+        const llmSettings& expertSettings,
+        const embeddingSettings& embeddingSettings,
+        const aiProfile& profile,
+        bool fastEnabled,
+        bool expertEnabled);
+    // Compatibility path for tests and profile reloads that intentionally configure
+    // only the primary endpoint.
+    void ApplyLLMSettings(
+        const llmSettings& settings,
         const embeddingSettings& embeddingSettings,
         const aiProfile& profile);
+    void ApplyProfile(const aiProfile& profile);
     bool IsExitCommand(const std::string &input) const;
 
 private:
 
     llmService llm;
+    llmService fastLlm;
+    llmService expertLlm;
+    bool fastConfigured = false;
+    bool expertConfigured = false;
+    llmSettings mainConfiguration;
+    llmSettings fastConfiguration;
+    llmSettings expertConfiguration;
+    embeddingSettings embeddingConfiguration;
+    mutable revia::intelligence::ModelResidencyManager residency;
 };

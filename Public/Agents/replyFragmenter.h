@@ -20,7 +20,9 @@ namespace revia::agents
 class ReplyFragmenter
 {
 public:
-    explicit ReplyFragmenter(std::size_t minimumFragmentCharacters = 24);
+    explicit ReplyFragmenter(
+        std::size_t minimumFragmentCharacters = 24,
+        std::size_t maximumPhraseCharacters = 0);
 
     // Feeds newly generated text. Returns any fragments that are now complete.
     [[nodiscard]] std::vector<std::string> Consume(const std::string& incoming);
@@ -33,6 +35,7 @@ public:
 private:
     std::string pending;
     std::size_t minimumCharacters;
+    std::size_t maximumCharacters;
 };
 
 } // namespace revia::agents

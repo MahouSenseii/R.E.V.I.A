@@ -126,8 +126,22 @@ else()
     target_compile_options(ReviaFoundation PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
+function(revia_link_foundation targetName)
+    # ReviaFoundation has intentional cross-subsystem references (the session
+    # coordinator reaches speech, vision, actions, and visuals). GNU ld only
+    # scans an archive from left to right, so an object referenced by a later
+    # archive member can otherwise be skipped and reported as undefined. Keep
+    # all foundation members for MinGW; other linkers already rescan the archive.
+    if(MINGW)
+        target_link_libraries(${targetName} PRIVATE
+                -Wl,--whole-archive ReviaFoundation -Wl,--no-whole-archive)
+    else()
+        target_link_libraries(${targetName} PRIVATE ReviaFoundation)
+    endif()
+endfunction()
+
 add_executable(R_E_V_I_A "${REVIA_MAIN_SOURCE}")
-target_link_libraries(R_E_V_I_A PRIVATE ReviaFoundation)
+revia_link_foundation(R_E_V_I_A)
 
 if(REVIA_BUILD_DESKTOP)
     # SvgWidgets renders the Canvas tab. It ships with the standard Qt kit, so the
@@ -155,8 +169,8 @@ if(REVIA_BUILD_DESKTOP)
         target_include_directories(ReviaDesktop PRIVATE
                 "${CMAKE_CURRENT_SOURCE_DIR}/Desktop"
         )
+        revia_link_foundation(ReviaDesktop)
         target_link_libraries(ReviaDesktop PRIVATE
-                ReviaFoundation
                 Qt6::Core
                 Qt6::Gui
                 Qt6::Widgets
@@ -240,7 +254,7 @@ if(BUILD_TESTING)
             "${CMAKE_CURRENT_SOURCE_DIR}/Tests/*.cpp"
     )
     add_executable(ReviaTests ${REVIA_TEST_SOURCES})
-    target_link_libraries(ReviaTests PRIVATE ReviaFoundation)
+    revia_link_foundation(ReviaTests)
     if(MINGW)
         target_link_options(ReviaTests PRIVATE -static)
     endif()

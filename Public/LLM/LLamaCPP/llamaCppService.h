@@ -24,6 +24,9 @@ public:
         const embeddingSettings& embeddingSettings,
         const aiProfile& profile);
     bool IsServerAvailable() const;
+    // Runs one real chat-template request so CUDA graph/JIT setup is paid during
+    // startup instead of delaying the user's first turn.
+    bool WarmUp(std::stop_token stopToken, std::string& outError) const;
     // Revia's own response posture for the next turn, already formatted. Stored rather
     // than threaded through every call because it changes per turn while the rest of the
     // request shape does not.
@@ -36,7 +39,8 @@ public:
     responseOutput GenerateResponse(
         const std::vector<conversationMessage>& context,
         std::stop_token stopToken = {},
-        DeltaHandler onDelta = {}) const;
+        DeltaHandler onDelta = {},
+        bool forceDeepReasoning = false) const;
     responseOutput GenerateActionProposal(const std::string& userRequest) const;
     responseOutput ReviewConversationReply(
         const std::string& userInput,

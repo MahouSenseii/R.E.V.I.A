@@ -11,8 +11,9 @@ namespace revia::agents
 // Keeps conversational presentation grounded and varied without owning inference.
 //
 // The profile defines who Revia is. This policy supplies only turn-local guidance and
-// removes a small, explicit set of stock follow-up questions that make otherwise good
-// replies sound like a help-desk script. It never rewrites factual answer content.
+// removes stock follow-up questions and substantial decoded repetition that make
+// otherwise good replies sound broken or like a help-desk script. It never rewrites
+// factual answer content.
 class ConversationStylePolicy
 {
 public:

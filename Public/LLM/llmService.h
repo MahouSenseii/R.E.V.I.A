@@ -20,13 +20,15 @@ public:
         const embeddingSettings& embeddingSettings,
         const aiProfile& profile);
     bool IsBackendAvailable() const;
+    bool WarmUp(std::stop_token stopToken, std::string& outError) const;
     void SetPosture(std::string posture);
     healthOutput CheckBackendHealth() const;
     using DeltaHandler = std::function<void(const std::string&)>;
     responseOutput GenerateResponse(
         const std::vector<conversationMessage>& context,
         std::stop_token stopToken = {},
-        DeltaHandler onDelta = {}) const;
+        DeltaHandler onDelta = {},
+        bool forceDeepReasoning = false) const;
     responseOutput GenerateActionProposal(const std::string& userRequest) const;
     responseOutput ReviewConversationReply(
         const std::string& userInput,

@@ -3,6 +3,7 @@
 #include "Agents/conversationStylePolicy.h"
 #include "Agents/responseFilter.h"
 #include "Core/messageRouter.h"
+#include "Intelligence/intelligenceTypes.h"
 
 namespace revia::agents
 {
@@ -19,7 +20,8 @@ public:
         const responseFilterSettings& filterSettings,
         const ResponseFilterContext& filterContext,
         std::stop_token stopToken = {},
-        messageRouter::DeltaHandler onDelta = {}) const;
+        messageRouter::DeltaHandler onDelta = {},
+        const revia::intelligence::IntelligenceDecision& decision = {}) const;
 
 private:
     ConversationStylePolicy stylePolicy;

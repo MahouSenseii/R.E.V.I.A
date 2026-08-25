@@ -2,12 +2,12 @@
   "activeProfile": "revia",
   "llm": {
     "backend": "LLamaCpp",
-    "host" : "127.0.0.1",
-    "port" : 8080,
-    "modelName" : "Qwen3-VL-8B-Instruct-Unredacted-MAX.Q4_K_M.gguf",
+    "host": "127.0.0.1",
+    "port": 8080,
+    "modelName": "Qwen3.5-4B-Q4_K_M.gguf",
     "autoStartServer": true,
     "serverExecutable": "ThirdParty/llama.cpp/llama-server.exe",
-    "modelPath": "Models/Qwen3-VL-8B-Instruct-Unredacted-MAX.Q4_K_M.gguf",
+    "modelPath": "Models/Qwen3.5-4B-Q4_K_M.gguf",
     "autoTune": true,
     "autoFitTargetMiB": 2048,
     "contextSize": 4096,
@@ -15,11 +15,41 @@
     "startupTimeoutSeconds": 120,
     "shutdownServerOnExit": true,
     "visionEnabled": true,
-    "multimodalProjectorPath": "Models/Qwen3-VL-8B-Instruct-Unredacted-MAX.mmproj-q8_0.gguf",
+    "multimodalProjectorPath": "Models/mmproj-F16.gguf",
     "mediaPath": "RuntimeData/Vision",
     "temperature": 0.8,
     "autoMaxTokens": true,
-    "maxTokens": 4096
+    "maxTokens": 1024
+  },
+  "intelligence": {
+    "enabled": true,
+    "fast": {
+      "enabled": true,
+      "host": "127.0.0.1",
+      "port": 8082,
+      "modelName": "Qwen3.5-0.8B-Q4_K_M.gguf",
+      "modelPath": "Models/Qwen3.5-0.8B-Q4_K_M.gguf",
+      "visionEnabled": false,
+      "contextSize": 4096,
+      "maxTokens": 256,
+      "temperature": 0.78,
+      "startupTimeoutSeconds": 90,
+      "warmAtStartup": true
+    },
+    "expert": {
+      "enabled": true,
+      "host": "127.0.0.1",
+      "port": 8083,
+      "modelName": "Qwen3-VL-8B-Instruct-Unredacted-MAX.Q4_K_M.gguf",
+      "modelPath": "Models/Qwen3-VL-8B-Instruct-Unredacted-MAX.Q4_K_M.gguf",
+      "visionEnabled": true,
+      "multimodalProjectorPath": "Models/Qwen3-VL-8B-Instruct-Unredacted-MAX.mmproj-q8_0.gguf",
+      "contextSize": 4096,
+      "maxTokens": 1024,
+      "temperature": 0.72,
+      "startupTimeoutSeconds": 180,
+      "warmAtStartup": true
+    }
   },
   "embedding": {
     "enabled": true,
@@ -49,9 +79,13 @@
     "qwenStartupTimeoutSeconds": 60,
     "qwenRequestTimeoutSeconds": 600,
     "qwenDevice": "auto",
-    "qwenDevices": ["auto"],
+    "qwenDevices": [
+      "auto"
+    ],
     "qwenMaxWorkers": 2,
     "qwenPrefetchFragments": 3,
+    "qwenPhraseCharacters": 64,
+    "qwenParallelLongReplies": true,
     "qwenMaxBufferedAudioMiB": 128,
     "qwenMinimumFreeVramMiB": 4600,
     "qwenVoiceDesignModel": "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign",
@@ -71,7 +105,7 @@
     "serverPort": 8094,
     "serverStartupTimeoutSeconds": 60,
     "requestTimeoutSeconds": 180,
-    "modelPath": "Models/ggml-small.en.bin",
+    "modelPath": "Models/ggml-distil-small.en.bin",
     "language": "en",
     "sampleRate": 16000,
     "threads": 6,
@@ -80,7 +114,7 @@
     "handsFree": false,
     "vadEnergyThreshold": 900,
     "vadSpeechFrames": 3,
-    "vadSilenceMs": 850,
+    "vadSilenceMs": 350,
     "minimumUtteranceMs": 350,
     "maximumUtteranceSeconds": 24
   },
@@ -95,7 +129,11 @@
     "adapterPollMs": 150,
     "maxAdapterEventsPerMinute": 30,
     "maxAdapterTextCharacters": 4000,
-    "allowedAdapters": ["discord", "stream", "game"]
+    "allowedAdapters": [
+      "discord",
+      "stream",
+      "game"
+    ]
   },
   "resources": {
     "autoPlan": true,
@@ -105,7 +143,7 @@
     "sqliteCacheMiB": 0,
     "gpuReserveMiB": 1536,
     "usageSampleSeconds": 2,
-    "allowChatModelSplit": true,
+    "allowChatModelSplit": false,
     "assignments": {
       "chat": "auto-primary",
       "voice": "auto-secondary",
@@ -135,7 +173,7 @@
     "restoreTurns": 6
   },
   "responseFilter": {
-    "aiReviewEnabled": true,
+    "aiReviewEnabled": false,
     "aiMaxReviewTokens": 192,
     "maxReplyCharacters": 12000
   },
@@ -143,6 +181,10 @@
     "enabled": true,
     "requireConfirmation": true,
     "maxResponseTokens": 768,
+    "continuousAwareness": true,
+    "awarenessDebounceMs": 1500,
+    "awarenessMinimumIntervalMs": 6000,
+    "awarenessMaxResponseTokens": 160,
     "resolutionConfidence": 0.72,
     "minimumNameAgreement": 0.35,
     "ambiguityMargin": 0.08,
@@ -153,6 +195,7 @@
     "curiosityEnabled": true,
     "spontaneousSpeechEnabled": true,
     "speakWhenUserAway": true,
+    "autonomousLearningEnabled": true,
     "curiosityCheckSeconds": 30,
     "autonomousQuietSeconds": 45,
     "curiosityTopicCooldownMinutes": 1440,
@@ -180,11 +223,15 @@
     "enabled": true,
     "minimumEventIntervalMs": 750,
     "maxObservationsPerMinute": 60,
-    "excludedApplications": ["ReviaDesktop.exe", "R_E_V_I_A.exe", "llama-server.exe"],
+    "excludedApplications": [
+      "ReviaDesktop.exe",
+      "R_E_V_I_A.exe",
+      "llama-server.exe"
+    ],
     "excludedTitleFragments": []
   },
   "inputArbiter": {
-    "mergeWindowMs": 1500,
+    "mergeWindowMs": 350,
     "minimumMeaningfulCharacters": 3,
     "maxQueuedInputs": 8,
     "ignoredFragments": []

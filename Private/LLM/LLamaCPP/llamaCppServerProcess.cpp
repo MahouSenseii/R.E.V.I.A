@@ -359,17 +359,11 @@ bool llamaCppServerProcess::StartInternal(
         return false;
     }
 
-    const llamaHardwareMemory hardwareMemory = DetectLlamaHardwareMemory();
-    const llamaHardwarePlan hardwarePlan = PlanLlamaHardware(
-        hardwareMemory.dedicatedVideoMemoryMiB,
-        hardwareMemory.systemMemoryMiB,
-        settings.reservedVramMiB);
-    const int contextSize = !embeddingMode && settings.bAutoTune
-        ? hardwarePlan.contextTokens
-        : settings.contextSize;
-    const int parallelRequests = !embeddingMode && settings.bAutoTune
-        ? hardwarePlan.parallelRequests
-        : settings.parallelRequests;
+    // Context is an explicit budget, not a prize to maximize. The resource plan still
+    // decides fitting and placement, while each role keeps the bounded context selected
+    // for it (ordinary conversation defaults to 4096 tokens).
+    const int contextSize = settings.contextSize;
+    const int parallelRequests = settings.parallelRequests;
     std::wstring commandLine = QuoteWindowsArgument(executableWide) +
         L" --model " + QuoteWindowsArgument(modelWide) +
         L" --host " + QuoteWindowsArgument(hostWide) +

@@ -421,6 +421,13 @@ class BrowserRuntime {
       `--user-data-dir=${this.settings.profile}`,
       '--remote-debugging-address=127.0.0.1',
       '--remote-debugging-port=0',
+      // Current Windows Edge builds can relaunch themselves to shed an inherited
+      // compatibility layer. The launcher then exits successfully while the real
+      // browser escapes the worker's job object, which looks like a crash and also
+      // defeats deterministic shutdown. Edge documents this internal guard on the
+      // relaunched process itself; passing it up front keeps the owned process stable.
+      // Chromium-based browsers ignore unknown switches, so Chrome remains supported.
+      '--edge-skip-compat-layer-relaunch',
       '--no-first-run',
       '--no-default-browser-check',
       '--disable-background-mode',
@@ -488,7 +495,20 @@ class BrowserRuntime {
       await navigate(this.page, `${SEARCH_HOME}?q=${encodeURIComponent(query)}`, Math.min(15_000, timeoutMs));
     }
     await sleep(stepDelayMs);
-    const rawResults = await searchResults(this.page);
+    let rawResults = await searchResults(this.page);
+    if (typed && rawResults.length === 0) {
+      // DuckDuckGo occasionally completes a typed search through client-side
+      // navigation without emitting the load event we waited for. Reloading the same
+      // public GET URL is still visible and auditable, and makes repeated searches as
+      // reliable as the first one instead of immediately reporting an empty page.
+      await navigate(
+        this.page,
+        `${SEARCH_HOME}?q=${encodeURIComponent(query)}`,
+        Math.max(2000, Math.min(15_000, deadline - Date.now())),
+      );
+      await sleep(stepDelayMs);
+      rawResults = await searchResults(this.page);
+    }
     const candidates = [];
     const seen = new Set();
     for (const raw of rawResults) {

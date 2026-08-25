@@ -6,6 +6,9 @@
 #include "Core/conversationContext.h"
 #include "Core/logger.h"
 #include "Core/messageRouter.h"
+#include "Intelligence/humanizationState.h"
+#include "Intelligence/intelligenceRouter.h"
+#include "Intelligence/reflexRouter.h"
 #include "Evaluation/conversationEvaluation.h"
 #include "Runtime/affectController.h"
 #include "Runtime/runtimeEvents.h"
@@ -36,6 +39,7 @@ public:
     using InternetLookupHandler =
         std::function<actions::ActionOutcome(const std::string&, const std::string&)>;
     using ResponseFilterSettingsProvider = std::function<responseFilterSettings()>;
+    using ScreenContextProvider = std::function<std::string()>;
 
     ConversationRuntime(
         messageRouter& router,
@@ -49,7 +53,8 @@ public:
         AffectHandler affectHandler,
         InternetSettingsProvider internetSettingsProvider,
         InternetLookupHandler internetLookupHandler,
-        ResponseFilterSettingsProvider responseFilterSettingsProvider);
+        ResponseFilterSettingsProvider responseFilterSettingsProvider,
+        ScreenContextProvider screenContextProvider);
 
     SessionResult Reply(
         const std::string& input,
@@ -145,7 +150,14 @@ private:
     InternetSettingsProvider internetSettings;
     InternetLookupHandler internetLookup;
     ResponseFilterSettingsProvider filterSettingsProvider;
+    ScreenContextProvider screenContextProvider;
     agents::ConversationQualityMonitor qualityMonitor;
+    intelligence::HumanizationController humanization;
+    intelligence::IntelligenceRouter intelligenceRouter;
+    intelligence::ReflexRouter reflexRouter;
+    std::string previousReflexResponse;
+    std::string previousReflexInput;
+    std::size_t repeatedReflexCalls = 0;
     std::uint64_t turnCounter = 0;
     std::uint64_t utteranceCounter = 0;
 };

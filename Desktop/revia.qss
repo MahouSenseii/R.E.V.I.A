@@ -141,8 +141,6 @@ QPushButton#microphoneButton { background: #31556f; }
 QPushButton#microphoneButton:hover { background: #3d6b8c; }
 QPushButton#microphoneButton[listening="true"] { background: #2b9a8b; }
 QPushButton#microphoneButton[listening="true"]:hover { background: #34b8a6; }
-QPushButton#visionButton { background: #694663; }
-QPushButton#visionButton:hover { background: #8e5b84; }
 QPushButton#screenActionButton { background: #46615f; }
 QPushButton#screenActionButton:hover { background: #5d817e; }
 QPushButton#fallbackVoiceButton { background: #354154; }

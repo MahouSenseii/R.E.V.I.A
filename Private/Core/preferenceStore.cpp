@@ -95,6 +95,8 @@ const std::vector<PreferenceKey>& PreferenceStore::Writable()
             "Let an admitted curiosity become a spontaneous line.", 0, 0, {}},
         {"initiative.speakWhenUserAway", PreferenceType::Boolean,
             "Let Revia speak when Windows reports that the user is away.", 0, 0, {}},
+        {"initiative.autonomousLearningEnabled", PreferenceType::Boolean,
+            "Keep bounded, sourced findings from approved autonomous research.", 0, 0, {}},
         {"initiative.maxPerHour", PreferenceType::Integer,
             "Ceiling on unprompted openings per hour.", 0, 60, {}},
         {"presence.avatarBridgeEnabled", PreferenceType::Boolean,
@@ -390,6 +392,8 @@ void PreferenceStore::Apply(appSettings& settings) const
     boolean("initiative.spontaneousSpeechEnabled",
         settings.initiative.bSpontaneousSpeechEnabled);
     boolean("initiative.speakWhenUserAway", settings.initiative.bSpeakWhenUserAway);
+    boolean("initiative.autonomousLearningEnabled",
+        settings.initiative.bAutonomousLearningEnabled);
     integer("initiative.maxPerHour", settings.initiative.maxUtterancesPerHour);
     boolean("presence.avatarBridgeEnabled", settings.presence.bAvatarBridgeEnabled);
     boolean("presence.externalAdaptersEnabled", settings.presence.bExternalAdaptersEnabled);

@@ -45,6 +45,7 @@ public:
     static constexpr std::size_t MaximumConversationMessages = 8;
     static constexpr std::size_t MaximumConversationCharacters = 3600;
     static constexpr std::size_t MaximumMessageCharacters = 700;
+    static constexpr std::size_t MaximumDesktopContextCharacters = 2400;
     static constexpr std::size_t MaximumPromptCharacters = 10000;
     static constexpr std::size_t MaximumTopicCharacters = 160;
     static constexpr std::size_t MaximumQueryCharacters = 320;
@@ -54,13 +55,15 @@ public:
         const messageRouter& router,
         const std::vector<conversationMessage>& recentConversation,
         const runtime::AffectSnapshot& affect,
+        const std::string& desktopContext,
         std::stop_token stopToken = {}) const;
 
     // Public so parser and prompt contracts can be tested without a running model.
     [[nodiscard]] static CuriosityDecision ParseDecision(const std::string& rawDecision);
     [[nodiscard]] static std::string BuildContextPrompt(
         const std::vector<conversationMessage>& recentConversation,
-        const runtime::AffectSnapshot& affect);
+        const runtime::AffectSnapshot& affect,
+        const std::string& desktopContext = {});
 };
 
 } // namespace revia::agents

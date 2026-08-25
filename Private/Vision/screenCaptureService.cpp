@@ -17,6 +17,53 @@ namespace revia::vision
 namespace
 {
 #ifdef _WIN32
+    std::string WideToUtf8(const std::wstring& value);
+
+    struct MonitorEnumeration
+    {
+        std::vector<MonitorDescriptor> monitors;
+        HMONITOR wanted = nullptr;
+        int wantedIndex = 0;
+    };
+
+    BOOL CALLBACK CollectMonitor(
+        const HMONITOR monitor,
+        HDC,
+        LPRECT,
+        const LPARAM data)
+    {
+        auto* enumeration = reinterpret_cast<MonitorEnumeration*>(data);
+        MONITORINFOEXW information{};
+        information.cbSize = sizeof(information);
+        if (!GetMonitorInfoW(monitor, &information))
+        {
+            return TRUE;
+        }
+        MonitorDescriptor descriptor;
+        descriptor.index = static_cast<int>(enumeration->monitors.size()) + 1;
+        descriptor.primary = (information.dwFlags & MONITORINFOF_PRIMARY) != 0;
+        descriptor.left = static_cast<int>(information.rcMonitor.left);
+        descriptor.top = static_cast<int>(information.rcMonitor.top);
+        descriptor.right = static_cast<int>(information.rcMonitor.right);
+        descriptor.bottom = static_cast<int>(information.rcMonitor.bottom);
+        descriptor.deviceName = WideToUtf8(information.szDevice);
+        if (monitor == enumeration->wanted)
+        {
+            enumeration->wantedIndex = descriptor.index;
+        }
+        enumeration->monitors.push_back(std::move(descriptor));
+        return TRUE;
+    }
+
+    MonitorEnumeration ReadMonitors(const HMONITOR wanted = nullptr)
+    {
+        MonitorEnumeration enumeration;
+        enumeration.wanted = wanted;
+        EnumDisplayMonitors(nullptr, nullptr, CollectMonitor,
+            reinterpret_cast<LPARAM>(&enumeration));
+        return enumeration;
+    }
+
     std::string WideToUtf8(const std::wstring& value)
     {
         if (value.empty())
@@ -166,6 +213,15 @@ namespace
 #endif
 }
 
+std::vector<MonitorDescriptor> ScreenCaptureService::EnumerateMonitors() const
+{
+#ifdef _WIN32
+    return ReadMonitors().monitors;
+#else
+    return {};
+#endif
+}
+
 CaptureResult ScreenCaptureService::CaptureDesktop(
     const std::filesystem::path& outputDirectory) const
 {
@@ -178,6 +234,7 @@ CaptureResult ScreenCaptureService::CaptureDesktop(
     result.originY = top;
     result.width = GetSystemMetrics(SM_CXVIRTUALSCREEN);
     result.height = GetSystemMetrics(SM_CYVIRTUALSCREEN);
+    result.monitorCount = GetSystemMetrics(SM_CMONITORS);
     if (result.width <= 0 || result.height <= 0)
     {
         result.reason = "Windows reported an invalid virtual desktop size.";
@@ -232,6 +289,10 @@ CaptureResult ScreenCaptureService::CaptureForegroundWindow(
             else
             {
                 ReadWindowIdentity(foreground, result);
+                const MonitorEnumeration monitors = ReadMonitors(
+                    MonitorFromWindow(foreground, MONITOR_DEFAULTTONEAREST));
+                result.monitorCount = static_cast<int>(monitors.monitors.size());
+                result.monitorIndex = monitors.wantedIndex;
                 CaptureRegion(outputDirectory, result);
                 if (result.succeeded && GetForegroundWindow() != foreground)
                 {

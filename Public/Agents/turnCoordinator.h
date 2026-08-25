@@ -2,6 +2,7 @@
 
 #include "Agents/conversationAgent.h"
 #include "Agents/memoryAgent.h"
+#include "Intelligence/intelligenceTypes.h"
 
 #include <cstdint>
 
@@ -26,8 +27,13 @@ public:
         bool evaluateMemory,
         std::uint64_t turnId = 0,
         std::stop_token stopToken = {},
-        messageRouter::DeltaHandler onDelta = {}) const;
+        messageRouter::DeltaHandler onDelta = {},
+        const revia::intelligence::IntelligenceDecision& decision = {}) const;
     std::vector<MemoryAgentEvent> DrainMemoryEvents();
+    void SubmitLearnedFinding(
+        const messageRouter& router,
+        memoryDecision decision,
+        std::uint64_t turnId = 0);
     void BackfillMemoryEmbeddings(
         const messageRouter& router,
         const std::string& embeddingModel);

@@ -277,7 +277,6 @@ void ReviaWindow::BuildInterface()
     sendButton = ui->sendButton;
     stopButton = ui->stopButton;
     microphoneButton = ui->microphoneButton;
-    visionButton = ui->visionButton;
     screenActionButton = ui->screenActionButton;
     alwaysOnTopCheck = ui->alwaysOnTopCheck;
     speechCheck = ui->speechCheck;
@@ -398,7 +397,6 @@ void ReviaWindow::BuildInterface()
     connect(sendButton, &QPushButton::clicked, this, [this]() { SendMessage(); });
     connect(stopButton, &QPushButton::clicked, this, [this]() { session.RequestStop(); });
     connect(microphoneButton, &QPushButton::clicked, this, [this]() { ToggleListening(); });
-    connect(visionButton, &QPushButton::clicked, this, [this]() { AnalyzeVisibleScreen(); });
     connect(screenActionButton, &QPushButton::clicked, this, [this]() { UseVisibleScreen(); });
     alwaysOnTopCheck->setChecked(shellSettings.value("window/alwaysOnTop", false).toBool());
     autoSendVoiceCheck->setChecked(shellSettings.value("input/autoSendVoice", true).toBool());
@@ -580,7 +578,6 @@ void ReviaWindow::StartRuntime()
         QMetaObject::invokeMethod(this, [this, started, greeting]()
         {
             sendButton->setEnabled(started);
-            visionButton->setEnabled(session.IsVisionAvailable());
             screenActionButton->setEnabled(session.IsVisionAvailable());
             stopButton->setEnabled(false);
             // Re-evaluate the microphone now that IsStarted() is finally true; the last
@@ -871,61 +868,6 @@ void ReviaWindow::BeginShutdown(
     });
 }
 
-void ReviaWindow::AnalyzeVisibleScreen()
-{
-    if (shuttingDown.load() || session.IsBusy())
-    {
-        return;
-    }
-    const bool approved = QMessageBox::question(
-        this,
-        "Share screen with Revia",
-        "Revia will capture all visible monitors once and analyze the image locally. "
-        "The temporary PNG is deleted after the request. Continue?",
-        QMessageBox::Yes | QMessageBox::No,
-        QMessageBox::No) == QMessageBox::Yes;
-    if (!approved)
-    {
-        return;
-    }
-    showMinimized();
-    sendButton->setEnabled(false);
-    visionButton->setEnabled(false);
-    screenActionButton->setEnabled(false);
-    stopButton->setEnabled(true);
-    if (operationWorker.joinable())
-    {
-        operationWorker.join();
-    }
-    operationWorker = std::jthread([this]()
-    {
-        std::this_thread::sleep_for(std::chrono::milliseconds(400));
-        const revia::runtime::SessionResult result = session.AnalyzeScreen(
-            "Describe what is visible on the screen accurately and briefly. "
-            "Mention errors, warnings, or the most useful next action if one is visible.");
-        QMetaObject::invokeMethod(this, [this, result]()
-        {
-            showNormal();
-            raise();
-            activateWindow();
-            if (!result.text.empty())
-            {
-                AppendChat(QString::fromStdString(session.DisplayName()),
-                    QString::fromStdString(result.text));
-            }
-            if (!result.succeeded && !result.reason.empty())
-            {
-                AppendActivity("Vision failed: " + QString::fromStdString(result.reason));
-            }
-            sendButton->setEnabled(session.IsStarted());
-            visionButton->setEnabled(session.IsVisionAvailable());
-            screenActionButton->setEnabled(session.IsVisionAvailable());
-            stopButton->setEnabled(false);
-            messageInput->setFocus();
-        }, Qt::QueuedConnection);
-    });
-}
-
 void ReviaWindow::UseVisibleScreen()
 {
     if (shuttingDown.load() || session.IsBusy())
@@ -961,7 +903,6 @@ void ReviaWindow::UseVisibleScreen()
     AppendChat("You", instruction, true);
     showMinimized();
     sendButton->setEnabled(false);
-    visionButton->setEnabled(false);
     screenActionButton->setEnabled(false);
     stopButton->setEnabled(true);
     if (operationWorker.joinable())
@@ -989,7 +930,6 @@ void ReviaWindow::UseVisibleScreen()
                     "Screen action stopped: " + QString::fromStdString(result.reason));
             }
             sendButton->setEnabled(session.IsStarted());
-            visionButton->setEnabled(session.IsVisionAvailable());
             screenActionButton->setEnabled(session.IsVisionAvailable());
             stopButton->setEnabled(false);
             messageInput->setFocus();
@@ -1485,12 +1425,11 @@ void ReviaWindow::HandleRuntimeEvent(const revia::runtime::RuntimeEvent& event)
             const QString phase = QString::fromStdString(event.phase);
             visionLabel->setText(QStringLiteral("Vision: ") + phase);
             visionLabel->setToolTip(QString::fromStdString(event.message));
-            visionButton->setEnabled(
+            screenActionButton->setEnabled(
                 phase != QStringLiteral("Disabled") && phase != QStringLiteral("Unavailable") &&
                 phase != QStringLiteral("Error") && phase != QStringLiteral("Capturing") &&
                 phase != QStringLiteral("Analyzing") && phase != QStringLiteral("Grounding") &&
                 phase != QStringLiteral("Resolving") && !session.IsBusy());
-            screenActionButton->setEnabled(visionButton->isEnabled());
             QString detail = QStringLiteral("Vision ") + phase + QStringLiteral(": ") +
                 QString::fromStdString(event.message);
             if (event.elapsedMilliseconds >= 0.0)

@@ -109,6 +109,62 @@ bool IsInterestingWindow(HWND window)
     return (exStyle & WS_EX_TOOLWINDOW) == 0;
 }
 
+struct MonitorLookup
+{
+    HMONITOR wanted = nullptr;
+    int currentIndex = 0;
+    int foundIndex = 0;
+};
+
+BOOL CALLBACK FindMonitorIndex(
+    const HMONITOR monitor,
+    HDC,
+    LPRECT,
+    const LPARAM data)
+{
+    auto* lookup = reinterpret_cast<MonitorLookup*>(data);
+    ++lookup->currentIndex;
+    if (monitor == lookup->wanted)
+    {
+        lookup->foundIndex = lookup->currentIndex;
+        return FALSE;
+    }
+    return TRUE;
+}
+
+void ReadWindowPlacement(const HWND window, WindowObservation& observation)
+{
+    RECT windowBounds{};
+    if (GetWindowRect(window, &windowBounds))
+    {
+        observation.windowLeft = static_cast<int>(windowBounds.left);
+        observation.windowTop = static_cast<int>(windowBounds.top);
+        observation.windowRight = static_cast<int>(windowBounds.right);
+        observation.windowBottom = static_cast<int>(windowBounds.bottom);
+    }
+
+    const HMONITOR monitor = MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST);
+    if (monitor == nullptr)
+    {
+        return;
+    }
+    MONITORINFO information{};
+    information.cbSize = sizeof(information);
+    if (GetMonitorInfoW(monitor, &information))
+    {
+        observation.monitorIsPrimary = (information.dwFlags & MONITORINFOF_PRIMARY) != 0;
+        observation.monitorLeft = static_cast<int>(information.rcMonitor.left);
+        observation.monitorTop = static_cast<int>(information.rcMonitor.top);
+        observation.monitorRight = static_cast<int>(information.rcMonitor.right);
+        observation.monitorBottom = static_cast<int>(information.rcMonitor.bottom);
+    }
+    MonitorLookup lookup;
+    lookup.wanted = monitor;
+    EnumDisplayMonitors(nullptr, nullptr, FindMonitorIndex,
+        reinterpret_cast<LPARAM>(&lookup));
+    observation.monitorIndex = lookup.foundIndex;
+}
+
 void CALLBACK EventProc(
     HWINEVENTHOOK,
     const DWORD event,
@@ -359,6 +415,7 @@ void WindowEventMonitor::HandleRawEvent(
 
     candidate.application = ExecutableOf(window);
     candidate.windowTitle = WindowTitleOf(window);
+    ReadWindowPlacement(window, candidate);
 
     ObservationHandler handler;
     Suppression verdict = Suppression::None;

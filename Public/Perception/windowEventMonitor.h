@@ -27,6 +27,19 @@ struct WindowObservation
     ObservationKind kind = ObservationKind::ForegroundChanged;
     std::string application;
     std::string windowTitle;
+    // One-based monitor index from the current Windows display topology. Zero means the
+    // monitor could not be identified. Bounds are screen-space coordinates and contain
+    // no pixels; they let Revia understand which display a permitted window occupies.
+    int monitorIndex = 0;
+    bool monitorIsPrimary = false;
+    int monitorLeft = 0;
+    int monitorTop = 0;
+    int monitorRight = 0;
+    int monitorBottom = 0;
+    int windowLeft = 0;
+    int windowTop = 0;
+    int windowRight = 0;
+    int windowBottom = 0;
     std::chrono::system_clock::time_point occurredAt = std::chrono::system_clock::now();
 };
 

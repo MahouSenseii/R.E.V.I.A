@@ -29,8 +29,35 @@ void MemoryAgent::Submit(
 
     {
         std::lock_guard lock(mutex);
-        tasks.push_front(Task{
-            &router, std::move(input), std::move(assistantResponse), "", turnId});
+        Task task;
+        task.router = &router;
+        task.input = std::move(input);
+        task.assistantResponse = std::move(assistantResponse);
+        task.turnId = turnId;
+        tasks.push_front(std::move(task));
+    }
+    taskAvailable.notify_one();
+}
+
+void MemoryAgent::SubmitLearnedFinding(
+    const messageRouter& router,
+    memoryDecision decision,
+    const std::uint64_t turnId)
+{
+    if (!decision.bSuccess || !decision.bShouldRemember || decision.summary.empty() ||
+        worker.get_stop_token().stop_requested())
+    {
+        return;
+    }
+    Task task;
+    task.router = &router;
+    task.input = decision.summary;
+    task.learnedDecision = std::move(decision);
+    task.hasLearnedDecision = true;
+    task.turnId = turnId;
+    {
+        std::lock_guard lock(mutex);
+        tasks.push_back(std::move(task));
     }
     taskAvailable.notify_one();
 }
@@ -55,7 +82,11 @@ void MemoryAgent::SubmitEmbeddingBackfill(
         std::lock_guard lock(mutex);
         for (const memoryEntry& entry : missing)
         {
-            tasks.push_back(Task{&router, entry.summary, "", entry.id, 0});
+            Task task;
+            task.router = &router;
+            task.input = entry.summary;
+            task.memoryId = entry.id;
+            tasks.push_back(std::move(task));
         }
     }
     taskAvailable.notify_one();
@@ -138,8 +169,25 @@ void MemoryAgent::Run(const std::stop_token stopToken)
 
         MemoryAgentEvent event;
         event.turnId = task.turnId;
-        event.decision = task.router->EvaluateMemory(
-            task.input, task.assistantResponse, stopToken);
+        if (task.hasLearnedDecision)
+        {
+            event.operation = "autonomous_learning";
+            event.decision = std::move(task.learnedDecision);
+            const embeddingOutput embedding = task.router->EmbedMemory(
+                event.decision.summary, stopToken);
+            event.decision.timings.push_back({
+                "autonomous_learning_embedding", embedding.elapsedMilliseconds});
+            if (embedding.bSuccess)
+            {
+                event.decision.embedding = embedding.values;
+                event.decision.embeddingModel = embedding.model;
+            }
+        }
+        else
+        {
+            event.decision = task.router->EvaluateMemory(
+                task.input, task.assistantResponse, stopToken);
+        }
         if (stopToken.stop_requested())
         {
             return;

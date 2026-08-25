@@ -21,12 +21,16 @@ public:
     void Clear();
 
     std::vector<conversationMessage> GetRecentMessages() const;
+    [[nodiscard]] std::string GetCompressedHistorySummary() const;
 
 private:
     [[nodiscard]] std::size_t CharacterCount() const;
     void TrimToBudget();
+    void CompressOldMessage(const conversationMessage& message);
 
     std::vector<conversationMessage> messages;
+    std::string compressedHistory;
     std::size_t maxMessages = 24;
     std::size_t maxCharacters = 14000;
+    std::size_t maxSummaryCharacters = 2400;
 };

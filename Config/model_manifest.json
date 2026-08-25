@@ -1,0 +1,114 @@
+{
+  "schemaVersion": 1,
+  "profiles": {
+    "Minimal": ["fast", "main", "memory", "stt-primary"],
+    "Standard": ["fast", "main", "main-vision", "memory", "stt-primary"],
+    "Full": ["fast", "main", "main-vision", "expert", "expert-vision", "memory", "stt-primary", "stt-fallback"]
+  },
+  "artifacts": [
+    {
+      "id": "fast",
+      "role": "Fast conversational brain",
+      "file": "Qwen3.5-0.8B-Q4_K_M.gguf",
+      "repository": "unsloth/Qwen3.5-0.8B-GGUF",
+      "revision": "6ab461498e2023f6e3c1baea90a8f0fe38ab64d0",
+      "sha256": "bd258782e35f7f458f8aced1adc053e6e92e89bc735ba3be89d38a06121dc517",
+      "bytes": 532517120,
+      "license": "apache-2.0",
+      "quantization": "Q4_K_M",
+      "recommendedVramMiB": 0,
+      "projectorFor": null
+    },
+    {
+      "id": "main",
+      "role": "Main conversational brain",
+      "file": "Qwen3.5-4B-Q4_K_M.gguf",
+      "repository": "unsloth/Qwen3.5-4B-GGUF",
+      "revision": "e87f176479d0855a907a41277aca2f8ee7a09523",
+      "sha256": "00fe7986ff5f6b463e62455821146049db6f9313603938a70800d1fb69ef11a4",
+      "bytes": 2740937888,
+      "license": "apache-2.0",
+      "quantization": "Q4_K_M",
+      "recommendedVramMiB": 4600,
+      "projectorFor": null
+    },
+    {
+      "id": "main-vision",
+      "role": "Main vision projector",
+      "file": "mmproj-F16.gguf",
+      "repository": "unsloth/Qwen3.5-4B-GGUF",
+      "revision": "e87f176479d0855a907a41277aca2f8ee7a09523",
+      "sha256": "cd88edcf8d031894960bb0c9c5b9b7e1fea6ebee02b9f7ce925a00d12891f864",
+      "bytes": 672423616,
+      "license": "apache-2.0",
+      "quantization": "F16",
+      "recommendedVramMiB": 700,
+      "projectorFor": "main"
+    },
+    {
+      "id": "expert",
+      "role": "Expert conversational and visual brain",
+      "file": "Qwen3-VL-8B-Instruct-Unredacted-MAX.Q4_K_M.gguf",
+      "repository": "KuroTo4ka/Qwen3-VL-8B-Instruct-Unredacted-MAX-Quants-GGUF",
+      "revision": "d2db200bba5cc65c50959a5d5624e34d6cc8e7bc",
+      "sha256": "79b2d3dd474e12435282f0ca76b6fee97f2d5580dc93f5dd494bf334faf6600b",
+      "bytes": 5027785376,
+      "license": "apache-2.0",
+      "quantization": "Q4_K_M",
+      "recommendedVramMiB": 7000,
+      "projectorFor": null
+    },
+    {
+      "id": "expert-vision",
+      "role": "Expert vision projector",
+      "file": "Qwen3-VL-8B-Instruct-Unredacted-MAX.mmproj-q8_0.gguf",
+      "repository": "prithivMLmods/Qwen3-VL-8B-Instruct-Unredacted-MAX-GGUF",
+      "revision": "d9e73e8c701e39aa4473af3139933dce814b0ad5",
+      "sha256": "20e21104e70d6363dca590bc628e7e4d55fc8e0c1152ea49b7607d2ab4a30daf",
+      "bytes": 752289920,
+      "license": "apache-2.0",
+      "quantization": "Q8_0",
+      "recommendedVramMiB": 800,
+      "projectorFor": "expert"
+    },
+    {
+      "id": "memory",
+      "role": "Semantic memory embeddings",
+      "file": "nomic-embed-text-v1.5.Q4_K_M.gguf",
+      "repository": "nomic-ai/nomic-embed-text-v1.5-GGUF",
+      "revision": "0188c9bf409793f810680a5a431e7b899c46104c",
+      "sha256": "d4e388894e09cf3816e8b0896d81d265b55e7a9fff9ab03fe8bf4ef5e11295ac",
+      "bytes": 84106624,
+      "license": "apache-2.0",
+      "quantization": "Q4_K_M",
+      "recommendedVramMiB": 0,
+      "projectorFor": null
+    },
+    {
+      "id": "stt-primary",
+      "role": "Primary English speech recognition",
+      "file": "ggml-distil-small.en.bin",
+      "repository": "distil-whisper/distil-small.en",
+      "revision": "9e4a67ca4569c30be43a3fe7fba1621e504f0093",
+      "sha256": "7691eb11167ab7aaf6b3e05d8266f2fd9ad89c550e433f86ac266ebdee6c970a",
+      "bytes": 336191657,
+      "license": "mit",
+      "quantization": "F16",
+      "recommendedVramMiB": 800,
+      "projectorFor": null
+    },
+    {
+      "id": "stt-fallback",
+      "role": "Speech recognition fallback",
+      "file": "ggml-small.en.bin",
+      "repository": "ggerganov/whisper.cpp",
+      "revision": "5359861c739e955e79d9a303bcbc70fb988958b1",
+      "sha256": "c6138d6d58ecc8322097e0f987c32f1be8bb0a18532a3f88f734d1bbf9c41e5d",
+      "bytes": 487614201,
+      "license": "mit",
+      "quantization": "F16",
+      "recommendedVramMiB": 1000,
+      "projectorFor": null
+    }
+  ]
+}

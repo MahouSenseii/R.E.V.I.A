@@ -85,6 +85,7 @@ CuriosityDecision CuriosityAgent::Nominate(
     const messageRouter& router,
     const std::vector<conversationMessage>& recentConversation,
     const runtime::AffectSnapshot& affect,
+    const std::string& desktopContext,
     const std::stop_token stopToken) const
 {
     if (stopToken.stop_requested())
@@ -93,7 +94,7 @@ CuriosityDecision CuriosityAgent::Nominate(
     }
 
     const responseOutput response = router.GenerateCuriosityPlan(
-        BuildContextPrompt(recentConversation, affect), stopToken);
+        BuildContextPrompt(recentConversation, affect, desktopContext), stopToken);
     if (!response.bSuccess)
     {
         return Invalid(response.reason.empty()
@@ -180,7 +181,8 @@ CuriosityDecision CuriosityAgent::ParseDecision(const std::string& rawDecision)
 
 std::string CuriosityAgent::BuildContextPrompt(
     const std::vector<conversationMessage>& recentConversation,
-    const runtime::AffectSnapshot& affect)
+    const runtime::AffectSnapshot& affect,
+    const std::string& desktopContext)
 {
     json selected = json::array();
     std::size_t remainingCharacters = MaximumConversationCharacters;
@@ -220,7 +222,12 @@ std::string CuriosityAgent::BuildContextPrompt(
             {"intensity", std::clamp(affect.intensity, 0.0F, 1.0F)},
             {"reason", BoundedLine(affect.reason, 240)}
         }},
-        {"recent_conversation", std::move(selected)}
+        {"recent_conversation", std::move(selected)},
+        // This is a local, filtered event summary (applications, titles, durations, and
+        // monitor indices), never screenshot pixels or UI text. It is still untrusted
+        // data because a window title can contain arbitrary text.
+        {"desktop_observation_summary", BoundedLine(
+            desktopContext, MaximumDesktopContextCharacters)}
     };
 
     std::string encoded = prompt.dump(

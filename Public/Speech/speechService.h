@@ -3,10 +3,12 @@
 #include "Library/structLibrary.h"
 #include "Runtime/affectTypes.h"
 #include "Speech/qwenTtsPool.h"
+#include "Speech/orderedSpeechQueue.h"
 #include "Speech/voiceActivityMonitor.h"
 #include "Speech/voicePresetStore.h"
 
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <cstdint>
 #include <deque>
@@ -77,6 +79,8 @@ public:
     VoiceOperationResult AssignVoice(const std::string& profileId, const std::string& presetId);
     void SetEnabled(bool enabled);
     bool IsEnabled() const;
+    [[nodiscard]] bool HasPendingSpeech() const;
+    [[nodiscard]] std::size_t PreferredFragmentCharacters() const;
     // utteranceId correlates the resulting Speaking event back to the reply, so the shell
     // can reveal text in step with the audio instead of well before it.
     void Speak(std::string text, runtime::AffectSnapshot affect, std::uint64_t utteranceId = 0);
@@ -109,6 +113,8 @@ private:
         std::uint64_t generation = 0;
         std::uint64_t utteranceId = 0;
         std::uint64_t sequence = 0;
+        std::chrono::steady_clock::time_point queuedAt =
+            std::chrono::steady_clock::now();
         std::optional<VoicePreset> preset;
     };
 
@@ -131,7 +137,7 @@ private:
     mutable std::mutex mutex;
     std::condition_variable_any condition;
     std::deque<Utterance> queue;
-    std::deque<std::uint64_t> playbackOrder;
+    OrderedSpeechQueue playbackOrder;
     std::map<std::uint64_t, PreparedUtterance> prepared;
     std::size_t generatingCount = 0;
     std::uintmax_t bufferedAudioBytes = 0;

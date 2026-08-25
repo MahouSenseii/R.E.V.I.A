@@ -178,7 +178,7 @@ bool SpeechService::Start(const speechSettings& settings, EventHandler handler)
         activePreset = assigned.empty() ? std::nullopt : presetStore.Find(assigned);
         eventHandler = std::move(handler);
         queue.clear();
-        playbackOrder.clear();
+        playbackOrder.Clear();
         prepared.clear();
         generatingCount = 0;
         bufferedAudioBytes = 0;
@@ -412,6 +412,19 @@ bool SpeechService::IsEnabled() const
     return enabled.load();
 }
 
+bool SpeechService::HasPendingSpeech() const
+{
+    std::lock_guard lock(mutex);
+    return !playbackOrder.Empty() || activeUtteranceId.load() != 0;
+}
+
+std::size_t SpeechService::PreferredFragmentCharacters() const
+{
+    return configuration.bQwenParallelLongReplies
+        ? static_cast<std::size_t>(std::max(48, configuration.qwenPhraseCharacters))
+        : 0;
+}
+
 void SpeechService::Speak(
     std::string text,
     const runtime::AffectSnapshot affect,
@@ -434,8 +447,7 @@ void SpeechService::Speak(
         {
             const std::uint64_t dropped = queue.front().sequence;
             queue.pop_front();
-            playbackOrder.erase(std::remove(
-                playbackOrder.begin(), playbackOrder.end(), dropped), playbackOrder.end());
+            playbackOrder.Remove(dropped);
         }
         Utterance utterance;
         utterance.text = std::move(text);
@@ -443,8 +455,9 @@ void SpeechService::Speak(
         utterance.generation = generation.load();
         utterance.utteranceId = utteranceId;
         utterance.sequence = nextSequence.fetch_add(1);
+        utterance.queuedAt = std::chrono::steady_clock::now();
         if (configuration.backend != "WindowsSapi") utterance.preset = activePreset;
-        playbackOrder.push_back(utterance.sequence);
+        playbackOrder.Reserve(utterance.sequence);
         queue.push_back(std::move(utterance));
         depth = static_cast<int>(queue.size());
     }
@@ -458,7 +471,7 @@ void SpeechService::StopSpeaking()
     {
         std::lock_guard lock(mutex);
         queue.clear();
-        playbackOrder.clear();
+        playbackOrder.Clear();
         for (const auto& [sequence, item] : prepared)
         {
             (void)sequence;
@@ -510,7 +523,7 @@ void SpeechService::YieldToUser()
     {
         std::lock_guard lock(mutex);
         queue.clear();
-        playbackOrder.clear();
+        playbackOrder.Clear();
         for (const auto& [sequence, item] : prepared)
         {
             (void)sequence;
@@ -678,19 +691,19 @@ void SpeechService::Run(const std::stop_token stopToken)
             std::unique_lock lock(mutex);
             condition.wait(lock, stopToken, [this]
             {
-                return !playbackOrder.empty() &&
-                    prepared.contains(playbackOrder.front());
+                return playbackOrder.FrontReady().has_value();
             });
             if (stopToken.stop_requested())
             {
                 break;
             }
-            if (playbackOrder.empty() || !enabled.load())
+            if (playbackOrder.Empty() || !enabled.load())
             {
                 continue;
             }
-            const std::uint64_t sequence = playbackOrder.front();
-            playbackOrder.pop_front();
+            const std::optional<std::uint64_t> next = playbackOrder.PopFrontReady();
+            if (!next.has_value()) continue;
+            const std::uint64_t sequence = *next;
             auto found = prepared.find(sequence);
             if (found == prepared.end()) continue;
             preparedUtterance = std::move(found->second);
@@ -725,7 +738,7 @@ void SpeechService::Run(const std::stop_token stopToken)
         if (preparedUtterance.qwenAttempted && !preparedUtterance.result.succeeded)
         {
             Notify({"Fallback", preparedUtterance.result.message +
-                " Using Windows voice for this sentence.",
+                " Using Windows voice for this phrase.",
                 preparedUtterance.result.elapsedMilliseconds, 0, utterance.utteranceId,
                 ActualQwenResource(preparedUtterance.result)});
         }
@@ -742,7 +755,11 @@ void SpeechService::Run(const std::stop_token stopToken)
             static_cast<long>(configuration.rate) + AffectRateAdjustment(utterance.affect.state),
             -10L, 10L));
         const auto startedAt = std::chrono::steady_clock::now();
-        Notify({"Speaking", "Reading the assistant reply aloud.", -1.0, 0, 0,
+        Notify({"FirstAudioPlayed", "Windows SAPI began playing the phrase.",
+            ElapsedMilliseconds(utterance.queuedAt), 0, utterance.utteranceId,
+            WindowsSapiResource});
+        Notify({"Speaking", "Reading the assistant reply aloud.", -1.0, 0,
+            utterance.utteranceId,
             WindowsSapiResource});
         const HRESULT spoke = voice->Speak(
             speechText.c_str(), static_cast<DWORD>(SPF_ASYNC | SPF_IS_NOT_XML), nullptr);
@@ -836,7 +853,7 @@ void SpeechService::Generate(const std::stop_token stopToken)
             else
             {
                 std::filesystem::create_directories(item.audioPath.parent_path(), error);
-                Notify({"Generating", "Synthesizing a sentence ahead with Qwen3-TTS.",
+                Notify({"Generating", "Synthesizing a phrase ahead with Qwen3-TTS.",
                     -1.0, depth, utterance.utteranceId,
                     PlannedQwenResource(configuration)});
                 item.result = qwenPool.Synthesize(
@@ -858,6 +875,7 @@ void SpeechService::Generate(const std::stop_token stopToken)
             {
                 bufferedAudioBytes += item.bufferedBytes;
                 prepared.emplace(utterance.sequence, std::move(item));
+                playbackOrder.MarkReady(utterance.sequence);
             }
         }
         if (stale)
@@ -867,7 +885,10 @@ void SpeechService::Generate(const std::stop_token stopToken)
         }
         else if (utterance.preset.has_value() && completedResult.succeeded)
         {
-            Notify({"Generated", "Qwen3-TTS sentence audio is ready for ordered playback.",
+            Notify({"FirstAudioReady", "The phrase's first playable audio is ready.",
+                ElapsedMilliseconds(utterance.queuedAt), depth, utterance.utteranceId,
+                ActualQwenResource(completedResult)});
+            Notify({"Generated", "Qwen3-TTS phrase audio is ready for ordered playback.",
                 completedResult.elapsedMilliseconds, depth, utterance.utteranceId,
                 ActualQwenResource(completedResult)});
         }
@@ -896,6 +917,9 @@ bool SpeechService::PlayPreparedQwen(const PreparedUtterance& preparedUtterance)
     SpeechEvent playing{"Speaking", "Playing the profile's Qwen3-TTS voice."};
     playing.utteranceId = utterance.utteranceId;
     playing.device = ActualQwenResource(generated);
+    Notify({"FirstAudioPlayed", "Ordered Qwen3-TTS playback began.",
+        ElapsedMilliseconds(utterance.queuedAt), 0, utterance.utteranceId,
+        ActualQwenResource(generated)});
     Notify(std::move(playing));
     if (!PlaySoundW(output.wstring().c_str(), nullptr, SND_FILENAME | SND_ASYNC | SND_NODEFAULT))
     {

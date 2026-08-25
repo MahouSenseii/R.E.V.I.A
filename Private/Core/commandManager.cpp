@@ -132,6 +132,7 @@ commandOutput commandManager::BuildHelpOutput() const
     stream << "/quality  - Conversation-quality counters for this session's real turns\n";
     stream << "/eval [list|last] - Run the conversation contract corpus against the model\n";
     stream << "/review   - Offer lessons drawn from recorded outcomes\n";
+    stream << "/self-assessment - Show evidence-backed performance findings\n";
     stream << "/initiative, /perception - Proposal and observation status\n";
     stream << "/exit     - Exit the application\n";
     stream << "/quit     - Exit the application\n";
@@ -282,7 +283,7 @@ commandOutput commandManager::HandleProfileCommand(const std::string& input,appS
     profile = newProfile;
     settings.activeProfile = profileId;
 
-    router.ApplyLLMSettings(settings.llm, settings.embedding, profile);
+    router.ApplyProfile(profile);
 
     output.output = "Loaded profile: " + profile.displayName + " (" + profile.id + ")";
     return output;

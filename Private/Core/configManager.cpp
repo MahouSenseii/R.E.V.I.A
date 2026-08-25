@@ -24,6 +24,44 @@ namespace
         return std::regex_match(value, Common) || std::regex_match(value, Cuda) ||
             (!cudaOnly && std::regex_match(value, Backend));
     }
+
+    void ReadModelTier(const json& data, modelTierSettings& output)
+    {
+        if (data.contains("enabled")) output.bEnabled = data["enabled"].get<bool>();
+        if (data.contains("host")) output.host = data["host"].get<std::string>();
+        if (data.contains("port")) output.port = data["port"].get<int>();
+        if (data.contains("modelName"))
+            output.modelName = data["modelName"].get<std::string>();
+        if (data.contains("modelPath"))
+            output.modelPath = data["modelPath"].get<std::string>();
+        if (data.contains("visionEnabled"))
+            output.bVisionEnabled = data["visionEnabled"].get<bool>();
+        if (data.contains("multimodalProjectorPath"))
+            output.multimodalProjectorPath =
+                data["multimodalProjectorPath"].get<std::string>();
+        if (data.contains("contextSize"))
+            output.contextSize = data["contextSize"].get<int>();
+        if (data.contains("maxTokens"))
+            output.maxTokens = data["maxTokens"].get<int>();
+        if (data.contains("temperature"))
+            output.temperature = data["temperature"].get<float>();
+        if (data.contains("startupTimeoutSeconds"))
+            output.startupTimeoutSeconds = data["startupTimeoutSeconds"].get<int>();
+        if (data.contains("warmAtStartup"))
+            output.bWarmAtStartup = data["warmAtStartup"].get<bool>();
+    }
+
+    bool IsValidModelTier(const modelTierSettings& tier)
+    {
+        if (!tier.bEnabled) return true;
+        return tier.host == "127.0.0.1" && tier.port > 0 && tier.port <= 65535 &&
+            !tier.modelName.empty() && !tier.modelPath.empty() &&
+            tier.contextSize >= 512 && tier.contextSize <= 1048576 &&
+            tier.maxTokens >= 1 && tier.maxTokens <= 32768 &&
+            tier.temperature >= 0.0F && tier.temperature <= 2.0F &&
+            tier.startupTimeoutSeconds >= 1 && tier.startupTimeoutSeconds <= 600 &&
+            (!tier.bVisionEnabled || !tier.multimodalProjectorPath.empty());
+    }
 }
 
 configManager::configManager() = default;
@@ -149,6 +187,20 @@ bool configManager::LoadSettings(appSettings& outSettings) const
             {
                 outSettings.llm.maxTokens = llmData["maxTokens"].get<int>();
             }
+        }
+
+        if (data.contains("intelligence"))
+        {
+            const json& intelligenceData = data["intelligence"];
+            if (intelligenceData.contains("enabled"))
+            {
+                outSettings.intelligence.bEnabled =
+                    intelligenceData["enabled"].get<bool>();
+            }
+            if (intelligenceData.contains("fast"))
+                ReadModelTier(intelligenceData["fast"], outSettings.intelligence.fast);
+            if (intelligenceData.contains("expert"))
+                ReadModelTier(intelligenceData["expert"], outSettings.intelligence.expert);
         }
 
         if (data.contains("embedding"))
@@ -289,6 +341,16 @@ bool configManager::LoadSettings(appSettings& outSettings) const
             {
                 outSettings.speech.qwenPrefetchFragments =
                     speechData["qwenPrefetchFragments"].get<int>();
+            }
+            if (speechData.contains("qwenPhraseCharacters"))
+            {
+                outSettings.speech.qwenPhraseCharacters =
+                    speechData["qwenPhraseCharacters"].get<int>();
+            }
+            if (speechData.contains("qwenParallelLongReplies"))
+            {
+                outSettings.speech.bQwenParallelLongReplies =
+                    speechData["qwenParallelLongReplies"].get<bool>();
             }
             if (speechData.contains("qwenMaxBufferedAudioMiB"))
             {
@@ -577,6 +639,26 @@ bool configManager::LoadSettings(appSettings& outSettings) const
             {
                 outSettings.vision.maxResponseTokens = visionData["maxResponseTokens"].get<int>();
             }
+            if (visionData.contains("continuousAwareness"))
+            {
+                outSettings.vision.bContinuousAwareness =
+                    visionData["continuousAwareness"].get<bool>();
+            }
+            if (visionData.contains("awarenessDebounceMs"))
+            {
+                outSettings.vision.awarenessDebounceMs =
+                    visionData["awarenessDebounceMs"].get<int>();
+            }
+            if (visionData.contains("awarenessMinimumIntervalMs"))
+            {
+                outSettings.vision.awarenessMinimumIntervalMs =
+                    visionData["awarenessMinimumIntervalMs"].get<int>();
+            }
+            if (visionData.contains("awarenessMaxResponseTokens"))
+            {
+                outSettings.vision.awarenessMaxResponseTokens =
+                    visionData["awarenessMaxResponseTokens"].get<int>();
+            }
             if (visionData.contains("resolutionConfidence"))
             {
                 outSettings.vision.resolutionConfidence =
@@ -620,6 +702,11 @@ bool configManager::LoadSettings(appSettings& outSettings) const
             {
                 outSettings.initiative.bSpeakWhenUserAway =
                     initiativeData["speakWhenUserAway"].get<bool>();
+            }
+            if (initiativeData.contains("autonomousLearningEnabled"))
+            {
+                outSettings.initiative.bAutonomousLearningEnabled =
+                    initiativeData["autonomousLearningEnabled"].get<bool>();
             }
             if (initiativeData.contains("curiosityCheckSeconds"))
             {
@@ -896,6 +983,22 @@ bool configManager::LoadSettings(appSettings& outSettings) const
         return false;
     }
 
+    const bool intelligencePortsConflict = outSettings.intelligence.bEnabled &&
+        ((outSettings.intelligence.fast.bEnabled &&
+            (outSettings.intelligence.fast.port == outSettings.llm.port ||
+             outSettings.intelligence.fast.port == outSettings.embedding.port ||
+             outSettings.intelligence.fast.port == outSettings.speech.qwenPort ||
+             outSettings.intelligence.fast.port == outSettings.speechRecognition.serverPort)) ||
+         (outSettings.intelligence.expert.bEnabled &&
+            (outSettings.intelligence.expert.port == outSettings.llm.port ||
+             outSettings.intelligence.expert.port == outSettings.embedding.port ||
+             outSettings.intelligence.expert.port == outSettings.speech.qwenPort ||
+             outSettings.intelligence.expert.port ==
+                outSettings.speechRecognition.serverPort)) ||
+         (outSettings.intelligence.fast.bEnabled &&
+          outSettings.intelligence.expert.bEnabled &&
+          outSettings.intelligence.fast.port == outSettings.intelligence.expert.port));
+
     if (outSettings.activeProfile.empty() || outSettings.llm.host.empty() ||
         outSettings.llm.modelName.empty() || outSettings.llm.port < 1 ||
         outSettings.llm.port > 65535 || outSettings.llm.temperature < 0.0f ||
@@ -911,6 +1014,10 @@ bool configManager::LoadSettings(appSettings& outSettings) const
             (outSettings.llm.serverExecutable.empty() || outSettings.llm.modelPath.empty())) ||
         (outSettings.llm.bVisionEnabled &&
             (outSettings.llm.multimodalProjectorPath.empty() || outSettings.llm.mediaPath.empty())) ||
+        (outSettings.intelligence.bEnabled &&
+            (!IsValidModelTier(outSettings.intelligence.fast) ||
+             !IsValidModelTier(outSettings.intelligence.expert) ||
+             intelligencePortsConflict)) ||
         (outSettings.embedding.bEnabled &&
             (outSettings.embedding.host.empty() || outSettings.embedding.modelName.empty() ||
                 outSettings.embedding.port < 1 || outSettings.embedding.port > 65535 ||
@@ -951,6 +1058,8 @@ bool configManager::LoadSettings(appSettings& outSettings) const
         outSettings.speech.qwenMaxWorkers < 1 || outSettings.speech.qwenMaxWorkers > 8 ||
         outSettings.speech.qwenPrefetchFragments < 1 ||
         outSettings.speech.qwenPrefetchFragments > 16 ||
+        outSettings.speech.qwenPhraseCharacters < 48 ||
+        outSettings.speech.qwenPhraseCharacters > 512 ||
         outSettings.speech.qwenMaxBufferedAudioMiB < 16 ||
         outSettings.speech.qwenMaxBufferedAudioMiB > 2048 ||
         outSettings.speech.qwenVoiceDesignModel.empty() ||
@@ -1042,6 +1151,12 @@ bool configManager::LoadSettings(appSettings& outSettings) const
         !IsDeviceSelector(outSettings.speechRecognition.device, true) ||
         outSettings.vision.maxResponseTokens < 64 ||
         outSettings.vision.maxResponseTokens > 4096 ||
+        outSettings.vision.awarenessDebounceMs < 250 ||
+        outSettings.vision.awarenessDebounceMs > 60000 ||
+        outSettings.vision.awarenessMinimumIntervalMs < 1000 ||
+        outSettings.vision.awarenessMinimumIntervalMs > 3600000 ||
+        outSettings.vision.awarenessMaxResponseTokens < 64 ||
+        outSettings.vision.awarenessMaxResponseTokens > 512 ||
         outSettings.vision.resolutionConfidence < 0.5 ||
         outSettings.vision.resolutionConfidence > 1.0 ||
         outSettings.vision.minimumNameAgreement < 0.1 ||

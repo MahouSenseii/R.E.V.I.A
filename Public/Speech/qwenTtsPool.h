@@ -14,8 +14,8 @@ namespace revia::speech
 {
 
 // Data-parallel Qwen workers. Each process owns one complete model on one device; a
-// heterogeneous pair is useful for independent sentences, not for splitting one
-// autoregressive sentence across PCIe devices.
+// heterogeneous pair is useful for independent bounded phrases, not for splitting one
+// autoregressive synthesis request across PCIe devices.
 class QwenTtsPool
 {
 public:

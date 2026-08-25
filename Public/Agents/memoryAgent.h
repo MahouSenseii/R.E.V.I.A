@@ -37,6 +37,12 @@ public:
         std::string input,
         std::string assistantResponse = "",
         std::uint64_t turnId = 0);
+    // Stores one already-grounded, bounded finding without asking the conversation
+    // classifier to reinterpret web text. Embedding still runs on the background lane.
+    void SubmitLearnedFinding(
+        const messageRouter& router,
+        memoryDecision decision,
+        std::uint64_t turnId = 0);
     void SubmitEmbeddingBackfill(
         const messageRouter& router,
         const std::string& embeddingModel);
@@ -50,6 +56,8 @@ private:
         std::string input;
         std::string assistantResponse;
         std::string memoryId;
+        memoryDecision learnedDecision;
+        bool hasLearnedDecision = false;
         std::uint64_t turnId = 0;
     };
 

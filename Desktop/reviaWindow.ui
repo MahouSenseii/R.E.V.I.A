@@ -68,7 +68,6 @@
          <item><widget class="QPushButton" name="sendButton"><property name="text"><string>Send</string></property></widget></item>
          <item><widget class="QPushButton" name="stopButton"><property name="enabled"><bool>false</bool></property><property name="text"><string>Stop</string></property></widget></item>
          <item><widget class="QPushButton" name="microphoneButton"><property name="enabled"><bool>false</bool></property><property name="toolTip"><string>Start or stop voice capture (Ctrl+Space)</string></property><property name="text"><string>Listen</string></property><property name="shortcut"><string>Ctrl+Space</string></property></widget></item>
-         <item><widget class="QPushButton" name="visionButton"><property name="enabled"><bool>false</bool></property><property name="text"><string>Analyze screen</string></property></widget></item>
          <item><widget class="QPushButton" name="screenActionButton"><property name="enabled"><bool>false</bool></property><property name="toolTip"><string>Use the instruction in the message box to locate one visible control, then resolve it to Windows UI Automation before asking for action confirmation.</string></property><property name="text"><string>Use screen</string></property></widget></item>
         </layout></item>
        </layout>

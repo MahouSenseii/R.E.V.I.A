@@ -22,6 +22,9 @@ struct ActivitySpan
     std::chrono::system_clock::time_point startedAt;
     std::chrono::system_clock::time_point endedAt;
     std::uint32_t observations = 0;
+    // A window may move between displays while the application span continues. Keep a
+    // small set of one-based monitor indices instead of fragmenting the activity record.
+    std::vector<int> monitors;
 
     [[nodiscard]] std::chrono::seconds Duration() const;
 };
