@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <initializer_list>
 #include <utility>
 
@@ -112,17 +113,233 @@ AffectSnapshot AffectController::Reset()
     return snapshot;
 }
 
-AffectSnapshot AffectController::ObserveInput(const std::string& userInput)
+AffectSnapshot AffectController::ObserveInput(
+    const std::string& userInput,
+    const SocialContext& social)
 {
-    return Apply(Classify(userInput, {}, true), std::chrono::steady_clock::now());
+    return Apply(
+        ModulateForRelationship(Classify(userInput, {}, true), social),
+        std::chrono::steady_clock::now());
 }
 
 AffectSnapshot AffectController::ObserveTurn(
     const std::string& userInput,
     const std::string& response,
-    const bool succeeded)
+    const bool succeeded,
+    const SocialContext& social)
 {
-    return Apply(Classify(userInput, response, succeeded), std::chrono::steady_clock::now());
+    return Apply(
+        ModulateForRelationship(Classify(userInput, response, succeeded), social),
+        std::chrono::steady_clock::now());
+}
+
+AffectController::Candidate AffectController::ModulateForRelationship(
+    Candidate candidate,
+    const SocialContext& social)
+{
+    // Thresholds sit outside the defaults on purpose, so a caller that passes no context
+    // gets the unmodulated reading and nothing that worked before changes.
+    constexpr float closeEnoughToTease = 0.6F;
+    constexpr float stranger = 0.2F;
+    constexpr float wornDown = 0.4F;
+
+    const float familiarity = std::clamp(social.familiarity, 0.0F, 1.0F);
+    const float irritation = std::clamp(social.irritation, 0.0F, 1.0F);
+    const float socialEnergy = std::clamp(social.socialEnergy, 0.0F, 1.0F);
+    const float confidence = std::clamp(social.confidence, 0.0F, 1.0F);
+
+    // Hostility is where who is speaking matters most, so it is handled first and
+    // explicitly rather than falling out of a general intensity nudge.
+    if (candidate.state == AffectState::Angry)
+    {
+        if (familiarity >= closeEnoughToTease && irritation < wornDown)
+        {
+            // People who know each other insult each other affectionately. Reading that
+            // as an attack is the mistake that makes a companion exhausting to talk to.
+            candidate.state = AffectState::Playful;
+            candidate.intensity *= 0.55F;
+            candidate.reason =
+                "A sharp remark, but from someone she knows well enough to take it as teasing.";
+        }
+        else if (familiarity >= closeEnoughToTease)
+        {
+            // Same words, same person, worse day. Anger is what strangers get; from
+            // someone close, on top of everything else, it lands as hurt instead.
+            candidate.state = AffectState::Sad;
+            candidate.reason =
+                "A sharp remark from someone close, landing on a day that had already gone badly.";
+        }
+        else if (familiarity <= stranger)
+        {
+            // No shared history to read it as anything gentler.
+            candidate.intensity = std::clamp(candidate.intensity * 1.15F, 0.0F, 1.0F);
+            candidate.reason += " There is no shared history to soften it.";
+        }
+    }
+
+    // A fuse that is already short makes the next unwelcome thing land harder, whatever
+    // it happened to be.
+    if (IsNegativeState(candidate.state))
+    {
+        candidate.intensity = std::clamp(
+            candidate.intensity + irritation * 0.22F, 0.0F, 1.0F);
+    }
+
+    // And a bad enough day colours a message that carried nothing in particular.
+    if (candidate.state == AffectState::Neutral && irritation >= 0.65F)
+    {
+        candidate.state = AffectState::Frustrated;
+        candidate.intensity = std::clamp(0.30F + 0.30F * irritation, 0.0F, 1.0F);
+        candidate.reason =
+            "Nothing in the message itself, but her patience was already worn thin.";
+    }
+
+    // Playing costs energy she does not always have.
+    if (candidate.state == AffectState::Playful && socialEnergy < 0.3F)
+    {
+        candidate.state = AffectState::Bored;
+        candidate.intensity *= 0.8F;
+        candidate.reason =
+            "There is room to play, but not much energy left to play with.";
+    }
+
+    // Warmth is worth more from someone whose warmth she has learned to expect, and less
+    // from someone she has no reason to trust yet. Neutral at the default familiarity.
+    if (IsPositiveState(candidate.state))
+    {
+        candidate.intensity = std::clamp(
+            candidate.intensity * (1.0F + 0.35F * (familiarity - 0.25F)), 0.0F, 1.0F);
+    }
+
+    // The same setback is a defeat when she is already unsure of herself and an
+    // annoyance when she is not.
+    if (candidate.state == AffectState::Concerned)
+    {
+        if (confidence < 0.35F)
+        {
+            candidate.state = AffectState::Sad;
+            candidate.reason += " It landed while she was already unsure of herself.";
+        }
+        else if (confidence >= 0.75F)
+        {
+            candidate.state = AffectState::Frustrated;
+            candidate.reason += " She expected that to work.";
+        }
+    }
+
+    return candidate;
+}
+
+AffectController::Candidate AffectController::ClassifyInternal(
+    const InternalStimulus& stimulus)
+{
+    Candidate candidate;
+    const float importance = std::clamp(stimulus.importance, 0.0F, 1.0F);
+    const float failure = std::clamp(stimulus.failure, 0.0F, 1.0F);
+    const float novelty = std::clamp(stimulus.novelty, 0.0F, 1.0F);
+
+    // Named after the thing that actually happened, so the badge explains itself rather
+    // than asserting a mood the user has no way to trace back to a cause.
+    const std::string cause = stimulus.detail.empty()
+        ? (stimulus.source.empty() ? std::string("Something finished.") : stimulus.source + " reported an outcome.")
+        : (stimulus.source.empty() ? stimulus.detail : stimulus.source + ": " + stimulus.detail);
+
+    // Weight by importance so a trivial outcome cannot produce a strong feeling, and add
+    // novelty on top because a surprising result is felt harder than an expected one.
+    const auto scaled = [&](const float magnitude)
+    {
+        return std::clamp(0.30F + 0.48F * magnitude * importance + 0.16F * novelty, 0.0F, 1.0F);
+    };
+
+    switch (stimulus.kind)
+    {
+        case InternalEventKind::ActivityFailed:
+            if (stimulus.selfCaused && failure >= 0.6F)
+            {
+                // Her approach, her problem. That is what makes it frustrating rather
+                // than merely unfortunate.
+                candidate.state = AffectState::Frustrated;
+            }
+            else if (!stimulus.selfCaused)
+            {
+                // Something broke underneath her. Concern, not self-reproach.
+                candidate.state = AffectState::Concerned;
+            }
+            else
+            {
+                // A partial failure she caused is more puzzling than infuriating.
+                candidate.state = AffectState::Confused;
+            }
+            candidate.intensity = scaled(failure);
+            candidate.reason = cause;
+            return candidate;
+
+        case InternalEventKind::ActionRefused:
+            // Nothing broke; she was told no. Kept deliberately mild: a companion who
+            // sulks every time policy holds a boundary makes the boundary feel like a
+            // punishment the user is inflicting.
+            candidate.state = AffectState::Concerned;
+            candidate.intensity = std::clamp(0.28F + 0.22F * importance, 0.0F, 1.0F);
+            candidate.reason = cause;
+            return candidate;
+
+        case InternalEventKind::DiscoveryMade:
+            candidate.state = novelty >= 0.7F && importance >= 0.6F
+                ? AffectState::Excited
+                : AffectState::Curious;
+            candidate.intensity = scaled(std::max(novelty, 0.4F));
+            candidate.reason = cause;
+            return candidate;
+
+        case InternalEventKind::WaitEnded:
+            candidate.state = AffectState::Focused;
+            candidate.intensity = scaled(0.4F);
+            candidate.reason = cause;
+            return candidate;
+
+        case InternalEventKind::ActivitySucceeded:
+            // Novelty is what turns a success into interest rather than satisfaction.
+            candidate.state = novelty >= 0.5F ? AffectState::Excited : AffectState::Pleased;
+            candidate.intensity = scaled(1.0F - failure);
+            candidate.reason = cause;
+            return candidate;
+    }
+
+    candidate.state = AffectState::Neutral;
+    candidate.reason = cause;
+    return candidate;
+}
+
+std::optional<AffectSnapshot> AffectController::ObserveInternalEvent(
+    const InternalStimulus& stimulus)
+{
+    // Most of what happens to her is not worth a change of expression. Returning nothing
+    // here is the same decision the initiative controller makes when it stays quiet, and
+    // it is the common one.
+    if (std::clamp(stimulus.importance, 0.0F, 1.0F) < internalImportanceFloor)
+    {
+        return std::nullopt;
+    }
+
+    const Candidate candidate = ClassifyInternal(stimulus);
+    if (candidate.state == AffectState::Neutral)
+    {
+        return std::nullopt;
+    }
+
+    const AffectSnapshot before = Current();
+    // countsAsInteraction is false: see the header. Her own work is not company.
+    const AffectSnapshot after = Apply(
+        candidate, std::chrono::steady_clock::now(), false);
+    if (after.state == before.state &&
+        std::abs(after.intensity - before.intensity) < 0.01F &&
+        after.reason == before.reason)
+    {
+        // The minimum-hold window swallowed it. Publishing an unchanged snapshot would
+        // make the shell redraw a transition that never happened.
+        return std::nullopt;
+    }
+    return after;
 }
 
 std::optional<AffectSnapshot> AffectController::Tick()
@@ -264,11 +481,15 @@ AffectController::Candidate AffectController::Classify(
 
 AffectSnapshot AffectController::Apply(
     Candidate candidate,
-    const std::chrono::steady_clock::time_point now)
+    const std::chrono::steady_clock::time_point now,
+    const bool countsAsInteraction)
 {
     std::lock_guard lock(mutex);
     candidate.intensity = std::clamp(candidate.intensity, 0.0F, 1.0F);
-    lastInteraction = now;
+    if (countsAsInteraction)
+    {
+        lastInteraction = now;
+    }
 
     if (IsNegativeState(candidate.state))
     {

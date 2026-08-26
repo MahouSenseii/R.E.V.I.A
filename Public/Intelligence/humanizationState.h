@@ -20,6 +20,14 @@ struct HumanizationState
     float playfulness = 0.55F;
     std::string currentInterest;
     std::string unresolvedThought;
+
+    // The subset the affect classifier needs to tell who is speaking and how the day has
+    // gone. Returning a narrow struct rather than exposing the whole state keeps the
+    // dependency one-directional: affect reads four numbers, not a social model.
+    [[nodiscard]] runtime::SocialContext Social() const
+    {
+        return {familiarity, irritation, socialEnergy, confidence};
+    }
 };
 
 // Holds one social state for all model tiers. Models receive a compact description of

@@ -33,6 +33,7 @@
 #include "Resources/resourcePlanner.h"
 #include "Speech/speechService.h"
 #include "Speech/speechRecognitionService.h"
+#include "Vision/cameraCaptureService.h"
 #include "Vision/screenCaptureService.h"
 #include "Vision/visionActionParser.h"
 #include "Windows/visionUiaResolver.h"
@@ -57,6 +58,43 @@ namespace revia::runtime
 {
 
 struct CapabilityUpdateResult
+{
+    bool succeeded = false;
+    std::string message;
+};
+
+// One profile as the desktop profile editor sees it: what it makes Revia say, and which
+// created voice speaks it. Voice assignment lives beside the profile because that is what
+// it is -- a property of who is talking, not of the speech engine.
+struct ProfileSummary
+{
+    std::string id;
+    std::string displayName;
+    std::string description;
+    std::string systemPrompt;
+    bool memoryEnabled = true;
+    bool hasTemperatureOverride = false;
+    float temperature = 0.7f;
+    bool hasMaxTokensOverride = false;
+    int maxTokens = 512;
+    // Empty means this profile falls back to the Windows voice.
+    std::string voicePresetId;
+    std::string voicePresetName;
+};
+
+struct ProfileStudioSnapshot
+{
+    std::vector<ProfileSummary> profiles;
+    // The profile Revia is running right now, which is the only honest answer to "which
+    // profile is in use". It is read from the loaded profile, not from settings.
+    std::string activeProfileId;
+    std::string activeDisplayName;
+    // The created voices a profile can be assigned, so the editor does not need a second
+    // trip through the voice studio to render its picker.
+    std::vector<speech::VoicePreset> voices;
+};
+
+struct ProfileOperationResult
 {
     bool succeeded = false;
     std::string message;
@@ -122,6 +160,18 @@ public:
     bool BeginListening();
     bool EndListening();
     [[nodiscard]] bool IsVisionAvailable() const;
+
+    // Camera. Off unless the capability file says otherwise, and rate limited even then.
+    //
+    // Listing devices is separate from using one so a settings screen can show what is
+    // attached without lighting a lens, and CaptureCameraFrame refuses rather than
+    // silently succeeding when the capability is absent -- a camera that quietly works
+    // when the user believes it is off is the worst possible failure here.
+    [[nodiscard]] bool IsCameraAvailable() const;
+    [[nodiscard]] std::vector<vision::CameraDescriptor> Cameras() const;
+    // autonomous is true when Revia chose to look rather than being asked. It requires
+    // the separate autonomousCapture authority on top of camera access.
+    vision::CameraFrame CaptureCameraFrame(bool autonomous = false);
     // The model may locate a target, but it cannot click it. A successful request must
     // resolve to an exact UIA runtime id and then pass through ordinary action policy,
     // confirmation, dispatch, and audit.
@@ -140,6 +190,7 @@ public:
         const std::string& control);
     CapabilityUpdateResult SetInternetAccess(bool enabled, bool automaticLookup);
     CapabilityUpdateResult SetInternetBrowser(bool visibleBrowser, bool autonomousResearch);
+    CapabilityUpdateResult SetCameraAccess(bool enabled, bool autonomousCapture);
 
     // Stage 4. The runner itself adds no authority: every step goes through the same
     // dispatcher, policy, and audit path as an interactive action, and has to prove it
@@ -154,6 +205,14 @@ public:
     // worker because a number moved turns a reproducible plan into a feedback loop.
     [[nodiscard]] resources::UsageSnapshot ResourceUsage() const;
     [[nodiscard]] std::string ResourceUsageStatus() const;
+
+    // Curated long-term memory, read-only. What Revia actually kept, so a user can see
+    // it rather than infer it from what she happens to bring up. Reading cannot write:
+    // memory is added through the reviewed memory path, never from a viewer.
+    [[nodiscard]] std::vector<memoryEntry> Memories() const;
+    [[nodiscard]] std::vector<memoryEntry> SearchMemories(
+        const std::string& query, std::size_t maxEntries = 50) const;
+    [[nodiscard]] std::string MemoryStatus() const;
 
     // Durable conversation history. Separate from longTermMemory, which keeps curated
     // facts: this keeps what was actually said, bounded and forgettable.
@@ -246,6 +305,13 @@ public:
     speech::VoiceOperationResult AssignVoice(
         const std::string& profileId,
         const std::string& presetId);
+
+    // Profiles. Creating and editing one is a file write; making one current swaps the
+    // system prompt, sampling, and assigned voice in place. Neither can reach a
+    // capability: a profile decides who Revia is, never what she is permitted to do.
+    [[nodiscard]] ProfileStudioSnapshot ProfileStudio() const;
+    ProfileOperationResult SaveProfile(const ProfileSummary& definition);
+    ProfileOperationResult ActivateProfile(const std::string& profileId);
 
 private:
     bool EnsureLLMAvailable(std::stop_token stopToken);
@@ -356,6 +422,10 @@ private:
     initiative::CuriosityJournal curiosityJournal;
     agents::CuriosityAgent curiosityAgent;
     vision::ScreenCaptureService screenCaptureService;
+    vision::CameraCaptureService cameraCaptureService;
+    mutable std::mutex cameraMutex;
+    std::chrono::steady_clock::time_point lastCameraCaptureAt{};
+    std::deque<std::chrono::steady_clock::time_point> recentCameraCaptures;
     vision::VisionActionParser visionActionParser;
     actions::windows::VisionUiaResolver visionUiaResolver;
     actions::windows::ApplicationControlDiscovery applicationControlDiscovery;

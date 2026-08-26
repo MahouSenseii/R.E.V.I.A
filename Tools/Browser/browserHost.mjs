@@ -8,6 +8,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const SEARCH_HOME = 'https://duckduckgo.com/';
+const SEARCH_HTML = 'https://html.duckduckgo.com/html/';
 const MAX_REQUEST_BODY = 16 * 1024;
 const MAX_URL_LENGTH = 4096;
 const DNS_CACHE_MS = 60_000;
@@ -504,6 +505,18 @@ class BrowserRuntime {
       await navigate(
         this.page,
         `${SEARCH_HOME}?q=${encodeURIComponent(query)}`,
+        Math.max(2000, Math.min(15_000, deadline - Date.now())),
+      );
+      await sleep(stepDelayMs);
+      rawResults = await searchResults(this.page);
+    }
+    if (rawResults.length === 0 && Date.now() < deadline) {
+      // The JavaScript results page occasionally serves a challenge/empty shell to an
+      // automated DevTools session. DuckDuckGo's own HTML endpoint is still a visible,
+      // public search page and uses the result__a selector already handled above.
+      await navigate(
+        this.page,
+        `${SEARCH_HTML}?q=${encodeURIComponent(query)}`,
         Math.max(2000, Math.min(15_000, deadline - Date.now())),
       );
       await sleep(stepDelayMs);

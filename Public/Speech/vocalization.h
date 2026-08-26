@@ -73,6 +73,39 @@ struct SpokenScript
 // meant literally must not silently disappear from her own sentence.
 [[nodiscard]] SpokenScript ParseVocalizations(const std::string& reply);
 
+// The single spelling handed to the TTS and shown in chat. Qwen3-TTS renders a
+// nonverbal cue written inline in the text it is given, so a vocalization needs no
+// pre-rendered clip -- it only needs to survive in one spelling the model recognises.
+// Every accepted synonym is canonicalised to this form. If the model turns out to want
+// a different delimiter, this is the one place that has to change.
+[[nodiscard]] std::string InlineTag(VocalizationKind kind);
+
+struct VocalizationShaping
+{
+    std::string text;
+    int kept = 0;
+    // Recognised vocalizations removed because the reply had already used its budget.
+    int droppedOverBudget = 0;
+    // Prose in asterisks -- "*Softens, leaning forward slightly.*" -- removed entirely.
+    int strippedStageDirections = 0;
+    bool changed = false;
+};
+
+// Keeps the sound effects and removes the theatre.
+//
+// A vocalization is a SOUND the voice can actually make, and the six kinds above are
+// the whole list. Anything else an asterisk pair contains is prose the model wrote
+// about itself, which the TTS would read aloud word by word and which nobody asked
+// for. So: recognised cues are canonicalised and capped, multi-word asterisk spans are
+// deleted, and single-word emphasis such as *really* is left alone because that is
+// ordinary markdown and not a stage direction.
+//
+// Bracket and angle forms are deliberately NOT stripped when unrecognised: "[section 4]"
+// is something Revia meant literally, and deleting it would edit her own sentence.
+[[nodiscard]] VocalizationShaping ShapeVocalizations(
+    const std::string& reply,
+    int maximumKept);
+
 enum class VocalizationVerdict
 {
     Allowed,

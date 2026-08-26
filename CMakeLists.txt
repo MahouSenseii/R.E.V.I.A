@@ -117,7 +117,9 @@ target_link_libraries(ReviaFoundation PUBLIC
 )
 
 if(WIN32)
-    target_link_libraries(ReviaFoundation PUBLIC shell32 dxgi sapi ole32 oleaut32 winmm gdiplus gdi32 bcrypt winhttp psapi pdh dbghelp)
+    # Media Foundation (mfplat/mf/mfreadwrite/mfuuid) backs camera capture; shlwapi comes
+    # with it. Screen capture continues to use GDI+, which also encodes the camera PNG.
+    target_link_libraries(ReviaFoundation PUBLIC shell32 dxgi sapi ole32 oleaut32 winmm gdiplus gdi32 bcrypt winhttp psapi pdh dbghelp mfplat mf mfreadwrite mfuuid shlwapi)
 endif()
 
 if(MSVC)
@@ -156,8 +158,12 @@ if(REVIA_BUILD_DESKTOP)
                 "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/internetActivityPanel.cpp"
                 "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/internetActivityPanel.h"
                 "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/main.cpp"
+                "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/memoryPanel.cpp"
+                "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/memoryPanel.h"
                 "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/pipelinePanel.cpp"
                 "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/pipelinePanel.h"
+                "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/profilePanel.cpp"
+                "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/profilePanel.h"
                 "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/resourcePanel.cpp"
                 "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/resourcePanel.h"
                 "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/reviaWindow.cpp"
@@ -270,6 +276,14 @@ if(BUILD_TESTING)
                 NAME Revia.BrowserWorkerPolicy
                 COMMAND "${REVIA_NODE_EXECUTABLE}" --test
                         "${CMAKE_CURRENT_SOURCE_DIR}/Tools/Browser/browserHost.test.mjs"
+        )
+    endif()
+    find_package(Python3 COMPONENTS Interpreter QUIET)
+    if(Python3_Interpreter_FOUND)
+        add_test(
+                NAME Revia.QwenTtsServicePolicy
+                COMMAND "${Python3_EXECUTABLE}"
+                        "${CMAKE_CURRENT_SOURCE_DIR}/Tests/qwenTtsService.test.py"
         )
     endif()
     if(TARGET ReviaDesktop)

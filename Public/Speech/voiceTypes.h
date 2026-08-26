@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <string>
 #include <unordered_map>
 #include <utility>
@@ -50,6 +51,21 @@ struct VoiceOperationResult
     std::string deviceName;
     std::string dtype;
     std::string workerId;
+    std::string attentionBackend;
+    std::string inputMode;
+    double workerQueueMilliseconds = -1.0;
+    double modelReadyMilliseconds = -1.0;
+    double clonePromptMilliseconds = -1.0;
+    double generationMilliseconds = -1.0;
+    double wavWriteMilliseconds = -1.0;
+    double cppResponseMilliseconds = -1.0;
+    double audioDurationMilliseconds = -1.0;
+    int sampleRate = 0;
+    bool clonePromptCached = false;
+    bool audioCacheHit = false;
+    // Normal conversation uses an in-memory RIFF/WAV payload. It remains bounded by
+    // qwenMaxBufferedAudioMiB and alive until WinMM finishes asynchronous playback.
+    std::vector<std::uint8_t> audioBytes;
 };
 
 struct VoiceStudioSnapshot

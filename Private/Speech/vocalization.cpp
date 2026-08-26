@@ -311,6 +311,128 @@ SpokenScript ParseVocalizations(const std::string& reply)
     return script;
 }
 
+std::string InlineTag(const VocalizationKind kind)
+{
+    return "*" + DisplayLabel(kind) + "*";
+}
+
+namespace
+{
+// Decides whether an asterisk pair is emphasis-shaped at all, before anything is
+// deleted for not being a known sound.
+//
+// The multiplication sign is the reason this exists. "2 * 3 and 4 * 5" pairs the first
+// asterisk with the second, and a rule that only asked "is this a vocalization?" would
+// delete " 3 and 4 " out of the middle of a sum. Markdown's own rule settles it: an
+// emphasis span never begins or ends against whitespace.
+bool IsStageDirectionSpan(const std::string& inner)
+{
+    // Long enough to be a deliberately italicised passage rather than a stage
+    // direction. Deleting a paragraph would be a far worse mistake than leaving one.
+    constexpr std::size_t maximumStageDirection = 100;
+    if (inner.empty() || inner.size() > maximumStageDirection)
+    {
+        return false;
+    }
+    const auto isSpace = [](const unsigned char character)
+    {
+        return std::isspace(character) != 0;
+    };
+    if (isSpace(static_cast<unsigned char>(inner.front())) ||
+        isSpace(static_cast<unsigned char>(inner.back())))
+    {
+        return false;
+    }
+    // A nested asterisk means the pairing was a guess, not a span.
+    return inner.find('*') == std::string::npos;
+}
+}
+
+VocalizationShaping ShapeVocalizations(const std::string& reply, const int maximumKept)
+{
+    VocalizationShaping shaping;
+    const int budget = std::max(maximumKept, 0);
+    std::string built;
+    built.reserve(reply.size());
+
+    std::size_t index = 0;
+    while (index < reply.size())
+    {
+        const char character = reply[index];
+        char closing = 0;
+        if (character == '[') { closing = ']'; }
+        else if (character == '<') { closing = '>'; }
+        else if (character == '*') { closing = '*'; }
+
+        if (closing == 0)
+        {
+            built += character;
+            ++index;
+            continue;
+        }
+
+        const std::size_t end = reply.find(closing, index + 1);
+        // An unclosed delimiter is ordinary text. Consuming to end-of-string here would
+        // let one stray '[' swallow an entire reply.
+        if (end == std::string::npos || end == index + 1)
+        {
+            built += character;
+            ++index;
+            continue;
+        }
+
+        const std::string inner = reply.substr(index + 1, end - index - 1);
+        VocalizationKind kind{};
+        if (VocalizationFromWord(inner, kind))
+        {
+            if (shaping.kept < budget)
+            {
+                built += InlineTag(kind);
+                ++shaping.kept;
+                if (InlineTag(kind) != reply.substr(index, end - index + 1))
+                {
+                    shaping.changed = true;
+                }
+            }
+            else
+            {
+                // Over budget. A companion that punctuates every clause with a laugh
+                // stops being expressive and becomes a tic, and a small local model
+                // will do exactly that once it learns the tag is accepted.
+                ++shaping.droppedOverBudget;
+                shaping.changed = true;
+            }
+            index = end + 1;
+            continue;
+        }
+
+        if (character == '*' && IsStageDirectionSpan(inner))
+        {
+            // Prose about herself, in asterisks. The TTS would read it aloud a word at a
+            // time, and it is not a sound the voice can make. Deleted rather than
+            // unwrapped: "*smiles*" unwrapped becomes the word "smiles" spoken in the
+            // middle of a sentence, which is the same failure with extra steps.
+            ++shaping.strippedStageDirections;
+            shaping.changed = true;
+            index = end + 1;
+            continue;
+        }
+
+        // A bracket or angle form that is not a known sound is left exactly as written.
+        // "[section 4]" is something Revia meant literally, and editing her own sentence
+        // is a worse failure than leaving one odd-looking aside in place.
+        built += reply.substr(index, end - index + 1);
+        index = end + 1;
+    }
+
+    shaping.text = Trimmed(RepairPunctuationSpacing(CollapseSpaces(built)));
+    if (shaping.text != reply)
+    {
+        shaping.changed = true;
+    }
+    return shaping;
+}
+
 std::string ToString(const VocalizationVerdict verdict)
 {
     switch (verdict)

@@ -1,5 +1,7 @@
 <RCC>
   <qresource prefix="/revia">
     <file>revia.qss</file>
+    <file>spin-up.svg</file>
+    <file>spin-down.svg</file>
   </qresource>
 </RCC>

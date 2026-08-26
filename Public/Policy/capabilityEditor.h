@@ -40,6 +40,14 @@ public:
         bool visibleBrowser,
         bool autonomousResearch,
         std::string& outError) const;
+    // enabled grants "may look when asked"; autonomousCapture additionally grants "may
+    // decide to look". Revoking the first revokes the second, because a subset authority
+    // cannot outlive the authority it is a subset of.
+    [[nodiscard]] bool SetCameraAccess(
+        const std::filesystem::path& path,
+        bool enabled,
+        bool autonomousCapture,
+        std::string& outError) const;
 
 private:
     enum class Mutation
@@ -49,7 +57,8 @@ private:
         AddControl,
         RemoveControl,
         Internet,
-        Browser
+        Browser,
+        Camera
     };
 
     [[nodiscard]] bool Apply(

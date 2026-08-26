@@ -52,6 +52,7 @@ struct SpeechEvent
     // the audio for it actually starts. Zero when the event is not about an utterance.
     std::uint64_t utteranceId = 0;
     std::string device;
+    std::vector<latencySample> timings;
 };
 
 class SpeechService
@@ -80,10 +81,15 @@ public:
     void SetEnabled(bool enabled);
     bool IsEnabled() const;
     [[nodiscard]] bool HasPendingSpeech() const;
+    [[nodiscard]] std::size_t FirstFragmentCharacters() const;
     [[nodiscard]] std::size_t PreferredFragmentCharacters() const;
     // utteranceId correlates the resulting Speaking event back to the reply, so the shell
     // can reveal text in step with the audio instead of well before it.
-    void Speak(std::string text, runtime::AffectSnapshot affect, std::uint64_t utteranceId = 0);
+    void Speak(
+        std::string text,
+        runtime::AffectSnapshot affect,
+        std::uint64_t utteranceId = 0,
+        bool latencyCritical = true);
     void StopSpeaking();
 
     // Barge-in. Arms a microphone energy monitor only for the duration of each utterance,
@@ -103,7 +109,13 @@ public:
 
     void Shutdown();
 
-    static std::string NormalizeForSpeech(const std::string& text, std::size_t maxCharacters);
+    // keepVocalizations is true only for a backend that performs an inline nonverbal
+    // cue itself. Windows SAPI cannot, and for it the tag is dropped rather than
+    // flattened, because reading the word "laughs" aloud is worse than silence.
+    static std::string NormalizeForSpeech(
+        const std::string& text,
+        std::size_t maxCharacters,
+        bool keepVocalizations = false);
 
 private:
     struct Utterance
@@ -113,6 +125,7 @@ private:
         std::uint64_t generation = 0;
         std::uint64_t utteranceId = 0;
         std::uint64_t sequence = 0;
+        bool latencyCritical = true;
         std::chrono::steady_clock::time_point queuedAt =
             std::chrono::steady_clock::now();
         std::optional<VoicePreset> preset;

@@ -801,6 +801,20 @@ bool ConversationStylePolicy::ShouldSuppressSpokenFragment(
     {
         return true;
     }
+    const std::string normalizedFragment = NormalizeSentence(fragment);
+    if (std::any_of(
+            context.rbegin(), context.rend(),
+            [&normalizedFragment](const conversationMessage& message)
+            {
+                return message.role == "assistant" &&
+                    IsSubstantialRepeat(
+                        normalizedFragment,
+                        NormalizeSentence(message.content),
+                        false);
+            }))
+    {
+        return true;
+    }
     if (LooksLikeBriefAcknowledgement(input) && alreadySpokeFragment)
     {
         return true;

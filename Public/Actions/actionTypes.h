@@ -144,6 +144,38 @@ struct CapabilitySettings
         int visibleBrowserStepDelayMs = 250;
     };
 
+    // The camera is the most physically invasive thing this application can reach, so it
+    // is off until explicitly asked for and it lives behind the same capability file as
+    // everything else rather than behind a comfort preference.
+    //
+    // Observation is not authority. Being allowed to take a frame grants nothing else:
+    // anything Revia does because of what a frame contained still goes through the
+    // ordinary typed action, policy, confirmation, and audit path.
+    struct CameraAccess
+    {
+        bool enabled = false;
+        // Which device, by the stable symbolic link. Empty means the first attached
+        // camera, which is the right default on a laptop and the wrong one on a desk
+        // with a capture card, so the setting exists.
+        std::string preferredDevice;
+        // A frame taken because Revia decided to look, rather than because the user
+        // asked her to. Separate authority for the same reason autonomous research is
+        // separate from ordinary lookup: consenting to answer "what am I holding?" is
+        // not consenting to be watched.
+        bool autonomousCapture = false;
+        // Frames discarded while auto-exposure and auto-white-balance settle.
+        //
+        // Measured rather than guessed: on a USB 2.0 webcam the first frame is visibly
+        // noisier than the tenth, and most of a capture's ~1.3s cost is opening the
+        // device, so each extra frame is around 27ms. Ten buys a settled image for
+        // roughly 200ms, which is a better trade than a fast picture of nothing.
+        int warmupFrames = 10;
+        // A floor between captures. Without one, a loop that captures per turn becomes
+        // a recording with extra steps.
+        int minimumIntervalMs = 4000;
+        int maxCapturesPerMinute = 6;
+    };
+
     ExecutionMode mode = ExecutionMode::Supervised;
     std::vector<std::filesystem::path> approvedRoots;
     std::vector<std::string> approvedApplications;
@@ -158,6 +190,7 @@ struct CapabilitySettings
     int maxDesktopActionsPerMinute = 12;
     int minimumDesktopActionIntervalMs = 250;
     InternetAccess internet;
+    CameraAccess camera;
 };
 
 [[nodiscard]] std::string ToString(ActionType value);

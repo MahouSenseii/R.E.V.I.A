@@ -38,6 +38,7 @@ bool InternetLookupPolicy::ShouldLookup(
     }
     if (ContainsAny(lowered, {
             "search the web", "search online", "look this up", "look it up",
+            "look up ", "find online", "browse for ",
             "check online", "use the internet", "browse the web", "web search"}))
     {
         return true;

@@ -75,7 +75,9 @@ public:
         std::stop_token stopToken = {}) const;
 
 private:
-    static std::string ParseStreamChunk(const std::string& line);
+    static std::string ParseStreamChunk(
+        const std::string& line,
+        std::string* outFinishReason = nullptr);
     int ResponseTokenLimit() const;
     // Shared by both planners: same low temperature, same JSON-object response format,
     // different contract and token ceiling.
@@ -101,6 +103,7 @@ private:
     bool bAutoMaxTokens = true;
     int maxTokens = 4096;
     bool bVisionExpected = false;
+    int configuredContextTokens = 4096;
     mutable std::atomic<int> effectiveContextTokens = 0;
     mutable std::atomic<int> effectiveParallelSlots = 0;
 

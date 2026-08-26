@@ -1,6 +1,8 @@
 #include "reviaWindow.h"
 #include "capabilityPanel.h"
 #include "pipelinePanel.h"
+#include "memoryPanel.h"
+#include "profilePanel.h"
 #include "canvasPanel.h"
 #include "internetActivityPanel.h"
 #include "resourcePanel.h"
@@ -27,6 +29,7 @@
 #include <QPainter>
 #include <QPlainTextEdit>
 #include <QPushButton>
+#include <QResizeEvent>
 #include <QProgressBar>
 #include <QPixmap>
 #include <QScrollBar>
@@ -251,6 +254,30 @@ void ReviaWindow::closeEvent(QCloseEvent* event)
     event->accept();
 }
 
+void ReviaWindow::resizeEvent(QResizeEvent* event)
+{
+    QMainWindow::resizeEvent(event);
+    ApplyContentWidthCap();
+}
+
+void ReviaWindow::ApplyContentWidthCap()
+{
+    if (ui == nullptr || ui->rootLayout == nullptr)
+    {
+        return;
+    }
+    // Text stops being easier to read somewhere around this width and starts being
+    // harder: the eye loses its place returning to the start of the next line, and a
+    // six-item status row spreads into six islands with nothing between them. Past the
+    // cap the extra pixels become margin instead of content, so a maximised window shows
+    // the same layout as a windowed one rather than a stretched relative of it.
+    constexpr int maximumContentWidth = 1500;
+    constexpr int minimumSideMargin = 22;
+    const int side = std::max(
+        minimumSideMargin, (width() - maximumContentWidth) / 2);
+    ui->rootLayout->setContentsMargins(side, 20, side, 20);
+}
+
 void ReviaWindow::BuildInterface()
 {
     ui->setupUi(this);
@@ -298,8 +325,7 @@ void ReviaWindow::BuildInterface()
     presenceAttentionValue = ui->presenceAttentionValue;
     presenceMomentumBar = ui->presenceMomentumBar;
     openPresenceFolderButton = ui->openPresenceFolderButton;
-    voiceProfileCombo = ui->voiceProfileCombo;
-    voicePresetCombo = ui->voicePresetCombo;
+    voiceLibraryCombo = ui->voiceLibraryCombo;
     voiceLanguageCombo = ui->voiceLanguageCombo;
     voiceNameInput = ui->voiceNameInput;
     voiceDescriptionInput = ui->voiceDescriptionInput;
@@ -308,8 +334,6 @@ void ReviaWindow::BuildInterface()
     voiceStudioStatus = ui->voiceStudioStatus;
     createVoiceButton = ui->createVoiceButton;
     previewVoiceButton = ui->previewVoiceButton;
-    assignVoiceButton = ui->assignVoiceButton;
-    fallbackVoiceButton = ui->fallbackVoiceButton;
 
     ui->titleIcon->setPixmap(CreateReviaIcon().pixmap(20, 20));
     titleBar->installEventFilter(this);
@@ -333,6 +357,10 @@ void ReviaWindow::BuildInterface()
         [this]() { DiscoverApplicationPermissions(); },
         ui->permissionsPage);
     ui->permissionsHostLayout->addWidget(capabilityPanel);
+    profilePanel = new ProfilePanel(session, ui->profilesPage);
+    ui->profilesHostLayout->addWidget(profilePanel);
+    memoryPanel = new MemoryPanel(session, ui->memoryTab);
+    ui->memoryHostLayout->addWidget(memoryPanel);
 
     voiceLanguageCombo->addItems({"English", "Chinese", "Japanese", "Korean", "German",
         "French", "Russian", "Portuguese", "Spanish", "Italian"});
@@ -493,28 +521,6 @@ void ReviaWindow::BuildInterface()
     });
     connect(createVoiceButton, &QPushButton::clicked, this, [this]() { CreateVoicePreset(); });
     connect(previewVoiceButton, &QPushButton::clicked, this, [this]() { PreviewVoice(); });
-    connect(assignVoiceButton, &QPushButton::clicked, this, [this]() { AssignVoice(); });
-    connect(fallbackVoiceButton, &QPushButton::clicked, this, [this]() { AssignVoice(true); });
-    connect(voiceProfileCombo, &QComboBox::currentTextChanged, this, [this](const QString& profile)
-    {
-        const auto snapshot = session.VoiceStudio();
-        const auto found = snapshot.profileAssignments.find(profile.toStdString());
-        const std::string assigned = found == snapshot.profileAssignments.end()
-            ? std::string()
-            : found->second;
-        if (!assigned.empty())
-        {
-            const int index = voicePresetCombo->findData(QString::fromStdString(assigned));
-            if (index >= 0)
-            {
-                voicePresetCombo->setCurrentIndex(index);
-            }
-        }
-        else if (voicePresetCombo->count() > 0)
-        {
-            voicePresetCombo->setCurrentIndex(0);
-        }
-    });
     RefreshVoiceStudio();
 
     QFile theme(":/revia/revia.qss");
@@ -528,6 +534,7 @@ void ReviaWindow::BuildInterface()
     }
 
     ApplyMicrophoneUi(MicrophoneUi::Unavailable);
+    ApplyContentWidthCap();
 }
 
 void ReviaWindow::BuildTray()
@@ -605,6 +612,10 @@ void ReviaWindow::StartRuntime()
             if (capabilityPanel != nullptr)
             {
                 capabilityPanel->Refresh();
+            }
+            if (memoryPanel != nullptr)
+            {
+                memoryPanel->Refresh();
             }
             messageInput->setFocus();
         }, Qt::QueuedConnection);
@@ -973,52 +984,39 @@ void ReviaWindow::DiscoverApplicationPermissions()
 void ReviaWindow::RefreshVoiceStudio()
 {
     const revia::speech::VoiceStudioSnapshot snapshot = session.VoiceStudio();
-    const QString selectedProfile = voiceProfileCombo->currentText();
-    const QString selectedPreset = voicePresetCombo->currentData().toString();
     {
-        const QSignalBlocker profileBlocker(voiceProfileCombo);
-        voiceProfileCombo->clear();
-        for (const std::string& profileId : snapshot.profiles)
-        {
-            voiceProfileCombo->addItem(QString::fromStdString(profileId));
-        }
-        int profileIndex = voiceProfileCombo->findText(
-            selectedProfile.isEmpty()
-                ? QString::fromStdString(snapshot.activeProfile)
-                : selectedProfile);
-        if (profileIndex < 0 && voiceProfileCombo->count() > 0)
-        {
-            profileIndex = 0;
-        }
-        voiceProfileCombo->setCurrentIndex(profileIndex);
-    }
-    {
-        const QSignalBlocker presetBlocker(voicePresetCombo);
-        voicePresetCombo->clear();
-        voicePresetCombo->addItem("Select a created voice...", QString());
+        const QSignalBlocker libraryBlocker(voiceLibraryCombo);
+        const QString selected = voiceLibraryCombo->currentData().toString();
+        voiceLibraryCombo->clear();
+        voiceLibraryCombo->addItem("Select a created voice...", QString());
         for (const auto& preset : snapshot.presets)
         {
-            voicePresetCombo->addItem(
+            voiceLibraryCombo->addItem(
                 QString::fromStdString(preset.name),
                 QString::fromStdString(preset.id));
         }
-        QString targetPreset = selectedPreset;
-        const auto assignment = snapshot.profileAssignments.find(
-            voiceProfileCombo->currentText().toStdString());
-        if (assignment != snapshot.profileAssignments.end())
+        // Prefer what the user was looking at; otherwise show the voice the running
+        // profile actually speaks with, so Preview answers "what do I sound like now".
+        QString target = selected;
+        if (target.isEmpty())
         {
-            targetPreset = QString::fromStdString(assignment->second);
+            target = QString::fromStdString(snapshot.assignedPresetId);
         }
-        const int presetIndex = voicePresetCombo->findData(targetPreset);
-        voicePresetCombo->setCurrentIndex(presetIndex >= 0 ? presetIndex : 0);
+        const int index = voiceLibraryCombo->findData(target);
+        voiceLibraryCombo->setCurrentIndex(index >= 0 ? index : 0);
     }
     if (!voiceOperationRunning.load())
     {
-        const QString assigned = voicePresetCombo->currentData().toString();
-        voiceStudioStatus->setText(assigned.isEmpty()
-            ? "This profile uses the Windows voice fallback. Create or select a Qwen voice to assign it."
-            : "Profile voice: " + voicePresetCombo->currentText() +
-                ". Preview it or replace the assignment at any time.");
+        voiceStudioStatus->setText(snapshot.presets.empty()
+            ? "No voices have been created yet. Describe one below and create it."
+            : QString::number(static_cast<int>(snapshot.presets.size())) +
+                (snapshot.presets.size() == 1
+                    ? " voice is available. Assign it to a profile under Profiles."
+                    : " voices are available. Assign one to a profile under Profiles."));
+    }
+    if (profilePanel != nullptr)
+    {
+        profilePanel->Refresh();
     }
 }
 
@@ -1039,8 +1037,7 @@ void ReviaWindow::CreateVoicePreset()
             "Enter a preset name, voice description, and reference line before creating a voice.");
         return;
     }
-    for (QPushButton* button : {
-        createVoiceButton, previewVoiceButton, assignVoiceButton, fallbackVoiceButton})
+    for (QPushButton* button : {createVoiceButton, previewVoiceButton})
     {
         button->setEnabled(false);
     }
@@ -1059,16 +1056,15 @@ void ReviaWindow::CreateVoicePreset()
         QMetaObject::invokeMethod(this, [this, result, name]()
         {
             voiceOperationRunning.store(false);
-            for (QPushButton* button : {
-                createVoiceButton, previewVoiceButton, assignVoiceButton, fallbackVoiceButton})
+            for (QPushButton* button : {createVoiceButton, previewVoiceButton})
             {
                 button->setEnabled(true);
             }
             RefreshVoiceStudio();
-            const int createdIndex = voicePresetCombo->findText(name);
+            const int createdIndex = voiceLibraryCombo->findText(name);
             if (createdIndex >= 0)
             {
-                voicePresetCombo->setCurrentIndex(createdIndex);
+                voiceLibraryCombo->setCurrentIndex(createdIndex);
             }
             voiceStudioStatus->setText(QString::fromStdString(result.message));
             if (!result.succeeded)
@@ -1085,7 +1081,7 @@ void ReviaWindow::PreviewVoice()
     {
         return;
     }
-    const QString presetId = voicePresetCombo->currentData().toString();
+    const QString presetId = voiceLibraryCombo->currentData().toString();
     const QString preview = voicePreviewInput->toPlainText().trimmed();
     if (presetId.isEmpty() || preview.isEmpty())
     {
@@ -1093,8 +1089,7 @@ void ReviaWindow::PreviewVoice()
         voiceStudioStatus->setText("Select a created voice and enter a preview line first.");
         return;
     }
-    for (QPushButton* button : {
-        createVoiceButton, previewVoiceButton, assignVoiceButton, fallbackVoiceButton})
+    for (QPushButton* button : {createVoiceButton, previewVoiceButton})
     {
         button->setEnabled(false);
     }
@@ -1111,33 +1106,13 @@ void ReviaWindow::PreviewVoice()
         QMetaObject::invokeMethod(this, [this, result]()
         {
             voiceOperationRunning.store(false);
-            for (QPushButton* button : {
-                createVoiceButton, previewVoiceButton, assignVoiceButton, fallbackVoiceButton})
+            for (QPushButton* button : {createVoiceButton, previewVoiceButton})
             {
                 button->setEnabled(true);
             }
             voiceStudioStatus->setText(QString::fromStdString(result.message));
         }, Qt::QueuedConnection);
     });
-}
-
-void ReviaWindow::AssignVoice(const bool useFallback)
-{
-    if (voiceOperationRunning.load())
-    {
-        return;
-    }
-    const QString profileId = voiceProfileCombo->currentText();
-    const QString presetId = useFallback ? QString() : voicePresetCombo->currentData().toString();
-    if (profileId.isEmpty() || (!useFallback && presetId.isEmpty()))
-    {
-        voiceStudioStatus->setText("Choose a profile and created voice first.");
-        return;
-    }
-    const revia::speech::VoiceOperationResult result = session.AssignVoice(
-        profileId.toStdString(), presetId.toStdString());
-    RefreshVoiceStudio();
-    voiceStudioStatus->setText(QString::fromStdString(result.message));
 }
 
 void ReviaWindow::ToggleMaximized()
@@ -1549,18 +1524,31 @@ void ReviaWindow::RenderChat()
     // document and QTextBrowser has no way to toggle a region in place.
     QString html;
     html.reserve(4096);
+    QString previousSpeaker;
+    bool previousSpeakerWasUser = false;
     for (std::size_t index = 0; index < chatEntries.size(); ++index)
     {
         const ChatEntry& entry = chatEntries[index];
         const QString align = entry.userMessage ? "right" : "left";
         const QString speakerColour = entry.userMessage ? "#9dd7ff" : "#70e0ca";
 
-        if (!entry.speaker.isEmpty())
+        // Streamed speech arrives sentence by sentence. Keep those separate so each one
+        // can appear when its audio begins, but do not print "Revia" above every sentence
+        // when nobody else has spoken between them.
+        const bool repeatedAssistantSpeaker = !entry.userMessage &&
+            !previousSpeakerWasUser && !entry.speaker.isEmpty() &&
+            entry.speaker == previousSpeaker;
+        if (!entry.speaker.isEmpty() && !repeatedAssistantSpeaker)
         {
             html += QStringLiteral(
                 "<p style=\"margin-top:8px; margin-bottom:2px; text-align:%1;\">"
                 "<b><span style=\"color:%2;\">%3</span></b></p>")
                 .arg(align, speakerColour, entry.speaker.toHtmlEscaped());
+        }
+        if (!entry.speaker.isEmpty())
+        {
+            previousSpeaker = entry.speaker;
+            previousSpeakerWasUser = entry.userMessage;
         }
 
         if (!entry.body.isEmpty())

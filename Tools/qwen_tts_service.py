@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import gc
+import io
 import json
 import os
 import sys
@@ -18,6 +19,11 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
+
+REFLEX_CACHE_TEXT = frozenset({
+    "Okay.", "Stopped.", "I'm here.", "Yeah?", "Hm?", "What?", "Mm?",
+    "Hold on—what?", "I heard you the first time.",
+})
 
 
 
@@ -60,7 +66,11 @@ class QwenRuntime:
         self.device = "cpu"
         self.device_name = "CPU"
         self.dtype_name = "float32"
-        self.clone_prompts: dict[tuple[str, str], Any] = {}
+        self.attention_backend = "auto"
+        self.loaded_at = 0.0
+        self.last_used = 0.0
+        self.clone_prompts: dict[tuple[str, int, int, str], Any] = {}
+        self.reflex_audio_cache: dict[tuple[Any, ...], tuple[bytes, int, float]] = {}
 
     @staticmethod
     def _cuda_candidate(torch: Any, index: int) -> tuple[str, Any, str, int]:
@@ -168,6 +178,7 @@ class QwenRuntime:
         self.model_kind = ""
         self.model_name = ""
         self.clone_prompts.clear()
+        self.reflex_audio_cache.clear()
         gc.collect()
         try:
             import torch
@@ -196,12 +207,21 @@ class QwenRuntime:
             pass
 
         self.device, dtype, device_reason = self._select_device()
+        selected_attention = self.args.attention_backend
+        if selected_attention == "adaptive":
+            selected_attention = "sdpa" if dtype == torch.bfloat16 else "auto"
+        self.attention_backend = selected_attention
         print(f"[Qwen3-TTS] Loading {kind} model {model_name} on {self.device}: {device_reason}", flush=True)
+        load_options: dict[str, Any] = {
+            "device_map": self.device,
+            "dtype": dtype,
+        }
+        if selected_attention != "auto":
+            load_options["attn_implementation"] = selected_attention
         try:
             self.model = Qwen3TTSModel.from_pretrained(
                 model_name,
-                device_map=self.device,
-                dtype=dtype,
+                **load_options,
             )
         except Exception:
             if self.device == "cpu":
@@ -211,14 +231,43 @@ class QwenRuntime:
             self.device = "cpu"
             self.device_name = "CPU"
             self.dtype_name = "float32"
+            selected_attention = "auto" if self.args.attention_backend == "adaptive" else self.args.attention_backend
+            self.attention_backend = selected_attention
+            load_options = {"device_map": "cpu", "dtype": torch.float32}
+            if selected_attention != "auto":
+                load_options["attn_implementation"] = selected_attention
             self.model = Qwen3TTSModel.from_pretrained(
                 model_name,
-                device_map="cpu",
-                dtype=torch.float32,
+                **load_options,
             )
         self.model_kind = kind
         self.model_name = model_name
+        self.loaded_at = time.time()
+        self.last_used = self.loaded_at
         return self.model
+
+    @staticmethod
+    def _prompt_key(reference_audio: Path, reference_text: str) -> tuple[str, int, int, str]:
+        metadata = reference_audio.stat()
+        return (str(reference_audio), metadata.st_size, metadata.st_mtime_ns, reference_text)
+
+    def _voice_prompt(
+        self,
+        model: Any,
+        reference_audio: Path,
+        reference_text: str,
+    ) -> tuple[Any, bool]:
+        prompt_key = self._prompt_key(reference_audio, reference_text)
+        voice_clone_prompt = self.clone_prompts.get(prompt_key)
+        cache_hit = voice_clone_prompt is not None
+        if voice_clone_prompt is None:
+            voice_clone_prompt = model.create_voice_clone_prompt(
+                ref_audio=str(reference_audio),
+                ref_text=reference_text,
+                x_vector_only_mode=False,
+            )
+            self.clone_prompts[prompt_key] = voice_clone_prompt
+        return voice_clone_prompt, cache_hit
 
     @staticmethod
     def _validated_output(raw_path: str) -> Path:
@@ -339,9 +388,55 @@ class QwenRuntime:
                 "dtype": self.dtype_name,
             }
 
-    def synthesize(self, request: dict[str, Any]) -> dict[str, Any]:
+    def prepare_voice(
+        self,
+        request: dict[str, Any],
+        request_received: float | None = None,
+    ) -> dict[str, Any]:
+        received = request_received or time.perf_counter()
+        lock_started = time.perf_counter()
         with self.lock:
-            started = time.perf_counter()
+            queue_wait_ms = (time.perf_counter() - lock_started) * 1000.0
+            reference_audio = Path(
+                self._text(request.get("reference_audio"), "Reference audio", 2048)
+            ).expanduser().resolve()
+            if not reference_audio.is_file() or reference_audio.suffix.lower() != ".wav":
+                raise ValueError("The voice reference WAV does not exist.")
+            reference_text = self._text(
+                request.get("reference_text"), "Reference transcript", 1000)
+            model_started = time.perf_counter()
+            model = self._load("clone")
+            model_ready_ms = (time.perf_counter() - model_started) * 1000.0
+            prompt_started = time.perf_counter()
+            _, cache_hit = self._voice_prompt(model, reference_audio, reference_text)
+            prompt_ms = (time.perf_counter() - prompt_started) * 1000.0
+            self.last_used = time.time()
+            elapsed = (time.perf_counter() - received) * 1000.0
+            return {
+                "succeeded": True,
+                "message": f"Active voice ready on {self.device}.",
+                "elapsed_ms": elapsed,
+                "worker_queue_wait_ms": queue_wait_ms,
+                "model_ready_ms": model_ready_ms,
+                "clone_prompt_ms": prompt_ms,
+                "clone_prompt_cached": cache_hit,
+                "device": self.device,
+                "device_name": self.device_name,
+                "dtype": self.dtype_name,
+                "attention_backend": self.attention_backend,
+                "input_mode": self.args.input_mode,
+            }
+
+    def _synthesize(
+        self,
+        request: dict[str, Any],
+        in_memory: bool,
+        request_received: float | None = None,
+    ) -> tuple[dict[str, Any], bytes | None]:
+        received = request_received or time.perf_counter()
+        lock_started = time.perf_counter()
+        with self.lock:
+            queue_wait_ms = (time.perf_counter() - lock_started) * 1000.0
             text = self._text(request.get("text"), "Speech text", 5000)
             language = self._text(request.get("language", "English"), "Language", 40)
             reference_audio = Path(
@@ -350,35 +445,124 @@ class QwenRuntime:
             if not reference_audio.is_file() or reference_audio.suffix.lower() != ".wav":
                 raise ValueError("The voice reference WAV does not exist.")
             reference_text = self._text(request.get("reference_text"), "Reference transcript", 1000)
-            output = self._validated_output(self._text(request.get("output_path"), "Output path", 2048))
+            output = None if in_memory else self._validated_output(
+                self._text(request.get("output_path"), "Output path", 2048))
+            model_started = time.perf_counter()
             model = self._load("clone")
+            model_ready_ms = (time.perf_counter() - model_started) * 1000.0
             import soundfile as sf
 
-            prompt_key = (str(reference_audio), reference_text)
-            voice_clone_prompt = self.clone_prompts.get(prompt_key)
-            if voice_clone_prompt is None:
-                voice_clone_prompt = model.create_voice_clone_prompt(
-                    ref_audio=str(reference_audio),
-                    ref_text=reference_text,
-                    x_vector_only_mode=False,
-                )
-                self.clone_prompts[prompt_key] = voice_clone_prompt
+            prompt_started = time.perf_counter()
+            voice_clone_prompt, cache_hit = self._voice_prompt(
+                model, reference_audio, reference_text)
+            prompt_ms = (time.perf_counter() - prompt_started) * 1000.0
+            prompt_key = self._prompt_key(reference_audio, reference_text)
+            audio_cache_key = (
+                prompt_key, text, language, self.args.input_mode, self.attention_backend)
+            cached_audio = self.reflex_audio_cache.get(audio_cache_key) if (
+                in_memory and text in REFLEX_CACHE_TEXT) else None
+            if cached_audio is not None:
+                audio, sample_rate, audio_duration_ms = cached_audio
+                self.last_used = time.time()
+                elapsed = (time.perf_counter() - received) * 1000.0
+                return {
+                    "succeeded": True,
+                    "message": "Speech served from the bounded Reflex voice cache.",
+                    "output_path": "",
+                    "elapsed_ms": elapsed,
+                    "worker_queue_wait_ms": queue_wait_ms,
+                    "model_ready_ms": model_ready_ms,
+                    "clone_prompt_ms": prompt_ms,
+                    "clone_prompt_cached": cache_hit,
+                    "generation_ms": 0.0,
+                    "first_audio_chunk_ms": 0.0,
+                    "wav_write_ms": 0.0,
+                    "sample_rate": sample_rate,
+                    "audio_duration_ms": audio_duration_ms,
+                    "device": self.device,
+                    "device_name": self.device_name,
+                    "dtype": self.dtype_name,
+                    "attention_backend": self.attention_backend,
+                    "input_mode": self.args.input_mode,
+                    "audio_cache_hit": True,
+                    "true_incremental_audio": False,
+                }, audio
+            generation_started = time.perf_counter()
             waveforms, sample_rate = model.generate_voice_clone(
                 text=text,
                 language=language,
                 voice_clone_prompt=voice_clone_prompt,
+                # Every request already contains a complete natural phrase. The package
+                # documents False as simulated streaming TEXT input, not incremental
+                # audio output; complete mode avoids paying that simulation overhead.
+                non_streaming_mode=self.args.input_mode == "complete",
             )
-            sf.write(output, waveforms[0], sample_rate)
-            elapsed = (time.perf_counter() - started) * 1000.0
+            generation_ms = (time.perf_counter() - generation_started) * 1000.0
+            encoding_started = time.perf_counter()
+            audio: bytes | None = None
+            if in_memory:
+                buffer = io.BytesIO()
+                sf.write(buffer, waveforms[0], sample_rate, format="WAV")
+                audio = buffer.getvalue()
+                if len(audio) > self.args.max_audio_mib * 1024 * 1024:
+                    raise ValueError(
+                        f"Generated audio exceeds the {self.args.max_audio_mib} MiB buffer limit.")
+            else:
+                sf.write(output, waveforms[0], sample_rate)
+            wav_write_ms = (time.perf_counter() - encoding_started) * 1000.0
+            self.last_used = time.time()
+            elapsed = (time.perf_counter() - received) * 1000.0
+            audio_duration_ms = (
+                float(len(waveforms[0])) * 1000.0 / float(sample_rate)
+                if sample_rate else 0.0
+            )
+            if audio is not None and text in REFLEX_CACHE_TEXT:
+                if len(self.reflex_audio_cache) >= len(REFLEX_CACHE_TEXT):
+                    self.reflex_audio_cache.pop(next(iter(self.reflex_audio_cache)))
+                self.reflex_audio_cache[audio_cache_key] = (
+                    audio, sample_rate, audio_duration_ms)
             return {
                 "succeeded": True,
                 "message": f"Speech synthesized with {self.model_name} on {self.device}.",
-                "output_path": str(output),
+                "output_path": str(output) if output is not None else "",
                 "elapsed_ms": elapsed,
+                "worker_queue_wait_ms": queue_wait_ms,
+                "model_ready_ms": model_ready_ms,
+                "clone_prompt_ms": prompt_ms,
+                "clone_prompt_cached": cache_hit,
+                "generation_ms": generation_ms,
+                # True first audio is not exposed by this package. For this batch API,
+                # the first playable chunk becomes available when generation finishes.
+                "first_audio_chunk_ms": generation_ms,
+                "wav_write_ms": wav_write_ms,
+                "sample_rate": sample_rate,
+                "audio_duration_ms": audio_duration_ms,
                 "device": self.device,
                 "device_name": self.device_name,
                 "dtype": self.dtype_name,
-            }
+                "attention_backend": self.attention_backend,
+                "input_mode": self.args.input_mode,
+                "audio_cache_hit": False,
+                "true_incremental_audio": False,
+            }, audio
+
+    def synthesize(
+        self,
+        request: dict[str, Any],
+        request_received: float | None = None,
+    ) -> dict[str, Any]:
+        result, _ = self._synthesize(request, False, request_received)
+        return result
+
+    def synthesize_pcm(
+        self,
+        request: dict[str, Any],
+        request_received: float | None = None,
+    ) -> tuple[dict[str, Any], bytes]:
+        result, audio = self._synthesize(request, True, request_received)
+        if audio is None:
+            raise RuntimeError("The in-memory WAV encoder returned no audio.")
+        return result, audio
 
 
 def make_handler(runtime: QwenRuntime, token: str) -> type[BaseHTTPRequestHandler]:
@@ -400,6 +584,33 @@ def make_handler(runtime: QwenRuntime, token: str) -> type[BaseHTTPRequestHandle
             self.end_headers()
             self.wfile.write(body)
 
+        def _send_audio(self, metadata: dict[str, Any], audio: bytes) -> None:
+            self.send_response(200)
+            self.send_header("Content-Type", "audio/wav")
+            self.send_header("Content-Length", str(len(audio)))
+            self.send_header("Cache-Control", "no-store")
+            headers = {
+                "X-Revia-Elapsed-Ms": metadata.get("elapsed_ms", -1),
+                "X-Revia-Queue-Ms": metadata.get("worker_queue_wait_ms", -1),
+                "X-Revia-Model-Ready-Ms": metadata.get("model_ready_ms", -1),
+                "X-Revia-Prompt-Ms": metadata.get("clone_prompt_ms", -1),
+                "X-Revia-Generation-Ms": metadata.get("generation_ms", -1),
+                "X-Revia-Wav-Write-Ms": metadata.get("wav_write_ms", -1),
+                "X-Revia-Audio-Duration-Ms": metadata.get("audio_duration_ms", -1),
+                "X-Revia-Sample-Rate": metadata.get("sample_rate", 0),
+                "X-Revia-Prompt-Cached": int(bool(metadata.get("clone_prompt_cached", False))),
+                "X-Revia-Audio-Cache-Hit": int(bool(metadata.get("audio_cache_hit", False))),
+                "X-Revia-Device": metadata.get("device", ""),
+                "X-Revia-Device-Name": metadata.get("device_name", ""),
+                "X-Revia-Dtype": metadata.get("dtype", ""),
+                "X-Revia-Attention": metadata.get("attention_backend", "auto"),
+                "X-Revia-Input-Mode": metadata.get("input_mode", "complete"),
+            }
+            for name, value in headers.items():
+                self.send_header(name, str(value).replace("\r", " ").replace("\n", " "))
+            self.end_headers()
+            self.wfile.write(audio)
+
         def do_GET(self) -> None:  # noqa: N802 - required by BaseHTTPRequestHandler
             if not self._authorized():
                 self._send(401, {"succeeded": False, "message": "Unauthorized."})
@@ -414,6 +625,13 @@ def make_handler(runtime: QwenRuntime, token: str) -> type[BaseHTTPRequestHandle
                 "device": runtime.device,
                 "device_name": runtime.device_name,
                 "dtype": runtime.dtype_name,
+                "attention_backend": runtime.attention_backend,
+                "input_mode": runtime.args.input_mode,
+                "loaded": runtime.model is not None,
+                "loaded_at": runtime.loaded_at,
+                "last_used": runtime.last_used,
+                "clone_prompts": len(runtime.clone_prompts),
+                "reflex_audio_cache_entries": len(runtime.reflex_audio_cache),
             })
 
         def do_POST(self) -> None:  # noqa: N802 - required by BaseHTTPRequestHandler
@@ -421,6 +639,7 @@ def make_handler(runtime: QwenRuntime, token: str) -> type[BaseHTTPRequestHandle
                 self._send(401, {"succeeded": False, "message": "Unauthorized."})
                 return
             try:
+                request_received = time.perf_counter()
                 length = int(self.headers.get("Content-Length", "0"))
                 if length <= 0 or length > 64 * 1024:
                     raise ValueError("The request body is empty or too large.")
@@ -430,13 +649,19 @@ def make_handler(runtime: QwenRuntime, token: str) -> type[BaseHTTPRequestHandle
                 if self.path == "/v1/voice-design":
                     result = runtime.design(request)
                 elif self.path == "/v1/audio/speech":
-                    result = runtime.synthesize(request)
+                    result = runtime.synthesize(request, request_received)
+                elif self.path == "/v1/audio/pcm":
+                    result, audio = runtime.synthesize_pcm(request, request_received)
+                    self._send_audio(result, audio)
+                    return
                 elif self.path == "/release":
                     with runtime.lock:
                         runtime._unload()
                     result = {"succeeded": True, "message": "Qwen3-TTS model memory released."}
                 elif self.path == "/v1/vocalizations":
-                    result = runtime.vocalizations(payload)
+                    result = runtime.vocalizations(request)
+                elif self.path == "/prepare-voice":
+                    result = runtime.prepare_voice(request, request_received)
                 elif self.path == "/prepare":
                     model_kind = request.get("model", "clone")
                     if model_kind not in ("clone", "design"):
@@ -497,8 +722,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--device", default="auto")
     parser.add_argument("--minimum-free-vram-mib", type=int, default=4600)
     parser.add_argument("--cpu-threads", type=int, default=2)
+    parser.add_argument("--max-audio-mib", type=int, default=128)
     parser.add_argument("--design-model", default="Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign")
     parser.add_argument("--clone-model", default="Qwen/Qwen3-TTS-12Hz-0.6B-Base")
+    parser.add_argument(
+        "--attention-backend",
+        choices=("adaptive", "auto", "eager", "sdpa", "flash_attention_2"),
+        default="adaptive")
+    parser.add_argument(
+        "--input-mode", choices=("complete", "simulated-stream"), default="simulated-stream")
     return parser.parse_args()
 
 
@@ -512,6 +744,9 @@ def main() -> int:
         return 2
     if not (1 <= args.cpu_threads <= 64):
         print("Invalid CPU thread cap.", file=sys.stderr)
+        return 2
+    if not (16 <= args.max_audio_mib <= 2048):
+        print("Invalid audio buffer limit.", file=sys.stderr)
         return 2
     runtime = QwenRuntime(args)
     server = ThreadingHTTPServer((args.host, args.port), make_handler(runtime, args.token))

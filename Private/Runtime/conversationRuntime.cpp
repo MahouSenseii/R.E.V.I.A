@@ -2,6 +2,7 @@
 
 #include "Agents/conversationStylePolicy.h"
 #include "Agents/replyFragmenter.h"
+#include "Speech/vocalization.h"
 #include "Internet/internetBackend.h"
 #include "Internet/internetLookupPolicy.h"
 
@@ -68,7 +69,9 @@ bool MentionsScreenEvidence(const std::string& text)
     const std::string lowered = LowerCopy(text);
     constexpr std::string_view signals[] = {
         "on my screen", "on screen", "what i'm looking at", "what i am looking at",
-        "this window", "these monitors", "my monitor", "screenshot", "blueprint graph"
+        "what am i doing", "what i am doing", "what do you see", "can you see",
+        "this window", "these monitors", "my monitor", "my monitors", "my screens",
+        "screenshot", "blueprint graph"
     };
     return std::any_of(std::begin(signals), std::end(signals),
         [&lowered](const std::string_view signal)
@@ -395,7 +398,11 @@ SessionResult ConversationRuntime::Generate(
     if (!proactive)
     {
         // Affect must shape this reply, not lag one turn behind it.
-        inputAffect = affect.ObserveInput(policyInput);
+        //
+        // The social state is read BEFORE the classifier runs, so the reading reflects
+        // the relationship as it stood when the message arrived. Feeding it back
+        // afterwards would let this turn's own reaction judge this turn's message.
+        inputAffect = affect.ObserveInput(policyInput, humanization.Current().Social());
         publishAffect(inputAffect);
         humanization.ObserveInput(policyInput, inputAffect);
     }
@@ -567,10 +574,14 @@ SessionResult ConversationRuntime::Generate(
             setState(RuntimeState::Idle, "The autonomous response was cancelled.");
             return finished;
         }
+        // Read before ObserveOutcome for the same reason as above: the confidence that
+        // decides whether this failure defeats or merely annoys her is the confidence she
+        // had going in, not the one this failure is about to lower.
         const AffectSnapshot observed = affect.ObserveTurn(
             policyInput,
             finished.text,
-            finished.succeeded);
+            finished.succeeded,
+            humanization.Current().Social());
         humanization.ObserveOutcome(finished.succeeded, observed);
         publishAffect(observed);
         if (finished.fromAssistant && finished.succeeded && !finished.text.empty())
@@ -643,28 +654,48 @@ SessionResult ConversationRuntime::Generate(
         speech.IsEnabled() && shouldSpeak &&
         conversationStyle.CanStreamReply(policyInput);
     agents::ReplyFragmenter fragmenter(
-        24, speech.PreferredFragmentCharacters());
+        32,
+        speech.PreferredFragmentCharacters(),
+        16,
+        speech.FirstFragmentCharacters());
     std::string streamedText;
-    const auto emitFragment = [&](const std::string& fragment)
+    std::vector<conversationMessage> spokenContext = promptContext;
+    const auto emitFragment = [&](const std::string& rawFragment)
     {
         if (stopToken.stop_requested()) return;
+        // Streamed fragments reach the voice before the hard filter ever sees the
+        // completed reply, so shaping has to happen here too or speech says the stage
+        // direction out loud while the filter tidies it up afterwards. One cue per
+        // fragment: a fragment is about a sentence, and two laughs in one sentence is
+        // never the right reading.
+        const revia::speech::VocalizationShaping shaped =
+            revia::speech::ShapeVocalizations(rawFragment, 1);
+        const std::string& fragment = shaped.text;
+        // A fragment that was nothing but a stage direction has no sound left in it.
+        if (fragment.empty()) return;
         if (conversationStyle.ShouldSuppressSpokenFragment(
                 policyInput,
-                promptContext,
+                spokenContext,
                 fragment,
                 streamedUtterances > 0))
         {
             return;
         }
+        const bool firstSpeechFragment = streamedUtterances == 0;
         const std::uint64_t utteranceId = ++utteranceCounter;
         ++streamedUtterances;
-        speech.Speak(fragment, affect.Current(), utteranceId);
+        speech.Speak(
+            fragment, affect.Current(), utteranceId, firstSpeechFragment);
         RuntimeEvent partial;
         partial.kind = RuntimeEventKind::ReplyFragment;
         partial.state = RuntimeState::Responding;
         partial.message = fragment;
         partial.turnId = utteranceId;
         events.Publish(std::move(partial));
+        // The finished assistant reply is not in promptContext yet. Record each accepted
+        // sentence locally so a repeated sentence later in this same stream is filtered
+        // before it reaches either GPU or the chat transcript.
+        spokenContext.push_back({"assistant", fragment});
     };
 
     messageRouter::DeltaHandler onDelta;
@@ -725,8 +756,9 @@ SessionResult ConversationRuntime::Generate(
     if (streamSpeech && turnResult.response.bSuccess)
     {
         const std::string& complete = turnResult.response.response;
-        if (complete.size() > streamedText.size() &&
-            complete.compare(0, streamedText.size(), streamedText) == 0)
+        const bool finalExtendsStream = complete.size() >= streamedText.size() &&
+            complete.compare(0, streamedText.size(), streamedText) == 0;
+        if (finalExtendsStream && complete.size() > streamedText.size())
         {
             for (const std::string& fragment :
                 fragmenter.Consume(complete.substr(streamedText.size())))
@@ -734,10 +766,27 @@ SessionResult ConversationRuntime::Generate(
                 emitFragment(fragment);
             }
         }
-        const std::string remainder = fragmenter.Flush();
-        if (!remainder.empty())
+        if (!finalExtendsStream)
         {
-            emitFragment(remainder);
+            // Final response repair can remove an unfinished token-limit tail, a
+            // generated User turn, or decoded repetition. Never flush that rejected raw
+            // tail into TTS. If nothing valid has spoken yet, replace it with the safe
+            // completed reply; otherwise the accepted earlier sentences already stand.
+            fragmenter.Reset();
+            if (streamedUtterances == 0)
+            {
+                for (const std::string& fragment : fragmenter.Consume(complete))
+                {
+                    emitFragment(fragment);
+                }
+                const std::string replacement = fragmenter.Flush();
+                if (!replacement.empty()) emitFragment(replacement);
+            }
+        }
+        else
+        {
+            const std::string remainder = fragmenter.Flush();
+            if (!remainder.empty()) emitFragment(remainder);
         }
     }
 

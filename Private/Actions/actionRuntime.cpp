@@ -325,6 +325,17 @@ bool ActionRuntime::SetInternetBrowser(
         ReloadUnlocked(outError);
 }
 
+bool ActionRuntime::SetCameraAccess(
+    const bool enabled,
+    const bool autonomousCapture,
+    std::string& outError)
+{
+    std::lock_guard lock(mutex);
+    return capabilityEditor.SetCameraAccess(
+            capabilityConfigPath, enabled, autonomousCapture, outError) &&
+        ReloadUnlocked(outError);
+}
+
 void ActionRuntime::CancelActiveInternet()
 {
     // Deliberately do not acquire `mutex`: Execute() owns it for the full synchronous

@@ -26,13 +26,17 @@ QLabel#perceptionLabel[watching="true"] {
 }
 QLabel#secondaryText, QLabel#voiceIntro, QLabel#settingsHint { color: #93a4bd; }
 QLabel#sectionTitle { color: #dce9f7; font-size: 15px; font-weight: 700; }
-QLabel#voiceStudioStatus {
+QLabel#voiceStudioStatus, QLabel#profileActiveBanner {
     color: #85d7c8;
     background: rgba(20, 48, 57, 180);
     border: 1px solid #2f625f;
     border-radius: 8px;
     padding: 8px;
 }
+QLabel#profileActiveBanner { color: #dce9f7; font-weight: 600; }
+QLabel#profileStatus { color: #85d7c8; font-weight: 600; }
+QLabel#memoryStatus { color: #85d7c8; font-weight: 600; }
+QLabel#profileStatus[error="true"] { color: #ff7b88; }
 QLabel#activityIssueSummary, QLabel#preferenceStatus {
     color: #85d7c8;
     font-weight: 600;
@@ -62,13 +66,49 @@ QTabBar::tab {
 }
 QTabBar::tab:hover { color: #dce9f7; background: rgba(35, 54, 78, 100); }
 QTabBar::tab:selected { color: #70e0ca; border-bottom-color: #70e0ca; }
-QComboBox, QLineEdit, QSpinBox {
+QComboBox, QLineEdit, QSpinBox, QDoubleSpinBox {
     color: #dce9f7;
     background: rgba(7, 12, 23, 220);
     border: 1px solid #293b55;
     border-radius: 8px;
     padding: 8px;
     selection-background-color: #315f84;
+}
+/* Giving a spin box custom padding without reserving room for its buttons squeezes
+   them into a pair of unclickable slivers. Reserving the space is enough -- the style
+   then draws its own buttons and arrows, which a CSS override cannot reproduce here:
+   border-triangles render as solid blocks, and sizing the arrow subcontrol without an
+   image makes it disappear altogether. QDoubleSpinBox was missing from the selector
+   above, which is the only reason one of the two ever looked right. */
+QSpinBox, QDoubleSpinBox { padding-right: 26px; }
+QSpinBox::up-button, QDoubleSpinBox::up-button,
+QSpinBox::down-button, QDoubleSpinBox::down-button {
+    subcontrol-origin: border;
+    width: 22px;
+    background: rgba(30, 46, 70, 220);
+    border: none;
+}
+QSpinBox::up-button, QDoubleSpinBox::up-button {
+    subcontrol-position: top right;
+    border-top-right-radius: 7px;
+    margin: 1px 1px 0 0;
+}
+QSpinBox::down-button, QDoubleSpinBox::down-button {
+    subcontrol-position: bottom right;
+    border-bottom-right-radius: 7px;
+    margin: 0 1px 1px 0;
+}
+QSpinBox::up-button:hover, QDoubleSpinBox::up-button:hover,
+QSpinBox::down-button:hover, QDoubleSpinBox::down-button:hover {
+    background: #315f84;
+}
+QSpinBox::up-arrow, QDoubleSpinBox::up-arrow {
+    image: url(:/revia/spin-up.svg);
+    width: 9px; height: 6px;
+}
+QSpinBox::down-arrow, QDoubleSpinBox::down-arrow {
+    image: url(:/revia/spin-down.svg);
+    width: 9px; height: 6px;
 }
 QComboBox QAbstractItemView {
     color: #dce9f7;

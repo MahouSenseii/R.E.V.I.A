@@ -12,7 +12,8 @@ namespace revia::agents
 // the first sentence is usually complete long before the last one exists. Emitting on
 // sentence boundaries lets speech start on sentence one while the rest is still being
 // produced, so the reply begins in about the time it takes to generate a sentence rather
-// than a paragraph.
+// than a paragraph. Legacy character targets remain accepted for configuration
+// compatibility, but only complete sentence boundaries may create spoken jobs.
 //
 // The cost of getting this wrong is speech that stops mid-clause, so a boundary is only
 // accepted when it is unambiguous: terminal punctuation followed by whitespace or the end
@@ -22,7 +23,9 @@ class ReplyFragmenter
 public:
     explicit ReplyFragmenter(
         std::size_t minimumFragmentCharacters = 24,
-        std::size_t maximumPhraseCharacters = 0);
+        std::size_t maximumPhraseCharacters = 0,
+        std::size_t firstMinimumFragmentCharacters = 0,
+        std::size_t firstMaximumPhraseCharacters = 0);
 
     // Feeds newly generated text. Returns any fragments that are now complete.
     [[nodiscard]] std::vector<std::string> Consume(const std::string& incoming);
@@ -34,8 +37,11 @@ public:
 
 private:
     std::string pending;
-    std::size_t minimumCharacters;
-    std::size_t maximumCharacters;
+    std::size_t followingMinimumCharacters;
+    std::size_t followingMaximumCharacters;
+    std::size_t firstMinimumCharacters;
+    std::size_t firstMaximumCharacters;
+    std::size_t emittedFragments = 0;
 };
 
 } // namespace revia::agents

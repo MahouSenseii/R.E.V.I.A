@@ -195,8 +195,13 @@ struct speechSettings
     // Short replies stay on the fastest worker. Longer replies are split into bounded
     // phrases, allowing additional local workers to synthesize ahead while playback
     // remains sequence-ordered.
-    int qwenPhraseCharacters = 96;
+    int qwenFirstPhraseCharacters = 28;
+    int qwenPhraseCharacters = 64;
     bool bQwenParallelLongReplies = false;
+    bool bQwenDirectPcm = true;
+    bool bQwenPrecomputeVoicePrompt = true;
+    std::string qwenAttentionBackend = "adaptive";
+    std::string qwenInputMode = "simulated-stream";
     int qwenMaxBufferedAudioMiB = 128;
     int qwenMinimumFreeVramMiB = 4600;
     // Effective host-thread cap applied inside the PyTorch worker. The resource planner
@@ -295,6 +300,10 @@ struct visionSettings
     bool bContinuousAwareness = false;
     int awarenessDebounceMs = 1500;
     int awarenessMinimumIntervalMs = 6000;
+    // Event hooks provide immediate updates. This idle refresh is a backstop for apps
+    // that repaint without changing focus or title, so screen context cannot stay stale
+    // forever just because Windows emitted no useful event.
+    int awarenessRefreshSeconds = 30;
     int awarenessMaxResponseTokens = 160;
     double resolutionConfidence = 0.72;
     double minimumNameAgreement = 0.35;
@@ -440,6 +449,9 @@ struct aiProfile
 {
     std::string id = "assistant";
     std::string displayName = "Assistant";
+    // Shown in the profile picker so a profile can be recognised without reading the
+    // whole system prompt. Optional: an empty description is a valid profile.
+    std::string description;
     std::string systemPrompt = "You are a helpful local AI assistant.";
 
     // H3: when false, user input is not written to long-term memory.

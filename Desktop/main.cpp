@@ -19,6 +19,9 @@ int main(int argc, char** argv)
     bool runtimeReadySmokeTest = false;
     std::string screenshotPath;
     std::string screenshotTab;
+    // Layout has to be checked at more than the one size the window happens to open at.
+    int forcedWidth = 0;
+    int forcedHeight = 0;
     for (int index = 1; index < argc; ++index)
     {
         smokeTest = smokeTest || std::string(argv[index]) == "--ui-smoke-test";
@@ -34,6 +37,24 @@ int main(int argc, char** argv)
         else if (std::string(argv[index]) == "--ui-screenshot-tab" && index + 1 < argc)
         {
             screenshotTab = argv[++index];
+        }
+        else if (std::string(argv[index]) == "--ui-size" && index + 1 < argc)
+        {
+            const std::string size = argv[++index];
+            const std::size_t separator = size.find('x');
+            if (separator != std::string::npos)
+            {
+                try
+                {
+                    forcedWidth = std::stoi(size.substr(0, separator));
+                    forcedHeight = std::stoi(size.substr(separator + 1));
+                }
+                catch (const std::exception&)
+                {
+                    forcedWidth = 0;
+                    forcedHeight = 0;
+                }
+            }
         }
     }
     runtimeSmokeTest = runtimeSmokeTest || runtimeReadySmokeTest;
@@ -95,6 +116,10 @@ int main(int argc, char** argv)
         });
 
     ReviaWindow window(!smokeTest, !smokeTest && !runtimeSmokeTest);
+    if (forcedWidth > 0 && forcedHeight > 0)
+    {
+        window.resize(forcedWidth, forcedHeight);
+    }
     if (!runtimeSmokeTest)
     {
         window.show();

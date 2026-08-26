@@ -13,6 +13,7 @@
 
 class QCheckBox;
 class QCloseEvent;
+class QResizeEvent;
 class QComboBox;
 class QEvent;
 class QLabel;
@@ -32,6 +33,8 @@ class InternetActivityPanel;
 class PipelinePanel;
 class ResourcePanel;
 class CapabilityPanel;
+class ProfilePanel;
+class MemoryPanel;
 namespace Ui { class ReviaWindow; }
 
 class ReviaWindow final : public QMainWindow
@@ -61,9 +64,14 @@ protected:
     bool eventFilter(QObject* watched, QEvent* event) override;
     void closeEvent(QCloseEvent* event) override;
     void changeEvent(QEvent* event) override;
+    void resizeEvent(QResizeEvent* event) override;
 
 private:
     void BuildInterface();
+    // Keeps the readable measure fixed as the window grows. Without this every row,
+    // field, and table column stretches to the full width of the monitor, which is why
+    // the same screen looks like a different application maximised.
+    void ApplyContentWidthCap();
     void BuildTray();
     void StartRuntime();
     void SendMessage(bool voiceInput = false);
@@ -71,10 +79,11 @@ private:
     void ApplyMicrophoneUi(MicrophoneUi microphoneUi);
     void UseVisibleScreen();
     void DiscoverApplicationPermissions();
+    // The voice studio creates and previews voices; which profile speaks with which one
+    // is decided in ProfilePanel, so refreshing here refreshes that too.
     void RefreshVoiceStudio();
     void CreateVoicePreset();
     void PreviewVoice();
-    void AssignVoice(bool useFallback = false);
     // Every shutdown names its own cause, so the ledger never has to guess between a
     // deliberate quit and something that merely looked like one.
     void BeginShutdown(revia::core::ExitReason reason, const std::string& detail = {});
@@ -164,6 +173,8 @@ private:
     ResourcePanel* resourcePanel = nullptr;
     CanvasPanel* canvasPanel = nullptr;
     CapabilityPanel* capabilityPanel = nullptr;
+    ProfilePanel* profilePanel = nullptr;
+    MemoryPanel* memoryPanel = nullptr;
     QTabWidget* tabs = nullptr;
     QPushButton* sendButton = nullptr;
     QPushButton* stopButton = nullptr;
@@ -189,8 +200,7 @@ private:
     QLabel* presenceAttentionValue = nullptr;
     QProgressBar* presenceMomentumBar = nullptr;
     QPushButton* openPresenceFolderButton = nullptr;
-    QComboBox* voiceProfileCombo = nullptr;
-    QComboBox* voicePresetCombo = nullptr;
+    QComboBox* voiceLibraryCombo = nullptr;
     QComboBox* voiceLanguageCombo = nullptr;
     QLineEdit* voiceNameInput = nullptr;
     QPlainTextEdit* voiceDescriptionInput = nullptr;
@@ -199,8 +209,6 @@ private:
     QLabel* voiceStudioStatus = nullptr;
     QPushButton* createVoiceButton = nullptr;
     QPushButton* previewVoiceButton = nullptr;
-    QPushButton* assignVoiceButton = nullptr;
-    QPushButton* fallbackVoiceButton = nullptr;
     QSystemTrayIcon* trayIcon = nullptr;
     QTimer* pollTimer = nullptr;
 

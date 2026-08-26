@@ -2,6 +2,7 @@
 #include "Runtime/runtimeDataBootstrap.h"
 #include "Core/exitReporter.h"
 #include "Core/localApiKey.h"
+#include "Core/runtimePath.h"
 #include "Internet/internetBackend.h"
 #include "Memory/longTermMemory.h"
 #include "Planning/goalPlanner.h"
@@ -160,11 +161,15 @@ namespace
     bool ModelArtifactsExist(const modelTierSettings& tier)
     {
         std::error_code error;
-        if (!std::filesystem::is_regular_file(tier.modelPath, error)) return false;
+        if (!std::filesystem::is_regular_file(
+                revia::core::ResolveRuntimePath(tier.modelPath), error))
+        {
+            return false;
+        }
         if (!tier.bVisionEnabled) return true;
         error.clear();
         return std::filesystem::is_regular_file(
-            tier.multimodalProjectorPath, error);
+            revia::core::ResolveRuntimePath(tier.multimodalProjectorPath), error);
     }
 
     std::string BuildLearnedResearchSummary(
@@ -470,7 +475,7 @@ bool ReviaSession::Start()
     // would spend more time reloading models than doing useful work.
     const speech::VoicePresetStore configuredVoices(settings.speech.voiceDataPath);
     const bool deferredVoiceLoad = settings.speech.backend != "WindowsSapi" &&
-        !configuredVoices.AssignedPresetId(profile.id).empty();
+        !configuredVoices.AssignedPresetId(settings.activeProfile).empty();
     stageStarted = std::chrono::steady_clock::now();
     const resources::HardwareInventory hardware =
         resources::DetectHardwareInventory(settings.llm.serverExecutable);
@@ -536,7 +541,10 @@ bool ReviaSession::Start()
     }
 
     stageStarted = std::chrono::steady_clock::now();
-    speechService.SetActiveProfile(profile.id);
+    // The file stem, not the "id" field inside the file. Voice assignments are keyed
+    // by the name a profile is addressed with, and those are the names the profile and
+    // voice pickers list.
+    speechService.SetActiveProfile(settings.activeProfile);
     speechService.Start(settings.speech, [this](const speech::SpeechEvent& speechEvent)
     {
         if (speechEvent.phase == "Queued" || speechEvent.phase == "Generating" ||
@@ -562,6 +570,12 @@ bool ReviaSession::Start()
             appLogger.Timing(
                 "voice utterance #" + std::to_string(speechEvent.utteranceId),
                 {{"qwen_synthesis", speechEvent.elapsedMilliseconds, true}});
+        }
+        if (speechEvent.phase == "Profile" && !speechEvent.timings.empty())
+        {
+            appLogger.Timing(
+                "voice stages #" + std::to_string(speechEvent.utteranceId),
+                speechEvent.timings);
         }
         if ((speechEvent.phase == "FirstAudioReady" ||
              speechEvent.phase == "FirstAudioPlayed") &&
@@ -925,7 +939,7 @@ void ReviaSession::StartScreenAwareness()
 {
     StopScreenAwareness();
     if (!settings.perception.bEnabled || !settings.vision.bEnabled ||
-        !settings.vision.bContinuousAwareness || !llmAvailable)
+        !settings.vision.bContinuousAwareness)
     {
         return;
     }
@@ -941,29 +955,49 @@ void ReviaSession::StartScreenAwareness()
             std::string trigger;
             {
                 std::unique_lock signalLock(screenAwarenessMutex);
-                screenAwarenessCondition.wait(signalLock, workerStop, [this, handledVersion]
-                {
-                    return screenAwarenessSignalVersion != handledVersion;
-                });
-                if (workerStop.stop_requested()) break;
-                targetVersion = screenAwarenessSignalVersion;
-                trigger = screenAwarenessSignalReason;
-
-                // Wait until the desktop has been stable for one debounce window. Title
-                // changes can arrive per keystroke; analyzing each one would make vision
-                // slower and turn continuous awareness into continuous interruption.
-                while (screenAwarenessCondition.wait_for(
+                const bool eventDriven = screenAwarenessCondition.wait_for(
                     signalLock,
                     workerStop,
-                    std::chrono::milliseconds(settings.vision.awarenessDebounceMs),
-                    [this, targetVersion]
+                    std::chrono::seconds(settings.vision.awarenessRefreshSeconds),
+                    [this, handledVersion]
                     {
-                        return screenAwarenessSignalVersion != targetVersion;
-                    }))
+                        return screenAwarenessSignalVersion != handledVersion;
+                    });
+                if (workerStop.stop_requested()) break;
+                targetVersion = screenAwarenessSignalVersion;
+                trigger = eventDriven
+                    ? screenAwarenessSignalReason
+                    : "periodic multi-monitor refresh";
+
+                if (eventDriven)
                 {
-                    if (workerStop.stop_requested()) break;
-                    targetVersion = screenAwarenessSignalVersion;
-                    trigger = screenAwarenessSignalReason;
+                    // Wait for an ordinary stable window, but put a hard ceiling on the
+                    // debounce. Editors and terminals can change their title continuously;
+                    // they used to postpone awareness forever while the user was active.
+                    const auto debounceLimit = std::chrono::steady_clock::now() +
+                        std::chrono::milliseconds(std::max(
+                            5000, settings.vision.awarenessDebounceMs * 4));
+                    while (std::chrono::steady_clock::now() < debounceLimit)
+                    {
+                        const auto remaining = std::chrono::duration_cast<
+                            std::chrono::milliseconds>(
+                                debounceLimit - std::chrono::steady_clock::now());
+                        const auto waitFor = std::min(
+                            std::chrono::milliseconds(settings.vision.awarenessDebounceMs),
+                            remaining);
+                        const bool superseded = screenAwarenessCondition.wait_for(
+                            signalLock,
+                            workerStop,
+                            waitFor,
+                            [this, targetVersion]
+                            {
+                                return screenAwarenessSignalVersion != targetVersion;
+                            });
+                        if (workerStop.stop_requested()) break;
+                        if (!superseded) break;
+                        targetVersion = screenAwarenessSignalVersion;
+                        trigger = screenAwarenessSignalReason;
+                    }
                 }
             }
             if (workerStop.stop_requested()) break;
@@ -978,8 +1012,7 @@ void ReviaSession::StartScreenAwareness()
             }
             if (workerStop.stop_requested()) break;
 
-            if (!started.load() || busy.load() || windowEventMonitor.IsPaused() ||
-                speechService.HasPendingSpeech())
+            if (!started.load() || busy.load() || windowEventMonitor.IsPaused())
             {
                 std::this_thread::sleep_for(std::chrono::milliseconds(250));
                 continue;
@@ -989,8 +1022,7 @@ void ReviaSession::StartScreenAwareness()
             // attempt before taking this mutex, and try_lock simply retries after the
             // foreground operation if it was already in progress.
             std::unique_lock operationLock(operationMutex, std::try_to_lock);
-            if (!operationLock.owns_lock() || busy.load() ||
-                speechService.HasPendingSpeech())
+            if (!operationLock.owns_lock() || busy.load())
             {
                 std::this_thread::sleep_for(std::chrono::milliseconds(250));
                 continue;
@@ -1003,8 +1035,11 @@ void ReviaSession::StartScreenAwareness()
                 attemptToken = screenAwarenessAttemptStopSource.get_token();
                 // Coalesce every event observed before capture. Anything arriving during
                 // inference receives a newer version and schedules the next summary.
+                if (screenAwarenessSignalVersion != targetVersion)
+                {
+                    trigger = screenAwarenessSignalReason;
+                }
                 targetVersion = screenAwarenessSignalVersion;
-                trigger = screenAwarenessSignalReason;
                 handledVersion = targetVersion;
             }
 
@@ -1018,11 +1053,28 @@ void ReviaSession::StartScreenAwareness()
             eventBus.Publish(event);
 
             const auto totalStarted = std::chrono::steady_clock::now();
-            std::filesystem::path mediaDirectory(settings.llm.mediaPath);
-            if (mediaDirectory.is_relative())
+            if (!llmAvailable ||
+                (llamaServerProcess.WasStartedByRevia() &&
+                    !llamaServerProcess.IsRunning()))
             {
-                mediaDirectory = std::filesystem::absolute(mediaDirectory);
+                PublishComponent(
+                    "Vision", "Reconnecting",
+                    "The local vision model stopped; background awareness is restarting it.");
+                llmAvailable = EnsureLLMAvailable(attemptToken);
             }
+            if (!llmAvailable || attemptToken.stop_requested())
+            {
+                lastCapture = std::chrono::steady_clock::now();
+                event.phase = attemptToken.stop_requested() ? "Yielded" : "Unavailable";
+                event.message = attemptToken.stop_requested()
+                    ? "Background screen awareness yielded to user input."
+                    : "The local vision model is unavailable; awareness will retry.";
+                event.elapsedMilliseconds = ElapsedMilliseconds(totalStarted);
+                eventBus.Publish(std::move(event));
+                continue;
+            }
+            const std::filesystem::path mediaDirectory =
+                revia::core::ResolveRuntimePath(settings.llm.mediaPath);
             const vision::CaptureResult capture =
                 screenCaptureService.CaptureDesktop(mediaDirectory);
             responseOutput output;
@@ -1635,6 +1687,12 @@ void ReviaSession::StartCuriosityLoop()
                 recentConversation = context.GetRecentMessages();
                 recentActivity = activityHistory.Spans(std::chrono::minutes{90});
                 desktopContext = activityHistory.Summarize(std::chrono::minutes{90});
+                const std::string visualContext = CurrentScreenContext();
+                if (!visualContext.empty())
+                {
+                    if (!desktopContext.empty()) desktopContext += "\n\n";
+                    desktopContext += visualContext;
+                }
                 inputGeneration = userInteractionGeneration.load();
             }
             const bool hasRealUserTurn = std::any_of(
@@ -2667,7 +2725,7 @@ SessionResult ReviaSession::ShowPicture(const std::string& path)
     std::vector<std::filesystem::path> allowed = actionRuntime.Settings().approvedRoots;
     allowed.push_back(std::filesystem::weakly_canonical(diagramStore.Root(), error));
     allowed.push_back(std::filesystem::weakly_canonical(
-        std::filesystem::path(settings.llm.mediaPath), error));
+        revia::core::ResolveRuntimePath(settings.llm.mediaPath), error));
     const bool inScope = std::any_of(allowed.begin(), allowed.end(),
         [&requested](const std::filesystem::path& root)
         {
@@ -3195,6 +3253,7 @@ SessionResult ReviaSession::RunTurnLocked(const std::string& acceptedInput)
         return finish(std::move(result));
     }
 
+    const std::string profileBeforeCommand = settings.activeProfile;
     const commandOutput commandResult = commands.HandleCommand(
         acceptedInput,
         settings,
@@ -3203,6 +3262,13 @@ SessionResult ReviaSession::RunTurnLocked(const std::string& acceptedInput)
         router);
     if (commandResult.bWasCommand)
     {
+        // /profile swaps the prompt and sampling through the router. The voice belongs to
+        // the profile too, so it has to follow, and the choice has to survive a restart.
+        if (settings.activeProfile != profileBeforeCommand)
+        {
+            speechService.SetActiveProfile(settings.activeProfile);
+            preferenceStore.Set("activeProfile", settings.activeProfile);
+        }
         result.succeeded = commandResult.bSuccess;
         result.shouldExit = commandResult.bShouldExit;
         result.text = commandResult.output;
@@ -3727,6 +3793,115 @@ bool ReviaSession::IsVisionAvailable() const
     return started.load() && llmAvailable && settings.vision.bEnabled;
 }
 
+bool ReviaSession::IsCameraAvailable() const
+{
+    return started.load() && actionRuntime.Settings().camera.enabled;
+}
+
+std::vector<vision::CameraDescriptor> ReviaSession::Cameras() const
+{
+    // Enumeration is not capture: it reads device names from Windows and opens nothing,
+    // so it stays available even while the capability is off. A settings screen that
+    // cannot list cameras until you first grant camera access is a settings screen you
+    // have to grant access to blindly.
+    return cameraCaptureService.EnumerateCameras();
+}
+
+vision::CameraFrame ReviaSession::CaptureCameraFrame(const bool autonomous)
+{
+    vision::CameraFrame refused;
+    const actions::CapabilitySettings capabilities = actionRuntime.Settings();
+    if (!capabilities.camera.enabled)
+    {
+        refused.reason =
+            "Camera access is off. Turn it on under Permissions before Revia can look.";
+        return refused;
+    }
+    if (autonomous && !capabilities.camera.autonomousCapture)
+    {
+        // Answering "what am I holding?" is not consent to be watched. The narrower
+        // authority is refused by name so the difference is visible rather than implied.
+        refused.reason =
+            "Revia may use the camera when asked, but taking a frame on her own is a "
+            "separate permission that is currently off.";
+        return refused;
+    }
+
+    {
+        std::lock_guard cameraLock(cameraMutex);
+        const auto now = std::chrono::steady_clock::now();
+        const auto since = std::chrono::duration_cast<std::chrono::milliseconds>(
+            now - lastCameraCaptureAt).count();
+        if (lastCameraCaptureAt.time_since_epoch().count() != 0 &&
+            since < capabilities.camera.minimumIntervalMs)
+        {
+            refused.reason = "The camera was used moments ago. Repeated frames this "
+                "close together would be a recording rather than a look.";
+            return refused;
+        }
+        // A minute-long window, trimmed rather than reset, so a burst cannot ride over
+        // the boundary between two fixed periods.
+        const auto windowStart = now - std::chrono::minutes(1);
+        while (!recentCameraCaptures.empty() && recentCameraCaptures.front() < windowStart)
+        {
+            recentCameraCaptures.pop_front();
+        }
+        if (static_cast<int>(recentCameraCaptures.size()) >=
+            capabilities.camera.maxCapturesPerMinute)
+        {
+            refused.reason = "The camera has already been used " +
+                std::to_string(recentCameraCaptures.size()) +
+                " times in the last minute, which is its limit.";
+            return refused;
+        }
+        lastCameraCaptureAt = now;
+        recentCameraCaptures.push_back(now);
+    }
+
+    PublishComponent("Camera", "Capturing",
+        autonomous ? "Revia is taking a frame she asked for herself."
+                   : "Taking one camera frame.");
+
+    vision::CameraFrame frame = cameraCaptureService.CaptureFrame(
+        "RuntimeData/Camera",
+        1,
+        capabilities.camera.preferredDevice,
+        capabilities.camera.warmupFrames);
+
+    PublishComponent(
+        "Camera",
+        frame.succeeded ? "Ready" : "Error",
+        frame.reason,
+        frame.elapsedMilliseconds);
+
+    if (frame.succeeded)
+    {
+        appLogger.Log("Camera frame captured: " + actions::PathToUtf8(frame.path));
+    }
+    else
+    {
+        appLogger.Warning("Camera capture failed: " + frame.reason);
+    }
+
+    // A camera that will not open is something that happened to her, not just a log
+    // line. Low importance on purpose: it should colour her mood, not dominate it.
+    InternalStimulus stimulus;
+    stimulus.source = "Camera";
+    stimulus.detail = frame.reason;
+    stimulus.selfCaused = autonomous;
+    stimulus.kind = frame.succeeded
+        ? InternalEventKind::ActivitySucceeded
+        : InternalEventKind::ActivityFailed;
+    stimulus.failure = frame.succeeded ? 0.0F : 0.6F;
+    stimulus.importance = frame.succeeded ? 0.2F : 0.4F;
+    if (const std::optional<AffectSnapshot> felt =
+            affectController.ObserveInternalEvent(stimulus))
+    {
+        PublishAffect(*felt);
+    }
+    return frame;
+}
+
 SessionResult ReviaSession::ActOnScreen(const std::string& instruction)
 {
     std::lock_guard operationLock(operationMutex);
@@ -3777,11 +3952,8 @@ SessionResult ReviaSession::ActOnScreen(const std::string& instruction)
     eventBus.Publish(event);
     SetState(RuntimeState::Thinking, "Locating the requested visible control.");
 
-    std::filesystem::path mediaDirectory(settings.llm.mediaPath);
-    if (mediaDirectory.is_relative())
-    {
-        mediaDirectory = std::filesystem::absolute(mediaDirectory);
-    }
+    const std::filesystem::path mediaDirectory =
+        revia::core::ResolveRuntimePath(settings.llm.mediaPath);
     const vision::CaptureResult capture = screenCaptureService.CaptureForegroundWindow(mediaDirectory);
     timings.push_back({"vision_action_capture", capture.elapsedMilliseconds});
     const auto finishFailure = [&](const std::string& text, const std::string& reason)
@@ -4037,6 +4209,27 @@ CapabilityUpdateResult ReviaSession::SetInternetAccess(
     return result;
 }
 
+CapabilityUpdateResult ReviaSession::SetCameraAccess(
+    const bool enabled,
+    const bool autonomousCapture)
+{
+    CapabilityUpdateResult result;
+    std::string error;
+    result.succeeded = actionRuntime.SetCameraAccess(enabled, autonomousCapture, error);
+    result.message = result.succeeded
+        ? enabled
+            ? autonomousCapture
+                ? "Revia may use the camera, including on her own initiative."
+                : "Revia may use the camera when asked. She cannot use it on her own."
+            : "Camera access is off."
+        : error;
+    if (result.succeeded)
+    {
+        PublishComponent("Camera", enabled ? "Ready" : "Disabled", result.message);
+    }
+    return result;
+}
+
 CapabilityUpdateResult ReviaSession::SetInternetBrowser(
     const bool visibleBrowser,
     const bool autonomousResearch)
@@ -4135,6 +4328,186 @@ speech::VoiceOperationResult ReviaSession::AssignVoice(
         appLogger.Warning("Voice assignment failed: " + result.message);
     }
     return result;
+}
+
+std::vector<memoryEntry> ReviaSession::Memories() const
+{
+    // Its own store object, matching how the memory agent and prompt construction each
+    // open one. SQLite handles the concurrency; sharing a handle across these callers
+    // would not.
+    const longTermMemory store;
+    return store.Load();
+}
+
+std::vector<memoryEntry> ReviaSession::SearchMemories(
+    const std::string& query,
+    const std::size_t maxEntries) const
+{
+    const longTermMemory store;
+    if (query.empty())
+    {
+        std::vector<memoryEntry> all = store.Load();
+        if (all.size() > maxEntries)
+        {
+            all.resize(maxEntries);
+        }
+        return all;
+    }
+    // No query embedding: a viewer is a person reading their own memory, and paying for
+    // an embedding round trip per keystroke to rank thirty rows would be absurd. BM25
+    // alone is what the store falls back to anyway when no vector is supplied.
+    return store.Search(query, maxEntries);
+}
+
+std::string ReviaSession::MemoryStatus() const
+{
+    const longTermMemory store;
+    if (!store.HasMemories())
+    {
+        return "Nothing has been remembered yet.";
+    }
+    const std::size_t count = store.Load().size();
+    return std::to_string(count) +
+        (count == 1 ? " memory is stored in " : " memories are stored in ") +
+        "Memory/revia_memory.db.";
+}
+
+ProfileStudioSnapshot ReviaSession::ProfileStudio() const
+{
+    ProfileStudioSnapshot snapshot;
+    // Taken before the voice studio lock rather than around it: the two are independent,
+    // and nesting them would create an ordering the rest of the class does not observe.
+    {
+        std::lock_guard operationLock(operationMutex);
+        snapshot.activeProfileId = settings.activeProfile;
+        snapshot.activeDisplayName = profile.displayName;
+    }
+    const speech::VoiceStudioSnapshot voices = VoiceStudio();
+    snapshot.voices = voices.presets;
+
+    for (const std::string& profileId : config.ListProfiles())
+    {
+        aiProfile loaded;
+        if (!config.LoadProfile(profileId, loaded))
+        {
+            // A file that does not parse is not offered for editing, because saving over
+            // it from a blank editor would destroy whatever the author was mid-way
+            // through writing. /profile still reports the failure by name.
+            continue;
+        }
+        ProfileSummary summary;
+        // The file stem, not the "id" field inside the file. That is the name every other
+        // part of the runtime addresses a profile by, voice assignment included.
+        summary.id = profileId;
+        summary.displayName = loaded.displayName;
+        summary.description = loaded.description;
+        summary.systemPrompt = loaded.systemPrompt;
+        summary.memoryEnabled = loaded.bMemoryEnabled;
+        summary.hasTemperatureOverride = loaded.bHasTemperatureOverride;
+        summary.temperature = loaded.temperature;
+        summary.hasMaxTokensOverride = loaded.bHasMaxTokensOverride;
+        summary.maxTokens = loaded.maxTokens;
+        const auto assignment = voices.profileAssignments.find(profileId);
+        if (assignment != voices.profileAssignments.end())
+        {
+            summary.voicePresetId = assignment->second;
+            for (const speech::VoicePreset& preset : voices.presets)
+            {
+                if (preset.id == summary.voicePresetId)
+                {
+                    summary.voicePresetName = preset.name;
+                    break;
+                }
+            }
+        }
+        snapshot.profiles.push_back(std::move(summary));
+    }
+    return snapshot;
+}
+
+ProfileOperationResult ReviaSession::SaveProfile(const ProfileSummary& definition)
+{
+    aiProfile candidate;
+    candidate.id = definition.id;
+    candidate.displayName = definition.displayName;
+    candidate.description = definition.description;
+    candidate.systemPrompt = definition.systemPrompt;
+    candidate.bMemoryEnabled = definition.memoryEnabled;
+    candidate.bHasTemperatureOverride = definition.hasTemperatureOverride;
+    candidate.temperature = definition.temperature;
+    candidate.bHasMaxTokensOverride = definition.hasMaxTokensOverride;
+    candidate.maxTokens = definition.maxTokens;
+
+    std::string error;
+    std::lock_guard operationLock(operationMutex);
+    if (!config.SaveProfile(candidate, error))
+    {
+        appLogger.Warning("Profile save failed: " + error);
+        return {false, error};
+    }
+    std::string message = "Saved profile '" + candidate.displayName + "'.";
+    if (candidate.id == settings.activeProfile)
+    {
+        // Editing the profile that is running should take effect on the next turn rather
+        // than at the next launch. Memory is the exception and says so: it is wired up
+        // once during startup.
+        aiProfile reloaded;
+        if (config.LoadProfile(candidate.id, reloaded))
+        {
+            const bool memoryChanged = reloaded.bMemoryEnabled != profile.bMemoryEnabled;
+            profile = reloaded;
+            router.ApplyProfile(profile);
+            message += " This is the running profile, so the change applies to the next reply.";
+            if (memoryChanged)
+            {
+                message += " The memory setting applies after a restart.";
+            }
+        }
+    }
+    appLogger.Log(message);
+    Publish(RuntimeEventKind::Activity, message);
+    return {true, message};
+}
+
+ProfileOperationResult ReviaSession::ActivateProfile(const std::string& profileId)
+{
+    aiProfile loaded;
+    if (!config.LoadProfile(profileId, loaded))
+    {
+        return {false, "Profile '" + profileId + "' could not be loaded."};
+    }
+    {
+        // Never mid-turn. Swapping the system prompt underneath a reply that is already
+        // being generated would produce an answer from neither profile.
+        std::unique_lock operationLock(operationMutex, std::try_to_lock);
+        if (!operationLock.owns_lock() || busy.load())
+        {
+            return {false,
+                "Revia is in the middle of a turn. Switch profiles once she has finished."};
+        }
+        profile = loaded;
+        settings.activeProfile = profileId;
+        router.ApplyProfile(profile);
+    }
+    speechService.SetActiveProfile(profileId);
+
+    std::string message = "Revia is now using '" + loaded.displayName + "'.";
+    const core::PreferenceResult stored = preferenceStore.Set("activeProfile", profileId);
+    if (!stored.succeeded)
+    {
+        message += " It could not be stored as the startup profile: " + stored.message;
+    }
+    if (!speechService.HasActiveQwenVoice())
+    {
+        message += " This profile speaks with the Windows voice.";
+    }
+    else
+    {
+        message += " Restart once so the assigned voice loads onto the planned device.";
+    }
+    appLogger.Log(message);
+    Publish(RuntimeEventKind::Activity, message);
+    return {true, message};
 }
 
 bool ReviaSession::EnsureLLMAvailable(const std::stop_token stopToken)
@@ -4451,6 +4824,49 @@ goals::Goal ReviaSession::FinishGoalRun(
                 : RuntimeState::Blocked,
             summary);
     }
+    // A goal run is an outcome the runtime confirmed, which makes it something Revia is
+    // allowed to feel. Steps she chose and budgets she spent make it self-caused, so a
+    // failure here lands as frustration rather than as concern about the world.
+    InternalStimulus stimulus;
+    stimulus.source = "Goal";
+    stimulus.detail = summary;
+    stimulus.selfCaused = true;
+    // Longer goals cost more and matter more, but the scale is capped: a twenty-step
+    // goal is not four times as important as a five-step one.
+    stimulus.importance = std::clamp(
+        0.35F + 0.05F * static_cast<float>(finished.spend.actions), 0.0F, 0.85F);
+    switch (finished.status)
+    {
+        case goals::GoalStatus::Succeeded:
+            stimulus.kind = InternalEventKind::ActivitySucceeded;
+            stimulus.failure = 0.0F;
+            // Retries mean it did not go smoothly, and a hard-won success is the kind
+            // worth being pleased about.
+            stimulus.novelty = finished.spend.retries > 0 ? 0.55F : 0.2F;
+            break;
+        case goals::GoalStatus::Failed:
+        case goals::GoalStatus::Exhausted:
+            stimulus.kind = InternalEventKind::ActivityFailed;
+            stimulus.failure = finished.status == goals::GoalStatus::Exhausted ? 0.7F : 0.85F;
+            break;
+        case goals::GoalStatus::Blocked:
+            // Blocked means policy or a missing permission stopped it. Nothing broke.
+            stimulus.kind = InternalEventKind::ActionRefused;
+            stimulus.failure = 0.4F;
+            break;
+        default:
+            // Planned, Running, and Cancelled are not outcomes. A goal the user cancelled
+            // is not a failure of hers, and pretending otherwise would teach her to feel
+            // bad about being told to stop.
+            stimulus.importance = 0.0F;
+            break;
+    }
+    if (const std::optional<AffectSnapshot> felt =
+            affectController.ObserveInternalEvent(stimulus))
+    {
+        PublishAffect(*felt);
+    }
+
     if (!goals::IsTerminal(finished.status))
     {
         SignalInitiative("an unfinished goal changed state");
@@ -5186,6 +5602,37 @@ bool ReviaSession::TryHandleActionInput(const std::string& input, SessionResult&
         result.reasoning =
             "Read-only self-assessment over recorded runtime events. No setting, model, "
             "source file, executable, permission, or capability was changed.";
+        SetState(RuntimeState::Idle);
+        return true;
+    }
+
+    if (input == "/models")
+    {
+        std::ostringstream stream;
+        stream << "Active Revia model inventory:";
+        for (const intelligence::ModelResidency& model : router.ModelResidencySnapshot())
+        {
+            stream << "\n  " << model.role << ": " << model.model
+                << " — " << intelligence::ToString(model.state)
+                << " on " << (model.device == "none" ? "CPU" : model.device);
+            if (!model.projector.empty())
+            {
+                stream << " + projector " << model.projector;
+            }
+            stream << " (" << model.artifactMiB << " MiB artifact)";
+        }
+        stream << "\n  Memory embeddings: " << settings.embedding.modelName
+            << " — " << (settings.embedding.device == "none"
+                ? "CPU" : settings.embedding.device);
+        stream << "\n  Speech recognition: " << settings.speechRecognition.modelPath
+            << " — " << resourcePlan.speechRecognitionDevice;
+        stream << "\n  Conversational voice: " << settings.speech.qwenCloneModel
+            << " — " << resourcePlan.VoiceLabel()
+            << ", " << settings.speech.qwenAttentionBackend
+            << " attention, " << settings.speech.qwenInputMode << " text input";
+        stream << "\n  Voice creation: " << settings.speech.qwenVoiceDesignModel
+            << " — isolated on-demand worker";
+        result.text = stream.str();
         SetState(RuntimeState::Idle);
         return true;
     }

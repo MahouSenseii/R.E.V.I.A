@@ -152,8 +152,12 @@ bool QwenTtsServerProcess::Start(
         L" --device " + QuoteWindowsArgument(Utf8ToWide(settings.qwenDevice)) +
         L" --minimum-free-vram-mib " + std::to_wstring(settings.qwenMinimumFreeVramMiB) +
         L" --cpu-threads " + std::to_wstring(settings.qwenCpuThreads) +
+        L" --max-audio-mib " + std::to_wstring(settings.qwenMaxBufferedAudioMiB) +
         L" --design-model " + QuoteWindowsArgument(Utf8ToWide(settings.qwenVoiceDesignModel)) +
-        L" --clone-model " + QuoteWindowsArgument(Utf8ToWide(settings.qwenCloneModel));
+        L" --clone-model " + QuoteWindowsArgument(Utf8ToWide(settings.qwenCloneModel)) +
+        L" --attention-backend " +
+            QuoteWindowsArgument(Utf8ToWide(settings.qwenAttentionBackend)) +
+        L" --input-mode " + QuoteWindowsArgument(Utf8ToWide(settings.qwenInputMode));
     std::vector<wchar_t> mutableCommandLine(commandLine.begin(), commandLine.end());
     mutableCommandLine.push_back(L'\0');
 

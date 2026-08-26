@@ -59,6 +59,20 @@ CapabilityPanel::CapabilityPanel(
     browserRow->addStretch();
     layout->addLayout(browserRow);
 
+    cameraCheck = new QCheckBox("Allow camera access", this);
+    cameraCheck->setToolTip(
+        "Revia may take a single still frame when you ask her to look at something. "
+        "The camera is opened for that frame and closed again immediately.");
+    autonomousCameraCheck = new QCheckBox(
+        "Let Revia decide when to look", this);
+    autonomousCameraCheck->setToolTip(
+        "A separate permission. Without it she can only use the camera when asked.");
+    auto* cameraRow = new QHBoxLayout();
+    cameraRow->addWidget(cameraCheck);
+    cameraRow->addWidget(autonomousCameraCheck);
+    cameraRow->addStretch();
+    layout->addLayout(cameraRow);
+
     auto* body = new QHBoxLayout();
     auto* approvedColumn = new QVBoxLayout();
     auto* approvedTitle = new QLabel("Approved applications and controls", this);
@@ -123,6 +137,9 @@ CapabilityPanel::CapabilityPanel(
         this, [this]() { ApplyBrowserSettings(); });
     connect(autonomousResearchCheck, &QCheckBox::toggled,
         this, [this]() { ApplyBrowserSettings(); });
+    connect(cameraCheck, &QCheckBox::toggled, this, [this]() { ApplyCameraSettings(); });
+    connect(autonomousCameraCheck, &QCheckBox::toggled,
+        this, [this]() { ApplyCameraSettings(); });
     connect(addApplicationButton, &QPushButton::clicked, this,
         [this]() { AddApplicationManually(); });
     connect(removeButton, &QPushButton::clicked, this,
@@ -175,7 +192,62 @@ void CapabilityPanel::Refresh()
     visibleBrowserCheck->setEnabled(settings.internet.enabled);
     autonomousResearchCheck->setEnabled(
         settings.internet.enabled && settings.internet.visibleBrowser);
+    cameraCheck->setChecked(settings.camera.enabled);
+    autonomousCameraCheck->setChecked(settings.camera.autonomousCapture);
+    autonomousCameraCheck->setEnabled(settings.camera.enabled);
     refreshing = false;
+}
+
+void CapabilityPanel::ApplyCameraSettings()
+{
+    if (refreshing) return;
+    const auto previous = session.Capabilities().camera;
+    // Confirmed on the way up only, and worded so the answer is informed rather than
+    // reflexive. A camera toggle that flips silently is the one permission users would
+    // most reasonably expect to be asked about.
+    if (!previous.enabled && cameraCheck->isChecked())
+    {
+        const bool approved = QMessageBox::question(
+            this,
+            "Allow camera access",
+            "Revia will be able to take a single still frame from your camera and describe "
+            "what it contains. The camera is opened for that frame and closed again "
+            "immediately, so the hardware light is on only while a frame is being taken. "
+            "Frames are written to RuntimeData/Camera on this computer and are never "
+            "uploaded. Seeing something does not let her act on it: anything she does as a "
+            "result still goes through the ordinary permission and confirmation path. "
+            "Enable camera access?",
+            QMessageBox::Yes | QMessageBox::No,
+            QMessageBox::No) == QMessageBox::Yes;
+        if (!approved)
+        {
+            Refresh();
+            return;
+        }
+    }
+    if (!previous.autonomousCapture && autonomousCameraCheck->isChecked())
+    {
+        const bool approved = QMessageBox::question(
+            this,
+            "Let Revia decide when to look",
+            "This is a separate permission from answering a question about what she can see. "
+            "It allows Revia to take a frame without you asking, subject to the same rate "
+            "limit and the same audit trail. Consenting to answer \"what am I holding?\" is "
+            "not the same as consenting to be watched, which is why this is asked "
+            "separately. Allow it?",
+            QMessageBox::Yes | QMessageBox::No,
+            QMessageBox::No) == QMessageBox::Yes;
+        if (!approved)
+        {
+            Refresh();
+            return;
+        }
+    }
+    autonomousCameraCheck->setEnabled(cameraCheck->isChecked());
+    const auto result = session.SetCameraAccess(
+        cameraCheck->isChecked(), autonomousCameraCheck->isChecked());
+    SetStatus(QString::fromStdString(result.message), !result.succeeded);
+    Refresh();
 }
 
 void CapabilityPanel::ShowDiscovery(

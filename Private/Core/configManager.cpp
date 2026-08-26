@@ -1,6 +1,8 @@
 #include "Core/configManager.h"
 
+#include <algorithm>
 #include <exception>
+#include <filesystem>
 #include <fstream>
 #include <nlohmann/json.hpp>
 #include <regex>
@@ -347,10 +349,35 @@ bool configManager::LoadSettings(appSettings& outSettings) const
                 outSettings.speech.qwenPhraseCharacters =
                     speechData["qwenPhraseCharacters"].get<int>();
             }
+            if (speechData.contains("qwenFirstPhraseCharacters"))
+            {
+                outSettings.speech.qwenFirstPhraseCharacters =
+                    speechData["qwenFirstPhraseCharacters"].get<int>();
+            }
             if (speechData.contains("qwenParallelLongReplies"))
             {
                 outSettings.speech.bQwenParallelLongReplies =
                     speechData["qwenParallelLongReplies"].get<bool>();
+            }
+            if (speechData.contains("qwenDirectPcm"))
+            {
+                outSettings.speech.bQwenDirectPcm =
+                    speechData["qwenDirectPcm"].get<bool>();
+            }
+            if (speechData.contains("qwenPrecomputeVoicePrompt"))
+            {
+                outSettings.speech.bQwenPrecomputeVoicePrompt =
+                    speechData["qwenPrecomputeVoicePrompt"].get<bool>();
+            }
+            if (speechData.contains("qwenAttentionBackend"))
+            {
+                outSettings.speech.qwenAttentionBackend =
+                    speechData["qwenAttentionBackend"].get<std::string>();
+            }
+            if (speechData.contains("qwenInputMode"))
+            {
+                outSettings.speech.qwenInputMode =
+                    speechData["qwenInputMode"].get<std::string>();
             }
             if (speechData.contains("qwenMaxBufferedAudioMiB"))
             {
@@ -653,6 +680,11 @@ bool configManager::LoadSettings(appSettings& outSettings) const
             {
                 outSettings.vision.awarenessMinimumIntervalMs =
                     visionData["awarenessMinimumIntervalMs"].get<int>();
+            }
+            if (visionData.contains("awarenessRefreshSeconds"))
+            {
+                outSettings.vision.awarenessRefreshSeconds =
+                    visionData["awarenessRefreshSeconds"].get<int>();
             }
             if (visionData.contains("awarenessMaxResponseTokens"))
             {
@@ -1058,8 +1090,19 @@ bool configManager::LoadSettings(appSettings& outSettings) const
         outSettings.speech.qwenMaxWorkers < 1 || outSettings.speech.qwenMaxWorkers > 8 ||
         outSettings.speech.qwenPrefetchFragments < 1 ||
         outSettings.speech.qwenPrefetchFragments > 16 ||
-        outSettings.speech.qwenPhraseCharacters < 48 ||
+        outSettings.speech.qwenFirstPhraseCharacters < 16 ||
+        outSettings.speech.qwenFirstPhraseCharacters > 128 ||
+        outSettings.speech.qwenPhraseCharacters < 32 ||
         outSettings.speech.qwenPhraseCharacters > 512 ||
+        outSettings.speech.qwenFirstPhraseCharacters >
+            outSettings.speech.qwenPhraseCharacters ||
+        (outSettings.speech.qwenAttentionBackend != "adaptive" &&
+            outSettings.speech.qwenAttentionBackend != "auto" &&
+            outSettings.speech.qwenAttentionBackend != "eager" &&
+            outSettings.speech.qwenAttentionBackend != "sdpa" &&
+            outSettings.speech.qwenAttentionBackend != "flash_attention_2") ||
+        (outSettings.speech.qwenInputMode != "complete" &&
+            outSettings.speech.qwenInputMode != "simulated-stream") ||
         outSettings.speech.qwenMaxBufferedAudioMiB < 16 ||
         outSettings.speech.qwenMaxBufferedAudioMiB > 2048 ||
         outSettings.speech.qwenVoiceDesignModel.empty() ||
@@ -1155,6 +1198,8 @@ bool configManager::LoadSettings(appSettings& outSettings) const
         outSettings.vision.awarenessDebounceMs > 60000 ||
         outSettings.vision.awarenessMinimumIntervalMs < 1000 ||
         outSettings.vision.awarenessMinimumIntervalMs > 3600000 ||
+        outSettings.vision.awarenessRefreshSeconds < 10 ||
+        outSettings.vision.awarenessRefreshSeconds > 3600 ||
         outSettings.vision.awarenessMaxResponseTokens < 64 ||
         outSettings.vision.awarenessMaxResponseTokens > 512 ||
         outSettings.vision.resolutionConfidence < 0.5 ||
@@ -1229,14 +1274,19 @@ bool configManager::LoadSettings(appSettings& outSettings) const
     return true;
 }
 
+bool configManager::IsSafeProfileId(const std::string& profileId)
+{
+    // M2: profileId comes from user input (/profile <name>, and now the desktop profile
+    // editor). Reject anything that could escape the Config/Profiles directory.
+    return !profileId.empty() &&
+        profileId.find('/') == std::string::npos &&
+        profileId.find('\\') == std::string::npos &&
+        profileId.find("..") == std::string::npos;
+}
+
 bool configManager::LoadProfile(const std::string& profileId, aiProfile& outProfile) const
 {
-    // M2: profileId comes from user input (/profile <name>). Reject anything
-    // that could escape the Config/Profiles directory.
-    if (profileId.empty() ||
-        profileId.find('/') != std::string::npos ||
-        profileId.find('\\') != std::string::npos ||
-        profileId.find("..") != std::string::npos)
+    if (!IsSafeProfileId(profileId))
     {
         return false;
     }
@@ -1264,6 +1314,11 @@ bool configManager::LoadProfile(const std::string& profileId, aiProfile& outProf
         if (data.contains("displayName"))
         {
             outProfile.displayName = data["displayName"].get<std::string>();
+        }
+
+        if (data.contains("description"))
+        {
+            outProfile.description = data["description"].get<std::string>();
         }
 
         if (data.contains("systemPrompt"))
@@ -1305,5 +1360,151 @@ bool configManager::LoadProfile(const std::string& profileId, aiProfile& outProf
         return false;
     }
 
+    return true;
+}
+
+std::vector<std::string> configManager::ListProfiles() const
+{
+    std::vector<std::string> profiles;
+    std::error_code error;
+    const std::filesystem::path root(profilePath);
+    if (!std::filesystem::is_directory(root, error))
+    {
+        return profiles;
+    }
+    for (const auto& entry : std::filesystem::directory_iterator(root, error))
+    {
+        if (entry.is_regular_file(error) && entry.path().extension() == ".json")
+        {
+            const std::string id = entry.path().stem().string();
+            if (IsSafeProfileId(id))
+            {
+                profiles.push_back(id);
+            }
+        }
+    }
+    std::sort(profiles.begin(), profiles.end());
+    return profiles;
+}
+
+bool configManager::SaveProfile(const aiProfile& profile, std::string& outError) const
+{
+    if (!IsSafeProfileId(profile.id))
+    {
+        outError = "A profile id cannot be empty or contain a path separator.";
+        return false;
+    }
+    // Stricter than the load-time containment rule on purpose: this creates a file name,
+    // and a hand-authored profile with an unusual name must still keep loading.
+    static const std::regex CreatableId(R"(^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$)");
+    if (!std::regex_match(profile.id, CreatableId))
+    {
+        outError = "A profile id may use letters, numbers, dot, dash, and underscore, "
+            "must start with a letter or number, and may be at most 64 characters.";
+        return false;
+    }
+    if (profile.displayName.empty())
+    {
+        outError = "A profile needs a display name.";
+        return false;
+    }
+    if (profile.systemPrompt.empty())
+    {
+        outError = "A profile needs a system prompt.";
+        return false;
+    }
+    if (profile.bHasTemperatureOverride &&
+        (profile.temperature < 0.0f || profile.temperature > 2.0f))
+    {
+        outError = "Temperature must be between 0.0 and 2.0.";
+        return false;
+    }
+    if (profile.bHasMaxTokensOverride &&
+        (profile.maxTokens < 1 || profile.maxTokens > 32768))
+    {
+        outError = "Reply limit must be between 1 and 32768 tokens.";
+        return false;
+    }
+
+    const std::filesystem::path root(profilePath);
+    std::error_code error;
+    std::filesystem::create_directories(root, error);
+    if (error)
+    {
+        outError = "The profile folder could not be created: " + error.message();
+        return false;
+    }
+    const std::filesystem::path profileFile = root / (profile.id + ".json");
+
+    // Read first so keys this loader does not understand survive the edit. A profile file
+    // is hand-editable, and a desktop save must not silently drop what someone wrote.
+    json document = json::object();
+    {
+        std::ifstream existing(profileFile);
+        if (existing.is_open())
+        {
+            try
+            {
+                json parsed;
+                existing >> parsed;
+                if (parsed.is_object())
+                {
+                    document = std::move(parsed);
+                }
+            }
+            catch (const std::exception&)
+            {
+                // A corrupt file is replaced rather than merged: there is nothing to keep.
+                document = json::object();
+            }
+        }
+    }
+
+    document["id"] = profile.id;
+    document["displayName"] = profile.displayName;
+    document["description"] = profile.description;
+    document["systemPrompt"] = profile.systemPrompt;
+    document["memoryEnabled"] = profile.bMemoryEnabled;
+    if (profile.bHasTemperatureOverride)
+    {
+        document["temperature"] = profile.temperature;
+    }
+    else
+    {
+        document.erase("temperature");
+    }
+    if (profile.bHasMaxTokensOverride)
+    {
+        document["maxTokens"] = profile.maxTokens;
+    }
+    else
+    {
+        document.erase("maxTokens");
+    }
+
+    // Written beside the target and moved into place, so an interrupted save cannot leave
+    // a half-written profile that the next startup refuses to load.
+    const std::filesystem::path temporaryFile = profileFile.string() + ".tmp";
+    {
+        std::ofstream output(temporaryFile, std::ios::binary | std::ios::trunc);
+        if (!output.is_open())
+        {
+            outError = "The profile file could not be opened for writing.";
+            return false;
+        }
+        output << document.dump(2) << "\n";
+        if (!output.good())
+        {
+            outError = "The profile file could not be written.";
+            return false;
+        }
+    }
+    std::filesystem::rename(temporaryFile, profileFile, error);
+    if (error)
+    {
+        std::filesystem::remove(temporaryFile, error);
+        outError = "The profile file could not be replaced.";
+        return false;
+    }
     return true;
 }

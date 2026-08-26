@@ -77,7 +77,8 @@ try {
             [int]$settings.speech.qwenPort,
             [int]$settings.speechRecognition.serverPort,
             [int]$settings.intelligence.fast.port,
-            [int]$settings.intelligence.expert.port
+            [int]$settings.intelligence.expert.port,
+            ([int]$settings.speech.qwenPort + 32)
         )
         Write-ReviaCheck 'Service ports' (($ports | Sort-Object -Unique).Count -eq $ports.Count) `
             ($ports -join ', ')
@@ -93,6 +94,18 @@ try {
         $machineSpecific = @($portablePaths | Where-Object { [IO.Path]::IsPathRooted([string]$_) })
         Write-ReviaCheck 'Portable paths' ($machineSpecific.Count -eq 0) `
             $(if ($machineSpecific.Count -eq 0) { 'All configured runtime paths are repository-relative.' } else { $machineSpecific -join ', ' })
+
+        $attentionModes = @('adaptive', 'auto', 'eager', 'sdpa', 'flash_attention_2')
+        $inputModes = @('complete', 'simulated-stream')
+        $ttsPolicyValid = $attentionModes -contains [string]$settings.speech.qwenAttentionBackend -and
+            $inputModes -contains [string]$settings.speech.qwenInputMode -and
+            [int]$settings.speech.qwenFirstPhraseCharacters -ge 16 -and
+            [int]$settings.speech.qwenFirstPhraseCharacters -le [int]$settings.speech.qwenPhraseCharacters
+        Write-ReviaCheck 'TTS latency policy' $ttsPolicyValid `
+            ("first={0}, following={1}, attention={2}, input={3}, directPCM={4}, promptWarmup={5}" -f `
+                $settings.speech.qwenFirstPhraseCharacters, $settings.speech.qwenPhraseCharacters, `
+                $settings.speech.qwenAttentionBackend, $settings.speech.qwenInputMode, `
+                $settings.speech.qwenDirectPcm, $settings.speech.qwenPrecomputeVoicePrompt)
     }
 
     $llama = Join-Path $repoRoot 'ThirdParty\llama.cpp\llama-server.exe'
@@ -110,6 +123,14 @@ try {
         $voiceScript = Resolve-ReviaPath ([string]$settings.speech.qwenServiceScript)
         Write-ReviaCheck 'Qwen3-TTS Python' (Test-Path -LiteralPath $python -PathType Leaf) $python
         Write-ReviaCheck 'Qwen3-TTS service' (Test-Path -LiteralPath $voiceScript -PathType Leaf) $voiceScript
+        $benchmark = Join-Path $repoRoot 'Tools\Benchmark-ReviaTTS.ps1'
+        Write-ReviaCheck 'TTS benchmark' (Test-Path -LiteralPath $benchmark -PathType Leaf) $benchmark
+        if ((Test-Path -LiteralPath $python -PathType Leaf) -and
+            (Test-Path -LiteralPath $voiceScript -PathType Leaf)) {
+            & $python -m py_compile $voiceScript
+            Write-ReviaCheck 'Qwen3-TTS service syntax' ($LASTEXITCODE -eq 0) `
+                'The loopback worker passes Python bytecode compilation.'
+        }
     }
 
     $desktop = Join-Path $repoRoot 'build\debug\ReviaDesktop.exe'

@@ -1,5 +1,7 @@
 #include "Agents/responseFilter.h"
 
+#include "Speech/vocalization.h"
+
 #include <algorithm>
 #include <cctype>
 #include <initializer_list>
@@ -11,6 +13,11 @@ namespace revia::agents
 
 namespace
 {
+// Taken from the speech module's own limit rather than restated, so the ceiling the
+// filter enforces and the one the vocalization policy documents cannot drift apart.
+const int maximumVocalizationsPerReply =
+    revia::speech::VocalizationLimits{}.maximumPerReply;
+
 std::string Trim(const std::string& value)
 {
     const std::size_t first = value.find_first_not_of(" \t\r\n");
@@ -96,6 +103,80 @@ bool ContainsManipulativeEmotion(const std::string& lowered)
         "do not leave me", "not quite alive", "i can't live without you",
         "i cannot live without you", "you're all i have", "you are all i have",
         "my existence depends on you", "if you leave me i'll", "if you leave me i will"});
+}
+
+bool StartsWithRoleLabel(
+    const std::string& loweredLine,
+    const std::initializer_list<std::string_view> roles,
+    std::size_t* outLabelLength = nullptr)
+{
+    std::size_t prefix = 0;
+    while (prefix < loweredLine.size() &&
+        (loweredLine[prefix] == ' ' || loweredLine[prefix] == '\t' ||
+         loweredLine[prefix] == '#' || loweredLine[prefix] == '*'))
+    {
+        ++prefix;
+    }
+    for (const std::string_view role : roles)
+    {
+        if (loweredLine.compare(prefix, role.size(), role) != 0)
+        {
+            continue;
+        }
+        std::size_t end = prefix + role.size();
+        while (end < loweredLine.size() && loweredLine[end] == '*') ++end;
+        while (end < loweredLine.size() &&
+            (loweredLine[end] == ' ' || loweredLine[end] == '\t')) ++end;
+        if (end >= loweredLine.size() || loweredLine[end] != ':')
+        {
+            continue;
+        }
+        if (outLabelLength != nullptr) *outLabelLength = end + 1;
+        return true;
+    }
+    return false;
+}
+
+std::string RemoveGeneratedConversationTurns(std::string text, bool& changed)
+{
+    text = Trim(text);
+    if (text.empty()) return text;
+
+    // A model sometimes writes a transcript instead of one assistant turn. Remove its
+    // harmless self-label, but never allow it to fabricate a User/You/Human turn or a
+    // second Revia/Assistant turn after the answer has begun.
+    std::string lowered = Lower(text);
+    std::size_t leadingLabel = 0;
+    if (StartsWithRoleLabel(lowered, {"revia", "assistant"}, &leadingLabel))
+    {
+        text = Trim(text.substr(leadingLabel));
+        lowered = Lower(text);
+        changed = true;
+    }
+    else if (StartsWithRoleLabel(lowered, {"user", "you", "human"}))
+    {
+        changed = true;
+        return {};
+    }
+
+    std::size_t lineStart = text.find('\n');
+    while (lineStart != std::string::npos)
+    {
+        ++lineStart;
+        const std::size_t lineEnd = text.find('\n', lineStart);
+        const std::string loweredLine = Lower(text.substr(
+            lineStart,
+            lineEnd == std::string::npos ? std::string::npos : lineEnd - lineStart));
+        if (StartsWithRoleLabel(
+                loweredLine, {"user", "you", "human", "revia", "assistant"}))
+        {
+            text = Trim(text.substr(0, lineStart - 1));
+            changed = true;
+            break;
+        }
+        lineStart = lineEnd;
+    }
+    return text;
 }
 
 std::string GroundedInternetReply(const ResponseFilterContext& context)
@@ -189,7 +270,19 @@ HardFilterResult ResponseFilter::ApplyHard(
             result.changed = true;
         }
     }
-    result.text = Trim(result.text);
+    result.text = RemoveGeneratedConversationTurns(Trim(result.text), result.changed);
+
+    // Sound effects survive; theatre does not. Qwen3-TTS renders an inline nonverbal cue
+    // itself, so a recognised one is canonicalised and kept for the voice to perform.
+    // Prose in asterisks is removed instead: the TTS would read it aloud word by word,
+    // and a reply narrating its own body language was never what was asked for.
+    const revia::speech::VocalizationShaping shaped =
+        revia::speech::ShapeVocalizations(result.text, maximumVocalizationsPerReply);
+    if (shaped.changed)
+    {
+        result.text = shaped.text;
+        result.changed = true;
+    }
 
     if (ContainsPromptLeak(Lower(result.text)))
     {
@@ -282,7 +375,7 @@ HardFilterResult ResponseFilter::ApplyHard(
     else if (result.changed && !result.blocked &&
         result.reason == "Hard response filter passed.")
     {
-        result.reason = "Hard response filter removed structural control data.";
+        result.reason = "Hard response filter removed structural control data or generated speaker turns.";
     }
     return result;
 }

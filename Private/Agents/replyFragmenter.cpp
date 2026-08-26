@@ -14,9 +14,16 @@ bool IsTerminal(const char value)
     return value == '.' || value == '!' || value == '?';
 }
 
-bool IsClausePunctuation(const char value)
+bool EndsWithTerminalSentence(const std::string& text)
 {
-    return value == ',' || value == ';' || value == ':' || value == '-';
+    std::size_t end = text.size();
+    while (end > 0 &&
+        (text[end - 1] == '"' || text[end - 1] == '\'' ||
+            text[end - 1] == ')' || text[end - 1] == ']'))
+    {
+        --end;
+    }
+    return end > 0 && IsTerminal(text[end - 1]);
 }
 
 std::string Trim(const std::string& value)
@@ -62,9 +69,15 @@ bool EndsWithAbbreviation(const std::string& text, const std::size_t terminalInd
 
 ReplyFragmenter::ReplyFragmenter(
     const std::size_t minimumFragmentCharacters,
-    const std::size_t maximumPhraseCharacters)
-    : minimumCharacters(minimumFragmentCharacters),
-      maximumCharacters(maximumPhraseCharacters)
+    const std::size_t maximumPhraseCharacters,
+    const std::size_t firstMinimumFragmentCharacters,
+    const std::size_t firstMaximumPhraseCharacters)
+    : followingMinimumCharacters(minimumFragmentCharacters),
+      followingMaximumCharacters(maximumPhraseCharacters),
+      firstMinimumCharacters(firstMinimumFragmentCharacters == 0
+          ? minimumFragmentCharacters : firstMinimumFragmentCharacters),
+      firstMaximumCharacters(firstMaximumPhraseCharacters == 0
+          ? maximumPhraseCharacters : firstMaximumPhraseCharacters)
 {
 }
 
@@ -114,6 +127,11 @@ std::vector<std::string> ReplyFragmenter::Consume(const std::string& incoming)
     std::size_t searchFrom = 0;
     while (searchFrom < pending.size())
     {
+        const bool first = emittedFragments == 0;
+        const std::size_t minimumCharacters = first
+            ? firstMinimumCharacters : followingMinimumCharacters;
+        const std::size_t maximumCharacters = first
+            ? firstMaximumCharacters : followingMaximumCharacters;
         std::size_t boundary = std::string::npos;
         for (std::size_t index = searchFrom; index < pending.size(); ++index)
         {
@@ -131,44 +149,11 @@ std::vector<std::string> ReplyFragmenter::Consume(const std::string& incoming)
                 break;
             }
         }
-        if (maximumCharacters > minimumCharacters &&
-            (boundary == std::string::npos || boundary + 1 > maximumCharacters) &&
-            pending.size() > maximumCharacters)
-        {
-            // Prefer a natural clause pause. If a very long clause has no punctuation,
-            // wait for some look-ahead and then use its last word boundary; bounded audio
-            // reaching the first worker is more useful than holding an entire paragraph.
-            const std::size_t limit = std::min(maximumCharacters, pending.size() - 1);
-            std::size_t phraseBoundary = std::string::npos;
-            for (std::size_t index = minimumCharacters;
-                 index <= limit && index + 1 < pending.size(); ++index)
-            {
-                if (IsClausePunctuation(pending[index]) &&
-                    std::isspace(static_cast<unsigned char>(pending[index + 1])) != 0)
-                {
-                    phraseBoundary = index;
-                }
-            }
-            const bool completeSentencePastLimit = boundary != std::string::npos &&
-                boundary + 1 > maximumCharacters;
-            if (phraseBoundary == std::string::npos &&
-                (completeSentencePastLimit ||
-                    pending.size() >= maximumCharacters + minimumCharacters))
-            {
-                for (std::size_t index = limit; index > minimumCharacters; --index)
-                {
-                    if (std::isspace(static_cast<unsigned char>(pending[index])) != 0)
-                    {
-                        phraseBoundary = index - 1;
-                        break;
-                    }
-                }
-            }
-            if (phraseBoundary != std::string::npos)
-            {
-                boundary = phraseBoundary;
-            }
-        }
+        // Legacy character targets are retained for configuration compatibility, but
+        // they are never permission to cut speech in the middle of a sentence. A long
+        // sentence stays intact and is handed to one worker only after its terminal
+        // punctuation is known.
+        (void)maximumCharacters;
         if (boundary == std::string::npos)
         {
             break;
@@ -183,6 +168,7 @@ std::vector<std::string> ReplyFragmenter::Consume(const std::string& incoming)
             continue;
         }
         fragments.push_back(candidate);
+        ++emittedFragments;
         pending.erase(0, boundary + 1);
         searchFrom = 0;
     }
@@ -191,14 +177,24 @@ std::vector<std::string> ReplyFragmenter::Consume(const std::string& incoming)
 
 std::string ReplyFragmenter::Flush()
 {
-    const std::string remainder = Trim(pending);
+    std::string remainder = Trim(pending);
     pending.clear();
+    if (remainder.empty()) return remainder;
+    if (EndsWithTerminalSentence(remainder)) return remainder;
+
+    // If earlier complete sentences are already queued, a non-terminal tail normally
+    // means the model hit a stop/token boundary mid-thought. Do not make Revia speak that
+    // broken tail. A short one-line answer such as "Okay" is still a complete utterance;
+    // give it natural terminal punctuation before TTS.
+    if (emittedFragments > 0 || remainder.size() > 160) return {};
+    remainder.push_back('.');
     return remainder;
 }
 
 void ReplyFragmenter::Reset()
 {
     pending.clear();
+    emittedFragments = 0;
 }
 
 } // namespace revia::agents

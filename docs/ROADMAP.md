@@ -17,20 +17,20 @@ The north star is **one Revia**: fast when a task is easy, thoughtful when it is
 
 | Area | Status | Current reality |
 |---|---:|---|
-| Main conversation brain | ✅ | Qwen3.5 4B handles normal local chat and vision. |
-| Fast/Main/Expert routing | ⬜ | The 0.8B and 8B model files exist, but they are not yet live conversation tiers. |
+| Main conversation brain | ✅ | Qwen3.5 4B handles normal local chat and ordinary vision. |
+| Reflex/Fast/Main/Expert routing | ✅ | C++ Reflex, Qwen3.5 0.8B, Qwen3.5 4B, and Qwen3-VL 8B are live, routed before generation, and share one identity packet. |
 | Personality and affect | ✅ | One profile, persistent affect momentum, style checks, preferences, and self-opinions. |
 | Memory | ✅ | SQLite conversation history plus hybrid structured memory and CPU embeddings. |
-| Multi-monitor awareness | ✅ | Event-driven local summaries, no Analyze Screen button, pause/forget controls. |
-| Voice output | ✅ | Qwen voice cloning, bounded phrase streaming, two-GPU generation, ordered playback, SAPI fallback. |
+| Multi-monitor awareness | ✅ | Event-driven local summaries plus an idle refresh backstop, no Analyze Screen button, pause/forget controls. |
+| Voice output | ✅ | Prompt-warmed Qwen cloning, complete-sentence pipelining, bounded in-memory playback, ordered multi-worker scheduling, and SAPI fallback. |
 | Voice input | ✅ | Persistent Distil-Whisper service, VAD, hold-to-talk/hands-free paths, barge-in. |
 | Internet research | ✅ | Opt-in visible browser with restricted navigation and source trace. |
-| Curiosity and initiative | 🟡 | Evidence-based proposals and bounded read-only research exist; deeper self-assessment is still limited. |
+| Curiosity and initiative | ✅ | Evidence-based proposals, bounded read-only research, and persisted evidence-threshold self-assessment tasks are live. |
 | Files and desktop actions | ✅ | Typed, supervised operations behind permission, confirmation, rate, and audit gates. |
 | Multi-step goals | 🟡 | Rehearsal, budgets, verification, confirmation, and resume exist; unattended delivery remains deliberately narrow. |
 | Hardware adaptation | 🟡 | Startup planning supports CPU, one GPU, and multiple GPUs; physical single-GPU/CPU test coverage is incomplete. |
-| One-command clean setup | ⬜ | Component installers exist, but one fully verified idempotent bootstrap does not. |
-| Self-improvement | 🟡 | Revia can review outcomes and propose memories; evidence-backed code/model improvement proposals are not complete. |
+| One-command clean setup | 🧪 | `setup.bat` implements profile selection, pinned manifests, install/build/test/health orchestration, and reuse; a genuinely fresh physical PC run remains unverified. |
+| Self-improvement | ✅ | Revia records repeated latency/failure evidence and creates reviewable proposals; it cannot apply code, model, setting, or permission changes by itself. |
 | Remote PCs and camera | ⬜ | Safety model is designed; runtime support is not built. |
 | Animated avatar | ⬜ | Intentionally deferred until the conversational system is stable. |
 
@@ -42,26 +42,35 @@ This milestone comes before adding more brains.
 
 - ✅ Continuous multi-monitor context is supplied to normal conversation automatically.
 - ✅ The manual **Analyze screen** control is removed; **Use screen** remains for confirmed actions.
-- ✅ Background vision yields to user input and pending voice work.
+- ✅ Background vision yields immediately to user input while remaining current during long voice playback.
 - ✅ Screen-context questions stay local instead of accidentally opening a browser search.
-- ✅ Long replies split at sentence, clause, or word boundaries around a 64-character target.
-- ✅ RTX 5070 and RTX 2070 Super workers can synthesize different phrases concurrently.
+- ✅ Speech starts on a complete sentence; legacy character targets never cut a clause or word mid-thought.
+- ✅ Generated User/You/Human turns and repeated assistant speaker labels are stopped before display, speech, history, or memory.
+- ✅ A response that reaches its token ceiling keeps its completed sentences and discards the unfinished tail instead of ending mid-thought.
+- ✅ Explicit visible-browser failures fall back to bounded allow-listed APIs; autonomous research remains visible-only.
+- ✅ RTX 5070 and RTX 2070 Super workers can synthesize different complete sentences concurrently.
 - ✅ An explicit sequence gate prevents a later phrase from playing before an earlier one.
 - ✅ The resource planner reserves VRAM before sharing the primary chat GPU with voice.
 - ✅ Automated planner, splitter, ordering, browser-policy, foundation, and desktop smoke tests pass.
-- ✅ A live four-sentence sample reduced first-phrase synthesis from 45.4 seconds to 18.1 seconds, with later phrases completing in roughly 9–20 seconds.
+- ✅ The active voice clone prompt is prepared before conversation synthesis and invalidated only when the reference identity changes.
+- ✅ Independent GPU workers load concurrently; live warmup improved from roughly 41–50 seconds to 26–31 seconds.
+- ✅ Normal chat audio is returned as a bounded in-memory WAV/PCM buffer, avoiding temporary playback files while keeping saved previews/assets.
+- ✅ Worker prediction includes fixed overhead and avoids assigning an ordered phrase to a slower free worker when the faster busy worker is still predicted to finish sooner.
+- ✅ The vocalization endpoint’s undefined-variable bug is fixed and covered by a real loopback HTTP regression test.
+- ✅ Reproducible 17/32/64/99/264-character device benchmarks record load, generation, audio duration, RTF, dtype, cache state, and throughput.
+- ✅ Adaptive attention uses measured SDPA on native-BF16 GPUs and the stable package default on FP32/Turing hardware.
 
 ### Still worth improving
 
-- 🟡 Qwen TTS warmup remains about 34–41 seconds after startup.
-- 🟡 First audio is much better but still not conversationally instant.
-- 🟡 `flash-attn` is unavailable in the current Windows Qwen TTS environment.
-- 🟡 Speech timing needs explicit `first_audio_ready` and `first_audio_played` metrics instead of inferring them from phrase-generation events.
+- 🟡 Qwen’s installed public API does not expose true incremental audio; text pipelining is honest but first phrase generation remains roughly 8–17 seconds in measured runs.
+- 🟡 Measured RTF remains above 1, so the model cannot guarantee uninterrupted arbitrarily long speech without enough phrase-ahead buffer.
+- 🟡 `flash-attn` has no installed, verified Windows/Blackwell wheel in this environment and is therefore not recommended by default.
+- ✅ Reflex audio is bounded to a strict nine-phrase session cache after first generation; a repeated live “Okay.” was ready in 46ms and audible in 65ms.
 - 🟡 Repetition and conversational consistency should keep running against the conversation-quality corpus and real sessions.
 
-## Milestone 1: a real intelligence router
+## Milestone 1: a real intelligence router — complete
 
-The next major architecture step is routing **before** final answer generation.
+Routing now happens **before** final answer generation; this section records the contract that should not regress.
 
 | Tier | Intended implementation | Intended role |
 |---|---|---|
@@ -74,15 +83,13 @@ The router must judge cognitive difficulty, not message length. “Why is this d
 
 ### Required behavior
 
-- ⬜ Build a deterministic `ReflexRouter` for reactions that should not pay HTTP, embedding, SQLite, Python, or LLM latency.
-- ⬜ Build an `IntelligenceRouter` that records requested tier, selected tier, model, reason, confidence, and reasoning mode.
-- ⬜ Use only one conversational model for a normal turn.
-- ⬜ Allow an early cancel-and-escalate when the chosen model is clearly insufficient.
-- ⬜ Never finish a Main answer and then routinely ask Expert to rewrite it.
-- ⬜ Keep routing diagnostics visible to developers but invisible in ordinary conversation.
-- ⬜ Prove actual model usage with worker logs and timing events rather than assuming the configured path ran.
+- ✅ Deterministic `ReflexRouter` avoids model, HTTP, embedding, and memory latency.
+- ✅ `IntelligenceRouter` records requested/selected tier, model, reason, confidence, mode, and fallback.
+- ✅ One conversational model generates a normal answer; completed Fast/Main answers are not routinely rewritten.
+- ✅ Unavailable/rejected tiers fall back safely, and context is budgeted before llama.cpp can reject it.
+- ✅ Routing diagnostics stay in developer traces; `/models` reports actual residency and use counts.
 
-## Milestone 2: one identity across multiple brains
+## Milestone 2: one identity across multiple brains — complete
 
 Adding more models is only useful if Revia remains one person.
 
@@ -97,12 +104,10 @@ Every conversational tier should receive the same relevant identity packet:
 
 ### Acceptance criteria
 
-- ⬜ Fast, Main, and Expert answers sound like the same person using different amounts of effort.
-- ⬜ Switching tiers does not reset mood, memory, relationship, humor, or vocabulary.
-- ⬜ Emotion has inertia and decays gradually rather than changing randomly per fragment.
-- ⬜ Reflex replies respond to affect and recent repetition without being a context-free random phrase list.
-- ⬜ Revia can hesitate, clarify, correct herself, or change her mind without becoming unsafe or factually careless.
-- ⬜ Ordinary spoken chat does not default to headings, executive summaries, or “How can I help?” tails.
+- ✅ Fast, Main, Expert, and Reflex consume the same identity/humanization state.
+- ✅ Switching tiers preserves mood, memory, relationship context, humor, and recent corrections.
+- ✅ Emotion has momentum and Reflex reacts to affect, repetition, and whether Revia is busy.
+- ✅ Humanization and conversation-quality contracts cover repetition, canned tails, and ordinary spoken style.
 
 ## Milestone 3: latency, residency, and hardware adaptation
 
@@ -115,8 +120,8 @@ The same source must work on CPU-only, one-GPU, dual-GPU, and larger supported m
 - ✅ Keep the Main model on one strong GPU when it fits.
 - ✅ Assign embeddings, STT, and TTS independently.
 - ✅ Use complete TTS phrase jobs rather than splitting one autoregressive request across mismatched GPUs.
-- 🟡 Track live GPU, RAM, CPU, worker, and queue usage against the startup plan.
-- ⬜ Add a model residency manager that knows which brain is warm, cold, loading, busy, or safe to unload.
+- ✅ Track live GPU, RAM, CPU, worker, and queue usage against the startup plan.
+- ✅ A model residency manager tracks role, artifact, placement, warm/cold/loading/failed state, active inference, priority, load time, and use count.
 - ⬜ Benchmark Expert on the 5070 alone versus a compatible two-GPU llama.cpp split before choosing either.
 - ⬜ Benchmark KV-cache type, context, Flash Attention, quantization, and CPU offload with quality and stability—not VRAM alone.
 
@@ -136,8 +141,8 @@ The current memory foundation works, but a multi-brain Revia needs a shared cont
 - ✅ Keep recent conversation and durable facts in separate stores.
 - ✅ Retrieve relevant memory with FTS plus semantic embeddings.
 - ✅ Classify/store memory after the visible reply so memory does not delay speech.
-- ⬜ Add a clear context budget for identity, humanization state, recent turns, retrieved memories, current task, and desktop context.
-- ⬜ Compress older conversation into a compact history instead of injecting everything.
+- ✅ Context is bounded per tier while prioritizing identity, newest request, current posture, and recent dialogue.
+- ✅ Evicted conversation is compacted into a deterministic bounded history summary.
 - ⬜ Represent strong memory, familiarity, partial recall, uncertainty, and forgotten detail naturally.
 - ⬜ Track preference evidence and confidence so opinions can evolve instead of randomly changing.
 
@@ -149,11 +154,11 @@ Revia should notice the desktop, understand enough to stay oriented, and usually
 - ✅ Maintain bounded in-memory activity spans.
 - ✅ Refresh a bounded visual summary after meaningful changes.
 - ✅ Treat visible text as untrusted and delete temporary captures.
-- ✅ Cancel/defer vision for user input and speech.
+- ✅ Cancel/defer vision for user input, cap event debounce, and refresh periodically when an app emits no useful window event.
 - 🟡 Improve change detection so visually identical states avoid unnecessary model wakes.
 - ⬜ Add cheap relevance scoring, eventually using the Fast brain when deterministic evidence is insufficient.
 - ⬜ Evaluate initiative precision with accepted versus dismissed openings.
-- ⬜ Keep screen observation separate from action authority permanently.
+- ✅ Screen observation remains separate from action authority; only a confirmed UI Automation action can cross that boundary.
 
 Most observations should end in: **do nothing**.
 
@@ -166,9 +171,9 @@ Curiosity should come from evidence, not from a timer inventing a topic.
 - ✅ Research is read-only, bounded, sourced, and permission-gated.
 - ✅ A successful finding can become a short reviewable memory rather than a dump of page text.
 - 🟡 Revia can review goal/proposal outcomes and suggest a lesson.
-- ⬜ Add self-assessment metrics for routing mistakes, repeated response failures, latency, queue stalls, and unnecessary Expert use.
-- ⬜ Let Revia research an observed weakness using primary sources and produce an evidence-backed improvement proposal.
-- ⬜ Keep code changes, model downloads, and capability changes behind explicit user approval, build/test review, and rollback information.
+- ✅ Self-assessment records repeated conversation latency, Expert use, browser failures, memory failures, and voice stalls; one observation is explicitly “not enough evidence.”
+- ✅ Evidence thresholds create persisted, reviewable improvement tasks/proposals without applying changes.
+- ✅ Code changes, model downloads, settings, and capability changes remain outside autonomous self-assessment authority.
 
 Self-improvement means finding a real weakness and recommending a measured change. It does not mean silently rewriting production code or chasing every newly released model.
 
@@ -186,14 +191,14 @@ That bootstrap should detect hardware, install or find dependencies, download an
 
 ### Required setup properties
 
-- ⬜ Idempotent second run: valid models and environments are reused.
-- ⬜ Minimal, Standard, and Full model profiles.
-- ⬜ A model manifest with source, revision, size, checksum, license, role, quantization, projector relationship, and recommended VRAM.
-- ⬜ Resume and verify large downloads without deleting unrelated models.
-- ⬜ Project-local Python environment for Qwen TTS.
-- ⬜ No hard-coded username, checkout path, drive letter, Python path, CUDA path, or second GPU.
-- ⬜ Preserve memory, conversation history, profiles, voices, preferences, and improvement history across updates.
-- ⬜ `revia --health-check` for models, configuration, ports, SQLite, devices, and services.
+- ✅ Idempotent orchestration reuses valid models and environments.
+- ✅ Minimal, Standard, and Full model profiles.
+- ✅ A pinned model manifest records source, revision, size, SHA-256, license, role, quantization, projector, and VRAM guidance.
+- ✅ Large downloads verify and reuse artifacts without deleting unrelated models.
+- ✅ Project-local Python environment for Qwen TTS.
+- ✅ Runtime configuration remains repository-relative and does not require a second GPU.
+- ✅ Existing memory, history, profiles, voices, preferences, and improvement history are preserved.
+- ✅ `Tools/HealthCheck.ps1` checks models, hashes, ports, paths, runtimes, TTS policy, devices, and data roots.
 - ⬜ Prebuilt end-user release path that does not require a compiler or Qt development kit.
 
 ## Milestone 8: safer autonomy and delivery
@@ -206,7 +211,7 @@ The current action foundation is intentionally stricter than the long-term visio
 - ✅ Per-step verification, cancellation, retry, action, and time budgets.
 - 🟡 Resume and initiative handoff for supervised goals.
 - ⬜ Unattended approved jobs only after notification, rollback, resource, and cross-restart behavior are proven.
-- ⬜ Never add unrestricted shell or model-selected coordinate clicks as a shortcut.
+- ✅ No unrestricted shell or model-selected coordinate-click path exists.
 
 ## Later: remote PCs and camera input
 
@@ -231,18 +236,21 @@ The roadmap is complete only when behavior is measured, not merely compiled.
 | Check | Current status |
 |---|---:|
 | All current CMake targets build | ✅ Verified in the current debug build |
-| Foundation, browser policy, and desktop smoke tests | ✅ Passing |
+| Foundation, browser policy, Qwen TTS HTTP policy, and desktop smoke tests | ✅ Passing |
 | Main typed chat | ✅ Live verified |
 | Main vision and automatic screen context | ✅ Live verified |
 | Dual-GPU ordered Qwen TTS | ✅ Live verified |
 | Clean shutdown with owned workers removed | ✅ Live verified in current runs |
-| Fast 0.8B conversation tier | ⬜ Not implemented |
-| Expert 8B conversation/vision tier | ⬜ Not implemented |
-| Repeated model-switch stress | ⬜ Not applicable yet |
+| Fast 0.8B conversation tier | ✅ Live started and answered |
+| Expert 8B conversation/vision tier | ✅ Live started; difficult turn completed and fallback path is implemented |
+| Reflex no-model latency | ✅ Live verified at 18 ms |
+| Qwen voice prompt + parallel warmup | ✅ Live verified at 26–31s on the dual-GPU PC |
+| Warm repeated Reflex audio | ✅ Live verified at 65ms to audible playback |
+| Direct in-memory ordered playback | ✅ Live verified with two phrases and no playback temporary files |
 | Physical one-GPU laptop run | 🧪 Not verified in this pass |
 | CPU-only run | 🧪 Not verified in this pass |
 | Extended VRAM/RAM/handle leak test | 🧪 Not verified in this pass |
-| Full cancellation matrix | 🧪 Partially covered, not fully stress-tested |
+| Full cancellation matrix | 🧪 Stop/stale-result suppression verified; long repeated barge-in stress remains unverified |
 | Fresh clone setup and immediate second run | 🧪 Not verified |
 | Missing/corrupt model and occupied-port matrix | 🧪 Partially covered, not complete |
 
@@ -252,14 +260,11 @@ Any final report should say **NOT VERIFIED** for an item that was not genuinely 
 
 The next code milestone should be small enough to verify end to end:
 
-1. Add the routing decision/event types and latency fields without changing the active 4B path.
-2. Implement deterministic Reflex handling for stop, cancel, pause, quiet, and “Revia?”.
-3. Add a 0.8B Fast worker behind a feature flag.
-4. Route a narrow, testable set of casual turns to Fast while keeping one shared identity/context builder.
-5. Benchmark TTFT, response quality, VRAM, cancellation, and unnecessary escalation.
-6. Keep the feature off by default until routing and humanization audits pass.
-
-Only after that slice is stable should the 8B Expert worker enter the live routing path.
+1. Run the completed setup on a genuinely fresh supported PC, then immediately run it a second time and record reuse behavior.
+2. Run the physical one-GPU laptop profile and a deliberate CPU/SAPI fallback session.
+3. Perform a longer repeated stop/barge-in and voice-worker leak test while watching handles, RAM, VRAM, and temporary files.
+4. Re-evaluate Qwen/FlashAttention only when a supported Windows wheel explicitly covers the installed PyTorch, CUDA, and GPU architecture.
+5. Continue collecting benchmark history rather than tuning phrase size or worker placement from anecdotes.
 
 ## Rules that should not change
 

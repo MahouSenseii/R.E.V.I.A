@@ -74,6 +74,10 @@ public:
         bool visibleBrowser,
         bool autonomousResearch,
         std::string& outError);
+    [[nodiscard]] bool SetCameraAccess(
+        bool enabled,
+        bool autonomousCapture,
+        std::string& outError);
     // Lock-free with respect to Execute(): shutdown must be able to interrupt a browser
     // request while that request owns the main action-runtime mutex.
     void CancelActiveInternet();

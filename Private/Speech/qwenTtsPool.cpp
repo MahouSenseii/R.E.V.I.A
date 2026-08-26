@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <future>
 #include <limits>
 #include <set>
 
@@ -22,6 +23,12 @@ void QwenTtsPool::Configure(const speechSettings& settings)
     const int maximum = std::max(1, settings.qwenMaxWorkers);
     std::lock_guard lock(mutex);
     shuttingDown = false;
+    designSettings = settings;
+    designSettings.qwenPort = std::min(65535, settings.qwenPort + 32);
+    designSettings.qwenDevice = devices.front();
+    designSettings.qwenDevices = {designSettings.qwenDevice};
+    designClient = std::make_unique<QwenTtsClient>();
+    designClient->Configure(designSettings);
     for (const std::string& device : devices)
     {
         if (device.empty() || !seen.insert(device).second ||
@@ -41,7 +48,8 @@ void QwenTtsPool::Configure(const speechSettings& settings)
         worker.client = std::move(client);
         // The first worker is the resource planner's latency-first choice. New workers
         // begin with a small uncertainty penalty until real timings replace it.
-        worker.millisecondsPerCharacter = 35.0 + workers.size() * 8.0;
+        worker.fixedOverheadMilliseconds = 5000.0 + workers.size() * 1200.0;
+        worker.millisecondsPerCharacter = 180.0 + workers.size() * 35.0;
         workers.push_back(std::move(worker));
     }
     if (workers.empty())
@@ -63,7 +71,7 @@ std::size_t QwenTtsPool::WorkerCount() const
     return workers.size();
 }
 
-VoiceOperationResult QwenTtsPool::PrepareCloneModel()
+VoiceOperationResult QwenTtsPool::PrepareVoice(const VoicePreset& preset)
 {
     std::vector<std::pair<std::string, QwenTtsClient*>> clients;
     {
@@ -73,22 +81,32 @@ VoiceOperationResult QwenTtsPool::PrepareCloneModel()
             clients.emplace_back(worker.id, worker.client.get());
         }
     }
+    const auto startedAt = std::chrono::steady_clock::now();
     VoiceOperationResult aggregate{
         true, "Qwen3-TTS voice workers are ready.", {}, 0.0};
+    std::vector<std::future<VoiceOperationResult>> preparations;
+    preparations.reserve(clients.size());
     for (const auto& [id, client] : clients)
     {
-        VoiceOperationResult result = client->PrepareCloneModel();
+        preparations.emplace_back(std::async(std::launch::async,
+            [client, &preset]() { return client->PrepareVoice(preset); }));
+    }
+    for (std::size_t index = 0; index < clients.size(); ++index)
+    {
+        VoiceOperationResult result = preparations[index].get();
+        const std::string& id = clients[index].first;
         result.workerId = id;
         if (!result.succeeded)
         {
             return result;
         }
-        aggregate.elapsedMilliseconds += std::max(0.0, result.elapsedMilliseconds);
         aggregate.device = result.device;
         aggregate.deviceName = result.deviceName;
         aggregate.dtype = result.dtype;
         aggregate.workerId = id;
     }
+    aggregate.elapsedMilliseconds = std::chrono::duration<double, std::milli>(
+        std::chrono::steady_clock::now() - startedAt).count();
     return aggregate;
 }
 
@@ -98,30 +116,27 @@ VoiceOperationResult QwenTtsPool::DesignVoice(
     const std::string& language,
     const std::string& outputPath)
 {
-    QwenTtsClient* client = nullptr;
-    std::string id;
-    {
-        std::lock_guard lock(mutex);
-        if (!workers.empty())
-        {
-            client = workers.front().client.get();
-            id = workers.front().id;
-        }
-    }
-    if (client == nullptr)
+    std::lock_guard designLock(designMutex);
+    if (designClient == nullptr)
         return {false, "No Qwen3-TTS worker is configured.", {}, -1.0};
-    VoiceOperationResult result = client->DesignVoice(
+    VoiceOperationResult result = designClient->DesignVoice(
         text, description, language, outputPath);
-    result.workerId = id;
+    result.workerId = "voice-design-worker";
+    // VoiceDesign is deliberately isolated and on-demand. Releasing it cannot evict
+    // either persistent conversational clone worker.
+    designClient->Shutdown();
+    designClient = std::make_unique<QwenTtsClient>();
+    designClient->Configure(designSettings);
     return result;
 }
 
 VoiceOperationResult QwenTtsPool::Synthesize(
     const std::string& text,
     const VoicePreset& preset,
-    const std::string& outputPath)
+    const std::string& outputPath,
+    const bool latencyCritical)
 {
-    const std::size_t index = AcquireWorker(text.size());
+    const std::size_t index = AcquireWorker(text.size(), latencyCritical);
     QwenTtsClient* client = nullptr;
     std::string id;
     bool rejected = false;
@@ -152,6 +167,40 @@ VoiceOperationResult QwenTtsPool::Synthesize(
     return result;
 }
 
+VoiceOperationResult QwenTtsPool::SynthesizePcm(
+    const std::string& text,
+    const VoicePreset& preset,
+    const bool latencyCritical)
+{
+    const std::size_t index = AcquireWorker(text.size(), latencyCritical);
+    QwenTtsClient* client = nullptr;
+    std::string id;
+    {
+        std::lock_guard lock(mutex);
+        if (index < workers.size() && !shuttingDown)
+        {
+            client = workers[index].client.get();
+            id = workers[index].id;
+        }
+        else if (index < workers.size())
+        {
+            workers[index].busy = false;
+        }
+    }
+    if (client == nullptr)
+    {
+        condition.notify_all();
+        return {false, "Qwen3-TTS worker pool is shutting down.", {}, -1.0};
+    }
+    const auto startedAt = std::chrono::steady_clock::now();
+    VoiceOperationResult result = client->SynthesizePcm(text, preset);
+    const double wallMilliseconds = std::chrono::duration<double, std::milli>(
+        std::chrono::steady_clock::now() - startedAt).count();
+    result.workerId = id;
+    ReleaseWorker(index, text.size(), wallMilliseconds);
+    return result;
+}
+
 void QwenTtsPool::CancelActiveRequests()
 {
     std::vector<QwenTtsClient*> clients;
@@ -160,6 +209,8 @@ void QwenTtsPool::CancelActiveRequests()
         for (Worker& worker : workers) clients.push_back(worker.client.get());
     }
     for (QwenTtsClient* client : clients) client->CancelActiveRequest();
+    std::lock_guard designLock(designMutex);
+    if (designClient) designClient->CancelActiveRequest();
 }
 
 void QwenTtsPool::RequestShutdown()
@@ -188,32 +239,48 @@ void QwenTtsPool::Shutdown()
     }
     condition.notify_all();
     for (auto& client : clients) client->Shutdown();
+    std::lock_guard designLock(designMutex);
+    if (designClient) designClient->Shutdown();
+    designClient.reset();
 }
 
-std::size_t QwenTtsPool::AcquireWorker(const std::size_t characters)
+std::size_t QwenTtsPool::AcquireWorker(
+    const std::size_t characters,
+    const bool latencyCritical)
 {
     std::unique_lock lock(mutex);
-    condition.wait(lock, [this]
+    while (!shuttingDown)
     {
-        return shuttingDown || std::any_of(workers.begin(), workers.end(),
-            [](const Worker& worker) { return !worker.busy; });
-    });
-    if (shuttingDown) return workers.size();
-    std::size_t best = workers.size();
-    double bestPrediction = std::numeric_limits<double>::max();
-    for (std::size_t index = 0; index < workers.size(); ++index)
-    {
-        if (workers[index].busy) continue;
-        const double prediction = workers[index].millisecondsPerCharacter *
-            static_cast<double>(std::max<std::size_t>(1, characters));
-        if (prediction < bestPrediction)
+        const auto now = std::chrono::steady_clock::now();
+        std::size_t best = workers.size();
+        auto bestFinish = std::chrono::steady_clock::time_point::max();
+        for (std::size_t index = 0; index < workers.size(); ++index)
         {
-            bestPrediction = prediction;
-            best = index;
+            const Worker& worker = workers[index];
+            if (latencyCritical && index != 0) continue;
+            const double predictedMilliseconds = worker.fixedOverheadMilliseconds +
+                worker.millisecondsPerCharacter *
+                    static_cast<double>(std::max<std::size_t>(1, characters));
+            const auto availableAt = worker.busy
+                ? std::max(now, worker.predictedCompletion) : now;
+            const auto finish = availableAt + std::chrono::milliseconds(
+                static_cast<long long>(predictedMilliseconds));
+            if (finish < bestFinish)
+            {
+                bestFinish = finish;
+                best = index;
+            }
         }
+        if (best < workers.size() && !workers[best].busy)
+        {
+            Worker& worker = workers[best];
+            worker.busy = true;
+            worker.predictedCompletion = bestFinish;
+            return best;
+        }
+        condition.wait(lock);
     }
-    if (best < workers.size()) workers[best].busy = true;
-    return best;
+    return workers.size();
 }
 
 void QwenTtsPool::ReleaseWorker(
@@ -232,6 +299,21 @@ void QwenTtsPool::ReleaseWorker(
                 ? sample
                 : worker.millisecondsPerCharacter * 0.72 + sample * 0.28;
             ++worker.completed;
+            if (worker.firstPhraseMilliseconds < 0.0)
+            {
+                worker.firstPhraseMilliseconds = milliseconds;
+            }
+            else
+            {
+                worker.firstPhraseMilliseconds =
+                    worker.firstPhraseMilliseconds * 0.8 + milliseconds * 0.2;
+            }
+            const double inferredFixed = std::max(
+                0.0, milliseconds - worker.millisecondsPerCharacter *
+                    static_cast<double>(characters));
+            worker.fixedOverheadMilliseconds = worker.completed == 1
+                ? inferredFixed
+                : worker.fixedOverheadMilliseconds * 0.8 + inferredFixed * 0.2;
             worker.busy = false;
         }
     }

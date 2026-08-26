@@ -44,4 +44,6 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 Write-Host "Qwen3-TTS runtime is ready: $pythonPath"
+Write-Host 'Adaptive attention uses PyTorch SDPA on native-BF16 GPUs and the stable package default elsewhere.'
+Write-Host 'flash-attn is intentionally optional and is not forced on Windows; benchmark it before selecting flash_attention_2.'
 Write-Host 'Model weights download on the first Create voice and Generate preview operations.'

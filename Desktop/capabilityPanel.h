@@ -35,6 +35,7 @@ private:
     void RemoveSelectedPermission();
     void ApplyInternetSettings();
     void ApplyBrowserSettings();
+    void ApplyCameraSettings();
 
     revia::runtime::ReviaSession& session;
     DiscoveryRequest requestDiscovery;
@@ -46,6 +47,8 @@ private:
     QCheckBox* automaticLookupCheck = nullptr;
     QCheckBox* visibleBrowserCheck = nullptr;
     QCheckBox* autonomousResearchCheck = nullptr;
+    QCheckBox* cameraCheck = nullptr;
+    QCheckBox* autonomousCameraCheck = nullptr;
     QPushButton* approveDiscoveredButton = nullptr;
     bool refreshing = false;
     std::string discoveredApplication;

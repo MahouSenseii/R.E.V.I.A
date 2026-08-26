@@ -129,8 +129,11 @@ commandOutput commandManager::BuildHelpOutput() const
     stream << "/show <path> - Put a picture from an approved folder on the Canvas\n";
     stream << "/canvas - List what is on the Canvas tab\n";
     stream << "/resources - Live usage measured against the startup resource plan\n";
+    stream << "/models   - Show the exact active model roles, files, and residency\n";
     stream << "/quality  - Conversation-quality counters for this session's real turns\n";
     stream << "/eval [list|last] - Run the conversation contract corpus against the model\n";
+    stream << "/internet [on|off|auto|manual] - Set internet lookup behavior\n";
+    stream << "/web \"query\" - Run one explicit internet lookup\n";
     stream << "/review   - Offer lessons drawn from recorded outcomes\n";
     stream << "/self-assessment - Show evidence-backed performance findings\n";
     stream << "/initiative, /perception - Proposal and observation status\n";

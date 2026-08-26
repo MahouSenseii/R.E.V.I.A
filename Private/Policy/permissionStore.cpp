@@ -187,6 +187,32 @@ bool PermissionStore::Load(
             }
         }
 
+        if (data.contains("camera"))
+        {
+            const json& camera = data["camera"];
+            if (!camera.is_object())
+            {
+                outError = "camera must be an object.";
+                return false;
+            }
+            settings.camera.enabled = camera.value("enabled", false);
+            settings.camera.preferredDevice = camera.value("preferredDevice", std::string{});
+            settings.camera.autonomousCapture = camera.value("autonomousCapture", false);
+            settings.camera.warmupFrames = BoundedInteger<int>(
+                camera, "warmupFrames", 10, 0, 30);
+            settings.camera.minimumIntervalMs = BoundedInteger<int>(
+                camera, "minimumIntervalMs", 4000, 250, 600000);
+            settings.camera.maxCapturesPerMinute = BoundedInteger<int>(
+                camera, "maxCapturesPerMinute", 6, 1, 60);
+            // Same shape as autonomous research depending on browsing: the narrower
+            // authority cannot be granted without the broader one it is a subset of.
+            if (settings.camera.autonomousCapture && !settings.camera.enabled)
+            {
+                outError = "Autonomous camera capture requires camera access to be enabled.";
+                return false;
+            }
+        }
+
         if (!data.contains("approvedRoots") || !data["approvedRoots"].is_array())
         {
             outError = "Capability configuration requires an approvedRoots array.";

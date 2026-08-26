@@ -22,7 +22,7 @@ public:
 
     void Configure(speechSettings settings);
     bool IsAvailable(std::string& outDetail);
-    VoiceOperationResult PrepareCloneModel();
+    VoiceOperationResult PrepareVoice(const VoicePreset& preset);
     VoiceOperationResult DesignVoice(
         const std::string& text,
         const std::string& description,
@@ -32,12 +32,16 @@ public:
         const std::string& text,
         const VoicePreset& preset,
         const std::string& outputPath);
+    VoiceOperationResult SynthesizePcm(
+        const std::string& text,
+        const VoicePreset& preset);
     void CancelActiveRequest();
     void Shutdown();
 
 private:
     bool EnsureAvailable(std::string& outError);
     VoiceOperationResult Post(const std::string& endpoint, const std::string& body);
+    VoiceOperationResult PostAudio(const std::string& endpoint, const std::string& body);
 
     std::mutex mutex;
     std::mutex processMutex;

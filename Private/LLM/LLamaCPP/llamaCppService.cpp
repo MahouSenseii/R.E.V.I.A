@@ -9,10 +9,12 @@
 #include <chrono>
 #include <cstdint>
 #include <fstream>
+#include <initializer_list>
 #include <iterator>
 #include <optional>
 #include <sstream>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -34,10 +36,124 @@ namespace
         "<|eot_id|>",
         "<|end_of_text|>",
         "<|begin_of_text|>",
-        "<|finetune_right_pad_id|>"
+        "<|finetune_right_pad_id|>",
+        // One request produces exactly one assistant turn. These stop the model before
+        // it can continue by inventing the user's next line or starting a second labelled
+        // Revia answer. Markdown-labelled variants cover transcript-style generations.
+        "\nUser:", "\nYou:", "\nHuman:", "\nAssistant:", "\nRevia:",
+        "\nuser:", "\nyou:", "\nhuman:", "\nassistant:", "\nrevia:",
+        "\n**User:**", "\n**You:**", "\n**Human:**",
+        "\n**Assistant:**", "\n**Revia:**"
     };
 
     constexpr size_t StreamHoldbackChars = 32;
+
+    std::string CompactTextToBudget(
+        const std::string& text,
+        const std::size_t maximumCharacters,
+        const std::string& marker)
+    {
+        if (text.size() <= maximumCharacters)
+        {
+            return text;
+        }
+        if (maximumCharacters <= marker.size() + 32)
+        {
+            return text.substr(text.size() - maximumCharacters);
+        }
+        const std::size_t available = maximumCharacters - marker.size();
+        const std::size_t prefix = available * 2 / 3;
+        const std::size_t suffix = available - prefix;
+        return text.substr(0, prefix) + marker +
+            text.substr(text.size() - suffix);
+    }
+
+    // llama.cpp rejects a request when prompt tokens plus max_tokens exceed n_ctx.
+    // Tokenizing once here would duplicate model-specific work and add latency, so use
+    // a deliberately conservative two UTF-8 bytes per token estimate. Keep Revia's
+    // identity, the latest user turn, and then as much recent dialogue as will fit.
+    json BoundMessagesForContext(
+        const json& messages,
+        const int contextTokens,
+        const int responseTokens)
+    {
+        if (!messages.is_array() || messages.empty())
+        {
+            return messages;
+        }
+        const int usableTokens = std::max(
+            1024, contextTokens - responseTokens - 384);
+        const std::size_t characterBudget =
+            static_cast<std::size_t>(usableTokens) * 2;
+
+        std::size_t totalCharacters = 0;
+        for (const auto& message : messages)
+        {
+            if (message.contains("content") && message["content"].is_string())
+            {
+                totalCharacters += message["content"].get_ref<const std::string&>().size();
+            }
+        }
+        if (totalCharacters <= characterBudget)
+        {
+            return messages;
+        }
+
+        json bounded = json::array();
+        std::size_t used = 0;
+        std::size_t firstDialogue = 0;
+        if (messages.front().value("role", "") == "system")
+        {
+            json system = messages.front();
+            const std::string content = system.value("content", "");
+            const std::size_t systemBudget = std::min(
+                content.size(), characterBudget * 7 / 10);
+            system["content"] = CompactTextToBudget(
+                content,
+                systemBudget,
+                "\n\n[Older runtime context compacted to fit this model.]\n\n");
+            used = system["content"].get_ref<const std::string&>().size();
+            bounded.push_back(std::move(system));
+            firstDialogue = 1;
+        }
+
+        std::vector<json> recent;
+        for (std::size_t index = messages.size(); index > firstDialogue; --index)
+        {
+            json message = messages[index - 1];
+            const std::string content = message.value("content", "");
+            if (content.empty())
+            {
+                continue;
+            }
+            const std::size_t remaining = characterBudget > used
+                ? characterBudget - used : 0;
+            if (remaining < 64 && !recent.empty())
+            {
+                break;
+            }
+            if (content.size() > remaining)
+            {
+                if (recent.empty() && remaining > 0)
+                {
+                    message["content"] = CompactTextToBudget(
+                        content, remaining,
+                        "\n[Earlier part of this turn compacted.]\n");
+                    used += message["content"].get_ref<const std::string&>().size();
+                    recent.push_back(std::move(message));
+                }
+                break;
+            }
+            used += content.size();
+            recent.push_back(std::move(message));
+        }
+        std::reverse(recent.begin(), recent.end());
+        for (json& message : recent)
+        {
+            bounded.push_back(std::move(message));
+        }
+        return bounded;
+    }
 
     size_t FindFirstStopMarker(const std::string& text)
     {
@@ -68,6 +184,114 @@ namespace
         }
 
         return text;
+    }
+
+    bool StartsWithRoleLabel(
+        const std::string& lowered,
+        const std::initializer_list<std::string_view> roles,
+        std::size_t* outLength = nullptr)
+    {
+        std::size_t start = 0;
+        while (start < lowered.size() &&
+            (lowered[start] == ' ' || lowered[start] == '\t' ||
+             lowered[start] == '#' || lowered[start] == '*'))
+        {
+            ++start;
+        }
+        for (const std::string_view role : roles)
+        {
+            if (lowered.compare(start, role.size(), role) != 0) continue;
+            std::size_t end = start + role.size();
+            while (end < lowered.size() && lowered[end] == '*') ++end;
+            while (end < lowered.size() &&
+                (lowered[end] == ' ' || lowered[end] == '\t')) ++end;
+            if (end < lowered.size() && lowered[end] == ':')
+            {
+                if (outLength != nullptr) *outLength = end + 1;
+                return true;
+            }
+        }
+        return false;
+    }
+
+    std::string RemoveGeneratedConversationTurns(std::string text)
+    {
+        text = TrimWhitespace(std::move(text));
+        std::string lowered = text;
+        std::transform(lowered.begin(), lowered.end(), lowered.begin(),
+            [](const unsigned char character)
+            {
+                return static_cast<char>(std::tolower(character));
+            });
+        std::size_t labelLength = 0;
+        if (StartsWithRoleLabel(lowered, {"revia", "assistant"}, &labelLength))
+        {
+            text = TrimWhitespace(text.substr(labelLength));
+            lowered = text;
+            std::transform(lowered.begin(), lowered.end(), lowered.begin(),
+                [](const unsigned char character)
+                {
+                    return static_cast<char>(std::tolower(character));
+                });
+        }
+        else if (StartsWithRoleLabel(lowered, {"user", "you", "human"}))
+        {
+            return {};
+        }
+
+        std::size_t lineStart = text.find('\n');
+        while (lineStart != std::string::npos)
+        {
+            ++lineStart;
+            const std::size_t lineEnd = text.find('\n', lineStart);
+            std::string loweredLine = text.substr(
+                lineStart,
+                lineEnd == std::string::npos
+                    ? std::string::npos
+                    : lineEnd - lineStart);
+            std::transform(
+                loweredLine.begin(), loweredLine.end(), loweredLine.begin(),
+                [](const unsigned char character)
+                {
+                    return static_cast<char>(std::tolower(character));
+                });
+            if (StartsWithRoleLabel(
+                    loweredLine, {"user", "you", "human", "revia", "assistant"}))
+            {
+                text = TrimWhitespace(text.substr(0, lineStart - 1));
+                break;
+            }
+            lineStart = lineEnd;
+        }
+        return text;
+    }
+
+    std::string LastCompleteSentencePrefix(const std::string& text)
+    {
+        for (std::size_t end = text.size(); end > 0; --end)
+        {
+            const std::size_t terminal = end - 1;
+            if (text[terminal] != '.' && text[terminal] != '!' &&
+                text[terminal] != '?')
+            {
+                continue;
+            }
+            std::size_t boundary = terminal + 1;
+            while (boundary < text.size() &&
+                (text[boundary] == '.' || text[boundary] == '!' ||
+                    text[boundary] == '?' || text[boundary] == '"' ||
+                    text[boundary] == '\'' || text[boundary] == ')' ||
+                    text[boundary] == ']'))
+            {
+                ++boundary;
+            }
+            if (boundary == text.size() ||
+                std::isspace(static_cast<unsigned char>(text[boundary])) != 0)
+            {
+                return TrimWhitespace(text.substr(0, boundary));
+            }
+        }
+        return {};
     }
 
     bool IsEmojiCodePoint(const unsigned int codePoint)
@@ -377,7 +601,7 @@ namespace
         {
             *outReasoning = reasoning;
         }
-        return TrimWhitespace(text);
+        return RemoveGeneratedConversationTurns(std::move(text));
     }
 
     std::string ImageDataUrl(const std::filesystem::path& path)
@@ -470,6 +694,7 @@ void llamaCppService::ApplySettings(
     modelName = settings.modelName;
     apiKey = settings.apiKey;
     bVisionExpected = settings.bVisionEnabled;
+    configuredContextTokens = std::max(1024, settings.contextSize);
 
     activeProfile = profile;
 
@@ -481,7 +706,7 @@ void llamaCppService::ApplySettings(
         ? profile.maxTokens
         : settings.maxTokens;
     bAutoMaxTokens = settings.bAutoMaxTokens && !profile.bHasMaxTokensOverride;
-    effectiveContextTokens.store(0);
+    effectiveContextTokens.store(configuredContextTokens);
     effectiveParallelSlots.store(0);
     inferenceScheduler.SetCapacity(settings.parallelRequests);
 
@@ -614,13 +839,19 @@ responseOutput llamaCppService::GenerateResponse(
 
     const auto requestPreparationStarted = std::chrono::steady_clock::now();
 
-    requestBody["model"]       = modelName;
-    requestBody["messages"]    = messages;
     const bool deepReasoning = forceDeepReasoning || WantsDeepReasoning(context);
+    // Fast-tier settings already carry their own small ceiling. Main and Expert should
+    // use their configured budget so a normal answer is not chopped off at 256 tokens.
+    const int responseTokens = ResponseTokenLimit();
+    const int activeContextTokens = effectiveContextTokens.load();
+    messages = BoundMessagesForContext(
+        messages,
+        activeContextTokens > 0 ? activeContextTokens : configuredContextTokens,
+        responseTokens);
+    requestBody["model"]       = modelName;
+    requestBody["messages"]    = std::move(messages);
     requestBody["temperature"] = temperature;
-    requestBody["max_tokens"]  = deepReasoning
-        ? ResponseTokenLimit()
-        : std::min(ResponseTokenLimit(), 256);
+    requestBody["max_tokens"]  = responseTokens;
     requestBody["stream"]      = true;
     // Qwen3.5 thinks by default. Ordinary companion conversation should begin speaking
     // immediately; explicit/complex technical turns may opt into the same model's deep
@@ -641,6 +872,7 @@ responseOutput llamaCppService::GenerateResponse(
 
     std::string fullResponse;
     std::string buffer;
+    std::string finishReason;
     size_t printedLength = 0;
     std::optional<std::chrono::steady_clock::time_point> firstTokenAt;
 
@@ -670,7 +902,7 @@ responseOutput llamaCppService::GenerateResponse(
             const std::string jsonStr = line.substr(6);
             if (jsonStr == "[DONE]") continue;
 
-            const std::string token = ParseStreamChunk(line);
+            const std::string token = ParseStreamChunk(line, &finishReason);
             if (token.empty()) continue;
 
             if (!firstTokenAt)
@@ -734,7 +966,7 @@ responseOutput llamaCppService::GenerateResponse(
         std::max(0.0, requestMilliseconds - firstTokenMilliseconds)});
     output.timings.push_back({"llama_request_total", requestMilliseconds, true});
 
-    const std::string cleanedResponse = VisibleReplyText(fullResponse, &output.reasoning);
+    std::string cleanedResponse = VisibleReplyText(fullResponse, &output.reasoning);
 
     if (!result)
     {
@@ -762,6 +994,18 @@ responseOutput llamaCppService::GenerateResponse(
         return output;
     }
 
+    if (finishReason == "length")
+    {
+        // Never commit or speak the dangling clause created by a token ceiling. The
+        // normal response budgets are large enough for ordinary answers now; if a turn
+        // still exhausts one, retain every complete sentence and discard only its
+        // unfinished tail.
+        const std::string completePrefix = LastCompleteSentencePrefix(cleanedResponse);
+        cleanedResponse = completePrefix.empty()
+            ? "I ran out of room before I could finish that answer. Ask me to continue."
+            : completePrefix;
+    }
+
     if (cleanedResponse.empty())
     {
         output.bSuccess = false;
@@ -773,8 +1017,8 @@ responseOutput llamaCppService::GenerateResponse(
     }
 
     // The stream deliberately holds back the last StreamHoldbackChars characters so a
-    // partial special token is never emitted. That tail is flushed to the terminal above,
-    // and it has to reach onDelta too, or a caller assembling the reply from deltas ends
+    // partial special token is never emitted. That tail still has to reach onDelta, or a
+    // caller assembling the reply from deltas ends
     // it mid-word. Emitted here rather than beside the terminal flush so a cancelled or
     // failed request, which returns above, never delivers a tail for a reply that is not
     // going to be used.
@@ -1410,7 +1654,9 @@ embeddingOutput llamaCppService::EmbedMemory(
     return embeddings.EmbedDocument(summary, stopToken);
 }
 
-std::string llamaCppService::ParseStreamChunk(const std::string &line)
+std::string llamaCppService::ParseStreamChunk(
+    const std::string& line,
+    std::string* outFinishReason)
 {
     if (line.rfind("data: ", 0) != 0) return "";
     const std::string json_str = line.substr(6);
@@ -1422,7 +1668,15 @@ std::string llamaCppService::ParseStreamChunk(const std::string &line)
 
         if (!chunk.contains("choices") || chunk["choices"].empty()) return "";
 
-        const auto& delta = chunk["choices"][0]["delta"];
+        const auto& choice = chunk["choices"][0];
+        if (outFinishReason != nullptr && choice.contains("finish_reason") &&
+            choice["finish_reason"].is_string())
+        {
+            *outFinishReason = choice["finish_reason"].get<std::string>();
+        }
+
+        if (!choice.contains("delta") || !choice["delta"].is_object()) return "";
+        const auto& delta = choice["delta"];
 
         if (!delta.contains("content")) return "";
 

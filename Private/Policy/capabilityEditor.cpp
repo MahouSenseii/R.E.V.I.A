@@ -158,6 +158,15 @@ bool CapabilityEditor::SetInternetAccess(
     return Apply(path, Mutation::Internet, {}, {}, enabled, automaticLookup, outError);
 }
 
+bool CapabilityEditor::SetCameraAccess(
+    const std::filesystem::path& path,
+    const bool enabled,
+    const bool autonomousCapture,
+    std::string& outError) const
+{
+    return Apply(path, Mutation::Camera, {}, {}, enabled, autonomousCapture, outError);
+}
+
 bool CapabilityEditor::SetInternetBrowser(
     const std::filesystem::path& path,
     const bool visibleBrowser,
@@ -178,6 +187,7 @@ bool CapabilityEditor::Apply(
     std::string& outError) const
 {
     if (mutation != Mutation::Internet && mutation != Mutation::Browser &&
+        mutation != Mutation::Camera &&
         !ValidExecutable(executable))
     {
         outError = "An application permission requires a plain .exe name.";
@@ -266,6 +276,22 @@ bool CapabilityEditor::Apply(
         {
             list.erase(found);
         }
+    }
+    else if (mutation == Mutation::Camera)
+    {
+        json& camera = data["camera"];
+        if (!camera.is_object())
+        {
+            camera = json::object();
+        }
+        camera["enabled"] = enabled;
+        // Turning the camera off must also drop the narrower permission, or re-enabling
+        // it later would silently restore an authority the user never re-granted.
+        camera["autonomousCapture"] = enabled && automaticLookup;
+        if (!camera.contains("preferredDevice")) camera["preferredDevice"] = "";
+        if (!camera.contains("warmupFrames")) camera["warmupFrames"] = 10;
+        if (!camera.contains("minimumIntervalMs")) camera["minimumIntervalMs"] = 4000;
+        if (!camera.contains("maxCapturesPerMinute")) camera["maxCapturesPerMinute"] = 6;
     }
     else
     {

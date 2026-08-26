@@ -350,7 +350,20 @@ ActionResult InternetSearchExecutor::Execute(
             {
                 browserResult.message = "The visible browser lookup was cancelled.";
             }
-            return browserResult;
+            if (browserResult.succeeded || activeRequest->IsCancelled() ||
+                autonomousCuriosity)
+            {
+                return browserResult;
+            }
+
+            // Search-result markup and anti-bot pages change regularly. A visible
+            // browser that opened correctly but could not extract public pages must not
+            // make an explicit user lookup look like internet permission disappeared.
+            // Continue through the already allow-listed, bounded APIs and report both
+            // paths in the final status. Autonomous research remains visible-only above.
+            browserStartupFailure = browserResult.message.empty()
+                ? "the visible lookup returned no grounded public pages"
+                : browserResult.message;
         }
         if (browserStartupFailure.empty())
         {
@@ -368,8 +381,8 @@ ActionResult InternetSearchExecutor::Execute(
     {
         if (!browserStartupFailure.empty())
         {
-            fallback.message = "Visible browser startup failed (" + browserStartupFailure +
-                "). Bounded API fallback: " + fallback.message;
+            fallback.message = "Visible browser path was unavailable (" +
+                browserStartupFailure + "). Bounded API fallback: " + fallback.message;
         }
         return fallback;
     };

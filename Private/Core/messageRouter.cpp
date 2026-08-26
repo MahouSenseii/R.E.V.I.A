@@ -1,4 +1,5 @@
 #include "Core/messageRouter.h"
+#include "Core/runtimePath.h"
 
 #include <algorithm>
 #include <cctype>
@@ -10,12 +11,14 @@ std::uint64_t ArtifactMiB(
     const std::string& projectorPath = {})
 {
     std::error_code error;
-    std::uintmax_t bytes = std::filesystem::file_size(modelPath, error);
+    std::uintmax_t bytes = std::filesystem::file_size(
+        revia::core::ResolveRuntimePath(modelPath), error);
     if (error) bytes = 0;
     if (!projectorPath.empty())
     {
         error.clear();
-        const std::uintmax_t projector = std::filesystem::file_size(projectorPath, error);
+        const std::uintmax_t projector = std::filesystem::file_size(
+            revia::core::ResolveRuntimePath(projectorPath), error);
         if (!error) bytes += projector;
     }
     return static_cast<std::uint64_t>((bytes + 1024 * 1024 - 1) / (1024 * 1024));
@@ -87,6 +90,7 @@ responseOutput messageRouter::RouteMessage(
     }
 
     residency.BeginInference(effectiveTier, "interactive");
+    DeltaHandler retryDelta = onDelta;
     responseOutput routed = selected->GenerateResponse(
         context,
         stopToken,
@@ -95,6 +99,27 @@ responseOutput messageRouter::RouteMessage(
             (!fallbackReason.empty() &&
              decision.requestedTier == revia::intelligence::IntelligenceTier::Expert));
     residency.EndInference(effectiveTier);
+    const bool contextRejected = !routed.bSuccess &&
+        routed.reason.find("HTTP status 400") != std::string::npos;
+    if (contextRejected && selected != &llm && !stopToken.stop_requested() &&
+        llm.IsBackendAvailable())
+    {
+        const std::string rejectedTier = selectedTier;
+        residency.BeginInference(
+            revia::intelligence::IntelligenceTier::Main, "fallback");
+        routed = llm.GenerateResponse(
+            context,
+            stopToken,
+            std::move(retryDelta),
+            decision.selectedTier == revia::intelligence::IntelligenceTier::Expert ||
+                decision.selectedTier == revia::intelligence::IntelligenceTier::ExpertVision);
+        residency.EndInference(revia::intelligence::IntelligenceTier::Main);
+        selected = &llm;
+        effectiveTier = revia::intelligence::IntelligenceTier::Main;
+        selectedTier = "Main";
+        fallbackReason = rejectedTier +
+            " rejected the bounded request; used Main instead.";
+    }
     routed.requestedTier = revia::intelligence::ToString(decision.requestedTier);
     routed.selectedTier = selectedTier;
     routed.selectedModel = selected == &fastLlm

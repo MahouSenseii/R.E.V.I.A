@@ -1,5 +1,7 @@
 #include "Speech/speechService.h"
 
+#include "Speech/vocalization.h"
+
 #include <algorithm>
 #include <chrono>
 #include <cctype>
@@ -99,23 +101,90 @@ namespace
         {
             return 0.0;
         }
-        char header[44]{};
-        file.read(header, sizeof(header));
-        if (file.gcount() != sizeof(header) || std::string_view(header, 4) != "RIFF" ||
-            std::string_view(header + 8, 4) != "WAVE")
+        char riff[12]{};
+        file.read(riff, sizeof(riff));
+        if (file.gcount() != sizeof(riff) || std::string_view(riff, 4) != "RIFF" ||
+            std::string_view(riff + 8, 4) != "WAVE")
         {
             return 0.0;
         }
-        const auto read32 = [&](const int offset)
+        const auto decode32 = [](const unsigned char* bytes)
         {
-            const auto* bytes = reinterpret_cast<const unsigned char*>(header + offset);
             return static_cast<std::uint32_t>(bytes[0]) |
                 (static_cast<std::uint32_t>(bytes[1]) << 8U) |
                 (static_cast<std::uint32_t>(bytes[2]) << 16U) |
                 (static_cast<std::uint32_t>(bytes[3]) << 24U);
         };
-        const std::uint32_t byteRate = read32(28);
-        const std::uint32_t dataSize = read32(40);
+        std::uint32_t byteRate = 0;
+        std::uint32_t dataSize = 0;
+        while (file && (byteRate == 0 || dataSize == 0))
+        {
+            char chunkHeader[8]{};
+            file.read(chunkHeader, sizeof(chunkHeader));
+            if (file.gcount() != sizeof(chunkHeader)) break;
+            const std::uint32_t chunkSize = decode32(
+                reinterpret_cast<const unsigned char*>(chunkHeader + 4));
+            if (std::string_view(chunkHeader, 4) == "fmt " && chunkSize >= 12)
+            {
+                std::vector<unsigned char> format(std::min<std::uint32_t>(chunkSize, 16));
+                file.read(reinterpret_cast<char*>(format.data()),
+                    static_cast<std::streamsize>(format.size()));
+                if (format.size() >= 12 && file.gcount() >= 12)
+                {
+                    byteRate = decode32(format.data() + 8);
+                }
+                if (chunkSize > format.size())
+                {
+                    file.seekg(static_cast<std::streamoff>(chunkSize - format.size()),
+                        std::ios::cur);
+                }
+            }
+            else
+            {
+                if (std::string_view(chunkHeader, 4) == "data") dataSize = chunkSize;
+                file.seekg(static_cast<std::streamoff>(chunkSize), std::ios::cur);
+            }
+            if ((chunkSize & 1U) != 0) file.seekg(1, std::ios::cur);
+        }
+        return byteRate == 0 ? 0.0 :
+            static_cast<double>(dataSize) * 1000.0 / static_cast<double>(byteRate);
+    }
+
+    double WavDurationMilliseconds(const std::vector<std::uint8_t>& bytes)
+    {
+        if (bytes.size() < 44 ||
+            std::string_view(reinterpret_cast<const char*>(bytes.data()), 4) != "RIFF" ||
+            std::string_view(reinterpret_cast<const char*>(bytes.data() + 8), 4) != "WAVE")
+        {
+            return 0.0;
+        }
+        const auto read32 = [&bytes](const std::size_t offset)
+        {
+            return static_cast<std::uint32_t>(bytes[offset]) |
+                (static_cast<std::uint32_t>(bytes[offset + 1]) << 8U) |
+                (static_cast<std::uint32_t>(bytes[offset + 2]) << 16U) |
+                (static_cast<std::uint32_t>(bytes[offset + 3]) << 24U);
+        };
+        std::uint32_t byteRate = 0;
+        std::uint32_t dataSize = 0;
+        std::size_t cursor = 12;
+        while (cursor + 8 <= bytes.size() && (byteRate == 0 || dataSize == 0))
+        {
+            const std::uint32_t chunkSize = read32(cursor + 4);
+            const std::size_t payload = cursor + 8;
+            if (payload + static_cast<std::size_t>(chunkSize) > bytes.size()) break;
+            const std::string_view id(
+                reinterpret_cast<const char*>(bytes.data() + cursor), 4);
+            if (id == "fmt " && chunkSize >= 12)
+            {
+                byteRate = read32(payload + 8);
+            }
+            else if (id == "data")
+            {
+                dataSize = chunkSize;
+            }
+            cursor = payload + static_cast<std::size_t>(chunkSize) + (chunkSize & 1U);
+        }
         return byteRate == 0 ? 0.0 :
             static_cast<double>(dataSize) * 1000.0 / static_cast<double>(byteRate);
     }
@@ -260,7 +329,16 @@ VoiceOperationResult SpeechService::PrepareActiveVoice()
     }
     Notify({"Loading", "Loading the assigned Qwen3-TTS voice on the selected device.",
         -1.0, 0, 0, PlannedQwenResource(configuration)});
-    VoiceOperationResult result = qwenPool.PrepareCloneModel();
+    std::optional<VoicePreset> preset;
+    {
+        std::lock_guard lock(mutex);
+        preset = activePreset;
+    }
+    if (!preset)
+    {
+        return {true, "No Qwen3-TTS voice needs preparation.", {}, 0.0};
+    }
+    VoiceOperationResult result = qwenPool.PrepareVoice(*preset);
     SpeechEvent prepared{result.succeeded ? "Ready" : "Fallback",
         result.succeeded
             ? result.message
@@ -425,16 +503,28 @@ std::size_t SpeechService::PreferredFragmentCharacters() const
         : 0;
 }
 
+std::size_t SpeechService::FirstFragmentCharacters() const
+{
+    return configuration.bQwenParallelLongReplies
+        ? static_cast<std::size_t>(std::max(
+            16, configuration.qwenFirstPhraseCharacters))
+        : 0;
+}
+
 void SpeechService::Speak(
     std::string text,
     const runtime::AffectSnapshot affect,
-    const std::uint64_t utteranceId)
+    const std::uint64_t utteranceId,
+    const bool latencyCritical)
 {
     if (!enabled.load())
     {
         return;
     }
-    text = NormalizeForSpeech(text, static_cast<std::size_t>(configuration.maxCharacters));
+    text = NormalizeForSpeech(
+        text,
+        static_cast<std::size_t>(configuration.maxCharacters),
+        configuration.backend != "WindowsSapi");
     if (text.empty())
     {
         return;
@@ -455,6 +545,7 @@ void SpeechService::Speak(
         utterance.generation = generation.load();
         utterance.utteranceId = utteranceId;
         utterance.sequence = nextSequence.fetch_add(1);
+        utterance.latencyCritical = latencyCritical;
         utterance.queuedAt = std::chrono::steady_clock::now();
         if (configuration.backend != "WindowsSapi") utterance.preset = activePreset;
         playbackOrder.Reserve(utterance.sequence);
@@ -596,8 +687,32 @@ void SpeechService::Shutdown()
 
 std::string SpeechService::NormalizeForSpeech(
     const std::string& text,
-    const std::size_t maxCharacters)
+    const std::size_t maxCharacters,
+    const bool keepVocalizations)
 {
+    // A vocalization tag is the one asterisk pair that must reach the model intact.
+    // Everything below strips '*' as markdown noise, and flattening "*laughs*" to
+    // "laughs" is precisely the failure this feature exists to avoid: the voice reads
+    // the word instead of making the sound.
+    const auto vocalizationTag = [](const std::string& token) -> std::string
+    {
+        if (token.size() < 3 || token.front() != '*')
+        {
+            return {};
+        }
+        const std::size_t closing = token.find('*', 1);
+        if (closing == std::string::npos || closing == 1)
+        {
+            return {};
+        }
+        VocalizationKind kind{};
+        if (!VocalizationFromWord(token.substr(1, closing - 1), kind))
+        {
+            return {};
+        }
+        // Trailing punctuation belongs to the sentence, not to the sound.
+        return InlineTag(kind);
+    };
     std::istringstream input(text);
     std::ostringstream visible;
     std::string line;
@@ -625,6 +740,21 @@ std::string SpeechService::NormalizeForSpeech(
         if (token.starts_with("http://") || token.starts_with("https://") ||
             token.starts_with("www."))
         {
+            continue;
+        }
+        if (const std::string tag = vocalizationTag(token); !tag.empty())
+        {
+            if (!keepVocalizations)
+            {
+                // This backend cannot perform the sound, so the tag leaves with no
+                // trace rather than becoming a word in the middle of a sentence.
+                continue;
+            }
+            if (!output.empty())
+            {
+                output.push_back(' ');
+            }
+            output += tag;
             continue;
         }
         token.erase(std::remove_if(token.begin(), token.end(), [](const char character)
@@ -842,26 +972,53 @@ void SpeechService::Generate(const std::stop_token stopToken)
         {
             item.qwenAttempted = true;
             std::error_code error;
-            item.audioPath = std::filesystem::absolute(
-                presetStore.Root() / "Playback" /
-                    (utterance.preset->id + "-" + std::to_string(utterance.generation) +
-                     "-" + std::to_string(utterance.sequence) + ".wav"), error).lexically_normal();
-            if (error)
+            if (configuration.bQwenDirectPcm)
             {
-                item.result = {false, "The Qwen playback path could not be resolved.", {}, -1.0};
+                Notify({"Generating", "Synthesizing the phrase into bounded memory.",
+                    -1.0, depth, utterance.utteranceId,
+                    PlannedQwenResource(configuration)});
+                item.result = qwenPool.SynthesizePcm(
+                    utterance.text, *utterance.preset, utterance.latencyCritical);
             }
             else
             {
-                std::filesystem::create_directories(item.audioPath.parent_path(), error);
-                Notify({"Generating", "Synthesizing a phrase ahead with Qwen3-TTS.",
-                    -1.0, depth, utterance.utteranceId,
-                    PlannedQwenResource(configuration)});
-                item.result = qwenPool.Synthesize(
-                    utterance.text, *utterance.preset, item.audioPath.string());
-                if (item.result.succeeded)
+                item.audioPath = std::filesystem::absolute(
+                    presetStore.Root() / "Playback" /
+                        (utterance.preset->id + "-" +
+                         std::to_string(utterance.generation) + "-" +
+                         std::to_string(utterance.sequence) + ".wav"), error).lexically_normal();
+                if (error)
                 {
-                    item.bufferedBytes = std::filesystem::file_size(item.audioPath, error);
-                    if (error) item.bufferedBytes = 0;
+                    item.result = {false, "The Qwen playback path could not be resolved.",
+                        {}, -1.0};
+                }
+                else
+                {
+                    std::filesystem::create_directories(item.audioPath.parent_path(), error);
+                    Notify({"Generating", "Synthesizing a phrase ahead with Qwen3-TTS.",
+                        -1.0, depth, utterance.utteranceId,
+                        PlannedQwenResource(configuration)});
+                    item.result = qwenPool.Synthesize(
+                        utterance.text, *utterance.preset, item.audioPath.string(),
+                        utterance.latencyCritical);
+                }
+            }
+            if (item.result.succeeded)
+            {
+                item.bufferedBytes = configuration.bQwenDirectPcm
+                    ? item.result.audioBytes.size()
+                    : std::filesystem::file_size(item.audioPath, error);
+                if (error) item.bufferedBytes = 0;
+                const std::uintmax_t maximumBytes =
+                    static_cast<std::uintmax_t>(configuration.qwenMaxBufferedAudioMiB) *
+                    1024U * 1024U;
+                if (item.bufferedBytes > maximumBytes)
+                {
+                    item.result.succeeded = false;
+                    item.result.message =
+                        "Generated audio exceeded the configured memory buffer limit.";
+                    item.result.audioBytes.clear();
+                    item.bufferedBytes = 0;
                 }
             }
         }
@@ -885,6 +1042,25 @@ void SpeechService::Generate(const std::stop_token stopToken)
         }
         else if (utterance.preset.has_value() && completedResult.succeeded)
         {
+            SpeechEvent profile{"Profile", std::string(completedResult.audioCacheHit
+                ? "Reflex audio cache hit. " : "") + "Qwen stages: queue " +
+                std::to_string(completedResult.workerQueueMilliseconds) +
+                " ms, model " + std::to_string(completedResult.modelReadyMilliseconds) +
+                " ms, prompt " + std::to_string(completedResult.clonePromptMilliseconds) +
+                " ms, generation " + std::to_string(completedResult.generationMilliseconds) +
+                " ms, encode " + std::to_string(completedResult.wavWriteMilliseconds) +
+                " ms, HTTP " + std::to_string(completedResult.cppResponseMilliseconds) +
+                " ms.", completedResult.elapsedMilliseconds, depth,
+                utterance.utteranceId, ActualQwenResource(completedResult)};
+            profile.timings = {
+                {"worker_queue_wait", completedResult.workerQueueMilliseconds},
+                {"model_ready", completedResult.modelReadyMilliseconds},
+                {"clone_prompt_ready", completedResult.clonePromptMilliseconds},
+                {"generation", completedResult.generationMilliseconds},
+                {"wav_memory_encode", completedResult.wavWriteMilliseconds},
+                {"cpp_response_received", completedResult.cppResponseMilliseconds, true}
+            };
+            Notify(std::move(profile));
             Notify({"FirstAudioReady", "The phrase's first playable audio is ready.",
                 ElapsedMilliseconds(utterance.queuedAt), depth, utterance.utteranceId,
                 ActualQwenResource(completedResult)});
@@ -921,16 +1097,32 @@ bool SpeechService::PlayPreparedQwen(const PreparedUtterance& preparedUtterance)
         ElapsedMilliseconds(utterance.queuedAt), 0, utterance.utteranceId,
         ActualQwenResource(generated)});
     Notify(std::move(playing));
-    if (!PlaySoundW(output.wstring().c_str(), nullptr, SND_FILENAME | SND_ASYNC | SND_NODEFAULT))
+    const bool inMemory = !generated.audioBytes.empty();
+    const std::wstring diskPath = inMemory ? std::wstring{} : output.wstring();
+    const wchar_t* sound = inMemory
+        ? reinterpret_cast<const wchar_t*>(generated.audioBytes.data())
+        : diskPath.c_str();
+    const DWORD flags = (inMemory ? SND_MEMORY : SND_FILENAME) |
+        SND_ASYNC | SND_NODEFAULT;
+    if (!PlaySoundW(sound, nullptr, flags))
     {
         Notify({"Fallback", "Windows could not play the Qwen3-TTS WAV; using SAPI.",
             -1.0, 0, utterance.utteranceId, WindowsSapiResource});
         return false;
     }
     ArmBargeIn();
-    const double duration = std::max(250.0, WavDurationMilliseconds(output));
+    const double parsedDuration = inMemory
+        ? WavDurationMilliseconds(generated.audioBytes)
+        : WavDurationMilliseconds(output);
+    const double duration = std::max(250.0,
+        generated.audioDurationMilliseconds > 0.0
+            ? generated.audioDurationMilliseconds
+            : parsedDuration);
     const auto deadline = std::chrono::steady_clock::now() +
-        std::chrono::milliseconds(static_cast<long long>(duration + 150.0));
+        // PlaySound is asynchronous. Leave a small tail before the next ordered phrase
+        // starts, otherwise timer granularity or a non-canonical WAV header can make the
+        // next phrase cut the last word off the current one.
+        std::chrono::milliseconds(static_cast<long long>(duration + 350.0));
     bool cancelled = false;
     while (std::chrono::steady_clock::now() < deadline)
     {
@@ -944,7 +1136,7 @@ bool SpeechService::PlayPreparedQwen(const PreparedUtterance& preparedUtterance)
     }
     const bool interrupted = bargeInMonitor.Triggered();
     DisarmBargeIn();
-    std::filesystem::remove(output, error);
+    if (!inMemory) std::filesystem::remove(output, error);
     Notify({interrupted ? "Interrupted" : (cancelled ? "Stopped" : "Ready"),
         interrupted
             ? "You started speaking, so I stopped."
