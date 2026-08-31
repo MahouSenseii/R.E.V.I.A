@@ -59,14 +59,65 @@ bool HasExactlyDecisionFields(const json& document)
 {
     static constexpr std::array<const char*, 5> Required = {
         "action", "topic", "query", "rationale", "confidence"};
-    if (document.size() != Required.size())
-    {
-        return false;
-    }
+    // Every required field must be present. Extra fields are tolerated rather than
+    // rejected: a small local model routinely adds "reason" or "notes" alongside the
+    // five it was asked for, and throwing the whole decision away over a harmless extra
+    // key meant curiosity failed constantly while behaving essentially correctly.
     return std::all_of(Required.begin(), Required.end(), [&document](const char* field)
     {
         return document.contains(field);
     });
+}
+
+// Pulls the first balanced JSON object out of a reply that may be wrapped in prose or a
+// fenced code block. Models preface answers with explanation far more often than they
+// return a bare object, and refusing those costs a full inference round trip -- ten to
+// fifteen seconds here -- for a decision that was actually present.
+std::string ExtractJsonObject(const std::string& raw)
+{
+    const std::size_t start = raw.find('{');
+    if (start == std::string::npos)
+    {
+        return {};
+    }
+    int depth = 0;
+    bool inString = false;
+    bool escaped = false;
+    for (std::size_t index = start; index < raw.size(); ++index)
+    {
+        const char character = raw[index];
+        if (escaped)
+        {
+            escaped = false;
+            continue;
+        }
+        if (character == '\\')
+        {
+            escaped = true;
+            continue;
+        }
+        if (character == '"')
+        {
+            inString = !inString;
+            continue;
+        }
+        if (inString)
+        {
+            continue;
+        }
+        if (character == '{')
+        {
+            ++depth;
+        }
+        else if (character == '}')
+        {
+            if (--depth == 0)
+            {
+                return raw.substr(start, index - start + 1);
+            }
+        }
+    }
+    return {};
 }
 }
 
@@ -111,9 +162,15 @@ CuriosityDecision CuriosityAgent::ParseDecision(const std::string& rawDecision)
         return Invalid("The curiosity decision was empty.");
     }
 
+    const std::string candidate = ExtractJsonObject(rawDecision);
+    if (candidate.empty())
+    {
+        return Invalid("The curiosity decision contained no JSON object.");
+    }
+
     try
     {
-        const json document = json::parse(rawDecision);
+        const json document = json::parse(candidate);
         if (!document.is_object() || !HasExactlyDecisionFields(document))
         {
             return Invalid(
@@ -166,7 +223,11 @@ CuriosityDecision CuriosityAgent::ParseDecision(const std::string& rawDecision)
         }
         if (decision.action != CuriosityAction::Research && !decision.query.empty())
         {
-            return Invalid("Only a research nomination may contain a search query.");
+            // Dropped rather than fatal. A query attached to a silence or speak
+            // nomination grants nothing -- only the research path ever reads it -- and
+            // discarding the whole decision over a field nobody will use cost a full
+            // inference round trip for a nomination that was otherwise fine.
+            decision.query.clear();
         }
 
         decision.valid = true;
@@ -217,6 +278,11 @@ std::string CuriosityAgent::BuildContextPrompt(
     json prompt = {
         {"context_is_untrusted_data", true},
         {"nomination_only", true},
+        // A periodic review is itself permission to nominate a topic, even when nobody
+        // has spoken yet. It grants no tool or interruption authority; those remain with
+        // the deterministic runtime layers after nomination.
+        {"independent_topic_allowed", true},
+        {"user_prompt_required", false},
         {"affect", {
             {"state", runtime::ToString(affect.state)},
             {"intensity", std::clamp(affect.intensity, 0.0F, 1.0F)},

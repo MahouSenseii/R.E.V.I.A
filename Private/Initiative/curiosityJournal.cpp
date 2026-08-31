@@ -132,6 +132,18 @@ bool CuriosityJournal::WasRecentlyConsidered(
     });
 }
 
+bool CuriosityJournal::WasResearchRecentlyAttempted(
+    const std::chrono::seconds window,
+    const std::chrono::system_clock::time_point now) const
+{
+    std::lock_guard lock(mutex);
+    return std::any_of(records.rbegin(), records.rend(), [&](const CuriosityRecord& record)
+    {
+        return !record.query.empty() && now >= record.occurredAt &&
+            now - record.occurredAt <= window;
+    });
+}
+
 bool CuriosityJournal::Append(const CuriosityRecord& input, std::string& outError)
 {
     CuriosityRecord record = input;

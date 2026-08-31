@@ -2,6 +2,8 @@
 #include "capabilityPanel.h"
 #include "pipelinePanel.h"
 #include "memoryPanel.h"
+#include "mindPanel.h"
+#include "visionPanel.h"
 #include "profilePanel.h"
 #include "canvasPanel.h"
 #include "internetActivityPanel.h"
@@ -271,8 +273,17 @@ void ReviaWindow::ApplyContentWidthCap()
     // six-item status row spreads into six islands with nothing between them. Past the
     // cap the extra pixels become margin instead of content, so a maximised window shows
     // the same layout as a windowed one rather than a stretched relative of it.
-    constexpr int maximumContentWidth = 1500;
+    // Scales with the window instead of stopping dead at a fixed measure.
+    //
+    // A hard 1500px cap meant maximising on a wide monitor changed nothing except the
+    // size of the empty margins, which is not what maximising is for. The cap now grows
+    // with the window: 1500px is a floor for small windows so a narrow one still gets
+    // sensible margins, and beyond that content takes most of the width while keeping a
+    // margin so nothing sits against the frame.
+    constexpr int readableFloor = 1500;
     constexpr int minimumSideMargin = 22;
+    const int maximumContentWidth = std::max(
+        readableFloor, static_cast<int>(static_cast<double>(width()) * 0.9));
     const int side = std::max(
         minimumSideMargin, (width() - maximumContentWidth) / 2);
     ui->rootLayout->setContentsMargins(side, 20, side, 20);
@@ -361,6 +372,10 @@ void ReviaWindow::BuildInterface()
     ui->profilesHostLayout->addWidget(profilePanel);
     memoryPanel = new MemoryPanel(session, ui->memoryTab);
     ui->memoryHostLayout->addWidget(memoryPanel);
+    mindPanel = new MindPanel(session, ui->mindTab);
+    ui->mindHostLayout->addWidget(mindPanel);
+    visionPanel = new VisionPanel(session, ui->visionTab);
+    ui->visionHostLayout->addWidget(visionPanel);
 
     voiceLanguageCombo->addItems({"English", "Chinese", "Japanese", "Korean", "German",
         "French", "Russian", "Portuguese", "Spanish", "Italian"});
@@ -616,6 +631,14 @@ void ReviaWindow::StartRuntime()
             if (memoryPanel != nullptr)
             {
                 memoryPanel->Refresh();
+            }
+            if (mindPanel != nullptr)
+            {
+                mindPanel->Refresh();
+            }
+            if (visionPanel != nullptr)
+            {
+                visionPanel->Refresh();
             }
             messageInput->setFocus();
         }, Qt::QueuedConnection);

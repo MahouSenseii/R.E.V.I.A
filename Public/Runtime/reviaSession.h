@@ -16,6 +16,10 @@
 #include "Goals/goalRunner.h"
 #include "Goals/goalSandbox.h"
 #include "Goals/goalStore.h"
+#include "Autonomy/activityScheduler.h"
+#include "Emotion/emotionRuntime.h"
+#include "Identity/developmentEngine.h"
+#include "Identity/relationshipRegistry.h"
 #include "LLM/LLamaCPP/llamaCppServerProcess.h"
 #include "Initiative/initiativeController.h"
 #include "Initiative/conversationStarter.h"
@@ -29,6 +33,7 @@
 #include "Runtime/conversationRuntime.h"
 #include "Runtime/runtimeEvents.h"
 #include "Runtime/sessionResult.h"
+#include "Resources/loadGovernor.h"
 #include "Resources/resourceMonitor.h"
 #include "Resources/resourcePlanner.h"
 #include "Speech/speechService.h"
@@ -168,6 +173,18 @@ public:
     // silently succeeding when the capability is absent -- a camera that quietly works
     // when the user believes it is off is the worst possible failure here.
     [[nodiscard]] bool IsCameraAvailable() const;
+    // Display topology, read without capturing anything, so a settings screen can show
+    // what is attached without needing screen-capture permission first.
+    // Captures and describes the screen right now, for a turn that explicitly asked
+    // about it.
+    //
+    // Continuous awareness is off by default and deliberately so, which meant "what is
+    // on my screen?" had no way to actually look: the cached observation it reads was
+    // only ever populated by the awareness loop. Being asked is the consent here, the
+    // same way it is for the camera -- answering a question about the screen is not the
+    // same as watching it.
+    [[nodiscard]] std::string CaptureScreenContextNow();
+    [[nodiscard]] std::vector<vision::MonitorDescriptor> Monitors() const;
     [[nodiscard]] std::vector<vision::CameraDescriptor> Cameras() const;
     // autonomous is true when Revia chose to look rather than being asked. It requires
     // the separate autonomousCapture authority on top of camera access.
@@ -205,10 +222,28 @@ public:
     // worker because a number moved turns a reproducible plan into a feedback loop.
     [[nodiscard]] resources::UsageSnapshot ResourceUsage() const;
     [[nodiscard]] std::string ResourceUsageStatus() const;
+    // What the machine can currently afford. Advisory: it changes what optional work is
+    // attempted, never where a model lives.
+    [[nodiscard]] resources::LoadAdjustment CurrentLoad() const;
 
     // Curated long-term memory, read-only. What Revia actually kept, so a user can see
     // it rather than infer it from what she happens to bring up. Reading cannot write:
     // memory is added through the reviewed memory path, never from a viewer.
+    // Who Revia is talking to, and how she stands with them. Read-only from outside:
+    // relationships move only through recorded evidence, never by assignment.
+    [[nodiscard]] std::vector<identity::RelationshipState> Relationships() const;
+    [[nodiscard]] identity::RelationshipState CurrentRelationship() const;
+    [[nodiscard]] emotion::EmotionVector CurrentEmotion() const;
+    [[nodiscard]] emotion::MoodState CurrentMood() const;
+    [[nodiscard]] identity::DevelopmentState CurrentDevelopment() const;
+    // What is currently pulling at her, and what the scheduler last decided about it.
+    // Read-only: drives move from stimuli and time, never by being set.
+    [[nodiscard]] autonomy::DriveState Drives() const;
+    [[nodiscard]] autonomy::ActivityDecision LastAutonomyDecision() const;
+    [[nodiscard]] std::optional<autonomy::Activity> CurrentActivity() const;
+    // Every applied personality change, with the evidence behind it.
+    [[nodiscard]] std::vector<identity::DevelopmentChange> DevelopmentHistory() const;
+
     [[nodiscard]] std::vector<memoryEntry> Memories() const;
     [[nodiscard]] std::vector<memoryEntry> SearchMemories(
         const std::string& query, std::size_t maxEntries = 50) const;
@@ -341,6 +376,30 @@ private:
     // Every archived turn goes through here, so the sensitive-content refusal and the
     // enabled check live in one place rather than at each call site.
     void ArchiveTurn(const std::string& role, const std::string& content);
+    // Reads observable signals out of a finished turn and applies them as bounded
+    // relationship evidence. Deterministic: no model is consulted about how Revia should
+    // feel toward someone, because a model that could set those numbers would let anyone
+    // talk their way into being trusted.
+    void RecordRelationshipEvidence(
+        const std::string& entityId,
+        const std::string& userInput,
+        const std::string& reply,
+        bool succeeded);
+    void PersistIdentity();
+    // Records what a finished turn says about who she is becoming. Bounded and slow:
+    // several consistent observations are needed before anything moves at all.
+    void RecordDevelopmentEvidence(const identity::TurnObservation& observation);
+    // Moves drives from a confirmed event, alongside the emotional appraisal of it, so
+    // wanting and feeling never disagree about what happened.
+    void ObserveDrives(const emotion::Stimulus& stimulus);
+    // Asks whether there is any reason to act. Called from the initiative loop rather
+    // than from a timer of its own: a timer may permit an activity, never motivate one.
+    void ConsiderAutonomousActivity(const std::string& triggerReason);
+    [[nodiscard]] autonomy::AutonomyEvidence GatherAutonomyEvidence() const;
+    [[nodiscard]] autonomy::AutonomyCost GatherAutonomyCost() const;
+    // Interrupts whatever she chose to do because the user needs attention. Interrupted
+    // is not cancelled: what was cut off stays resumable.
+    void PreemptAutonomousActivity(const std::string& because);
     // Replays the tail of the previous session into context, so a restart continues a
     // conversation rather than starting one that has forgotten yesterday.
     void RestoreConversationContext();
@@ -412,6 +471,36 @@ private:
     goals::GoalStore goalStore;
     goals::GoalRunner goalRunner;
     AffectController affectController;
+    // Primary emotion path. AffectController remains as the deterministic fallback and
+    // baseline; this is what reaches the prompt, the badge, and speech.
+    emotion::EmotionRuntime emotionRuntime;
+    identity::DevelopmentEngine developmentEngine;
+    autonomy::DriveController driveController;
+    autonomy::ActivityScheduler activityScheduler;
+    mutable std::mutex autonomyMutex;
+    autonomy::DriveState drives;
+    autonomy::ActivityDecision lastAutonomyDecision;
+    // What was last written to the log, so a repeated identical decision is published as
+    // an event but not logged again. Logging every idle evaluation would bury the log;
+    // logging none of them makes a silent Revia impossible to diagnose.
+    std::string lastLoggedAutonomy;
+    mutable std::mutex loadMutex;
+    resources::LoadAdjustment currentLoad;
+    // Hysteresis lives here rather than in the governor, which is pure. Without it a
+    // reading hovering on a threshold flips the machine between states every sample.
+    resources::LoadState lastPublishedLoad = resources::LoadState::Normal;
+    // A new state has to hold for several consecutive samples before it is adopted.
+    // VRAM readings swing hard while models load and free memory -- 111%, then 11%, then
+    // 88% within seconds -- and acting on each swing made what Revia would attempt
+    // change from one moment to the next for no reason a person could see.
+    resources::LoadState candidateLoad = resources::LoadState::Normal;
+    int candidateLoadSamples = 0;
+    static constexpr int loadSamplesBeforeAdopting = 3;
+    std::optional<autonomy::Activity> runningActivity;
+    // Rolling counters the scheduler charges against. Kept here rather than in the
+    // scheduler so it stays a pure function of its inputs.
+    std::deque<std::chrono::steady_clock::time_point> recentActivities;
+    std::chrono::steady_clock::time_point lastActivityAt{};
     speech::SpeechService speechService;
     speech::SpeechRecognitionService speechRecognitionService;
     presence::PresenceRuntime presenceRuntime;
@@ -444,6 +533,12 @@ private:
     evaluation::EvaluationReport lastEvaluation;
     memory::ConversationArchive conversationArchive;
     core::PreferenceStore preferenceStore;
+    identity::RelationshipRegistry relationships;
+    // The entity whose turn is being handled. Set before a turn runs and read when the
+    // state packet is assembled, so relationship state follows whoever is speaking
+    // rather than being global.
+    mutable std::mutex speakerMutex;
+    std::string currentSpeakerId = identity::LocalUserEntityId();
     learning::SelfAssessmentEngine selfAssessment;
     visual::DiagramStore diagramStore;
     content::WorkingDocument workingDocument;

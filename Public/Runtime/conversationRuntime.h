@@ -10,6 +10,8 @@
 #include "Intelligence/intelligenceRouter.h"
 #include "Intelligence/reflexRouter.h"
 #include "Evaluation/conversationEvaluation.h"
+#include "Emotion/emotionRuntime.h"
+#include "Identity/relationshipState.h"
 #include "Runtime/affectController.h"
 #include "Runtime/runtimeEvents.h"
 #include "Runtime/sessionResult.h"
@@ -40,6 +42,20 @@ public:
         std::function<actions::ActionOutcome(const std::string&, const std::string&)>;
     using ResponseFilterSettingsProvider = std::function<responseFilterSettings()>;
     using ScreenContextProvider = std::function<std::string()>;
+    // Supplies the relationship with whoever is currently speaking. A provider rather
+    // than a parameter because every call site would otherwise have to thread a speaker
+    // through, and the session already owns who that is.
+    using RelationshipProvider = std::function<identity::RelationshipState()>;
+    // Supplies who Revia currently is. Appraisal scales by personality, so whatever
+    // decides how an event feels needs the same development state the prompt shows.
+    using DevelopmentProvider = std::function<identity::DevelopmentState()>;
+    // Lets the session move drives from the same stimulus the appraisal saw, so wanting
+    // and feeling cannot disagree about what happened.
+    using StimulusObserver = std::function<void(const emotion::Stimulus&)>;
+    // Captures the screen on demand for a turn that explicitly asked about it. Separate
+    // from ScreenContextProvider, which only ever reads what ambient observation already
+    // cached and returns nothing when that is off.
+    using ScreenCaptureRequest = std::function<std::string()>;
 
     ConversationRuntime(
         messageRouter& router,
@@ -47,6 +63,7 @@ public:
         agents::TurnCoordinator& coordinator,
         speech::SpeechService& speech,
         AffectController& affect,
+        emotion::EmotionRuntime& emotions,
         RuntimeEventBus& events,
         logger& log,
         StateHandler stateHandler,
@@ -54,7 +71,11 @@ public:
         InternetSettingsProvider internetSettingsProvider,
         InternetLookupHandler internetLookupHandler,
         ResponseFilterSettingsProvider responseFilterSettingsProvider,
-        ScreenContextProvider screenContextProvider);
+        ScreenContextProvider screenContextProvider,
+        RelationshipProvider relationshipProvider = {},
+        DevelopmentProvider developmentProvider = {},
+        StimulusObserver stimulusObserver = {},
+        ScreenCaptureRequest screenCaptureRequest = {});
 
     SessionResult Reply(
         const std::string& input,
@@ -143,6 +164,9 @@ private:
     agents::TurnCoordinator& coordinator;
     speech::SpeechService& speech;
     AffectController& affect;
+    // Primary. AffectController stays as the deterministic fallback and baseline, but
+    // what reaches the prompt now comes from appraisal.
+    emotion::EmotionRuntime& emotions;
     RuntimeEventBus& events;
     logger& log;
     StateHandler setState;
@@ -151,6 +175,10 @@ private:
     InternetLookupHandler internetLookup;
     ResponseFilterSettingsProvider filterSettingsProvider;
     ScreenContextProvider screenContextProvider;
+    RelationshipProvider relationshipProvider;
+    DevelopmentProvider developmentProvider;
+    StimulusObserver stimulusObserver;
+    ScreenCaptureRequest screenCaptureRequest;
     agents::ConversationQualityMonitor qualityMonitor;
     intelligence::HumanizationController humanization;
     intelligence::IntelligenceRouter intelligenceRouter;

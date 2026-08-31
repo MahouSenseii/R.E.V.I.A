@@ -79,6 +79,55 @@ bool InputArbiter::IsNoise(const inputArbiterSettings& settings, const std::stri
     {
         return true;
     }
+
+    // The signature of a recogniser hallucinating on silence.
+    //
+    // Whisper does not return nothing when it hears nothing; it returns punctuation and
+    // stray initials -- "[. [. C.S.C.C.C. .. .." -- which is long enough to clear the
+    // length check above and reaches Revia as though someone had spoken. She then
+    // answers it earnestly, which makes her look broken and costs a full inference.
+    //
+    // Two independent conditions, because either alone has a false positive: density
+    // alone would reject a legitimate "ok!!!", and the word check alone would accept a
+    // long run of single letters.
+    std::size_t alphanumeric = 0;
+    std::size_t longestWord = 0;
+    std::size_t currentWord = 0;
+    std::size_t wordsOfTwoOrMore = 0;
+    for (const unsigned char character : text)
+    {
+        if (std::isalnum(character) != 0)
+        {
+            ++alphanumeric;
+            ++currentWord;
+            longestWord = std::max(longestWord, currentWord);
+        }
+        else
+        {
+            if (currentWord >= 2)
+            {
+                ++wordsOfTwoOrMore;
+            }
+            currentWord = 0;
+        }
+    }
+    if (currentWord >= 2)
+    {
+        ++wordsOfTwoOrMore;
+    }
+    if (wordsOfTwoOrMore == 0)
+    {
+        // Nothing in it is even a two-letter word.
+        return true;
+    }
+    const double density = text.empty()
+        ? 0.0
+        : static_cast<double>(alphanumeric) / static_cast<double>(text.size());
+    if (density < 0.35 && longestWord < 4)
+    {
+        // Mostly punctuation, and what letters there are do not form a real word.
+        return true;
+    }
     return false;
 }
 

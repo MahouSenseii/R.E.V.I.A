@@ -159,6 +159,10 @@ if(REVIA_BUILD_DESKTOP)
                 "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/internetActivityPanel.h"
                 "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/main.cpp"
                 "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/memoryPanel.cpp"
+                "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/mindPanel.cpp"
+                "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/visionPanel.cpp"
+                "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/visionPanel.h"
+                "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/mindPanel.h"
                 "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/memoryPanel.h"
                 "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/pipelinePanel.cpp"
                 "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/pipelinePanel.h"
@@ -260,6 +264,8 @@ if(BUILD_TESTING)
             "${CMAKE_CURRENT_SOURCE_DIR}/Tests/*.cpp"
     )
     add_executable(ReviaTests ${REVIA_TEST_SOURCES})
+    # Split test suites include testSupport.h from the Tests directory.
+    target_include_directories(ReviaTests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/Tests")
     revia_link_foundation(ReviaTests)
     if(MINGW)
         target_link_options(ReviaTests PRIVATE -static)

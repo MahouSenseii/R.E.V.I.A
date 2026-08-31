@@ -18,6 +18,13 @@ struct ResponseFilterContext
     bool internetTopicIsActive = false;
     std::string internetProvider = "approved provider";
 
+    // Populated only after a real screen capture or retained ambient observation was
+    // successfully described. The hard filter uses it to stop a model prior such as
+    // "assistants cannot see screens" from contradicting evidence the runtime supplied.
+    bool screenTopicIsActive = false;
+    bool screenObservationAvailable = false;
+    std::string screenObservation;
+
     [[nodiscard]] std::string Describe() const;
 };
 

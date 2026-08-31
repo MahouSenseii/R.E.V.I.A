@@ -22,6 +22,13 @@ int main(int argc, char** argv)
     // Layout has to be checked at more than the one size the window happens to open at.
     int forcedWidth = 0;
     int forcedHeight = 0;
+    // Starts the runtime, stays alive for a fixed period, then shuts down cleanly.
+    //
+    // --runtime-ready-smoke-test exits the moment startup reports ready, which is before
+    // any background worker has had a chance to do anything. Confirming that the
+    // initiative and autonomy loops actually run needs the process to outlive their
+    // debounce, and doing that by hand is not a check anyone will repeat.
+    int holdSeconds = 0;
     for (int index = 1; index < argc; ++index)
     {
         smokeTest = smokeTest || std::string(argv[index]) == "--ui-smoke-test";
@@ -37,6 +44,18 @@ int main(int argc, char** argv)
         else if (std::string(argv[index]) == "--ui-screenshot-tab" && index + 1 < argc)
         {
             screenshotTab = argv[++index];
+        }
+        else if (std::string(argv[index]) == "--runtime-hold" && index + 1 < argc)
+        {
+            try
+            {
+                holdSeconds = std::stoi(argv[++index]);
+            }
+            catch (const std::exception&)
+            {
+                holdSeconds = 0;
+            }
+            runtimeSmokeTest = true;
         }
         else if (std::string(argv[index]) == "--ui-size" && index + 1 < argc)
         {
@@ -170,6 +189,13 @@ int main(int argc, char** argv)
         });
         readyTimer->start();
         QTimer::singleShot(120000, &window, [&window]() { window.RequestShutdown(); });
+    }
+    else if (holdSeconds > 0)
+    {
+        QTimer::singleShot(holdSeconds * 1000, &window, [&window]()
+        {
+            window.RequestShutdown();
+        });
     }
     else if (runtimeSmokeTest)
     {

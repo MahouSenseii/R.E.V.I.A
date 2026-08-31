@@ -44,7 +44,7 @@
       "modelPath": "Models/Qwen3-VL-8B-Instruct-Unredacted-MAX.Q4_K_M.gguf",
       "visionEnabled": true,
       "multimodalProjectorPath": "Models/Qwen3-VL-8B-Instruct-Unredacted-MAX.mmproj-q8_0.gguf",
-      "contextSize": 4096,
+      "contextSize": 8192,
       "maxTokens": 1024,
       "temperature": 0.72,
       "startupTimeoutSeconds": 180,

@@ -18,7 +18,8 @@ enum class StarterCueKind
     FocusCompleted,
     ReturnedToApplication,
     ContextSwitching,
-    SelfDirectedCuriosity
+    SelfDirectedCuriosity,
+    VisualIssue
 };
 
 struct StarterCue
@@ -41,6 +42,16 @@ public:
     void Configure(initiativeSettings settings);
     void UpdateSettings(initiativeSettings settings);
     void Observe(const perception::WindowObservation& observation);
+    // A structured vision assessment found one clear, current issue. Returns true only
+    // when a new cue was queued, so a periodic refresh cannot wake initiative every
+    // thirty seconds for the same unchanged error.
+    [[nodiscard]] bool ObserveVisualIssue(
+        const std::string& issue,
+        float confidence,
+        std::chrono::system_clock::time_point occurredAt);
+    // Removes a queued visual cue once a later successful assessment shows that the
+    // issue disappeared. Other desktop-transition cues are left alone.
+    void ClearVisualIssue();
     // One-shot opportunities. Once the attention policy considers a cue, a timer cannot
     // revive it later after its conversational moment has passed.
     [[nodiscard]] std::vector<StarterCue> RecentCues(
@@ -65,6 +76,7 @@ private:
     std::deque<Transition> transitions;
     std::deque<StarterCue> cues;
     std::string lastCueEvidence;
+    std::string activeVisualIssue;
 };
 
 } // namespace revia::initiative

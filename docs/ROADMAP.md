@@ -280,3 +280,273 @@ The next code milestone should be small enough to verify end to end:
 - Do not start avatar work before the conversational brain is stable.
 
 Internally Revia may eventually have Reflex, Fast, Main, Expert, memory, speech, vision, curiosity, research, self-assessment, and multiple resource workers. Externally there should still be only **one Revia**.
+
+## Persistent mind architecture (in progress)
+
+The goal is that Revia's emotions, personality, and relationships are runtime-owned
+state that the conversational model receives, rather than something the model invents
+per turn.
+
+**Phase 1 — state foundations: implemented and tested.**
+
+- `Public/Emotion/emotionTypes.h` — 20-component `EmotionVector`. Emotions coexist;
+  a dominant reading is derived for UI and logging without collapsing the rest.
+- `Public/Emotion/stimulus.h` — typed `Stimulus` with valence, importance, novelty,
+  certainty, success/failure, and causation. Nothing downstream branches on prose.
+- `Public/Emotion/moodState.h` — `MoodState` plus `MoodController`: momentum, decay,
+  saturation, and `AppraisalGain`, which is how mood changes what the next event feels
+  like rather than merely being reported.
+- `Public/Identity/developmentState.h` — 16 traits as base + learned delta, never
+  collapsed, so drift is explainable and reversible. `ChildlikeBaseline()` encodes her
+  documented starting temperament as numbers.
+- `Public/Identity/relationshipState.h` — per-entity relationship with bounded evidence
+  application. Affinity starts neutral: nothing assumes she likes anyone.
+- `Public/Identity/identityStore.h` — atomic, schema-versioned persistence of
+  development, mood, relationships, and development history. A corrupt or newer-schema
+  file is refused rather than silently replaced.
+
+**Phase 2 — appraisal: implemented and tested.**
+
+- `Public/Emotion/appraisalContext.h` — derives the appraisal axes (expectedness, goal
+  relevance, novelty, controllability, self-responsibility, social importance) from a
+  stimulus plus current state. Retrieved memories are bounded to six and temper how
+  surprising a familiar outcome is.
+- `Public/Emotion/emotionModel.h` — `IEmotionModel` with `RuleEmotionModel` behind it.
+  The rule model is permanent: the fallback when no network is loaded, the source of
+  initial training targets, and the baseline a trained model must beat. Personality is
+  applied as a separate multiplier after the appraisal arithmetic, never folded into
+  coefficients, and `RawResponse` exposes the pre-personality delta so that influence
+  can be measured rather than asserted.
+- `Public/Emotion/emotionRuntime.h` — owns the emotion vector and mood, applies a model
+  to a stimulus, integrates the result, and records an `AppraisalOutcome` carrying the
+  stimulus, context, delta, resulting state, and model name.
+- `EmotionRuntime::ToAffectSnapshot()` projects the vector onto the legacy
+  `AffectSnapshot`, so the badge, speech rate, and posture line can be migrated
+  incrementally and `AffectController` stays a working fallback rather than dead code.
+
+Observed behaviour from the same stimulus under different context:
+
+| Event | Result |
+| --- | --- |
+| Goal failed, her approach | frustration 0.54, disappointment 0.41, confusion 0.38 |
+| Goal failed, external cause | concern 0.43, disappointment 0.41, confusion 0.38 |
+| Hard-won success | joy 0.66, pride 0.57, excitement 0.54 |
+| Sharp remark from a close friend | amusement 0.38, irritation 0.08 |
+| The same remark from a stranger | irritation 0.32, anger 0.24 |
+| The same remark from a friend, on a bad day | sadness 0.29, disappointment 0.24 |
+
+**Phase 3 — dynamic identity: implemented, integrated, and tested.**
+
+- `Public/Identity/reviaStatePacket.h` — the single canonical description of Revia
+  handed to whichever model answers. `RenderStatePacket` assembles the documented
+  section order and is deterministic, which is what guarantees Reflex, Fast, Main, and
+  Expert cannot be given different descriptions of the same moment.
+- Sections render only when they carry something real. A development section with no
+  drift, or a relationship section for a stranger, would assert state that does not
+  exist, so absence is the honest rendering.
+- `Private/Runtime/conversationRuntime.cpp` now assembles the packet instead of
+  concatenating the prompt inline. The emotion vector is populated from the
+  deterministic `AffectController` via `LegacyAffectToVector`, so behaviour is unchanged
+  while the assembly moves; when appraisal goes live only that population changes.
+- The prompt-leak filter was extended to cover the new sections. It also had a real
+  pre-existing bug: the marker `"runtime self-knowledge (ground truth)"` ended in a
+  parenthesis the rendered prompt never contains (`"(ground truth; mention it only..."`),
+  so that marker had never matched anything. Fixed.
+
+**Phase 4 — relationships: implemented, integrated, and tested.**
+
+- `Public/Identity/relationshipRegistry.h` — the live per-entity database, loaded at
+  startup and saved on shutdown. Entity ids are namespaced (`local:user`,
+  `adapter:discord:name`) so two people who share a name stay two relationships, and
+  adapter-supplied author strings are sanitised before they key anything.
+- `Public/Identity/relationshipEvidence.h` — deterministic signal reading. A model never
+  assigns relationship numbers; evidence comes from what the runtime can observe, so
+  claiming to be trusted produces no trust. Hostility aimed at Revia accrues as
+  grievance; frustration at a broken tool does not; being corrected is friction rather
+  than disrespect.
+- `ReviaSession` resolves the speaker, applies evidence after each turn, and supplies the
+  relationship to the state packet through a provider, so the relationship section now
+  renders for real in conversation.
+- Warmth is capped by acquaintance (`0.25 + 0.75 * familiarity`). Without it affinity and
+  trust saturated in about thirty exchanges while familiarity needed hundreds, and the
+  rendered sentence contradicted itself: *"nearly a stranger to you, you like them, you
+  trust them"*. The cap is one-directional -- dislike stays fast, because deciding you
+  want nothing to do with someone does not require history.
+
+Observed accumulation against sustained appreciation, and against hostility:
+
+| Exchanges | Rendered |
+| --- | --- |
+| 30 | they are nearly a stranger to you. |
+| 150 | you are still getting to know them, and you like them. |
+| 400 | you know them well, you like them, you trust them, and you look up to them. |
+| 25 hostile | nearly a stranger, you do not like them, ... annoyed with them right now. |
+
+**Phase 5 — development, and appraisal going live: implemented and tested.**
+
+- `Public/Emotion/stimulusBuilder.h` — one place where stimuli are constructed from
+  confirmed outcomes. Conversation stimuli reuse the same signals the relationship system
+  reads, so what moves a feeling and what moves a relationship cannot disagree about what
+  was said.
+- **Appraisal is now the live emotion path.** `ConversationRuntime` builds a stimulus
+  before generation, `EmotionRuntime` appraises it against development, mood, and the
+  speaker's relationship, and the resulting vector is what reaches the prompt, the status
+  badge, and speech. `AffectController` still runs as the documented deterministic
+  fallback and baseline, and `LegacyAffectToVector` covers paths with no stimulus behind
+  them, such as a proactive opening.
+- `Public/Identity/developmentEngine.h` — evidence accumulates per trait and only moves a
+  personality when several consistent observations agree. Changes are bounded per step,
+  capped over a lifetime, reversible when evidence changes direction, and carry the reason
+  and evidence count that produced them.
+- Development has no preferred direction. Impulsiveness that keeps paying off raises
+  impulsiveness and risk tolerance; impulsiveness that keeps failing lowers it and raises
+  caution. Growth is not a slide toward a calmer, more agreeable assistant.
+- Mood is restored at startup and captured at shutdown. Momentary emotion deliberately is
+  not: waking up annoyed about something she cannot point at would be worse than waking
+  up calm.
+
+Verified live, not only in tests. A full `--runtime-ready-smoke-test` cycle logs
+`Identity loaded: 0 known relationship(s).`, records `identity_load=0.6ms` in the startup
+timings, and logs `Identity saved` during shutdown, leaving a schema-version-1
+`RuntimeData/Identity/identity.json` with all sixteen traits persisted by name.
+
+**Not yet implemented.**
+
+- The packet's `memories` field is never populated. Memory does still reach the prompt:
+  `promptBuilder::BuildMessages` performs its own BM25/vector retrieval and inserts a
+  memory block directly. Consolidating that into the packet is outstanding, as are the
+  autobiographical metadata fields (`emotionAtEncoding`, `relationshipAtEncoding`) and
+  memory strength/decay.
+**Debug UI: implemented.** `Desktop/mindPanel.cpp` adds a Mind tab with three views --
+Now (the full emotion vector including the zeroes, plus mood), Development (base, change,
+and current side by side, with the applied-change history and the evidence behind each),
+and Relationships (every known entity with familiarity, affinity, trust, respect,
+irritation, resentment, and exchange count). Read-only: a control that could set trust to
+0.9 would be exactly the assignment path the relationship system refuses the model.
+
+**Verified against a live conversation turn**, not only in tests. Piping one message
+through the CLI produced: identity loaded at startup, a reply, a `local:user`
+relationship at familiarity 0.0023 / affinity +0.0269 / trust 0.2517 after one exchange,
+mood valence nudged to +0.008 and sociability 0.600 to 0.605, an empty development
+history (one observation being far below the four-observation threshold), and
+`Identity saved: 1 relationship(s)` on shutdown.
+**Phase 6 — drives and the activity scheduler: implemented and tested, not yet running.**
+
+- `Public/Autonomy/driveState.h` — seven drives with their own dynamics. Everything
+  decays except boredom, which is what nothing happening feels like; acting on a drive
+  spends it, so finding an answer actually reduces the wanting.
+- `Public/Autonomy/activity.h` — activity types and lifecycle. `Interrupted` is distinct
+  from `Paused` and from `Cancelled`, because an interruption is not a decision and what
+  the user cut off deserves a chance to continue.
+- `Public/Autonomy/activityScheduler.h` — evidence-gated scoring. `Nothing` is a
+  first-class candidate scored exactly at the bar, so any real activity has to beat it
+  outright rather than win by default.
+
+The load-bearing property, tested directly: **a timer alone can never produce an
+activity.** Maxed-out drives with no evidence return `Nothing`. Over sixty-four ordinary
+idle evaluations fewer than a quarter produce any activity at all.
+
+An active conversation is a *hard gate*, not a score penalty. It was written as a penalty
+first, and a strong enough drive could outbid the user's attention -- exactly backwards.
+Missing permission is likewise refused by name rather than being silently absent, so
+"why did she not look it up?" has an answer.
+
+Observed decisions:
+
+| Situation | Decision |
+| --- | --- |
+| Idle, nothing happened | nothing -- "Nothing has happened that would justify doing anything." |
+| Unfinished important goal | continue goal (1.14) |
+| The same, mid-conversation | nothing -- "A conversation is in progress; nothing autonomous outranks that." |
+| Open question, research allowed | research (0.78) |
+| Open question, research off | nothing -- "no permission to research it" |
+| Worth saying, long quiet | speak (0.55, marginal) |
+| Worth saying, just talked | nothing -- "the user was interacting too recently" |
+
+**Wired into the runtime.** `ReviaSession` owns the drive state and scheduler. Drives
+move from the same stimuli the appraisal sees (conversation via a stimulus observer, goal
+outcomes directly), settle toward baseline on each initiative signal, and are spent when
+an activity acts on them. `ConsiderAutonomousActivity` runs from the initiative worker,
+`ContinueGoal` executes through the ordinary goal runner, and user input calls
+`PreemptAutonomousActivity`, which marks the activity `Interrupted` rather than
+`Cancelled` so it stays resumable.
+
+Only `ContinueGoal` executes. Every other decided activity is recorded and published but
+explicitly reported as not yet carried out, rather than silently no-opping into something
+that looks like a working feature.
+
+The scheduler is deliberately not given authority to speak: `openQuestion` and
+`somethingWorthSaying` are left unpopulated in `GatherAutonomyEvidence` because the
+existing curiosity and initiative controllers already own that channel, and two systems
+with the same authority over speech would produce two unprompted lines at once.
+
+Placement mattered and was wrong at first. The call originally sat after the initiative
+loop's microphone and busy checks. Those guard the interruption point -- speaking over
+someone -- and hands-free listening keeps the microphone recording continuously, so
+gating on it meant resuming her own unfinished work was permanently suppressed by a
+microphone she was not going to use. It now runs before those checks and relies on the
+scheduler's own finer-grained gates, where an active conversation is a hard refusal.
+
+**Verified running.** `ReviaDesktop.exe --runtime-hold <seconds>` starts the runtime,
+stays alive past the initiative debounce, and shuts down cleanly, which is what makes
+this checkable at all -- `--runtime-ready-smoke-test` exits the moment startup reports
+ready, before any background worker has done anything. A seventy-second hold produced:
+
+```
+Initiative woke: startup state and unfinished goals
+Autonomy: doing nothing - Nothing has happened that would justify doing anything.
+```
+
+Exactly one autonomy line for the whole session. The loop woke on the startup signal,
+considered, and declined for lack of evidence; no further wakes occurred because nothing
+signalled. Time passing did not manufacture a reason to act, which is the property the
+whole design exists to guarantee.
+
+Note that the hold is measured from process start rather than from runtime-ready, and
+startup alone takes around twenty-five seconds, so a useful hold is sixty seconds or
+more.
+
+**Outstanding:** memory consolidation into the state packet, Phase 7 (neural emotion
+model, training-data export), and Phase 8 (avatar). `AffectController` remains the emotion path that actually drives
+conversation, and no `Stimulus` is constructed anywhere in `ReviaSession`.
+
+## Response latency
+
+Measured on a real turn rather than estimated. An ordinary C++ question cost 18.3
+seconds, of which 14.8 seconds was an internet lookup:
+
+```
+turn_total=18296ms  internet_lookup=14840ms  llama_wait_first_token=411ms
+                    llama_decode_after_first_token=2888ms
+```
+
+`InternetLookupPolicy::ShouldLookup` ended in `return question && lowered.size() >= 12`,
+so **any input containing a question mark and at least twelve characters triggered a web
+round trip**. Nearly every question the user asked paid for it, and the lookup was four
+times more expensive than generating the answer.
+
+A lookup now requires actual evidence that fresh external facts are wanted: an explicit
+request, which is always honoured, or a time-sensitive marker. Technical and programming
+wording is excluded before the time-sensitive check, because "which version of C++ has
+std::format" would otherwise leave the machine on the word "version".
+
+The same question now costs **3.0 seconds**, a 5.7x improvement, verified by re-running
+it. Remaining turn cost is almost entirely model decode, which is the honest floor for
+this hardware.
+
+**Known and unfixed.**
+
+- Replies perform personality instead of delivering substance. Across three separate
+  technical questions Revia produced a characterful comment about the topic and never
+  answered it ("A mutex (mutual exclusion) is basically a digital doorman." and nothing
+  further). This is not downstream truncation: `ConversationStylePolicy::RefineReply`
+  was tested directly and preserves a full answer both with empty context and against
+  overlapping replayed history, and decode timings show the model itself stopping early.
+  A profile-prompt rule requiring the answer alongside the personality was added and did
+  **not** fix it. The likely cause is that the combined system prompt, state packet,
+  style guidance, and humanization block push hard enough toward personality that
+  substance loses, but that has not been isolated.
+- `speech_service_stop` took 55.6 seconds on one shutdown, almost certainly a generation
+  worker blocked in an uncancellable Qwen HTTP request. Not investigated.
+- `memory_classification` costs about 7.5 seconds after a turn. It runs in the
+  background and does not delay the reply, but it is large.

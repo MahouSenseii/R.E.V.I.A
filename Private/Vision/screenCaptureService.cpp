@@ -197,8 +197,41 @@ namespace
         bool saved = false;
         {
             Gdiplus::Bitmap image(bitmap, nullptr);
-            saved = FindPngEncoder(encoder) &&
-                image.Save(result.path.c_str(), &encoder, nullptr) == Gdiplus::Ok;
+            // Downscaled before saving, because the vision model charges by image tokens
+            // and a two-monitor virtual desktop is enormous. A 6000x1440 capture costs
+            // more prompt tokens than the whole context window, so the request fails
+            // outright with nothing to show for the capture.
+            //
+            // The ceiling is on the longest side, so aspect ratio and both monitors
+            // survive. Text large enough for a person to read across a room -- a clock,
+            // an error, a title -- survives this comfortably; body text in a small font
+            // may not, which is the deliberate trade for being able to look at all.
+            constexpr UINT maximumLongestSide = 1600;
+            const UINT longest = std::max(image.GetWidth(), image.GetHeight());
+            if (longest > maximumLongestSide)
+            {
+                const double scale =
+                    static_cast<double>(maximumLongestSide) / static_cast<double>(longest);
+                const UINT width = std::max<UINT>(
+                    1, static_cast<UINT>(image.GetWidth() * scale));
+                const UINT height = std::max<UINT>(
+                    1, static_cast<UINT>(image.GetHeight() * scale));
+                Gdiplus::Bitmap scaled(static_cast<INT>(width), static_cast<INT>(height),
+                    PixelFormat32bppRGB);
+                Gdiplus::Graphics graphics(&scaled);
+                graphics.SetInterpolationMode(Gdiplus::InterpolationModeHighQualityBicubic);
+                graphics.DrawImage(&image, 0, 0,
+                    static_cast<INT>(width), static_cast<INT>(height));
+                result.width = static_cast<int>(width);
+                result.height = static_cast<int>(height);
+                saved = FindPngEncoder(encoder) &&
+                    scaled.Save(result.path.c_str(), &encoder, nullptr) == Gdiplus::Ok;
+            }
+            else
+            {
+                saved = FindPngEncoder(encoder) &&
+                    image.Save(result.path.c_str(), &encoder, nullptr) == Gdiplus::Ok;
+            }
         }
         Gdiplus::GdiplusShutdown(token);
         DeleteObject(bitmap);

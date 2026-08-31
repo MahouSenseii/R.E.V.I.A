@@ -30,6 +30,12 @@ public:
         const std::string& topic,
         std::chrono::minutes window,
         std::chrono::system_clock::time_point now) const;
+    // A separate global pace for network work. Topic deduplication prevents repetition,
+    // while this prevents a stream of different model-selected topics from turning the
+    // background learner into a crawler.
+    [[nodiscard]] bool WasResearchRecentlyAttempted(
+        std::chrono::seconds window,
+        std::chrono::system_clock::time_point now) const;
     bool Append(const CuriosityRecord& record, std::string& outError);
     [[nodiscard]] std::vector<CuriosityRecord> Recent(std::size_t maximum) const;
 

@@ -35,6 +35,8 @@ class ResourcePanel;
 class CapabilityPanel;
 class ProfilePanel;
 class MemoryPanel;
+class MindPanel;
+class VisionPanel;
 namespace Ui { class ReviaWindow; }
 
 class ReviaWindow final : public QMainWindow
@@ -175,6 +177,8 @@ private:
     CapabilityPanel* capabilityPanel = nullptr;
     ProfilePanel* profilePanel = nullptr;
     MemoryPanel* memoryPanel = nullptr;
+    MindPanel* mindPanel = nullptr;
+    VisionPanel* visionPanel = nullptr;
     QTabWidget* tabs = nullptr;
     QPushButton* sendButton = nullptr;
     QPushButton* stopButton = nullptr;

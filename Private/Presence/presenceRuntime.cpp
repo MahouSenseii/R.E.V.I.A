@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <atomic>
 #include <fstream>
 #include <iomanip>
 #include <nlohmann/json.hpp>
@@ -78,7 +79,17 @@ namespace
         {
             return false;
         }
-        const std::filesystem::path temporary = path.string() + ".tmp";
+        // Unique per write, not a shared "<path>.tmp".
+        //
+        // Avatar state is written from several threads -- speech phase changes, presence
+        // observation, affect updates -- and they all used the same temporary name. Two
+        // overlapping writes would truncate each other's file, the first rename would
+        // move it away, and the second would fail because its temporary no longer
+        // existed. That produced a steady stream of "the avatar state file could not be
+        // updated" while nothing was actually wrong with the destination.
+        static std::atomic<std::uint64_t> writeCounter{0};
+        const std::filesystem::path temporary = path.string() + "." +
+            std::to_string(writeCounter.fetch_add(1)) + ".tmp";
         {
             std::ofstream file(temporary, std::ios::trunc);
             if (!file.is_open())
@@ -91,9 +102,16 @@ namespace
                 return false;
             }
         }
-        std::filesystem::remove(path, error);
-        error.clear();
+        // No pre-remove. Deleting the destination first opens a window where a reader
+        // sees no file at all, and std::filesystem::rename already replaces an existing
+        // regular file on both platforms this runs on.
         std::filesystem::rename(temporary, path, error);
+        if (error)
+        {
+            // A stale temporary would otherwise accumulate one file per failed write.
+            std::error_code cleanup;
+            std::filesystem::remove(temporary, cleanup);
+        }
         if (error)
         {
             std::filesystem::remove(temporary, error);

@@ -36,6 +36,7 @@ QLabel#voiceStudioStatus, QLabel#profileActiveBanner {
 QLabel#profileActiveBanner { color: #dce9f7; font-weight: 600; }
 QLabel#profileStatus { color: #85d7c8; font-weight: 600; }
 QLabel#memoryStatus { color: #85d7c8; font-weight: 600; }
+QLabel#mindHeadline { color: #dce9f7; font-size: 14px; font-weight: 600; }
 QLabel#profileStatus[error="true"] { color: #ff7b88; }
 QLabel#activityIssueSummary, QLabel#preferenceStatus {
     color: #85d7c8;

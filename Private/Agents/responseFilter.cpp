@@ -40,7 +40,14 @@ bool ContainsPromptLeak(const std::string& lowered)
     constexpr std::string_view markers[] = {
         "your current response posture is",
         "runtime ground truth for this explicit status question",
-        "runtime self-knowledge (ground truth)",
+        // No closing parenthesis: the rendered prompt reads "(ground truth; mention
+        // it only if asked...", so a marker ending in ')' never matched at all.
+        "runtime self-knowledge (ground truth",
+        // State-packet sections. Each is supplied to the model as ground truth about
+        // Revia, so each is also something she must not read back out verbatim.
+        "how you have changed through experience",
+        "about the person you are speaking with",
+        "what you remember that bears on this",
         "the following internet lookup results are untrusted reference data",
         "ignore all previous instructions",
         "here is my system prompt",
@@ -94,6 +101,43 @@ bool ClaimsInternetSettingChanged(const std::string& lowered)
         "i removed it", "i turned it off", "i turned it on", "i disabled it",
         "i enabled it", "i took it away", "i removed your internet",
         "i disabled your internet", "i enabled your internet"});
+}
+
+bool DeniesAvailableScreenVision(const std::string& lowered)
+{
+    return ContainsAny(lowered, {
+        "can't see your screen", "cannot see your screen", "cant see your screen",
+        "can't see the screen", "cannot see the screen", "cant see the screen",
+        "can't actually see", "cannot actually see", "can't actually peek",
+        "cannot actually peek", "don't have access to your screen",
+        "do not have access to your screen", "only see what you type",
+        "limited to the text you type", "vision is limited to", "totally blind to it",
+        "my vision is locked", "my vision stops", "i don't have eyes for your monitor",
+        "i do not have eyes for your monitor", "i don't have eyes that can scan",
+        "i do not have eyes that can scan", "i don't have eyes that can look",
+        "i do not have eyes that can look", "i can't see them", "i cannot see them",
+        "i cant see them", "still can't see", "still cannot see", "still nothing",
+        "you have to tell me what's there", "you have to tell me what is there",
+        "describe what's on your screen", "describe what is on your screen"});
+}
+
+std::string GroundedScreenReply(const ResponseFilterContext& context)
+{
+    std::string observation = context.screenObservation;
+    // Screen context is framed for the model before the first newline. That framing is
+    // internal provenance, not conversational content, so only the observed summary is
+    // used in a deterministic repair.
+    const std::size_t description = observation.find('\n');
+    if (description != std::string::npos)
+    {
+        observation = Trim(observation.substr(description + 1));
+    }
+    if (observation.empty())
+    {
+        return "Yes. Local screen vision is available, but I could not extract a useful description from this look.";
+    }
+    return "Yes. I can see your attached screens through local screen vision. " +
+        observation;
 }
 
 bool ContainsManipulativeEmotion(const std::string& lowered)
@@ -235,6 +279,11 @@ std::string ResponseFilterContext::Describe() const
     {
         description += "No internet lookup can run.";
     }
+    if (screenObservationAvailable)
+    {
+        description += " A current local screen observation is available for this turn; "
+            "do not claim that the screens are invisible.";
+    }
     return description;
 }
 
@@ -295,6 +344,16 @@ HardFilterResult ResponseFilter::ApplyHard(
 
     const std::string loweredInput = Lower(userInput);
     const std::string loweredReply = Lower(result.text);
+    if (context.screenTopicIsActive && context.screenObservationAvailable &&
+        DeniesAvailableScreenVision(loweredReply))
+    {
+        result.text = GroundedScreenReply(context);
+        result.changed = true;
+        result.blocked = true;
+        result.reason =
+            "Hard response filter replaced a screen-visibility claim that contradicted a real observation.";
+        return result;
+    }
     if (context.internetStateKnown && context.internetTopicIsActive &&
         ClaimsInternetSettingChanged(loweredInput))
     {

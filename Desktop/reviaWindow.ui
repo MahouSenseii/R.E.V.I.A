@@ -95,6 +95,14 @@
       </widget>
       <widget class="QWidget" name="canvasPage"><attribute name="title"><string>Canvas</string></attribute><layout class="QVBoxLayout" name="canvasHostLayout"><property name="leftMargin"><number>0</number></property><property name="topMargin"><number>8</number></property><property name="rightMargin"><number>0</number></property><property name="bottomMargin"><number>0</number></property></layout></widget>
       <widget class="QWidget" name="permissionsPage"><attribute name="title"><string>Permissions</string></attribute><layout class="QVBoxLayout" name="permissionsHostLayout"><property name="leftMargin"><number>0</number></property><property name="topMargin"><number>8</number></property><property name="rightMargin"><number>0</number></property><property name="bottomMargin"><number>0</number></property></layout></widget>
+      <widget class="QWidget" name="visionTab">
+       <attribute name="title"><string>Vision</string></attribute>
+       <layout class="QVBoxLayout" name="visionHostLayout"><property name="leftMargin"><number>0</number></property><property name="topMargin"><number>8</number></property><property name="rightMargin"><number>0</number></property><property name="bottomMargin"><number>0</number></property></layout>
+      </widget>
+      <widget class="QWidget" name="mindTab">
+       <attribute name="title"><string>Mind</string></attribute>
+       <layout class="QVBoxLayout" name="mindHostLayout"><property name="leftMargin"><number>0</number></property><property name="topMargin"><number>8</number></property><property name="rightMargin"><number>0</number></property><property name="bottomMargin"><number>0</number></property></layout>
+      </widget>
       <widget class="QWidget" name="memoryTab">
        <attribute name="title"><string>Memory</string></attribute>
        <layout class="QVBoxLayout" name="memoryHostLayout"><property name="leftMargin"><number>0</number></property><property name="topMargin"><number>8</number></property><property name="rightMargin"><number>0</number></property><property name="bottomMargin"><number>0</number></property></layout>

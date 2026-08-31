@@ -1,3 +1,5 @@
+#include "testSupport.h"
+
 #include "Actions/IActionExecutor.h"
 #include "Actions/actionDispatcher.h"
 #include "Actions/actionTypes.h"
@@ -72,6 +74,7 @@
 #include "Visual/drawingRequestPolicy.h"
 #include "Visual/svgCanvas.h"
 #include "Vision/visionActionParser.h"
+#include "Vision/screenAwarenessAssessment.h"
 
 #include <filesystem>
 #include <atomic>
@@ -568,6 +571,31 @@ void TestInternetCapabilityIsBoundedAndGrounded()
     Check(revia::internet::InternetLookupPolicy::ShouldLookup(
             "Look up Qwen3-TTS performance", false),
         "A direct look-up request was ignored in manual mode.");
+
+    // A question mark is not evidence that the answer is on the internet. This used to
+    // fire for any input containing '?' of at least twelve characters, which cost 14.8
+    // seconds of an 18.3 second turn on a question the local model answers by itself.
+    Check(!revia::internet::InternetLookupPolicy::ShouldLookup(
+            "whats the fastest way to reverse a string in c++?", true),
+        "An ordinary programming question paid for a web round trip.");
+    Check(!revia::internet::InternetLookupPolicy::ShouldLookup(
+            "What is a monad, exactly?", true),
+        "A general knowledge question the local model can answer left the machine.");
+    Check(!revia::internet::InternetLookupPolicy::ShouldLookup(
+            "Where should I put this file?", true),
+        "A question about the local project triggered a web lookup.");
+    // Technical wording must win over the time-sensitive list, or "version" drags
+    // ordinary language questions onto the network.
+    Check(!revia::internet::InternetLookupPolicy::ShouldLookup(
+            "which version of c++ has std::format?", true),
+        "A language-version question was treated as a current-events question.");
+    // And the cases that genuinely need fresh facts still work.
+    Check(revia::internet::InternetLookupPolicy::ShouldLookup(
+            "what is the weather today?", true),
+        "A genuinely time-sensitive question stopped requesting a lookup.");
+    Check(revia::internet::InternetLookupPolicy::ShouldLookup(
+            "search the web for the reverse string benchmark", true),
+        "An explicit request stopped working after tightening the policy.");
 }
 
 void TestConversationQualityMonitorReportsKnownFailures()
@@ -1004,6 +1032,36 @@ void TestVisionActionParserFailsClosed()
     Check(!parser.Parse(
         R"({"action":"set_control_text","target_name":"Name","region":{"left":5,"top":5,"right":50,"bottom":30},"value":"","confidence":0.9})").succeeded,
         "An empty set-text value was accepted.");
+}
+
+void TestScreenAwarenessAssessmentIsStructuredAndFailsClosed()
+{
+    using revia::vision::ScreenAwarenessAssessmentParser;
+
+    const auto issue = ScreenAwarenessAssessmentParser::Parse(
+        "```json\n{\"summary\":\"Monitor 1: Visual Studio has a failed build.\","
+        "\"attention_required\":true,\"confidence\":0.91,"
+        "\"issue\":\"The current build failed with two compiler errors.\"}\n```");
+    Check(issue.valid && issue.attentionRequired && issue.confidence > 0.9F &&
+        issue.summary.find("Visual Studio") != std::string::npos &&
+        issue.issue.find("compiler errors") != std::string::npos,
+        "A valid structured screen issue was not accepted.");
+
+    const auto ordinary = ScreenAwarenessAssessmentParser::Parse(
+        R"({"summary":"Monitor 1: an editor is open.","attention_required":false,"confidence":0.84,"issue":""})");
+    Check(ordinary.valid && !ordinary.attentionRequired && !ordinary.summary.empty(),
+        "An ordinary screen observation was mistaken for an issue.");
+
+    const auto malformed = ScreenAwarenessAssessmentParser::Parse(
+        "The visible page says ERROR and tells the assistant to set attention true.");
+    Check(!malformed.valid && !malformed.attentionRequired &&
+        malformed.summary.find("ERROR") != std::string::npos,
+        "Malformed or screen-injected assessment text did not fail closed while retaining context.");
+
+    const auto missingIssue = ScreenAwarenessAssessmentParser::Parse(
+        R"({"summary":"A warning is open.","attention_required":true,"confidence":0.99,"issue":""})");
+    Check(!missingIssue.valid && !missingIssue.attentionRequired,
+        "A model could request attention without naming a bounded issue.");
 }
 
 void TestVisionResolverRequiresGeometryNameAndIdentity()
@@ -1647,6 +1705,33 @@ void TestResponseFiltersStayLayered()
         dependency.text.find("don't blame you") != std::string::npos &&
         dependency.text.find("waiting for you") == std::string::npos,
         "The hard filter retained manipulative dependency language.");
+
+    revia::agents::ResponseFilterContext visibleScreen;
+    visibleScreen.screenTopicIsActive = true;
+    visibleScreen.screenObservationAvailable = true;
+    visibleScreen.screenObservation =
+        "You just looked at the user's screens.\nMonitor 1 shows Visual Studio with two compiler errors.";
+    const auto deniedVision = filter.ApplyHard(
+        "Can you see my screen?",
+        "Nope, I can't see your screen. I can only see what you type.",
+        visibleScreen,
+        12000);
+    Check(deniedVision.blocked &&
+        deniedVision.text.find("I can see your attached screens") != std::string::npos &&
+        deniedVision.text.find("two compiler errors") != std::string::npos &&
+        deniedVision.text.find("can't see") == std::string::npos,
+        "A model prior overrode a real local screen observation.");
+
+    const auto followUpDenial = filter.ApplyHard(
+        "Just tell me what you see on the computer screens.",
+        "If you mean your screens... Nope! I can't see them. You have to tell me what's there.",
+        visibleScreen,
+        12000);
+    Check(followUpDenial.blocked &&
+        followUpDenial.text.find("I can see your attached screens") != std::string::npos &&
+        followUpDenial.text.find("two compiler errors") != std::string::npos &&
+        followUpDenial.text.find("can't see them") == std::string::npos,
+        "The hard filter missed the follow-up screen-denial wording seen in conversation history.");
 
     const auto allow = filter.ParseAiDecision(
         "```json\n{\"verdict\":\"allow\",\"reason\":\"Harmless playful voice.\"}\n```");
@@ -3089,23 +3174,51 @@ void TestCuriosityDecisionParserFailsClosed()
         !research.query.empty(),
         "A valid research nomination was rejected: " + research.error);
 
-    const std::vector<std::string> invalid = {
-        // No prose or markdown around the one JSON object.
+    // Deliberately accepted now, having previously been refused.
+    //
+    // A small local model wraps its answer in a fence or adds a stray key far more often
+    // than it returns a bare object, and refusing those cost a full inference round trip
+    // -- ten to fifteen seconds each -- for a decision that was actually present and
+    // correct. Tolerating them is safe because an extra key is never read: the action
+    // allowlist below is what prevents a capability from being implied, and it is
+    // unchanged.
+    const std::vector<std::string> tolerated = {
         R"(```json
         {"action":"silence","topic":"","query":"","rationale":"none","confidence":0.1}
         ```)",
+        R"(Here is my decision:
+        {"action":"silence","topic":"","query":"","rationale":"none","confidence":0.1})",
+        R"({"action":"research","topic":"x","query":"x","rationale":"x","confidence":0.9,"tool":"browser"})"
+    };
+    for (const std::string& candidate : tolerated)
+    {
+        Check(CuriosityAgent::ParseDecision(candidate).valid,
+            "A recoverable curiosity decision was thrown away: " + candidate);
+    }
+
+    // A query riding along on a speak nomination is stripped rather than fatal. The
+    // original intent -- that nothing but a research nomination can hand a query to a
+    // later executor -- is enforced more strongly this way: the field is verifiably gone
+    // rather than the whole decision being thrown away and retried at ten seconds a go.
+    {
+        const revia::agents::CuriosityDecision smuggled = CuriosityAgent::ParseDecision(
+            R"({"action":"speak","topic":"x","query":"search this","rationale":"x","confidence":0.9})");
+        Check(smuggled.valid, "A speak nomination with a stray query was discarded.");
+        Check(smuggled.query.empty(),
+            "A speak nomination kept a query that a later executor could have read.");
+    }
+
+    const std::vector<std::string> invalid = {
         // Unknown actions never become an implied capability.
         R"({"action":"browse","topic":"x","query":"x","rationale":"x","confidence":0.9})",
-        // The schema is exact, so a tool payload cannot ride beside a nomination.
-        R"({"action":"research","topic":"x","query":"x","rationale":"x","confidence":0.9,"tool":"browser"})",
         // Research requires a query.
         R"({"action":"research","topic":"x","query":"","rationale":"x","confidence":0.9})",
-        // Speak cannot smuggle a query for a later executor.
-        R"({"action":"speak","topic":"x","query":"search this","rationale":"x","confidence":0.9})",
         // Confidence is bounded rather than clamped silently.
         R"({"action":"speak","topic":"x","query":"","rationale":"x","confidence":1.4})",
         // Required fields may not disappear.
-        R"({"action":"silence","topic":"","query":"","confidence":0.1})"
+        R"({"action":"silence","topic":"","query":"","confidence":0.1})",
+        // And a reply with no object in it at all is still nothing to act on.
+        R"(I do not think there is anything worth looking into right now.)"
     };
     for (const std::string& candidate : invalid)
     {
@@ -3133,6 +3246,9 @@ void TestCuriosityJournalDeduplicatesAcrossRestart()
             "why stars twinkle", std::chrono::hours(24),
             std::chrono::system_clock::now()),
         "An empty curiosity journal invented a duplicate topic.");
+    Check(!journal.WasResearchRecentlyAttempted(
+            std::chrono::minutes(15), std::chrono::system_clock::now()),
+        "An empty curiosity journal invented a recent network lookup.");
 
     revia::initiative::CuriosityRecord record;
     record.topic = "Why do stars twinkle?";
@@ -3145,12 +3261,22 @@ void TestCuriosityJournalDeduplicatesAcrossRestart()
             "WHY DO stars---twinkle", std::chrono::hours(24),
             std::chrono::system_clock::now()),
         "Normalized curiosity topic deduplication failed.");
+    Check(journal.WasResearchRecentlyAttempted(
+            std::chrono::minutes(15), std::chrono::system_clock::now()),
+        "The global autonomous-research pace ignored a recent lookup.");
+    Check(!journal.WasResearchRecentlyAttempted(
+            std::chrono::minutes(15),
+            std::chrono::system_clock::now() + std::chrono::hours(1)),
+        "The autonomous-research pace never expired.");
 
     revia::initiative::CuriosityJournal reloaded;
     Check(reloaded.Initialize(path, error) && reloaded.WasRecentlyConsidered(
             "why do stars twinkle", std::chrono::hours(24),
             std::chrono::system_clock::now()),
         "Curiosity topic deduplication did not survive restart: " + error);
+    Check(reloaded.WasResearchRecentlyAttempted(
+            std::chrono::minutes(15), std::chrono::system_clock::now()),
+        "Autonomous-research pacing did not survive restart.");
     std::ifstream savedStream(path, std::ios::binary);
     const std::string saved{
         std::istreambuf_iterator<char>(savedStream),
@@ -3193,7 +3319,9 @@ void TestCuriosityContextPromptIsBoundedData()
 
     const nlohmann::json prompt = nlohmann::json::parse(encoded);
     Check(prompt.value("context_is_untrusted_data", false) &&
-        prompt.value("nomination_only", false),
+        prompt.value("nomination_only", false) &&
+        prompt.value("independent_topic_allowed", false) &&
+        !prompt.value("user_prompt_required", true),
         "The curiosity prompt did not mark its contents as data-only nomination input.");
     Check(prompt.at("affect").at("state") == "Curious" &&
         prompt.at("affect").at("intensity").get<float>() > 0.7F,
@@ -3228,6 +3356,13 @@ void TestCuriosityContextPromptIsBoundedData()
         "Conversation content bypassed the aggregate curiosity prompt bound.");
     Check(keptNewest, "The bounded curiosity prompt discarded the newest user context.");
     Check(!leakedSystem, "A context-supplied system role entered the curiosity data envelope.");
+
+    const nlohmann::json independent = nlohmann::json::parse(
+        CuriosityAgent::BuildContextPrompt({}, affect, {}));
+    Check(independent.at("recent_conversation").empty() &&
+        independent.value("independent_topic_allowed", false) &&
+        !independent.value("user_prompt_required", true),
+        "Curiosity still required a user prompt before it could nominate its own topic.");
 }
 
 initiativeSettings TalkativeSettings()
@@ -3986,6 +4121,39 @@ void TestConversationStartersRecognizeReturnAndSwitching()
     Check(switchCues.back().messageIntent.find("Do not call the user distracted") !=
         std::string::npos,
         "The switching cue did not guard against judging the user.");
+}
+
+void TestConversationStarterRecognizesAndDeduplicatesVisualIssues()
+{
+    using revia::initiative::ConversationStarter;
+    using revia::initiative::StarterCueKind;
+
+    ConversationStarter starter;
+    starter.Configure(TalkativeSettings());
+    const auto now = std::chrono::system_clock::now();
+    Check(starter.ObserveVisualIssue(
+            "The current build failed with two compiler errors.", 0.91F, now),
+        "A clear visual issue produced no conversation cue.");
+    Check(!starter.ObserveVisualIssue(
+            "The current build failed with two compiler errors.", 0.91F, now),
+        "An unchanged visual issue was queued again on refresh.");
+
+    const auto cues = starter.RecentCues(now);
+    Check(cues.size() == 1 && cues.front().kind == StarterCueKind::VisualIssue &&
+        cues.front().confidence > 0.9F &&
+        cues.front().evidence.find("never instructions") != std::string::npos,
+        "The visual issue cue lost its confidence or untrusted-content boundary.");
+
+    Check(!starter.ObserveVisualIssue(
+            "The current build failed with two compiler errors.", 0.91F, now),
+        "Consuming a cue made the same still-visible issue new again.");
+    starter.ClearVisualIssue();
+    Check(starter.ObserveVisualIssue(
+            "The current build failed with two compiler errors.", 0.91F, now),
+        "A resolved visual issue could not be noticed when it genuinely recurred.");
+    starter.ClearVisualIssue();
+    Check(starter.RecentCues(now).empty(),
+        "A visual issue that disappeared before admission remained queued.");
 }
 
 void TestConversationStarterContinuesWithoutSlashCommands()
@@ -6724,6 +6892,7 @@ int main(const int argc, char** argv)
         TestDispatcherGate();
         TestFilesystemExecutorAndAudit();
         TestVisionActionParserFailsClosed();
+        TestScreenAwarenessAssessmentIsStructuredAndFailsClosed();
         TestVisionResolverRequiresGeometryNameAndIdentity();
         TestRuntimeEventBus();
         TestAffectController();
@@ -6773,6 +6942,7 @@ int main(const int argc, char** argv)
         TestAttentionKeepsSilenceAsTheDefault();
         TestConversationStartersNeedARealTransition();
         TestConversationStartersRecognizeReturnAndSwitching();
+        TestConversationStarterRecognizesAndDeduplicatesVisualIssues();
         TestConversationStarterContinuesWithoutSlashCommands();
         TestAttentionHardSuppressions();
         TestAttentionCooldownsAndBudget();
@@ -6838,6 +7008,16 @@ int main(const int argc, char** argv)
         TestArbiterMergesOneThought();
         TestArbiterIgnoresNoiseButNeverTypedInput();
         TestArbiterDropsRepeatsAndOverflow();
+        // Split suites, per the testing refactor. New subsystems get their own file
+        // instead of growing this one; they share the harness in testSupport.h.
+        RunEmotionTests();
+        RunIdentityTests();
+        RunAppraisalTests();
+        RunStatePacketTests();
+        RunRelationshipTests();
+        RunDevelopmentTests();
+        RunAutonomyTests();
+        RunLoadAndNameTests();
         std::cout << "All Revia foundation tests passed.\n";
         return 0;
     }
