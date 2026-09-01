@@ -175,7 +175,8 @@ foreach ($device in $Devices) {
             $gpu = Get-GpuSnapshot ([string]$prepare.device)
             $all.Add([pscustomobject]@{
                 kind = 'prepare'; device = $prepare.device; deviceName = $prepare.device_name
-                dtype = $prepare.dtype; characters = 0; text = ''
+                dtype = $prepare.dtype; cudaMathMode = $prepare.cuda_math_mode
+                characters = 0; text = ''
                 serverMilliseconds = [double]$prepare.elapsed_ms
                 wallMilliseconds = $prepareWatch.Elapsed.TotalMilliseconds
                 audioSeconds = 0.0; rtf = 0.0; charactersPerSecond = 0.0
@@ -205,7 +206,8 @@ foreach ($device in $Devices) {
             $gpu = Get-GpuSnapshot ([string]$result.device)
             $all.Add([pscustomobject]@{
                 kind = 'synthesis'; device = $result.device; deviceName = $result.device_name
-                dtype = $result.dtype; characters = $text.Length; text = $text
+                dtype = $result.dtype; cudaMathMode = $result.cuda_math_mode
+                characters = $text.Length; text = $text
                 serverMilliseconds = [double]$result.elapsed_ms
                 wallMilliseconds = $watch.Elapsed.TotalMilliseconds
                 audioSeconds = $duration
@@ -247,4 +249,4 @@ $document = [ordered]@{
 }
 $document | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $outputJson -Encoding utf8
 Write-Output "TTS benchmark written to $outputJson"
-$all | Format-Table kind,device,dtype,characters,serverMilliseconds,audioSeconds,rtf,charactersPerSecond,succeeded -AutoSize
+$all | Format-Table kind,device,dtype,cudaMathMode,characters,serverMilliseconds,audioSeconds,rtf,charactersPerSecond,succeeded -AutoSize

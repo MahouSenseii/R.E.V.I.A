@@ -1234,6 +1234,18 @@ void ReviaWindow::HandleRuntimeEvent(const revia::runtime::RuntimeEvent& event)
             QStringLiteral(" - /initiative accept or /initiative dismiss"));
         return;
     }
+    if (event.kind == revia::runtime::RuntimeEventKind::SelfInquiry)
+    {
+        // Shown in the transcript rather than collapsed behind "Thought process". These
+        // are the questions Revia put to herself on a hard turn, and the point of them is
+        // that the user sees what she was actually wondering before the answer arrives.
+        AppendChat(
+            QString::fromStdString(session.DisplayName()) + QStringLiteral(" is thinking"),
+            QString::fromStdString(event.message));
+        AppendActivity(QStringLiteral("Self-inquiry: ") +
+            QString::fromStdString(event.detail));
+        return;
+    }
     if (event.kind == revia::runtime::RuntimeEventKind::Memory)
     {
         AppendActivity(QString::fromStdString(event.message));

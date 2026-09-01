@@ -26,6 +26,7 @@ class FakeRuntime:
     device_name = "CPU"
     dtype_name = "float32"
     attention_backend = "auto"
+    cuda_math_mode = "default"
     model = None
     loaded_at = 0.0
     last_used = 0.0
@@ -58,6 +59,63 @@ class QwenHandlerTests(unittest.TestCase):
             server.shutdown()
             server.server_close()
             thread.join(timeout=5)
+
+
+class _FakeMatmul:
+    allow_tf32 = False
+
+
+class _FakeCudaBackend:
+    matmul = _FakeMatmul()
+
+
+class _FakeCudnnBackend:
+    allow_tf32 = False
+
+
+class _FakeBackends:
+    cuda = _FakeCudaBackend()
+    cudnn = _FakeCudnnBackend()
+
+
+class _FakeCuda:
+    def __init__(self, major: int) -> None:
+        self.major = major
+
+    def get_device_capability(self, index: int) -> tuple[int, int]:
+        del index
+        return self.major, 0
+
+
+class _FakeTorch:
+    def __init__(self, major: int) -> None:
+        self.cuda = _FakeCuda(major)
+        self.backends = _FakeBackends()
+        self.precision = "highest"
+
+    def set_float32_matmul_precision(self, precision: str) -> None:
+        self.precision = precision
+
+
+class CudaMathPolicyTests(unittest.TestCase):
+    def test_ampere_enables_tf32_for_residual_float32_inference(self) -> None:
+        torch = _FakeTorch(8)
+
+        enabled = MODULE._enable_ampere_tf32(torch, "cuda:0")
+
+        self.assertTrue(enabled)
+        self.assertEqual(torch.precision, "high")
+        self.assertTrue(torch.backends.cuda.matmul.allow_tf32)
+        self.assertTrue(torch.backends.cudnn.allow_tf32)
+
+    def test_cpu_and_turing_keep_the_default_math_path(self) -> None:
+        cpu = _FakeTorch(8)
+        turing = _FakeTorch(7)
+
+        self.assertFalse(MODULE._enable_ampere_tf32(cpu, "cpu"))
+        self.assertFalse(MODULE._enable_ampere_tf32(turing, "cuda:0"))
+        self.assertEqual(cpu.precision, "highest")
+        self.assertEqual(turing.precision, "highest")
 
 
 if __name__ == "__main__":

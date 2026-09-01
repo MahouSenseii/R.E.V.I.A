@@ -56,6 +56,29 @@ def _reports_bf16(torch: Any) -> bool:
         return bool(torch.cuda.is_bf16_supported())
 
 
+def _enable_ampere_tf32(torch: Any, device: str) -> bool:
+    """Use TensorFloat-32 for residual FP32 inference work on Ampere or newer.
+
+    The conversational clone model stays in BF16. This only accelerates FP32 matrix
+    operations left in the tokenizer/decoder path, and is deliberately capability-gated:
+    older CUDA devices and CPU workers keep their existing numerical path.
+    """
+    if not device.startswith("cuda:"):
+        return False
+    try:
+        index = int(device.split(":", 1)[1])
+        major, _ = torch.cuda.get_device_capability(index)
+        if major < 8:
+            return False
+        torch.set_float32_matmul_precision("high")
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
+        return True
+    except (AttributeError, RuntimeError, TypeError, ValueError):
+        # A backend that cannot expose or set TF32 is still a valid inference backend.
+        return False
+
+
 class QwenRuntime:
     def __init__(self, args: argparse.Namespace) -> None:
         self.args = args
@@ -67,6 +90,7 @@ class QwenRuntime:
         self.device_name = "CPU"
         self.dtype_name = "float32"
         self.attention_backend = "auto"
+        self.cuda_math_mode = "default"
         self.loaded_at = 0.0
         self.last_used = 0.0
         self.clone_prompts: dict[tuple[str, int, int, str], Any] = {}
@@ -207,11 +231,18 @@ class QwenRuntime:
             pass
 
         self.device, dtype, device_reason = self._select_device()
+        self.cuda_math_mode = (
+            "tf32" if _enable_ampere_tf32(torch, self.device) else "default"
+        )
         selected_attention = self.args.attention_backend
         if selected_attention == "adaptive":
             selected_attention = "sdpa" if dtype == torch.bfloat16 else "auto"
         self.attention_backend = selected_attention
-        print(f"[Qwen3-TTS] Loading {kind} model {model_name} on {self.device}: {device_reason}", flush=True)
+        print(
+            f"[Qwen3-TTS] Loading {kind} model {model_name} on {self.device}: "
+            f"{device_reason}; CUDA math={self.cuda_math_mode}",
+            flush=True,
+        )
         load_options: dict[str, Any] = {
             "device_map": self.device,
             "dtype": dtype,
@@ -231,6 +262,7 @@ class QwenRuntime:
             self.device = "cpu"
             self.device_name = "CPU"
             self.dtype_name = "float32"
+            self.cuda_math_mode = "default"
             selected_attention = "auto" if self.args.attention_backend == "adaptive" else self.args.attention_backend
             self.attention_backend = selected_attention
             load_options = {"device_map": "cpu", "dtype": torch.float32}
@@ -424,6 +456,7 @@ class QwenRuntime:
                 "device_name": self.device_name,
                 "dtype": self.dtype_name,
                 "attention_backend": self.attention_backend,
+                "cuda_math_mode": self.cuda_math_mode,
                 "input_mode": self.args.input_mode,
             }
 
@@ -483,6 +516,7 @@ class QwenRuntime:
                     "device_name": self.device_name,
                     "dtype": self.dtype_name,
                     "attention_backend": self.attention_backend,
+                    "cuda_math_mode": self.cuda_math_mode,
                     "input_mode": self.args.input_mode,
                     "audio_cache_hit": True,
                     "true_incremental_audio": False,
@@ -541,6 +575,7 @@ class QwenRuntime:
                 "device_name": self.device_name,
                 "dtype": self.dtype_name,
                 "attention_backend": self.attention_backend,
+                "cuda_math_mode": self.cuda_math_mode,
                 "input_mode": self.args.input_mode,
                 "audio_cache_hit": False,
                 "true_incremental_audio": False,
@@ -626,6 +661,7 @@ def make_handler(runtime: QwenRuntime, token: str) -> type[BaseHTTPRequestHandle
                 "device_name": runtime.device_name,
                 "dtype": runtime.dtype_name,
                 "attention_backend": runtime.attention_backend,
+                "cuda_math_mode": runtime.cuda_math_mode,
                 "input_mode": runtime.args.input_mode,
                 "loaded": runtime.model is not None,
                 "loaded_at": runtime.loaded_at,

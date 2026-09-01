@@ -2,8 +2,6 @@
 
 #include <algorithm>
 #include <cctype>
-#include <iomanip>
-#include <sstream>
 
 namespace revia::intelligence
 {
@@ -62,27 +60,6 @@ HumanizationState HumanizationController::Current() const
 {
     std::lock_guard lock(mutex);
     return state;
-}
-
-std::string HumanizationController::BuildPromptBlock() const
-{
-    const HumanizationState snapshot = Current();
-    std::ostringstream output;
-    output << std::fixed << std::setprecision(2)
-        << "Shared Revia state (the same state is supplied to every intelligence tier): "
-        << "curiosity=" << snapshot.curiosity
-        << ", social energy=" << snapshot.socialEnergy
-        << ", irritation=" << snapshot.irritation
-        << ", confidence=" << snapshot.confidence
-        << ", familiarity=" << snapshot.familiarity
-        << ", talkativeness=" << snapshot.talkativeness
-        << ", playfulness=" << snapshot.playfulness
-        << ". These are behavioral leanings, not labels to recite or a recipe for canned phrases.";
-    if (!snapshot.currentInterest.empty())
-        output << " Current interest: " << snapshot.currentInterest << '.';
-    if (!snapshot.unresolvedThought.empty())
-        output << " Unresolved thought: " << snapshot.unresolvedThought;
-    return output.str();
 }
 
 } // namespace revia::intelligence

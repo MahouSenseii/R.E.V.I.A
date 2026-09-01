@@ -2,6 +2,8 @@
 
 #include "Identity/developmentState.h"
 #include "Identity/identityStore.h"
+#include "Identity/preferenceEvidence.h"
+#include "Identity/preferenceState.h"
 #include "Identity/relationshipState.h"
 
 #include <cmath>
@@ -337,6 +339,266 @@ void TestTraitNamesRoundTrip()
     Check(TraitFromString("not_a_trait") == Trait::Count,
         "An unknown trait name was mapped onto a real trait.");
 }
+
+void TestOneRemarkCannotInstallATaste()
+{
+    // The preference equivalent of the development rule. If one enthusiastic sentence
+    // could set a strong like, her tastes would be whatever she was last told to have.
+    PreferenceSet set;
+    const Preference first = set.Reinforce("jazz", true, PreferenceSource::Stated, "t0");
+    Check(first.strength <= 0.12F + 0.0001F,
+        "One observation moved a preference further than the bounded step.");
+    Check(!first.WorthStating(),
+        "A preference formed from one remark was already confident enough to assert.");
+
+    // Repeated agreement builds a taste, and confidence grows with the evidence rather
+    // than with the strength of any single claim.
+    for (int index = 0; index < 4; ++index)
+    {
+        set.Reinforce("jazz", true, PreferenceSource::Observed, "t");
+    }
+    const Preference* settled = set.Find("jazz");
+    Check(settled != nullptr, "A reinforced preference was not retained.");
+    Check(settled->evidenceCount == 5, "Evidence was not counted per observation.");
+    Check(settled->WorthStating(),
+        "Five consistent observations did not produce a preference she can state.");
+    Check(settled->Direction() == PreferenceDirection::Like,
+        "Consistent positive evidence did not produce a like.");
+}
+
+void TestAPreferenceCanReverseWithEvidence()
+{
+    // Design section 10: mild dislike -> neutral -> like. A taste that could only
+    // strengthen would be a ratchet, and experience could never talk her round.
+    PreferenceSet set;
+    for (int index = 0; index < 3; ++index)
+    {
+        set.Reinforce("mornings", false, PreferenceSource::Observed, "t");
+    }
+    Check(set.Find("mornings")->Direction() == PreferenceDirection::Dislike,
+        "Repeated negative evidence did not produce a dislike.");
+
+    for (int index = 0; index < 3; ++index)
+    {
+        set.Reinforce("mornings", true, PreferenceSource::Observed, "t");
+    }
+    Check(set.Find("mornings")->Direction() == PreferenceDirection::Neutral,
+        "Equal contradicting evidence did not return the preference to neutral.");
+
+    for (int index = 0; index < 4; ++index)
+    {
+        set.Reinforce("mornings", true, PreferenceSource::Observed, "t");
+    }
+    Check(set.Find("mornings")->Direction() == PreferenceDirection::Like,
+        "Sustained positive evidence could not reverse an established dislike.");
+    // Evidence accumulates across the reversal: she has thought about mornings a lot,
+    // whichever way she currently leans.
+    Check(set.Find("mornings")->evidenceCount == 10,
+        "Reversing a preference reset the evidence behind it.");
+}
+
+void TestProfileSeedsButDoesNotOverwriteEarnedOpinion()
+{
+    // The rule development already follows: an authored starting point must not delete
+    // what experience produced, or editing a profile would quietly reset her.
+    PreferenceSet set;
+    for (int index = 0; index < 5; ++index)
+    {
+        set.Reinforce("puzzles", false, PreferenceSource::Observed, "t");
+    }
+    const float earned = set.Find("puzzles")->strength;
+
+    Check(!set.SeedFromProfile("puzzles", 0.8F),
+        "A profile seed overwrote an opinion she had already formed.");
+    Check(std::abs(set.Find("puzzles")->strength - earned) < 0.0001F,
+        "A refused seed still changed the earned strength.");
+
+    Check(set.SeedFromProfile("thunderstorms", 0.7F),
+        "A profile preference for a new subject was not seeded.");
+    const Preference* seeded = set.Find("thunderstorms");
+    Check(seeded->source == PreferenceSource::Profile,
+        "A seeded preference did not record the profile as its origin.");
+    Check(seeded->evidenceCount == 0,
+        "A profile declaration was counted as an observation.");
+}
+
+void TestSubjectsAreOneOpinionNotSeveral()
+{
+    // "Jazz" and " jazz " must not become separate opinions that can disagree.
+    PreferenceSet set;
+    set.Reinforce("Jazz", true, PreferenceSource::Stated, "t");
+    set.Reinforce("  jazz  ", true, PreferenceSource::Stated, "t");
+    Check(set.Count() == 1, "The same subject in different casing became two opinions.");
+    Check(set.Find("JAZZ")->evidenceCount == 2,
+        "Lookup did not normalise the subject the same way storage did.");
+}
+
+void TestOnlyHeldOpinionsReachThePrompt()
+{
+    // Neutral is a real state but not worth prompt space, and ranking has to weigh
+    // confidence or every first impression outranks a settled taste.
+    PreferenceSet set;
+    set.Reinforce("silence", true, PreferenceSource::Stated, "t");
+    for (int index = 0; index < 5; ++index)
+    {
+        set.Reinforce("being rushed", false, PreferenceSource::Observed, "t");
+    }
+    const std::vector<Preference> shown = set.Strongest(5);
+    Check(!shown.empty(), "No held opinion was offered for the prompt.");
+    Check(shown.front().subject == "being rushed",
+        "A barely evidenced opinion outranked a well evidenced one.");
+}
+
+void TestPreferencesSurviveARestart()
+{
+    ScopedTestDirectory directory;
+    const std::filesystem::path file = directory.root / "identity.json";
+
+    IdentitySnapshot saved;
+    Preference held;
+    held.subject = "long walks";
+    held.strength = 0.55F;
+    held.confidence = 0.8F;
+    held.evidenceCount = 4;
+    held.lastReinforced = "2026-08-31T00:00:00Z";
+    held.source = PreferenceSource::Observed;
+    saved.preferences.push_back(held);
+
+    IdentityStore store(file);
+    std::string error;
+    Check(store.Save(saved, error), "Saving preferences failed: " + error);
+
+    IdentitySnapshot loaded;
+    Check(store.Load(loaded, error), "Loading preferences failed: " + error);
+    Check(loaded.preferences.size() == 1,
+        "A stored preference did not survive a restart.");
+    Check(loaded.preferences.front().subject == "long walks",
+        "The subject did not round-trip.");
+    Check(loaded.preferences.front().evidenceCount == 4,
+        "The evidence behind an opinion did not round-trip.");
+    Check(loaded.preferences.front().source == PreferenceSource::Observed,
+        "How she formed an opinion did not round-trip.");
+}
+}
+
+void TestWorkKindIsReadDeterministically()
+{
+    Check(ReadWorkKind("this deadlocks on shutdown") == "debugging",
+        "A deadlock report was not read as debugging.");
+    Check(ReadWorkKind("the code crashes when I close it") == "debugging",
+        "A crash was read as writing code rather than as debugging.");
+    Check(ReadWorkKind("implement the retry path") == "writing code",
+        "An implementation request was not read as writing code.");
+    Check(ReadWorkKind("explain how the scheduler picks a worker") == "explaining things",
+        "An explanation request was not read as explaining.");
+    Check(ReadWorkKind("look up what changed in Qt 6.8") == "looking things up",
+        "A lookup request was not read as looking things up.");
+    Check(ReadWorkKind("hey, how are you?").empty() && ReadWorkKind("").empty(),
+        "Ordinary conversation was classified as a kind of work.");
+}
+
+void TestOrdinaryWorkLeavesOpinionsAlone()
+{
+    WorkOutcome quiet;
+    quiet.workKind = "debugging";
+    quiet.succeeded = true;
+    Check(ReadWorkPreferenceEvidence(quiet).empty(),
+        "A turn that merely worked moved an opinion; tastes would become a tally of "
+        "how often each kind of work happened to succeed.");
+
+    WorkOutcome unclassified;
+    unclassified.succeeded = false;
+    unclassified.wasCorrected = true;
+    Check(ReadWorkPreferenceEvidence(unclassified).empty(),
+        "Evidence was produced for a turn with no recognisable kind of work, which "
+        "would have no subject to attach to.");
+}
+
+void TestWorkEvidenceNeedsTheTurnToGoNotablyWellOrBadly()
+{
+    WorkOutcome praised;
+    praised.workKind = "debugging";
+    praised.succeeded = true;
+    praised.expressedAppreciation = true;
+    const std::vector<PreferenceObservation> liked =
+        ReadWorkPreferenceEvidence(praised);
+    Check(liked.size() == 1 && liked[0].positive && liked[0].subject == "debugging" &&
+          liked[0].source == PreferenceSource::Observed,
+        "Work that landed and was appreciated produced no positive evidence.");
+
+    WorkOutcome corrected;
+    corrected.workKind = "writing code";
+    corrected.succeeded = true;
+    corrected.wasCorrected = true;
+    const std::vector<PreferenceObservation> disliked =
+        ReadWorkPreferenceEvidence(corrected);
+    Check(disliked.size() == 1 && !disliked[0].positive &&
+          disliked[0].subject == "writing code" && !disliked[0].reason.empty(),
+        "Being corrected again on a kind of work produced no negative evidence.");
+
+    WorkOutcome failed;
+    failed.workKind = "planning";
+    failed.succeeded = false;
+    failed.expressedAppreciation = true;
+    const std::vector<PreferenceObservation> broke = ReadWorkPreferenceEvidence(failed);
+    Check(broke.size() == 1 && !broke[0].positive,
+        "A turn that did not come together was counted as a good experience.");
+}
+
+void TestCuriosityEvidenceOnlyCountsWhenItPaidOff()
+{
+    const std::vector<PreferenceObservation> paid =
+        ReadCuriosityPreferenceEvidence({"Cassini's final orbit", true});
+    Check(paid.size() == 1 && paid[0].positive &&
+          paid[0].subject == PreferenceSet::NormaliseSubject("Cassini's final orbit"),
+        "A self-directed run that produced a finding moved nothing.");
+
+    Check(ReadCuriosityPreferenceEvidence({"Cassini's final orbit", false}).empty(),
+        "A failed lookup was treated as evidence about whether she likes the subject.");
+    Check(ReadCuriosityPreferenceEvidence({"", true}).empty() &&
+          ReadCuriosityPreferenceEvidence({std::string(400, 'x'), true}).empty(),
+        "An empty or unbounded model-supplied topic became a durable opinion key.");
+}
+
+void TestObservedEvidenceCanActuallyFormAndReverseAnOpinion()
+{
+    // The whole point of wiring evidence: an opinion has to be reachable from experience
+    // alone, without a profile declaring it and without a model asserting it.
+    PreferenceSet set;
+    WorkOutcome praised;
+    praised.workKind = "debugging";
+    praised.succeeded = true;
+    praised.expressedAppreciation = true;
+
+    Preference held;
+    for (int index = 0; index < 8; ++index)
+    {
+        for (const PreferenceObservation& observation :
+            ReadWorkPreferenceEvidence(praised))
+        {
+            held = set.Reinforce(
+                observation.subject, observation.positive, observation.source, "t");
+        }
+    }
+    Check(held.Direction() == PreferenceDirection::Like && held.WorthStating(),
+        "Repeated appreciated debugging never became an opinion she would state.");
+
+    // And it must be able to go the other way, or an opinion is a ratchet.
+    WorkOutcome corrected;
+    corrected.workKind = "debugging";
+    corrected.succeeded = true;
+    corrected.wasCorrected = true;
+    for (int index = 0; index < 20; ++index)
+    {
+        for (const PreferenceObservation& observation :
+            ReadWorkPreferenceEvidence(corrected))
+        {
+            held = set.Reinforce(
+                observation.subject, observation.positive, observation.source, "t");
+        }
+    }
+    Check(held.Direction() == PreferenceDirection::Dislike,
+        "A formed opinion could not be reversed by contrary experience.");
 }
 
 void RunIdentityTests()
@@ -349,6 +611,18 @@ void RunIdentityTests()
     TestRelationshipMovementIsBoundedPerExchange();
     TestIdentitySurvivesRestartAndRefusesToGuess();
     TestTraitNamesRoundTrip();
+    TestOneRemarkCannotInstallATaste();
+    TestAPreferenceCanReverseWithEvidence();
+    TestProfileSeedsButDoesNotOverwriteEarnedOpinion();
+    TestSubjectsAreOneOpinionNotSeveral();
+    TestOnlyHeldOpinionsReachThePrompt();
+    TestPreferencesSurviveARestart();
+    TestWorkKindIsReadDeterministically();
+    TestOrdinaryWorkLeavesOpinionsAlone();
+    TestWorkEvidenceNeedsTheTurnToGoNotablyWellOrBadly();
+    TestCuriosityEvidenceOnlyCountsWhenItPaidOff();
+    TestObservedEvidenceCanActuallyFormAndReverseAnOpinion();
     std::cout << "Personality keeps its origin, relationships stay independent and "
-                 "bounded, and identity survives a restart.\n";
+                 "bounded, opinions form slowly and reverse on evidence, and identity "
+                 "survives a restart.\n";
 }

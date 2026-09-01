@@ -123,6 +123,20 @@ bool MentionsScreenEvidence(const std::string& text)
         });
 }
 
+bool ContainsPublicSecretPattern(const std::string& text)
+{
+    const std::string lowered = LowerCopy(text);
+    constexpr std::string_view patterns[] = {
+        "c:\\users\\", "c:/users/", "\\appdata\\", "/home/",
+        "authorization: bearer ", "api_key=", "apikey=", "password=", "token="
+    };
+    return std::any_of(std::begin(patterns), std::end(patterns),
+        [&lowered](const std::string_view pattern)
+        {
+            return lowered.find(pattern) != std::string::npos;
+        });
+}
+
 std::size_t ContextCharacters(const std::vector<conversationMessage>& context)
 {
     std::size_t total = 0;
@@ -190,7 +204,9 @@ ConversationRuntime::ConversationRuntime(
     RelationshipProvider inputRelationship,
     DevelopmentProvider inputDevelopment,
     StimulusObserver inputStimulusObserver,
-    ScreenCaptureRequest inputScreenCaptureRequest)
+    ScreenCaptureRequest inputScreenCaptureRequest,
+    PreferenceProvider inputPreferenceProvider,
+    SelfInquirySettingsProvider inputSelfInquirySettings)
     : router(inputRouter),
       context(inputContext),
       coordinator(inputCoordinator),
@@ -207,8 +223,10 @@ ConversationRuntime::ConversationRuntime(
       screenContextProvider(std::move(inputScreenContext)),
       relationshipProvider(std::move(inputRelationship)),
       developmentProvider(std::move(inputDevelopment)),
+      preferenceProvider(std::move(inputPreferenceProvider)),
       stimulusObserver(std::move(inputStimulusObserver)),
-      screenCaptureRequest(std::move(inputScreenCaptureRequest))
+      screenCaptureRequest(std::move(inputScreenCaptureRequest)),
+      selfInquirySettingsProvider(std::move(inputSelfInquirySettings))
 {
 }
 
@@ -230,7 +248,44 @@ SessionResult ConversationRuntime::Reply(
         false,
         {},
         {},
-        stopToken);
+        stopToken,
+        {});
+}
+
+SessionResult ConversationRuntime::ReplyPublic(
+    const std::string& input,
+    const std::vector<conversationMessage>& channelHistory,
+    const std::string& publicInstruction,
+    const identity::RelationshipState& relationship,
+    const aiProfile& profile,
+    const bool llmAvailable,
+    const bool shouldSpeak,
+    const std::stop_token stopToken)
+{
+    std::vector<conversationMessage> promptContext = channelHistory;
+    promptContext.push_back({"user", input});
+    aiProfile publicProfile = profile;
+    publicProfile.bMemoryEnabled = false;
+    TurnPolicy policy;
+    policy.publicAudience = true;
+    policy.allowScreenContext = false;
+    policy.allowInternetLookup = false;
+    policy.allowSelfInquiry = false;
+    policy.includePrivateHistory = false;
+    policy.relationship = relationship;
+    policy.instruction = publicInstruction;
+    return Generate(
+        input,
+        promptContext,
+        publicProfile,
+        llmAvailable,
+        shouldSpeak,
+        false,
+        false,
+        {},
+        {},
+        stopToken,
+        policy);
 }
 
 SessionResult ConversationRuntime::StartConversation(
@@ -266,7 +321,8 @@ SessionResult ConversationRuntime::StartConversation(
         true,
         proactiveInstruction,
         {},
-        stopToken);
+        stopToken,
+        {});
 }
 
 SessionResult ConversationRuntime::StartCuriosityConversation(
@@ -299,22 +355,34 @@ SessionResult ConversationRuntime::StartCuriosityConversation(
         true,
         proactiveInstruction,
         researchGrounding,
-        stopToken);
+        stopToken,
+        {});
 }
 
 std::string ConversationRuntime::BuildTurnPosture(
     const std::string& policyInput,
     const std::vector<conversationMessage>& promptContext,
     const aiProfile& profile,
-    const bool llmAvailable) const
+    const bool llmAvailable,
+    const TurnPolicy& turnPolicy) const
 {
     const agents::ConversationStylePolicy conversationStyle;
     const AffectSnapshot posture = affect.Current();
     const responseFilterSettings filters = filterSettingsProvider
         ? filterSettingsProvider()
         : responseFilterSettings{};
-    const agents::ResponseFilterContext runtimeFacts =
+    agents::ResponseFilterContext runtimeFacts =
         BuildResponseFilterContext(policyInput, promptContext);
+    if (turnPolicy.publicAudience)
+    {
+        runtimeFacts.internetEnabled = false;
+        runtimeFacts.automaticInternetLookup = false;
+        runtimeFacts.autonomousInternetResearch = false;
+        runtimeFacts.internetTopicIsActive = false;
+        runtimeFacts.screenTopicIsActive = false;
+        runtimeFacts.screenObservationAvailable = false;
+        runtimeFacts.screenObservation.clear();
+    }
     // Assembled as one canonical state packet rather than concatenated inline, so every
     // intelligence tier is handed the identical description of this moment. Reflex,
     // Fast, Main, and Expert all receive whatever this renders; a personality that
@@ -341,14 +409,33 @@ std::string ConversationRuntime::BuildTurnPosture(
     {
         packet.development = developmentProvider();
     }
+    if (preferenceProvider)
+    {
+        // Bounded here rather than in the renderer: how much of the prompt opinions may
+        // occupy is a runtime budget decision, not a formatting one.
+        packet.preferences = preferenceProvider();
+    }
+    // The two things HumanizationState still uniquely owns. Every other field it
+    // carries -- curiosity, confidence, playfulness, talkativeness, social energy,
+    // familiarity, irritation -- names a trait DevelopmentState, RelationshipState, or
+    // the emotion vector already owns and already renders as prose. Sending both meant
+    // handing the model two descriptions of one personality, one of them telemetry.
+    const intelligence::HumanizationState social = humanization.Current();
+    packet.currentInterest = social.currentInterest;
+    packet.unresolvedThought = social.unresolvedThought;
     packet.runtime.aiReviewEnabled = filters.bAiReviewEnabled;
-    packet.runtime.capabilityDescription = runtimeFacts.Describe();
-    if (relationshipProvider)
+    packet.runtime.capabilityDescription = turnPolicy.publicAudience
+        ? "This public turn can only converse; private local capabilities and context "
+          "are unavailable."
+        : runtimeFacts.Describe();
+    if (turnPolicy.relationship || relationshipProvider)
     {
         // Rendered only once there is history behind it. A relationship section for
         // someone with no recorded exchanges would describe a stranger in the language
         // of an acquaintance.
-        identity::RelationshipState speaker = relationshipProvider();
+        identity::RelationshipState speaker = turnPolicy.relationship
+            ? *turnPolicy.relationship
+            : relationshipProvider();
         if (speaker.interactionCount > 0)
         {
             packet.relationship = std::move(speaker);
@@ -358,14 +445,15 @@ std::string ConversationRuntime::BuildTurnPosture(
 
     std::ostringstream postureLine;
     postureLine << identity::RenderStatePacket(packet)
-        << "\n\n" << conversationStyle.BuildTurnGuidance(policyInput, promptContext)
-        << "\n\n" << humanization.BuildPromptBlock();
-    const std::string compressedHistory = context.GetCompressedHistorySummary();
+        << "\n\n" << conversationStyle.BuildTurnGuidance(policyInput, promptContext);
+    const std::string compressedHistory = turnPolicy.includePrivateHistory
+        ? context.GetCompressedHistorySummary()
+        : std::string{};
     if (!compressedHistory.empty())
     {
         postureLine << "\n\n" << compressedHistory;
     }
-    if (IsExplicitRuntimeQuestion(policyInput))
+    if (!turnPolicy.publicAudience && IsExplicitRuntimeQuestion(policyInput))
     {
         postureLine << "\n\nRuntime ground truth for this explicit status question: the "
             "local language model is " << (llmAvailable ? "available" : "unavailable")
@@ -378,6 +466,82 @@ std::string ConversationRuntime::BuildTurnPosture(
                "the question and never turn this status into a canned report.";
     }
     return postureLine.str();
+}
+
+agents::SelfInquiryResult ConversationRuntime::RunSelfInquiry(
+    const std::string& policyInput,
+    const std::vector<conversationMessage>& promptContext,
+    const std::string& basePosture,
+    const intelligence::IntelligenceDecision& routing,
+    const bool modelAvailable,
+    const std::uint64_t turnId,
+    const std::stop_token stopToken)
+{
+    agents::SelfInquiryResult inquiry;
+    if (selfInquirySettingsProvider)
+    {
+        selfInquiryPolicy.SetLimits(selfInquirySettingsProvider());
+    }
+    const agents::SelfInquiryDecision decision =
+        selfInquiryPolicy.Consider(policyInput, routing, false, turnId);
+    if (!decision.shouldThink)
+    {
+        inquiry.reason = decision.reason;
+        return inquiry;
+    }
+    if (!modelAvailable)
+    {
+        inquiry.reason = "There is no local brain available to think with.";
+        return inquiry;
+    }
+
+    setState(RuntimeState::Thinking,
+        "Stopping to think about turn #" + std::to_string(turnId) + ".");
+    PublishComponent("Self-inquiry", "Thinking", decision.reason, -1.0, 0, turnId);
+
+    const auto started = std::chrono::steady_clock::now();
+    inquiry = selfInquiryAgent.Ask(
+        router,
+        policyInput,
+        basePosture,
+        promptContext,
+        selfInquiryPolicy.Limits().maximumQuestions,
+        stopToken);
+    if (!inquiry.HasQuestions())
+    {
+        // Never fatal. A deliberation that failed, was preempted, or came back unusable
+        // leaves the turn exactly as it would have been if the gate had stayed shut.
+        PublishComponent(
+            "Self-inquiry", "Unavailable", inquiry.reason,
+            ElapsedMilliseconds(started), 0, turnId);
+        return inquiry;
+    }
+
+    // Recorded only on a pass that produced questions, so one unreachable model does not
+    // start a cooldown that silences her for the next several hard turns.
+    selfInquiryPolicy.RecordInquiry(turnId);
+    RuntimeEvent thinking;
+    thinking.kind = RuntimeEventKind::SelfInquiry;
+    thinking.state = RuntimeState::Thinking;
+    thinking.message = inquiry.TranscriptBlock();
+    thinking.detail = decision.reason;
+    thinking.component = "Self-inquiry";
+    thinking.phase = "Asking";
+    thinking.initiator = "conversation turn #" + std::to_string(turnId);
+    thinking.turnId = turnId;
+    thinking.elapsedMilliseconds = inquiry.elapsedMilliseconds;
+    events.Publish(std::move(thinking));
+    PublishComponent(
+        "Self-inquiry", "Ready",
+        "She asked herself " + std::to_string(inquiry.questions.size()) +
+            (inquiry.questions.size() == 1 ? " question" : " questions") +
+            " before answering.",
+        inquiry.elapsedMilliseconds, 0, turnId);
+    log.Log(
+        "Self-inquiry turn #" + std::to_string(turnId) + " | questions=" +
+        std::to_string(inquiry.questions.size()) + " | " +
+        OneLine(inquiry.TranscriptBlock()));
+    return inquiry;
 }
 
 agents::ResponseFilterContext ConversationRuntime::BuildResponseFilterContext(
@@ -421,7 +585,7 @@ evaluation::EvaluationReply ConversationRuntime::EvaluateTurn(
     // measures the corpus and not whatever the user happened to say beforehand.
     std::vector<conversationMessage> promptContext = priorTurns;
     promptContext.push_back({"user", input});
-    router.SetPosture(BuildTurnPosture(input, promptContext, profile, llmAvailable));
+    router.SetPosture(BuildTurnPosture(input, promptContext, profile, llmAvailable, {}));
 
     intelligence::RoutingContext routingContext;
     routingContext.visionRequired = MentionsScreenEvidence(input);
@@ -460,7 +624,8 @@ SessionResult ConversationRuntime::Generate(
     const bool proactive,
     const std::string& proactiveInstruction,
     const std::string& precomputedInternetGrounding,
-    const std::stop_token stopToken)
+    const std::stop_token stopToken,
+    const TurnPolicy& turnPolicy)
 {
     SessionResult result;
     std::uint64_t streamedUtterances = 0;
@@ -471,6 +636,24 @@ SessionResult ConversationRuntime::Generate(
     std::string internetTrace;
     agents::ResponseFilterContext filterContext =
         BuildResponseFilterContext(policyInput, promptContext);
+    if (turnPolicy.publicAudience)
+    {
+        filterContext.internetEnabled = false;
+        filterContext.automaticInternetLookup = false;
+        filterContext.autonomousInternetResearch = false;
+        filterContext.internetTopicIsActive = false;
+        filterContext.screenTopicIsActive = false;
+        filterContext.screenObservationAvailable = false;
+        filterContext.screenObservation.clear();
+    }
+
+    const auto relationshipForTurn = [&]()
+    {
+        if (turnPolicy.relationship) return *turnPolicy.relationship;
+        return relationshipProvider
+            ? relationshipProvider()
+            : identity::RelationshipState{};
+    };
 
     AffectSnapshot inputAffect = affect.Current();
 
@@ -482,8 +665,7 @@ SessionResult ConversationRuntime::Generate(
         // Relationship and development are read BEFORE anything is appraised, so the
         // reading reflects how things stood when the message arrived. Feeding this
         // turn's own reaction back into judging this turn's message would be circular.
-        const identity::RelationshipState speakerBefore =
-            relationshipProvider ? relationshipProvider() : identity::RelationshipState{};
+        const identity::RelationshipState speakerBefore = relationshipForTurn();
         const identity::DevelopmentState developmentBefore =
             developmentProvider ? developmentProvider() : identity::DevelopmentState{};
         const identity::ConversationSignals signals =
@@ -508,12 +690,13 @@ SessionResult ConversationRuntime::Generate(
     }
 
     intelligence::RoutingContext routingContext;
-    routingContext.visionRequired = !proactive && MentionsScreenEvidence(policyInput);
+    routingContext.visionRequired = turnPolicy.allowScreenContext && !proactive &&
+        MentionsScreenEvidence(policyInput);
     routingContext.expertVisionPreferred = routingContext.visionRequired &&
         (LowerCopy(policyInput).find("blueprint") != std::string::npos ||
          LowerCopy(policyInput).find("architecture") != std::string::npos);
-    routingContext.explicitResearch = !precomputedInternetGrounding.empty() ||
-        MentionsInternet(policyInput);
+    routingContext.explicitResearch = turnPolicy.allowInternetLookup &&
+        (!precomputedInternetGrounding.empty() || MentionsInternet(policyInput));
     routingContext.recentContextCharacters = ContextCharacters(promptContext);
     intelligence::IntelligenceDecision routeDecision;
     if (proactive)
@@ -558,7 +741,8 @@ SessionResult ConversationRuntime::Generate(
         0,
         currentTurn);
 
-    if (!proactive && !reflex.matched && internetSettings && internetLookup)
+    if (turnPolicy.allowInternetLookup && !proactive && !reflex.matched &&
+        internetSettings && internetLookup)
     {
         const actions::CapabilitySettings::InternetAccess access = internetSettings();
         const std::string lookupQuery = policyInput;
@@ -688,8 +872,7 @@ SessionResult ConversationRuntime::Generate(
         // this the only thing ever appraised was the incoming message.
         // Re-read rather than reusing the pre-generation locals: those are scoped to the
         // non-proactive branch, and this path also serves proactive replies.
-        const identity::RelationshipState outcomeSpeaker =
-            relationshipProvider ? relationshipProvider() : identity::RelationshipState{};
+        const identity::RelationshipState outcomeSpeaker = relationshipForTurn();
         const identity::DevelopmentState outcomeDevelopment =
             developmentProvider ? developmentProvider() : identity::DevelopmentState{};
 
@@ -740,19 +923,56 @@ SessionResult ConversationRuntime::Generate(
     };
 
     const agents::ConversationStylePolicy conversationStyle;
+    agents::SelfInquiryResult inquiry;
     if (!proactive)
     {
+        // Built once and used twice: the deliberation is handed the identical description
+        // of this moment that the answer is generated under, which is what keeps the
+        // questions hers rather than a detached reasoner's.
+        const std::string basePosture =
+            BuildTurnPosture(
+                policyInput, promptContext, profile, llmAvailable, turnPolicy);
+        if (turnPolicy.allowSelfInquiry)
+        {
+            inquiry = RunSelfInquiry(
+                policyInput,
+                promptContext,
+                basePosture,
+                routeDecision,
+                llmAvailable && !reflex.matched,
+                currentTurn,
+                stopToken);
+        }
+        if (stopToken.stop_requested())
+        {
+            result.fromAssistant = true;
+            result.reason = "The response was cancelled while she was still thinking.";
+            PublishComponent(
+                "Conversation", "Stopped", result.reason,
+                ElapsedMilliseconds(turnStarted), 0, currentTurn);
+            return finish(std::move(result));
+        }
         std::ostringstream postureLine;
-        postureLine << BuildTurnPosture(policyInput, promptContext, profile, llmAvailable);
+        postureLine << basePosture;
+        if (const std::string inquiryBlock = inquiry.PromptBlock(); !inquiryBlock.empty())
+        {
+            postureLine << "\n\n" << inquiryBlock;
+        }
+        if (!turnPolicy.instruction.empty())
+        {
+            postureLine << "\n\n" << turnPolicy.instruction;
+        }
         std::string screenContext;
-        if (routingContext.visionRequired && screenCaptureRequest)
+        if (turnPolicy.allowScreenContext && routingContext.visionRequired &&
+            screenCaptureRequest)
         {
             // An explicit screen question always gets a current look. Reusing a cached
             // ambient summary skipped the strongly grounded capture path and let the
             // model insist it was blind while the vision worker was visibly succeeding.
             screenContext = screenCaptureRequest();
         }
-        if (screenContext.empty() && screenContextProvider)
+        if (turnPolicy.allowScreenContext && screenContext.empty() &&
+            screenContextProvider)
         {
             // Preserve the most recent successful observation if an on-demand capture
             // is temporarily unavailable. The provider includes age/provenance so the
@@ -792,6 +1012,10 @@ SessionResult ConversationRuntime::Generate(
         router.SetPosture(std::move(posture));
     }
 
+    const intelligence::IntelligenceDecision answerDecision =
+        agents::SelfInquiryPolicy::FinalAnswerRouting(
+            routeDecision, inquiry.HasQuestions());
+
     setState(RuntimeState::Thinking,
         proactive
             ? "Preparing a context-driven conversation opening."
@@ -811,7 +1035,8 @@ SessionResult ConversationRuntime::Generate(
         : responseFilterSettings{};
     // AI review sees a completed candidate. Streaming it first would speak unreviewed
     // text and make the filter cosmetic, so reviewed turns begin speech after approval.
-    const bool streamSpeech = !proactive && !routingContext.visionRequired &&
+    const bool streamSpeech = !turnPolicy.publicAudience && !proactive &&
+        !routingContext.visionRequired &&
         !filters.bAiReviewEnabled &&
         speech.IsEnabled() && shouldSpeak &&
         conversationStyle.CanStreamReply(policyInput);
@@ -887,8 +1112,8 @@ SessionResult ConversationRuntime::Generate(
         turnResult.response.selectedTier = "Reflex";
         turnResult.response.selectedModel = "C++ ReflexRouter";
         turnResult.response.reasoningMode = "Fast";
-        turnResult.response.routingReason = routeDecision.reason;
-        turnResult.response.routingConfidence = routeDecision.confidence;
+        turnResult.response.routingReason = answerDecision.reason;
+        turnResult.response.routingConfidence = answerDecision.confidence;
         turnResult.response.timings.push_back({
             "reflex_route", ElapsedMilliseconds(turnStarted)});
     }
@@ -904,7 +1129,7 @@ SessionResult ConversationRuntime::Generate(
             currentTurn,
             stopToken,
             onDelta,
-            routeDecision);
+            answerDecision);
     }
     if (stopToken.stop_requested())
     {
@@ -952,7 +1177,17 @@ SessionResult ConversationRuntime::Generate(
         }
     }
 
-    const responseOutput& output = turnResult.response;
+    responseOutput output = turnResult.response;
+    if (turnPolicy.publicAudience && output.bSuccess &&
+        ContainsPublicSecretPattern(output.response))
+    {
+        output.response = "I can't share private local details on a public channel.";
+        output.bHardFilterChanged = true;
+        output.filterSummary = output.filterSummary.empty()
+            ? "Public privacy filter replaced a possible local path or credential."
+            : output.filterSummary +
+                " Public privacy filter replaced a possible local path or credential.";
+    }
     const bool filterDegraded = output.bSuccess && filters.bAiReviewEnabled &&
         !output.bAiFilterReviewed;
     const std::string filterPhase = !output.bSuccess
@@ -1005,25 +1240,42 @@ SessionResult ConversationRuntime::Generate(
         << static_cast<int>(posture.intensity * 100.0F) << "% - " << posture.reason;
     trace << "\n\nIntelligence: requested "
         << (output.requestedTier.empty()
-            ? intelligence::ToString(routeDecision.requestedTier)
+            ? intelligence::ToString(answerDecision.requestedTier)
             : output.requestedTier)
         << "; selected "
         << (output.selectedTier.empty()
-            ? intelligence::ToString(routeDecision.selectedTier)
+            ? intelligence::ToString(answerDecision.selectedTier)
             : output.selectedTier)
         << "; model "
-        << (output.selectedModel.empty() ? routeDecision.selectedModel : output.selectedModel)
+        << (output.selectedModel.empty() ? answerDecision.selectedModel : output.selectedModel)
         << "; mode "
         << (output.reasoningMode.empty()
-            ? intelligence::ToString(routeDecision.mode)
+            ? intelligence::ToString(answerDecision.mode)
             : output.reasoningMode)
-        << "; confidence " << static_cast<int>(routeDecision.confidence * 100.0F)
-        << "%. " << routeDecision.reason;
+        << "; confidence " << static_cast<int>(answerDecision.confidence * 100.0F)
+        << "%. " << answerDecision.reason;
     if (output.bRoutingFallback)
         trace << " Fallback: " << output.routingFallbackReason;
     if (proactive)
     {
         trace << "\n\nInitiative: a verified event, not an elapsed timer, opened this turn.";
+    }
+    if (inquiry.HasQuestions())
+    {
+        trace << "\n\nSelf-inquiry (" << static_cast<int>(inquiry.elapsedMilliseconds)
+            << "ms), asked and answered by Revia herself:";
+        for (const std::string& question : inquiry.questions)
+        {
+            trace << "\n  - " << question;
+        }
+        if (!inquiry.settled.empty())
+        {
+            trace << "\n  Settled: " << inquiry.settled;
+        }
+    }
+    else if (!inquiry.reason.empty())
+    {
+        trace << "\n\nSelf-inquiry: " << inquiry.reason;
     }
     if (!output.reasoning.empty())
     {
@@ -1104,7 +1356,10 @@ SessionResult ConversationRuntime::Generate(
             proactive
                 ? "Revia started a conversation."
                 : "Reply ready for turn #" + std::to_string(currentTurn) + ".");
-        context.AddMessage("assistant", output.response);
+        if (!turnPolicy.publicAudience)
+        {
+            context.AddMessage("assistant", output.response);
+        }
     }
 
     if (turnResult.memoryQueued)

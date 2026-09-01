@@ -10,6 +10,19 @@ The installed `qwen-tts` 0.1.1 API does **not** expose true incremental generate
 
 Qwen inference is still the dominant bottleneck. The result is substantially better startup/pipelining, but it is not yet real-time speech.
 
+On the current single-GPU RTX 3070 Laptop system, Qwen3-TTS is already local PyTorch
+inference. Automatic placement correctly keeps voice on CPU while the 8K-context 4B chat
+model owns the GPU. Pinning both to CUDA was live-tested: it left 471 MiB free, increased
+chat startup from about 7.5s to 36.5s, produced a 3.99s first-token wait (versus a
+previous 1.06s auto-placement turn with a different prompt), and generated the short
+spoken phrase in 24.13s. Shared placement is therefore not the default optimization for
+an 8 GB card.
+
+The conversational Qwen models intentionally remain GGUF models served by llama.cpp,
+with GPU layer fitting. Moving the 4B chat model to PyTorch would consume more of this
+card's limited VRAM and remove the measured fit/offload control; it is not treated as a
+speed optimization on the 8 GB laptop.
+
 ## Architecture change
 
 Before:
@@ -92,6 +105,16 @@ On the FP32 2070, explicit SDPA was stable but mixed relative to its baseline. T
 
 The installed Qwen wrapper and generation path contain no supported compile/graph integration, use dynamic autoregressive generation and custom caches, and are already decorated with `torch.no_grad`. No safe project-level compile target was identified. `torch.compile` and explicit CUDA graphs remain disabled and are **NOT BENCHMARKED** rather than being claimed as improvements.
 
+### Ampere TF32
+
+CUDA workers on Ampere or newer now enable PyTorch's high FP32 matmul precision mode and
+TF32 for residual FP32 matrix/convolution work. The 0.6B clone weights remain BF16; CPU
+and pre-Ampere workers retain their existing path. Interleaved quick samples on the RTX
+3070 were noisy under mixed desktop load, but the repeated TF32 pass improved the
+17-character sample from 10.12s to 9.15s and the 64-character sample from 23.34s to
+21.39s. An earlier pair improved from 7.64s/16.19s to 7.08s/13.70s. This is a bounded
+kernel optimization, not a claim of real-time generation.
+
 ### Direct memory playback
 
 The Python worker encodes the completed waveform into an in-memory RIFF/WAV response. C++ keeps those bytes alive in the existing bounded ordered queue and uses Windows `PlaySound` with `SND_MEMORY`. Response headers carry queue, model, prompt, generation, encode, audio-duration, dtype, attention, and cache timings.
@@ -161,8 +184,8 @@ The resource planner still chooses `qwenDevice`, `qwenDevices`, and the effectiv
 | VoiceDesign isolation | Implemented; full new-voice live generation in this pass **NOT VERIFIED** |
 | Vocalization endpoint bug | FIXED; loopback HTTP regression PASS |
 | Windows SAPI fallback | Existing live-test entry point retained; not invoked in this pass |
-| Physical one-GPU laptop | **NOT VERIFIED** |
-| CPU Qwen synthesis | **NOT VERIFIED** |
+| Physical one-GPU laptop | PASS: isolated CPU/CUDA plus live shared-GPU pressure tested |
+| CPU Qwen synthesis | PASS: 17 chars 34.22s; 64 chars 72.25s |
 | Dual-GPU Qwen generation | PASS, live and benchmarked independently |
 | Long-duration RAM/VRAM/handle leak | **NOT VERIFIED** |
 | Worker cleanup | PASS for all completed live/benchmark runs |

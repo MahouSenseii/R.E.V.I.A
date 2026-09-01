@@ -1,6 +1,8 @@
 #pragma once
 
+#include <map>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "enumLibrary.h"
@@ -84,7 +86,7 @@ struct llmSettings
     // positive value is the real maximum RAM allocation passed to --cache-ram.
     int ramCacheMiB = -1;
     std::string modelLoadMode = "auto";
-    int contextSize = 4096;
+    int contextSize = 8192;
     int parallelRequests = 2;
     int startupTimeoutSeconds = 120;
     bool bShutdownServerOnExit = true;
@@ -111,7 +113,7 @@ struct modelTierSettings
     std::string modelPath;
     bool bVisionEnabled = false;
     std::string multimodalProjectorPath;
-    int contextSize = 4096;
+    int contextSize = 8192;
     int maxTokens = 384;
     float temperature = 0.75F;
     int startupTimeoutSeconds = 120;
@@ -129,7 +131,7 @@ struct intelligenceSettings
         "Models/Qwen3.5-0.8B-Q4_K_M.gguf",
         false,
         "",
-        4096,
+        8192,
         256,
         0.78F,
         90,
@@ -142,7 +144,7 @@ struct intelligenceSettings
         "Models/Qwen3-VL-8B-Instruct-Unredacted-MAX.Q4_K_M.gguf",
         true,
         "Models/Qwen3-VL-8B-Instruct-Unredacted-MAX.mmproj-q8_0.gguf",
-        4096,
+        8192,
         1024,
         0.72F,
         180,
@@ -263,6 +265,12 @@ struct presenceSettings
     int adapterPollMs = 150;
     int maxAdapterEventsPerMinute = 30;
     int maxAdapterTextCharacters = 4000;
+    int maxAvatarEventBytes = 4194304;
+    int rememberedAdapterIds = 2048;
+    int publicContextTurns = 6;
+    int streamReplyCooldownSeconds = 4;
+    bool bRequireAddressedStreamMessages = true;
+    bool bSpeakStreamReplies = false;
     std::vector<std::string> allowedAdapters = {"discord", "stream", "game"};
 };
 
@@ -462,6 +470,18 @@ struct aiProfile
 
     float temperature = 0.7f;
     int maxTokens = 512;
+
+    // Starting personality by trait name, supplied by the profile instead of compiled in.
+    // Absent names keep the built-in default, so a profile may tune one trait without
+    // restating all sixteen. Identity owns which names are real; this only carries the
+    // numbers, so adding a trait does not require touching configuration code.
+    std::map<std::string, float> personalityBaseline;
+
+    // Opinions the profile declares she starts with, as subject and signed strength.
+    // Seeded only when she does not already hold one for that subject, so experience
+    // outranks an authored starting point. Identity owns what a preference means; this
+    // carries the pairs.
+    std::vector<std::pair<std::string, float>> preferences;
 };
 
 // Local image generation. Off by default: it is an optional Python runtime and a
@@ -508,6 +528,13 @@ struct conversationSettings
     // continues a conversation instead of restarting one. Costs prompt tokens every turn
     // it survives, which is why it is small.
     int restoreTurns = 6;
+    // Whether Revia may stop on a hard turn, ask herself a few questions, and show them.
+    // It costs one extra bounded inference on the turns it fires, which is why it is
+    // gated to the problems the intelligence router already judged difficult.
+    bool bSelfInquiryEnabled = true;
+    // Turns that must pass before she may think out loud again. Deliberation on every
+    // hard turn in a row stops being thinking and becomes a preamble.
+    int selfInquiryCooldownTurns = 3;
 };
 
 // Response filtering is deliberately separate from the personality prompt. A profile

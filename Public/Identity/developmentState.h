@@ -2,7 +2,9 @@
 
 #include <array>
 #include <cstddef>
+#include <map>
 #include <string>
+#include <vector>
 
 namespace revia::identity
 {
@@ -63,6 +65,18 @@ struct TraitVector
 // stubborn, not yet patient or regulated. These are the initial conditions of a
 // developing intelligence, and every one of them is allowed to move.
 [[nodiscard]] TraitVector ChildlikeBaseline();
+
+// Where Revia starts when the profile says so.
+//
+// Begins from ChildlikeBaseline and overrides only the names present, so a profile that
+// supplies none behaves exactly as the compiled-in default and one that supplies a single
+// trait changes only that trait. Values are clamped to the trait scale.
+//
+// Unrecognised names are collected rather than applied. Silently mapping a typo onto some
+// trait would change who she starts as, and the only symptom would be that she felt wrong.
+[[nodiscard]] TraitVector BaselineFromProfile(
+    const std::map<std::string, float>& values,
+    std::vector<std::string>* outUnknownNames = nullptr);
 
 // One recorded reason a trait moved, so development is explainable rather than merely
 // observable. Without this, "she got less impulsive" is indistinguishable from a bug.

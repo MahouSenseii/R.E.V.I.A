@@ -71,6 +71,42 @@ namespace
         }
     }
 
+    std::uint64_t ExistingSequence(const std::filesystem::path& path)
+    {
+        std::ifstream file(path);
+        if (!file.is_open()) return 0;
+        try
+        {
+            nlohmann::json document;
+            file >> document;
+            return document.value("sequence", std::uint64_t{0});
+        }
+        catch (...)
+        {
+            return 0;
+        }
+    }
+
+    bool ContainsUnsafeControl(const std::string& text)
+    {
+        return std::any_of(text.begin(), text.end(), [](const unsigned char character)
+        {
+            return character < 0x20 && character != '\n' && character != '\r' &&
+                character != '\t';
+        });
+    }
+
+    bool ContainsSpamRun(const std::string& text)
+    {
+        std::size_t run = 1;
+        for (std::size_t index = 1; index < text.size(); ++index)
+        {
+            run = text[index] == text[index - 1] ? run + 1 : 1;
+            if (run > 24) return true;
+        }
+        return false;
+    }
+
     bool AtomicJsonWrite(const std::filesystem::path& path, const nlohmann::json& document)
     {
         std::error_code error;
@@ -132,6 +168,7 @@ bool PresenceRuntime::Start(
     AdapterHandler inputAdapterHandler)
 {
     Shutdown();
+    const std::uint64_t previousSequence = ExistingSequence(settings.statePath);
     {
         std::lock_guard lock(mutex);
         configuration = settings;
@@ -142,6 +179,11 @@ bool PresenceRuntime::Start(
         snapshot.avatarBridgeEnabled = settings.bAvatarBridgeEnabled;
         snapshot.adaptersEnabled = settings.bExternalAdaptersEnabled;
         snapshot.phase = settings.bEnabled ? "idle" : "disabled";
+        snapshot.sequence = previousSequence + 1;
+        adapterAdmissions.clear();
+        recentAdapterIdOrder.clear();
+        recentAdapterIds.clear();
+        lastStreamReply = {};
         inboxRoot = settings.inboxPath;
         outboxRoot = settings.outboxPath;
         stateFile = settings.statePath;
@@ -290,22 +332,21 @@ void PresenceRuntime::PublishAdapterReply(
     const std::string& reason)
 {
     presenceSettings settings;
-    std::uint64_t sequence = 0;
     {
         std::lock_guard lock(mutex);
         settings = configuration;
-        sequence = ++snapshot.sequence;
     }
     if (!settings.bExternalAdaptersEnabled)
     {
         return;
     }
     const std::string safeId = SafeToken(request.id).empty()
-        ? std::to_string(sequence)
+        ? "missing-id"
         : SafeToken(request.id);
     const nlohmann::json response = {
         {"version", 1}, {"id", safeId}, {"source", request.source},
-        {"channel", request.channel}, {"succeeded", succeeded},
+        {"channel", request.channel}, {"author_id", request.authorId},
+        {"succeeded", succeeded},
         {"text", text}, {"reason", reason}, {"timestamp", IsoTimestamp()}
     };
     const std::filesystem::path target = outboxRoot /
@@ -336,9 +377,13 @@ void PresenceRuntime::Shutdown()
     bool write = false;
     {
         std::lock_guard lock(mutex);
-        write = snapshot.enabled && snapshot.avatarBridgeEnabled;
-        snapshot.phase = "offline";
-        ++snapshot.sequence;
+        write = snapshot.enabled && snapshot.avatarBridgeEnabled &&
+            snapshot.phase != "offline";
+        if (write)
+        {
+            snapshot.phase = "offline";
+            ++snapshot.sequence;
+        }
     }
     if (write)
     {
@@ -396,7 +441,19 @@ void PresenceRuntime::ScanAdapterInbox()
             Notify({"Adapters", "Rejected", parseError});
             continue;
         }
-        if (!RateLimitAllows(std::chrono::steady_clock::now()))
+        if (!RememberAdapterEvent(event))
+        {
+            Notify({"Adapters", "Ignored", "A replayed adapter event was ignored."});
+            continue;
+        }
+        std::string policyReason;
+        const auto now = std::chrono::steady_clock::now();
+        if (!StreamPolicyAllows(event, now, policyReason))
+        {
+            Notify({"Adapters", "Ignored", policyReason});
+            continue;
+        }
+        if (!RateLimitAllows(now))
         {
             Notify({"Adapters", "RateLimited", "The adapter event limit was reached."});
             continue;
@@ -444,11 +501,28 @@ bool PresenceRuntime::ParseAdapterFile(
         outError = "Adapter input must be one JSON object.";
         return false;
     }
-    outEvent.id = SafeToken(document.value("id", path.stem().string()));
-    outEvent.source = Lower(SafeToken(document.value("source", "")));
-    outEvent.channel = SafeToken(document.value("channel", "default"));
-    outEvent.author = document.value("author", "user");
-    outEvent.text = document.value("text", "");
+    try
+    {
+        outEvent.version = document.value("version", 1);
+        outEvent.id = SafeToken(document.value("id", path.stem().string()));
+        outEvent.source = Lower(SafeToken(document.value("source", "")));
+        outEvent.channel = SafeToken(document.value("channel", "default"));
+        outEvent.author = document.value("author", "user");
+        outEvent.authorId = SafeToken(document.value("author_id", ""));
+        outEvent.role = Lower(SafeToken(document.value("role", "viewer")));
+        outEvent.text = document.value("text", "");
+        outEvent.addressedToRevia = document.value("addressed_to_revia", false);
+    }
+    catch (...)
+    {
+        outError = "Adapter input fields had invalid types.";
+        return false;
+    }
+    if (outEvent.version != 1)
+    {
+        outError = "Adapter input used an unsupported contract version.";
+        return false;
+    }
     const bool allowed = std::any_of(
         settings.allowedAdapters.begin(), settings.allowedAdapters.end(),
         [&outEvent](const std::string& value) { return Lower(value) == outEvent.source; });
@@ -461,6 +535,25 @@ bool PresenceRuntime::ParseAdapterFile(
         outEvent.text.size() > static_cast<std::size_t>(settings.maxAdapterTextCharacters))
     {
         outError = "Adapter id or text was empty, unsafe, or over the configured limit.";
+        return false;
+    }
+    if (outEvent.source == "stream" && outEvent.authorId.empty())
+    {
+        outError = "Stream input requires a stable author_id separate from display name.";
+        return false;
+    }
+    if (outEvent.authorId.empty()) outEvent.authorId = SafeToken(outEvent.author);
+    if (outEvent.authorId.empty()) outEvent.authorId = "anonymous";
+    if (outEvent.role != "viewer" && outEvent.role != "moderator" &&
+        outEvent.role != "broadcaster")
+    {
+        outError = "Adapter role was not viewer, moderator, or broadcaster.";
+        return false;
+    }
+    if (ContainsUnsafeControl(outEvent.author) || ContainsUnsafeControl(outEvent.text) ||
+        ContainsSpamRun(outEvent.text))
+    {
+        outError = "Adapter text contained unsafe control data or repeated-character spam.";
         return false;
     }
     if (!outEvent.text.empty() && outEvent.text.front() == '/')
@@ -487,6 +580,64 @@ bool PresenceRuntime::RateLimitAllows(const std::chrono::steady_clock::time_poin
     }
     adapterAdmissions.push_back(now);
     return true;
+}
+
+bool PresenceRuntime::RememberAdapterEvent(const ExternalAdapterEvent& event)
+{
+    std::lock_guard lock(mutex);
+    const std::string key = event.source + ":" + event.id;
+    if (recentAdapterIds.contains(key)) return false;
+    recentAdapterIds.insert(key);
+    recentAdapterIdOrder.push_back(key);
+    while (recentAdapterIdOrder.size() >
+        static_cast<std::size_t>(configuration.rememberedAdapterIds))
+    {
+        recentAdapterIds.erase(recentAdapterIdOrder.front());
+        recentAdapterIdOrder.pop_front();
+    }
+    return true;
+}
+
+bool PresenceRuntime::StreamPolicyAllows(
+    const ExternalAdapterEvent& event,
+    const std::chrono::steady_clock::time_point now,
+    std::string& outReason)
+{
+    if (event.source != "stream") return true;
+    std::lock_guard lock(mutex);
+    if (configuration.bRequireAddressedStreamMessages && event.role == "viewer" &&
+        !event.addressedToRevia)
+    {
+        outReason = "The stream message was not addressed to Revia.";
+        return false;
+    }
+    const auto cooldown = std::chrono::seconds(configuration.streamReplyCooldownSeconds);
+    if (event.role == "viewer" && lastStreamReply != std::chrono::steady_clock::time_point{} &&
+        now - lastStreamReply < cooldown)
+    {
+        outReason = "The stream reply cooldown is still active.";
+        return false;
+    }
+    lastStreamReply = now;
+    return true;
+}
+
+void PresenceRuntime::RotateAvatarEventsIfNeeded(
+    const std::filesystem::path& path,
+    const int maximumBytes)
+{
+    std::error_code error;
+    if (!std::filesystem::is_regular_file(path, error) || error) return;
+    const std::uintmax_t size = std::filesystem::file_size(path, error);
+    if (error || size < static_cast<std::uintmax_t>(maximumBytes)) return;
+    const std::filesystem::path backup = path.string() + ".1";
+    std::filesystem::remove(backup, error);
+    error.clear();
+    std::filesystem::rename(path, backup, error);
+    if (error)
+    {
+        Notify({"Avatar", "Error", "The avatar event stream could not be rotated."});
+    }
 }
 
 void PresenceRuntime::UpdatePhase(std::string phase, std::string attention)
@@ -529,6 +680,12 @@ void PresenceRuntime::WriteAvatarState(const bool appendEvent)
     }
     if (appendEvent && !eventsPath.empty())
     {
+        int maximumBytes = 0;
+        {
+            std::lock_guard lock(mutex);
+            maximumBytes = configuration.maxAvatarEventBytes;
+        }
+        RotateAvatarEventsIfNeeded(eventsPath, maximumBytes);
         std::error_code error;
         std::filesystem::create_directories(eventsPath.parent_path(), error);
         std::ofstream stream(eventsPath, std::ios::app);

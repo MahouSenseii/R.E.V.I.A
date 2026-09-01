@@ -223,7 +223,9 @@ Start with the **Runtime → Activity**, **Pipelines**, and **Resources** panels
 - Continuous awareness summarizes visible context; it is not a video recorder, OCR archive, or permission to act.
 - Autonomous learning is bounded to evidence, read-only research, reviewable memory, and persisted improvement proposals. Revia cannot silently edit her own production source, change models/settings, or widen her permissions.
 - Physical single-GPU laptop, CPU-only, clean-machine setup, extended VRAM-leak, and long cancellation stress tests are not yet fully verified.
-- Remote PCs, camera input, and avatar embodiment are designed or planned but not implemented.
+- Remote PCs remain planned. Permissioned one-frame camera capture is implemented. Avatar
+  character/presence and public-conversation contracts are implemented, but no Live2D/VRM
+  renderer, platform connector, model asset, or OBS integration is live-verified yet.
 
 ## Project docs
 

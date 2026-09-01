@@ -179,6 +179,72 @@ void TestStimuliCarryCausationFromRealOutcomes()
     Check(std::abs(BuildConversationStimulus("someone", ordinary).valence) < 0.0001F,
         "An ordinary message carried an emotional charge.");
 }
+
+void TestProfileBaselineOverridesOnlyWhatItNames()
+{
+    // A profile that says nothing must behave exactly as the compiled-in default, or
+    // adding this feature silently changed every existing profile.
+    const TraitVector fallback = BaselineFromProfile({});
+    const TraitVector childlike = ChildlikeBaseline();
+    for (std::size_t index = 0; index < TraitCount; ++index)
+    {
+        Check(std::abs(fallback.values[index] - childlike.values[index]) < 0.0001F,
+            "An empty profile baseline did not fall back to the childlike default.");
+    }
+
+    // Naming one trait must move that trait and nothing else, so a profile can tune a
+    // single tendency without restating all sixteen.
+    const TraitVector tuned = BaselineFromProfile({{"patience", 0.9F}});
+    Check(std::abs(tuned[Trait::Patience] - 0.9F) < 0.0001F,
+        "A named trait did not take the value the profile supplied.");
+    Check(std::abs(tuned[Trait::Curiosity] - childlike[Trait::Curiosity]) < 0.0001F,
+        "Setting one trait changed a trait the profile never mentioned.");
+}
+
+void TestProfileBaselineRefusesNonsense()
+{
+    // An unrecognised name must not land on a real trait. TraitFromString returns a
+    // sentinel for anything it does not know, and the failure this guards against is a
+    // typo quietly rewriting whichever trait happened to sit at index zero.
+    std::vector<std::string> unknown;
+    const TraitVector result =
+        BaselineFromProfile({{"pateince", 0.9F}, {"kindness", 0.1F}}, &unknown);
+    const TraitVector childlike = ChildlikeBaseline();
+    for (std::size_t index = 0; index < TraitCount; ++index)
+    {
+        Check(std::abs(result.values[index] - childlike.values[index]) < 0.0001F,
+            "An unknown trait name changed a real trait.");
+    }
+    Check(unknown.size() == 2,
+        "Unknown trait names were dropped instead of being reported.");
+
+    // Out of range is clamped rather than refused: a profile is hand-editable, and a
+    // value outside the scale should not push a trait somewhere no evidence could.
+    const TraitVector clamped =
+        BaselineFromProfile({{"maturity", 4.0F}, {"caution", -2.0F}});
+    Check(clamped[Trait::Maturity] <= 1.0F && clamped[Trait::Maturity] >= 0.0F,
+        "A baseline above the trait scale was not clamped.");
+    Check(clamped[Trait::Caution] >= 0.0F,
+        "A negative baseline was not clamped.");
+}
+
+void TestChangingBaselineKeepsEarnedDrift()
+{
+    // Development is drift from where she started. Re-seating the baseline is what a
+    // profile edit does, and it must not erase what evidence already moved -- otherwise
+    // editing a profile would quietly reset her.
+    DevelopmentState development;
+    development.base = BaselineFromProfile({{"patience", 0.30F}});
+    development.delta[Trait::Patience] = 0.12F;
+    const float driftBefore = development.Drift(Trait::Patience);
+
+    development.base = BaselineFromProfile({{"patience", 0.60F}});
+
+    Check(std::abs(development.Drift(Trait::Patience) - driftBefore) < 0.0001F,
+        "Re-seating the baseline discarded earned drift.");
+    Check(std::abs(development.Current(Trait::Patience) - 0.72F) < 0.0001F,
+        "Current value did not follow the new baseline plus retained drift.");
+}
 }
 
 void RunDevelopmentTests()
@@ -188,6 +254,9 @@ void RunDevelopmentTests()
     TestDriftIsCappedSoSheStaysRecognisable();
     TestDevelopmentHasNoPreferredDirection();
     TestStimuliCarryCausationFromRealOutcomes();
-    std::cout << "Personality changes slowly, reversibly, within bounds, and in no "
-                 "preferred direction.\n";
+    TestProfileBaselineOverridesOnlyWhatItNames();
+    TestProfileBaselineRefusesNonsense();
+    TestChangingBaselineKeepsEarnedDrift();
+    std::cout << "Personality changes slowly, reversibly, within bounds, in no "
+                 "preferred direction, and from the baseline the profile supplies.\n";
 }

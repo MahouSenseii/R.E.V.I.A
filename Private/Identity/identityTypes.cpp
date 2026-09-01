@@ -119,6 +119,27 @@ TraitVector ChildlikeBaseline()
     return traits;
 }
 
+TraitVector BaselineFromProfile(
+    const std::map<std::string, float>& values,
+    std::vector<std::string>* outUnknownNames)
+{
+    TraitVector traits = ChildlikeBaseline();
+    for (const auto& [name, value] : values)
+    {
+        const Trait trait = TraitFromString(name);
+        if (trait == Trait::Count)
+        {
+            if (outUnknownNames != nullptr)
+            {
+                outUnknownNames->push_back(name);
+            }
+            continue;
+        }
+        traits[trait] = std::clamp(value, 0.0F, 1.0F);
+    }
+    return traits;
+}
+
 TraitVector DevelopmentState::Current() const
 {
     TraitVector current;

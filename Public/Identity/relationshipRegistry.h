@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Identity/identityStore.h"
+#include "Identity/preferenceState.h"
 #include "Identity/relationshipState.h"
 
 #include <filesystem>
@@ -80,6 +81,10 @@ public:
     // a load/save cycle rather than letting a relationship save silently discard them.
     [[nodiscard]] DevelopmentState Development() const;
     void SetDevelopment(const DevelopmentState& development);
+    // Replaces where she started while keeping what she has earned. The profile owns the
+    // baseline and reapplies it at every startup and profile change; delta is runtime
+    // state and must survive that, or editing a profile would erase her development.
+    void SetDevelopmentBaseline(const TraitVector& baseline);
     // Appended, never replaced. The history is the explanation for how she got here, and
     // a personality change with no recorded reason is indistinguishable from a bug.
     void RecordDevelopmentChange(const DevelopmentChange& change);
@@ -87,12 +92,30 @@ public:
     [[nodiscard]] emotion::MoodState Mood() const;
     void SetMood(const emotion::MoodState& mood);
 
+    // Opinions live in the same file, so the registry carries them through a load/save
+    // cycle for the same reason it carries development: a relationship save must not
+    // silently discard what she likes.
+    //
+    // Evidence in, bounded change out. Callers supply an observation, never a value:
+    // letting a caller set strength directly would make one sentence able to install a
+    // lifelong taste, which is what the bounded step exists to prevent.
+    Preference ReinforcePreference(
+        const std::string& subject, bool positive, PreferenceSource source);
+    // Inserts a profile-declared preference only when she does not already hold one for
+    // that subject. Earned opinion outranks an authored starting point.
+    void SeedPreferences(const std::vector<std::pair<std::string, float>>& declared);
+    [[nodiscard]] std::vector<Preference> Preferences() const;
+    [[nodiscard]] std::vector<Preference> StrongestPreferences(std::size_t limit) const;
+
     [[nodiscard]] std::size_t Count() const;
 
 private:
     mutable std::mutex mutex;
     IdentityStore store;
     IdentitySnapshot snapshot;
+    // Kept alongside the snapshot rather than inside it: the set owns the bounded update
+    // rules, and the snapshot is the plain data those rules produce.
+    PreferenceSet preferences;
 };
 
 } // namespace revia::identity

@@ -9,6 +9,7 @@
 #include "Agents/conversationStylePolicy.h"
 #include "Agents/conversationQualityMonitor.h"
 #include "Agents/replyFragmenter.h"
+#include "Agents/selfInquiry.h"
 #include "Agents/responseFilter.h"
 #include "Core/localApiKey.h"
 #include "Diagnostics/issueLog.h"
@@ -35,6 +36,7 @@
 #include "LLM/LLamaCPP/llamaCppService.h"
 #include "LLM/inferenceScheduler.h"
 #include "LLM/promptBuilder.h"
+#include "Identity/reviaStatePacket.h"
 #include "Intelligence/humanizationState.h"
 #include "Intelligence/intelligenceRouter.h"
 #include "Intelligence/reflexRouter.h"
@@ -1843,11 +1845,187 @@ void TestHumanizationStateIsSharedAndHasMomentum()
         "Irritation reset randomly instead of decaying with emotional momentum.");
 
     controller.ObserveOutcome(false, frustrated);
-    const std::string prompt = controller.BuildPromptBlock();
-    Check(prompt.find("same state is supplied to every intelligence tier") !=
-            std::string::npos &&
-          prompt.find("recent request did not complete") != std::string::npos,
-        "The one-Revia state did not reach the shared model context.");
+    Check(controller.Current().unresolvedThought.find("did not complete") !=
+            std::string::npos,
+        "A failed outcome left no unresolved thought behind.");
+
+    // The one-Revia state reaches the model through the packet and nowhere else.
+    // HumanizationController used to render a second, numeric description of traits
+    // DevelopmentState and the emotion vector already own; it renders nothing now.
+    revia::identity::ReviaStatePacket packet;
+    packet.unresolvedThought = controller.Current().unresolvedThought;
+    packet.currentInterest = "how speech latency actually breaks down";
+    const std::string rendered = revia::identity::RenderStatePacket(packet);
+    Check(rendered.find("recent request did not complete") != std::string::npos &&
+          rendered.find("speech latency actually breaks down") != std::string::npos,
+        "The state only HumanizationState holds did not reach the shared packet.");
+    Check(rendered.find("curiosity=") == std::string::npos &&
+          rendered.find("social energy=") == std::string::npos &&
+          rendered.find("talkativeness=") == std::string::npos,
+        "A numeric personality row is back in the prompt beside the prose one.");
+}
+
+void TestSelfInquiryOnlyOpensForMajorProblems()
+{
+    using namespace revia::agents;
+    using namespace revia::intelligence;
+
+    const std::string hardProblem =
+        "The shutdown path deadlocks when the speech worker is still draining a queue.";
+
+    IntelligenceDecision expert;
+    expert.selectedTier = IntelligenceTier::Expert;
+    expert.mode = ReasoningMode::Deep;
+
+    IntelligenceDecision ordinary;
+    ordinary.selectedTier = IntelligenceTier::Main;
+    ordinary.mode = ReasoningMode::Fast;
+
+    IntelligenceDecision reflex;
+    reflex.selectedTier = IntelligenceTier::Reflex;
+    reflex.mode = ReasoningMode::Fast;
+
+    SelfInquiryPolicy policy;
+    Check(policy.Consider(hardProblem, expert, false, 1).shouldThink,
+        "A hard Expert turn did not open the self-inquiry gate.");
+    Check(!policy.Consider(hardProblem, ordinary, false, 1).shouldThink,
+        "An ordinary Main turn stopped to deliberate.");
+    Check(!policy.Consider(hardProblem, reflex, false, 1).shouldThink,
+        "A reflex turn, which never reaches a model, stopped to deliberate.");
+    Check(!policy.Consider("why is it broken", expert, false, 1).shouldThink,
+        "A message too short to be a major problem still opened the gate.");
+    Check(!policy.Consider(hardProblem, expert, true, 1).shouldThink,
+        "A conversation Revia started herself was treated as a problem put to her.");
+
+    SelfInquiryLimits off;
+    off.enabled = false;
+    const SelfInquiryPolicy disabled(off);
+    Check(!disabled.Consider(hardProblem, expert, false, 1).shouldThink,
+        "Self-inquiry ran while the setting was off.");
+}
+
+void TestSelfInquiryCooldownStopsItBecomingATic()
+{
+    using namespace revia::agents;
+    using namespace revia::intelligence;
+
+    const std::string hardProblem =
+        "The shutdown path deadlocks when the speech worker is still draining a queue.";
+    IntelligenceDecision expert;
+    expert.selectedTier = IntelligenceTier::Expert;
+    expert.mode = ReasoningMode::Deep;
+
+    SelfInquiryLimits limits;
+    limits.cooldownTurns = 3;
+    SelfInquiryPolicy policy(limits);
+
+    Check(policy.Consider(hardProblem, expert, false, 10).shouldThink,
+        "The first hard turn did not deliberate.");
+    policy.RecordInquiry(10);
+    Check(!policy.Consider(hardProblem, expert, false, 11).shouldThink &&
+          !policy.Consider(hardProblem, expert, false, 13).shouldThink,
+        "Self-inquiry ran again inside its own cooldown.");
+    Check(policy.Consider(hardProblem, expert, false, 14).shouldThink,
+        "Self-inquiry never recovered after the cooldown elapsed.");
+}
+
+void TestCompletedSelfInquiryReservesTheFinalAnswerBudget()
+{
+    using namespace revia::agents;
+    using namespace revia::intelligence;
+
+    IntelligenceDecision hardTurn;
+    hardTurn.requestedTier = IntelligenceTier::Expert;
+    hardTurn.selectedTier = IntelligenceTier::Expert;
+    hardTurn.mode = ReasoningMode::Deep;
+    hardTurn.selectedModel = "expert-model";
+    hardTurn.reason = "The turn needs expert analysis.";
+
+    const IntelligenceDecision answer =
+        SelfInquiryPolicy::FinalAnswerRouting(hardTurn, true);
+    Check(answer.requestedTier == IntelligenceTier::Expert &&
+          answer.selectedTier == IntelligenceTier::Expert &&
+          answer.selectedModel == "expert-model",
+        "Completing self-inquiry changed the selected intelligence tier.");
+    Check(answer.mode == ReasoningMode::Fast &&
+          answer.reason.find("reserves its token budget for the answer") !=
+              std::string::npos,
+        "The final answer opened a second hidden reasoning pass after self-inquiry.");
+
+    const IntelligenceDecision withoutInquiry =
+        SelfInquiryPolicy::FinalAnswerRouting(hardTurn, false);
+    Check(withoutInquiry.mode == ReasoningMode::Deep,
+        "A hard turn lost deep reasoning when no self-inquiry completed.");
+
+    const llmSettings mainDefaults;
+    const intelligenceSettings tierDefaults;
+    Check(mainDefaults.contextSize >= 8192 &&
+          tierDefaults.fast.contextSize >= 8192 &&
+          tierDefaults.expert.contextSize >= 8192,
+        "A conversation tier default cannot hold the shared identity packet and answer budget.");
+}
+
+void TestSelfInquiryKeepsTheQuestionsHerOwn()
+{
+    using namespace revia::agents;
+
+    const std::string raw =
+        "Sure, here you go:{" + std::string(1, '"') + "questions" + std::string(1, '"') +
+        ":[" + std::string(1, '"') + "What am I assuming about when the queue drains?" +
+        std::string(1, '"') + "," + std::string(1, '"') +
+        "Would you like me to check the logs?" + std::string(1, '"') + "," +
+        std::string(1, '"') + "What am I assuming about when the queue drains?" +
+        std::string(1, '"') + "," + std::string(1, '"') +
+        "Did I ever see this fail on one thread?" + std::string(1, '"') + "]," +
+        std::string(1, '"') + "settled" + std::string(1, '"') + ":" +
+        std::string(1, '"') + "I have been assuming the worker is idle by then." +
+        std::string(1, '"') + "}";
+
+    const SelfInquiryResult parsed = SelfInquiryAgent::Parse(raw, 4);
+    Check(parsed.HasQuestions() && parsed.questions.size() == 2,
+        "The parse kept a question addressed to the user, or dropped a real one.");
+    Check(parsed.questions[0].find("assuming about when the queue drains") !=
+              std::string::npos &&
+          parsed.questions[1].find("one thread") != std::string::npos,
+        "Deduplication removed the wrong question.");
+    Check(parsed.settled.find("assuming the worker is idle") != std::string::npos,
+        "What she settled on was lost.");
+
+    // Both blocks must name her as the one who asked, or a turn where an unattributed
+    // voice interrogates her would read as two people sharing a name.
+    const std::string prompt = parsed.PromptBlock();
+    Check(prompt.find("your own questions") != std::string::npos &&
+          prompt.find("you are the one who asked") != std::string::npos,
+        "The prompt block did not tell Revia the questions were hers.");
+    const std::string transcript = parsed.TranscriptBlock();
+    Check(transcript.find("queue drains") != std::string::npos &&
+          transcript.find("assuming the worker is idle") != std::string::npos,
+        "The transcript block did not carry the questions to the shell.");
+
+    Check(!SelfInquiryAgent::Parse("not json at all", 4).HasQuestions() &&
+          !SelfInquiryAgent::Parse("{}", 4).HasQuestions(),
+        "An unusable deliberation was treated as real thinking.");
+}
+
+void TestSelfInquiryEnvelopeStaysBounded()
+{
+    using namespace revia::agents;
+
+    const std::string posture(9000, 'p');
+    const std::string problem(9000, 'q');
+    std::vector<conversationMessage> context;
+    for (int index = 0; index < 12; ++index)
+    {
+        context.push_back({index % 2 == 0 ? "user" : "assistant", std::string(2000, 'c')});
+    }
+
+    const std::string envelope =
+        SelfInquiryAgent::BuildEnvelope(problem, posture, context);
+    Check(envelope.size() < 6000,
+        "The self-inquiry envelope grew without bound and would cost more than the turn.");
+    Check(envelope.find("The problem in front of you") != std::string::npos &&
+          envelope.find("Who you are right now") != std::string::npos,
+        "The envelope lost the problem or the identity it needs to sound like her.");
 }
 
 void TestModelResidencyIsAuditable()
@@ -4053,6 +4231,27 @@ void TestPostureReachesTheModel()
     Check(plainContent.find("posture") == std::string::npos,
         "A prompt with no posture still mentioned one: " + plainContent);
 
+    memoryDecision privateMemory;
+    privateMemory.bSuccess = true;
+    privateMemory.bShouldRemember = true;
+    privateMemory.category = "project";
+    privateMemory.summary = "The user keeps a private lighthouse project.";
+    bool wasAdded = false;
+    longTermMemory memory;
+    Check(memory.Save(privateMemory, wasAdded) && wasAdded,
+        "The prompt privacy fixture could not save its private memory.");
+    context.back().content = "What is the private lighthouse project?";
+    profile.bMemoryEnabled = true;
+    const std::string withMemory = builder.BuildMessages(profile, context)[0]["content"]
+        .get<std::string>();
+    Check(withMemory.find("private lighthouse") != std::string::npos,
+        "Enabled memory did not reach the ordinary private prompt.");
+    profile.bMemoryEnabled = false;
+    const std::string memoryDisabled = builder.BuildMessages(profile, context)[0]["content"]
+        .get<std::string>();
+    Check(memoryDisabled.find("private lighthouse") == std::string::npos,
+        "A memory-disabled public-style prompt still retrieved durable private memory.");
+
     std::filesystem::current_path(previous);
 }
 
@@ -5845,7 +6044,7 @@ void TestPresenceRuntimePublishesAvatarStateAndBoundsAdapters()
         });
     }
     Check(received.has_value() && received->source == "discord" &&
-        received->text == "Are you there?",
+        received->text == "Are you there?" && received->authorId == "MahouSensei",
         "An allowlisted bounded adapter event was not delivered.");
     presence.PublishAdapterReply(*received, "Yep. I heard you.", true);
     Check(std::filesystem::is_regular_file(
@@ -5861,7 +6060,75 @@ void TestPresenceRuntimePublishesAvatarStateAndBoundsAdapters()
     Check(std::filesystem::is_regular_file(
         std::filesystem::path(settings.inboxPath) / "Rejected" / "unsafe.json"),
         "An external slash command was not rejected before reaching the session.");
+
+    {
+        std::lock_guard lock(receivedMutex);
+        received.reset();
+    }
+    {
+        std::ofstream file(std::filesystem::path(settings.inboxPath) / "unaddressed.json");
+        file << nlohmann::json{{"version", 1}, {"id", "stream-one"},
+            {"source", "stream"}, {"channel", "live"},
+            {"author_id", "viewer-42"}, {"author", "Viewer"},
+            {"role", "viewer"}, {"addressed_to_revia", false},
+            {"text", "Talking to somebody else."}}.dump();
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(180));
+    {
+        std::lock_guard lock(receivedMutex);
+        Check(!received.has_value(),
+            "An unaddressed viewer message entered Revia's conversation queue.");
+    }
+
+    {
+        std::ofstream file(std::filesystem::path(settings.inboxPath) / "addressed.json");
+        file << nlohmann::json{{"version", 1}, {"id", "stream-two"},
+            {"source", "stream"}, {"channel", "live"},
+            {"author_id", "viewer-42"}, {"author", "Viewer"},
+            {"role", "viewer"}, {"addressed_to_revia", true},
+            {"text", "Revia, are you there?"}}.dump();
+    }
+    {
+        std::unique_lock lock(receivedMutex);
+        receivedCondition.wait_for(lock, std::chrono::seconds(2), [&]
+        {
+            return received.has_value();
+        });
+    }
+    Check(received.has_value() && received->authorId == "viewer-42" &&
+        received->addressedToRevia,
+        "An addressed stream message lost its stable viewer identity or address flag.");
+    {
+        std::lock_guard lock(receivedMutex);
+        received.reset();
+    }
+    {
+        std::ofstream file(std::filesystem::path(settings.inboxPath) / "replay.json");
+        file << nlohmann::json{{"version", 1}, {"id", "stream-two"},
+            {"source", "stream"}, {"channel", "live"},
+            {"author_id", "viewer-42"}, {"author", "Viewer"},
+            {"role", "viewer"}, {"addressed_to_revia", true},
+            {"text", "This ID has already been handled."}}.dump();
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(180));
+    {
+        std::lock_guard lock(receivedMutex);
+        Check(!received.has_value(),
+            "A replayed source/id pair entered Revia's conversation queue twice.");
+    }
+
     presence.Shutdown();
+    const auto lineCount = [](const std::filesystem::path& path)
+    {
+        std::ifstream file(path);
+        return static_cast<std::size_t>(std::count(
+            std::istreambuf_iterator<char>(file),
+            std::istreambuf_iterator<char>(), '\n'));
+    };
+    const std::size_t afterFirstShutdown = lineCount(settings.eventPath);
+    presence.Shutdown();
+    Check(lineCount(settings.eventPath) == afterFirstShutdown,
+        "Repeated presence shutdown appended duplicate offline avatar states.");
 }
 
 void TestResourcePlannerKeepsAutomaticVoiceOffTheChatGpu()
@@ -6899,6 +7166,11 @@ int main(const int argc, char** argv)
         TestTieredIntelligenceRoutesBeforeGeneration();
         TestReflexesAreContextualAndModelFree();
         TestHumanizationStateIsSharedAndHasMomentum();
+        TestSelfInquiryOnlyOpensForMajorProblems();
+        TestSelfInquiryCooldownStopsItBecomingATic();
+        TestCompletedSelfInquiryReservesTheFinalAnswerBudget();
+        TestSelfInquiryKeepsTheQuestionsHerOwn();
+        TestSelfInquiryEnvelopeStaysBounded();
         TestModelResidencyIsAuditable();
         TestSelfAssessmentRequiresLocalEvidence();
         TestResponseFiltersStayLayered();

@@ -45,11 +45,13 @@ const std::string& posture) const
     }
 
     const auto retrievalStarted = std::chrono::steady_clock::now();
-    const std::string memoryBlock = memory.BuildPromptBlock(
-        retrievalQuery,
-        6,
-        queryEmbedding,
-        embeddingModel);
+    const std::string memoryBlock = profile.bMemoryEnabled
+        ? memory.BuildPromptBlock(
+            retrievalQuery,
+            6,
+            queryEmbedding,
+            embeddingModel)
+        : std::string{};
     if (timings)
     {
         timings->push_back({"memory_retrieval", ElapsedMilliseconds(retrievalStarted)});

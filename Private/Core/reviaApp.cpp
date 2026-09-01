@@ -41,6 +41,12 @@ void reviaApp::Run()
             std::cout << "\nRevia: " << event.message
                 << "\n  Evidence: " << event.detail << "\n" << std::flush;
         }
+        else if (event.kind == revia::runtime::RuntimeEventKind::SelfInquiry)
+        {
+            // Her own questions, shown before the answer they shaped. Never spoken.
+            std::cout << "\n[Revia is thinking - " << event.detail << "]\n"
+                << event.message << "\n" << std::flush;
+        }
     });
 
     if (!session.Start())

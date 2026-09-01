@@ -20,3 +20,8 @@ A renderer should smooth `mouth`, expression, and gaze locally at its display fr
 Audio-amplitude or phoneme-driven visemes can replace the base mouth gate later without
 changing the state owner or the rest of the schema. Rendering remains a consumer: it must
 never call inference or grant an action.
+
+The canonical design, palette, expression mapping, and selected renderer target are in
+`Config/avatar.json`. `target` remains `unselected` until a real Live2D/VRM model and its
+renderer are chosen. The transition stream rotates to `avatar_events.jsonl.1` at the
+configured byte ceiling, and repeated shutdown calls do not emit duplicate offline states.

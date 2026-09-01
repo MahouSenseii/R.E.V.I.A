@@ -53,6 +53,11 @@ enum class RuntimeEventKind
     // Revia offering something unprompted. Distinct from AssistantMessage because it is
     // answerable: the shell must be able to accept or dismiss it in one action.
     Proposal,
+    // The questions Revia put to herself before answering a hard turn. Distinct from
+    // AssistantMessage because it is not addressed to anyone and is never spoken: it is
+    // her own thinking, shown so the reasoning behind a difficult reply is visible
+    // rather than buried in a collapsed trace.
+    SelfInquiry,
     // A sanitized SVG drawing, ready to render. `detail` carries the markup and
     // `resource` the file it was saved to. Distinct from AssistantMessage because a
     // picture belongs on a canvas, not in the middle of a chat transcript.

@@ -145,6 +145,32 @@ std::string RenderStatePacket(const ReviaStatePacket& packet)
         section(memories.str());
     }
 
+    // OPINIONS. Stated as hers, never as fact -- design §11 keeps the two apart, and a
+    // preference rendered in the register of a fact is how "I dislike this" becomes
+    // "this is bad". Confidence is carried for the same reason it is on a memory: a
+    // taste she has barely formed should not be asserted like one she has held for
+    // months.
+    if (!packet.preferences.empty())
+    {
+        std::ostringstream opinions;
+        opinions << "What you like and dislike. These are your opinions, not facts, and "
+                    "you may say so plainly when it fits:";
+        for (const Preference& preference : packet.preferences)
+        {
+            const bool likes = preference.Direction() == PreferenceDirection::Like;
+            opinions << "\n- you " << (likes ? "like " : "dislike ") << preference.subject;
+            if (std::abs(preference.strength) > 0.6F)
+            {
+                opinions << " a lot";
+            }
+            if (preference.confidence < 0.5F)
+            {
+                opinions << " (you are still working out how you feel about this)";
+            }
+        }
+        section(opinions.str());
+    }
+
     if (!packet.currentInterest.empty())
     {
         section("Something you have been interested in lately: " + packet.currentInterest +

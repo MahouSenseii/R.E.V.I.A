@@ -19,6 +19,7 @@
 #include "Autonomy/activityScheduler.h"
 #include "Emotion/emotionRuntime.h"
 #include "Identity/developmentEngine.h"
+#include "Identity/preferenceEvidence.h"
 #include "Identity/relationshipRegistry.h"
 #include "LLM/LLamaCPP/llamaCppServerProcess.h"
 #include "Initiative/initiativeController.h"
@@ -57,6 +58,7 @@
 #include <stop_token>
 #include <string>
 #include <thread>
+#include <unordered_map>
 #include <vector>
 
 namespace revia::runtime
@@ -236,6 +238,9 @@ public:
     [[nodiscard]] emotion::EmotionVector CurrentEmotion() const;
     [[nodiscard]] emotion::MoodState CurrentMood() const;
     [[nodiscard]] identity::DevelopmentState CurrentDevelopment() const;
+    // What she currently likes and dislikes. Read-only: opinions move from evidence, not
+    // by being set from outside.
+    [[nodiscard]] std::vector<identity::Preference> CurrentPreferences() const;
     // What is currently pulling at her, and what the scheduler last decided about it.
     // Read-only: drives move from stimuli and time, never by being set.
     [[nodiscard]] autonomy::DriveState Drives() const;
@@ -349,6 +354,14 @@ public:
     ProfileOperationResult ActivateProfile(const std::string& profileId);
 
 private:
+    // The profile owns where she starts: trait baseline and declared opinions. What
+    // experience has earned -- trait drift, and any preference she already holds --
+    // survives, or editing a profile would quietly delete her development.
+    //
+    // Applied at startup and whenever the active profile changes, so an edit takes effect
+    // without a restart. Private: re-seating who she started as is a consequence of
+    // loading a profile, not something a caller may ask for on its own.
+    void ApplyProfilePersonality();
     bool EnsureLLMAvailable(std::stop_token stopToken);
     bool EnsureFastBrainAvailable(std::stop_token stopToken);
     bool EnsureExpertBrainAvailable(std::stop_token stopToken);
@@ -380,6 +393,12 @@ private:
     // relationship evidence. Deterministic: no model is consulted about how Revia should
     // feel toward someone, because a model that could set those numbers would let anyone
     // talk their way into being trusted.
+    // Applies bounded preference evidence and reports only the opinions that actually
+    // moved. Separate from RecordRelationshipEvidence because what she thinks of a
+    // person and what she thinks of a subject are different things that must not be
+    // able to overwrite one another (design §8, §10).
+    void RecordPreferenceEvidence(
+        const std::vector<identity::PreferenceObservation>& observations);
     void RecordRelationshipEvidence(
         const std::string& entityId,
         const std::string& userInput,
@@ -557,6 +576,10 @@ private:
     std::condition_variable_any externalAdapterCondition;
     std::condition_variable_any screenAwarenessCondition;
     std::deque<presence::ExternalAdapterEvent> externalAdapterQueue;
+    // Public history is deliberately channel-scoped and memory-only. It never enters
+    // the local user's conversationContext or durable conversation archive.
+    std::unordered_map<std::string, std::deque<conversationMessage>>
+        publicConversationContexts;
     std::condition_variable_any initiativeCondition;
     std::condition_variable_any curiosityCondition;
     std::uint64_t initiativeSignalVersion = 0;

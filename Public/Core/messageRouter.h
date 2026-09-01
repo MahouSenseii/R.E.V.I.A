@@ -35,6 +35,11 @@ public:
     responseOutput GenerateCuriosityPlan(
         const std::string& boundedContextPrompt,
         std::stop_token stopToken = {}) const;
+    // Runs one bounded self-inquiry pass for a hard conversational turn. Interactive
+    // priority, because the user's own reply is waiting behind it.
+    responseOutput Deliberate(
+        const std::string& boundedInquiryPrompt,
+        std::stop_token stopToken = {}) const;
     responseOutput PlanGoal(const std::string& request) const;
     responseOutput DrawDiagram(const std::string& request) const;
     responseOutput ComposeContent(

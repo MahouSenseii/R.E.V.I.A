@@ -3,6 +3,7 @@
 #include "Emotion/emotionTypes.h"
 #include "Emotion/moodState.h"
 #include "Identity/developmentState.h"
+#include "Identity/preferenceState.h"
 #include "Identity/relationshipState.h"
 
 #include <string>
@@ -63,6 +64,10 @@ struct ReviaStatePacket
     bool hasRelationship = false;
 
     std::vector<RelevantMemoryLine> memories;
+
+    // What she likes and dislikes. Already selected and bounded by the runtime; the
+    // renderer states them, it does not choose them.
+    std::vector<Preference> preferences;
 
     std::string currentInterest;
     std::string unresolvedThought;

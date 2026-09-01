@@ -91,13 +91,16 @@ responseOutput messageRouter::RouteMessage(
 
     residency.BeginInference(effectiveTier, "interactive");
     DeltaHandler retryDelta = onDelta;
+    // IntelligenceRouter owns the reasoning mode. In particular, a completed visible
+    // self-inquiry changes the final-answer decision to Fast so the model does not spend
+    // the same response allowance on a second, hidden deliberation.
+    const bool deepReasoning =
+        decision.mode == revia::intelligence::ReasoningMode::Deep;
     responseOutput routed = selected->GenerateResponse(
         context,
         stopToken,
         std::move(onDelta),
-        decision.mode == revia::intelligence::ReasoningMode::Deep ||
-            (!fallbackReason.empty() &&
-             decision.requestedTier == revia::intelligence::IntelligenceTier::Expert));
+        deepReasoning);
     residency.EndInference(effectiveTier);
     const bool contextRejected = !routed.bSuccess &&
         routed.reason.find("HTTP status 400") != std::string::npos;
@@ -111,8 +114,7 @@ responseOutput messageRouter::RouteMessage(
             context,
             stopToken,
             std::move(retryDelta),
-            decision.selectedTier == revia::intelligence::IntelligenceTier::Expert ||
-                decision.selectedTier == revia::intelligence::IntelligenceTier::ExpertVision);
+            deepReasoning);
         residency.EndInference(revia::intelligence::IntelligenceTier::Main);
         selected = &llm;
         effectiveTier = revia::intelligence::IntelligenceTier::Main;
@@ -196,6 +198,51 @@ responseOutput messageRouter::GenerateCuriosityPlan(
     output.selectedModel = "Qwen3.5-4B-Q4_K_M.gguf";
     output.bRoutingFallback = true;
     output.routingFallbackReason = "Fast background brain was unavailable.";
+    return output;
+}
+
+responseOutput messageRouter::Deliberate(
+    const std::string& boundedInquiryPrompt,
+    const std::stop_token stopToken) const
+{
+    if (boundedInquiryPrompt.empty())
+    {
+        responseOutput output;
+        output.reason = "The self-inquiry envelope was empty.";
+        return output;
+    }
+    // Main, not Expert, even though the Expert brain is what makes a turn qualify for an
+    // inquiry. Expert is about to generate the answer this inquiry exists to improve, and
+    // queueing both on it would double the wait on exactly the turns that are already the
+    // slowest. The state packet travels in the envelope, so she is the same Revia either
+    // way -- only the effort spent on the questions differs.
+    if (llm.IsBackendAvailable())
+    {
+        residency.BeginInference(
+            revia::intelligence::IntelligenceTier::Main, "interactive");
+        responseOutput output = llm.Deliberate(boundedInquiryPrompt, stopToken);
+        residency.EndInference(revia::intelligence::IntelligenceTier::Main);
+        output.requestedTier = "Main";
+        output.selectedTier = "Main";
+        output.selectedModel = "Qwen3.5-4B-Q4_K_M.gguf";
+        output.routingReason = "One bounded self-inquiry runs on the balanced Main brain.";
+        return output;
+    }
+    if (fastConfigured && fastLlm.IsBackendAvailable())
+    {
+        residency.BeginInference(
+            revia::intelligence::IntelligenceTier::Fast, "interactive");
+        responseOutput output = fastLlm.Deliberate(boundedInquiryPrompt, stopToken);
+        residency.EndInference(revia::intelligence::IntelligenceTier::Fast);
+        output.requestedTier = "Main";
+        output.selectedTier = "Fast";
+        output.selectedModel = "Qwen3.5-0.8B-Q4_K_M.gguf";
+        output.bRoutingFallback = true;
+        output.routingFallbackReason = "The Main brain was unavailable for self-inquiry.";
+        return output;
+    }
+    responseOutput output;
+    output.reason = "No local brain was available for self-inquiry.";
     return output;
 }
 

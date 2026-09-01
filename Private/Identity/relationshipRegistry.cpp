@@ -2,6 +2,10 @@
 
 #include <algorithm>
 #include <cctype>
+#include <chrono>
+#include <ctime>
+#include <iomanip>
+#include <sstream>
 #include <utility>
 
 namespace revia::identity
@@ -9,6 +13,21 @@ namespace revia::identity
 
 namespace
 {
+    std::string Timestamp()
+    {
+        const auto now = std::chrono::system_clock::to_time_t(
+            std::chrono::system_clock::now());
+        std::tm parts{};
+#ifdef _WIN32
+        gmtime_s(&parts, &now);
+#else
+        gmtime_r(&now, &parts);
+#endif
+        std::ostringstream stamp;
+        stamp << std::put_time(&parts, "%Y-%m-%dT%H:%M:%SZ");
+        return stamp.str();
+    }
+
     // Entity ids reach a file name only indirectly, but they do key a persisted map, so
     // they are normalised to something stable and printable rather than trusting an
     // adapter to supply a sane author string.
@@ -59,13 +78,58 @@ RelationshipRegistry::RelationshipRegistry(std::filesystem::path path)
 bool RelationshipRegistry::Load(std::string& outError)
 {
     std::lock_guard lock(mutex);
-    return store.Load(snapshot, outError);
+    if (!store.Load(snapshot, outError))
+    {
+        return false;
+    }
+    preferences.Replace(snapshot.preferences);
+    return true;
 }
 
 bool RelationshipRegistry::Save(std::string& outError) const
 {
     std::lock_guard lock(mutex);
     return store.Save(snapshot, outError);
+}
+
+Preference RelationshipRegistry::ReinforcePreference(
+    const std::string& subject, const bool positive, const PreferenceSource source)
+{
+    std::lock_guard lock(mutex);
+    const Preference updated =
+        preferences.Reinforce(subject, positive, source, Timestamp());
+    // The snapshot is what persistence writes, so it has to follow every change rather
+    // than only the ones that happen to precede a save.
+    snapshot.preferences = preferences.All();
+    return updated;
+}
+
+void RelationshipRegistry::SeedPreferences(
+    const std::vector<std::pair<std::string, float>>& declared)
+{
+    std::lock_guard lock(mutex);
+    bool inserted = false;
+    for (const auto& [subject, strength] : declared)
+    {
+        inserted = preferences.SeedFromProfile(subject, strength) || inserted;
+    }
+    if (inserted)
+    {
+        snapshot.preferences = preferences.All();
+    }
+}
+
+std::vector<Preference> RelationshipRegistry::Preferences() const
+{
+    std::lock_guard lock(mutex);
+    return preferences.All();
+}
+
+std::vector<Preference> RelationshipRegistry::StrongestPreferences(
+    const std::size_t limit) const
+{
+    std::lock_guard lock(mutex);
+    return preferences.Strongest(limit);
 }
 
 RelationshipState RelationshipRegistry::Get(const std::string& entityId)
@@ -215,6 +279,12 @@ void RelationshipRegistry::SetDevelopment(const DevelopmentState& development)
 {
     std::lock_guard lock(mutex);
     snapshot.development = development;
+}
+
+void RelationshipRegistry::SetDevelopmentBaseline(const TraitVector& baseline)
+{
+    std::lock_guard lock(mutex);
+    snapshot.development.base = baseline;
 }
 
 void RelationshipRegistry::RecordDevelopmentChange(const DevelopmentChange& change)

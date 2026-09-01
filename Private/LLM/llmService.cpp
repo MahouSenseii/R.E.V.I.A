@@ -126,7 +126,7 @@ responseOutput llmService::GenerateResponse(
     const std::vector<conversationMessage>& context,
     const std::stop_token stopToken,
     DeltaHandler onDelta,
-    const bool forceDeepReasoning) const
+    const bool deepReasoning) const
 {
     if (!bIsReady)
     {
@@ -159,7 +159,7 @@ responseOutput llmService::GenerateResponse(
                 return output;
             }
             return llamaCpp.GenerateResponse(
-                context, stopToken, std::move(onDelta), forceDeepReasoning);
+                context, stopToken, std::move(onDelta), deepReasoning);
         }
 
         case llmBackendType::None:
@@ -264,6 +264,28 @@ responseOutput llmService::GenerateCuriosityPlan(
         return output;
     }
     return llamaCpp.GenerateCuriosityPlan(boundedContextPrompt, stopToken);
+}
+
+responseOutput llmService::Deliberate(
+    const std::string& boundedInquiryPrompt,
+    const std::stop_token stopToken) const
+{
+    if (!bIsReady || backendType != llmBackendType::LLamaCpp)
+    {
+        responseOutput output;
+        output.reason = "Self-inquiry requires the active llama.cpp backend.";
+        return output;
+    }
+    const healthOutput health = llamaCpp.CheckHealth();
+    if (!health.bIsAvailable)
+    {
+        responseOutput output;
+        output.reason = health.reason.empty()
+            ? "The local model is unavailable for self-inquiry."
+            : health.reason;
+        return output;
+    }
+    return llamaCpp.Deliberate(boundedInquiryPrompt, stopToken);
 }
 
 responseOutput llmService::GenerateGoalPlan(const std::string& userRequest) const

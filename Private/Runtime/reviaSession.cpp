@@ -268,6 +268,21 @@ ReviaSession::ReviaSession()
            [this]()
            {
                return CaptureScreenContextNow();
+           },
+           [this]()
+           {
+               // Bounded before it leaves the session. Six is enough to read as a person
+               // with tastes; the whole set would crowd out the turn it is meant to
+               // colour.
+               return relationships.StrongestPreferences(6);
+           },
+           [this]()
+           {
+               agents::SelfInquiryLimits limits;
+               limits.enabled = settings.conversation.bSelfInquiryEnabled;
+               limits.cooldownTurns = static_cast<std::size_t>(
+                   std::max(0, settings.conversation.selfInquiryCooldownTurns));
+               return limits;
            })
 {
     appLogger.SetSink([this](const std::string& line)
@@ -433,6 +448,9 @@ bool ReviaSession::Start()
             " known relationship(s)." +
             (drift.empty() ? "" : " Development: " + drift + "."));
     }
+    // After the load either way: a corrupt identity file still starts from whatever
+    // baseline the profile asks for rather than from the compiled-in one.
+    ApplyProfilePersonality();
     startupTimings.push_back({"identity_load", ElapsedMilliseconds(stageStarted)});
 
     stageStarted = std::chrono::steady_clock::now();
@@ -1329,22 +1347,63 @@ void ReviaSession::StartExternalAdapterLoop()
                     {
                         llmAvailable = EnsureLLMAvailable(operationToken);
                     }
-                    const std::string prompt =
-                        "A message arrived through the approved local " + request.source +
-                        " conversation adapter in channel '" + request.channel + "' from " +
-                        request.author + ". Reply to the message naturally. Do not claim you "
-                        "performed an action and do not emit slash commands.\n\nMessage: " +
-                        request.text;
-                    result = conversationRuntime.Reply(
-                        prompt, profile, llmAvailable, false, operationToken);
+                    const std::string speaker = identity::AdapterEntityId(
+                        request.source, request.authorId);
+                    relationships.SetDisplayName(speaker, request.author);
+                    identity::RelationshipState relationship;
+                    if (const auto found = relationships.Find(speaker))
+                    {
+                        relationship = *found;
+                    }
+                    else
+                    {
+                        relationship.entityId = speaker;
+                        relationship.displayName = request.author;
+                    }
+                    const std::string contextKey =
+                        request.source + ":" + request.channel;
+                    std::vector<conversationMessage> channelHistory;
+                    if (const auto found = publicConversationContexts.find(contextKey);
+                        found != publicConversationContexts.end())
+                    {
+                        channelHistory.assign(found->second.begin(), found->second.end());
+                    }
+                    const std::string publicInput =
+                        request.author + " [" + request.role + "]: " + request.text;
+                    const std::string publicInstruction =
+                        "This is a PUBLIC broadcast conversation through the approved " +
+                        request.source + " adapter in channel '" + request.channel + "'. "
+                        "Reply to " + request.author + " naturally and keep the answer safe "
+                        "to broadcast. Use only the public messages supplied in this turn. "
+                        "Never reveal or infer private desktop, camera, local-user, file, "
+                        "memory, credential, path, or application details. Do not perform "
+                        "actions, emit commands, or claim that an action or web lookup ran.";
+                    const bool shouldSpeak = request.source == "stream" &&
+                        settings.presence.bSpeakStreamReplies;
+                    result = conversationRuntime.ReplyPublic(
+                        publicInput,
+                        channelHistory,
+                        publicInstruction,
+                        relationship,
+                        profile,
+                        llmAvailable,
+                        shouldSpeak,
+                        operationToken);
+                    auto& publicHistory = publicConversationContexts[contextKey];
+                    publicHistory.push_back({"user", publicInput});
+                    if (result.succeeded && !result.text.empty())
+                    {
+                        publicHistory.push_back({"assistant", result.text});
+                    }
+                    const std::size_t maximumMessages = static_cast<std::size_t>(
+                        std::max(0, settings.presence.publicContextTurns) * 2);
+                    while (publicHistory.size() > maximumMessages)
+                    {
+                        publicHistory.pop_front();
+                    }
                     const AffectSnapshot affect = affectController.ObserveTurn(
                         request.text, result.text, result.succeeded);
                     PublishAffect(affect);
-                    // Against this author, not the local user. Two people who happen to
-                    // share a first name are not one relationship.
-                    const std::string speaker = identity::AdapterEntityId(
-                        request.source, request.author);
-                    relationships.SetDisplayName(speaker, request.author);
                     RecordRelationshipEvidence(
                         speaker, request.text, result.text, result.succeeded);
                     busy.store(false);
@@ -1378,6 +1437,7 @@ void ReviaSession::StopExternalAdapterLoop()
     }
     std::lock_guard lock(externalAdapterMutex);
     externalAdapterQueue.clear();
+    publicConversationContexts.clear();
 }
 
 void ReviaSession::QueueExternalAdapterEvent(const presence::ExternalAdapterEvent& event)
@@ -2225,6 +2285,13 @@ void ReviaSession::StartCuriosityLoop()
                 event.turnId = opening.speechPending ? opening.utteranceId : 0;
                 eventBus.Publish(std::move(event));
             }
+
+            // A self-directed run that produced a cited finding is her own experience
+            // of the subject, not a model's claim about her taste, so it is allowed to
+            // move an opinion. A failed run moves nothing in either direction.
+            RecordPreferenceEvidence(identity::ReadCuriosityPreferenceEvidence({
+                decision.topic,
+                opening.succeeded && !researchSources.empty()}));
 
             std::string journalError;
             if (!curiosityJournal.Append({
@@ -3356,6 +3423,10 @@ SessionResult ReviaSession::RunTurnLocked(const std::string& acceptedInput)
 {
     SessionResult result;
     busy.store(true);
+    {
+        std::lock_guard speakerLock(speakerMutex);
+        currentSpeakerId = identity::LocalUserEntityId();
+    }
     const std::stop_token stopToken = BeginOperation();
     const auto finish = [&](SessionResult finished)
     {
@@ -4631,6 +4702,16 @@ void ReviaSession::RecordRelationshipEvidence(
     observation.wasSocialAndPositive = signals.expressedAppreciation;
     observation.actedIndependently = succeeded && !signals.repeatedCorrection;
     RecordDevelopmentEvidence(observation);
+
+    // And what it says about the work itself. Read from the same observed signals for
+    // the same reason: what moves a relationship, a personality, and an opinion must not
+    // be able to disagree about what happened in the exchange they all watched.
+    identity::WorkOutcome work;
+    work.workKind = identity::ReadWorkKind(userInput);
+    work.succeeded = succeeded;
+    work.wasCorrected = signals.repeatedCorrection;
+    work.expressedAppreciation = signals.expressedAppreciation;
+    RecordPreferenceEvidence(identity::ReadWorkPreferenceEvidence(work));
     {
         std::lock_guard speakerLock(speakerMutex);
         currentSpeakerId = speakerId;
@@ -4903,6 +4984,24 @@ emotion::MoodState ReviaSession::CurrentMood() const
     return emotionRuntime.Mood();
 }
 
+void ReviaSession::ApplyProfilePersonality()
+{
+    std::vector<std::string> unknown;
+    relationships.SetDevelopmentBaseline(
+        identity::BaselineFromProfile(profile.personalityBaseline, &unknown));
+    for (const std::string& name : unknown)
+    {
+        appLogger.Warning("Profile '" + profile.id + "' sets an unknown personality "
+            "trait '" + name + "'. It was ignored.");
+    }
+    relationships.SeedPreferences(profile.preferences);
+}
+
+std::vector<identity::Preference> ReviaSession::CurrentPreferences() const
+{
+    return relationships.Preferences();
+}
+
 identity::DevelopmentState ReviaSession::CurrentDevelopment() const
 {
     return relationships.Development();
@@ -4911,6 +5010,54 @@ identity::DevelopmentState ReviaSession::CurrentDevelopment() const
 std::vector<identity::DevelopmentChange> ReviaSession::DevelopmentHistory() const
 {
     return relationships.DevelopmentHistory();
+}
+
+void ReviaSession::RecordPreferenceEvidence(
+    const std::vector<identity::PreferenceObservation>& observations)
+{
+    for (const identity::PreferenceObservation& observation : observations)
+    {
+        if (observation.subject.empty())
+        {
+            continue;
+        }
+        const std::string key =
+            identity::PreferenceSet::NormaliseSubject(observation.subject);
+        identity::Preference before;
+        for (const identity::Preference& held : relationships.Preferences())
+        {
+            if (held.subject == key)
+            {
+                before = held;
+                break;
+            }
+        }
+
+        const identity::Preference updated = relationships.ReinforcePreference(
+            observation.subject, observation.positive, observation.source);
+
+        // Published only when the opinion crossed into being one she would state.
+        // Every observation moves something by design, and announcing each nudge would
+        // report a personality change on almost every turn -- exactly the noise the
+        // bounded step exists to prevent.
+        if (updated.WorthStating() && !before.WorthStating())
+        {
+            const std::string summary =
+                std::string(updated.Direction() == identity::PreferenceDirection::Like
+                    ? "likes " : "dislikes ") + updated.subject +
+                " (" + observation.reason + ")";
+            appLogger.Log("Preference: she now " + summary);
+            PublishComponent("Preference", "Formed", "She now " + summary);
+        }
+        else if (updated.Direction() != before.Direction())
+        {
+            appLogger.Log(
+                "Preference: " + updated.subject + " moved toward " +
+                identity::ToString(updated.Direction()) + " (" + observation.reason +
+                "), held on " + std::to_string(updated.evidenceCount) +
+                " observation(s).");
+        }
+    }
 }
 
 void ReviaSession::RecordDevelopmentEvidence(const identity::TurnObservation& observation)
@@ -5097,6 +5244,7 @@ ProfileOperationResult ReviaSession::SaveProfile(const ProfileSummary& definitio
             const bool memoryChanged = reloaded.bMemoryEnabled != profile.bMemoryEnabled;
             profile = reloaded;
             router.ApplyProfile(profile);
+            ApplyProfilePersonality();
             message += " This is the running profile, so the change applies to the next reply.";
             if (memoryChanged)
             {
@@ -5128,6 +5276,7 @@ ProfileOperationResult ReviaSession::ActivateProfile(const std::string& profileI
         profile = loaded;
         settings.activeProfile = profileId;
         router.ApplyProfile(profile);
+        ApplyProfilePersonality();
     }
     speechService.SetActiveProfile(profileId);
 

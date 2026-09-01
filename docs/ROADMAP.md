@@ -32,7 +32,7 @@ The north star is **one Revia**: fast when a task is easy, thoughtful when it is
 | One-command clean setup | 🧪 | `setup.bat` implements profile selection, pinned manifests, install/build/test/health orchestration, and reuse; a genuinely fresh physical PC run remains unverified. |
 | Self-improvement | ✅ | Revia records repeated latency/failure evidence and creates reviewable proposals; it cannot apply code, model, setting, or permission changes by itself. |
 | Remote PCs and camera | ⬜ | Safety model is designed; runtime support is not built. |
-| Animated avatar | ⬜ | Intentionally deferred until the conversational system is stable. |
+| Animated avatar | 🟡 | Canonical character/palette and a bounded presence bridge exist; a real Live2D/VRM renderer and model are not selected or live-verified. |
 
 ## Immediate priority: make the current Revia feel fast and reliable
 
@@ -225,9 +225,9 @@ Planned tiers are: show Revia remotely, converse remotely, view a remote screen,
 
 The planned camera path is on-demand: capture one frame when asked, analyze it locally, and delete it. Continuous camera watching is not part of the current plan.
 
-## Deliberately deferred: avatar embodiment
+## Active foundation: avatar embodiment
 
-Live2D, VRM, 3D rendering, locomotion, physics, IK, shaders, and desktop walking are not part of the current intelligence phase. A renderer can be added later as an isolated presentation consumer of the existing Presence state. It must not own models, memory, permissions, or actions.
+The character design, palette, expression map, bounded Presence stream, and public conversation boundary are established. A real Live2D/VRM model, renderer adapter, OBS routing, and platform connectors still require explicit provider selection, credentials, assets, and live verification. Rendering remains an isolated presentation consumer and must not own models, memory, permissions, or actions. Locomotion, physics, IK, shaders, and desktop walking remain later presentation work.
 
 ## Verification gates
 
@@ -277,7 +277,7 @@ The next code milestone should be small enough to verify end to end:
 - Do not fill VRAM to 100% or assume more GPUs are automatically faster.
 - Do not hard-code the development machine into the product.
 - Do not grant a model permission to widen its own authority.
-- Do not start avatar work before the conversational brain is stable.
+- Keep avatar work behind the replaceable Presence boundary; rendering never owns Revia's mind or authority.
 
 Internally Revia may eventually have Reflex, Fast, Main, Expert, memory, speech, vision, curiosity, research, self-assessment, and multiple resource workers. Externally there should still be only **one Revia**.
 

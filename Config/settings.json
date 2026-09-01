@@ -10,7 +10,7 @@
     "modelPath": "Models/Qwen3.5-4B-Q4_K_M.gguf",
     "autoTune": true,
     "autoFitTargetMiB": 2048,
-    "contextSize": 4096,
+    "contextSize": 8192,
     "parallelRequests": 1,
     "startupTimeoutSeconds": 120,
     "shutdownServerOnExit": true,
@@ -30,7 +30,7 @@
       "modelName": "Qwen3.5-0.8B-Q4_K_M.gguf",
       "modelPath": "Models/Qwen3.5-0.8B-Q4_K_M.gguf",
       "visionEnabled": false,
-      "contextSize": 4096,
+      "contextSize": 8192,
       "maxTokens": 256,
       "temperature": 0.78,
       "startupTimeoutSeconds": 90,
@@ -134,6 +134,12 @@
     "adapterPollMs": 150,
     "maxAdapterEventsPerMinute": 30,
     "maxAdapterTextCharacters": 4000,
+    "maxAvatarEventBytes": 4194304,
+    "rememberedAdapterIds": 2048,
+    "publicContextTurns": 6,
+    "streamReplyCooldownSeconds": 4,
+    "requireAddressedStreamMessages": true,
+    "speakStreamReplies": false,
     "allowedAdapters": [
       "discord",
       "stream",
@@ -175,7 +181,9 @@
     "maxSessions": 200,
     "maxTurnsPerSession": 500,
     "maxTurnCharacters": 8000,
-    "restoreTurns": 6
+    "restoreTurns": 6,
+    "selfInquiryEnabled": true,
+    "selfInquiryCooldownTurns": 3
   },
   "responseFilter": {
     "aiReviewEnabled": false,

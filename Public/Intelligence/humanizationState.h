@@ -30,15 +30,23 @@ struct HumanizationState
     }
 };
 
-// Holds one social state for all model tiers. Models receive a compact description of
-// this state; they never own separate moods or relationships.
+// Holds one social state for all model tiers, and renders none of it.
+//
+// This deliberately has no prompt output. It used to write a numeric row of curiosity,
+// confidence, playfulness, talkativeness, social energy, familiarity, and irritation
+// straight into the system prompt, alongside the state packet's prose description of the
+// same traits from DevelopmentState, RelationshipState, and the emotion vector. Two
+// descriptions of one personality, moving independently, one of them telemetry.
+//
+// What survives here is the part nothing else owns: the short-horizon social reading the
+// affect classifier needs, and the unresolved thought an outcome leaves behind. Both
+// reach the model through ReviaStatePacket like everything else.
 class HumanizationController
 {
 public:
     void ObserveInput(const std::string& input, const runtime::AffectSnapshot& affect);
     void ObserveOutcome(bool succeeded, const runtime::AffectSnapshot& affect);
     [[nodiscard]] HumanizationState Current() const;
-    [[nodiscard]] std::string BuildPromptBlock() const;
 
 private:
     mutable std::mutex mutex;

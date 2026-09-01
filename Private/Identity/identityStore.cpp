@@ -197,6 +197,27 @@ bool IdentityStore::Load(IdentitySnapshot& outSnapshot, std::string& outError) c
         }
     }
 
+    // Absent in schema 1. A file without them is a personality that has not formed any
+    // opinions yet, which is a valid state rather than an error.
+    if (document.contains("preferences") && document["preferences"].is_array())
+    {
+        for (const json& entry : document["preferences"])
+        {
+            if (!entry.is_object()) continue;
+            Preference preference;
+            preference.subject =
+                PreferenceSet::NormaliseSubject(entry.value("subject", std::string{}));
+            if (preference.subject.empty()) continue;
+            preference.strength = ReadFloat(entry, "strength", 0.0F);
+            preference.confidence = ReadFloat(entry, "confidence", 0.0F);
+            preference.evidenceCount = entry.value("evidenceCount", std::size_t{0});
+            preference.lastReinforced = entry.value("lastReinforced", std::string{});
+            preference.source =
+                PreferenceSourceFromString(entry.value("source", std::string{}));
+            outSnapshot.preferences.push_back(std::move(preference));
+        }
+    }
+
     if (document.contains("developmentHistory") && document["developmentHistory"].is_array())
     {
         for (const json& entry : document["developmentHistory"])
@@ -224,6 +245,20 @@ bool IdentityStore::Save(const IdentitySnapshot& snapshot, std::string& outError
     document["schemaVersion"] = IdentitySchemaVersion;
     document["development"]["base"] = WriteTraits(snapshot.development.base);
     document["development"]["delta"] = WriteTraits(snapshot.development.delta);
+
+    json preferences = json::array();
+    for (const Preference& preference : snapshot.preferences)
+    {
+        json entry;
+        entry["subject"] = preference.subject;
+        entry["strength"] = preference.strength;
+        entry["confidence"] = preference.confidence;
+        entry["evidenceCount"] = preference.evidenceCount;
+        entry["lastReinforced"] = preference.lastReinforced;
+        entry["source"] = ToString(preference.source);
+        preferences.push_back(std::move(entry));
+    }
+    document["preferences"] = std::move(preferences);
 
     json mood;
     mood["valence"] = snapshot.mood.valence;

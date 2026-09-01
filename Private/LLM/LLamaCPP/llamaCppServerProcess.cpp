@@ -361,7 +361,8 @@ bool llamaCppServerProcess::StartInternal(
 
     // Context is an explicit budget, not a prize to maximize. The resource plan still
     // decides fitting and placement, while each role keeps the bounded context selected
-    // for it (ordinary conversation defaults to 4096 tokens).
+    // for it (conversation defaults to 8192 tokens so the shared identity packet and a
+    // useful answer allowance coexist without truncating either one).
     const int contextSize = settings.contextSize;
     const int parallelRequests = settings.parallelRequests;
     std::wstring commandLine = QuoteWindowsArgument(executableWide) +

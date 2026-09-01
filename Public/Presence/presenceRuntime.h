@@ -13,17 +13,22 @@
 #include <stop_token>
 #include <string>
 #include <thread>
+#include <unordered_set>
 
 namespace revia::presence
 {
 
 struct ExternalAdapterEvent
 {
+    int version = 1;
     std::string id;
     std::string source;
     std::string channel;
+    std::string authorId;
     std::string author;
+    std::string role = "viewer";
     std::string text;
+    bool addressedToRevia = false;
 };
 
 struct PresenceNotice
@@ -85,6 +90,12 @@ private:
         ExternalAdapterEvent& outEvent,
         std::string& outError) const;
     bool RateLimitAllows(std::chrono::steady_clock::time_point now);
+    bool RememberAdapterEvent(const ExternalAdapterEvent& event);
+    bool StreamPolicyAllows(
+        const ExternalAdapterEvent& event,
+        std::chrono::steady_clock::time_point now,
+        std::string& outReason);
+    void RotateAvatarEventsIfNeeded(const std::filesystem::path& path, int maximumBytes);
     void UpdatePhase(std::string phase, std::string attention = {});
     void WriteAvatarState(bool appendEvent);
     void Notify(PresenceNotice notice) const;
@@ -95,7 +106,10 @@ private:
     AdapterHandler adapterHandler;
     PresenceSnapshot snapshot;
     std::chrono::steady_clock::time_point lastConversationActivity{};
+    std::chrono::steady_clock::time_point lastStreamReply{};
     std::deque<std::chrono::steady_clock::time_point> adapterAdmissions;
+    std::deque<std::string> recentAdapterIdOrder;
+    std::unordered_set<std::string> recentAdapterIds;
     std::filesystem::path inboxRoot;
     std::filesystem::path outboxRoot;
     std::filesystem::path stateFile;

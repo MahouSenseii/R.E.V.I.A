@@ -2,6 +2,7 @@
 
 #include "Emotion/moodState.h"
 #include "Identity/developmentState.h"
+#include "Identity/preferenceState.h"
 #include "Identity/relationshipState.h"
 
 #include <filesystem>
@@ -27,9 +28,13 @@ struct IdentitySnapshot
     emotion::MoodState mood;
     std::map<std::string, RelationshipState> relationships;
     std::vector<DevelopmentChange> developmentHistory;
+    std::vector<Preference> preferences;
 };
 
-inline constexpr int IdentitySchemaVersion = 1;
+// 2 added preferences. Bumped rather than added silently: an older build refuses a file
+// from a newer schema instead of loading it and dropping the keys it does not know, and
+// dropping them would delete opinions on the next save.
+inline constexpr int IdentitySchemaVersion = 2;
 
 // Loads and saves identity as one versioned JSON document.
 //

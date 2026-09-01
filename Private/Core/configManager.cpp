@@ -543,6 +543,12 @@ bool configManager::LoadSettings(appSettings& outSettings) const
             if (presenceData.contains("externalAdaptersEnabled"))
                 outSettings.presence.bExternalAdaptersEnabled =
                     presenceData["externalAdaptersEnabled"].get<bool>();
+            if (presenceData.contains("requireAddressedStreamMessages"))
+                outSettings.presence.bRequireAddressedStreamMessages =
+                    presenceData["requireAddressedStreamMessages"].get<bool>();
+            if (presenceData.contains("speakStreamReplies"))
+                outSettings.presence.bSpeakStreamReplies =
+                    presenceData["speakStreamReplies"].get<bool>();
             text("statePath", outSettings.presence.statePath);
             text("eventPath", outSettings.presence.eventPath);
             text("inboxPath", outSettings.presence.inboxPath);
@@ -552,6 +558,11 @@ bool configManager::LoadSettings(appSettings& outSettings) const
                 outSettings.presence.maxAdapterEventsPerMinute);
             number("maxAdapterTextCharacters",
                 outSettings.presence.maxAdapterTextCharacters);
+            number("maxAvatarEventBytes", outSettings.presence.maxAvatarEventBytes);
+            number("rememberedAdapterIds", outSettings.presence.rememberedAdapterIds);
+            number("publicContextTurns", outSettings.presence.publicContextTurns);
+            number("streamReplyCooldownSeconds",
+                outSettings.presence.streamReplyCooldownSeconds);
             if (presenceData.contains("allowedAdapters") &&
                 presenceData["allowedAdapters"].is_array())
             {
@@ -958,6 +969,16 @@ bool configManager::LoadSettings(appSettings& outSettings) const
                 outSettings.conversation.restoreTurns =
                     conversationData["restoreTurns"].get<int>();
             }
+            if (conversationData.contains("selfInquiryEnabled"))
+            {
+                outSettings.conversation.bSelfInquiryEnabled =
+                    conversationData["selfInquiryEnabled"].get<bool>();
+            }
+            if (conversationData.contains("selfInquiryCooldownTurns"))
+            {
+                outSettings.conversation.selfInquiryCooldownTurns =
+                    conversationData["selfInquiryCooldownTurns"].get<int>();
+            }
         }
         if (data.contains("responseFilter"))
         {
@@ -1152,6 +1173,14 @@ bool configManager::LoadSettings(appSettings& outSettings) const
         outSettings.presence.maxAdapterEventsPerMinute > 600 ||
         outSettings.presence.maxAdapterTextCharacters < 64 ||
         outSettings.presence.maxAdapterTextCharacters > 20000 ||
+        outSettings.presence.maxAvatarEventBytes < 65536 ||
+        outSettings.presence.maxAvatarEventBytes > 1073741824 ||
+        outSettings.presence.rememberedAdapterIds < 16 ||
+        outSettings.presence.rememberedAdapterIds > 100000 ||
+        outSettings.presence.publicContextTurns < 0 ||
+        outSettings.presence.publicContextTurns > 40 ||
+        outSettings.presence.streamReplyCooldownSeconds < 0 ||
+        outSettings.presence.streamReplyCooldownSeconds > 3600 ||
         outSettings.presence.allowedAdapters.empty() ||
         outSettings.resources.reserveLogicalCores < 0 ||
         outSettings.resources.reserveLogicalCores > 64 ||
@@ -1173,6 +1202,8 @@ bool configManager::LoadSettings(appSettings& outSettings) const
         outSettings.conversation.maxTurnCharacters > 1000000 ||
         outSettings.conversation.restoreTurns < 0 ||
         outSettings.conversation.restoreTurns > 40 ||
+        outSettings.conversation.selfInquiryCooldownTurns < 0 ||
+        outSettings.conversation.selfInquiryCooldownTurns > 200 ||
         outSettings.responseFilter.aiMaxReviewTokens < 64 ||
         outSettings.responseFilter.aiMaxReviewTokens > 512 ||
         outSettings.responseFilter.maxReplyCharacters < 256 ||
@@ -1343,6 +1374,42 @@ bool configManager::LoadProfile(const std::string& profileId, aiProfile& outProf
         {
             outProfile.maxTokens = data["maxTokens"].get<int>();
             outProfile.bHasMaxTokensOverride = true;
+        }
+
+        // Optional declared opinions. Order is preserved but not meaningful; a subject
+        // that repeats is applied twice and the second seed is refused as already held.
+        if (data.contains("preferences") && data["preferences"].is_array())
+        {
+            for (const auto& entry : data["preferences"])
+            {
+                if (!entry.is_object() || !entry.contains("subject") ||
+                    !entry["subject"].is_string())
+                {
+                    continue;
+                }
+                float strength = 0.0F;
+                if (entry.contains("strength") && entry["strength"].is_number())
+                {
+                    strength = entry["strength"].get<float>();
+                }
+                outProfile.preferences.emplace_back(
+                    entry["subject"].get<std::string>(), strength);
+            }
+        }
+
+        // Optional starting personality. Only numbers are carried through; which names
+        // are real traits, and what happens to one that is not, belongs to Identity.
+        if (data.contains("personalityBaseline") &&
+            data["personalityBaseline"].is_object())
+        {
+            for (const auto& entry : data["personalityBaseline"].items())
+            {
+                if (entry.value().is_number())
+                {
+                    outProfile.personalityBaseline[entry.key()] =
+                        entry.value().get<float>();
+                }
+            }
         }
     }
     catch (const std::exception&)

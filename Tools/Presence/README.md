@@ -16,6 +16,15 @@ owns them. Revia sees only the bounded text event.
     -Author MahouSensei -Text "Hi Revia, are you there?"
 ```
 
+Stream simulation includes the stable platform ID and address decision a real connector
+must derive from its SDK event:
+
+```powershell
+.\Tools\Presence\SendPresenceEvent.ps1 -Source stream -Channel live `
+    -AuthorId viewer-42 -Author Viewer -AddressedToRevia `
+    -Text "Revia, what do you think?"
+```
+
 Enable `Local Discord, stream, and game adapters` in the Presence tab first, then watch
 the reply:
 
@@ -31,7 +40,10 @@ the reply:
   "id": "platform-message-id",
   "source": "discord",
   "channel": "general",
+  "author_id": "stable-platform-user-id",
   "author": "display name",
+  "role": "viewer",
+  "addressed_to_revia": true,
   "text": "message text"
 }
 ```
@@ -39,6 +51,18 @@ the reply:
 `source` must be one of the configured `presence.allowedAdapters`. Text beginning with
 `/` is rejected, and the session routes accepted events directly to conversation rather
 than its command, goal, drawing, or application-action paths.
+
+Stream events require `author_id`; display names are not identities. Viewer messages must
+set `addressed_to_revia` unless that requirement is disabled. `broadcaster` and `moderator`
+roles may pass the address and viewer cooldown gates, but they gain no action authority.
+Duplicate source/id pairs, unsupported versions, control data, and repeated-character spam
+are ignored or rejected before generation.
+
+Public adapter turns have channel-scoped in-memory history. They do not receive the local
+user's dialogue, compressed history, durable memories, desktop/camera context, or automatic
+internet lookup. Stream speech is separately disabled by default with
+`presence.speakStreamReplies`; enabling it routes selected replies through the existing
+speech owner and does not grant the connector control over audio devices or OBS.
 
 ## Output contract
 
@@ -48,6 +72,7 @@ than its command, goal, drawing, or application-action paths.
   "id": "platform-message-id",
   "source": "discord",
   "channel": "general",
+  "author_id": "stable-platform-user-id",
   "succeeded": true,
   "text": "Revia's reply",
   "reason": "",

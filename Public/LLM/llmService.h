@@ -28,7 +28,7 @@ public:
         const std::vector<conversationMessage>& context,
         std::stop_token stopToken = {},
         DeltaHandler onDelta = {},
-        bool forceDeepReasoning = false) const;
+        bool deepReasoning = false) const;
     responseOutput GenerateActionProposal(const std::string& userRequest) const;
     responseOutput ReviewConversationReply(
         const std::string& userInput,
@@ -38,6 +38,9 @@ public:
         std::stop_token stopToken = {}) const;
     responseOutput GenerateCuriosityPlan(
         const std::string& boundedContextPrompt,
+        std::stop_token stopToken = {}) const;
+    responseOutput Deliberate(
+        const std::string& boundedInquiryPrompt,
         std::stop_token stopToken = {}) const;
     responseOutput GenerateGoalPlan(const std::string& userRequest) const;
     responseOutput GenerateDiagram(const std::string& userRequest) const;
