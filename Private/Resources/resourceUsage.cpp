@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cstdio>
 #include <deque>
+#include <string_view>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -45,23 +46,51 @@ std::string WideToUtf8(const wchar_t* value)
     WideCharToMultiByte(CP_UTF8, 0, value, -1, result.data(), length, nullptr, nullptr);
     return result;
 }
+#endif
 
-// "luid_0x00000000_0x0000b8b4_phys_0" -> "luid_0x00000000_0x0000b8b4". The physical
-// engine suffix splits one adapter across several instances; memory is reported per
-// adapter, so the suffix is noise here.
-std::string AdapterKeyFromInstance(const std::string& instance)
+} // namespace
+
+// "luid_0x00000000_0x0000b8b4_phys_0" and
+// "pid_9612_luid_0x00000000_0x0000b8b4_phys_0_eng_3_engtype_3d" both reduce to
+// ("luid_0x00000000_0x0000b8b4"), the second also yielding "3d".
+//
+// The leading process id and the trailing physical-adapter and engine segments all split
+// one card across many instances. Every one of them has to be dropped, or a single GPU
+// arrives as several devices and each gets a fraction of its own reading.
+GpuCounterInstance ParseGpuCounterInstance(const std::string& instanceName)
 {
-    std::string lowered = instance;
+    std::string lowered = instanceName;
     std::transform(lowered.begin(), lowered.end(), lowered.begin(),
         [](const unsigned char character)
         {
             return static_cast<char>(std::tolower(character));
         });
-    const std::size_t physical = lowered.find("_phys");
-    return physical == std::string::npos ? lowered : lowered.substr(0, physical);
+
+    const std::size_t luid = lowered.find("luid_");
+    if (luid == std::string::npos)
+    {
+        return {};
+    }
+
+    GpuCounterInstance parsed;
+    parsed.adapterKey = lowered.substr(luid);
+    for (const char* suffix : {"_phys", "_eng"})
+    {
+        const std::size_t found = parsed.adapterKey.find(suffix);
+        if (found != std::string::npos)
+        {
+            parsed.adapterKey = parsed.adapterKey.substr(0, found);
+        }
+    }
+
+    static constexpr std::string_view EngineTypeMarker = "_engtype_";
+    const std::size_t engineType = lowered.find(EngineTypeMarker);
+    if (engineType != std::string::npos)
+    {
+        parsed.engineType = lowered.substr(engineType + EngineTypeMarker.size());
+    }
+    return parsed;
 }
-#endif
-} // namespace
 
 unsigned int LogicalProcessorCount()
 {
@@ -179,7 +208,7 @@ std::vector<ProcessUsage> SampleOwnedProcesses()
     return owned;
 }
 
-GpuMemorySampler::GpuMemorySampler()
+GpuAdapterSampler::GpuAdapterSampler()
 {
 #ifdef _WIN32
     PDH_HQUERY openedQuery = nullptr;
@@ -187,7 +216,7 @@ GpuMemorySampler::GpuMemorySampler()
     {
         return;
     }
-    PDH_HCOUNTER openedCounter = nullptr;
+    PDH_HCOUNTER openedMemory = nullptr;
     // The English counter name is used deliberately: the localized path differs per
     // Windows display language, and a monitor that works only on English installs is a
     // portability bug waiting to be reported as a missing feature.
@@ -195,20 +224,33 @@ GpuMemorySampler::GpuMemorySampler()
             openedQuery,
             L"\\GPU Adapter Memory(*)\\Dedicated Usage",
             0,
-            &openedCounter) != ERROR_SUCCESS)
+            &openedMemory) != ERROR_SUCCESS)
     {
         PdhCloseQuery(openedQuery);
         return;
+    }
+    // Optional. A machine that cannot report engine utilisation still reports memory,
+    // and failing the whole sampler over the second counter would trade a working
+    // reading for a missing one.
+    PDH_HCOUNTER openedUtilization = nullptr;
+    if (PdhAddEnglishCounterW(
+            openedQuery,
+            L"\\GPU Engine(*)\\Utilization Percentage",
+            0,
+            &openedUtilization) != ERROR_SUCCESS)
+    {
+        openedUtilization = nullptr;
     }
     // Some counter types format only after a prior collection, so one is taken here and
     // its result discarded rather than making the first sample report nothing.
     PdhCollectQueryData(openedQuery);
     query = openedQuery;
-    counter = openedCounter;
+    memoryCounter = openedMemory;
+    utilizationCounter = openedUtilization;
 #endif
 }
 
-GpuMemorySampler::~GpuMemorySampler()
+GpuAdapterSampler::~GpuAdapterSampler()
 {
 #ifdef _WIN32
     if (query != nullptr)
@@ -217,17 +259,23 @@ GpuMemorySampler::~GpuMemorySampler()
     }
 #endif
     query = nullptr;
-    counter = nullptr;
+    memoryCounter = nullptr;
+    utilizationCounter = nullptr;
 }
 
-bool GpuMemorySampler::IsAvailable() const
+bool GpuAdapterSampler::IsAvailable() const
 {
-    return query != nullptr && counter != nullptr;
+    return query != nullptr && memoryCounter != nullptr;
 }
 
-std::vector<GpuMemoryReading> GpuMemorySampler::Sample()
+bool GpuAdapterSampler::IsUtilizationAvailable() const
 {
-    std::vector<GpuMemoryReading> readings;
+    return query != nullptr && utilizationCounter != nullptr;
+}
+
+std::vector<GpuAdapterReading> GpuAdapterSampler::Sample()
+{
+    std::vector<GpuAdapterReading> readings;
 #ifdef _WIN32
     if (!IsAvailable())
     {
@@ -238,61 +286,126 @@ std::vector<GpuMemoryReading> GpuMemorySampler::Sample()
         return readings;
     }
 
-    DWORD bufferSize = 0;
-    DWORD itemCount = 0;
-    PDH_STATUS status = PdhGetFormattedCounterArrayW(
-        static_cast<PDH_HCOUNTER>(counter),
-        PDH_FMT_LARGE,
-        &bufferSize,
-        &itemCount,
-        nullptr);
-    if (status != static_cast<PDH_STATUS>(PDH_MORE_DATA) || bufferSize == 0)
+    // Formats one multi-instance counter and hands each usable item to the caller. The
+    // two-call buffer dance and the per-item status filter are identical for both
+    // counters; only the union member read from the value differs.
+    const auto forEachItem = [](
+        void* counterHandle,
+        const DWORD format,
+        const auto& visit)
     {
-        return readings;
-    }
-
-    std::vector<unsigned char> buffer(bufferSize);
-    auto* items = reinterpret_cast<PDH_FMT_COUNTERVALUE_ITEM_W*>(buffer.data());
-    status = PdhGetFormattedCounterArrayW(
-        static_cast<PDH_HCOUNTER>(counter),
-        PDH_FMT_LARGE,
-        &bufferSize,
-        &itemCount,
-        items);
-    if (status != ERROR_SUCCESS)
-    {
-        return readings;
-    }
+        if (counterHandle == nullptr)
+        {
+            return;
+        }
+        DWORD bufferSize = 0;
+        DWORD itemCount = 0;
+        PDH_STATUS status = PdhGetFormattedCounterArrayW(
+            static_cast<PDH_HCOUNTER>(counterHandle),
+            format,
+            &bufferSize,
+            &itemCount,
+            nullptr);
+        if (status != static_cast<PDH_STATUS>(PDH_MORE_DATA) || bufferSize == 0)
+        {
+            return;
+        }
+        std::vector<unsigned char> buffer(bufferSize);
+        auto* items = reinterpret_cast<PDH_FMT_COUNTERVALUE_ITEM_W*>(buffer.data());
+        status = PdhGetFormattedCounterArrayW(
+            static_cast<PDH_HCOUNTER>(counterHandle),
+            format,
+            &bufferSize,
+            &itemCount,
+            items);
+        if (status != ERROR_SUCCESS)
+        {
+            return;
+        }
+        for (DWORD index = 0; index < itemCount; ++index)
+        {
+            if (items[index].FmtValue.CStatus != ERROR_SUCCESS &&
+                items[index].FmtValue.CStatus != PDH_CSTATUS_NEW_DATA &&
+                items[index].FmtValue.CStatus != PDH_CSTATUS_VALID_DATA)
+            {
+                continue;
+            }
+            visit(WideToUtf8(items[index].szName), items[index].FmtValue);
+        }
+    };
 
     // One adapter appears once per physical engine. Their memory figures are the same
     // adapter total repeated, so the largest is taken rather than the sum.
-    std::unordered_map<std::string, std::uint64_t> byAdapter;
-    for (DWORD index = 0; index < itemCount; ++index)
+    std::unordered_map<std::string, std::uint64_t> memoryByAdapter;
+    forEachItem(memoryCounter, PDH_FMT_LARGE,
+        [&memoryByAdapter](const std::string& instance, const PDH_FMT_COUNTERVALUE& value)
+        {
+            const std::string key = ParseGpuCounterInstance(instance).adapterKey;
+            if (key.empty())
+            {
+                return;
+            }
+            const auto bytes = static_cast<std::uint64_t>(
+                std::max<LONGLONG>(0, value.largeValue));
+            std::uint64_t& stored = memoryByAdapter[key];
+            stored = std::max(stored, bytes / MiB);
+        });
+
+    // Engine utilisation is reported once per process per engine. Work on one engine
+    // adds up across processes, but the engines run concurrently, so the adapter's
+    // figure is the busiest engine rather than the total -- which is the same rule Task
+    // Manager's GPU column uses, and the reason its number never exceeds 100%.
+    std::unordered_map<std::string, std::unordered_map<std::string, double>> engineLoad;
+    forEachItem(utilizationCounter, PDH_FMT_DOUBLE,
+        [&engineLoad](const std::string& instance, const PDH_FMT_COUNTERVALUE& value)
+        {
+            const GpuCounterInstance parsed = ParseGpuCounterInstance(instance);
+            if (parsed.adapterKey.empty())
+            {
+                return;
+            }
+            engineLoad[parsed.adapterKey][parsed.engineType] +=
+                std::max(0.0, value.doubleValue);
+        });
+
+    std::unordered_map<std::string, double> utilizationByAdapter;
+    for (const auto& adapter : engineLoad)
     {
-        if (items[index].FmtValue.CStatus != ERROR_SUCCESS &&
-            items[index].FmtValue.CStatus != PDH_CSTATUS_NEW_DATA &&
-            items[index].FmtValue.CStatus != PDH_CSTATUS_VALID_DATA)
+        double busiest = 0.0;
+        for (const auto& engine : adapter.second)
         {
-            continue;
+            busiest = std::max(busiest, engine.second);
         }
-        const std::string key = AdapterKeyFromInstance(WideToUtf8(items[index].szName));
-        if (key.empty())
-        {
-            continue;
-        }
-        const auto bytes = static_cast<std::uint64_t>(
-            std::max<LONGLONG>(0, items[index].FmtValue.largeValue));
-        std::uint64_t& stored = byAdapter[key];
-        stored = std::max(stored, bytes / MiB);
+        // Concurrent engines sampled independently can add to a shade over full. The
+        // counter cannot mean more than a saturated adapter, so it is reported as one.
+        utilizationByAdapter[adapter.first] = std::min(100.0, busiest);
     }
 
-    readings.reserve(byAdapter.size());
-    for (const auto& [adapter, used] : byAdapter)
+    std::unordered_set<std::string> adapters;
+    for (const auto& entry : memoryByAdapter) adapters.insert(entry.first);
+    for (const auto& entry : utilizationByAdapter) adapters.insert(entry.first);
+
+    readings.reserve(adapters.size());
+    for (const std::string& adapter : adapters)
     {
-        readings.push_back({adapter, used});
+        GpuAdapterReading reading;
+        reading.adapterLuid = adapter;
+        const auto memory = memoryByAdapter.find(adapter);
+        if (memory != memoryByAdapter.end())
+        {
+            reading.dedicatedUsedMiB = memory->second;
+            reading.memoryMeasured = true;
+        }
+        const auto utilization = utilizationByAdapter.find(adapter);
+        if (utilization != utilizationByAdapter.end())
+        {
+            reading.utilizationPercent = utilization->second;
+            reading.utilizationMeasured = true;
+        }
+        readings.push_back(std::move(reading));
     }
     std::sort(readings.begin(), readings.end(),
-        [](const GpuMemoryReading& left, const GpuMemoryReading& right)
+        [](const GpuAdapterReading& left, const GpuAdapterReading& right)
         {
             return left.adapterLuid < right.adapterLuid;
         });

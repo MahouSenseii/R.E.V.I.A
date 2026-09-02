@@ -13,6 +13,7 @@
 #include "Core/messageRouter.h"
 #include "Evaluation/conversationEvaluation.h"
 #include "Memory/conversationArchive.h"
+#include "Memory/conversationRecall.h"
 #include "Goals/goalRunner.h"
 #include "Goals/goalSandbox.h"
 #include "Goals/goalStore.h"
@@ -259,6 +260,18 @@ public:
     [[nodiscard]] std::string ConversationHistoryStatus() const;
     [[nodiscard]] std::vector<memory::ArchivedTurn> SearchConversations(
         const std::string& query, std::size_t maxTurns = 12) const;
+    // Everything said in a window of epoch seconds, oldest first. Backs /history with a
+    // date or a phrase like "yesterday" instead of words to match.
+    [[nodiscard]] std::vector<memory::ArchivedTurn> ConversationsInRange(
+        std::int64_t startEpoch,
+        std::int64_t endEpoch,
+        std::size_t maxTurns = 40) const;
+    // Answers one typed recall request from the conversational path and renders the
+    // bounded block that grounds the reply. Returns empty when archiving is off, when
+    // nothing matches, or when the only match was the question being asked.
+    [[nodiscard]] std::string RecallConversation(
+        const memory::RecallRequest& request,
+        const std::string& currentInput) const;
     [[nodiscard]] std::vector<memory::ArchivedSession> RecentConversations(
         std::size_t maxSessions = 20) const;
     std::size_t ForgetConversations();

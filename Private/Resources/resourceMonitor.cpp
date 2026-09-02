@@ -5,6 +5,7 @@
 #include <condition_variable>
 #include <iomanip>
 #include <sstream>
+#include <string_view>
 
 namespace revia::resources
 {
@@ -40,7 +41,70 @@ double LargestOf(const UsageMeter& meter)
     return std::max({meter.used, meter.budget, meter.capacity});
 }
 
+// Where a physical resource stops being comfortable.
+//
+// Judged against the hardware ceiling, never against a budget. Below Elevated the
+// machine has room; at High a load that arrives next may not fit; at Critical something
+// is about to be refused. The gap between High and Critical is narrow on purpose: on a
+// card holding resident model weights the last few percent disappear quickly, and a
+// warning that arrives only at the ceiling arrives too late to mean anything.
+constexpr double ElevatedAbove = 0.75;
+constexpr double HighAbove = 0.90;
+constexpr double CriticalAbove = 0.95;
+// A resource this far below its ceiling is not merely comfortable, it is unused, and
+// saying so is more useful than calling a card at 1% "normal".
+constexpr double IdleBelow = 0.05;
+
+std::string FormatPercent(const double fraction)
+{
+    std::ostringstream stream;
+    stream << std::fixed << std::setprecision(0) << (fraction * 100.0) << '%';
+    return stream.str();
+}
+
+// "NVIDIA GeForce RTX 5070 (CUDA0)". The vendor and product-line words are identical on
+// every row of a machine and push the part that identifies the card out of a narrow
+// column, so they are dropped; the backend id stays because two identical cards are
+// otherwise indistinguishable, and a meter whose label collides with another's is a row
+// that overwrites its neighbour.
+std::string DeviceIdentity(const GpuDevice& device)
+{
+    static constexpr const char* VendorPrefixes[] = {
+        "NVIDIA GeForce ", "NVIDIA ", "AMD Radeon ", "AMD ", "Intel(R) ", "Intel "
+    };
+    std::string name = device.name;
+    for (const char* prefix : VendorPrefixes)
+    {
+        const std::string_view candidate(prefix);
+        if (name.size() > candidate.size() &&
+            std::string_view(name).substr(0, candidate.size()) == candidate)
+        {
+            name = name.substr(candidate.size());
+            break;
+        }
+    }
+    if (name.empty())
+    {
+        return device.backendId.empty() ? std::string("GPU") : device.backendId;
+    }
+    return device.backendId.empty() ? name : name + " (" + device.backendId + ")";
+}
+
 } // namespace
+
+std::string ToString(const PressureLevel level)
+{
+    switch (level)
+    {
+        case PressureLevel::Unmeasured: return "not measured";
+        case PressureLevel::Idle: return "Idle";
+        case PressureLevel::Normal: return "Normal";
+        case PressureLevel::Elevated: return "Elevated";
+        case PressureLevel::High: return "High";
+        case PressureLevel::Critical: return "Critical";
+    }
+    return "not measured";
+}
 
 double UsageMeter::BudgetFraction() const
 {
@@ -51,9 +115,69 @@ double UsageMeter::BudgetFraction() const
     return used / budget;
 }
 
+double UsageMeter::CapacityFraction() const
+{
+    if (capacity <= 0.0)
+    {
+        return 0.0;
+    }
+    return used / capacity;
+}
+
+double UsageMeter::Fraction() const
+{
+    return basis == MeterBasis::Capacity ? CapacityFraction() : BudgetFraction();
+}
+
 bool UsageMeter::OverBudget() const
 {
     return measured && budget > 0.0 && used > budget;
+}
+
+PressureLevel UsageMeter::Pressure() const
+{
+    // A budget meter has no physical claim to make. Reporting one would be the exact
+    // confusion this type exists to prevent: a card at 88% is not critical because Revia
+    // planned to use less of it than she did.
+    if (!measured || basis != MeterBasis::Capacity || capacity <= 0.0)
+    {
+        return PressureLevel::Unmeasured;
+    }
+    const double fraction = CapacityFraction();
+    if (fraction > CriticalAbove) return PressureLevel::Critical;
+    if (fraction > HighAbove) return PressureLevel::High;
+    if (fraction > ElevatedAbove) return PressureLevel::Elevated;
+    if (fraction < IdleBelow) return PressureLevel::Idle;
+    return PressureLevel::Normal;
+}
+
+std::string UsageMeter::Status() const
+{
+    if (!measured)
+    {
+        return "not measured";
+    }
+    if (basis == MeterBasis::Capacity)
+    {
+        if (capacity <= 0.0)
+        {
+            return "no ceiling known";
+        }
+        // A reading that is already a percentage does not need its own percentage
+        // repeated back to it.
+        return unit == MeterUnit::Percent
+            ? ToString(Pressure())
+            : ToString(Pressure()) + " (" + FormatPercent(CapacityFraction()) + " used)";
+    }
+    if (budget <= 0.0)
+    {
+        return "no budget set";
+    }
+    if (OverBudget())
+    {
+        return "Budget exceeded by " + FormatPercent(BudgetFraction() - 1.0);
+    }
+    return "Within budget (" + FormatPercent(BudgetFraction()) + ")";
 }
 
 std::string UsageMeter::Format() const
@@ -63,6 +187,11 @@ std::string UsageMeter::Format() const
         return "not measured";
     }
     std::ostringstream stream;
+    if (unit == MeterUnit::Percent)
+    {
+        stream << std::fixed << std::setprecision(0) << used << '%';
+        return stream.str();
+    }
     if (unit == MeterUnit::Threads)
     {
         stream << FormatThreads(used, false);
@@ -96,6 +225,20 @@ std::string UsageMeter::Format() const
         return inner.str();
     };
     stream << scaled(used);
+    if (basis == MeterBasis::Capacity)
+    {
+        // A capacity meter compares with the hardware and stops there. Naming a budget
+        // it was never measured against is what made the physical card look overloaded.
+        if (capacity > 0.0)
+        {
+            stream << " / " << scaled(capacity) << unitLabel << " installed";
+        }
+        else
+        {
+            stream << unitLabel;
+        }
+        return stream.str();
+    }
     if (budget > 0.0)
     {
         stream << " / " << scaled(budget) << unitLabel << " budget";
@@ -127,9 +270,9 @@ std::string UsageSnapshot::Summary() const
         }
         first = false;
         stream << meter.label << ' ' << meter.Format();
-        if (meter.OverBudget())
+        if (meter.measured)
         {
-            stream << " (over budget)";
+            stream << " -- " << meter.Status();
         }
     }
     stream << '.';
@@ -182,7 +325,7 @@ UsageSnapshot ResourceMonitor::Compose(
     const ResourcePlan& plan,
     const SystemMemoryReading& memory,
     const std::vector<ProcessUsage>& processes,
-    const std::vector<GpuMemoryReading>& gpuReadings,
+    const std::vector<GpuAdapterReading>& gpuReadings,
     const bool gpuCountersAvailable,
     const std::uint64_t previousOwnedCpuMilliseconds,
     const double elapsedSeconds)
@@ -196,14 +339,14 @@ UsageSnapshot ResourceMonitor::Compose(
         });
 
     const auto readingFor = [&gpuReadings](const std::string& luid)
-        -> const GpuMemoryReading*
+        -> const GpuAdapterReading*
     {
         if (luid.empty())
         {
             return nullptr;
         }
         const auto found = std::find_if(gpuReadings.begin(), gpuReadings.end(),
-            [&luid](const GpuMemoryReading& reading)
+            [&luid](const GpuAdapterReading& reading)
             {
                 return reading.adapterLuid == luid;
             });
@@ -237,60 +380,109 @@ UsageSnapshot ResourceMonitor::Compose(
 
     for (const GpuDevice& device : plan.hardware.gpus)
     {
-        UsageMeter meter;
-        meter.id = "gpu:" + (device.backendId.empty() ? device.name : device.backendId);
-        meter.label = device.backendId.empty()
-            ? "VRAM " + device.name
-            : "VRAM " + device.backendId;
-        meter.unit = MeterUnit::Mebibytes;
-        meter.capacity = static_cast<double>(device.totalMemoryMiB);
+        const std::string base =
+            "gpu:" + (device.backendId.empty() ? device.name : device.backendId);
+        const std::string identity = DeviceIdentity(device);
+        const GpuAdapterReading* reading = readingFor(device.adapterLuid);
+        const std::vector<std::string> workloads = placedOn(device);
+
+        // Why the reading is missing, said once and reused: three meters that disagree
+        // about whether a card could be read would be three bugs waiting to happen.
+        const std::string unreadable = device.adapterLuid.empty()
+            ? "The backend device could not be matched to a display adapter."
+            : gpuCountersAvailable
+                ? "The platform reported no counter for this adapter."
+                : "The GPU performance counters are not available.";
+
+        std::ostringstream placement;
+        placement << (device.name.empty() ? std::string("This adapter") : device.name);
+        if (workloads.empty())
+        {
+            placement << " -- no Revia workload was placed here.";
+        }
+        else
+        {
+            placement << " -- running";
+            for (std::size_t index = 0; index < workloads.size(); ++index)
+            {
+                placement << (index == 0 ? " " : ", ") << workloads[index];
+            }
+            placement << '.';
+        }
+
+        // What the card itself is doing. This is the number that answers "is the GPU in
+        // trouble", and it is judged against the hardware, never against Revia's plan.
+        UsageMeter vram;
+        vram.id = base + ":vram";
+        vram.label = identity + " VRAM";
+        vram.unit = MeterUnit::Mebibytes;
+        vram.basis = MeterBasis::Capacity;
+        vram.capacity = static_cast<double>(device.totalMemoryMiB);
+        if (reading != nullptr && reading->memoryMeasured)
+        {
+            vram.used = static_cast<double>(reading->dedicatedUsedMiB);
+            vram.measured = true;
+        }
+        vram.detail = placement.str() + ' ' + (vram.measured
+            ? "System-wide dedicated usage for the whole card, so other applications are "
+              "included; this is the figure Task Manager shows."
+            : "Live video memory is unavailable. " + unreadable);
+        snapshot.meters.push_back(std::move(vram));
+
+        // What Revia planned for. Separate from the card's own reading because exceeding
+        // an allowance she set for herself is a planning result, not a hardware fault:
+        // the same occupancy can be a healthy card and an over-subscribed plan at once.
+        UsageMeter budget;
+        budget.id = base + ":budget";
+        budget.label = identity + " Revia budget";
+        budget.unit = MeterUnit::Mebibytes;
+        budget.basis = MeterBasis::Budget;
         // The plan's promise for a device is that this much stays free on it, so the
         // budget is a ceiling on total occupancy rather than on Revia's own share --
         // which is also the only thing the counters can report, since the weights live
         // in a child process.
-        meter.budget = std::max(0.0,
+        budget.budget = std::max(0.0,
             static_cast<double>(device.totalMemoryMiB) -
                 static_cast<double>(std::max(0, plan.gpuReserveMiB)));
-
-        const GpuMemoryReading* reading = readingFor(device.adapterLuid);
-        if (reading != nullptr)
+        if (reading != nullptr && reading->memoryMeasured)
         {
-            meter.used = static_cast<double>(reading->dedicatedUsedMiB);
-            meter.measured = true;
+            budget.used = static_cast<double>(reading->dedicatedUsedMiB);
+            budget.measured = true;
         }
-
-        std::ostringstream detail;
-        // The label already carries the name when the backend could not identify the
-        // device, and repeating it there would say the same thing twice.
-        detail << (device.backendId.empty() ? std::string("This adapter") : device.name);
-        const std::vector<std::string> workloads = placedOn(device);
-        if (workloads.empty())
         {
-            detail << " -- no Revia workload was placed here";
-        }
-        else
-        {
-            detail << " -- running";
-            for (std::size_t index = 0; index < workloads.size(); ++index)
+            std::ostringstream detail;
+            detail << "The plan promises to leave "
+                << FormatQuantity(static_cast<double>(std::max(0, plan.gpuReserveMiB)))
+                << " free on any device it uses. Total occupancy is measured against "
+                   "that, so memory another application took counts toward it.";
+            if (!budget.measured)
             {
-                detail << (index == 0 ? " " : ", ") << workloads[index];
+                detail << ' ' << unreadable;
             }
+            budget.detail = detail.str();
         }
-        if (!meter.measured)
+        snapshot.meters.push_back(std::move(budget));
+
+        UsageMeter compute;
+        compute.id = base + ":compute";
+        compute.label = identity + " compute";
+        compute.unit = MeterUnit::Percent;
+        compute.basis = MeterBasis::Capacity;
+        compute.capacity = 100.0;
+        if (reading != nullptr && reading->utilizationMeasured)
         {
-            detail << ". Live video memory is unavailable for this adapter"
-                << (device.adapterLuid.empty()
-                    ? "; the backend device could not be matched to a display adapter."
-                    : gpuCountersAvailable
-                        ? "; the platform reported no counter for it."
-                        : "; the GPU performance counters are not available.");
+            compute.used = reading->utilizationPercent;
+            compute.measured = true;
         }
-        else
-        {
-            detail << ". System-wide dedicated usage, so other applications are included.";
-        }
-        meter.detail = detail.str();
-        snapshot.meters.push_back(std::move(meter));
+        compute.detail = compute.measured
+            ? "Busiest engine on the adapter. Memory can be nearly full while compute is "
+              "idle: resident model weights occupy VRAM whether or not anything is "
+              "generating."
+            : (reading == nullptr
+                ? "Live engine utilisation is unavailable. " + unreadable
+                : std::string("The GPU engine utilisation counter is not available on "
+                    "this machine."));
+        snapshot.meters.push_back(std::move(compute));
     }
 
     UsageMeter ram;
@@ -403,7 +595,7 @@ void ResourceMonitor::Run(const std::stop_token stopToken)
 {
     // Created on the worker thread so an unavailable counter set costs the caller
     // nothing at startup and is retried on the next run rather than on every sample.
-    GpuMemorySampler gpuSampler;
+    GpuAdapterSampler gpuSampler;
 
     ResourcePlan localPlan;
     std::chrono::milliseconds interval{2000};

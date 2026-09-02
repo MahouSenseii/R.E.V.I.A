@@ -283,6 +283,10 @@ ReviaSession::ReviaSession()
                limits.cooldownTurns = static_cast<std::size_t>(
                    std::max(0, settings.conversation.selfInquiryCooldownTurns));
                return limits;
+           },
+           [this](const memory::RecallRequest& request, const std::string& currentInput)
+           {
+               return RecallConversation(request, currentInput);
            })
 {
     appLogger.SetSink([this](const std::string& line)
@@ -2449,6 +2453,64 @@ std::vector<memory::ArchivedTurn> ReviaSession::SearchConversations(
     const std::size_t maxTurns) const
 {
     return conversationArchive.Search(query, maxTurns);
+}
+
+std::vector<memory::ArchivedTurn> ReviaSession::ConversationsInRange(
+    const std::int64_t startEpoch,
+    const std::int64_t endEpoch,
+    const std::size_t maxTurns) const
+{
+    return conversationArchive.LoadRange(startEpoch, endEpoch, maxTurns);
+}
+
+std::string ReviaSession::RecallConversation(
+    const memory::RecallRequest& request,
+    const std::string& currentInput) const
+{
+    if (!request.Wanted() || !settings.conversation.bArchiveEnabled)
+    {
+        return {};
+    }
+
+    const std::int64_t now = memory::CurrentEpoch();
+    std::vector<memory::ArchivedTurn> turns;
+    switch (request.kind)
+    {
+        case memory::RecallKind::Window:
+            if (!request.terms.empty())
+            {
+                turns = conversationArchive.SearchRange(
+                    request.terms, request.window.startEpoch, request.window.endEpoch);
+            }
+            if (turns.empty())
+            {
+                // A named stretch with no usable subject, or a subject that matched
+                // nothing inside it. Either way the stretch itself is what was asked for.
+                turns = conversationArchive.LoadRange(
+                    request.window.startEpoch, request.window.endEpoch);
+            }
+            break;
+        case memory::RecallKind::Topic:
+            // No window: the whole archive up to now, which the created_at index still
+            // bounds because the range is closed at both ends.
+            turns = conversationArchive.SearchRange(request.terms, 0, now + 60);
+            break;
+        case memory::RecallKind::Earliest:
+            turns = conversationArchive.SearchEarliest(request.terms);
+            break;
+        case memory::RecallKind::None:
+            return {};
+    }
+
+    // The question being answered was archived moments ago, before generation started.
+    // Handing it back as evidence of what was said would be circular and would waste the
+    // block on a turn the model already has.
+    std::erase_if(turns, [&](const memory::ArchivedTurn& turn)
+    {
+        return turn.role == "user" && turn.content == currentInput;
+    });
+
+    return memory::RenderRecallBlock(request, turns, DisplayName(), now);
 }
 
 std::vector<memory::ArchivedSession> ReviaSession::RecentConversations(
@@ -6034,14 +6096,49 @@ bool ReviaSession::TryHandleActionInput(const std::string& input, SessionResult&
                             : session.opening);
                 }
             }
-            stream << "\n\n/history <words> searches them; /history forget clears them.";
+            stream << "\n\n/history <words> searches them, /history <when> reads a day or "
+                      "a stretch (\"yesterday\", \"last tuesday\", \"2026-08-25\"), and "
+                      "/history forget clears them.";
+            result.text = stream.str();
+            SetState(RuntimeState::Idle);
+            return true;
+        }
+
+        // A time phrase is tried first, because "yesterday" as a word search finds every
+        // turn that happened to say "yesterday" rather than the day it names.
+        const std::int64_t now = memory::CurrentEpoch();
+        const memory::TimeWindow window = memory::ParseTimeWindow(argument, now);
+        std::ostringstream stream;
+        if (window.IsValid())
+        {
+            const std::vector<memory::ArchivedTurn> during =
+                ConversationsInRange(window.startEpoch, window.endEpoch);
+            if (during.empty())
+            {
+                stream << "Nothing was archived " << window.phrase << ".";
+            }
+            else
+            {
+                stream << during.size()
+                    << (during.size() == 1 ? " archived turn from " : " archived turns from ")
+                    << window.phrase << ":";
+                for (const memory::ArchivedTurn& turn : during)
+                {
+                    stream << "\n\n  ["
+                        << memory::DescribeMoment(
+                            memory::ParseEpochSecondsText(turn.createdAt), now)
+                        << "] " << (turn.role == "user" ? "you" : DisplayName())
+                        << ": " << (turn.content.size() > 240
+                            ? turn.content.substr(0, 240) + "..."
+                            : turn.content);
+                }
+            }
             result.text = stream.str();
             SetState(RuntimeState::Idle);
             return true;
         }
 
         const std::vector<memory::ArchivedTurn> found = SearchConversations(argument);
-        std::ostringstream stream;
         if (found.empty())
         {
             stream << "Nothing archived matches \"" << argument << "\".";
@@ -6053,7 +6150,10 @@ bool ReviaSession::TryHandleActionInput(const std::string& input, SessionResult&
                 << argument << "\":";
             for (const memory::ArchivedTurn& turn : found)
             {
-                stream << "\n\n  " << (turn.role == "user" ? "you" : DisplayName())
+                stream << "\n\n  ["
+                    << memory::DescribeMoment(
+                        memory::ParseEpochSecondsText(turn.createdAt), now)
+                    << "] " << (turn.role == "user" ? "you" : DisplayName())
                     << ": " << (turn.content.size() > 240
                         ? turn.content.substr(0, 240) + "..."
                         : turn.content);
@@ -7007,7 +7107,15 @@ void ReviaSession::PublishResourceUsage(const resources::UsageSnapshot& snapshot
         event.usedAmount = meter.used;
         event.budgetAmount = meter.budget;
         event.capacityAmount = meter.capacity;
-        event.usageUnit = meter.unit == resources::MeterUnit::Threads ? "threads" : "MiB";
+        switch (meter.unit)
+        {
+            case resources::MeterUnit::Threads: event.usageUnit = "threads"; break;
+            case resources::MeterUnit::Percent: event.usageUnit = "percent"; break;
+            case resources::MeterUnit::Mebibytes: event.usageUnit = "MiB"; break;
+        }
+        event.usageBasis =
+            meter.basis == resources::MeterBasis::Capacity ? "capacity" : "budget";
+        event.usageStatus = meter.Status();
         event.usageMeasured = meter.measured;
         eventBus.Publish(std::move(event));
     }

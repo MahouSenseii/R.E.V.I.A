@@ -118,6 +118,12 @@ Database OpenDatabase(const std::string& archivePath)
         ");"
         "CREATE INDEX IF NOT EXISTS conversation_turns_session "
         "  ON conversation_turns(session_id, turn_index);"
+        // Reaching a moment directly. created_at was written from the first version and
+        // never queried, so every time-anchored question had to page whole sessions. The
+        // expression matches the range queries verbatim, which is what makes the index
+        // usable rather than merely present.
+        "CREATE INDEX IF NOT EXISTS conversation_turns_created "
+        "  ON conversation_turns(CAST(created_at AS INTEGER));"
         "CREATE VIRTUAL TABLE IF NOT EXISTS conversation_search USING fts5("
         "  content, content='conversation_turns', content_rowid='rowid',"
         "  tokenize='unicode61 remove_diacritics 2'"
@@ -170,6 +176,28 @@ ArchivedTurn ReadTurn(sqlite3_stmt* statement)
 
 constexpr const char* TurnColumns =
     "id, session_id, turn_index, role, content, created_at";
+
+// Terms matched individually and OR'd, each as a prefix, so "emotion system" finds a turn
+// that said either word. Distinct from QuoteForFts, which builds one exact phrase: a
+// caller that reduced a question to topic words has no phrase left to match on.
+std::string BuildTermMatch(const std::vector<std::string>& terms)
+{
+    std::string expression;
+    for (const std::string& term : terms)
+    {
+        if (term.size() < 2)
+        {
+            continue;
+        }
+        if (!expression.empty())
+        {
+            expression += " OR ";
+        }
+        expression += QuoteForFts(term);
+        expression += '*';
+    }
+    return expression;
+}
 
 } // namespace
 
@@ -548,6 +576,124 @@ std::vector<ArchivedTurn> ConversationArchive::Search(
     }
     statement.reset(raw);
     const std::string match = QuoteForFts(query);
+    sqlite3_bind_text(statement.get(), 1, match.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_int64(statement.get(), 2, static_cast<sqlite3_int64>(maxTurns));
+    while (sqlite3_step(statement.get()) == SQLITE_ROW)
+    {
+        turns.push_back(ReadTurn(statement.get()));
+    }
+    return turns;
+}
+
+std::vector<ArchivedTurn> ConversationArchive::LoadRange(
+    const std::int64_t startEpoch,
+    const std::int64_t endEpoch,
+    const std::size_t maxTurns) const
+{
+    std::vector<ArchivedTurn> turns;
+    if (endEpoch <= startEpoch || maxTurns == 0)
+    {
+        return turns;
+    }
+    sqlite3* const database = Acquire();
+    if (database == nullptr)
+    {
+        return turns;
+    }
+    Statement statement;
+    sqlite3_stmt* raw = nullptr;
+    // Newest first under the limit, then reversed, so a window holding more than the
+    // ceiling keeps the end of the stretch rather than an arbitrary beginning.
+    const std::string sql = std::string("SELECT ") + TurnColumns +
+        " FROM conversation_turns "
+        "WHERE CAST(created_at AS INTEGER) >= ? AND CAST(created_at AS INTEGER) < ? "
+        "ORDER BY CAST(created_at AS INTEGER) DESC, turn_index DESC LIMIT ?;";
+    if (sqlite3_prepare_v2(database, sql.c_str(), -1, &raw, nullptr) != SQLITE_OK)
+    {
+        return turns;
+    }
+    statement.reset(raw);
+    sqlite3_bind_int64(statement.get(), 1, startEpoch);
+    sqlite3_bind_int64(statement.get(), 2, endEpoch);
+    sqlite3_bind_int64(statement.get(), 3, static_cast<sqlite3_int64>(maxTurns));
+    while (sqlite3_step(statement.get()) == SQLITE_ROW)
+    {
+        turns.push_back(ReadTurn(statement.get()));
+    }
+    std::reverse(turns.begin(), turns.end());
+    return turns;
+}
+
+std::vector<ArchivedTurn> ConversationArchive::SearchRange(
+    const std::vector<std::string>& terms,
+    const std::int64_t startEpoch,
+    const std::int64_t endEpoch,
+    const std::size_t maxTurns) const
+{
+    std::vector<ArchivedTurn> turns;
+    const std::string match = BuildTermMatch(terms);
+    if (match.empty() || endEpoch <= startEpoch || maxTurns == 0)
+    {
+        return turns;
+    }
+    sqlite3* const database = Acquire();
+    if (database == nullptr)
+    {
+        return turns;
+    }
+    Statement statement;
+    sqlite3_stmt* raw = nullptr;
+    const std::string sql =
+        "SELECT t.id, t.session_id, t.turn_index, t.role, t.content, t.created_at "
+        "FROM conversation_search s "
+        "JOIN conversation_turns t ON t.rowid = s.rowid "
+        "WHERE conversation_search MATCH ? "
+        "  AND CAST(t.created_at AS INTEGER) >= ? AND CAST(t.created_at AS INTEGER) < ? "
+        "ORDER BY bm25(conversation_search) ASC LIMIT ?;";
+    if (sqlite3_prepare_v2(database, sql.c_str(), -1, &raw, nullptr) != SQLITE_OK)
+    {
+        return turns;
+    }
+    statement.reset(raw);
+    sqlite3_bind_text(statement.get(), 1, match.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_int64(statement.get(), 2, startEpoch);
+    sqlite3_bind_int64(statement.get(), 3, endEpoch);
+    sqlite3_bind_int64(statement.get(), 4, static_cast<sqlite3_int64>(maxTurns));
+    while (sqlite3_step(statement.get()) == SQLITE_ROW)
+    {
+        turns.push_back(ReadTurn(statement.get()));
+    }
+    return turns;
+}
+
+std::vector<ArchivedTurn> ConversationArchive::SearchEarliest(
+    const std::vector<std::string>& terms,
+    const std::size_t maxTurns) const
+{
+    std::vector<ArchivedTurn> turns;
+    const std::string match = BuildTermMatch(terms);
+    if (match.empty() || maxTurns == 0)
+    {
+        return turns;
+    }
+    sqlite3* const database = Acquire();
+    if (database == nullptr)
+    {
+        return turns;
+    }
+    Statement statement;
+    sqlite3_stmt* raw = nullptr;
+    const std::string sql =
+        "SELECT t.id, t.session_id, t.turn_index, t.role, t.content, t.created_at "
+        "FROM conversation_search s "
+        "JOIN conversation_turns t ON t.rowid = s.rowid "
+        "WHERE conversation_search MATCH ? "
+        "ORDER BY CAST(t.created_at AS INTEGER) ASC, t.turn_index ASC LIMIT ?;";
+    if (sqlite3_prepare_v2(database, sql.c_str(), -1, &raw, nullptr) != SQLITE_OK)
+    {
+        return turns;
+    }
+    statement.reset(raw);
     sqlite3_bind_text(statement.get(), 1, match.c_str(), -1, SQLITE_TRANSIENT);
     sqlite3_bind_int64(statement.get(), 2, static_cast<sqlite3_int64>(maxTurns));
     while (sqlite3_step(statement.get()) == SQLITE_ROW)

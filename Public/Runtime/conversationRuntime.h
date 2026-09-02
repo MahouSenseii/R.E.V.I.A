@@ -11,6 +11,7 @@
 #include "Intelligence/intelligenceRouter.h"
 #include "Intelligence/reflexRouter.h"
 #include "Evaluation/conversationEvaluation.h"
+#include "Memory/conversationRecall.h"
 #include "Emotion/emotionRuntime.h"
 #include "Identity/preferenceState.h"
 #include "Identity/relationshipState.h"
@@ -67,6 +68,17 @@ public:
     // from ScreenContextProvider, which only ever reads what ambient observation already
     // cached and returns nothing when that is off.
     using ScreenCaptureRequest = std::function<std::string()>;
+    // Consults the durable conversation archive for one turn that asked about what was
+    // actually said, and returns the bounded block to ground the answer with. The
+    // session owns the archive; this runtime owns the decision to ask. Returning a
+    // rendered string rather than turns keeps the transcript itself out of the
+    // conversational path except as the one block that reaches the prompt.
+    //
+    // The second argument is the question being answered. It is archived before the
+    // reply is generated, so without it a search for "what did I say about X" reliably
+    // finds the user asking what they said about X.
+    using ConversationRecallHandler = std::function<std::string(
+        const memory::RecallRequest&, const std::string& currentInput)>;
 
     ConversationRuntime(
         messageRouter& router,
@@ -88,7 +100,8 @@ public:
         StimulusObserver stimulusObserver = {},
         ScreenCaptureRequest screenCaptureRequest = {},
         PreferenceProvider preferenceProvider = {},
-        SelfInquirySettingsProvider selfInquirySettingsProvider = {});
+        SelfInquirySettingsProvider selfInquirySettingsProvider = {},
+        ConversationRecallHandler conversationRecallHandler = {});
 
     SessionResult Reply(
         const std::string& input,
@@ -233,6 +246,7 @@ private:
     StimulusObserver stimulusObserver;
     ScreenCaptureRequest screenCaptureRequest;
     SelfInquirySettingsProvider selfInquirySettingsProvider;
+    ConversationRecallHandler conversationRecall;
     agents::ConversationQualityMonitor qualityMonitor;
     intelligence::HumanizationController humanization;
     intelligence::IntelligenceRouter intelligenceRouter;

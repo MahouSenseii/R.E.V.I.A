@@ -44,7 +44,9 @@
 #include "Learning/learningReview.h"
 #include "Learning/selfAssessment.h"
 #include "Memory/conversationArchive.h"
+#include "Memory/conversationRecall.h"
 #include "Memory/longTermMemory.h"
+#include "Memory/temporalQuery.h"
 #include "Memory/sensitiveContent.h"
 #include "Perception/activityHistory.h"
 #include "Perception/windowEventMonitor.h"
@@ -84,6 +86,8 @@
 #include <cwctype>
 #include <fstream>
 #include <chrono>
+#include <cstdint>
+#include <ctime>
 #include <iostream>
 #include <iterator>
 #include <memory>
@@ -809,6 +813,94 @@ void TestStructuredLongTermMemory()
         "test-embedding-model");
     Check(afterRestart.size() == 1 && afterRestart[0].summary == project.summary,
         "Semantic memory vectors were not usable after reopening the database.");
+}
+
+void TestTimePhrasesResolveToWindows()
+{
+    using revia::memory::ParseTimeWindow;
+    using revia::memory::TimeWindow;
+
+    // A fixed anchor so the expected windows do not move with the wall clock: local
+    // noon on Wednesday 2026-09-02.
+    std::tm anchorParts{};
+    anchorParts.tm_year = 126;
+    anchorParts.tm_mon = 8;
+    anchorParts.tm_mday = 2;
+    anchorParts.tm_hour = 12;
+    anchorParts.tm_isdst = -1;
+    const auto now = static_cast<std::int64_t>(std::mktime(&anchorParts));
+    Check(now > 0, "The test clock anchor could not be built.");
+
+    const std::int64_t day = 24 * 60 * 60;
+    const TimeWindow yesterday = ParseTimeWindow("what did I tell you yesterday?", now);
+    Check(yesterday.IsValid(), "\"yesterday\" did not resolve to a time window.");
+    Check(yesterday.Contains(now - day),
+        "The \"yesterday\" window did not contain this time yesterday.");
+    Check(!yesterday.Contains(now),
+        "The \"yesterday\" window wrongly contained the present moment.");
+
+    const TimeWindow lastNight = ParseTimeWindow("that thing from last night", now);
+    Check(lastNight.IsValid() && lastNight.Contains(now - day + 8 * 60 * 60),
+        "\"last night\" did not resolve to the evening before.");
+
+    const TimeWindow threeDays = ParseTimeWindow("the game I mentioned three days ago", now);
+    Check(threeDays.IsValid() && threeDays.Contains(now - 3 * day),
+        "\"three days ago\" did not resolve to that day.");
+
+    const TimeWindow beforeYesterday = ParseTimeWindow("the day before yesterday", now);
+    Check(beforeYesterday.IsValid() && beforeYesterday.Contains(now - 2 * day),
+        "\"the day before yesterday\" was swallowed by the \"yesterday\" rule.");
+
+    const TimeWindow explicitDay = ParseTimeWindow("what about 2026-08-29?", now);
+    Check(explicitDay.IsValid() && explicitDay.Contains(now - 4 * day),
+        "An explicit calendar date did not resolve to that day.");
+
+    Check(!ParseTimeWindow("what is my favourite colour?", now).IsValid(),
+        "A question naming no time was given a time window anyway.");
+
+    Check(revia::memory::DescribeMoment(now - day, now).rfind("yesterday", 0) == 0,
+        "A moment a day old was not described as yesterday.");
+    Check(!revia::memory::DescribeNow(now).empty(),
+        "The prompt's clock anchor rendered as nothing.");
+}
+
+void TestMemoryIsReachableByTime()
+{
+    ScopedTestDirectory temporary;
+    const auto memoryPath = temporary.root / "Memory" / "revia_memory.db";
+    longTermMemory store(memoryPath.string());
+
+    memoryDecision fact;
+    fact.bSuccess = true;
+    fact.bShouldRemember = true;
+    fact.category = "project";
+    fact.summary = "The graphics card he was pricing has eight gigabytes.";
+    bool wasAdded = false;
+    Check(store.Save(fact, wasAdded) && wasAdded,
+        "The memory under test was not saved.");
+
+    // The entry is written with the current time, so the query's clock is moved forward
+    // a day instead: from there the entry sits squarely inside "yesterday".
+    const std::int64_t day = 24 * 60 * 60;
+    const std::int64_t tomorrow = revia::memory::CurrentEpoch() + day;
+
+    // Shares no searchable word with the summary. Before recall by time existed this
+    // question could only return nothing.
+    const std::string question = "what did we talk about yesterday?";
+    Check(store.Search(question, 6, {}, "", tomorrow).size() == 1,
+        "A question naming yesterday did not reach the memory formed yesterday.");
+    Check(store.Search(question, 6, {}, "", revia::memory::CurrentEpoch() + 10 * day).empty(),
+        "A question naming yesterday returned a memory from nine days earlier.");
+    Check(store.Search("what did we talk about?", 6, {}, "", tomorrow).empty(),
+        "A question naming no time still matched on words it does not share.");
+
+    const std::string block = store.BuildPromptBlock(question, 6, {}, "", tomorrow);
+    Check(block.find("It is currently") != std::string::npos,
+        "The memory block did not state the current time the stamps are relative to.");
+    Check(block.find("(yesterday ") != std::string::npos,
+        "The memory block did not stamp the retrieved memory with when it was formed.");
+    Check(block.find(fact.summary) != std::string::npos,
+        "The stamped memory block lost the memory it was stamping.");
 }
 
 void TestLegacyMemoryMigration()
@@ -4944,6 +5036,173 @@ void TestConversationArchiveRemembersAndSearches()
         "Forgetting the archive left turns behind.");
 }
 
+void TestArchiveReachesAStretchOfTimeDirectly()
+{
+    ScopedTestDirectory directory;
+    const std::string path = (directory.root / "conversations.db").string();
+    revia::memory::ConversationArchive archive(path);
+
+    std::string error;
+    Check(archive.BeginSession("session-one", error), "A session could not be opened: " + error);
+    std::string reason;
+    Check(archive.Record("session-one", "user",
+        "I want the emotion system to have momentum.", reason), "Turn one: " + reason);
+    Check(archive.Record("session-one", "assistant",
+        "Momentum means mood lags behind a single stimulus.", reason), "Turn two: " + reason);
+    Check(archive.Record("session-one", "user",
+        "Project Hunter should reuse that appraisal path.", reason), "Turn three: " + reason);
+
+    const std::int64_t now = revia::memory::CurrentEpoch();
+    const std::int64_t day = 24 * 60 * 60;
+
+    const auto today = archive.LoadRange(now - day, now + day);
+    Check(today.size() == 3, "A window containing the recorded turns did not return them.");
+    Check(today.front().content.find("momentum") != std::string::npos,
+        "A time window returned its turns newest first instead of in the order they happened.");
+
+    Check(archive.LoadRange(now - 10 * day, now - 9 * day).empty(),
+        "A window with nothing in it still returned archived turns.");
+    Check(archive.LoadRange(now + day, now - day).empty(),
+        "An inverted window was accepted instead of refused.");
+
+    const auto narrowed = archive.SearchRange({"hunter"}, now - day, now + day);
+    Check(narrowed.size() == 1 && narrowed.front().role == "user",
+        "Narrowing a window by subject did not isolate the turn that raised it.");
+    Check(archive.SearchRange({"hunter"}, now - 10 * day, now - 9 * day).empty(),
+        "A subject search ignored the window it was given.");
+
+    // Terms are matched individually, not as a phrase: a caller that reduced a question
+    // to topic words has no phrase left to match.
+    Check(archive.SearchRange({"emotion", "appraisal"}, now - day, now + day).size() == 2,
+        "Separate topic terms were matched as one phrase.");
+
+    const auto earliest = archive.SearchEarliest({"momentum"}, 4);
+    Check(!earliest.empty() && earliest.front().role == "user",
+        "The earliest mention of a subject was not returned oldest first.");
+
+    Check(archive.Forget() == 3, "Forgetting did not remove every turn.");
+}
+
+void TestArchiveIsConsultedOnlyWhenThePastIsAskedAbout()
+{
+    using revia::memory::ConversationRecallPolicy;
+    using revia::memory::RecallKind;
+    using revia::memory::RecallRequest;
+
+    // A fixed anchor so weekday and window expectations do not move with the wall clock:
+    // local noon on Wednesday 2026-09-02.
+    std::tm anchorParts{};
+    anchorParts.tm_year = 126;
+    anchorParts.tm_mon = 8;
+    anchorParts.tm_mday = 2;
+    anchorParts.tm_hour = 12;
+    anchorParts.tm_isdst = -1;
+    const auto now = static_cast<std::int64_t>(std::mktime(&anchorParts));
+    Check(now > 0, "The recall test clock anchor could not be built.");
+    const std::int64_t day = 24 * 60 * 60;
+
+    const RecallRequest stretch =
+        ConversationRecallPolicy::Evaluate("What did we talk about last Tuesday?", now);
+    Check(stretch.kind == RecallKind::Window,
+        "A question about a past day did not become a window request.");
+    // The anchor is a Wednesday, so the most recent Tuesday is yesterday. A weekday
+    // always means the last one that has already happened, never one still to come.
+    Check(stretch.window.Contains(now - day),
+        "\"last Tuesday\" did not resolve to the most recent Tuesday.");
+    Check(!stretch.window.Contains(now),
+        "A past weekday window reached forward into today.");
+    Check(stretch.terms.empty(),
+        "A question with no subject still produced search terms to narrow by.");
+
+    const RecallRequest subject = ConversationRecallPolicy::Evaluate(
+        "What exactly did I say about the emotion system?", now);
+    Check(subject.kind == RecallKind::Topic,
+        "A question about what was said on a subject did not become a topic request.");
+    Check(std::find(subject.terms.begin(), subject.terms.end(), "emotion") !=
+            subject.terms.end() &&
+        std::find(subject.terms.begin(), subject.terms.end(), "system") !=
+            subject.terms.end(),
+        "The subject words were lost while stripping the question's scaffolding.");
+    Check(std::find(subject.terms.begin(), subject.terms.end(), "say") == subject.terms.end(),
+        "The vocabulary of asking was searched for as though it were the subject.");
+
+    const RecallRequest beginning = ConversationRecallPolicy::Evaluate(
+        "When did I first mention Project Hunter?", now);
+    Check(beginning.kind == RecallKind::Earliest,
+        "A question about when something began did not ask for the earliest mentions.");
+    Check(std::find(beginning.terms.begin(), beginning.terms.end(), "hunter") !=
+            beginning.terms.end(),
+        "The subject whose beginning was asked about was not carried into the request.");
+
+    const RecallRequest vague = ConversationRecallPolicy::Evaluate(
+        "You said something about this a few days ago - what was it?", now);
+    Check(vague.kind == RecallKind::Window,
+        "A vague reference to something said days ago did not reach the archive.");
+    Check(vague.window.Contains(now - 3 * day) && vague.window.Contains(now - 4 * day),
+        "\"a few days ago\" resolved to one exact day instead of the days around it.");
+
+    // The quiet cases. Firing on these would search the transcript on ordinary turns.
+    Check(!ConversationRecallPolicy::Evaluate(
+            "I will do it tomorrow.", now).Wanted(),
+        "Naming a time was treated as a request to search the archive.");
+    Check(!ConversationRecallPolicy::Evaluate(
+            "Yesterday was exhausting.", now).Wanted(),
+        "A remark about a past day was treated as a question about the transcript.");
+    Check(!ConversationRecallPolicy::Evaluate(
+            "Like you said, the router owns that decision.", now).Wanted(),
+        "An ordinary use of \"you said\" triggered a transcript search.");
+    Check(!ConversationRecallPolicy::Evaluate(
+            "How do I rebuild the project?", now).Wanted(),
+        "An ordinary question triggered a transcript search.");
+    Check(!ConversationRecallPolicy::Evaluate("", now).Wanted(),
+        "An empty turn produced a recall request.");
+}
+
+void TestRecalledTurnsStayBoundedAndAttributed()
+{
+    using revia::memory::ArchivedTurn;
+    using revia::memory::RecallKind;
+    using revia::memory::RecallRequest;
+
+    const std::int64_t now = revia::memory::CurrentEpoch();
+    const std::int64_t day = 24 * 60 * 60;
+
+    RecallRequest request;
+    request.kind = RecallKind::Window;
+    request.window = {now - day, now, "yesterday"};
+
+    std::vector<ArchivedTurn> turns;
+    for (int index = 0; index < 12; ++index)
+    {
+        ArchivedTurn turn;
+        turn.role = index % 2 == 0 ? "user" : "assistant";
+        turn.content = std::string(400, 'x') + std::to_string(index);
+        turn.createdAt = std::to_string(now - day + index);
+        turns.push_back(turn);
+    }
+
+    const std::string block =
+        revia::memory::RenderRecallBlock(request, turns, "Revia", now, 1200);
+    Check(!block.empty(), "A window request with matching turns rendered nothing.");
+    Check(block.size() <= 1600,
+        "The recall block ignored its character ceiling and could crowd out the turn.");
+    Check(block.find("untrusted reference data") != std::string::npos,
+        "The recall block did not mark the transcript as untrusted reference data.");
+    Check(block.find("the user") != std::string::npos && block.find("Revia") != std::string::npos,
+        "Recalled turns were not attributed to who actually said them.");
+    Check(block.find("yesterday") != std::string::npos,
+        "The recall block did not say which stretch of time it covers.");
+    Check(block.find("not shown here") != std::string::npos,
+        "Turns were dropped for the ceiling without saying so.");
+    Check(block.find(std::string(400, 'x')) == std::string::npos,
+        "An over-long turn reached the prompt without being truncated.");
+
+    Check(revia::memory::RenderRecallBlock(request, {}, "Revia", now).empty(),
+        "A search that found nothing still produced a grounding block.");
+    Check(revia::memory::RenderRecallBlock({}, turns, "Revia", now).empty(),
+        "Turns were rendered for a request that never asked for them.");
+}
+
 void TestConversationArchiveWithholdsSecretsAndStaysBounded()
 {
     ScopedTestDirectory directory;
@@ -6232,6 +6491,42 @@ revia::resources::UsageMeter MeterById(
 }
 }
 
+void TestGpuCounterInstancesReduceToOneAdapter()
+{
+    // Verbatim instance names read from this machine's live PDH counters. The memory and
+    // engine counters describe the same card in different shapes, and every reading is
+    // attributed by the key they reduce to, so they have to agree exactly.
+    const revia::resources::GpuCounterInstance memory =
+        revia::resources::ParseGpuCounterInstance("luid_0x00000000_0x0000f338_phys_0");
+    Check(memory.adapterKey == "luid_0x00000000_0x0000f338",
+        "The memory counter instance did not reduce to its adapter: " + memory.adapterKey);
+    Check(memory.engineType.empty(),
+        "A memory counter instance invented an engine type: " + memory.engineType);
+
+    const revia::resources::GpuCounterInstance engine =
+        revia::resources::ParseGpuCounterInstance(
+            "pid_1052_luid_0x00000000_0x0000f338_phys_0_eng_0_engtype_3D");
+    Check(engine.adapterKey == memory.adapterKey,
+        "The engine counter did not reduce to the same adapter as the memory counter, so "
+        "one card would arrive as two devices: " + engine.adapterKey);
+    Check(engine.engineType == "3d",
+        "The engine type was not recovered from the instance name: " + engine.engineType);
+
+    // Different processes on different engines of one card must all collapse together,
+    // or each gets a fraction of the card's reading and none of them is right.
+    Check(revia::resources::ParseGpuCounterInstance(
+            "pid_31004_luid_0x00000000_0x0000f338_phys_0_eng_4_engtype_copy").adapterKey ==
+        memory.adapterKey,
+        "A second process on another engine was treated as a separate adapter.");
+    Check(revia::resources::ParseGpuCounterInstance(
+            "luid_0x00000000_0x00010c8d_phys_0").adapterKey !=
+        memory.adapterKey,
+        "Two physically different adapters reduced to the same key.");
+
+    Check(revia::resources::ParseGpuCounterInstance("_Total").adapterKey.empty(),
+        "An instance naming no adapter was accepted as one.");
+}
+
 void TestUsageIsMeasuredAgainstThePlannedBudget()
 {
     const revia::resources::ResourcePlan plan = TwoCardPlan();
@@ -6248,9 +6543,9 @@ void TestUsageIsMeasuredAgainstThePlannedBudget()
         {200, "llama-server.exe", 9000, 40000},
         {300, "python.exe", 2600, 4000}
     };
-    const std::vector<revia::resources::GpuMemoryReading> gpuReadings = {
-        {"luid_0x00000000_0x0000aaaa", 9800},
-        {"luid_0x00000000_0x0000bbbb", 5100}
+    const std::vector<revia::resources::GpuAdapterReading> gpuReadings = {
+        {"luid_0x00000000_0x0000aaaa", 9800, true, 4.0, true},
+        {"luid_0x00000000_0x0000bbbb", 5100, true, 62.0, true}
     };
 
     // 50000 ms of processor time in the previous sample, 4000 ms consumed since, over
@@ -6259,20 +6554,58 @@ void TestUsageIsMeasuredAgainstThePlannedBudget()
         revia::resources::ResourceMonitor::Compose(
             plan, memory, processes, gpuReadings, true, 46000, 2.0);
 
-    const revia::resources::UsageMeter primary = MeterById(snapshot, "gpu:CUDA0");
+    // The card's own reading is judged against the card, never against Revia's plan.
+    const revia::resources::UsageMeter primary = MeterById(snapshot, "gpu:CUDA0:vram");
     Check(primary.measured, "The primary card reported no live video memory.");
     Check(primary.used == 9800.0, "The live VRAM reading was not attributed to CUDA0.");
-    Check(primary.budget == 12288.0 - 1536.0,
-        "The VRAM budget did not subtract the reserve the plan promised to leave free.");
+    Check(primary.basis == revia::resources::MeterBasis::Capacity,
+        "The physical VRAM meter was measured against a budget rather than the card.");
+    Check(primary.budget == 0.0,
+        "The physical VRAM meter carried a budget, which would count the same card twice "
+        "in the load governor.");
     Check(primary.capacity == 12288.0, "The installed VRAM was not reported.");
-    Check(!primary.OverBudget(), "A reading inside its budget was flagged as over it.");
+    Check(primary.Pressure() == revia::resources::PressureLevel::Elevated,
+        "9800 of 12288 MiB is 80% of the card and should read as elevated, not as the "
+        "budget overrun it also is. Status was: " + primary.Status());
+    Check(primary.label.find("RTX 5070") != std::string::npos &&
+        primary.label.find("CUDA0") != std::string::npos,
+        "The VRAM row did not name the card and the backend device: " + primary.label);
     Check(primary.detail.find("chat/vision") != std::string::npos,
         "The primary card did not name the workload the plan placed on it: " +
         primary.detail);
-    Check(primary.Format().find("GiB budget") != std::string::npos,
-        "The VRAM meter did not render as a budget comparison: " + primary.Format());
+    Check(primary.Format().find("GiB installed") != std::string::npos &&
+        primary.Format().find("budget") == std::string::npos,
+        "The physical VRAM meter did not render as a hardware comparison: " +
+        primary.Format());
 
-    const revia::resources::UsageMeter secondary = MeterById(snapshot, "gpu:CUDA1");
+    // The same occupancy, judged against the allowance rather than against the card.
+    const revia::resources::UsageMeter primaryBudget =
+        MeterById(snapshot, "gpu:CUDA0:budget");
+    Check(primaryBudget.used == 9800.0,
+        "The budget row did not measure the same occupancy the card reported.");
+    Check(primaryBudget.budget == 12288.0 - 1536.0,
+        "The VRAM budget did not subtract the reserve the plan promised to leave free.");
+    Check(!primaryBudget.OverBudget(),
+        "A reading inside its budget was flagged as over it.");
+    Check(primaryBudget.Pressure() == revia::resources::PressureLevel::Unmeasured,
+        "A budget row claimed to know the physical pressure on the hardware.");
+    Check(primaryBudget.Format().find("GiB budget") != std::string::npos,
+        "The budget row did not render as a budget comparison: " + primaryBudget.Format());
+
+    // Compute is independent: a card holding resident weights is not a busy card.
+    const revia::resources::UsageMeter primaryCompute =
+        MeterById(snapshot, "gpu:CUDA0:compute");
+    Check(primaryCompute.measured && primaryCompute.used == 4.0,
+        "The GPU compute reading was not carried through.");
+    Check(primaryCompute.Pressure() == revia::resources::PressureLevel::Idle &&
+        primaryCompute.Status() == "Idle",
+        "A card at 4% utilisation did not read as idle: " + primaryCompute.Status());
+    Check(primaryCompute.Format() == "4%",
+        "The compute meter did not render as a percentage: " + primaryCompute.Format());
+    Check(MeterById(snapshot, "gpu:CUDA1:compute").Status() == "Normal",
+        "A card at 62% utilisation should read as normal, not as pressured.");
+
+    const revia::resources::UsageMeter secondary = MeterById(snapshot, "gpu:CUDA1:vram");
     Check(secondary.used == 5100.0,
         "The second card's reading was taken from the wrong adapter.");
     Check(secondary.detail.find("voice") != std::string::npos,
@@ -6307,20 +6640,25 @@ void TestUnmeasurableResourcesSaySoRatherThanReportingZero()
     // another card's reading would look precise and be wrong.
     plan.hardware.gpus[1].adapterLuid.clear();
 
-    const std::vector<revia::resources::GpuMemoryReading> readings = {
-        {"luid_0x00000000_0x0000aaaa", 9800}
+    const std::vector<revia::resources::GpuAdapterReading> readings = {
+        {"luid_0x00000000_0x0000aaaa", 9800, true, 0.0, true}
     };
     const revia::resources::UsageSnapshot first =
         revia::resources::ResourceMonitor::Compose(
             plan, {}, {}, readings, true, 0, 0.0);
 
-    const revia::resources::UsageMeter unmatched = MeterById(first, "gpu:CUDA1");
+    const revia::resources::UsageMeter unmatched = MeterById(first, "gpu:CUDA1:vram");
     Check(!unmatched.measured, "An unmatched adapter reported a live VRAM figure anyway.");
     Check(unmatched.used == 0.0 && unmatched.Format() == "not measured",
         "An unmeasured meter rendered as a zero reading instead of as unmeasured.");
+    Check(unmatched.Status() == "not measured" &&
+        unmatched.Pressure() == revia::resources::PressureLevel::Unmeasured,
+        "An unmeasured card was given a pressure verdict: " + unmatched.Status());
     Check(unmatched.detail.find("could not be matched") != std::string::npos,
         "The unmatched adapter did not explain why it has no reading: " + unmatched.detail);
-    Check(unmatched.budget > 0.0,
+    Check(!MeterById(first, "gpu:CUDA1:compute").measured,
+        "An unmatched adapter reported a live compute figure anyway.");
+    Check(MeterById(first, "gpu:CUDA1:budget").budget > 0.0,
         "An unmeasured resource lost the budget the plan still sets for it.");
 
     const revia::resources::UsageMeter ram = MeterById(first, "ram");
@@ -6338,7 +6676,7 @@ void TestUnmeasurableResourcesSaySoRatherThanReportingZero()
     // device that simply could not be matched.
     const revia::resources::UsageSnapshot noCounters =
         revia::resources::ResourceMonitor::Compose(plan, {}, {}, {}, false, 0, 0.0);
-    Check(MeterById(noCounters, "gpu:CUDA0").detail.find(
+    Check(MeterById(noCounters, "gpu:CUDA0:vram").detail.find(
         "performance counters are not available") != std::string::npos,
         "A missing counter set was not distinguished from an unmatched adapter.");
     Check(!noCounters.measured,
@@ -6350,24 +6688,36 @@ void TestUnmeasurableResourcesSaySoRatherThanReportingZero()
 void TestUsageOverItsBudgetIsVisible()
 {
     const revia::resources::ResourcePlan plan = TwoCardPlan();
-    const std::vector<revia::resources::GpuMemoryReading> readings = {
+    const std::vector<revia::resources::GpuAdapterReading> readings = {
         // Past the reserve the plan promised to keep free on the primary card.
-        {"luid_0x00000000_0x0000aaaa", 12000},
-        {"luid_0x00000000_0x0000bbbb", 1200}
+        {"luid_0x00000000_0x0000aaaa", 12000, true, 1.0, true},
+        {"luid_0x00000000_0x0000bbbb", 1200, true, 0.0, true}
     };
     const revia::resources::UsageSnapshot snapshot =
         revia::resources::ResourceMonitor::Compose(
             plan, {}, {}, readings, true, 0, 0.0);
 
-    const revia::resources::UsageMeter primary = MeterById(snapshot, "gpu:CUDA0");
+    const revia::resources::UsageMeter primary = MeterById(snapshot, "gpu:CUDA0:budget");
     Check(primary.OverBudget(),
         "Video memory past the planned reserve was not flagged as over budget.");
     Check(primary.BudgetFraction() > 1.0,
         "An over-budget meter did not report a fraction above one.");
-    Check(snapshot.Summary().find("over budget") != std::string::npos,
+    // 12000 of 10752 MiB is 112% of the allowance and 98% of the card. Both are true and
+    // they are different sentences; the panel must be able to say each without the other.
+    Check(primary.Status() == "Budget exceeded by 12%",
+        "The overrun was not reported as a budget result: " + primary.Status());
+    Check(snapshot.Summary().find("Budget exceeded") != std::string::npos,
         "The summary hid that a resource had exceeded its budget.");
-    Check(!MeterById(snapshot, "gpu:CUDA1").OverBudget(),
+    Check(MeterById(snapshot, "gpu:CUDA0:vram").Pressure() ==
+        revia::resources::PressureLevel::Critical,
+        "A card at 98% of its installed memory was not reported as critical.");
+    Check(MeterById(snapshot, "gpu:CUDA0:compute").Status() == "Idle",
+        "A card doing no work was described by its memory pressure instead.");
+    Check(!MeterById(snapshot, "gpu:CUDA1:budget").OverBudget(),
         "A card well inside its budget was flagged alongside the one that was not.");
+    Check(MeterById(snapshot, "gpu:CUDA1:vram").Pressure() ==
+        revia::resources::PressureLevel::Normal,
+        "A card at 15% of its installed memory was not reported as normal.");
 
     revia::resources::UsageMeter unbudgeted;
     unbudgeted.measured = true;
@@ -7155,6 +7505,8 @@ int main(const int argc, char** argv)
         TestLlamaServerProcessStopIsBounded();
         TestStructuredLongTermMemory();
         TestLegacyMemoryMigration();
+        TestTimePhrasesResolveToWindows();
+        TestMemoryIsReachableByTime();
         TestBackgroundMemoryAgentLifecycle();
         TestDispatcherGate();
         TestFilesystemExecutorAndAudit();
@@ -7240,6 +7592,9 @@ int main(const int argc, char** argv)
         TestContractCorpusCanBeSuppliedOnDisk();
         TestConversationArchiveRemembersAndSearches();
         TestConversationArchiveWithholdsSecretsAndStaysBounded();
+        TestArchiveReachesAStretchOfTimeDirectly();
+        TestArchiveIsConsultedOnlyWhenThePastIsAskedAbout();
+        TestRecalledTurnsStayBoundedAndAttributed();
         TestPreferencesCannotReachAuthority();
         TestPreferencesPersistAndValidate();
         TestCameraStaysShutUntilItIsExplicitlyAllowed();
@@ -7265,6 +7620,7 @@ int main(const int argc, char** argv)
         TestPresenceRuntimePublishesAvatarStateAndBoundsAdapters();
         TestResourcePlannerKeepsAutomaticVoiceOffTheChatGpu();
         TestResourcePlannerUsesBothGpusForParallelLongVoice();
+        TestGpuCounterInstancesReduceToOneAdapter();
         TestUsageIsMeasuredAgainstThePlannedBudget();
         TestUnmeasurableResourcesSaySoRatherThanReportingZero();
         TestUsageOverItsBudgetIsVisible();

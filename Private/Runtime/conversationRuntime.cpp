@@ -206,7 +206,8 @@ ConversationRuntime::ConversationRuntime(
     StimulusObserver inputStimulusObserver,
     ScreenCaptureRequest inputScreenCaptureRequest,
     PreferenceProvider inputPreferenceProvider,
-    SelfInquirySettingsProvider inputSelfInquirySettings)
+    SelfInquirySettingsProvider inputSelfInquirySettings,
+    ConversationRecallHandler inputConversationRecall)
     : router(inputRouter),
       context(inputContext),
       coordinator(inputCoordinator),
@@ -226,7 +227,8 @@ ConversationRuntime::ConversationRuntime(
       preferenceProvider(std::move(inputPreferenceProvider)),
       stimulusObserver(std::move(inputStimulusObserver)),
       screenCaptureRequest(std::move(inputScreenCaptureRequest)),
-      selfInquirySettingsProvider(std::move(inputSelfInquirySettings))
+      selfInquirySettingsProvider(std::move(inputSelfInquirySettings)),
+      conversationRecall(std::move(inputConversationRecall))
 {
 }
 
@@ -841,6 +843,35 @@ SessionResult ConversationRuntime::Generate(
         }
     }
 
+    // Selective archive recall. The durable transcript stays a separate store from
+    // curated memory and is never folded into the ordinary prompt; it is consulted only
+    // when this turn is actually asking what was said, and only for what it asked about.
+    // Public turns and proactive openings are excluded: the first must not reach the
+    // local user's dialogue at all, and the second has no question to answer.
+    std::string recallGrounding;
+    if (turnPolicy.includePrivateHistory && !turnPolicy.publicAudience && !proactive &&
+        !reflex.matched && conversationRecall)
+    {
+        const memory::RecallRequest recall = memory::ConversationRecallPolicy::Evaluate(
+            policyInput, memory::CurrentEpoch());
+        if (recall.Wanted())
+        {
+            PublishComponent(
+                "Conversation history", "Searching", recall.reason, -1.0, 0, currentTurn);
+            const auto recallStarted = std::chrono::steady_clock::now();
+            recallGrounding = conversationRecall(recall, policyInput);
+            PublishComponent(
+                "Conversation history",
+                recallGrounding.empty() ? "Nothing found" : "Ready",
+                recallGrounding.empty()
+                    ? recall.reason + " Nothing archived matches, so she answers without it."
+                    : recall.reason + " The recorded turns are grounding this answer.",
+                ElapsedMilliseconds(recallStarted),
+                0,
+                currentTurn);
+        }
+    }
+
     const auto finish = [&](SessionResult finished)
     {
         if (stopToken.stop_requested())
@@ -984,6 +1015,10 @@ SessionResult ConversationRuntime::Generate(
             postureLine << "\n\n" << screenContext;
             filterContext.screenObservationAvailable = true;
             filterContext.screenObservation = screenContext;
+        }
+        if (!recallGrounding.empty())
+        {
+            postureLine << "\n\n" << recallGrounding;
         }
         if (!internetGrounding.empty())
         {

@@ -162,6 +162,14 @@ QProgressBar {
     font-weight: 600;
 }
 QProgressBar::chunk { background: #327aa8; border-radius: 5px; }
+/* Physical pressure, against the hardware's own ceiling. A card filling up earns a
+   warning colour; a plan Revia over-subscribed does not, and keeps the flat one below. */
+QProgressBar[pressure="Idle"]::chunk { background: #3f6f8a; }
+QProgressBar[pressure="Elevated"]::chunk { background: #c08a3e; }
+QProgressBar[pressure="High"] { border-color: #c08a3e; }
+QProgressBar[pressure="High"]::chunk { background: #d1732f; }
+QProgressBar[pressure="Critical"] { border-color: #a64d69; }
+QProgressBar[pressure="Critical"]::chunk { background: #c94b5f; }
 QProgressBar[overBudget="true"] { border-color: #a64d69; }
 QProgressBar[overBudget="true"]::chunk { background: #c94b5f; }
 QProgressBar[unavailable="true"] { color: #7b8a9e; }

@@ -4,6 +4,7 @@
 struct sqlite3;
 
 #include <cstddef>
+#include <cstdint>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -97,9 +98,34 @@ public:
         std::size_t maxTurns = 6) const;
     [[nodiscard]] std::vector<ArchivedSession> RecentSessions(
         std::size_t maxSessions = 20) const;
+    // Exact-phrase search, which is what a user typing words into /history means.
     [[nodiscard]] std::vector<ArchivedTurn> Search(
         const std::string& query,
         std::size_t maxTurns = 12) const;
+
+    // Everything said in a half-open window of epoch seconds, oldest first, so a stretch
+    // of conversation reads in the order it happened. Answers "what did we talk about
+    // last Tuesday" without paging whole sessions to find the day.
+    [[nodiscard]] std::vector<ArchivedTurn> LoadRange(
+        std::int64_t startEpoch,
+        std::int64_t endEpoch,
+        std::size_t maxTurns = 40) const;
+
+    // The same window narrowed to turns matching any of the supplied terms, best match
+    // first. Terms are matched individually rather than as a phrase, because a caller
+    // that already reduced a question to its topic words has no phrase left to match.
+    [[nodiscard]] std::vector<ArchivedTurn> SearchRange(
+        const std::vector<std::string>& terms,
+        std::int64_t startEpoch,
+        std::int64_t endEpoch,
+        std::size_t maxTurns = 12) const;
+
+    // The earliest turns mentioning any of the terms, oldest first. This is the only
+    // honest way to answer "when did I first mention this": relevance ranking returns
+    // the best match, which is rarely the first one.
+    [[nodiscard]] std::vector<ArchivedTurn> SearchEarliest(
+        const std::vector<std::string>& terms,
+        std::size_t maxTurns = 4) const;
 
     // Returns how many turns were removed. Forgetting is immediate and total; there is no
     // archived copy kept behind it, because a forget that leaves a copy is not one.

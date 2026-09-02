@@ -17,10 +17,42 @@ namespace revia::resources
 enum class MeterUnit
 {
     Mebibytes,
-    Threads
+    Threads,
+    // Already a percentage of its own device, such as GPU engine utilisation.
+    Percent
 };
 
-// One live reading placed next to the budget the plan set aside for it.
+// What a meter's percentage is a fraction of.
+//
+// The distinction is the difference between two questions a user asks separately: is the
+// hardware in trouble, and is Revia inside the allowance her plan set. A card 88% full
+// while Revia is 7% past a budget carved out of it is one healthy number and one
+// planning number, and a single bar reading 107% claims the first is critical when it is
+// not.
+enum class MeterBasis
+{
+    Budget,
+    Capacity
+};
+
+// How hard a physical resource is being pressed, judged against its own ceiling.
+//
+// Deliberately about the hardware only. A budget overrun is a separate statement made in
+// the meter's own terms, because exceeding an allowance Revia set for herself is not the
+// same event as running a card out of memory.
+enum class PressureLevel
+{
+    Unmeasured,
+    Idle,
+    Normal,
+    Elevated,
+    High,
+    Critical
+};
+
+[[nodiscard]] std::string ToString(PressureLevel level);
+
+// One live reading placed next to the ceiling it should be judged against.
 //
 // Three numbers rather than two, because "5.6 of 6.2" only means something when the
 // difference between the budget and the hardware is also visible: a plan that leaves
@@ -31,8 +63,11 @@ struct UsageMeter
     std::string id;
     std::string label;
     MeterUnit unit = MeterUnit::Mebibytes;
+    MeterBasis basis = MeterBasis::Budget;
     double used = 0.0;
-    // What the resource plan allows Revia to consume.
+    // What the resource plan allows Revia to consume. Left at zero on a capacity meter,
+    // which has no allowance of its own to exceed -- and which is also what keeps the
+    // load governor reading each device once rather than once per view of it.
     double budget = 0.0;
     // The physical ceiling the budget was carved out of.
     double capacity = 0.0;
@@ -45,8 +80,17 @@ struct UsageMeter
     // Zero when there is no budget to be a fraction of, so a caller can draw a bar
     // without special-casing an unassigned device.
     [[nodiscard]] double BudgetFraction() const;
+    [[nodiscard]] double CapacityFraction() const;
+    // The fraction the meter's own basis makes it a statement about. This is the number
+    // a bar should draw, so the bar and the label can never disagree.
+    [[nodiscard]] double Fraction() const;
     [[nodiscard]] bool OverBudget() const;
-    // "5.6 / 6.2 GiB budget" or "9.0 / 14 threads".
+    // Unmeasured on a budget meter: physical pressure is a claim about hardware, and a
+    // budget is not hardware.
+    [[nodiscard]] PressureLevel Pressure() const;
+    // "88% used", "Budget exceeded by 7%", "Idle".
+    [[nodiscard]] std::string Status() const;
+    // "5.6 / 6.2 GiB budget", "10.6 / 12.0 GiB installed" or "9.0 / 14 threads".
     [[nodiscard]] std::string Format() const;
 };
 
@@ -91,7 +135,7 @@ public:
         const ResourcePlan& plan,
         const SystemMemoryReading& memory,
         const std::vector<ProcessUsage>& processes,
-        const std::vector<GpuMemoryReading>& gpuReadings,
+        const std::vector<GpuAdapterReading>& gpuReadings,
         bool gpuCountersAvailable,
         std::uint64_t previousOwnedCpuMilliseconds,
         double elapsedSeconds);

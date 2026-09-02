@@ -80,8 +80,25 @@ namespace
         return event.usageUnit == "threads";
     }
 
+    bool IsPercentMeter(const revia::runtime::RuntimeEvent& event)
+    {
+        return event.usageUnit == "percent";
+    }
+
+    // Whether the row is a statement about the hardware or about Revia's allowance. The
+    // runtime decides this; drawing a budget fraction under a hardware label is exactly
+    // the misreading that made a working card look overloaded.
+    bool IsAgainstCapacity(const revia::runtime::RuntimeEvent& event)
+    {
+        return event.usageBasis == "capacity";
+    }
+
     QString FormatAmount(const revia::runtime::RuntimeEvent& event, const double value)
     {
+        if (IsPercentMeter(event))
+        {
+            return QString::number(value, 'f', 0) + QStringLiteral("%");
+        }
         if (IsThreadMeter(event))
         {
             return QString::number(value, 'f', value < 10.0 ? 1 : 0);
@@ -99,13 +116,31 @@ namespace
         return IsThreadMeter(event) ? amount + QStringLiteral(" threads") : amount;
     }
 
-    QString BudgetText(const revia::runtime::RuntimeEvent& event)
+    // The one number the row is compared against, named so the reader knows which
+    // question the percentage beside it answers.
+    QString ReferenceText(const revia::runtime::RuntimeEvent& event)
     {
+        if (IsAgainstCapacity(event))
+        {
+            if (event.capacityAmount <= 0.0)
+            {
+                return QStringLiteral("-");
+            }
+            if (IsPercentMeter(event))
+            {
+                return QStringLiteral("full utilisation");
+            }
+            return FormatAmount(event, event.capacityAmount) +
+                (IsThreadMeter(event)
+                    ? QStringLiteral(" logical")
+                    : QStringLiteral(" installed"));
+        }
         if (event.budgetAmount <= 0.0)
         {
             return QStringLiteral("no budget set");
         }
-        QString text = FormatAmount(event, event.budgetAmount);
+        QString text = FormatAmount(event, event.budgetAmount) +
+            QStringLiteral(" budget");
         if (event.capacityAmount > 0.0)
         {
             text += QStringLiteral(" of ") + FormatAmount(event, event.capacityAmount) +
@@ -114,6 +149,20 @@ namespace
                     : QStringLiteral(" installed"));
         }
         return text;
+    }
+
+    double ReferenceAmount(const revia::runtime::RuntimeEvent& event)
+    {
+        return IsAgainstCapacity(event) ? event.capacityAmount : event.budgetAmount;
+    }
+
+    // The status word alone, for the bar's colour. The full status sentence carries a
+    // percentage the bar is already drawing.
+    QString PressureWord(const revia::runtime::RuntimeEvent& event)
+    {
+        const QString status = QString::fromStdString(event.usageStatus);
+        const int space = status.indexOf(QLatin1Char(' '));
+        return space < 0 ? status : status.left(space);
     }
 }
 
@@ -198,22 +247,28 @@ ResourcePanel::ResourcePanel(VoiceDeviceHandler voiceDeviceHandler, QWidget* par
         voiceDeviceStatus->style()->polish(voiceDeviceStatus);
     });
 
-    addSection("Live usage against the plan",
-        "Sampled continuously and compared with the budget the plan set aside. Video "
-        "memory is the system-wide figure for the adapter, because the model weights "
-        "live in a worker process; RAM and CPU cover Revia and every process it "
-        "started. Nothing here changes the plan.");
+    addSection("Live usage",
+        "Each GPU is reported three ways, because they are three different questions. "
+        "VRAM is how full the card itself is, against the memory installed on it. The "
+        "Revia budget row is the same occupancy judged against the allowance the plan "
+        "set aside, so exceeding it means the plan was optimistic rather than that the "
+        "card is in trouble. Compute is what the GPU is actually working on, which is "
+        "usually idle while resident model weights sit in memory. Video memory figures "
+        "are system-wide for the adapter, because the model weights live in a worker "
+        "process; RAM and CPU cover Revia and every process she started. Nothing here "
+        "changes the plan.");
 
-    usageTable = new QTableWidget(0, 5, page);
+    usageTable = new QTableWidget(0, 6, page);
     usageTable->setHorizontalHeaderLabels(
-        {"Resource", "In use", "Budget", "Against budget", "Detail"});
+        {"Resource", "In use", "Compared with", "Usage", "Status", "Detail"});
     ConfigureTable(usageTable);
     usageTable->horizontalHeader()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
     usageTable->horizontalHeader()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
     usageTable->horizontalHeader()->setSectionResizeMode(2, QHeaderView::ResizeToContents);
     usageTable->horizontalHeader()->setSectionResizeMode(3, QHeaderView::Fixed);
     usageTable->horizontalHeader()->resizeSection(3, BarColumnWidth);
-    usageTable->horizontalHeader()->setSectionResizeMode(4, QHeaderView::Stretch);
+    usageTable->horizontalHeader()->setSectionResizeMode(4, QHeaderView::ResizeToContents);
+    usageTable->horizontalHeader()->setSectionResizeMode(5, QHeaderView::Stretch);
     layout->addWidget(usageTable);
 
     addSection("Detected hardware and budgets", {});
@@ -369,10 +424,14 @@ void ResourcePanel::ApplyUsage(const revia::runtime::RuntimeEvent& event)
     const QString label = QString::fromStdString(event.component);
     UsageRow& usage = EnsureUsageRow(label);
 
-    const int percent = event.budgetAmount > 0.0
-        ? static_cast<int>(std::lround(100.0 * event.usedAmount / event.budgetAmount))
+    // Against whatever this row is a statement about, so the bar and its label always
+    // answer the same question.
+    const double reference = ReferenceAmount(event);
+    const int percent = reference > 0.0
+        ? static_cast<int>(std::lround(100.0 * event.usedAmount / reference))
         : 0;
-    const bool overBudget = event.usageMeasured && event.budgetAmount > 0.0 && percent > 100;
+    const bool overBudget = event.usageMeasured && !IsAgainstCapacity(event) &&
+        event.budgetAmount > 0.0 && percent > 100;
 
     if (!event.usageMeasured)
     {
@@ -388,17 +447,24 @@ void ResourcePanel::ApplyUsage(const revia::runtime::RuntimeEvent& event)
         usage.bar->setValue(std::clamp(percent, 0, 100));
         // The bar saturates at full; the number does not, so a reading past its budget
         // still says by how much rather than looking merely full.
-        usage.bar->setFormat(event.budgetAmount > 0.0
+        usage.bar->setFormat(reference > 0.0
             ? QString::number(percent) + QStringLiteral("%")
             : QStringLiteral("no budget"));
     }
     usage.bar->setProperty("overBudget", overBudget);
     usage.bar->setProperty("unavailable", !event.usageMeasured);
+    // Physical pressure colours the bar on its own scale. A budget row keeps the single
+    // over-budget colour: it is a yes-or-no result, not a severity.
+    usage.bar->setProperty("pressure",
+        event.usageMeasured && IsAgainstCapacity(event) ? PressureWord(event) : QString());
     usage.bar->style()->unpolish(usage.bar);
     usage.bar->style()->polish(usage.bar);
 
-    SetCell(usageTable, usage.row, 2, BudgetText(event));
-    SetCell(usageTable, usage.row, 4, QString::fromStdString(event.message));
+    SetCell(usageTable, usage.row, 2, ReferenceText(event));
+    SetCell(usageTable, usage.row, 4, event.usageMeasured
+        ? QString::fromStdString(event.usageStatus)
+        : QStringLiteral("not measured"));
+    SetCell(usageTable, usage.row, 5, QString::fromStdString(event.message));
     FitToContents(usageTable);
 }
 

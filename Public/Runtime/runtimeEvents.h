@@ -106,6 +106,14 @@ struct RuntimeEvent
     double budgetAmount = 0.0;
     double capacityAmount = 0.0;
     std::string usageUnit;
+    // "capacity" when the reading is a fraction of the hardware ceiling, "budget" when it
+    // is a fraction of what the plan allowed. A shell that draws one bar for both makes a
+    // card 88% full look 107% overloaded, so the basis travels with the numbers.
+    std::string usageBasis;
+    // The already-decided verdict on the reading -- "Normal", "Critical", "Budget
+    // exceeded by 7%". Decided by the resource owner rather than by each shell, so the
+    // desktop panel and the CLI cannot disagree about when a card is in trouble.
+    std::string usageStatus;
     // False when the platform could not report the reading. The shell must show that
     // rather than a zero, which would read as "nothing is using it".
     bool usageMeasured = false;
