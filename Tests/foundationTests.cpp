@@ -604,6 +604,114 @@ void TestInternetCapabilityIsBoundedAndGrounded()
         "An explicit request stopped working after tightening the policy.");
 }
 
+// The regression: the technical exclusion ran before the freshness check, so any question
+// about what shipped recently died on its own subject. "What's the latest Python version?"
+// stayed local because it contains "python" -- the one technical question a local model
+// provably cannot answer, since no model knows what was released after it was trained.
+void TestCurrentTechnicalFactsLookUpAndStableOnesStayLocal()
+{
+    const auto lookup = [](const std::string& input)
+    {
+        return revia::internet::InternetLookupPolicy::ShouldLookup(input, true);
+    };
+
+    // A technical subject must not erase a clear question about current state.
+    for (const std::string fresh : {
+        "What's the latest Python version?",
+        "What's the current Unreal Engine version?",
+        "What's the newest CUDA release?",
+        "What is the latest Rider version?",
+        "What's the current CMake release?",
+        "What's the current Rider release?",
+        "What version of Qwen is current?"})
+    {
+        Check(lookup(fresh),
+            "\"" + fresh + "\" stayed local. A technical keyword erased a clear "
+            "current-version question.");
+    }
+
+    // Release status is a freshness question even without the word "latest".
+    for (const std::string status : {
+        "Did Python 3.14 release yet?",
+        "Has Unreal Engine 5.8 released yet?",
+        "Is CUDA 13 out yet?",
+        "Is the new Rider available yet?"})
+    {
+        Check(lookup(status),
+            "\"" + status + "\" stayed local. Asking whether something has shipped is a "
+            "question about the current world.");
+    }
+
+    // Stable knowledge is what the local model is for; a web round trip buys nothing.
+    for (const std::string stable : {
+        "What is a mutex?",
+        "How does std::vector work?",
+        "What is a pointer?",
+        "How do virtual functions work?",
+        "When was std::filesystem standardized?"})
+    {
+        Check(!lookup(stable),
+            "\"" + stable + "\" paid for a web round trip to answer stable knowledge.");
+    }
+
+    // Historical version questions are static: they ask what already happened, not what
+    // is current. A bare "version" must never be enough on its own.
+    for (const std::string historical : {
+        "Which C++ version introduced std::format?",
+        "Which C++ standard introduced concepts?",
+        "What Python version added match statements?",
+        "What version of Python introduced match?",
+        "What Unreal version introduced Lumen?"})
+    {
+        Check(!lookup(historical),
+            "\"" + historical + "\" was treated as a current-events question. It asks "
+            "what already happened.");
+    }
+
+    // "current" and "latest" are ordinary English adjectives long before they are
+    // freshness signals. None of these have anything to do with the internet.
+    for (const std::string adjective : {
+        "What is the current value of this pointer?",
+        "What does current thread mean?",
+        "What is the latest element in this vector?",
+        "Explain the current object in this C++ iterator.",
+        "How does concurrent access to a version counter work?"})
+    {
+        Check(!lookup(adjective),
+            "\"" + adjective + "\" was read as a freshness request because of an "
+            "ordinary temporal adjective.");
+    }
+
+    // Explicit intent stays authoritative even when the subject is stable, and even in
+    // manual mode.
+    Check(lookup("Look up the latest Python version."),
+        "An explicit lookup of a current version was refused.");
+    Check(lookup("Search the web for how std::vector works."),
+        "An explicit web request lost to the static-knowledge exclusion.");
+    Check(revia::internet::InternetLookupPolicy::ShouldLookup(
+            "Look up how std::vector works.", false),
+        "An explicit request stopped being honoured in manual mode.");
+
+    // Manual mode still gates everything that was not explicitly requested, so this
+    // change decides usefulness only and never grants access.
+    Check(!revia::internet::InternetLookupPolicy::ShouldLookup(
+            "What's the latest Python version?", false),
+        "A freshness question performed an automatic lookup while automatic lookup was "
+        "switched off.");
+
+    // Ordinary non-technical freshness must keep working exactly as before.
+    Check(lookup("What's the latest news about the merger?"),
+        "A non-technical current-events question stopped requesting a lookup.");
+    Check(lookup("Who is the current CEO of Valve?"),
+        "A non-technical current-fact question stopped requesting a lookup.");
+    Check(lookup("What is the weather today?"),
+        "A time-sensitive question stopped requesting a lookup.");
+
+    // Local screen context is not a public fact, however current it is.
+    Check(!lookup("What is the current version shown on my screen?"),
+        "A question about retained local screen context left the machine.");
+}
+
 void TestConversationQualityMonitorReportsKnownFailures()
 {
     revia::agents::ConversationQualityMonitor monitor;
@@ -1892,6 +2000,94 @@ void TestTieredIntelligenceRoutesBeforeGeneration()
     const auto expertVisual = router.Route("Analyze this Blueprint graph.", vision);
     Check(expertVisual.selectedTier == IntelligenceTier::ExpertVision,
         "A difficult visual request did not select Expert vision.");
+}
+
+// The regression: "Why?" normalizes to exactly "why", which used to sit in FastExact, so
+// a follow-up to an Expert answer was handed to the 0.8B brain because it was short. A
+// tier is effort, not identity, and a short question about a hard answer is not a cheap
+// question.
+void TestShortFollowUpsInheritTheEffortOfTheAnswerTheyFollow()
+{
+    using revia::intelligence::IntelligenceTier;
+    using revia::intelligence::RoutingContext;
+    revia::intelligence::IntelligenceRouter router;
+
+    const auto standalone = router.Route("Why?");
+    Check(standalone.selectedTier != IntelligenceTier::Fast,
+        "A bare \"Why?\" with nothing to follow up on still collapsed to Fast.");
+    Check(standalone.selectedTier == IntelligenceTier::Main,
+        "A bare \"Why?\" with no previous answer did not fall back to the conservative "
+        "Main default.");
+
+    RoutingContext afterMain;
+    afterMain.previousAssistantTier = IntelligenceTier::Main;
+    RoutingContext afterExpert;
+    afterExpert.previousAssistantTier = IntelligenceTier::Expert;
+
+    Check(router.Route("Why?", afterMain).selectedTier == IntelligenceTier::Main,
+        "A follow-up to a Main answer did not stay on Main.");
+    Check(router.Route("Why?", afterExpert).selectedTier == IntelligenceTier::Expert,
+        "A follow-up to an Expert answer did not keep Expert.");
+    Check(router.Route("How?", afterExpert).selectedTier == IntelligenceTier::Expert,
+        "\"How?\" after an Expert answer did not keep Expert.");
+    Check(router.Route("Why not?", afterExpert).selectedTier == IntelligenceTier::Expert,
+        "\"Why not?\" after an Expert answer did not keep Expert.");
+    Check(router.Route("What do you mean?", afterExpert).selectedTier ==
+            IntelligenceTier::Expert,
+        "\"What do you mean?\" after an Expert answer did not keep Expert.");
+
+    // "Explain that." contains "explain", a Main signal. Read as a fresh request it looks
+    // like ordinary Main work, but "that" is the previous answer, so continuity has to
+    // outrank the substring match.
+    Check(router.Route("Explain that.", afterExpert).selectedTier ==
+            IntelligenceTier::Expert,
+        "\"Explain that.\" after an Expert answer was routed as a fresh Main request "
+        "instead of as a follow-up.");
+
+    Check(router.Route("It still doesn't work.", afterMain).selectedTier ==
+            IntelligenceTier::Main,
+        "A failure continuation after a Main answer did not stay on Main.");
+    Check(router.Route("It still does not work.", afterMain).selectedTier ==
+            IntelligenceTier::Main,
+        "The unabbreviated failure continuation did not stay on Main.");
+
+    // Social turns stay cheap however hard the previous answer was, or every "thanks"
+    // after a debugging session would cost Expert inference.
+    for (const std::string social : {"Thanks.", "thank you", "ok", "Okay.", "Hi.",
+        "hello", "cool"})
+    {
+        Check(router.Route(social, afterExpert).selectedTier == IntelligenceTier::Fast,
+            "\"" + social + "\" after an Expert answer did not stay Fast.");
+    }
+
+    // No tier stickiness: a new request routes on its own merits.
+    const auto unrelated = router.Route("Write me a poem.", afterExpert);
+    Check(unrelated.selectedTier != IntelligenceTier::Expert,
+        "An unrelated new request inherited Expert purely because the previous answer "
+        "was Expert.");
+
+    // Clear current-turn intent still outranks continuity in both directions.
+    RoutingContext visionAfterMain = afterMain;
+    visionAfterMain.visionRequired = true;
+    Check(router.Route("What is on my screen?", visionAfterMain).selectedTier ==
+            IntelligenceTier::Vision,
+        "An explicit screen request lost to follow-up continuity.");
+    Check(router.Route("Why is this deadlocking?", afterMain).selectedTier ==
+            IntelligenceTier::Expert,
+        "An explicit Expert signal lost to Main continuity.");
+
+    // A cheap previous turn is never inherited onto a question that may deserve more,
+    // and a reflex turn is not a conversational answer to follow up on.
+    RoutingContext afterFast;
+    afterFast.previousAssistantTier = IntelligenceTier::Fast;
+    Check(router.Route("Why?", afterFast).selectedTier != IntelligenceTier::Fast,
+        "A follow-up inherited Fast from a social turn instead of falling back "
+        "conservatively.");
+    RoutingContext afterReflex;
+    afterReflex.previousAssistantTier = IntelligenceTier::Reflex;
+    Check(router.Route("Why?", afterReflex).selectedTier == IntelligenceTier::Main,
+        "A follow-up to a reflex response did not fall back to the conservative "
+        "default.");
 }
 
 void TestReflexesAreContextualAndModelFree()
@@ -7498,6 +7694,7 @@ int main(const int argc, char** argv)
         TestCapabilityEditorPersistsNarrowLivePermissions();
         TestActionRuntimeReloadsEditedCapabilities();
         TestInternetCapabilityIsBoundedAndGrounded();
+        TestCurrentTechnicalFactsLookUpAndStableOnesStayLocal();
         TestConversationQualityMonitorReportsKnownFailures();
         TestDesktopActionRateLimitsAreDeterministic();
         TestDesktopRateLimitIsAudited();
@@ -7516,6 +7713,7 @@ int main(const int argc, char** argv)
         TestRuntimeEventBus();
         TestAffectController();
         TestTieredIntelligenceRoutesBeforeGeneration();
+        TestShortFollowUpsInheritTheEffortOfTheAnswerTheyFollow();
         TestReflexesAreContextualAndModelFree();
         TestHumanizationStateIsSharedAndHasMomentum();
         TestSelfInquiryOnlyOpensForMajorProblems();

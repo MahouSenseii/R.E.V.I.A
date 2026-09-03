@@ -259,6 +259,12 @@ private:
     std::string previousReflexResponse;
     std::string previousReflexInput;
     std::size_t repeatedReflexCalls = 0;
+    // The tier that produced the last answer this conversation actually delivered, so a
+    // short follow-up can inherit its effort. Set at the one point a reply enters
+    // conversation history, which is why a cancelled, failed, or empty generation never
+    // reaches it. Transient and deliberately not persisted: routing effort is not
+    // identity, and a restarted session starts with no tier rather than a guessed one.
+    std::optional<intelligence::IntelligenceTier> previousDeliveredTier;
     std::uint64_t turnCounter = 0;
     std::uint64_t utteranceCounter = 0;
 };

@@ -593,6 +593,12 @@ evaluation::EvaluationReply ConversationRuntime::EvaluateTurn(
     routingContext.visionRequired = MentionsScreenEvidence(input);
     routingContext.explicitResearch = MentionsInternet(input);
     routingContext.recentContextCharacters = ContextCharacters(promptContext);
+    // previousAssistantTier is deliberately left empty. This path measures a supplied
+    // corpus, so letting it read the live conversation's last delivered tier would make
+    // a suite result depend on whatever the user happened to say beforehand -- exactly
+    // what the supplied history above exists to prevent. A case that wants to measure
+    // follow-up continuity needs to state its own previous tier, which is evaluation
+    // work rather than routing work.
     const intelligence::IntelligenceDecision decision =
         intelligenceRouter.Route(input, routingContext);
 
@@ -700,6 +706,13 @@ SessionResult ConversationRuntime::Generate(
     routingContext.explicitResearch = turnPolicy.allowInternetLookup &&
         (!precomputedInternetGrounding.empty() || MentionsInternet(policyInput));
     routingContext.recentContextCharacters = ContextCharacters(promptContext);
+    // Only the local thread carries continuity. A public-audience turn answers a
+    // different conversation, and it does not record a tier below either, so the two
+    // cannot steer each other's routing.
+    if (!turnPolicy.publicAudience)
+    {
+        routingContext.previousAssistantTier = previousDeliveredTier;
+    }
     intelligence::IntelligenceDecision routeDecision;
     if (proactive)
     {
@@ -1398,6 +1411,14 @@ SessionResult ConversationRuntime::Generate(
         if (!turnPolicy.publicAudience)
         {
             context.AddMessage("assistant", output.response);
+            // Recorded here, beside the one place a reply becomes part of this
+            // conversation, so the tier a follow-up inherits is always the tier that
+            // produced an answer the user actually received. A failed generation
+            // returned above, a cancelled one returned a few lines above that, and an
+            // empty response never enters this block, so none of them can be inherited.
+            // The self-inquiry pass has its own agent and never touches routeDecision,
+            // so deliberation cannot be mistaken for the answering tier either.
+            previousDeliveredTier = routeDecision.selectedTier;
         }
     }
 

@@ -33,6 +33,30 @@ bool ContainsAny(
     });
 }
 
+// A short turn that cannot be understood on its own, only against the answer before it.
+//
+// Deliberately an exact match against a small closed list rather than a prefix or
+// substring test: "why" has to mean the bare follow-up, while "why does vector growth
+// invalidate iterators?" is a complete question that must route on its own merits. The
+// list stays short on purpose. Normalize() has already lowercased the text and removed
+// trailing punctuation, so no entry carries a question mark.
+bool IsContextualFollowUp(const std::string& normalizedInput)
+{
+    static constexpr std::array FollowUps = {
+        std::string_view{"why"}, std::string_view{"how"},
+        std::string_view{"why not"}, std::string_view{"explain that"},
+        std::string_view{"what do you mean"}, std::string_view{"and then"},
+        std::string_view{"what about that"},
+        // Both spellings, matching how FastExact already carries "that's funny" and
+        // "thats funny", because normalization does not touch apostrophes.
+        std::string_view{"it still doesn't work"},
+        std::string_view{"it still doesnt work"},
+        std::string_view{"it still does not work"}
+    };
+    return std::find(FollowUps.begin(), FollowUps.end(), normalizedInput) !=
+        FollowUps.end();
+}
+
 IntelligenceDecision Decision(
     const IntelligenceTier tier,
     const ReasoningMode mode,
@@ -112,6 +136,45 @@ IntelligenceDecision IntelligenceRouter::Route(
             0.87F);
     }
 
+    // Conversational continuity, checked only after every explicit current-turn signal
+    // above has had its chance: a clear new intent always outranks what came before, so
+    // "What is on my screen?" still routes to vision and "deadlock" still routes to
+    // Expert even mid-thread. What is left here is a follow-up that carries no intent of
+    // its own, and answering it with the smallest brain is what made Revia get weaker
+    // exactly when the user asked her to go deeper.
+    //
+    // This sits above MainSignals because "Explain that." contains "explain": read as a
+    // fresh request it looks like ordinary Main work, but it is anaphoric -- "that" is
+    // the previous answer -- so the tier that produced that answer is the right effort.
+    //
+    // Only Main and Expert are inherited. Fast and Reflex are not escalated and not
+    // preserved, so a social exchange never makes the next turn expensive and a cheap
+    // route is never inherited onto a question that may deserve more; those fall through
+    // to the conservative default below. Vision tiers are not inherited either, because
+    // re-selecting a projector without a current visual requirement would point a vision
+    // model at no image.
+    if (context.previousAssistantTier.has_value() && IsContextualFollowUp(text))
+    {
+        if (*context.previousAssistantTier == IntelligenceTier::Expert)
+        {
+            return Decision(
+                IntelligenceTier::Expert, ReasoningMode::Deep,
+                "Qwen3-VL-8B-Instruct-Unredacted-MAX.Q4_K_M.gguf",
+                "A short follow-up to an Expert answer keeps the effort that answer "
+                "was worth.",
+                0.8F);
+        }
+        if (*context.previousAssistantTier == IntelligenceTier::Main)
+        {
+            return Decision(
+                IntelligenceTier::Main, ReasoningMode::Fast,
+                "Qwen3.5-4B-Q4_K_M.gguf",
+                "A short follow-up to a Main answer keeps the effort that answer was "
+                "worth.",
+                0.8F);
+        }
+    }
+
     static constexpr std::array MainSignals = {
         std::string_view{"explain"}, std::string_view{"implement"},
         std::string_view{"debug"}, std::string_view{"error"},
@@ -137,12 +200,17 @@ IntelligenceDecision IntelligenceRouter::Route(
             0.84F);
     }
 
+    // "why" deliberately is not here. It is the one entry that was not social: bare
+    // "Why?" is a substantive follow-up to whatever was just said, and matching it
+    // unconditionally sent every technical follow-up to the smallest brain. It is
+    // handled by the continuity rule above when there is an answer to follow up on, and
+    // otherwise falls to the conservative default rather than to Fast.
     static constexpr std::array FastExact = {
         std::string_view{"hi"}, std::string_view{"hello"},
         std::string_view{"hey"}, std::string_view{"thanks"},
         std::string_view{"thank you"}, std::string_view{"okay"},
         std::string_view{"ok"}, std::string_view{"cool"},
-        std::string_view{"really"}, std::string_view{"why"},
+        std::string_view{"really"},
         std::string_view{"what's up"}, std::string_view{"whats up"},
         std::string_view{"that's funny"}, std::string_view{"thats funny"}
     };
