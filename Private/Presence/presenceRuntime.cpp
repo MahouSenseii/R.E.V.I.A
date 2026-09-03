@@ -1,4 +1,6 @@
+#include "Presence/adapterArchivePolicy.h"
 #include "Presence/presenceRuntime.h"
+#include "Core/runtimePath.h"
 
 #include <algorithm>
 #include <cctype>
@@ -168,7 +170,8 @@ bool PresenceRuntime::Start(
     AdapterHandler inputAdapterHandler)
 {
     Shutdown();
-    const std::uint64_t previousSequence = ExistingSequence(settings.statePath);
+    const std::uint64_t previousSequence =
+        ExistingSequence(core::ResolveRuntimeWritePath(settings.statePath));
     {
         std::lock_guard lock(mutex);
         configuration = settings;
@@ -184,10 +187,16 @@ bool PresenceRuntime::Start(
         recentAdapterIdOrder.clear();
         recentAdapterIds.clear();
         lastStreamReply = {};
-        inboxRoot = settings.inboxPath;
-        outboxRoot = settings.outboxPath;
-        stateFile = settings.statePath;
-        eventFile = settings.eventPath;
+        // Anchored to the canonical runtime root, not to the process working
+        // directory. These files do not exist on a first run, so the read-side
+        // resolver would have fallen through to a CWD-relative absolute path and a
+        // shortcut, a startup entry, or any launcher started elsewhere would have
+        // created a second RuntimeData tree there. Absolute configured paths are
+        // returned unchanged.
+        inboxRoot = core::ResolveRuntimeWritePath(settings.inboxPath);
+        outboxRoot = core::ResolveRuntimeWritePath(settings.outboxPath);
+        stateFile = core::ResolveRuntimeWritePath(settings.statePath);
+        eventFile = core::ResolveRuntimeWritePath(settings.eventPath);
     }
 
     // The runtime folders are part of the install contract even when their optional
@@ -211,7 +220,7 @@ bool PresenceRuntime::Start(
             : "Presence coordination is disabled."});
     Notify({"Avatar", settings.bAvatarBridgeEnabled ? "Ready" : "Disabled",
         settings.bAvatarBridgeEnabled
-            ? "Avatar state is available at " + settings.statePath + "."
+            ? "Avatar state is available at " + stateFile.string() + "."
             : "The avatar bridge is disabled."});
     Notify({"Adapters", settings.bExternalAdaptersEnabled ? "Watching" : "Disabled",
         settings.bExternalAdaptersEnabled
@@ -409,6 +418,39 @@ void PresenceRuntime::RunAdapterInbox(const std::stop_token stopToken)
     }
 }
 
+void PresenceRuntime::PruneAdapterArchive(const std::filesystem::path& directory)
+{
+    int maximumFiles = 0;
+    int maximumAgeDays = 0;
+    {
+        std::lock_guard lock(mutex);
+        maximumFiles = configuration.adapterArchiveMaximumFiles;
+        maximumAgeDays = configuration.adapterArchiveMaximumAgeDays;
+    }
+    if (maximumFiles <= 0 && maximumAgeDays <= 0) return;
+
+    std::error_code error;
+    std::vector<std::pair<std::filesystem::file_time_type, std::filesystem::path>> kept;
+    for (const auto& entry : std::filesystem::directory_iterator(directory, error))
+    {
+        if (!entry.is_regular_file(error) || error) { error.clear(); continue; }
+        const auto written = entry.last_write_time(error);
+        if (error) { error.clear(); continue; }
+        kept.emplace_back(written, entry.path());
+    }
+    if (error) return;
+
+    // Policy lives in SelectExpiredArchiveFiles so it can be tested without a
+    // filesystem; this function only walks the directory and deletes what it names.
+    for (const std::filesystem::path& stale : SelectExpiredArchiveFiles(
+            std::move(kept), maximumFiles, maximumAgeDays,
+            std::filesystem::file_time_type::clock::now()))
+    {
+        std::error_code removeError;
+        std::filesystem::remove(stale, removeError);
+    }
+}
+
 void PresenceRuntime::ScanAdapterInbox()
 {
     std::error_code error;
@@ -436,6 +478,10 @@ void PresenceRuntime::ScanAdapterInbox()
             error.clear();
             std::filesystem::remove(path, error);
         }
+        // Pruned after the move, and only the archive the file just landed in. The
+        // inbox itself is never touched here: a file still arriving must not be
+        // considered for retention.
+        PruneAdapterArchive(destinationRoot);
         if (!parsed)
         {
             Notify({"Adapters", "Rejected", parseError});
@@ -653,6 +699,19 @@ void PresenceRuntime::UpdatePhase(std::string phase, std::string attention)
 
 void PresenceRuntime::WriteAvatarState(const bool appendEvent)
 {
+    // Writer serialization is acquired BEFORE the snapshot is captured, and that order
+    // is the whole fix.
+    //
+    // Capturing first and writing afterwards let two threads interleave: A copies
+    // sequence 40 and stalls, B copies 41 and writes it, then A writes 40 over the top.
+    // Each write was atomic and the file still went backwards. Taking writer ownership
+    // first means whoever is about to write reads the newest state that exists at that
+    // moment, so writes are monotonic by construction rather than by luck.
+    //
+    // The state mutex is still only held for the copy. Disk I/O happens under the
+    // writer lock alone, so a slow write never blocks an affect or phase update.
+    std::lock_guard writerLock(writerMutex);
+
     PresenceSnapshot current;
     std::filesystem::path statePath;
     std::filesystem::path eventsPath;
@@ -663,6 +722,10 @@ void PresenceRuntime::WriteAvatarState(const bool appendEvent)
         eventsPath = eventFile;
     }
     if (!current.avatarBridgeEnabled || statePath.empty()) return;
+    // Second line of defence, independent of the ordering above. A sequence that is not
+    // newer than what is already on disk is not written at all: the file is a current
+    // state, and replacing it with an older one is worse than skipping the write.
+    if (lastWrittenSequence != 0 && current.sequence <= lastWrittenSequence) return;
     const nlohmann::json document = {
         {"version", 1}, {"sequence", current.sequence}, {"timestamp", IsoTimestamp()},
         {"phase", current.phase}, {"expression", Expression(current.affect)},
@@ -678,6 +741,9 @@ void PresenceRuntime::WriteAvatarState(const bool appendEvent)
         Notify({"Avatar", "Error", "The avatar state file could not be updated."});
         return;
     }
+    // Recorded only after the write succeeded, so a failed write does not bar the
+    // retry that follows it.
+    lastWrittenSequence = current.sequence;
     if (appendEvent && !eventsPath.empty())
     {
         int maximumBytes = 0;

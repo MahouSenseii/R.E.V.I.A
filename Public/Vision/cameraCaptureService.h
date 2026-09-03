@@ -19,6 +19,45 @@ struct CameraDescriptor
     std::string symbolicLink;
 };
 
+// Which camera a capture should use.
+//
+// A selection, not a name. The display name is not identity -- two identical webcams
+// report the same friendly name -- and the index is not identity either, because it
+// renumbers whenever a device is attached or a virtual camera starts.
+struct CameraSelection
+{
+    // The durable identity. Empty means "use whatever the configured preference
+    // resolves to", which is what autonomous capture and an unconfigured shell do.
+    std::string symbolicLink;
+    // Where the device sat when the selection was made, 1-based. Secondary on purpose:
+    // useful for reporting and as a fallback only when nothing was explicitly chosen.
+    int index = 0;
+    // True when a person picked this device from a list. An explicit choice is never
+    // satisfied by a different physical camera -- pointing a lens the user did not
+    // choose is the one outcome worse than not capturing at all.
+    bool explicitChoice = false;
+};
+
+// What a selection resolved to against the cameras actually attached.
+struct CameraResolution
+{
+    bool available = false;
+    int index = 1;
+    std::string symbolicLink;
+    std::string name;
+    // Always populated, in plain language, for the log and the shell.
+    std::string reason;
+};
+
+// Resolves a selection against the devices present right now.
+//
+// Free and pure so the substitution rules are testable without a webcam. The rule that
+// matters: an explicit choice that is no longer attached resolves to unavailable rather
+// than to some other camera.
+[[nodiscard]] CameraResolution ResolveCamera(
+    const std::vector<CameraDescriptor>& cameras,
+    const CameraSelection& selection);
+
 struct CameraFrame
 {
     bool succeeded = false;
@@ -58,7 +97,11 @@ public:
         const std::filesystem::path& outputDirectory,
         int cameraIndex = 1,
         const std::string& symbolicLink = {},
-        int warmupFrames = 10) const;
+        int warmupFrames = 10,
+        // When true, a symbolicLink that is not attached fails instead of falling back
+        // to whichever device holds cameraIndex. Set for an explicit user choice: the
+        // fallback is a convenience for "any camera", never for "that camera".
+        bool requireSymbolicLink = false) const;
 };
 
 } // namespace revia::vision

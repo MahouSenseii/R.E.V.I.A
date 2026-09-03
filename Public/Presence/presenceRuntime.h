@@ -85,6 +85,10 @@ public:
 private:
     void RunAdapterInbox(std::stop_token stopToken);
     void ScanAdapterInbox();
+    // Bounded retention for one archive directory. Processed and Rejected are pruned
+    // separately so a burst of rejects cannot evict the successful envelopes someone is
+    // comparing them against.
+    void PruneAdapterArchive(const std::filesystem::path& directory);
     bool ParseAdapterFile(
         const std::filesystem::path& path,
         ExternalAdapterEvent& outEvent,
@@ -101,6 +105,13 @@ private:
     void Notify(PresenceNotice notice) const;
 
     mutable std::mutex mutex;
+    // Held for the whole of one avatar-state write, and acquired before the snapshot is
+    // captured. Separate from `mutex` so disk I/O never blocks a state update, and
+    // ordered before it so a writer always serialises the newest state rather than one
+    // it captured earlier. Never acquire `mutex` and then this one.
+    std::mutex writerMutex;
+    // Highest sequence successfully written to the state file. Guarded by writerMutex.
+    std::uint64_t lastWrittenSequence = 0;
     presenceSettings configuration;
     NoticeHandler noticeHandler;
     AdapterHandler adapterHandler;

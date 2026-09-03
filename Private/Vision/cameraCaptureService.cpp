@@ -275,11 +275,72 @@ std::vector<CameraDescriptor> CameraCaptureService::EnumerateCameras() const
     return cameras;
 }
 
+CameraResolution ResolveCamera(
+    const std::vector<CameraDescriptor>& cameras,
+    const CameraSelection& selection)
+{
+    CameraResolution resolution;
+    if (cameras.empty())
+    {
+        resolution.reason = "No camera is attached.";
+        return resolution;
+    }
+
+    // Identity first, always. The link is the only field that still means the same
+    // physical device after something else is plugged in.
+    if (!selection.symbolicLink.empty())
+    {
+        for (const CameraDescriptor& camera : cameras)
+        {
+            if (camera.symbolicLink == selection.symbolicLink)
+            {
+                resolution.available = true;
+                resolution.index = camera.index;
+                resolution.symbolicLink = camera.symbolicLink;
+                resolution.name = camera.name;
+                resolution.reason = "Using " + camera.name + ".";
+                return resolution;
+            }
+        }
+        if (selection.explicitChoice)
+        {
+            // Deliberately does not fall through to the index below. A chosen camera
+            // that is gone is unavailable; substituting whichever device now holds that
+            // position is exactly the silent swap this function exists to prevent.
+            resolution.reason = "The selected camera is no longer attached. Choose "
+                "another camera; Revia will not quietly use a different one.";
+            return resolution;
+        }
+    }
+
+    // No explicit choice: position is an acceptable hint.
+    const int wanted = selection.index < 1 ? 1 : selection.index;
+    for (const CameraDescriptor& camera : cameras)
+    {
+        if (camera.index == wanted)
+        {
+            resolution.available = true;
+            resolution.index = camera.index;
+            resolution.symbolicLink = camera.symbolicLink;
+            resolution.name = camera.name;
+            resolution.reason = "Using " + camera.name + ".";
+            return resolution;
+        }
+    }
+    resolution.available = true;
+    resolution.index = cameras.front().index;
+    resolution.symbolicLink = cameras.front().symbolicLink;
+    resolution.name = cameras.front().name;
+    resolution.reason = "Using " + cameras.front().name + ".";
+    return resolution;
+}
+
 CameraFrame CameraCaptureService::CaptureFrame(
     const std::filesystem::path& outputDirectory,
     const int cameraIndex,
     const std::string& symbolicLink,
-    const int warmupFrames) const
+    const int warmupFrames,
+    const bool requireSymbolicLink) const
 {
     const auto started = std::chrono::steady_clock::now();
     CameraFrame result;
@@ -334,6 +395,15 @@ CameraFrame CameraCaptureService::CaptureFrame(
     }
     if (chosen >= devices.Count())
     {
+        // An explicit device that is not here is a refusal, not an invitation to use a
+        // different one. Falling back on index would point a lens the user did not
+        // choose, which is worse than capturing nothing.
+        if (requireSymbolicLink && !symbolicLink.empty())
+        {
+            result.reason = "The selected camera is no longer attached. Nothing was "
+                "captured, because another camera is not the one that was chosen.";
+            return result;
+        }
         const int wanted = cameraIndex < 1 ? 1 : cameraIndex;
         if (static_cast<UINT32>(wanted) > devices.Count())
         {

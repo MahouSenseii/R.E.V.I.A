@@ -65,3 +65,6 @@ void RunDevelopmentTests();
 void RunAutonomyTests();
 void RunLoadAndNameTests();
 void RunVoicePoolTests();
+void RunMicrophoneTests();
+void RunActivityExecutionTests();
+void RunAuditFindingsTests();

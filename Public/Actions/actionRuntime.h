@@ -9,6 +9,7 @@
 #include "Policy/permissionStore.h"
 
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -48,6 +49,20 @@ public:
         const ActionRequest& request,
         const policy::CapabilityPolicy& scopedPolicy,
         bool confirmationGranted = false);
+    // Notified immediately before and immediately after every dispatched action,
+    // whichever entry point reached it.
+    //
+    // Exists so a caller can scope runtime state to the life of an action without every
+    // call site having to remember to. Both Execute and ExecuteScoped funnel through the
+    // same dispatch, so one observer covers the command path, the LLM-planned path, the
+    // vision-resolved path, and goal steps -- which is the difference between a policy
+    // that is wired and one that is merely declared.
+    //
+    // The observer is called with the dispatcher lock held. It must not execute another
+    // action or block on model or network work.
+    using DispatchObserver = std::function<void(const ActionRequest&, bool beginning)>;
+    void SetDispatchObserver(DispatchObserver observer);
+
     [[nodiscard]] std::string StatusJson() const;
     [[nodiscard]] bool IsInitialized() const;
 
@@ -97,6 +112,7 @@ private:
     ActionDispatcher dispatcher;
     std::unique_ptr<audit::ActionAuditLogger> auditLogger;
     planning::StructuredActionParser parser;
+    DispatchObserver dispatchObserver;
     policy::DesktopActionRateLimiter desktopRateLimiter;
     std::filesystem::path capabilityConfigPath;
     std::filesystem::path auditPath;

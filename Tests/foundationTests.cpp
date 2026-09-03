@@ -7647,6 +7647,9 @@ int main(const int argc, char** argv)
         RunAutonomyTests();
         RunLoadAndNameTests();
         RunVoicePoolTests();
+        RunMicrophoneTests();
+        RunActivityExecutionTests();
+        RunAuditFindingsTests();
         std::cout << "All Revia foundation tests passed.\n";
         return 0;
     }

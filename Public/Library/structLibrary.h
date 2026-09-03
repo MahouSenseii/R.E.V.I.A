@@ -328,6 +328,14 @@ struct speechRecognitionSettings
     // setting rather than an authority setting: transcripts still enter the same input
     // arbiter and cannot widen action permissions.
     bool bHandsFree = false;
+    // Which Windows recording device to capture from, by product name. Empty or
+    // "Default" follows whatever Windows is set to.
+    //
+    // By name rather than by waveIn ordinal deliberately: ordinals renumber whenever a
+    // device is plugged in or removed, so a saved index quietly becomes a different
+    // microphone. A name that is no longer present is a reportable condition; a wrong
+    // device that still works is not, which is why the index cannot be trusted.
+    std::string microphoneDevice;
     int vadEnergyThreshold = 900;
     int vadSpeechFrames = 3;
     int vadSilenceMs = 350;
@@ -352,6 +360,17 @@ struct presenceSettings
     int maxAdapterTextCharacters = 4000;
     int maxAvatarEventBytes = 4194304;
     int rememberedAdapterIds = 2048;
+    // How many distinct public channel histories are kept at once. Each channel is
+    // already capped by publicContextTurns; this caps how many channels exist, which is
+    // the growth path an adapter that sees many channel identifiers opens up.
+    int maxPublicConversationContexts = 32;
+    // Bounded retention for consumed adapter envelopes. Enough to debug what an adapter
+    // sent, not an indefinite archive of everything it ever sent -- these files hold
+    // message content, so unlimited retention is a privacy decision as much as a disk
+    // one. Processed and Rejected are capped separately: a burst of rejects should not
+    // evict the successful envelopes someone is trying to compare them against.
+    int adapterArchiveMaximumFiles = 200;
+    int adapterArchiveMaximumAgeDays = 14;
     int publicContextTurns = 6;
     int streamReplyCooldownSeconds = 4;
     bool bRequireAddressedStreamMessages = true;

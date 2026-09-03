@@ -51,7 +51,74 @@ std::filesystem::path ExistingFromAncestors(
     return {};
 }
 
+// A directory that holds a Config folder is a Revia runtime root. Every install shape
+// -- development build output, packaged copy, portable directory -- has one, and
+// nothing else Revia might be launched from does.
+bool LooksLikeRuntimeRoot(const std::filesystem::path& candidate)
+{
+    std::error_code error;
+    return std::filesystem::is_directory(candidate / "Config", error) && !error;
+}
+
+std::filesystem::path NearestRuntimeRoot(std::filesystem::path root)
+{
+    for (int depth = 0; depth < 6 && !root.empty(); ++depth)
+    {
+        if (LooksLikeRuntimeRoot(root)) return root;
+        const std::filesystem::path parent = root.parent_path();
+        if (parent == root) break;
+        root = parent;
+    }
+    return {};
+}
+
 } // namespace
+
+std::filesystem::path RuntimeRoot()
+{
+    // The launch directory wins when it is itself a runtime root, so running from the
+    // build output behaves exactly as it did before this existed.
+    std::error_code error;
+    const std::filesystem::path launchDirectory =
+        std::filesystem::current_path(error);
+    if (!error)
+    {
+        if (const std::filesystem::path fromLaunch =
+                NearestRuntimeRoot(launchDirectory);
+            !fromLaunch.empty())
+        {
+            return fromLaunch;
+        }
+    }
+    const std::filesystem::path executable = ExecutableDirectory();
+    if (const std::filesystem::path fromExecutable = NearestRuntimeRoot(executable);
+        !fromExecutable.empty())
+    {
+        return fromExecutable;
+    }
+    return executable;
+}
+
+std::filesystem::path ResolveRuntimeWritePath(
+    const std::filesystem::path& configuredPath)
+{
+    if (configuredPath.empty() || configuredPath.is_absolute())
+    {
+        return configuredPath.lexically_normal();
+    }
+    // An existing file still wins, so a path already in use never moves underneath a
+    // running install.
+    if (const std::filesystem::path existing = ResolveRuntimePath(configuredPath);
+        !existing.empty())
+    {
+        std::error_code error;
+        if (std::filesystem::exists(existing, error) && !error)
+        {
+            return existing;
+        }
+    }
+    return (RuntimeRoot() / configuredPath).lexically_normal();
+}
 
 std::filesystem::path ResolveRuntimePath(
     const std::filesystem::path& configuredPath)

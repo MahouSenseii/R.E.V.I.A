@@ -1,5 +1,6 @@
 #include "Agents/memoryAgent.h"
 
+#include <array>
 #include <chrono>
 #include <utility>
 
@@ -16,6 +17,164 @@ MemoryAgent::~MemoryAgent()
     Stop();
 }
 
+std::string ToString(const MemoryTaskClass value)
+{
+    switch (value)
+    {
+        case MemoryTaskClass::InteractiveTurn: return "turn";
+        case MemoryTaskClass::AutonomousLearning: return "learning";
+        case MemoryTaskClass::EmbeddingBackfill: return "backfill";
+    }
+    return "turn";
+}
+
+MemoryTaskClass MemoryAgent::NextClass(
+    const QueueDepths& depths,
+    int& roundPosition,
+    bool& outHasWork)
+{
+    outHasWork = depths.interactive > 0 || depths.learning > 0 || depths.backfill > 0;
+    if (!outHasWork) return MemoryTaskClass::InteractiveTurn;
+
+    // Four interactive slots, two learning, one backfill, repeating. Every class is
+    // reached once per round whatever the others are doing, which is what makes
+    // starvation impossible rather than merely unlikely.
+    static constexpr std::array<MemoryTaskClass, 7> Round{
+        MemoryTaskClass::InteractiveTurn,
+        MemoryTaskClass::InteractiveTurn,
+        MemoryTaskClass::AutonomousLearning,
+        MemoryTaskClass::InteractiveTurn,
+        MemoryTaskClass::InteractiveTurn,
+        MemoryTaskClass::AutonomousLearning,
+        MemoryTaskClass::EmbeddingBackfill};
+
+    const auto available = [&depths](const MemoryTaskClass value)
+    {
+        switch (value)
+        {
+            case MemoryTaskClass::InteractiveTurn: return depths.interactive > 0;
+            case MemoryTaskClass::AutonomousLearning: return depths.learning > 0;
+            case MemoryTaskClass::EmbeddingBackfill: return depths.backfill > 0;
+        }
+        return false;
+    };
+
+    // The slot this round is on, if it has work.
+    const int start = ((roundPosition % 7) + 7) % 7;
+    if (available(Round[static_cast<std::size_t>(start)]))
+    {
+        roundPosition = start + 1;
+        return Round[static_cast<std::size_t>(start)];
+    }
+    // Otherwise the next slot with work, scanning forward, so an empty class never
+    // idles the worker while another has a backlog.
+    for (int step = 1; step < 7; ++step)
+    {
+        const int position = (start + step) % 7;
+        if (available(Round[static_cast<std::size_t>(position)]))
+        {
+            roundPosition = position + 1;
+            return Round[static_cast<std::size_t>(position)];
+        }
+    }
+    roundPosition = start + 1;
+    return Round[static_cast<std::size_t>(start)];
+}
+
+void MemoryAgent::SetDiagnosticSink(DiagnosticSink sink)
+{
+    std::lock_guard lock(mutex);
+    diagnostics = std::move(sink);
+}
+
+void MemoryAgent::SetQueueLimits(const MemoryQueueLimits newLimits)
+{
+    std::lock_guard lock(mutex);
+    limits = newLimits;
+}
+
+MemoryAgent::QueueDepths MemoryAgent::Depths() const
+{
+    std::lock_guard lock(mutex);
+    return {interactiveTasks.size(), learningTasks.size(), backfillTasks.size()};
+}
+
+void MemoryAgent::Report(const std::string& line) const
+{
+    DiagnosticSink sink;
+    {
+        std::lock_guard lock(mutex);
+        sink = diagnostics;
+    }
+    // Called without the lock: the sink logs, and logging under the queue mutex would
+    // put file I/O in front of every submission.
+    if (sink) sink(line);
+}
+
+bool MemoryAgent::Enqueue(const MemoryTaskClass taskClass, Task task)
+{
+    std::string report;
+    bool admitted = true;
+    {
+        std::lock_guard lock(mutex);
+        switch (taskClass)
+        {
+            case MemoryTaskClass::InteractiveTurn:
+            {
+                if (interactiveTasks.size() >= limits.maximumInteractive)
+                {
+                    // The oldest pending evaluation is dropped rather than the newest,
+                    // because the newest describes the conversation that is actually
+                    // happening. This is a decision not yet made, not a memory already
+                    // decided, and it is reported rather than absorbed.
+                    interactiveTasks.pop_back();
+                    report = "[MemoryAgent] overflow | type=turn | dropped=oldest | "
+                        "depth=" + std::to_string(interactiveTasks.size() + 1);
+                }
+                interactiveTasks.push_front(std::move(task));
+                break;
+            }
+            case MemoryTaskClass::AutonomousLearning:
+            {
+                if (learningTasks.size() >= limits.maximumLearning)
+                {
+                    // Never dropped. This is a memory Revia already decided to keep, so
+                    // losing it would lose a durable decision. Refusing the submission
+                    // and saying so is the only honest option.
+                    admitted = false;
+                    report = "[MemoryAgent] overflow | type=learning | refused | depth=" +
+                        std::to_string(learningTasks.size());
+                    break;
+                }
+                learningTasks.push_back(std::move(task));
+                break;
+            }
+            case MemoryTaskClass::EmbeddingBackfill:
+            {
+                if (!queuedBackfillIds.insert(task.memoryId).second)
+                {
+                    // Already waiting. A repeated scan finding the same unembedded row
+                    // must not queue it twice.
+                    return true;
+                }
+                if (backfillTasks.size() >= limits.maximumBackfill)
+                {
+                    queuedBackfillIds.erase(task.memoryId);
+                    admitted = false;
+                    report = "[MemoryAgent] delayed | reason=queue_pressure | "
+                        "type=backfill | depth=" + std::to_string(backfillTasks.size());
+                    break;
+                }
+                backfillTasks.push_back(std::move(task));
+                break;
+            }
+        }
+    }
+    if (!report.empty()) Report(report);
+    if (admitted) taskAvailable.notify_one();
+    return admitted;
+}
+
 void MemoryAgent::Submit(
     const messageRouter& router,
     std::string input,
@@ -27,16 +186,14 @@ void MemoryAgent::Submit(
         return;
     }
 
-    {
-        std::lock_guard lock(mutex);
-        Task task;
-        task.router = &router;
-        task.input = std::move(input);
-        task.assistantResponse = std::move(assistantResponse);
-        task.turnId = turnId;
-        tasks.push_front(std::move(task));
-    }
-    taskAvailable.notify_one();
+    Task task;
+    task.router = &router;
+    task.input = std::move(input);
+    task.assistantResponse = std::move(assistantResponse);
+    task.turnId = turnId;
+    (void)Enqueue(MemoryTaskClass::InteractiveTurn, std::move(task));
+    Report("[MemoryAgent] queued | type=turn | depth=" +
+        std::to_string(Depths().interactive));
 }
 
 void MemoryAgent::SubmitLearnedFinding(
@@ -55,11 +212,12 @@ void MemoryAgent::SubmitLearnedFinding(
     task.learnedDecision = std::move(decision);
     task.hasLearnedDecision = true;
     task.turnId = turnId;
+    if (!Enqueue(MemoryTaskClass::AutonomousLearning, std::move(task)))
     {
-        std::lock_guard lock(mutex);
-        tasks.push_back(std::move(task));
+        return;
     }
-    taskAvailable.notify_one();
+    Report("[MemoryAgent] queued | type=learning | depth=" +
+        std::to_string(Depths().learning));
 }
 
 void MemoryAgent::SubmitEmbeddingBackfill(
@@ -78,18 +236,18 @@ void MemoryAgent::SubmitEmbeddingBackfill(
         return;
     }
 
+    std::size_t admitted = 0;
+    for (const memoryEntry& entry : missing)
     {
-        std::lock_guard lock(mutex);
-        for (const memoryEntry& entry : missing)
-        {
-            Task task;
-            task.router = &router;
-            task.input = entry.summary;
-            task.memoryId = entry.id;
-            tasks.push_back(std::move(task));
-        }
+        Task task;
+        task.router = &router;
+        task.input = entry.summary;
+        task.memoryId = entry.id;
+        if (Enqueue(MemoryTaskClass::EmbeddingBackfill, std::move(task))) ++admitted;
     }
-    taskAvailable.notify_one();
+    Report("[MemoryAgent] queued | type=backfill | admitted=" +
+        std::to_string(admitted) + " | scanned=" + std::to_string(missing.size()) +
+        " | depth=" + std::to_string(Depths().backfill));
 }
 
 std::vector<MemoryAgentEvent> MemoryAgent::DrainEvents()
@@ -121,16 +279,42 @@ void MemoryAgent::Run(const std::stop_token stopToken)
             std::unique_lock lock(mutex);
             taskAvailable.wait(lock, stopToken, [&]()
             {
-                return !tasks.empty();
+                return !interactiveTasks.empty() || !learningTasks.empty() ||
+                    !backfillTasks.empty();
             });
             if (stopToken.stop_requested())
             {
-                tasks.clear();
+                interactiveTasks.clear();
+                learningTasks.clear();
+                backfillTasks.clear();
+                queuedBackfillIds.clear();
                 return;
             }
 
-            task = std::move(tasks.front());
-            tasks.pop_front();
+            bool hasWork = false;
+            const QueueDepths depths{
+                interactiveTasks.size(), learningTasks.size(), backfillTasks.size()};
+            const MemoryTaskClass chosen =
+                NextClass(depths, roundPosition, hasWork);
+            if (!hasWork) continue;
+            switch (chosen)
+            {
+                case MemoryTaskClass::InteractiveTurn:
+                    task = std::move(interactiveTasks.front());
+                    interactiveTasks.pop_front();
+                    break;
+                case MemoryTaskClass::AutonomousLearning:
+                    task = std::move(learningTasks.front());
+                    learningTasks.pop_front();
+                    break;
+                case MemoryTaskClass::EmbeddingBackfill:
+                    task = std::move(backfillTasks.front());
+                    backfillTasks.pop_front();
+                    // Freed as it is taken, so a row that still needs embedding after a
+                    // failure can be queued again by the next scan.
+                    queuedBackfillIds.erase(task.memoryId);
+                    break;
+            }
         }
 
         if (!task.memoryId.empty())
@@ -162,6 +346,7 @@ void MemoryAgent::Run(const std::stop_token stopToken)
             }
             {
                 std::lock_guard lock(mutex);
+                if (events.size() >= limits.maximumPendingEvents) events.erase(events.begin());
                 events.push_back(std::move(event));
             }
             continue;
@@ -205,6 +390,7 @@ void MemoryAgent::Run(const std::stop_token stopToken)
 
         {
             std::lock_guard lock(mutex);
+            if (events.size() >= limits.maximumPendingEvents) events.erase(events.begin());
             events.push_back(std::move(event));
         }
     }

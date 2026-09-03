@@ -1,3 +1,7 @@
+#include <vector>
+#include <unordered_set>
+#include <unordered_map>
+#include <algorithm>
 #include "Learning/selfAssessment.h"
 
 #include "Actions/actionTypes.h"
@@ -36,8 +40,110 @@ bool SelfAssessmentEngine::Initialize(
         path.clear();
         return false;
     }
+
+    // Reading the history back is what makes it a history rather than an append-only
+    // sink. Without this the category guards reset with the process, so every restart
+    // could raise a fresh task for a problem already recorded -- which is the one thing
+    // the file existed to prevent.
+    snapshot.openTasks.clear();
+    slowTurnTaskCreated = false;
+    voiceTaskCreated = false;
+    reliabilityTaskCreated = false;
+    malformedHistoryRecords = 0;
+
+    std::ifstream file(path);
+    if (!file.is_open())
+    {
+        // No history yet is the normal first run, not a failure.
+        outError.clear();
+        return true;
+    }
+
+    std::string line;
+    std::unordered_map<std::string, SelfImprovementTask> byId;
+    std::vector<std::string> order;
+    std::unordered_set<std::string> resolved;
+    while (std::getline(file, line))
+    {
+        if (line.empty()) continue;
+        // Parsed per line, so a partially written final record -- the shape a crash
+        // leaves behind -- costs that record and nothing before it.
+        const json record = json::parse(line, nullptr, false);
+        if (record.is_discarded() || !record.is_object())
+        {
+            ++malformedHistoryRecords;
+            continue;
+        }
+        const std::string id = record.value("id", std::string{});
+        if (id.empty())
+        {
+            ++malformedHistoryRecords;
+            continue;
+        }
+        // A resolution retires a task rather than resurrecting it.
+        if (record.value("resolved", false))
+        {
+            resolved.insert(id);
+            continue;
+        }
+        SelfImprovementTask task;
+        task.id = id;
+        task.category = record.value("category", std::string{});
+        task.observedProblem = record.value("observedProblem", std::string{});
+        task.evidence = record.value("evidence", std::string{});
+        task.confidence = record.value("confidence", 0.0);
+        task.expectedBenefit = record.value("expectedBenefit", 0.0);
+        task.estimatedRisk = record.value("estimatedRisk", 0.0);
+        task.relatedMetrics = record.value("relatedMetrics", std::vector<std::string>{});
+        task.relatedComponents =
+            record.value("relatedComponents", std::vector<std::string>{});
+        task.researchAllowed = record.value("researchAllowed", false);
+        task.researchCompleted = record.value("researchCompleted", false);
+        if (byId.find(id) == byId.end()) order.push_back(id);
+        byId[id] = std::move(task);
+    }
+
+    for (const std::string& id : order)
+    {
+        if (resolved.count(id) != 0) continue;
+        const SelfImprovementTask& task = byId[id];
+        snapshot.openTasks.push_back(task);
+        // The guards follow what is still open, not what this process created. That is
+        // the difference between "already raised" and "raised since the last restart".
+        if (task.category == "performance") slowTurnTaskCreated = true;
+        else if (task.category == "voice") voiceTaskCreated = true;
+        else if (task.category == "reliability") reliabilityTaskCreated = true;
+    }
+
     outError.clear();
     return true;
+}
+
+std::size_t SelfAssessmentEngine::MalformedHistoryRecords() const
+{
+    std::lock_guard lock(mutex);
+    return malformedHistoryRecords;
+}
+
+bool SelfAssessmentEngine::ResolveTask(const std::string& taskId, std::string& outError)
+{
+    SelfImprovementTask retired;
+    {
+        std::lock_guard lock(mutex);
+        const auto found = std::find_if(
+            snapshot.openTasks.begin(), snapshot.openTasks.end(),
+            [&taskId](const SelfImprovementTask& task) { return task.id == taskId; });
+        if (found == snapshot.openTasks.end())
+        {
+            outError = "No open self-improvement task with that id.";
+            return false;
+        }
+        retired = *found;
+        snapshot.openTasks.erase(found);
+    }
+    // Appended rather than rewritten: the history stays append-only and a resolution is
+    // simply another record the loader honours.
+    return PersistResolution(retired, outError);
 }
 
 void SelfAssessmentEngine::Observe(const runtime::RuntimeEvent& event)
@@ -134,7 +240,16 @@ SelfAssessmentSnapshot SelfAssessmentEngine::Assess()
             : std::to_string(snapshot.openTasks.size()) +
                 " evidence-backed improvement task(s) are ready for review.";
     }
-    for (const SelfImprovementTask& task : created) PersistTask(task);
+    // A task that could not be written is not durable, and saying so beats a panel
+    // that lists it as recorded.
+    for (const SelfImprovementTask& task : created)
+    {
+        if (!PersistTask(task))
+        {
+            snapshot.conclusion += " (A self-improvement task could not be saved: " +
+                LastPersistenceError() + ")";
+        }
+    }
     return Snapshot();
 }
 
@@ -144,14 +259,41 @@ SelfAssessmentSnapshot SelfAssessmentEngine::Snapshot() const
     return snapshot;
 }
 
-void SelfAssessmentEngine::PersistTask(const SelfImprovementTask& task)
+bool SelfAssessmentEngine::AppendRecord(const json& record, std::string& outError)
 {
     std::filesystem::path destination;
     {
         std::lock_guard lock(mutex);
         destination = path;
     }
-    if (destination.empty()) return;
+    if (destination.empty())
+    {
+        outError = "The self-improvement history has no configured path.";
+        return false;
+    }
+    std::ofstream file(destination, std::ios::app);
+    if (!file.is_open())
+    {
+        outError = "The self-improvement history could not be opened for writing: " +
+            destination.string();
+        return false;
+    }
+    file << record.dump() << '\n';
+    // Flushed, then checked. The previous version tested only that the stream opened,
+    // so a full disk or a revoked permission produced a task the panel listed as
+    // durable and the next start had never heard of.
+    file.flush();
+    if (!file.good())
+    {
+        outError = "The self-improvement history could not be written: " +
+            destination.string();
+        return false;
+    }
+    return true;
+}
+
+bool SelfAssessmentEngine::PersistTask(const SelfImprovementTask& task)
+{
     const json record = {
         {"id", task.id}, {"category", task.category},
         {"observedProblem", task.observedProblem}, {"evidence", task.evidence},
@@ -159,11 +301,34 @@ void SelfAssessmentEngine::PersistTask(const SelfImprovementTask& task)
         {"estimatedRisk", task.estimatedRisk}, {"relatedMetrics", task.relatedMetrics},
         {"relatedComponents", task.relatedComponents},
         {"researchAllowed", task.researchAllowed},
-        {"researchCompleted", task.researchCompleted}
+        {"researchCompleted", task.researchCompleted},
+        {"resolved", false}
     };
-    std::ofstream file(destination, std::ios::app);
-    if (file.is_open()) file << record.dump() << '\n';
+    std::string error;
+    if (AppendRecord(record, error)) return true;
+    std::lock_guard lock(mutex);
+    lastPersistenceError = error;
+    return false;
 }
+
+bool SelfAssessmentEngine::PersistResolution(
+    const SelfImprovementTask& task,
+    std::string& outError)
+{
+    const json record = {
+        {"id", task.id}, {"category", task.category}, {"resolved", true}};
+    if (AppendRecord(record, outError)) return true;
+    std::lock_guard lock(mutex);
+    lastPersistenceError = outError;
+    return false;
+}
+
+std::string SelfAssessmentEngine::LastPersistenceError() const
+{
+    std::lock_guard lock(mutex);
+    return lastPersistenceError;
+}
+
 
 std::string SelfAssessmentEngine::Report() const
 {

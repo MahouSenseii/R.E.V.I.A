@@ -8,6 +8,8 @@
 #include <QLabel>
 #include <QPixmap>
 #include <QPushButton>
+#include <QSettings>
+#include <QSignalBlocker>
 #include <QStyle>
 #include <QTableWidget>
 #include <QTableWidgetItem>
@@ -92,6 +94,13 @@ VisionPanel::VisionPanel(revia::runtime::ReviaSession& inputSession, QWidget* pa
     layout->addWidget(perceptionSummary);
 
     connect(captureButton, &QPushButton::clicked, this, [this]() { CaptureCameraFrame(); });
+    connect(cameraCombo, &QComboBox::currentIndexChanged, this, [this](const int index)
+    {
+        if (index < 0) return;
+        // Stored by symbolic link, not by position: an index saved today points at a
+        // different lens as soon as anything else is plugged in.
+        QSettings().setValue("vision/cameraLink", cameraCombo->itemData(index).toString());
+    });
     Refresh();
 }
 
@@ -158,7 +167,13 @@ void VisionPanel::RenderCameras()
                 " camera(s) detected, but camera access is off. Enable it under "
                 "Permissions before Revia can look.");
 
-    const QString previous = cameraCombo->currentData().toString();
+    // The saved camera outranks the in-session one, so a restart restores what the
+    // user chose rather than whatever enumerates first.
+    const QString inSession = cameraCombo->currentData().toString();
+    const QString saved = QSettings().value("vision/cameraLink", QString()).toString();
+    const QString previous = inSession.isEmpty() ? saved : inSession;
+
+    const QSignalBlocker blocker(cameraCombo);
     cameraCombo->clear();
     for (const revia::vision::CameraDescriptor& camera : cameras)
     {
@@ -171,6 +186,13 @@ void VisionPanel::RenderCameras()
     {
         cameraCombo->setCurrentIndex(index);
     }
+    else if (!saved.isEmpty() && !cameras.empty())
+    {
+        // Said out loud rather than quietly reverting to camera one. A selection that
+        // silently moves to a different lens is the failure this reporting prevents.
+        SetStatus("The camera saved from a previous session is not attached. Pick a "
+                  "camera; Revia will not use a different one on its own.", true);
+    }
     cameraCombo->setEnabled(!cameras.empty());
     captureButton->setEnabled(allowed && !cameras.empty());
 }
@@ -181,13 +203,23 @@ void VisionPanel::CaptureCameraFrame()
     SetStatus("Opening the camera for one frame...");
     // Synchronous and deliberately brief. A capture is around a second and a half, and
     // the camera light going out is the signal that it is over.
-    const revia::vision::CameraFrame frame = session.CaptureCameraFrame(false);
+    revia::vision::CameraSelection selection;
+    selection.symbolicLink = cameraCombo->currentData().toString().toStdString();
+    selection.index = cameraCombo->currentIndex() + 1;
+    // A person picked this from a list. That is what makes substitution unacceptable
+    // rather than merely undesirable.
+    selection.explicitChoice = !selection.symbolicLink.empty();
+    const revia::vision::CameraFrame frame =
+        session.CaptureCameraFrame(false, selection);
     captureButton->setEnabled(true);
 
     if (!frame.succeeded)
     {
         preview->setText("No frame. " + QString::fromStdString(frame.reason));
         SetStatus(QString::fromStdString(frame.reason), true);
+        // The device list is re-read on failure so a camera that was unplugged stops
+        // being offered, rather than staying selectable and failing again.
+        Refresh();
         return;
     }
 

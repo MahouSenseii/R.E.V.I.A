@@ -78,6 +78,10 @@ private:
     void StartRuntime();
     void SendMessage(bool voiceInput = false);
     void ToggleListening();
+    // Rebuilds the device list from what Windows reports and restores the saved
+    // selection. Called at startup and from Refresh.
+    void RefreshMicrophoneDevices();
+    void RunMicrophoneTest();
     void ApplyMicrophoneUi(MicrophoneUi microphoneUi);
     void UseVisibleScreen();
     void DiscoverApplicationPermissions();
@@ -184,6 +188,10 @@ private:
     QPushButton* stopButton = nullptr;
     QPushButton* microphoneButton = nullptr;
     QPushButton* screenActionButton = nullptr;
+    QComboBox* microphoneDeviceCombo = nullptr;
+    QPushButton* refreshMicrophonesButton = nullptr;
+    QPushButton* testMicrophoneButton = nullptr;
+    QLabel* microphoneTestResultLabel = nullptr;
     QCheckBox* alwaysOnTopCheck = nullptr;
     QCheckBox* speechCheck = nullptr;
     QCheckBox* autoSendVoiceCheck = nullptr;

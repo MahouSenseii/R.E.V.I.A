@@ -527,6 +527,11 @@ bool configManager::LoadSettings(appSettings& outSettings) const
                 outSettings.speechRecognition.bHandsFree =
                     recognitionData["handsFree"].get<bool>();
             }
+            if (recognitionData.contains("microphoneDevice"))
+            {
+                outSettings.speechRecognition.microphoneDevice =
+                    recognitionData["microphoneDevice"].get<std::string>();
+            }
             if (recognitionData.contains("vadEnergyThreshold"))
             {
                 outSettings.speechRecognition.vadEnergyThreshold =
@@ -591,6 +596,12 @@ bool configManager::LoadSettings(appSettings& outSettings) const
             number("maxAvatarEventBytes", outSettings.presence.maxAvatarEventBytes);
             number("rememberedAdapterIds", outSettings.presence.rememberedAdapterIds);
             number("publicContextTurns", outSettings.presence.publicContextTurns);
+            number("maxPublicConversationContexts",
+                outSettings.presence.maxPublicConversationContexts);
+            number("adapterArchiveMaximumFiles",
+                outSettings.presence.adapterArchiveMaximumFiles);
+            number("adapterArchiveMaximumAgeDays",
+                outSettings.presence.adapterArchiveMaximumAgeDays);
             number("streamReplyCooldownSeconds",
                 outSettings.presence.streamReplyCooldownSeconds);
             if (presenceData.contains("allowedAdapters") &&

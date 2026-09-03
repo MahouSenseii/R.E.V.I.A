@@ -2,7 +2,10 @@
 
 #include "Runtime/runtimeEvents.h"
 
+#include <nlohmann/json_fwd.hpp>
+
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <mutex>
@@ -65,14 +68,32 @@ public:
     [[nodiscard]] SelfAssessmentSnapshot Snapshot() const;
     [[nodiscard]] std::string Report() const;
 
+    // Retires an open task. Appended to the history as a resolution record, so the
+    // next start does not raise it again -- and does not resurrect it either.
+    bool ResolveTask(const std::string& taskId, std::string& outError);
+    // History lines that could not be parsed on load. A partially written final record
+    // is expected after a crash; a rising count is not.
+    [[nodiscard]] std::size_t MalformedHistoryRecords() const;
+    // Empty unless a write failed. A task the panel shows as recorded must actually be
+    // on disk, and this is how a caller finds out it is not.
+    [[nodiscard]] std::string LastPersistenceError() const;
+
 private:
-    void PersistTask(const SelfImprovementTask& task);
+    [[nodiscard]] bool AppendRecord(const nlohmann::json& record, std::string& outError);
+    [[nodiscard]] bool PersistTask(const SelfImprovementTask& task);
+    [[nodiscard]] bool PersistResolution(
+        const SelfImprovementTask& task,
+        std::string& outError);
     mutable std::mutex mutex;
     std::filesystem::path path;
     SelfAssessmentSnapshot snapshot;
+    // Guards against raising a second task for a problem already recorded. Restored
+    // from the history on Initialize rather than reset with the process.
     bool slowTurnTaskCreated = false;
     bool voiceTaskCreated = false;
     bool reliabilityTaskCreated = false;
+    std::size_t malformedHistoryRecords = 0;
+    std::string lastPersistenceError;
 };
 
 } // namespace revia::learning

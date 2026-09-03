@@ -1,4 +1,7 @@
 #include "reviaWindow.h"
+
+#include "Runtime/retainedCounts.h"
+#include "Speech/transcriptRouting.h"
 #include "capabilityPanel.h"
 #include "pipelinePanel.h"
 #include "memoryPanel.h"
@@ -36,6 +39,7 @@
 #include <QPixmap>
 #include <QScrollBar>
 #include <QSettings>
+#include <QStatusBar>
 #include <QSignalBlocker>
 #include <QSpinBox>
 #include <QStyle>
@@ -316,6 +320,10 @@ void ReviaWindow::BuildInterface()
     stopButton = ui->stopButton;
     microphoneButton = ui->microphoneButton;
     screenActionButton = ui->screenActionButton;
+    microphoneDeviceCombo = ui->microphoneDeviceCombo;
+    refreshMicrophonesButton = ui->refreshMicrophonesButton;
+    testMicrophoneButton = ui->testMicrophoneButton;
+    microphoneTestResultLabel = ui->microphoneTestResultLabel;
     alwaysOnTopCheck = ui->alwaysOnTopCheck;
     speechCheck = ui->speechCheck;
     autoSendVoiceCheck = ui->autoSendVoiceCheck;
@@ -441,6 +449,27 @@ void ReviaWindow::BuildInterface()
     connect(stopButton, &QPushButton::clicked, this, [this]() { session.RequestStop(); });
     connect(microphoneButton, &QPushButton::clicked, this, [this]() { ToggleListening(); });
     connect(screenActionButton, &QPushButton::clicked, this, [this]() { UseVisibleScreen(); });
+    RefreshMicrophoneDevices();
+    connect(refreshMicrophonesButton, &QPushButton::clicked, this, [this]()
+    {
+        RefreshMicrophoneDevices();
+    });
+    connect(testMicrophoneButton, &QPushButton::clicked, this, [this]()
+    {
+        RunMicrophoneTest();
+    });
+    connect(microphoneDeviceCombo, &QComboBox::currentIndexChanged, this,
+        [this](const int index)
+        {
+            if (index < 0 || microphoneDeviceCombo->signalsBlocked())
+            {
+                return;
+            }
+            const QString device =
+                microphoneDeviceCombo->itemData(index).toString();
+            QSettings().setValue("input/microphoneDevice", device);
+            session.SetMicrophoneDevice(device.toStdString());
+        });
     alwaysOnTopCheck->setChecked(shellSettings.value("window/alwaysOnTop", false).toBool());
     autoSendVoiceCheck->setChecked(shellSettings.value("input/autoSendVoice", true).toBool());
     connect(alwaysOnTopCheck, &QCheckBox::toggled, this, [this](const bool enabled)
@@ -796,6 +825,65 @@ void ReviaWindow::ReleasePendingSpeechText(const std::uint64_t utteranceId)
     }
 }
 
+void ReviaWindow::RefreshMicrophoneDevices()
+{
+    const QSignalBlocker blocker(microphoneDeviceCombo);
+    const QString saved =
+        QSettings().value("input/microphoneDevice", QString()).toString();
+    microphoneDeviceCombo->clear();
+    microphoneDeviceCombo->addItem(QStringLiteral("Default"), QString());
+    for (const revia::speech::MicrophoneDevice& device : session.AvailableMicrophones())
+    {
+        const QString name = QString::fromStdString(device.name);
+        microphoneDeviceCombo->addItem(name, name);
+    }
+
+    // The saved device is offered even when it is not present, so the selection the
+    // user made is still visible rather than silently reverting to Default and looking
+    // like it was never set. Capture falls back at open time and reports it.
+    int index = microphoneDeviceCombo->findData(saved);
+    if (index < 0 && !saved.isEmpty())
+    {
+        microphoneDeviceCombo->addItem(saved + QStringLiteral(" (not connected)"), saved);
+        index = microphoneDeviceCombo->count() - 1;
+    }
+    microphoneDeviceCombo->setCurrentIndex(index < 0 ? 0 : index);
+    session.SetMicrophoneDevice(saved.toStdString());
+
+    const revia::speech::MicrophoneSelection resolved = session.ResolvedMicrophone();
+    microphoneDeviceCombo->setToolTip(QString::fromStdString(resolved.report));
+    if (resolved.fellBackToDefault)
+    {
+        microphoneTestResultLabel->setText(
+            QStringLiteral("Microphone error: ") +
+            QString::fromStdString(resolved.report));
+        AppendActivity(QStringLiteral("Microphone: ") +
+            QString::fromStdString(resolved.report));
+    }
+}
+
+void ReviaWindow::RunMicrophoneTest()
+{
+    if (shuttingDown.load())
+    {
+        return;
+    }
+    testMicrophoneButton->setEnabled(false);
+    microphoneTestResultLabel->setText(QStringLiteral("Testing microphone..."));
+    // Synchronous and short. Running it on the UI thread keeps the device lifetime
+    // trivially correct, and the button is disabled for the few seconds it takes.
+    QApplication::processEvents();
+    const revia::speech::MicrophoneTestResult result = session.TestMicrophone(3, true);
+    const QString status = QString::fromStdString(result.status);
+    const QString message = QString::fromStdString(result.message);
+    microphoneTestResultLabel->setText(
+        (result.succeeded ? QStringLiteral("Microphone OK - ")
+                          : QStringLiteral("Microphone error: ")) + message);
+    AppendActivity(QStringLiteral("Microphone test (") + status +
+        QStringLiteral("): ") + message);
+    testMicrophoneButton->setEnabled(true);
+}
+
 void ReviaWindow::ToggleListening()
 {
     if (shuttingDown.load())
@@ -825,7 +913,12 @@ void ReviaWindow::ToggleListening()
     }
     else
     {
-        AppendActivity("Microphone: listening could not start right now.");
+        // The reason itself arrives as a Microphone/Error event from the session, which
+        // puts it in the label and the status bar. This line only guarantees the
+        // activity feed records the press, so a press that produced nothing is still
+        // visible in the transcript of what happened.
+        AppendActivity("Microphone: listening could not start. See the microphone "
+            "status for the reason.");
     }
 }
 
@@ -1350,6 +1443,14 @@ void ReviaWindow::HandleRuntimeEvent(const revia::runtime::RuntimeEvent& event)
             {
                 ApplyMicrophoneUi(MicrophoneUi::Transcribing);
             }
+            else if (phase == QStringLiteral("Diagnostics") ||
+                phase.startsWith(QStringLiteral("Test")))
+            {
+                // Neither a recording nor the end of one. Diagnostics reports what a
+                // capture measured, and the Test* phases belong to the microphone test,
+                // which deliberately runs outside the Listen cycle. Letting either fall
+                // into the branch below would end a cycle that is still going.
+            }
             else
             {
                 // Ready, Transcript, Stopped, and Error all end the cycle. Error is
@@ -1358,24 +1459,47 @@ void ReviaWindow::HandleRuntimeEvent(const revia::runtime::RuntimeEvent& event)
                 listenRequested = false;
                 ApplyMicrophoneUi(MicrophoneUi::Ready);
             }
+            if (phase == QStringLiteral("Error"))
+            {
+                // Said where the user is looking, not only in the activity feed. The
+                // button returning to "Listen" with no other change is what made a
+                // microphone that could not open look like a button that did nothing.
+                const QString reason = QString::fromStdString(event.message);
+                microphoneTestResultLabel->setText(reason);
+                microphoneLabel->setText(QStringLiteral("Mic: error"));
+                statusBar()->showMessage(reason, 12000);
+            }
+            else if (phase == QStringLiteral("Recording"))
+            {
+                microphoneTestResultLabel->clear();
+            }
             if (phase == QStringLiteral("Transcript"))
             {
                 const QString transcript = QString::fromStdString(event.message).trimmed();
-                if (event.detail == "hands-free")
+                using revia::speech::TranscriptRouting;
+                switch (revia::speech::DecideTranscriptRouting(
+                    event.detail == "hands-free",
+                    transcript.isEmpty(),
+                    autoSendVoiceCheck->isChecked(),
+                    session.IsBusy()))
                 {
-                    ApplyMicrophoneUi(MicrophoneUi::HandsFree);
-                }
-                else
-                {
-                    messageInput->setPlainText(transcript);
-                    if (autoSendVoiceCheck->isChecked() && !session.IsBusy())
-                    {
+                    case TranscriptRouting::Ignore:
+                        // Deliberately leaves the message box alone: an empty
+                        // transcript must not erase something already typed there.
+                        AppendActivity(QStringLiteral(
+                            "Microphone: nothing was recognised in that recording."));
+                        break;
+                    case TranscriptRouting::HandsFreeAlreadySubmitted:
+                        ApplyMicrophoneUi(MicrophoneUi::HandsFree);
+                        break;
+                    case TranscriptRouting::FillAndSend:
+                        messageInput->setPlainText(transcript);
                         SendMessage(true);
-                    }
-                    else
-                    {
+                        break;
+                    case TranscriptRouting::FillAndHold:
+                        messageInput->setPlainText(transcript);
                         messageInput->setFocus();
-                    }
+                        break;
                 }
             }
             QString detail = QStringLiteral("Microphone ") + phase + QStringLiteral(": ") +
@@ -1679,6 +1803,22 @@ void ReviaWindow::AppendActivity(
             activityEntries.begin(),
             activityEntries.begin() +
                 static_cast<std::ptrdiff_t>(activityEntries.size() - MaximumVisibleLogEntries));
+        // Recounted from what is still held, because the counters describe the retained
+        // model and trimming changes that model. Incrementing on append but never
+        // decrementing on trim is what let the summary report errors that had already
+        // scrolled out of existence -- at 2000 entries a full recount is trivial, and it
+        // cannot drift the way paired increments and decrements can.
+        std::vector<int> retained;
+        retained.reserve(activityEntries.size());
+        for (const ActivityEntry& entry : activityEntries)
+        {
+            retained.push_back(entry.severity == ActivitySeverity::Warning ? 1
+                : entry.severity == ActivitySeverity::Error ? 2 : 0);
+        }
+        const revia::runtime::RetainedSeverityCounts counts =
+            revia::runtime::CountRetainedSeverities(retained);
+        activityWarningCount = counts.warnings;
+        activityErrorCount = counts.errors;
     }
     const int filter = activityFilter == nullptr ? 0 : activityFilter->currentIndex();
     const bool visible = (filter == 0) ||
@@ -1760,6 +1900,12 @@ void ReviaWindow::UpdateActivitySummary()
             .arg(activityErrorCount == 1 ? QString() : QStringLiteral("s"))
             .arg(activityWarningCount)
             .arg(activityWarningCount == 1 ? QString() : QStringLiteral("s")));
+    // Labelled for what it counts. "Retained" is not a detail: the log holds the most
+    // recent 2000 entries, so this is a count of what is still there rather than a
+    // lifetime total, and conflating the two is what made the old number wrong.
+    activityIssueSummary->setToolTip(QStringLiteral(
+        "Warnings and errors in the retained activity log (most recent %1 entries).")
+        .arg(2000));
     activityIssueSummary->setProperty("level", hasErrors
         ? QStringLiteral("error")
         : (hasWarnings ? QStringLiteral("warning") : QStringLiteral("ok")));
@@ -1774,7 +1920,7 @@ void ReviaWindow::UpdateActivitySummary()
             ? QStringLiteral("Runtime")
             : QStringLiteral("Runtime (%1)").arg(issueCount));
         tabs->setTabToolTip(runtimeIndex, issueCount == 0
-            ? QStringLiteral("No warnings or errors in this UI session.")
+            ? QStringLiteral("No warnings or errors in the retained activity log.")
             : activityIssueSummary->text());
     }
 }

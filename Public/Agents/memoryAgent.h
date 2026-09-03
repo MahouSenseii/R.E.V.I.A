@@ -6,6 +6,8 @@
 #include <condition_variable>
 #include <cstdint>
 #include <deque>
+#include <functional>
+#include <unordered_set>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -21,6 +23,40 @@ struct MemoryAgentEvent
     std::string operation = "memory_evaluation";
     bool saveSucceeded = true;
     bool wasAdded = false;
+};
+
+// What kind of work a queued memory task is.
+//
+// Explicit classes rather than a single queue with push_front for the urgent ones. The
+// old shape put fresh turns at the head and everything else at the tail, so sustained
+// conversation could keep jumping the queue indefinitely and the work behind it -- an
+// autonomous finding, an embedding backfill -- was never reached at all.
+enum class MemoryTaskClass
+{
+    // Classifying what just happened in conversation. Freshest work, highest priority:
+    // a memory that arrives after the conversation moved on is worth much less.
+    InteractiveTurn,
+    // A finding Revia already decided to keep. The decision is made; only the storing
+    // is pending, so this must never be discarded.
+    AutonomousLearning,
+    // Embedding a memory that already exists. Lowest value per task and the only class
+    // that regenerates itself: a dropped backfill is found again by the next scan.
+    EmbeddingBackfill
+};
+
+[[nodiscard]] std::string ToString(MemoryTaskClass value);
+
+struct MemoryQueueLimits
+{
+    // Bounded per class rather than in total, so a flood of one kind cannot consume the
+    // room another kind needs.
+    std::size_t maximumInteractive = 64;
+    // Generous, and never overflowed by dropping: these carry decisions already made.
+    std::size_t maximumLearning = 256;
+    std::size_t maximumBackfill = 256;
+    // Drained by the session each poll. Capped so a shell that stops draining cannot
+    // grow this without bound either.
+    std::size_t maximumPendingEvents = 512;
 };
 
 class MemoryAgent
@@ -49,6 +85,34 @@ public:
     std::vector<MemoryAgentEvent> DrainEvents();
     void Stop();
 
+    // Plain diagnostic lines: queue depth, delay, overflow. Never task content.
+    using DiagnosticSink = std::function<void(const std::string&)>;
+    void SetDiagnosticSink(DiagnosticSink sink);
+    void SetQueueLimits(MemoryQueueLimits limits);
+
+    // Queue depth per class, for tests and for the resources panel.
+    struct QueueDepths
+    {
+        std::size_t interactive = 0;
+        std::size_t learning = 0;
+        std::size_t backfill = 0;
+    };
+    [[nodiscard]] QueueDepths Depths() const;
+
+    // The scheduling order, exposed so fairness can be tested without a router, a
+    // model, or a database. Given how many tasks of each class are waiting, returns the
+    // class the worker takes next and advances the round.
+    //
+    // A weighted round robin over a fixed round of seven slots -- four interactive, two
+    // learning, one backfill. Every class is reached in every round, so none can starve
+    // however busy the others are, while fresh conversation still gets most of the
+    // worker. An empty slot falls through to whichever class has work, so the weights
+    // never idle the worker.
+    [[nodiscard]] static MemoryTaskClass NextClass(
+        const QueueDepths& depths,
+        int& roundPosition,
+        bool& outHasWork);
+
 private:
     struct Task
     {
@@ -62,12 +126,23 @@ private:
     };
 
     void Run(std::stop_token stopToken);
+    void Report(const std::string& line) const;
+    // Returns false when the queue is full and the task could not be admitted.
+    bool Enqueue(MemoryTaskClass taskClass, Task task);
 
     memoryManager memory;
-    std::mutex mutex;
+    mutable std::mutex mutex;
     std::condition_variable_any taskAvailable;
-    std::deque<Task> tasks;
+    std::deque<Task> interactiveTasks;
+    std::deque<Task> learningTasks;
+    std::deque<Task> backfillTasks;
+    // Memory ids already queued for embedding, so a repeated scan cannot enqueue the
+    // same row again. Erased when the task is taken.
+    std::unordered_set<std::string> queuedBackfillIds;
+    int roundPosition = 0;
     std::vector<MemoryAgentEvent> events;
+    MemoryQueueLimits limits;
+    DiagnosticSink diagnostics;
     std::jthread worker;
 };
 

@@ -42,6 +42,13 @@ public:
 private:
     ConversationAgent conversationAgent;
     mutable MemoryAgent memoryAgent;
+
+public:
+    // Exposed so the session can attach logging and read queue depth without the
+    // coordinator having to proxy every accessor.
+    [[nodiscard]] MemoryAgent& Memory() const { return memoryAgent; }
+
+private:
 };
 
 } // namespace revia::agents

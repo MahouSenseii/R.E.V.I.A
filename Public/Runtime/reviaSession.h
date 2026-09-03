@@ -17,6 +17,7 @@
 #include "Goals/goalRunner.h"
 #include "Goals/goalSandbox.h"
 #include "Goals/goalStore.h"
+#include "Autonomy/activityExecution.h"
 #include "Autonomy/activityScheduler.h"
 #include "Emotion/emotionRuntime.h"
 #include "Identity/developmentEngine.h"
@@ -33,6 +34,7 @@
 #include "Presence/presenceRuntime.h"
 #include "Runtime/affectController.h"
 #include "Runtime/conversationRuntime.h"
+#include "Runtime/outputChannelPolicy.h"
 #include "Runtime/runtimeEvents.h"
 #include "Runtime/sessionResult.h"
 #include "Resources/loadGovernor.h"
@@ -167,6 +169,16 @@ public:
     [[nodiscard]] presence::PresenceSnapshot Presence() const;
     bool BeginListening();
     bool EndListening();
+    // The Windows recording devices present right now, for the shell's picker.
+    [[nodiscard]] std::vector<speech::MicrophoneDevice> AvailableMicrophones() const;
+    // What the configured device name resolves to, including whether it has gone
+    // missing and capture would fall back to the Windows default.
+    [[nodiscard]] speech::MicrophoneSelection ResolvedMicrophone() const;
+    void SetMicrophoneDevice(const std::string& deviceName);
+    // Opens the selected device, records briefly, measures the signal, and optionally
+    // transcribes. The transcript is returned for display and never submitted as a
+    // conversation turn.
+    speech::MicrophoneTestResult TestMicrophone(int seconds = 3, bool transcribe = true);
     [[nodiscard]] bool IsVisionAvailable() const;
 
     // Camera. Off unless the capability file says otherwise, and rate limited even then.
@@ -191,7 +203,15 @@ public:
     [[nodiscard]] std::vector<vision::CameraDescriptor> Cameras() const;
     // autonomous is true when Revia chose to look rather than being asked. It requires
     // the separate autonomousCapture authority on top of camera access.
-    vision::CameraFrame CaptureCameraFrame(bool autonomous = false);
+    // Captures one frame from a specific camera.
+    //
+    // The selection is carried through rather than re-derived: a shell that offered the
+    // user a list of cameras has to be able to say which one it meant, and an explicit
+    // choice is never satisfied by a different physical device. An empty selection
+    // means "the configured preference", which is what autonomous capture uses.
+    vision::CameraFrame CaptureCameraFrame(
+        bool autonomous = false,
+        const vision::CameraSelection& requested = {});
     // The model may locate a target, but it cannot click it. A successful request must
     // resolve to an exact UIA runtime id and then pass through ordinary action policy,
     // confirmation, dispatch, and audit.
@@ -319,6 +339,8 @@ public:
     // Where Revia is talking. Composing into another application is text; only the local
     // channel is read aloud, unless that executable is explicitly opted in.
     void SetOutputChannel(outputChannel channel, const std::string& applicationName = {});
+    // The resolved policy for wherever output is going right now.
+    [[nodiscard]] runtime::ChannelPolicy CurrentChannelPolicy() const;
     [[nodiscard]] bool ShouldSpeakOnCurrentChannel() const;
     [[nodiscard]] std::string OutputChannelStatus() const;
 
@@ -381,6 +403,15 @@ private:
     bool EnsureEmbeddingAvailable(std::stop_token stopToken);
     bool TryHandleActionInput(const std::string& input, SessionResult& result);
     SessionResult ExecuteAction(actions::ActionRequest request);
+    // Whether an action writes into another application's window, which is the only
+    // thing that moves the output channel. Foreground application is deliberately not
+    // part of this: what Revia is doing decides, not what the user is looking at.
+    // Drops the least recently used public channel context when the map is at its
+    // bound. The channel passed in is the one being processed and is never evicted.
+    void EvictStalePublicContexts(const std::string& keepKey);
+    [[nodiscard]] bool IsCompositionAction(const actions::ActionRequest& request) const;
+    void BeginExternalComposition(const std::string& application);
+    void EndExternalComposition();
     static std::string FormatActionOutcome(const actions::ActionOutcome& outcome);
     // Submit already holds operationMutex when a /goals command arrives, and that mutex is
     // not recursive, so the command path uses these and the public entry points lock.
@@ -432,6 +463,34 @@ private:
     // Interrupts whatever she chose to do because the user needs attention. Interrupted
     // is not cancelled: what was cut off stays resumable.
     void PreemptAutonomousActivity(const std::string& because);
+    // Carries out one decided activity. The scheduler decides; this is the only place
+    // that acts, and every externally meaningful step inside it still goes through the
+    // ordinary capability, policy, and initiative systems.
+    [[nodiscard]] autonomy::ActivityOutcome ExecuteActivity(
+        const autonomy::Activity& activity,
+        const autonomy::ActivityDecision& decision);
+    [[nodiscard]] autonomy::ActivityOutcome ExecuteThink(
+        const autonomy::Activity& activity,
+        const autonomy::ActivityDecision& decision);
+    [[nodiscard]] autonomy::ActivityOutcome ExecuteObserve(
+        const autonomy::Activity& activity,
+        const autonomy::ActivityDecision& decision);
+    [[nodiscard]] autonomy::ActivityOutcome ExecuteResearch(
+        const autonomy::Activity& activity,
+        const autonomy::ActivityDecision& decision);
+    [[nodiscard]] autonomy::ActivityOutcome ExecuteOrganizeMemory(
+        const autonomy::Activity& activity,
+        const autonomy::ActivityDecision& decision);
+    [[nodiscard]] autonomy::ActivityOutcome ExecuteCreate(
+        const autonomy::Activity& activity,
+        const autonomy::ActivityDecision& decision);
+    [[nodiscard]] autonomy::ActivityOutcome ExecuteSpeak(
+        const autonomy::Activity& activity,
+        const autonomy::ActivityDecision& decision);
+    // Whether the activity this worker is running is still the current one. Polled
+    // between steps so a long activity yields to the user promptly rather than only at
+    // its own boundaries.
+    [[nodiscard]] bool ActivityWasInterrupted(const std::string& activityId) const;
     // Replays the tail of the previous session into context, so a restart continues a
     // conversation rather than starting one that has forgotten yesterday.
     void RestoreConversationContext();
@@ -596,6 +655,10 @@ private:
     // the local user's conversationContext or durable conversation archive.
     std::unordered_map<std::string, std::deque<conversationMessage>>
         publicConversationContexts;
+    // Last-used ordinal per channel, for LRU eviction. A monotonic counter rather than a
+    // clock: ordering is all this needs, and a counter cannot go backwards.
+    std::unordered_map<std::string, std::uint64_t> publicContextLastUsed;
+    std::uint64_t publicContextClock = 0;
     std::condition_variable_any initiativeCondition;
     std::condition_variable_any curiosityCondition;
     std::uint64_t initiativeSignalVersion = 0;
@@ -609,6 +672,12 @@ private:
     std::string latestScreenContext;
     std::chrono::steady_clock::time_point latestScreenContextAt{};
     outputChannel outputTarget = outputChannel::LocalVoice;
+    // What to go back to when a composition ends. Depth-counted because one act of
+    // composing is often two actions -- set the text, then click send -- and restoring
+    // after the first would put Revia back on local voice halfway through.
+    outputChannel previousOutputTarget = outputChannel::LocalVoice;
+    std::string previousOutputApplication;
+    int compositionDepth = 0;
     std::string outputApplication;
     std::stop_source activeStopSource;
     ConfirmationHandler confirmationHandler;

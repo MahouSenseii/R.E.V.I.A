@@ -96,6 +96,12 @@ PolicyDecision ActionRuntime::Evaluate(const ActionRequest& request) const
     return policy->Evaluate(request);
 }
 
+void ActionRuntime::SetDispatchObserver(DispatchObserver observer)
+{
+    std::lock_guard lock(mutex);
+    dispatchObserver = std::move(observer);
+}
+
 ActionOutcome ActionRuntime::Execute(
     const ActionRequest& request,
     bool confirmationGranted)
@@ -116,7 +122,12 @@ ActionOutcome ActionRuntime::Execute(
         outcome.policy.verdict = PolicyVerdict::Blocked;
         outcome.policy.reason = rateReason;
     }
+    // Bracketed so the observer sees the action end on every path, including the
+    // blocked and refused ones -- a scope that only closes on success is how a session
+    // gets stuck in a state an aborted action put it in.
+    if (dispatchObserver) dispatchObserver(request, true);
     outcome.result = dispatcher.Dispatch(request, outcome.policy, confirmationGranted);
+    if (dispatchObserver) dispatchObserver(request, false);
     if (auditLogger)
     {
         const double elapsedMilliseconds = std::chrono::duration<double, std::milli>(
@@ -187,7 +198,12 @@ ActionOutcome ActionRuntime::ExecuteScoped(
         outcome.policy.verdict = PolicyVerdict::Blocked;
         outcome.policy.reason = rateReason;
     }
+    // Bracketed so the observer sees the action end on every path, including the
+    // blocked and refused ones -- a scope that only closes on success is how a session
+    // gets stuck in a state an aborted action put it in.
+    if (dispatchObserver) dispatchObserver(request, true);
     outcome.result = dispatcher.Dispatch(request, outcome.policy, confirmationGranted);
+    if (dispatchObserver) dispatchObserver(request, false);
     if (auditLogger)
     {
         const double elapsedMilliseconds = std::chrono::duration<double, std::milli>(

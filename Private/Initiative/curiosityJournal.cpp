@@ -13,6 +13,13 @@ namespace revia::initiative
 namespace
 {
 constexpr std::size_t MaximumLoadedRecords = 500;
+// The file is allowed to run ahead of what is loaded, so ordinary appends stay a single
+// write, but not indefinitely: only the newest MaximumLoadedRecords ever affect
+// behaviour, and everything before them is dead weight on disk.
+constexpr std::uintmax_t MaximumJournalBytes = 1024 * 1024;
+// Appends between size checks. Compaction rewrites the whole file, which is not
+// something a conversation turn should ever wait behind.
+constexpr std::size_t CompactionInterval = 64;
 
 std::int64_t EpochMilliseconds(const std::chrono::system_clock::time_point value)
 {
@@ -93,6 +100,12 @@ bool CuriosityJournal::Initialize(
         outError = "Could not open the curiosity journal.";
         return false;
     }
+    // Read through the file handle rather than the directory entry, for the same reason
+    // the compaction trigger does not use std::filesystem::file_size.
+    stream.seekg(0, std::ios::end);
+    journalBytes = static_cast<std::uintmax_t>(
+        std::max<std::streamoff>(0, stream.tellg()));
+    stream.seekg(0, std::ios::beg);
     std::string line;
     while (std::getline(stream, line))
     {
@@ -169,21 +182,98 @@ bool CuriosityJournal::Append(const CuriosityRecord& input, std::string& outErro
         outError = "Could not append to the curiosity journal.";
         return false;
     }
-    stream << nlohmann::json({
+    const std::string line = nlohmann::json({
         {"occurred_at_ms", EpochMilliseconds(record.occurredAt)},
         {"topic", record.topic},
         {"query", record.query},
         {"sources", record.sources},
         {"outcome", record.outcome}
-    }).dump() << '\n';
+    }).dump();
+    stream << line << '\n';
     if (!stream.good())
     {
         outError = "Could not finish writing the curiosity journal.";
         return false;
     }
+    journalBytes += line.size() + 1;
     records.push_back(std::move(record));
     if (records.size() > MaximumLoadedRecords) records.erase(records.begin());
+
+    // Only the newest MaximumLoadedRecords ever affect behaviour, so the file has no
+    // reason to grow past a small multiple of that. Checked here, acted on rarely: the
+    // rewrite happens once every CompactionInterval appends rather than on each one, so
+    // conversation never waits behind a full file rewrite.
+    stream.close();
+    if (++appendsSinceCompaction >= CompactionInterval)
+    {
+        appendsSinceCompaction = 0;
+        std::string compactError;
+        if (!CompactUnlocked(compactError))
+        {
+            // The previous journal is still intact and still correct; compaction is an
+            // optimisation, and failing it must not fail the append that triggered it.
+            outError.clear();
+            return true;
+        }
+    }
     outError.clear();
+    return true;
+}
+
+bool CuriosityJournal::CompactUnlocked(std::string& outError)
+{
+    // Triggered on bytes this process has written, not on std::filesystem::file_size.
+    //
+    // On Windows that call reads the directory entry, which is not refreshed while a
+    // file is being appended to: measured here it reported 620 KB for a journal that
+    // was actually 2.1 MB, so compaction never fired at all. The running total is exact
+    // and costs nothing.
+    if (journalBytes <= MaximumJournalBytes) return true;
+
+    std::error_code error;
+    std::uintmax_t rewrittenBytes = 0;
+    // Written beside the journal and moved into place, so an interrupted compaction
+    // leaves the previous good file untouched rather than a half-written one.
+    const std::filesystem::path temporary =
+        journalPath.string() + ".compact-" + std::to_string(EpochMilliseconds(
+            std::chrono::system_clock::now()));
+    {
+        std::ofstream rewritten(temporary, std::ios::binary | std::ios::trunc);
+        if (!rewritten)
+        {
+            outError = "The curiosity journal could not be compacted.";
+            return false;
+        }
+        for (const CuriosityRecord& kept : records)
+        {
+            const std::string keptLine = nlohmann::json({
+                {"occurred_at_ms", EpochMilliseconds(kept.occurredAt)},
+                {"topic", kept.topic},
+                {"query", kept.query},
+                {"sources", kept.sources},
+                {"outcome", kept.outcome}
+            }).dump();
+            rewritten << keptLine << '\n';
+            rewrittenBytes += keptLine.size() + 1;
+        }
+        rewritten.flush();
+        if (!rewritten.good())
+        {
+            rewritten.close();
+            std::filesystem::remove(temporary, error);
+            outError = "The compacted curiosity journal could not be written.";
+            return false;
+        }
+    }
+    std::filesystem::rename(temporary, journalPath, error);
+    if (error)
+    {
+        std::error_code removeError;
+        std::filesystem::remove(temporary, removeError);
+        outError = "The compacted curiosity journal could not replace the original.";
+        return false;
+    }
+    journalBytes = rewrittenBytes;
     return true;
 }
 

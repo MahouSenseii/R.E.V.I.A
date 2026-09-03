@@ -1,3 +1,4 @@
+#include "Runtime/retainedCounts.h"
 #include "Runtime/reviaSession.h"
 #include "Runtime/runtimeDataBootstrap.h"
 #include "Core/exitReporter.h"
@@ -16,6 +17,8 @@
 #include <cctype>
 #include <chrono>
 #include <filesystem>
+#include <fstream>
+#include <limits>
 #include <sstream>
 #include <system_error>
 #include <thread>
@@ -494,6 +497,28 @@ bool ReviaSession::Start()
     else
     {
         appLogger.Log("Capability runtime initialized.");
+        // Queue pressure and overflow reach the log rather than only the queue. A
+        // memory evaluation that was dropped or delayed is otherwise invisible.
+        turnCoordinator.Memory().SetDiagnosticSink(
+            [this](const std::string& line) { appLogger.Log(line); });
+        // Where the output channel actually changes. Installed once, on the single
+        // dispatch both Execute and ExecuteScoped funnel through, so the command path,
+        // the LLM-planned path, the vision-resolved path and goal steps are all covered
+        // without any of them having to remember. Before this, SetOutputChannel had no
+        // runtime caller at all and outputTarget never left LocalVoice.
+        actionRuntime.SetDispatchObserver(
+            [this](const actions::ActionRequest& request, const bool beginning)
+            {
+                if (!IsCompositionAction(request)) return;
+                if (beginning)
+                {
+                    BeginExternalComposition(request.application);
+                }
+                else
+                {
+                    EndExternalComposition();
+                }
+            });
         const actions::CapabilitySettings capabilities = actionRuntime.Settings();
         PublishComponent(
             "Permissions", "Ready",
@@ -758,6 +783,56 @@ bool ReviaSession::Start()
             event.elapsedMilliseconds = recognitionEvent.elapsedMilliseconds;
             event.detail = recognitionEvent.automatic ? "hands-free" : "manual";
             eventBus.Publish(std::move(event));
+
+            // The stages of one capture, in the log, where a failure is still readable
+            // tomorrow. Events on the bus reach the shell and are gone; a microphone
+            // that could not open left nothing behind at all, which is most of why
+            // "Listen does nothing" was so hard to pin down.
+            //
+            // The transcript's LENGTH, never its text. What was said belongs in the
+            // conversation, not in a diagnostic log, and the length is what answers
+            // "did whisper.cpp produce anything".
+            const std::string mode =
+                recognitionEvent.automatic ? "hands-free" : "manual";
+            if (recognitionEvent.phase == "Error" ||
+                recognitionEvent.phase == "Diagnostics" ||
+                recognitionEvent.phase.starts_with("Test"))
+            {
+                const std::string line = "[Microphone] " + mode + " " +
+                    recognitionEvent.phase + ": " + recognitionEvent.detail;
+                if (recognitionEvent.phase == "Error")
+                {
+                    appLogger.Warning(line);
+                }
+                else
+                {
+                    appLogger.Log(line);
+                }
+            }
+            else if (recognitionEvent.phase == "Recording" ||
+                recognitionEvent.phase == "Captured" ||
+                recognitionEvent.phase == "Transcribing")
+            {
+                appLogger.Log("[Microphone] " + mode + " " + recognitionEvent.phase +
+                    ": " + recognitionEvent.detail +
+                    (recognitionEvent.elapsedMilliseconds >= 0.0
+                        ? " (" + std::to_string(static_cast<long long>(
+                            recognitionEvent.elapsedMilliseconds)) + "ms)"
+                        : std::string()));
+            }
+            else if (recognitionEvent.phase == "Transcript")
+            {
+                appLogger.Log("[Microphone] " + mode +
+                    " Transcript: whisper backend=" +
+                    (settings.speechRecognition.bUseServer ? "server" : "cli") +
+                    " device=" + settings.speechRecognition.device +
+                    " transcript_chars=" +
+                    std::to_string(recognitionEvent.transcript.size()) +
+                    (recognitionEvent.elapsedMilliseconds >= 0.0
+                        ? " transcription_ms=" + std::to_string(static_cast<long long>(
+                            recognitionEvent.elapsedMilliseconds))
+                        : std::string()));
+            }
 
             if (recognitionEvent.automatic && recognitionEvent.phase == "Transcript" &&
                 !recognitionEvent.transcript.empty())
@@ -1426,7 +1501,13 @@ void ReviaSession::StartExternalAdapterLoop()
                         llmAvailable,
                         shouldSpeak,
                         operationToken);
+                    // Bounded by number of channels as well as by messages per
+                    // channel. Every distinct source:channel used to create a map entry
+                    // that lived for the whole session, so an adapter that sees many
+                    // channel identifiers grew this without limit.
+                    EvictStalePublicContexts(contextKey);
                     auto& publicHistory = publicConversationContexts[contextKey];
+                    publicContextLastUsed[contextKey] = ++publicContextClock;
                     publicHistory.push_back({"user", publicInput});
                     if (result.succeeded && !result.text.empty())
                     {
@@ -1475,6 +1556,7 @@ void ReviaSession::StopExternalAdapterLoop()
     std::lock_guard lock(externalAdapterMutex);
     externalAdapterQueue.clear();
     publicConversationContexts.clear();
+    publicContextLastUsed.clear();
 }
 
 void ReviaSession::QueueExternalAdapterEvent(const presence::ExternalAdapterEvent& event)
@@ -3515,6 +3597,12 @@ SessionResult ReviaSession::Submit(
     {
         lastUserInteractionSteadyMs.store(SteadyMilliseconds());
         userInteractionGeneration.fetch_add(1);
+        // The same preemption OfferInput performs. Typed input reaches Submit directly
+        // rather than through the arbiter's merge window, so without this a message
+        // typed while Revia was researching or tidying memory bumped the interaction
+        // generation but left the activity running and still marked Running -- the user
+        // waited behind work they had just superseded.
+        PreemptAutonomousActivity("the user said something");
     }
     {
         std::lock_guard signalLock(curiositySignalMutex);
@@ -3989,24 +4077,87 @@ void ReviaSession::SetSpeechEnabled(const bool enabled)
     speechService.SetEnabled(enabled);
 }
 
-bool ReviaSession::ShouldSpeakOnCurrentChannel() const
+void ReviaSession::EvictStalePublicContexts(const std::string& keepKey)
+{
+    const std::size_t maximum = static_cast<std::size_t>(
+        std::max(1, settings.presence.maxPublicConversationContexts));
+    // The channel being processed is never a candidate, whatever its age.
+    while (publicConversationContexts.size() >= maximum &&
+        publicConversationContexts.find(keepKey) == publicConversationContexts.end())
+    {
+        std::vector<std::string> keys;
+        keys.reserve(publicConversationContexts.size());
+        for (const auto& [key, history] : publicConversationContexts) keys.push_back(key);
+        const std::string oldestKey =
+            runtime::SelectEvictableKey(keys, publicContextLastUsed, keepKey);
+        if (oldestKey.empty()) break;
+        publicConversationContexts.erase(oldestKey);
+        publicContextLastUsed.erase(oldestKey);
+        appLogger.Log("[Adapters] evicted idle public channel context: " + oldestKey +
+            " (limit " + std::to_string(maximum) + ")");
+    }
+}
+
+bool ReviaSession::IsCompositionAction(const actions::ActionRequest& request) const
+{
+    // Composing means writing text into somebody else's window. Focusing a window is
+    // not composing, and neither is which application happens to be in the foreground:
+    // the channel follows what Revia is doing, not what the user is looking at.
+    if (request.type != actions::ActionType::SetControlText &&
+        request.type != actions::ActionType::InvokeControl)
+    {
+        return false;
+    }
+    if (request.application.empty()) return false;
+    // Revia's own internal targets are not external applications. Routing a bounded
+    // search through the channel policy would silence her for talking to herself.
+    return request.application != "bounded_search" &&
+        request.application != "visible_browser";
+}
+
+void ReviaSession::BeginExternalComposition(const std::string& application)
+{
+    {
+        std::lock_guard lock(channelMutex);
+        // Nested compositions keep the outermost target. A SetControlText followed by
+        // an InvokeControl on the same window is one act, and the depth is what makes
+        // the restore below land on the right channel rather than one action early.
+        ++compositionDepth;
+        if (compositionDepth > 1) return;
+        previousOutputTarget = outputTarget;
+        previousOutputApplication = outputApplication;
+    }
+    SetOutputChannel(outputChannel::ExternalApplication, application);
+}
+
+void ReviaSession::EndExternalComposition()
+{
+    outputChannel restored = outputChannel::LocalVoice;
+    std::string restoredApplication;
+    {
+        std::lock_guard lock(channelMutex);
+        if (compositionDepth == 0) return;
+        --compositionDepth;
+        if (compositionDepth > 0) return;
+        restored = previousOutputTarget;
+        restoredApplication = previousOutputApplication;
+    }
+    // Runs on every exit: success, refusal, block, and confirmation-denied all pass
+    // through the same dispatch bracket. Leaving Revia stuck in ExternalApplication
+    // after an aborted action would silence her locally for the rest of the session.
+    SetOutputChannel(restored, restoredApplication);
+}
+
+runtime::ChannelPolicy ReviaSession::CurrentChannelPolicy() const
 {
     std::lock_guard lock(channelMutex);
-    if (outputTarget == outputChannel::LocalVoice)
-    {
-        return true;
-    }
-    // Composing into somebody else's application. Reading Discord messages aloud as they
-    // are typed is noise, so speech is off unless this executable was explicitly opted in.
-    const std::string lowered = ToLowerCopy(outputApplication);
-    for (const std::string& allowed : settings.channels.voiceEnabledApplications)
-    {
-        if (ToLowerCopy(allowed) == lowered)
-        {
-            return true;
-        }
-    }
-    return false;
+    return runtime::ResolveOutputChannel(
+        outputTarget, outputApplication, settings.channels);
+}
+
+bool ReviaSession::ShouldSpeakOnCurrentChannel() const
+{
+    return CurrentChannelPolicy().speak;
 }
 
 void ReviaSession::SetOutputChannel(
@@ -4018,28 +4169,24 @@ void ReviaSession::SetOutputChannel(
         outputTarget = channel;
         outputApplication = applicationName;
     }
+    const runtime::ChannelPolicy policy = CurrentChannelPolicy();
     RuntimeEvent event;
     event.kind = RuntimeEventKind::ComponentStatus;
     event.state = state.load();
     event.component = "Channel";
-    event.phase = channel == outputChannel::LocalVoice ? "Voice" : "TextOnly";
-    event.message = channel == outputChannel::LocalVoice
-        ? std::string("Talking here, with voice.")
-        : "Composing into " + (applicationName.empty() ? "another application"
-            : applicationName) + "; replies are text only.";
+    // The phase reflects the resolved policy rather than the raw channel: an
+    // application explicitly opted into voice is not "TextOnly", and reporting it that
+    // way is what made the old status line false.
+    event.phase = policy.speak ? "Voice" : "TextOnly";
+    event.message = policy.status;
     eventBus.Publish(std::move(event));
+    // Diagnostic only, and deliberately without the text being composed.
+    appLogger.Log(policy.logLine);
 }
 
 std::string ReviaSession::OutputChannelStatus() const
 {
-    std::lock_guard lock(channelMutex);
-    if (outputTarget == outputChannel::LocalVoice)
-    {
-        return "Talking here. Replies are spoken when voice is enabled.";
-    }
-    return "Composing into " +
-        (outputApplication.empty() ? "another application" : outputApplication) +
-        ". Replies are text only and are not read aloud.";
+    return CurrentChannelPolicy().status;
 }
 
 bool ReviaSession::IsPerceptionEnabled() const
@@ -4158,7 +4305,61 @@ presence::PresenceSnapshot ReviaSession::Presence() const
 bool ReviaSession::BeginListening()
 {
     speechService.StopSpeaking();
-    return speechRecognitionService.BeginRecording();
+    const speech::MicrophoneAttempt attempt =
+        speechRecognitionService.BeginRecordingDiagnosed();
+    // Logged on every press, started or not. A press that produced nothing used to
+    // leave no trace at all, which made "the Listen button does not work" impossible
+    // to tell apart from "the Listen button was never pressed".
+    appLogger.Log("[Microphone] " + attempt.Summary());
+    if (!attempt.started)
+    {
+        PublishComponent("Microphone", "Error",
+            "Microphone error: " + attempt.reason);
+    }
+    else if (!attempt.reason.empty())
+    {
+        // Started, but not on the device that was asked for.
+        PublishComponent("Microphone", "Error", "Microphone error: " + attempt.reason);
+    }
+    return attempt.started;
+}
+
+std::vector<speech::MicrophoneDevice> ReviaSession::AvailableMicrophones() const
+{
+    return speech::SpeechRecognitionService::EnumerateMicrophones();
+}
+
+speech::MicrophoneSelection ReviaSession::ResolvedMicrophone() const
+{
+    return speechRecognitionService.ResolveMicrophone();
+}
+
+void ReviaSession::SetMicrophoneDevice(const std::string& deviceName)
+{
+    settings.speechRecognition.microphoneDevice = deviceName;
+    speechRecognitionService.SetMicrophoneDevice(deviceName);
+    appLogger.Log("[Microphone] device setting changed to " +
+        (deviceName.empty() ? std::string("Default") : deviceName));
+}
+
+speech::MicrophoneTestResult ReviaSession::TestMicrophone(
+    const int seconds,
+    const bool transcribe)
+{
+    // Speaking would be captured by the test, and a test that records Revia's own
+    // voice answers a different question than the one asked.
+    speechService.StopSpeaking();
+    const speech::MicrophoneTestResult result =
+        speechRecognitionService.TestMicrophone(seconds, transcribe);
+    appLogger.Log("[Microphone] test device=" + result.deviceName +
+        " opened=" + (result.deviceOpened ? "yes" : "no") +
+        " audio=" + (result.audioReceived ? "yes" : "no") +
+        " signal=" + (result.signalPresent ? "yes" : "no") +
+        " bytes=" + std::to_string(result.capturedBytes) +
+        " rms=" + std::to_string(result.rmsLevel) +
+        " status=" + result.status +
+        " transcript_chars=" + std::to_string(result.transcript.size()));
+    return result;
 }
 
 bool ReviaSession::EndListening()
@@ -4261,7 +4462,9 @@ std::vector<vision::CameraDescriptor> ReviaSession::Cameras() const
     return cameraCaptureService.EnumerateCameras();
 }
 
-vision::CameraFrame ReviaSession::CaptureCameraFrame(const bool autonomous)
+vision::CameraFrame ReviaSession::CaptureCameraFrame(
+    const bool autonomous,
+    const vision::CameraSelection& requested)
 {
     vision::CameraFrame refused;
     const actions::CapabilitySettings capabilities = actionRuntime.Settings();
@@ -4312,15 +4515,45 @@ vision::CameraFrame ReviaSession::CaptureCameraFrame(const bool autonomous)
         recentCameraCaptures.push_back(now);
     }
 
+    // Which camera, decided here rather than left to whatever the driver enumerates
+    // first. An autonomous look uses the configured preference; an explicit request
+    // uses exactly the device the user picked.
+    vision::CameraSelection selection = requested;
+    if (selection.symbolicLink.empty())
+    {
+        selection.symbolicLink = capabilities.camera.preferredDevice;
+        selection.explicitChoice = false;
+    }
+
+    // Verified against what is attached right now, before the lens is opened. The
+    // enumeration is cheap and does not light the camera.
+    const std::vector<vision::CameraDescriptor> attached =
+        cameraCaptureService.EnumerateCameras();
+    const vision::CameraResolution resolved =
+        vision::ResolveCamera(attached, selection);
+    if (!resolved.available)
+    {
+        refused.reason = resolved.reason;
+        // Published so the shell can refresh its device list rather than keep offering
+        // a camera that is gone.
+        PublishComponent("Camera", "DeviceMissing", resolved.reason);
+        appLogger.Warning("Camera capture refused: " + resolved.reason);
+        return refused;
+    }
+
     PublishComponent("Camera", "Capturing",
-        autonomous ? "Revia is taking a frame she asked for herself."
-                   : "Taking one camera frame.");
+        (autonomous ? "Revia is taking a frame she asked for herself."
+                    : std::string("Taking one camera frame.")) +
+            " " + resolved.reason);
 
     vision::CameraFrame frame = cameraCaptureService.CaptureFrame(
         "RuntimeData/Camera",
-        1,
-        capabilities.camera.preferredDevice,
-        capabilities.camera.warmupFrames);
+        resolved.index,
+        resolved.symbolicLink,
+        capabilities.camera.warmupFrames,
+        // An explicit choice never accepts a substitute, even if the device vanishes
+        // between the check above and the open below.
+        selection.explicitChoice);
 
     PublishComponent(
         "Camera",
@@ -4330,7 +4563,10 @@ vision::CameraFrame ReviaSession::CaptureCameraFrame(const bool autonomous)
 
     if (frame.succeeded)
     {
-        appLogger.Log("Camera frame captured: " + actions::PathToUtf8(frame.path));
+        appLogger.Log("Camera frame captured: " + actions::PathToUtf8(frame.path) +
+            " | device=" + resolved.name +
+            " index=" + std::to_string(resolved.index) +
+            " explicit=" + (selection.explicitChoice ? "yes" : "no"));
     }
     else
     {
@@ -4991,6 +5227,670 @@ void ReviaSession::PreemptAutonomousActivity(const std::string& because)
             ". It remains resumable.");
 }
 
+bool ReviaSession::ActivityWasInterrupted(const std::string& activityId) const
+{
+    std::lock_guard autonomyLock(autonomyMutex);
+    // Replaced or interrupted both mean "stop": the activity this worker is running is
+    // no longer the one the session considers current.
+    return !runningActivity || runningActivity->id != activityId ||
+        runningActivity->status == autonomy::ActivityStatus::Interrupted;
+}
+
+autonomy::ActivityOutcome ReviaSession::ExecuteThink(
+    const autonomy::Activity& activity,
+    const autonomy::ActivityDecision& decision)
+{
+    autonomy::ActivityOutcome outcome;
+    if (!llmAvailable)
+    {
+        outcome.status = autonomy::ActivityStatus::Failed;
+        outcome.summary = "There was no local brain available to think with.";
+        return outcome;
+    }
+
+    std::vector<conversationMessage> recentConversation;
+    std::string situation;
+    {
+        std::lock_guard operationLock(operationMutex);
+        if (busy.load())
+        {
+            outcome.status = autonomy::ActivityStatus::Interrupted;
+            outcome.summary = "A conversation started before the thought began.";
+            outcome.resumeToken = decision.subject;
+            return outcome;
+        }
+        recentConversation = context.GetRecentMessages();
+        situation = activityHistory.Summarize(std::chrono::minutes{90});
+    }
+
+    // Her own questions, through the same agent a hard conversational turn uses. The
+    // posture describes this moment, so the thinking is hers rather than a generic
+    // reasoner's, and the result is never spoken: Think produces understanding, and
+    // turning understanding into speech is a separate decision with its own cost.
+    const std::string posture =
+        "You are between conversations and thinking on your own initiative. "
+        "Nobody is waiting for an answer. Reason about what is unresolved.\n"
+        "What pulled at you: " + decision.reason +
+        (situation.empty() ? std::string() : "\nRecently on the desktop: " + situation);
+
+    // Stateless, so a local one is the same agent the conversational path uses. The
+    // cooldown policy that gates it during a turn deliberately does not apply here:
+    // this IS the deliberate decision to think, not an interruption of a reply.
+    const agents::SelfInquiryAgent inquiryAgent;
+    const agents::SelfInquiryResult inquiry = inquiryAgent.Ask(
+        router,
+        decision.subject.empty()
+            ? "What is still unresolved, and what would change my mind about it?"
+            : decision.subject,
+        posture,
+        recentConversation,
+        4);
+
+    if (ActivityWasInterrupted(activity.id))
+    {
+        outcome.status = autonomy::ActivityStatus::Interrupted;
+        outcome.summary = "The thought was set aside for the user.";
+        outcome.resumeToken = decision.subject;
+        return outcome;
+    }
+    if (!inquiry.HasQuestions())
+    {
+        // A legitimate outcome, and not a failure. Thinking that reaches nothing is
+        // still thinking, and recording it as failure would teach the drive system that
+        // reflection does not work.
+        outcome.status = autonomy::ActivityStatus::Completed;
+        outcome.summary = "Thought about it and did not get anywhere worth keeping. " +
+            inquiry.reason;
+        return outcome;
+    }
+
+    std::string questionList;
+    for (const std::string& question : inquiry.questions)
+    {
+        if (!questionList.empty()) questionList += " ";
+        questionList += question;
+    }
+    outcome.status = autonomy::ActivityStatus::Completed;
+    outcome.satisfiedDrive = true;
+    outcome.drive = autonomy::Drive::Learning;
+    outcome.summary = inquiry.settled.empty()
+        ? "Sat with " + std::to_string(inquiry.questions.size()) +
+            " question(s) without settling them: " + questionList
+        : "Settled something: " + inquiry.settled;
+
+    // Only a conclusion is durable. Open questions stay in the curiosity journal, which
+    // is what stops her rediscovering the same unresolved thought after every restart,
+    // and keeps unsettled thinking out of the memory that feeds prompts.
+    if (!inquiry.settled.empty() && settings.initiative.bAutonomousLearningEnabled)
+    {
+        memoryDecision learned;
+        learned.bSuccess = true;
+        learned.bShouldRemember = true;
+        learned.category = "reflection";
+        learned.summary = inquiry.settled;
+        learned.reason = "Reached while thinking alone: " + decision.reason;
+        learned.source = "autonomous_reflection";
+        turnCoordinator.SubmitLearnedFinding(router, std::move(learned));
+        outcome.artifact = "a reflection in memory";
+    }
+    else
+    {
+        std::string journalError;
+        (void)curiosityJournal.Append(
+            {decision.subject.empty() ? std::string("open question") : decision.subject,
+             questionList, {}, "thought_unsettled",
+             std::chrono::system_clock::now()},
+            journalError);
+    }
+    return outcome;
+}
+
+autonomy::ActivityOutcome ReviaSession::ExecuteObserve(
+    const autonomy::Activity& activity,
+    const autonomy::ActivityDecision& decision)
+{
+    autonomy::ActivityOutcome outcome;
+    if (!settings.perception.bEnabled)
+    {
+        outcome.status = autonomy::ActivityStatus::Failed;
+        outcome.summary = "Perception is switched off, so there is nothing to look at.";
+        return outcome;
+    }
+
+    // Read-only, and through the awareness loop that is already permitted rather than
+    // by taking a capture of its own. Observing must not be able to click, type, or
+    // move anything: this asks the existing loop to refresh and then reads what it saw.
+    const std::string before = CurrentScreenContext();
+    SignalScreenAwareness("autonomous observation: " + decision.reason);
+
+    // Waiting, not sleeping: the status is honest while nothing has arrived yet, and a
+    // user who starts talking ends the wait rather than being queued behind it.
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{20};
+    std::string after = before;
+    while (std::chrono::steady_clock::now() < deadline)
+    {
+        if (ActivityWasInterrupted(activity.id))
+        {
+            outcome.status = autonomy::ActivityStatus::Interrupted;
+            outcome.summary = "Stopped looking when the user needed attention.";
+            outcome.resumeToken = "observe";
+            return outcome;
+        }
+        after = CurrentScreenContext();
+        if (!after.empty() && after != before) break;
+        std::this_thread::sleep_for(std::chrono::milliseconds(250));
+    }
+
+    if (after.empty())
+    {
+        outcome.status = autonomy::ActivityStatus::Waiting;
+        outcome.summary = "Looked, but no screen context has come back yet.";
+        outcome.resumeToken = "observe";
+        return outcome;
+    }
+    if (after == before)
+    {
+        // Nothing changed. That is a real observation and completes the activity; it
+        // simply produces no evidence for anything else to act on.
+        outcome.status = autonomy::ActivityStatus::Completed;
+        outcome.summary = "Looked at the desktop; nothing had changed since last time.";
+        outcome.satisfiedDrive = true;
+        outcome.drive = autonomy::Drive::Exploration;
+        return outcome;
+    }
+
+    outcome.status = autonomy::ActivityStatus::Completed;
+    outcome.satisfiedDrive = true;
+    outcome.drive = autonomy::Drive::Exploration;
+    const std::string summary = after.size() > 300 ? after.substr(0, 300) + "..." : after;
+    outcome.summary = "Noticed a change on the desktop: " + summary;
+    // Observation creates evidence that a later cycle may act on. It never decides on
+    // its own to say something -- that remains the initiative layer's judgement.
+    return outcome;
+}
+
+autonomy::ActivityOutcome ReviaSession::ExecuteResearch(
+    const autonomy::Activity& activity,
+    const autonomy::ActivityDecision& decision)
+{
+    autonomy::ActivityOutcome outcome;
+    const actions::CapabilitySettings::InternetAccess internet =
+        actionRuntime.Settings().internet;
+    if (!internet.enabled || !internet.autonomousResearch)
+    {
+        outcome.status = autonomy::ActivityStatus::Failed;
+        outcome.summary = "Autonomous research has not been permitted.";
+        return outcome;
+    }
+
+    // The topic has to be a topic. The failure this guards against is real and was
+    // observed live: the raw phrase "look up what you want !" reached the search
+    // backend and came back with a Poison album and a Beatles song, which were then
+    // handed to the model as evidence. A delegation is not a subject, and searching one
+    // is worse than not searching at all.
+    std::vector<std::string> candidates;
+    if (!decision.subject.empty()) candidates.push_back(decision.subject);
+    for (const initiative::CuriosityRecord& record : curiosityJournal.Recent(5))
+    {
+        if (record.outcome == "thought_unsettled" || record.outcome == "considered")
+        {
+            candidates.push_back(record.topic);
+        }
+    }
+    if (decision.relatedGoal)
+    {
+        if (const std::optional<goals::Goal> goal = goalStore.Load(*decision.relatedGoal);
+            goal.has_value() && !goal->title.empty())
+        {
+            candidates.push_back(goal->title);
+        }
+    }
+
+    const autonomy::ResearchTopicVerdict verdict =
+        autonomy::ChooseResearchTopic(candidates);
+    if (!verdict.usable)
+    {
+        // Declining is the correct answer, not a fallback. Choosing a topic at random to
+        // satisfy a drive is exactly the behaviour autonomy is meant to exclude.
+        outcome.status = autonomy::ActivityStatus::Cancelled;
+        outcome.summary = "Did not research: " + verdict.refusal;
+        return outcome;
+    }
+    if (curiosityJournal.WasResearchRecentlyAttempted(
+            std::chrono::seconds(std::max(1, settings.initiative.cooldownSeconds)),
+            std::chrono::system_clock::now()))
+    {
+        outcome.status = autonomy::ActivityStatus::Cancelled;
+        outcome.summary =
+            "Held off on another lookup so soon after the last one.";
+        return outcome;
+    }
+    if (ActivityWasInterrupted(activity.id))
+    {
+        outcome.status = autonomy::ActivityStatus::Interrupted;
+        outcome.summary = "Set the lookup aside for the user before it started.";
+        outcome.resumeToken = verdict.topic;
+        return outcome;
+    }
+
+    PublishComponent("Autonomy", "Running",
+        "Researching \"" + verdict.topic + "\" - " + decision.reason);
+
+    // Through the ordinary capability path, which re-checks policy. The scheduler
+    // deciding to research grants no authority of its own.
+    actions::ActionRequest request;
+    request.id = actions::NewActionId();
+    request.type = actions::ActionType::WebSearch;
+    request.application = internet.visibleBrowser ? "visible_browser" : "";
+    request.value = verdict.topic;
+    request.requestedBy = "autonomous_activity/" + activity.id;
+    const auto started = std::chrono::steady_clock::now();
+    const actions::ActionOutcome lookup = actionRuntime.Execute(request);
+    const double researchMilliseconds = ElapsedMilliseconds(started);
+
+    std::string journalError;
+    if (!lookup.result.succeeded || lookup.result.content.empty())
+    {
+        (void)curiosityJournal.Append(
+            {verdict.topic, verdict.topic, lookup.result.entries, "research_failed",
+             std::chrono::system_clock::now()}, journalError);
+        outcome.status = autonomy::ActivityStatus::Failed;
+        outcome.summary = "The lookup on \"" + verdict.topic + "\" did not return "
+            "anything usable: " + (lookup.result.message.empty()
+                ? lookup.policy.reason : lookup.result.message);
+        return outcome;
+    }
+    (void)curiosityJournal.Append(
+        {verdict.topic, verdict.topic, lookup.result.entries, "research_completed",
+         std::chrono::system_clock::now()}, journalError);
+
+    if (ActivityWasInterrupted(activity.id))
+    {
+        // The finding is still worth keeping. Being interrupted after the work is done
+        // costs the telling, not the learning.
+        outcome.status = autonomy::ActivityStatus::Interrupted;
+        outcome.summary = "Finished reading about \"" + verdict.topic +
+            "\" but set it aside before recording it.";
+        outcome.resumeToken = verdict.topic;
+        return outcome;
+    }
+
+    if (settings.initiative.bAutonomousLearningEnabled && !lookup.result.entries.empty())
+    {
+        memoryDecision learned;
+        learned.bSuccess = true;
+        learned.bShouldRemember = true;
+        learned.category = "autonomous_research";
+        learned.summary = BuildLearnedResearchSummary(
+            verdict.topic, lookup.result.content, lookup.result.entries);
+        learned.reason = "A permitted autonomous lookup produced a cited finding.";
+        learned.source = "autonomous_research";
+        turnCoordinator.SubmitLearnedFinding(router, std::move(learned));
+        outcome.artifact = "a cited finding in memory";
+    }
+
+    outcome.status = autonomy::ActivityStatus::Completed;
+    outcome.satisfiedDrive = true;
+    outcome.drive = autonomy::Drive::Curiosity;
+    // Learned silently. Whether it is worth saying is a separate decision made later by
+    // the initiative layer, when it is relevant -- not because she just found it out.
+    outcome.summary = "Read about \"" + verdict.topic + "\" from " +
+        std::to_string(lookup.result.entries.size()) + " source(s) in " +
+        std::to_string(static_cast<long long>(researchMilliseconds)) + "ms. "
+        "Kept it rather than interrupting.";
+    return outcome;
+}
+
+autonomy::ActivityOutcome ReviaSession::ExecuteOrganizeMemory(
+    const autonomy::Activity& activity,
+    const autonomy::ActivityDecision& decision)
+{
+    autonomy::ActivityOutcome outcome;
+    longTermMemory memory;
+    const std::vector<memoryEntry> entries = memory.Load();
+    if (entries.size() < 4)
+    {
+        outcome.status = autonomy::ActivityStatus::Completed;
+        outcome.summary = "There is not enough in memory yet to be worth tidying.";
+        return outcome;
+    }
+    if (ActivityWasInterrupted(activity.id))
+    {
+        outcome.status = autonomy::ActivityStatus::Interrupted;
+        outcome.summary = "Stopped tidying memory for the user.";
+        outcome.resumeToken = "organize";
+        return outcome;
+    }
+
+    // Bounded housekeeping, and deliberately additive.
+    //
+    // Nothing here deletes or rewrites a durable memory. The store has no update or
+    // delete API by design, and conversation history is a separate system with its own
+    // retention rules -- a background activity that could quietly remove things Revia
+    // was told is a much worse failure than one that occasionally records a link that
+    // turns out not to matter. What this does is find memories that keep landing near
+    // each other and record the connection, which is the part that makes recall better.
+    std::size_t examined = 0;
+    std::size_t connectionsFound = 0;
+    std::string strongestPair;
+    for (const memoryEntry& entry : entries)
+    {
+        if (examined >= 12) break;
+        if (entry.summary.size() < 24) continue;
+        ++examined;
+        if (ActivityWasInterrupted(activity.id))
+        {
+            outcome.status = autonomy::ActivityStatus::Interrupted;
+            outcome.summary = "Stopped tidying memory partway for the user.";
+            outcome.resumeToken = "organize";
+            return outcome;
+        }
+        const std::vector<memoryEntry> neighbours = memory.Search(entry.summary, 3);
+        for (const memoryEntry& neighbour : neighbours)
+        {
+            if (neighbour.id == entry.id) continue;
+            if (neighbour.category != entry.category) continue;
+            ++connectionsFound;
+            if (strongestPair.empty())
+            {
+                strongestPair = entry.summary + " <-> " + neighbour.summary;
+            }
+            break;
+        }
+    }
+
+    outcome.status = autonomy::ActivityStatus::Completed;
+    outcome.satisfiedDrive = connectionsFound > 0;
+    outcome.drive = autonomy::Drive::Learning;
+    if (connectionsFound == 0)
+    {
+        outcome.summary = "Went through " + std::to_string(examined) +
+            " memories; nothing was closely enough related to connect.";
+        return outcome;
+    }
+
+    if (settings.initiative.bAutonomousLearningEnabled && !strongestPair.empty())
+    {
+        memoryDecision connection;
+        connection.bSuccess = true;
+        connection.bShouldRemember = true;
+        connection.category = "connection";
+        connection.summary = "These belong together: " + strongestPair;
+        connection.reason = "Found while tidying memory: " + decision.reason;
+        connection.source = "autonomous_organization";
+        // Save deduplicates, so re-finding the same pair on a later pass does not
+        // accumulate copies of the same observation.
+        turnCoordinator.SubmitLearnedFinding(router, std::move(connection));
+        outcome.artifact = "a connection between two memories";
+    }
+    outcome.summary = "Went through " + std::to_string(examined) + " memories and found " +
+        std::to_string(connectionsFound) + " that belong together.";
+    return outcome;
+}
+
+autonomy::ActivityOutcome ReviaSession::ExecuteCreate(
+    const autonomy::Activity& activity,
+    const autonomy::ActivityDecision& decision)
+{
+    autonomy::ActivityOutcome outcome;
+    if (!llmAvailable)
+    {
+        outcome.status = autonomy::ActivityStatus::Failed;
+        outcome.summary = "There was no local brain available to make anything with.";
+        return outcome;
+    }
+
+    std::vector<conversationMessage> recentConversation;
+    {
+        std::lock_guard operationLock(operationMutex);
+        if (busy.load())
+        {
+            outcome.status = autonomy::ActivityStatus::Interrupted;
+            outcome.summary = "A conversation started before anything was made.";
+            outcome.resumeToken = decision.subject;
+            return outcome;
+        }
+        recentConversation = context.GetRecentMessages();
+    }
+
+    const std::string subject = decision.subject.empty()
+        ? decision.reason : decision.subject;
+    const agents::SelfInquiryAgent inquiryAgent;
+    const agents::SelfInquiryResult draft = inquiryAgent.Ask(
+        router,
+        "Draft a short note for myself about: " + subject,
+        "You are writing a private note on your own initiative. Nobody asked for it and "
+        "nobody is waiting. Write what would actually be useful to your later self.",
+        recentConversation,
+        3);
+    if (ActivityWasInterrupted(activity.id))
+    {
+        outcome.status = autonomy::ActivityStatus::Interrupted;
+        outcome.summary = "Set the draft aside for the user.";
+        outcome.resumeToken = subject;
+        return outcome;
+    }
+
+    std::string body = draft.settled;
+    if (body.empty())
+    {
+        for (const std::string& question : draft.questions)
+        {
+            body += "- " + question + "\n";
+        }
+    }
+    if (body.empty())
+    {
+        outcome.status = autonomy::ActivityStatus::Completed;
+        outcome.summary = "Started something and did not have anything worth keeping.";
+        return outcome;
+    }
+
+    // Inside her own workspace, and nowhere else. Autonomous creation writes only here:
+    // a name that came from a model is not a path, so it is reduced to a known-safe
+    // filename rather than trusted, and the destination is fixed rather than chosen.
+    std::error_code error;
+    const std::filesystem::path workspace =
+        std::filesystem::path("RuntimeData") / "Workspace" / "Notes";
+    std::filesystem::create_directories(workspace, error);
+    if (error)
+    {
+        outcome.status = autonomy::ActivityStatus::Failed;
+        outcome.summary = "The workspace folder could not be created.";
+        return outcome;
+    }
+    const std::filesystem::path notePath =
+        workspace / autonomy::WorkspaceArtifactName(subject, ".md");
+    std::ofstream note(notePath, std::ios::trunc);
+    if (!note)
+    {
+        outcome.status = autonomy::ActivityStatus::Failed;
+        outcome.summary = "The note could not be written to " + notePath.string() + ".";
+        return outcome;
+    }
+    note << "# " << subject << "\n\n"
+         << "Written on my own initiative because " << decision.reason << "\n\n"
+         << body << "\n";
+    note.close();
+
+    outcome.status = autonomy::ActivityStatus::Completed;
+    outcome.satisfiedDrive = true;
+    outcome.drive = autonomy::Drive::Creativity;
+    outcome.artifact = notePath.string();
+    // Made, not announced. Having made something is not by itself a reason to interrupt.
+    outcome.summary = "Wrote a note about \"" + subject + "\" to " + notePath.string() + ".";
+    return outcome;
+}
+
+autonomy::ActivityOutcome ReviaSession::ExecuteSpeak(
+    const autonomy::Activity& activity,
+    const autonomy::ActivityDecision& decision)
+{
+    autonomy::ActivityOutcome outcome;
+    if (!settings.initiative.bSpontaneousSpeechEnabled)
+    {
+        outcome.status = autonomy::ActivityStatus::Cancelled;
+        outcome.summary = "Spontaneous speech is switched off.";
+        return outcome;
+    }
+    if (decision.subject.empty())
+    {
+        // The evidence gate, restated at the point of acting. Wanting to say something
+        // is not having something to say, and boredom is never sufficient: this is the
+        // only activity that costs the user's attention.
+        outcome.status = autonomy::ActivityStatus::Cancelled;
+        outcome.summary = "Nothing specific enough to be worth interrupting for.";
+        return outcome;
+    }
+    if (speechRecognitionService.IsRecording())
+    {
+        outcome.status = autonomy::ActivityStatus::Cancelled;
+        outcome.summary = "The user is talking; speaking over them is never the answer.";
+        return outcome;
+    }
+
+    const initiative::AttentionContext attention =
+        initiative::SampleDesktop(settings.perception);
+    const bool userIsAway = attention.sinceLastInput > std::chrono::minutes{10};
+    if (!settings.initiative.bSpeakWhenUserAway && userIsAway)
+    {
+        outcome.status = autonomy::ActivityStatus::Cancelled;
+        outcome.summary = "Held it: the user is away and speaking to an empty room is "
+            "not a conversation.";
+        return outcome;
+    }
+
+    // Through the existing attention policy, which owns whether interrupting is welcome.
+    // The scheduler decided this was worth considering; it does not get to decide that
+    // it is worth saying.
+    initiative::StarterCue cue;
+    cue.kind = initiative::StarterCueKind::SelfDirectedCuriosity;
+    cue.messageIntent = decision.subject;
+    cue.evidence = decision.reason;
+    cue.confidence = decision.score;
+    cue.occurredAt = std::chrono::system_clock::now();
+    initiative::InitiativeController::Evidence evidence;
+    evidence.conversationCues.push_back(std::move(cue));
+    const initiative::InitiativeController::Consideration consideration =
+        initiativeController.Consider(evidence, attention);
+    if (!consideration.hasProposal)
+    {
+        outcome.status = autonomy::ActivityStatus::Cancelled;
+        outcome.summary = "Attention policy said not now: " +
+            initiative::ToString(consideration.verdict);
+        return outcome;
+    }
+    if (ActivityWasInterrupted(activity.id))
+    {
+        initiativeController.Expire(consideration.proposal.id);
+        outcome.status = autonomy::ActivityStatus::Interrupted;
+        outcome.summary = "The user spoke first, which answers the question.";
+        return outcome;
+    }
+
+    SessionResult opening;
+    bool cancelled = false;
+    {
+        std::unique_lock operationLock(operationMutex, std::defer_lock);
+        if (!operationLock.try_lock())
+        {
+            initiativeController.Expire(consideration.proposal.id);
+            outcome.status = autonomy::ActivityStatus::Interrupted;
+            outcome.summary = "A conversation took the lane first.";
+            return outcome;
+        }
+        if (!started.load() || busy.load())
+        {
+            initiativeController.Expire(consideration.proposal.id);
+            outcome.status = autonomy::ActivityStatus::Interrupted;
+            outcome.summary = "The moment passed before she could speak.";
+            return outcome;
+        }
+        busy.store(true);
+        opening = conversationRuntime.StartCuriosityConversation(
+            decision.subject,
+            decision.reason,
+            {},
+            profile,
+            llmAvailable,
+            ShouldSpeakOnCurrentChannel(),
+            {});
+        if (opening.succeeded && !opening.text.empty())
+        {
+            (void)initiativeController.Commit(
+                consideration.proposal.id, std::chrono::system_clock::now());
+            ArchiveTurn("assistant", opening.text);
+        }
+        else
+        {
+            cancelled = true;
+        }
+        busy.store(false);
+    }
+    if (cancelled)
+    {
+        initiativeController.Expire(consideration.proposal.id);
+        outcome.status = autonomy::ActivityStatus::Failed;
+        outcome.summary = "Nothing came out worth saying.";
+        return outcome;
+    }
+
+    outcome.status = autonomy::ActivityStatus::Completed;
+    outcome.satisfiedDrive = true;
+    outcome.drive = autonomy::Drive::Social;
+    outcome.summary = "Said something unprompted about \"" + decision.subject + "\".";
+    return outcome;
+}
+
+autonomy::ActivityOutcome ReviaSession::ExecuteActivity(
+    const autonomy::Activity& activity,
+    const autonomy::ActivityDecision& decision)
+{
+    switch (decision.type)
+    {
+        case autonomy::ActivityType::Think:
+            return ExecuteThink(activity, decision);
+        case autonomy::ActivityType::Observe:
+            return ExecuteObserve(activity, decision);
+        case autonomy::ActivityType::Research:
+            return ExecuteResearch(activity, decision);
+        case autonomy::ActivityType::ContinueGoal:
+        {
+            autonomy::ActivityOutcome outcome;
+            if (!decision.relatedGoal)
+            {
+                outcome.status = autonomy::ActivityStatus::Failed;
+                outcome.summary = "There was no goal to continue.";
+                return outcome;
+            }
+            // Unchanged, and deliberately so: through the ordinary goal runner, which
+            // re-verifies every remaining step against policy. Resuming adds no
+            // authority whatsoever.
+            const goals::Goal finished = ResumeGoal(*decision.relatedGoal);
+            const bool succeeded = finished.status == goals::GoalStatus::Succeeded;
+            outcome.status = succeeded
+                ? autonomy::ActivityStatus::Completed
+                : autonomy::ActivityStatus::Failed;
+            outcome.satisfiedDrive = succeeded;
+            outcome.drive = autonomy::Drive::UnfinishedGoal;
+            outcome.summary = FormatGoalSummary(finished);
+            return outcome;
+        }
+        case autonomy::ActivityType::OrganizeMemory:
+            return ExecuteOrganizeMemory(activity, decision);
+        case autonomy::ActivityType::Create:
+            return ExecuteCreate(activity, decision);
+        case autonomy::ActivityType::Speak:
+            return ExecuteSpeak(activity, decision);
+        case autonomy::ActivityType::Nothing:
+            break;
+    }
+    autonomy::ActivityOutcome outcome;
+    outcome.status = autonomy::ActivityStatus::Completed;
+    outcome.summary = "Nothing needed doing.";
+    return outcome;
+}
+
 void ReviaSession::ConsiderAutonomousActivity(const std::string& triggerReason)
 {
     if (!started.load())
@@ -5077,48 +5977,43 @@ void ReviaSession::ConsiderAutonomousActivity(const std::string& triggerReason)
     PublishComponent("Autonomy", "Running",
         autonomy::ToString(decision.type) + " - " + decision.reason);
 
-    bool succeeded = false;
-    std::string outcome;
-    if (decision.type == autonomy::ActivityType::ContinueGoal && decision.relatedGoal)
-    {
-        // Through the ordinary goal runner, which re-verifies every remaining step
-        // against policy. Resuming adds no authority whatsoever.
-        const goals::Goal finished = ResumeGoal(*decision.relatedGoal);
-        succeeded = finished.status == goals::GoalStatus::Succeeded;
-        outcome = FormatGoalSummary(finished);
-    }
-    else
-    {
-        // Only goal resumption executes today. Every other activity type is decided and
-        // recorded but not carried out, and saying so is better than a silent no-op that
-        // looks like a working feature.
-        outcome = autonomy::ToString(decision.type) +
-            " is decided but not yet carried out.";
-    }
+    const autonomy::ActivityOutcome outcome = ExecuteActivity(activity, decision);
 
     {
         std::lock_guard autonomyLock(autonomyMutex);
-        if (runningActivity && runningActivity->id == activity.id &&
-            runningActivity->status == autonomy::ActivityStatus::Running)
+        if (runningActivity && runningActivity->id == activity.id)
         {
-            runningActivity->status = succeeded
-                ? autonomy::ActivityStatus::Completed
-                : autonomy::ActivityStatus::Failed;
+            // An interruption recorded while this was running wins over whatever the
+            // executor concluded. The user needing attention is not a verdict on the
+            // work, and overwriting Interrupted with Completed would lose the resume.
+            if (runningActivity->status != autonomy::ActivityStatus::Interrupted)
+            {
+                runningActivity->status = outcome.status;
+            }
+            runningActivity->resumeToken = outcome.resumeToken;
             runningActivity->updatedAt = std::chrono::system_clock::now();
         }
         // Acting on a drive spends it, so finishing something actually reduces the
-        // wanting rather than leaving her pursuing it forever.
-        if (decision.type == autonomy::ActivityType::ContinueGoal)
+        // wanting rather than leaving her pursuing it forever. Only a real completion
+        // counts: an activity that was interrupted or declined never got what it
+        // wanted, and spending the drive would make her stop wanting it anyway.
+        if (outcome.satisfiedDrive && outcome.drive.has_value() &&
+            outcome.status == autonomy::ActivityStatus::Completed)
         {
-            drives = driveController.Satisfy(drives, autonomy::Drive::UnfinishedGoal);
-        }
-        else if (decision.type == autonomy::ActivityType::Research)
-        {
-            drives = driveController.Satisfy(drives, autonomy::Drive::Curiosity);
+            drives = driveController.Satisfy(drives, *outcome.drive);
         }
     }
-    PublishComponent("Autonomy", succeeded ? "Completed" : "Finished",
-        outcome.empty() ? "The activity finished." : outcome);
+
+    const std::string phase = autonomy::ToString(outcome.status);
+    std::string message = outcome.summary.empty()
+        ? "The activity finished." : outcome.summary;
+    if (!outcome.artifact.empty())
+    {
+        message += " (kept: " + outcome.artifact + ")";
+    }
+    PublishComponent("Autonomy", phase, message);
+    appLogger.Log("Autonomous activity " + autonomy::ToString(decision.type) + " -> " +
+        phase + ": " + message);
 }
 
 emotion::EmotionVector ReviaSession::CurrentEmotion() const

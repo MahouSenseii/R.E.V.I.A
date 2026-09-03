@@ -1,6 +1,7 @@
 #pragma once
 
 #include <chrono>
+#include <cstdint>
 #include <filesystem>
 #include <mutex>
 #include <string>
@@ -42,7 +43,15 @@ public:
     [[nodiscard]] static std::string NormalizeTopic(const std::string& topic);
 
 private:
+    // Rewrites the journal to just the retained records. Caller holds the mutex.
+    [[nodiscard]] bool CompactUnlocked(std::string& outError);
+
     mutable std::mutex mutex;
+    std::size_t appendsSinceCompaction = 0;
+    // Bytes written to the journal, tracked in process. Directory-entry file sizes are
+    // stale for a file being appended to on Windows, so this is the only reliable
+    // trigger for compaction.
+    std::uintmax_t journalBytes = 0;
     std::filesystem::path journalPath;
     std::vector<CuriosityRecord> records;
 };
