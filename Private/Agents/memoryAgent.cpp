@@ -1,5 +1,6 @@
 #include "Agents/memoryAgent.h"
 
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <utility>
@@ -7,7 +8,27 @@
 namespace revia::agents
 {
 
+namespace
+{
+    // The highest-volume Low-priority case by far: a scan can hand back dozens of
+    // rows missing the same embedding model, and every one of them either succeeds
+    // (nothing durable to protect; the row just keeps its place for the next scan) or
+    // is a separate Critical failure event that this never touches.
+    bool IsCoalescableBackfillSuccess(const MemoryAgentEvent& event)
+    {
+        return event.operation == "memory_backfill" && event.decision.bSuccess &&
+            event.saveSucceeded;
+    }
+}
+
 MemoryAgent::MemoryAgent() : worker([this](const std::stop_token stopToken)
+{
+    Run(stopToken);
+}) {}
+
+MemoryAgent::MemoryAgent(std::string memoryDatabasePath)
+    : memory(std::move(memoryDatabasePath)),
+      worker([this](const std::stop_token stopToken)
 {
     Run(stopToken);
 }) {}
@@ -97,6 +118,131 @@ MemoryAgent::QueueDepths MemoryAgent::Depths() const
 {
     std::lock_guard lock(mutex);
     return {interactiveTasks.size(), learningTasks.size(), backfillTasks.size()};
+}
+
+MemoryEventPriority MemoryAgent::ClassifyEventPriority(const MemoryAgentEvent& event)
+{
+    if (event.operation == "memory_backfill")
+    {
+        // A failed embedding or a failed write to a memory that already exists is the
+        // only way backfill loses ground; a success just means the next scan will not
+        // find that row again, so this event alone protects nothing durable.
+        return (!event.decision.bSuccess || !event.saveSucceeded)
+            ? MemoryEventPriority::Critical
+            : MemoryEventPriority::Low;
+    }
+
+    if (event.operation == "autonomous_learning")
+    {
+        // The decision was already approved before this task was ever queued, so
+        // failing to store it loses a conclusion Revia already reached, not a
+        // classification that can simply run again.
+        return event.saveSucceeded
+            ? MemoryEventPriority::Important
+            : MemoryEventPriority::Critical;
+    }
+
+    // "memory_evaluation": the interactive-turn classifier's verdict on one turn.
+    if (!event.decision.bSuccess ||
+        (event.decision.bShouldRemember && !event.saveSucceeded))
+    {
+        // The classifier itself failed to run, or it decided to remember and the save
+        // failed. Either way, this event is the only record of a failure the session
+        // would otherwise never see.
+        return MemoryEventPriority::Critical;
+    }
+    if (event.decision.bShouldRemember && event.wasAdded)
+    {
+        return MemoryEventPriority::Important;
+    }
+    // Ran fine and either decided there was nothing worth keeping, or the memory
+    // already existed under a prior summary.
+    return MemoryEventPriority::Low;
+}
+
+std::size_t MemoryAgent::DroppedLowPriorityEvents() const
+{
+    std::lock_guard lock(mutex);
+    return droppedLowPriorityEvents;
+}
+
+std::size_t MemoryAgent::CoalescedEvents() const
+{
+    std::lock_guard lock(mutex);
+    return coalescedEvents;
+}
+
+std::size_t MemoryAgent::CriticalEventsEvicted() const
+{
+    std::lock_guard lock(mutex);
+    return criticalEventsEvicted;
+}
+
+std::string MemoryAgent::AdmitEventLocked(MemoryAgentEvent event)
+{
+    if (events.size() < limits.maximumPendingEvents)
+    {
+        events.push_back(std::move(event));
+        return {};
+    }
+
+    // At the bound. Prefer folding a new Low-priority backfill success into an
+    // already-coalesced summary at the tail over evicting a different event outright:
+    // a burst of hundreds of successful backfills is the highest-volume Low case, and
+    // folding them costs nothing that mattered.
+    if (IsCoalescableBackfillSuccess(event) && !events.empty() &&
+        IsCoalescableBackfillSuccess(events.back()))
+    {
+        MemoryAgentEvent& tail = events.back();
+        tail.coalescedCount = std::max<std::uint32_t>(tail.coalescedCount, 1) + 1;
+        tail.turnId = event.turnId;
+        ++coalescedEvents;
+        return "[MemoryAgent] event_pressure | depth=" +
+            std::to_string(limits.maximumPendingEvents) +
+            " | action=coalesced | type=memory_backfill";
+    }
+
+    // Otherwise evict the oldest event at the lowest priority present, so a Critical
+    // failure is never displaced while anything less important is still queued.
+    if (const auto lowVictim = std::find_if(events.begin(), events.end(),
+            [](const MemoryAgentEvent& queued)
+            { return ClassifyEventPriority(queued) == MemoryEventPriority::Low; });
+        lowVictim != events.end())
+    {
+        const std::string victimType = lowVictim->operation;
+        events.erase(lowVictim);
+        events.push_back(std::move(event));
+        ++droppedLowPriorityEvents;
+        return "[MemoryAgent] event_pressure | depth=" +
+            std::to_string(limits.maximumPendingEvents) +
+            " | action=coalesced | type=" + victimType;
+    }
+
+    if (const auto importantVictim = std::find_if(events.begin(), events.end(),
+            [](const MemoryAgentEvent& queued)
+            { return ClassifyEventPriority(queued) == MemoryEventPriority::Important; });
+        importantVictim != events.end())
+    {
+        const std::string victimType = importantVictim->operation;
+        events.erase(importantVictim);
+        events.push_back(std::move(event));
+        ++droppedLowPriorityEvents;
+        return "[MemoryAgent] event_pressure | depth=" +
+            std::to_string(limits.maximumPendingEvents) +
+            " | action=evicted_important | type=" + victimType;
+    }
+
+    // Every queued event, and this one, are Critical. The bound still applies even
+    // here: drop the oldest and say so loudly, rather than growing without limit. This
+    // should not come up in practice -- it needs the entire event queue to be Critical
+    // failures that nothing has drained -- but bounded takes precedence over it.
+    const std::string victimType = events.front().operation;
+    events.erase(events.begin());
+    events.push_back(std::move(event));
+    ++criticalEventsEvicted;
+    return "[MemoryAgent] event_pressure | depth=" +
+        std::to_string(limits.maximumPendingEvents) +
+        " | action=evicted_critical | type=" + victimType;
 }
 
 void MemoryAgent::Report(const std::string& line) const
@@ -196,7 +342,7 @@ void MemoryAgent::Submit(
         std::to_string(Depths().interactive));
 }
 
-void MemoryAgent::SubmitLearnedFinding(
+LearnedFindingResult MemoryAgent::SubmitLearnedFinding(
     const messageRouter& router,
     memoryDecision decision,
     const std::uint64_t turnId)
@@ -204,20 +350,49 @@ void MemoryAgent::SubmitLearnedFinding(
     if (!decision.bSuccess || !decision.bShouldRemember || decision.summary.empty() ||
         worker.get_stop_token().stop_requested())
     {
-        return;
+        return LearnedFindingResult::Failed;
     }
+
     Task task;
     task.router = &router;
     task.input = decision.summary;
-    task.learnedDecision = std::move(decision);
+    // A copy: `decision` itself has to survive intact for the fallback save below,
+    // which only runs if the queue refuses this task.
+    task.learnedDecision = decision;
     task.hasLearnedDecision = true;
     task.turnId = turnId;
-    if (!Enqueue(MemoryTaskClass::AutonomousLearning, std::move(task)))
+
+    if (Enqueue(MemoryTaskClass::AutonomousLearning, std::move(task)))
     {
-        return;
+        Report("[MemoryAgent] queued | type=learning | depth=" +
+            std::to_string(Depths().learning));
+        return LearnedFindingResult::Queued;
     }
-    Report("[MemoryAgent] queued | type=learning | depth=" +
-        std::to_string(Depths().learning));
+
+    // The queue is full, but the decision was already approved before this call ever
+    // happened. Losing it here would turn an observable refusal back into the silent
+    // drop this API exists to prevent, so it is saved immediately instead -- without an
+    // embedding, since that is the expensive step the queue was protecting. The
+    // existing backfill scan finds the row missing its vector and adds it later.
+    // Save() still deduplicates and applies the same safety policy any other save does.
+    decision.embedding.clear();
+    decision.embeddingModel.clear();
+
+    bool wasAdded = false;
+    if (!memory.SaveAutomaticMemory(decision, wasAdded))
+    {
+        Report("[MemoryAgent] overflow_fallback | type=learning | result=save_failed");
+        return LearnedFindingResult::Failed;
+    }
+    if (!wasAdded)
+    {
+        Report("[MemoryAgent] overflow_fallback | type=learning | "
+            "result=already_exists");
+        return LearnedFindingResult::AlreadyExists;
+    }
+    Report("[MemoryAgent] overflow_fallback | type=learning | "
+        "result=saved_without_embedding");
+    return LearnedFindingResult::SavedWithoutEmbedding;
 }
 
 void MemoryAgent::SubmitEmbeddingBackfill(
@@ -344,11 +519,12 @@ void MemoryAgent::Run(const std::stop_token stopToken)
                     std::chrono::duration<double, std::milli>(
                         std::chrono::steady_clock::now() - saveStarted).count()});
             }
+            std::string pressureReport;
             {
                 std::lock_guard lock(mutex);
-                if (events.size() >= limits.maximumPendingEvents) events.erase(events.begin());
-                events.push_back(std::move(event));
+                pressureReport = AdmitEventLocked(std::move(event));
             }
+            if (!pressureReport.empty()) Report(pressureReport);
             continue;
         }
 
@@ -388,11 +564,12 @@ void MemoryAgent::Run(const std::stop_token stopToken)
                     std::chrono::steady_clock::now() - saveStarted).count()});
         }
 
+        std::string pressureReport;
         {
             std::lock_guard lock(mutex);
-            if (events.size() >= limits.maximumPendingEvents) events.erase(events.begin());
-            events.push_back(std::move(event));
+            pressureReport = AdmitEventLocked(std::move(event));
         }
+        if (!pressureReport.empty()) Report(pressureReport);
     }
 }
 

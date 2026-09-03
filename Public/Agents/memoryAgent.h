@@ -16,6 +16,32 @@
 namespace revia::agents
 {
 
+    enum class LearnedFindingResult
+    {
+        Queued,
+        SavedWithoutEmbedding,
+        AlreadyExists,
+        Failed
+    };
+
+// How much an event's disappearance under queue pressure actually costs.
+//
+// Critical and Important are named for what they describe, not for the queue: nothing
+// here changes whether the underlying memory was saved, only whether the event
+// reporting it is worth keeping when the bounded event queue is full.
+enum class MemoryEventPriority
+{
+    // A failure that would otherwise vanish silently: a durable save that did not
+    // happen, a classifier that did not run, an embedding that could not be computed.
+    Critical,
+    // Something durable actually happened: a new memory was saved, or an autonomous
+    // finding was completed.
+    Important,
+    // Nothing changed, or a routine embedding backfill succeeded. The next scan finds
+    // an unembedded row again regardless, so losing this event costs nothing durable.
+    Low
+};
+
 struct MemoryAgentEvent
 {
     memoryDecision decision;
@@ -23,6 +49,10 @@ struct MemoryAgentEvent
     std::string operation = "memory_evaluation";
     bool saveSucceeded = true;
     bool wasAdded = false;
+    // Set when this entry stands in for more than one Low-priority occurrence folded
+    // together under queue pressure -- see MemoryAgent::AdmitEventLocked. Zero for an
+    // ordinary event describing exactly one task.
+    std::uint32_t coalescedCount = 0;
 };
 
 // What kind of work a queued memory task is.
@@ -63,6 +93,10 @@ class MemoryAgent
 {
 public:
     MemoryAgent();
+    // Same as the default constructor, but the durable store lives at
+    // `memoryDatabasePath` instead of the process-relative default. Exists for tests
+    // that need an isolated database rather than the shared runtime one.
+    explicit MemoryAgent(std::string memoryDatabasePath);
     ~MemoryAgent();
 
     MemoryAgent(const MemoryAgent&) = delete;
@@ -75,7 +109,13 @@ public:
         std::uint64_t turnId = 0);
     // Stores one already-grounded, bounded finding without asking the conversation
     // classifier to reinterpret web text. Embedding still runs on the background lane.
-    void SubmitLearnedFinding(
+    //
+    // Never destroys an already-approved decision: when the learning queue is full,
+    // this saves it immediately without an embedding rather than refusing it. The
+    // existing backfill scan adds the vector later. The returned disposition tells the
+    // caller which of those happened, so autonomy reporting never claims a save that
+    // did not happen.
+    [[nodiscard]] LearnedFindingResult SubmitLearnedFinding(
         const messageRouter& router,
         memoryDecision decision,
         std::uint64_t turnId = 0);
@@ -113,6 +153,21 @@ public:
         int& roundPosition,
         bool& outHasWork);
 
+    // What the event queue's bounded eviction would do with this event, exposed so the
+    // policy can be tested directly: Critical events are never coalesced away, Low ones
+    // are the first to go, and Important sits between the two.
+    [[nodiscard]] static MemoryEventPriority ClassifyEventPriority(
+        const MemoryAgentEvent& event);
+
+    // How many Low-priority (or, failing that, Important) events have been coalesced
+    // or evicted to keep the event queue bounded under pressure, and how many times
+    // pressure was severe enough that even a Critical event had to be dropped -- the
+    // one condition that should never come up in practice, since Critical events are
+    // preserved as long as anything lower-priority is still queued. Never task content.
+    [[nodiscard]] std::size_t DroppedLowPriorityEvents() const;
+    [[nodiscard]] std::size_t CoalescedEvents() const;
+    [[nodiscard]] std::size_t CriticalEventsEvicted() const;
+
 private:
     struct Task
     {
@@ -129,6 +184,11 @@ private:
     void Report(const std::string& line) const;
     // Returns false when the queue is full and the task could not be admitted.
     bool Enqueue(MemoryTaskClass taskClass, Task task);
+    // Appends one event, coalescing or evicting under the priority policy when the
+    // queue is already at its bound. Requires `mutex`; returns a diagnostic line to
+    // report once the caller has released it, or an empty string when nothing
+    // noteworthy happened.
+    std::string AdmitEventLocked(MemoryAgentEvent event);
 
     memoryManager memory;
     mutable std::mutex mutex;
@@ -143,6 +203,10 @@ private:
     std::vector<MemoryAgentEvent> events;
     MemoryQueueLimits limits;
     DiagnosticSink diagnostics;
+    // Guarded by `mutex`, same as `events`.
+    std::size_t droppedLowPriorityEvents = 0;
+    std::size_t coalescedEvents = 0;
+    std::size_t criticalEventsEvicted = 0;
     std::jthread worker;
 };
 

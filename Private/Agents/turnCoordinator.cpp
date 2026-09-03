@@ -38,12 +38,12 @@ std::vector<MemoryAgentEvent> TurnCoordinator::DrainMemoryEvents()
     return memoryAgent.DrainEvents();
 }
 
-void TurnCoordinator::SubmitLearnedFinding(
+LearnedFindingResult TurnCoordinator::SubmitLearnedFinding(
     const messageRouter& router,
     memoryDecision decision,
     const std::uint64_t turnId)
 {
-    memoryAgent.SubmitLearnedFinding(router, std::move(decision), turnId);
+    return memoryAgent.SubmitLearnedFinding(router, std::move(decision), turnId);
 }
 
 void TurnCoordinator::BackfillMemoryEmbeddings(

@@ -265,4 +265,22 @@ std::string WorkspaceArtifactName(
     return name + extension;
 }
 
+std::string DescribeLearnedFindingArtifact(
+    const agents::LearnedFindingResult result,
+    const std::string& kept,
+    const std::string& pending)
+{
+    switch (result)
+    {
+        case agents::LearnedFindingResult::SavedWithoutEmbedding:
+        case agents::LearnedFindingResult::AlreadyExists:
+            return kept;
+        case agents::LearnedFindingResult::Queued:
+            return pending;
+        case agents::LearnedFindingResult::Failed:
+            return {};
+    }
+    return {};
+}
+
 } // namespace revia::autonomy

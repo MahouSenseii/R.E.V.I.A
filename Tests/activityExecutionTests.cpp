@@ -12,6 +12,7 @@ namespace
 {
 using revia::tests::Check;
 using namespace revia::autonomy;
+using revia::agents::LearnedFindingResult;
 
 bool Contains(const std::string& haystack, const std::string& needle)
 {
@@ -218,6 +219,37 @@ void TestAWorkspaceNameStaysReadableAndBounded()
     Check(empty == "note.md", "An empty title did not fall back to a usable name.");
 }
 
+// The caller-honesty contract every autonomous activity that submits a learned finding
+// relies on: the reported artifact must say what actually happened, never what an
+// activity hoped would happen.
+void TestALearnedFindingArtifactNeverClaimsMoreThanItsDisposition()
+{
+    const std::string kept = "a cited finding in memory";
+    const std::string pending = "a cited finding queued for memory";
+
+    Check(DescribeLearnedFindingArtifact(
+              LearnedFindingResult::SavedWithoutEmbedding, kept, pending) == kept,
+        "A finding that was actually saved did not report the kept phrase.");
+    Check(DescribeLearnedFindingArtifact(
+              LearnedFindingResult::AlreadyExists, kept, pending) == kept,
+        "A finding already in memory did not report the kept phrase.");
+    Check(DescribeLearnedFindingArtifact(
+              LearnedFindingResult::Queued, kept, pending) == pending,
+        "A finding still waiting in the queue reported the kept phrase instead of the "
+        "pending one -- this is the false \"in memory\" claim before persistence "
+        "returns.");
+
+    // The regression this exists for: a refused or failed submission must never
+    // produce text a reader could take for "queued" or "in memory".
+    const std::string failedArtifact =
+        DescribeLearnedFindingArtifact(LearnedFindingResult::Failed, kept, pending);
+    Check(failedArtifact.empty(),
+        "A save that failed outright produced a non-empty artifact (\"" +
+        failedArtifact + "\") instead of reporting nothing kept.");
+    Check(!Contains(failedArtifact, "queued") && !Contains(failedArtifact, "memory"),
+        "A failed save's artifact text could still be read as a queued-or-saved claim.");
+}
+
 } // namespace
 
 void RunActivityExecutionTests()
@@ -234,6 +266,7 @@ void RunActivityExecutionTests()
     TestTheUserOutranksEverythingExceptNothing();
     TestAWorkspaceNameCannotEscapeTheWorkspace();
     TestAWorkspaceNameStaysReadableAndBounded();
+    TestALearnedFindingArtifactNeverClaimsMoreThanItsDisposition();
     std::cout << "Autonomous research refuses a delegated topic instead of searching "
                  "the request, acting spends the drive that\nmotivated it, an "
                  "interruption stays resumable, and anything she makes stays inside her "

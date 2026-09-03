@@ -1,6 +1,10 @@
 #include "Core/memoryManager.h"
 
+#include <utility>
+
 memoryManager::memoryManager() = default;
+
+memoryManager::memoryManager(std::string databasePath) : store(std::move(databasePath)) {}
 
 memoryManager::~memoryManager() = default;
 

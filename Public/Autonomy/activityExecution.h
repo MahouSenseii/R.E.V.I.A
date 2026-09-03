@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Agents/memoryAgent.h"
 #include "Autonomy/activity.h"
 #include "Autonomy/driveState.h"
 
@@ -82,5 +83,20 @@ struct ResearchTopicVerdict
 [[nodiscard]] std::string WorkspaceArtifactName(
     const std::string& title,
     const std::string& extension);
+
+// What an activity should report as ActivityOutcome::artifact for a learned finding it
+// submitted, given how that submission actually resolved.
+//
+// `kept` is used when the finding genuinely reached durable memory -- saved, whether or
+// not its embedding has landed yet, or already there from an earlier pass -- and
+// `pending` while it is still only queued behind other work, not yet durable. Nothing is
+// returned for a submission that failed outright: an empty artifact leaves the outcome
+// message honest instead of claiming a save that never happened. This is the one place
+// that mapping happens, so every autonomous activity reports the same disposition the
+// same way.
+[[nodiscard]] std::string DescribeLearnedFindingArtifact(
+    agents::LearnedFindingResult result,
+    const std::string& kept,
+    const std::string& pending);
 
 } // namespace revia::autonomy

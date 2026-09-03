@@ -6,12 +6,14 @@
 #include "Core/runtimePath.h"
 #include "Initiative/curiosityJournal.h"
 #include "Learning/selfAssessment.h"
+#include "Memory/longTermMemory.h"
 #include "Presence/adapterArchivePolicy.h"
 #include "Presence/presenceRuntime.h"
 #include "Runtime/outputChannelPolicy.h"
 #include "Runtime/retainedCounts.h"
 #include "Vision/cameraCaptureService.h"
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <fstream>
@@ -279,6 +281,99 @@ void TestResolutionIsStableAcrossRepeatedCalls()
     Check(first == second, "Repeated resolution of the same path disagreed.");
 }
 
+// The regression this exists for: a stray RuntimeData/Presence tree left behind by the
+// working-directory bug this replaced must not go on hijacking Presence forever just
+// because it happens to already exist. "Existing file wins" is exactly the old
+// behaviour that made the first bug permanent.
+void TestALegacyForeignCwdTreeDoesNotHijackPresenceWritePaths()
+{
+    ScopedTestDirectory foreignCwd;
+    // The precondition the regression depends on: this directory is not, and must not
+    // look like, a real Revia install.
+    Check(!std::filesystem::exists(foreignCwd.root / "Config"),
+        "The foreign working directory accidentally looks like a Revia runtime root, "
+        "so it cannot exercise the regression.");
+
+    const std::filesystem::path staleState =
+        foreignCwd.root / "RuntimeData" / "Presence" / "avatar_state.json";
+    std::filesystem::create_directories(staleState.parent_path());
+    { std::ofstream file(staleState); file << R"({"sequence":999,"phase":"stale"})"; }
+
+    const std::filesystem::path staleInbox =
+        foreignCwd.root / "RuntimeData" / "Presence" / "Inbox";
+    std::filesystem::create_directories(staleInbox);
+    const std::filesystem::path staleOutbox =
+        foreignCwd.root / "RuntimeData" / "Presence" / "Outbox";
+    std::filesystem::create_directories(staleOutbox);
+    const std::filesystem::path staleEvents =
+        foreignCwd.root / "RuntimeData" / "Presence" / "avatar_events.jsonl";
+    { std::ofstream file(staleEvents); file << "{}\n"; }
+
+    const presenceSettings defaults;
+    const std::filesystem::path original = std::filesystem::current_path();
+    std::filesystem::current_path(foreignCwd.root);
+    const std::filesystem::path canonicalRoot = revia::core::RuntimeRoot();
+    const std::filesystem::path resolvedState =
+        revia::core::ResolveRuntimeWritePath(defaults.statePath);
+    const std::filesystem::path resolvedStateAgain =
+        revia::core::ResolveRuntimeWritePath(defaults.statePath);
+    const std::filesystem::path resolvedEvents =
+        revia::core::ResolveRuntimeWritePath(defaults.eventPath);
+    const std::filesystem::path resolvedInbox =
+        revia::core::ResolveRuntimeWritePath(defaults.inboxPath);
+    const std::filesystem::path resolvedOutbox =
+        revia::core::ResolveRuntimeWritePath(defaults.outboxPath);
+    std::filesystem::current_path(original);
+
+    Check(resolvedState != staleState,
+        "A stale foreign avatar_state.json hijacked the write target: " +
+        resolvedState.string());
+    Check(resolvedState == (canonicalRoot / defaults.statePath).lexically_normal(),
+        "The resolved state path was not anchored to the canonical runtime root: " +
+        resolvedState.string());
+    Check(resolvedState == resolvedStateAgain,
+        "Repeated resolution in the presence of a legacy tree disagreed with itself.");
+
+    Check(resolvedEvents != staleEvents,
+        "A stale foreign avatar_events.jsonl hijacked the write target.");
+    Check(resolvedInbox != staleInbox,
+        "A stale foreign Inbox directory hijacked the write target: " +
+        resolvedInbox.string());
+    Check(resolvedOutbox != staleOutbox,
+        "A stale foreign Outbox directory hijacked the write target: " +
+        resolvedOutbox.string());
+
+    // The legacy files must still be exactly where this test put them -- nothing here
+    // may delete or move them.
+    Check(std::filesystem::exists(staleState),
+        "The legacy avatar_state.json was removed rather than left alone.");
+    Check(std::filesystem::exists(staleInbox) && std::filesystem::exists(staleOutbox),
+        "A legacy Presence directory was removed rather than left alone.");
+}
+
+// The companion to the regression above: the ordinary, non-buggy case must keep
+// working exactly as before. When the working directory already is the canonical
+// runtime root and the configured file already lives there, that is still the answer.
+void TestAnExistingFileAtTheCanonicalRootStaysCanonical()
+{
+    ScopedTestDirectory runtimeRootDir;
+    std::filesystem::create_directories(runtimeRootDir.root / "Config");
+    const std::filesystem::path existing =
+        runtimeRootDir.root / "RuntimeData" / "Presence" / "avatar_state.json";
+    std::filesystem::create_directories(existing.parent_path());
+    { std::ofstream file(existing); file << "{}"; }
+
+    const std::filesystem::path original = std::filesystem::current_path();
+    std::filesystem::current_path(runtimeRootDir.root);
+    const std::filesystem::path resolved = revia::core::ResolveRuntimeWritePath(
+        std::string("RuntimeData/Presence/avatar_state.json"));
+    std::filesystem::current_path(original);
+
+    Check(resolved == existing,
+        "A legitimate canonical existing file was not resolved to its own location: " +
+        resolved.string() + " vs " + existing.string());
+}
+
 // ------------------------------------------------------------------- 4. memory queue
 using revia::agents::MemoryAgent;
 using revia::agents::MemoryTaskClass;
@@ -377,6 +472,421 @@ void TestBackfillIsDeduplicatedAndQueuesAreBounded()
         "The queue dropped work without reporting it. A silent drop is exactly what "
         "the diagnostics exist to prevent.");
     agent.Stop();
+}
+
+// messageRouter is not copyable (it owns mutexes several layers down), so this
+// configures one in place rather than returning by value.
+void ConfigurePlaceholderRouter(messageRouter& router)
+{
+    llmSettings settings;
+    settings.backend = "Placeholder";
+    embeddingSettings embeddings;
+    embeddings.bEnabled = false;
+    aiProfile profile;
+    router.ApplyLLMSettings(settings, embeddings, profile);
+}
+
+memoryDecision ApprovedFinding(const std::string& uniqueTag)
+{
+    // Every token carries the tag, so no two generated summaries share a token and the
+    // similarity-based duplicate check (Private/Memory/longTermMemory.cpp) can never
+    // mistake two distinct findings for the same one.
+    memoryDecision decision;
+    decision.bSuccess = true;
+    decision.bShouldRemember = true;
+    decision.category = "test";
+    decision.summary = "findingalpha" + uniqueTag + " findingbeta" + uniqueTag +
+        " findinggamma" + uniqueTag + " findingdelta" + uniqueTag;
+    decision.reason = "queue-pressure test";
+    decision.source = "autonomous_research";
+    return decision;
+}
+
+// ------------------------------------------------- 4a. lossless autonomous learning
+// The regression: SubmitLearnedFinding() used to construct the task, try to enqueue
+// it, and simply return when the queue refused it -- destroying a memoryDecision the
+// model had already approved. Refusing was observable; losing the decision was not.
+void TestAnAlreadyApprovedFindingSurvivesAFullLearningQueue()
+{
+    ScopedTestDirectory directory;
+    const std::string databasePath = (directory.root / "revia_memory.db").string();
+    messageRouter router;
+    ConfigurePlaceholderRouter(router);
+
+    // A zero-capacity learning queue refuses every submission deterministically, so
+    // this exercises the overflow path on every call rather than racing the
+    // background worker to observe it.
+    MemoryAgent agent(databasePath);
+    revia::agents::MemoryQueueLimits limits;
+    limits.maximumLearning = 0;
+    agent.SetQueueLimits(limits);
+
+    const memoryDecision approved = ApprovedFinding("restart");
+    const std::string summary = approved.summary;
+    const auto disposition = agent.SubmitLearnedFinding(router, approved);
+    Check(disposition == revia::agents::LearnedFindingResult::SavedWithoutEmbedding,
+        "A finding submitted against a full learning queue was not staged "
+        "immediately; the decision was at risk of being destroyed instead of merely "
+        "delayed.");
+    agent.Stop();
+
+    // Restart-safe: reopening the same database, with no MemoryAgent involved at all,
+    // finds the row.
+    const std::vector<memoryEntry> entries = longTermMemory(databasePath).Load();
+    const bool found = std::any_of(entries.begin(), entries.end(),
+        [&summary](const memoryEntry& entry) { return entry.summary == summary; });
+    Check(found, "The finding staged under queue pressure did not survive a restart.");
+
+    // Resubmitting the identical, already-approved finding must not create a
+    // duplicate memory.
+    MemoryAgent secondAgent(databasePath);
+    secondAgent.SetQueueLimits(limits);
+    Check(secondAgent.SubmitLearnedFinding(router, approved) ==
+            revia::agents::LearnedFindingResult::AlreadyExists,
+        "Resubmitting the same already-approved finding was not recognised as "
+        "already known.");
+    secondAgent.Stop();
+
+    const std::vector<memoryEntry> afterResubmit = longTermMemory(databasePath).Load();
+    const auto matches = std::count_if(afterResubmit.begin(), afterResubmit.end(),
+        [&summary](const memoryEntry& entry) { return entry.summary == summary; });
+    Check(matches == 1,
+        "The same approved finding exists " + std::to_string(matches) +
+        " times in durable memory instead of once.");
+}
+
+// A finding that was never approved by the model, or carries no content, has nothing
+// to protect: Failed is correct for it, and must stay distinguishable from every
+// disposition that means the finding is safe.
+void TestAnUnapprovedFindingIsReportedFailedNotQueued()
+{
+    messageRouter router;
+    ConfigurePlaceholderRouter(router);
+    MemoryAgent agent;
+
+    memoryDecision neverApproved;
+    Check(agent.SubmitLearnedFinding(router, neverApproved) ==
+            revia::agents::LearnedFindingResult::Failed,
+        "A finding the model never approved produced a disposition other than "
+        "Failed.");
+
+    memoryDecision noSummary;
+    noSummary.bSuccess = true;
+    noSummary.bShouldRemember = true;
+    Check(agent.SubmitLearnedFinding(router, noSummary) ==
+            revia::agents::LearnedFindingResult::Failed,
+        "A finding with no summary produced a disposition other than Failed.");
+    agent.Stop();
+}
+
+// The end-to-end proof: whatever mix of the normal queue and the overflow fallback a
+// burst of already-approved findings actually takes -- which depends on how the
+// background worker happens to be scheduled -- every one of them ends up represented
+// exactly once in durable memory. None are lost, and none are duplicated.
+void TestABurstOfApprovedFindingsUnderQueuePressureLosesNoneAndDuplicatesNone()
+{
+    ScopedTestDirectory directory;
+    const std::string databasePath = (directory.root / "revia_memory.db").string();
+    messageRouter router;
+    ConfigurePlaceholderRouter(router);
+
+    MemoryAgent agent(databasePath);
+    revia::agents::MemoryQueueLimits limits;
+    limits.maximumLearning = 8;
+    agent.SetQueueLimits(limits);
+
+    constexpr int FindingCount = 60;
+    int queued = 0;
+    for (int index = 0; index < FindingCount; ++index)
+    {
+        const auto disposition =
+            agent.SubmitLearnedFinding(router, ApprovedFinding(std::to_string(index)));
+        Check(disposition == revia::agents::LearnedFindingResult::Queued ||
+                disposition == revia::agents::LearnedFindingResult::SavedWithoutEmbedding,
+            "An already-approved finding under queue pressure produced a disposition "
+            "other than Queued or SavedWithoutEmbedding -- either refused outright or "
+            "wrongly reported as a duplicate of another distinct finding.");
+        if (disposition == revia::agents::LearnedFindingResult::Queued) ++queued;
+        Check(agent.Depths().learning <= limits.maximumLearning,
+            "The learning queue exceeded its configured bound mid-burst.");
+    }
+
+    // Wait for every normally-queued finding to be fully processed, not merely
+    // dequeued -- Depths() alone would report zero while the last one is still being
+    // embedded and saved, and stopping the agent there would cut off in-flight work
+    // that has nothing to do with the fix under test.
+    std::vector<revia::agents::MemoryAgentEvent> learningEvents;
+    for (int attempt = 0;
+         attempt < 400 && static_cast<int>(learningEvents.size()) < queued;
+         ++attempt)
+    {
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        for (auto& event : agent.DrainEvents())
+        {
+            if (event.operation == "autonomous_learning")
+            {
+                learningEvents.push_back(std::move(event));
+            }
+        }
+    }
+    Check(static_cast<int>(learningEvents.size()) == queued,
+        "Only " + std::to_string(learningEvents.size()) + " of " +
+        std::to_string(queued) + " normally-queued findings were fully processed "
+        "before the worker appeared to stall.");
+    agent.Stop();
+
+    const std::vector<memoryEntry> entries = longTermMemory(databasePath).Load();
+    Check(static_cast<int>(entries.size()) == FindingCount,
+        "Durable memory holds " + std::to_string(entries.size()) + " rows after a "
+        "burst of " + std::to_string(FindingCount) + " distinct already-approved "
+        "findings (" + std::to_string(queued) + " queued normally, " +
+        std::to_string(FindingCount - queued) + " staged immediately); queue "
+        "pressure lost or duplicated some of them.");
+}
+
+// --------------------------------------------------------- 4b. bounded memory events
+// The regression: the event queue dropped events.front() -- the oldest -- whatever it
+// described, including a database save failure or a durable autonomous-learning
+// failure that nothing else in the system would ever report again.
+void TestEventPriorityClassificationMatchesWhatMustNeverBeLostSilently()
+{
+    using revia::agents::MemoryAgentEvent;
+    using revia::agents::MemoryEventPriority;
+
+    MemoryAgentEvent failedEmbedding;
+    failedEmbedding.operation = "memory_backfill";
+    failedEmbedding.decision.bSuccess = false;
+    Check(MemoryAgent::ClassifyEventPriority(failedEmbedding) == MemoryEventPriority::Critical,
+        "A failed backfill embedding was not classified Critical.");
+
+    MemoryAgentEvent failedBackfillSave;
+    failedBackfillSave.operation = "memory_backfill";
+    failedBackfillSave.decision.bSuccess = true;
+    failedBackfillSave.saveSucceeded = false;
+    Check(MemoryAgent::ClassifyEventPriority(failedBackfillSave) == MemoryEventPriority::Critical,
+        "A backfilled embedding that could not be saved was not classified Critical.");
+
+    MemoryAgentEvent backfillSucceeded;
+    backfillSucceeded.operation = "memory_backfill";
+    backfillSucceeded.decision.bSuccess = true;
+    backfillSucceeded.saveSucceeded = true;
+    Check(MemoryAgent::ClassifyEventPriority(backfillSucceeded) == MemoryEventPriority::Low,
+        "A successful embedding backfill was not classified Low.");
+
+    MemoryAgentEvent failedLearning;
+    failedLearning.operation = "autonomous_learning";
+    failedLearning.saveSucceeded = false;
+    Check(MemoryAgent::ClassifyEventPriority(failedLearning) == MemoryEventPriority::Critical,
+        "A durable autonomous-learning failure was not classified Critical.");
+
+    MemoryAgentEvent completedLearning;
+    completedLearning.operation = "autonomous_learning";
+    completedLearning.saveSucceeded = true;
+    Check(MemoryAgent::ClassifyEventPriority(completedLearning) == MemoryEventPriority::Important,
+        "A completed autonomous-learning finding was not classified Important.");
+
+    MemoryAgentEvent classifierFailed;
+    classifierFailed.decision.bSuccess = false;
+    Check(MemoryAgent::ClassifyEventPriority(classifierFailed) == MemoryEventPriority::Critical,
+        "A failed automatic-memory classification was not classified Critical.");
+
+    MemoryAgentEvent turnSaveFailed;
+    turnSaveFailed.decision.bSuccess = true;
+    turnSaveFailed.decision.bShouldRemember = true;
+    turnSaveFailed.saveSucceeded = false;
+    Check(MemoryAgent::ClassifyEventPriority(turnSaveFailed) == MemoryEventPriority::Critical,
+        "A failed automatic-memory save was not classified Critical.");
+
+    MemoryAgentEvent newMemorySaved;
+    newMemorySaved.decision.bSuccess = true;
+    newMemorySaved.decision.bShouldRemember = true;
+    newMemorySaved.saveSucceeded = true;
+    newMemorySaved.wasAdded = true;
+    Check(MemoryAgent::ClassifyEventPriority(newMemorySaved) == MemoryEventPriority::Important,
+        "A newly saved automatic memory was not classified Important.");
+
+    MemoryAgentEvent noOpClassification;
+    noOpClassification.decision.bSuccess = true;
+    noOpClassification.decision.bShouldRemember = false;
+    Check(MemoryAgent::ClassifyEventPriority(noOpClassification) == MemoryEventPriority::Low,
+        "A no-op classification (nothing worth remembering) was not classified Low.");
+
+    MemoryAgentEvent dedupedSave;
+    dedupedSave.decision.bSuccess = true;
+    dedupedSave.decision.bShouldRemember = true;
+    dedupedSave.saveSucceeded = true;
+    dedupedSave.wasAdded = false;
+    Check(MemoryAgent::ClassifyEventPriority(dedupedSave) == MemoryEventPriority::Low,
+        "A save that matched an existing memory (nothing new) was not classified Low.");
+}
+
+// Exercises the documented production default (maximumPendingEvents == 512) directly,
+// with enough sustained Low-value pressure -- more submissions than the interactive
+// task queue's own bound, so every one of them actually reaches the worker and
+// becomes an event -- to force real overflow rather than merely configuring a small
+// bound and asserting on the arithmetic.
+void TestEventQueueNeverExceedsTheDocumentedDefaultBoundUnderSustainedPressure()
+{
+    messageRouter router;
+    ConfigurePlaceholderRouter(router);
+    MemoryAgent agent;
+    revia::agents::MemoryQueueLimits limits;
+    // Wide enough that every submission below survives the task queue's own bound and
+    // reaches the worker; maximumPendingEvents is left at its real default, 512, which
+    // is what this test exists to prove holds.
+    limits.maximumInteractive = 700;
+    agent.SetQueueLimits(limits);
+    Check(revia::agents::MemoryQueueLimits{}.maximumPendingEvents == 512,
+        "The documented default event bound has changed; update this test alongside "
+        "it.");
+
+    constexpr int SubmissionCount = 620;
+    for (int index = 0; index < SubmissionCount; ++index)
+    {
+        agent.Submit(router, "sustained pressure turn " + std::to_string(index));
+    }
+    for (int attempt = 0; attempt < 3000 && agent.Depths().interactive > 0; ++attempt)
+    {
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    Check(agent.Depths().interactive == 0,
+        "The interactive task queue never drained; the worker appears stuck.");
+
+    const std::vector<revia::agents::MemoryAgentEvent> drained = agent.DrainEvents();
+    Check(drained.size() <= 512,
+        "The event queue exceeded its documented default bound of 512: holds " +
+        std::to_string(drained.size()) + " events after " +
+        std::to_string(SubmissionCount) + " submissions.");
+    Check(agent.DroppedLowPriorityEvents() > 0,
+        "None of the " + std::to_string(SubmissionCount) + " submissions triggered "
+        "eviction, so this did not actually exercise overflow.");
+    Check(agent.CriticalEventsEvicted() == 0,
+        "A Critical event was evicted even though nothing Critical was ever produced "
+        "in this run.");
+
+    // Alive and functional afterward: no deadlock, and both submission and draining
+    // still work normally.
+    agent.Submit(router, "after the burst");
+    for (int attempt = 0; attempt < 400 && agent.Depths().interactive > 0; ++attempt)
+    {
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    Check(!agent.DrainEvents().empty(),
+        "The agent stopped producing events after sustained overflow pressure.");
+    agent.Stop();
+}
+
+// The other half of the policy: under a genuine mix of priorities, Critical and
+// Important events are preserved in full and only Low-value events are sacrificed. A
+// smaller, explicitly configured bound is used here instead of repeating the 512-scale
+// run above, since AdmitEventLocked reads the bound generically -- proving the
+// preservation order at one bound proves it at every bound, including the default.
+void TestEventOverflowPreservesCriticalAndImportantEventsOverLowValueOnes()
+{
+    ScopedTestDirectory directory;
+    const std::string databasePath = (directory.root / "revia_memory.db").string();
+
+    // Seeded before the agent opens its own connection, so nothing writes to the
+    // database concurrently.
+    constexpr int BackfillSourceCount = 10;
+    {
+        longTermMemory seedStore(databasePath);
+        for (int index = 0; index < BackfillSourceCount; ++index)
+        {
+            bool wasAdded = false;
+            memoryDecision automatic = ApprovedFinding("backfillsource" + std::to_string(index));
+            seedStore.Save(automatic, wasAdded);
+            Check(wasAdded, "A seeded backfill-source row was not actually added.");
+        }
+    }
+
+    messageRouter router;
+    ConfigurePlaceholderRouter(router);
+    MemoryAgent agent(databasePath);
+    revia::agents::MemoryQueueLimits limits;
+    limits.maximumInteractive = 250;
+    limits.maximumLearning = 250;
+    limits.maximumBackfill = 250;
+    // Small and focused rather than 512-scale: the point here is the preservation
+    // order among a genuine mix of priorities, not the raw bound, which the sibling
+    // test above already exercises at the real default.
+    limits.maximumPendingEvents = 20;
+    agent.SetQueueLimits(limits);
+
+    // Important: a handful of already-approved findings that fit comfortably inside
+    // the learning queue and so are admitted normally; once the worker saves each one,
+    // it becomes a completed "autonomous_learning" event.
+    constexpr int LearningCount = 6;
+    for (int index = 0; index < LearningCount; ++index)
+    {
+        const auto disposition = agent.SubmitLearnedFinding(
+            router, ApprovedFinding("learning" + std::to_string(index)));
+        Check(disposition == revia::agents::LearnedFindingResult::Queued,
+            "A learning submission that fit well inside its queue was not admitted "
+            "normally, which would invalidate this test's accounting.");
+    }
+
+    // Critical: the placeholder backend's EmbedMemory always fails, so every one of
+    // the seeded rows above comes back as a backfill event reporting a real embedding
+    // failure -- the only record of it, per the priority policy.
+    agent.SubmitEmbeddingBackfill(router, "test-embedding-model");
+
+    // Low: a burst of no-op classifications, far more than the 20-event bound, so the
+    // queue is forced to evict something well before everything above has drained.
+    constexpr int LowValueCount = 200;
+    for (int index = 0; index < LowValueCount; ++index)
+    {
+        agent.Submit(router, "low value turn " + std::to_string(index));
+    }
+
+    for (int attempt = 0; attempt < 3000 &&
+             (agent.Depths().interactive > 0 || agent.Depths().learning > 0 ||
+              agent.Depths().backfill > 0);
+         ++attempt)
+    {
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    Check(agent.Depths().interactive == 0 && agent.Depths().learning == 0 &&
+            agent.Depths().backfill == 0,
+        "Not every task queue drained; the worker appears stuck.");
+
+    const std::vector<revia::agents::MemoryAgentEvent> drained = agent.DrainEvents();
+    agent.Stop();
+
+    Check(drained.size() <= limits.maximumPendingEvents,
+        "The event queue exceeded its configured bound: holds " +
+        std::to_string(drained.size()) + " of a maximum " +
+        std::to_string(limits.maximumPendingEvents) + ".");
+
+    const auto countAt = [&drained](const revia::agents::MemoryEventPriority priority)
+    {
+        return std::count_if(drained.begin(), drained.end(),
+            [priority](const revia::agents::MemoryAgentEvent& event)
+            { return MemoryAgent::ClassifyEventPriority(event) == priority; });
+    };
+    const auto criticalSurvivors = countAt(revia::agents::MemoryEventPriority::Critical);
+    const auto importantSurvivors = countAt(revia::agents::MemoryEventPriority::Important);
+    const auto lowSurvivors = countAt(revia::agents::MemoryEventPriority::Low);
+
+    Check(criticalSurvivors == BackfillSourceCount,
+        "Not every Critical backfill-embedding failure survived overflow: " +
+        std::to_string(criticalSurvivors) + " of " +
+        std::to_string(BackfillSourceCount) + " remained.");
+    Check(importantSurvivors == LearningCount,
+        "Not every Important completed-learning event survived overflow: " +
+        std::to_string(importantSurvivors) + " of " + std::to_string(LearningCount) +
+        " remained.");
+    Check(static_cast<std::size_t>(lowSurvivors) ==
+            limits.maximumPendingEvents - (BackfillSourceCount + LearningCount),
+        "The surviving Low-value count does not match what the preservation policy "
+        "predicts, which means Critical or Important events lost ground they should "
+        "never lose while a Low-value event is still available to evict instead.");
+
+    Check(agent.DroppedLowPriorityEvents() > 0,
+        "Overflow occurred but the dropped-low-priority counter never moved.");
+    Check(agent.CriticalEventsEvicted() == 0,
+        "A Critical event was evicted even though Low-value events were still "
+        "present -- the preservation order was violated.");
 }
 
 // -------------------------------------------------------------- 5. self assessment
@@ -759,11 +1269,19 @@ void RunAuditFindingsTests()
     TestRelativeRuntimePathsDoNotFollowTheWorkingDirectory();
     TestAbsoluteConfiguredPathsAreLeftAlone();
     TestResolutionIsStableAcrossRepeatedCalls();
+    TestALegacyForeignCwdTreeDoesNotHijackPresenceWritePaths();
+    TestAnExistingFileAtTheCanonicalRootStaysCanonical();
 
     TestSustainedTurnsCannotStarveTheOtherClasses();
     TestFreshConversationStillGetsMostOfTheWorker();
     TestAnEmptyClassNeverIdlesTheWorker();
     TestBackfillIsDeduplicatedAndQueuesAreBounded();
+    TestAnAlreadyApprovedFindingSurvivesAFullLearningQueue();
+    TestAnUnapprovedFindingIsReportedFailedNotQueued();
+    TestABurstOfApprovedFindingsUnderQueuePressureLosesNoneAndDuplicatesNone();
+    TestEventPriorityClassificationMatchesWhatMustNeverBeLostSilently();
+    TestEventQueueNeverExceedsTheDocumentedDefaultBoundUnderSustainedPressure();
+    TestEventOverflowPreservesCriticalAndImportantEventsOverLowValueOnes();
 
     TestHistoryIsReadBackAfterRestart();
     TestARestoredCategoryDoesNotProduceADuplicateTask();
@@ -782,7 +1300,10 @@ void RunAuditFindingsTests()
     TestATruncatedJournalLineDoesNotDestroyHistory();
 
     std::cout << "A chosen camera is the one that opens, output channels resolve a real "
-                 "speech policy, runtime paths ignore the\nworking directory, memory "
-                 "work cannot starve, self-assessment survives a restart, and every "
+                 "speech policy, runtime paths ignore the\nworking directory and a "
+                 "legacy tree left behind by it, memory work cannot starve, an "
+                 "already-approved finding survives a full\nlearning queue and a burst "
+                 "under pressure, the bounded event queue never loses a Critical or "
+                 "Important event, self-assessment\nsurvives a restart, and every "
                  "long-run store is bounded.\n";
 }

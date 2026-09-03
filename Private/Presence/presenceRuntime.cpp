@@ -89,6 +89,40 @@ namespace
         }
     }
 
+    // A stray tree from the working-directory bug this replaced can still exist beside
+    // wherever Revia happens to be launched from. The write resolver never reads from
+    // it -- every configured path resolves only against the canonical runtime root --
+    // but silently ignoring it would leave whoever is debugging "Presence forgot
+    // everything" without the one fact that explains it: an old avatar_state.json is
+    // still sitting there, just not the one being written to.
+    //
+    // Checked with the same two resolvers the fix itself is built on, so this can never
+    // disagree with what Start() actually does: `canonical` is where every path below
+    // is written, and `legacy` is where the old CWD-search would have found something
+    // instead.
+    bool FindLegacyRuntimeData(
+        const std::initializer_list<std::string>& configuredPaths,
+        std::filesystem::path& outLegacy,
+        std::filesystem::path& outCanonical)
+    {
+        for (const std::string& configured : configuredPaths)
+        {
+            if (configured.empty()) continue;
+            const std::filesystem::path canonical =
+                core::ResolveRuntimeWritePath(configured);
+            const std::filesystem::path legacy = core::ResolveRuntimePath(configured);
+            std::error_code error;
+            if (!legacy.empty() && legacy != canonical &&
+                std::filesystem::exists(legacy, error) && !error)
+            {
+                outLegacy = legacy;
+                outCanonical = canonical;
+                return true;
+            }
+        }
+        return false;
+    }
+
     bool ContainsUnsafeControl(const std::string& text)
     {
         return std::any_of(text.begin(), text.end(), [](const unsigned char character)
@@ -211,6 +245,21 @@ bool PresenceRuntime::Start(
         Notify({"Presence", "Error", "Presence runtime folders could not be created: " +
             error.message()});
         return false;
+    }
+
+    // Never redirects anything -- every path above already resolved against the
+    // canonical root -- but a stray tree from the bug that fix replaced can still be
+    // sitting beside wherever Revia was launched from, and that is worth saying so
+    // whoever is looking at "Presence forgot everything" is not left guessing.
+    if (std::filesystem::path legacyPath, canonicalPath;
+        FindLegacyRuntimeData(
+            {settings.statePath, settings.eventPath, settings.inboxPath,
+             settings.outboxPath},
+            legacyPath, canonicalPath))
+    {
+        Notify({"Presence", "Warning",
+            "Legacy runtime data detected outside the canonical Revia root: " +
+            legacyPath.string() + ". Canonical location: " + canonicalPath.string()});
     }
 
     WriteAvatarState(true);

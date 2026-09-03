@@ -106,17 +106,14 @@ std::filesystem::path ResolveRuntimeWritePath(
     {
         return configuredPath.lexically_normal();
     }
-    // An existing file still wins, so a path already in use never moves underneath a
-    // running install.
-    if (const std::filesystem::path existing = ResolveRuntimePath(configuredPath);
-        !existing.empty())
-    {
-        std::error_code error;
-        if (std::filesystem::exists(existing, error) && !error)
-        {
-            return existing;
-        }
-    }
+    // Anchored only to the canonical runtime root, never to an existing file found by
+    // searching the working directory (or the executable directory) and its ancestors.
+    // That search is right for locating an installed, read-only artifact, but for a
+    // write target it let an old accidental RuntimeData tree -- created before
+    // RuntimeRoot() existed, or by a launcher with a different working directory -- go
+    // on hijacking Presence forever, because the stale file it finds always "already
+    // exists". A write target has exactly one right answer, and RuntimeRoot() already
+    // is it.
     return (RuntimeRoot() / configuredPath).lexically_normal();
 }
 

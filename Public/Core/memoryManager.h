@@ -9,6 +9,10 @@ class memoryManager
 {
 public:
     memoryManager();
+    // Same store, opened at `databasePath` instead of the process-relative default.
+    // Exists so callers that need an isolated database -- tests, chiefly -- do not have
+    // to reach past this class into longTermMemory directly.
+    explicit memoryManager(std::string databasePath);
     ~memoryManager();
 
     bool SaveAutomaticMemory(const memoryDecision& decision, bool& outWasAdded) const;

@@ -1249,8 +1249,12 @@ void ReviaSession::StartScreenAwareness()
                 eventBus.Publish(std::move(event));
                 continue;
             }
+            // A write target -- the capture is about to create a file here -- so it is
+            // anchored only to the canonical runtime root. The read-side resolver
+            // would let a stray RuntimeData/Vision left by an earlier working
+            // directory go on hijacking every capture taken from this one.
             const std::filesystem::path mediaDirectory =
-                revia::core::ResolveRuntimePath(settings.llm.mediaPath);
+                revia::core::ResolveRuntimeWritePath(settings.llm.mediaPath);
             const vision::CaptureResult capture =
                 screenCaptureService.CaptureDesktop(mediaDirectory);
             responseOutput output;
@@ -2366,12 +2370,43 @@ void ReviaSession::StartCuriosityLoop()
                 learned.reason =
                     "A permitted autonomous lookup produced a bounded, cited finding.";
                 learned.source = "autonomous_research";
-                turnCoordinator.SubmitLearnedFinding(
-                    router, std::move(learned), runId);
-                PublishComponent(
-                    "Curiosity", "Learning queued",
-                    "A bounded finding and its source URLs were queued for durable memory.",
-                    -1.0, static_cast<int>(researchSources.size()), runId);
+                const agents::LearnedFindingResult learnedResult =
+                    turnCoordinator.SubmitLearnedFinding(
+                        router, std::move(learned), runId);
+                const int sourceCount = static_cast<int>(researchSources.size());
+
+                switch (learnedResult)
+                {
+                    case agents::LearnedFindingResult::Queued:
+                        PublishComponent(
+                            "Curiosity", "Learning queued",
+                            "A bounded finding and its source URLs were queued for "
+                            "durable memory.",
+                            -1.0, sourceCount, runId);
+                        break;
+
+                    case agents::LearnedFindingResult::SavedWithoutEmbedding:
+                        PublishComponent(
+                            "Curiosity", "Learning saved",
+                            "A bounded finding and its source URLs were saved to "
+                            "memory; the embedding will be added in the background.",
+                            -1.0, sourceCount, runId);
+                        break;
+
+                    case agents::LearnedFindingResult::AlreadyExists:
+                        PublishComponent(
+                            "Curiosity", "Already known",
+                            "The finding was already represented in memory.",
+                            -1.0, sourceCount, runId);
+                        break;
+
+                    case agents::LearnedFindingResult::Failed:
+                        PublishComponent(
+                            "Curiosity", "Learning failed",
+                            "The finding could not be saved to memory.",
+                            -1.0, sourceCount, runId);
+                        break;
+                }
             }
 
             PublishComponent(
@@ -3115,8 +3150,10 @@ SessionResult ReviaSession::ShowPicture(const std::string& path)
     // govern reading one. Revia's own output folder is included because she wrote it.
     std::vector<std::filesystem::path> allowed = actionRuntime.Settings().approvedRoots;
     allowed.push_back(std::filesystem::weakly_canonical(diagramStore.Root(), error));
+    // Must match however the capture side resolves the same setting, or an image
+    // Revia just captured under the canonical root could be rejected as out of scope.
     allowed.push_back(std::filesystem::weakly_canonical(
-        revia::core::ResolveRuntimePath(settings.llm.mediaPath), error));
+        revia::core::ResolveRuntimeWritePath(settings.llm.mediaPath), error));
     const bool inScope = std::any_of(allowed.begin(), allowed.end(),
         [&requested](const std::filesystem::path& root)
         {
@@ -3845,6 +3882,15 @@ void ReviaSession::PollBackgroundEvents()
             {
                 appLogger.Warning("Failed to save a backfilled memory embedding.");
             }
+            else if (event.coalescedCount > 0)
+            {
+                // This one event stands in for several successful backfills folded
+                // together under event-queue pressure -- see MemoryAgent::AdmitEventLocked.
+                // Worth a line precisely because it is not visible any other way.
+                appLogger.Log("Memory embedding backfill: " +
+                    std::to_string(event.coalescedCount) +
+                    " successful backfills were coalesced under event-queue pressure.");
+            }
             continue;
         }
 
@@ -4386,7 +4432,7 @@ std::string ReviaSession::CaptureScreenContextNow()
         return {};
     }
     const std::filesystem::path mediaDirectory =
-        revia::core::ResolveRuntimePath(settings.llm.mediaPath);
+        revia::core::ResolveRuntimeWritePath(settings.llm.mediaPath);
     const vision::CaptureResult capture =
         screenCaptureService.CaptureDesktop(mediaDirectory);
     if (!capture.succeeded)
@@ -4643,7 +4689,7 @@ SessionResult ReviaSession::ActOnScreen(const std::string& instruction)
     SetState(RuntimeState::Thinking, "Locating the requested visible control.");
 
     const std::filesystem::path mediaDirectory =
-        revia::core::ResolveRuntimePath(settings.llm.mediaPath);
+        revia::core::ResolveRuntimeWritePath(settings.llm.mediaPath);
     const vision::CaptureResult capture = screenCaptureService.CaptureForegroundWindow(mediaDirectory);
     timings.push_back({"vision_action_capture", capture.elapsedMilliseconds});
     const auto finishFailure = [&](const std::string& text, const std::string& reason)
@@ -5330,8 +5376,14 @@ autonomy::ActivityOutcome ReviaSession::ExecuteThink(
         learned.summary = inquiry.settled;
         learned.reason = "Reached while thinking alone: " + decision.reason;
         learned.source = "autonomous_reflection";
-        turnCoordinator.SubmitLearnedFinding(router, std::move(learned));
-        outcome.artifact = "a reflection in memory";
+        const agents::LearnedFindingResult learnedResult =
+            turnCoordinator.SubmitLearnedFinding(router, std::move(learned));
+        outcome.artifact = autonomy::DescribeLearnedFindingArtifact(
+            learnedResult, "a reflection in memory", "a reflection queued for memory");
+        if (learnedResult == agents::LearnedFindingResult::Failed)
+        {
+            outcome.summary += " The reflection could not be saved to memory.";
+        }
     }
     else
     {
@@ -5515,6 +5567,7 @@ autonomy::ActivityOutcome ReviaSession::ExecuteResearch(
         return outcome;
     }
 
+    std::optional<agents::LearnedFindingResult> learnedResult;
     if (settings.initiative.bAutonomousLearningEnabled && !lookup.result.entries.empty())
     {
         memoryDecision learned;
@@ -5525,8 +5578,10 @@ autonomy::ActivityOutcome ReviaSession::ExecuteResearch(
             verdict.topic, lookup.result.content, lookup.result.entries);
         learned.reason = "A permitted autonomous lookup produced a cited finding.";
         learned.source = "autonomous_research";
-        turnCoordinator.SubmitLearnedFinding(router, std::move(learned));
-        outcome.artifact = "a cited finding in memory";
+        learnedResult = turnCoordinator.SubmitLearnedFinding(router, std::move(learned));
+        outcome.artifact = autonomy::DescribeLearnedFindingArtifact(
+            *learnedResult, "a cited finding in memory",
+            "a cited finding queued for memory");
     }
 
     outcome.status = autonomy::ActivityStatus::Completed;
@@ -5534,10 +5589,17 @@ autonomy::ActivityOutcome ReviaSession::ExecuteResearch(
     outcome.drive = autonomy::Drive::Curiosity;
     // Learned silently. Whether it is worth saying is a separate decision made later by
     // the initiative layer, when it is relevant -- not because she just found it out.
+    // The research itself succeeded regardless of what happened below: a memory
+    // staging failure is reported alongside it, not in place of it, and never turns a
+    // completed lookup into a failed activity that the scheduler would try again.
     outcome.summary = "Read about \"" + verdict.topic + "\" from " +
         std::to_string(lookup.result.entries.size()) + " source(s) in " +
         std::to_string(static_cast<long long>(researchMilliseconds)) + "ms. "
         "Kept it rather than interrupting.";
+    if (learnedResult == agents::LearnedFindingResult::Failed)
+    {
+        outcome.summary += " The finding could not be saved to memory.";
+    }
     return outcome;
 }
 
@@ -5609,6 +5671,7 @@ autonomy::ActivityOutcome ReviaSession::ExecuteOrganizeMemory(
         return outcome;
     }
 
+    std::optional<agents::LearnedFindingResult> learnedResult;
     if (settings.initiative.bAutonomousLearningEnabled && !strongestPair.empty())
     {
         memoryDecision connection;
@@ -5620,11 +5683,17 @@ autonomy::ActivityOutcome ReviaSession::ExecuteOrganizeMemory(
         connection.source = "autonomous_organization";
         // Save deduplicates, so re-finding the same pair on a later pass does not
         // accumulate copies of the same observation.
-        turnCoordinator.SubmitLearnedFinding(router, std::move(connection));
-        outcome.artifact = "a connection between two memories";
+        learnedResult = turnCoordinator.SubmitLearnedFinding(router, std::move(connection));
+        outcome.artifact = autonomy::DescribeLearnedFindingArtifact(
+            *learnedResult, "a connection between two memories",
+            "a connection between two memories, queued for saving");
     }
     outcome.summary = "Went through " + std::to_string(examined) + " memories and found " +
         std::to_string(connectionsFound) + " that belong together.";
+    if (learnedResult == agents::LearnedFindingResult::Failed)
+    {
+        outcome.summary += " The connection could not be saved to memory.";
+    }
     return outcome;
 }
 

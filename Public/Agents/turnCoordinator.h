@@ -30,7 +30,7 @@ public:
         messageRouter::DeltaHandler onDelta = {},
         const revia::intelligence::IntelligenceDecision& decision = {}) const;
     std::vector<MemoryAgentEvent> DrainMemoryEvents();
-    void SubmitLearnedFinding(
+    [[nodiscard]] LearnedFindingResult SubmitLearnedFinding(
         const messageRouter& router,
         memoryDecision decision,
         std::uint64_t turnId = 0);

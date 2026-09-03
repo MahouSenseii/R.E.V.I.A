@@ -1,5 +1,7 @@
 #include "Runtime/runtimeDataBootstrap.h"
 
+#include "Core/runtimePath.h"
+
 #include <array>
 #include <system_error>
 
@@ -80,7 +82,10 @@ RuntimeDataBootstrapResult BootstrapRuntimeData(
         runtimeRoot / "Browser" / "Profile",
         runtimeRoot / "Initiative",
         std::filesystem::path(settings.speech.voiceDataPath),
-        std::filesystem::path(settings.llm.mediaPath)
+        // Anchored the same way the vision capture paths that actually write into it
+        // are, or this would pre-create an empty directory in one place while every
+        // capture lands in another.
+        revia::core::ResolveRuntimeWritePath(settings.llm.mediaPath)
     };
     for (const auto& directory : directories)
     {
