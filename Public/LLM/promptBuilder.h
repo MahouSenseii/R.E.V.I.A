@@ -22,7 +22,12 @@ public:
         const std::vector<float>& queryEmbedding = {},
         const std::string& embeddingModel = "",
         std::vector<latencySample>* timings = nullptr,
-        const std::string& posture = ""
+        const std::string& posture = "",
+        // Filled, in prompt order, with what the system message and history were made
+        // of. Measured here because this is the only place that still sees the pieces
+        // separately -- one line further on they are a single concatenated string, and
+        // no consumer can tell which subsystem paid for which part of it.
+        std::vector<promptSection>* sections = nullptr
     ) const;
     std::string BuildMemoryBlock(const std::string& query = "") const;
 

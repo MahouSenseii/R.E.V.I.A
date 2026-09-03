@@ -93,6 +93,11 @@ class QwenRuntime:
         self.cuda_math_mode = "default"
         self.loaded_at = 0.0
         self.last_used = 0.0
+        # Which inference path this worker actually runs, decided at load time and
+        # reported on every request. "standard" is stock Hugging Face generation.
+        self.backend = "standard"
+        self.cuda_graph = False
+        self.low_latency_detail = ""
         self.clone_prompts: dict[tuple[str, int, int, str], Any] = {}
         self.reflex_audio_cache: dict[tuple[Any, ...], tuple[bytes, int, float]] = {}
 
@@ -276,7 +281,134 @@ class QwenRuntime:
         self.model_name = model_name
         self.loaded_at = time.time()
         self.last_used = self.loaded_at
+
+        self.backend = "standard"
+        self.cuda_graph = False
+        self.low_latency_detail = ""
+        self.low_latency_direct = None
+        # Only the clone model carries conversation. The design model is used once to
+        # build a voice and gains nothing from a path tuned for repeated short phrases.
+        if getattr(self.args, "low_latency", False) and kind == "clone":
+            try:
+                import qwen_lowlatency
+
+                direct = qwen_lowlatency.install(
+                    self.model,
+                    instrument=False,
+                    use_cuda_graph=bool(getattr(self.args, "cuda_graph", False)),
+                    use_talker_graph=bool(getattr(self.args, "talker_graph", False)),
+                )
+                self.backend = "low_latency"
+                # Held so the reported graph state is the real one. Capture happens on
+                # the first eligible phrase, not here, so a flag latched at load time
+                # would claim a graph that may never exist.
+                self.low_latency_direct = direct
+                stages = []
+                if direct.graph is not None:
+                    stages.append("predictor graph")
+                if getattr(direct, "talker_graph", None) is not None:
+                    stages.append("talker graph")
+                self.low_latency_detail = (
+                    ", ".join(stages) if stages else "eager direct loop")
+                print("[Qwen3-TTS] Inference backend: " + self.backend
+                      + " (" + self.low_latency_detail + ")", flush=True)
+            except Exception as exception:  # noqa: BLE001 - never block speech
+                self.backend = "standard"
+                self.cuda_graph = False
+                self.low_latency_detail = "unavailable: " + str(exception)
+                print("[Qwen3-TTS] Low-latency path " + self.low_latency_detail
+                      + "; using stock generation.", flush=True)
         return self.model
+
+
+    def _talker_graph_active(self) -> bool:
+        """Whether the talker decode step is being replayed from a graph right now."""
+        direct = getattr(self, "low_latency_direct", None)
+        talker = getattr(direct, "talker_graph", None) if direct is not None else None
+        return bool(talker is not None and talker.graph is not None)
+
+    def _graph_active(self) -> bool:
+        """Whether a CUDA graph is actually carrying phrases right now.
+
+        Asked per request rather than latched at load, because capture is deferred to
+        the first eligible phrase and can still fail there. A flag set optimistically at
+        startup would report a graph that never existed.
+        """
+        direct = getattr(self, "low_latency_direct", None)
+        graph = getattr(direct, "graph", None) if direct is not None else None
+        return bool(graph is not None and graph.graph is not None)
+
+    def _backend_state(self) -> dict[str, Any]:
+        """What was asked for, what was installed, and what is replaying right now.
+
+        Three different facts, reported separately because they diverge in ways that
+        matter and a single flag would have to lie about one of them. Capture is
+        deferred to the first eligible phrase, so a worker can be on the low-latency
+        path with no graph captured yet and be perfectly healthy. A worker whose
+        install raised is on stock generation, and no amount of configuration makes
+        that untrue. Collapsing the three is exactly how a session claims a graph it
+        never had -- which is the mistake this reporting exists to prevent.
+        """
+        requested = bool(getattr(self.args, "low_latency", False))
+        # Installation is attempted when the clone model loads, so before any load
+        # there is nothing to report and "not installed" would be read as "failed".
+        # A worker polled at startup is in exactly that state, and the distinction is
+        # the difference between waiting and investigating.
+        if not requested:
+            state = "off"
+        elif self.backend == "low_latency":
+            state = "installed"
+        elif self.model is None:
+            state = "not-loaded"
+        else:
+            state = "unavailable"
+        return {
+            "backend": self.backend,
+            "low_latency_requested": requested,
+            "low_latency_installed": self.backend == "low_latency",
+            "low_latency_state": state,
+            "cuda_graph_requested": bool(getattr(self.args, "cuda_graph", False)),
+            "talker_graph_requested": bool(getattr(self.args, "talker_graph", False)),
+            "cuda_graph": self._graph_active(),
+            "talker_graph": self._talker_graph_active(),
+            "low_latency_detail": self.low_latency_detail,
+        }
+
+    def _gpu_reading(self) -> dict[str, Any]:
+        """VRAM and utilisation for the device this worker actually holds.
+
+        Reported per request rather than once at load because the number that explains a
+        slow utterance is the one from that utterance: another process taking the card is
+        invisible in a figure captured at startup. Utilisation is best-effort -- NVML is
+        not always present, and a missing reading is reported as unknown rather than as
+        zero, which would read as an idle card.
+        """
+        reading: dict[str, Any] = {
+            "vram_used_mib": -1,
+            "vram_total_mib": -1,
+            "gpu_utilization": -1,
+        }
+        if not self.device.startswith("cuda:"):
+            return reading
+        index = int(self.device.split(":", 1)[1])
+        try:
+            import torch
+
+            free_bytes, total_bytes = torch.cuda.mem_get_info(index)
+            reading["vram_used_mib"] = (total_bytes - free_bytes) // (1024 * 1024)
+            reading["vram_total_mib"] = total_bytes // (1024 * 1024)
+        except Exception:
+            pass
+        try:
+            import pynvml
+
+            pynvml.nvmlInit()
+            handle = pynvml.nvmlDeviceGetHandleByIndex(index)
+            reading["gpu_utilization"] = int(
+                pynvml.nvmlDeviceGetUtilizationRates(handle).gpu)
+        except Exception:
+            pass
+        return reading
 
     @staticmethod
     def _prompt_key(reference_audio: Path, reference_text: str) -> tuple[str, int, int, str]:
@@ -458,6 +590,12 @@ class QwenRuntime:
                 "attention_backend": self.attention_backend,
                 "cuda_math_mode": self.cuda_math_mode,
                 "input_mode": self.args.input_mode,
+                # Reported here because this is the first call that loads the clone
+                # model, and therefore the first moment the runtime knows whether the
+                # low-latency path installed. The caller logs it at startup, so a
+                # session that fell back to stock generation says so before the first
+                # phrase rather than being inferred from a slow one.
+                **self._backend_state(),
             }
 
     def _synthesize(
@@ -520,6 +658,10 @@ class QwenRuntime:
                     "input_mode": self.args.input_mode,
                     "audio_cache_hit": True,
                     "true_incremental_audio": False,
+                    **self._backend_state(),
+                    "model_resident": True,
+                    "real_time_factor": 0.0,
+                    **self._gpu_reading(),
                 }, audio
             generation_started = time.perf_counter()
             waveforms, sample_rate = model.generate_voice_clone(
@@ -579,7 +721,212 @@ class QwenRuntime:
                 "input_mode": self.args.input_mode,
                 "audio_cache_hit": False,
                 "true_incremental_audio": False,
+                # Whether this request found the model already on the device. A reload
+                # costs seconds and is the first thing worth ruling out on a slow
+                # utterance, so it is answered per request rather than inferred.
+                **self._backend_state(),
+                "model_resident": model_ready_ms < 1.0,
+                # Generation time over the audio it produced. Above 1.0 the pipeline
+                # cannot keep up with playback and every queued phrase falls further
+                # behind, which is the difference between a slow voice and one that
+                # never catches up.
+                "real_time_factor": (
+                    generation_ms / audio_duration_ms if audio_duration_ms > 0.0 else -1.0
+                ),
+                **self._gpu_reading(),
             }, audio
+
+    # Peak allocation above the resident model, fitted to measured batches.
+    #
+    # Two terms, because one does not describe the data. Fitting only per character
+    # underestimates a batch of several short phrases by more than a factor of two --
+    # five phrases totalling 195 characters cost 1412 MiB, where 472 characters in four
+    # longer phrases cost 1565 MiB. Each sequence carries a fixed cost of its own, so
+    # the estimate carries one too.
+    #
+    # Fitted on an RTX 5070 in bfloat16 over batches of 4, 5, 8 and 12 phrases. Float32
+    # holds twice the activation width for the same work, so both terms double there.
+    # Used only to refuse a batch, never to size one: too pessimistic costs a fallback
+    # to the per-phrase path, too optimistic costs the process.
+    BATCH_MIB_PER_CHARACTER_BF16 = 1.5
+    BATCH_MIB_PER_PHRASE_BF16 = 240.0
+
+    def _batch_fits(self, characters: int, phrases: int) -> tuple[bool, str, int]:
+        """Whether a batch of this shape can be attempted on the current device."""
+        if not self.device.startswith("cuda:"):
+            return True, "", -1
+        try:
+            import torch
+
+            index = int(self.device.split(":", 1)[1])
+            free_bytes, _ = torch.cuda.mem_get_info(index)
+            # Blocks PyTorch has already taken from the driver and is no longer using.
+            # They are free for this allocation without touching the driver at all, and
+            # leaving them out is what made every batch after the first one refuse
+            # itself: the first batch's arena stays reserved, the driver reports it as
+            # taken, and a card with gigabytes of reusable cache looks full.
+            reserved = torch.cuda.memory_reserved(index)
+            allocated = torch.cuda.memory_allocated(index)
+            reusable = max(0, reserved - allocated)
+        except Exception:
+            # An unreadable card is not an argument for attempting the larger thing.
+            return False, "Free VRAM could not be read; using the per-phrase path.", -1
+        available_mib = int((free_bytes + reusable) // (1024 * 1024))
+        scale = 1.0 if self.dtype_name == "bfloat16" else 2.0
+        projected = int(
+            (characters * self.BATCH_MIB_PER_CHARACTER_BF16
+             + phrases * self.BATCH_MIB_PER_PHRASE_BF16) * scale
+        )
+        # Reuse the reserve the operator already set for this device rather than
+        # inventing a second, differently-shaped headroom rule.
+        reserve = max(0, int(self.args.minimum_free_vram_mib) // 4)
+        if projected + reserve > available_mib:
+            return False, (
+                "Projected batch peak " + str(projected) + " MiB plus " + str(reserve)
+                + " MiB reserve exceeds " + str(available_mib) + " MiB available"
+            ), projected
+        return True, "", projected
+
+    def synthesize_batch(
+        self,
+        request: dict[str, Any],
+        request_received: float | None = None,
+    ) -> tuple[dict[str, Any], list[bytes]]:
+        """Synthesize several complete phrases in one generation call.
+
+        Returns audio in the order the texts were given. The caller depends on that
+        ordering to keep playback in reply order, so a result count that does not match
+        the request is reported as a failure rather than repaired by guessing which
+        phrase went missing.
+        """
+        received = request_received or time.perf_counter()
+        lock_started = time.perf_counter()
+        with self.lock:
+            queue_wait_ms = (time.perf_counter() - lock_started) * 1000.0
+            raw_texts = request.get("texts")
+            if not isinstance(raw_texts, list) or not raw_texts:
+                raise ValueError("Batch synthesis requires a non-empty texts array.")
+            if len(raw_texts) > 32:
+                raise ValueError("Batch synthesis accepts at most 32 phrases.")
+            texts = [self._text(value, "Speech text", 5000) for value in raw_texts]
+            language = self._text(request.get("language", "English"), "Language", 40)
+            reference_audio = Path(
+                self._text(request.get("reference_audio"), "Reference audio", 2048)
+            ).expanduser().resolve()
+            if not reference_audio.is_file() or reference_audio.suffix.lower() != ".wav":
+                raise ValueError("The voice reference WAV does not exist.")
+            reference_text = self._text(
+                request.get("reference_text"), "Reference transcript", 1000)
+
+            characters = sum(len(value) for value in texts)
+            model_started = time.perf_counter()
+            model = self._load("clone")
+            model_ready_ms = (time.perf_counter() - model_started) * 1000.0
+
+            fits, refusal, projected_mib = self._batch_fits(characters, len(texts))
+            if not fits:
+                # Refused, not failed. The caller has a working per-phrase path, so this
+                # is a normal reply describing why that path should be used.
+                return {
+                    "succeeded": False,
+                    "batch_refused": True,
+                    "message": refusal,
+                    "phrases": len(texts),
+                    "characters": characters,
+                    "projected_peak_mib": projected_mib,
+                    **self._gpu_reading(),
+                }, []
+
+            import soundfile as sf
+
+            prompt_started = time.perf_counter()
+            voice_clone_prompt, cache_hit = self._voice_prompt(
+                model, reference_audio, reference_text)
+            prompt_ms = (time.perf_counter() - prompt_started) * 1000.0
+
+            if self.device.startswith("cuda:"):
+                try:
+                    import torch
+
+                    torch.cuda.reset_peak_memory_stats(int(self.device.split(":", 1)[1]))
+                except Exception:
+                    pass
+
+            generation_started = time.perf_counter()
+            waveforms, sample_rate = model.generate_voice_clone(
+                text=texts,
+                language=[language] * len(texts),
+                voice_clone_prompt=voice_clone_prompt,
+                non_streaming_mode=self.args.input_mode == "complete",
+            )
+            generation_ms = (time.perf_counter() - generation_started) * 1000.0
+
+            if len(waveforms) != len(texts):
+                raise RuntimeError(
+                    "Batch returned " + str(len(waveforms)) + " clips for "
+                    + str(len(texts)) + " phrases."
+                )
+
+            encoding_started = time.perf_counter()
+            clips: list[bytes] = []
+            durations: list[float] = []
+            for waveform in waveforms:
+                buffer = io.BytesIO()
+                sf.write(buffer, waveform, sample_rate, format="WAV")
+                clips.append(buffer.getvalue())
+                durations.append(
+                    float(len(waveform)) * 1000.0 / float(sample_rate)
+                    if sample_rate else 0.0
+                )
+            wav_write_ms = (time.perf_counter() - encoding_started) * 1000.0
+
+            total_bytes = sum(len(clip) for clip in clips)
+            if total_bytes > self.args.max_audio_mib * 1024 * 1024:
+                raise ValueError("Batched audio exceeds the configured buffer limit.")
+
+            peak_mib = -1
+            if self.device.startswith("cuda:"):
+                try:
+                    import torch
+
+                    peak_mib = int(torch.cuda.max_memory_allocated(
+                        int(self.device.split(":", 1)[1])) // (1024 * 1024))
+                except Exception:
+                    pass
+
+            self.last_used = time.time()
+            audio_duration_ms = sum(durations)
+            return {
+                "succeeded": True,
+                "batch_refused": False,
+                "message": str(len(texts)) + " phrases synthesized on " + self.device,
+                "elapsed_ms": (time.perf_counter() - received) * 1000.0,
+                "worker_queue_wait_ms": queue_wait_ms,
+                "model_ready_ms": model_ready_ms,
+                "clone_prompt_ms": prompt_ms,
+                "clone_prompt_cached": cache_hit,
+                "generation_ms": generation_ms,
+                "wav_write_ms": wav_write_ms,
+                "sample_rate": sample_rate,
+                "phrases": len(texts),
+                "characters": characters,
+                "clip_bytes": [len(clip) for clip in clips],
+                "clip_duration_ms": durations,
+                "audio_duration_ms": audio_duration_ms,
+                "peak_vram_mib": peak_mib,
+                "projected_peak_mib": projected_mib,
+                "device": self.device,
+                "device_name": self.device_name,
+                "dtype": self.dtype_name,
+                "attention_backend": self.attention_backend,
+                "input_mode": self.args.input_mode,
+                **self._backend_state(),
+                "model_resident": model_ready_ms < 1.0,
+                "real_time_factor": (
+                    generation_ms / audio_duration_ms if audio_duration_ms > 0.0 else -1.0
+                ),
+                **self._gpu_reading(),
+            }, clips
 
     def synthesize(
         self,
@@ -640,11 +987,65 @@ def make_handler(runtime: QwenRuntime, token: str) -> type[BaseHTTPRequestHandle
                 "X-Revia-Dtype": metadata.get("dtype", ""),
                 "X-Revia-Attention": metadata.get("attention_backend", "auto"),
                 "X-Revia-Input-Mode": metadata.get("input_mode", "complete"),
+                "X-Revia-Vram-Used-Mib": metadata.get("vram_used_mib", -1),
+                "X-Revia-Vram-Total-Mib": metadata.get("vram_total_mib", -1),
+                "X-Revia-Gpu-Utilization": metadata.get("gpu_utilization", -1),
+                "X-Revia-Model-Resident": int(bool(metadata.get("model_resident", False))),
+                "X-Revia-Backend": metadata.get("backend", "standard"),
+                "X-Revia-Cuda-Graph": int(bool(metadata.get("cuda_graph", False))),
+                "X-Revia-Talker-Graph": int(bool(metadata.get("talker_graph", False))),
+                "X-Revia-Real-Time-Factor": metadata.get("real_time_factor", -1),
             }
             for name, value in headers.items():
                 self.send_header(name, str(value).replace("\r", " ").replace("\n", " "))
             self.end_headers()
             self.wfile.write(audio)
+
+        def _send_audio_batch(
+            self, metadata: dict[str, Any], clips: list[bytes]
+        ) -> None:
+            payload = b"".join(clips)
+            self.send_response(200)
+            self.send_header("Content-Type", "application/octet-stream")
+            self.send_header("Content-Length", str(len(payload)))
+            self.send_header("Cache-Control", "no-store")
+            headers = {
+                "X-Revia-Batch-Count": len(clips),
+                # Byte length of each clip, in order. Splitting on these keeps the reply
+                # order the caller depends on for ordered playback.
+                "X-Revia-Batch-Sizes": ",".join(str(len(clip)) for clip in clips),
+                "X-Revia-Batch-Durations-Ms": ",".join(
+                    str(int(value)) for value in metadata.get("clip_duration_ms", [])
+                ),
+                "X-Revia-Batch-Characters": metadata.get("characters", 0),
+                "X-Revia-Elapsed-Ms": metadata.get("elapsed_ms", -1),
+                "X-Revia-Queue-Ms": metadata.get("worker_queue_wait_ms", -1),
+                "X-Revia-Model-Ready-Ms": metadata.get("model_ready_ms", -1),
+                "X-Revia-Prompt-Ms": metadata.get("clone_prompt_ms", -1),
+                "X-Revia-Generation-Ms": metadata.get("generation_ms", -1),
+                "X-Revia-Wav-Write-Ms": metadata.get("wav_write_ms", -1),
+                "X-Revia-Audio-Duration-Ms": metadata.get("audio_duration_ms", -1),
+                "X-Revia-Sample-Rate": metadata.get("sample_rate", 0),
+                "X-Revia-Prompt-Cached": int(bool(metadata.get("clone_prompt_cached", False))),
+                "X-Revia-Device": metadata.get("device", ""),
+                "X-Revia-Device-Name": metadata.get("device_name", ""),
+                "X-Revia-Dtype": metadata.get("dtype", ""),
+                "X-Revia-Attention": metadata.get("attention_backend", "auto"),
+                "X-Revia-Input-Mode": metadata.get("input_mode", "complete"),
+                "X-Revia-Vram-Used-Mib": metadata.get("vram_used_mib", -1),
+                "X-Revia-Vram-Total-Mib": metadata.get("vram_total_mib", -1),
+                "X-Revia-Peak-Vram-Mib": metadata.get("peak_vram_mib", -1),
+                "X-Revia-Gpu-Utilization": metadata.get("gpu_utilization", -1),
+                "X-Revia-Model-Resident": int(bool(metadata.get("model_resident", False))),
+                "X-Revia-Backend": metadata.get("backend", "standard"),
+                "X-Revia-Cuda-Graph": int(bool(metadata.get("cuda_graph", False))),
+                "X-Revia-Talker-Graph": int(bool(metadata.get("talker_graph", False))),
+                "X-Revia-Real-Time-Factor": metadata.get("real_time_factor", -1),
+            }
+            for name, value in headers.items():
+                self.send_header(name, str(value).replace("\r", " ").replace("\n", " "))
+            self.end_headers()
+            self.wfile.write(payload)
 
         def do_GET(self) -> None:  # noqa: N802 - required by BaseHTTPRequestHandler
             if not self._authorized():
@@ -663,6 +1064,7 @@ def make_handler(runtime: QwenRuntime, token: str) -> type[BaseHTTPRequestHandle
                 "attention_backend": runtime.attention_backend,
                 "cuda_math_mode": runtime.cuda_math_mode,
                 "input_mode": runtime.args.input_mode,
+                **runtime._backend_state(),
                 "loaded": runtime.model is not None,
                 "loaded_at": runtime.loaded_at,
                 "last_used": runtime.last_used,
@@ -689,6 +1091,15 @@ def make_handler(runtime: QwenRuntime, token: str) -> type[BaseHTTPRequestHandle
                 elif self.path == "/v1/audio/pcm":
                     result, audio = runtime.synthesize_pcm(request, request_received)
                     self._send_audio(result, audio)
+                    return
+                elif self.path == "/v1/audio/pcm-batch":
+                    result, clips = runtime.synthesize_batch(request, request_received)
+                    if not result.get("succeeded", False):
+                        # A refusal is a normal answer here: the caller falls back to the
+                        # per-phrase path rather than treating it as a worker failure.
+                        self._send(200, result)
+                        return
+                    self._send_audio_batch(result, clips)
                     return
                 elif self.path == "/release":
                     with runtime.lock:
@@ -765,6 +1176,13 @@ def parse_args() -> argparse.Namespace:
         "--attention-backend",
         choices=("adaptive", "auto", "eager", "sdpa", "flash_attention_2"),
         default="adaptive")
+    # The low-latency path replaces the codebook predictor's inner generate loop with a
+    # direct forward loop, and optionally replays that loop as a CUDA graph. Both are off
+    # by default: the stock path is the one that has always worked, and a worker that
+    # cannot capture a graph must still be able to speak.
+    parser.add_argument("--low-latency", action="store_true")
+    parser.add_argument("--cuda-graph", action="store_true")
+    parser.add_argument("--talker-graph", action="store_true")
     parser.add_argument(
         "--input-mode", choices=("complete", "simulated-stream"), default="simulated-stream")
     return parser.parse_args()

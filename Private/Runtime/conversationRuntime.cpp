@@ -1347,10 +1347,14 @@ SessionResult ConversationRuntime::Generate(
             turnTimings.begin(), {"internet_lookup", internetLookupMilliseconds});
     }
     turnTimings.push_back({"turn_total", ElapsedMilliseconds(turnStarted), true});
-    log.Timing(
-        proactive ? "proactive conversation #" + std::to_string(currentTurn)
-                  : "turn #" + std::to_string(currentTurn),
-        turnTimings);
+    const std::string turnScope = proactive
+        ? "proactive conversation #" + std::to_string(currentTurn)
+        : "turn #" + std::to_string(currentTurn);
+    log.Timing(turnScope, turnTimings);
+    // Logged next to the timing line so a slow first token can be read against the
+    // prompt that caused it. Time to first token is dominated by prompt evaluation, and
+    // prompt evaluation is dominated by whichever section grew.
+    log.PromptBreakdown(turnScope, output.promptSections);
 
     result.succeeded = output.bSuccess;
     result.fromAssistant = true;

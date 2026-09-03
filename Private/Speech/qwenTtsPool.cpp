@@ -104,6 +104,35 @@ VoiceOperationResult QwenTtsPool::PrepareVoice(const VoicePreset& preset)
         aggregate.deviceName = result.deviceName;
         aggregate.dtype = result.dtype;
         aggregate.workerId = id;
+        // Reported for the pool, not for the last worker to answer. Workers sit on
+        // different cards and can install the low-latency path differently -- an
+        // architecture that cannot capture a graph is exactly the case worth hearing
+        // about -- so the aggregate takes the weakest result. A pool that says the
+        // graph path is on when one of its two cards is on stock generation would send
+        // the next session looking for the wrong explanation.
+        if (index == 0)
+        {
+            aggregate.backend = result.backend;
+            aggregate.lowLatencyInstalled = result.lowLatencyInstalled;
+            aggregate.cudaGraph = result.cudaGraph;
+            aggregate.talkerGraph = result.talkerGraph;
+            aggregate.backendDetail = result.backendDetail;
+        }
+        else
+        {
+            if (!result.lowLatencyInstalled)
+            {
+                aggregate.lowLatencyInstalled = false;
+                aggregate.backend = result.backend;
+            }
+            aggregate.cudaGraph = aggregate.cudaGraph && result.cudaGraph;
+            aggregate.talkerGraph = aggregate.talkerGraph && result.talkerGraph;
+            if (!result.backendDetail.empty() &&
+                result.backendDetail != aggregate.backendDetail)
+            {
+                aggregate.backendDetail += "; " + id + ": " + result.backendDetail;
+            }
+        }
     }
     aggregate.elapsedMilliseconds = std::chrono::duration<double, std::milli>(
         std::chrono::steady_clock::now() - startedAt).count();
@@ -136,7 +165,9 @@ VoiceOperationResult QwenTtsPool::Synthesize(
     const std::string& outputPath,
     const bool latencyCritical)
 {
-    const std::size_t index = AcquireWorker(text.size(), latencyCritical);
+    double poolWaitMilliseconds = 0.0;
+    const std::size_t index =
+        AcquireWorker(text.size(), latencyCritical, poolWaitMilliseconds);
     QwenTtsClient* client = nullptr;
     std::string id;
     bool rejected = false;
@@ -156,13 +187,17 @@ VoiceOperationResult QwenTtsPool::Synthesize(
     if (rejected)
     {
         condition.notify_all();
-        return {false, "Qwen3-TTS worker pool is shutting down.", {}, -1.0};
+        VoiceOperationResult shuttingDownResult{
+            false, "Qwen3-TTS worker pool is shutting down.", {}, -1.0};
+        shuttingDownResult.workerPoolWaitMilliseconds = poolWaitMilliseconds;
+        return shuttingDownResult;
     }
     const auto startedAt = std::chrono::steady_clock::now();
     VoiceOperationResult result = client->Synthesize(text, preset, outputPath);
     const double wallMilliseconds = std::chrono::duration<double, std::milli>(
         std::chrono::steady_clock::now() - startedAt).count();
     result.workerId = id;
+    result.workerPoolWaitMilliseconds = poolWaitMilliseconds;
     ReleaseWorker(index, text.size(), wallMilliseconds);
     return result;
 }
@@ -172,7 +207,9 @@ VoiceOperationResult QwenTtsPool::SynthesizePcm(
     const VoicePreset& preset,
     const bool latencyCritical)
 {
-    const std::size_t index = AcquireWorker(text.size(), latencyCritical);
+    double poolWaitMilliseconds = 0.0;
+    const std::size_t index =
+        AcquireWorker(text.size(), latencyCritical, poolWaitMilliseconds);
     QwenTtsClient* client = nullptr;
     std::string id;
     {
@@ -190,15 +227,69 @@ VoiceOperationResult QwenTtsPool::SynthesizePcm(
     if (client == nullptr)
     {
         condition.notify_all();
-        return {false, "Qwen3-TTS worker pool is shutting down.", {}, -1.0};
+        VoiceOperationResult shuttingDownResult{
+            false, "Qwen3-TTS worker pool is shutting down.", {}, -1.0};
+        shuttingDownResult.workerPoolWaitMilliseconds = poolWaitMilliseconds;
+        return shuttingDownResult;
     }
     const auto startedAt = std::chrono::steady_clock::now();
     VoiceOperationResult result = client->SynthesizePcm(text, preset);
     const double wallMilliseconds = std::chrono::duration<double, std::milli>(
         std::chrono::steady_clock::now() - startedAt).count();
     result.workerId = id;
+    result.workerPoolWaitMilliseconds = poolWaitMilliseconds;
     ReleaseWorker(index, text.size(), wallMilliseconds);
     return result;
+}
+
+std::vector<VoiceOperationResult> QwenTtsPool::SynthesizePcmBatch(
+    const std::vector<std::string>& texts,
+    const VoicePreset& preset)
+{
+    std::size_t characters = 0;
+    for (const std::string& text : texts) characters += text.size();
+
+    // Not latency-critical: the phrase the listener is waiting on already went out on
+    // its own, and this call is the work queued behind it.
+    double poolWaitMilliseconds = 0.0;
+    const std::size_t index = AcquireWorker(characters, false, poolWaitMilliseconds);
+    QwenTtsClient* client = nullptr;
+    std::string id;
+    {
+        std::lock_guard lock(mutex);
+        if (index < workers.size() && !shuttingDown)
+        {
+            client = workers[index].client.get();
+            id = workers[index].id;
+        }
+        else if (index < workers.size())
+        {
+            workers[index].busy = false;
+        }
+    }
+    if (client == nullptr)
+    {
+        condition.notify_all();
+        VoiceOperationResult shuttingDownResult{
+            false, "Qwen3-TTS worker pool is shutting down.", {}, -1.0};
+        shuttingDownResult.workerPoolWaitMilliseconds = poolWaitMilliseconds;
+        return {shuttingDownResult};
+    }
+
+    const auto startedAt = std::chrono::steady_clock::now();
+    std::vector<VoiceOperationResult> results =
+        client->SynthesizePcmBatch(texts, preset);
+    const double wallMilliseconds = std::chrono::duration<double, std::milli>(
+        std::chrono::steady_clock::now() - startedAt).count();
+    for (VoiceOperationResult& result : results)
+    {
+        result.workerId = id;
+        // The whole batch waited once, together. Attributing that wait to each clip is
+        // what the number means: every phrase in it started speaking that much later.
+        result.workerPoolWaitMilliseconds = poolWaitMilliseconds;
+    }
+    ReleaseWorker(index, characters, wallMilliseconds);
+    return results;
 }
 
 void QwenTtsPool::CancelActiveRequests()
@@ -244,42 +335,82 @@ void QwenTtsPool::Shutdown()
     designClient.reset();
 }
 
-std::size_t QwenTtsPool::AcquireWorker(
+std::size_t SelectIdleVoiceWorker(
+    const std::vector<VoiceWorkerState>& workers,
     const std::size_t characters,
     const bool latencyCritical)
 {
+    // A preference, not a pin. Worker 0 is where the resource planner put the phrase
+    // the listener is waiting on, so it wins whenever it is free.
+    //
+    // It does not win while it is busy. The planner puts the newer chat GPU first on
+    // the assumption that newer is faster, and the live session contradicted that
+    // under load: the RTX 5070 that also carries chat averaged a real-time factor of
+    // 5.78 against the RTX 2070's 4.13, and the very first phrase of the session ran
+    // at 6.44 there. Waiting for a busy card to become the "right" one is how a first
+    // phrase ends up slower than it would have been anywhere else.
+    if (latencyCritical && !workers.empty() && !workers.front().busy)
+    {
+        return 0;
+    }
+
+    std::size_t best = workers.size();
+    double bestMilliseconds = 0.0;
+    for (std::size_t index = 0; index < workers.size(); ++index)
+    {
+        const VoiceWorkerState& worker = workers[index];
+        if (worker.busy) continue;
+        // Every candidate is idle, so predicted duration and predicted finish are the
+        // same ordering and there is no need to reason about clocks here.
+        const double predictedMilliseconds = worker.fixedOverheadMilliseconds +
+            worker.millisecondsPerCharacter *
+                static_cast<double>(std::max<std::size_t>(1, characters));
+        if (best == workers.size() || predictedMilliseconds < bestMilliseconds)
+        {
+            bestMilliseconds = predictedMilliseconds;
+            best = index;
+        }
+    }
+    return best;
+}
+
+std::size_t QwenTtsPool::AcquireWorker(
+    const std::size_t characters,
+    const bool latencyCritical,
+    double& outWaitMilliseconds)
+{
+    const auto waitStarted = std::chrono::steady_clock::now();
+    const auto waited = [&waitStarted]
+    {
+        return std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - waitStarted).count();
+    };
+
     std::unique_lock lock(mutex);
+    std::vector<VoiceWorkerState> states;
     while (!shuttingDown)
     {
-        const auto now = std::chrono::steady_clock::now();
-        std::size_t best = workers.size();
-        auto bestFinish = std::chrono::steady_clock::time_point::max();
-        for (std::size_t index = 0; index < workers.size(); ++index)
+        // Rebuilt on every pass, never carried across the wait. A choice made before
+        // blocking describes a pool that has since changed -- the release that woke
+        // this caller is exactly the event that invalidates it.
+        states.clear();
+        states.reserve(workers.size());
+        for (const Worker& worker : workers)
         {
-            const Worker& worker = workers[index];
-            if (latencyCritical && index != 0) continue;
-            const double predictedMilliseconds = worker.fixedOverheadMilliseconds +
-                worker.millisecondsPerCharacter *
-                    static_cast<double>(std::max<std::size_t>(1, characters));
-            const auto availableAt = worker.busy
-                ? std::max(now, worker.predictedCompletion) : now;
-            const auto finish = availableAt + std::chrono::milliseconds(
-                static_cast<long long>(predictedMilliseconds));
-            if (finish < bestFinish)
-            {
-                bestFinish = finish;
-                best = index;
-            }
+            states.push_back({worker.busy, worker.fixedOverheadMilliseconds,
+                worker.millisecondsPerCharacter});
         }
-        if (best < workers.size() && !workers[best].busy)
+        const std::size_t best =
+            SelectIdleVoiceWorker(states, characters, latencyCritical);
+        if (best < workers.size())
         {
-            Worker& worker = workers[best];
-            worker.busy = true;
-            worker.predictedCompletion = bestFinish;
+            workers[best].busy = true;
+            outWaitMilliseconds = waited();
             return best;
         }
         condition.wait(lock);
     }
+    outWaitMilliseconds = waited();
     return workers.size();
 }
 

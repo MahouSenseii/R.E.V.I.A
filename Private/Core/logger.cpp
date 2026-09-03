@@ -91,6 +91,63 @@ void logger::Timing(const std::string& scope, const std::vector<latencySample>& 
     Write("Timing", message.str(), false);
 }
 
+void logger::PromptBreakdown(
+    const std::string& scope,
+    const std::vector<promptSection>& sections)
+{
+    if (sections.empty())
+    {
+        return;
+    }
+
+    // Where the reusable prefix ends. Everything from the first unstable section onward
+    // has to be re-evaluated on every turn no matter how much of it repeats, because a
+    // prefix cache matches from the start and stops at the first byte that differs.
+    // Reporting the total without this number makes a 3000-token prompt look like a
+    // caching problem when the real question is how many of those tokens move.
+    std::size_t total = 0;
+    std::size_t reusablePrefix = 0;
+    bool prefixIntact = true;
+    const promptSection* largestVolatile = nullptr;
+    for (const promptSection& section : sections)
+    {
+        total += section.characters;
+        if (prefixIntact && section.stable)
+        {
+            reusablePrefix += section.characters;
+        }
+        else
+        {
+            prefixIntact = false;
+            if (!largestVolatile || section.characters > largestVolatile->characters)
+            {
+                largestVolatile = &section;
+            }
+        }
+    }
+
+    std::ostringstream message;
+    message << scope;
+    for (const promptSection& section : sections)
+    {
+        message << " | " << section.name << '=' << section.characters << 'c';
+        if (!section.stable)
+        {
+            message << '*';
+        }
+    }
+    message << " | total=" << total << 'c';
+    message << " | reusable_prefix=" << reusablePrefix << 'c';
+    message << " | reevaluated_every_turn=" << (total - reusablePrefix) << 'c';
+    if (largestVolatile)
+    {
+        message << " | largest_volatile=" << largestVolatile->name
+                << '(' << largestVolatile->characters << "c)";
+    }
+    message << " | *=changes between turns";
+    Write("Prompt", message.str(), false);
+}
+
 void logger::Write(
     const std::string& severity,
     const std::string& message,

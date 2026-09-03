@@ -64,3 +64,4 @@ void RunRelationshipTests();
 void RunDevelopmentTests();
 void RunAutonomyTests();
 void RunLoadAndNameTests();
+void RunVoicePoolTests();

@@ -3,6 +3,7 @@
 #include "Identity/relationshipEvidence.h"
 #include "Identity/relationshipRegistry.h"
 #include "Resources/loadGovernor.h"
+#include "Speech/qwenTtsClient.h"
 
 #include <cmath>
 #include <iostream>
@@ -27,23 +28,93 @@ UsageSnapshot Snapshot(const double usedFraction, const bool measured = true)
     return snapshot;
 }
 
+// A card whose budget and physical ceiling are different numbers, which is the only
+// shape in which the two can disagree -- and the shape every real GPU has.
+UsageSnapshot GpuSnapshot(
+    const double usedMiB,
+    const double budgetMiB,
+    const double capacityMiB)
+{
+    UsageSnapshot snapshot;
+    snapshot.measured = true;
+    UsageMeter meter;
+    meter.id = "gpu:CUDA0:vram";
+    meter.label = "RTX 5070 (CUDA0) VRAM";
+    meter.unit = MeterUnit::Mebibytes;
+    meter.budget = budgetMiB;
+    meter.capacity = capacityMiB;
+    meter.used = usedMiB;
+    meter.measured = true;
+    snapshot.meters.push_back(meter);
+    return snapshot;
+}
+
 void TestLoadStatesFollowActualUsage()
 {
     Check(AssessLoad(Snapshot(0.20)).state == LoadState::Free,
         "A mostly idle machine was not reported as free.");
     Check(AssessLoad(Snapshot(0.70)).state == LoadState::Normal,
         "An ordinarily busy machine was reported as something other than normal.");
-    Check(AssessLoad(Snapshot(0.90)).state == LoadState::Pressured,
-        "A machine near its budget was not reported as pressured.");
+    Check(AssessLoad(Snapshot(0.93)).state == LoadState::Pressured,
+        "A machine near its ceiling was not reported as pressured.");
     Check(AssessLoad(Snapshot(1.05)).state == LoadState::Throttled,
-        "A machine over its budget was not reported as throttled.");
+        "A machine past its ceiling was not reported as throttled.");
+}
+
+void TestBudgetOverrunIsNotStarvation()
+{
+    // The failure this exists to prevent. Resident model weights put Revia past an
+    // allowance that was carved out before they loaded, while the card itself still has
+    // room to spare. Judged on the budget this reads as 110% and sheds every optional
+    // thing she does; judged on the hardware it is a card that is 73% full and fine.
+    // Thirteen sessions running, she throttled about thirty seconds after startup and
+    // never came back, so memory consolidation and curiosity planning simply never ran.
+    const UsageSnapshot overBudget = GpuSnapshot(9011.0, 8192.0, 12288.0);
+
+    const LoadAdjustment assessed = AssessLoad(overBudget);
+    Check(assessed.state == LoadState::Normal,
+        "A card with room to spare was throttled for passing a budget.");
+    Check(assessed.allowOptionalBackgroundWork,
+        "Background work was shed because a plan was optimistic, not because a device "
+        "was full.");
+    Check(assessed.budgetExceeded,
+        "The budget overrun was not reported at all, so the plan looks fine when it is "
+        "not.");
+    Check(assessed.reason.find("budget") != std::string::npos,
+        "The overrun was not mentioned in the sentence the panel and the log show.");
+
+    // The same card genuinely running out still sheds work: the fix is about which
+    // number is consulted, not about never throttling.
+    Check(AssessLoad(GpuSnapshot(11900.0, 8192.0, 12288.0)).state == LoadState::Throttled,
+        "A card that really was nearly full was not throttled.");
+}
+
+void TestBusyIsNotFull()
+{
+    // Engine utilisation is a statement about how hard a card is working, not how much
+    // room is left on it. Throttling on it would shed optional work at exactly the
+    // moment work is happening, then restore it the instant she went idle.
+    UsageSnapshot generating;
+    generating.measured = true;
+    UsageMeter compute;
+    compute.id = "gpu:CUDA0:compute";
+    compute.label = "RTX 5070 (CUDA0) compute";
+    compute.unit = MeterUnit::Percent;
+    compute.basis = MeterBasis::Capacity;
+    compute.capacity = 100.0;
+    compute.used = 100.0;
+    compute.measured = true;
+    generating.meters.push_back(compute);
+
+    Check(AssessLoad(generating).state == LoadState::Normal,
+        "A GPU busy doing the work it was asked to do was treated as starved.");
 }
 
 void TestOptionalWorkShedsBeforeConversationQuality()
 {
     // The ordering that matters: background work stops first, then phrase-ahead voice.
     // A person will not miss curiosity planning; they will notice a stuttering voice.
-    const LoadAdjustment pressured = AssessLoad(Snapshot(0.90));
+    const LoadAdjustment pressured = AssessLoad(Snapshot(0.93));
     Check(!pressured.allowOptionalBackgroundWork,
         "Background work kept running while the machine was pressured.");
     Check(pressured.allowOpportunisticVision,
@@ -78,6 +149,48 @@ void TestUnmeasurableLoadChangesNothing()
     // A meter that cannot be read is ignored rather than counted as idle.
     Check(AssessLoad(Snapshot(1.20, false)).state == LoadState::Normal,
         "An unmeasured meter was treated as a real reading.");
+}
+
+void TestBatchClipFramingRefusesAnythingAmbiguous()
+{
+    using revia::speech::ParseBatchClipSizes;
+
+    // The one shape that may be used: as many lengths as phrases, accounting for every
+    // byte. Order is the whole contract -- these lengths are what map clip 2 onto the
+    // second phrase rather than the third.
+    const auto good = ParseBatchClipSizes("10,20,30", 60, 3);
+    Check(good.has_value(), "A well formed clip framing was rejected.");
+    Check(good->size() == 3 && (*good)[0] == 10 && (*good)[1] == 20 && (*good)[2] == 30,
+        "A well formed clip framing was parsed into the wrong lengths.");
+
+    // Every one of these would produce audio attached to the wrong phrase, or a silent
+    // slot ordered playback would wait behind. None may be repaired into a usable split.
+    Check(!ParseBatchClipSizes("10,20", 60, 3).has_value(),
+        "A framing naming fewer clips than phrases was accepted.");
+    Check(!ParseBatchClipSizes("10,20,30,40", 100, 3).has_value(),
+        "A framing naming more clips than phrases was accepted.");
+    Check(!ParseBatchClipSizes("10,20,30", 61, 3).has_value(),
+        "A framing that did not account for the whole payload was accepted.");
+    Check(!ParseBatchClipSizes("10,20,29", 60, 3).has_value(),
+        "Lengths that did not sum to the payload were accepted.");
+    Check(!ParseBatchClipSizes("10,,30", 40, 3).has_value(),
+        "A doubled comma was accepted, which would shift every later clip.");
+    Check(!ParseBatchClipSizes("10,20,", 30, 3).has_value(),
+        "A trailing comma was accepted.");
+    Check(!ParseBatchClipSizes("10,20,0", 30, 3).has_value(),
+        "A zero-length clip was accepted, which never becomes audible.");
+    Check(!ParseBatchClipSizes("10,x,30", 60, 3).has_value(),
+        "A non-numeric length was accepted.");
+    Check(!ParseBatchClipSizes("", 0, 3).has_value(),
+        "An empty framing header was accepted.");
+    Check(!ParseBatchClipSizes("10", 10, 0).has_value(),
+        "A framing was accepted for a batch of no phrases.");
+
+    // A single-clip batch is still framed, because the per-phrase path and the batch
+    // path publish through the same code and one of them must not be a special case.
+    const auto single = ParseBatchClipSizes("42", 42, 1);
+    Check(single.has_value() && single->size() == 1 && (*single)[0] == 42,
+        "A single-clip batch framing was rejected.");
 }
 
 void TestNamesAreReadOnlyFromRealIntroductions()
@@ -181,11 +294,15 @@ void TestSeveralPeopleAtOneKeyboard()
 void RunLoadAndNameTests()
 {
     TestLoadStatesFollowActualUsage();
+    TestBudgetOverrunIsNotStarvation();
+    TestBusyIsNotFull();
     TestOptionalWorkShedsBeforeConversationQuality();
     TestUnmeasurableLoadChangesNothing();
+    TestBatchClipFramingRefusesAnythingAmbiguous();
     TestNamesAreReadOnlyFromRealIntroductions();
     TestLearningANameKeepsEverythingEarned();
     TestSeveralPeopleAtOneKeyboard();
-    std::cout << "Load sheds optional work before conversation quality, and a learned "
-                 "name keeps everything already earned.\n";
+    std::cout << "Load sheds optional work on how full a device is rather than on a "
+                 "budget, batched voice clips are refused unless their framing is\n"
+                 "exact, and a learned name keeps everything already earned.\n";
 }

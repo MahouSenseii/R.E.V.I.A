@@ -14,6 +14,23 @@ struct latencySample
     bool bAggregate = false;
 };
 
+// One named span of the assembled prompt, measured where it is assembled.
+//
+// Characters rather than tokens because the tokenizer lives in the server process and a
+// second, approximate one here would disagree with the only count that matters. The
+// ratio is stable enough per model that a character breakdown ranks the sections
+// correctly, and llama.cpp still reports the real token total for the whole prompt.
+//
+// `stable` is the load-bearing field. A section that is byte-identical between turns can
+// live in the cached prefix; one that is not invalidates itself and everything after it,
+// which is why the order these are emitted in is the order they occupy in the prompt.
+struct promptSection
+{
+    std::string name;
+    std::size_t characters = 0;
+    bool stable = false;
+};
+
 struct responseOutput
 {
     bool bSuccess = false;
@@ -50,6 +67,8 @@ struct responseOutput
     bool bRoutingFallback = false;
     std::string routingFallbackReason;
     std::vector<latencySample> timings;
+    // How the prompt that produced this reply was made up, in prompt order.
+    std::vector<promptSection> promptSections;
 };
 
 struct llmSettings
@@ -200,6 +219,72 @@ struct speechSettings
     int qwenFirstPhraseCharacters = 28;
     int qwenPhraseCharacters = 64;
     bool bQwenParallelLongReplies = false;
+    // Synthesize the phrases after the first one in a single batched call.
+    //
+    // The clone path is overhead-bound rather than compute-bound: a phrase costs about
+    // 670 sequential forward passes, and almost all of that is per-step Python and
+    // kernel-launch cost that a batch pays once for every sequence at the same time.
+    // Measured on an RTX 5070, one phrase runs at a real-time factor near 3.2 while
+    // four in one call run near 0.9 -- the difference between a queue that can drain
+    // and one that falls further behind with every phrase.
+    //
+    // The first phrase is deliberately never batched. It is what the listener is
+    // waiting on, and holding it back to collect company for it would trade the only
+    // latency anybody experiences for throughput they do not.
+    // Runs the codebook predictor's inner sub-token loop directly instead of through
+    // a nested Hugging Face generate() call, and optionally replays that loop as a
+    // CUDA graph.
+    //
+    // This is the first-phrase lever, and it is a different problem from batching.
+    // Batching fixed throughput by amortising per-launch overhead across sequences;
+    // it cannot help the one phrase that has nobody to share a call with. The graph
+    // removes the overhead itself: measured on an RTX 5070, one frame's inner loop
+    // costs 171.9 ms eager and 13.1 ms replayed, because a forward of this predictor
+    // costs the same at batch 32 as at batch 1 and a comparable bare matmul runs in
+    // 0.04 ms. The work was never arithmetic.
+    //
+    // On by default as of the 2026-09-02 live session, which was the gate the offline
+    // work was waiting for. That session ran the stock path end to end and measured
+    // what it costs in a conversation rather than on a bench: 19.6 to 34.8 seconds to
+    // first audible audio, replies taking 95 to 285 seconds to finish speaking, and a
+    // real-time factor of 4.13 on the RTX 2070 and 5.78 on the RTX 5070. Generation
+    // was 1516 seconds to produce 342 seconds of audio, so the queue could never
+    // drain. The graphed path was measured at 0.29 to 0.34 offline; the live number
+    // for it is the point of the next session.
+    //
+    // A worker that cannot install this path falls back to stock generation and says
+    // so, so the failure mode of turning it on is the behaviour that was already
+    // shipping, not silence.
+    bool bQwenLowLatencyPhrase = true;
+    // Only meaningful with the low-latency path on. Capture is attempted once per
+    // model load and costs a few hundred milliseconds; failure is reported and the
+    // eager direct loop carries the phrase instead.
+    bool bQwenCudaGraph = true;
+    // Stage 2: replays the talker's 28-layer decode step from a graph as well.
+    //
+    // A separate switch from the predictor graph on purpose. Stage 1 is the path that
+    // has been measured end to end, and a talker graph that fails to capture must not
+    // take it down with it. Requires bQwenCudaGraph; on its own it does nothing.
+    //
+    // Measured on an RTX 5070: the talker decode step is 64.7 ms eager and 5.5 ms
+    // replayed, which is the same launch-overhead story as the predictor. Prefill stays
+    // eager because its length varies, and sampling, end-of-sequence detection and the
+    // token budget are deliberately left with Hugging Face -- a graph that took
+    // responsibility for stopping is how a corrupted state would look like a hang.
+    bool bQwenTalkerGraph = true;
+    bool bQwenBatchReplyPhrases = true;
+    // Ceilings on one batch, in phrases and in characters.
+    //
+    // Both are needed. The phrase count bounds how long the batch delays the phrases at
+    // the end of it; the character count bounds memory, which scales with the audio
+    // being generated rather than with the number of sequences. Peak allocation grew by
+    // roughly 375 MiB per 118-character phrase in measurement, and twelve long phrases
+    // filled a 12 GiB card outright -- on a card already holding chat and vision
+    // weights, an unbounded batch is an allocation failure waiting for a long reply.
+    // 480 characters keeps the batch under about 1.6 GiB above the resident model while
+    // still reaching a real-time factor near 0.9.
+    int qwenMaxBatchPhrases = 6;
+    int qwenMaxBatchCharacters = 480;
     bool bQwenDirectPcm = true;
     bool bQwenPrecomputeVoicePrompt = true;
     std::string qwenAttentionBackend = "adaptive";

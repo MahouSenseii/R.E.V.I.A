@@ -359,6 +359,36 @@ bool configManager::LoadSettings(appSettings& outSettings) const
                 outSettings.speech.bQwenParallelLongReplies =
                     speechData["qwenParallelLongReplies"].get<bool>();
             }
+            if (speechData.contains("qwenLowLatencyPhrase"))
+            {
+                outSettings.speech.bQwenLowLatencyPhrase =
+                    speechData["qwenLowLatencyPhrase"].get<bool>();
+            }
+            if (speechData.contains("qwenCudaGraph"))
+            {
+                outSettings.speech.bQwenCudaGraph =
+                    speechData["qwenCudaGraph"].get<bool>();
+            }
+            if (speechData.contains("qwenTalkerGraph"))
+            {
+                outSettings.speech.bQwenTalkerGraph =
+                    speechData["qwenTalkerGraph"].get<bool>();
+            }
+            if (speechData.contains("qwenBatchReplyPhrases"))
+            {
+                outSettings.speech.bQwenBatchReplyPhrases =
+                    speechData["qwenBatchReplyPhrases"].get<bool>();
+            }
+            if (speechData.contains("qwenMaxBatchPhrases"))
+            {
+                outSettings.speech.qwenMaxBatchPhrases =
+                    speechData["qwenMaxBatchPhrases"].get<int>();
+            }
+            if (speechData.contains("qwenMaxBatchCharacters"))
+            {
+                outSettings.speech.qwenMaxBatchCharacters =
+                    speechData["qwenMaxBatchCharacters"].get<int>();
+            }
             if (speechData.contains("qwenDirectPcm"))
             {
                 outSettings.speech.bQwenDirectPcm =
@@ -1104,6 +1134,14 @@ bool configManager::LoadSettings(appSettings& outSettings) const
         outSettings.speech.qwenRequestTimeoutSeconds > 3600 ||
         outSettings.speech.qwenMinimumFreeVramMiB < 512 ||
         outSettings.speech.qwenMinimumFreeVramMiB > 65536 ||
+        // A batch of one is the unbatched path with extra bookkeeping, and an unbounded
+        // batch is an allocation failure on the first long reply. Both ceilings are
+        // required to be sane whether or not batching is currently enabled, so turning
+        // it on later cannot activate a configuration that was never checked.
+        outSettings.speech.qwenMaxBatchPhrases < 2 ||
+        outSettings.speech.qwenMaxBatchPhrases > 32 ||
+        outSettings.speech.qwenMaxBatchCharacters < 64 ||
+        outSettings.speech.qwenMaxBatchCharacters > 4096 ||
         outSettings.speech.qwenDevices.empty() ||
         std::any_of(outSettings.speech.qwenDevices.begin(),
             outSettings.speech.qwenDevices.end(),

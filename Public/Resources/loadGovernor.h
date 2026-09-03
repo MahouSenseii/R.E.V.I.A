@@ -50,18 +50,35 @@ struct LoadAdjustment
     // still generating a reply that says she cannot see, is the worst of both.
     bool allowOpportunisticVision = true;
 
+    // Whether Revia is past the allowance her plan carved out, which is a planning
+    // result rather than a hardware fault and never on its own a reason to shed work.
+    // Reported so the panel and the log can say it without it being confused for
+    // starvation.
+    bool budgetExceeded = false;
+
     // Plain sentence for the log and the resources panel, so a machine that has quietly
     // reduced what it attempts can say why.
     std::string reason;
 };
 
-// Thresholds, as fractions of the budget the plan allocated.
+// Thresholds, as fractions of the physical ceiling the hardware actually has.
+//
+// Against capacity, never against the budget. The budget is a promise Revia made to
+// herself about how much of a card to leave free; passing it means the plan was
+// optimistic, not that the machine is failing. Judging shedding on the budget is what
+// left a healthy card at 88% occupancy reported as "starved at 110%", with every
+// optional thing switched off for the whole session.
+//
+// The steps match the ones the Resources panel already draws, so the word the user reads
+// and the decision Revia makes come from the same number.
 struct LoadThresholds
 {
     // Below this on every meter, there is room to spare.
     double freeBelow = 0.55;
-    double pressuredAbove = 0.85;
-    double throttledAbove = 0.97;
+    // High: a load arriving next may not fit.
+    double pressuredAbove = 0.90;
+    // Critical: an allocation is about to be refused.
+    double throttledAbove = 0.95;
     // A meter that cannot be measured is ignored rather than assumed idle: guessing a
     // reading is how a governor confidently makes exactly the wrong call.
     bool ignoreUnmeasured = true;
@@ -77,9 +94,23 @@ struct LoadThresholds
     const UsageSnapshot& usage,
     const LoadThresholds& thresholds = {});
 
-// The worst utilisation across measured meters, 0..1+ of budget. Exposed so a caller can
-// apply its own hysteresis without re-deriving it.
-[[nodiscard]] double PeakUtilisation(
+// The worst occupancy across measured meters as a fraction of the hardware ceiling,
+// 0..1. This is the number that answers "is anything about to be refused", and the one
+// the shedding decision is made on. Exposed so a caller can apply its own hysteresis
+// without re-deriving it.
+//
+// Meters that are already a percentage of their own device -- GPU engine utilisation --
+// are deliberately left out. A card at 100% compute is doing exactly what it was asked
+// to do; being busy is not the same as being out of room, and throttling on it would
+// shed work precisely when work is happening. Space is what runs out.
+[[nodiscard]] double PeakCapacityPressure(
+    const UsageSnapshot& usage,
+    bool ignoreUnmeasured = true);
+
+// The worst occupancy as a fraction of the allowance the plan set, 0..1+. Separate from
+// pressure on purpose: it says whether the plan was optimistic, which is worth reporting
+// and is never by itself a reason to stop doing things.
+[[nodiscard]] double PeakBudgetUtilisation(
     const UsageSnapshot& usage,
     bool ignoreUnmeasured = true);
 

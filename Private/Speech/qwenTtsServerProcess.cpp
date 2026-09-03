@@ -158,6 +158,21 @@ bool QwenTtsServerProcess::Start(
         L" --attention-backend " +
             QuoteWindowsArgument(Utf8ToWide(settings.qwenAttentionBackend)) +
         L" --input-mode " + QuoteWindowsArgument(Utf8ToWide(settings.qwenInputMode));
+    // Passed as flags rather than values so an older worker script that does not know
+    // them fails loudly at startup instead of quietly ignoring a value it parsed.
+    if (settings.bQwenLowLatencyPhrase)
+    {
+        commandLine += L" --low-latency";
+        if (settings.bQwenCudaGraph)
+        {
+            commandLine += L" --cuda-graph";
+            // Stage 2 only means anything with the predictor graph already on.
+            if (settings.bQwenTalkerGraph)
+            {
+                commandLine += L" --talker-graph";
+            }
+        }
+    }
     std::vector<wchar_t> mutableCommandLine(commandLine.begin(), commandLine.end());
     mutableCommandLine.push_back(L'\0');
 

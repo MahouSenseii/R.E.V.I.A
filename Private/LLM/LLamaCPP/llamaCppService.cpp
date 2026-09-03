@@ -797,7 +797,8 @@ responseOutput llamaCppService::GenerateResponse(
         queryEmbedding.values,
         queryEmbedding.bSuccess ? queryEmbedding.model : "",
         &output.timings,
-        posture);
+        posture,
+        &output.promptSections);
 
     const auto requestPreparationStarted = std::chrono::steady_clock::now();
 

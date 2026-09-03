@@ -142,6 +142,29 @@ private:
 
     void Run(std::stop_token stopToken);
     void Generate(std::stop_token stopToken);
+    // Synthesizes one phrase on its own and publishes it. Also the fallback body for a
+    // batch that could not run, so the two paths cannot drift apart in what they
+    // publish or in how they account for a phrase still being generated.
+    void SynthesizeOne(Utterance utterance, int depth);
+    // Attempts one generation call covering the whole group, in order.
+    //
+    // False means nothing was published and the caller must fall back to synthesizing
+    // the group one phrase at a time. Every refusal is reported that way rather than by
+    // throwing: a batch that will not fit is an ordinary condition on a shared card,
+    // not an error, and the per-phrase path is always available.
+    bool SynthesizeBatch(std::vector<Utterance>& group, int depth);
+    // Takes the phrases that may ride along with `leader` off the queue.
+    //
+    // Caller holds the mutex. Only complete phrases already waiting are taken: nothing
+    // is held back to build a bigger batch, because the phrases are still arriving from
+    // the model and waiting for more would delay the ones already here.
+    std::vector<Utterance> CollectBatchCompanions(const Utterance& leader);
+    void PublishGenerated(const Utterance& utterance, PreparedUtterance item, int depth);
+    // Compares the path the first real phrase ran on against the configured one, once
+    // per session. Graph capture is deferred to that phrase, so this is the earliest
+    // point at which the answer is an observation rather than a setting.
+    void VerifyInferenceBackend(
+        const VoiceOperationResult& result, std::uint64_t utteranceId);
     bool PlayPreparedQwen(const PreparedUtterance& prepared);
     void Notify(SpeechEvent event) const;
     void ArmBargeIn();
@@ -171,6 +194,9 @@ private:
     // Stamped onto every event while an utterance is in flight, so callers do not have to
     // thread the id through each Notify call site.
     std::atomic<std::uint64_t> activeUtteranceId = 0;
+    // Latched by the first synthesised phrase, so the backend check is reported once
+    // rather than on every request.
+    std::atomic<bool> backendVerified = false;
 };
 
 } // namespace revia::speech

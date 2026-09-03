@@ -639,11 +639,44 @@ bool ReviaSession::Start()
                 "voice utterance #" + std::to_string(speechEvent.utteranceId),
                 {{"qwen_synthesis", speechEvent.elapsedMilliseconds, true}});
         }
+        if (speechEvent.phase == "Batch")
+        {
+            // What one batched call cost and bought. The real-time factor is the number
+            // that decides whether the ceilings are right: below one the phrase queue
+            // drains while earlier phrases play, at or above one it cannot.
+            appLogger.Log("[Voice] batch #" +
+                std::to_string(speechEvent.utteranceId) + " | " + speechEvent.detail);
+        }
+        if (speechEvent.phase == "BatchFallback")
+        {
+            // Always a warning. Falling back is safe and expected on a full card, but a
+            // batch that never runs means the throughput fix is not actually in effect,
+            // and that is invisible unless it is said out loud.
+            appLogger.Warning("[Voice] batch fell back to per-phrase synthesis (#" +
+                std::to_string(speechEvent.utteranceId) + "): " + speechEvent.detail);
+        }
+        if (speechEvent.phase == "BackendVerified")
+        {
+            appLogger.Log("[Voice] " + speechEvent.detail);
+        }
+        if (speechEvent.phase == "BackendMismatch")
+        {
+            // A warning even though the audio is fine. The whole point of turning the
+            // graph path on is the latency, and a session that quietly ran without it
+            // produces measurements that look like the fast path failed when it was
+            // never in use.
+            appLogger.Warning("[Voice] " + speechEvent.detail);
+        }
         if (speechEvent.phase == "Profile" && !speechEvent.timings.empty())
         {
             appLogger.Timing(
                 "voice stages #" + std::to_string(speechEvent.utteranceId),
                 speechEvent.timings);
+            // The conditions beside the durations. A generation time means nothing on
+            // its own: the same figure is healthy on a card serving one phrase and a
+            // symptom on one already four phrases behind.
+            appLogger.Log("[Voice] request #" +
+                std::to_string(speechEvent.utteranceId) + " | " + speechEvent.detail);
         }
         if ((speechEvent.phase == "FirstAudioReady" ||
              speechEvent.phase == "FirstAudioPlayed") &&
@@ -3304,6 +3337,57 @@ void ReviaSession::DismissProposal(const std::string& proposalId)
     appLogger.Log("Proposal dismissed. Revia will wait longer before offering again.");
 }
 
+void ReviaSession::ReportVoiceBackend(const speech::VoiceOperationResult& prepared)
+{
+    // Only the Qwen path has a backend to report. A profile on Windows SAPI reaches
+    // here with an empty backend and nothing to say.
+    if (prepared.backend.empty() && !settings.speech.bQwenLowLatencyPhrase)
+    {
+        return;
+    }
+    const bool requestedLowLatency = settings.speech.bQwenLowLatencyPhrase;
+    const bool requestedPredictorGraph =
+        requestedLowLatency && settings.speech.bQwenCudaGraph;
+    const bool requestedTalkerGraph =
+        requestedPredictorGraph && settings.speech.bQwenTalkerGraph;
+    const bool installed = prepared.lowLatencyInstalled;
+
+    // What is being reported is the resolved state, and the honest version of it has
+    // two parts. Whether the module installed is known now, because loading the clone
+    // model is what installs it. Whether a graph is replaying is NOT known now: capture
+    // is deferred to the first eligible phrase and can still fail there. So this line
+    // says what was asked for and what loaded, and SpeechService checks the first real
+    // phrase against it. A single line claiming an active graph at startup would be a
+    // claim about something that has not happened yet -- which is precisely how the
+    // 2026-09-02 session ran 116 requests on stock generation without ever saying so.
+    const auto yesNo = [](const bool value) { return value ? "yes" : "no"; };
+    const std::string resolved =
+        std::string("[Voice] low_latency_phrase=") + yesNo(requestedLowLatency && installed) +
+        " predictor_graph=" + yesNo(requestedPredictorGraph && installed) +
+        " talker_graph=" + yesNo(requestedTalkerGraph && installed);
+
+    if (requestedLowLatency && !installed)
+    {
+        appLogger.Warning(resolved +
+            " -- the low-latency path was requested but did not install on " +
+            (prepared.deviceName.empty() ? prepared.device : prepared.deviceName) +
+            ", so this session speaks on stock Qwen generation. " +
+            (prepared.backendDetail.empty()
+                ? std::string("The worker gave no reason.")
+                : "Worker: " + prepared.backendDetail));
+        return;
+    }
+    if (!requestedLowLatency)
+    {
+        appLogger.Log(resolved +
+            " -- stock Qwen generation, by configuration (speech.qwenLowLatencyPhrase).");
+        return;
+    }
+    appLogger.Log(resolved +
+        " -- installed at voice load. Graph capture happens on the first eligible "
+        "phrase; the first request of the session reports whether it took.");
+}
+
 void ReviaSession::StartVoiceWarmup()
 {
     StopVoiceWarmup();
@@ -3335,6 +3419,7 @@ void ReviaSession::StartVoiceWarmup()
                     "voice_warmup",
                     {{"qwen_voice_model_load", ElapsedMilliseconds(startedAt), true}});
                 appLogger.Log("Background voice load finished: " + prepared.message);
+                ReportVoiceBackend(prepared);
                 return;
             }
             if (stopToken.stop_requested() || !started.load())

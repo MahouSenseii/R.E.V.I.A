@@ -445,6 +445,9 @@ private:
         std::string& outSource);
     void StartVoiceWarmup();
     void StopVoiceWarmup();
+    // Logs which inference path the voice actually loaded on, once the clone model is
+    // resident and the answer is a fact rather than a configuration value.
+    void ReportVoiceBackend(const speech::VoiceOperationResult& prepared);
     // Shared by the immediate typed path and the merged voice path. Callers hold
     // operationMutex; the arbiter has already decided what the turn's text is.
     SessionResult RunTurnLocked(const std::string& acceptedInput);
