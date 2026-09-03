@@ -29,6 +29,7 @@
 #include "Initiative/initiativeController.h"
 #include "Initiative/curiosityJournal.h"
 #include "Internet/internetLookupPolicy.h"
+#include "Internet/lookupQueryResolver.h"
 #include "Internet/internetSearchExecutor.h"
 #include "Internet/visibleBrowserClient.h"
 #include "Goals/goalTypes.h"
@@ -710,6 +711,84 @@ void TestCurrentTechnicalFactsLookUpAndStableOnesStayLocal()
     // Local screen context is not a public fact, however current it is.
     Check(!lookup("What is the current version shown on my screen?"),
         "A question about retained local screen context left the machine.");
+}
+
+// Deciding to search and deciding what to search for are different questions. The query
+// used to be the raw sentence, so "Look up the newest CUDA release for me" was typed
+// into the search box verbatim, courtesy and all.
+void TestLookupQueriesDropTheInstructionAndKeepTheSubject()
+{
+    using revia::internet::ResolveLookupQuery;
+    const auto query = [](const std::string& input)
+    {
+        return ResolveLookupQuery(input).query;
+    };
+    const auto resolves = [](const std::string& input)
+    {
+        return ResolveLookupQuery(input).resolved;
+    };
+
+    struct Case { std::string input; std::string expected; };
+    for (const Case& item : std::vector<Case>{
+        {"Look up the latest Unreal Engine release for me.", "latest Unreal Engine release"},
+        {"Search the web for the newest CUDA release", "newest CUDA release"},
+        {"Can you look up the newest CUDA release for me?", "newest CUDA release"},
+        {"Find out the current Rider version", "current Rider version"},
+        {"Please check whether Python 3.14 is released yet", "Python 3.14 is released yet"},
+        {"Can you check when Qwen3.5 was last updated?", "Qwen3.5 was last updated"},
+        // Already a clean query. Normalization, not search-engine optimisation.
+        {"latest Python version", "latest Python version"}})
+    {
+        Check(query(item.input) == item.expected,
+            "\"" + item.input + "\" resolved to \"" + query(item.input) +
+            "\" instead of \"" + item.expected + "\".");
+    }
+
+    // The subject survives verbatim. An error code or a namespace only works as a search
+    // term if it comes back exactly as it was written.
+    for (const std::string technical : {
+        "std::expected", "std::format", "Qwen3.5", "Qwen3-TTS", "UE5.8", "CUDA 13",
+        "0xC0000135", "STATUS_DEVICE_POWER_FAILURE", "CreateProcessW"})
+    {
+        const std::string resolved = query("Look up " + technical + " for me.");
+        Check(resolved.find(technical) != std::string::npos,
+            "\"" + technical + "\" did not survive query resolution; got \"" +
+            resolved + "\".");
+    }
+    Check(query("Look up C++ std::expected support in MSVC.") ==
+            "C++ std::expected support in MSVC",
+        "A technical subject was altered while its wrapper was removed.");
+    Check(query("Search for \"STATUS_DEVICE_POWER_FAILURE\" Windows Bluetooth.").find(
+            "STATUS_DEVICE_POWER_FAILURE") != std::string::npos,
+        "A quoted diagnostic token was normalised out of the query.");
+
+    // The command words are also ordinary subject words. Stripping by position rather
+    // than by substring is what keeps these intact.
+    Check(query("search algorithm complexity") == "search algorithm complexity",
+        "\"search algorithm complexity\" lost its subject to wrapper stripping.");
+    Check(query("lookup table performance C++") == "lookup table performance C++",
+        "\"lookup table performance C++\" lost the word the question is about.");
+    Check(query("Search formatting options in std::format") ==
+            "Search formatting options in std::format",
+        "A word boundary was ignored, so \"search for\" matched inside \"search "
+        "formatting\".");
+
+    // Handing back the choice of subject is not a search request. Choosing a topic
+    // Revia was not given belongs to Curiosity, not to this turn.
+    for (const std::string empty : {
+        "Look up whatever you want.", "Search for something interesting",
+        "Research anything", "Look it up.", "Check online", "look up anything",
+        "search for stuff"})
+    {
+        Check(!resolves(empty),
+            "\"" + empty + "\" produced a query instead of refusing. Searching the "
+            "words of a delegation returns confident nonsense.");
+    }
+    Check(!resolves(""), "An empty request produced a query.");
+
+    // A refusal explains itself without quoting conversation back.
+    Check(!ResolveLookupQuery("Look it up.").reason.empty(),
+        "An unresolved lookup carried no reason.");
 }
 
 void TestConversationQualityMonitorReportsKnownFailures()
@@ -7695,6 +7774,7 @@ int main(const int argc, char** argv)
         TestActionRuntimeReloadsEditedCapabilities();
         TestInternetCapabilityIsBoundedAndGrounded();
         TestCurrentTechnicalFactsLookUpAndStableOnesStayLocal();
+        TestLookupQueriesDropTheInstructionAndKeepTheSubject();
         TestConversationQualityMonitorReportsKnownFailures();
         TestDesktopActionRateLimitsAreDeterministic();
         TestDesktopRateLimitIsAudited();

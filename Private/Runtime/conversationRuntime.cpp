@@ -8,6 +8,7 @@
 #include "Speech/vocalization.h"
 #include "Internet/internetBackend.h"
 #include "Internet/internetLookupPolicy.h"
+#include "Internet/lookupQueryResolver.h"
 
 #include <algorithm>
 #include <cctype>
@@ -760,11 +761,29 @@ SessionResult ConversationRuntime::Generate(
         internetSettings && internetLookup)
     {
         const actions::CapabilitySettings::InternetAccess access = internetSettings();
-        const std::string lookupQuery = policyInput;
+        // Two separate questions, deliberately asked in this order: whether a lookup is
+        // worth it, and only then what to actually search for. The query used to be the
+        // raw sentence, so "Look up the newest CUDA release for me" was typed into the
+        // search box verbatim, instruction and courtesy included.
+        const revia::internet::ResolvedLookupQuery resolvedQuery =
+            revia::internet::ResolveLookupQuery(policyInput);
+        const std::string lookupQuery = resolvedQuery.query;
         const bool shouldLookup = access.enabled &&
             revia::internet::InternetLookupPolicy::ShouldLookup(
                 policyInput, access.automaticLookup);
-        if (shouldLookup)
+        if (shouldLookup && !resolvedQuery.resolved)
+        {
+            // Worth searching, but nothing to search for. Falling back to the raw
+            // sentence is exactly the defect this replaced, and inventing a subject is
+            // Curiosity's job rather than this turn's, so the lookup is skipped and the
+            // turn continues without web grounding.
+            PublishComponent(
+                "Internet", "Skipped",
+                "A lookup was warranted but the request named no subject to search "
+                "for. " + resolvedQuery.reason,
+                -1.0, 0, currentTurn);
+        }
+        if (shouldLookup && resolvedQuery.resolved)
         {
             const std::string configuredBackend = access.visibleBrowser
                 ? actions::internet::BackendDisplayName(
