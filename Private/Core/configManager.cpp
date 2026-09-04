@@ -13,6 +13,18 @@ using json = nlohmann::json;
 
 namespace
 {
+    // Profile JSON is hand-edited, so an enum spelled "Balanced" or "BALANCED" is the
+    // same intent as "balanced".
+    std::string Lowercase(std::string value)
+    {
+        std::transform(value.begin(), value.end(), value.begin(),
+            [](const unsigned char character)
+            {
+                return static_cast<char>(std::tolower(character));
+            });
+        return value;
+    }
+
     bool IsDeviceSelector(const std::string& value, const bool cudaOnly)
     {
         static const std::regex Common(
@@ -1425,6 +1437,37 @@ bool configManager::LoadProfile(const std::string& profileId, aiProfile& outProf
             outProfile.bHasMaxTokensOverride = true;
         }
 
+        // Absent, misspelled, or a value from a newer build all land on Balanced. A
+        // profile written before this field existed must keep working, and an
+        // unreadable value must not silently grant the most permissive posture --
+        // failing open to CharacterFirst would let a typo decide that Revia no longer
+        // owes anyone an answer.
+        if (data.contains("answerObligation") && data["answerObligation"].is_string())
+        {
+            const std::string obligation =
+                Lowercase(data["answerObligation"].get<std::string>());
+            if (obligation == "reliable")
+            {
+                outProfile.answerObligation = AnswerObligationMode::Reliable;
+            }
+            else if (obligation == "characterfirst" || obligation == "character_first" ||
+                obligation == "character-first")
+            {
+                outProfile.answerObligation = AnswerObligationMode::CharacterFirst;
+            }
+            else if (obligation == "balanced")
+            {
+                outProfile.answerObligation = AnswerObligationMode::Balanced;
+            }
+            else
+            {
+                // Unrecognised. Same destination as an explicit "balanced", listed
+                // separately so the recognised spellings stay readable and so this
+                // branch is obviously the fallback rather than a fourth mode.
+                outProfile.answerObligation = AnswerObligationMode::Balanced;
+            }
+        }
+
         // Optional declared opinions. Order is preserved but not meaningful; a subject
         // that repeats is applied twice and the second seed is refused as already held.
         if (data.contains("preferences") && data["preferences"].is_array())
@@ -1581,6 +1624,11 @@ bool configManager::SaveProfile(const aiProfile& profile, std::string& outError)
     document["description"] = profile.description;
     document["systemPrompt"] = profile.systemPrompt;
     document["memoryEnabled"] = profile.bMemoryEnabled;
+    document["answerObligation"] =
+        profile.answerObligation == AnswerObligationMode::Reliable ? "reliable"
+        : profile.answerObligation == AnswerObligationMode::CharacterFirst
+            ? "characterFirst"
+            : "balanced";
     if (profile.bHasTemperatureOverride)
     {
         document["temperature"] = profile.temperature;

@@ -448,7 +448,12 @@ std::string ConversationRuntime::BuildTurnPosture(
 
     std::ostringstream postureLine;
     postureLine << identity::RenderStatePacket(packet)
-        << "\n\n" << conversationStyle.BuildTurnGuidance(policyInput, promptContext);
+        << "\n\n" << conversationStyle.BuildTurnGuidance(policyInput, promptContext)
+        // The profile's answer obligation, alongside the turn guidance rather than
+        // inside the state packet: it is a configured preference about this
+        // conversation, not a fact about who she is or what she has earned.
+        << "\n\n" << agents::ConversationStylePolicy::BuildAnswerObligationGuidance(
+            profile.answerObligation);
     const std::string compressedHistory = turnPolicy.includePrivateHistory
         ? context.GetCompressedHistorySummary()
         : std::string{};
@@ -620,6 +625,7 @@ evaluation::EvaluationReply ConversationRuntime::EvaluateTurn(
     reply.text = turnResult.response.response;
     reply.rawText = turnResult.response.rawResponse;
     reply.reason = turnResult.response.reason;
+    reply.answerObligation = profile.answerObligation;
     return reply;
 }
 

@@ -80,6 +80,14 @@ struct EvaluationReply
     // supply it. Equal to text when nothing was repaired.
     std::string rawText;
     std::string reason;
+    // The answer obligation the profile was carrying when this reply was produced.
+    //
+    // Recorded, not yet acted on. A short reply under CharacterFirst may be Revia
+    // deciding not to answer, while the same reply under Reliable is more likely a
+    // truncation or a failure -- but telling those apart is evaluation logic that does
+    // not exist yet, so this only makes the distinction possible for the unit that
+    // builds it. Nothing currently reads it.
+    AnswerObligationMode answerObligation = AnswerObligationMode::Balanced;
 };
 
 struct TurnOutcome

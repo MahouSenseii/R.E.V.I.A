@@ -135,6 +135,17 @@ public:
         const actions::ActionRequest&,
         const actions::PolicyDecision&)>;
 
+    // How a typed action result becomes the text the user reads.
+    //
+    // Public because it is the runtime-truth boundary and that boundary is worth being
+    // able to prove. Pure and static: the only input is the outcome, so the profile,
+    // its answer obligation, the emotion vector, and the conversation are all
+    // structurally incapable of reaching it. Character can style a result everywhere
+    // else in the reply; it cannot restate one here, because there is nothing to
+    // restate through.
+    [[nodiscard]] static std::string FormatActionOutcome(
+        const actions::ActionOutcome& outcome);
+
     ReviaSession();
     ~ReviaSession();
 
@@ -412,7 +423,6 @@ private:
     [[nodiscard]] bool IsCompositionAction(const actions::ActionRequest& request) const;
     void BeginExternalComposition(const std::string& application);
     void EndExternalComposition();
-    static std::string FormatActionOutcome(const actions::ActionOutcome& outcome);
     // Submit already holds operationMutex when a /goals command arrives, and that mutex is
     // not recursive, so the command path uses these and the public entry points lock.
     goals::Goal RunGoalUnlocked(goals::Goal goal);

@@ -21,6 +21,18 @@ public:
         const std::string& input,
         const std::vector<conversationMessage>& context) const;
 
+    // The profile's answer obligation, as one bounded instruction for the turn.
+    //
+    // Static and pure so the three modes can be compared directly in a test without
+    // assembling a conversation. Each mode says something materially different about
+    // whether an answer is owed, and every mode carries the same closing sentence: a
+    // runtime-confirmed result may be styled but never contradicted. That sentence is
+    // defence in depth rather than the guarantee itself -- action results reach the
+    // user through ReviaSession::FormatActionOutcome, which derives its text from the
+    // typed outcome and never consults the model at all.
+    [[nodiscard]] static std::string BuildAnswerObligationGuidance(
+        AnswerObligationMode mode);
+
     [[nodiscard]] std::string RefineReply(
         const std::string& input,
         const std::vector<conversationMessage>& context,

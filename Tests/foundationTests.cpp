@@ -5609,6 +5609,179 @@ void TestPreferencesPersistAndValidate()
         "A legitimate key was dropped alongside the rejected one.");
 }
 
+// Answer obligation is a profile setting, so it has to survive a write and a reload,
+// and a profile authored before the field existed has to keep working.
+void TestAnswerObligationRoundTripsAndFallsBackSafely()
+{
+    ScopedTestDirectory directory;
+    const auto previous = std::filesystem::current_path();
+    std::filesystem::current_path(directory.root);
+
+    configManager config;
+    std::string error;
+    for (const AnswerObligationMode mode : {
+        AnswerObligationMode::Reliable,
+        AnswerObligationMode::Balanced,
+        AnswerObligationMode::CharacterFirst})
+    {
+        aiProfile written;
+        written.id = "obligation";
+        written.displayName = "Obligation";
+        written.systemPrompt = "You are brief.";
+        written.answerObligation = mode;
+        Check(config.SaveProfile(written, error),
+            "A profile carrying an answer obligation could not be saved: " + error);
+
+        aiProfile reloaded;
+        Check(config.LoadProfile("obligation", reloaded),
+            "A profile carrying an answer obligation could not be reloaded.");
+        Check(reloaded.answerObligation == mode,
+            "The answer obligation did not survive a save and reload.");
+    }
+
+    // The default, before anything sets it. A new profile must not start out with the
+    // most permissive posture.
+    const aiProfile fresh;
+    Check(fresh.answerObligation == AnswerObligationMode::Balanced,
+        "A profile that never set an answer obligation did not default to Balanced.");
+
+    const auto writeProfile = [&directory](const std::string& body)
+    {
+        const auto profiles = directory.root / "Config" / "Profiles";
+        std::filesystem::create_directories(profiles);
+        std::ofstream file(profiles / "legacy.json", std::ios::trunc);
+        file << body;
+    };
+
+    // A profile written before this field existed. It must load, and it must land on
+    // Balanced rather than being refused or silently promoted.
+    writeProfile(R"({"id":"legacy","displayName":"Legacy",)"
+        R"("systemPrompt":"You are terse."})");
+    aiProfile legacy;
+    Check(config.LoadProfile("legacy", legacy),
+        "A profile written before answerObligation existed no longer loads.");
+    Check(legacy.answerObligation == AnswerObligationMode::Balanced,
+        "An older profile without the field did not fall back to Balanced.");
+
+    // An unreadable value must fail closed. Failing open to CharacterFirst would let a
+    // typo decide that Revia no longer owes anyone an answer.
+    writeProfile(R"({"id":"legacy","displayName":"Legacy",)"
+        R"("systemPrompt":"You are terse.","answerObligation":"chaotic"})");
+    aiProfile unknown;
+    Check(config.LoadProfile("legacy", unknown),
+        "A profile with an unrecognised answer obligation refused to load.");
+    Check(unknown.answerObligation == AnswerObligationMode::Balanced,
+        "An unrecognised answer obligation did not fall back to Balanced.");
+
+    // Hand-edited JSON, so casing is intent rather than syntax.
+    writeProfile(R"({"id":"legacy","displayName":"Legacy",)"
+        R"("systemPrompt":"You are terse.","answerObligation":"CharacterFirst"})");
+    aiProfile cased;
+    Check(config.LoadProfile("legacy", cased),
+        "A profile with a differently-cased obligation refused to load.");
+    Check(cased.answerObligation == AnswerObligationMode::CharacterFirst,
+        "Answer obligation parsing was case sensitive.");
+
+    std::filesystem::current_path(previous);
+}
+
+// Each mode has to say something materially different about whether an answer is owed,
+// while none of them may soften what the runtime confirmed.
+void TestAnswerObligationPostureDiffersByModeAndNeverBendsRuntimeTruth()
+{
+    using revia::agents::ConversationStylePolicy;
+    const auto Contains = [](const std::string& haystack, const std::string& needle)
+    {
+        return haystack.find(needle) != std::string::npos;
+    };
+    const std::string reliable = ConversationStylePolicy::BuildAnswerObligationGuidance(
+        AnswerObligationMode::Reliable);
+    const std::string balanced = ConversationStylePolicy::BuildAnswerObligationGuidance(
+        AnswerObligationMode::Balanced);
+    const std::string characterFirst =
+        ConversationStylePolicy::BuildAnswerObligationGuidance(
+            AnswerObligationMode::CharacterFirst);
+
+    Check(reliable != balanced && balanced != characterFirst &&
+            reliable != characterFirst,
+        "Two answer-obligation modes produced identical posture, so the setting cannot "
+        "change behaviour.");
+
+    // Reliable expects substance and still permits character.
+    Check(Contains(reliable, "answer properly"),
+        "Reliable posture did not ask for the substance of an answer.");
+    Check(Contains(reliable, "tease") || Contains(reliable, "sarcastic"),
+        "Reliable posture read as a ban on character rather than as answer plus "
+        "character.");
+
+    // Balanced is useful by default with genuine freedom.
+    Check(Contains(balanced, "useful by default"),
+        "Balanced posture did not lean towards being useful.");
+    Check(Contains(balanced, "decline") || Contains(balanced, "partly"),
+        "Balanced posture granted no real character freedom.");
+
+    // CharacterFirst grants permission without demanding obstruction.
+    Check(Contains(characterFirst, "dodge") && Contains(characterFirst, "refuse"),
+        "CharacterFirst posture did not permit dodging or refusing.");
+    Check(Contains(characterFirst, "permission, not a quota"),
+        "CharacterFirst posture read as an instruction to withhold answers rather than "
+        "permission to.");
+
+    // The one sentence no posture may soften, identical in all three.
+    for (const std::string& posture : {reliable, balanced, characterFirst})
+    {
+        Check(Contains(posture, "may not change what they say"),
+            "A posture omitted the runtime-truth boundary.");
+        Check(Contains(posture, "may not invent"),
+            "A posture did not forbid inventing a result that was never produced.");
+    }
+}
+
+// The structural half, and the one that actually holds. A runtime result reaches the
+// user through a deterministic formatter that reads the typed outcome, so no posture,
+// prompt, or model has an opportunity to restate it.
+void TestRuntimeResultsAreFormattedFromTheOutcomeNotFromCharacter()
+{
+    using revia::actions::ActionOutcome;
+    using revia::runtime::ReviaSession;
+    const auto Contains = [](const std::string& haystack, const std::string& needle)
+    {
+        return haystack.find(needle) != std::string::npos;
+    };
+
+    ActionOutcome failed;
+    failed.result.succeeded = false;
+    failed.result.message = "The destination is outside every approved root.";
+    const std::string failureText = ReviaSession::FormatActionOutcome(failed);
+    Check(Contains(failureText, "Action stopped"),
+        "A failed action was not reported as stopped.");
+    Check(!Contains(failureText, "Action succeeded"),
+        "A failed action produced success language.");
+    Check(Contains(failureText, failed.result.message),
+        "A failed action dropped the reason it failed.");
+
+    ActionOutcome succeeded;
+    succeeded.result.succeeded = true;
+    succeeded.result.message = "Copied one file.";
+    Check(Contains(ReviaSession::FormatActionOutcome(succeeded), "Action succeeded"),
+        "A successful action was not reported as succeeded.");
+
+    // The property that makes the posture safe: this text is a pure function of the
+    // typed outcome. The profile, its answer obligation, the emotion vector and the
+    // conversation are not parameters, so no character setting can reach it. Same
+    // failed outcome, same words, under every mode -- there is only one code path.
+    for (const AnswerObligationMode mode : {
+        AnswerObligationMode::Reliable,
+        AnswerObligationMode::Balanced,
+        AnswerObligationMode::CharacterFirst})
+    {
+        (void)mode;
+        Check(ReviaSession::FormatActionOutcome(failed) == failureText,
+            "A runtime result changed with the answer obligation. Character is allowed "
+            "to style a result and never to restate it.");
+    }
+}
+
 void TestProfilesAreCreatedListedAndReloaded()
 {
     // configManager resolves Config/Profiles relative to the working directory, so the
@@ -7883,6 +8056,9 @@ int main(const int argc, char** argv)
         TestOnlySoundEffectsSurviveInAsterisks();
         TestHardFilterStripsStageDirectionsFromACompletedReply();
         TestSpeechNormalizerKeepsTheSoundAndDropsTheMarkdown();
+        TestAnswerObligationRoundTripsAndFallsBackSafely();
+        TestAnswerObligationPostureDiffersByModeAndNeverBendsRuntimeTruth();
+        TestRuntimeResultsAreFormattedFromTheOutcomeNotFromCharacter();
         TestProfilesAreCreatedListedAndReloaded();
         TestProfileCreationRefusesUnsafeAndIncompleteProfiles();
         TestDiagramsDrawButNeverRunOrFetch();

@@ -586,6 +586,13 @@ struct aiProfile
     // outranks an authored starting point. Identity owns what a preference means; this
     // carries the pairs.
     std::vector<std::pair<std::string, float>> preferences;
+
+    // Whether this profile obliges her to answer. A configured preference rather than
+    // earned state, which is why it lives here beside the other authored starting
+    // points and not in relationship, development, or affect. Balanced by default, and
+    // a profile written before this field existed loads as Balanced rather than as the
+    // most permissive option.
+    AnswerObligationMode answerObligation = AnswerObligationMode::Balanced;
 };
 
 // Local image generation. Off by default: it is an optional Python runtime and a

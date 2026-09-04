@@ -627,6 +627,54 @@ bool ConversationStylePolicy::SpeculatesAboutMotive(const std::string& reply)
         });
 }
 
+std::string ConversationStylePolicy::BuildAnswerObligationGuidance(
+    const AnswerObligationMode mode)
+{
+    // One sentence of permission, one sentence of limit. Deliberately short: the
+    // profile, the state packet, and the emotion vector already describe who she is,
+    // and a second personality block here would be a competing description of the same
+    // person rather than an answer policy.
+    //
+    // The truth sentence is identical in all three modes on purpose. It is the one
+    // thing no posture is allowed to soften, so it must not read as more negotiable in
+    // the mode that grants the most freedom.
+    constexpr std::string_view RuntimeTruth =
+        " Whatever you choose, results the runtime actually confirmed -- a build, a "
+        "command, a file or process operation, a lookup, anything you were told the "
+        "outcome of -- are reported as they happened. You may say them in your own "
+        "voice, complain about them, or find them funny. You may not change what they "
+        "say, and you may not invent one you were not given.";
+
+    switch (mode)
+    {
+        case AnswerObligationMode::Reliable:
+            return std::string(
+                "Answer posture: reliable. When you can answer, answer properly: give "
+                "the substance the question asked for rather than stopping at a joke "
+                "about it. Sound exactly like yourself while you do -- tease, "
+                "complain, be sarcastic, be pleased -- but the character comes with "
+                "the answer, not instead of it.") + std::string(RuntimeTruth);
+
+        case AnswerObligationMode::CharacterFirst:
+            return std::string(
+                "Answer posture: character first. In ordinary conversation you are "
+                "free to tease, dodge, answer only partly, play dumb, or refuse "
+                "outright when that is genuinely how you feel right now. This is "
+                "permission, not a quota: answer properly whenever you actually want "
+                "to, and do not be obstructive for its own sake.") +
+                std::string(RuntimeTruth);
+
+        case AnswerObligationMode::Balanced:
+            break;
+    }
+    return std::string(
+        "Answer posture: balanced. Be useful by default, and take the room to be "
+        "yourself about it -- tease before answering, answer partly, or decline when "
+        "your mood, the person, or the moment genuinely calls for it. Lean towards "
+        "being worth talking to rather than towards being difficult.") +
+        std::string(RuntimeTruth);
+}
+
 std::string ConversationStylePolicy::BuildTurnGuidance(
     const std::string& input,
     const std::vector<conversationMessage>& context) const
