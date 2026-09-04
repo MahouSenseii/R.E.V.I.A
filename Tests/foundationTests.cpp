@@ -5609,6 +5609,153 @@ void TestPreferencesPersistAndValidate()
         "A legitimate key was dropped alongside the rejected one.");
 }
 
+// Unit 4.1. Live use showed the answer posture had quietly become personality policy:
+// Balanced ended by telling her not to be "difficult", and Reliable listed the traits
+// she was still allowed. Deterministic tests could not see it because every assertion
+// was about completeness. These are the assertions that would have.
+void TestAnswerPostureDoesNotLegislatePersonality()
+{
+    using revia::agents::ConversationStylePolicy;
+    const auto contains = [](const std::string& haystack, const std::string& needle)
+    {
+        return haystack.find(needle) != std::string::npos;
+    };
+
+    for (const AnswerObligationMode mode : {
+        AnswerObligationMode::Reliable,
+        AnswerObligationMode::Balanced,
+        AnswerObligationMode::CharacterFirst})
+    {
+        const std::string guidance =
+            ConversationStylePolicy::BuildAnswerObligationGuidance(mode);
+
+        // Telling her how agreeable to be is the defect, in either direction. The
+        // posture must not ask her to soften, and must not prescribe brattiness to
+        // compensate either -- both take a decision that belongs to the profile, the
+        // emotion vector and the relationship.
+        for (const std::string verdict : {
+            "difficult", "nice", "pleasant", "agreeable", "obedient", "submissive",
+            "polite", "cooperative", "friendly",
+            "bratty", "sarcastic", "mischievous", "smug"})
+        {
+            Check(!contains(guidance, verdict),
+                "The answer posture used the word '" + verdict + "', which makes it a "
+                "personality instruction. Attitude belongs to the profile and her "
+                "current state, not to how much of an answer she owes.");
+        }
+
+        // And it must say so, rather than merely omitting the subject.
+        Check(contains(guidance, "personality"),
+            "The answer posture did not hand delivery back to her personality.");
+        Check(contains(guidance, "may not change what they say"),
+            "A posture lost the runtime-truth boundary while being reworded.");
+    }
+}
+
+// The stock tail that kept coming back live. The exact-match list could only catch
+// wording it had already seen, so every new phrasing survived it.
+void TestStockContinuationTailsAreRecognisedByShapeNotByWording()
+{
+    const revia::agents::ConversationStylePolicy policy;
+
+    for (const std::string tail : {
+        "What part of me are we fixing today?",
+        "What are we fixing next?",
+        "So what are we fixing next?",
+        "What should we fix next?",
+        "What are we working on today?",
+        "What are we working on next?",
+        "What should we work on next?",
+        "What do you want to work on next?",
+        "What do you want to fix next?",
+        "What are we doing next?",
+        "So what is next?",
+        "What do we tackle next?"})
+    {
+        Check(policy.IsGenericContinuation(tail),
+            "'" + tail + "' was not recognised as a stock continuation.");
+    }
+
+    // A question that gathers missing information is the opposite of a stock tail, and
+    // the conjunction of conditions is what keeps these safe: each one fails at least
+    // one of opener, generic activity, or open-ended when.
+    for (const std::string real : {
+        "Which file is failing to compile?",
+        "What error code did Rider show?",
+        "Do you mean the RTX 5070 or the RTX 2070 Super?",
+        "What happens immediately before the crash?",
+        "Which profile are you testing?",
+        "Should CombatManager or the Ability own this value?",
+        "What exact message does Qwen return?",
+        "Is the file on C: or D:?",
+        "What error are you getting?",
+        // Long enough to name its own subject, so not a stock tail.
+        "What do you want to work on next in the CombatManager refactor?"})
+    {
+        Check(!policy.IsGenericContinuation(real),
+            "'" + real + "' was suppressed as a stock continuation. It asks for "
+            "information the reply actually needs.");
+    }
+
+    // Display and audio share one classifier, so a tail cannot be removed from the
+    // screen while still being spoken.
+    Check(policy.ShouldSuppressSpokenFragment(
+            "it broke", {}, "What are we fixing next?", false),
+        "A stock continuation was suppressed on screen but still queued for speech.");
+    Check(!policy.ShouldSuppressSpokenFragment(
+            "it broke", {}, "Which file is failing to compile?", false),
+        "A real clarifying question was silenced.");
+}
+
+// Live defect: the reply contained a chuckle tag and the voice said the word
+// "chuckles". The tag was being preserved deliberately, on the assumption the model
+// would perform the cue. It does not.
+void TestVocalizationTagsNeverReachTheSynthesiser()
+{
+    using revia::speech::SpeechService;
+    // false is now passed for every backend, so this is the behaviour of the live path.
+    for (const std::string reply : {
+        "Oh please. *chuckles* You really did that?",
+        "No. *sighs* You did it again.",
+        "*laughs* Absolutely not.",
+        "Fine <sigh> whatever.",
+        "Oh really [laugh] that is perfect."})
+    {
+        const std::string spoken = SpeechService::NormalizeForSpeech(reply, 4000, false);
+        for (const std::string word : {
+            "chuckle", "chuckles", "laugh", "laughs", "sigh", "sighs", "gasp",
+            "gasps"})
+        {
+            Check(spoken.find(word) == std::string::npos,
+                "'" + reply + "' would have spoken the word '" + word +
+                "'. A vocalization is a sound, never narration.");
+        }
+    }
+
+    // The surrounding speech survives intact -- dropping the cue must not cost the
+    // sentence around it.
+    const std::string spoken =
+        SpeechService::NormalizeForSpeech("Oh please. *chuckles* You really did that?",
+            4000, false);
+    Check(spoken.find("Oh please") != std::string::npos &&
+            spoken.find("You really did that") != std::string::npos,
+        "Removing the cue also removed the speech around it.");
+
+    // The eye still gets the stage direction even though the ear does not. The parser
+    // that owns that split is already correct and already tested; this pins the
+    // relationship the live fix depends on.
+    const revia::speech::SpokenScript script =
+        revia::speech::ParseVocalizations("Oh please. *chuckles* You really did that?");
+    Check(script.displayText.find("*chuckles*") != std::string::npos,
+        "The visible reply lost the stage direction it is supposed to show.");
+    Check(script.spokenText.find("chuckle") == std::string::npos,
+        "The parser spoken form still carried the cue word.");
+    Check(script.segments.size() == 3 &&
+            script.segments[1].kind == revia::speech::SegmentKind::Vocalization &&
+            script.segments[1].vocalization == revia::speech::VocalizationKind::SoftLaugh,
+        "The reply did not segment into speech, sound, speech.");
+}
+
 // Answer obligation is a profile setting, so it has to survive a write and a reload,
 // and a profile authored before the field existed has to keep working.
 void TestAnswerObligationRoundTripsAndFallsBackSafely()
@@ -5707,23 +5854,25 @@ void TestAnswerObligationPostureDiffersByModeAndNeverBendsRuntimeTruth()
         "Two answer-obligation modes produced identical posture, so the setting cannot "
         "change behaviour.");
 
-    // Reliable expects substance and still permits character.
-    Check(Contains(reliable, "answer properly"),
+    // Reliable expects the substance. It deliberately no longer lists the traits she
+    // is permitted to keep: naming them here was the coupling Unit 4.1 removed, and
+    // TestAnswerPostureDoesNotLegislatePersonality now guards against it returning.
+    Check(Contains(reliable, "substance"),
         "Reliable posture did not ask for the substance of an answer.");
-    Check(Contains(reliable, "tease") || Contains(reliable, "sarcastic"),
-        "Reliable posture read as a ban on character rather than as answer plus "
-        "character.");
+    Check(Contains(reliable, "still counts as answering"),
+        "Reliable posture did not make room for answering reluctantly, which is the "
+        "difference between requiring an answer and requiring a good mood.");
 
-    // Balanced is useful by default with genuine freedom.
-    Check(Contains(balanced, "useful by default"),
-        "Balanced posture did not lean towards being useful.");
-    Check(Contains(balanced, "decline") || Contains(balanced, "partly"),
-        "Balanced posture granted no real character freedom.");
+    // Balanced expects substance most of the time while making the alternatives real.
+    Check(Contains(balanced, "Usually give the substance"),
+        "Balanced posture did not normally expect the substance.");
+    Check(Contains(balanced, "declined") || Contains(balanced, "partial"),
+        "Balanced posture granted no real freedom to answer less than fully.");
 
-    // CharacterFirst grants permission without demanding obstruction.
-    Check(Contains(characterFirst, "dodge") && Contains(characterFirst, "refuse"),
-        "CharacterFirst posture did not permit dodging or refusing.");
-    Check(Contains(characterFirst, "permission, not a quota"),
+    // CharacterFirst makes completeness optional without demanding obstruction.
+    Check(Contains(characterFirst, "optional"),
+        "CharacterFirst posture did not make the complete answer optional.");
+    Check(Contains(characterFirst, "permission rather than an expectation"),
         "CharacterFirst posture read as an instruction to withhold answers rather than "
         "permission to.");
 
@@ -8056,6 +8205,9 @@ int main(const int argc, char** argv)
         TestOnlySoundEffectsSurviveInAsterisks();
         TestHardFilterStripsStageDirectionsFromACompletedReply();
         TestSpeechNormalizerKeepsTheSoundAndDropsTheMarkdown();
+        TestAnswerPostureDoesNotLegislatePersonality();
+        TestStockContinuationTailsAreRecognisedByShapeNotByWording();
+        TestVocalizationTagsNeverReachTheSynthesiser();
         TestAnswerObligationRoundTripsAndFallsBackSafely();
         TestAnswerObligationPostureDiffersByModeAndNeverBendsRuntimeTruth();
         TestRuntimeResultsAreFormattedFromTheOutcomeNotFromCharacter();

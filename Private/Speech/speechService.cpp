@@ -521,10 +521,24 @@ void SpeechService::Speak(
     {
         return;
     }
+    // Vocalization tags never reach any synthesiser now, on any backend.
+    //
+    // They used to be preserved for Qwen on the assumption that the model would
+    // perform the cue rather than read it. Live listening settled that: it says the
+    // word. "chuckles" spoken aloud in the middle of a sentence is worse than the
+    // silence of dropping it, and dropping it is what the SAPI path already did.
+    //
+    // The tag survives in the visible reply, which is where it belongs -- the chat
+    // bubble still shows *chuckles*. What it no longer does is become a word.
+    //
+    // Making the sound actually happen is a separate, larger piece of work: it needs
+    // the parsed segments played in order against a clip bank, and the bank is empty
+    // on this machine. Until that exists, silence is the correct behaviour rather
+    // than narration.
     text = NormalizeForSpeech(
         text,
         static_cast<std::size_t>(configuration.maxCharacters),
-        configuration.backend != "WindowsSapi");
+        false);
     if (text.empty())
     {
         return;
@@ -694,13 +708,25 @@ std::string SpeechService::NormalizeForSpeech(
     // Everything below strips '*' as markdown noise, and flattening "*laughs*" to
     // "laughs" is precisely the failure this feature exists to avoid: the voice reads
     // the word instead of making the sound.
+    // All three bracket styles, because ParseVocalizations accepts all three and the
+    // small local model writing these is not consistent about which it uses. This
+    // recognised only the asterisk form, so "<sigh>" and "[laugh]" walked straight
+    // past it and were spoken as words -- the same live defect, one bracket over.
     const auto vocalizationTag = [](const std::string& token) -> std::string
     {
-        if (token.size() < 3 || token.front() != '*')
+        if (token.size() < 3)
         {
             return {};
         }
-        const std::size_t closing = token.find('*', 1);
+        char closingCharacter = '\0';
+        switch (token.front())
+        {
+            case '*': closingCharacter = '*'; break;
+            case '[': closingCharacter = ']'; break;
+            case '<': closingCharacter = '>'; break;
+            default: return {};
+        }
+        const std::size_t closing = token.find(closingCharacter, 1);
         if (closing == std::string::npos || closing == 1)
         {
             return {};

@@ -113,6 +113,28 @@ ProfilePanel::ProfilePanel(
         "next start.");
     identityLayout->addWidget(memoryCheck);
 
+    // How complete an answer this profile owes. Deliberately worded around
+    // completeness rather than temperament: how she says a thing is her personality's
+    // business, and describing these as nicer or more difficult would make this
+    // control quietly edit her character.
+    answerStyleCombo = new QComboBox(identityGroup);
+    answerStyleCombo->addItem("Reliable",
+        static_cast<int>(AnswerObligationMode::Reliable));
+    answerStyleCombo->addItem("Balanced",
+        static_cast<int>(AnswerObligationMode::Balanced));
+    answerStyleCombo->addItem("Character First",
+        static_cast<int>(AnswerObligationMode::CharacterFirst));
+    answerStyleCombo->setToolTip(
+        "Answer style. Reliable usually gives the substantive answer, in her own "
+        "voice. Balanced usually answers, and her current state may affect how "
+        "complete it is. Character First lets her personality take priority over "
+        "completing the answer in ordinary conversation. This does not change who "
+        "she is, only how much of an answer she owes.");
+    auto* answerStyleRow = new QHBoxLayout();
+    answerStyleRow->addWidget(new QLabel("Answer style", identityGroup));
+    answerStyleRow->addWidget(answerStyleCombo, 1);
+    identityLayout->addLayout(answerStyleRow);
+
     auto* samplingRow = new QHBoxLayout();
     temperatureCheck = new QCheckBox("Override temperature", identityGroup);
     temperatureSpin = new QDoubleSpinBox(identityGroup);
@@ -309,6 +331,8 @@ void ProfilePanel::LoadSelectedProfile()
     descriptionInput->setText(QString::fromStdString(profile->description));
     systemPromptInput->setPlainText(QString::fromStdString(profile->systemPrompt));
     memoryCheck->setChecked(profile->memoryEnabled);
+    answerStyleCombo->setCurrentIndex(
+        answerStyleCombo->findData(static_cast<int>(profile->answerObligation)));
     temperatureCheck->setChecked(profile->hasTemperatureOverride);
     temperatureSpin->setValue(profile->temperature);
     maxTokensCheck->setChecked(profile->hasMaxTokensOverride);
@@ -330,6 +354,8 @@ void ProfilePanel::BeginNewProfile()
     descriptionInput->clear();
     systemPromptInput->clear();
     memoryCheck->setChecked(true);
+    answerStyleCombo->setCurrentIndex(
+        answerStyleCombo->findData(static_cast<int>(AnswerObligationMode::Balanced)));
     temperatureCheck->setChecked(false);
     temperatureSpin->setValue(0.7);
     maxTokensCheck->setChecked(false);
@@ -371,6 +397,8 @@ void ProfilePanel::Save()
     definition.description = descriptionInput->text().trimmed().toStdString();
     definition.systemPrompt = systemPromptInput->toPlainText().trimmed().toStdString();
     definition.memoryEnabled = memoryCheck->isChecked();
+    definition.answerObligation = static_cast<AnswerObligationMode>(
+        answerStyleCombo->currentData().toInt());
     definition.hasTemperatureOverride = temperatureCheck->isChecked();
     definition.temperature = static_cast<float>(temperatureSpin->value());
     definition.hasMaxTokensOverride = maxTokensCheck->isChecked();

@@ -630,14 +630,28 @@ bool ConversationStylePolicy::SpeculatesAboutMotive(const std::string& reply)
 std::string ConversationStylePolicy::BuildAnswerObligationGuidance(
     const AnswerObligationMode mode)
 {
-    // One sentence of permission, one sentence of limit. Deliberately short: the
-    // profile, the state packet, and the emotion vector already describe who she is,
-    // and a second personality block here would be a competing description of the same
-    // person rather than an answer policy.
+    // This says how much of an answer is owed. It says nothing about attitude.
+    //
+    // The first version of this got that wrong in a way only live use exposed. Balanced
+    // ended with "lean towards being worth talking to rather than towards being
+    // difficult", and Reliable listed traits she was permitted to keep. Both read as
+    // instructions about how agreeable to be, arriving after the profile had already
+    // described who she is -- so the last word on personality came from the answer
+    // policy, and she noticeably flattened out.
+    //
+    // Attitude belongs to the profile, the emotion vector, the relationship, and her
+    // development. Naming traits here would be the same coupling pointing the other
+    // way: telling her to be bratty is as wrong as telling her not to be. So these
+    // three strings talk about completeness only, and explicitly hand delivery back to
+    // the layers that own it.
     //
     // The truth sentence is identical in all three modes on purpose. It is the one
     // thing no posture is allowed to soften, so it must not read as more negotiable in
     // the mode that grants the most freedom.
+    constexpr std::string_view Delivery =
+        " How you say it is not this instruction's business: your personality, your "
+        "current mood, and how you actually feel about the person you are talking to "
+        "decide that, exactly as they would have anyway.";
     constexpr std::string_view RuntimeTruth =
         " Whatever you choose, results the runtime actually confirmed -- a build, a "
         "command, a file or process operation, a lookup, anything you were told the "
@@ -649,30 +663,28 @@ std::string ConversationStylePolicy::BuildAnswerObligationGuidance(
     {
         case AnswerObligationMode::Reliable:
             return std::string(
-                "Answer posture: reliable. When you can answer, answer properly: give "
-                "the substance the question asked for rather than stopping at a joke "
-                "about it. Sound exactly like yourself while you do -- tease, "
-                "complain, be sarcastic, be pleased -- but the character comes with "
-                "the answer, not instead of it.") + std::string(RuntimeTruth);
+                "Answer posture: reliable. When the substance of an answer exists and "
+                "you can give it, give it: do not stop short of the useful part or "
+                "leave a joke standing in its place. Answering reluctantly, or while "
+                "complaining about the question, still counts as answering.") +
+                std::string(Delivery) + std::string(RuntimeTruth);
 
         case AnswerObligationMode::CharacterFirst:
             return std::string(
-                "Answer posture: character first. In ordinary conversation you are "
-                "free to tease, dodge, answer only partly, play dumb, or refuse "
-                "outright when that is genuinely how you feel right now. This is "
-                "permission, not a quota: answer properly whenever you actually want "
-                "to, and do not be obstructive for its own sake.") +
-                std::string(RuntimeTruth);
+                "Answer posture: character first. In ordinary conversation the "
+                "complete answer is optional: you may answer partly, put it off, "
+                "sidestep the question, or decline it outright. That is permission "
+                "rather than an expectation -- answer fully whenever you would have "
+                "anyway.") + std::string(Delivery) + std::string(RuntimeTruth);
 
         case AnswerObligationMode::Balanced:
             break;
     }
     return std::string(
-        "Answer posture: balanced. Be useful by default, and take the room to be "
-        "yourself about it -- tease before answering, answer partly, or decline when "
-        "your mood, the person, or the moment genuinely calls for it. Lean towards "
-        "being worth talking to rather than towards being difficult.") +
-        std::string(RuntimeTruth);
+        "Answer posture: balanced. Usually give the substance when you have it, and "
+        "treat a partial answer or a declined one as genuinely available to you when "
+        "the moment calls for it rather than as a failure.") +
+        std::string(Delivery) + std::string(RuntimeTruth);
 }
 
 std::string ConversationStylePolicy::BuildTurnGuidance(
@@ -754,11 +766,72 @@ std::string ConversationStylePolicy::BuildTurnGuidance(
 bool ConversationStylePolicy::IsGenericContinuation(const std::string& sentence) const
 {
     const std::string normalized = NormalizeSentence(sentence);
-    return std::any_of(std::begin(GenericContinuations), std::end(GenericContinuations),
+    if (std::any_of(std::begin(GenericContinuations), std::end(GenericContinuations),
         [&normalized](const std::string_view candidate)
         {
             return normalized == candidate;
-        });
+        }))
+    {
+        return true;
+    }
+
+    // The exact list above only catches wording it has already seen, which is why
+    // "What part of me are we fixing today?" survived it live and kept reappearing.
+    // The stock tail is a shape, not a sentence, so the shape is recognised too.
+    //
+    // All three parts are required together, and that conjunction is what keeps real
+    // questions safe. A genuine clarifying question fails at least one of them:
+    // "Which file is failing to compile?" does not open with "what", "What error code
+    // did Rider show?" names no generic activity, and "What happens before the crash?"
+    // asks about no point in time.
+    std::vector<std::string> words = Words(normalized);
+    if (words.empty()) return false;
+    // "So what are we fixing next" is the same sentence wearing a conjunction.
+    if (words.front() == "so" || words.front() == "and" || words.front() == "ok" ||
+        words.front() == "okay")
+    {
+        words.erase(words.begin());
+        // The remainder may be a stock tail the list already knows, which is how
+        // "So what's next?" differs from "What's next?" by one word and nothing else.
+        std::string remainder;
+        for (const std::string& word : words)
+        {
+            if (!remainder.empty()) remainder.push_back(' ');
+            remainder += word;
+        }
+        if (std::any_of(std::begin(GenericContinuations),
+            std::end(GenericContinuations),
+            [&remainder](const std::string_view candidate)
+            {
+                return remainder == candidate;
+            }))
+        {
+            return true;
+        }
+    }
+    if (words.empty() || words.front() != "what") return false;
+
+    // Long enough to carry a real subject is long enough to be a real question:
+    // "What do you want to work on next in the CombatManager refactor?" names its
+    // work and is not a stock tail.
+    if (words.size() > 10) return false;
+
+    const auto has = [&words](const std::initializer_list<std::string_view> any)
+    {
+        return std::any_of(words.begin(), words.end(),
+            [&any](const std::string& word)
+            {
+                return std::find(any.begin(), any.end(), word) != any.end();
+            });
+    };
+
+    // An activity with no content: what the pair of us does next, in the abstract.
+    const bool genericActivity = has({
+        "fix", "fixing", "work", "working", "do", "doing", "tackle", "tackling",
+        "break", "breaking", "debug", "debugging", "build", "building"});
+    // Pointed at a moment rather than at a thing.
+    const bool openEndedWhen = has({"next", "today", "now", "afterwards", "after"});
+    return genericActivity && openEndedWhen;
 }
 
 std::string ConversationStylePolicy::RefineReply(

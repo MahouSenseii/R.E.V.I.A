@@ -87,6 +87,10 @@ struct ProfileSummary
     float temperature = 0.7f;
     bool hasMaxTokensOverride = false;
     int maxTokens = 512;
+    // How much of an answer this profile owes. The enum crosses the boundary as
+    // itself rather than as a string, so the desktop and the runtime cannot drift
+    // into disagreeing about what a mode is called.
+    AnswerObligationMode answerObligation = AnswerObligationMode::Balanced;
     // Empty means this profile falls back to the Windows voice.
     std::string voicePresetId;
     std::string voicePresetName;

@@ -60,6 +60,7 @@ private:
     QLineEdit* descriptionInput = nullptr;
     QPlainTextEdit* systemPromptInput = nullptr;
     QCheckBox* memoryCheck = nullptr;
+    QComboBox* answerStyleCombo = nullptr;
     QCheckBox* temperatureCheck = nullptr;
     QDoubleSpinBox* temperatureSpin = nullptr;
     QCheckBox* maxTokensCheck = nullptr;

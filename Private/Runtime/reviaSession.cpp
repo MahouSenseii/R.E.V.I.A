@@ -6305,6 +6305,7 @@ ProfileStudioSnapshot ReviaSession::ProfileStudio() const
         summary.temperature = loaded.temperature;
         summary.hasMaxTokensOverride = loaded.bHasMaxTokensOverride;
         summary.maxTokens = loaded.maxTokens;
+        summary.answerObligation = loaded.answerObligation;
         const auto assignment = voices.profileAssignments.find(profileId);
         if (assignment != voices.profileAssignments.end())
         {
@@ -6335,6 +6336,7 @@ ProfileOperationResult ReviaSession::SaveProfile(const ProfileSummary& definitio
     candidate.temperature = definition.temperature;
     candidate.bHasMaxTokensOverride = definition.hasMaxTokensOverride;
     candidate.maxTokens = definition.maxTokens;
+    candidate.answerObligation = definition.answerObligation;
 
     std::string error;
     std::lock_guard operationLock(operationMutex);
