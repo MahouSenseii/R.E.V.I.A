@@ -5609,6 +5609,164 @@ void TestPreferencesPersistAndValidate()
         "A legitimate key was dropped alongside the rejected one.");
 }
 
+// Unit 4.3D playback. The parser, the bank and the policy all existed and all worked,
+// and the live path used none of them: a cue was stripped and the reply went quiet
+// where the sound belonged. These tests drive the production planner itself, not the
+// parser underneath it.
+void TestVocalizationCuesAreQueuedAsSoundsInTheirOwnPlace()
+{
+    using revia::speech::SegmentKind;
+    using revia::speech::SpeechService;
+    using revia::speech::VocalizationKind;
+    using revia::speech::VocalizationVerdict;
+
+    speechSettings settings;
+    settings.maxCharacters = 4000;
+    const auto allow = [](VocalizationKind) { return VocalizationVerdict::Allowed; };
+
+    // A. The production plan, in order. Speech, sound, speech -- not speech, speech,
+    // sound, which is where a laugh appended after synthesis would land.
+    const auto plan = SpeechService::PlanSpeech(
+        "Yeah. *chuckles* Nice try.", settings, allow);
+    Check(plan.size() == 3,
+        "The reply did not plan as three items; a cue must keep its own place in the "
+        "order rather than being folded into the speech around it.");
+    Check(plan[0].kind == SegmentKind::Speech &&
+            plan[0].text.find("Yeah") != std::string::npos,
+        "The speech before the cue was lost.");
+    Check(plan[1].kind == SegmentKind::Vocalization &&
+            plan[1].vocalization == VocalizationKind::SoftLaugh,
+        "The cue did not become a sound the runtime will play.");
+    Check(plan[2].kind == SegmentKind::Speech &&
+            plan[2].text.find("Nice try") != std::string::npos,
+        "The speech after the cue was lost.");
+
+    // B. No narration, through the same planner, in all three written forms.
+    for (const std::string reply : {
+        "Yeah. *chuckles* Nice try.",
+        "Fine <sigh> whatever.",
+        "Oh really [laugh] that is perfect."})
+    {
+        for (const auto& segment : SpeechService::PlanSpeech(reply, settings, allow))
+        {
+            if (segment.kind != SegmentKind::Speech) continue;
+            for (const std::string word : {"chuckle", "laugh", "sigh", "gasp"})
+            {
+                Check(segment.text.find(word) == std::string::npos,
+                    "'" + reply + "' planned a spoken phrase containing '" + word +
+                    "'. A vocalization is a sound, never narration.");
+            }
+        }
+    }
+
+    // E. Order again, with a different cue, because the first case could pass on a
+    // planner that always emits three items.
+    const auto sighed = SpeechService::PlanSpeech("A. *sighs* B.", settings, allow);
+    Check(sighed.size() == 3 && sighed[1].kind == SegmentKind::Vocalization &&
+            sighed[1].vocalization == VocalizationKind::Sigh,
+        "A sigh did not plan between the two phrases it was written between.");
+
+    // F and G. Every suppression leaves the speech either side intact, and the cue
+    // simply is not heard. The policy decides this, not the model.
+    for (const VocalizationVerdict verdict : {
+        VocalizationVerdict::SuppressedByMissingClip,
+        VocalizationVerdict::SuppressedByRate,
+        VocalizationVerdict::SuppressedByAffect})
+    {
+        const auto suppressed = SpeechService::PlanSpeech(
+            "A. *chuckles* B.", settings,
+            [verdict](VocalizationKind) { return verdict; });
+        Check(suppressed.size() == 2,
+            "A suppressed cue changed how much of the reply is spoken. Verdict: " +
+                revia::speech::ToString(verdict));
+        Check(suppressed[0].kind == SegmentKind::Speech &&
+                suppressed[1].kind == SegmentKind::Speech,
+            "A suppressed cue was still queued as a sound.");
+        Check(suppressed[0].text.find("chuckle") == std::string::npos &&
+                suppressed[1].text.find("chuckle") == std::string::npos,
+            "A suppressed cue was read aloud instead of being dropped.");
+    }
+
+    // C and D. The lifetime rule, with real files, because this is the one mistake
+    // that is permanent: a deleted bank clip does not come back on the next reply.
+    ScopedTestDirectory directory;
+    const std::filesystem::path clip = directory.root / "soft-laugh-1.wav";
+    const std::filesystem::path scratch = directory.root / "phrase-1.wav";
+    const auto write = [](const std::filesystem::path& path)
+    {
+        std::ofstream file(path, std::ios::binary | std::ios::trunc);
+        file << "RIFF";
+    };
+    write(clip);
+    write(scratch);
+    Check(SpeechService::LifetimeOf(SegmentKind::Vocalization) ==
+            SpeechService::AudioLifetime::Persistent,
+        "A bank clip was classified as a scratch file, so playing her laugh once would "
+        "delete it.");
+    Check(SpeechService::LifetimeOf(SegmentKind::Speech) ==
+            SpeechService::AudioLifetime::Temporary,
+        "A synthesised phrase was classified as persistent, so every reply would leave "
+        "its audio behind forever.");
+    SpeechService::ReleaseAudio(clip, SpeechService::LifetimeOf(
+        SegmentKind::Vocalization));
+    SpeechService::ReleaseAudio(scratch, SpeechService::LifetimeOf(
+        SegmentKind::Speech));
+    Check(std::filesystem::exists(clip),
+        "The cleanup that follows a phrase also deleted a bank clip.");
+    Check(!std::filesystem::exists(scratch),
+        "Synthesised phrase audio was left on disk; the existing cleanup regressed.");
+
+    // H. The cancellation question, asked identically of a cue and of a phrase.
+    Check(SpeechService::StillCurrent(7, 7, true),
+        "An item from the reply being spoken was treated as stale.");
+    Check(!SpeechService::StillCurrent(7, 8, true),
+        "An item from a superseded reply was treated as current. This is the late "
+        "chuckle: the user interrupted and a laugh arrived attached to nothing.");
+    Check(!SpeechService::StillCurrent(7, 7, false),
+        "An item was played after the voice was switched off.");
+
+    // I and J. The bank follows the voice, and sees clips written after it started.
+    const std::filesystem::path voiceA = directory.root / "voice-a" / "vocalizations";
+    const std::filesystem::path voiceB = directory.root / "voice-b" / "vocalizations";
+    std::filesystem::create_directories(voiceA);
+    std::filesystem::create_directories(voiceB);
+    write(voiceA / "soft-laugh-1.wav");
+    revia::speech::VocalizationBank bank(directory.root / "voice-a");
+    bank.Refresh();
+    Check(bank.Has(VocalizationKind::SoftLaugh),
+        "The bank did not see the active voice's clips.");
+    bank.SetPresetDirectory(directory.root / "voice-b");
+    bank.Refresh();
+    Check(!bank.Has(VocalizationKind::SoftLaugh),
+        "After switching voices the bank still offered the previous voice's laugh. A "
+        "voice must never speak with another voice's sounds.");
+    write(voiceB / "soft-laugh-1.wav");
+    bank.Refresh();
+    Check(bank.Has(VocalizationKind::SoftLaugh),
+        "A clip generated while Revia was running stayed unusable until a restart.");
+
+    // The same rule, through the live service rather than through the bank on its own.
+    // The bank-level check above passes even when nothing in production repoints the
+    // bank, which is exactly what the first run of this mutation proved.
+    SpeechService service;
+    revia::speech::VoicePreset first;
+    first.id = "voice-a";
+    revia::speech::VoicePreset second;
+    second.id = "voice-b";
+    service.UseVoice(first);
+    const std::filesystem::path afterFirst = service.ActiveVocalizationDirectory();
+    Check(afterFirst.filename() == std::filesystem::path("voice-a"),
+        "Selecting a voice did not point the clip bank at that voice.");
+    service.UseVoice(second);
+    Check(service.ActiveVocalizationDirectory().filename() ==
+            std::filesystem::path("voice-b"),
+        "Switching voices left the clip bank on the previous voice, so she would laugh "
+        "in somebody else's voice.");
+    service.UseVoice(std::nullopt);
+    Check(service.ActiveVocalizationDirectory().empty(),
+        "Clearing the voice left its sounds loaded.");
+}
+
 // Unit 4.3D, second pass. The first pass added the renderer, tested it from six
 // angles, and never called it from anywhere in the program -- and the whole suite
 // stayed green, because every test called the renderer itself. This test crosses the
@@ -8406,6 +8564,7 @@ int main(const int argc, char** argv)
         TestSpeechNormalizerKeepsTheSoundAndDropsTheMarkdown();
         TestVocalizationBankHasAProducerAndItIsIdempotent();
         TestCreatingAVoicePresetActuallyRendersItsBank();
+        TestVocalizationCuesAreQueuedAsSoundsInTheirOwnPlace();
         TestAnswerPostureDoesNotLegislatePersonality();
         TestStockContinuationTailsAreRecognisedByShapeNotByWording();
         TestVocalizationTagsNeverReachTheSynthesiser();

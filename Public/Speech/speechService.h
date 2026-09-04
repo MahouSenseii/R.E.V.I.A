@@ -5,6 +5,7 @@
 #include "Speech/qwenTtsPool.h"
 #include "Speech/orderedSpeechQueue.h"
 #include "Speech/voiceActivityMonitor.h"
+#include "Speech/vocalization.h"
 #include "Speech/voicePresetStore.h"
 
 #include <atomic>
@@ -106,6 +107,17 @@ public:
     // to obtain them would replace the reference audio the user already approved.
     // Rendering only what is missing makes this safe to press twice.
     VoiceOperationResult RenderVoiceBank(const std::string& presetId);
+
+    // Points the service at a voice now, outside profile assignment.
+    //
+    // Public because the voice studio needs it after rendering a bank -- new clips
+    // should be usable without a restart -- and because it is the operation a test has
+    // to be able to perform to prove the bank follows the voice.
+    void UseVoice(std::optional<VoicePreset> preset);
+
+    // Whose sounds are currently loaded. The observable half of the rule above: a bank
+    // left on the previous voice is silent about it until you hear the wrong laugh.
+    [[nodiscard]] std::filesystem::path ActiveVocalizationDirectory() const;
     VoiceOperationResult AssignVoice(const std::string& profileId, const std::string& presetId);
     void SetEnabled(bool enabled);
     bool IsEnabled() const;
@@ -146,6 +158,58 @@ public:
         std::size_t maxCharacters,
         bool keepVocalizations = false);
 
+    // Whether the pipeline owns an audio file or is only borrowing it.
+    enum class AudioLifetime
+    {
+        // A scratch file synthesised for one playback. Deleted when done with.
+        Temporary,
+        // A clip from the voice's bank. Every later reply reuses it, so nothing in the
+        // speech pipeline may delete it.
+        Persistent
+    };
+
+    // Which one a planned item is. The single place the question is answered: three
+    // separate cleanup sites ask it, and a bank clip only needs one of them to answer
+    // wrongly to be gone for good.
+    [[nodiscard]] static AudioLifetime LifetimeOf(SegmentKind kind);
+
+    // Deletes an item's audio only when it was ours to delete. A no-op for a bank clip
+    // and for an empty path.
+    static void ReleaseAudio(
+        const std::filesystem::path& path, AudioLifetime lifetime);
+
+    // Whether a queued item still belongs to the reply currently being spoken.
+    //
+    // Asked identically of a phrase and of a cue, because a cue that skipped it is the
+    // late chuckle: the user interrupted, the sentence stopped, and a laugh arrived
+    // afterwards attached to nothing.
+    [[nodiscard]] static bool StillCurrent(
+        std::uint64_t itemGeneration, std::uint64_t currentGeneration, bool voiceEnabled);
+
+    // One item of the ordered plan a reply becomes.
+    struct PlannedSegment
+    {
+        SegmentKind kind = SegmentKind::Speech;
+        // Speech only, already normalised for synthesis.
+        std::string text;
+        // Vocalization only.
+        VocalizationKind vocalization = VocalizationKind::Laugh;
+    };
+
+    // Turns a reply into the ordered plan the speech queue receives.
+    //
+    // "Yeah. *chuckles* Nice try." becomes speech, sound, speech, in that order, so the
+    // laugh lands where the model put it rather than after the sentence has finished.
+    //
+    // Pure and static so a test drives the decision the live path makes instead of
+    // restating it. `decide` answers whether a cue is actually heard -- it is where the
+    // clip bank and the rate/affect policy are consulted -- and a suppressed cue leaves
+    // the speech on either side of it completely untouched.
+    [[nodiscard]] static std::vector<PlannedSegment> PlanSpeech(
+        const std::string& reply,
+        const speechSettings& settings,
+        const std::function<VocalizationVerdict(VocalizationKind)>& decide);
+
     // The exact preparation the live speech path applies before an utterance is
     // queued, in one pure function.
     //
@@ -170,6 +234,13 @@ private:
         std::chrono::steady_clock::time_point queuedAt =
             std::chrono::steady_clock::now();
         std::optional<VoicePreset> preset;
+        // Set when this item is a nonverbal cue rather than a phrase. It occupies a
+        // sequence slot like any other item, which is what keeps it between the two
+        // phrases it was written between.
+        std::optional<VocalizationKind> vocalization;
+        // The bank clip chosen for that cue. Resolved when the reply is planned, so a
+        // reply uses its variants in the order it was written.
+        std::filesystem::path clipPath;
     };
 
     struct PreparedUtterance
@@ -179,6 +250,9 @@ private:
         VoiceOperationResult result;
         bool qwenAttempted = false;
         std::uintmax_t bufferedBytes = 0;
+        // Deleting a bank clip would empty the voice a sound at a time, and it would
+        // go quiet again with nothing to show why.
+        AudioLifetime lifetime = AudioLifetime::Temporary;
     };
 
     void Run(std::stop_token stopToken);
@@ -207,6 +281,17 @@ private:
     void VerifyInferenceBackend(
         const VoiceOperationResult& result, std::uint64_t utteranceId);
     bool PlayPreparedQwen(const PreparedUtterance& prepared);
+    // Plays one bank clip in its place in the reply, and never deletes it.
+    void PlayVocalizationClip(const PreparedUtterance& prepared);
+    // The body of UseVoice, for callers already holding the mutex.
+    //
+    // Sets the active voice and repoints the clip bank with it, together.
+    //
+    // One function so the two cannot drift apart. A bank still pointing at the previous
+    // voice plays the wrong laugh, and nothing about that looks like a bug until you
+    // hear it -- so changing the voice without moving the bank is made impossible
+    // rather than merely discouraged. Caller holds the mutex.
+    void SetActiveVoiceLocked(std::optional<VoicePreset> preset);
     void Notify(SpeechEvent event) const;
     void ArmBargeIn();
     void DisarmBargeIn();
@@ -223,6 +308,12 @@ private:
     std::optional<VoicePreset> activePreset;
     EventHandler eventHandler;
     VoicePresetStore presetStore;
+    // Whose laugh it is. Follows the active preset, because a voice playing another
+    // voice's clips is worse than a voice with none.
+    VocalizationBank vocalizationBank;
+    // How often she is allowed to. The model chooses where a cue belongs; this decides
+    // whether it is heard, and it is deliberately not the model's to overrule.
+    VocalizationPolicy vocalizationPolicy;
     QwenTtsPool qwenPool;
     VoiceActivityMonitor bargeInMonitor;
     std::function<void()> bargeInHandler;

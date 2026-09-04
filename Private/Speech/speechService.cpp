@@ -244,7 +244,7 @@ bool SpeechService::Start(const speechSettings& settings, EventHandler handler)
         presetStore.SetRoot(settings.voiceDataPath);
         qwenPool.Configure(settings);
         const std::string assigned = presetStore.AssignedPresetId(activeProfile);
-        activePreset = assigned.empty() ? std::nullopt : presetStore.Find(assigned);
+        SetActiveVoiceLocked(assigned.empty() ? std::nullopt : presetStore.Find(assigned));
         eventHandler = std::move(handler);
         queue.clear();
         playbackOrder.Clear();
@@ -274,7 +274,7 @@ void SpeechService::SetActiveProfile(std::string profileId)
     std::lock_guard lock(mutex);
     activeProfile = std::move(profileId);
     const std::string assigned = presetStore.AssignedPresetId(activeProfile);
-    activePreset = assigned.empty() ? std::nullopt : presetStore.Find(assigned);
+    SetActiveVoiceLocked(assigned.empty() ? std::nullopt : presetStore.Find(assigned));
 }
 
 VoiceStudioSnapshot SpeechService::VoiceStudio() const
@@ -478,6 +478,15 @@ VoiceOperationResult SpeechService::RenderVoiceBank(const std::string& presetId)
         ? "Rendered every nonverbal sound for '" + preset->name + "'."
         : "Rendered nonverbal sounds for '" + preset->name + "', but " +
             std::to_string(missing) + " kind(s) are still missing.";
+    {
+        std::lock_guard lock(mutex);
+        // Clips that did not exist when the voice was selected are usable now. Without
+        // this, generating a bank would appear to do nothing until the next restart.
+        if (activePreset.has_value() && activePreset->id == preset->id)
+        {
+            vocalizationBank.Refresh();
+        }
+    }
     Notify({"Ready", result.message, result.elapsedMilliseconds, 0, 0,
         ActualQwenResource(result)});
     return result;
@@ -533,7 +542,7 @@ VoiceOperationResult SpeechService::AssignVoice(
         assignedActiveProfile = profileId == activeProfile;
         if (profileId == activeProfile)
         {
-            activePreset = presetId.empty() ? std::nullopt : presetStore.Find(presetId);
+            SetActiveVoiceLocked(presetId.empty() ? std::nullopt : presetStore.Find(presetId));
         }
     }
     std::string message = presetId.empty()
@@ -600,46 +609,71 @@ void SpeechService::Speak(
     {
         return;
     }
-    // Vocalization tags never reach any synthesiser now, on any backend.
-    //
-    // They used to be preserved for Qwen on the assumption that the model would
-    // perform the cue rather than read it. Live listening settled that: it says the
-    // word. "chuckles" spoken aloud in the middle of a sentence is worse than the
-    // silence of dropping it, and dropping it is what the SAPI path already did.
-    //
-    // The tag survives in the visible reply, which is where it belongs -- the chat
-    // bubble still shows *chuckles*. What it no longer does is become a word.
-    //
-    // Making the sound actually happen is a separate, larger piece of work: it needs
-    // the parsed segments played in order against a clip bank, and the bank is empty
-    // on this machine. Until that exists, silence is the correct behaviour rather
-    // than narration.
-    text = PrepareForSynthesis(text, configuration);
-    if (text.empty())
-    {
-        return;
-    }
 
+    // A reply becomes an ordered plan before anything is queued, so a cue keeps its
+    // position between the phrases it was written between. Flattening first and adding
+    // the sound afterwards would put every laugh at the end of the reply, which is not
+    // where it was meant and does not read as a reaction to anything.
     int depth = 0;
     {
         std::lock_guard lock(mutex);
-        while (queue.size() >= static_cast<std::size_t>(configuration.maxQueuedUtterances))
+        // The reply boundary the policy needs, taken from the signal that already marks
+        // one: only the first fragment of a reply is latency critical.
+        if (latencyCritical)
+        {
+            vocalizationPolicy.BeginReply();
+        }
+        const auto now = std::chrono::steady_clock::now();
+        const std::vector<PlannedSegment> plan = PlanSpeech(text, configuration,
+            [&](const VocalizationKind kind)
+            {
+                return vocalizationPolicy.Evaluate(
+                    kind, affect, now, vocalizationBank.Has(kind));
+            });
+        if (plan.empty())
+        {
+            return;
+        }
+        while (!queue.empty() && queue.size() + plan.size() >
+            static_cast<std::size_t>(configuration.maxQueuedUtterances))
         {
             const std::uint64_t dropped = queue.front().sequence;
             queue.pop_front();
             playbackOrder.Remove(dropped);
         }
-        Utterance utterance;
-        utterance.text = std::move(text);
-        utterance.affect = affect;
-        utterance.generation = generation.load();
-        utterance.utteranceId = utteranceId;
-        utterance.sequence = nextSequence.fetch_add(1);
-        utterance.latencyCritical = latencyCritical;
-        utterance.queuedAt = std::chrono::steady_clock::now();
-        if (configuration.backend != "WindowsSapi") utterance.preset = activePreset;
-        playbackOrder.Reserve(utterance.sequence);
-        queue.push_back(std::move(utterance));
+        bool firstOfReply = latencyCritical;
+        for (const PlannedSegment& segment : plan)
+        {
+            Utterance utterance;
+            utterance.affect = affect;
+            utterance.generation = generation.load();
+            utterance.utteranceId = utteranceId;
+            utterance.sequence = nextSequence.fetch_add(1);
+            utterance.queuedAt = now;
+            if (segment.kind == SegmentKind::Vocalization)
+            {
+                utterance.vocalization = segment.vocalization;
+                // Rotation happens here so the variants a reply uses follow the order
+                // it was written in, and so the choice is made once rather than raced
+                // for by a generator thread.
+                utterance.clipPath = vocalizationBank.Next(segment.vocalization);
+                // Never latency critical: there is nothing to generate, and claiming
+                // the flag would suppress batching for the phrases around it.
+                utterance.latencyCritical = false;
+            }
+            else
+            {
+                utterance.text = segment.text;
+                utterance.latencyCritical = firstOfReply;
+                if (configuration.backend != "WindowsSapi")
+                {
+                    utterance.preset = activePreset;
+                }
+                firstOfReply = false;
+            }
+            playbackOrder.Reserve(utterance.sequence);
+            queue.push_back(std::move(utterance));
+        }
         depth = static_cast<int>(queue.size());
     }
     Notify({"Queued", "Assistant reply queued for speech.", -1.0, depth, utteranceId});
@@ -656,11 +690,9 @@ void SpeechService::StopSpeaking()
         for (const auto& [sequence, item] : prepared)
         {
             (void)sequence;
-            if (!item.audioPath.empty())
-            {
-                std::error_code error;
-                std::filesystem::remove(item.audioPath, error);
-            }
+            // Bank clips are skipped. Stopping her mid-sentence must not cost the
+            // voice the laugh it would have used next time.
+            ReleaseAudio(item.audioPath, item.lifetime);
         }
         prepared.clear();
         bufferedAudioBytes = 0;
@@ -773,6 +805,68 @@ void SpeechService::Shutdown()
     generationWorkers.clear();
     ready.store(false);
     qwenPool.Shutdown();
+}
+
+SpeechService::AudioLifetime SpeechService::LifetimeOf(const SegmentKind kind)
+{
+    return kind == SegmentKind::Vocalization
+        ? AudioLifetime::Persistent
+        : AudioLifetime::Temporary;
+}
+
+void SpeechService::ReleaseAudio(
+    const std::filesystem::path& path, const AudioLifetime lifetime)
+{
+    if (path.empty() || lifetime == AudioLifetime::Persistent)
+    {
+        return;
+    }
+    std::error_code error;
+    std::filesystem::remove(path, error);
+}
+
+bool SpeechService::StillCurrent(
+    const std::uint64_t itemGeneration,
+    const std::uint64_t currentGeneration,
+    const bool voiceEnabled)
+{
+    return voiceEnabled && itemGeneration == currentGeneration;
+}
+
+std::vector<SpeechService::PlannedSegment> SpeechService::PlanSpeech(
+    const std::string& reply,
+    const speechSettings& settings,
+    const std::function<VocalizationVerdict(VocalizationKind)>& decide)
+{
+    std::vector<PlannedSegment> plan;
+    const SpokenScript script = ParseVocalizations(reply);
+    for (const ScriptSegment& segment : script.segments)
+    {
+        if (segment.kind == SegmentKind::Speech)
+        {
+            // Normalised per segment rather than once over the whole reply. The parser
+            // has already taken the tags out, so this is defence in depth -- but it is
+            // the guard the no-narration test holds, and a segment that went round it
+            // is exactly the one that would say "chuckles" out loud.
+            std::string spoken = PrepareForSynthesis(segment.text, settings);
+            if (spoken.empty())
+            {
+                continue;
+            }
+            plan.push_back({SegmentKind::Speech, std::move(spoken),
+                VocalizationKind::Laugh});
+            continue;
+        }
+        if (!decide || decide(segment.vocalization) != VocalizationVerdict::Allowed)
+        {
+            // Suppressed: no clip, too soon, or the wrong mood. The speech either side
+            // is untouched. A cue that cannot be played is a cue that is not heard, not
+            // a sentence that goes unsaid.
+            continue;
+        }
+        plan.push_back({SegmentKind::Vocalization, {}, segment.vocalization});
+    }
+    return plan;
 }
 
 std::string SpeechService::PrepareForSynthesis(
@@ -961,11 +1055,9 @@ void SpeechService::Run(const std::stop_token stopToken)
         }
         condition.notify_all();
         const Utterance& utterance = preparedUtterance.utterance;
-        if (utterance.generation != generation.load())
+        if (!StillCurrent(utterance.generation, generation.load(), true))
         {
-            std::error_code error;
-            if (!preparedUtterance.audioPath.empty())
-                std::filesystem::remove(preparedUtterance.audioPath, error);
+            ReleaseAudio(preparedUtterance.audioPath, preparedUtterance.lifetime);
             continue;
         }
         activeUtteranceId.store(utterance.utteranceId);
@@ -977,6 +1069,14 @@ void SpeechService::Run(const std::stop_token stopToken)
             ~ActiveGuard() { id.store(0); }
         } activeGuard{activeUtteranceId};
 
+        if (utterance.vocalization.has_value())
+        {
+            // No SAPI fallback below this. A cue has no words, and a cue that cannot
+            // play is silence -- which is the correct outcome, and the one thing this
+            // path must never do is fall through to something that reads it aloud.
+            PlayVocalizationClip(preparedUtterance);
+            continue;
+        }
         if (preparedUtterance.qwenAttempted && preparedUtterance.result.succeeded &&
             PlayPreparedQwen(preparedUtterance))
         {
@@ -1068,6 +1168,13 @@ std::vector<SpeechService::Utterance> SpeechService::CollectBatchCompanions(
     // The first phrase of a reply is never batched. It is the only latency anyone
     // experiences, and collecting company for it would trade that for throughput the
     // listener does not hear.
+    // A cue is an ordering boundary, never a member of a synthesis batch. The batch
+    // maps generated clips onto playback slots by position, and a bank clip was never
+    // generated -- counting it would shift every phrase after it onto the wrong audio.
+    if (leader.vocalization.has_value())
+    {
+        return companions;
+    }
     if (leader.latencyCritical || !leader.preset.has_value())
     {
         return companions;
@@ -1083,6 +1190,10 @@ std::vector<SpeechService::Utterance> SpeechService::CollectBatchCompanions(
         // A phrase from a superseded reply, a different voice, or the start of the next
         // reply does not belong in this call. Mixing generations would let a cancelled
         // reply's text reach the card inside a batch that survives the cancellation.
+        if (candidate.vocalization.has_value())
+        {
+            break;
+        }
         if (candidate.generation != leader.generation ||
             candidate.latencyCritical ||
             !candidate.preset.has_value() ||
@@ -1169,8 +1280,7 @@ void SpeechService::PublishGenerated(
     }
     if (stale)
     {
-        std::error_code error;
-        if (!item.audioPath.empty()) std::filesystem::remove(item.audioPath, error);
+        ReleaseAudio(item.audioPath, item.lifetime);
     }
     else if (utterance.preset.has_value() && completedResult.succeeded)
     {
@@ -1385,6 +1495,18 @@ void SpeechService::SynthesizeOne(Utterance utterance, const int depth)
 {
     PreparedUtterance item;
     item.utterance = utterance;
+    if (utterance.vocalization.has_value())
+    {
+        // Already rendered, months ago, when the voice was made. That is the whole
+        // point of a bank: a laugh that has to be generated first arrives after the
+        // moment it was for. It goes straight into the playback order and keeps its
+        // slot between the phrases either side.
+        item.audioPath = utterance.clipPath;
+        item.lifetime = LifetimeOf(SegmentKind::Vocalization);
+        item.result = {true, "Vocalization clip ready.", {}, 0.0};
+        PublishGenerated(utterance, std::move(item), depth);
+        return;
+    }
     if (utterance.preset.has_value())
     {
         item.qwenAttempted = true;
@@ -1500,6 +1622,95 @@ void SpeechService::Generate(const std::stop_token stopToken)
 
         SynthesizeOne(std::move(utterance), depth);
     }
+}
+
+void SpeechService::UseVoice(std::optional<VoicePreset> preset)
+{
+    std::lock_guard lock(mutex);
+    SetActiveVoiceLocked(std::move(preset));
+}
+
+std::filesystem::path SpeechService::ActiveVocalizationDirectory() const
+{
+    std::lock_guard lock(mutex);
+    return vocalizationBank.Directory();
+}
+
+void SpeechService::SetActiveVoiceLocked(std::optional<VoicePreset> preset)
+{
+    activePreset = std::move(preset);
+    // Same directory convention the producer writes into, derived from the preset
+    // rather than remembered.
+    if (!activePreset.has_value())
+    {
+        vocalizationBank.SetPresetDirectory({});
+        return;
+    }
+    vocalizationBank.SetPresetDirectory(presetStore.Root() / activePreset->id);
+    vocalizationBank.Refresh();
+}
+
+void SpeechService::PlayVocalizationClip(const PreparedUtterance& preparedUtterance)
+{
+#ifndef _WIN32
+    (void)preparedUtterance;
+#else
+    const Utterance& utterance = preparedUtterance.utterance;
+    const std::filesystem::path& clip = preparedUtterance.audioPath;
+    const std::string label = utterance.vocalization.has_value()
+        ? DisplayLabel(*utterance.vocalization) : std::string("sound");
+    std::error_code error;
+    if (clip.empty() || !std::filesystem::is_regular_file(clip, error))
+    {
+        Notify({"VocalizationSuppressed",
+            "No rendered clip for the " + label + ", so it was skipped.", -1.0, 0,
+            utterance.utteranceId});
+        return;
+    }
+    if (!StillCurrent(utterance.generation, generation.load(), enabled.load()))
+    {
+        Notify({"VocalizationCancelled",
+            "The " + label + " was cancelled before it played.", -1.0, 0,
+            utterance.utteranceId});
+        return;
+    }
+    const auto startedAt = std::chrono::steady_clock::now();
+    Notify({"Vocalization", "Playing the " + label + ".", -1.0, 0,
+        utterance.utteranceId});
+    const std::wstring path = clip.wstring();
+    if (!PlaySoundW(path.c_str(), nullptr, SND_FILENAME | SND_ASYNC | SND_NODEFAULT))
+    {
+        Notify({"VocalizationFailed",
+            "Windows could not play the " + label + ".", -1.0, 0,
+            utterance.utteranceId});
+        return;
+    }
+    ArmBargeIn();
+    // Held for the clip's own length, like a phrase, so the sentence after it does not
+    // start on top of it. These are short by construction; the floor is for a header
+    // that cannot be parsed rather than for a real clip.
+    const double duration = std::max(200.0, WavDurationMilliseconds(clip));
+    const auto deadline = std::chrono::steady_clock::now() +
+        std::chrono::milliseconds(static_cast<long long>(duration + 120.0));
+    bool cancelled = false;
+    while (std::chrono::steady_clock::now() < deadline)
+    {
+        if (!StillCurrent(utterance.generation, generation.load(), enabled.load()))
+        {
+            PlaySoundW(nullptr, nullptr, 0);
+            cancelled = true;
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+    DisarmBargeIn();
+    // Deliberately no removal. The clip is an asset the voice owns and every later
+    // reply reuses it.
+    Notify({cancelled ? "VocalizationCancelled" : "VocalizationPlayed",
+        cancelled ? "The " + label + " was cut short."
+                  : "Played the " + label + ".",
+        ElapsedMilliseconds(startedAt), 0, utterance.utteranceId});
+#endif
 }
 
 bool SpeechService::PlayPreparedQwen(const PreparedUtterance& preparedUtterance)

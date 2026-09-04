@@ -73,11 +73,16 @@ struct SpokenScript
 // meant literally must not silently disappear from her own sentence.
 [[nodiscard]] SpokenScript ParseVocalizations(const std::string& reply);
 
-// The single spelling handed to the TTS and shown in chat. Qwen3-TTS renders a
-// nonverbal cue written inline in the text it is given, so a vocalization needs no
-// pre-rendered clip -- it only needs to survive in one spelling the model recognises.
-// Every accepted synonym is canonicalised to this form. If the model turns out to want
-// a different delimiter, this is the one place that has to change.
+// The single spelling shown in chat, and the one the parser canonicalises every
+// accepted synonym to.
+//
+// It is NOT handed to a synthesiser. An earlier version of this comment claimed
+// Qwen3-TTS performs a nonverbal cue written inline in its input; live listening
+// disproved that outright -- it reads the word "chuckles" aloud. The real division of
+// labour is: the model chooses the cue and where it belongs, the runtime parses it out,
+// and the runtime plays a pre-rendered clip from the voice's own bank in that position.
+// Ordinary TTS never receives a recognised cue. If the model turns out to want a
+// different delimiter, this is the one place that has to change.
 [[nodiscard]] std::string InlineTag(VocalizationKind kind);
 
 struct VocalizationShaping
