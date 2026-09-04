@@ -353,6 +353,7 @@ void ReviaWindow::BuildInterface()
     voiceStudioStatus = ui->voiceStudioStatus;
     createVoiceButton = ui->createVoiceButton;
     previewVoiceButton = ui->previewVoiceButton;
+    renderVoiceBankButton = ui->renderVoiceBankButton;
 
     ui->titleIcon->setPixmap(CreateReviaIcon().pixmap(20, 20));
     titleBar->installEventFilter(this);
@@ -565,6 +566,7 @@ void ReviaWindow::BuildInterface()
     });
     connect(createVoiceButton, &QPushButton::clicked, this, [this]() { CreateVoicePreset(); });
     connect(previewVoiceButton, &QPushButton::clicked, this, [this]() { PreviewVoice(); });
+    connect(renderVoiceBankButton, &QPushButton::clicked, this, [this]() { RenderVoiceBank(); });
     RefreshVoiceStudio();
 
     QFile theme(":/revia/revia.qss");
@@ -1153,7 +1155,7 @@ void ReviaWindow::CreateVoicePreset()
             "Enter a preset name, voice description, and reference line before creating a voice.");
         return;
     }
-    for (QPushButton* button : {createVoiceButton, previewVoiceButton})
+    for (QPushButton* button : {createVoiceButton, previewVoiceButton, renderVoiceBankButton})
     {
         button->setEnabled(false);
     }
@@ -1172,7 +1174,7 @@ void ReviaWindow::CreateVoicePreset()
         QMetaObject::invokeMethod(this, [this, result, name]()
         {
             voiceOperationRunning.store(false);
-            for (QPushButton* button : {createVoiceButton, previewVoiceButton})
+            for (QPushButton* button : {createVoiceButton, previewVoiceButton, renderVoiceBankButton})
             {
                 button->setEnabled(true);
             }
@@ -1191,6 +1193,48 @@ void ReviaWindow::CreateVoicePreset()
     });
 }
 
+void ReviaWindow::RenderVoiceBank()
+{
+    if (voiceOperationRunning.exchange(true))
+    {
+        return;
+    }
+    const QString presetId = voiceLibraryCombo->currentData().toString();
+    if (presetId.isEmpty())
+    {
+        voiceOperationRunning.store(false);
+        voiceStudioStatus->setText("Select a created voice first.");
+        return;
+    }
+    for (QPushButton* button :
+        {createVoiceButton, previewVoiceButton, renderVoiceBankButton})
+    {
+        button->setEnabled(false);
+    }
+    voiceStudioStatus->setText(
+        "Rendering her nonverbal sounds. This runs once per voice and the VoiceDesign "
+        "model downloads on first use, so the first time is slow.");
+    if (voiceWorker.joinable())
+    {
+        voiceWorker.join();
+    }
+    voiceWorker = std::jthread([this, presetId]()
+    {
+        const revia::speech::VoiceOperationResult result =
+            session.RenderVoiceBank(presetId.toStdString());
+        QMetaObject::invokeMethod(this, [this, result]()
+        {
+            voiceOperationRunning.store(false);
+            for (QPushButton* button :
+                {createVoiceButton, previewVoiceButton, renderVoiceBankButton})
+            {
+                button->setEnabled(true);
+            }
+            voiceStudioStatus->setText(QString::fromStdString(result.message));
+        }, Qt::QueuedConnection);
+    });
+}
+
 void ReviaWindow::PreviewVoice()
 {
     if (voiceOperationRunning.exchange(true))
@@ -1205,7 +1249,7 @@ void ReviaWindow::PreviewVoice()
         voiceStudioStatus->setText("Select a created voice and enter a preview line first.");
         return;
     }
-    for (QPushButton* button : {createVoiceButton, previewVoiceButton})
+    for (QPushButton* button : {createVoiceButton, previewVoiceButton, renderVoiceBankButton})
     {
         button->setEnabled(false);
     }
@@ -1222,7 +1266,7 @@ void ReviaWindow::PreviewVoice()
         QMetaObject::invokeMethod(this, [this, result]()
         {
             voiceOperationRunning.store(false);
-            for (QPushButton* button : {createVoiceButton, previewVoiceButton})
+            for (QPushButton* button : {createVoiceButton, previewVoiceButton, renderVoiceBankButton})
             {
                 button->setEnabled(true);
             }

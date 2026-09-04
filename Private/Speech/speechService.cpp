@@ -392,13 +392,92 @@ VoiceOperationResult SpeechService::CreateVoicePreset(
     preset.referenceText = referenceText;
     preset.referenceAudioPath = (directory / "reference.wav").lexically_normal().string();
     preset.createdAt = IsoTimestamp();
-    std::string saveError;
-    if (!presetStore.Save(preset, saveError))
+    const VoiceOperationResult finished = FinishVoicePreset(presetStore, preset,
+        [this](const std::filesystem::path& presetDirectory,
+            const std::vector<QwenTtsClient::VocalizationRequest>& requests,
+            const std::string& presetLanguage)
+        {
+            // The design worker is already warm from the DesignVoice call above, and
+            // it is the only model that accepts a style instruction, so this is the
+            // cheapest moment in the whole program to render the bank.
+            return qwenPool.RenderVocalizations(
+                presetDirectory, requests, presetLanguage, true);
+        });
+    if (!finished.succeeded)
     {
-        return {false, saveError, {}, -1.0};
+        return finished;
+    }
+    if (!finished.message.empty())
+    {
+        Notify({"Warning", finished.message, -1.0, 0, 0, {}});
     }
     result.message = "Created voice preset '" + name + "'.";
     result.outputPath = referencePath.string();
+    Notify({"Ready", result.message, result.elapsedMilliseconds, 0, 0,
+        ActualQwenResource(result)});
+    return result;
+}
+
+VoiceOperationResult SpeechService::FinishVoicePreset(
+    VoicePresetStore& store,
+    const VoicePreset& preset,
+    const VocalizationRenderer& render)
+{
+    std::string saveError;
+    if (!store.Save(preset, saveError))
+    {
+        return {false, saveError, {}, -1.0};
+    }
+    if (!render)
+    {
+        return {true, {}, {}, -1.0};
+    }
+    const std::filesystem::path directory = store.Root() / preset.id;
+    const VoiceOperationResult rendered = render(
+        directory, QwenTtsClient::DefaultVocalizationBankRequests(), preset.language);
+    if (rendered.succeeded)
+    {
+        return {true, {}, {}, rendered.elapsedMilliseconds};
+    }
+    // Non-fatal, deliberately. A voice that cannot laugh is still a voice, and losing
+    // a preset the user just waited on because its chuckle failed would be a worse
+    // trade than a quiet one. The reason is carried back so the caller can say so.
+    return {true,
+        "The voice was created, but its nonverbal clips could not be rendered: " +
+            rendered.message,
+        {}, rendered.elapsedMilliseconds};
+}
+
+VoiceOperationResult SpeechService::RenderVoiceBank(const std::string& presetId)
+{
+    const auto preset = presetStore.Find(presetId);
+    if (!preset)
+    {
+        return {false, "The selected voice preset does not exist.", {}, -1.0};
+    }
+    Notify({"Designing",
+        "Rendering this voice's nonverbal sounds. The VoiceDesign model downloads on "
+        "first use.", -1.0, 0, 0, PlannedQwenResource(configuration)});
+    const std::filesystem::path directory = presetStore.Root() / preset->id;
+    VoiceOperationResult result = qwenPool.RenderVocalizations(
+        directory, QwenTtsClient::DefaultVocalizationBankRequests(),
+        preset->language, true);
+    if (!result.succeeded)
+    {
+        Notify({"Error", result.message, result.elapsedMilliseconds, 0, 0,
+            ActualQwenResource(result)});
+        return result;
+    }
+    // What actually landed, rather than what was asked for. A partial bank is a real
+    // outcome -- the worker keeps the clips that worked -- and reporting the request
+    // instead of the result is how a half-silent voice would look finished.
+    VocalizationBank bank(directory);
+    bank.Refresh();
+    const std::size_t missing = bank.MissingKinds().size();
+    result.message = missing == 0
+        ? "Rendered every nonverbal sound for '" + preset->name + "'."
+        : "Rendered nonverbal sounds for '" + preset->name + "', but " +
+            std::to_string(missing) + " kind(s) are still missing.";
     Notify({"Ready", result.message, result.elapsedMilliseconds, 0, 0,
         ActualQwenResource(result)});
     return result;

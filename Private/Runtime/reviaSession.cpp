@@ -5042,6 +5042,23 @@ speech::VoiceOperationResult ReviaSession::CreateVoicePreset(
     return result;
 }
 
+speech::VoiceOperationResult ReviaSession::RenderVoiceBank(
+    const std::string& presetId)
+{
+    std::lock_guard lock(voiceStudioMutex);
+    const auto startedAt = std::chrono::steady_clock::now();
+    speech::VoiceOperationResult result = speechService.RenderVoiceBank(presetId);
+    appLogger.Timing("voice bank render", {
+        {"qwen_voice_design", result.elapsedMilliseconds},
+        {"voice_bank_total", ElapsedMilliseconds(startedAt), true}
+    });
+    if (!result.succeeded)
+    {
+        appLogger.Warning("Voice bank render failed: " + result.message);
+    }
+    return result;
+}
+
 speech::VoiceOperationResult ReviaSession::PreviewVoice(
     const std::string& presetId,
     const std::string& text)

@@ -76,7 +76,36 @@ public:
         const std::string& description,
         const std::string& referenceText,
         const std::string& language);
+    // How a preset's clip bank gets rendered. A parameter rather than a direct pool
+    // call so the step below can be driven by a test without a GPU worker.
+    using VocalizationRenderer = std::function<VoiceOperationResult(
+        const std::filesystem::path& presetDirectory,
+        const std::vector<QwenTtsClient::VocalizationRequest>& requests,
+        const std::string& language)>;
+
+    // Saves a finished preset and renders its nonverbal clip bank, as one step.
+    //
+    // The two belong together. The first version of this unit added the renderer,
+    // tested it thoroughly, and never called it from anywhere -- and every test still
+    // passed, because the tests all called the renderer directly. Binding the render
+    // to the save means a preset that exists without a bank cannot be produced by
+    // forgetting a line: dropping the call drops the preset too, which fails loudly.
+    //
+    // Static, taking its collaborators explicitly, so a test drives the exact sequence
+    // preset creation runs rather than a restatement of it.
+    static VoiceOperationResult FinishVoicePreset(
+        VoicePresetStore& store,
+        const VoicePreset& preset,
+        const VocalizationRenderer& render);
+
     VoiceOperationResult PreviewVoice(const std::string& presetId, const std::string& text);
+    // Renders the missing nonverbal clips for a voice that already exists.
+    //
+    // Needed because the bank arrived after the voices did. Every preset created
+    // before this feature has no clips and no way to get any, and re-creating a voice
+    // to obtain them would replace the reference audio the user already approved.
+    // Rendering only what is missing makes this safe to press twice.
+    VoiceOperationResult RenderVoiceBank(const std::string& presetId);
     VoiceOperationResult AssignVoice(const std::string& profileId, const std::string& presetId);
     void SetEnabled(bool enabled);
     bool IsEnabled() const;

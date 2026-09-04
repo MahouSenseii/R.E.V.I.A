@@ -389,6 +389,7 @@ public:
         const std::string& description,
         const std::string& referenceText,
         const std::string& language);
+    speech::VoiceOperationResult RenderVoiceBank(const std::string& presetId);
     speech::VoiceOperationResult PreviewVoice(
         const std::string& presetId,
         const std::string& text);

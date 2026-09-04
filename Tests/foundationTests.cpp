@@ -5609,6 +5609,112 @@ void TestPreferencesPersistAndValidate()
         "A legitimate key was dropped alongside the rejected one.");
 }
 
+// Unit 4.3D, second pass. The first pass added the renderer, tested it from six
+// angles, and never called it from anywhere in the program -- and the whole suite
+// stayed green, because every test called the renderer itself. This test crosses the
+// production decision boundary instead: it drives the step preset creation actually
+// runs and asserts that step reaches the bank.
+void TestCreatingAVoicePresetActuallyRendersItsBank()
+{
+    using revia::speech::QwenTtsClient;
+    using revia::speech::SpeechService;
+    using revia::speech::VoiceOperationResult;
+    using revia::speech::VoicePreset;
+    using revia::speech::VoicePresetStore;
+
+    ScopedTestDirectory directory;
+    VoicePresetStore store(directory.root);
+
+    VoicePreset preset;
+    preset.id = "revia-bright";
+    preset.name = "Revia Bright";
+    preset.description = "A bright, dry voice.";
+    preset.language = "Japanese";
+    preset.referenceText = "This is the reference line.";
+    preset.referenceAudioPath =
+        (directory.root / preset.id / "reference.wav").string();
+    // The store checks the reference audio exists, so the fixture provides it.
+    const auto writeReference = [&](const revia::speech::VoicePreset& value)
+    {
+        std::filesystem::create_directories(directory.root / value.id);
+        std::ofstream file(directory.root / value.id / "reference.wav",
+            std::ios::binary | std::ios::trunc);
+        file << "RIFF";
+    };
+    writeReference(preset);
+
+    int calls = 0;
+    std::filesystem::path seenDirectory;
+    std::vector<QwenTtsClient::VocalizationRequest> seenRequests;
+    std::string seenLanguage;
+    const auto succeeding = [&](const std::filesystem::path& renderDirectory,
+        const std::vector<QwenTtsClient::VocalizationRequest>& requests,
+        const std::string& language)
+    {
+        ++calls;
+        seenDirectory = renderDirectory;
+        seenRequests = requests;
+        seenLanguage = language;
+        return VoiceOperationResult{true, "rendered", {}, 12.0};
+    };
+
+    const VoiceOperationResult created =
+        SpeechService::FinishVoicePreset(store, preset, succeeding);
+    Check(created.succeeded, "Finishing a voice preset failed: " + created.message);
+    Check(calls == 1,
+        "Creating a voice preset did not render its clip bank exactly once. A bank "
+        "with a producer nothing calls is the defect this unit exists to fix.");
+    Check(seenDirectory == store.Root() / preset.id,
+        "The bank was rendered somewhere other than the preset's own directory.");
+    Check(seenRequests.size() ==
+            QwenTtsClient::DefaultVocalizationBankRequests().size(),
+        "Preset creation rendered a different set of clips than the one that defines "
+        "a complete bank.");
+    Check(seenLanguage == "Japanese",
+        "The bank was rendered in a different language than the voice it belongs to, "
+        "so her laugh and her speech would not match.");
+    Check(store.Find(preset.id).has_value(),
+        "The preset was not saved.");
+
+    // A bank that fails to render must not cost the voice. The user waited on the
+    // design model for this preset; losing it because a chuckle failed is the worse
+    // trade. The reason still has to come back, or the failure would be silent.
+    VoicePreset second = preset;
+    second.id = "revia-dry";
+    second.referenceAudioPath =
+        (directory.root / second.id / "reference.wav").string();
+    writeReference(second);
+    const VoiceOperationResult degraded = SpeechService::FinishVoicePreset(
+        store, second,
+        [](const std::filesystem::path&,
+            const std::vector<QwenTtsClient::VocalizationRequest>&,
+            const std::string&)
+        {
+            return VoiceOperationResult{false, "the design worker was unreachable",
+                {}, -1.0};
+        });
+    Check(degraded.succeeded,
+        "A failed clip render threw away the voice preset the user just waited for.");
+    Check(store.Find(second.id).has_value(),
+        "A failed clip render left the preset unsaved.");
+    Check(degraded.message.find("unreachable") != std::string::npos,
+        "A failed clip render was reported as a complete success, so a silent voice "
+        "would look intentional.");
+
+    // A save that fails is a real failure and must not be softened by the render
+    // succeeding afterwards -- nor may it render a bank for a preset that does not
+    // exist.
+    VoicePreset unsafe = preset;
+    unsafe.id = "../escape";
+    calls = 0;
+    const VoiceOperationResult refused =
+        SpeechService::FinishVoicePreset(store, unsafe, succeeding);
+    Check(!refused.succeeded,
+        "A preset that could not be saved was reported as created.");
+    Check(calls == 0,
+        "A clip bank was rendered for a preset that was never saved.");
+}
+
 // Unit 4.3D. ISSUE-REVIA-0013: the clip bank had no producer. The Python
 // /v1/vocalizations endpoint existed and the C++ caller did not, so every preset was
 // created without nonverbal clips and every cue fell silent.
@@ -8299,6 +8405,7 @@ int main(const int argc, char** argv)
         TestHardFilterStripsStageDirectionsFromACompletedReply();
         TestSpeechNormalizerKeepsTheSoundAndDropsTheMarkdown();
         TestVocalizationBankHasAProducerAndItIsIdempotent();
+        TestCreatingAVoicePresetActuallyRendersItsBank();
         TestAnswerPostureDoesNotLegislatePersonality();
         TestStockContinuationTailsAreRecognisedByShapeNotByWording();
         TestVocalizationTagsNeverReachTheSynthesiser();

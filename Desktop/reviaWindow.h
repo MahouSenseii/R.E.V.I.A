@@ -89,6 +89,7 @@ private:
     // is decided in ProfilePanel, so refreshing here refreshes that too.
     void RefreshVoiceStudio();
     void CreateVoicePreset();
+    void RenderVoiceBank();
     void PreviewVoice();
     // Every shutdown names its own cause, so the ledger never has to guess between a
     // deliberate quit and something that merely looked like one.
@@ -221,6 +222,7 @@ private:
     QLabel* voiceStudioStatus = nullptr;
     QPushButton* createVoiceButton = nullptr;
     QPushButton* previewVoiceButton = nullptr;
+    QPushButton* renderVoiceBankButton = nullptr;
     QSystemTrayIcon* trayIcon = nullptr;
     QTimer* pollTimer = nullptr;
 
