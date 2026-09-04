@@ -2,6 +2,7 @@
 
 #include "Core/localApiKey.h"
 
+#include <algorithm>
 #include <chrono>
 #include <filesystem>
 #include <httplib.h>
@@ -112,6 +113,85 @@ VoiceOperationResult QwenTtsClient::DesignVoice(
         {"output_path", outputPath}
     };
     return Post("/v1/voice-design", request.dump());
+}
+
+std::vector<QwenTtsClient::VocalizationRequest>
+    QwenTtsClient::DefaultVocalizationBankRequests()
+{
+    return {
+        {VocalizationKind::Laugh, 3},
+        {VocalizationKind::SoftLaugh, 3},
+        {VocalizationKind::Sigh, 2},
+        {VocalizationKind::Hmm, 2},
+        {VocalizationKind::Gasp, 2},
+        {VocalizationKind::Breath, 2},
+    };
+}
+
+VoiceOperationResult QwenTtsClient::RenderVocalizations(
+    const std::filesystem::path& presetDirectory,
+    const std::vector<VocalizationRequest>& kinds,
+    const std::string& language,
+    const bool missingOnly)
+{
+    std::lock_guard lock(mutex);
+    if (presetDirectory.empty())
+    {
+        return {false, "No voice preset directory was supplied.", {}, -1.0};
+    }
+    if (kinds.empty())
+    {
+        return {false, "No vocalization kinds were requested.", {}, -1.0};
+    }
+
+    const std::filesystem::path directory = presetDirectory / "vocalizations";
+    // Which clips are already on disk. Checked here rather than in the worker so a
+    // fully rendered bank costs nothing at all -- no process start, no model load, no
+    // request. Preparing a preset that is already complete has to be free, or it will
+    // be skipped and the bank will stay empty.
+    nlohmann::json requested = nlohmann::json::array();
+    for (const VocalizationRequest& entry : kinds)
+    {
+        const int variants = std::clamp(entry.variants, 1,
+            static_cast<int>(VocalizationBank::maximumVariantsPerKind));
+        if (missingOnly)
+        {
+            std::error_code error;
+            // The first variant standing in for the kind, matching how the bank stops
+            // at the first gap: a kind with clip 1 present is a kind it can play.
+            const std::filesystem::path first =
+                directory / (ToString(entry.kind) + "-1.wav");
+            if (std::filesystem::is_regular_file(first, error) && !error)
+            {
+                continue;
+            }
+        }
+        requested.push_back({
+            {"kind", ToString(entry.kind)},
+            {"instruct", StyleInstruction(entry.kind)},
+            // A carrier the model can attach the sound to. It is never played as
+            // words: the instruction asks for the sound, and the whole clip is the
+            // sound. Kept short so a clip is a cue rather than a sentence.
+            {"carrier", "Ha."},
+            {"variants", variants}
+        });
+    }
+    if (requested.empty())
+    {
+        return {true, "Every requested vocalization is already rendered.", {}, 0.0};
+    }
+
+    std::string error;
+    if (!EnsureAvailable(error))
+    {
+        return {false, std::move(error), {}, -1.0};
+    }
+    const nlohmann::json request = {
+        {"directory", directory.string()},
+        {"language", language},
+        {"kinds", std::move(requested)}
+    };
+    return Post("/v1/vocalizations", request.dump());
 }
 
 VoiceOperationResult QwenTtsClient::Synthesize(

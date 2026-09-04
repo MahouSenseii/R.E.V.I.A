@@ -535,10 +535,7 @@ void SpeechService::Speak(
     // the parsed segments played in order against a clip bank, and the bank is empty
     // on this machine. Until that exists, silence is the correct behaviour rather
     // than narration.
-    text = NormalizeForSpeech(
-        text,
-        static_cast<std::size_t>(configuration.maxCharacters),
-        false);
+    text = PrepareForSynthesis(text, configuration);
     if (text.empty())
     {
         return;
@@ -697,6 +694,21 @@ void SpeechService::Shutdown()
     generationWorkers.clear();
     ready.store(false);
     qwenPool.Shutdown();
+}
+
+std::string SpeechService::PrepareForSynthesis(
+    const std::string& text,
+    const speechSettings& settings)
+{
+    // false, for every backend, deliberately and unconditionally. Qwen would
+    // synthesise the word "chuckles"; SAPI would read it aloud; a backend nobody has
+    // written yet has not earned the benefit of the doubt. Making the sound actually
+    // happen belongs to the clip bank, not to a synthesiser being handed a stage
+    // direction, and until a cue has a clip, silence beats narration.
+    return NormalizeForSpeech(
+        text,
+        static_cast<std::size_t>(settings.maxCharacters),
+        false);
 }
 
 std::string SpeechService::NormalizeForSpeech(

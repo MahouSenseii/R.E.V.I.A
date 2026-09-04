@@ -117,6 +117,18 @@ public:
         std::size_t maxCharacters,
         bool keepVocalizations = false);
 
+    // The exact preparation the live speech path applies before an utterance is
+    // queued, in one pure function.
+    //
+    // Pure and static on purpose. The vocalization decision used to be a literal at
+    // the call site with a test that restated the same literal, which meant the test
+    // passed whatever the live path actually did. Mutating the call site proved it:
+    // the tag was allowed through to the synthesiser and every test still passed.
+    // The decision now lives where a test can hold it.
+    [[nodiscard]] static std::string PrepareForSynthesis(
+        const std::string& text,
+        const speechSettings& settings);
+
 private:
     struct Utterance
     {

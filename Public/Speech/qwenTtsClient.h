@@ -2,8 +2,10 @@
 
 #include "Library/structLibrary.h"
 #include "Speech/qwenTtsServerProcess.h"
+#include "Speech/vocalization.h"
 #include "Speech/voiceTypes.h"
 
+#include <filesystem>
 #include <mutex>
 #include <atomic>
 #include <optional>
@@ -43,6 +45,36 @@ public:
         const std::string& description,
         const std::string& language,
         const std::string& outputPath);
+    // How many clips a kind gets. More than one so a repeated laugh is not the same
+    // recording twice; few enough that rendering a bank stays a one-off cost.
+    struct VocalizationRequest
+    {
+        VocalizationKind kind = VocalizationKind::Laugh;
+        int variants = 2;
+    };
+    // Renders the nonverbal clip bank for one voice preset into
+    // <presetDirectory>/vocalizations, as <kind>-<n>.wav starting at 1 -- the exact
+    // layout VocalizationBank scans for.
+    //
+    // A batch job at preset-creation time rather than a runtime call, because a laugh
+    // that arrives a second after the joke is not a laugh. Only the VoiceDesign model
+    // accepts the style instruction that produces a sound instead of the word, so this
+    // is the one path that can render them in Revia's own voice.
+    //
+    // `existingOnly` renders just the kinds that have no clip yet, which is what makes
+    // repeated preparation cheap and idempotent.
+    VoiceOperationResult RenderVocalizations(
+        const std::filesystem::path& presetDirectory,
+        const std::vector<VocalizationRequest>& kinds,
+        const std::string& language = "English",
+        bool missingOnly = true);
+
+    // What a complete bank means, in one place, so generation and any status display
+    // cannot disagree about whether a voice is finished. Laughter gets the most
+    // variants because it is the cue she reaches for most, and a repeated identical
+    // laugh is the one that gives the trick away.
+    [[nodiscard]] static std::vector<VocalizationRequest>
+        DefaultVocalizationBankRequests();
     VoiceOperationResult Synthesize(
         const std::string& text,
         const VoicePreset& preset,

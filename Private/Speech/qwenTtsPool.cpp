@@ -139,6 +139,27 @@ VoiceOperationResult QwenTtsPool::PrepareVoice(const VoicePreset& preset)
     return aggregate;
 }
 
+VoiceOperationResult QwenTtsPool::RenderVocalizations(
+    const std::filesystem::path& presetDirectory,
+    const std::vector<QwenTtsClient::VocalizationRequest>& kinds,
+    const std::string& language,
+    const bool missingOnly)
+{
+    std::lock_guard designLock(designMutex);
+    if (designClient == nullptr)
+        return {false, "No Qwen3-TTS worker is configured.", {}, -1.0};
+    VoiceOperationResult result = designClient->RenderVocalizations(
+        presetDirectory, kinds, language, missingOnly);
+    result.workerId = "voice-design-worker";
+    // Released exactly as DesignVoice releases it. Rendering a bank is a one-off cost
+    // at preset creation, and holding the design model resident afterwards would take
+    // memory from the conversational workers for something that will not run again.
+    designClient->Shutdown();
+    designClient = std::make_unique<QwenTtsClient>();
+    designClient->Configure(designSettings);
+    return result;
+}
+
 VoiceOperationResult QwenTtsPool::DesignVoice(
     const std::string& text,
     const std::string& description,

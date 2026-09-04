@@ -68,6 +68,14 @@ public:
     void Configure(const speechSettings& settings);
     [[nodiscard]] std::size_t WorkerCount() const;
     VoiceOperationResult PrepareVoice(const VoicePreset& preset);
+    // Renders one preset's nonverbal clip bank. Routed through the same isolated,
+    // on-demand VoiceDesign worker as DesignVoice, because that is the only model that
+    // accepts the style instruction which produces a sound instead of the word.
+    VoiceOperationResult RenderVocalizations(
+        const std::filesystem::path& presetDirectory,
+        const std::vector<QwenTtsClient::VocalizationRequest>& kinds,
+        const std::string& language,
+        bool missingOnly);
     VoiceOperationResult DesignVoice(
         const std::string& text,
         const std::string& description,

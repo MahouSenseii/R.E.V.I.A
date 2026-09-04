@@ -5609,6 +5609,89 @@ void TestPreferencesPersistAndValidate()
         "A legitimate key was dropped alongside the rejected one.");
 }
 
+// Unit 4.3D. ISSUE-REVIA-0013: the clip bank had no producer. The Python
+// /v1/vocalizations endpoint existed and the C++ caller did not, so every preset was
+// created without nonverbal clips and every cue fell silent.
+void TestVocalizationBankHasAProducerAndItIsIdempotent()
+{
+    using revia::speech::QwenTtsClient;
+    using revia::speech::VocalizationBank;
+    using revia::speech::VocalizationKind;
+
+    // What a complete bank means, defined once so generation and any status readout
+    // cannot disagree about whether a voice is finished.
+    const auto requests = QwenTtsClient::DefaultVocalizationBankRequests();
+    Check(requests.size() == 6,
+        "The default bank does not cover all six vocalization kinds.");
+    int total = 0;
+    for (const auto& request : requests)
+    {
+        Check(request.variants >= 2,
+            "A vocalization kind was given fewer than two variants, so a repeated cue "
+            "would be the same recording twice.");
+        Check(request.variants <= static_cast<int>(
+                VocalizationBank::maximumVariantsPerKind),
+            "A kind asked for more variants than the bank can hold.");
+        total += request.variants;
+    }
+    Check(total == 14,
+        "The default bank renders " + std::to_string(total) + " clips rather than the "
+        "14 the unit specifies.");
+
+    // Generation writes <kind>-<n>.wav from 1; the bank stops at the first gap. The
+    // two conventions have to agree or a rendered bank reads as empty.
+    ScopedTestDirectory directory;
+    const std::filesystem::path preset = directory.root / "revia-bright";
+    const std::filesystem::path clips = preset / "vocalizations";
+    std::filesystem::create_directories(clips);
+
+    VocalizationBank empty(preset);
+    empty.Refresh();
+    Check(!empty.Has(VocalizationKind::SoftLaugh),
+        "An empty directory reported a usable chuckle.");
+
+    // A minimal but valid RIFF/WAVE file, because the bank must accept what the
+    // renderer writes and nothing else about the format matters here.
+    const auto writeWav = [](const std::filesystem::path& path)
+    {
+        std::ofstream file(path, std::ios::binary | std::ios::trunc);
+        const char header[] = "RIFF\x24\x00\x00\x00WAVEfmt ";
+        file.write(header, 16);
+        const unsigned char rest[20] = {16, 0, 0, 0, 1, 0, 1, 0, 0x44, 0xAC,
+            0, 0, 0x88, 0x58, 1, 0, 2, 0, 16, 0};
+        file.write(reinterpret_cast<const char*>(rest), sizeof(rest));
+        file.write("data\x00\x00\x00\x00", 8);
+    };
+    writeWav(clips / "soft-laugh-1.wav");
+    writeWav(clips / "soft-laugh-2.wav");
+
+    VocalizationBank rendered(preset);
+    rendered.Refresh();
+    Check(rendered.Has(VocalizationKind::SoftLaugh),
+        "The bank did not find clips written under the renderer's own naming "
+        "convention. Generation and playback disagree about the filename.");
+    Check(rendered.VariantCount(VocalizationKind::SoftLaugh) == 2,
+        "The bank did not see both rendered variants.");
+
+    // Rotation, so a repeated chuckle is not the same recording.
+    const std::filesystem::path first = rendered.Next(VocalizationKind::SoftLaugh);
+    const std::filesystem::path second = rendered.Next(VocalizationKind::SoftLaugh);
+    Check(!first.empty() && !second.empty() && first != second,
+        "Two consecutive chuckles selected the same clip.");
+
+    // The clips are persistent assets. Selecting one for playback must not consume it.
+    Check(std::filesystem::exists(first) && std::filesystem::exists(second),
+        "A bank clip disappeared when it was selected. These are assets, not the "
+        "temporary files the synthesised-speech path deletes after playing.");
+
+    // A kind with no clips stays empty rather than borrowing another kind's sound.
+    Check(rendered.Next(VocalizationKind::Gasp).empty(),
+        "A missing kind returned a clip belonging to a different sound.");
+    Check(!rendered.MissingKinds().empty(),
+        "A partially rendered bank reported nothing missing, so a half-finished voice "
+        "would look complete.");
+}
+
 // Unit 4.1. Live use showed the answer posture had quietly become personality policy:
 // Balanced ended by telling her not to be "difficult", and Reliable listed the traits
 // she was still allowed. Deterministic tests could not see it because every assertion
@@ -5713,7 +5796,13 @@ void TestStockContinuationTailsAreRecognisedByShapeNotByWording()
 void TestVocalizationTagsNeverReachTheSynthesiser()
 {
     using revia::speech::SpeechService;
-    // false is now passed for every backend, so this is the behaviour of the live path.
+    // Driven through the same function the live path calls, not through
+    // NormalizeForSpeech with the flag restated here. The earlier version of this test
+    // passed its own `false` and so proved only that NormalizeForSpeech works when
+    // asked correctly -- mutating the live call site to pass `true` left every test
+    // green. The settings carry the backend, and no backend changes the answer.
+    speechSettings settings;
+    settings.maxCharacters = 4000;
     for (const std::string reply : {
         "Oh please. *chuckles* You really did that?",
         "No. *sighs* You did it again.",
@@ -5721,22 +5810,26 @@ void TestVocalizationTagsNeverReachTheSynthesiser()
         "Fine <sigh> whatever.",
         "Oh really [laugh] that is perfect."})
     {
-        const std::string spoken = SpeechService::NormalizeForSpeech(reply, 4000, false);
+        for (const std::string backend : {"Auto", "Qwen", "SAPI", "Windows", ""})
+        {
+        settings.backend = backend;
+        const std::string spoken = SpeechService::PrepareForSynthesis(reply, settings);
         for (const std::string word : {
             "chuckle", "chuckles", "laugh", "laughs", "sigh", "sighs", "gasp",
             "gasps"})
         {
             Check(spoken.find(word) == std::string::npos,
-                "'" + reply + "' would have spoken the word '" + word +
-                "'. A vocalization is a sound, never narration.");
+                "'" + reply + "' on backend '" + backend + "' would have spoken the "
+                "word '" + word + "'. A vocalization is a sound, never narration.");
+        }
         }
     }
 
     // The surrounding speech survives intact -- dropping the cue must not cost the
     // sentence around it.
-    const std::string spoken =
-        SpeechService::NormalizeForSpeech("Oh please. *chuckles* You really did that?",
-            4000, false);
+    settings.backend = "Auto";
+    const std::string spoken = SpeechService::PrepareForSynthesis(
+        "Oh please. *chuckles* You really did that?", settings);
     Check(spoken.find("Oh please") != std::string::npos &&
             spoken.find("You really did that") != std::string::npos,
         "Removing the cue also removed the speech around it.");
@@ -8205,6 +8298,7 @@ int main(const int argc, char** argv)
         TestOnlySoundEffectsSurviveInAsterisks();
         TestHardFilterStripsStageDirectionsFromACompletedReply();
         TestSpeechNormalizerKeepsTheSoundAndDropsTheMarkdown();
+        TestVocalizationBankHasAProducerAndItIsIdempotent();
         TestAnswerPostureDoesNotLegislatePersonality();
         TestStockContinuationTailsAreRecognisedByShapeNotByWording();
         TestVocalizationTagsNeverReachTheSynthesiser();
