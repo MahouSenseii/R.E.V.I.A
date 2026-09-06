@@ -79,6 +79,7 @@ void RunIdentityFinalSaveTests();
 void RunLearningDurabilityTests();
 void RunEmbeddingBackfillTests();
 void RunSpeakerContinuityTests();
+void RunSpeechAttributionTests();
 void RunProfileActivationTests();
 void RunProactiveStateTests();
 void RunIdentityCrashChild(const std::filesystem::path& root);

@@ -165,6 +165,20 @@ void TestStimuliCarryCausationFromRealOutcomes()
     const Stimulus jab = BuildConversationStimulus("someone", hostile);
     Check(jab.userCaused && !jab.selfCaused && jab.valence < -0.5F,
         "A hostile remark was not attributed to the person who made it.");
+    for (const std::string input : {"You need therapy.", "Revia, you need an exorcism!"})
+    {
+        const auto signals = ReadConversationSignals(input, {}, true);
+        Check(signals.hostileTowardRevia &&
+            BuildConversationStimulus("someone", signals).valence < -0.5F,
+            "A direct personal jab was treated as an ordinary exchange.");
+    }
+    for (const std::string input : {"I need therapy.", "My friend needs therapy.",
+        "Someone said 'you need therapy' to me.", "Do you need therapy?",
+        "You need therapy? I'm worried about you.", "You need therapy because I'm concerned."})
+    {
+        Check(!ReadConversationSignals(input, {}, true).hostileTowardRevia,
+            "A care request, question, or reported remark became hostility toward Revia.");
+    }
 
     const ConversationSignals corrected =
         ReadConversationSignals("no, I already said that", "Sorry.", true);

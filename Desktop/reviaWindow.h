@@ -140,6 +140,7 @@ private:
     void AppendActivity(
         const QString& message,
         ActivitySeverity severity = ActivitySeverity::Automatic);
+    void AppendComponentActivity(const revia::runtime::RuntimeEvent& event, const QString& message);
     void RenderActivity();
     void UpdateActivitySummary();
     void ApplyUserPreferences();
@@ -173,6 +174,7 @@ private:
     QPushButton* openLogsButton = nullptr;
     QPushButton* clearActivityButton = nullptr;
     std::vector<ActivityEntry> activityEntries;
+    std::map<QString, std::pair<QString, qint64>> lastComponentIssues;
     int activityWarningCount = 0;
     int activityErrorCount = 0;
     PipelinePanel* pipelinePanel = nullptr;

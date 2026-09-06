@@ -192,6 +192,10 @@ void TestTheLegacyPostureSentenceIsPreserved()
         "The instruction that stops the posture becoming a script was dropped.");
     Check(Contains(rendered, "never the user's state"),
         "The boundary keeping Revia's state separate from the user's was dropped.");
+    const auto social = RenderStatePacket(packet, false);
+    Check(Contains(social, "Anger") && !Contains(social, "Runtime self-knowledge") &&
+        !Contains(social, "hard response filter"),
+        "A social reaction lost its feelings or was primed with diagnostic internals.");
 }
 }
 

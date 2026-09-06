@@ -24,6 +24,7 @@ std::string ToString(const ActivityType type)
         case ActivityType::ContinueGoal: return "continue goal";
         case ActivityType::OrganizeMemory: return "organize memory";
         case ActivityType::Create: return "create";
+        case ActivityType::Computer: return "computer";
         case ActivityType::Speak: return "speak";
     }
     return "nothing";

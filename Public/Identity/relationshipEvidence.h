@@ -34,6 +34,8 @@ struct ConversationSignals
     bool collaborative = false;
     // How much this exchange should count at all.
     float importance = 0.4F;
+    // Explicit joking language in this turn; closeness alone is not evidence of it.
+    bool explicitlyPlayful = false;
 };
 
 // Reads observable signals out of one turn. Keyword-driven and deterministic, sharing

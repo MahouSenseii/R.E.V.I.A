@@ -287,7 +287,83 @@ the query, visited URLs, timing, failures, and bounded grounding preview.
 
 The distinction matters for unattended operation. An autonomous run must not wait forever at a prompt or silently broaden its permissions.
 
+## Idle background resource admission
+
+GPU memory occupancy and GPU engine activity have different meanings. Resident model
+weights and caches can keep a card at 91–94% memory use between requests. `AssessLoad`
+keeps that physical pressure visible, but admits background work when the pressure is
+only GPU VRAM, at least 512 MiB remains on each pressured card, and their measured
+engine activity is at most 55%. This also applies above the 95% display threshold:
+on a 12 GiB card, 95.2% occupancy still leaves working room for resident inference.
+A busy measured GPU, insufficient absolute headroom, or simultaneous CPU/RAM
+pressure still defers optional work. An unreadable engine does not qualify a
+pressured GPU for the idle exception.
+Voice prefetch stays conservative under memory pressure; admission does not move
+models or change device budgets.
+
+The session stabilizes both pressure labels and work admission across three resource
+samples. Recovery wakes initiative to reconsider existing evidence and wakes deferred
+curiosity. Curiosity also retains its scheduled review and rechecks load after waiting
+for the user's quiet window. A wakeup does not grant permission or require speech:
+normal attention, capability, cancellation, and rate limits still apply, and a valid
+decision to remain silent is different from a worker that never ran.
+
+Curiosity uses the resident Main model for a bounded, interruptible nomination,
+with Fast available as a fallback when Main is unavailable. The request constrains
+action, field types, and lengths using JSON schema. A verbose rationale is bounded
+without changing the selected topic or query; empty/malformed active nominations
+still cannot proceed. Decisions are logged so a successful evaluation can be
+distinguished from a wakeup followed by a parsing failure.
+
+Ambient vision also uses a bounded JSON schema, with one compact summary string.
+The parser additionally accepts textual bullet arrays returned by older requests,
+while keeping attention/confidence/issue validation strict. Ambient requests hold
+background inference leases and yield to direct requests. A partial assessment is
+shown as partial, rather than a successful observation containing error keywords.
+Model HTTP reads use the same cancellable transport as embeddings: short socket
+wait slices observe cancellation without shortening the overall request timeout.
+This matters on Windows, where socket shutdown alone may leave another thread's
+`select()` waiting for response bytes and delay the foreground inference lease.
+The activity panel uses structured status severity for vision, curiosity, and load,
+and coalesces identical component issues for a minute. Resource admission changes
+are normal status logs; actual inference/allocation failures remain errors.
+
+`loadAndNameTests.cpp` covers idle residency, active compute, missing measurements,
+small-card headroom, multiple GPUs, and CPU/RAM pressure. The session fixture in
+`emotionOwnershipTests.cpp` supplies sustained GPU readings through the real sampling
+callback, checks hysteresis and deferral, then verifies both recovered and scheduled
+idle reviews reach a local test backend without a new user or desktop event.
+
 ## Proactive conversation state
+
+Idle nominations also include `think`, `observe`, `create`, and `computer`. These
+enter the shared autonomous activity owner instead of the conversation runtime.
+The owner enforces one active execution, a two-minute interval and six activities
+per rolling hour, with input cancellation and resource checks at admission. Old
+activity timestamps cease counting even if no new activity has run to prune them.
+Completed private work relieves boredom and its motivating drive.
+
+The nomination context includes elapsed conversation quiet, boredom/social drives,
+unanswered openings, recent activities and the current approved PC scope. After an
+unanswered opening, further speech gets a longer quiet window; private work remains
+available. Normal initiative attention and speech budgets still govern interruptions.
+
+Private creation uses a bounded background request to produce an actual draft,
+not the self-inquiry endpoint, which intentionally does not draft replies. Notes
+stay under `RuntimeData/Workspace/Notes`, with an activity ID preserved in the
+bounded filename. They appear in the activity feed and Mind activity state without
+becoming assistant dialogue. PC nominations contain one typed action. Inspection,
+approved file reads, directory creation, copying and window focus go through the
+ordinary capability policy and audited dispatch; unattended work cannot grant itself
+confirmation, delete or move user work, post messages, or invoke arbitrary controls.
+PC changes wait while the user is busy. Inspection content stays in the local trace.
+
+State maintenance advances idle drives once per interval, rather than once per
+desktop event. A long quiet interval may produce boredom or loneliness through the
+canonical emotion owner; recent or ongoing work suppresses that event. Sociability,
+independence and mood influence its intensity. Actual incoming conversation relieves
+the quiet feeling. This observation is not attributed to user hostility or recorded
+as damage to the relationship.
 
 Approved initiative and curiosity openings enter `ConversationRuntime::StartConversation`
 and `StartCuriosityConversation`. Their generation path uses the same `BuildTurnPosture`
@@ -296,6 +372,11 @@ relationship, preferences, runtime facts, answer obligation and bounded compress
 history. The existing profile prompt remains the base identity. Proactive event or
 research instructions are appended to this state, followed by existing cached screen
 context and supplied research grounding. No second personality renderer is involved.
+The final transient task names the actual cue or topic; it is never a placeholder
+about a private thought that the model could mistake for dialogue. Research asks
+for a factual finding with a supplied source URL. Curiosity saves learned research
+only when the generated finding itself cites a supplied source, and records when
+research produced no saved finding instead of treating arbitrary dialogue as learning.
 
 This does not admit new autonomous work. Session attention/permission/cancellation
 gates remain responsible for whether an opening runs. A proactive cue stays transient;

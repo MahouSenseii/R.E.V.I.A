@@ -43,7 +43,10 @@ std::string BoundedLine(const std::string& value, const std::size_t maximum)
     std::string bounded = NormalizeLine(value);
     if (bounded.size() > maximum)
     {
-        bounded.resize(maximum);
+        std::size_t end = maximum;
+        while (end > 0 && (static_cast<unsigned char>(bounded[end]) & 0xC0U) == 0x80U)
+            --end;
+        bounded.resize(end);
     }
     return bounded;
 }
@@ -128,6 +131,10 @@ std::string ToString(const CuriosityAction action)
         case CuriosityAction::Silence: return "silence";
         case CuriosityAction::Speak: return "speak";
         case CuriosityAction::Research: return "research";
+        case CuriosityAction::Think: return "think";
+        case CuriosityAction::Observe: return "observe";
+        case CuriosityAction::Create: return "create";
+        case CuriosityAction::Computer: return "computer";
     }
     return "silence";
 }
@@ -137,7 +144,8 @@ CuriosityDecision CuriosityAgent::Nominate(
     const std::vector<conversationMessage>& recentConversation,
     const runtime::AffectSnapshot& affect,
     const std::string& desktopContext,
-    const std::stop_token stopToken) const
+    const std::stop_token stopToken,
+    const IdleActivityContext& idle) const
 {
     if (stopToken.stop_requested())
     {
@@ -145,7 +153,7 @@ CuriosityDecision CuriosityAgent::Nominate(
     }
 
     const responseOutput response = router.GenerateCuriosityPlan(
-        BuildContextPrompt(recentConversation, affect, desktopContext), stopToken);
+        BuildContextPrompt(recentConversation, affect, desktopContext, idle), stopToken);
     if (!response.bSuccess)
     {
         return Invalid(response.reason.empty()
@@ -188,10 +196,21 @@ CuriosityDecision CuriosityAgent::ParseDecision(const std::string& rawDecision)
         if (action == "silence") decision.action = CuriosityAction::Silence;
         else if (action == "speak") decision.action = CuriosityAction::Speak;
         else if (action == "research") decision.action = CuriosityAction::Research;
-        else return Invalid("The curiosity action must be silence, speak, or research.");
+        else if (action == "think") decision.action = CuriosityAction::Think;
+        else if (action == "observe") decision.action = CuriosityAction::Observe;
+        else if (action == "create") decision.action = CuriosityAction::Create;
+        else if (action == "computer") decision.action = CuriosityAction::Computer;
+        else return Invalid("Unknown idle activity.");
 
         decision.topic = NormalizeLine(document["topic"].get<std::string>());
         decision.query = NormalizeLine(document["query"].get<std::string>());
+        if (decision.action == CuriosityAction::Computer)
+        {
+            // Preserve quoted paths and control names exactly, including whitespace.
+            const auto operation = json::parse(document["query"].get<std::string>());
+            if (!operation.is_object()) return Invalid("A PC activity must contain one action object.");
+            decision.query = operation.dump();
+        }
         decision.rationale = NormalizeLine(document["rationale"].get<std::string>());
         const double confidence = document["confidence"].get<double>();
         if (!std::isfinite(confidence) || confidence < 0.0 || confidence > 1.0)
@@ -208,11 +227,15 @@ CuriosityDecision CuriosityAgent::ParseDecision(const std::string& rawDecision)
         {
             return Invalid("The curiosity query exceeded its character limit.");
         }
-        if (decision.rationale.empty() ||
-            decision.rationale.size() > MaximumRationaleCharacters)
+        if (decision.rationale.empty() && decision.action == CuriosityAction::Silence)
+            decision.rationale = "No reason to interrupt was nominated.";
+        if (decision.rationale.empty())
         {
-            return Invalid("The curiosity rationale was empty or exceeded its character limit.");
+            return Invalid("The curiosity nomination did not explain why the topic was worth pursuing.");
         }
+        // Rationale is explanatory context, not an action/query. A verbose explanation
+        // must not discard an otherwise valid nomination on every idle cycle.
+        decision.rationale = BoundedLine(decision.rationale, MaximumRationaleCharacters);
         if (decision.action != CuriosityAction::Silence && decision.topic.empty())
         {
             return Invalid("A spoken or researched curiosity decision requires a topic.");
@@ -221,7 +244,10 @@ CuriosityDecision CuriosityAgent::ParseDecision(const std::string& rawDecision)
         {
             return Invalid("A research nomination requires a search query.");
         }
-        if (decision.action != CuriosityAction::Research && !decision.query.empty())
+        if (decision.action == CuriosityAction::Computer && decision.query.empty())
+            return Invalid("A computer activity requires one typed action object in query.");
+        if (decision.action != CuriosityAction::Research &&
+            decision.action != CuriosityAction::Computer && !decision.query.empty())
         {
             // Dropped rather than fatal. A query attached to a silence or speak
             // nomination grants nothing -- only the research path ever reads it -- and
@@ -243,7 +269,8 @@ CuriosityDecision CuriosityAgent::ParseDecision(const std::string& rawDecision)
 std::string CuriosityAgent::BuildContextPrompt(
     const std::vector<conversationMessage>& recentConversation,
     const runtime::AffectSnapshot& affect,
-    const std::string& desktopContext)
+    const std::string& desktopContext,
+    const IdleActivityContext& idle)
 {
     json selected = json::array();
     std::size_t remainingCharacters = MaximumConversationCharacters;
@@ -283,6 +310,18 @@ std::string CuriosityAgent::BuildContextPrompt(
         // the deterministic runtime layers after nomination.
         {"independent_topic_allowed", true},
         {"user_prompt_required", false},
+        {"idle_activity", {
+            {"quiet_seconds", std::max(0LL, idle.quietSeconds)},
+            {"boredom", std::clamp(idle.boredom, 0.0F, 1.0F)},
+            {"social_need", std::clamp(idle.socialNeed, 0.0F, 1.0F)},
+            {"user_busy", idle.userBusy},
+            {"research_allowed", idle.researchAllowed},
+            {"observation_allowed", idle.observationAllowed},
+            {"computer_allowed", idle.computerAllowed},
+            {"unanswered_openings", std::max(0, idle.unansweredOpenings)},
+            {"recent_activities", BoundedLine(idle.recentActivities, 800)},
+            {"computer_scope", BoundedLine(idle.computerScope, 1800)}
+        }},
         {"affect", {
             {"state", runtime::ToString(affect.state)},
             {"intensity", std::clamp(affect.intensity, 0.0F, 1.0F)},

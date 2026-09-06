@@ -250,6 +250,14 @@ responseOutput llmService::ReviewConversationReply(
         userInput, candidateReply, runtimeGroundTruth, maxReviewTokens, stopToken);
 }
 
+responseOutput llmService::GenerateActivityDraft(
+    const std::string& topic, const std::string& context, const std::stop_token stopToken) const
+{
+    if (!bIsReady || backendType != llmBackendType::LLamaCpp)
+    { responseOutput result; result.reason = "A private draft requires the local model."; return result; }
+    return llamaCpp.GenerateActivityDraft(topic, context, stopToken);
+}
+
 responseOutput llmService::GenerateCuriosityPlan(
     const std::string& boundedContextPrompt,
     const std::stop_token stopToken) const
@@ -406,7 +414,8 @@ responseOutput llmService::AnalyzeImage(
     const std::filesystem::path& imagePath,
     const std::string& prompt,
     const int maxResponseTokens,
-    const std::stop_token stopToken) const
+    const std::stop_token stopToken,
+    const bool backgroundAwareness) const
 {
     if (!bIsReady || backendType != llmBackendType::LLamaCpp)
     {
@@ -423,7 +432,7 @@ responseOutput llmService::AnalyzeImage(
         output.reason = health.reason;
         return output;
     }
-    return llamaCpp.AnalyzeImage(imagePath, prompt, maxResponseTokens, stopToken);
+    return llamaCpp.AnalyzeImage(imagePath, prompt, maxResponseTokens, stopToken, backgroundAwareness);
 }
 
 memoryDecision llmService::EvaluateMemory(

@@ -139,6 +139,7 @@ std::optional<Drive> DriveSatisfiedBy(const ActivityType type)
     switch (type)
     {
         case ActivityType::Think: return Drive::Learning;
+        case ActivityType::Computer:
         case ActivityType::Observe: return Drive::Exploration;
         case ActivityType::Research: return Drive::Curiosity;
         case ActivityType::ContinueGoal: return Drive::UnfinishedGoal;

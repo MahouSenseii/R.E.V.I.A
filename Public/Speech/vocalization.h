@@ -131,7 +131,8 @@ struct VocalizationLimits
     // expressive and becomes a tic.
     int maximumPerReply = 2;
     std::chrono::seconds minimumInterval{8};
-    // The same sound twice in a row is the most obvious tell that it is a recording.
+    // Avoid the same sound twice within one reply. The cross-reply cooldown below
+    // must not ban a kind forever just because no different sound followed it.
     bool bForbidImmediateRepeat = true;
 };
 

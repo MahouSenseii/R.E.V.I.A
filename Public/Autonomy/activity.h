@@ -28,6 +28,7 @@ enum class ActivityType
     OrganizeMemory,
     // Make something -- a diagram, a draft.
     Create,
+    Computer,
     // Say something unprompted. The highest-cost activity, because it is the only one
     // that interrupts a person.
     Speak

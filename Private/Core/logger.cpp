@@ -100,11 +100,9 @@ void logger::PromptBreakdown(
         return;
     }
 
-    // Where the reusable prefix ends. Everything from the first unstable section onward
-    // has to be re-evaluated on every turn no matter how much of it repeats, because a
-    // prefix cache matches from the start and stops at the first byte that differs.
-    // Reporting the total without this number makes a 3000-token prompt look like a
-    // caching problem when the real question is how many of those tokens move.
+    // The guaranteed stable prefix and potentially changing suffix. An unchanged
+    // beginning of the history may also be reused: these are prompt sizes, not a
+    // measurement of how many tokens the backend actually evaluated.
     std::size_t total = 0;
     std::size_t reusablePrefix = 0;
     bool prefixIntact = true;
@@ -137,14 +135,14 @@ void logger::PromptBreakdown(
         }
     }
     message << " | total=" << total << 'c';
-    message << " | reusable_prefix=" << reusablePrefix << 'c';
-    message << " | reevaluated_every_turn=" << (total - reusablePrefix) << 'c';
+    message << " | stable_prefix=" << reusablePrefix << 'c';
+    message << " | variable_suffix=" << (total - reusablePrefix) << 'c';
     if (largestVolatile)
     {
         message << " | largest_volatile=" << largestVolatile->name
                 << '(' << largestVolatile->characters << "c)";
     }
-    message << " | *=changes between turns";
+    message << " | *=variable; unchanged history prefix may also be cached";
     Write("Prompt", message.str(), false);
 }
 

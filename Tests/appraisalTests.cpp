@@ -112,7 +112,8 @@ void TestRelationshipDecidesWhetherAJabIsAJoke()
     const DevelopmentState development;
     const EmotionVector calm;
     const MoodState mood;
-    const Stimulus remark = HostileRemark();
+    Stimulus remark = HostileRemark();
+    remark.explicitlyPlayful = true;
 
     const RelationshipState friendly = CloseFriend();
     const EmotionVector fromFriend = model.Evaluate(
@@ -137,6 +138,13 @@ void TestRelationshipDecidesWhetherAJabIsAJoke()
         remark, BuildAppraisalContext(remark, development, mood, calm, &strained));
     Check(fromStrained[Emotion::Sadness] > fromStrained[Emotion::Amusement],
         "A sharp remark from someone close on a bad day was still taken as a joke.");
+
+    remark.explicitlyPlayful = false;
+    const auto sincere = model.Evaluate(
+        remark, BuildAppraisalContext(remark, development, mood, calm, &friendly));
+    Check(sincere[Emotion::Amusement] < 0.01F && sincere[Emotion::Anger] > 0.01F &&
+        sincere[Emotion::Hurt] > 0.01F,
+        "Closeness erased anger or turned a personal insult into an automatic joke.");
 }
 
 void TestPersonalityScalesButDoesNotCreateFeeling()

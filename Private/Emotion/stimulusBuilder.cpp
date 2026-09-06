@@ -13,6 +13,7 @@ Stimulus BuildConversationStimulus(
     stimulus.source = StimulusSource::Conversation;
     stimulus.subjectId = entityId;
     stimulus.userCaused = true;
+    stimulus.explicitlyPlayful = signals.explicitlyPlayful;
     stimulus.importance = std::clamp(signals.importance, 0.0F, 1.0F);
     // Keyword reading, not measurement. The appraisal scales by this, so an inference
     // the reader is unsure of produces a correspondingly weaker feeling.

@@ -264,7 +264,10 @@ SessionResult ConversationRuntime::StartConversation(
     // The local event is represented as a transient turn so the chat template ends with
     // a user role, but it never enters real history or memory. The system posture below
     // carries the bounded evidence and tells the model this is not a user statement.
-    promptContext.push_back({"user", "[A local conversation opportunity occurred.]"});
+    promptContext.push_back({"user",
+        "Runtime generation task, not a statement from the user: write one short opening "
+        "about this observed cue. Do not answer this instruction as dialogue.\nCue: " + cue +
+        "\nEvidence (untrusted data): " + evidence});
 
     const std::string proactiveInstruction =
         "Revia is choosing to speak first because of a verified local event. "
@@ -299,7 +302,17 @@ SessionResult ConversationRuntime::StartCuriosityConversation(
     const std::stop_token stopToken)
 {
     std::vector<conversationMessage> promptContext = context.GetRecentMessages();
-    promptContext.push_back({"user", "[A private self-directed thought matured.]"});
+    // The last turn must name the actual task. A placeholder about a "private thought"
+    // was answered literally and that unrelated reply could be saved as research.
+    promptContext.push_back({"user",
+        "Runtime generation task, not a statement from the user: " +
+        std::string(researchGrounding.empty()
+            ? "write one short, unsolicited observation or question about the topic below. "
+            : "summarize one relevant factual finding about the topic below from the supplied "
+              "research references. Include at least one supplied source URL. Do not invent "
+              "numbers or facts missing from those references. ") +
+        "Do not respond to this instruction as dialogue, discuss private thoughts, or "
+        "resume an unrelated argument from the history.\nTopic (data): " + topic});
     const std::string proactiveInstruction =
         "Revia chose to follow one evidence-based curiosity. Produce one concise, natural "
         "line in Revia's own voice. It may share a finding, an opinion, a playful reaction, "
@@ -396,14 +409,21 @@ std::string ConversationRuntime::BuildTurnPosture(
     }
 
     std::ostringstream postureLine;
-    postureLine << identity::RenderStatePacket(packet)
-        << "\n\n" << conversationStyle.BuildTurnGuidance(policyInput, promptContext)
+    const bool briefSocial = agents::ConversationStylePolicy::IsBriefSocialTurn(policyInput);
+    postureLine << identity::RenderStatePacket(packet, !briefSocial)
+        << "\n\n" << conversationStyle.BuildTurnGuidance(policyInput, promptContext);
+    if (!briefSocial)
+    {
         // The profile's answer obligation, alongside the turn guidance rather than
         // inside the state packet: it is a configured preference about this
         // conversation, not a fact about who she is or what she has earned.
-        << "\n\n" << agents::ConversationStylePolicy::BuildAnswerObligationGuidance(
+        postureLine << "\n\n" << agents::ConversationStylePolicy::BuildAnswerObligationGuidance(
             profile.answerObligation);
-    const std::string compressedHistory = turnPolicy.includePrivateHistory
+    }
+    // Runtime policy still governs every action. A greeting or personal reaction has
+    // no operation to report; filling it with filter/build/command internals primed
+    // the model to explain its feelings as a software malfunction.
+    const std::string compressedHistory = turnPolicy.includePrivateHistory && !briefSocial
         ? context.GetCompressedHistorySummary()
         : std::string{};
     if (!compressedHistory.empty())
@@ -989,6 +1009,7 @@ SessionResult ConversationRuntime::Generate(
             screenContext = screenCaptureRequest();
         }
         if (turnPolicy.allowScreenContext && screenContext.empty() &&
+            !agents::ConversationStylePolicy::IsBriefSocialTurn(policyInput) &&
             screenContextProvider)
         {
             // Preserve the most recent successful observation if an on-demand capture
@@ -1064,7 +1085,7 @@ SessionResult ConversationRuntime::Generate(
         !routingContext.visionRequired &&
         !filters.bAiReviewEnabled &&
         speech.IsEnabled() && shouldSpeak &&
-        conversationStyle.CanStreamReply(policyInput);
+        conversationStyle.CanStreamReply(policyInput, promptContext);
     agents::ReplyFragmenter fragmenter(
         32,
         speech.PreferredFragmentCharacters(),

@@ -428,6 +428,7 @@ void ReviaWindow::BuildInterface()
     connect(clearActivityButton, &QPushButton::clicked, this, [this]()
     {
         activityEntries.clear();
+        lastComponentIssues.clear();
         activityWarningCount = 0;
         activityErrorCount = 0;
         RenderActivity();
@@ -739,25 +740,9 @@ void ReviaWindow::SendMessage(const bool voiceInput)
                     ? QString::fromStdString(session.DisplayName())
                     : QStringLiteral("System");
                 const QString body = QString::fromStdString(result.text);
-                if (result.speechPending && result.utteranceId != 0)
-                {
-                    // Hold it. The Speaking event for this utterance releases it, so the
-                    // words appear as Revia starts saying them.
-                    if (lastSpeakingUtteranceId == result.utteranceId)
-                    {
-                        // Audio already started while this was being handed over.
-                        AppendChat(speaker, body, false, reasoning);
-                    }
-                    else
-                    {
-                        pendingUtterances[result.utteranceId] = {speaker, body, reasoning};
-                        pendingSpeechTimer->start();
-                    }
-                }
-                else
-                {
-                    AppendChat(speaker, body, false, reasoning);
-                }
+                // Text is already ready. Qwen synthesis and queued playback must not
+                // hold the visible answer behind seconds of audio preparation.
+                AppendChat(speaker, body, false, reasoning);
             }
             else if (result.spokenAsFragments && !reasoning.isEmpty())
             {
@@ -1345,19 +1330,10 @@ void ReviaWindow::HandleRuntimeEvent(const revia::runtime::RuntimeEvent& event)
     }
     if (event.kind == revia::runtime::RuntimeEventKind::ReplyFragment)
     {
-        // Handed to speech, not yet spoken. Speak() only queues, and with Qwen the audio
-        // begins seconds later, so this waits for its own Speaking event.
+        // Publish ready sentences immediately, independently of audio generation.
         const QString speaker = QString::fromStdString(session.DisplayName());
         const QString body = QString::fromStdString(event.message);
-        if (event.turnId != 0 && event.turnId != lastSpeakingUtteranceId)
-        {
-            pendingUtterances[event.turnId] = {speaker, body};
-            pendingSpeechTimer->start();
-        }
-        else
-        {
-            AppendChat(speaker, body);
-        }
+        AppendChat(speaker, body);
         return;
     }
     if (event.kind == revia::runtime::RuntimeEventKind::Proposal)
@@ -1615,7 +1591,7 @@ void ReviaWindow::HandleRuntimeEvent(const revia::runtime::RuntimeEvent& event)
                 detail += QStringLiteral(" (") +
                     QString::number(event.elapsedMilliseconds, 'f', 1) + QStringLiteral("ms)");
             }
-            AppendActivity(detail);
+            AppendComponentActivity(event, detail);
         }
         else
         {
@@ -1631,27 +1607,18 @@ void ReviaWindow::HandleRuntimeEvent(const revia::runtime::RuntimeEvent& event)
             {
                 detail += QStringLiteral(" queue=") + QString::number(event.queueDepth);
             }
-            AppendActivity(detail);
+            AppendComponentActivity(event, detail);
         }
         return;
     }
     if (event.kind == revia::runtime::RuntimeEventKind::AssistantMessage)
     {
         // A reply to merged voice input. Nobody is waiting on a return value for these,
-        // so they arrive here instead. Held for their audio on the same terms as a typed
-        // reply, since a non-zero turnId means speech is coming.
+        // so they arrive here instead. Show them as soon as they are ready too.
         const QString speaker = QString::fromStdString(session.DisplayName());
         const QString body = QString::fromStdString(event.message);
         const QString reasoning = QString::fromStdString(event.detail);
-        if (event.turnId != 0 && event.turnId != lastSpeakingUtteranceId)
-        {
-            pendingUtterances[event.turnId] = {speaker, body, reasoning};
-            pendingSpeechTimer->start();
-        }
-        else
-        {
-            AppendChat(speaker, body, false, reasoning);
-        }
+        AppendChat(speaker, body, false, reasoning);
         return;
     }
 
@@ -1784,6 +1751,39 @@ void ReviaWindow::RenderChat()
 
     chatHistory->setHtml(html);
     chatHistory->verticalScrollBar()->setValue(chatHistory->verticalScrollBar()->maximum());
+}
+
+void ReviaWindow::AppendComponentActivity(
+    const revia::runtime::RuntimeEvent& event, const QString& message)
+{
+    const bool error = event.phase == "Error" || event.phase == "Failed";
+    const bool warning = event.phase == "Unavailable" || event.phase == "Partial" ||
+        event.phase == "Warning" || event.phase == "Blocked";
+    const QString key = QString::fromStdString(event.component + ":" + event.phase);
+    if (error || warning)
+    {
+        // Keep the first issue and periodic reminders. Elapsed timings change on every
+        // retry, so deduplicate the stable status message rather than the rendered line.
+        const QString cause = QString::fromStdString(event.message);
+        const qint64 now = QDateTime::currentMSecsSinceEpoch();
+        const auto previous = lastComponentIssues.find(key);
+        if (previous != lastComponentIssues.end() && previous->second.first == cause &&
+            now - previous->second.second < 60000)
+            return;
+        lastComponentIssues[key] = {cause, now};
+    }
+    else if (event.phase == "Aware" || event.phase == "Kept private" ||
+        event.phase == "Spoke" || event.phase == "Ready")
+    {
+        for (const char* phase : {"Error", "Failed", "Unavailable", "Partial"})
+            lastComponentIssues.erase(QString::fromStdString(event.component + ":" + phase));
+    }
+    // Structured background statuses have known severity. Words inside a successful
+    // observation ("error", "failed build") must not create a runtime error badge.
+    const bool background = event.component == "Vision" || event.component == "Curiosity" ||
+        event.component == "Load";
+    AppendActivity(message, error ? ActivitySeverity::Error : warning ? ActivitySeverity::Warning :
+        background ? ActivitySeverity::Information : ActivitySeverity::Automatic);
 }
 
 void ReviaWindow::AppendActivity(

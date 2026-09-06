@@ -7,13 +7,13 @@
 namespace revia::resources
 {
 
-// How hard the machine is working right now.
+// Physical capacity pressure. GPU activity is considered separately for admitting work.
 enum class LoadState
 {
     // Plenty spare. Optional work that costs latency elsewhere is worth doing.
     Free,
     Normal,
-    // Getting tight. Stop starting optional work, but finish what is running.
+    // Getting tight. Idle resident GPU services may still have room to work.
     Pressured,
     // Something is being starved. Shed optional work immediately.
     Throttled
@@ -69,8 +69,8 @@ struct LoadAdjustment
 // left a healthy card at 88% occupancy reported as "starved at 110%", with every
 // optional thing switched off for the whole session.
 //
-// The steps match the ones the Resources panel already draws, so the word the user reads
-// and the decision Revia makes come from the same number.
+// Capacity labels match the Resources panel. Background admission also considers
+// measured GPU activity and absolute headroom so residency does not imply busy compute.
 struct LoadThresholds
 {
     // Below this on every meter, there is room to spare.
@@ -79,6 +79,10 @@ struct LoadThresholds
     double pressuredAbove = 0.90;
     // Critical: an allocation is about to be refused.
     double throttledAbove = 0.95;
+    // A high-occupancy GPU may still run background work through resident services
+    // when it has this much working room and its measured engine activity is low.
+    double backgroundGpuHeadroomMiB = 512.0;
+    double backgroundGpuBusyAbove = 0.55;
     // A meter that cannot be measured is ignored rather than assumed idle: guessing a
     // reading is how a governor confidently makes exactly the wrong call.
     bool ignoreUnmeasured = true;

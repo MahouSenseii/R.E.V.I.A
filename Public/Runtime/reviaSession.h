@@ -485,6 +485,11 @@ private:
     // Asks whether there is any reason to act. Called from the initiative loop rather
     // than from a timer of its own: a timer may permit an activity, never motivate one.
     void ConsiderAutonomousActivity(const std::string& triggerReason);
+    void RunAutonomousActivity(const autonomy::ActivityDecision& decision,
+        const std::string& triggerReason, std::stop_token stopToken = {});
+    [[nodiscard]] autonomy::ActivityOutcome ExecuteComputer(
+        const autonomy::Activity& activity, const autonomy::ActivityDecision& decision,
+        std::stop_token stopToken);
     [[nodiscard]] autonomy::AutonomyEvidence GatherAutonomyEvidence() const;
     [[nodiscard]] autonomy::AutonomyCost GatherAutonomyCost() const;
     // Interrupts whatever she chose to do because the user needs attention. Interrupted
@@ -495,13 +500,16 @@ private:
     // ordinary capability, policy, and initiative systems.
     [[nodiscard]] autonomy::ActivityOutcome ExecuteActivity(
         const autonomy::Activity& activity,
-        const autonomy::ActivityDecision& decision);
+        const autonomy::ActivityDecision& decision,
+        std::stop_token stopToken = {});
     [[nodiscard]] autonomy::ActivityOutcome ExecuteThink(
         const autonomy::Activity& activity,
-        const autonomy::ActivityDecision& decision);
+        const autonomy::ActivityDecision& decision,
+        std::stop_token stopToken = {});
     [[nodiscard]] autonomy::ActivityOutcome ExecuteObserve(
         const autonomy::Activity& activity,
-        const autonomy::ActivityDecision& decision);
+        const autonomy::ActivityDecision& decision,
+        std::stop_token stopToken = {});
     [[nodiscard]] autonomy::ActivityOutcome ExecuteResearch(
         const autonomy::Activity& activity,
         const autonomy::ActivityDecision& decision);
@@ -510,7 +518,8 @@ private:
         const autonomy::ActivityDecision& decision);
     [[nodiscard]] autonomy::ActivityOutcome ExecuteCreate(
         const autonomy::Activity& activity,
-        const autonomy::ActivityDecision& decision);
+        const autonomy::ActivityDecision& decision,
+        std::stop_token stopToken = {});
     [[nodiscard]] autonomy::ActivityOutcome ExecuteSpeak(
         const autonomy::Activity& activity,
         const autonomy::ActivityDecision& decision);
@@ -576,6 +585,7 @@ private:
     void PublishResourcePlan() const;
     void PublishResourceUsage(const resources::UsageSnapshot& snapshot) const;
     void StartResourceMonitor();
+    void UpdateResourceLoad(const resources::UsageSnapshot& snapshot);
 
     RuntimeEventBus eventBus;
     logger appLogger;
@@ -609,15 +619,16 @@ private:
     resources::LoadAdjustment currentLoad;
     // Hysteresis lives here rather than in the governor, which is pure. Without it a
     // reading hovering on a threshold flips the machine between states every sample.
-    resources::LoadState lastPublishedLoad = resources::LoadState::Normal;
     // A new state has to hold for several consecutive samples before it is adopted.
     // VRAM readings swing hard while models load and free memory -- 111%, then 11%, then
     // 88% within seconds -- and acting on each swing made what Revia would attempt
     // change from one moment to the next for no reason a person could see.
-    resources::LoadState candidateLoad = resources::LoadState::Normal;
+    resources::LoadAdjustment candidateLoad;
     int candidateLoadSamples = 0;
     static constexpr int loadSamplesBeforeAdopting = 3;
     std::optional<autonomy::Activity> runningActivity;
+    bool autonomousExecutionActive = false;
+    std::stop_source autonomousAttemptStopSource;
     // Rolling counters the scheduler charges against. Kept here rather than in the
     // scheduler so it stays a pure function of its inputs.
     std::deque<std::chrono::steady_clock::time_point> recentActivities;

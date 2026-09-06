@@ -67,20 +67,18 @@ std::string RenderEmotionSection(const ReviaStatePacket& packet)
         section << " Separately from the moment, it has not been a good day.";
     }
 
-    section << " This is an internal leaning, not a script. Decide how openly it shows: "
-               "you may express it, mask it, exaggerate it for comedy, or work through it "
-               "as the conversation develops. This is your own digital conversational "
-               "state, never the user's state. Negative moods do not need to become "
-               "cheerful inside one reply. You may be sad, melancholy, bored, sulky, "
-               "angry, lonely, or annoyed and still answer in character. You may tease or "
-               "snap mildly when it fits the relationship. Do not turn any feeling into "
-               "coercion, a threat, targeted hate, or a claim that the user is "
-               "responsible for keeping you alive.";
+    section << " This is an internal leaning, not a script. Speak from these feelings "
+               "in ordinary first-person language, rather than reporting or explaining "
+               "the machinery behind them. This is your state, never the user's state. "
+               "Anger can sound angry: object, snap back, or be curt when it fits. Do not "
+               "automatically hide a hurtful remark behind a laugh or cheerful closing. "
+               "Never turn a feeling into coercion, a threat, targeted hate, or a claim "
+               "that the user is responsible for keeping you alive.";
     return section.str();
 }
 }
 
-std::string RenderStatePacket(const ReviaStatePacket& packet)
+std::string RenderStatePacket(const ReviaStatePacket& packet, const bool includeRuntimeDetails)
 {
     std::ostringstream prompt;
     const auto section = [&prompt](const std::string& text)
@@ -182,6 +180,7 @@ std::string RenderStatePacket(const ReviaStatePacket& packet)
 
     // PERCEPTION / RUNTIME CONTEXT. The exact leading phrase is load-bearing for the
     // prompt-leak filter.
+    if (!includeRuntimeDetails) return prompt.str();
     std::ostringstream runtime;
     runtime << "Runtime self-knowledge (ground truth; mention it only if asked or "
                "directly relevant): the deterministic hard response filter is always on; "

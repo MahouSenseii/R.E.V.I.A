@@ -622,6 +622,10 @@ void SpeechService::Speak(
         if (latencyCritical)
         {
             vocalizationPolicy.BeginReply();
+            // A bank may have been installed after the preset was selected.
+            // Refresh only at reply boundaries, keeping variant rotation intact
+            // unless previously missing clips have appeared.
+            if (!vocalizationBank.MissingKinds().empty()) vocalizationBank.Refresh();
         }
         const auto now = std::chrono::steady_clock::now();
         const std::vector<PlannedSegment> plan = PlanSpeech(text, configuration,

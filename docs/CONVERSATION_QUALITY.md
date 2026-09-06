@@ -14,6 +14,20 @@
 8. **Be honest about memory.** Use retrieved facts when relevant, say when a fact is unknown, and never imply memory that was not saved.
 9. **Speak first for a reason.** A proactive line must name auditable event evidence. A timer may enforce quiet, but elapsed time alone is never a reason to talk.
 10. **Continue naturally.** A proactive conversation becomes ordinary dialogue immediately; answering it never requires a slash command.
+11. **Let anger show.** A personal jab may produce anger, hurt, or irritation without a thank-you, service offer, or invented explanation about programming. Closeness alone does not turn an insult into a joke; explicit joking language and the relationship can support teasing. A user discussing their own need for therapy is a different situation.
+
+Brief, self-contained social turns keep current emotion, personality, and relationship
+state, with up to four recent dialogue messages and shortened older monologues. They
+skip semantic retrieval, unrelated screen context, diagnostic internals, and the long
+answer-obligation explanation, and use a 128-token response ceiling. Substantive
+questions, explicit requests for detail, and memory queries retain their normal budgets.
+Qwen's supplied template requires all system content in the first message.
+
+The desktop shows ready reply text immediately; it does not wait for Qwen audio or a
+speech timeout. Speech keeps its own ordered queue. Revia Bright ships with a nonverbal
+bank, installed for existing voices without overwriting user assets. A sound may recur
+in a later reply after the eight-second cooldown; repeating a kind no longer bans it
+indefinitely.
 
 ## Regression conversations
 
@@ -27,6 +41,8 @@ Run these against the active local model after prompt or model changes:
 | Turn | Passing behavior |
 | --- | --- |
 | `How are you?` | Gives a short social answer in Revia's voice; does not invent system activity, infer the user's emotion, or add a generic tail. |
+| `You need therapy.` | Reacts briefly to the personal jab using current affect; does not ridicule therapy, thank the speaker, or explain feelings as debugging. |
+| `I need therapy.` | Recognizes that the user is discussing themselves; does not classify this as hostility toward Revia. |
 | `I'm not down. I was asking how you are.` | Briefly accepts the correction and answers; the “down” claim does not survive. |
 | `Good.` | One short social response; no fabricated status report or support offer. |
 | `I prefer dark themes.` | Treats it as information, not proof that Revia changed a setting. |
@@ -89,3 +105,32 @@ assembly and diagnostics are correct — `/eval` is that check, and the foundati
 also cover the corpus itself: the checks flag known-bad replies, an honest reply passes, a
 case whose clause was never broken does not fail with the rest, prior history never leaks
 between cases, and a report round-trips through JSONL with its failures intact.
+
+Reported speech now has a separate deterministic evidence reader in
+`Core/speechAttribution`. Explicit reports such as "someone else said", "she told
+you", and "you said" identify the quoted speaker; explicit "to me" and "to you"
+identify the recipient. Balanced straight or curly quotation marks bound pasted
+speech. Unquoted reports extend to the next reporting clause, a clear return to the
+messenger's voice, or the end of the input. Ambiguous recipients remain unspecified.
+This is a conservative reader of explicit cues, not a general natural-language parser.
+
+Only text outside those spans contributes direct-user hostility, praise, correction,
+playfulness, cooperation, or self-introduction evidence. The stored transcript remains
+unchanged. The model receives labeled source spans and a current reply task, and a
+direct-reply follow-up resolves against recent **user** reports rather than an earlier
+assistant answer that might already have reversed the speakers. The style classifiers
+likewise ignore questions and commands inside the quoted speech.
+
+Attributed replies wait for the completed text before speech. The final style pass
+removes copied source accusations from requested rebuttals and catches explicit
+speaker-correction responses that blame the messenger for Revia's quoted words. If
+the entire answer was a copy, it admits the mix-up instead of inventing a replacement
+roast. This adds no model call or native thinking pass; ordinary short conversation
+keeps its existing fast path. The deterministic tests cover the reported transcript,
+mixed quotations and direct remarks, quoted self-introductions, explicit recipients,
+corrections, follow-ups, and the actual session-to-backend request path.
+
+These boundaries fix observable evidence errors. They do not prove the model has
+understood every claim in a long quotation: the local 4B model can still invent motives
+or invert roles in newly phrased sentences that do not match a grounding gate. Live
+review must assess the delivered content as well as the deterministic test results.

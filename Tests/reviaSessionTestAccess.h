@@ -13,6 +13,29 @@ struct ReviaSessionTestAccess
     static AffectController& LegacyAffect(ReviaSession& session) { return session.affectController; }
     static identity::RelationshipRegistry& People(ReviaSession& session) { return session.relationships; }
 
+    static void SampleLoad(ReviaSession& session, const resources::UsageSnapshot& usage)
+    { session.UpdateResourceLoad(usage); }
+
+    static void StartIdleReviewFixture(ReviaSession& session)
+    {
+        session.settings.initiative.bEnabled = true;
+        session.settings.initiative.bCuriosityEnabled = true;
+        session.settings.initiative.bSpontaneousSpeechEnabled = false;
+        session.settings.initiative.curiosityCheckSeconds = 1;
+        session.settings.initiative.autonomousQuietSeconds = 0;
+        session.StartCuriosityLoop();
+    }
+
+    static void StopIdleReviewFixture(ReviaSession& session) { session.StopCuriosityLoop(); }
+    static void RunIdleActivity(ReviaSession& session, const autonomy::ActivityDecision& decision)
+    { session.RunAutonomousActivity(decision, "fixture nomination"); }
+    static void AgeIdleBudget(ReviaSession& session)
+    {
+        std::lock_guard lock(session.autonomyMutex);
+        session.lastActivityAt = std::chrono::steady_clock::now() - std::chrono::hours(2);
+        for (auto& at : session.recentActivities) at = session.lastActivityAt;
+    }
+
     static void MaintenanceEvery(ReviaSession& session, std::chrono::milliseconds emotionInterval,
         std::chrono::milliseconds relationshipQuiet, std::chrono::milliseconds conversationQuiet)
     {

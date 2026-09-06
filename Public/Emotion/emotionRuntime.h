@@ -75,7 +75,8 @@ public:
     // shares the appraisal lock so a new message cannot race a stale idle observation.
     std::optional<AppraisalOutcome> ObserveQuietConversation(
         const identity::DevelopmentState& development,
-        std::chrono::milliseconds quietInterval = std::chrono::minutes(20));
+        std::chrono::milliseconds quietInterval = std::chrono::minutes(20),
+        bool occupied = false, float boredom = 0.0F);
 
     [[nodiscard]] EmotionVector Emotion() const;
     [[nodiscard]] MoodState Mood() const;

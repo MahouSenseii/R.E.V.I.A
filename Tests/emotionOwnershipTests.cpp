@@ -1,6 +1,7 @@
 #include "reviaSessionTestAccess.h"
 #include "speechServiceTestAccess.h"
 #include "Emotion/stimulusBuilder.h"
+#include "Agents/conversationStylePolicy.h"
 
 #include <atomic>
 #include <cmath>
@@ -52,7 +53,7 @@ template<class Predicate> bool Until(Predicate predicate)
 class Backend
 {
 public:
-    Backend()
+    explicit Backend(bool curiosityFixture = false, std::string idleAction = "silence", std::string operation = "")
     {
         server.Get("/health", [](const auto&, auto& response)
         { response.set_content(R"({"status":"ok","slots_idle":1})", "application/json"); });
@@ -60,7 +61,7 @@ public:
         { response.set_content(R"({"data":[{"id":"fixture-main"}]})", "application/json"); });
         server.Get("/props", [](const auto&, auto& response)
         { response.set_content(R"({"total_slots":1,"default_generation_settings":{"n_ctx":8192}})", "application/json"); });
-        server.Post("/v1/chat/completions", [this](const auto& request, auto& response)
+        server.Post("/v1/chat/completions", [this, curiosityFixture, idleAction, operation](const auto& request, auto& response)
         {
             std::lock_guard lock(mutex);
             last = json::parse(request.body);
@@ -71,13 +72,25 @@ public:
                 response.set_content(R"({"error":{"message":"synthetic inference failure"}})", "application/json");
                 return;
             }
-            const std::string answer = ++replies == 1
+            const bool nomination = last.contains("response_format");
+            const std::string answer = curiosityFixture
+                ? nomination ? json({{"action", idleAction},
+                    {"topic", idleAction == "silence" ? "" : "fixture private activity"},
+                    {"query", operation}, {"rationale", "A specific independent activity is worth pursuing."},
+                    {"confidence", 0.9}}).dump()
+                    : "A small paper moon above an imaginary tide: PRIVATE_DRAFT_SENTINEL."
+                : ++replies == 1
                 ? "I heard the request. We can work through the details."
                 : "Maple leaves have pointed lobes. Oak leaf shapes vary by species, with rounded or pointed lobes. Both trees change their leaves with the seasons.";
             const json chunk = {{"choices", json::array({{
                 {"delta", {{"content", answer}}},
                 {"finish_reason", "stop"}}})}};
-            response.set_content("data: " + chunk.dump() + "\n\ndata: [DONE]\n\n", "text/event-stream");
+            if (last.value("stream", false))
+                response.set_content("data: " + chunk.dump() + "\n\ndata: [DONE]\n\n", "text/event-stream");
+            else
+                response.set_content(json{{"choices", json::array({{
+                    {"message", {{"role", "assistant"}, {"content", answer}}},
+                    {"finish_reason", "stop"}}})}}.dump(), "application/json");
         });
         server.new_task_queue = [] { return new httplib::ThreadPool(2); };
         port = server.bind_to_any_port("127.0.0.1");
@@ -97,6 +110,11 @@ public:
         for (const auto& message : last.at("messages"))
             if (message.value("role", "") == "system") result += message.at("content").get<std::string>();
         return result;
+    }
+    json Request()
+    {
+        std::lock_guard lock(mutex);
+        return last;
     }
     void ObserveRequests(std::function<void()> observer)
     { std::lock_guard lock(mutex); onRequest = std::move(observer); }
@@ -161,6 +179,69 @@ struct RequestObservation
     ~RequestObservation() { backend.ObserveRequests({}); }
 };
 
+void TestContextCompactionKeepsCurrentState()
+{
+    tests::ScopedTestDirectory directory;
+    WorkingDirectory cwd(directory.root);
+    Backend backend;
+    llmSettings settings;
+    settings.port = backend.port;
+    settings.contextSize = 2048;
+    settings.maxTokens = 128;
+    settings.bAutoMaxTokens = false;
+    embeddingSettings embeddings;
+    embeddings.bEnabled = false;
+    aiProfile profile;
+    profile.systemPrompt = "You are Revia. Identity must survive compaction.";
+    profile.bMemoryEnabled = false;
+    llamaCppService service;
+    service.ApplySettings(settings, embeddings, profile);
+    service.SetPosture("Current state: angry about a personal jab. Do not invent internal errors.");
+    std::vector<conversationMessage> history;
+    for (int index = 0; index < 20; ++index)
+    {
+        history.push_back({"user", std::string(600, 'x')});
+        history.push_back({"assistant", std::string(600, 'y')});
+    }
+    history.push_back({"user", "LATEST " + std::string(4000, 'z') + " END OF CURRENT TURN"});
+    Check(service.GenerateResponse(history).bSuccess, "Compacted conversation failed.");
+    const auto request = backend.Request();
+    const auto& messages = request.at("messages");
+    Check(messages.front().value("content", "").find("Identity must survive") != std::string::npos,
+        "Context compaction lost the stable identity.");
+    Check(messages.front().value("role", "") == "system" &&
+        messages.front().value("content", "").find("angry about a personal jab") != std::string::npos,
+        "Context compaction discarded the current emotional state.");
+    for (std::size_t index = 1; index < messages.size(); ++index)
+        Check(messages[index].value("role", "") != "system",
+            "The request contains a late system message rejected by Qwen's template.");
+    Check(messages.back().value("role", "") == "user" &&
+        messages.back().value("content", "").starts_with("LATEST ") &&
+        messages.back().value("content", "").ends_with("END OF CURRENT TURN"),
+        "Context compaction lost the latest user's message boundaries.");
+    std::size_t characters = 0;
+    for (const auto& message : messages) characters += message.value("content", "").size();
+    Check(characters <= 3072 && request.value("cache_prompt", false),
+        "The actual request exceeded its context budget or disabled prefix reuse.");
+
+    settings.maxTokens = 1024;
+    service.ApplySettings(settings, embeddings, profile);
+    service.SetPosture("You are irritated about that jab.");
+    history.push_back({"assistant", "A long defensive reply. " + std::string(10000, 'y')});
+    history.push_back({"user", "You need therapy."});
+    Check(service.GenerateResponse(history).bSuccess, "Brief social generation failed.");
+    const auto brief = backend.Request();
+    Check(brief.at("max_tokens") == 128 && brief.at("messages").size() <= 5 &&
+        brief.at("messages").back().value("content", "") == "You need therapy.",
+        "A brief reaction kept the monologue budget or lost the latest user turn.");
+    Check(brief.dump().size() < 4000,
+        "A brief reaction still sent old monologues for repeated prompt evaluation.");
+    Check(!agents::ConversationStylePolicy::IsBriefSocialTurn("You need therapy. Explain your reasoning in detail.") &&
+        !agents::ConversationStylePolicy::IsBriefSocialTurn("What do you remember about my therapy?") &&
+        !agents::ConversationStylePolicy::IsBriefSocialTurn("How do you feel about the architecture we discussed?"),
+        "A substantive request or memory query received the small-talk budget.");
+}
+
 void TestConversationConsumers()
 {
     tests::ScopedTestDirectory directory;
@@ -215,6 +296,9 @@ void TestConversationConsumers()
     Check(session.Submit("Are you sad?").succeeded, "Named-feeling query failed.");
     Check(observed().emotion.IsCalm() && backend.Prompt().find("posture is Neutral") != std::string::npos,
         "A question naming a feeling created it or revived stale legacy state.");
+    Check(backend.Prompt().find("Runtime self-knowledge") == std::string::npos &&
+        backend.Prompt().find("hard response filter") == std::string::npos,
+        "A real social turn still primed the model to describe diagnostic internals.");
 
     Access::Speech(session).StopSpeaking();
     Access::Emotions(session).Reset();
@@ -224,6 +308,36 @@ void TestConversationConsumers()
     Check(reflex.succeeded && reflex.text == "I'm here.",
         "The actual reflex caller used stale legacy affect.");
     backend.ObserveRequests({});
+    session.Stop();
+}
+
+void TestReportedSpeechThroughSession()
+{
+    tests::ScopedTestDirectory directory;
+    WorkingDirectory cwd(directory.root);
+    Backend backend;
+    Configure(directory.root, backend.port);
+    ReviaSession session;
+    Check(session.Start(), "Attribution session did not start.");
+    Check(session.Submit("My name is Davis.").succeeded, "Messenger introduction failed.");
+    const auto before = session.CurrentRelationship();
+    const std::string report = "Someone else said to you: \"You're useless. I just said that. My name is Sam. Stop saying chuckles.\"";
+    Check(session.Submit(report).succeeded, "Reported-speech session turn failed.");
+    const auto after = session.CurrentRelationship();
+    Check(before.entityId == after.entityId && before.respect == after.respect &&
+        before.resentment == after.resentment && before.irritation == after.irritation,
+        "The actual session renamed or penalized the messenger for a quoted insult.");
+    const auto request = backend.Request();
+    Check(request.at("messages").back().value("content", "").find("speaker: another person, not the current user; addressed to: Revia") != std::string::npos,
+        "The actual model request did not receive quoted-speaker evidence.");
+    Check(session.Submit("What would you say to them directly?").succeeded,
+        "Direct-reply session follow-up failed.");
+    Check(backend.Prompt().find("I=Revia, you=that person") != std::string::npos,
+        "The actual follow-up request lost the original quoted speaker.");
+    Check(session.Submit("You said \"Why do you think I need help?\". Those were your words.").succeeded,
+        "Quoted Revia correction failed.");
+    Check(backend.Prompt().find("user is asking about their own motive") == std::string::npos,
+        "The style classifier treated quoted Revia speech as the user's motive question.");
     session.Stop();
 }
 
@@ -309,12 +423,19 @@ void TestQuietAdmissionAndRelationshipClocks()
     const identity::DevelopmentState development;
     Check(!emotions.ObserveQuietConversation(development, 10min), "Fresh state claimed a quiet period.");
     std::this_thread::sleep_for(70ms);
-    const auto quiet = emotions.ObserveQuietConversation(development, 60ms);
+    Check(!emotions.ObserveQuietConversation(development, 60ms, true, .8F),
+        "Being occupied still forced a lonely reaction.");
+    const auto quiet = emotions.ObserveQuietConversation(development, 60ms, false, .8F);
+    Check(quiet && quiet->emotion[emotion::Emotion::Boredom] > .2F,
+        "Accumulated boredom did not reach the canonical emotion state.");
     Check(quiet && quiet->emotion[emotion::Emotion::Loneliness] > .1F,
         "A confirmed quiet interval did not reach canonical emotion.");
     Check(!emotions.ObserveQuietConversation(development, 60ms), "One quiet interval was appraised twice.");
     auto input = emotion::BuildConversationStimulus("fixture", identity::ReadConversationSignals("Okay.", {}, true));
+    const auto lonelyBefore = emotions.Emotion()[emotion::Emotion::Loneliness];
     emotions.Observe(input, development);
+    Check(emotions.Emotion()[emotion::Emotion::Loneliness] < lonelyBefore,
+        "Renewed contact did not relieve the quiet feeling.");
     Check(!emotions.ObserveQuietConversation(development, 10min), "Actual input did not reset quiet admission.");
     std::this_thread::sleep_for(70ms);
     Check(emotions.ObserveQuietConversation(development, 60ms).has_value(), "A later quiet interval could never be observed.");
@@ -433,15 +554,166 @@ void TestActualQuietWorkerAndGoalOutcomes()
         "A user-cancelled goal was appraised as a failure.");
     session.Stop();
 }
+
+void TestIdleActivitiesProduceWorkWithoutChat()
+{
+    for (const std::string action : {"create", "computer"})
+    {
+        tests::ScopedTestDirectory directory;
+        WorkingDirectory cwd(directory.root);
+        const auto permitted = directory.root / "Approved";
+        std::filesystem::create_directories(permitted);
+        const auto source = permitted / "quiet  idea.txt";
+        { std::ofstream out(source); out << "LOCAL_PC_SENTINEL"; }
+        const std::string operation = action == "computer"
+            ? json({{"action", "read_text_file"}, {"target", source.string()}}).dump() : "";
+        Backend backend(true, action, operation);
+        Configure(directory.root, backend.port);
+        Write(directory.root / "Config/capabilities.json", {
+            {"mode", "supervised"}, {"approvedRoots", {permitted.string()}},
+            {"approvedApplications", json::array()}, {"autoApproveRiskThrough", "read_only"}});
+        ReviaSession session;
+        std::atomic<int> chat{0}, completed{0}, inspected{0};
+        const Subscription subscription{session.Events(), session.Events().Subscribe([&](const RuntimeEvent& event)
+        {
+            if (event.kind == RuntimeEventKind::AssistantMessage) ++chat;
+            if (event.component == "Autonomy" && event.phase == "completed") ++completed;
+            if (event.component == "Autonomy" && event.detail.find("LOCAL_PC_SENTINEL") != std::string::npos) ++inspected;
+        })};
+        Check(session.Start(), "The independent activity fixture did not start.");
+        const int beforeChat = chat.load();
+        Access::StartIdleReviewFixture(session);
+        Check(Until([&] { return completed.load() > 0; }), "The real idle worker did not execute " + action);
+        Check(chat == beforeChat, "A private activity became unsolicited dialogue.");
+        const auto activity = session.CurrentActivity();
+        Check(activity && activity->status == autonomy::ActivityStatus::Completed,
+            "The completed independent activity was not exposed by its owner.");
+        if (action == "create")
+        {
+            const auto notes = directory.root / "RuntimeData/Workspace/Notes";
+            Check(std::filesystem::exists(notes), "Creation produced no workspace directory.");
+            int count = 0;
+            for (const auto& note : std::filesystem::directory_iterator(notes))
+            {
+                std::ifstream input(note.path());
+                const std::string body((std::istreambuf_iterator<char>(input)), {});
+                Check(body.find("PRIVATE_DRAFT_SENTINEL") != std::string::npos,
+                    "The kept artifact contained only a plan, not the actual draft.");
+                ++count;
+            }
+            Check(count == 1, "An idle creation wrote more than one artifact.");
+            Check(backend.Request()["chat_template_kwargs"]["enable_thinking"] == false,
+                "Private creation spent its output budget on hidden reasoning.");
+        }
+        else
+        {
+            Check(inspected == 1, "The PC action did not read the approved file through dispatch.");
+            Access::StopIdleReviewFixture(session);
+            autonomy::ActivityDecision repeat;
+            repeat.type = autonomy::ActivityType::Computer;
+            repeat.subject = "Read the approved note";
+            repeat.reason = "Fixture scope and pacing check";
+            repeat.operation = operation;
+            repeat.score = .9F;
+            Access::RunIdleActivity(session, repeat);
+            Check(inspected == 1, "A second activity bypassed spacing.");
+            Access::AgeIdleBudget(session);
+            Access::RunIdleActivity(session, repeat);
+            Check(inspected == 2, "Expired activity history permanently blocked future work.");
+
+            const auto outside = directory.root / "outside.txt";
+            { std::ofstream out(outside); out << "OUTSIDE_SCOPE_SENTINEL"; }
+            Access::AgeIdleBudget(session);
+            repeat.operation = json({{"action", "read_text_file"}, {"source", outside.string()}}).dump();
+            Access::RunIdleActivity(session, repeat);
+            Check(session.CurrentActivity()->status == autonomy::ActivityStatus::Paused && inspected == 2,
+                "An autonomous PC read escaped its approved roots.");
+            Access::AgeIdleBudget(session);
+            repeat.operation = json({{"action", "move_to_recycle_bin"}, {"source", source.string()}}).dump();
+            Access::RunIdleActivity(session, repeat);
+            Check(session.CurrentActivity()->status == autonomy::ActivityStatus::Cancelled &&
+                std::filesystem::exists(source), "An independent activity deleted user work.");
+        }
+        session.Stop();
+    }
+}
+
+void TestIdleReviewRecoversWithResidentGpuMemory()
+{
+    tests::ScopedTestDirectory directory;
+    WorkingDirectory cwd(directory.root);
+    Backend backend(true);
+    Configure(directory.root, backend.port);
+    // Drive the real sampling callback deterministically, without the test machine's
+    // resource sampler racing the supplied GPU readings.
+    auto settingsPath = directory.root / "Config/settings.json";
+    json settings;
+    { std::ifstream input(settingsPath); input >> settings; }
+    settings["resources"]["usageSampleSeconds"] = 0;
+    Write(settingsPath, settings);
+    ReviaSession session;
+    Check(session.Start(), "Idle review session did not start.");
+    resources::UsageSnapshot usage;
+    usage.measured = true;
+    resources::UsageMeter vram;
+    vram.id = "gpu:CUDA0:vram";
+    vram.unit = resources::MeterUnit::Mebibytes;
+    vram.capacity = 12288.0;
+    vram.used = 11400.0;
+    vram.measured = true;
+    resources::UsageMeter compute;
+    compute.id = "gpu:CUDA0:compute";
+    compute.unit = resources::MeterUnit::Percent;
+    compute.capacity = 100.0;
+    compute.used = 90.0;
+    compute.measured = true;
+    usage.meters = {vram, compute};
+    for (int i = 0; i < 3; ++i) Access::SampleLoad(session, usage);
+    Check(!session.CurrentLoad().allowOptionalBackgroundWork,
+        "A sustained busy GPU did not defer background work.");
+    std::atomic<int> deferred{0}, decisions{0};
+    const Subscription subscription{session.Events(), session.Events().Subscribe([&](const RuntimeEvent& event)
+    {
+        if (event.component != "Curiosity") return;
+        if (event.phase == "Deferred") ++deferred;
+        if (event.phase == "Kept private") ++decisions;
+    })};
+    Access::StartIdleReviewFixture(session);
+    Check(Until([&] { return deferred.load() > 0; }),
+        "The actual idle worker did not report its resource deferral.");
+    Check(decisions == 0, "A blocked idle worker still reached inference.");
+    usage.meters.back().used = 2.0;
+    Access::SampleLoad(session, usage);
+    Access::SampleLoad(session, usage);
+    Check(!session.CurrentLoad().allowOptionalBackgroundWork,
+        "Two transient idle samples bypassed resource hysteresis.");
+    Access::SampleLoad(session, usage);
+    Check(session.CurrentLoad().allowOptionalBackgroundWork &&
+        session.CurrentLoad().state == resources::LoadState::Pressured,
+        "Idle compute did not recover work while VRAM remained resident.");
+    Check(Until([&] { return decisions.load() >= 1; }),
+        "Deferred idle curiosity never reached the backend after recovery.");
+    Check(Until([&] { return decisions.load() >= 2; }),
+        "Scheduled curiosity stopped without another user or desktop event.");
+    const auto request = backend.Request();
+    Check(request["response_format"].value("type", "") == "json_schema" &&
+        request["response_format"]["json_schema"]["schema"]["properties"]["rationale"]["maxLength"].get<int>() <= 400,
+        "The real idle worker did not constrain its nomination fields on the wire.");
+    session.Stop();
+}
 }
 
 void RunEmotionOwnershipTests()
 {
+    TestContextCompactionKeepsCurrentState();
     TestConversationConsumers();
+    TestReportedSpeechThroughSession();
     TestDeliveryRequiresEmotionalEvidence();
     TestMaintenanceAndPersistence();
     TestQuietAdmissionAndRelationshipClocks();
     TestPublicCompletionAndPresence();
     TestActualQuietWorkerAndGoalOutcomes();
+    TestIdleReviewRecoversWithResidentGpuMemory();
+    TestIdleActivitiesProduceWorkWithoutChat();
     std::cout << "Canonical emotion consumers, real session settling, quiet admission and persistence tests passed.\n";
 }

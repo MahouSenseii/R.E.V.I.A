@@ -66,12 +66,14 @@ struct Stimulus
     // Confirmed absence of conversation, not an inference about the user's feelings
     // or physical presence. Only the session's quiet-period clock supplies this.
     float quietConversation = 0.0F;
+    float idleBoredom = 0.0F;
 
     // Causation changes the feeling more than the facts do. The same failure is
     // frustration when she chose the approach and concern when something broke
     // underneath her.
     bool selfCaused = false;
     bool userCaused = false;
+    bool explicitlyPlayful = false;
 
     std::chrono::system_clock::time_point timestamp =
         std::chrono::system_clock::now();

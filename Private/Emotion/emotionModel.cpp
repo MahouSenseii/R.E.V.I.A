@@ -43,6 +43,8 @@ EmotionVector RuleEmotionModel::RawResponse(
     const float mine = context.selfResponsibility;
 
     delta[Emotion::Loneliness] += Clamp01(stimulus.quietConversation) * magnitude;
+    delta[Emotion::Boredom] += Clamp01(stimulus.idleBoredom) * 0.65F;
+    delta[Emotion::Restlessness] += Clamp01(stimulus.idleBoredom) * 0.25F;
 
     // --- Outcomes -----------------------------------------------------------------
     if (success > 0.0F)
@@ -119,10 +121,9 @@ EmotionVector RuleEmotionModel::RawResponse(
         bool absorbed = false;
         if (context.hasRelationship && stimulus.userCaused)
         {
-            if (context.relationship.ReadsAsTeasing())
+            if (stimulus.explicitlyPlayful && context.relationship.ReadsAsTeasing())
             {
-                // A jab from someone she is close to and not currently annoyed with is
-                // a joke. Reading it as an attack is what makes a companion exhausting.
+                // Closeness can support a joke, but cannot turn every insult into one.
                 delta[Emotion::Amusement] += weight * 0.55F;
                 delta[Emotion::Irritation] += weight * 0.15F;
                 absorbed = true;
@@ -130,11 +131,13 @@ EmotionVector RuleEmotionModel::RawResponse(
             else if (context.relationship.trust > 0.55F &&
                 context.relationship.affinity > 0.2F)
             {
-                // From someone she trusts but is already strained with, the same words
-                // hurt rather than anger. Anger is what strangers get.
+                // Someone she trusts can hurt AND anger her. Neither familiarity nor
+                // affection grants immunity from a sharp reaction.
                 delta[Emotion::Hurt] += weight * 0.6F;
                 delta[Emotion::Sadness] += weight * 0.55F;
                 delta[Emotion::Disappointment] += weight * 0.45F;
+                delta[Emotion::Irritation] += weight * 0.45F;
+                delta[Emotion::Anger] += weight * 0.35F;
                 absorbed = true;
             }
         }

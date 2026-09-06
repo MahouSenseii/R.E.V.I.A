@@ -172,7 +172,10 @@ VoiceOperationResult QwenTtsClient::RenderVocalizations(
             // A carrier the model can attach the sound to. It is never played as
             // words: the instruction asks for the sound, and the whole clip is the
             // sound. Kept short so a clip is a cue rather than a sentence.
-            {"carrier", "Ha."},
+            {"carrier", entry.kind == VocalizationKind::Hmm ? "Hmm." :
+                entry.kind == VocalizationKind::Laugh ? "Ha ha!" :
+                entry.kind == VocalizationKind::SoftLaugh ? "Heh." :
+                entry.kind == VocalizationKind::Gasp ? "Ah!" : "Ah..."},
             {"variants", variants}
         });
     }

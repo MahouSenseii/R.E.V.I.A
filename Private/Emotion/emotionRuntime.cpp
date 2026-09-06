@@ -48,20 +48,34 @@ std::optional<AppraisalOutcome> EmotionRuntime::Observe(
     {
         lastConversation = std::chrono::steady_clock::now();
         quietConversationObserved = false;
+        // Renewed contact relieves the quiet feeling even when the message itself is
+        // neutral. It is never interpreted as an apology owed to Revia.
+        emotion[emotion::Emotion::Loneliness] *= 0.25F;
+        emotion[emotion::Emotion::Boredom] *= 0.4F;
     }
     return Appraise(stimulus, development, relationship, std::move(memories));
 }
 
 std::optional<AppraisalOutcome> EmotionRuntime::ObserveQuietConversation(
     const identity::DevelopmentState& development,
-    const std::chrono::milliseconds quietInterval)
+    const std::chrono::milliseconds quietInterval,
+    const bool occupied, const float boredom)
 {
     std::lock_guard lock(mutex);
-    if (quietConversationObserved || std::chrono::steady_clock::now() - lastConversation <
+    if (occupied || quietConversationObserved || std::chrono::steady_clock::now() - lastConversation <
         std::max(std::chrono::milliseconds(1), quietInterval))
         return std::nullopt;
     quietConversationObserved = true;
-    return Appraise(BuildQuietConversationStimulus(), development, nullptr, {});
+    auto stimulus = BuildQuietConversationStimulus();
+    stimulus.description = "A long quiet stretch without conversation or a recent activity";
+    const auto traits = development.Current();
+    // Independence and current sociability change the response. Being absorbed in
+    // something skips this event entirely; quiet does not always mean lonely.
+    stimulus.quietConversation = std::clamp(
+        0.35F + 0.65F * traits[identity::Trait::Sociability] -
+        0.35F * traits[identity::Trait::Independence] + 0.2F * mood.sociability, 0.0F, 1.0F);
+    stimulus.idleBoredom = std::clamp(boredom, 0.0F, 1.0F);
+    return Appraise(stimulus, development, nullptr, {});
 }
 
 std::optional<AppraisalOutcome> EmotionRuntime::Appraise(

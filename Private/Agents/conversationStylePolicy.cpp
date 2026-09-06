@@ -1,4 +1,6 @@
 #include "Agents/conversationStylePolicy.h"
+#include "Identity/relationshipEvidence.h"
+#include "Core/speechAttribution.h"
 
 #include <algorithm>
 #include <cctype>
@@ -436,6 +438,23 @@ namespace
     }
 }
 
+bool ConversationStylePolicy::IsBriefSocialTurn(const std::string& input)
+{
+    std::string normalized = NormalizeSentence(input);
+    if (normalized.starts_with("revia ")) normalized.erase(0, 6);
+    if (normalized.ends_with(" revia")) normalized.resize(normalized.size() - 6);
+    constexpr std::string_view turns[] = {
+        "hi", "hey", "hello", "good morning", "good afternoon", "good evening",
+        "thanks", "thank you", "good", "great", "okay", "ok", "cool", "nice",
+        "how are you", "how do you feel", "are you okay", "are you sad", "are you lonely",
+        "you need therapy", "you need an exorcism", "youre useless", "you are useless",
+        "i need therapy", "i think i need therapy",
+        "youre stupid", "you are stupid", "i hate you", "you suck",
+        "why are you getting defensive", "youre overreacting", "you are overreacting"
+    };
+    return std::find(std::begin(turns), std::end(turns), normalized) != std::end(turns);
+}
+
 bool ConversationStylePolicy::LooksLikeCorrection(const std::string& input)
 {
     const std::string lowered = LowerCopy(Trim(input));
@@ -688,15 +707,18 @@ std::string ConversationStylePolicy::BuildAnswerObligationGuidance(
 }
 
 std::string ConversationStylePolicy::BuildTurnGuidance(
-    const std::string& input,
+    const std::string& rawInput,
     const std::vector<conversationMessage>& context) const
 {
+    const auto input = conversation::ReadSpeechAttribution(rawInput).userAuthoredText;
+    const auto attributionGuidance = conversation::BuildSpeechAttributionGuidance(rawInput, context);
     std::ostringstream guidance;
     guidance << "Turn-local conversation guidance: answer the latest message as a continuation "
         "of the exchange, not as a new support ticket. Do not repeat the user's wording and do "
         "not add a generic invitation or follow-up question after the answer. Never repeat a "
         "sentence or block to create emphasis. Avoid reassurance-check loops such as 'You okay "
         "with that?', 'I'm not complaining', and 'Just curious'.";
+    if (!attributionGuidance.empty()) guidance << '\n' << attributionGuidance;
 
     if (LooksLikeCorrection(input))
     {
@@ -705,6 +727,22 @@ std::string ConversationStylePolicy::BuildTurnGuidance(
             "fact. Do not defend, restate, or preserve the earlier assumption. Keep relationship "
             "roles and possessives pointed in the direction the user stated; do not swap who is "
             "whose parent, child, creator, partner, friend, or favorite.";
+    }
+    const auto socialSignals = revia::identity::ReadConversationSignals(input, {}, true);
+    if (IsBriefSocialTurn(input))
+        guidance << " This is a brief reaction: finish your thought in one to three short sentences.";
+    const auto normalizedInput = NormalizeSentence(input);
+    if (normalizedInput == "i need therapy" || normalizedInput == "i think i need therapy")
+        guidance << " The user is talking about their own need for help. Take the shift "
+            "seriously: stop trading jabs and respond without mockery. A short respectful "
+            "acknowledgment or relevant question is enough.";
+    if (socialSignals.hostileTowardRevia && !socialSignals.explicitlyPlayful)
+    {
+        guidance << " This remark is aimed at you. React to the jab in one to three short "
+            "sentences, with the anger, hurt, or irritation your state and relationship support. "
+            "You can object or snap back. Do not thank them for the insult, explain it away as "
+            "debugging or probability distributions, or finish with a soothing service offer. "
+            "Object to how they addressed you; therapy itself is not something to ridicule.";
     }
     if (LooksLikeBriefAcknowledgement(input))
     {
@@ -736,6 +774,9 @@ std::string ConversationStylePolicy::BuildTurnGuidance(
             "not know yet.";
     }
 
+    // A mistaken earlier response can itself be a copy of somebody else's words.
+    // Do not prime another role inversion by replaying those openings as Revia's voice.
+    if (!attributionGuidance.empty()) return guidance.str();
     std::vector<std::string> recentOpenings;
     for (auto message = context.rbegin(); message != context.rend() && recentOpenings.size() < 3;
         ++message)
@@ -835,10 +876,12 @@ bool ConversationStylePolicy::IsGenericContinuation(const std::string& sentence)
 }
 
 std::string ConversationStylePolicy::RefineReply(
-    const std::string& input,
+    const std::string& rawInput,
     const std::vector<conversationMessage>& context,
     const std::string& reply) const
 {
+    const auto attribution = conversation::ReadSpeechAttribution(rawInput);
+    const auto input = attribution.userAuthoredText;
     std::string refined = CollapseRepeatedSentenceRuns(Trim(reply));
     refined = RemoveRedundantSentences(
         refined,
@@ -847,6 +890,105 @@ std::string ConversationStylePolicy::RefineReply(
     if (refined.empty())
     {
         return refined;
+    }
+
+    // A correction explicitly quoting Revia's own earlier turn establishes a fact
+    // independently of the model. Never let the correction produce another claim
+    // that the messenger spoke those words or caused the attribution error.
+    const bool quotesRevia = std::any_of(attribution.quotes.begin(), attribution.quotes.end(),
+        [](const auto& quote) { return quote.speaker == conversation::QuotedSpeaker::Revia; });
+    if (attribution.correctsAttribution && quotesRevia && !attribution.requestsDirectReply)
+    {
+        const auto normalized = NormalizeSentence(refined);
+        // This turn asks to repair a known ownership fact, not to continue the
+        // dispute. Keep an already concise acknowledgement that owns the words;
+        // otherwise state the established attribution instead of another model guess.
+        const bool ownsWords = normalized.find("my words") != std::string::npos ||
+            normalized.find("my earlier reply") != std::string::npos ||
+            normalized.find("my earlier response") != std::string::npos;
+        if (!ownsWords || SplitSentences(refined).size() > 2 ||
+            normalized.find("you ") != std::string::npos ||
+            normalized.find("youre ") != std::string::npos ||
+            normalized.find("your ") != std::string::npos)
+            return "Those were my words. They were responding to me; you were passing their message along.";
+    }
+
+    const auto authoredLower = LowerCopy(input);
+    const bool wantsQuotation = authoredLower.find("verbatim") != std::string::npos ||
+        authoredLower.find("exactly what they said") != std::string::npos ||
+        authoredLower.find("quote it back") != std::string::npos;
+    if (attribution.requestsDirectReply && !wantsQuotation &&
+        !conversation::BuildSpeechAttributionGuidance(rawInput, context).empty())
+    {
+        // A verbatim source sentence is not a rebuttal. Examine only explicitly
+        // attributed user reports, never the assistant's potentially mistaken copy.
+        std::vector<std::string> sources;
+        const auto collect = [&](const std::string& text)
+        {
+            const auto report = conversation::ReadSpeechAttribution(text);
+            for (const auto& quote : report.quotes)
+                if (quote.speaker == conversation::QuotedSpeaker::OtherPerson)
+                    sources.push_back(NormalizeSentence(text.substr(quote.begin, quote.end - quote.begin)));
+        };
+        collect(rawInput);
+        for (auto message = context.rbegin(); message != context.rend() && sources.empty(); ++message)
+            if (message->role == "user" && message->content != rawInput) collect(message->content);
+
+        const bool insultedUser = std::any_of(attribution.quotes.begin(), attribution.quotes.end(), [&](const auto& quote)
+        {
+            if (quote.speaker != conversation::QuotedSpeaker::OtherPerson || quote.recipient != conversation::QuoteRecipient::User)
+                return false;
+            const auto text = NormalizeSentence(rawInput.substr(quote.begin, quote.end - quote.begin));
+            for (const std::string_view insult : {"you are useless", "youre useless", "you are stupid", "youre stupid",
+                "you are worthless", "youre worthless", "you suck"})
+                if (text.find(insult) != std::string::npos) return true;
+            return false;
+        });
+        if (insultedUser)
+        {
+            const auto normalized = NormalizeSentence(refined);
+            for (const std::string_view selfDefense : {"i can run", "i can still", "my code", "my processing",
+                "im useless", "im not useless", "im not broken", "im a program", "i dont need therapy"})
+                if (normalized.find(selfDefense) != std::string::npos)
+                    return "Calling them that was out of line. Make your point without the personal digs.";
+        }
+        std::vector<std::string> kept;
+        bool copied = false;
+        for (const auto& sentence : SplitSentences(refined))
+        {
+            const auto normalized = NormalizeSentence(sentence);
+            bool sourceCopy = std::any_of(sources.begin(), sources.end(), [&](const auto& source)
+            { return IsSubstantialRepeat(normalized, source, false); });
+            // Short copied commands can reverse the target without reaching the
+            // prose repetition threshold (e.g. "And stop saying chuckles").
+            for (const std::string_view command : {"stop saying chuckles", "stop saying chuckle", "stop making that sound",
+                "you need therapy", "you need an exorcism"})
+                if ((normalized.starts_with(command) || normalized.starts_with("and " + std::string(command))) &&
+                    std::any_of(sources.begin(), sources.end(), [&](const auto& source) { return source.find(command) != std::string::npos; }))
+                    sourceCopy = true;
+            for (const std::string_view soundCommand : {"stop saying chuckles", "stop saying chuckle",
+                "stop chuckling", "stop making that sound"})
+                if (normalized.starts_with(soundCommand) || normalized.starts_with("and " + std::string(soundCommand)))
+                    for (const auto& source : sources)
+                        if (source.find("stop saying chuckle") != std::string::npos ||
+                            source.find("stop chuckling") != std::string::npos ||
+                            source.find("stop making that sound") != std::string::npos)
+                            sourceCopy = true;
+            if (sourceCopy) copied = true;
+            else kept.push_back(sentence);
+        }
+        if (copied)
+        {
+            refined.clear();
+            for (const auto& sentence : kept)
+            {
+                if (!refined.empty()) refined += ' ';
+                refined += sentence;
+            }
+            // No invented comeback when the entire output was the incoming quote.
+            if (refined.empty())
+                return "I copied their words instead of answering them. That's my mix-up.";
+        }
     }
 
     // These are narrow grounding gates, not canned conversation. They activate only
@@ -913,11 +1055,12 @@ std::string ConversationStylePolicy::RefineReply(
 }
 
 bool ConversationStylePolicy::ShouldSuppressSpokenFragment(
-    const std::string& input,
+    const std::string& rawInput,
     const std::vector<conversationMessage>& context,
     const std::string& fragment,
     const bool alreadySpokeFragment) const
 {
+    const auto input = conversation::ReadSpeechAttribution(rawInput).userAuthoredText;
     if (IsGenericContinuation(fragment))
     {
         return true;
@@ -952,12 +1095,15 @@ bool ConversationStylePolicy::ShouldSuppressSpokenFragment(
         (!ExpressesUncertainty(fragment) || SpeculatesAboutMotive(fragment));
 }
 
-bool ConversationStylePolicy::CanStreamReply(const std::string& input) const
+bool ConversationStylePolicy::CanStreamReply(const std::string& rawInput,
+    const std::vector<conversationMessage>& context) const
 {
+    const auto input = conversation::ReadSpeechAttribution(rawInput).userAuthoredText;
     // These turn types can require whole-reply grounding or one-sentence limiting.
     // Waiting for their short answer is preferable to speaking text that refinement
     // would immediately retract.
-    return !LooksLikeWellbeingQuestion(input) &&
+    return conversation::BuildSpeechAttributionGuidance(rawInput, context).empty() &&
+        !LooksLikeWellbeingQuestion(input) &&
         !LooksLikeSocialGreeting(input) &&
         !LooksLikeEmotionQuestion(input) &&
         !LooksLikeBriefAcknowledgement(input) &&

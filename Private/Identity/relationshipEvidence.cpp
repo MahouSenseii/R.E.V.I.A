@@ -1,4 +1,5 @@
 #include "Identity/relationshipEvidence.h"
+#include "Core/speechAttribution.h"
 
 #include <algorithm>
 #include <cctype>
@@ -43,7 +44,9 @@ ConversationSignals ReadConversationSignals(
     signals.reply = reply;
     signals.succeeded = succeeded;
 
-    const std::string input = Lower(userInput);
+    const std::string input = Lower(conversation::ReadSpeechAttribution(userInput).userAuthoredText);
+    signals.explicitlyPlayful = ContainsAny(input, {
+        "just kidding", "only kidding", "i'm joking", "i am joking", "just teasing"});
 
     // Aimed at Revia, not at the problem. The distinction matters: "this is broken" is
     // not evidence about the relationship, and treating it as such would make her resent
@@ -52,6 +55,24 @@ ConversationSignals ReadConversationSignals(
         "i hate you", "you're useless", "you are useless", "you're stupid",
         "you are stupid", "shut up", "nobody likes you", "you suck",
         "you're worthless", "you are worthless"});
+
+    // A direct put-down is different from the user discussing their own care, or
+    // quoting somebody else's words. Keep this narrow: the word therapy by itself
+    // carries no hostility, and a concerned question is not a taunt.
+    const auto start = input.find_first_not_of(" \t\r\n");
+    const std::string direct = start == std::string::npos ? "" : input.substr(start);
+    for (const std::string_view opener : {"you need therapy", "revia, you need therapy",
+        "you need an exorcism", "revia, you need an exorcism"})
+    {
+        if (direct.starts_with(opener) &&
+            (direct.size() == opener.size() ||
+             std::string_view(".! ,").find(direct[opener.size()]) != std::string_view::npos) &&
+            direct.find('?') == std::string::npos &&
+            !ContainsAny(direct, {"i'm worried", "i am worried", "i care about", "because i'm concerned"}))
+        {
+            signals.hostileTowardRevia = true;
+        }
+    }
 
     signals.expressedAppreciation = ContainsAny(input, {
         "thank", "thanks", "appreciate", "well done", "good job", "nice work",
@@ -83,7 +104,7 @@ std::string ReadStatedName(const std::string& userInput)
         "my name is ", "call me ", "i am called ", "i'm called ", "you can call me ",
         "name's ", "this is "
     };
-    const std::string lowered = Lower(userInput);
+    const std::string lowered = Lower(conversation::ReadSpeechAttribution(userInput).userAuthoredText);
     for (const std::string& opener : openers)
     {
         const std::size_t at = lowered.find(opener);

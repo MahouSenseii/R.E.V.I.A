@@ -13,14 +13,18 @@ class messageRouter;
 namespace revia::agents
 {
 
-// A nomination, not permission. The curiosity layer may suggest silence, a line of
-// conversation, or a read-only research query. It cannot execute the suggestion and it
-// cannot decide whether interrupting the user is welcome.
+// A nomination, not permission. Idle choices include private work and bounded PC
+// actions as well as research and conversation. The runtime owns execution and
+// decides whether an interruption is welcome.
 enum class CuriosityAction
 {
     Silence,
     Speak,
-    Research
+    Research,
+    Think,
+    Observe,
+    Create,
+    Computer
 };
 
 [[nodiscard]] std::string ToString(CuriosityAction action);
@@ -34,6 +38,20 @@ struct CuriosityDecision
     std::string rationale;
     float confidence = 0.0F;
     std::string error;
+};
+
+struct IdleActivityContext
+{
+    long long quietSeconds = 0;
+    float boredom = 0.0F;
+    float socialNeed = 0.0F;
+    bool userBusy = false;
+    bool researchAllowed = false;
+    bool observationAllowed = false;
+    bool computerAllowed = false;
+    int unansweredOpenings = 0;
+    std::string recentActivities;
+    std::string computerScope;
 };
 
 // Produces one tightly bounded structured nomination from recent dialogue and Revia's
@@ -56,14 +74,16 @@ public:
         const std::vector<conversationMessage>& recentConversation,
         const runtime::AffectSnapshot& affect,
         const std::string& desktopContext,
-        std::stop_token stopToken = {}) const;
+        std::stop_token stopToken = {},
+        const IdleActivityContext& idle = {}) const;
 
     // Public so parser and prompt contracts can be tested without a running model.
     [[nodiscard]] static CuriosityDecision ParseDecision(const std::string& rawDecision);
     [[nodiscard]] static std::string BuildContextPrompt(
         const std::vector<conversationMessage>& recentConversation,
         const runtime::AffectSnapshot& affect,
-        const std::string& desktopContext = {});
+        const std::string& desktopContext = {},
+        const IdleActivityContext& idle = {});
 };
 
 } // namespace revia::agents

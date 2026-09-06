@@ -112,7 +112,10 @@ ScreenAwarenessAssessment ScreenAwarenessAssessmentParser::Parse(
     {
         const nlohmann::json document = nlohmann::json::parse(candidate);
         if (!document.is_object() || !document.contains("summary") ||
-            !document["summary"].is_string() ||
+            !(document["summary"].is_string() ||
+                (document["summary"].is_array() && std::all_of(
+                    document["summary"].begin(), document["summary"].end(),
+                    [](const auto& line) { return line.is_string(); }))) ||
             !document.contains("attention_required") ||
             !document["attention_required"].is_boolean() ||
             !document.contains("confidence") ||
@@ -130,8 +133,19 @@ ScreenAwarenessAssessment ScreenAwarenessAssessmentParser::Parse(
             return assessment;
         }
 
-        assessment.summary = BoundedText(
-            document["summary"].get<std::string>(), MaximumSummaryCharacters);
+        // "Four compact bullets" naturally elicits a JSON array from local models.
+        // Accept textual bullets without relaxing any of the attention control fields.
+        std::string summary;
+        if (document["summary"].is_string())
+            summary = document["summary"].get<std::string>();
+        else
+            for (const auto& line : document["summary"])
+            {
+                if (!summary.empty()) summary += '\n';
+                summary += line.get<std::string>();
+                if (summary.size() >= MaximumSummaryCharacters) break;
+            }
+        assessment.summary = BoundedText(summary, MaximumSummaryCharacters);
         assessment.attentionRequired =
             document["attention_required"].get<bool>();
         assessment.confidence = static_cast<float>(confidence);

@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <fstream>
 #include <httplib.h>
 #include <iostream>
 #include <mutex>
@@ -39,9 +40,26 @@ public:
         { response.set_content(R"({"data":[{"id":"proactive-fixture"}]})", "application/json"); });
         server.Post("/v1/chat/completions", [this](const auto& request, auto& response)
         {
+            const auto body = json::parse(request.body);
             {
                 std::lock_guard lock(mutex);
-                requests.push_back(json::parse(request.body));
+                requests.push_back(body);
+            }
+            if (holdBackgroundVision.load())
+            {
+                if (body.contains("response_format") &&
+                    body["response_format"].value("type", "") == "json_schema" &&
+                    body["response_format"]["json_schema"].value("name", "") == "screen_awareness")
+                {
+                    backgroundVisionStarted = true;
+                    const auto deadline = std::chrono::steady_clock::now() + 2s;
+                    while (!foregroundVisionStarted && std::chrono::steady_clock::now() < deadline)
+                        std::this_thread::sleep_for(5ms);
+                }
+                else
+                    foregroundVisionStarted = true;
+                response.set_content(R"({"choices":[{"message":{"content":"A test screen summary."},"finish_reason":"stop"}]})", "application/json");
+                return;
             }
             if (rejectNext.exchange(false))
             {
@@ -88,6 +106,7 @@ public:
     int port = 0;
     std::atomic<int> embeddingRequests{0};
     std::atomic<bool> rejectNext{false};
+    std::atomic<bool> holdBackgroundVision{false}, backgroundVisionStarted{false}, foregroundVisionStarted{false};
 private:
     httplib::Server server;
     std::mutex mutex;
@@ -249,6 +268,11 @@ void TestProactiveGenerationAndPublicBoundary()
         "RESEARCH_SENTINEL: supplied untrusted reference https://example.org/leaf",
         fixture.profile, true, false);
     Check(curiosity.succeeded, "The real curiosity opening failed: " + curiosity.reason);
+    const auto currentTask = backend.Last()["messages"].back()["content"].get<std::string>();
+    Check(currentTask.find("TOPIC_SENTINEL") != std::string::npos &&
+        currentTask.find("supplied source URL") != std::string::npos &&
+        currentTask.find("[A private self-directed thought matured.]") == std::string::npos,
+        "The model was asked to answer a placeholder instead of the actual research topic.");
     CheckCanonicalState(backend.Last());
     const auto second = SystemText(backend.Last());
     for (const auto& marker : {"TOPIC_SENTINEL", "RATIONALE_SENTINEL", "RESEARCH_SENTINEL",
@@ -354,11 +378,54 @@ void TestCancelledProactiveCommit()
         !late.speechPending && backend.Count() == 1 && History(fixture.context) == original &&
         fixture.memorySubmissions == 0, "Cancellation at delivery committed a proactive reply or transient cue.");
 }
+
+void TestBackgroundVisionContractAndPreemption()
+{
+    tests::ScopedTestDirectory directory;
+    WorkingDirectory cwd(directory.root);
+    Backend backend;
+    backend.holdBackgroundVision = true;
+    const auto imagePath = directory.root / "transport-fixture.png";
+    // The test backend inspects the request envelope rather than decoding pixels.
+    { std::ofstream output(imagePath, std::ios::binary); output << "image transport fixture"; }
+    llamaCppService service;
+    llmSettings settings;
+    settings.host = "127.0.0.1"; settings.port = backend.port;
+    settings.modelName = "proactive-fixture";
+    settings.parallelRequests = 1;
+    embeddingSettings embedding;
+    embedding.bEnabled = false;
+    aiProfile profile;
+    service.ApplySettings(settings, embedding, profile);
+    responseOutput background;
+    std::jthread worker([&] { background = service.AnalyzeImage(imagePath, "ambient", 160, {}, true); });
+    const auto deadline = std::chrono::steady_clock::now() + 3s;
+    while (!backend.backgroundVisionStarted && std::chrono::steady_clock::now() < deadline)
+        std::this_thread::sleep_for(5ms);
+    Check(backend.backgroundVisionStarted, "The background vision request did not reach the backend.");
+    const auto request = backend.Last();
+    Check(request["max_tokens"].get<int>() >= 192 &&
+        request["response_format"]["json_schema"]["schema"]["properties"]["summary"]["type"] == "string",
+        "Ambient vision did not send a bounded structured assessment contract.");
+    const auto started = std::chrono::steady_clock::now();
+    const auto foreground = service.AnalyzeImage(imagePath, "user requested look", 160);
+    const auto elapsed = std::chrono::steady_clock::now() - started;
+    worker.join();
+    Check(foreground.bSuccess && !background.bSuccess && elapsed < 1s &&
+        background.reason == "Background screen awareness yielded to user input.",
+        "Background vision preemption: foreground=" + std::to_string(foreground.bSuccess) +
+        " background=" + std::to_string(background.bSuccess) + " elapsed_ms=" +
+        std::to_string(std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count()) +
+        " reason=" + background.reason + " foreground_reason=" + foreground.reason);
+    Check(!backend.Last().contains("response_format"),
+        "The ambient assessment schema leaked into user-requested vision.");
+}
 }
 
 void RunProactiveStateTests()
 {
     TestProactiveGenerationAndPublicBoundary();
     TestCancelledProactiveCommit();
+    TestBackgroundVisionContractAndPreemption();
     std::cout << "Proactive canonical state, additive evidence, public boundary and cancellation owner tests passed.\n";
 }

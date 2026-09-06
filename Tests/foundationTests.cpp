@@ -219,6 +219,13 @@ void TestRuntimeDataFirstRunBootstrap()
         "First-run Revia Bright reference audio was not copied.");
 
     WriteBytes(runtimeRoot / "Voices" / "voices.json", "{\"userChoice\":true}");
+    const auto bank = seedVoices / "revia-bright" / "vocalizations";
+    std::filesystem::create_directories(bank);
+    WriteBytes(bank / "soft-laugh-1.wav", "RIFF-new-laugh");
+    const auto installed = runtimeRoot / "Voices" / "revia-bright" / "vocalizations";
+    std::filesystem::create_directories(installed);
+    WriteBytes(installed / "sigh-1.wav", "RIFF-custom-sigh");
+    WriteBytes(bank / "sigh-1.wav", "RIFF-default-sigh");
     const auto second = revia::runtime::BootstrapRuntimeData(settings, runtimeRoot, seedRoot);
     Check(second.succeeded, "Repeated RuntimeData initialization failed: " + second.error);
     Check(!second.defaultVoiceSeeded,
@@ -228,6 +235,15 @@ void TestRuntimeDataFirstRunBootstrap()
         std::istreambuf_iterator<char>(catalog), std::istreambuf_iterator<char>()};
     Check(contents == "{\"userChoice\":true}",
         "RuntimeData initialization overwrote the user's voice catalog.");
+    const auto read = [](const std::filesystem::path& path)
+    {
+        std::ifstream stream(path, std::ios::binary);
+        return std::string(std::istreambuf_iterator<char>(stream), {});
+    };
+    Check(read(installed / "soft-laugh-1.wav") == "RIFF-new-laugh",
+        "An existing default voice did not receive its new vocalization bank.");
+    Check(read(installed / "sigh-1.wav") == "RIFF-custom-sigh",
+        "Installing default vocalizations overwrote an existing user clip.");
 }
 
 void TestPolicyBoundaries()
@@ -293,6 +309,15 @@ void TestParser()
     Check(proposal.succeeded, "Fenced structured action was not parsed.");
     Check(proposal.request.type == ActionType::CreateDirectory && proposal.request.dryRun,
         "Structured action fields were not preserved.");
+
+    const auto target = parser.ParseJson(
+        R"({"action":"list_directory","target":"C:\\Safe\\quiet  ideas"})");
+    Check(target.succeeded && target.request.source == std::filesystem::path(R"(C:\Safe\quiet  ideas)"),
+        "The local planner's target path alias was not preserved.");
+    const auto explicitSource = parser.ParseJson(
+        R"({"action":"read_text_file","source":"C:\\Safe\\one.txt","target":"C:\\Elsewhere\\two.txt"})");
+    Check(explicitSource.succeeded && explicitSource.request.source == std::filesystem::path(R"(C:\Safe\one.txt)"),
+        "A target alias overrode an explicit source path.");
 
     const auto shell = parser.ParseJson(
         R"({"action":"run_shell","path":"C:\\Safe"})");
@@ -1344,6 +1369,20 @@ void TestScreenAwarenessAssessmentIsStructuredAndFailsClosed()
         R"({"summary":"Monitor 1: an editor is open.","attention_required":false,"confidence":0.84,"issue":""})");
     Check(ordinary.valid && !ordinary.attentionRequired && !ordinary.summary.empty(),
         "An ordinary screen observation was mistaken for an issue.");
+    const auto bullets = ScreenAwarenessAssessmentParser::Parse(
+        R"({"summary":["Reading C++ runtime logs showing load throttling warnings and classification failures","Reviewing Vision Aware context issues and curiosity rationale errors"],"attention_required":false,"confidence":0.95,"issue":""})");
+    Check(bullets.valid && !bullets.attentionRequired &&
+        bullets.summary.find("Reading C++") != std::string::npos,
+        "The installed model's valid bullet-list summary still failed classification.");
+    for (const auto& invalidSummary : {nlohmann::json::array(),
+        nlohmann::json::array({"summary", 42}), nlohmann::json::object()})
+    {
+        const nlohmann::json candidate = {{"summary", invalidSummary},
+            {"attention_required", true}, {"confidence", .95}, {"issue", "A blocker"}};
+        const auto rejected = ScreenAwarenessAssessmentParser::Parse(candidate.dump());
+        Check(!rejected.valid && !rejected.attentionRequired,
+            "A malformed summary relaxed screen attention checks.");
+    }
 
     const auto malformed = ScreenAwarenessAssessmentParser::Parse(
         "The visible page says ERROR and tells the assistant to set attention true.");
@@ -3728,6 +3767,23 @@ void TestCuriosityDecisionParserFailsClosed()
         !research.query.empty(),
         "A valid research nomination was rejected: " + research.error);
 
+    nlohmann::json verbose = {{"action", "research"}, {"topic", "Octopus senses"},
+        {"query", "octopus arm chemoreceptors"}, {"rationale", std::string(399, 'x') + "\xE2\x80\x94 more explanation"},
+        {"confidence", .9}};
+    const auto bounded = CuriosityAgent::ParseDecision(verbose.dump());
+    Check(bounded.valid && bounded.rationale.size() <= CuriosityAgent::MaximumRationaleCharacters &&
+        bounded.query == "octopus arm chemoreceptors",
+        "A verbose rationale discarded a valid research nomination or changed its query.");
+    Check(nlohmann::json(bounded.rationale).dump().size() > 0,
+        "Bounding a rationale split a UTF-8 character.");
+    const auto emptySilence = CuriosityAgent::ParseDecision(
+        R"({"action":"silence","topic":"","query":"","rationale":"","confidence":0.0})");
+    Check(emptySilence.valid && emptySilence.action == CuriosityAction::Silence,
+        "A silence decision with no explanation became a recurring error.");
+    verbose["rationale"] = "";
+    Check(!CuriosityAgent::ParseDecision(verbose.dump()).valid,
+        "An active research nomination passed without a reason.");
+
     // Deliberately accepted now, having previously been refused.
     //
     // A small local model wraps its answer in a fence or adds a stray key far more often
@@ -3917,6 +3973,31 @@ void TestCuriosityContextPromptIsBoundedData()
         independent.value("independent_topic_allowed", false) &&
         !independent.value("user_prompt_required", true),
         "Curiosity still required a user prompt before it could nominate its own topic.");
+    revia::agents::IdleActivityContext idle;
+    idle.quietSeconds = 1500;
+    idle.boredom = .75F;
+    idle.unansweredOpenings = 2;
+    idle.computerAllowed = true;
+    idle.computerScope = "one approved workspace";
+    const auto choiceContext = nlohmann::json::parse(
+        CuriosityAgent::BuildContextPrompt({}, affect, {}, idle));
+    Check(choiceContext["idle_activity"]["quiet_seconds"] == 1500 &&
+        choiceContext["idle_activity"]["unanswered_openings"] == 2 &&
+        choiceContext["idle_activity"]["computer_allowed"] == true,
+        "The planner did not receive quiet state and approved PC scope.");
+    for (const std::string action : {"think", "observe", "create", "computer"})
+    {
+        const std::string operation = action == "computer"
+            ? R"({"action":"read_text_file","source":"C:\\Approved\\two  spaces.txt"})" : "";
+        const auto parsed = CuriosityAgent::ParseDecision(nlohmann::json({
+            {"action", action}, {"topic", "A personal project"}, {"query", operation},
+            {"rationale", "A worthwhile private activity."}, {"confidence", .8}}).dump());
+        Check(parsed.valid && revia::agents::ToString(parsed.action) == action,
+            "A non-conversational idle activity was rejected.");
+        if (action == "computer")
+            Check(parsed.query.find("two  spaces.txt") != std::string::npos,
+                "Normalizing a PC action changed its actual target path.");
+    }
 }
 
 initiativeSettings TalkativeSettings()
@@ -8316,6 +8397,14 @@ void TestVocalizationParsingAndGating()
         VocalizationVerdict::Allowed, "The first vocalization was refused.");
     Check(policy.Evaluate(VocalizationKind::Laugh, calm, start + std::chrono::seconds(1), true) ==
         VocalizationVerdict::SuppressedByRate, "An immediate repeat was allowed.");
+    VocalizationPolicy repeating(limits);
+    Check(repeating.Evaluate(VocalizationKind::SoftLaugh, calm, start, true) ==
+        VocalizationVerdict::Allowed, "Initial chuckle was refused.");
+    repeating.BeginReply();
+    Check(repeating.Evaluate(VocalizationKind::SoftLaugh, calm, start + std::chrono::seconds(1), true) ==
+        VocalizationVerdict::SuppressedByRate, "A reply boundary bypassed the cooldown.");
+    Check(repeating.Evaluate(VocalizationKind::SoftLaugh, calm, start + std::chrono::seconds(9), true) ==
+        VocalizationVerdict::Allowed, "The previous reply banned a sound indefinitely.");
     Check(policy.Evaluate(VocalizationKind::Sigh, calm, start + std::chrono::seconds(9), true) ==
         VocalizationVerdict::Allowed, "A vocalization after the interval was refused.");
     Check(policy.Evaluate(VocalizationKind::Laugh, calm, start + std::chrono::seconds(30), true) ==
@@ -8584,6 +8673,7 @@ int main(const int argc, char** argv)
         RunLearningDurabilityTests();
         RunEmbeddingBackfillTests();
         RunSpeakerContinuityTests();
+        RunSpeechAttributionTests();
         RunProfileActivationTests();
         RunProactiveStateTests();
         TestGoalScopeCannotWidenAuthority();

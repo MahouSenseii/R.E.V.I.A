@@ -322,8 +322,8 @@ void MindPanel::RenderDrives()
         ? "Last activity: " +
             QString::fromStdString(revia::autonomy::ToString(activity->type)) + " â " +
             QString::fromStdString(revia::autonomy::ToString(activity->status))
-        : QString("No activity has been started. Only a real event can start one; time "
-                  "passing cannot."));
+        : QString("No activity has been started yet. She can choose something to explore "
+                  "or make during quiet time."));
 
     driveTable->setRowCount(static_cast<int>(revia::autonomy::DriveCount));
     for (std::size_t index = 0; index < revia::autonomy::DriveCount; ++index)

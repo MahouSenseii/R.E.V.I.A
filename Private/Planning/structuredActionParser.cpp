@@ -92,9 +92,15 @@ ParsedAction StructuredActionParser::ParseObject(const nlohmann::json& data)
         {
             source = data["path"].get<std::string>();
         }
+        else if (data.contains("target") && data["target"].is_string())
+        {
+            // Local planners also use target for the same explicit filesystem path.
+            // It still passes through the normal capability and path checks.
+            source = data["target"].get<std::string>();
+        }
         if (source.empty())
         {
-            return Error(true, "Action proposal requires a source or path string.");
+            return Error(true, "Action proposal requires a source, path, or target string.");
         }
 
         result.request.source = actions::Utf8ToPath(source);

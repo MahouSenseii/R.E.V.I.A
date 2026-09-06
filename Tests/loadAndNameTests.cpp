@@ -108,6 +108,68 @@ void TestBusyIsNotFull()
 
     Check(AssessLoad(generating).state == LoadState::Normal,
         "A GPU busy doing the work it was asked to do was treated as starved.");
+    Check(!AssessLoad(generating).allowOptionalBackgroundWork,
+        "New background work competed with a measured busy GPU.");
+}
+
+void TestResidentGpuMemoryDoesNotStrandIdleWork()
+{
+    auto usage = GpuSnapshot(11400.0, 10752.0, 12288.0);
+    UsageMeter compute;
+    compute.id = "gpu:CUDA0:compute";
+    compute.unit = MeterUnit::Percent;
+    compute.capacity = 100.0;
+    compute.used = 2.0;
+    compute.measured = true;
+    usage.meters.push_back(compute);
+    const auto idle = AssessLoad(usage);
+    Check(idle.state == LoadState::Pressured && idle.budgetExceeded &&
+        idle.allowOptionalBackgroundWork,
+        "Resident weights at 93% still permanently suppressed idle curiosity.");
+    Check(!idle.allowPhraseAheadVoice && idle.voicePrefetchFragments == 2,
+        "Idle background admission also expanded voice memory use.");
+
+    usage.meters.back().used = 90.0;
+    Check(!AssessLoad(usage).allowOptionalBackgroundWork &&
+        !AssessLoad(usage).allowOpportunisticVision,
+        "An actively computing GPU admitted competing optional work.");
+    usage.meters.back().used = 2.0;
+    Check(AssessLoad(usage).allowOptionalBackgroundWork,
+        "Optional work could not recover without releasing the resident weights.");
+    usage.meters.back().measured = false;
+    Check(!AssessLoad(usage).allowOptionalBackgroundWork,
+        "An unreadable high-occupancy GPU was assumed idle.");
+    usage.meters.back().measured = true;
+    usage.meters.front().used = 11700.0;
+    Check(AssessLoad(usage).state == LoadState::Throttled &&
+        AssessLoad(usage).allowOptionalBackgroundWork &&
+        AssessLoad(usage).voicePrefetchFragments == 1,
+        "Crossing 95% blocked idle resident inference despite sufficient free memory.");
+    usage.meters.front().used = 11900.0;
+    Check(!AssessLoad(usage).allowOptionalBackgroundWork,
+        "Critical memory pressure was excused because compute was idle.");
+    usage.meters.front().capacity = 4096.0;
+    usage.meters.front().used = 3800.0;
+    Check(!AssessLoad(usage).allowOptionalBackgroundWork,
+        "A smaller card admitted work without sufficient absolute headroom.");
+    usage.meters.front().capacity = 12288.0;
+    usage.meters.front().used = 11400.0;
+    auto otherGpu = compute;
+    otherGpu.id = "gpu:CUDA1:compute";
+    otherGpu.used = 85.0;
+    usage.meters.push_back(otherGpu);
+    Check(!AssessLoad(usage).allowOptionalBackgroundWork,
+        "The second GPU's active load was ignored.");
+    usage.meters.pop_back();
+    auto ram = usage.meters.front();
+    ram.id = "ram";
+    usage.meters.push_back(ram);
+    Check(!AssessLoad(usage).allowOptionalBackgroundWork,
+        "GPU residency excused simultaneous RAM pressure.");
+    usage.meters.back().id = "cpu";
+    usage.meters.back().unit = MeterUnit::Threads;
+    Check(!AssessLoad(usage).allowOptionalBackgroundWork,
+        "GPU residency excused simultaneous CPU pressure.");
 }
 
 void TestOptionalWorkShedsBeforeConversationQuality()
@@ -296,6 +358,7 @@ void RunLoadAndNameTests()
     TestLoadStatesFollowActualUsage();
     TestBudgetOverrunIsNotStarvation();
     TestBusyIsNotFull();
+    TestResidentGpuMemoryDoesNotStrandIdleWork();
     TestOptionalWorkShedsBeforeConversationQuality();
     TestUnmeasurableLoadChangesNothing();
     TestBatchClipFramingRefusesAnythingAmbiguous();

@@ -1,4 +1,6 @@
 #include "LLM/promptBuilder.h"
+#include "Agents/conversationStylePolicy.h"
+#include "Core/speechAttribution.h"
 
 #include <chrono>
 
@@ -65,8 +67,9 @@ const revia::llm::PrivateMemoryAccess memoryAccess) const
     }
 
     const auto retrievalStarted = std::chrono::steady_clock::now();
+    const bool briefSocial = revia::agents::ConversationStylePolicy::IsBriefSocialTurn(retrievalQuery);
     const std::string memoryBlock = memoryAccess == revia::llm::PrivateMemoryAccess::ProfileSetting &&
-        profile.bMemoryEnabled
+        profile.bMemoryEnabled && !briefSocial
         ? memory.BuildPromptBlock(
             retrievalQuery,
             6,
@@ -100,17 +103,39 @@ const revia::llm::PrivateMemoryAccess memoryAccess) const
     }
 
     std::size_t historyCharacters = 0;
-    for (const conversationMessage& message : context)
+    const std::size_t first = briefSocial && context.size() > 4 ? context.size() - 4 : 0;
+    for (std::size_t index = first; index < context.size(); ++index)
     {
+        const conversationMessage& message = context[index];
         if (message.content.empty())
         {
             continue;
         }
 
-        historyCharacters += message.content.size();
+        std::string content = message.content;
+        if (briefSocial && index + 1 < context.size() && content.size() > 640)
+        {
+            // Keep the exchange that prompted the reaction, without re-evaluating
+            // a previous monologue. Never shorten the current input.
+            auto end = content.find_last_of(".!?\n", 600);
+            if (end == std::string::npos) end = 600;
+            else ++end;
+            while (end > 0 && (static_cast<unsigned char>(content[end]) & 0xC0) == 0x80) --end;
+            content = content.substr(0, end) + " [Earlier turn shortened.]";
+        }
+        // Keep the stored transcript untouched; labels are model-input evidence.
+        // This also supports custom profiles and call paths without turn posture.
+        if (message.role == "user")
+            content = revia::conversation::AnnotateReportedSpeech(content);
+        if (message.role == "user" && index + 1 == context.size())
+        {
+            const auto attribution = revia::conversation::BuildSpeechAttributionGuidance(message.content, context);
+            if (!attribution.empty()) content += "\n\n[Current reply task]\n" + attribution;
+        }
+        historyCharacters += content.size();
         messages.push_back({
             {"role", message.role},
-            {"content", message.content}
+            {"content", content}
         });
     }
     if (sections && historyCharacters > 0)

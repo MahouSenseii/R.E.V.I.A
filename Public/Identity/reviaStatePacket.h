@@ -87,6 +87,7 @@ struct ReviaStatePacket
 //
 // Deterministic: the same packet always renders identically, which is what guarantees
 // two model tiers cannot be handed different descriptions of the same moment.
-[[nodiscard]] std::string RenderStatePacket(const ReviaStatePacket& packet);
+[[nodiscard]] std::string RenderStatePacket(
+    const ReviaStatePacket& packet, bool includeRuntimeDetails = true);
 
 } // namespace revia::identity

@@ -51,6 +51,8 @@ public:
         const std::string& runtimeGroundTruth,
         int maxReviewTokens,
         std::stop_token stopToken = {}) const;
+    responseOutput GenerateActivityDraft(const std::string& topic,
+        const std::string& context, std::stop_token stopToken = {}) const;
     responseOutput GenerateCuriosityPlan(
         const std::string& boundedContextPrompt,
         std::stop_token stopToken = {}) const;
@@ -72,7 +74,8 @@ public:
         const std::filesystem::path& imagePath,
         const std::string& prompt,
         int maxResponseTokens,
-        std::stop_token stopToken = {}) const;
+        std::stop_token stopToken = {},
+        bool backgroundAwareness = false) const;
     memoryDecision EvaluateMemory(
         const std::string& userMessage,
         const std::string& assistantMessage = "",
@@ -101,7 +104,8 @@ private:
         std::stop_token stopToken = {},
         revia::llm::InferencePriority priority = revia::llm::InferencePriority::Interactive,
         float requestTemperature = 0.1F,
-        const std::string& operation = "structured planning") const;
+        const std::string& operation = "structured planning",
+        const std::string& responseSchema = {}) const;
 
     std::string host = "127.0.0.1";
     int port = 8080;

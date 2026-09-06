@@ -37,6 +37,48 @@ bool Contributes(const UsageMeter& meter, const bool ignoreUnmeasured)
     return (!ignoreUnmeasured || meter.measured) && CanRunOut(meter);
 }
 
+bool IsGpuCompute(const UsageMeter& meter)
+{
+    return meter.id.starts_with("gpu:") && meter.id.ends_with(":compute") &&
+        meter.unit == MeterUnit::Percent;
+}
+
+bool GpuIsBusy(const UsageSnapshot& usage, const LoadThresholds& thresholds)
+{
+    return std::any_of(usage.meters.begin(), usage.meters.end(), [&](const UsageMeter& meter)
+    {
+        return IsGpuCompute(meter) && meter.measured &&
+            meter.used > thresholds.backgroundGpuBusyAbove * 100.0;
+    });
+}
+
+bool HasIdleGpuHeadroom(const UsageSnapshot& usage, const LoadThresholds& thresholds)
+{
+    // Only GPU residency gets this exception. CPU/RAM pressure still blocks work,
+    // and an unreadable engine is not evidence that a nearly full card is idle.
+    bool found = false;
+    for (const UsageMeter& meter : usage.meters)
+    {
+        if (!Contributes(meter, thresholds.ignoreUnmeasured) ||
+            meter.used / meter.capacity <= thresholds.pressuredAbove)
+            continue;
+        if (!meter.id.starts_with("gpu:") || !meter.id.ends_with(":vram") ||
+            meter.unit != MeterUnit::Mebibytes ||
+            meter.capacity - meter.used < thresholds.backgroundGpuHeadroomMiB)
+            return false;
+
+        const std::string computeId = meter.id.substr(0, meter.id.size() - 5) + ":compute";
+        const auto compute = std::find_if(usage.meters.begin(), usage.meters.end(),
+            [&](const UsageMeter& candidate) { return candidate.id == computeId; });
+        if (compute == usage.meters.end() || !compute->measured ||
+            !IsGpuCompute(*compute) ||
+            compute->used > thresholds.backgroundGpuBusyAbove * 100.0)
+            return false;
+        found = true;
+    }
+    return found;
+}
+
 } // namespace
 
 double PeakCapacityPressure(const UsageSnapshot& usage, const bool ignoreUnmeasured)
@@ -105,6 +147,13 @@ LoadAdjustment AssessLoad(const UsageSnapshot& usage, const LoadThresholds& thre
         adjustment.state = LoadState::Normal;
         adjustment.reason =
             "No meter could be read, so nothing is being held back or added.";
+        if (GpuIsBusy(usage, thresholds))
+        {
+            adjustment.allowOptionalBackgroundWork = false;
+            adjustment.allowOpportunisticVision = false;
+            adjustment.reason = "GPU engines are busy; new background work waits for idle compute. "
+                "No capacity reading is available.";
+        }
         return adjustment;
     }
 
@@ -114,31 +163,43 @@ LoadAdjustment AssessLoad(const UsageSnapshot& usage, const LoadThresholds& thre
 
     std::ostringstream reason;
     const int percent = static_cast<int>(peak * 100.0);
+    const bool idleGpuHeadroom = HasIdleGpuHeadroom(usage, thresholds) &&
+        !GpuIsBusy(usage, thresholds);
 
     if (peak > thresholds.throttledAbove)
     {
         adjustment.state = LoadState::Throttled;
-        // Everything optional stops. Nothing already running is cancelled: killing a
-        // reply mid-sentence to save memory is a worse outcome than finishing it.
+        // Keep allocations conservative. A percentage boundary alone cannot rule out
+        // resident inference: on a 12 GiB card, 95.2% still leaves over 512 MiB free.
         adjustment.voicePrefetchFragments = 1;
         adjustment.allowPhraseAheadVoice = false;
-        adjustment.allowOptionalBackgroundWork = false;
-        adjustment.allowOpportunisticVision = false;
-        reason << "A device is " << percent
-               << "% full, so optional work is on hold until something is released.";
+        adjustment.allowOptionalBackgroundWork = idleGpuHeadroom;
+        adjustment.allowOpportunisticVision = idleGpuHeadroom;
+        if (idleGpuHeadroom)
+            reason << "GPU memory is " << percent
+                   << "% full; idle resident services still have working room. "
+                      "Extra voice prefetch is limited.";
+        else
+            reason << "A device is " << percent
+                   << "% full; waiting for memory headroom before starting optional work.";
     }
     else if (peak > thresholds.pressuredAbove)
     {
         adjustment.state = LoadState::Pressured;
         adjustment.voicePrefetchFragments = 2;
         adjustment.allowPhraseAheadVoice = false;
-        // Background work stops before conversation quality does. Curiosity planning and
-        // memory consolidation are the things a person will not miss; a stuttering voice
-        // is the thing they will.
-        adjustment.allowOptionalBackgroundWork = false;
+        // Resident weights and preallocated caches occupy VRAM between requests.
+        // Occupancy alone must not strand those services for an entire idle session.
+        adjustment.allowOptionalBackgroundWork = idleGpuHeadroom;
         adjustment.allowOpportunisticVision = true;
-        reason << "A device is " << percent
-               << "% full, so background work is paused to protect the reply.";
+        if (adjustment.allowOptionalBackgroundWork)
+            reason << "GPU memory is " << percent
+                   << "% full, but measured GPU activity is low and working room remains; "
+                      "background work can use the resident services.";
+        else
+            reason << "A device is " << percent
+                   << "% full; background work is waiting for measured idle GPU headroom "
+                      "or lower memory/CPU pressure.";
     }
     else if (peak < thresholds.freeBelow)
     {
@@ -156,6 +217,15 @@ LoadAdjustment AssessLoad(const UsageSnapshot& usage, const LoadThresholds& thre
     {
         adjustment.state = LoadState::Normal;
         reason << "The busiest device is " << percent << "% full.";
+    }
+
+    // Activity controls when to start optional work, not whether memory is full.
+    // Keep replies and already-running work intact while avoiding competing inference.
+    if (GpuIsBusy(usage, thresholds))
+    {
+        adjustment.allowOptionalBackgroundWork = false;
+        adjustment.allowOpportunisticVision = false;
+        reason << " GPU engines are busy, so new background work waits for idle compute.";
     }
 
     // Said alongside the state, never instead of it. Resident model weights put Revia

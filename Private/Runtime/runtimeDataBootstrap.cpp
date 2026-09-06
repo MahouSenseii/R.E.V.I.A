@@ -1,6 +1,7 @@
 #include "Runtime/runtimeDataBootstrap.h"
 
 #include "Core/runtimePath.h"
+#include "Speech/vocalization.h"
 
 #include <array>
 #include <system_error>
@@ -105,6 +106,23 @@ RuntimeDataBootstrapResult BootstrapRuntimeData(
             result.error))
     {
         return result;
+    }
+
+    // Upgrade already-created default voices too. The catalogue and reference may
+    // predate nonverbal audio; preserving them must not leave the sound bank empty.
+    for (const auto kind : revia::speech::AllVocalizationKinds())
+    {
+        for (std::size_t variant = 1;
+            variant <= revia::speech::VocalizationBank::maximumVariantsPerKind; ++variant)
+        {
+            const auto relative = std::filesystem::path("revia-bright") / "vocalizations" /
+                (revia::speech::ToString(kind) + "-" + std::to_string(variant) + ".wav");
+            std::error_code error;
+            if (!std::filesystem::is_regular_file(seedVoices / relative, error)) break;
+            bool copied = false;
+            if (!CopySeedIfMissing(seedVoices / relative, runtimeVoices / relative,
+                    copied, result.error)) return result;
+        }
     }
 
     bool catalogCopied = false;

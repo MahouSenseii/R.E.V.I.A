@@ -17,6 +17,9 @@ namespace revia::agents
 class ConversationStylePolicy
 {
 public:
+    // Exact, self-contained social turns only. Requests for detail or recall retain
+    // the full history, retrieval, and response budget.
+    [[nodiscard]] static bool IsBriefSocialTurn(const std::string& input);
     [[nodiscard]] std::string BuildTurnGuidance(
         const std::string& input,
         const std::vector<conversationMessage>& context) const;
@@ -43,7 +46,8 @@ public:
         const std::vector<conversationMessage>& context,
         const std::string& fragment,
         bool alreadySpokeFragment) const;
-    [[nodiscard]] bool CanStreamReply(const std::string& input) const;
+    [[nodiscard]] bool CanStreamReply(const std::string& input,
+        const std::vector<conversationMessage>& context = {}) const;
 
 private:
     [[nodiscard]] static bool LooksLikeCorrection(const std::string& input);

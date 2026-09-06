@@ -97,6 +97,8 @@ struct ActivityDecision
     std::string refusal;
     std::optional<std::string> relatedGoal;
     std::string subject;
+    // One typed PC action, parsed and checked again at dispatch.
+    std::string operation;
 };
 
 // Decides whether there is a reason to do anything at all.

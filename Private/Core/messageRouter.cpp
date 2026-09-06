@@ -172,6 +172,15 @@ responseOutput messageRouter::ReviewConversationReply(
         userInput, candidateReply, runtimeGroundTruth, maxReviewTokens, stopToken);
 }
 
+responseOutput messageRouter::GenerateActivityDraft(
+    const std::string& topic, const std::string& context, const std::stop_token stopToken) const
+{
+    residency.BeginInference(revia::intelligence::IntelligenceTier::Main, "background");
+    auto result = llm.GenerateActivityDraft(topic, context, stopToken);
+    residency.EndInference(revia::intelligence::IntelligenceTier::Main);
+    return result;
+}
+
 responseOutput messageRouter::GenerateCuriosityPlan(
     const std::string& boundedContextPrompt,
     const std::stop_token stopToken) const
@@ -182,6 +191,19 @@ responseOutput messageRouter::GenerateCuriosityPlan(
         output.reason = "Curiosity planning context was empty.";
         return output;
     }
+    // Topic selection needs more judgment than a cheap classifier. On the installed
+    // hardware Main also completes this bounded job faster than the CPU Fast model.
+    // It remains background inference, preemptible by an actual user turn.
+    if (llm.IsBackendAvailable())
+    {
+        residency.BeginInference(revia::intelligence::IntelligenceTier::Main, "background");
+        responseOutput output = llm.GenerateCuriosityPlan(boundedContextPrompt, stopToken);
+        residency.EndInference(revia::intelligence::IntelligenceTier::Main);
+        output.requestedTier = output.selectedTier = "Main";
+        output.selectedModel = "Qwen3.5-4B-Q4_K_M.gguf";
+        output.routingReason = "Bounded self-directed topic selection uses the resident Main model.";
+        return output;
+    }
     if (fastConfigured && fastLlm.IsBackendAvailable())
     {
         residency.BeginInference(
@@ -189,18 +211,18 @@ responseOutput messageRouter::GenerateCuriosityPlan(
         responseOutput output = fastLlm.GenerateCuriosityPlan(
             boundedContextPrompt, stopToken);
         residency.EndInference(revia::intelligence::IntelligenceTier::Fast);
-        output.requestedTier = "Fast";
+        output.requestedTier = "Main";
         output.selectedTier = "Fast";
         output.selectedModel = "Qwen3.5-0.8B-Q4_K_M.gguf";
-        output.routingReason = "Bounded curiosity nomination is a Fast background task.";
+        output.bRoutingFallback = true;
+        output.routingFallbackReason = "Main was unavailable; Fast can still nominate a bounded topic.";
         return output;
     }
     responseOutput output = llm.GenerateCuriosityPlan(boundedContextPrompt, stopToken);
-    output.requestedTier = "Fast";
+    output.requestedTier = "Main";
     output.selectedTier = "Main";
     output.selectedModel = "Qwen3.5-4B-Q4_K_M.gguf";
-    output.bRoutingFallback = true;
-    output.routingFallbackReason = "Fast background brain was unavailable.";
+    output.routingReason = "No alternate background brain was available.";
     return output;
 }
 
@@ -296,7 +318,8 @@ responseOutput messageRouter::AnalyzeImage(
     const std::filesystem::path& imagePath,
     const std::string& prompt,
     const int maxResponseTokens,
-    const std::stop_token stopToken) const
+    const std::stop_token stopToken,
+    const bool backgroundAwareness) const
 {
     std::string lowered = prompt;
     std::transform(lowered.begin(), lowered.end(), lowered.begin(),
@@ -312,7 +335,7 @@ responseOutput messageRouter::AnalyzeImage(
     const bool expertAvailable = expertRequested && expertConfigured &&
         expertLlm.IsBackendAvailable();
     responseOutput output = (expertAvailable ? expertLlm : llm).AnalyzeImage(
-        imagePath, prompt, maxResponseTokens, stopToken);
+        imagePath, prompt, maxResponseTokens, stopToken, backgroundAwareness);
     output.requestedTier = expertRequested ? "ExpertVision" : "Vision";
     output.selectedTier = expertAvailable ? "ExpertVision" : "Vision";
     output.selectedModel = expertAvailable

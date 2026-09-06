@@ -498,7 +498,7 @@ VocalizationVerdict VocalizationPolicy::Evaluate(
     }
     if (bHasSpoken)
     {
-        if (configuration.bForbidImmediateRepeat && kind == lastKind)
+        if (configuration.bForbidImmediateRepeat && spokenThisReply > 0 && kind == lastKind)
         {
             return VocalizationVerdict::SuppressedByRate;
         }
