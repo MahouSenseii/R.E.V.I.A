@@ -835,6 +835,19 @@ void TestDesktopActionRateLimitsAreDeterministic()
         "Read-only inspection consumed the mutable desktop-action budget.");
 }
 
+nlohmann::json ReadAuditResult(const std::filesystem::path& path, const std::string& actionId)
+{
+    std::ifstream audit(path);
+    std::string line;
+    while (std::getline(audit, line))
+    {
+        const auto entry = nlohmann::json::parse(line);
+        if (entry.value("record_type", "result") == "result" &&
+            entry.value("action_id", "") == actionId) return entry;
+    }
+    return nullptr;
+}
+
 void TestDesktopRateLimitIsAudited()
 {
     ScopedTestDirectory temporary;
@@ -870,12 +883,8 @@ void TestDesktopRateLimitIsAudited()
         refused.policy.reason.find("per-minute") != std::string::npos,
         "The action runtime did not convert a rate refusal into a blocked outcome.");
 
-    std::ifstream audit(auditPath);
-    std::string line;
-    std::getline(audit, line);
-    std::getline(audit, line);
-    const auto entry = nlohmann::json::parse(line);
-    Check(entry.at("policy_verdict") == "blocked" &&
+    const auto entry = ReadAuditResult(auditPath, request.id);
+    Check(entry.is_object() && entry.at("policy_verdict") == "blocked" &&
         entry.at("policy_reason").get<std::string>().find("per-minute") != std::string::npos,
         "The desktop rate refusal was not visible in the action audit.");
 }
@@ -905,6 +914,9 @@ void TestLlamaServerProcessStopIsBounded()
     llmSettings settings;
     settings.serverExecutable = R"(C:\Windows\System32\ping.exe)";
     settings.modelPath = placeholderModel.string();
+    // This fixture exercises child ownership, not multimodal model loading.
+    settings.bVisionEnabled = false;
+    settings.multimodalProjectorPath = (temporary.root / "unused-projector.gguf").string();
     settings.host = "127.0.0.1";
     settings.port = 65534;
     settings.bShutdownServerOnExit = true;
@@ -2623,13 +2635,10 @@ void RunInternetLookupLive()
         "The live bounded lookup failed: " +
             (outcome.result.message.empty() ? outcome.policy.reason : outcome.result.message));
 
-    std::ifstream audit(auditPath, std::ios::binary);
-    std::string auditLine;
-    std::getline(audit, auditLine);
-    const nlohmann::json record = nlohmann::json::parse(auditLine);
-    Check(record.at("action") == "web_search" &&
+    const nlohmann::json record = ReadAuditResult(auditPath, request.id);
+    Check(record.is_object() && record.at("action") == "web_search" &&
         record.at("value_length") == request.value.size() &&
-        auditLine.find(request.value) == std::string::npos,
+        record.dump().find(request.value) == std::string::npos,
         "The live lookup was not audited without retaining its query text.");
     std::cout << outcome.result.message << '\n';
     for (const std::string& source : outcome.result.entries)
@@ -8355,6 +8364,78 @@ int main(const int argc, char** argv)
 {
     try
     {
+        if (argc > 1 && std::string(argv[1]) == "--learning-durability")
+        {
+            RunLearningDurabilityTests();
+            return 0;
+        }
+        if (argc > 1 && std::string(argv[1]) == "--embedding-backfill")
+        {
+            RunEmbeddingBackfillTests();
+            return 0;
+        }
+        if (argc > 1 && std::string(argv[1]) == "--emotion-ownership")
+        {
+            RunEmotionOwnershipTests();
+            return 0;
+        }
+        if (argc > 1 && std::string(argv[1]) == "--emotion-live")
+        {
+            Check(argc == 4, "Usage: --emotion-live <isolated-runtime-directory> <new-report.jsonl>");
+            RunEmotionOwnershipLive(argv[2], argv[3]);
+            return 0;
+        }
+        if (argc > 1 && std::string(argv[1]) == "--profile-activation")
+        {
+            RunProfileActivationTests();
+            return 0;
+        }
+        if (argc > 1 && std::string(argv[1]) == "--proactive-state")
+        {
+            RunProactiveStateTests();
+            return 0;
+        }
+        if (argc > 1 && std::string(argv[1]) == "--speaker-continuity")
+        {
+            RunSpeakerContinuityTests();
+            return 0;
+        }
+        if (argc > 1 && std::string(argv[1]) == "--identity-final-save")
+        {
+            RunIdentityFinalSaveTests();
+            return 0;
+        }
+        if (argc > 1 && std::string(argv[1]) == "--identity-persistence")
+        {
+            RunIdentityPersistenceTests();
+            return 0;
+        }
+        if (argc == 3 && std::string(argv[1]) == "--identity-crash-child")
+        {
+            RunIdentityCrashChild(argv[2]);
+            return 0;
+        }
+        if (argc > 1 && std::string(argv[1]) == "--action-audit")
+        {
+            RunActionAuditTests();
+            return 0;
+        }
+        if (argc > 1 && std::string(argv[1]) == "--action-cancellation")
+        {
+            RunActionCancellationTests();
+            return 0;
+        }
+        if (argc > 1 && std::string(argv[1]) == "--speech-interruption")
+        {
+            RunSpeechInterruptionTests();
+            return 0;
+        }
+        if (argc > 1 && std::string(argv[1]) == "--speech-interruption-live")
+        {
+            Check(argc == 3, "Usage: --speech-interruption-live <existing-bank-clip.wav>");
+            RunSpeechInterruptionLive(argv[2]);
+            return 0;
+        }
         if (argc > 1 && std::string(argv[1]) == "--uia-inspect-notepad")
         {
             revia::actions::windows::WindowsAutomationExecutor executor;
@@ -8496,7 +8577,15 @@ int main(const int argc, char** argv)
         TestGoalStoreRoundTrip();
         TestGoalRunnerRejectsUnverifiablePlan();
         TestGoalRunnerVerifiesSuccess();
+        RunActionCancellationTests();
+        RunActionAuditTests();
         TestGoalRunnerStopsOnUnverifiableStep();
+        RunIdentityPersistenceTests();
+        RunLearningDurabilityTests();
+        RunEmbeddingBackfillTests();
+        RunSpeakerContinuityTests();
+        RunProfileActivationTests();
+        RunProactiveStateTests();
         TestGoalScopeCannotWidenAuthority();
         TestGoalResumesAfterRestart();
         TestGoalPlannerParsesMultiStepPlan();
@@ -8565,6 +8654,7 @@ int main(const int argc, char** argv)
         TestVocalizationBankHasAProducerAndItIsIdempotent();
         TestCreatingAVoicePresetActuallyRendersItsBank();
         TestVocalizationCuesAreQueuedAsSoundsInTheirOwnPlace();
+        RunSpeechInterruptionTests();
         TestAnswerPostureDoesNotLegislatePersonality();
         TestStockContinuationTailsAreRecognisedByShapeNotByWording();
         TestVocalizationTagsNeverReachTheSynthesiser();
@@ -8605,6 +8695,7 @@ int main(const int argc, char** argv)
         // Split suites, per the testing refactor. New subsystems get their own file
         // instead of growing this one; they share the harness in testSupport.h.
         RunEmotionTests();
+        RunEmotionOwnershipTests();
         RunIdentityTests();
         RunAppraisalTests();
         RunStatePacketTests();

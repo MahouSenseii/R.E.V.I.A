@@ -427,10 +427,10 @@ struct visionSettings
 // continuous-awareness layer is enabled, accepted events may also trigger a temporary
 // local virtual-desktop capture whose bounded summary is kept in memory.
 //
-// Continuous observation is the most invasive capability in this project, so it is off
-// until asked for, and the exclusion lists deny by default rather than allow by default.
-// An application or title that matches is not recorded in redacted form -- it produces no
-// observation at all, because "the user switched to their bank at 14:02" is the leak.
+// Activity metadata collection is opt-in. An application or title that matches an
+// exclusion produces no WindowObservation, including no redacted activity record.
+// These lists filter metadata only. Separately permitted screen captures can still
+// contain excluded windows; their pixels are not masked before vision inference.
 struct perceptionSettings
 {
     bool bEnabled = false;

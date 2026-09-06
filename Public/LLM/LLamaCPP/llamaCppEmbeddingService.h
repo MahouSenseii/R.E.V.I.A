@@ -9,7 +9,7 @@ class llamaCppEmbeddingService
 {
 public:
     void ApplySettings(const embeddingSettings& settings);
-    healthOutput CheckHealth() const;
+    healthOutput CheckHealth(std::stop_token stopToken = {}) const;
     embeddingOutput EmbedQuery(
         const std::string& text,
         std::stop_token stopToken = {}) const;

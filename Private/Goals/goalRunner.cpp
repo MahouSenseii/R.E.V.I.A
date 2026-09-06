@@ -213,9 +213,35 @@ bool GoalRunner::RunStep(
 
         StepAttempt record;
         record.attempt = attempt;
+        std::string actionResult;
+        const auto cancelled = [&]()
+        {
+            if (!stopToken.stop_requested()) return false;
+            record.failure = record.executed
+                ? "Cancelled after the action was attempted. Action result: " + actionResult
+                : "Cancelled before the action executed.";
+            const std::string message = record.failure;
+            step.status = record.verified ? StepStatus::Succeeded : StepStatus::Failed;
+            step.attempts.push_back(std::move(record));
+            goal.stopReason = StopReason::Cancelled;
+            Publish(goal, step, message);
+            return true;
+        };
+        const auto auditFailed = [&](const actions::ActionOutcome& outcome)
+        {
+            if (outcome.auditError.empty()) return false;
+            record.failure = outcome.Message();
+            const std::string message = record.failure;
+            step.attempts.push_back(std::move(record));
+            step.status = StepStatus::Failed;
+            goal.stopReason = StopReason::StoreError;
+            Publish(goal, step, message);
+            return true;
+        };
 
         step.status = StepStatus::Acting;
         Publish(goal, step, "Attempt " + std::to_string(attempt) + ": " + step.description);
+        if (cancelled()) return false;
 
         actions::ActionRequest action = step.action;
         action.id = actions::NewActionId();
@@ -240,6 +266,7 @@ bool GoalRunner::RunStep(
         if (decision.verdict == actions::PolicyVerdict::RequiresConfirmation)
         {
             confirmationGranted = confirmationHandler && confirmationHandler(action, decision);
+            if (cancelled()) return false;
             if (!confirmationGranted)
             {
                 record.failure = "Confirmation was not granted.";
@@ -252,9 +279,12 @@ bool GoalRunner::RunStep(
         }
 
         const actions::ActionOutcome outcome =
-            actionRuntime.ExecuteScoped(action, scopedPolicy, confirmationGranted);
-        ++goal.spend.actions;
+            actionRuntime.ExecuteScoped(action, scopedPolicy, confirmationGranted, stopToken);
+        if (!stopToken.stop_requested() || outcome.result.attempted) ++goal.spend.actions;
         record.executed = outcome.result.attempted;
+        actionResult = outcome.Message();
+        if (auditFailed(outcome)) return false;
+        if (cancelled()) return false;
 
         if (outcome.result.succeeded)
         {
@@ -267,16 +297,23 @@ bool GoalRunner::RunStep(
             record.checkActionId = check.id;
 
             const actions::ActionOutcome checkOutcome =
-                actionRuntime.ExecuteScoped(check, scopedPolicy, false);
-            ++goal.spend.actions;
+                actionRuntime.ExecuteScoped(check, scopedPolicy, false, stopToken);
+            if (!stopToken.stop_requested() || checkOutcome.result.attempted) ++goal.spend.actions;
             record.observation = SummarizeResult(checkOutcome.result);
+            if (auditFailed(checkOutcome)) return false;
             record.verified = Observed(checkOutcome.result, step.expected);
+            if (cancelled()) return false;
 
             if (record.verified)
             {
                 step.attempts.push_back(std::move(record));
                 step.status = StepStatus::Succeeded;
                 Publish(goal, step, "Verified: " + step.expected);
+                if (stopToken.stop_requested())
+                {
+                    goal.stopReason = StopReason::Cancelled;
+                    return false;
+                }
                 return true;
             }
             record.failure = "Verification did not observe: " + step.expected;

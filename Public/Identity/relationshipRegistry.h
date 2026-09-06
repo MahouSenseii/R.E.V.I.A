@@ -5,6 +5,8 @@
 #include "Identity/relationshipState.h"
 
 #include <filesystem>
+#include <chrono>
+#include <map>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -58,8 +60,11 @@ public:
     // Applies evidence and returns the updated relationship.
     RelationshipState Apply(const RelationshipEvent& event);
 
-    // Time passing. Friction cools, grievance mostly does not.
-    void SettleAll();
+    // One bounded cooling step per person after a quiet interval. Clock metadata
+    // stays in memory; a restart does not invent time spent apart.
+    void SettleAll(
+        std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now(),
+        std::chrono::milliseconds quietInterval = std::chrono::minutes(5));
 
     void SetDisplayName(const std::string& entityId, const std::string& displayName);
 
@@ -113,6 +118,7 @@ private:
     mutable std::mutex mutex;
     IdentityStore store;
     IdentitySnapshot snapshot;
+    std::map<std::string, std::chrono::steady_clock::time_point> frictionUpdatedAt;
     // Kept alongside the snapshot rather than inside it: the set owns the bounded update
     // rules, and the snapshot is the plain data those rules produce.
     PreferenceSet preferences;

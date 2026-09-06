@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "LLM/llmService.h"
+#include "LLM/privateMemoryAccess.h"
 #include "Intelligence/intelligenceTypes.h"
 #include "Intelligence/modelResidencyManager.h"
 
@@ -21,7 +22,8 @@ public:
         const std::vector<conversationMessage>& context,
         std::stop_token stopToken = {},
         DeltaHandler onDelta = {},
-        const revia::intelligence::IntelligenceDecision& decision = {}) const;
+        const revia::intelligence::IntelligenceDecision& decision = {},
+        revia::llm::PrivateMemoryAccess memoryAccess = revia::llm::PrivateMemoryAccess::ProfileSetting) const;
     void SetPosture(std::string posture);
     responseOutput PlanAction(const std::string& request) const;
     responseOutput ReviewConversationReply(
@@ -73,7 +75,9 @@ public:
         const std::string& detail = {});
     [[nodiscard]] std::vector<revia::intelligence::ModelResidency>
         ModelResidencySnapshot() const;
-    healthOutput CheckEmbeddingHealth() const;
+    healthOutput CheckEmbeddingHealth(std::stop_token stopToken = {}) const;
+    [[nodiscard]] const std::string& EmbeddingModelName() const
+    { return embeddingConfiguration.modelName; }
     embeddingOutput EmbedMemory(
         const std::string& summary,
         std::stop_token stopToken = {}) const;

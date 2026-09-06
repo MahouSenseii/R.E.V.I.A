@@ -173,8 +173,8 @@ private:
         std::string instruction;
     };
 
-    // The system posture a non-proactive turn is generated under. Shared with the
-    // evaluation path so the suite exercises the prompt the user actually gets.
+    // Canonical state and posture for replies, proactive openings and evaluation.
+    // Event/research instructions extend it; audience policy controls private history.
     [[nodiscard]] std::string BuildTurnPosture(
         const std::string& policyInput,
         const std::vector<conversationMessage>& promptContext,
@@ -229,8 +229,7 @@ private:
     agents::TurnCoordinator& coordinator;
     speech::SpeechService& speech;
     AffectController& affect;
-    // Primary. AffectController stays as the deterministic fallback and baseline, but
-    // what reaches the prompt now comes from appraisal.
+    // Canonical state. AffectController above is retained for comparison only.
     emotion::EmotionRuntime& emotions;
     RuntimeEventBus& events;
     logger& log;

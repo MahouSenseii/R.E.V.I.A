@@ -601,12 +601,12 @@ void TestABurstOfApprovedFindingsUnderQueuePressureLosesNoneAndDuplicatesNone()
     {
         const auto disposition =
             agent.SubmitLearnedFinding(router, ApprovedFinding(std::to_string(index)));
-        Check(disposition == revia::agents::LearnedFindingResult::Queued ||
+        Check(disposition == revia::agents::LearnedFindingResult::SavedEmbeddingQueued ||
                 disposition == revia::agents::LearnedFindingResult::SavedWithoutEmbedding,
             "An already-approved finding under queue pressure produced a disposition "
             "other than Queued or SavedWithoutEmbedding -- either refused outright or "
             "wrongly reported as a duplicate of another distinct finding.");
-        if (disposition == revia::agents::LearnedFindingResult::Queued) ++queued;
+        if (disposition == revia::agents::LearnedFindingResult::SavedEmbeddingQueued) ++queued;
         Check(agent.Depths().learning <= limits.maximumLearning,
             "The learning queue exceeded its configured bound mid-burst.");
     }
@@ -684,6 +684,10 @@ void TestEventPriorityClassificationMatchesWhatMustNeverBeLostSilently()
     completedLearning.saveSucceeded = true;
     Check(MemoryAgent::ClassifyEventPriority(completedLearning) == MemoryEventPriority::Important,
         "A completed autonomous-learning finding was not classified Important.");
+
+    completedLearning.embeddingError = "The finding is saved, but its vector update failed.";
+    Check(MemoryAgent::ClassifyEventPriority(completedLearning) == MemoryEventPriority::Critical,
+        "An optional vector-write failure could disappear as an ordinary learning completion.");
 
     MemoryAgentEvent classifierFailed;
     classifierFailed.decision.bSuccess = false;
@@ -813,23 +817,22 @@ void TestEventOverflowPreservesCriticalAndImportantEventsOverLowValueOnes()
     limits.maximumPendingEvents = 20;
     agent.SetQueueLimits(limits);
 
-    // Important: a handful of already-approved findings that fit comfortably inside
-    // the learning queue and so are admitted normally; once the worker saves each one,
-    // it becomes a completed "autonomous_learning" event.
+    // Scan before accepting the new findings below, which are now stored immediately.
+    // This fixes the workload at exactly ten Critical embedding failures rather than
+    // depending on whether learning content has reached the database yet.
+    agent.SubmitEmbeddingBackfill(router, "test-embedding-model");
+
+    // Important: accepted findings are durable before their optional embedding work.
+    // The placeholder cannot embed them, but the completion still reports saved content.
     constexpr int LearningCount = 6;
     for (int index = 0; index < LearningCount; ++index)
     {
         const auto disposition = agent.SubmitLearnedFinding(
             router, ApprovedFinding("learning" + std::to_string(index)));
-        Check(disposition == revia::agents::LearnedFindingResult::Queued,
+        Check(disposition == revia::agents::LearnedFindingResult::SavedEmbeddingQueued,
             "A learning submission that fit well inside its queue was not admitted "
             "normally, which would invalidate this test's accounting.");
     }
-
-    // Critical: the placeholder backend's EmbedMemory always fails, so every one of
-    // the seeded rows above comes back as a backfill event reporting a real embedding
-    // failure -- the only record of it, per the priority policy.
-    agent.SubmitEmbeddingBackfill(router, "test-embedding-model");
 
     // Low: a burst of no-op classifications, far more than the 20-event bound, so the
     // queue is forced to evict something well before everything above has drained.

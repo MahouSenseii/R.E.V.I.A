@@ -321,8 +321,9 @@ per turn.
   to a stimulus, integrates the result, and records an `AppraisalOutcome` carrying the
   stimulus, context, delta, resulting state, and model name.
 - `EmotionRuntime::ToAffectSnapshot()` projects the vector onto the legacy
-  `AffectSnapshot`, so the badge, speech rate, and posture line can be migrated
-  incrementally and `AffectController` stays a working fallback rather than dead code.
+  `AffectSnapshot` consumed by the badge, speech and reflex. The F7/F8 checkpoint uses
+  that projection throughout; `AffectController` remains a comparison baseline.
+  Controlled caller tests and live personality acceptance are in progress (2026-09-06).
 
 Observed behaviour from the same stimulus under different context:
 
@@ -345,9 +346,9 @@ Observed behaviour from the same stimulus under different context:
   drift, or a relationship section for a stranger, would assert state that does not
   exist, so absence is the honest rendering.
 - `Private/Runtime/conversationRuntime.cpp` now assembles the packet instead of
-  concatenating the prompt inline. The emotion vector is populated from the
-  deterministic `AffectController` via `LegacyAffectToVector`, so behaviour is unchanged
-  while the assembly moves; when appraisal goes live only that population changes.
+  concatenating the prompt inline. The packet reads emotion and mood atomically from
+  `EmotionRuntime`, including a calm vector. Proactive instructions extend the same
+  packet; a separate legacy fallback no longer replaces calm state.
 - The prompt-leak filter was extended to cover the new sections. It also had a real
   pre-existing bug: the marker `"runtime self-knowledge (ground truth)"` ended in a
   parenthesis the rendered prompt never contains (`"(ground truth; mention it only..."`),
@@ -391,9 +392,12 @@ Observed accumulation against sustained appreciation, and against hostility:
 - **Appraisal is now the live emotion path.** `ConversationRuntime` builds a stimulus
   before generation, `EmotionRuntime` appraises it against development, mood, and the
   speaker's relationship, and the resulting vector is what reaches the prompt, the status
-  badge, and speech. `AffectController` still runs as the documented deterministic
-  fallback and baseline, and `LegacyAffectToVector` covers paths with no stimulus behind
-  them, such as a proactive opening.
+  badge, and speech. `AffectController` still runs for comparison, without publishing
+  state. Confirmed camera and goal outcomes also enter canonical appraisal; generic
+  command completion does not manufacture or duplicate an achievement reaction.
+  Cancelled goals do not create a failure reaction. Session maintenance now supplies
+  one-minute emotion settling, separate five-minute quiet relationship steps and the
+  existing thirty-second identity save cadence. These behavior changes await live review.
 - `Public/Identity/developmentEngine.h` — evidence accumulates per trait and only moves a
   personality when several consistent observations agree. Changes are bounded per step,
   capped over a lifetime, reversible when evidence changes direction, and carry the reason
@@ -506,9 +510,10 @@ Note that the hold is measured from process start rather than from runtime-ready
 startup alone takes around twenty-five seconds, so a useful hold is sixty seconds or
 more.
 
-**Outstanding:** memory consolidation into the state packet, Phase 7 (neural emotion
-model, training-data export), and Phase 8 (avatar). `AffectController` remains the emotion path that actually drives
-conversation, and no `Stimulus` is constructed anywhere in `ReviaSession`.
+**Outstanding:** F7/F8 live personality acceptance, memory consolidation into the state
+packet, Phase 7 (neural emotion model, training-data export), and Phase 8 (avatar).
+`EmotionRuntime` drives conversation and presentation; `ReviaSession` constructs typed
+stimuli from confirmed runtime outcomes. Legacy evaluation is retained for comparison.
 
 ## Response latency
 

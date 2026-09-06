@@ -658,21 +658,20 @@ void llamaCppService::ApplySettings(
     bVisionExpected = settings.bVisionEnabled;
     configuredContextTokens = std::max(1024, settings.contextSize);
 
-    activeProfile = profile;
-
-    temperature = profile.bHasTemperatureOverride
-        ? profile.temperature
-        : settings.temperature;
-
-    maxTokens = profile.bHasMaxTokensOverride
-        ? profile.maxTokens
-        : settings.maxTokens;
-    bAutoMaxTokens = settings.bAutoMaxTokens && !profile.bHasMaxTokensOverride;
+    ApplyProfile(settings, profile);
     effectiveContextTokens.store(configuredContextTokens);
     effectiveParallelSlots.store(0);
     inferenceScheduler.SetCapacity(settings.parallelRequests);
 
     embeddings.ApplySettings(embeddingSettings);
+}
+
+void llamaCppService::ApplyProfile(const llmSettings& settings, const aiProfile& profile)
+{
+    activeProfile = profile;
+    temperature = profile.bHasTemperatureOverride ? profile.temperature : settings.temperature;
+    maxTokens = profile.bHasMaxTokensOverride ? profile.maxTokens : settings.maxTokens;
+    bAutoMaxTokens = settings.bAutoMaxTokens && !profile.bHasMaxTokensOverride;
 }
 
 bool llamaCppService::IsServerAvailable() const
@@ -739,7 +738,8 @@ responseOutput llamaCppService::GenerateResponse(
     const std::vector<conversationMessage>& context,
     const std::stop_token stopToken,
     DeltaHandler onDelta,
-    const bool deepReasoning) const
+    const bool deepReasoning,
+    const revia::llm::PrivateMemoryAccess memoryAccess) const
 {
     responseOutput output;
 
@@ -769,7 +769,7 @@ responseOutput llamaCppService::GenerateResponse(
     }
 
     embeddingOutput queryEmbedding;
-    if (activeProfile.bMemoryEnabled)
+    if (memoryAccess == revia::llm::PrivateMemoryAccess::ProfileSetting && activeProfile.bMemoryEnabled)
     {
         for (auto message = context.rbegin(); message != context.rend(); ++message)
         {
@@ -798,7 +798,8 @@ responseOutput llamaCppService::GenerateResponse(
         queryEmbedding.bSuccess ? queryEmbedding.model : "",
         &output.timings,
         posture,
-        &output.promptSections);
+        &output.promptSections,
+        memoryAccess);
 
     const auto requestPreparationStarted = std::chrono::steady_clock::now();
 
@@ -1633,9 +1634,9 @@ memoryDecision llamaCppService::EvaluateMemory(
     }
 }
 
-healthOutput llamaCppService::CheckEmbeddingHealth() const
+healthOutput llamaCppService::CheckEmbeddingHealth(std::stop_token stopToken) const
 {
-    return embeddings.CheckHealth();
+    return embeddings.CheckHealth(stopToken);
 }
 
 embeddingOutput llamaCppService::EmbedMemory(

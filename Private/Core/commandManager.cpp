@@ -1,15 +1,14 @@
 #include "Core/commandManager.h"
 #include <sstream>
 
-#include "Core/configManager.h"
 #include "Core/messageRouter.h"
 
 commandManager::commandManager()= default;
 
 commandManager::~commandManager() = default;
 
-commandOutput commandManager::HandleCommand(const std::string& input,appSettings& settings,
-    aiProfile& profile,configManager& config,messageRouter& router) const
+commandOutput commandManager::HandleCommand(const std::string& input, const appSettings& settings,
+    const aiProfile& profile, messageRouter& router, const ProfileActivator& activateProfile) const
 {
     commandOutput output;
 
@@ -72,7 +71,9 @@ commandOutput commandManager::HandleCommand(const std::string& input,appSettings
 
     if (input.rfind("/profile ", 0) == 0)
     {
-        return HandleProfileCommand(input, settings, profile, config, router);
+        output = activateProfile(input.substr(std::string("/profile ").size()));
+        output.bWasCommand = true;
+        return output;
     }
 
     output.bSuccess = false;
@@ -253,41 +254,5 @@ commandOutput commandManager::BuildStatusOutput(
 
     output.output = stream.str();
 
-    return output;
-}
-
-commandOutput commandManager::HandleProfileCommand(const std::string& input,appSettings& settings,aiProfile& profile,
-    configManager& config,messageRouter& router) const
-{
-    commandOutput output;
-    output.bWasCommand = true;
-
-    const std::string prefix = "/profile ";
-    std::string profileId = input.substr(prefix.length());
-
-    if (profileId.empty())
-    {
-        output.bSuccess = false;
-        output.output = "Profile name was empty. Example: /profile revia";
-        output.reason = "Profile command missing profile name.";
-        return output;
-    }
-
-    aiProfile newProfile;
-
-    if (!config.LoadProfile(profileId, newProfile))
-    {
-        output.bSuccess = false;
-        output.output = "Profile not found: " + profileId;
-        output.reason = "Failed to load profile: " + profileId;
-        return output;
-    }
-
-    profile = newProfile;
-    settings.activeProfile = profileId;
-
-    router.ApplyProfile(profile);
-
-    output.output = "Loaded profile: " + profile.displayName + " (" + profile.id + ")";
     return output;
 }

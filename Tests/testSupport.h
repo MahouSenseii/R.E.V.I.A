@@ -57,6 +57,8 @@ public:
 
 // Entry points for the split suites, called from the single test main.
 void RunEmotionTests();
+void RunEmotionOwnershipTests();
+void RunEmotionOwnershipLive(const std::string& runtimeDirectory, const std::string& reportPath);
 void RunIdentityTests();
 void RunAppraisalTests();
 void RunStatePacketTests();
@@ -68,3 +70,15 @@ void RunVoicePoolTests();
 void RunMicrophoneTests();
 void RunActivityExecutionTests();
 void RunAuditFindingsTests();
+void RunSpeechInterruptionTests();
+void RunSpeechInterruptionLive(const std::filesystem::path& sourceClip);
+void RunActionCancellationTests();
+void RunActionAuditTests();
+void RunIdentityPersistenceTests();
+void RunIdentityFinalSaveTests();
+void RunLearningDurabilityTests();
+void RunEmbeddingBackfillTests();
+void RunSpeakerContinuityTests();
+void RunProfileActivationTests();
+void RunProactiveStateTests();
+void RunIdentityCrashChild(const std::filesystem::path& root);

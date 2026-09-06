@@ -12,6 +12,7 @@
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <stop_token>
 #include <string>
 
 namespace revia::actions
@@ -35,7 +36,10 @@ public:
     [[nodiscard]] planning::ParsedAction ParseCommand(const std::string& input) const;
     [[nodiscard]] planning::ParsedAction ParseJson(const std::string& input) const;
     [[nodiscard]] PolicyDecision Evaluate(const ActionRequest& request) const;
-    [[nodiscard]] ActionOutcome Execute(const ActionRequest& request,bool confirmationGranted = false);
+    [[nodiscard]] ActionOutcome Execute(
+        const ActionRequest& request,
+        bool confirmationGranted = false,
+        std::stop_token stopToken = {});
 
     // Scoped evaluation for the goal runner. A goal carries its own, narrower
     // CapabilitySettings; the result is the more restrictive of the global
@@ -48,7 +52,8 @@ public:
     [[nodiscard]] ActionOutcome ExecuteScoped(
         const ActionRequest& request,
         const policy::CapabilityPolicy& scopedPolicy,
-        bool confirmationGranted = false);
+        bool confirmationGranted = false,
+        std::stop_token stopToken = {});
     // Notified immediately before and immediately after every dispatched action,
     // whichever entry point reached it.
     //
@@ -98,6 +103,14 @@ public:
     void CancelActiveInternet();
 
 private:
+    // Called under mutex. Cancellation is checked after the observer callback,
+    // immediately before dispatch; completed executor results are never rewritten.
+    [[nodiscard]] ActionOutcome ExecuteWithPolicy(
+        const ActionRequest& request,
+        const policy::CapabilityPolicy* scopedPolicy,
+        bool confirmationGranted,
+        std::stop_token stopToken);
+
     [[nodiscard]] bool InitializeUnlocked(
         const std::filesystem::path& capabilityConfig,
         const std::filesystem::path& auditPath,

@@ -36,6 +36,7 @@ The design rule is simple even though the internals are not: **one Revia**. Refl
 ### Seeing, listening, and speaking
 
 - Continuous awareness is event-driven with a 30-second idle refresh backstop. Filtered window changes wake a bounded local analysis of the complete virtual desktop, including every monitor and its real coordinates; constantly changing window titles cannot postpone it forever.
+- Application and window-title exclusions apply to **activity metadata only**. They suppress matching activity records; they do **not** hide those windows in screenshots sent to vision. Screen capture has its own permission and can still include excluded windows.
 - Temporary screenshots are deleted immediately. Only a short in-memory summary is retained, and screen text is treated as untrusted content rather than instructions.
 - User input preempts background vision. Voice and vision can continue as separate bounded workers while Revia is otherwise idle, so a long spoken answer no longer makes screen context go stale. `/perception pause` stops observation immediately; `/perception forget` clears the in-memory activity and visual summaries.
 - The old **Analyze screen** button has been removed. **Use screen** still exists for a specific, confirmed UI action because observation and action authority are deliberately separate.
@@ -188,7 +189,7 @@ Revia is local-first, but “local” does not mean “unrestricted.”
 - The checked-in capability template is supervised and limits filesystem work to `%USERPROFILE%\Documents\ReviaSandbox`.
 - Application approval grants inspection only. Invoking or changing a control also requires an exact approved control name or automation ID.
 - Filesystem writes and mutable desktop actions require policy approval and normally confirmation.
-- Password managers, banking, private browsing, recovery phrases, and similar titles are excluded from ambient perception by default.
+- Password-manager applications and matching sensitive window titles are excluded from ambient **activity metadata** by default. These exclusions do not mask their visible contents in screenshots sent to vision.
 - Internet access is separately opt-in because query text leaves the machine when a lookup runs.
 - Screen analysis can describe; it cannot click. **Use screen** must resolve the visual target back to a permitted Windows UI Automation element before policy and confirmation are evaluated.
 - Action logs omit entered control text and record only its length.

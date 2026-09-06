@@ -4,11 +4,13 @@
 #include "Core/messageRouter.h"
 
 #include <condition_variable>
+#include <chrono>
 #include <cstdint>
 #include <deque>
 #include <functional>
-#include <unordered_set>
+#include <set>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <thread>
 #include <vector>
@@ -18,7 +20,7 @@ namespace revia::agents
 
     enum class LearnedFindingResult
     {
-        Queued,
+        SavedEmbeddingQueued,
         SavedWithoutEmbedding,
         AlreadyExists,
         Failed
@@ -49,6 +51,9 @@ struct MemoryAgentEvent
     std::string operation = "memory_evaluation";
     bool saveSucceeded = true;
     bool wasAdded = false;
+    // Optional vector work failed after the semantic content was committed.
+    // Keep that failure separate from saveSucceeded, which describes the memory.
+    std::string embeddingError;
     // Set when this entry stands in for more than one Low-priority occurrence folded
     // together under queue pressure -- see MemoryAgent::AdmitEventLocked. Zero for an
     // ordinary event describing exactly one task.
@@ -66,11 +71,11 @@ enum class MemoryTaskClass
     // Classifying what just happened in conversation. Freshest work, highest priority:
     // a memory that arrives after the conversation moved on is worth much less.
     InteractiveTurn,
-    // A finding Revia already decided to keep. The decision is made; only the storing
-    // is pending, so this must never be discarded.
+    // Vector work for an approved finding whose content is already committed.
+    // Pending vectors can be recovered by the normal backfill path after shutdown.
     AutonomousLearning,
-    // Embedding a memory that already exists. Lowest value per task and the only class
-    // that regenerates itself: a dropped backfill is found again by the next scan.
+    // Embedding a memory that already exists. A dropped backfill is found again
+    // by the next scan, as is a deferred vector from AutonomousLearning.
     EmbeddingBackfill
 };
 
@@ -81,7 +86,7 @@ struct MemoryQueueLimits
     // Bounded per class rather than in total, so a flood of one kind cannot consume the
     // room another kind needs.
     std::size_t maximumInteractive = 64;
-    // Generous, and never overflowed by dropping: these carry decisions already made.
+    // Optional vector work; content is committed before this bound is checked.
     std::size_t maximumLearning = 256;
     std::size_t maximumBackfill = 256;
     // Drained by the session each poll. Capped so a shell that stops draining cannot
@@ -107,14 +112,10 @@ public:
         std::string input,
         std::string assistantResponse = "",
         std::uint64_t turnId = 0);
-    // Stores one already-grounded, bounded finding without asking the conversation
-    // classifier to reinterpret web text. Embedding still runs on the background lane.
-    //
-    // Never destroys an already-approved decision: when the learning queue is full,
-    // this saves it immediately without an embedding rather than refusing it. The
-    // existing backfill scan adds the vector later. The returned disposition tells the
-    // caller which of those happened, so autonomy reporting never claims a save that
-    // did not happen.
+    // Commits already-approved semantic content before accepting optional embedding
+    // work. A successful disposition guarantees the content is in the existing store;
+    // cancellation/queue pressure can defer vectors, never the accepted content.
+    // Unclassified candidates still use Submit and are not persisted by this path.
     [[nodiscard]] LearnedFindingResult SubmitLearnedFinding(
         const messageRouter& router,
         memoryDecision decision,
@@ -122,6 +123,11 @@ public:
     void SubmitEmbeddingBackfill(
         const messageRouter& router,
         const std::string& embeddingModel);
+    // The session owns this subscription's lifetime; all scans and requests run on
+    // the existing worker. The router must remain alive until Stop has joined the
+    // worker; StopEmbeddingBackfill cancels its subscription without joining it.
+    void StartEmbeddingBackfill(const messageRouter& router, const std::string& embeddingModel);
+    void StopEmbeddingBackfill();
     std::vector<MemoryAgentEvent> DrainEvents();
     void Stop();
 
@@ -169,18 +175,27 @@ public:
     [[nodiscard]] std::size_t CriticalEventsEvicted() const;
 
 private:
+    friend struct MemoryAgentTestAccess;
     struct Task
     {
         const messageRouter* router = nullptr;
         std::string input;
         std::string assistantResponse;
         std::string memoryId;
+        std::string embeddingModel;
+        std::stop_token backfillStop;
+        bool scheduledBackfill = false;
         memoryDecision learnedDecision;
         bool hasLearnedDecision = false;
+        bool learnedWasAdded = false;
         std::uint64_t turnId = 0;
     };
 
     void Run(std::stop_token stopToken);
+    void ScanBackfill(std::stop_token stopToken);
+    void FinishEmbeddingTask(const Task& task, bool failed);
+    bool BackfillDueLocked() const;
+    std::chrono::milliseconds BackfillRetryDelay(int failures) const;
     void Report(const std::string& line) const;
     // Returns false when the queue is full and the task could not be admitted.
     bool Enqueue(MemoryTaskClass taskClass, Task task);
@@ -196,9 +211,25 @@ private:
     std::deque<Task> interactiveTasks;
     std::deque<Task> learningTasks;
     std::deque<Task> backfillTasks;
-    // Memory ids already queued for embedding, so a repeated scan cannot enqueue the
-    // same row again. Erased when the task is taken.
-    std::unordered_set<std::string> queuedBackfillIds;
+    // Includes queued and in-flight learning/backfill, keyed by model and row id.
+    std::set<std::pair<std::string, std::string>> pendingEmbeddingIds;
+    struct BackfillSubscription
+    {
+        const messageRouter* router = nullptr;
+        std::string model;
+        std::int64_t afterRowId = 0;
+        std::chrono::steady_clock::time_point nextScan;
+        std::stop_source cancellation;
+        std::size_t pending = 0;
+        int failures = 0;
+        bool batchFailed = false;
+        bool atEnd = false;
+    };
+    std::optional<BackfillSubscription> backfill;
+    std::chrono::milliseconds backfillBatchInterval{250};
+    std::chrono::milliseconds backfillIdleInterval{30000};
+    std::chrono::milliseconds backfillRetryInterval{5000};
+    std::chrono::milliseconds backfillMaximumRetry{60000};
     int roundPosition = 0;
     std::vector<MemoryAgentEvent> events;
     MemoryQueueLimits limits;

@@ -15,11 +15,15 @@ public:
     explicit memoryManager(std::string databasePath);
     ~memoryManager();
 
-    bool SaveAutomaticMemory(const memoryDecision& decision, bool& outWasAdded) const;
+    bool SaveAutomaticMemory(const memoryDecision& decision, bool& outWasAdded,
+        std::string* outMemoryId = nullptr) const;
     std::vector<memoryEntry> LoadMemories() const;
     std::vector<memoryEntry> LoadMissingEmbeddings(
         const std::string& embeddingModel,
         std::size_t maxEntries = 25) const;
+    EmbeddingBackfillPage ScanMissingEmbeddings(const std::string& embeddingModel,
+        std::int64_t afterRowId, std::size_t maxEntries = 25) const;
+    bool NeedsEmbedding(const std::string& memoryId, const std::string& embeddingModel) const;
     bool SaveEmbedding(
         const std::string& memoryId,
         const std::string& embeddingModel,

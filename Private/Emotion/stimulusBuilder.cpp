@@ -126,4 +126,15 @@ Stimulus BuildDiscoveryStimulus(
     return stimulus;
 }
 
+Stimulus BuildQuietConversationStimulus()
+{
+    Stimulus stimulus;
+    stimulus.source = StimulusSource::Environment;
+    stimulus.eventType = "quiet_conversation";
+    stimulus.description = "conversation has been quiet for twenty minutes";
+    stimulus.importance = 0.48F;
+    stimulus.quietConversation = 1.0F;
+    return stimulus;
+}
+
 } // namespace revia::emotion

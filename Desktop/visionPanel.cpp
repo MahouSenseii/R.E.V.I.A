@@ -28,10 +28,10 @@ VisionPanel::VisionPanel(revia::runtime::ReviaSession& inputSession, QWidget* pa
     layout->addWidget(title);
 
     auto* explanation = new QLabel(
-        "What Revia can see, and what she is permitted to look at. Screen capture, camera "
-        "capture, and ambient observation are separate permissions, all off unless granted "
-        "under Permissions. Seeing is not acting: a frame taken here grants no authority "
-        "over whatever it happens to contain.", this);
+        "Screen capture, camera capture, and ambient observation require separate "
+        "permissions. Application and window exclusions apply to activity metadata only; "
+        "they do not hide pixels in screenshots sent to vision. Capturing a frame grants "
+        "no authority to act on its contents.", this);
     explanation->setWordWrap(true);
     explanation->setObjectName("secondaryText");
     layout->addWidget(explanation);

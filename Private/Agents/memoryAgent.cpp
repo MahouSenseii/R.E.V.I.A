@@ -134,10 +134,9 @@ MemoryEventPriority MemoryAgent::ClassifyEventPriority(const MemoryAgentEvent& e
 
     if (event.operation == "autonomous_learning")
     {
-        // The decision was already approved before this task was ever queued, so
-        // failing to store it loses a conclusion Revia already reached, not a
-        // classification that can simply run again.
-        return event.saveSucceeded
+        // Semantic content was committed at acceptance. A later vector-write
+        // failure must remain visible without claiming that content was lost.
+        return event.saveSucceeded && event.embeddingError.empty()
             ? MemoryEventPriority::Important
             : MemoryEventPriority::Critical;
     }
@@ -263,6 +262,7 @@ bool MemoryAgent::Enqueue(const MemoryTaskClass taskClass, Task task)
     bool admitted = true;
     {
         std::lock_guard lock(mutex);
+        if (worker.get_stop_token().stop_requested()) return false;
         switch (taskClass)
         {
             case MemoryTaskClass::InteractiveTurn:
@@ -284,33 +284,32 @@ bool MemoryAgent::Enqueue(const MemoryTaskClass taskClass, Task task)
             {
                 if (learningTasks.size() >= limits.maximumLearning)
                 {
-                    // Never dropped. This is a memory Revia already decided to keep, so
-                    // losing it would lose a durable decision. Refusing the submission
-                    // and saying so is the only honest option.
+                    // Content is already committed. Only optional vector work is
+                    // deferred here; a later backfill can discover the saved row.
                     admitted = false;
                     report = "[MemoryAgent] overflow | type=learning | refused | depth=" +
                         std::to_string(learningTasks.size());
                     break;
                 }
+                if (!pendingEmbeddingIds.emplace(task.embeddingModel, task.memoryId).second)
+                    return false;
                 learningTasks.push_back(std::move(task));
                 break;
             }
             case MemoryTaskClass::EmbeddingBackfill:
             {
-                if (!queuedBackfillIds.insert(task.memoryId).second)
-                {
-                    // Already waiting. A repeated scan finding the same unembedded row
-                    // must not queue it twice.
-                    return true;
-                }
+                if (task.scheduledBackfill && (!backfill ||
+                    task.backfillStop != backfill->cancellation.get_token() ||
+                    task.backfillStop.stop_requested())) return false;
                 if (backfillTasks.size() >= limits.maximumBackfill)
                 {
-                    queuedBackfillIds.erase(task.memoryId);
                     admitted = false;
                     report = "[MemoryAgent] delayed | reason=queue_pressure | "
                         "type=backfill | depth=" + std::to_string(backfillTasks.size());
                     break;
                 }
+                if (!pendingEmbeddingIds.emplace(task.embeddingModel, task.memoryId).second)
+                    return false;
                 backfillTasks.push_back(std::move(task));
                 break;
             }
@@ -353,37 +352,38 @@ LearnedFindingResult MemoryAgent::SubmitLearnedFinding(
         return LearnedFindingResult::Failed;
     }
 
+    // Acceptance is a database boundary, not a queue boundary. This is the same
+    // curation/deduplication path used by the former overflow-only fallback.
+    decision.embedding.clear();
+    decision.embeddingModel.clear();
+    bool wasAdded = false;
+    std::string memoryId;
+    const auto saveStarted = std::chrono::steady_clock::now();
+    if (!memory.SaveAutomaticMemory(decision, wasAdded, &memoryId))
+    {
+        Report("[MemoryAgent] acceptance | type=learning | result=save_failed");
+        return LearnedFindingResult::Failed;
+    }
+    decision.timings.push_back({"memory_db_save",
+        std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - saveStarted).count()});
+
     Task task;
     task.router = &router;
     task.input = decision.summary;
-    // A copy: `decision` itself has to survive intact for the fallback save below,
-    // which only runs if the queue refuses this task.
-    task.learnedDecision = decision;
+    task.memoryId = std::move(memoryId);
+    task.embeddingModel = router.EmbeddingModelName();
+    task.learnedDecision = std::move(decision);
     task.hasLearnedDecision = true;
+    task.learnedWasAdded = wasAdded;
     task.turnId = turnId;
-
     if (Enqueue(MemoryTaskClass::AutonomousLearning, std::move(task)))
     {
-        Report("[MemoryAgent] queued | type=learning | depth=" +
+        Report("[MemoryAgent] queued | type=learning | content=saved | depth=" +
             std::to_string(Depths().learning));
-        return LearnedFindingResult::Queued;
+        return LearnedFindingResult::SavedEmbeddingQueued;
     }
 
-    // The queue is full, but the decision was already approved before this call ever
-    // happened. Losing it here would turn an observable refusal back into the silent
-    // drop this API exists to prevent, so it is saved immediately instead -- without an
-    // embedding, since that is the expensive step the queue was protecting. The
-    // existing backfill scan finds the row missing its vector and adds it later.
-    // Save() still deduplicates and applies the same safety policy any other save does.
-    decision.embedding.clear();
-    decision.embeddingModel.clear();
-
-    bool wasAdded = false;
-    if (!memory.SaveAutomaticMemory(decision, wasAdded))
-    {
-        Report("[MemoryAgent] overflow_fallback | type=learning | result=save_failed");
-        return LearnedFindingResult::Failed;
-    }
     if (!wasAdded)
     {
         Report("[MemoryAgent] overflow_fallback | type=learning | "
@@ -418,11 +418,147 @@ void MemoryAgent::SubmitEmbeddingBackfill(
         task.router = &router;
         task.input = entry.summary;
         task.memoryId = entry.id;
+        task.embeddingModel = embeddingModel;
         if (Enqueue(MemoryTaskClass::EmbeddingBackfill, std::move(task))) ++admitted;
     }
     Report("[MemoryAgent] queued | type=backfill | admitted=" +
         std::to_string(admitted) + " | scanned=" + std::to_string(missing.size()) +
         " | depth=" + std::to_string(Depths().backfill));
+}
+
+void MemoryAgent::StartEmbeddingBackfill(const messageRouter& router, const std::string& model)
+{
+    if (model.empty()) { StopEmbeddingBackfill(); return; }
+    std::optional<std::stop_source> previous;
+    {
+        std::lock_guard lock(mutex);
+        if (worker.get_stop_token().stop_requested()) return;
+        if (backfill && backfill->router == &router && backfill->model == model) return;
+        if (backfill) previous = backfill->cancellation;
+        for (const auto& task : backfillTasks)
+            pendingEmbeddingIds.erase({task.embeddingModel, task.memoryId});
+        backfillTasks.clear();
+        backfill.emplace();
+        backfill->router = &router;
+        backfill->model = model;
+        backfill->nextScan = std::chrono::steady_clock::now();
+    }
+    if (previous) previous->request_stop();
+    taskAvailable.notify_all();
+}
+
+void MemoryAgent::StopEmbeddingBackfill()
+{
+    std::optional<std::stop_source> previous;
+    {
+        std::lock_guard lock(mutex);
+        if (backfill) previous = backfill->cancellation;
+        backfill.reset();
+        for (const auto& task : backfillTasks)
+            pendingEmbeddingIds.erase({task.embeddingModel, task.memoryId});
+        backfillTasks.clear();
+    }
+    if (previous) previous->request_stop();
+    taskAvailable.notify_all();
+}
+
+bool MemoryAgent::BackfillDueLocked() const
+{
+    return backfill && backfill->pending == 0 &&
+        std::chrono::steady_clock::now() >= backfill->nextScan;
+}
+
+std::chrono::milliseconds MemoryAgent::BackfillRetryDelay(int failures) const
+{
+    return std::min(backfillMaximumRetry,
+        backfillRetryInterval * (1 << std::clamp(failures - 1, 0, 4)));
+}
+
+void MemoryAgent::ScanBackfill(std::stop_token stopToken)
+{
+    BackfillSubscription scan;
+    std::size_t batchSize;
+    {
+        std::lock_guard lock(mutex);
+        if (!BackfillDueLocked()) return;
+        scan = *backfill;
+        batchSize = std::min<std::size_t>(25, limits.maximumBackfill);
+    }
+    auto cancellation = scan.cancellation;
+    std::stop_callback ownerStopped(stopToken, [&cancellation] { cancellation.request_stop(); });
+    const auto token = cancellation.get_token();
+    if (token.stop_requested()) return;
+    const auto page = memory.ScanMissingEmbeddings(scan.model, scan.afterRowId, batchSize);
+    std::string error = page.error;
+    if (error.empty() && !page.entries.empty())
+    {
+        const auto health = scan.router->CheckEmbeddingHealth(token);
+        if (!health.bIsAvailable) error = health.reason.empty() ? health.message : health.reason;
+    }
+    if (token.stop_requested()) return;
+    if (!error.empty())
+    {
+        MemoryAgentEvent event;
+        event.operation = "memory_backfill";
+        event.decision.reason = error;
+        std::string pressure;
+        {
+            std::lock_guard lock(mutex);
+            if (!backfill || backfill->cancellation.get_token() != token) return;
+            backfill->failures = std::min(backfill->failures + 1, 5);
+            backfill->nextScan = std::chrono::steady_clock::now() + BackfillRetryDelay(backfill->failures);
+            pressure = AdmitEventLocked(std::move(event));
+        }
+        Report("[MemoryAgent] backfill_scan | result=failed | retry=delayed");
+        if (!pressure.empty()) Report(pressure);
+        return;
+    }
+    std::size_t admitted = 0;
+    for (const auto& entry : page.entries)
+    {
+        Task task;
+        task.router = scan.router;
+        task.input = entry.summary;
+        task.memoryId = entry.id;
+        task.embeddingModel = scan.model;
+        task.backfillStop = token;
+        task.scheduledBackfill = true;
+        if (Enqueue(MemoryTaskClass::EmbeddingBackfill, std::move(task))) ++admitted;
+    }
+    {
+        std::lock_guard lock(mutex);
+        if (!backfill || backfill->cancellation.get_token() != token) return;
+        backfill->afterRowId = page.nextRowId;
+        backfill->atEnd = !page.hasMore;
+        backfill->batchFailed = false;
+        backfill->pending = admitted;
+        if (admitted == 0)
+        {
+            if (backfill->atEnd) backfill->afterRowId = 0;
+            backfill->nextScan = std::chrono::steady_clock::now() +
+                (backfill->atEnd ? backfillIdleInterval : backfillBatchInterval);
+        }
+        else backfill->nextScan = std::chrono::steady_clock::time_point::max();
+    }
+    if (!page.entries.empty())
+        Report("[MemoryAgent] backfill_scan | rows=" + std::to_string(page.entries.size()) +
+            " | queued=" + std::to_string(admitted));
+}
+
+void MemoryAgent::FinishEmbeddingTask(const Task& task, bool failed)
+{
+    std::lock_guard lock(mutex);
+    pendingEmbeddingIds.erase({task.embeddingModel, task.memoryId});
+    if (!task.scheduledBackfill || !backfill ||
+        backfill->cancellation.get_token() != task.backfillStop) return;
+    backfill->batchFailed = backfill->batchFailed || failed;
+    if (backfill->pending > 0) --backfill->pending;
+    if (backfill->pending != 0) return;
+    backfill->failures = backfill->batchFailed ? std::min(backfill->failures + 1, 5) : 0;
+    auto delay = backfill->atEnd ? backfillIdleInterval : backfillBatchInterval;
+    if (backfill->batchFailed) delay = std::max(delay, BackfillRetryDelay(backfill->failures));
+    if (backfill->atEnd) backfill->afterRowId = 0;
+    backfill->nextScan = std::chrono::steady_clock::now() + delay;
 }
 
 std::vector<MemoryAgentEvent> MemoryAgent::DrainEvents()
@@ -443,6 +579,12 @@ void MemoryAgent::Stop()
     worker.request_stop();
     taskAvailable.notify_all();
     worker.join();
+    std::lock_guard lock(mutex);
+    interactiveTasks.clear();
+    learningTasks.clear();
+    backfillTasks.clear();
+    pendingEmbeddingIds.clear();
+    backfill.reset();
 }
 
 void MemoryAgent::Run(const std::stop_token stopToken)
@@ -450,25 +592,38 @@ void MemoryAgent::Run(const std::stop_token stopToken)
     while (!stopToken.stop_requested())
     {
         Task task;
+        bool scanDue = false;
         {
             std::unique_lock lock(mutex);
-            taskAvailable.wait(lock, stopToken, [&]()
+            const auto ready = [&]()
             {
                 return !interactiveTasks.empty() || !learningTasks.empty() ||
-                    !backfillTasks.empty();
-            });
+                    !backfillTasks.empty() || BackfillDueLocked();
+            };
+            if (backfill)
+            {
+                // A profile change can replace the subscription while the wait
+                // releases the mutex; its deadline must remain a local value.
+                const auto deadline = backfill->nextScan;
+                taskAvailable.wait_until(lock, stopToken, deadline, ready);
+            }
+            else
+                taskAvailable.wait(lock, stopToken, ready);
             if (stopToken.stop_requested())
             {
                 interactiveTasks.clear();
+                // Accepted findings are already in SQLite; only their optional
+                // vector work is discarded here and can be backfilled later.
                 learningTasks.clear();
                 backfillTasks.clear();
-                queuedBackfillIds.clear();
+                pendingEmbeddingIds.clear();
                 return;
             }
 
             bool hasWork = false;
             const QueueDepths depths{
-                interactiveTasks.size(), learningTasks.size(), backfillTasks.size()};
+                interactiveTasks.size(), learningTasks.size(),
+                backfillTasks.size() + (BackfillDueLocked() ? 1U : 0U)};
             const MemoryTaskClass chosen =
                 NextClass(depths, roundPosition, hasWork);
             if (!hasWork) continue;
@@ -483,31 +638,53 @@ void MemoryAgent::Run(const std::stop_token stopToken)
                     learningTasks.pop_front();
                     break;
                 case MemoryTaskClass::EmbeddingBackfill:
+                    if (backfillTasks.empty())
+                    {
+                        scanDue = true;
+                        break;
+                    }
                     task = std::move(backfillTasks.front());
                     backfillTasks.pop_front();
-                    // Freed as it is taken, so a row that still needs embedding after a
-                    // failure can be queued again by the next scan.
-                    queuedBackfillIds.erase(task.memoryId);
                     break;
             }
         }
-
-        if (!task.memoryId.empty())
+        if (scanDue)
         {
-            const embeddingOutput embedding =
-                task.router->EmbedMemory(task.input, stopToken);
-            if (stopToken.stop_requested())
+            ScanBackfill(stopToken);
+            continue;
+        }
+
+        std::stop_source requestStop;
+        std::stop_callback ownerStopped(stopToken, [&requestStop] { requestStop.request_stop(); });
+        std::stop_callback backfillStopped(task.backfillStop, [&requestStop] { requestStop.request_stop(); });
+        const auto requestToken = requestStop.get_token();
+
+        if (!task.memoryId.empty() && !task.hasLearnedDecision)
+        {
+            if (requestToken.stop_requested() ||
+                !memory.NeedsEmbedding(task.memoryId, task.embeddingModel))
             {
-                return;
+                FinishEmbeddingTask(task, false);
+                continue;
+            }
+            const embeddingOutput embedding =
+                task.router->EmbedMemory(task.input, requestToken);
+            if (requestToken.stop_requested())
+            {
+                FinishEmbeddingTask(task, false);
+                continue;
             }
             MemoryAgentEvent event;
             event.operation = "memory_backfill";
-            event.decision.bSuccess = embedding.bSuccess;
-            event.decision.reason = embedding.reason;
+            event.decision.bSuccess = embedding.bSuccess && embedding.model == task.embeddingModel;
+            event.decision.reason = embedding.bSuccess && !event.decision.bSuccess
+                ? "The embedding model changed while backfill was pending." : embedding.reason;
             event.decision.timings.push_back({
                 "memory_document_embedding",
                 embedding.elapsedMilliseconds});
-            if (embedding.bSuccess)
+            if (event.decision.bSuccess &&
+                memory.NeedsEmbedding(task.memoryId, task.embeddingModel) &&
+                !requestToken.stop_requested())
             {
                 const auto saveStarted = std::chrono::steady_clock::now();
                 event.saveSucceeded = memory.SaveEmbedding(
@@ -519,6 +696,7 @@ void MemoryAgent::Run(const std::stop_token stopToken)
                     std::chrono::duration<double, std::milli>(
                         std::chrono::steady_clock::now() - saveStarted).count()});
             }
+            FinishEmbeddingTask(task, !event.decision.bSuccess || !event.saveSucceeded);
             std::string pressureReport;
             {
                 std::lock_guard lock(mutex);
@@ -534,15 +712,29 @@ void MemoryAgent::Run(const std::stop_token stopToken)
         {
             event.operation = "autonomous_learning";
             event.decision = std::move(task.learnedDecision);
-            const embeddingOutput embedding = task.router->EmbedMemory(
-                event.decision.summary, stopToken);
-            event.decision.timings.push_back({
-                "autonomous_learning_embedding", embedding.elapsedMilliseconds});
-            if (embedding.bSuccess)
+            event.wasAdded = task.learnedWasAdded;
+            if (memory.NeedsEmbedding(task.memoryId, task.embeddingModel))
             {
-                event.decision.embedding = embedding.values;
-                event.decision.embeddingModel = embedding.model;
+                const embeddingOutput embedding = task.router->EmbedMemory(
+                    event.decision.summary, requestToken);
+                event.decision.timings.push_back({
+                    "autonomous_learning_embedding", embedding.elapsedMilliseconds});
+                if (embedding.bSuccess && !requestToken.stop_requested() &&
+                    memory.NeedsEmbedding(task.memoryId, embedding.model))
+                {
+                    event.decision.embedding = embedding.values;
+                    event.decision.embeddingModel = embedding.model;
+                    const auto saveStarted = std::chrono::steady_clock::now();
+                    if (!memory.SaveEmbedding(task.memoryId, embedding.model, embedding.values))
+                    {
+                        event.embeddingError = "The finding is saved, but its search vector could not be updated.";
+                    }
+                    event.decision.timings.push_back({"memory_embedding_save",
+                        std::chrono::duration<double, std::milli>(
+                            std::chrono::steady_clock::now() - saveStarted).count()});
+                }
             }
+            FinishEmbeddingTask(task, !event.embeddingError.empty());
         }
         else
         {
@@ -554,7 +746,7 @@ void MemoryAgent::Run(const std::stop_token stopToken)
             return;
         }
 
-        if (event.decision.bSuccess && event.decision.bShouldRemember)
+        if (!task.hasLearnedDecision && event.decision.bSuccess && event.decision.bShouldRemember)
         {
             const auto saveStarted = std::chrono::steady_clock::now();
             event.saveSucceeded = memory.SaveAutomaticMemory(event.decision, event.wasAdded);

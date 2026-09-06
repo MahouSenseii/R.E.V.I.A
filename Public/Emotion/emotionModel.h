@@ -51,7 +51,7 @@ public:
         const Stimulus& stimulus,
         const AppraisalContext& context) const override;
 
-    [[nodiscard]] std::string Name() const override { return "rule-v1"; }
+    [[nodiscard]] std::string Name() const override { return "rule-v2"; }
 
     // Exposed for testing and for training-data generation: the raw appraisal response
     // before personality and mood scale it. Comparing this against the final delta is

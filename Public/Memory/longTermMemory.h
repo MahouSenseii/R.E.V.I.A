@@ -11,9 +11,18 @@ struct sqlite3;
 #include <cstdint>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <vector>
 
+
+struct EmbeddingBackfillPage
+{
+    std::vector<memoryEntry> entries;
+    std::int64_t nextRowId = 0;
+    bool hasMore = false;
+    std::string error;
+};
 
 class longTermMemory
 {
@@ -26,7 +35,10 @@ public:
     static void ConfigureCache(int cacheMiB, int mmapMiB);
 
     std::vector<memoryEntry> Load() const;
-    bool Save(const memoryDecision& decision, bool& outWasAdded) const;
+    // Returns the new or deduplicated row id when requested, so optional work
+    // can address the accepted memory without saving its content a second time.
+    bool Save(const memoryDecision& decision, bool& outWasAdded,
+        std::string* outMemoryId = nullptr) const;
     bool HasMemories() const;
     // A query that names a time -- "what did I say yesterday", "that thing from last
     // Tuesday" -- is resolved to a window and answered from the created_at index rather
@@ -51,6 +63,11 @@ public:
     std::vector<memoryEntry> LoadMissingEmbeddings(
         const std::string& embeddingModel,
         std::size_t maxEntries = 25) const;
+    // Row-id traversal moves past failed rows without an offset into a shrinking
+    // result set. Restarting a scan at zero rediscovers failures and newly added rows.
+    EmbeddingBackfillPage ScanMissingEmbeddings(const std::string& embeddingModel,
+        std::int64_t afterRowId, std::size_t maxEntries = 25) const;
+    bool NeedsEmbedding(const std::string& memoryId, const std::string& embeddingModel) const;
     bool SaveEmbedding(
         const std::string& memoryId,
         const std::string& embeddingModel,
@@ -66,6 +83,8 @@ private:
     // which almost none was the query, and Search -- which runs on every conversation
     // turn -- spent two thirds of its time getting ready to look.
     [[nodiscard]] sqlite3* Acquire() const;
+    EmbeddingBackfillPage ReadMissingEmbeddings(const std::string& embeddingModel,
+        std::size_t maxEntries, std::optional<std::int64_t> afterRowId) const;
 
     std::string memoryPath;
     mutable std::mutex connectionMutex;

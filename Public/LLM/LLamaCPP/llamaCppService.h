@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "LLM/promptBuilder.h"
+#include "LLM/privateMemoryAccess.h"
 #include "LLM/LLamaCPP/llamaCppEmbeddingService.h"
 
 class llamaCppService
@@ -23,6 +24,7 @@ public:
         const llmSettings& settings,
         const embeddingSettings& embeddingSettings,
         const aiProfile& profile);
+    void ApplyProfile(const llmSettings& settings, const aiProfile& profile);
     bool IsServerAvailable() const;
     // Runs one real chat-template request so CUDA graph/JIT setup is paid during
     // startup instead of delaying the user's first turn.
@@ -40,7 +42,8 @@ public:
         const std::vector<conversationMessage>& context,
         std::stop_token stopToken = {},
         DeltaHandler onDelta = {},
-        bool deepReasoning = false) const;
+        bool deepReasoning = false,
+        revia::llm::PrivateMemoryAccess memoryAccess = revia::llm::PrivateMemoryAccess::ProfileSetting) const;
     responseOutput GenerateActionProposal(const std::string& userRequest) const;
     responseOutput ReviewConversationReply(
         const std::string& userInput,
@@ -74,7 +77,7 @@ public:
         const std::string& userMessage,
         const std::string& assistantMessage = "",
         std::stop_token stopToken = {}) const;
-    healthOutput CheckEmbeddingHealth() const;
+    healthOutput CheckEmbeddingHealth(std::stop_token stopToken = {}) const;
     embeddingOutput EmbedMemory(
         const std::string& summary,
         std::stop_token stopToken = {}) const;

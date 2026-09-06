@@ -14,10 +14,11 @@ responseOutput ConversationAgent::Execute(
     const ResponseFilterContext& filterContext,
     const std::stop_token stopToken,
     messageRouter::DeltaHandler onDelta,
-    const revia::intelligence::IntelligenceDecision& decision) const
+    const revia::intelligence::IntelligenceDecision& decision,
+    const llm::PrivateMemoryAccess memoryAccess) const
 {
     responseOutput output =
-        router.RouteMessage(input, context, stopToken, std::move(onDelta), decision);
+        router.RouteMessage(input, context, stopToken, std::move(onDelta), decision, memoryAccess);
     if (output.bSuccess)
     {
         output.rawResponse = output.response;

@@ -33,7 +33,8 @@ responseOutput messageRouter::RouteMessage(
     const std::vector<conversationMessage>& context,
     const std::stop_token stopToken,
     DeltaHandler onDelta,
-    const revia::intelligence::IntelligenceDecision& decision) const
+    const revia::intelligence::IntelligenceDecision& decision,
+    const revia::llm::PrivateMemoryAccess memoryAccess) const
 {
     responseOutput output;
 
@@ -100,7 +101,8 @@ responseOutput messageRouter::RouteMessage(
         context,
         stopToken,
         std::move(onDelta),
-        deepReasoning);
+        deepReasoning,
+        memoryAccess);
     residency.EndInference(effectiveTier);
     const bool contextRejected = !routed.bSuccess &&
         routed.reason.find("HTTP status 400") != std::string::npos;
@@ -114,7 +116,8 @@ responseOutput messageRouter::RouteMessage(
             context,
             stopToken,
             std::move(retryDelta),
-            deepReasoning);
+            deepReasoning,
+            memoryAccess);
         residency.EndInference(revia::intelligence::IntelligenceTier::Main);
         selected = &llm;
         effectiveTier = revia::intelligence::IntelligenceTier::Main;
@@ -413,9 +416,9 @@ messageRouter::ModelResidencySnapshot() const
     return residency.Snapshot();
 }
 
-healthOutput messageRouter::CheckEmbeddingHealth() const
+healthOutput messageRouter::CheckEmbeddingHealth(std::stop_token stopToken) const
 {
-    return llm.CheckEmbeddingHealth();
+    return llm.CheckEmbeddingHealth(stopToken);
 }
 
 embeddingOutput messageRouter::EmbedMemory(
@@ -487,14 +490,10 @@ void messageRouter::ApplyLLMSettings(
 
 void messageRouter::ApplyProfile(const aiProfile& profile)
 {
-    ApplyLLMSettings(
-        mainConfiguration,
-        fastConfiguration,
-        expertConfiguration,
-        embeddingConfiguration,
-        profile,
-        fastConfigured,
-        expertConfigured);
+    // Profile changes do not reconfigure transports read by the memory worker.
+    llm.ApplyProfile(mainConfiguration, profile);
+    if (fastConfigured) fastLlm.ApplyProfile(fastConfiguration, profile);
+    if (expertConfigured) expertLlm.ApplyProfile(expertConfiguration, profile);
 }
 
 void messageRouter::ApplyLLMSettings(

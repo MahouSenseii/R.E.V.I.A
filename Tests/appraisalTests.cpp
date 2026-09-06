@@ -225,7 +225,7 @@ void TestRuntimeAccumulatesAndSettles()
     const std::optional<AppraisalOutcome> outcome =
         runtime.Observe(GoalOutcome(false, true), development);
     Check(outcome.has_value(), "An important self-caused failure produced no feeling.");
-    Check(outcome->changed && outcome->modelName == "rule-v1",
+    Check(outcome->changed && outcome->modelName == "rule-v2",
         "The appraisal did not record which model produced it.");
     Check(!outcome->explanation.empty(),
         "An appraisal produced no explanation, so the feeling cannot be traced.");

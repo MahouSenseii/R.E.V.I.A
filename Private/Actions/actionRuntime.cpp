@@ -104,17 +104,27 @@ void ActionRuntime::SetDispatchObserver(DispatchObserver observer)
 
 ActionOutcome ActionRuntime::Execute(
     const ActionRequest& request,
-    bool confirmationGranted)
+    bool confirmationGranted,
+    const std::stop_token stopToken)
 {
     std::lock_guard lock(mutex);
+    return ExecuteWithPolicy(request, nullptr, confirmationGranted, stopToken);
+}
+
+ActionOutcome ActionRuntime::ExecuteWithPolicy(
+    const ActionRequest& request,
+    const policy::CapabilityPolicy* scopedPolicy,
+    const bool confirmationGranted,
+    const std::stop_token stopToken)
+{
     const auto executionStarted = std::chrono::steady_clock::now();
     ActionOutcome outcome;
-    outcome.policy = Evaluate(request);
+    outcome.policy = scopedPolicy ? EvaluateScoped(request, *scopedPolicy) : Evaluate(request);
     const bool otherwiseExecutable =
         outcome.policy.verdict == PolicyVerdict::Allowed ||
         (outcome.policy.verdict == PolicyVerdict::RequiresConfirmation && confirmationGranted);
     std::string rateReason;
-    if (otherwiseExecutable && !desktopRateLimiter.Admit(
+    if (otherwiseExecutable && !stopToken.stop_requested() && !desktopRateLimiter.Admit(
             request,
             std::chrono::steady_clock::now(),
             rateReason))
@@ -126,15 +136,44 @@ ActionOutcome ActionRuntime::Execute(
     // blocked and refused ones -- a scope that only closes on success is how a session
     // gets stuck in a state an aborted action put it in.
     if (dispatchObserver) dispatchObserver(request, true);
-    outcome.result = dispatcher.Dispatch(request, outcome.policy, confirmationGranted);
+    const std::string transactionId = NewActionId();
+    const bool executable = outcome.policy.verdict == PolicyVerdict::Allowed ||
+        (outcome.policy.verdict == PolicyVerdict::RequiresConfirmation && confirmationGranted);
+    if (stopToken.stop_requested())
+    {
+        outcome.result.dryRun = request.dryRun;
+        outcome.result.message = "Action was cancelled before execution.";
+    }
+    else if (executable && (!auditLogger ||
+        !auditLogger->RecordIntent(request, outcome.policy, transactionId)))
+    {
+        outcome.result.dryRun = request.dryRun;
+        outcome.result.message = "Action was not executed because its required audit could not be written.";
+        outcome.auditError = "The action intent could not be recorded durably.";
+    }
+    else if (stopToken.stop_requested())
+    {
+        // Writing the intent can take time; cancellation still wins before dispatch.
+        outcome.result.dryRun = request.dryRun;
+        outcome.result.message = "Action was cancelled before execution.";
+    }
+    else
+    {
+        outcome.result = dispatcher.Dispatch(request, outcome.policy, confirmationGranted);
+    }
     if (dispatchObserver) dispatchObserver(request, false);
     if (auditLogger)
     {
         const double elapsedMilliseconds = std::chrono::duration<double, std::milli>(
             std::chrono::steady_clock::now() - executionStarted).count();
-        static_cast<void>(auditLogger->Record(
-            request, outcome.policy, outcome.result, elapsedMilliseconds));
+        if (!auditLogger->Record(
+            request, outcome.policy, outcome.result, elapsedMilliseconds, transactionId))
+        {
+            if (!outcome.auditError.empty()) outcome.auditError += " ";
+            outcome.auditError += "The completion audit could not be recorded; the executor result is retained.";
+        }
     }
+    else outcome.auditError = "The action audit is unavailable.";
     return outcome;
 }
 
@@ -180,38 +219,11 @@ PolicyDecision ActionRuntime::EvaluateScoped(
 ActionOutcome ActionRuntime::ExecuteScoped(
     const ActionRequest& request,
     const policy::CapabilityPolicy& scopedPolicy,
-    bool confirmationGranted)
+    bool confirmationGranted,
+    const std::stop_token stopToken)
 {
     std::lock_guard lock(mutex);
-    const auto executionStarted = std::chrono::steady_clock::now();
-    ActionOutcome outcome;
-    outcome.policy = EvaluateScoped(request, scopedPolicy);
-    const bool otherwiseExecutable =
-        outcome.policy.verdict == PolicyVerdict::Allowed ||
-        (outcome.policy.verdict == PolicyVerdict::RequiresConfirmation && confirmationGranted);
-    std::string rateReason;
-    if (otherwiseExecutable && !desktopRateLimiter.Admit(
-            request,
-            std::chrono::steady_clock::now(),
-            rateReason))
-    {
-        outcome.policy.verdict = PolicyVerdict::Blocked;
-        outcome.policy.reason = rateReason;
-    }
-    // Bracketed so the observer sees the action end on every path, including the
-    // blocked and refused ones -- a scope that only closes on success is how a session
-    // gets stuck in a state an aborted action put it in.
-    if (dispatchObserver) dispatchObserver(request, true);
-    outcome.result = dispatcher.Dispatch(request, outcome.policy, confirmationGranted);
-    if (dispatchObserver) dispatchObserver(request, false);
-    if (auditLogger)
-    {
-        const double elapsedMilliseconds = std::chrono::duration<double, std::milli>(
-            std::chrono::steady_clock::now() - executionStarted).count();
-        static_cast<void>(auditLogger->Record(
-            request, outcome.policy, outcome.result, elapsedMilliseconds));
-    }
-    return outcome;
+    return ExecuteWithPolicy(request, &scopedPolicy, confirmationGranted, stopToken);
 }
 
 std::string ActionRuntime::StatusJson() const

@@ -56,8 +56,12 @@ struct SpeechEvent
     std::vector<latencySample> timings;
 };
 
+struct SpeechServiceTestAccess;
+
 class SpeechService
 {
+    friend struct SpeechServiceTestAccess;
+
 public:
     using EventHandler = std::function<void(const SpeechEvent&)>;
 

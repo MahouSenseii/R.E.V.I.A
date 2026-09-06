@@ -9,6 +9,11 @@
 namespace revia::actions
 {
 
+std::string ActionOutcome::Message() const
+{
+    return auditError.empty() ? result.message : result.message + "\nAudit error: " + auditError;
+}
+
 namespace
 {
 

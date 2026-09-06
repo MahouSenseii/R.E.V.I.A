@@ -22,45 +22,6 @@ namespace revia::runtime
 
 namespace
 {
-// The inverse of EmotionRuntime::ToAffectSnapshot.
-//
-// While AffectController remains the live emotion path, the packet still needs an
-// EmotionVector to render. Projecting the single legacy state onto one component keeps
-// the rendered prompt identical in meaning to what it was before the packet existed --
-// a migration seam, not a second source of feeling, and it disappears the moment
-// appraisal goes live.
-emotion::EmotionVector LegacyAffectToVector(const AffectSnapshot& snapshot)
-{
-    emotion::EmotionVector vector;
-    const auto set = [&vector, &snapshot](const emotion::Emotion component)
-    {
-        vector[component] = snapshot.intensity;
-    };
-    switch (snapshot.state)
-    {
-        case AffectState::Curious: set(emotion::Emotion::Curiosity); break;
-        case AffectState::Pleased: set(emotion::Emotion::Joy); break;
-        case AffectState::Excited: set(emotion::Emotion::Excitement); break;
-        case AffectState::Playful: set(emotion::Emotion::Amusement); break;
-        case AffectState::Bored: set(emotion::Emotion::Boredom); break;
-        case AffectState::Sulky: set(emotion::Emotion::Irritation); break;
-        case AffectState::Sad: set(emotion::Emotion::Sadness); break;
-        case AffectState::Melancholy: set(emotion::Emotion::Sadness); break;
-        case AffectState::Angry: set(emotion::Emotion::Anger); break;
-        case AffectState::Lonely: set(emotion::Emotion::Loneliness); break;
-        case AffectState::Frustrated: set(emotion::Emotion::Frustration); break;
-        case AffectState::Concerned: set(emotion::Emotion::Concern); break;
-        case AffectState::Focused: set(emotion::Emotion::Confidence); break;
-        case AffectState::Confused: set(emotion::Emotion::Confusion); break;
-        case AffectState::Neutral: break;
-    }
-    return vector;
-}
-}
-
-
-namespace
-{
 double ElapsedMilliseconds(const std::chrono::steady_clock::time_point start)
 {
     return std::chrono::duration<double, std::milli>(
@@ -370,7 +331,7 @@ std::string ConversationRuntime::BuildTurnPosture(
     const TurnPolicy& turnPolicy) const
 {
     const agents::ConversationStylePolicy conversationStyle;
-    const AffectSnapshot posture = affect.Current();
+    const emotion::EmotionSnapshot current = emotions.Current();
     const responseFilterSettings filters = filterSettingsProvider
         ? filterSettingsProvider()
         : responseFilterSettings{};
@@ -391,23 +352,11 @@ std::string ConversationRuntime::BuildTurnPosture(
     // Fast, Main, and Expert all receive whatever this renders; a personality that
     // varied with the tier that happened to be selected would be four personalities
     // sharing a name.
-    //
-    // The emotion vector is currently populated from the deterministic AffectController
-    // so behaviour is unchanged while the assembly moves. When EmotionRuntime becomes
-    // the live path, only this population changes -- the renderer and every consumer
-    // stay exactly as they are.
     identity::ReviaStatePacket packet;
     packet.identity.profileId = profile.id;
     packet.identity.displayName = profile.displayName;
-    // From appraisal, not from the legacy single-state classifier. LegacyAffectToVector
-    // remains as the fallback for paths that have no appraisal behind them, such as a
-    // proactive opening with no stimulus.
-    packet.emotion = emotions.Emotion();
-    if (packet.emotion.IsCalm(0.05F))
-    {
-        packet.emotion = LegacyAffectToVector(posture);
-    }
-    packet.mood = emotions.Mood();
+    packet.emotion = current.emotion;
+    packet.mood = current.mood;
     if (developmentProvider)
     {
         packet.development = developmentProvider();
@@ -670,7 +619,7 @@ SessionResult ConversationRuntime::Generate(
             : identity::RelationshipState{};
     };
 
-    AffectSnapshot inputAffect = affect.Current();
+    AffectSnapshot inputAffect = emotions.ToAffectSnapshot();
 
     if (!proactive)
     {
@@ -696,12 +645,13 @@ SessionResult ConversationRuntime::Generate(
             stimulusObserver(stimulus);
         }
 
-        // The deterministic classifier still runs. It is the documented fallback and
-        // baseline, and keeping it live means a regression in appraisal is visible as a
-        // disagreement rather than as silence.
-        inputAffect = affect.ObserveInput(policyInput, humanization.Current().Social());
-        publishAffect(emotions.ToAffectSnapshot());
-        humanization.ObserveInput(policyInput, inputAffect);
+        // The old evaluator remains a comparison, never a second state for consumers.
+        const auto legacy = affect.ObserveInput(policyInput, humanization.Current().Social());
+        inputAffect = emotions.ToAffectSnapshot();
+        log.Log("Affect comparison: canonical=" + ToString(inputAffect.state) +
+            " legacy=" + ToString(legacy.state));
+        publishAffect(inputAffect);
+        humanization.ObserveInput(policyInput, legacy);
     }
 
     intelligence::RoutingContext routingContext;
@@ -813,7 +763,7 @@ SessionResult ConversationRuntime::Generate(
                 lookupQuery,
                 "conversation_internet");
             internetLookupMilliseconds = ElapsedMilliseconds(lookupStarted);
-            if (lookup.result.succeeded && !lookup.result.content.empty())
+            if (lookup.Succeeded() && !lookup.result.content.empty())
             {
                 internetGrounding =
                     "The runtime just retrieved the live page text below for this turn. "
@@ -853,9 +803,9 @@ SessionResult ConversationRuntime::Generate(
             }
             else
             {
-                internetTrace = lookup.result.message.empty()
+                internetTrace = lookup.Message().empty()
                     ? lookup.policy.reason
-                    : lookup.result.message;
+                    : lookup.Message();
                 PublishComponent(
                     "Internet", "Unavailable", internetTrace,
                     internetLookupMilliseconds, 0, currentTurn);
@@ -930,15 +880,15 @@ SessionResult ConversationRuntime::Generate(
         // Read before ObserveOutcome for the same reason as above: the confidence that
         // decides whether this failure defeats or merely annoys her is the confidence she
         // had going in, not the one this failure is about to lower.
-        const AffectSnapshot observed = affect.ObserveTurn(
+        (void)affect.ObserveTurn(
             policyInput,
             finished.text,
             finished.succeeded,
             humanization.Current().Social());
-        humanization.ObserveOutcome(finished.succeeded, observed);
 
-        // How the turn actually went is an outcome she is entitled to feel, and without
-        // this the only thing ever appraised was the incoming message.
+        // Delivery confirms that text arrived, not that it was useful or an achievement.
+        // Input evidence and verified work outcomes supply positive appraisal; a failed
+        // reply remains a confirmed setback.
         // Re-read rather than reusing the pre-generation locals: those are scoped to the
         // non-proactive branch, and this path also serves proactive replies.
         const identity::RelationshipState outcomeSpeaker = relationshipForTurn();
@@ -950,31 +900,29 @@ SessionResult ConversationRuntime::Generate(
         outcome.eventType = finished.succeeded ? "reply_delivered" : "reply_failed";
         outcome.subjectId = outcomeSpeaker.entityId;
         outcome.description = finished.succeeded
-            ? "the reply came out the way she wanted"
+            ? "the reply was delivered"
             : "the reply did not come together";
         outcome.selfCaused = true;
         outcome.importance = finished.succeeded ? 0.3F : 0.55F;
         outcome.certainty = 1.0F;
-        outcome.success = finished.succeeded ? 0.5F : 0.0F;
+        outcome.success = 0.0F;
         outcome.failure = finished.succeeded ? 0.0F : 0.7F;
-        outcome.valence = finished.succeeded ? 0.2F : -0.5F;
-        emotions.Observe(
-            outcome,
-            outcomeDevelopment,
-            outcomeSpeaker.interactionCount > 0 ? &outcomeSpeaker : nullptr);
+        outcome.valence = finished.succeeded ? 0.0F : -0.5F;
+        if (!finished.succeeded)
+        {
+            emotions.Observe(
+                outcome,
+                outcomeDevelopment,
+                outcomeSpeaker.interactionCount > 0 ? &outcomeSpeaker : nullptr);
+        }
         if (stimulusObserver)
         {
             stimulusObserver(outcome);
         }
 
-        // Published from appraisal, not from the deterministic classifier.
-        //
-        // Publishing `observed` here meant the badge was driven entirely by the keyword
-        // path, which answers Curious for almost anything containing a question mark --
-        // so Revia appeared permanently curious no matter what had actually happened.
-        // ObserveTurn still runs above because it remains the documented fallback and
-        // baseline; its result simply is not what the user sees.
-        publishAffect(emotions.ToAffectSnapshot());
+        const AffectSnapshot observed = emotions.ToAffectSnapshot();
+        humanization.ObserveOutcome(finished.succeeded, observed);
+        publishAffect(observed);
         if (finished.fromAssistant && finished.succeeded && !finished.text.empty())
         {
             if (streamedUtterances > 0)
@@ -1066,8 +1014,12 @@ SessionResult ConversationRuntime::Generate(
     }
     else
     {
-        std::string posture = proactiveInstruction;
-        if (screenContextProvider)
+        // Speaking first changes the conversational purpose, not who is speaking.
+        // Event/research instructions extend the same bounded state as a private reply.
+        std::string posture = BuildTurnPosture(
+            policyInput, promptContext, profile, llmAvailable, turnPolicy) +
+            "\n\n" + proactiveInstruction;
+        if (turnPolicy.allowScreenContext && screenContextProvider)
         {
             const std::string screenContext = screenContextProvider();
             if (!screenContext.empty())
@@ -1145,7 +1097,7 @@ SessionResult ConversationRuntime::Generate(
         const std::uint64_t utteranceId = ++utteranceCounter;
         ++streamedUtterances;
         speech.Speak(
-            fragment, affect.Current(), utteranceId, firstSpeechFragment);
+            fragment, emotions.ToAffectSnapshot(), utteranceId, firstSpeechFragment);
         RuntimeEvent partial;
         partial.kind = RuntimeEventKind::ReplyFragment;
         partial.state = RuntimeState::Responding;
@@ -1202,7 +1154,9 @@ SessionResult ConversationRuntime::Generate(
             currentTurn,
             stopToken,
             onDelta,
-            answerDecision);
+            answerDecision,
+            turnPolicy.publicAudience ? llm::PrivateMemoryAccess::Denied :
+                llm::PrivateMemoryAccess::ProfileSetting);
     }
     if (stopToken.stop_requested())
     {
@@ -1307,7 +1261,7 @@ SessionResult ConversationRuntime::Generate(
         0,
         currentTurn);
 
-    const AffectSnapshot posture = affect.Current();
+    const AffectSnapshot posture = emotions.ToAffectSnapshot();
     std::ostringstream trace;
     trace << "Posture: " << ToString(posture.state) << " at "
         << static_cast<int>(posture.intensity * 100.0F) << "% - " << posture.reason;

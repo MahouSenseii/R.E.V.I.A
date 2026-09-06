@@ -132,8 +132,12 @@ struct UserPreferenceSnapshot
     int resourceSampleSeconds = 0;
 };
 
+struct ReviaSessionTestAccess;
+
 class ReviaSession
 {
+    friend struct ReviaSessionTestAccess;
+
 public:
     using ConfirmationHandler = std::function<bool(
         const actions::ActionRequest&,
@@ -405,6 +409,10 @@ public:
     ProfileOperationResult ActivateProfile(const std::string& profileId);
 
 private:
+    // Callers hold operationMutex. Startup and active-file edits share application;
+    // UI and CLI selection additionally require the preference write to succeed first.
+    void ApplyProfileLocked(const std::string& profileId, aiProfile loaded);
+    ProfileOperationResult ActivateProfileLocked(const std::string& profileId);
     // The profile owns where she starts: trait baseline and declared opinions. What
     // experience has earned -- trait drift, and any preference she already holds --
     // survives, or editing a profile would quietly delete her development.
@@ -458,12 +466,16 @@ private:
     // able to overwrite one another (design §8, §10).
     void RecordPreferenceEvidence(
         const std::vector<identity::PreferenceObservation>& observations);
+    std::string ResolveLocalSpeaker(const std::string& input);
     void RecordRelationshipEvidence(
         const std::string& entityId,
         const std::string& userInput,
         const std::string& reply,
         bool succeeded);
     void PersistIdentity();
+    void StartStateMaintenance();
+    void StopStateMaintenance();
+    void RefreshMemoryBackfill();
     // Records what a finished turn says about who she is becoming. Bounded and slow:
     // several consistent observations are needed before anything moves at all.
     void RecordDevelopmentEvidence(const identity::TurnObservation& observation);
@@ -551,7 +563,7 @@ private:
     // requested while the outer operation was still dispatching.
     [[nodiscard]] std::stop_token CurrentOperationToken() const;
     void SetState(RuntimeState newState, const std::string& activity = "");
-    void PublishAffect(const AffectSnapshot& affect);
+    void PublishAffect();
     void Publish(RuntimeEventKind kind, const std::string& message, std::uint64_t turnId = 0) const;
     void PublishComponent(
         const std::string& component,
@@ -643,10 +655,19 @@ private:
     memory::ConversationArchive conversationArchive;
     core::PreferenceStore preferenceStore;
     identity::RelationshipRegistry relationships;
+    // Set by startup before the save worker runs. Failed loads must never turn
+    // a fresh baseline into a replacement for an unreadable identity.
+    bool identityPersistenceReady = false;
+    std::chrono::milliseconds identitySaveInterval = std::chrono::seconds(30);
+    std::chrono::milliseconds emotionSettleInterval = std::chrono::minutes(1);
+    std::chrono::milliseconds relationshipQuietInterval = std::chrono::minutes(5);
+    std::chrono::milliseconds quietConversationInterval = std::chrono::minutes(20);
+    std::jthread stateMaintenanceWorker;
     // The entity whose turn is being handled. Set before a turn runs and read when the
     // state packet is assembled, so relationship state follows whoever is speaking
     // rather than being global.
     mutable std::mutex speakerMutex;
+    // Local session attribution only. Adapter authors never replace this selection.
     std::string currentSpeakerId = identity::LocalUserEntityId();
     learning::SelfAssessmentEngine selfAssessment;
     visual::DiagramStore diagramStore;

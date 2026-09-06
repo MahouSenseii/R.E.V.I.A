@@ -13,10 +13,8 @@ using emotion::EmotionReading;
 
 // The legacy posture sentence, preserved word for word.
 //
-// Two things depend on this exact wording: the hard response filter's prompt-leak
-// detector keys on "your current response posture is", and the deterministic
-// AffectController path produces it today. Rewording it would silently disable a safety
-// check, so the renderer extends around this sentence rather than replacing it.
+// The hard response filter's prompt-leak detector keys on this wording. The state
+// comes from EmotionRuntime; retaining the sentence preserves that filter contract.
 std::string RenderEmotionSection(const ReviaStatePacket& packet)
 {
     const EmotionReading dominant = packet.emotion.Dominant();

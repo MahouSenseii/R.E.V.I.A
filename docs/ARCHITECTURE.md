@@ -6,16 +6,134 @@ The language model is a planner, not an operating-system authority. It can propo
 
 ```mermaid
 flowchart LR
-    U["User or future goal runner"] --> P["Direct parser or LLM planner"]
+    U["User or goal runner"] --> P["Direct parser or LLM planner"]
     P --> J["One typed ActionRequest"]
     J --> C["CapabilityPolicy"]
     C -->|blocked| A["JSONL audit"]
     C -->|confirmation required| H["Human confirmation"]
-    C -->|allowed| D["ActionDispatcher"]
-    H --> D
+    C -->|allowed| I["Cancellation check and durable audit intent"]
+    H -->|approved| I
+    H -->|declined| A
+    I -->|admitted| D["ActionDispatcher"]
+    I -->|cancelled or audit unavailable| A
     D --> F["Filesystem, UI Automation, or bounded internet executor"]
     F --> A
 ```
+
+`ActionRuntime::Execute` and `ExecuteScoped` share this dispatch boundary. A
+required intent must be written and flushed before an executor starts; cancellation
+is checked again after that write. Result recording is checked independently.
+`ActionOutcome::result` always retains the actual executor result, including a
+successful mutation whose completion audit failed. Callers use `Succeeded()` to
+decide whether dependent work may continue and `Message()` to report both execution
+and audit errors. Goals stop without verification or retry on an audit storage error.
+
+Executed actions normally produce two JSONL records joined by `audit_transaction`:
+`record_type: intent` and `record_type: result`. Intent records omit `attempted` and
+`succeeded`; an intent without a result means the outcome is unknown and is not
+permission to retry. Historical records without `record_type` are result records.
+No repository component replays actions from this journal. Competing writers and
+an incomplete trailing line cause admission to fail; the logger does not truncate
+or silently repair an existing audit file.
+
+## Identity persistence
+
+`ReviaSession` owns the save lifecycle; `RelationshipRegistry` continues to own
+the single identity snapshot and `IdentityStore` its schema version 2 file. After
+a successful identity load, the session saves every 30 seconds. A long foreground
+inference does not block that timer. The cadence bounds ordinary unsaved work;
+scheduling delays and storage failures can extend it, and failures are logged.
+
+Shutdown first requests cancellation, joins owned workers, acquires the foreground
+operation lock, joins the save worker, and consumes final background completions.
+Only then does it save the final relationships, preferences, development and mood.
+Momentary emotion remains transient. Failed identity loads disable both periodic
+and final saves for that session, preserving the unreadable file for recovery.
+
+The store writes a neighboring temporary file, checks write/flush/close, then
+replaces the identity. Windows uses `_commit` and `MoveFileExW` with replacement
+and write-through flags; POSIX flushes the file with `fsync` before rename. Failed
+replacement preserves the previous target. This is not a cross-process identity
+merge or a guarantee against hardware/power loss; POSIX directory durability has
+not been certified. The existing file format and profile baseline rules are unchanged.
+
+## Local person attribution
+
+ReviaSession owns the current local person selection. A conversational introduction
+is resolved through the existing RelationshipRegistry before appraisal and reply
+construction; completed evidence uses that captured entity ID. The first named person
+adopts anonymous local history, later people remain separate, and returning names
+reuse the registry's existing normalized IDs. Ordinary turns and session commands
+retain the selection until another introduction or a fresh session.
+
+Adapter conversations keep their platform entity IDs. A stated name can update that
+entity's display name, but recording adapter evidence cannot replace the local person.
+Relationship history persists; the current local selection does not. A fresh session
+starts anonymous and does not guess who is at the keyboard. This is textual attribution,
+not biometric recognition or authentication, and it does not grant capabilities.
+
+## Accepted learned findings
+
+`MemoryAgent::SubmitLearnedFinding` commits an already-approved finding through the
+existing memoryManager/longTermMemory curation and deduplication path before accepting
+optional embedding work. `SavedEmbeddingQueued` therefore means the semantic content
+is already stored. Queue pressure returns SavedWithoutEmbedding or AlreadyExists;
+storage failure returns Failed without queueing. Unclassified conversation candidates
+still use the existing classifier path and are not saved by this admission rule.
+
+The store can return the new or deduplicated row id. The worker uses that id to save
+the vector on the same row, preserving the original insertion result in its event.
+An optional vector-write error is separate from semantic save success and is published
+by the session as an embedding error. Activity artifacts and curiosity status report
+saved content consistently. Shutdown may cancel/discard pending vectors, which remain
+discoverable by backfill; it no longer needs to drain uncommitted approved content.
+
+No new store or schema is introduced. The C++ disposition formerly named Queued is
+now SavedEmbeddingQueued, and the shared activity-artifact formatter no longer takes
+a pending-content phrase. Submission now includes the existing database write latency.
+
+The embedding HTTP client checks cancellation during readiness waits in slices of
+at most 100 ms, retaining the existing two-second connection and ten-second read
+timeouts. This is needed on Windows where a successful socket shutdown did not
+wake the blocked read in the owner regression. The request thread still owns and
+closes the socket; cancellation does not detach work, retry requests, or require a
+responsive inference server. DNS and connection establishment keep their existing
+transport limits. This does not certify that an external model stops GPU work.
+
+## Continuing memory indexing
+
+The session enables a backfill subscription when embeddings and the active profile's
+memory setting are enabled. Startup readiness failure does not abandon the subscription;
+profile activation, active-profile edits and the profile command refresh the same gate.
+MemoryAgent runs scans and requests on its existing worker, alongside its weighted
+four-turn/two-learning/one-backfill schedule. No additional scheduler or thread owns memory.
+
+Each scan reads at most 25 active rows missing the configured model's vector, using
+a row-id cursor so a failing early row cannot hide later rows. Completed batches wait
+250 ms before continuing; an exhausted pass resets the cursor and checks again after
+30 seconds. This discovers content saved while vector queues were full. Readiness,
+model metadata and storage failures are reported and retried with bounded delays of
+5, 10, 20, 40 and 60 seconds; a failed batch also retains its ordinary scan delay.
+Retries perform new attempts on a later pass, without keeping unbounded queued work.
+
+Queued and in-flight learning/backfill share a model-and-row deduplication set. The
+worker rechecks active status and vector presence before inference and saving. Health
+checks and embedding requests observe cancellation. Disabling the subscription removes
+pending backfill and cancels its request; stopping MemoryAgent joins the worker before
+its router can be destroyed. The database schema and stored semantic content are unchanged.
+
+## Observation exclusions
+
+`perception.excludedApplications` and `perception.excludedTitleFragments` exclude
+activity metadata only. `PerceptionFilter::Admit` suppresses the matching
+`WindowObservation` entirely. Application names match without case sensitivity;
+title fragments use a case-insensitive substring match.
+
+These lists do not mask pixels in screenshots sent to vision. Other admitted
+events or the idle refresh can still lead to a complete virtual-desktop capture
+containing excluded windows. Screen and camera permissions, observation pause,
+and public/private context isolation remain separate controls. The Vision panel
+and `/perception` status state this boundary explicitly.
 
 ## Current owners
 
@@ -124,7 +242,7 @@ New behavior is split by reason to change:
 - `ConversationStarter` recognizes meaningful event patterns; it does not generate text or decide permission to speak.
 - `AttentionPolicy` decides whether an observed opportunity may interrupt; timers are limits and never causes.
 - `InputArbiter` owns voice-noise, duplicate, and fragment admission; it does not generate replies.
-- `AffectController` owns Revia's persistent conversational state and negative momentum; it supplies an internal leaning and never dictates exact prose or infers the user's emotion.
+- `EmotionRuntime` owns momentary emotion and slow mood. Its projection supplies speech, reflex, curiosity and presentation; `AffectController` remains a comparison evaluator and cannot overwrite that state. Neither infers the user's emotion or grants authority.
 - `MemoryAgent` evaluates the completed user/assistant exchange after delivery. It may persist grounded Revia self-opinions as distinct categories, and it can embed/store one preclassified sourced research finding without reinterpreting raw page text; it never turns an opinion into a factual claim or stores passing affect, jokes, screenshots, page bodies, or private reasoning.
 - `InferenceScheduler` owns shared llama slot capacity and priority; it does not build prompts or issue HTTP requests.
 - `ResourcePlanner` detects hardware and calculates placement/budgets; it does not start a process or execute queued work.
@@ -168,6 +286,93 @@ untrusted grounding before entering the conversation prompt, and typed runtime e
 the query, visited URLs, timing, failures, and bounded grounding preview.
 
 The distinction matters for unattended operation. An autonomous run must not wait forever at a prompt or silently broaden its permissions.
+
+## Proactive conversation state
+
+Approved initiative and curiosity openings enter `ConversationRuntime::StartConversation`
+and `StartCuriosityConversation`. Their generation path uses the same `BuildTurnPosture`
+as private replies and evaluation: earned development, emotion/mood, current-person
+relationship, preferences, runtime facts, answer obligation and bounded compressed
+history. The existing profile prompt remains the base identity. Proactive event or
+research instructions are appended to this state, followed by existing cached screen
+context and supplied research grounding. No second personality renderer is involved.
+
+This does not admit new autonomous work. Session attention/permission/cancellation
+gates remain responsible for whether an opening runs. A proactive cue stays transient;
+only a successful visible reply enters dialogue. These paths do not automatically
+classify the cue into memory, appraise it as user speech, request a fresh screen capture,
+recall the archive, run self-inquiry or start an automatic lookup. Public replies retain
+their separate audience policy and supplied channel relationship/history.
+
+Public generation also carries `PrivateMemoryAccess::Denied` through the coordinator,
+conversation agent, router, selected LLM service and request builder. It suppresses
+private query embedding, curated-memory retrieval and classification, including after
+a tier fallback. A temporary memory-disabled profile copy at the conversation layer
+is insufficient: the LLM client retains the active profile for request construction.
+The request restriction never changes that profile or disables later private turns.
+
+## Emotion state and settling
+
+`EmotionRuntime::Current` returns one synchronized emotion/mood/projection snapshot.
+`ConversationRuntime` constructs the canonical packet from that state, including when
+it is calm. It never revives a separate legacy snapshot as a formatting fallback.
+Speech, reflex and curiosity use the same owner's `AffectSnapshot` projection; Presence
+and the desktop listen to the session's canonical publication. Public adapter completion
+does not appraise its already completed conversation a second time.
+
+Conversation input, failed replies, camera results and terminal
+goal results enter typed appraisal. Successful reply delivery still notifies conversation
+observers but does not supply achievement reward or a new feeling; usefulness requires
+separate evidence. Generic command completion does not appraise help/status text or
+duplicate an outcome already observed by its owner. Cancelled goals are not failures. The legacy evaluator
+is retained for comparison; its independently evolving social metrics do not describe
+active state in the prompt. Development, preferences and person-specific relationships
+keep their own established owners. A question naming an emotion asks about existing state;
+it does not itself assign that emotion.
+
+The session's state maintenance worker owns timing independently of UI polling, model
+availability and the curiosity switch. Emotion takes one existing decay/integration
+step per minute. RelationshipRegistry uses in-memory per-person clocks and applies one
+bounded friction-cooling step after five quiet minutes; familiarity, affinity and trust
+are preserved. Loaded relationships begin a fresh quiet interval. No offline time is
+invented or new clock field persisted. A stalled worker takes one step when it resumes.
+
+After twenty minutes without incoming conversation, the emotion owner admits one
+typed quiet-conversation stimulus. Admission and incoming-message clock reset share
+the appraisal lock. This describes the absence of conversation, not the user's physical
+presence or feelings; it grants no permission to speak or act. Rule evaluator `rule-v2`
+adds this explicit input. Further ticks settle it rather than repeatedly adding it.
+
+The same worker retains the independent30-second identity save cadence. Failed identity
+loads still disable all identity writes, while transient state may settle. Shutdown joins
+maintenance before the final quiescent identity snapshot. Saved mood survives restart;
+momentary emotion and quiet-interval metadata do not. These behavior changes require
+controlled production traces and live personality review in addition to build/tests.
+
+## Profile activation
+
+`ReviaSession` owns profile application. UI activation and `/profile` use the same
+locked selection operation: load and validate the file, save the startup selection,
+then apply the profile to the generation router, personality baseline, declared
+preferences, assigned speech preset and memory backfill subscription. A failed
+selection write leaves the running profile unchanged. The command parser cannot
+mutate settings or profiles. UI activation is refused during a running operation;
+the CLI already holds the session operation lock.
+
+Startup and saves of the active profile share that application helper. Startup first
+loads earned identity, then applies the profile baseline while retaining learned
+deltas and held preferences. Transport configuration and resource placement remain
+startup responsibilities; switching a profile does not reload models or replan GPU
+placement. Assigned voices use profile file stems, even if an authored JSON `id`
+differs. Existing queued speech retains its captured preset; subsequent speech uses
+the new selection. Voice model preparation retains its existing resource plan.
+
+`/set activeProfile` remains a next-start preference, as its description states. It
+does not partially change the live profile ID; use `/profile` for live activation.
+Editing an inactive profile only saves its file. Active edits preserve authored
+personality fields, apply answer obligation and generation overrides to the next
+reply, and refresh the memory gate. Profiles never change person attribution or
+capability authority.
 
 ## Non-negotiable invariants
 

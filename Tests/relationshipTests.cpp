@@ -174,9 +174,10 @@ void TestSettlingCoolsFrictionWithoutErasingHistory()
     const RelationshipState annoyed = registry.Get(entity);
     Check(annoyed.irritation > 0.0F, "Hostility produced no friction.");
 
-    for (int step = 0; step < 20; ++step)
+    const auto quietStarted = std::chrono::steady_clock::now();
+    for (int step = 1; step <= 20; ++step)
     {
-        registry.SettleAll();
+        registry.SettleAll(quietStarted + std::chrono::minutes(5 * step));
     }
     const RelationshipState settled = registry.Get(entity);
     Check(settled.irritation == 0.0F, "Friction never cooled with time.");

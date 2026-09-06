@@ -4,6 +4,7 @@
 #include "Library/enumLibrary.h"
 #include "Library/structLibrary.h"
 #include "LLM/LLamaCPP/llamaCppService.h"
+#include "LLM/privateMemoryAccess.h"
 #include <string>
 #include <filesystem>
 #include <stop_token>
@@ -19,6 +20,7 @@ public:
         const llmSettings& settings,
         const embeddingSettings& embeddingSettings,
         const aiProfile& profile);
+    void ApplyProfile(const llmSettings& settings, const aiProfile& profile);
     bool IsBackendAvailable() const;
     bool WarmUp(std::stop_token stopToken, std::string& outError) const;
     void SetPosture(std::string posture);
@@ -28,7 +30,8 @@ public:
         const std::vector<conversationMessage>& context,
         std::stop_token stopToken = {},
         DeltaHandler onDelta = {},
-        bool deepReasoning = false) const;
+        bool deepReasoning = false,
+        revia::llm::PrivateMemoryAccess memoryAccess = revia::llm::PrivateMemoryAccess::ProfileSetting) const;
     responseOutput GenerateActionProposal(const std::string& userRequest) const;
     responseOutput ReviewConversationReply(
         const std::string& userInput,
@@ -60,7 +63,7 @@ public:
         const std::string& userMessage,
         const std::string& assistantMessage = "",
         std::stop_token stopToken = {}) const;
-    healthOutput CheckEmbeddingHealth() const;
+    healthOutput CheckEmbeddingHealth(std::stop_token stopToken = {}) const;
     embeddingOutput EmbedMemory(
         const std::string& summary,
         std::stop_token stopToken = {}) const;

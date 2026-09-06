@@ -28,17 +28,22 @@ void llmService::ApplySettings(
     bIsReady = false;
 }
 
+void llmService::ApplyProfile(const llmSettings& settings, const aiProfile& profile)
+{
+    llamaCpp.ApplyProfile(settings, profile);
+}
+
 void llmService::SetPosture(std::string posture)
 {
     // Only the local backend assembles its own prompt; the others have nowhere to put it.
     llamaCpp.SetPosture(std::move(posture));
 }
 
-healthOutput llmService::CheckEmbeddingHealth() const
+healthOutput llmService::CheckEmbeddingHealth(std::stop_token stopToken) const
 {
     if (backendType == llmBackendType::LLamaCpp)
     {
-        return llamaCpp.CheckEmbeddingHealth();
+        return llamaCpp.CheckEmbeddingHealth(stopToken);
     }
 
     healthOutput output;
@@ -126,7 +131,8 @@ responseOutput llmService::GenerateResponse(
     const std::vector<conversationMessage>& context,
     const std::stop_token stopToken,
     DeltaHandler onDelta,
-    const bool deepReasoning) const
+    const bool deepReasoning,
+    const revia::llm::PrivateMemoryAccess memoryAccess) const
 {
     if (!bIsReady)
     {
@@ -159,7 +165,7 @@ responseOutput llmService::GenerateResponse(
                 return output;
             }
             return llamaCpp.GenerateResponse(
-                context, stopToken, std::move(onDelta), deepReasoning);
+                context, stopToken, std::move(onDelta), deepReasoning, memoryAccess);
         }
 
         case llmBackendType::None:

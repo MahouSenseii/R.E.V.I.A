@@ -732,24 +732,7 @@ bool SpeechService::IsBargeInEnabled() const
 
 void SpeechService::YieldToUser()
 {
-    generation.fetch_add(1);
-    {
-        std::lock_guard lock(mutex);
-        queue.clear();
-        playbackOrder.Clear();
-        for (const auto& [sequence, item] : prepared)
-        {
-            (void)sequence;
-            std::error_code error;
-            if (!item.audioPath.empty()) std::filesystem::remove(item.audioPath, error);
-        }
-        prepared.clear();
-        bufferedAudioBytes = 0;
-    }
-    condition.notify_all();
-#ifdef _WIN32
-    PlaySoundW(nullptr, nullptr, 0);
-#endif
+    StopSpeaking();
 }
 
 void SpeechService::ArmBargeIn()

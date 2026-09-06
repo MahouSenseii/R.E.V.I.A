@@ -4,6 +4,7 @@
 #include "Agents/responseFilter.h"
 #include "Core/messageRouter.h"
 #include "Intelligence/intelligenceTypes.h"
+#include "LLM/privateMemoryAccess.h"
 
 namespace revia::agents
 {
@@ -21,7 +22,8 @@ public:
         const ResponseFilterContext& filterContext,
         std::stop_token stopToken = {},
         messageRouter::DeltaHandler onDelta = {},
-        const revia::intelligence::IntelligenceDecision& decision = {}) const;
+        const revia::intelligence::IntelligenceDecision& decision = {},
+        llm::PrivateMemoryAccess memoryAccess = llm::PrivateMemoryAccess::ProfileSetting) const;
 
 private:
     ConversationStylePolicy stylePolicy;

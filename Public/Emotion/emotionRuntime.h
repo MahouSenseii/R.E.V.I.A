@@ -37,6 +37,13 @@ struct AppraisalOutcome
     std::string explanation;
 };
 
+struct EmotionSnapshot
+{
+    EmotionVector emotion;
+    MoodState mood;
+    runtime::AffectSnapshot affect;
+};
+
 // Owns how Revia currently feels, and is the only thing allowed to change it.
 //
 // Single purpose on purpose: it holds the emotion vector and mood, applies a model to a
@@ -64,18 +71,23 @@ public:
     // its baseline far more slowly. Called by an idle tick, not by a clock this owns.
     void Settle(float emotionDecayRate = 0.08F);
 
+    // At most one quiet-conversation event between actual incoming messages. Admission
+    // shares the appraisal lock so a new message cannot race a stale idle observation.
+    std::optional<AppraisalOutcome> ObserveQuietConversation(
+        const identity::DevelopmentState& development,
+        std::chrono::milliseconds quietInterval = std::chrono::minutes(20));
+
     [[nodiscard]] EmotionVector Emotion() const;
     [[nodiscard]] MoodState Mood() const;
+    [[nodiscard]] EmotionSnapshot Current() const;
     void SetMood(const MoodState& mood);
     void Reset();
 
     // The compatibility bridge.
     //
-    // Everything downstream -- the status badge, speech rate, the posture line in the
-    // prompt -- currently consumes a single AffectSnapshot. Rather than change all of
-    // them at once, the vector is projected onto the old shape, so the new system can be
-    // adopted incrementally and the deterministic AffectController stays a working
-    // fallback rather than becoming dead code.
+    // Speech, reflex, curiosity and presentation consume the projection of this
+    // state. The prompt retains the full vector. The legacy classifier remains a
+    // comparison evaluator; it cannot replace a calm canonical vector.
     [[nodiscard]] runtime::AffectSnapshot ToAffectSnapshot() const;
 
     // Mapping used by the bridge, exposed for testing. Every emotion resolves to some
@@ -86,11 +98,19 @@ public:
     [[nodiscard]] std::string ModelName() const;
 
 private:
+    [[nodiscard]] runtime::AffectSnapshot ProjectAffect() const;
+    std::optional<AppraisalOutcome> Appraise(
+        const Stimulus& stimulus,
+        const identity::DevelopmentState& development,
+        const identity::RelationshipState* relationship,
+        std::vector<RelevantMemory> memories);
     mutable std::mutex mutex;
     std::unique_ptr<IEmotionModel> model;
     EmotionVector emotion;
     MoodState mood;
     MoodController moodController;
+    std::chrono::steady_clock::time_point lastConversation = std::chrono::steady_clock::now();
+    bool quietConversationObserved = false;
 };
 
 } // namespace revia::emotion

@@ -15,17 +15,19 @@ TurnAgentResult TurnCoordinator::Execute(
     const std::uint64_t turnId,
     const std::stop_token stopToken,
     messageRouter::DeltaHandler onDelta,
-    const revia::intelligence::IntelligenceDecision& decision) const
+    const revia::intelligence::IntelligenceDecision& decision,
+    const llm::PrivateMemoryAccess memoryAccess) const
 {
     TurnAgentResult result;
     result.response =
         conversationAgent.Execute(
             router, input, context, filterSettings, filterContext, stopToken,
-            std::move(onDelta), decision);
+            std::move(onDelta), decision, memoryAccess);
 
     // The interactive reply owns inference priority. Starting memory classification
     // first can contend with chat and embedding work on the same GPU.
-    if (evaluateMemory && result.response.bSuccess && !stopToken.stop_requested())
+    if (memoryAccess == llm::PrivateMemoryAccess::ProfileSetting &&
+        evaluateMemory && result.response.bSuccess && !stopToken.stop_requested())
     {
         memoryAgent.Submit(router, input, result.response.response, turnId);
         result.memoryQueued = true;
@@ -50,7 +52,7 @@ void TurnCoordinator::BackfillMemoryEmbeddings(
     const messageRouter& router,
     const std::string& embeddingModel)
 {
-    memoryAgent.SubmitEmbeddingBackfill(router, embeddingModel);
+    memoryAgent.StartEmbeddingBackfill(router, embeddingModel);
 }
 
 void TurnCoordinator::Stop()

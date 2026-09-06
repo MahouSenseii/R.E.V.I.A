@@ -21,7 +21,8 @@ const std::vector<float>& queryEmbedding,
 const std::string& embeddingModel,
 std::vector<latencySample>* timings,
 const std::string& posture,
-std::vector<promptSection>* sections) const
+std::vector<promptSection>* sections,
+const revia::llm::PrivateMemoryAccess memoryAccess) const
 {
     nlohmann::json messages = nlohmann::json::array();
 
@@ -64,7 +65,8 @@ std::vector<promptSection>* sections) const
     }
 
     const auto retrievalStarted = std::chrono::steady_clock::now();
-    const std::string memoryBlock = profile.bMemoryEnabled
+    const std::string memoryBlock = memoryAccess == revia::llm::PrivateMemoryAccess::ProfileSetting &&
+        profile.bMemoryEnabled
         ? memory.BuildPromptBlock(
             retrievalQuery,
             6,

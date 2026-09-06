@@ -113,6 +113,12 @@ struct ActionOutcome
 {
     PolicyDecision policy;
     ActionResult result;
+    // Execution may already have succeeded when recording its result fails.
+    // Keep that fact in result; callers must stop dependent work on auditError.
+    std::string auditError;
+
+    [[nodiscard]] bool Succeeded() const { return result.succeeded && auditError.empty(); }
+    [[nodiscard]] std::string Message() const;
 };
 
 struct CapabilitySettings

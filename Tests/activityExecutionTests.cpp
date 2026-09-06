@@ -225,24 +225,21 @@ void TestAWorkspaceNameStaysReadableAndBounded()
 void TestALearnedFindingArtifactNeverClaimsMoreThanItsDisposition()
 {
     const std::string kept = "a cited finding in memory";
-    const std::string pending = "a cited finding queued for memory";
 
     Check(DescribeLearnedFindingArtifact(
-              LearnedFindingResult::SavedWithoutEmbedding, kept, pending) == kept,
+              LearnedFindingResult::SavedWithoutEmbedding, kept) == kept,
         "A finding that was actually saved did not report the kept phrase.");
     Check(DescribeLearnedFindingArtifact(
-              LearnedFindingResult::AlreadyExists, kept, pending) == kept,
+              LearnedFindingResult::AlreadyExists, kept) == kept,
         "A finding already in memory did not report the kept phrase.");
     Check(DescribeLearnedFindingArtifact(
-              LearnedFindingResult::Queued, kept, pending) == pending,
-        "A finding still waiting in the queue reported the kept phrase instead of the "
-        "pending one -- this is the false \"in memory\" claim before persistence "
-        "returns.");
+              LearnedFindingResult::SavedEmbeddingQueued, kept) == kept,
+        "Optional queued embedding hid an already committed finding.");
 
     // The regression this exists for: a refused or failed submission must never
     // produce text a reader could take for "queued" or "in memory".
     const std::string failedArtifact =
-        DescribeLearnedFindingArtifact(LearnedFindingResult::Failed, kept, pending);
+        DescribeLearnedFindingArtifact(LearnedFindingResult::Failed, kept);
     Check(failedArtifact.empty(),
         "A save that failed outright produced a non-empty artifact (\"" +
         failedArtifact + "\") instead of reporting nothing kept.");

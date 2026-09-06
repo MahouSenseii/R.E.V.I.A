@@ -38,4 +38,6 @@ namespace revia::emotion
     float novelty,
     float importance);
 
+[[nodiscard]] Stimulus BuildQuietConversationStimulus();
+
 } // namespace revia::emotion

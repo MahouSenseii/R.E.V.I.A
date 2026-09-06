@@ -42,6 +42,8 @@ EmotionVector RuleEmotionModel::RawResponse(
     const float surprise = 1.0F - context.expectedness;
     const float mine = context.selfResponsibility;
 
+    delta[Emotion::Loneliness] += Clamp01(stimulus.quietConversation) * magnitude;
+
     // --- Outcomes -----------------------------------------------------------------
     if (success > 0.0F)
     {

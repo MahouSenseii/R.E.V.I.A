@@ -2,6 +2,7 @@
 
 #include "Library/structLibrary.h"
 #include "Memory/longTermMemory.h"
+#include "LLM/privateMemoryAccess.h"
 
 #include <nlohmann/json.hpp>
 #include <vector>
@@ -27,7 +28,8 @@ public:
         // of. Measured here because this is the only place that still sees the pieces
         // separately -- one line further on they are a single concatenated string, and
         // no consumer can tell which subsystem paid for which part of it.
-        std::vector<promptSection>* sections = nullptr
+        std::vector<promptSection>* sections = nullptr,
+        revia::llm::PrivateMemoryAccess memoryAccess = revia::llm::PrivateMemoryAccess::ProfileSetting
     ) const;
     std::string BuildMemoryBlock(const std::string& query = "") const;
 

@@ -3,6 +3,7 @@
 #include "Agents/conversationAgent.h"
 #include "Agents/memoryAgent.h"
 #include "Intelligence/intelligenceTypes.h"
+#include "LLM/privateMemoryAccess.h"
 
 #include <cstdint>
 
@@ -28,7 +29,8 @@ public:
         std::uint64_t turnId = 0,
         std::stop_token stopToken = {},
         messageRouter::DeltaHandler onDelta = {},
-        const revia::intelligence::IntelligenceDecision& decision = {}) const;
+        const revia::intelligence::IntelligenceDecision& decision = {},
+        llm::PrivateMemoryAccess memoryAccess = llm::PrivateMemoryAccess::ProfileSetting) const;
     std::vector<MemoryAgentEvent> DrainMemoryEvents();
     [[nodiscard]] LearnedFindingResult SubmitLearnedFinding(
         const messageRouter& router,

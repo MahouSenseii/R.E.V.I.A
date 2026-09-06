@@ -228,7 +228,8 @@ ReviaSession::ReviaSession()
           },
           [this](const AffectSnapshot& affect)
           {
-              PublishAffect(affect);
+              (void)affect;
+              PublishAffect();
           },
           [this]()
           {
@@ -419,7 +420,8 @@ bool ReviaSession::Start()
     }
 
     stageStarted = std::chrono::steady_clock::now();
-    const bool profileLoaded = config.LoadProfile(settings.activeProfile, profile);
+    aiProfile startupProfile;
+    const bool profileLoaded = config.LoadProfile(settings.activeProfile, startupProfile);
     startupTimings.push_back({"profile_load", ElapsedMilliseconds(stageStarted)});
     if (!profileLoaded)
     {
@@ -437,7 +439,8 @@ bool ReviaSession::Start()
     // different.
     stageStarted = std::chrono::steady_clock::now();
     std::string identityError;
-    if (!relationships.Load(identityError))
+    identityPersistenceReady = relationships.Load(identityError);
+    if (!identityPersistenceReady)
     {
         appLogger.Warning("Persisted identity could not be loaded: " + identityError);
         PublishComponent("Identity", "Error",
@@ -457,7 +460,7 @@ bool ReviaSession::Start()
     }
     // After the load either way: a corrupt identity file still starts from whatever
     // baseline the profile asks for rather than from the compiled-in one.
-    ApplyProfilePersonality();
+    ApplyProfileLocked(settings.activeProfile, std::move(startupProfile));
     startupTimings.push_back({"identity_load", ElapsedMilliseconds(stageStarted)});
 
     stageStarted = std::chrono::steady_clock::now();
@@ -634,10 +637,6 @@ bool ReviaSession::Start()
     }
 
     stageStarted = std::chrono::steady_clock::now();
-    // The file stem, not the "id" field inside the file. Voice assignments are keyed
-    // by the name a profile is addressed with, and those are the names the profile and
-    // voice pickers list.
-    speechService.SetActiveProfile(settings.activeProfile);
     speechService.Start(settings.speech, [this](const speech::SpeechEvent& speechEvent)
     {
         if (speechEvent.phase == "Queued" || speechEvent.phase == "Generating" ||
@@ -995,16 +994,11 @@ bool ReviaSession::Start()
         0,
         0,
         resourcePlan.embeddingDevice == "none" ? "CPU" : resourcePlan.embeddingDevice);
-    if (embeddingAvailable && profile.bMemoryEnabled && !stopToken.stop_requested())
-    {
-        stageStarted = std::chrono::steady_clock::now();
-        turnCoordinator.BackfillMemoryEmbeddings(router, settings.embedding.modelName);
-        startupTimings.push_back({"embedding_backfill_queue", ElapsedMilliseconds(stageStarted)});
-    }
-
     startupTimings.push_back({"startup_total", ElapsedMilliseconds(startupStarted), true});
     appLogger.Log("Loaded profile: " + profile.displayName);
-    PublishAffect(affectController.Reset());
+    (void)affectController.Reset();
+    emotionRuntime.Reset();
+    PublishAffect();
     appLogger.Timing("startup", startupTimings);
     busy.store(false);
 
@@ -1015,6 +1009,7 @@ bool ReviaSession::Start()
     }
 
     started.store(true);
+    RefreshMemoryBackfill();
     if (llmAvailable)
     {
         SetState(RuntimeState::Idle, profile.displayName + " is online.");
@@ -1047,9 +1042,10 @@ bool ReviaSession::Start()
     StartExternalAdapterLoop();
     StartInitiativeLoop();
     StartCuriosityLoop();
+    StartStateMaintenance();
     if (settings.speech.bEnabled && settings.speech.bSpeakGreeting && !Greeting().empty())
     {
-        speechService.Speak(Greeting(), affectController.Current());
+        speechService.Speak(Greeting(), emotionRuntime.ToAffectSnapshot());
     }
     return true;
 }
@@ -1523,9 +1519,6 @@ void ReviaSession::StartExternalAdapterLoop()
                     {
                         publicHistory.pop_front();
                     }
-                    const AffectSnapshot affect = affectController.ObserveTurn(
-                        request.text, result.text, result.succeeded);
-                    PublishAffect(affect);
                     RecordRelationshipEvidence(
                         speaker, request.text, result.text, result.succeeded);
                     busy.store(false);
@@ -1845,7 +1838,7 @@ void ReviaSession::StartInitiativeLoop()
             if (speechService.IsEnabled())
             {
                 speechService.Speak(
-                    consideration.proposal.message, affectController.Current());
+                    consideration.proposal.message, emotionRuntime.ToAffectSnapshot());
             }
         }
     });
@@ -1916,18 +1909,6 @@ void ReviaSession::StartCuriosityLoop()
             if (!hasEvidenceSignal)
             {
                 trigger = "scheduled self-directed curiosity review";
-                const std::optional<AffectSnapshot> transition = affectController.Tick();
-                if (transition)
-                {
-                    PublishAffect(*transition);
-                    if (transition->state == AffectState::Curious ||
-                        transition->state == AffectState::Bored ||
-                        transition->state == AffectState::Lonely ||
-                        transition->state == AffectState::Melancholy)
-                    {
-                        trigger = "affect matured to " + ToString(transition->state);
-                    }
-                }
             }
 
             if (const resources::LoadAdjustment load = CurrentLoad();
@@ -2017,7 +1998,7 @@ void ReviaSession::StartCuriosityLoop()
             const agents::CuriosityDecision decision = curiosityAgent.Nominate(
                 router,
                 recentConversation,
-                affectController.Current(),
+                emotionRuntime.ToAffectSnapshot(),
                 desktopContext,
                 attemptToken);
             const double planningMilliseconds = ElapsedMilliseconds(planningStarted);
@@ -2157,7 +2138,7 @@ void ReviaSession::StartCuriosityLoop()
                 internetEvent.kind = RuntimeEventKind::ComponentStatus;
                 internetEvent.state = RuntimeState::Thinking;
                 internetEvent.component = "Internet activity";
-                internetEvent.phase = lookup.result.succeeded ? "Ready" : "Unavailable";
+                internetEvent.phase = lookup.Succeeded() ? "Ready" : "Unavailable";
                 internetEvent.message = decision.query;
                 internetEvent.resource = actions::internet::BackendDisplayName(
                     lookup.result.backend);
@@ -2166,7 +2147,7 @@ void ReviaSession::StartCuriosityLoop()
                 internetEvent.queueDepth = static_cast<int>(lookup.result.entries.size());
                 internetEvent.turnId = runId;
                 std::ostringstream internetDetail;
-                internetDetail << "Backend result: " << lookup.result.message
+                internetDetail << "Backend result: " << lookup.Message()
                     << "\n\nDecision rationale: " << decision.rationale
                     << "\n\nVisited source URLs:";
                 if (lookup.result.entries.empty()) internetDetail << "\n(none)";
@@ -2175,8 +2156,8 @@ void ReviaSession::StartCuriosityLoop()
                     internetDetail << "\n" << source;
                 }
                 internetDetail << "\n\nGrounding shown to Revia:\n"
-                    << (lookup.result.content.empty()
-                        ? lookup.result.message
+                    << (!lookup.Succeeded() || lookup.result.content.empty()
+                        ? lookup.Message()
                         : lookup.result.content);
                 internetEvent.detail = internetDetail.str();
                 eventBus.Publish(std::move(internetEvent));
@@ -2190,13 +2171,13 @@ void ReviaSession::StartCuriosityLoop()
                         researchMilliseconds, 0, runId);
                     continue;
                 }
-                if (!lookup.result.succeeded || lookup.result.content.empty())
+                if (!lookup.Succeeded() || lookup.result.content.empty())
                 {
                     PublishComponent(
                         "Curiosity", "Research failed",
-                        lookup.result.message.empty()
+                        lookup.Message().empty()
                             ? lookup.policy.reason
-                            : lookup.result.message,
+                            : lookup.Message(),
                         researchMilliseconds, 0, runId);
                     std::string journalError;
                     curiosityJournal.Append({
@@ -2377,11 +2358,11 @@ void ReviaSession::StartCuriosityLoop()
 
                 switch (learnedResult)
                 {
-                    case agents::LearnedFindingResult::Queued:
+                    case agents::LearnedFindingResult::SavedEmbeddingQueued:
                         PublishComponent(
-                            "Curiosity", "Learning queued",
-                            "A bounded finding and its source URLs were queued for "
-                            "durable memory.",
+                            "Curiosity", "Learning saved",
+                            "A bounded finding and its source URLs were saved; "
+                            "search indexing is queued.",
                             -1.0, sourceCount, runId);
                         break;
 
@@ -2389,7 +2370,7 @@ void ReviaSession::StartCuriosityLoop()
                         PublishComponent(
                             "Curiosity", "Learning saved",
                             "A bounded finding and its source URLs were saved to "
-                            "memory; the embedding will be added in the background.",
+                            "memory; search indexing is pending.",
                             -1.0, sourceCount, runId);
                         break;
 
@@ -2789,6 +2770,9 @@ core::PreferenceResult ReviaSession::SetPreference(
     {
         result.message += " It takes effect the next time Revia starts.";
     }
+    // activeProfile in the preference store is a next-start selection. Only the
+    // canonical activation operation can change the running profile and its owners.
+    updated.activeProfile = settings.activeProfile;
     settings = updated;
     return result;
 }
@@ -3695,20 +3679,17 @@ SessionResult ReviaSession::RunTurnLocked(const std::string& acceptedInput)
 {
     SessionResult result;
     busy.store(true);
-    {
-        std::lock_guard speakerLock(speakerMutex);
-        currentSpeakerId = identity::LocalUserEntityId();
-    }
     const std::stop_token stopToken = BeginOperation();
     const auto finish = [&](SessionResult finished)
     {
-        if (!finished.shouldExit)
+        if (!finished.shouldExit && !stopToken.stop_requested())
         {
-            const AffectSnapshot affect = affectController.ObserveTurn(
+            (void)affectController.ObserveTurn(
                 acceptedInput,
                 finished.text,
                 finished.succeeded);
-            PublishAffect(affect);
+            // A command result can be help text or a notification of work already
+            // appraised by its owner. This wrapper must not invent or duplicate emotion.
         }
         busy.store(false);
         return finished;
@@ -3743,22 +3724,22 @@ SessionResult ReviaSession::RunTurnLocked(const std::string& acceptedInput)
         return finish(std::move(result));
     }
 
-    const std::string profileBeforeCommand = settings.activeProfile;
     const commandOutput commandResult = commands.HandleCommand(
         acceptedInput,
         settings,
         profile,
-        config,
-        router);
+        router,
+        [this](const std::string& profileId)
+        {
+            const auto activated = ActivateProfileLocked(profileId);
+            commandOutput output;
+            output.bSuccess = activated.succeeded;
+            output.output = activated.message;
+            if (!activated.succeeded) output.reason = activated.message;
+            return output;
+        });
     if (commandResult.bWasCommand)
     {
-        // /profile swaps the prompt and sampling through the router. The voice belongs to
-        // the profile too, so it has to follow, and the choice has to survive a restart.
-        if (settings.activeProfile != profileBeforeCommand)
-        {
-            speechService.SetActiveProfile(settings.activeProfile);
-            preferenceStore.Set("activeProfile", settings.activeProfile);
-        }
         result.succeeded = commandResult.bSuccess;
         result.shouldExit = commandResult.bShouldExit;
         result.text = commandResult.output;
@@ -3807,6 +3788,7 @@ SessionResult ReviaSession::RunTurnLocked(const std::string& acceptedInput)
         }
         return finish(std::move(drawn));
     }
+    const std::string speakerForTurn = ResolveLocalSpeaker(acceptedInput);
     result = conversationRuntime.Reply(
         acceptedInput,
         profile,
@@ -3814,7 +3796,7 @@ SessionResult ReviaSession::RunTurnLocked(const std::string& acceptedInput)
         ShouldSpeakOnCurrentChannel(),
         stopToken);
     RecordRelationshipEvidence(
-        identity::LocalUserEntityId(), acceptedInput, result.text, result.succeeded);
+        speakerForTurn, acceptedInput, result.text, result.succeeded);
     if (result.succeeded && result.fromAssistant && !result.text.empty())
     {
         ArchiveTurn("assistant", result.text);
@@ -3836,15 +3818,6 @@ SessionResult ReviaSession::RunTurnLocked(const std::string& acceptedInput)
 void ReviaSession::PollBackgroundEvents()
 {
     (void)selfAssessment.Assess();
-    if (const std::optional<AffectSnapshot> affect = affectController.Tick())
-    {
-        PublishAffect(*affect);
-        if (affect->state == AffectState::Curious || affect->state == AffectState::Bored ||
-            affect->state == AffectState::Lonely || affect->state == AffectState::Melancholy)
-        {
-            SignalCuriosity("affect changed to " + ToString(affect->state));
-        }
-    }
 
     const std::vector<agents::MemoryAgentEvent> memoryEvents =
         turnCoordinator.DrainMemoryEvents();
@@ -3854,6 +3827,13 @@ void ReviaSession::PollBackgroundEvents()
             ? "memory backfill"
             : "memory turn #" + std::to_string(event.turnId);
         appLogger.Timing(timingScope, event.decision.timings);
+
+        if (!event.embeddingError.empty())
+        {
+            PublishComponent("Embeddings", "Error", event.embeddingError,
+                -1.0, 0, event.turnId);
+            appLogger.Warning(event.embeddingError);
+        }
 
         const std::string phase = !event.decision.bSuccess || !event.saveSucceeded
             ? "Error"
@@ -3940,17 +3920,6 @@ void ReviaSession::RequestStop()
 
 void ReviaSession::Stop()
 {
-    // Saved before anything is torn down. Relationships and development are the parts of
-    // Revia that are supposed to outlive the process, and losing an afternoon of them to
-    // shutdown ordering would be the least forgivable data loss in the system.
-    if (started.load())
-    {
-        // Mood is captured at the moment of saving rather than tracked continuously, so
-        // a crash costs at most the current afternoon and never a corrupted file.
-        relationships.SetMood(emotionRuntime.Mood());
-        PersistIdentity();
-    }
-
     // Order matters. The warmup is built to survive RequestStop, because stopping a reply
     // must not cost the session its voice. Shutdown is the one case where it must not
     // retry, so cancel it first, then let RequestStop kill the Qwen worker so an in-flight
@@ -3976,6 +3945,9 @@ void ReviaSession::Stop()
         conversationArchive.EndSession(conversationSessionId);
     }
     std::lock_guard operationLock(operationMutex);
+    // Start also holds operationMutex: join here so startup cannot create a
+    // save worker after shutdown has already tried to stop it.
+    StopStateMaintenance();
     if (!started.load() && !llamaServerProcess.WasStartedByRevia() &&
         !embeddingServerProcess.WasStartedByRevia())
     {
@@ -4078,6 +4050,14 @@ void ReviaSession::Stop()
         shutdownTimings.push_back({"embedding_server_stop", ElapsedMilliseconds(stageStarted)});
     }
 
+    // Owned mutators and the foreground operation are now quiescent, and late
+    // background completions have been consumed. This is the final snapshot.
+    if (started.load())
+    {
+        stageStarted = std::chrono::steady_clock::now();
+        PersistIdentity();
+        shutdownTimings.push_back({"identity_save", ElapsedMilliseconds(stageStarted)});
+    }
     shutdownTimings.push_back({"shutdown_total", ElapsedMilliseconds(shutdownStarted), true});
     appLogger.Timing("shutdown", shutdownTimings);
     appLogger.Log("Shutdown complete.");
@@ -4268,8 +4248,9 @@ std::string ReviaSession::PerceptionStatus() const
     std::ostringstream stream;
     if (!settings.perception.bEnabled)
     {
-        stream << "Ambient perception is OFF. Nothing about your windows is observed.\n"
-            << "Enable it in Config/settings.json under \"perception\".";
+        stream << "Ambient activity metadata is OFF.\n"
+            << "Enable it in Config/settings.json under \"perception\".\n"
+            << "Activity exclusions do not mask screenshots sent to vision.";
         return stream.str();
     }
     const perception::PerceptionCounters counters = windowEventMonitor.Counters();
@@ -4285,7 +4266,8 @@ std::string ReviaSession::PerceptionStatus() const
         << settings.perception.excludedApplications.size()
         << " excluded applications and "
         << settings.perception.excludedTitleFragments.size()
-        << " excluded title fragments are in effect.\n"
+        << " excluded title fragments apply to activity metadata only; "
+        << "screenshots sent to vision are not masked.\n"
         << "Retained in memory only: " << activityHistory.Size()
         << " activity spans and "
         << (CurrentScreenContext().empty() ? "no visual summary yet" : "one current visual summary")
@@ -4630,11 +4612,17 @@ vision::CameraFrame ReviaSession::CaptureCameraFrame(
         : InternalEventKind::ActivityFailed;
     stimulus.failure = frame.succeeded ? 0.0F : 0.6F;
     stimulus.importance = frame.succeeded ? 0.2F : 0.4F;
-    if (const std::optional<AffectSnapshot> felt =
-            affectController.ObserveInternalEvent(stimulus))
-    {
-        PublishAffect(*felt);
-    }
+    (void)affectController.ObserveInternalEvent(stimulus);
+    emotion::Stimulus cameraOutcome;
+    cameraOutcome.source = emotion::StimulusSource::Perception;
+    cameraOutcome.eventType = frame.succeeded ? "camera_captured" : "camera_failed";
+    cameraOutcome.description = frame.reason;
+    cameraOutcome.selfCaused = autonomous;
+    cameraOutcome.importance = stimulus.importance;
+    cameraOutcome.failure = stimulus.failure;
+    cameraOutcome.success = frame.succeeded ? 0.3F : 0.0F;
+    emotionRuntime.Observe(cameraOutcome, relationships.Development());
+    PublishAffect();
     return frame;
 }
 
@@ -5094,6 +5082,26 @@ speech::VoiceOperationResult ReviaSession::AssignVoice(
     return result;
 }
 
+std::string ReviaSession::ResolveLocalSpeaker(const std::string& input)
+{
+    const std::string previous = CurrentRelationship().entityId;
+    const std::string stated = identity::ReadStatedName(input);
+    if (stated.empty()) return previous;
+
+    const std::string resolved = relationships.ResolveNamedLocalSpeaker(stated);
+    {
+        std::lock_guard speakerLock(speakerMutex);
+        currentSpeakerId = resolved;
+    }
+    if (resolved != previous)
+    {
+        appLogger.Log("Local speaker is " + stated + " (" + resolved + ").");
+        PublishComponent("Relationship", "Named",
+            "Local conversation turns are now attributed to " + stated + ".");
+    }
+    return resolved;
+}
+
 void ReviaSession::RecordRelationshipEvidence(
     const std::string& entityId,
     const std::string& userInput,
@@ -5108,36 +5116,14 @@ void ReviaSession::RecordRelationshipEvidence(
         identity::ReadConversationSignals(userInput, reply, succeeded);
     const identity::RelationshipEvent event =
         identity::BuildRelationshipEvent(entityId, signals);
-    // A stated name attaches to the entity that already exists rather than creating a
-    // new one. Re-keying on a name would throw away every exchange earned before she was
-    // told it, which is exactly backwards: learning someone's name is not meeting a
-    // stranger.
-    std::string speakerId = entityId;
+    // The local entry point resolves introductions before generation. An adapter
+    // supplies its stable platform entity. Recording evidence never changes which
+    // person the local session is addressing.
     if (const std::string stated = identity::ReadStatedName(userInput); !stated.empty())
     {
-        // Only the keyboard is ambiguous about who is speaking. An adapter already
-        // carries an author, so a name mentioned there must not re-attribute the turn.
-        if (entityId == identity::LocalUserEntityId())
-        {
-            const std::string resolved = relationships.ResolveNamedLocalSpeaker(stated);
-            if (resolved != entityId)
-            {
-                speakerId = resolved;
-                appLogger.Log("Local speaker is " + stated + " (" + resolved + ").");
-                PublishComponent("Relationship", "Named",
-                    stated + " introduced themselves. Turns are now attributed to them "
-                    "rather than to an anonymous local user.");
-            }
-        }
-        else
-        {
-            relationships.SetDisplayName(entityId, stated);
-        }
+        relationships.SetDisplayName(entityId, stated);
     }
-
-    identity::RelationshipEvent attributed = event;
-    attributed.entityId = speakerId;
-    const identity::RelationshipState updated = relationships.Apply(attributed);
+    const identity::RelationshipState updated = relationships.Apply(event);
 
     // The same finished turn also says something about who she is becoming. Read from
     // the same observed signals, so what moves a relationship and what moves a
@@ -5158,10 +5144,6 @@ void ReviaSession::RecordRelationshipEvidence(
     work.wasCorrected = signals.repeatedCorrection;
     work.expressedAppreciation = signals.expressedAppreciation;
     RecordPreferenceEvidence(identity::ReadWorkPreferenceEvidence(work));
-    {
-        std::lock_guard speakerLock(speakerMutex);
-        currentSpeakerId = speakerId;
-    }
     // Published rather than logged silently, so a relationship that drifts can be traced
     // to the exchanges that moved it instead of only being noticed later.
     PublishComponent(
@@ -5173,6 +5155,8 @@ void ReviaSession::RecordRelationshipEvidence(
 
 void ReviaSession::PersistIdentity()
 {
+    if (!identityPersistenceReady) return;
+    relationships.SetMood(emotionRuntime.Mood());
     std::string error;
     if (!relationships.Save(error))
     {
@@ -5181,6 +5165,59 @@ void ReviaSession::PersistIdentity()
     }
     appLogger.Log("Identity saved: " + std::to_string(relationships.Count()) +
         " relationship(s).");
+}
+
+void ReviaSession::StartStateMaintenance()
+{
+    StopStateMaintenance();
+    stateMaintenanceWorker = std::jthread([this](const std::stop_token stopToken)
+    {
+        std::mutex waitMutex;
+        std::condition_variable_any wake;
+        std::unique_lock lock(waitMutex);
+        auto nextEmotion = std::chrono::steady_clock::now() + emotionSettleInterval;
+        auto nextSave = identityPersistenceReady
+            ? std::chrono::steady_clock::now() + identitySaveInterval
+            : std::chrono::steady_clock::time_point::max();
+        while (!stopToken.stop_requested())
+        {
+            const auto deadline = std::min(nextEmotion, nextSave);
+            wake.wait_until(lock, stopToken, deadline, [] { return false; });
+            if (stopToken.stop_requested()) break;
+            const auto now = std::chrono::steady_clock::now();
+            if (now >= nextEmotion)
+            {
+                const auto before = emotionRuntime.ToAffectSnapshot();
+                emotionRuntime.Settle();
+                relationships.SettleAll(now, relationshipQuietInterval);
+                (void)affectController.Tick(); // comparison only
+                emotionRuntime.ObserveQuietConversation(
+                    relationships.Development(), quietConversationInterval);
+                PublishAffect();
+                const auto after = emotionRuntime.ToAffectSnapshot();
+                if (before.state != after.state &&
+                    (after.state == AffectState::Curious || after.state == AffectState::Bored ||
+                     after.state == AffectState::Lonely || after.state == AffectState::Melancholy))
+                    SignalCuriosity("affect changed to " + ToString(after.state));
+                // A stalled process takes one bounded step, not an unbounded catch-up loop.
+                nextEmotion = now + emotionSettleInterval;
+            }
+            if (now >= nextSave)
+            {
+                PersistIdentity();
+                nextSave = now + identitySaveInterval;
+            }
+        }
+    });
+}
+
+void ReviaSession::StopStateMaintenance()
+{
+    if (stateMaintenanceWorker.joinable())
+    {
+        stateMaintenanceWorker.request_stop();
+        stateMaintenanceWorker.join();
+    }
 }
 
 autonomy::DriveState ReviaSession::Drives() const
@@ -5396,7 +5433,7 @@ autonomy::ActivityOutcome ReviaSession::ExecuteThink(
         const agents::LearnedFindingResult learnedResult =
             turnCoordinator.SubmitLearnedFinding(router, std::move(learned));
         outcome.artifact = autonomy::DescribeLearnedFindingArtifact(
-            learnedResult, "a reflection in memory", "a reflection queued for memory");
+            learnedResult, "a reflection in memory");
         if (learnedResult == agents::LearnedFindingResult::Failed)
         {
             outcome.summary += " The reflection could not be saved to memory.";
@@ -5558,15 +5595,15 @@ autonomy::ActivityOutcome ReviaSession::ExecuteResearch(
     const double researchMilliseconds = ElapsedMilliseconds(started);
 
     std::string journalError;
-    if (!lookup.result.succeeded || lookup.result.content.empty())
+    if (!lookup.Succeeded() || lookup.result.content.empty())
     {
         (void)curiosityJournal.Append(
             {verdict.topic, verdict.topic, lookup.result.entries, "research_failed",
              std::chrono::system_clock::now()}, journalError);
         outcome.status = autonomy::ActivityStatus::Failed;
         outcome.summary = "The lookup on \"" + verdict.topic + "\" did not return "
-            "anything usable: " + (lookup.result.message.empty()
-                ? lookup.policy.reason : lookup.result.message);
+            "anything usable: " + (lookup.Message().empty()
+                ? lookup.policy.reason : lookup.Message());
         return outcome;
     }
     (void)curiosityJournal.Append(
@@ -5597,8 +5634,7 @@ autonomy::ActivityOutcome ReviaSession::ExecuteResearch(
         learned.source = "autonomous_research";
         learnedResult = turnCoordinator.SubmitLearnedFinding(router, std::move(learned));
         outcome.artifact = autonomy::DescribeLearnedFindingArtifact(
-            *learnedResult, "a cited finding in memory",
-            "a cited finding queued for memory");
+            *learnedResult, "a cited finding in memory");
     }
 
     outcome.status = autonomy::ActivityStatus::Completed;
@@ -5702,8 +5738,7 @@ autonomy::ActivityOutcome ReviaSession::ExecuteOrganizeMemory(
         // accumulate copies of the same observation.
         learnedResult = turnCoordinator.SubmitLearnedFinding(router, std::move(connection));
         outcome.artifact = autonomy::DescribeLearnedFindingArtifact(
-            *learnedResult, "a connection between two memories",
-            "a connection between two memories, queued for saving");
+            *learnedResult, "a connection between two memories");
     }
     outcome.summary = "Went through " + std::to_string(examined) + " memories and found " +
         std::to_string(connectionsFound) + " that belong together.";
@@ -6365,21 +6400,17 @@ ProfileOperationResult ReviaSession::SaveProfile(const ProfileSummary& definitio
     std::string message = "Saved profile '" + candidate.displayName + "'.";
     if (candidate.id == settings.activeProfile)
     {
-        // Editing the profile that is running should take effect on the next turn rather
-        // than at the next launch. Memory is the exception and says so: it is wired up
-        // once during startup.
         aiProfile reloaded;
-        if (config.LoadProfile(candidate.id, reloaded))
+        if (!config.LoadProfile(candidate.id, reloaded))
         {
-            const bool memoryChanged = reloaded.bMemoryEnabled != profile.bMemoryEnabled;
-            profile = reloaded;
-            router.ApplyProfile(profile);
-            ApplyProfilePersonality();
-            message += " This is the running profile, so the change applies to the next reply.";
-            if (memoryChanged)
-            {
-                message += " The memory setting applies after a restart.";
-            }
+            return {false, message + " The saved file could not be reloaded; the running profile is unchanged."};
+        }
+        const bool memoryChanged = reloaded.bMemoryEnabled != profile.bMemoryEnabled;
+        ApplyProfileLocked(candidate.id, std::move(reloaded));
+        message += " This is the running profile, so the change applies to the next reply.";
+        if (memoryChanged)
+        {
+            message += " Background memory indexing follows this setting immediately.";
         }
     }
     appLogger.Log(message);
@@ -6389,11 +6420,7 @@ ProfileOperationResult ReviaSession::SaveProfile(const ProfileSummary& definitio
 
 ProfileOperationResult ReviaSession::ActivateProfile(const std::string& profileId)
 {
-    aiProfile loaded;
-    if (!config.LoadProfile(profileId, loaded))
-    {
-        return {false, "Profile '" + profileId + "' could not be loaded."};
-    }
+    ProfileOperationResult result;
     {
         // Never mid-turn. Swapping the system prompt underneath a reply that is already
         // being generated would produce an answer from neither profile.
@@ -6403,19 +6430,28 @@ ProfileOperationResult ReviaSession::ActivateProfile(const std::string& profileI
             return {false,
                 "Revia is in the middle of a turn. Switch profiles once she has finished."};
         }
-        profile = loaded;
-        settings.activeProfile = profileId;
-        router.ApplyProfile(profile);
-        ApplyProfilePersonality();
+        result = ActivateProfileLocked(profileId);
     }
-    speechService.SetActiveProfile(profileId);
+    if (result.succeeded) Publish(RuntimeEventKind::Activity, result.message);
+    return result;
+}
 
-    std::string message = "Revia is now using '" + loaded.displayName + "'.";
+ProfileOperationResult ReviaSession::ActivateProfileLocked(const std::string& profileId)
+{
+    aiProfile loaded;
+    if (!config.LoadProfile(profileId, loaded))
+    {
+        return {false, "Profile '" + profileId + "' could not be loaded."};
+    }
+    // Selection is one operation: a failed preference write must not leave the live
+    // profile different from the one startup will load. No live owner changes first.
     const core::PreferenceResult stored = preferenceStore.Set("activeProfile", profileId);
     if (!stored.succeeded)
     {
-        message += " It could not be stored as the startup profile: " + stored.message;
+        return {false, "Profile selection could not be saved; the running profile is unchanged: " + stored.message};
     }
+    ApplyProfileLocked(profileId, std::move(loaded));
+    std::string message = "Revia is now using '" + profile.displayName + "'.";
     if (!speechService.HasActiveQwenVoice())
     {
         message += " This profile speaks with the Windows voice.";
@@ -6425,8 +6461,28 @@ ProfileOperationResult ReviaSession::ActivateProfile(const std::string& profileI
         message += " Restart once so the assigned voice loads onto the planned device.";
     }
     appLogger.Log(message);
-    Publish(RuntimeEventKind::Activity, message);
     return {true, message};
+}
+
+void ReviaSession::ApplyProfileLocked(const std::string& profileId, aiProfile loaded)
+{
+    profile = std::move(loaded);
+    settings.activeProfile = profileId;
+    router.ApplyProfile(profile);
+    ApplyProfilePersonality();
+    // File-stem identity keys assignments, even when a hand-authored JSON id differs.
+    // Speech Start resolves the same selection after configuring its store at startup.
+    speechService.SetActiveProfile(settings.activeProfile);
+    RefreshMemoryBackfill();
+}
+
+void ReviaSession::RefreshMemoryBackfill()
+{
+    if (started.load() && settings.embedding.bEnabled && profile.bMemoryEnabled &&
+        settings.llm.backend == "LLamaCpp")
+        turnCoordinator.BackfillMemoryEmbeddings(router, settings.embedding.modelName);
+    else
+        turnCoordinator.Memory().StopEmbeddingBackfill();
 }
 
 bool ReviaSession::EnsureLLMAvailable(const std::stop_token stopToken)
@@ -6597,7 +6653,7 @@ bool ReviaSession::EnsureEmbeddingAvailable(const std::stop_token stopToken)
         return false;
     }
 
-    const healthOutput initialHealth = router.CheckEmbeddingHealth();
+    const healthOutput initialHealth = router.CheckEmbeddingHealth(stopToken);
     if (initialHealth.bIsAvailable)
     {
         appLogger.Log("Semantic-memory embeddings are available.");
@@ -6627,7 +6683,7 @@ bool ReviaSession::EnsureEmbeddingAvailable(const std::stop_token stopToken)
             embeddingServerProcess.Stop();
             return false;
         }
-        if (router.CheckEmbeddingHealth().bIsAvailable)
+        if (router.CheckEmbeddingHealth(stopToken).bIsAvailable)
         {
             appLogger.Log("Dedicated semantic-memory embeddings are available.");
             return true;
@@ -6780,20 +6836,22 @@ goals::Goal ReviaSession::FinishGoalRun(
             stimulus.importance = 0.0F;
             break;
     }
-    if (const std::optional<AffectSnapshot> felt =
-            affectController.ObserveInternalEvent(stimulus))
-    {
-        PublishAffect(*felt);
-    }
+    (void)affectController.ObserveInternalEvent(stimulus);
 
     // A goal outcome is a confirmed event, so it moves drives alongside emotion.
-    ObserveDrives(emotion::BuildGoalStimulus(
+    const auto goalOutcome = emotion::BuildGoalStimulus(
         finished.status == goals::GoalStatus::Succeeded,
         finished.status == goals::GoalStatus::Exhausted,
         finished.status == goals::GoalStatus::Blocked,
         finished.spend.actions,
         finished.spend.retries,
-        summary));
+        summary);
+    if (stimulus.importance > 0.0F)
+    {
+        emotionRuntime.Observe(goalOutcome, relationships.Development());
+        PublishAffect();
+        ObserveDrives(goalOutcome);
+    }
 
     if (!goals::IsTerminal(finished.status))
     {
@@ -7863,6 +7921,7 @@ bool ReviaSession::TryHandleActionInput(const std::string& input, SessionResult&
 
 SessionResult ReviaSession::ExecuteAction(actions::ActionRequest request)
 {
+    const std::stop_token stopToken = CurrentOperationToken();
     SessionResult result;
     if (!actionRuntime.IsInitialized())
     {
@@ -7894,30 +7953,30 @@ SessionResult ReviaSession::ExecuteAction(actions::ActionRequest request)
     startedEvent.phase = "Running";
     eventBus.Publish(std::move(startedEvent));
     SetState(RuntimeState::Acting, "Executing " + actions::ToString(request.type) + ".");
-    const actions::ActionOutcome outcome = actionRuntime.Execute(request, confirmed);
+    const actions::ActionOutcome outcome = actionRuntime.Execute(request, confirmed, stopToken);
     RuntimeEvent completedEvent;
     completedEvent.kind = RuntimeEventKind::ComponentStatus;
     completedEvent.state = RuntimeState::Acting;
-    completedEvent.message = outcome.result.message;
+    completedEvent.message = outcome.Message();
     completedEvent.component = "Automation";
-    completedEvent.phase = outcome.result.succeeded ? "Ready" : "Blocked";
+    completedEvent.phase = outcome.Succeeded() ? "Ready" : "Blocked";
     completedEvent.elapsedMilliseconds = ElapsedMilliseconds(actionStarted);
     eventBus.Publish(std::move(completedEvent));
-    result.succeeded = outcome.result.succeeded;
+    result.succeeded = outcome.Succeeded();
     result.text = FormatActionOutcome(outcome);
     if (!result.succeeded)
     {
-        result.reason = outcome.result.message;
+        result.reason = outcome.Message();
     }
 
-    if (outcome.policy.verdict == actions::PolicyVerdict::Blocked ||
+    if (!outcome.auditError.empty() || outcome.policy.verdict == actions::PolicyVerdict::Blocked ||
         (outcome.policy.verdict == actions::PolicyVerdict::RequiresConfirmation && !confirmed))
     {
-        SetState(RuntimeState::Blocked, outcome.result.message);
+        SetState(RuntimeState::Blocked, outcome.Message());
     }
     else
     {
-        SetState(RuntimeState::Idle, outcome.result.message);
+        SetState(RuntimeState::Idle, outcome.Message());
     }
     return result;
 }
@@ -7926,7 +7985,7 @@ std::string ReviaSession::FormatActionOutcome(const actions::ActionOutcome& outc
 {
     std::ostringstream stream;
     stream << (outcome.result.succeeded ? "Action succeeded: " : "Action stopped: ")
-           << outcome.result.message << '\n';
+           << outcome.Message() << '\n';
     for (const std::string& entry : outcome.result.entries)
     {
         stream << "  " << entry << '\n';
@@ -7961,8 +8020,9 @@ void ReviaSession::SetState(const RuntimeState newState, const std::string& acti
         activity.empty() ? ToString(newState) : activity);
 }
 
-void ReviaSession::PublishAffect(const AffectSnapshot& affect)
+void ReviaSession::PublishAffect()
 {
+    const AffectSnapshot affect = emotionRuntime.ToAffectSnapshot();
     RuntimeEvent event;
     event.kind = RuntimeEventKind::AffectChanged;
     event.state = state.load();

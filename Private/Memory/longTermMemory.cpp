@@ -521,9 +521,11 @@ std::vector<memoryEntry> longTermMemory::Load() const
     return entries;
 }
 
-bool longTermMemory::Save(const memoryDecision& decision, bool& outWasAdded) const
+bool longTermMemory::Save(const memoryDecision& decision, bool& outWasAdded,
+    std::string* outMemoryId) const
 {
     outWasAdded = false;
+    if (outMemoryId) outMemoryId->clear();
     if (!decision.bSuccess || !decision.bShouldRemember || decision.summary.empty())
     {
         return false;
@@ -539,6 +541,7 @@ bool longTermMemory::Save(const memoryDecision& decision, bool& outWasAdded) con
         });
     if (duplicate != existingEntries.end())
     {
+        if (outMemoryId) *outMemoryId = duplicate->id;
         if (!decision.embedding.empty() && !decision.embeddingModel.empty())
         {
             return SaveEmbedding(
@@ -568,6 +571,7 @@ bool longTermMemory::Save(const memoryDecision& decision, bool& outWasAdded) con
         return false;
     }
     outWasAdded = sqlite3_changes(database) > 0;
+    if (outMemoryId) *outMemoryId = entry.id;
     if (outWasAdded && !decision.embedding.empty() && !decision.embeddingModel.empty() &&
         !UpsertEmbedding(
             database,
@@ -862,39 +866,80 @@ std::vector<memoryEntry> longTermMemory::LoadMissingEmbeddings(
     const std::string& embeddingModel,
     const std::size_t maxEntries) const
 {
+    return ReadMissingEmbeddings(embeddingModel, maxEntries, std::nullopt).entries;
+}
+
+EmbeddingBackfillPage longTermMemory::ScanMissingEmbeddings(
+    const std::string& model, std::int64_t afterRowId, std::size_t maxEntries) const
+{
+    return ReadMissingEmbeddings(model, maxEntries, std::max<std::int64_t>(0, afterRowId));
+}
+
+EmbeddingBackfillPage longTermMemory::ReadMissingEmbeddings(
+    const std::string& embeddingModel, const std::size_t maxEntries,
+    const std::optional<std::int64_t> afterRowId) const
+{
+    EmbeddingBackfillPage page;
+    page.nextRowId = afterRowId.value_or(0);
     if (embeddingModel.empty() || maxEntries == 0)
     {
-        return {};
+        return page;
     }
 
     sqlite3* const database = Acquire();
     if (!database)
     {
-        return {};
+        page.error = "The memory database could not be opened for embedding backfill.";
+        return page;
     }
 
-    Statement query = Prepare(database,
+    std::string sql =
         "SELECT memories.id, memories.category, memories.summary, "
-        "       memories.source, memories.created_at "
+        "       memories.source, memories.created_at, memories.rowid "
         "FROM memories "
         "LEFT JOIN memory_embeddings ON "
         "  memory_embeddings.memory_id = memories.id AND memory_embeddings.model = ? "
-        "WHERE memories.active = 1 AND memory_embeddings.memory_id IS NULL "
-        "ORDER BY CAST(memories.created_at AS INTEGER), memories.rowid "
-        "LIMIT ?;");
+        "WHERE memories.active = 1 AND memory_embeddings.memory_id IS NULL ";
+    sql += afterRowId
+        ? "AND memories.rowid > ? ORDER BY memories.rowid LIMIT ?;"
+        : "ORDER BY CAST(memories.created_at AS INTEGER), memories.rowid LIMIT ?;";
+    Statement query = Prepare(database, sql.c_str());
     if (!query)
     {
-        return {};
+        page.error = "Could not prepare embedding backfill: " + std::string(sqlite3_errmsg(database));
+        return page;
     }
     BindText(query.get(), 1, embeddingModel);
-    sqlite3_bind_int64(query.get(), 2, static_cast<sqlite3_int64>(maxEntries));
+    if (afterRowId) sqlite3_bind_int64(query.get(), 2, *afterRowId);
+    sqlite3_bind_int64(query.get(), afterRowId ? 3 : 2, static_cast<sqlite3_int64>(maxEntries));
 
-    std::vector<memoryEntry> entries;
-    while (sqlite3_step(query.get()) == SQLITE_ROW)
+    int status;
+    while ((status = sqlite3_step(query.get())) == SQLITE_ROW)
     {
-        entries.push_back(ReadEntry(query.get()));
+        page.entries.push_back(ReadEntry(query.get()));
+        page.nextRowId = sqlite3_column_int64(query.get(), 5);
     }
-    return entries;
+    if (status != SQLITE_DONE)
+    {
+        page.entries.clear();
+        page.nextRowId = afterRowId.value_or(0);
+        page.error = "Could not read embedding backfill: " + std::string(sqlite3_errmsg(database));
+    }
+    page.hasMore = page.entries.size() == maxEntries;
+    return page;
+}
+
+bool longTermMemory::NeedsEmbedding(const std::string& id, const std::string& model) const
+{
+    sqlite3* const database = Acquire();
+    if (!database || id.empty() || model.empty()) return false;
+    Statement query = Prepare(database,
+        "SELECT 1 FROM memories WHERE id = ? AND active = 1 AND NOT EXISTS "
+        "(SELECT 1 FROM memory_embeddings WHERE memory_id = memories.id AND model = ?);");
+    if (!query) return false;
+    BindText(query.get(), 1, id);
+    BindText(query.get(), 2, model);
+    return sqlite3_step(query.get()) == SQLITE_ROW;
 }
 
 bool longTermMemory::SaveEmbedding(

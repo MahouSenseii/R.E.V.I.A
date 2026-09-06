@@ -1,4 +1,5 @@
 #include "Emotion/emotionRuntime.h"
+#include "Emotion/stimulusBuilder.h"
 
 #include <algorithm>
 #include <sstream>
@@ -42,14 +43,39 @@ std::optional<AppraisalOutcome> EmotionRuntime::Observe(
     const identity::RelationshipState* relationship,
     std::vector<RelevantMemory> memories)
 {
+    std::lock_guard lock(mutex);
+    if (stimulus.source == StimulusSource::Conversation && stimulus.userCaused)
+    {
+        lastConversation = std::chrono::steady_clock::now();
+        quietConversationObserved = false;
+    }
+    return Appraise(stimulus, development, relationship, std::move(memories));
+}
+
+std::optional<AppraisalOutcome> EmotionRuntime::ObserveQuietConversation(
+    const identity::DevelopmentState& development,
+    const std::chrono::milliseconds quietInterval)
+{
+    std::lock_guard lock(mutex);
+    if (quietConversationObserved || std::chrono::steady_clock::now() - lastConversation <
+        std::max(std::chrono::milliseconds(1), quietInterval))
+        return std::nullopt;
+    quietConversationObserved = true;
+    return Appraise(BuildQuietConversationStimulus(), development, nullptr, {});
+}
+
+std::optional<AppraisalOutcome> EmotionRuntime::Appraise(
+    const Stimulus& stimulus,
+    const identity::DevelopmentState& development,
+    const identity::RelationshipState* relationship,
+    std::vector<RelevantMemory> memories)
+{
     if (!stimulus.IsMeaningful())
     {
         // Most of what happens is not worth feeling. This is the common path and not a
         // missed case.
         return std::nullopt;
     }
-
-    std::lock_guard lock(mutex);
 
     AppraisalOutcome outcome;
     outcome.stimulus = stimulus;
@@ -107,6 +133,12 @@ MoodState EmotionRuntime::Mood() const
     return mood;
 }
 
+EmotionSnapshot EmotionRuntime::Current() const
+{
+    std::lock_guard lock(mutex);
+    return {emotion, mood, ProjectAffect()};
+}
+
 void EmotionRuntime::SetMood(const MoodState& inputMood)
 {
     std::lock_guard lock(mutex);
@@ -117,6 +149,8 @@ void EmotionRuntime::Reset()
 {
     std::lock_guard lock(mutex);
     emotion = EmotionVector{};
+    lastConversation = std::chrono::steady_clock::now();
+    quietConversationObserved = false;
     // Mood deliberately survives a reset of momentary emotion, because a restart is not
     // a reason to have had a different afternoon.
 }
@@ -196,7 +230,11 @@ runtime::AffectState EmotionRuntime::ToAffectState(const emotion::Emotion value)
 runtime::AffectSnapshot EmotionRuntime::ToAffectSnapshot() const
 {
     std::lock_guard lock(mutex);
+    return ProjectAffect();
+}
 
+runtime::AffectSnapshot EmotionRuntime::ProjectAffect() const
+{
     runtime::AffectSnapshot snapshot;
     const EmotionReading dominant = emotion.Dominant();
     if (dominant.value < 0.12F)

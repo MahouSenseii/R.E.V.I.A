@@ -1,4 +1,5 @@
 #include "LLM/LLamaCPP/llamaCppEmbeddingService.h"
+#include "cancellableHttpClient.h"
 
 #include <algorithm>
 #include <chrono>
@@ -23,7 +24,8 @@ namespace
         return output;
     }
 
-    void ApplyApiKey(httplib::Client& client, const std::string& apiKey)
+    template<class Client>
+    void ApplyApiKey(Client& client, const std::string& apiKey)
     {
         if (!apiKey.empty())
         {
@@ -53,7 +55,7 @@ const std::string& llamaCppEmbeddingService::ModelName() const
     return modelName;
 }
 
-healthOutput llamaCppEmbeddingService::CheckHealth() const
+healthOutput llamaCppEmbeddingService::CheckHealth(std::stop_token stopToken) const
 {
     healthOutput output;
     output.name = "llama.cpp embeddings";
@@ -65,10 +67,16 @@ healthOutput llamaCppEmbeddingService::CheckHealth() const
         return output;
     }
 
-    httplib::Client client(host, port);
+    revia::llm::CancellableHttpClient client(host, port, stopToken);
     ApplyApiKey(client, apiKey);
     client.set_connection_timeout(2);
     client.set_read_timeout(3);
+    std::stop_callback cancelRequest(stopToken, [&client] { client.stop(); });
+    if (stopToken.stop_requested())
+    {
+        output.reason = "Embedding health check was cancelled.";
+        return output;
+    }
     const auto health = client.Get("/health");
     if (!health || health->status != 200)
     {
@@ -79,6 +87,11 @@ healthOutput llamaCppEmbeddingService::CheckHealth() const
         return output;
     }
 
+    if (stopToken.stop_requested())
+    {
+        output.reason = "Embedding health check was cancelled.";
+        return output;
+    }
     const auto models = client.Get("/v1/models");
     if (!models || models->status != 200)
     {
@@ -164,7 +177,7 @@ embeddingOutput llamaCppEmbeddingService::Embed(
         return FinishEmbedding(std::move(output), started);
     }
 
-    httplib::Client client(host, port);
+    revia::llm::CancellableHttpClient client(host, port, stopToken);
     ApplyApiKey(client, apiKey);
     client.set_connection_timeout(2);
     client.set_read_timeout(10);

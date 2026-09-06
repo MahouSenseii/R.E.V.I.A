@@ -267,16 +267,14 @@ std::string WorkspaceArtifactName(
 
 std::string DescribeLearnedFindingArtifact(
     const agents::LearnedFindingResult result,
-    const std::string& kept,
-    const std::string& pending)
+    const std::string& kept)
 {
     switch (result)
     {
         case agents::LearnedFindingResult::SavedWithoutEmbedding:
         case agents::LearnedFindingResult::AlreadyExists:
+        case agents::LearnedFindingResult::SavedEmbeddingQueued:
             return kept;
-        case agents::LearnedFindingResult::Queued:
-            return pending;
         case agents::LearnedFindingResult::Failed:
             return {};
     }

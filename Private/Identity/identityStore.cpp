@@ -1,10 +1,18 @@
 #include "Identity/identityStore.h"
 
 #include <exception>
+#include <cstdio>
 #include <fstream>
 #include <nlohmann/json.hpp>
 #include <system_error>
 #include <utility>
+
+#ifdef _WIN32
+#include <io.h>
+#include <Windows.h>
+#else
+#include <unistd.h>
+#endif
 
 namespace revia::identity
 {
@@ -133,8 +141,10 @@ bool IdentityStore::Load(IdentitySnapshot& outSnapshot, std::string& outError) c
     std::ifstream file(storePath);
     if (!file.is_open())
     {
-        // First run. The childlike baseline is the correct answer, not an error.
-        return true;
+        std::error_code error;
+        if (!std::filesystem::exists(storePath, error) && !error) return true;
+        outError = "The existing identity file could not be opened for reading.";
+        return false;
     }
 
     json document;
@@ -305,27 +315,45 @@ bool IdentityStore::Save(const IdentitySnapshot& snapshot, std::string& outError
     // Written beside the target and moved into place. An interrupted save must not be
     // able to leave a truncated identity that the next start reads as a smaller person.
     const std::filesystem::path temporary = storePath.string() + ".tmp";
+    const std::string bytes = document.dump(2) + "\n";
+#ifdef _WIN32
+    std::FILE* output = _wfopen(temporary.c_str(), L"wb");
+#else
+    std::FILE* output = std::fopen(temporary.c_str(), "wb");
+#endif
+    if (!output)
     {
-        std::ofstream output(temporary, std::ios::binary | std::ios::trunc);
-        if (!output.is_open())
-        {
-            outError = "The identity file could not be opened for writing.";
-            return false;
-        }
-        output << document.dump(2) << "\n";
-        if (!output.good())
-        {
-            outError = "The identity file could not be written.";
-            return false;
-        }
+        outError = "The identity file could not be opened for writing.";
+        return false;
     }
+    bool written = std::fwrite(bytes.data(), 1, bytes.size(), output) == bytes.size() &&
+        std::fflush(output) == 0;
+#ifdef _WIN32
+    written = written && _commit(_fileno(output)) == 0;
+#else
+    written = written && fsync(fileno(output)) == 0;
+#endif
+    const bool closed = std::fclose(output) == 0;
+    if (!written || !closed)
+    {
+        std::filesystem::remove(temporary, error);
+        outError = "The identity file could not be flushed and closed; the previous identity was preserved.";
+        return false;
+    }
+#ifdef _WIN32
+    const bool replaced = MoveFileExW(temporary.c_str(), storePath.c_str(),
+        MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != 0;
+#else
     std::filesystem::rename(temporary, storePath, error);
-    if (error)
+    const bool replaced = !error;
+#endif
+    if (!replaced)
     {
         std::filesystem::remove(temporary, error);
         outError = "The identity file could not be replaced.";
         return false;
     }
+    outError.clear();
     return true;
 }
 

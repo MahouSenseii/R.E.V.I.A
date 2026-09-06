@@ -21,9 +21,8 @@ struct HumanizationState
     std::string currentInterest;
     std::string unresolvedThought;
 
-    // The subset the affect classifier needs to tell who is speaking and how the day has
-    // gone. Returning a narrow struct rather than exposing the whole state keeps the
-    // dependency one-directional: affect reads four numbers, not a social model.
+    // Comparison inputs for the legacy evaluator. Active appraisal reads the actual
+    // relationship and mood owners, never these independently evolving metrics.
     [[nodiscard]] runtime::SocialContext Social() const
     {
         return {familiarity, irritation, socialEnergy, confidence};
@@ -38,9 +37,8 @@ struct HumanizationState
 // same traits from DevelopmentState, RelationshipState, and the emotion vector. Two
 // descriptions of one personality, moving independently, one of them telemetry.
 //
-// What survives here is the part nothing else owns: the short-horizon social reading the
-// affect classifier needs, and the unresolved thought an outcome leaves behind. Both
-// reach the model through ReviaStatePacket like everything else.
+// The old numeric social reading remains only for evaluator comparison. Current interest
+// and the generic unresolved outcome reach the model through ReviaStatePacket.
 class HumanizationController
 {
 public:

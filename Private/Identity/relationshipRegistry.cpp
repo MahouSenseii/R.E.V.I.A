@@ -83,6 +83,13 @@ bool RelationshipRegistry::Load(std::string& outError)
         return false;
     }
     preferences.Replace(snapshot.preferences);
+    frictionUpdatedAt.clear();
+    const auto now = std::chrono::steady_clock::now();
+    for (const auto& [entityId, relationship] : snapshot.relationships)
+    {
+        (void)relationship;
+        frictionUpdatedAt.emplace(entityId, now);
+    }
     return true;
 }
 
@@ -186,15 +193,22 @@ RelationshipState RelationshipRegistry::Apply(const RelationshipEvent& event)
         found = snapshot.relationships.emplace(event.entityId, fresh).first;
     }
     found->second = ApplyRelationshipEvent(found->second, event);
+    frictionUpdatedAt[event.entityId] = std::chrono::steady_clock::now();
     return found->second;
 }
 
-void RelationshipRegistry::SettleAll()
+void RelationshipRegistry::SettleAll(
+    const std::chrono::steady_clock::time_point now,
+    const std::chrono::milliseconds quietInterval)
 {
     std::lock_guard lock(mutex);
     for (auto& [entityId, relationship] : snapshot.relationships)
     {
+        auto [clock, inserted] = frictionUpdatedAt.try_emplace(entityId, now);
+        if (inserted || now < clock->second || now - clock->second < quietInterval)
+            continue;
         relationship = SettleRelationship(relationship);
+        clock->second = now;
     }
 }
 
@@ -257,6 +271,12 @@ std::string RelationshipRegistry::ResolveNamedLocalSpeaker(const std::string& na
         adopted.displayName = name;
         snapshot.relationships.erase(anonymous);
         snapshot.relationships.emplace(target, adopted);
+        const auto clock = frictionUpdatedAt.find(LocalUserEntityId());
+        if (clock != frictionUpdatedAt.end())
+        {
+            frictionUpdatedAt[target] = clock->second;
+            frictionUpdatedAt.erase(clock);
+        }
         return target;
     }
 
