@@ -73,6 +73,43 @@ CapabilityPanel::CapabilityPanel(
     cameraRow->addStretch();
     layout->addLayout(cameraRow);
 
+    auto* desktopTitle = new QLabel("Pointer and keyboard control", this);
+    desktopTitle->setObjectName("sectionTitle");
+    layout->addWidget(desktopTitle);
+    auto* desktopExplanation = new QLabel(
+        "Synthesized input is indistinguishable from you typing, so it is confined to "
+        "windows that belong to an approved application above and refuses to act if "
+        "something else has focus. Hold ctrl+alt+shift, or press Stop, to halt it "
+        "immediately.", this);
+    desktopExplanation->setWordWrap(true);
+    desktopExplanation->setObjectName("secondaryText");
+    layout->addWidget(desktopExplanation);
+
+    pointerCheck = new QCheckBox("Move and click the pointer", this);
+    keyboardCheck = new QCheckBox("Type and press key chords", this);
+    launchCheck = new QCheckBox("Start approved applications", this);
+    rawCoordinateCheck = new QCheckBox("Allow raw coordinates", this);
+    rawCoordinateCheck->setToolTip(
+        "Without this she may only click an element the screen resolver re-verified. "
+        "Either way the point must land inside the approved application's window.");
+    autonomousDesktopCheck = new QCheckBox("Let Revia operate on her own", this);
+    autonomousDesktopCheck->setToolTip(
+        "A separate permission. Without it she may only do this as part of something "
+        "you asked for.");
+    desktopStopButton = new QPushButton("Stop desktop control", this);
+    auto* desktopRow = new QHBoxLayout();
+    desktopRow->addWidget(pointerCheck);
+    desktopRow->addWidget(keyboardCheck);
+    desktopRow->addWidget(launchCheck);
+    desktopRow->addStretch();
+    layout->addLayout(desktopRow);
+    auto* desktopScopeRow = new QHBoxLayout();
+    desktopScopeRow->addWidget(rawCoordinateCheck);
+    desktopScopeRow->addWidget(autonomousDesktopCheck);
+    desktopScopeRow->addStretch();
+    desktopScopeRow->addWidget(desktopStopButton);
+    layout->addLayout(desktopScopeRow);
+
     auto* body = new QHBoxLayout();
     auto* approvedColumn = new QVBoxLayout();
     auto* approvedTitle = new QLabel("Approved applications and controls", this);
@@ -140,6 +177,17 @@ CapabilityPanel::CapabilityPanel(
     connect(cameraCheck, &QCheckBox::toggled, this, [this]() { ApplyCameraSettings(); });
     connect(autonomousCameraCheck, &QCheckBox::toggled,
         this, [this]() { ApplyCameraSettings(); });
+    connect(pointerCheck, &QCheckBox::toggled,
+        this, [this]() { ApplyDesktopControlSettings(); });
+    connect(keyboardCheck, &QCheckBox::toggled,
+        this, [this]() { ApplyDesktopControlSettings(); });
+    connect(launchCheck, &QCheckBox::toggled,
+        this, [this]() { ApplyDesktopControlSettings(); });
+    connect(rawCoordinateCheck, &QCheckBox::toggled,
+        this, [this]() { ApplyDesktopControlSettings(); });
+    connect(autonomousDesktopCheck, &QCheckBox::toggled,
+        this, [this]() { ApplyDesktopControlSettings(); });
+    connect(desktopStopButton, &QPushButton::clicked, this, [this]() { ToggleDesktopStop(); });
     connect(addApplicationButton, &QPushButton::clicked, this,
         [this]() { AddApplicationManually(); });
     connect(removeButton, &QPushButton::clicked, this,
@@ -195,6 +243,18 @@ void CapabilityPanel::Refresh()
     cameraCheck->setChecked(settings.camera.enabled);
     autonomousCameraCheck->setChecked(settings.camera.autonomousCapture);
     autonomousCameraCheck->setEnabled(settings.camera.enabled);
+    const auto& desktop = settings.desktopControl;
+    pointerCheck->setChecked(desktop.pointer);
+    keyboardCheck->setChecked(desktop.keyboard);
+    launchCheck->setChecked(desktop.applicationLaunch);
+    rawCoordinateCheck->setChecked(desktop.rawCoordinates);
+    rawCoordinateCheck->setEnabled(desktop.pointer);
+    autonomousDesktopCheck->setChecked(desktop.autonomous);
+    autonomousDesktopCheck->setEnabled(desktop.AnyEnabled());
+    // Kept meaningful even with every capability off: the stop has to stay reachable
+    // while it is latched, or the only way back would be editing JSON.
+    desktopStopButton->setText(session.DesktopControlStopped()
+        ? "Resume desktop control" : "Stop desktop control");
     refreshing = false;
 }
 
@@ -247,6 +307,75 @@ void CapabilityPanel::ApplyCameraSettings()
     const auto result = session.SetCameraAccess(
         cameraCheck->isChecked(), autonomousCameraCheck->isChecked());
     SetStatus(QString::fromStdString(result.message), !result.succeeded);
+    Refresh();
+}
+
+void CapabilityPanel::ApplyDesktopControlSettings()
+{
+    if (refreshing) return;
+    const auto previous = session.Capabilities().desktopControl;
+    // Confirmed on the way up only. This is the permission that lets Revia act as the
+    // person at the keyboard, so the question is asked once and answered informed.
+    if (!previous.AnyEnabled() &&
+        (pointerCheck->isChecked() || keyboardCheck->isChecked() ||
+            launchCheck->isChecked()))
+    {
+        const bool approved = QMessageBox::question(
+            this,
+            "Allow pointer and keyboard control",
+            "Revia will be able to move the pointer, click, and type on this computer. "
+            "Input is confined to windows belonging to the applications approved below, "
+            "and she refuses to act when something else has focus, but inside those "
+            "windows it is the same as you doing it. Every action is rate limited and "
+            "written to the action audit log; typed text is recorded only by length. "
+            "Hold ctrl+alt+shift at any time to stop it. Enable desktop control?",
+            QMessageBox::Yes | QMessageBox::No,
+            QMessageBox::No) == QMessageBox::Yes;
+        if (!approved)
+        {
+            Refresh();
+            return;
+        }
+    }
+    if (!previous.autonomous && autonomousDesktopCheck->isChecked())
+    {
+        const bool approved = QMessageBox::question(
+            this,
+            "Let Revia operate the desktop on her own",
+            "This is a separate permission from doing desktop work you asked for. It "
+            "allows Revia to move the pointer, type, and start approved applications "
+            "without a request, subject to the same limits and the same audit trail. "
+            "Allow it?",
+            QMessageBox::Yes | QMessageBox::No,
+            QMessageBox::No) == QMessageBox::Yes;
+        if (!approved)
+        {
+            Refresh();
+            return;
+        }
+    }
+    const auto result = session.SetDesktopControl(
+        pointerCheck->isChecked(),
+        keyboardCheck->isChecked(),
+        launchCheck->isChecked(),
+        rawCoordinateCheck->isChecked(),
+        autonomousDesktopCheck->isChecked());
+    SetStatus(QString::fromStdString(result.message), !result.succeeded);
+    Refresh();
+}
+
+void CapabilityPanel::ToggleDesktopStop()
+{
+    if (session.DesktopControlStopped())
+    {
+        const auto result = session.ResumeDesktopControl();
+        SetStatus(QString::fromStdString(result.message), !result.succeeded);
+    }
+    else
+    {
+        session.StopDesktopControl("stopped from the Permissions tab");
+        SetStatus("Desktop control is stopped. Nothing further will be typed or clicked.");
+    }
     Refresh();
 }
 

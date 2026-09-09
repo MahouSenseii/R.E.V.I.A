@@ -18,6 +18,16 @@
   "maxAffectedEntries": 200,
   "maxDesktopActionsPerMinute": 12,
   "minimumDesktopActionIntervalMs": 250,
+  "desktopControl": {
+    "pointer": false,
+    "keyboard": false,
+    "applicationLaunch": false,
+    "rawCoordinates": false,
+    "autonomous": false,
+    "maxInputActionsPerMinute": 30,
+    "minimumInputIntervalMs": 120,
+    "maxTypedCharacters": 512
+  },
   "internet": {
     "enabled": true,
     "automaticLookup": true,

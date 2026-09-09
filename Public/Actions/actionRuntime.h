@@ -6,6 +6,7 @@
 #include "Policy/capabilityEditor.h"
 #include "Policy/capabilityPolicy.h"
 #include "Policy/desktopActionRateLimiter.h"
+#include "Policy/desktopInputGuard.h"
 #include "Policy/permissionStore.h"
 
 #include <filesystem>
@@ -98,6 +99,26 @@ public:
         bool enabled,
         bool autonomousCapture,
         std::string& outError);
+    // pointer/keyboard/applicationLaunch are the hands themselves; rawCoordinates and
+    // autonomous are narrower authorities inside them and are dropped when the
+    // authority they are a subset of is withdrawn.
+    [[nodiscard]] bool SetDesktopControl(
+        bool pointer,
+        bool keyboard,
+        bool applicationLaunch,
+        bool rawCoordinates,
+        bool autonomous,
+        std::string& outError);
+    [[nodiscard]] bool SetExecutionMode(ExecutionMode mode, std::string& outError);
+
+    // The emergency stop for synthesized input. Deliberately reachable without the
+    // action mutex and without a model turn: it exists for the case where Revia is
+    // mid-action and the answer has to be "stop now", not "stop when you get to it".
+    void StopDesktopControl(const std::string& reason);
+    // Returns whether desktop control had actually been stopped.
+    bool ResumeDesktopControl();
+    [[nodiscard]] bool DesktopControlStopped() const;
+    [[nodiscard]] std::string DesktopControlStopReason() const;
     // Lock-free with respect to Execute(): shutdown must be able to interrupt a browser
     // request while that request owns the main action-runtime mutex.
     void CancelActiveInternet();
@@ -127,6 +148,8 @@ private:
     planning::StructuredActionParser parser;
     DispatchObserver dispatchObserver;
     policy::DesktopActionRateLimiter desktopRateLimiter;
+    policy::DesktopActionRateLimiter desktopControlRateLimiter;
+    std::shared_ptr<policy::DesktopInputGuard> desktopInputGuard;
     std::filesystem::path capabilityConfigPath;
     std::filesystem::path auditPath;
 };

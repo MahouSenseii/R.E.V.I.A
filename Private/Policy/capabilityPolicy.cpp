@@ -83,14 +83,6 @@ bool RequiresDestination(actions::ActionType type)
         type == actions::ActionType::RenamePath;
 }
 
-bool IsDesktopAction(const actions::ActionType type)
-{
-    return type == actions::ActionType::InspectWindow ||
-        type == actions::ActionType::FocusWindow ||
-        type == actions::ActionType::SetControlText ||
-        type == actions::ActionType::InvokeControl;
-}
-
 std::string Lower(std::string value)
 {
     std::transform(value.begin(), value.end(), value.begin(), [](const unsigned char c)
@@ -98,6 +90,26 @@ std::string Lower(std::string value)
         return static_cast<char>(std::tolower(c));
     });
     return value;
+}
+
+// Approved-application matching is shared by UI Automation and desktop operation:
+// both are "drive this executable", and neither may reach an unapproved one.
+bool ApplicationIsApproved(
+    const actions::CapabilitySettings& settings,
+    const std::string& application)
+{
+    const std::string wanted = Lower(application);
+    return std::any_of(
+        settings.approvedApplications.begin(), settings.approvedApplications.end(),
+        [&wanted](const std::string& allowed) { return Lower(allowed) == wanted; });
+}
+
+bool TypedTextIsAcceptable(const std::string& value)
+{
+    return std::none_of(value.begin(), value.end(), [](const unsigned char character)
+    {
+        return character < 0x20 && character != 0x09 && character != 0x0A;
+    });
 }
 
 } // namespace
@@ -122,6 +134,14 @@ actions::PolicyDecision CapabilityPolicy::Evaluate(
 {
     actions::PolicyDecision decision;
     decision.risk = actions::RiskForAction(request.type);
+    // OwnerFullAccess is the owner delegating broad operation, so reversible work stops
+    // asking. It changes only this ceiling: approved roots, approved applications,
+    // approved controls, the desktop-control switches, and destructive confirmation are
+    // all still evaluated exactly as they are in Supervised mode.
+    const actions::RiskLevel automaticCeiling =
+        settings.mode == actions::ExecutionMode::OwnerFullAccess
+            ? std::max(settings.autoApproveRiskThrough, actions::RiskLevel::ReversibleWrite)
+            : settings.autoApproveRiskThrough;
 
     if (settings.mode == actions::ExecutionMode::Disabled)
     {
@@ -149,7 +169,153 @@ actions::PolicyDecision CapabilityPolicy::Evaluate(
         decision.reason = "Read-only search approved through the configured bounded provider.";
         return decision;
     }
-    if (IsDesktopAction(request.type))
+    if (actions::IsDesktopControlAction(request.type))
+    {
+        if (request.application.empty() ||
+            request.application.find_first_of("/\\") != std::string::npos)
+        {
+            decision.reason = "Desktop operation requires an executable name without a path.";
+            return decision;
+        }
+        if (!ApplicationIsApproved(settings, request.application))
+        {
+            decision.reason = "The target application is outside the approved application list.";
+            return decision;
+        }
+        // Delegating a task is not standing consent to drive the machine unprompted.
+        if (actions::IsAutonomousRequest(request.requestedBy) &&
+            !settings.desktopControl.autonomous)
+        {
+            decision.reason = "Autonomous desktop operation is a separate permission and is off.";
+            return decision;
+        }
+        if (request.type == actions::ActionType::LaunchApplication &&
+            !settings.desktopControl.applicationLaunch)
+        {
+            decision.reason = "Starting applications is disabled in desktop control settings.";
+            return decision;
+        }
+        const bool pointerAction = request.type == actions::ActionType::MoveCursor ||
+            request.type == actions::ActionType::ClickPointer ||
+            request.type == actions::ActionType::ScrollPointer;
+        if (pointerAction && !settings.desktopControl.pointer)
+        {
+            decision.reason = "Pointer control is disabled in desktop control settings.";
+            return decision;
+        }
+        const bool keyboardAction = request.type == actions::ActionType::PressKeys ||
+            request.type == actions::ActionType::TypeText;
+        if (keyboardAction && !settings.desktopControl.keyboard)
+        {
+            decision.reason = "Keyboard control is disabled in desktop control settings.";
+            return decision;
+        }
+
+        if (request.type == actions::ActionType::LaunchApplication)
+        {
+            // An optional file to open. It is checked against the same approved roots as
+            // every other filesystem action rather than trusted as a process argument,
+            // because a process argument is the shortest path back to a shell.
+            if (!request.source.empty())
+            {
+                const std::filesystem::path lexical = AbsoluteLexical(request.source);
+                decision.canonicalSource = ResolveForPolicy(lexical);
+                if (lexical.empty() || decision.canonicalSource.empty() ||
+                    !IsWithinApprovedRoot(lexical, decision.canonicalSource))
+                {
+                    decision.reason = "The file to open is outside every approved root.";
+                    return decision;
+                }
+                if (HasReparsePointBelowApprovedRoot(lexical))
+                {
+                    decision.reason = "The file to open crosses a symbolic link or reparse point.";
+                    return decision;
+                }
+            }
+        }
+        else if (pointerAction)
+        {
+            // Aiming is either an element the vision-to-UIA resolver re-verified or a
+            // point the owner separately allowed. There is no third option, and the
+            // executor still confines the point to the target window.
+            if (!request.resolution.visionResolved)
+            {
+                if (!request.input.hasPoint)
+                {
+                    decision.reason = "A pointer action needs a resolved element or an explicit point.";
+                    return decision;
+                }
+                if (!settings.desktopControl.rawCoordinates)
+                {
+                    decision.reason = "Pointing at raw coordinates is disabled; resolve the element first.";
+                    return decision;
+                }
+            }
+            if (request.type == actions::ActionType::ClickPointer &&
+                (request.input.clickCount < 1 || request.input.clickCount > 3))
+            {
+                decision.reason = "A click may repeat between one and three times.";
+                return decision;
+            }
+            if (request.type == actions::ActionType::ScrollPointer &&
+                (request.input.scrollClicks == 0 ||
+                    request.input.scrollClicks < -10 || request.input.scrollClicks > 10))
+            {
+                decision.reason = "A scroll needs between one and ten wheel detents.";
+                return decision;
+            }
+        }
+        else if (request.type == actions::ActionType::PressKeys)
+        {
+            actions::KeyChord chord;
+            std::string chordError;
+            if (!actions::ParseKeyChord(request.input.keys, chord, chordError))
+            {
+                decision.reason = chordError;
+                return decision;
+            }
+        }
+        else
+        {
+            if (request.value.empty())
+            {
+                decision.reason = "Typing requires non-empty text.";
+                return decision;
+            }
+            if (request.value.size() > settings.desktopControl.maxTypedCharacters)
+            {
+                decision.reason = "The text exceeds the configured typing length limit.";
+                return decision;
+            }
+            if (!TypedTextIsAcceptable(request.value))
+            {
+                decision.reason = "Typed text may not contain control characters.";
+                return decision;
+            }
+        }
+
+        if (request.dryRun)
+        {
+            decision.verdict = actions::PolicyVerdict::Allowed;
+            decision.reason = "Desktop-operation dry-run approved; no input was synthesized.";
+            return decision;
+        }
+        if (static_cast<int>(decision.risk) <= static_cast<int>(automaticCeiling))
+        {
+            decision.verdict = actions::PolicyVerdict::Allowed;
+            decision.reason = "Desktop operation is inside the automatic approval ceiling.";
+            return decision;
+        }
+        if (settings.mode == actions::ExecutionMode::ApprovedScope)
+        {
+            decision.reason = "Desktop operation exceeds the unattended risk ceiling.";
+            return decision;
+        }
+        decision.verdict = actions::PolicyVerdict::RequiresConfirmation;
+        decision.reason = "Desktop operation requires confirmation for the allowed application.";
+        return decision;
+    }
+    if (actions::IsUiAutomationAction(request.type))
     {
         if (request.application.empty() || request.application.find_first_of("/\\") != std::string::npos)
         {
@@ -216,7 +382,7 @@ actions::PolicyDecision CapabilityPolicy::Evaluate(
         }
 
         if (request.dryRun ||
-            static_cast<int>(decision.risk) <= static_cast<int>(settings.autoApproveRiskThrough))
+            static_cast<int>(decision.risk) <= static_cast<int>(automaticCeiling))
         {
             decision.verdict = actions::PolicyVerdict::Allowed;
             decision.reason = request.dryRun
@@ -287,7 +453,7 @@ actions::PolicyDecision CapabilityPolicy::Evaluate(
         return decision;
     }
 
-    if (static_cast<int>(decision.risk) <= static_cast<int>(settings.autoApproveRiskThrough))
+    if (static_cast<int>(decision.risk) <= static_cast<int>(automaticCeiling))
     {
         decision.verdict = actions::PolicyVerdict::Allowed;
         decision.reason = "Action is inside an approved root and below the automatic risk ceiling.";

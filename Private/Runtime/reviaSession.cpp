@@ -3968,6 +3968,10 @@ void ReviaSession::PollBackgroundEvents()
 void ReviaSession::RequestStop()
 {
     PreemptAutonomousActivity("stop was requested");
+    // Synthesized input keeps producing consequences while it is being noticed, so the
+    // deliberate stop gesture latches it off rather than merely cancelling the current
+    // action. /desktop resume, or the desktop shell's own control, clears it.
+    actionRuntime.StopDesktopControl("stop was requested");
     // A visible-browser request owns ActionRuntime's execution mutex while WinHTTP
     // waits, so cancellation must reach the authenticated worker without taking it.
     actionRuntime.CancelActiveInternet();
@@ -5034,6 +5038,123 @@ CapabilityUpdateResult ReviaSession::SetCameraAccess(
         PublishComponent("Camera", enabled ? "Ready" : "Disabled", result.message);
     }
     return result;
+}
+
+CapabilityUpdateResult ReviaSession::SetDesktopControl(
+    const bool pointer,
+    const bool keyboard,
+    const bool applicationLaunch,
+    const bool rawCoordinates,
+    const bool autonomous)
+{
+    CapabilityUpdateResult result;
+    std::string error;
+    result.succeeded = actionRuntime.SetDesktopControl(
+        pointer, keyboard, applicationLaunch, rawCoordinates, autonomous, error);
+    if (!result.succeeded)
+    {
+        result.message = error;
+        return result;
+    }
+    const auto& desktop = actionRuntime.Settings().desktopControl;
+    if (!desktop.AnyEnabled())
+    {
+        result.message = "Desktop control is off. Revia cannot move the pointer, "
+            "type, or start applications.";
+    }
+    else
+    {
+        std::vector<std::string> granted;
+        if (desktop.pointer) granted.emplace_back("pointer");
+        if (desktop.keyboard) granted.emplace_back("keyboard");
+        if (desktop.applicationLaunch) granted.emplace_back("application launch");
+        std::string list;
+        for (std::size_t index = 0; index < granted.size(); ++index)
+        {
+            if (index > 0) list += index + 1 == granted.size() ? " and " : ", ";
+            list += granted[index];
+        }
+        result.message = "Desktop control allows " + list +
+            " inside approved applications.";
+        result.message += desktop.rawCoordinates
+            ? " Raw coordinates are allowed."
+            : " Only re-verified elements may be targeted.";
+        result.message += desktop.autonomous
+            ? " She may also operate the desktop on her own."
+            : " She may only do it as part of something you asked for.";
+    }
+    PublishComponent(
+        "DesktopControl", desktop.AnyEnabled() ? "Ready" : "Disabled", result.message);
+    return result;
+}
+
+CapabilityUpdateResult ReviaSession::SetExecutionMode(const actions::ExecutionMode mode)
+{
+    CapabilityUpdateResult result;
+    std::string error;
+    result.succeeded = actionRuntime.SetExecutionMode(mode, error);
+    result.message = result.succeeded
+        ? "Action execution mode is now " + actions::ToString(mode) + "."
+        : error;
+    if (result.succeeded)
+    {
+        PublishComponent(
+            "Automation",
+            mode == actions::ExecutionMode::Disabled ? "Disabled" : "Ready",
+            result.message);
+    }
+    return result;
+}
+
+void ReviaSession::StopDesktopControl(const std::string& reason)
+{
+    actionRuntime.StopDesktopControl(reason);
+    PublishComponent(
+        "DesktopControl",
+        "Blocked",
+        "Desktop control stopped: " + actionRuntime.DesktopControlStopReason());
+}
+
+CapabilityUpdateResult ReviaSession::ResumeDesktopControl()
+{
+    CapabilityUpdateResult result;
+    result.succeeded = true;
+    result.message = actionRuntime.ResumeDesktopControl()
+        ? "Desktop control was stopped and is available again."
+        : "Desktop control was not stopped.";
+    PublishComponent("DesktopControl", "Ready", result.message);
+    return result;
+}
+
+bool ReviaSession::DesktopControlStopped() const
+{
+    return actionRuntime.DesktopControlStopped();
+}
+
+std::string ReviaSession::DesktopControlStatus() const
+{
+    const auto& desktop = actionRuntime.Settings().desktopControl;
+    std::ostringstream stream;
+    stream << "Desktop control\n";
+    stream << "  Pointer:             " << (desktop.pointer ? "on" : "off") << '\n';
+    stream << "  Keyboard:            " << (desktop.keyboard ? "on" : "off") << '\n';
+    stream << "  Start applications:  " << (desktop.applicationLaunch ? "on" : "off") << '\n';
+    stream << "  Raw coordinates:     " << (desktop.rawCoordinates ? "on" : "off") << '\n';
+    stream << "  On her own:          " << (desktop.autonomous ? "on" : "off") << '\n';
+    stream << "  Execution mode:      "
+           << actions::ToString(actionRuntime.Settings().mode) << '\n';
+    stream << "  Input budget:        " << desktop.maxInputActionsPerMinute
+           << " per minute, " << desktop.minimumInputIntervalMs << "ms apart\n";
+    if (actionRuntime.DesktopControlStopped())
+    {
+        stream << "  STOPPED: " << actionRuntime.DesktopControlStopReason()
+               << " Use /desktop resume to allow it again.\n";
+    }
+    else
+    {
+        stream << "  Stop: hold ctrl+alt+shift, press Stop, or use /desktop stop.\n";
+    }
+    return stream.str();
 }
 
 CapabilityUpdateResult ReviaSession::SetInternetBrowser(
@@ -7702,6 +7823,39 @@ bool ReviaSession::TryHandleActionInput(const std::string& input, SessionResult&
             }
         }
         SetState(result.succeeded ? RuntimeState::Idle : RuntimeState::Blocked, result.reason);
+        return true;
+    }
+
+    if (input == "/desktop" || input.rfind("/desktop ", 0) == 0)
+    {
+        const std::string argument =
+            input.size() > 9 ? Trim(input.substr(9)) : std::string();
+        if (argument == "stop")
+        {
+            StopDesktopControl("stopped from the command line");
+            result.text = "Desktop control is stopped. Use /desktop resume to allow it again.";
+            SetState(RuntimeState::Idle);
+            return true;
+        }
+        if (argument == "resume")
+        {
+            const CapabilityUpdateResult update = ResumeDesktopControl();
+            result.succeeded = update.succeeded;
+            result.text = update.message;
+            SetState(RuntimeState::Idle);
+            return true;
+        }
+        if (!argument.empty())
+        {
+            result.succeeded = false;
+            result.text = "Usage: /desktop [stop|resume]. Change what Revia may do with "
+                "the pointer and keyboard in the Permissions tab.";
+            result.reason = "Unrecognized desktop control argument.";
+            SetState(RuntimeState::Blocked, result.reason);
+            return true;
+        }
+        result.text = DesktopControlStatus();
+        SetState(RuntimeState::Idle);
         return true;
     }
 

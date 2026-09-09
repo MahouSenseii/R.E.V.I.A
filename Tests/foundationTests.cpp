@@ -8509,6 +8509,11 @@ int main(const int argc, char** argv)
             RunActionAuditTests();
             return 0;
         }
+        if (argc > 1 && std::string(argv[1]) == "--desktop-control")
+        {
+            RunDesktopControlTests();
+            return 0;
+        }
         if (argc > 1 && std::string(argv[1]) == "--action-cancellation")
         {
             RunActionCancellationTests();
@@ -8668,6 +8673,7 @@ int main(const int argc, char** argv)
         TestGoalRunnerVerifiesSuccess();
         RunActionCancellationTests();
         RunActionAuditTests();
+        RunDesktopControlTests();
         TestGoalRunnerStopsOnUnverifiableStep();
         RunIdentityPersistenceTests();
         RunLearningDurabilityTests();

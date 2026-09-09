@@ -18,7 +18,8 @@ namespace
 bool IsSupportedMode(const std::string& value)
 {
     return value == "disabled" || value == "supervised" ||
-        value == "approved_scope" || value == "autonomous";
+        value == "approved_scope" || value == "autonomous" ||
+        value == "owner_full_access";
 }
 
 bool IsSupportedRisk(const std::string& value)
@@ -209,6 +210,41 @@ bool PermissionStore::Load(
             if (settings.camera.autonomousCapture && !settings.camera.enabled)
             {
                 outError = "Autonomous camera capture requires camera access to be enabled.";
+                return false;
+            }
+        }
+
+        if (data.contains("desktopControl"))
+        {
+            const json& desktop = data["desktopControl"];
+            if (!desktop.is_object())
+            {
+                outError = "desktopControl must be an object.";
+                return false;
+            }
+            settings.desktopControl.pointer = desktop.value("pointer", false);
+            settings.desktopControl.keyboard = desktop.value("keyboard", false);
+            settings.desktopControl.applicationLaunch =
+                desktop.value("applicationLaunch", false);
+            settings.desktopControl.rawCoordinates =
+                desktop.value("rawCoordinates", false);
+            settings.desktopControl.autonomous = desktop.value("autonomous", false);
+            settings.desktopControl.maxInputActionsPerMinute = BoundedInteger<int>(
+                desktop, "maxInputActionsPerMinute", 30, 1, 600);
+            settings.desktopControl.minimumInputIntervalMs = BoundedInteger<int>(
+                desktop, "minimumInputIntervalMs", 120, 0, 60000);
+            settings.desktopControl.maxTypedCharacters = BoundedInteger<std::size_t>(
+                desktop, "maxTypedCharacters", 512U, 1U, 8192U);
+            // Both of these are narrower authorities that only make sense inside a
+            // broader one they are a subset of, and neither may outlive it.
+            if (settings.desktopControl.rawCoordinates && !settings.desktopControl.pointer)
+            {
+                outError = "Raw pointer coordinates require pointer control to be enabled.";
+                return false;
+            }
+            if (settings.desktopControl.autonomous && !settings.desktopControl.AnyEnabled())
+            {
+                outError = "Autonomous desktop control requires at least one enabled desktop capability.";
                 return false;
             }
         }

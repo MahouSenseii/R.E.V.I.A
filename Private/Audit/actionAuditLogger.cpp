@@ -208,6 +208,30 @@ bool ActionAuditLogger::WriteRecord(
                 {"grounding_bytes", result.content.size()}
             };
         }
+        if (actions::IsDesktopControlAction(request.type))
+        {
+            // Key chords and pointer geometry are recorded in full because they are
+            // what was done. Typed text is not: value_length above is deliberately the
+            // only trace of it, so an audit trail cannot become a keystroke log.
+            nlohmann::json desktop = {
+                {"button", request.input.button ==
+                    actions::ActionRequest::DesktopInput::PointerButton::Right ? "right"
+                    : request.input.button ==
+                        actions::ActionRequest::DesktopInput::PointerButton::Middle
+                        ? "middle" : "left"},
+                {"click_count", request.input.clickCount},
+                {"scroll_clicks", request.input.scrollClicks},
+                {"horizontal_scroll", request.input.horizontalScroll},
+                {"keys", request.input.keys},
+                {"targeted_point", request.input.hasPoint}
+            };
+            if (request.input.hasPoint)
+            {
+                desktop["requested_x"] = request.input.x;
+                desktop["requested_y"] = request.input.y;
+            }
+            entry["desktop_input"] = std::move(desktop);
+        }
         if (request.resolution.visionResolved)
         {
             entry["vision_resolution"] = {

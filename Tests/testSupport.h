@@ -74,6 +74,7 @@ void RunSpeechInterruptionTests();
 void RunSpeechInterruptionLive(const std::filesystem::path& sourceClip);
 void RunActionCancellationTests();
 void RunActionAuditTests();
+void RunDesktopControlTests();
 void RunIdentityPersistenceTests();
 void RunIdentityFinalSaveTests();
 void RunLearningDurabilityTests();

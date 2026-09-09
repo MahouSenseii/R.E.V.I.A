@@ -120,7 +120,8 @@ bool CapabilityEditor::AddApplication(
     const std::string& executable,
     std::string& outError) const
 {
-    return Apply(path, Mutation::AddApplication, executable, {}, false, false, outError);
+    return Apply(path, Mutation::AddApplication, executable, {}, false, false,
+        outError, {}, actions::ExecutionMode::Supervised);
 }
 
 bool CapabilityEditor::RemoveApplication(
@@ -128,7 +129,8 @@ bool CapabilityEditor::RemoveApplication(
     const std::string& executable,
     std::string& outError) const
 {
-    return Apply(path, Mutation::RemoveApplication, executable, {}, false, false, outError);
+    return Apply(path, Mutation::RemoveApplication, executable, {}, false, false,
+        outError, {}, actions::ExecutionMode::Supervised);
 }
 
 bool CapabilityEditor::AddControl(
@@ -137,7 +139,8 @@ bool CapabilityEditor::AddControl(
     const std::string& control,
     std::string& outError) const
 {
-    return Apply(path, Mutation::AddControl, executable, control, false, false, outError);
+    return Apply(path, Mutation::AddControl, executable, control, false, false,
+        outError, {}, actions::ExecutionMode::Supervised);
 }
 
 bool CapabilityEditor::RemoveControl(
@@ -146,7 +149,8 @@ bool CapabilityEditor::RemoveControl(
     const std::string& control,
     std::string& outError) const
 {
-    return Apply(path, Mutation::RemoveControl, executable, control, false, false, outError);
+    return Apply(path, Mutation::RemoveControl, executable, control, false, false,
+        outError, {}, actions::ExecutionMode::Supervised);
 }
 
 bool CapabilityEditor::SetInternetAccess(
@@ -155,7 +159,8 @@ bool CapabilityEditor::SetInternetAccess(
     const bool automaticLookup,
     std::string& outError) const
 {
-    return Apply(path, Mutation::Internet, {}, {}, enabled, automaticLookup, outError);
+    return Apply(path, Mutation::Internet, {}, {}, enabled, automaticLookup,
+        outError, {}, actions::ExecutionMode::Supervised);
 }
 
 bool CapabilityEditor::SetCameraAccess(
@@ -164,7 +169,35 @@ bool CapabilityEditor::SetCameraAccess(
     const bool autonomousCapture,
     std::string& outError) const
 {
-    return Apply(path, Mutation::Camera, {}, {}, enabled, autonomousCapture, outError);
+    return Apply(path, Mutation::Camera, {}, {}, enabled, autonomousCapture,
+        outError, {}, actions::ExecutionMode::Supervised);
+}
+
+bool CapabilityEditor::SetDesktopControl(
+    const std::filesystem::path& path,
+    const bool pointer,
+    const bool keyboard,
+    const bool applicationLaunch,
+    const bool rawCoordinates,
+    const bool autonomous,
+    std::string& outError) const
+{
+    DesktopControlChange change;
+    change.pointer = pointer;
+    change.keyboard = keyboard;
+    change.applicationLaunch = applicationLaunch;
+    change.rawCoordinates = rawCoordinates;
+    change.autonomous = autonomous;
+    return Apply(path, Mutation::DesktopControl, {}, {}, false, false, outError,
+        change, actions::ExecutionMode::Supervised);
+}
+
+bool CapabilityEditor::SetExecutionMode(
+    const std::filesystem::path& path,
+    const actions::ExecutionMode mode,
+    std::string& outError) const
+{
+    return Apply(path, Mutation::Mode, {}, {}, false, false, outError, {}, mode);
 }
 
 bool CapabilityEditor::SetInternetBrowser(
@@ -174,7 +207,8 @@ bool CapabilityEditor::SetInternetBrowser(
     std::string& outError) const
 {
     return Apply(
-        path, Mutation::Browser, {}, {}, visibleBrowser, autonomousResearch, outError);
+        path, Mutation::Browser, {}, {}, visibleBrowser, autonomousResearch, outError, {},
+        actions::ExecutionMode::Supervised);
 }
 
 bool CapabilityEditor::Apply(
@@ -184,11 +218,14 @@ bool CapabilityEditor::Apply(
     const std::string& control,
     const bool enabled,
     const bool automaticLookup,
-    std::string& outError) const
+    std::string& outError,
+    const DesktopControlChange& desktop,
+    const actions::ExecutionMode mode) const
 {
-    if (mutation != Mutation::Internet && mutation != Mutation::Browser &&
-        mutation != Mutation::Camera &&
-        !ValidExecutable(executable))
+    const bool applicationMutation = mutation == Mutation::AddApplication ||
+        mutation == Mutation::RemoveApplication || mutation == Mutation::AddControl ||
+        mutation == Mutation::RemoveControl;
+    if (applicationMutation && !ValidExecutable(executable))
     {
         outError = "An application permission requires a plain .exe name.";
         return false;
@@ -276,6 +313,31 @@ bool CapabilityEditor::Apply(
         {
             list.erase(found);
         }
+    }
+    else if (mutation == Mutation::DesktopControl)
+    {
+        json& desktopControl = data["desktopControl"];
+        if (!desktopControl.is_object())
+        {
+            desktopControl = json::object();
+        }
+        desktopControl["pointer"] = desktop.pointer;
+        desktopControl["keyboard"] = desktop.keyboard;
+        desktopControl["applicationLaunch"] = desktop.applicationLaunch;
+        desktopControl["rawCoordinates"] = desktop.pointer && desktop.rawCoordinates;
+        desktopControl["autonomous"] =
+            (desktop.pointer || desktop.keyboard || desktop.applicationLaunch) &&
+            desktop.autonomous;
+        if (!desktopControl.contains("maxInputActionsPerMinute"))
+            desktopControl["maxInputActionsPerMinute"] = 30;
+        if (!desktopControl.contains("minimumInputIntervalMs"))
+            desktopControl["minimumInputIntervalMs"] = 120;
+        if (!desktopControl.contains("maxTypedCharacters"))
+            desktopControl["maxTypedCharacters"] = 512;
+    }
+    else if (mutation == Mutation::Mode)
+    {
+        data["mode"] = actions::ToString(mode);
     }
     else if (mutation == Mutation::Camera)
     {

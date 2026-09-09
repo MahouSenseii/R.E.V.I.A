@@ -16,7 +16,8 @@ Revia can currently:
 - look things up in a visible, restricted browser when internet access is enabled;
 - suggest something on her own when she has real evidence and policy allows it;
 - draw diagrams, maintain a working document, and generate images when those features are enabled;
-- perform a narrow set of confirmed filesystem and Windows UI Automation actions; and
+- perform a narrow set of confirmed filesystem and Windows UI Automation actions;
+- when the owner turns it on, move the pointer, type, and start approved applications inside a verified approved window, with a physical emergency stop; and
 - show exactly which models, GPUs, queues, timings, and errors are active.
 
 The design rule is simple even though the internals are not: **one Revia**. Reflex, Fast, Main, and Expert share one identity, mood, memory, relationship state, and desktop context; routing changes how much effort she uses, not who she is.
@@ -52,8 +53,40 @@ The design rule is simple even though the internals are not: **one Revia**. Refl
 - Internet grounding is opt-in. The visible browser uses a dedicated profile, blocks downloads and private/local destinations, and exposes the exact query, sources, and bounded text returned to Revia. Explicit lookups fall back to allow-listed DuckDuckGo/Wikipedia APIs when the visible results page cannot be extracted; autonomous research remains visible-browser-only.
 - Local screen-context questions stay local; asking “what am I doing on my screens?” does not become a web search.
 - Curiosity and initiative are bounded background lanes. They can nominate silence, a short opening, or one read-only research query, but user work always has priority.
-- Filesystem actions, goal steps, and Windows UI Automation all pass through typed parsers, capability policy, confirmation rules, rate limits, and JSONL audit logging.
+- Filesystem actions, goal steps, Windows UI Automation, and desktop operation all pass through typed parsers, capability policy, confirmation rules, rate limits, and JSONL audit logging.
 - The model never gets unrestricted shell access or coordinate-click authority.
+
+### Driving the desktop
+
+Pointer, keyboard, and application launch are off in the checked-in capability template
+and each is granted separately in the **Permissions** tab. Once granted:
+
+- Input is only ever synthesized into a window belonging to an application on the
+  approved list, and the executor re-checks the real foreground window immediately
+  before it presses anything. If focus moved, nothing is sent.
+- The Windows key is not a supported modifier, and application-switching chords
+  (`alt+tab`, `ctrl+esc`, `ctrl+shift+esc`, `ctrl+alt+delete`) are refused. There is no
+  keystroke route to the Run box, the start menu, or search, so there is no keystroke
+  route to a shell.
+- A click aimed at something Revia saw re-finds that exact UI Automation element and
+  uses its **current** bounds. The coordinate captured when the plan was made is never
+  the coordinate clicked. Aiming at a point she chose instead is a separate permission,
+  and the point must still land inside the approved window.
+- `launch_application` starts an approved executable with no arguments, or with one file
+  that passes the same approved-root checks as any other filesystem action.
+- Typed text is bounded in length, may not contain control characters, and is recorded
+  in the audit log by length only. The audit trail is not a keystroke log.
+- Synthesized input has its own per-minute and minimum-interval budget, separate from
+  the UI Automation budget.
+- **Stop:** hold `ctrl+alt+shift`, press Stop in the desktop shell, use the Permissions
+  tab button, or run `/desktop stop`. The stop latches; `/desktop resume` clears it. It
+  does not travel through the model or the turn queue, and an executor with no stop
+  path available refuses to act at all.
+
+`mode` in the capability file also accepts `owner_full_access`, which is the owner
+choosing that reversible in-scope work should stop asking for confirmation. It changes
+that ceiling and nothing else: approved roots, approved applications, approved controls,
+and every desktop-control switch are evaluated exactly as they are under `supervised`.
 
 ### Developer visibility
 
@@ -170,6 +203,8 @@ The desktop UI is the normal interface. These CLI commands are useful for diagno
 | `/internet on`, `manual`, `off` | Choose automatic, explicit-only, or no lookup |
 | `/web "query"` | Request one web lookup |
 | `/bargein`, `/bargein off` | Inspect or disable voice interruption |
+| `/desktop`, `/desktop stop`, `/desktop resume` | Desktop control state and the emergency stop |
+| `/launch`, `/click`, `/move-cursor`, `/scroll`, `/press`, `/type` | Typed desktop operation |
 | `/initiative`, `accept`, `dismiss` | Review a proactive proposal |
 | `/goal <task>`, `/goals` | Rehearse and supervise a bounded multi-step goal |
 | `/plan <task>` | Plan one typed action |
@@ -191,7 +226,7 @@ Revia is local-first, but “local” does not mean “unrestricted.”
 - Filesystem writes and mutable desktop actions require policy approval and normally confirmation.
 - Password-manager applications and matching sensitive window titles are excluded from ambient **activity metadata** by default. These exclusions do not mask their visible contents in screenshots sent to vision.
 - Internet access is separately opt-in because query text leaves the machine when a lookup runs.
-- Screen analysis can describe; it cannot click. **Use screen** must resolve the visual target back to a permitted Windows UI Automation element before policy and confirmation are evaluated.
+- Screen analysis by itself can only describe. Anything Revia does because of what she saw must first resolve back to a permitted Windows UI Automation element, and that element is re-verified at execution time before policy, confirmation, and either a control pattern or a click at its current bounds.
 - Action logs omit entered control text and record only its length.
 
 The live capability file is `RuntimeData/Capabilities/capabilities.json`. It is seeded once from `Config/capabilities.json` and is not overwritten by later builds. Use the **Permissions** tab for normal changes.

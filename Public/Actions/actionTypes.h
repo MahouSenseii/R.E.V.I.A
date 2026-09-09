@@ -24,6 +24,15 @@ enum class ActionType
     FocusWindow,
     SetControlText,
     InvokeControl,
+    // Desktop operation. These reach the machine through synthesized input or a new
+    // process rather than through a UI Automation pattern, so they are separately
+    // permitted, separately rate limited, and never usable outside an approved window.
+    LaunchApplication,
+    MoveCursor,
+    ClickPointer,
+    ScrollPointer,
+    PressKeys,
+    TypeText,
     WebSearch
 };
 
@@ -45,7 +54,13 @@ enum class ExecutionMode
 {
     Disabled,
     Supervised,
-    ApprovedScope
+    ApprovedScope,
+    // The owner has delegated broad operation of this machine. It raises the automatic
+    // approval ceiling to reversible work; it does not widen approved roots, approved
+    // applications, approved controls, or any capability switch, and destructive work
+    // still stops for confirmation. Environment is not authority: this is chosen, never
+    // inferred from running in a virtual machine.
+    OwnerFullAccess
 };
 
 struct ActionRequest
@@ -72,6 +87,34 @@ struct ActionRequest
         double matchConfidence = 0.0;
     };
 
+    // Pointer and keyboard payload. Present only on the desktop-operation actions;
+    // every other action type ignores it.
+    struct DesktopInput
+    {
+        enum class PointerButton
+        {
+            Left,
+            Right,
+            Middle
+        };
+
+        // Virtual-desktop pixel coordinates, which on a multi-monitor desk can be
+        // negative. Meaningful only when hasPoint is set: a vision-resolved click
+        // re-finds its element and uses that element's current bounds instead, because
+        // a coordinate captured before confirmation may no longer point at the target.
+        int x = 0;
+        int y = 0;
+        bool hasPoint = false;
+        PointerButton button = PointerButton::Left;
+        int clickCount = 1;
+        // Wheel detents. Positive scrolls away from the user, or right when horizontal.
+        int scrollClicks = 0;
+        bool horizontalScroll = false;
+        // A single normalized chord such as "ctrl+shift+s": modifiers held for exactly
+        // one non-modifier key. It is deliberately not a macro language.
+        std::string keys;
+    };
+
     std::string id;
     ActionType type = ActionType::Unknown;
     std::filesystem::path source;
@@ -83,6 +126,7 @@ struct ActionRequest
     // Present only after the vision-to-UIA resolver has produced a typed element
     // reference. Execution re-finds this exact runtime id and fails closed if it changed.
     ElementResolutionEvidence resolution;
+    DesktopInput input;
     bool dryRun = false;
     std::string requestedBy = "user";
 };
@@ -182,6 +226,33 @@ struct CapabilitySettings
         int maxCapturesPerMinute = 6;
     };
 
+    // Hands, as opposed to eyes. UI Automation asks an application to do something it
+    // already exposes; synthesized input is indistinguishable from the person at the
+    // keyboard, so it is off until the owner turns it on and stays confined to windows
+    // that belong to an approved application.
+    struct DesktopControl
+    {
+        bool pointer = false;
+        bool keyboard = false;
+        bool applicationLaunch = false;
+        // Permission to aim at a point Revia chose rather than at an element the
+        // vision-to-UIA resolver re-verified. The point must still land inside the
+        // target application's own window.
+        bool rawCoordinates = false;
+        // Separate authority, for the same reason autonomous research is separate from
+        // ordinary lookup: delegating a task is not standing consent to drive the
+        // machine whenever she feels like it.
+        bool autonomous = false;
+        int maxInputActionsPerMinute = 30;
+        int minimumInputIntervalMs = 120;
+        std::size_t maxTypedCharacters = 512;
+
+        [[nodiscard]] bool AnyEnabled() const
+        {
+            return pointer || keyboard || applicationLaunch;
+        }
+    };
+
     ExecutionMode mode = ExecutionMode::Supervised;
     std::vector<std::filesystem::path> approvedRoots;
     std::vector<std::string> approvedApplications;
@@ -197,6 +268,7 @@ struct CapabilitySettings
     int minimumDesktopActionIntervalMs = 250;
     InternetAccess internet;
     CameraAccess camera;
+    DesktopControl desktopControl;
 };
 
 [[nodiscard]] std::string ToString(ActionType value);
@@ -207,6 +279,29 @@ struct CapabilitySettings
 [[nodiscard]] RiskLevel RiskLevelFromString(const std::string& value);
 [[nodiscard]] ExecutionMode ExecutionModeFromString(const std::string& value);
 [[nodiscard]] RiskLevel RiskForAction(ActionType value);
+// UI Automation and desktop operation both drive an application, but only the second
+// synthesizes input or starts a process, so they are gated separately.
+[[nodiscard]] bool IsUiAutomationAction(ActionType value);
+[[nodiscard]] bool IsDesktopControlAction(ActionType value);
+[[nodiscard]] bool IsSynthesizedInputAction(ActionType value);
+// True for a request Revia raised on her own rather than one a user turn asked for.
+// The prefix convention is shared with internet research.
+[[nodiscard]] bool IsAutonomousRequest(const std::string& requestedBy);
+// One accepted keyboard chord. Modifiers are limited to ctrl/alt/shift on purpose:
+// every Windows-key chord opens a system surface rather than an application control,
+// and a shell reachable by keystroke would be a shell reachable by model text.
+struct KeyChord
+{
+    std::string normalized;
+    std::vector<int> modifierVirtualKeys;
+    int virtualKey = 0;
+};
+
+// Accepts "Ctrl + Shift+S" as "ctrl+shift+s": modifiers plus exactly one supported key.
+// Rejects unknown names, empty chords, chords with no key, and the chords that would
+// let Revia leave the approved application. Returns false with a reason on rejection.
+[[nodiscard]] bool ParseKeyChord(
+    const std::string& value, KeyChord& outChord, std::string& outError);
 [[nodiscard]] std::string NewActionId();
 [[nodiscard]] std::filesystem::path Utf8ToPath(const std::string& value);
 [[nodiscard]] std::string PathToUtf8(const std::filesystem::path& value);

@@ -120,6 +120,8 @@ commandOutput commandManager::BuildHelpOutput() const
     stream << "/action <json> - Validate and execute a structured action\n";
     stream << "/list, /read, /mkdir, /copy, /move, /rename, /trash - Typed file actions\n";
     stream << "/inspect-window, /focus-window, /set-text, /invoke-control - Supervised UI Automation\n";
+    stream << "/launch, /click, /move-cursor, /scroll, /press, /type - Desktop operation\n";
+    stream << "/desktop [stop|resume] - Desktop control state and emergency stop\n";
     stream << "/goal <request> - Plan, rehearse, and run a multi-step goal\n";
     stream << "/goals, /goals resume <id> - List goals and continue an unfinished one\n";
     stream << "/history [words|forget] - Search or clear durable conversation history\n";

@@ -250,6 +250,25 @@ public:
     CapabilityUpdateResult SetInternetAccess(bool enabled, bool automaticLookup);
     CapabilityUpdateResult SetInternetBrowser(bool visibleBrowser, bool autonomousResearch);
     CapabilityUpdateResult SetCameraAccess(bool enabled, bool autonomousCapture);
+    // Revia's hands: pointer, keyboard, and starting an approved application. Each is
+    // off until the owner turns it on; rawCoordinates and autonomous are narrower
+    // authorities that are dropped when the one they sit inside is withdrawn.
+    CapabilityUpdateResult SetDesktopControl(
+        bool pointer,
+        bool keyboard,
+        bool applicationLaunch,
+        bool rawCoordinates,
+        bool autonomous);
+    // How much of Revia's in-scope work stops to ask. It never widens which roots,
+    // applications, or controls are in scope.
+    CapabilityUpdateResult SetExecutionMode(actions::ExecutionMode mode);
+
+    // The emergency stop for synthesized input. It latches, so it is not a pause, and
+    // it does not travel through the model, the turn queue, or the action mutex.
+    void StopDesktopControl(const std::string& reason);
+    CapabilityUpdateResult ResumeDesktopControl();
+    [[nodiscard]] bool DesktopControlStopped() const;
+    [[nodiscard]] std::string DesktopControlStatus() const;
 
     // Stage 4. The runner itself adds no authority: every step goes through the same
     // dispatcher, policy, and audit path as an interactive action, and has to prove it

@@ -3,6 +3,7 @@
 #include "Filesystem/fileSystemExecutor.h"
 #include "Internet/internetSearchExecutor.h"
 #include "Internet/visibleBrowserClient.h"
+#include "Windows/desktopControlExecutor.h"
 #include "Windows/windowsAutomationExecutor.h"
 
 #include <algorithm>
@@ -14,7 +15,8 @@ namespace revia::actions
 {
 
 ActionRuntime::ActionRuntime()
-    : internetCancellation(std::make_shared<internet::VisibleBrowserCancellation>())
+    : internetCancellation(std::make_shared<internet::VisibleBrowserCancellation>()),
+      desktopInputGuard(std::make_shared<policy::DesktopInputGuard>())
 {
 }
 
@@ -57,7 +59,12 @@ bool ActionRuntime::InitializeUnlocked(
     dispatcher.Clear();
     desktopRateLimiter.Configure(
         settings.maxDesktopActionsPerMinute,
-        settings.minimumDesktopActionIntervalMs);
+        settings.minimumDesktopActionIntervalMs,
+        policy::DesktopActionRateLimiter::Scope::UiAutomation);
+    desktopControlRateLimiter.Configure(
+        settings.desktopControl.maxInputActionsPerMinute,
+        settings.desktopControl.minimumInputIntervalMs,
+        policy::DesktopActionRateLimiter::Scope::DesktopControl);
     dispatcher.Register(std::make_unique<filesystem::FileSystemExecutor>(
         settings.maxReadBytes,
         settings.maxDirectoryEntries,
@@ -66,6 +73,8 @@ bool ActionRuntime::InitializeUnlocked(
         settings.internet, internetCancellation));
 #ifdef _WIN32
     dispatcher.Register(std::make_unique<windows::WindowsAutomationExecutor>());
+    dispatcher.Register(std::make_unique<windows::DesktopControlExecutor>(
+        settings.desktopControl, desktopInputGuard));
 #endif
     auditLogger = std::make_unique<audit::ActionAuditLogger>(inputAuditPath);
     capabilityConfigPath = capabilityConfig;
@@ -124,13 +133,15 @@ ActionOutcome ActionRuntime::ExecuteWithPolicy(
         outcome.policy.verdict == PolicyVerdict::Allowed ||
         (outcome.policy.verdict == PolicyVerdict::RequiresConfirmation && confirmationGranted);
     std::string rateReason;
-    if (otherwiseExecutable && !stopToken.stop_requested() && !desktopRateLimiter.Admit(
-            request,
-            std::chrono::steady_clock::now(),
-            rateReason))
+    if (otherwiseExecutable && !stopToken.stop_requested())
     {
-        outcome.policy.verdict = PolicyVerdict::Blocked;
-        outcome.policy.reason = rateReason;
+        const auto admissionTime = std::chrono::steady_clock::now();
+        if (!desktopRateLimiter.Admit(request, admissionTime, rateReason) ||
+            !desktopControlRateLimiter.Admit(request, admissionTime, rateReason))
+        {
+            outcome.policy.verdict = PolicyVerdict::Blocked;
+            outcome.policy.reason = rateReason;
+        }
     }
     // Bracketed so the observer sees the action end on every path, including the
     // blocked and refused ones -- a scope that only closes on success is how a session
@@ -254,6 +265,20 @@ std::string ActionRuntime::StatusJson() const
         {"max_affected_entries", settings.maxAffectedEntries},
         {"max_desktop_actions_per_minute", settings.maxDesktopActionsPerMinute},
         {"minimum_desktop_action_interval_ms", settings.minimumDesktopActionIntervalMs},
+        {"desktop_control", {
+            {"pointer", settings.desktopControl.pointer},
+            {"keyboard", settings.desktopControl.keyboard},
+            {"application_launch", settings.desktopControl.applicationLaunch},
+            {"raw_coordinates", settings.desktopControl.rawCoordinates},
+            {"autonomous", settings.desktopControl.autonomous},
+            {"max_input_actions_per_minute",
+                settings.desktopControl.maxInputActionsPerMinute},
+            {"minimum_input_interval_ms",
+                settings.desktopControl.minimumInputIntervalMs},
+            {"max_typed_characters", settings.desktopControl.maxTypedCharacters},
+            {"stopped", desktopInputGuard && desktopInputGuard->IsTripped()},
+            {"stop_reason", desktopInputGuard ? desktopInputGuard->Reason() : std::string{}}
+        }},
         {"internet", {
             {"enabled", settings.internet.enabled},
             {"automatic_lookup", settings.internet.automaticLookup},
@@ -362,6 +387,50 @@ bool ActionRuntime::SetCameraAccess(
     return capabilityEditor.SetCameraAccess(
             capabilityConfigPath, enabled, autonomousCapture, outError) &&
         ReloadUnlocked(outError);
+}
+
+bool ActionRuntime::SetDesktopControl(
+    const bool pointer,
+    const bool keyboard,
+    const bool applicationLaunch,
+    const bool rawCoordinates,
+    const bool autonomous,
+    std::string& outError)
+{
+    std::lock_guard lock(mutex);
+    return capabilityEditor.SetDesktopControl(
+            capabilityConfigPath, pointer, keyboard, applicationLaunch, rawCoordinates,
+            autonomous, outError) &&
+        ReloadUnlocked(outError);
+}
+
+bool ActionRuntime::SetExecutionMode(const ExecutionMode mode, std::string& outError)
+{
+    std::lock_guard lock(mutex);
+    return capabilityEditor.SetExecutionMode(capabilityConfigPath, mode, outError) &&
+        ReloadUnlocked(outError);
+}
+
+void ActionRuntime::StopDesktopControl(const std::string& reason)
+{
+    // Deliberately does not acquire `mutex`: Execute() owns it for the whole action,
+    // and an emergency stop that waits for the action it is stopping is not one.
+    if (desktopInputGuard) desktopInputGuard->Trip(reason);
+}
+
+bool ActionRuntime::ResumeDesktopControl()
+{
+    return desktopInputGuard && desktopInputGuard->Resume();
+}
+
+bool ActionRuntime::DesktopControlStopped() const
+{
+    return desktopInputGuard && desktopInputGuard->IsTripped();
+}
+
+std::string ActionRuntime::DesktopControlStopReason() const
+{
+    return desktopInputGuard ? desktopInputGuard->Reason() : std::string{};
 }
 
 void ActionRuntime::CancelActiveInternet()

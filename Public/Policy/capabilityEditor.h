@@ -1,5 +1,7 @@
 #pragma once
 
+#include "Actions/actionTypes.h"
+
 #include <filesystem>
 #include <string>
 
@@ -48,6 +50,24 @@ public:
         bool enabled,
         bool autonomousCapture,
         std::string& outError) const;
+    // Withdrawing pointer control withdraws raw coordinates with it, and withdrawing
+    // every hand withdraws autonomy, for the same reason the camera works that way:
+    // a subset authority must not survive the authority it is a subset of and quietly
+    // return when that one is granted again.
+    [[nodiscard]] bool SetDesktopControl(
+        const std::filesystem::path& path,
+        bool pointer,
+        bool keyboard,
+        bool applicationLaunch,
+        bool rawCoordinates,
+        bool autonomous,
+        std::string& outError) const;
+    // Execution mode is the owner's choice of how much stops to ask. It never changes
+    // which roots, applications, or controls are in scope.
+    [[nodiscard]] bool SetExecutionMode(
+        const std::filesystem::path& path,
+        actions::ExecutionMode mode,
+        std::string& outError) const;
 
 private:
     enum class Mutation
@@ -58,7 +78,18 @@ private:
         RemoveControl,
         Internet,
         Browser,
-        Camera
+        Camera,
+        DesktopControl,
+        Mode
+    };
+
+    struct DesktopControlChange
+    {
+        bool pointer = false;
+        bool keyboard = false;
+        bool applicationLaunch = false;
+        bool rawCoordinates = false;
+        bool autonomous = false;
     };
 
     [[nodiscard]] bool Apply(
@@ -68,7 +99,11 @@ private:
         const std::string& control,
         bool enabled,
         bool automaticLookup,
-        std::string& outError) const;
+        std::string& outError,
+        // Passed explicitly by every caller: a nested aggregate cannot supply a default
+        // argument from inside the class that owns it.
+        const DesktopControlChange& desktop,
+        actions::ExecutionMode mode) const;
 };
 
 } // namespace revia::policy

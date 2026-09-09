@@ -143,7 +143,7 @@ and `/perception` status state this boundary explicitly.
 | `Policy` | Load capability settings, normalize paths, calculate risk and verdict | Prompting the LLM or changing files |
 | `Actions` | Define action/result types, coordinate evaluation and dispatch | Action-specific Windows behavior |
 | `Filesystem` | Perform the supported file operation using the policy-resolved paths | Expanding scope or bypassing confirmation |
-| `Windows` | Resolve vision regions to typed UIA identities, then inspect or interact through control patterns | Coordinate clicking, shell execution, or app-scope decisions |
+| `Windows` | Resolve vision regions to typed UIA identities, inspect or interact through control patterns, and synthesize pointer/keyboard input into a verified approved foreground window | Shell execution, app-scope decisions, input to an unverified window, or acting without an emergency stop |
 | `Internet` | Decide when an enabled lookup is useful and query fixed approved HTTPS knowledge endpoints | General sockets, arbitrary URL fetching, or permission changes |
 | `Speech` | Own SAPI/Qwen3-TTS output, persistent voice presets and profile assignments, WinMM capture, whisper.cpp transcription, queues, and cancellation | Conversation policy or widget rendering |
 | `Presence` | Reduce runtime events into an atomic avatar snapshot and validate bounded conversation-only adapter files | Rendering a character, storing platform credentials, inference, or action routing |
@@ -256,7 +256,10 @@ New behavior is split by reason to change:
 - `VisionActionParser` accepts only bounded invoke/value intents; it never inspects Windows or executes.
 - `VisionUiaResolver` matches geometry and accessible names and returns a typed runtime identity; it never clicks coordinates or grants application scope.
 - `WindowsAutomationExecutor` rechecks that exact identity and invokes a UIA pattern; it never falls back to a name or coordinate when a resolved element changed.
-- `CapabilityPolicy` owns executable and per-executable control scopes; `DesktopActionRateLimiter` owns rolling mutable-action admission. Neither inspects pixels or invokes UIA.
+- `UiaElementLocator` is the single owner of "which window and which element does this typed request mean". Both the UI Automation executor and the desktop-control executor use it, so the re-verification check exists once.
+- `DesktopControlExecutor` synthesizes pointer and keyboard input and starts approved applications. It refuses unless the foreground window still belongs to the approved application, confines every point to that window, re-finds a vision-resolved element and clicks its current bounds rather than the planned coordinate, and refuses entirely without a `DesktopInputGuard`.
+- `DesktopInputGuard` is the emergency stop. It latches, is reachable without the action mutex or a model turn, and is additionally tripped by the physical ctrl+alt+shift hold sampled immediately before injection.
+- `CapabilityPolicy` owns executable and per-executable control scopes, the desktop-control switches, and key-chord admission; `DesktopActionRateLimiter` owns rolling mutable-action admission, budgeting UI Automation and synthesized input separately. None of them inspect pixels or invoke UIA.
 - Shells own presentation only. `ReviaSession` remains the sole runtime lifecycle owner.
 
 When a feature needs model logic, persistence, OS authority, and presentation, those are four components connected through typed values or events—not four methods added to one window or service.
@@ -459,7 +462,7 @@ capability authority.
 
 1. Model text never becomes a shell command.
 2. Source and destination must both remain within an approved root.
-3. Desktop actions must name an executable in the application allowlist and use UI Automation patterns rather than unrestricted input injection.
+3. Desktop actions must name an executable in the application allowlist. UI Automation patterns are preferred; synthesized pointer and keyboard input is a separate opt-in capability that is confined to a verified foreground window of that executable, cannot use the Windows key or an application-switching chord, and cannot aim outside that window.
 4. A dry run must not mutate state.
 5. Blocked or unconfirmed actions never reach an executor.
 6. Unknown configuration values fail closed.
@@ -467,3 +470,4 @@ capability authority.
 8. Screen capture is opt-in, local, short-lived, and visibly reported.
 9. New capabilities start disabled or supervised and earn unattended access through tests and explicit configuration.
 10. Internet grounding never exposes a general socket, raw browser API, selector, script, or model-selected URL; the visible worker accepts only a bounded query and enforces public read-only navigation.
+11. Desktop operation has a deterministic stop that does not depend on model inference, and an executor without one refuses to act.

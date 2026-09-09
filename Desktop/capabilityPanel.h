@@ -36,6 +36,8 @@ private:
     void ApplyInternetSettings();
     void ApplyBrowserSettings();
     void ApplyCameraSettings();
+    void ApplyDesktopControlSettings();
+    void ToggleDesktopStop();
 
     revia::runtime::ReviaSession& session;
     DiscoveryRequest requestDiscovery;
@@ -49,6 +51,12 @@ private:
     QCheckBox* autonomousResearchCheck = nullptr;
     QCheckBox* cameraCheck = nullptr;
     QCheckBox* autonomousCameraCheck = nullptr;
+    QCheckBox* pointerCheck = nullptr;
+    QCheckBox* keyboardCheck = nullptr;
+    QCheckBox* launchCheck = nullptr;
+    QCheckBox* rawCoordinateCheck = nullptr;
+    QCheckBox* autonomousDesktopCheck = nullptr;
+    QPushButton* desktopStopButton = nullptr;
     QPushButton* approveDiscoveredButton = nullptr;
     bool refreshing = false;
     std::string discoveredApplication;
