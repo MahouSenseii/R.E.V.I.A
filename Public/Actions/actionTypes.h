@@ -44,6 +44,32 @@ enum class RiskLevel
     Destructive = 2
 };
 
+// What an action would actually cause, as opposed to how it is performed.
+//
+// RiskLevel describes the mechanism: every click is a click, so every click is the same
+// reversible write. That is true and useless. Clicking a tab and clicking "Confirm
+// purchase" are the same keystroke-level event and nothing alike in consequence, and the
+// difference lives in what is being clicked, not in the clicking.
+//
+// Ordered by severity, because the ceiling below is a comparison.
+enum class ConsequenceClass
+{
+    Observation = 0,
+    // Ordinary interaction with no lasting effect outside the window.
+    Routine = 1,
+    // Changes the user's own documents or data.
+    UserContent = 2,
+    // Leaves the machine. Hard to retract once it has gone.
+    ExternalMessage = 3,
+    Financial = 4,
+    // Permanent loss.
+    Destructive = 5,
+    // Credentials, permissions, account state -- the things that enable everything else.
+    AccountOrSecurity = 6,
+    // Arbitrary execution.
+    CommandSurface = 7
+};
+
 enum class PolicyVerdict
 {
     Allowed,
@@ -268,6 +294,12 @@ struct CapabilitySettings
         // ordinary lookup: delegating a task is not standing consent to drive the
         // machine whenever she feels like it.
         bool autonomous = false;
+        // The most consequential thing she may commit without being stopped. It is a
+        // ceiling on the *target*, evaluated at the moment of injection, and it only
+        // ever adds refusals: an action still has to pass the mode, the scope, the
+        // capability switches and the risk ceiling first. Raising it is a deliberate
+        // act, and OwnerFullAccess does not raise it.
+        ConsequenceClass maxUnconfirmedConsequence = ConsequenceClass::Routine;
         InputScope scope = InputScope::ApprovedApplications;
         // A shell reached by keystroke is still model text reaching a shell. Command
         // interpreters, script hosts, and the chords that summon them are refused unless
@@ -306,6 +338,27 @@ struct CapabilitySettings
 [[nodiscard]] std::string ToString(RiskLevel value);
 [[nodiscard]] std::string ToString(PolicyVerdict value);
 [[nodiscard]] std::string ToString(ExecutionMode value);
+[[nodiscard]] std::string ToString(ConsequenceClass value);
+[[nodiscard]] ConsequenceClass ConsequenceClassFromString(const std::string& value);
+
+// What a named control would do if it were activated.
+//
+// Read honestly: this is a tripwire, not a boundary. It matches English words in an
+// accessible name, so it catches "Send", "Delete account" and "Confirm purchase", and it
+// will miss an unlabelled icon, another language, and any wording nobody thought of.
+// A control it does not recognize classifies as Routine.
+//
+// That is why it may only ever *raise* the required authority and never lower it. It is
+// worth having because the cases it does catch are the expensive ones, and it is worth
+// being plain about because a check that is trusted for more than it does is worse than
+// no check at all.
+//
+// isPasswordField comes from UI Automation rather than from the name, and is the one
+// signal here that is not a guess.
+[[nodiscard]] ConsequenceClass ClassifyControlConsequence(
+    const std::string& controlName,
+    bool isPasswordField = false);
+
 [[nodiscard]] std::string ToString(CapabilitySettings::DesktopControl::InputScope value);
 [[nodiscard]] CapabilitySettings::DesktopControl::InputScope InputScopeFromString(
     const std::string& value);

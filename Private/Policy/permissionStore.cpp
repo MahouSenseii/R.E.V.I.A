@@ -239,6 +239,19 @@ bool PermissionStore::Load(
             settings.desktopControl.scope = actions::InputScopeFromString(scopeName);
             settings.desktopControl.allowCommandSurfaces =
                 desktop.value("allowCommandSurfaces", false);
+            const std::string consequenceName =
+                desktop.value("maxUnconfirmedConsequence", std::string("routine"));
+            static const std::vector<std::string> supportedConsequences = {
+                "observation", "routine", "user_content", "external_message",
+                "financial", "destructive", "account_or_security", "command_surface"};
+            if (std::find(supportedConsequences.begin(), supportedConsequences.end(),
+                    consequenceName) == supportedConsequences.end())
+            {
+                outError = "Unsupported desktop consequence ceiling: " + consequenceName;
+                return false;
+            }
+            settings.desktopControl.maxUnconfirmedConsequence =
+                actions::ConsequenceClassFromString(consequenceName);
             settings.desktopControl.maxInputActionsPerMinute = BoundedInteger<int>(
                 desktop, "maxInputActionsPerMinute", 30, 1, 600);
             settings.desktopControl.minimumInputIntervalMs = BoundedInteger<int>(

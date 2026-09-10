@@ -483,6 +483,107 @@ void TestCommandSurfacesStayOutOfReach()
         "Allowing command surfaces did not admit the run box.");
 }
 
+void TestConsequenceIsReadFromTheTargetNotTheVerb()
+{
+    // The point of the whole classifier: these are all the same click.
+    Check(ClassifyControlConsequence("Select tab") == ConsequenceClass::Routine &&
+        ClassifyControlConsequence("Run tests") == ConsequenceClass::Routine &&
+        ClassifyControlConsequence("Save") == ConsequenceClass::UserContent &&
+        ClassifyControlConsequence("Send") == ConsequenceClass::ExternalMessage &&
+        ClassifyControlConsequence("Buy now") == ConsequenceClass::Financial &&
+        ClassifyControlConsequence("Delete") == ConsequenceClass::Destructive &&
+        ClassifyControlConsequence("Delete account") == ConsequenceClass::AccountOrSecurity,
+        "Identical clicks on different controls were not told apart.");
+
+    // Severity order decides: deleting an account is an account change, not a deletion.
+    Check(ClassifyControlConsequence("Delete account") >
+        ClassifyControlConsequence("Delete"),
+        "A dangerous compound label lost to its own substring.");
+
+    // The reliable signal outranks the label entirely.
+    Check(ClassifyControlConsequence("", true) == ConsequenceClass::AccountOrSecurity &&
+        ClassifyControlConsequence("Nickname", true) == ConsequenceClass::AccountOrSecurity,
+        "A password field was classified from its name instead of its own flag.");
+
+    // Substring matching would make each of these a false alarm. A gate that cries wolf
+    // is a gate that gets raised until it stops meaning anything.
+    Check(ClassifyControlConsequence("Display settings") == ConsequenceClass::Routine &&
+        ClassifyControlConsequence("Undelete") == ConsequenceClass::Routine &&
+        ClassifyControlConsequence("Repayment history") == ConsequenceClass::Routine &&
+        ClassifyControlConsequence("Sendai") == ConsequenceClass::Routine,
+        "Word-boundary matching failed and produced a false alarm.");
+
+    // What it does not know, it does not guess about.
+    Check(ClassifyControlConsequence("") == ConsequenceClass::Routine &&
+        ClassifyControlConsequence("Frobnicate") == ConsequenceClass::Routine,
+        "An unrecognized control was classified as something.");
+
+    Check(ConsequenceClassFromString(ToString(ConsequenceClass::Financial)) ==
+            ConsequenceClass::Financial &&
+        ConsequenceClassFromString("nonsense") == ConsequenceClass::Routine,
+        "The consequence class did not round-trip, or an unreadable one was permissive.");
+}
+
+void TestTheConsequenceCeilingLoadsAndDefaultsNarrow()
+{
+    revia::policy::PermissionStore store;
+    CapabilitySettings loaded;
+    std::string error;
+
+    // A capability file that never mentions it gets the narrow default, so an older
+    // file cannot acquire a wider ceiling by omission.
+    PolicyFixture silent;
+    silent.Allow(true, true, false, true);
+    Check(store.Load(silent.Write("silent-ceiling.json"), loaded, error) &&
+        loaded.desktopControl.maxUnconfirmedConsequence == ConsequenceClass::Routine,
+        "A file with no consequence ceiling did not default to routine: " + error);
+
+    PolicyFixture raised;
+    raised.Allow(true, true, false, true);
+    raised.settings["desktopControl"]["maxUnconfirmedConsequence"] = "external_message";
+    Check(store.Load(raised.Write("raised.json"), loaded, error) &&
+        loaded.desktopControl.maxUnconfirmedConsequence == ConsequenceClass::ExternalMessage,
+        "A raised consequence ceiling did not load: " + error);
+
+    PolicyFixture nonsense;
+    nonsense.Allow(true, true, false, true);
+    nonsense.settings["desktopControl"]["maxUnconfirmedConsequence"] = "whatever";
+    Check(!store.Load(nonsense.Write("bad-ceiling.json"), loaded, error) &&
+        error.find("consequence ceiling") != std::string::npos,
+        "An unreadable consequence ceiling was accepted.");
+}
+
+void TestTheCeilingOnlyEverAddsRefusals()
+{
+    // Composition property: raising the ceiling to its maximum must not make anything
+    // reachable that the mode, scope and capability switches already refused.
+    PolicyFixture permissive;
+    permissive.Allow(true, true, true, true);
+    permissive.settings["mode"] = "owner_full_access";
+    permissive.settings["desktopControl"]["maxUnconfirmedConsequence"] = "command_surface";
+    const auto policy = permissive.Policy();
+
+    ActionRequest unapproved = PointerRequest();
+    unapproved.application = "cmd.exe";
+    Check(policy.Evaluate(unapproved).verdict == PolicyVerdict::Blocked,
+        "The highest consequence ceiling reached an unapproved application.");
+
+    ActionRequest screenSpace = ScreenRequest(ActionType::ClickPointer);
+    Check(policy.Evaluate(screenSpace).verdict == PolicyVerdict::Blocked,
+        "The consequence ceiling substituted for the input scope.");
+
+    // And OwnerFullAccess does not raise it: the ceiling is its own decision.
+    PolicyFixture owner;
+    owner.Allow(true, true, true, true);
+    owner.settings["mode"] = "owner_full_access";
+    revia::policy::PermissionStore store;
+    CapabilitySettings loaded;
+    std::string error;
+    Check(store.Load(owner.Write("owner-ceiling.json"), loaded, error) &&
+        loaded.desktopControl.maxUnconfirmedConsequence == ConsequenceClass::Routine,
+        "OwnerFullAccess quietly raised the consequence ceiling.");
+}
+
 void TestOwnerFullAccessRaisesOnlyTheCeiling()
 {
     PolicyFixture fixture;
@@ -815,6 +916,9 @@ void RunDesktopControlTests()
     TestWholeDesktopNeedsItsPrerequisites();
     TestWholeDesktopAcceptsScreenSpaceInput();
     TestCommandSurfacesStayOutOfReach();
+    TestConsequenceIsReadFromTheTargetNotTheVerb();
+    TestTheConsequenceCeilingLoadsAndDefaultsNarrow();
+    TestTheCeilingOnlyEverAddsRefusals();
     TestTypedTextIsBounded();
     TestLaunchArgumentStaysInsideApprovedRoots();
     TestOwnerFullAccessRaisesOnlyTheCeiling();

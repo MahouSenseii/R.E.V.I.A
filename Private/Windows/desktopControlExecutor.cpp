@@ -32,15 +32,6 @@ void Release(T*& value)
     }
 }
 
-std::wstring LowerWide(std::wstring value)
-{
-    std::transform(value.begin(), value.end(), value.begin(), [](const wchar_t c)
-    {
-        return static_cast<wchar_t>(std::towlower(c));
-    });
-    return value;
-}
-
 struct VirtualDesktop
 {
     int left = 0;
@@ -125,16 +116,60 @@ INPUT UnicodeEvent(const wchar_t unit, const bool down)
     return event;
 }
 
-DWORD ForegroundProcessId()
+// Which window, not merely which program.
+//
+// A process id alone cannot tell two windows of one program apart, and a browser or an
+// editor with two documents open is the ordinary case, not an exotic one. Binding the
+// window handle as well is what makes "the window I decided about" and "the window this
+// keystroke is about to reach" the same claim.
+//
+// The pair is checked together: a dead handle reports no process, and a reused process
+// id belongs to a different handle, so neither half can drift alone.
+struct WindowIdentity
 {
-    const HWND foreground = GetForegroundWindow();
-    if (foreground == nullptr)
+    HWND window = nullptr;
+    DWORD processId = 0;
+
+    [[nodiscard]] bool Valid() const { return window != nullptr && processId != 0; }
+    [[nodiscard]] bool operator==(const WindowIdentity& other) const
     {
-        return 0;
+        return window == other.window && processId == other.processId;
+    }
+};
+
+WindowIdentity IdentityOf(const HWND window)
+{
+    WindowIdentity identity;
+    if (window == nullptr)
+    {
+        return identity;
     }
     DWORD processId = 0;
-    GetWindowThreadProcessId(foreground, &processId);
-    return processId;
+    GetWindowThreadProcessId(window, &processId);
+    identity.window = window;
+    identity.processId = processId;
+    return identity;
+}
+
+WindowIdentity ForegroundIdentity()
+{
+    return IdentityOf(GetForegroundWindow());
+}
+
+DWORD ForegroundProcessId()
+{
+    return ForegroundIdentity().processId;
+}
+
+HWND NativeWindowHandle(IUIAutomationElement* element)
+{
+    UIA_HWND handle = nullptr;
+    if (element == nullptr ||
+        FAILED(element->get_CurrentNativeWindowHandle(&handle)))
+    {
+        return nullptr;
+    }
+    return static_cast<HWND>(handle);
 }
 
 std::string ExecutableOfProcess(const DWORD processId)
@@ -156,28 +191,33 @@ std::string ExecutableAtPoint(const int x, const int y)
     return ExecutableOfProcess(processId);
 }
 
-// Confined scope only. Policy proved the application is approved; this proves the
-// keystroke or click is about to reach that application and not whatever took focus in
-// the meantime.
-bool ForegroundBelongsTo(const std::string& application)
+// Brings the requested window forward and confirms that *that exact window* is the one
+// receiving input, not merely some window of the right program.
+//
+// Fails closed when the element exposes no window handle: without one there is nothing
+// to bind the action to, and an unbindable target is not a target.
+bool FocusAndConfirm(
+    IUIAutomationElement* window,
+    const std::string& application,
+    WindowIdentity& outIdentity,
+    std::string& outFailure)
 {
-    const DWORD processId = ForegroundProcessId();
-    if (processId == 0)
+    const WindowIdentity wanted = IdentityOf(NativeWindowHandle(window));
+    if (!wanted.Valid())
     {
+        outFailure = "The target window of " + application +
+            " exposes no window handle, so input could not be bound to it.";
         return false;
     }
-    return LowerWide(ProcessFileName(static_cast<int>(processId))) ==
-        LowerWide(Utf8ToWide(application));
-}
 
-bool FocusAndConfirm(IUIAutomationElement* window, const std::string& application)
-{
-    if (ForegroundBelongsTo(application))
+    if (ForegroundIdentity() == wanted)
     {
+        outIdentity = wanted;
         return true;
     }
     if (window == nullptr || FAILED(window->SetFocus()))
     {
+        outFailure = "The target window of " + application + " could not be focused.";
         return false;
     }
     // Windows can defer a foreground change; a bounded poll is the difference between
@@ -185,12 +225,51 @@ bool FocusAndConfirm(IUIAutomationElement* window, const std::string& applicatio
     for (int attempt = 0; attempt < 12; ++attempt)
     {
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
-        if (ForegroundBelongsTo(application))
+        if (ForegroundIdentity() == wanted)
         {
+            outIdentity = wanted;
             return true;
         }
     }
+    outFailure = "The foreground window is not the requested window of " + application +
+        "; no input was synthesized.";
     return false;
+}
+
+// The consequence gate.
+//
+// It runs at the last possible moment, because the name on a button is only knowable
+// once there is a button. It can only refuse: everything else -- mode, scope, capability
+// switches, risk ceiling, rate limit -- has already had its say by the time this is
+// asked, and a permissive answer here does not override any of them.
+bool ConsequenceAllowed(
+    const PointDescription& target,
+    const CapabilitySettings::DesktopControl& settings,
+    const char* what,
+    std::string& outFailure)
+{
+    const ConsequenceClass consequence =
+        ClassifyControlConsequence(target.elementName, target.isPassword);
+    if (static_cast<int>(consequence) <=
+        static_cast<int>(settings.maxUnconfirmedConsequence))
+    {
+        return true;
+    }
+    outFailure = std::string("Refused: ") + what + " \"" +
+        (target.elementName.empty() ? std::string("an unnamed control")
+                                    : target.elementName) +
+        "\" reads as " + ToString(consequence) + ", above the configured ceiling of " +
+        ToString(settings.maxUnconfirmedConsequence) + ".";
+    return false;
+}
+
+// Chords that commit whatever currently has the caret. Enter on a focused Send button is
+// the same event as clicking it, and it would be strange for one to be checked and the
+// other not.
+bool IsActivationChord(const std::string& normalizedChord)
+{
+    return normalizedChord == "enter" || normalizedChord == "return" ||
+        normalizedChord == "space";
 }
 
 std::wstring ResolveExecutable(const std::string& application)
@@ -447,7 +526,8 @@ ActionResult Drag(
 ActionResult TypeTextInput(
     const ActionRequest& request,
     const CapabilitySettings::DesktopControl& settings,
-    policy::DesktopInputGuard& guard)
+    policy::DesktopInputGuard& guard,
+    const WindowIdentity& bound)
 {
     ActionResult result;
     result.attempted = true;
@@ -466,14 +546,16 @@ ActionResult TypeTextInput(
         return result;
     }
 
-    // Pinned once, then compared per character. Comparing process ids rather than
-    // re-reading the image name is both cheaper and stricter: a second instance of the
-    // same executable is a different window, and text meant for one of them should not
-    // finish in the other.
-    const DWORD target = ForegroundProcessId();
-    if (target == 0)
+    // Bound once, then compared per character.
+    //
+    // The comparison is window handle and process id together, not the process alone.
+    // A process check catches a switch to another program and misses the case that
+    // actually happens: a second document in the same program. Text meant for one
+    // window must not finish in the other, and two windows of one process share a
+    // process id but never a handle.
+    if (!bound.Valid())
     {
-        result.message = "No window has focus, so nothing was typed.";
+        result.message = "No window could be bound to, so nothing was typed.";
         return result;
     }
 
@@ -486,10 +568,10 @@ ActionResult TypeTextInput(
                 " characters: " + guard.Reason();
             return result;
         }
-        if (ForegroundProcessId() != target)
+        if (!(ForegroundIdentity() == bound))
         {
             result.message = "Typing stopped after " + std::to_string(sent) +
-                " characters because focus moved to another window.";
+                " characters because focus left the window it was aimed at.";
             return result;
         }
         const bool delivered = unit == L'\n'
@@ -509,7 +591,7 @@ ActionResult TypeTextInput(
     // The text itself is never echoed into a message that reaches logs, the UI, or
     // memory. The audit record keeps its length for the same reason.
     result.message = "Typed " + std::to_string(sent) + " characters into " +
-        ExecutableOfProcess(target) + ".";
+        ExecutableOfProcess(bound.processId) + ".";
     return result;
 }
 
@@ -624,6 +706,7 @@ ActionResult DesktopControlExecutor::Execute(
     }
 
     IUIAutomationElement* window = nullptr;
+    WindowIdentity bound;
     result.attempted = true;
     result.backend = "windows_send_input";
     if (!screenSpace)
@@ -636,15 +719,22 @@ ActionResult DesktopControlExecutor::Execute(
             if (shouldUninitialize) CoUninitialize();
             return result;
         }
-        if (!FocusAndConfirm(window, request.application))
+        std::string focusFailure;
+        if (!FocusAndConfirm(window, request.application, bound, focusFailure))
         {
-            result.message = "The foreground window does not belong to " +
-                request.application + "; no input was synthesized.";
+            result.message = focusFailure;
             Release(window);
             Release(automation);
             if (shouldUninitialize) CoUninitialize();
             return result;
         }
+    }
+    else
+    {
+        // Screen space names no window, so the binding is whatever is in front at the
+        // moment the decision is acted on. Captured here so every check below compares
+        // against one fixed answer rather than re-asking a question that can change.
+        bound = ForegroundIdentity();
     }
 
     const auto finish = [&]()
@@ -669,8 +759,26 @@ ActionResult DesktopControlExecutor::Execute(
                 return finish();
             }
         }
+        // Typing goes into whatever holds the caret, so that is what gets classified.
+        // The password check is the reliable half of this: a secret field says so
+        // itself rather than being inferred from a label.
+        const PointDescription focused = automation != nullptr
+            ? DescribeFocusedElement(automation) : PointDescription{};
+        std::string refusal;
+        KeyChord chord;
+        std::string chordError;
+        const bool commits = request.type == ActionType::TypeText ||
+            (ParseKeyChord(request.input.keys, chord, chordError) &&
+                IsActivationChord(chord.normalized));
+        if (commits && focused.found &&
+            !ConsequenceAllowed(focused, settings, "the focused control", refusal))
+        {
+            result.message = refusal;
+            return finish();
+        }
+
         result = request.type == ActionType::PressKeys
-            ? PressKeyChord(request) : TypeTextInput(request, settings, *guard);
+            ? PressKeyChord(request) : TypeTextInput(request, settings, *guard, bound);
         return finish();
     }
 
@@ -697,12 +805,13 @@ ActionResult DesktopControlExecutor::Execute(
             result.message = target.failure;
             return finish();
         }
-        if (!ForegroundBelongsTo(request.application))
+        if (!(ForegroundIdentity() == bound))
         {
-            // Re-verified after the target was resolved: resolution walks the whole
-            // element tree, which is long enough for focus to move.
-            result.message = "Focus left " + request.application +
-                " while the target was being verified; nothing was clicked.";
+            // Re-verified against the exact window, not the program: resolution walks
+            // the whole element tree, which is long enough for another document of the
+            // same application to come forward.
+            result.message = "Focus left the window this was aimed at while the target "
+                "was being verified; nothing was clicked.";
             return finish();
         }
     }
@@ -729,10 +838,31 @@ ActionResult DesktopControlExecutor::Execute(
         }
     }
 
+    // Which window owns the pixel, captured before the pointer moves. Moving the cursor
+    // can itself change what is under it -- a hover menu, a tooltip, a window raised on
+    // hover -- so the thing that was decided about has to be re-identified before it is
+    // clicked rather than assumed to have stayed put.
+    const WindowIdentity aimedAt = target.aimed
+        ? IdentityOf(WindowFromPoint(POINT{
+            static_cast<LONG>(target.x), static_cast<LONG>(target.y)}))
+        : WindowIdentity{};
+
     if (target.aimed && !MoveTo(target.x, target.y))
     {
         result.message = "The point is not on any attached display.";
         return finish();
+    }
+
+    if (target.aimed && request.type != ActionType::MoveCursor)
+    {
+        const WindowIdentity nowUnderPointer = IdentityOf(WindowFromPoint(POINT{
+            static_cast<LONG>(target.x), static_cast<LONG>(target.y)}));
+        if (!(nowUnderPointer == aimedAt))
+        {
+            result.message = "What is under that point changed as the pointer arrived; "
+                "nothing was clicked.";
+            return finish();
+        }
     }
 
     // What is under the pointer, read after moving. This is the feedback that makes a
@@ -740,6 +870,18 @@ ActionResult DesktopControlExecutor::Execute(
     const PointDescription under = automation != nullptr
         ? DescribePoint(automation, target.x, target.y) : PointDescription{};
     const std::string where = " Pointer is over " + under.Summary() + ".";
+
+    // Moving the pointer commits nothing, so it is not gated. Anything that presses a
+    // button is, and the button is only nameable now that the pointer is on it.
+    if (request.type == ActionType::ClickPointer || request.type == ActionType::DragPointer)
+    {
+        std::string refusal;
+        if (under.found && !ConsequenceAllowed(under, settings, "the control at", refusal))
+        {
+            result.message = refusal;
+            return finish();
+        }
+    }
 
     if (request.type == ActionType::MoveCursor)
     {

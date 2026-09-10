@@ -72,6 +72,9 @@ struct PointDescription
     std::string executable;
     std::string elementName;
     int controlType = 0;
+    // From UI Automation rather than from the name. It is the one thing about a control
+    // that says "this is a secret" without anyone having to guess from a label.
+    bool isPassword = false;
     bool found = false;
 
     // A short line for an action result: "Save button in notepad.exe".
@@ -79,6 +82,10 @@ struct PointDescription
 };
 
 [[nodiscard]] PointDescription DescribePoint(IUIAutomation* automation, int x, int y);
+
+// The control that will receive typing. Same read, different question: a click asks
+// "what is under the pointer", a keystroke asks "what has the caret".
+[[nodiscard]] PointDescription DescribeFocusedElement(IUIAutomation* automation);
 
 } // namespace revia::actions::windows
 

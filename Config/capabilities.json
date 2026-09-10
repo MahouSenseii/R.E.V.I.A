@@ -8,8 +8,21 @@
     "explorer.exe"
   ],
   "approvedControls": {
-    "notepad.exe": ["File", "Edit", "View"],
-    "explorer.exe": ["Address Bar", "backButton", "forwardButton", "upButton", "refreshButton", "New", "SortAndGroupButton", "View"]
+    "notepad.exe": [
+      "File",
+      "Edit",
+      "View"
+    ],
+    "explorer.exe": [
+      "Address Bar",
+      "backButton",
+      "forwardButton",
+      "upButton",
+      "refreshButton",
+      "New",
+      "SortAndGroupButton",
+      "View"
+    ]
   },
   "autoApproveRiskThrough": "read_only",
   "createMissingApprovedRoots": true,
@@ -25,6 +38,7 @@
     "rawCoordinates": false,
     "scope": "approved_applications",
     "allowCommandSurfaces": false,
+    "maxUnconfirmedConsequence": "routine",
     "autonomous": false,
     "maxInputActionsPerMinute": 30,
     "minimumInputIntervalMs": 120,
@@ -34,7 +48,10 @@
     "enabled": true,
     "automaticLookup": true,
     "provider": "duckduckgo",
-    "approvedHosts": ["api.duckduckgo.com", "en.wikipedia.org"],
+    "approvedHosts": [
+      "api.duckduckgo.com",
+      "en.wikipedia.org"
+    ],
     "requestTimeoutMs": 8000,
     "maxResponseBytes": 262144,
     "maxRequestsPerMinute": 12,

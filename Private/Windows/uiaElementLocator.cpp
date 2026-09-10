@@ -332,6 +332,49 @@ std::string PointDescription::Summary() const
     return summary;
 }
 
+namespace
+{
+
+PointDescription DescribeElement(IUIAutomationElement* element)
+{
+    PointDescription description;
+    if (element == nullptr)
+    {
+        return description;
+    }
+    int processId = 0;
+    element->get_CurrentProcessId(&processId);
+    CONTROLTYPEID controlType = 0;
+    element->get_CurrentControlType(&controlType);
+    BOOL isPassword = FALSE;
+    element->get_CurrentIsPassword(&isPassword);
+    description.executable = WideToUtf8(ProcessFileName(processId));
+    description.elementName = WideToUtf8(ElementName(element));
+    description.controlType = static_cast<int>(controlType);
+    description.isPassword = isPassword != FALSE;
+    description.found = true;
+    return description;
+}
+
+} // namespace
+
+PointDescription DescribeFocusedElement(IUIAutomation* automation)
+{
+    PointDescription description;
+    if (automation == nullptr)
+    {
+        return description;
+    }
+    IUIAutomationElement* element = nullptr;
+    if (FAILED(automation->GetFocusedElement(&element)) || element == nullptr)
+    {
+        return description;
+    }
+    description = DescribeElement(element);
+    element->Release();
+    return description;
+}
+
 PointDescription DescribePoint(IUIAutomation* automation, const int x, const int y)
 {
     PointDescription description;
@@ -354,14 +397,7 @@ PointDescription DescribePoint(IUIAutomation* automation, const int x, const int
         }
         return description;
     }
-    int processId = 0;
-    element->get_CurrentProcessId(&processId);
-    CONTROLTYPEID controlType = 0;
-    element->get_CurrentControlType(&controlType);
-    description.executable = WideToUtf8(ProcessFileName(processId));
-    description.elementName = WideToUtf8(ElementName(element));
-    description.controlType = static_cast<int>(controlType);
-    description.found = true;
+    description = DescribeElement(element);
     element->Release();
     return description;
 }

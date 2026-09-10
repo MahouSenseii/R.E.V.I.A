@@ -345,6 +345,13 @@ bool CapabilityEditor::Apply(
                 : actions::CapabilitySettings::DesktopControl::InputScope::ApprovedApplications);
         desktopControl["allowCommandSurfaces"] =
             (desktop.pointer || desktop.keyboard) && desktop.allowCommandSurfaces;
+        // Preserved rather than rewritten: the consequence ceiling is not part of the
+        // hands themselves, so toggling pointer or keyboard must not quietly reset how
+        // far-reaching a target she may commit to.
+        if (!desktopControl.contains("maxUnconfirmedConsequence"))
+        {
+            desktopControl["maxUnconfirmedConsequence"] = "routine";
+        }
         if (!desktopControl.contains("maxInputActionsPerMinute"))
             desktopControl["maxInputActionsPerMinute"] = 30;
         if (!desktopControl.contains("minimumInputIntervalMs"))

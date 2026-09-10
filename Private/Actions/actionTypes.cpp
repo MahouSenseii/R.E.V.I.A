@@ -96,6 +96,123 @@ std::string ToString(ExecutionMode value)
     }
 }
 
+std::string ToString(const ConsequenceClass value)
+{
+    switch (value)
+    {
+        case ConsequenceClass::Observation: return "observation";
+        case ConsequenceClass::Routine: return "routine";
+        case ConsequenceClass::UserContent: return "user_content";
+        case ConsequenceClass::ExternalMessage: return "external_message";
+        case ConsequenceClass::Financial: return "financial";
+        case ConsequenceClass::Destructive: return "destructive";
+        case ConsequenceClass::AccountOrSecurity: return "account_or_security";
+        case ConsequenceClass::CommandSurface: return "command_surface";
+    }
+    return "routine";
+}
+
+ConsequenceClass ConsequenceClassFromString(const std::string& value)
+{
+    const std::string name = NormalizeName(value);
+    if (name == "observation") return ConsequenceClass::Observation;
+    if (name == "user_content") return ConsequenceClass::UserContent;
+    if (name == "external_message") return ConsequenceClass::ExternalMessage;
+    if (name == "financial") return ConsequenceClass::Financial;
+    if (name == "destructive") return ConsequenceClass::Destructive;
+    if (name == "account_or_security") return ConsequenceClass::AccountOrSecurity;
+    if (name == "command_surface") return ConsequenceClass::CommandSurface;
+    // Anything unreadable lands on the narrow default rather than a permissive one.
+    return ConsequenceClass::Routine;
+}
+
+namespace
+{
+
+// Word-bounded, because substring matching turns "Display settings" into a payment and
+// "Undelete" into a deletion. A label is a phrase, so it is matched as one.
+bool ContainsPhrase(const std::string& haystack, const std::string& phrase)
+{
+    const auto boundary = [](const char character)
+    {
+        return !std::isalnum(static_cast<unsigned char>(character));
+    };
+    std::size_t at = haystack.find(phrase);
+    while (at != std::string::npos)
+    {
+        const bool startsClean = at == 0 || boundary(haystack[at - 1]);
+        const std::size_t after = at + phrase.size();
+        const bool endsClean = after >= haystack.size() || boundary(haystack[after]);
+        if (startsClean && endsClean)
+        {
+            return true;
+        }
+        at = haystack.find(phrase, at + 1);
+    }
+    return false;
+}
+
+bool MatchesAny(const std::string& value, const std::vector<std::string>& phrases)
+{
+    return std::any_of(phrases.begin(), phrases.end(),
+        [&value](const std::string& phrase) { return ContainsPhrase(value, phrase); });
+}
+
+} // namespace
+
+ConsequenceClass ClassifyControlConsequence(
+    const std::string& controlName,
+    const bool isPasswordField)
+{
+    // The one signal here that is measured rather than guessed.
+    if (isPasswordField)
+    {
+        return ConsequenceClass::AccountOrSecurity;
+    }
+
+    std::string name = controlName;
+    std::transform(name.begin(), name.end(), name.begin(), [](const unsigned char c)
+    {
+        return static_cast<char>(std::tolower(c));
+    });
+    if (name.empty())
+    {
+        return ConsequenceClass::Routine;
+    }
+
+    // Checked most severe first, so "delete account" is an account change rather than an
+    // ordinary deletion.
+    static const std::vector<std::string> commandSurface = {
+        "command prompt", "powershell", "terminal", "run command", "execute command",
+        "developer console"};
+    static const std::vector<std::string> accountOrSecurity = {
+        "password", "passphrase", "sign in", "signin", "log in", "login", "sign out",
+        "log out", "credential", "api key", "access token", "two-factor", "2fa",
+        "permission", "permissions", "administrator", "delete account",
+        "deactivate account", "close account", "change email", "security", "privacy",
+        "grant access", "authorize", "private key"};
+    static const std::vector<std::string> financial = {
+        "buy", "buy now", "purchase", "pay", "payment", "checkout", "check out",
+        "place order", "confirm order", "subscribe", "donate", "send money", "transfer"};
+    static const std::vector<std::string> destructive = {
+        "delete", "delete all", "remove", "erase", "format", "wipe", "empty trash",
+        "empty recycle bin", "permanently", "destroy", "uninstall"};
+    static const std::vector<std::string> externalMessage = {
+        "send", "post", "publish", "share", "tweet", "upload", "submit", "reply",
+        "broadcast", "go live", "invite", "email"};
+    static const std::vector<std::string> userContent = {
+        "save", "save as", "rename", "move", "overwrite", "replace", "apply", "commit",
+        "export", "import", "merge"};
+
+    if (MatchesAny(name, commandSurface)) return ConsequenceClass::CommandSurface;
+    if (MatchesAny(name, accountOrSecurity)) return ConsequenceClass::AccountOrSecurity;
+    if (MatchesAny(name, destructive)) return ConsequenceClass::Destructive;
+    if (MatchesAny(name, financial)) return ConsequenceClass::Financial;
+    if (MatchesAny(name, externalMessage)) return ConsequenceClass::ExternalMessage;
+    if (MatchesAny(name, userContent)) return ConsequenceClass::UserContent;
+    return ConsequenceClass::Routine;
+}
+
 std::string ToString(const CapabilitySettings::DesktopControl::InputScope value)
 {
     return value == CapabilitySettings::DesktopControl::InputScope::WholeDesktop
