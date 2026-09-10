@@ -754,6 +754,35 @@ bool ReviaSession::Start()
     startupTimings.push_back({"speech_service_init", ElapsedMilliseconds(stageStarted)});
 
     stageStarted = std::chrono::steady_clock::now();
+    {
+        performance::PerformanceConfig performanceConfig;
+        performanceConfig.enabled = settings.performance.bEnabled;
+        performanceConfig.songLibraryPath = settings.performance.songLibraryPath;
+        performanceConfig.interruptSongToSpeak = settings.performance.bInterruptSongToSpeak;
+        performanceConfig.maximumSongSeconds = settings.performance.maxSongSeconds;
+        performanceConfig.outputBufferMs = settings.performance.outputBufferMs;
+        performanceConfig.instrumentalGain = settings.performance.instrumentalGain;
+        performanceConfig.vocalGain = settings.performance.vocalGain;
+        performanceRuntime.Configure(performanceConfig);
+        // Published from the playback thread. It only ever enqueues onto the bus, which
+        // is what keeps a three-minute song from touching the conversation path at all.
+        performanceRuntime.SetObserver([this](const performance::PerformanceEvent& song)
+        {
+            RuntimeEvent event;
+            event.kind = RuntimeEventKind::Performance;
+            event.state = state.load();
+            event.component = "Performance";
+            event.phase = performance::ToString(song.kind);
+            event.message = song.message;
+            event.detail = song.line;
+            event.initiator = song.songId;
+            event.elapsedMilliseconds = static_cast<double>(song.positionMs);
+            eventBus.Publish(std::move(event));
+        });
+    }
+    startupTimings.push_back({"performance_init", ElapsedMilliseconds(stageStarted)});
+
+    stageStarted = std::chrono::steady_clock::now();
     speechRecognitionService.Start(
         settings.speechRecognition,
         [this](const speech::RecognitionEvent& recognitionEvent)
@@ -3661,6 +3690,15 @@ SessionResult ReviaSession::Submit(
         return result;
     }
 
+    // One voice. A song and a spoken reply are the same throat, so she stops singing to
+    // answer rather than talking over herself. Commands are exempt: /sing status and
+    // /songs are questions about the performance, not interruptions of it.
+    if (settings.performance.bInterruptSongToSpeak && performanceRuntime.IsPerforming() &&
+        input.rfind('/', 0) != 0)
+    {
+        performanceRuntime.Stop("she stopped singing to answer you");
+    }
+
     const agents::InputVerdict inputVerdict = inputArbiter.Offer(
         input,
         source,
@@ -3972,6 +4010,9 @@ void ReviaSession::RequestStop()
     // deliberate stop gesture latches it off rather than merely cancelling the current
     // action. /desktop resume, or the desktop shell's own control, clears it.
     actionRuntime.StopDesktopControl("stop was requested");
+    // A song is the loudest thing she does, so Stop stops it too. Unlike desktop control
+    // this does not latch: the next /sing works normally.
+    performanceRuntime.Stop("you asked her to stop");
     // A visible-browser request owns ActionRuntime's execution mutex while WinHTTP
     // waits, so cancellation must reach the authenticated worker without taking it.
     actionRuntime.CancelActiveInternet();
@@ -4932,6 +4973,86 @@ SessionResult ReviaSession::ActOnScreen(const std::string& instruction)
     return result;
 }
 
+bool ReviaSession::StartSong(const std::string& songQuery, std::string& outError)
+{
+    if (!settings.performance.bEnabled)
+    {
+        outError = "Singing is turned off in settings.";
+        return false;
+    }
+    // Speech and singing are the same voice, so a song begins by clearing the queue
+    // rather than by layering over whatever she was in the middle of saying.
+    speechService.StopSpeaking();
+    return performanceRuntime.Start(songQuery, outError);
+}
+
+void ReviaSession::StopSong(const std::string& reason)
+{
+    performanceRuntime.Stop(reason);
+}
+
+performance::PerformanceStatus ReviaSession::SongStatus() const
+{
+    return performanceRuntime.Status();
+}
+
+std::vector<performance::SongSummary> ReviaSession::Songs() const
+{
+    return performanceRuntime.Library().List();
+}
+
+performance::SongRehearsal ReviaSession::RehearseSong(const std::string& songQuery) const
+{
+    return performanceRuntime.Rehearse(songQuery);
+}
+
+std::string ReviaSession::SongListingText() const
+{
+    const std::vector<performance::SongSummary> songs = Songs();
+    std::ostringstream stream;
+    stream << "Songs in "
+           << actions::PathToUtf8(performanceRuntime.Library().Root()) << "\n";
+    if (songs.empty())
+    {
+        stream << "  (none yet)\n"
+               << "  Make a folder there, drop a .wav in it, and she can sing it.\n"
+               << "  Two files named instrumental.wav and vocal.wav become a karaoke mix,\n"
+               << "  and an optional song.json adds the title, credit, and timed lines.\n";
+        return stream.str();
+    }
+    for (const performance::SongSummary& song : songs)
+    {
+        stream << "  " << song.id;
+        if (song.title != song.id) stream << "  \"" << song.title << '"';
+        if (!song.artist.empty()) stream << "  - " << song.artist;
+        stream << "  [";
+        stream << (song.hasInstrumental ? "instrumental" : "no instrumental");
+        stream << (song.hasVocal ? " + vocal" : ", no vocal");
+        stream << ']';
+        if (!song.usable) stream << "  UNUSABLE: " << song.problem;
+        stream << '\n';
+    }
+    return stream.str();
+}
+
+std::string ReviaSession::SongStatusText() const
+{
+    const performance::PerformanceStatus current = SongStatus();
+    if (current.state == performance::PerformanceState::Idle)
+    {
+        return "Nothing is playing. Use /songs to see what she can sing.";
+    }
+    std::ostringstream stream;
+    stream << performance::ToString(current.state) << ": " << current.title;
+    if (!current.artist.empty()) stream << " - " << current.artist;
+    stream << "\n  " << performance::FormatSongTime(current.positionMs) << " / "
+           << performance::FormatSongTime(current.durationMs);
+    if (!current.sectionLabel.empty()) stream << "  [" << current.sectionLabel << ']';
+    stream << '\n';
+    if (!current.line.empty()) stream << "  " << current.line << '\n';
+    return stream.str();
+}
+
 actions::CapabilitySettings ReviaSession::Capabilities() const
 {
     return actionRuntime.Settings();
@@ -5045,12 +5166,15 @@ CapabilityUpdateResult ReviaSession::SetDesktopControl(
     const bool keyboard,
     const bool applicationLaunch,
     const bool rawCoordinates,
-    const bool autonomous)
+    const bool autonomous,
+    const actions::CapabilitySettings::DesktopControl::InputScope scope,
+    const bool allowCommandSurfaces)
 {
     CapabilityUpdateResult result;
     std::string error;
     result.succeeded = actionRuntime.SetDesktopControl(
-        pointer, keyboard, applicationLaunch, rawCoordinates, autonomous, error);
+        pointer, keyboard, applicationLaunch, rawCoordinates, autonomous, scope,
+        allowCommandSurfaces, error);
     if (!result.succeeded)
     {
         result.message = error;
@@ -5074,11 +5198,16 @@ CapabilityUpdateResult ReviaSession::SetDesktopControl(
             if (index > 0) list += index + 1 == granted.size() ? " and " : ", ";
             list += granted[index];
         }
+        const bool wholeDesktop = desktop.scope ==
+            actions::CapabilitySettings::DesktopControl::InputScope::WholeDesktop;
         result.message = "Desktop control allows " + list +
-            " inside approved applications.";
+            (wholeDesktop ? " anywhere on the desktop." : " inside approved applications.");
         result.message += desktop.rawCoordinates
-            ? " Raw coordinates are allowed."
+            ? " She may aim at coordinates she chose."
             : " Only re-verified elements may be targeted.";
+        result.message += desktop.allowCommandSurfaces
+            ? " Command surfaces are reachable."
+            : " Command surfaces stay out of reach.";
         result.message += desktop.autonomous
             ? " She may also operate the desktop on her own."
             : " She may only do it as part of something you asked for.";
@@ -5139,7 +5268,13 @@ std::string ReviaSession::DesktopControlStatus() const
     stream << "  Pointer:             " << (desktop.pointer ? "on" : "off") << '\n';
     stream << "  Keyboard:            " << (desktop.keyboard ? "on" : "off") << '\n';
     stream << "  Start applications:  " << (desktop.applicationLaunch ? "on" : "off") << '\n';
-    stream << "  Raw coordinates:     " << (desktop.rawCoordinates ? "on" : "off") << '\n';
+    stream << "  Chosen coordinates:  " << (desktop.rawCoordinates ? "on" : "off") << '\n';
+    stream << "  Reach:               "
+           << (desktop.scope ==
+                   actions::CapabilitySettings::DesktopControl::InputScope::WholeDesktop
+               ? "the whole desktop" : "approved applications only") << '\n';
+    stream << "  Command surfaces:    "
+           << (desktop.allowCommandSurfaces ? "reachable" : "refused") << '\n';
     stream << "  On her own:          " << (desktop.autonomous ? "on" : "off") << '\n';
     stream << "  Execution mode:      "
            << actions::ToString(actionRuntime.Settings().mode) << '\n';
@@ -7823,6 +7958,87 @@ bool ReviaSession::TryHandleActionInput(const std::string& input, SessionResult&
             }
         }
         SetState(result.succeeded ? RuntimeState::Idle : RuntimeState::Blocked, result.reason);
+        return true;
+    }
+
+    if (input == "/songs")
+    {
+        result.text = SongListingText();
+        SetState(RuntimeState::Idle);
+        return true;
+    }
+
+    if (input == "/sing" || input.rfind("/sing ", 0) == 0 ||
+        input == "/karaoke" || input.rfind("/karaoke ", 0) == 0)
+    {
+        const std::size_t prefix = input.rfind("/karaoke", 0) == 0 ? 8U : 5U;
+        const std::string argument =
+            input.size() > prefix ? Trim(input.substr(prefix)) : std::string();
+        if (argument.empty() || argument == "status")
+        {
+            result.text = SongStatusText();
+            SetState(RuntimeState::Idle);
+            return true;
+        }
+        if (argument == "stop")
+        {
+            const performance::PerformanceStatus current = SongStatus();
+            StopSong("you asked her to stop");
+            result.text = current.state == performance::PerformanceState::Idle
+                ? "She was not singing."
+                : "Stopped " + current.title + ".";
+            SetState(RuntimeState::Idle);
+            return true;
+        }
+        if (argument.rfind("check ", 0) == 0)
+        {
+            // The rehearsal answers "will this song play?" without three minutes of
+            // audio, which is the only honest way to check a new asset.
+            const performance::SongRehearsal rehearsal = RehearseSong(Trim(argument.substr(6)));
+            if (!rehearsal.succeeded)
+            {
+                result.succeeded = false;
+                result.text = rehearsal.error;
+                result.reason = rehearsal.error;
+                SetState(RuntimeState::Blocked, result.reason);
+                return true;
+            }
+            std::ostringstream stream;
+            stream << rehearsal.title << " is ready to sing.\n"
+                   << "  " << performance::FormatSongTime(rehearsal.durationMs) << " at "
+                   << rehearsal.sampleRate << " Hz\n"
+                   << "  tracks: "
+                   << (rehearsal.hasInstrumental ? "instrumental" : "no instrumental")
+                   << (rehearsal.hasVocal ? " + vocal" : ", no vocal") << '\n'
+                   << "  " << rehearsal.sectionCount << " marked section(s), "
+                   << rehearsal.vocalSpanCount << " sung phrase(s)\n";
+            if (rehearsal.clippedSamples > 0 && rehearsal.totalSamples > 0)
+            {
+                const double percent = 100.0 * static_cast<double>(rehearsal.clippedSamples) /
+                    static_cast<double>(rehearsal.totalSamples);
+                stream << "  " << rehearsal.clippedSamples << " sample(s) clip when mixed ("
+                       << static_cast<int>(percent + 0.5)
+                       << "%). Lower instrumentalGain or vocalGain if it sounds harsh.\n";
+            }
+            result.text = stream.str();
+            SetState(RuntimeState::Idle);
+            return true;
+        }
+
+        std::string error;
+        if (!StartSong(argument, error))
+        {
+            result.succeeded = false;
+            result.text = error;
+            result.reason = error;
+            SetState(RuntimeState::Blocked, result.reason);
+            return true;
+        }
+        const performance::PerformanceStatus current = SongStatus();
+        result.text = "Singing " + current.title +
+            (current.artist.empty() ? "" : " - " + current.artist) +
+            ". Use /sing stop to stop her.";
+        SetState(RuntimeState::Idle);
         return true;
     }
 

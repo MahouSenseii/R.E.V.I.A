@@ -130,6 +130,15 @@
     "minimumUtteranceMs": 350,
     "maximumUtteranceSeconds": 24
   },
+  "performance": {
+    "enabled": true,
+    "songLibraryPath": "RuntimeData/Songs",
+    "interruptSongToSpeak": true,
+    "maxSongSeconds": 600,
+    "outputBufferMs": 120,
+    "instrumentalGain": 1.0,
+    "vocalGain": 1.0
+  },
   "presence": {
     "enabled": true,
     "avatarBridgeEnabled": true,

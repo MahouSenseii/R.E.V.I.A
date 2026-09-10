@@ -77,9 +77,10 @@ CapabilityPanel::CapabilityPanel(
     desktopTitle->setObjectName("sectionTitle");
     layout->addWidget(desktopTitle);
     auto* desktopExplanation = new QLabel(
-        "Synthesized input is indistinguishable from you typing, so it is confined to "
-        "windows that belong to an approved application above and refuses to act if "
-        "something else has focus. Hold ctrl+alt+shift, or press Stop, to halt it "
+        "Synthesized input is indistinguishable from you typing. By default it is "
+        "confined to windows belonging to an approved application above. Giving her the "
+        "whole desktop removes that confinement on purpose, so she can learn the machine "
+        "the way a person does. Hold ctrl+alt+shift, or press Stop, to halt it "
         "immediately.", this);
     desktopExplanation->setWordWrap(true);
     desktopExplanation->setObjectName("secondaryText");
@@ -88,10 +89,17 @@ CapabilityPanel::CapabilityPanel(
     pointerCheck = new QCheckBox("Move and click the pointer", this);
     keyboardCheck = new QCheckBox("Type and press key chords", this);
     launchCheck = new QCheckBox("Start approved applications", this);
-    rawCoordinateCheck = new QCheckBox("Allow raw coordinates", this);
+    rawCoordinateCheck = new QCheckBox("Aim at coordinates she chose", this);
     rawCoordinateCheck->setToolTip(
-        "Without this she may only click an element the screen resolver re-verified. "
-        "Either way the point must land inside the approved application's window.");
+        "Without this she may only click an element the screen resolver re-verified.");
+    wholeDesktopCheck = new QCheckBox("Give her the whole desktop", this);
+    wholeDesktopCheck->setToolTip(
+        "The pointer goes anywhere and the keyboard goes to whatever has focus, the way "
+        "it does for you. Needs pointer control and chosen coordinates.");
+    commandSurfaceCheck = new QCheckBox("Allow terminals and script hosts", this);
+    commandSurfaceCheck->setToolTip(
+        "Off by default. Typing into a command interpreter is model text reaching a "
+        "shell no matter which window it arrived through.");
     autonomousDesktopCheck = new QCheckBox("Let Revia operate on her own", this);
     autonomousDesktopCheck->setToolTip(
         "A separate permission. Without it she may only do this as part of something "
@@ -105,10 +113,15 @@ CapabilityPanel::CapabilityPanel(
     layout->addLayout(desktopRow);
     auto* desktopScopeRow = new QHBoxLayout();
     desktopScopeRow->addWidget(rawCoordinateCheck);
-    desktopScopeRow->addWidget(autonomousDesktopCheck);
+    desktopScopeRow->addWidget(wholeDesktopCheck);
+    desktopScopeRow->addWidget(commandSurfaceCheck);
     desktopScopeRow->addStretch();
-    desktopScopeRow->addWidget(desktopStopButton);
     layout->addLayout(desktopScopeRow);
+    auto* desktopAutonomyRow = new QHBoxLayout();
+    desktopAutonomyRow->addWidget(autonomousDesktopCheck);
+    desktopAutonomyRow->addStretch();
+    desktopAutonomyRow->addWidget(desktopStopButton);
+    layout->addLayout(desktopAutonomyRow);
 
     auto* body = new QHBoxLayout();
     auto* approvedColumn = new QVBoxLayout();
@@ -185,6 +198,10 @@ CapabilityPanel::CapabilityPanel(
         this, [this]() { ApplyDesktopControlSettings(); });
     connect(rawCoordinateCheck, &QCheckBox::toggled,
         this, [this]() { ApplyDesktopControlSettings(); });
+    connect(wholeDesktopCheck, &QCheckBox::toggled,
+        this, [this]() { ApplyDesktopControlSettings(); });
+    connect(commandSurfaceCheck, &QCheckBox::toggled,
+        this, [this]() { ApplyDesktopControlSettings(); });
     connect(autonomousDesktopCheck, &QCheckBox::toggled,
         this, [this]() { ApplyDesktopControlSettings(); });
     connect(desktopStopButton, &QPushButton::clicked, this, [this]() { ToggleDesktopStop(); });
@@ -249,6 +266,11 @@ void CapabilityPanel::Refresh()
     launchCheck->setChecked(desktop.applicationLaunch);
     rawCoordinateCheck->setChecked(desktop.rawCoordinates);
     rawCoordinateCheck->setEnabled(desktop.pointer);
+    wholeDesktopCheck->setChecked(desktop.scope ==
+        revia::actions::CapabilitySettings::DesktopControl::InputScope::WholeDesktop);
+    wholeDesktopCheck->setEnabled(desktop.pointer && desktop.rawCoordinates);
+    commandSurfaceCheck->setChecked(desktop.allowCommandSurfaces);
+    commandSurfaceCheck->setEnabled(desktop.pointer || desktop.keyboard);
     autonomousDesktopCheck->setChecked(desktop.autonomous);
     autonomousDesktopCheck->setEnabled(desktop.AnyEnabled());
     // Kept meaningful even with every capability off: the stop has to stay reachable
@@ -354,12 +376,58 @@ void CapabilityPanel::ApplyDesktopControlSettings()
             return;
         }
     }
+    using InputScope =
+        revia::actions::CapabilitySettings::DesktopControl::InputScope;
+    if (previous.scope != InputScope::WholeDesktop && wholeDesktopCheck->isChecked())
+    {
+        const bool approved = QMessageBox::question(
+            this,
+            "Give Revia the whole desktop",
+            "Until now her input has been confined to windows belonging to the "
+            "applications you approved. This removes that confinement: the pointer can "
+            "go anywhere on your screens and the keyboard goes to whatever has focus, "
+            "exactly as it does for you.\n\n"
+            "That is the point of it -- a general skill cannot be learned inside one "
+            "application -- but it is worth being clear that confinement is what is "
+            "being given up. What remains is this permission, the refusal to touch "
+            "terminals and script hosts, the per-minute input budget, the audit log, and "
+            "the ctrl+alt+shift stop. Those raise the effort; none of them is a proof "
+            "that she cannot reach something you would not have chosen.\n\n"
+            "Give her the whole desktop?",
+            QMessageBox::Yes | QMessageBox::No,
+            QMessageBox::No) == QMessageBox::Yes;
+        if (!approved)
+        {
+            Refresh();
+            return;
+        }
+    }
+    if (!previous.allowCommandSurfaces && commandSurfaceCheck->isChecked())
+    {
+        const bool approved = QMessageBox::question(
+            this,
+            "Allow terminals and script hosts",
+            "Command interpreters, script hosts, and the chords that summon them are "
+            "refused by default, because text typed into one of them is model text "
+            "running as a command however it arrived. Allowing this makes that possible "
+            "on purpose. Allow it?",
+            QMessageBox::Yes | QMessageBox::No,
+            QMessageBox::No) == QMessageBox::Yes;
+        if (!approved)
+        {
+            Refresh();
+            return;
+        }
+    }
     const auto result = session.SetDesktopControl(
         pointerCheck->isChecked(),
         keyboardCheck->isChecked(),
         launchCheck->isChecked(),
         rawCoordinateCheck->isChecked(),
-        autonomousDesktopCheck->isChecked());
+        autonomousDesktopCheck->isChecked(),
+        wholeDesktopCheck->isChecked()
+            ? InputScope::WholeDesktop : InputScope::ApprovedApplications,
+        commandSurfaceCheck->isChecked());
     SetStatus(QString::fromStdString(result.message), !result.succeeded);
     Refresh();
 }

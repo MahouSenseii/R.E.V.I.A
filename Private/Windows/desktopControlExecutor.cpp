@@ -59,18 +59,21 @@ VirtualDesktop DesktopBounds()
     return bounds;
 }
 
+bool OnVirtualDesktop(const int x, const int y)
+{
+    const VirtualDesktop desktop = DesktopBounds();
+    return desktop.width > 1 && desktop.height > 1 &&
+        x >= desktop.left && y >= desktop.top &&
+        x < desktop.left + desktop.width && y < desktop.top + desktop.height;
+}
+
 // SendInput's absolute space is 0..65535 across the whole virtual desktop, which is the
 // same space the screen-capture service already reports monitors in, so a coordinate
 // that came from what Revia saw and a coordinate injected here mean the same pixel.
 bool ToAbsolute(const int x, const int y, LONG& outX, LONG& outY)
 {
     const VirtualDesktop desktop = DesktopBounds();
-    if (desktop.width <= 1 || desktop.height <= 1)
-    {
-        return false;
-    }
-    if (x < desktop.left || y < desktop.top ||
-        x >= desktop.left + desktop.width || y >= desktop.top + desktop.height)
+    if (!OnVirtualDesktop(x, y))
     {
         return false;
     }
@@ -134,9 +137,28 @@ DWORD ForegroundProcessId()
     return processId;
 }
 
-// The containment check that matters. Policy proved the application is approved; this
-// proves the keystroke or click is about to reach that application and not whatever
-// took focus in the meantime.
+std::string ExecutableOfProcess(const DWORD processId)
+{
+    return processId == 0
+        ? std::string{} : WideToUtf8(ProcessFileName(static_cast<int>(processId)));
+}
+
+std::string ExecutableAtPoint(const int x, const int y)
+{
+    const POINT point{static_cast<LONG>(x), static_cast<LONG>(y)};
+    const HWND window = WindowFromPoint(point);
+    if (window == nullptr)
+    {
+        return {};
+    }
+    DWORD processId = 0;
+    GetWindowThreadProcessId(window, &processId);
+    return ExecutableOfProcess(processId);
+}
+
+// Confined scope only. Policy proved the application is approved; this proves the
+// keystroke or click is about to reach that application and not whatever took focus in
+// the meantime.
 bool ForegroundBelongsTo(const std::string& application)
 {
     const DWORD processId = ForegroundProcessId();
@@ -246,11 +268,16 @@ struct PointerTarget
 {
     int x = 0;
     int y = 0;
+    int endX = 0;
+    int endY = 0;
     bool resolved = false;
+    bool aimed = false;
     std::string failure;
 };
 
-PointerTarget ResolvePointerTarget(
+// Confined scope: the point comes from a re-verified element, or from a coordinate that
+// must still land inside the approved window.
+PointerTarget ResolveInsideWindow(
     IUIAutomation* automation,
     IUIAutomationElement* window,
     const ActionRequest& request)
@@ -283,23 +310,49 @@ PointerTarget ResolvePointerTarget(
         }
         target.x = bounds.left + (bounds.right - bounds.left) / 2;
         target.y = bounds.top + (bounds.bottom - bounds.top) / 2;
+        target.aimed = true;
     }
-    else
+    else if (request.input.hasPoint)
     {
         target.x = request.input.x;
         target.y = request.input.y;
+        target.aimed = true;
     }
+    target.endX = request.input.endX;
+    target.endY = request.input.endY;
 
-    // Even an owner-approved raw coordinate stays inside the window Revia was given
+    const auto inside = [&windowBounds](const int x, const int y)
+    {
+        return x >= windowBounds.left && x < windowBounds.right &&
+            y >= windowBounds.top && y < windowBounds.bottom;
+    };
+    // Even an owner-approved chosen coordinate stays inside the window Revia was given
     // permission to operate. Nothing here can reach another application by arithmetic.
-    if (target.x < windowBounds.left || target.x >= windowBounds.right ||
-        target.y < windowBounds.top || target.y >= windowBounds.bottom)
+    if (target.aimed && !inside(target.x, target.y))
     {
         target.failure = "The point is outside the approved application's window.";
         return target;
     }
+    if (request.input.hasEndPoint && !inside(target.endX, target.endY))
+    {
+        target.failure = "The drag would end outside the approved application's window.";
+        return target;
+    }
     target.resolved = true;
     return target;
+}
+
+bool MoveTo(const int x, const int y)
+{
+    LONG absoluteX = 0;
+    LONG absoluteY = 0;
+    if (!ToAbsolute(x, y, absoluteX, absoluteY))
+    {
+        return false;
+    }
+    return Send({MouseEvent(
+        MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK,
+        absoluteX, absoluteY)});
 }
 
 DWORD ButtonDownFlag(const ActionRequest::DesktopInput::PointerButton button)
@@ -330,17 +383,65 @@ DWORD ButtonUpFlag(const ActionRequest::DesktopInput::PointerButton button)
     }
 }
 
-bool MoveTo(const int x, const int y)
+// A drag is the one action that leaves the machine in a changed state partway through.
+// The release is therefore unconditional: every early exit still lets go of the button.
+ActionResult Drag(
+    const ActionRequest& request,
+    const PointerTarget& target,
+    policy::DesktopInputGuard& guard)
 {
-    LONG absoluteX = 0;
-    LONG absoluteY = 0;
-    if (!ToAbsolute(x, y, absoluteX, absoluteY))
+    ActionResult result;
+    result.attempted = true;
+    result.backend = "windows_send_input";
+    if (!MoveTo(target.x, target.y))
     {
-        return false;
+        result.message = "The drag start point is not on any attached display.";
+        return result;
     }
-    return Send({MouseEvent(
-        MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK,
-        absoluteX, absoluteY)});
+    if (!OnVirtualDesktop(target.endX, target.endY))
+    {
+        result.message = "The drag end point is not on any attached display.";
+        return result;
+    }
+
+    const DWORD down = ButtonDownFlag(request.input.button);
+    const DWORD up = ButtonUpFlag(request.input.button);
+    if (!Send({MouseEvent(down)}))
+    {
+        result.message = "Windows rejected the synthesized button press.";
+        return result;
+    }
+
+    // Interpolated rather than teleported: a drag that jumps in one step is not a drag
+    // as far as most applications are concerned, because they never see it move.
+    constexpr int Steps = 24;
+    bool interrupted = false;
+    bool delivered = true;
+    for (int step = 1; step <= Steps && delivered; ++step)
+    {
+        if (guard.IsTripped())
+        {
+            interrupted = true;
+            break;
+        }
+        const int x = target.x + ((target.endX - target.x) * step) / Steps;
+        const int y = target.y + ((target.endY - target.y) * step) / Steps;
+        delivered = MoveTo(x, y);
+        std::this_thread::sleep_for(std::chrono::milliseconds(8));
+    }
+    const bool released = Send({MouseEvent(up)});
+
+    result.succeeded = delivered && released && !interrupted;
+    result.message = interrupted
+        ? "The drag was stopped and the button released: " + guard.Reason()
+        : !released
+            ? "The drag finished but Windows rejected the button release."
+            : !delivered
+                ? "The drag was interrupted by a rejected move; the button was released."
+                : "Dragged from " + std::to_string(target.x) + ", " +
+                    std::to_string(target.y) + " to " + std::to_string(target.endX) +
+                    ", " + std::to_string(target.endY) + ".";
+    return result;
 }
 
 ActionResult TypeTextInput(
@@ -367,8 +468,8 @@ ActionResult TypeTextInput(
 
     // Pinned once, then compared per character. Comparing process ids rather than
     // re-reading the image name is both cheaper and stricter: a second instance of the
-    // same approved executable is a different window, and text meant for one of them
-    // should not finish in the other.
+    // same executable is a different window, and text meant for one of them should not
+    // finish in the other.
     const DWORD target = ForegroundProcessId();
     if (target == 0)
     {
@@ -388,7 +489,7 @@ ActionResult TypeTextInput(
         if (ForegroundProcessId() != target)
         {
             result.message = "Typing stopped after " + std::to_string(sent) +
-                " characters because focus left " + request.application + ".";
+                " characters because focus moved to another window.";
             return result;
         }
         const bool delivered = unit == L'\n'
@@ -408,7 +509,7 @@ ActionResult TypeTextInput(
     // The text itself is never echoed into a message that reaches logs, the UI, or
     // memory. The audit record keeps its length for the same reason.
     result.message = "Typed " + std::to_string(sent) + " characters into " +
-        request.application + ".";
+        ExecutableOfProcess(target) + ".";
     return result;
 }
 
@@ -440,7 +541,7 @@ ActionResult PressKeyChord(const ActionRequest& request)
     // One SendInput call, so a modifier can never be left held by a partial batch.
     result.succeeded = Send(std::move(events));
     result.message = result.succeeded
-        ? "Pressed " + chord.normalized + " in " + request.application + "."
+        ? "Pressed " + chord.normalized + "."
         : "Windows rejected the synthesized key chord.";
     return result;
 }
@@ -494,6 +595,10 @@ ActionResult DesktopControlExecutor::Execute(
         return LaunchApplication(request, decision);
     }
 
+    // Naming an application asks for the confined form; leaving it out asks for the
+    // desktop. Policy has already refused the second unless the owner widened the scope.
+    const bool screenSpace = request.application.empty();
+
     const HRESULT initialized = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
     const bool shouldUninitialize = initialized == S_OK || initialized == S_FALSE;
     if (FAILED(initialized) && initialized != RPC_E_CHANGED_MODE)
@@ -507,102 +612,180 @@ ActionResult DesktopControlExecutor::Execute(
             CLSID_CUIAutomation, nullptr, CLSCTX_INPROC_SERVER, IID_IUIAutomation,
             reinterpret_cast<void**>(&automation))) || automation == nullptr)
     {
-        result.message = "Windows UI Automation is unavailable, so the target window "
-            "cannot be verified and no input was synthesized.";
-        if (shouldUninitialize) CoUninitialize();
-        return result;
+        // Confined actions need it to verify the window. Screen-space actions only use
+        // it to describe what they touched, which is worth losing but not worth failing.
+        if (!screenSpace)
+        {
+            result.message = "Windows UI Automation is unavailable, so the target window "
+                "cannot be verified and no input was synthesized.";
+            if (shouldUninitialize) CoUninitialize();
+            return result;
+        }
     }
 
-    IUIAutomationElement* window = FindApplicationWindow(automation, request);
-    if (window == nullptr)
+    IUIAutomationElement* window = nullptr;
+    result.attempted = true;
+    result.backend = "windows_send_input";
+    if (!screenSpace)
     {
-        result.message = "No matching window was found for " + request.application + ".";
+        window = FindApplicationWindow(automation, request);
+        if (window == nullptr)
+        {
+            result.message = "No matching window was found for " + request.application + ".";
+            Release(automation);
+            if (shouldUninitialize) CoUninitialize();
+            return result;
+        }
+        if (!FocusAndConfirm(window, request.application))
+        {
+            result.message = "The foreground window does not belong to " +
+                request.application + "; no input was synthesized.";
+            Release(window);
+            Release(automation);
+            if (shouldUninitialize) CoUninitialize();
+            return result;
+        }
+    }
+
+    const auto finish = [&]()
+    {
+        Release(window);
         Release(automation);
         if (shouldUninitialize) CoUninitialize();
         return result;
+    };
+
+    if (request.type == ActionType::PressKeys || request.type == ActionType::TypeText)
+    {
+        // A shell reached by keystroke is still model text reaching a shell, and in
+        // screen space the only way to know which window will receive it is to look.
+        if (screenSpace && !settings.allowCommandSurfaces)
+        {
+            const std::string focused = ExecutableOfProcess(ForegroundProcessId());
+            if (IsCommandSurfaceExecutable(focused))
+            {
+                result.message = "The focused window is " + focused +
+                    ", a command surface, so nothing was typed.";
+                return finish();
+            }
+        }
+        result = request.type == ActionType::PressKeys
+            ? PressKeyChord(request) : TypeTextInput(request, settings, *guard);
+        return finish();
     }
 
-    result.attempted = true;
-    result.backend = "windows_send_input";
-    if (!FocusAndConfirm(window, request.application))
+    PointerTarget target;
+    if (screenSpace)
     {
-        result.message = "The foreground window does not belong to " +
-            request.application + "; no input was synthesized.";
-    }
-    else if (request.type == ActionType::PressKeys)
-    {
-        result = PressKeyChord(request);
-    }
-    else if (request.type == ActionType::TypeText)
-    {
-        result = TypeTextInput(request, settings, *guard);
+        target.x = request.input.x;
+        target.y = request.input.y;
+        target.endX = request.input.endX;
+        target.endY = request.input.endY;
+        target.aimed = request.input.hasPoint;
+        target.resolved = true;
+        if (target.aimed && !OnVirtualDesktop(target.x, target.y))
+        {
+            result.message = "The point is not on any attached display.";
+            return finish();
+        }
     }
     else
     {
-        const PointerTarget target = ResolvePointerTarget(automation, window, request);
+        target = ResolveInsideWindow(automation, window, request);
         if (!target.resolved)
         {
             result.message = target.failure;
+            return finish();
         }
-        else if (!ForegroundBelongsTo(request.application))
+        if (!ForegroundBelongsTo(request.application))
         {
             // Re-verified after the target was resolved: resolution walks the whole
             // element tree, which is long enough for focus to move.
             result.message = "Focus left " + request.application +
                 " while the target was being verified; nothing was clicked.";
-        }
-        else if (!MoveTo(target.x, target.y))
-        {
-            result.message = "The point is not on any attached display.";
-        }
-        else if (request.type == ActionType::MoveCursor)
-        {
-            result.succeeded = true;
-            result.message = "Moved the pointer to " + std::to_string(target.x) + ", " +
-                std::to_string(target.y) + " in " + request.application + ".";
-        }
-        else if (request.type == ActionType::ScrollPointer)
-        {
-            const DWORD flags = request.input.horizontalScroll
-                ? MOUSEEVENTF_HWHEEL : MOUSEEVENTF_WHEEL;
-            const DWORD amount = static_cast<DWORD>(
-                static_cast<int>(WHEEL_DELTA) * request.input.scrollClicks);
-            result.succeeded = Send({MouseEvent(flags, 0, 0, amount)});
-            result.message = result.succeeded
-                ? "Scrolled " + std::to_string(request.input.scrollClicks) +
-                    " detents in " + request.application + "."
-                : "Windows rejected the synthesized scroll.";
-        }
-        else
-        {
-            const DWORD down = ButtonDownFlag(request.input.button);
-            const DWORD up = ButtonUpFlag(request.input.button);
-            bool delivered = true;
-            int completed = 0;
-            for (int click = 0; click < request.input.clickCount && delivered; ++click)
-            {
-                if (guard->IsTripped())
-                {
-                    break;
-                }
-                delivered = Send({MouseEvent(down), MouseEvent(up)});
-                if (delivered) ++completed;
-            }
-            result.succeeded = delivered && completed == request.input.clickCount;
-            result.message = result.succeeded
-                ? "Clicked " + std::to_string(completed) + " time(s) at " +
-                    std::to_string(target.x) + ", " + std::to_string(target.y) + " in " +
-                    request.application + "."
-                : guard->IsTripped()
-                    ? "The click was stopped: " + guard->Reason()
-                    : "Windows rejected the synthesized click.";
+            return finish();
         }
     }
 
-    Release(window);
-    Release(automation);
-    if (shouldUninitialize) CoUninitialize();
-    return result;
+    // Where the pointer actually is, for a scroll that named no point.
+    if (!target.aimed)
+    {
+        POINT cursor{};
+        if (GetCursorPos(&cursor) != FALSE)
+        {
+            target.x = static_cast<int>(cursor.x);
+            target.y = static_cast<int>(cursor.y);
+        }
+    }
+
+    if (screenSpace && !settings.allowCommandSurfaces)
+    {
+        const std::string owner = ExecutableAtPoint(target.x, target.y);
+        if (IsCommandSurfaceExecutable(owner))
+        {
+            result.message = "That point belongs to " + owner +
+                ", a command surface, so nothing was clicked.";
+            return finish();
+        }
+    }
+
+    if (target.aimed && !MoveTo(target.x, target.y))
+    {
+        result.message = "The point is not on any attached display.";
+        return finish();
+    }
+
+    // What is under the pointer, read after moving. This is the feedback that makes a
+    // pointer skill learnable rather than blind; it is description, never permission.
+    const PointDescription under = automation != nullptr
+        ? DescribePoint(automation, target.x, target.y) : PointDescription{};
+    const std::string where = " Pointer is over " + under.Summary() + ".";
+
+    if (request.type == ActionType::MoveCursor)
+    {
+        result.succeeded = true;
+        result.message = "Moved the pointer to " + std::to_string(target.x) + ", " +
+            std::to_string(target.y) + "." + where;
+    }
+    else if (request.type == ActionType::DragPointer)
+    {
+        result = Drag(request, target, *guard);
+    }
+    else if (request.type == ActionType::ScrollPointer)
+    {
+        const DWORD flags = request.input.horizontalScroll
+            ? MOUSEEVENTF_HWHEEL : MOUSEEVENTF_WHEEL;
+        const DWORD amount = static_cast<DWORD>(
+            static_cast<int>(WHEEL_DELTA) * request.input.scrollClicks);
+        result.succeeded = Send({MouseEvent(flags, 0, 0, amount)});
+        result.message = result.succeeded
+            ? "Scrolled " + std::to_string(request.input.scrollClicks) + " detents." + where
+            : "Windows rejected the synthesized scroll.";
+    }
+    else
+    {
+        const DWORD down = ButtonDownFlag(request.input.button);
+        const DWORD up = ButtonUpFlag(request.input.button);
+        bool delivered = true;
+        int completed = 0;
+        for (int click = 0; click < request.input.clickCount && delivered; ++click)
+        {
+            if (guard->IsTripped())
+            {
+                break;
+            }
+            delivered = Send({MouseEvent(down), MouseEvent(up)});
+            if (delivered) ++completed;
+        }
+        result.succeeded = delivered && completed == request.input.clickCount;
+        result.message = result.succeeded
+            ? "Clicked " + std::to_string(completed) + " time(s) at " +
+                std::to_string(target.x) + ", " + std::to_string(target.y) + "." + where
+            : guard->IsTripped()
+                ? "The click was stopped: " + guard->Reason()
+                : "Windows rejected the synthesized click.";
+    }
+    return finish();
 #else
     (void)decision;
     (void)settings;

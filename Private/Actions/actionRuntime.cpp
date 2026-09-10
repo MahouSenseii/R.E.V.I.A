@@ -271,6 +271,8 @@ std::string ActionRuntime::StatusJson() const
             {"application_launch", settings.desktopControl.applicationLaunch},
             {"raw_coordinates", settings.desktopControl.rawCoordinates},
             {"autonomous", settings.desktopControl.autonomous},
+            {"scope", ToString(settings.desktopControl.scope)},
+            {"allow_command_surfaces", settings.desktopControl.allowCommandSurfaces},
             {"max_input_actions_per_minute",
                 settings.desktopControl.maxInputActionsPerMinute},
             {"minimum_input_interval_ms",
@@ -395,12 +397,14 @@ bool ActionRuntime::SetDesktopControl(
     const bool applicationLaunch,
     const bool rawCoordinates,
     const bool autonomous,
+    const CapabilitySettings::DesktopControl::InputScope scope,
+    const bool allowCommandSurfaces,
     std::string& outError)
 {
     std::lock_guard lock(mutex);
     return capabilityEditor.SetDesktopControl(
             capabilityConfigPath, pointer, keyboard, applicationLaunch, rawCoordinates,
-            autonomous, outError) &&
+            autonomous, scope, allowCommandSurfaces, outError) &&
         ReloadUnlocked(outError);
 }
 

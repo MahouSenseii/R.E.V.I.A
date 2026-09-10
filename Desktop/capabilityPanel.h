@@ -55,6 +55,8 @@ private:
     QCheckBox* keyboardCheck = nullptr;
     QCheckBox* launchCheck = nullptr;
     QCheckBox* rawCoordinateCheck = nullptr;
+    QCheckBox* wholeDesktopCheck = nullptr;
+    QCheckBox* commandSurfaceCheck = nullptr;
     QCheckBox* autonomousDesktopCheck = nullptr;
     QPushButton* desktopStopButton = nullptr;
     QPushButton* approveDiscoveredButton = nullptr;

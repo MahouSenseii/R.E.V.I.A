@@ -99,9 +99,213 @@ void GoalRunner::SetProgressHandler(ProgressHandler handler)
     progressHandler = std::move(handler);
 }
 
+void GoalRunner::SetStepProvider(StepProvider provider)
+{
+    stepProvider = std::move(provider);
+}
+
 void GoalRunner::SetConfirmationHandler(ConfirmationHandler handler)
 {
     confirmationHandler = std::move(handler);
+}
+
+namespace
+{
+
+// Enough of an action to tell "she is doing the same thing again" from "she is doing
+// something new". Deliberately covers the target as well as the verb: clicking twice in
+// different places is progress, clicking twice in the same place is not.
+std::string ActionFingerprint(const actions::ActionRequest& action)
+{
+    std::string fingerprint = actions::ToString(action.type);
+    fingerprint += '|' + action.application;
+    fingerprint += '|' + action.windowTitle;
+    fingerprint += '|' + action.control;
+    fingerprint += '|' + action.value;
+    fingerprint += '|' + action.input.keys;
+    fingerprint += '|' + actions::PathToUtf8(action.source);
+    fingerprint += '|' + actions::PathToUtf8(action.destination);
+    if (action.input.hasPoint)
+    {
+        fingerprint += '|' + std::to_string(action.input.x) + ',' +
+            std::to_string(action.input.y);
+    }
+    return fingerprint;
+}
+
+} // namespace
+
+Goal GoalRunner::Operate(Goal goal, std::stop_token stopToken)
+{
+    if (goal.id.empty())
+    {
+        goal.id = NewGoalId();
+    }
+
+    if (!stepProvider)
+    {
+        // Refusing beats running zero steps and reporting success, which is the shape
+        // this failure would otherwise take.
+        goal.status = GoalStatus::Failed;
+        goal.stopReason = StopReason::InvalidPlan;
+        static_cast<void>(Persist(goal));
+        return goal;
+    }
+    if (!actionRuntime.IsInitialized())
+    {
+        goal.status = GoalStatus::Blocked;
+        goal.stopReason = StopReason::PolicyBlocked;
+        static_cast<void>(Persist(goal));
+        return goal;
+    }
+
+    const policy::CapabilityPolicy scopedPolicy(goal.scope);
+    const auto startedAt = std::chrono::steady_clock::now();
+    const std::uint64_t priorElapsed = goal.spend.elapsedMs;
+
+    goal.status = GoalStatus::Running;
+    goal.stopReason = StopReason::None;
+    if (!Persist(goal))
+    {
+        goal.status = GoalStatus::Failed;
+        goal.stopReason = StopReason::StoreError;
+        return goal;
+    }
+
+    std::string lastFingerprint;
+    std::uint32_t repeats = 0;
+    for (std::uint32_t iteration = 0;; ++iteration)
+    {
+        goal.spend.elapsedMs = priorElapsed + ElapsedMilliseconds(startedAt);
+
+        if (stopToken.stop_requested())
+        {
+            goal.status = GoalStatus::Cancelled;
+            goal.stopReason = StopReason::Cancelled;
+            static_cast<void>(Persist(goal));
+            return goal;
+        }
+
+        const StopReason budget = CheckBudget(goal);
+        if (budget != StopReason::None)
+        {
+            goal.status = GoalStatus::Exhausted;
+            goal.stopReason = budget;
+            static_cast<void>(Persist(goal));
+            return goal;
+        }
+
+        const NextStep next = stepProvider(goal, iteration);
+        if (!next.hasStep)
+        {
+            // Finished and stuck are opposite outcomes and are recorded as such.
+            goal.status = next.finished ? GoalStatus::Succeeded : GoalStatus::Blocked;
+            goal.stopReason =
+                next.finished ? StopReason::Completed : StopReason::Undecided;
+            goal.spend.elapsedMs = priorElapsed + ElapsedMilliseconds(startedAt);
+            static_cast<void>(Persist(goal));
+            return goal;
+        }
+
+        GoalStep step = next.step;
+        step.ordinal = static_cast<std::uint32_t>(goal.steps.size());
+        std::string stepError;
+        if (!ValidateStep(step, stepError))
+        {
+            // A step invented mid-run faces exactly the checks a planned one does, so
+            // the loop cannot become a way to execute something unverifiable.
+            goal.status = GoalStatus::Failed;
+            goal.stopReason = StopReason::InvalidPlan;
+            goal.spend.elapsedMs = priorElapsed + ElapsedMilliseconds(startedAt);
+            static_cast<void>(Persist(goal));
+            return goal;
+        }
+
+        const std::string fingerprint = ActionFingerprint(step.action);
+        repeats = fingerprint == lastFingerprint ? repeats + 1 : 1;
+        lastFingerprint = fingerprint;
+        if (goal.budget.maxIdenticalSteps > 0 && repeats > goal.budget.maxIdenticalSteps)
+        {
+            // Checked before executing, so the action that would have been pointless is
+            // not performed. A budget stops work that costs too much; this stops work
+            // that achieves nothing, which a budget alone would let run to exhaustion.
+            goal.status = GoalStatus::Blocked;
+            goal.stopReason = StopReason::NoProgress;
+            goal.spend.elapsedMs = priorElapsed + ElapsedMilliseconds(startedAt);
+            static_cast<void>(Persist(goal));
+            return goal;
+        }
+
+        if (step.id.empty())
+        {
+            step.id = NewStepId();
+        }
+        step.status = StepStatus::Pending;
+        goal.currentStep = static_cast<std::uint32_t>(goal.steps.size());
+        goal.steps.push_back(std::move(step));
+
+        if (!RunStep(goal, goal.steps[goal.currentStep], scopedPolicy, stopToken))
+        {
+            switch (goal.stopReason)
+            {
+                case StopReason::Cancelled:
+                    goal.status = GoalStatus::Cancelled;
+                    break;
+                case StopReason::PolicyBlocked:
+                    goal.status = GoalStatus::Blocked;
+                    break;
+                case StopReason::BudgetActions:
+                case StopReason::BudgetDuration:
+                case StopReason::BudgetRetries:
+                case StopReason::BudgetTokens:
+                    goal.status = GoalStatus::Exhausted;
+                    break;
+                default:
+                    goal.status = GoalStatus::Failed;
+                    break;
+            }
+            goal.spend.elapsedMs = priorElapsed + ElapsedMilliseconds(startedAt);
+            static_cast<void>(Persist(goal));
+            return goal;
+        }
+
+        ++goal.currentStep;
+        goal.spend.elapsedMs = priorElapsed + ElapsedMilliseconds(startedAt);
+        if (!Persist(goal))
+        {
+            goal.status = GoalStatus::Failed;
+            goal.stopReason = StopReason::StoreError;
+            return goal;
+        }
+    }
+}
+
+bool GoalRunner::ValidateStep(const GoalStep& step, std::string& outError)
+{
+    const std::string label = "Step " + std::to_string(step.ordinal);
+    if (step.action.type == actions::ActionType::Unknown)
+    {
+        outError = label + " has no action.";
+        return false;
+    }
+    if (step.check.type == actions::ActionType::Unknown)
+    {
+        outError = label + " has no verification action.";
+        return false;
+    }
+    if (actions::RiskForAction(step.check.type) != actions::RiskLevel::ReadOnly)
+    {
+        outError = label + " verifies with " + actions::ToString(step.check.type) +
+            ", which is not read-only. Verification must not change anything.";
+        return false;
+    }
+    if (step.expected.empty())
+    {
+        outError = label + " does not say what success looks like.";
+        return false;
+    }
+    outError.clear();
+    return true;
 }
 
 bool GoalRunner::Validate(const Goal& goal, std::string& outError)
@@ -114,26 +318,8 @@ bool GoalRunner::Validate(const Goal& goal, std::string& outError)
 
     for (const GoalStep& step : goal.steps)
     {
-        const std::string label = "Step " + std::to_string(step.ordinal);
-        if (step.action.type == actions::ActionType::Unknown)
+        if (!ValidateStep(step, outError))
         {
-            outError = label + " has no action.";
-            return false;
-        }
-        if (step.check.type == actions::ActionType::Unknown)
-        {
-            outError = label + " has no verification action.";
-            return false;
-        }
-        if (actions::RiskForAction(step.check.type) != actions::RiskLevel::ReadOnly)
-        {
-            outError = label + " verifies with " + actions::ToString(step.check.type) +
-                ", which is not read-only. Verification must not change anything.";
-            return false;
-        }
-        if (step.expected.empty())
-        {
-            outError = label + " does not say what success looks like.";
             return false;
         }
     }

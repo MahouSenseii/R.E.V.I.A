@@ -571,6 +571,31 @@ bool configManager::LoadSettings(appSettings& outSettings) const
             }
         }
 
+        if (data.contains("performance"))
+        {
+            const json& performanceData = data["performance"];
+            if (performanceData.contains("enabled"))
+                outSettings.performance.bEnabled = performanceData["enabled"].get<bool>();
+            if (performanceData.contains("songLibraryPath"))
+                outSettings.performance.songLibraryPath =
+                    performanceData["songLibraryPath"].get<std::string>();
+            if (performanceData.contains("interruptSongToSpeak"))
+                outSettings.performance.bInterruptSongToSpeak =
+                    performanceData["interruptSongToSpeak"].get<bool>();
+            if (performanceData.contains("maxSongSeconds"))
+                outSettings.performance.maxSongSeconds =
+                    performanceData["maxSongSeconds"].get<int>();
+            if (performanceData.contains("outputBufferMs"))
+                outSettings.performance.outputBufferMs =
+                    performanceData["outputBufferMs"].get<int>();
+            if (performanceData.contains("instrumentalGain"))
+                outSettings.performance.instrumentalGain =
+                    performanceData["instrumentalGain"].get<double>();
+            if (performanceData.contains("vocalGain"))
+                outSettings.performance.vocalGain =
+                    performanceData["vocalGain"].get<double>();
+        }
+
         if (data.contains("presence"))
         {
             const json& presenceData = data["presence"];

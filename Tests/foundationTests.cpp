@@ -8514,6 +8514,16 @@ int main(const int argc, char** argv)
             RunDesktopControlTests();
             return 0;
         }
+        if (argc > 1 && std::string(argv[1]) == "--performance")
+        {
+            RunPerformanceTests();
+            return 0;
+        }
+        if (argc > 1 && std::string(argv[1]) == "--operator-loop")
+        {
+            RunOperatorLoopTests();
+            return 0;
+        }
         if (argc > 1 && std::string(argv[1]) == "--action-cancellation")
         {
             RunActionCancellationTests();
@@ -8674,6 +8684,8 @@ int main(const int argc, char** argv)
         RunActionCancellationTests();
         RunActionAuditTests();
         RunDesktopControlTests();
+        RunPerformanceTests();
+        RunOperatorLoopTests();
         TestGoalRunnerStopsOnUnverifiableStep();
         RunIdentityPersistenceTests();
         RunLearningDurabilityTests();

@@ -61,6 +61,25 @@ struct ElementBounds
     IUIAutomationElement* window,
     const ActionRequest& request);
 
+// What is under a screen point: the executable that owns it, and the accessible name
+// and control type of the element there.
+//
+// This is how a pointer skill becomes something other than clicking in the dark. It is
+// read-only and grants nothing -- describing a control is not permission to press it,
+// and the text it returns is treated as untrusted the same way screen text is.
+struct PointDescription
+{
+    std::string executable;
+    std::string elementName;
+    int controlType = 0;
+    bool found = false;
+
+    // A short line for an action result: "Save button in notepad.exe".
+    [[nodiscard]] std::string Summary() const;
+};
+
+[[nodiscard]] PointDescription DescribePoint(IUIAutomation* automation, int x, int y);
+
 } // namespace revia::actions::windows
 
 #endif

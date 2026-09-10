@@ -57,6 +57,16 @@ struct PolicyFixture
             {"autonomous", autonomous}};
     }
 
+    // The wide scope, which only exists on top of a pointer that may choose its own
+    // coordinates. Both prerequisites are set here so the tests below are about what
+    // the scope does rather than about how it is spelled.
+    void AllowWholeDesktop(const bool keyboard = true, const bool commandSurfaces = false)
+    {
+        Allow(true, keyboard, false, true);
+        settings["desktopControl"]["scope"] = "whole_desktop";
+        settings["desktopControl"]["allowCommandSurfaces"] = commandSurfaces;
+    }
+
     [[nodiscard]] std::filesystem::path Write(const std::string& name = "capabilities.json") const
     {
         const std::filesystem::path path = directory.root / name;
@@ -95,6 +105,28 @@ ActionRequest KeyRequest(const std::string& chord)
     request.type = ActionType::PressKeys;
     request.application = "notepad.exe";
     request.input.keys = chord;
+    return request;
+}
+
+// The same request with no application named: aimed at the desktop rather than at one
+// approved window. Naming nothing is what asks for the wide scope.
+ActionRequest ScreenRequest(const ActionType type)
+{
+    ActionRequest request;
+    request.id = NewActionId();
+    request.type = type;
+    request.input.x = 400;
+    request.input.y = 300;
+    request.input.hasPoint = true;
+    if (type == ActionType::DragPointer)
+    {
+        request.input.endX = 500;
+        request.input.endY = 380;
+        request.input.hasEndPoint = true;
+    }
+    if (type == ActionType::TypeText) request.value = "hello";
+    if (type == ActionType::PressKeys) request.input.keys = "ctrl+s";
+    if (type == ActionType::ScrollPointer) request.input.scrollClicks = -3;
     return request;
 }
 
@@ -148,8 +180,8 @@ void TestRawCoordinatesNeedTheirOwnPermission()
     const auto policy = fixture.Policy();
     const auto pointed = policy.Evaluate(PointerRequest());
     Check(pointed.verdict == PolicyVerdict::Blocked &&
-        pointed.reason.find("raw coordinates is disabled") != std::string::npos,
-        "A raw coordinate was accepted without the raw-coordinate permission.");
+        pointed.reason.find("chosen coordinate is disabled") != std::string::npos,
+        "A chosen coordinate was accepted without the coordinate permission.");
 
     // A vision-resolved element needs no raw-coordinate permission: the executor
     // re-finds the element rather than trusting the coordinate.
@@ -207,22 +239,24 @@ void TestKeyChordsCannotLeaveTheApplication()
     PolicyFixture fixture;
     fixture.Allow(false, true, false);
     const auto policy = fixture.Policy();
-    // The Windows key is not a supported modifier, so the run box, the start menu, and
-    // search -- every keystroke route to a shell -- are unreachable by construction.
-    for (const std::string chord : {"win+r", "win+s", "win+x", "win+l", "meta+e"})
-    {
-        const auto decision = policy.Evaluate(KeyRequest(chord));
-        Check(decision.verdict == PolicyVerdict::Blocked,
-            "A Windows-key chord was accepted: " + chord);
-    }
-    for (const std::string chord : {"alt+tab", "ctrl+shift+esc", "ctrl+escape",
-             "ctrl+alt+delete", "alt+escape"})
+    // Confined input may not address the desktop at all, so every Windows-key chord and
+    // every window switch is refused while it is the scope.
+    for (const std::string chord : {"win+e", "win+p", "meta+h"})
     {
         const auto decision = policy.Evaluate(KeyRequest(chord));
         Check(decision.verdict == PolicyVerdict::Blocked &&
-            decision.reason.find("switches away") != std::string::npos,
-            "An application-switching chord was accepted: " + chord);
+            decision.reason.find("address the desktop") != std::string::npos,
+            "A Windows-key chord was accepted while input was confined: " + chord);
     }
+    for (const std::string chord : {"alt+tab", "ctrl+shift+esc", "ctrl+escape",
+             "alt+escape", "win+tab"})
+    {
+        const auto decision = policy.Evaluate(KeyRequest(chord));
+        Check(decision.verdict == PolicyVerdict::Blocked,
+            "An application-switching chord was accepted while confined: " + chord);
+    }
+    Check(policy.Evaluate(KeyRequest("ctrl+alt+delete")).verdict == PolicyVerdict::Blocked,
+        "The secure attention sequence was accepted.");
     for (const std::string chord : {"", "ctrl", "ctrl+", "ctrl+s+a", "ctrl+notakey"})
     {
         Check(policy.Evaluate(KeyRequest(chord)).verdict == PolicyVerdict::Blocked,
@@ -233,18 +267,43 @@ void TestKeyChordsCannotLeaveTheApplication()
         "A well-formed chord was not offered for confirmation.");
 }
 
+void TestSwitchingChordsFollowTheScope()
+{
+    // Learning the desktop includes learning to change windows, so the chords that were
+    // refused above become ordinary once the desktop is the scope.
+    PolicyFixture fixture;
+    fixture.AllowWholeDesktop();
+    const auto policy = fixture.Policy();
+    for (const std::string chord : {"alt+tab", "win+tab", "win+e", "ctrl+escape"})
+    {
+        ActionRequest request = KeyRequest(chord);
+        request.application.clear();
+        Check(policy.Evaluate(request).verdict == PolicyVerdict::RequiresConfirmation,
+            "A window-switching chord was refused on the whole desktop: " + chord);
+    }
+    // The one that Windows will not synthesize stays refused in every scope, because
+    // accepting it would only be a claim that something happened.
+    ActionRequest attention = KeyRequest("ctrl+alt+delete");
+    attention.application.clear();
+    Check(policy.Evaluate(attention).verdict == PolicyVerdict::Blocked,
+        "The secure attention sequence was accepted on the whole desktop.");
+}
+
 void TestKeyChordNormalization()
 {
     KeyChord chord;
     std::string error;
     Check(ParseKeyChord("CTRL + shift + S", chord, error) &&
         chord.normalized == "ctrl+shift+s" && chord.modifierVirtualKeys.size() == 2 &&
-        chord.virtualKey == 0x53,
+        chord.virtualKey == 0x53 && !chord.usesWindowsKey,
         "A mixed-case chord did not normalize to ctrl+shift+s.");
-    // Aliases collapse so the blocklist cannot be sidestepped by spelling.
-    Check(ParseKeyChord("alt+esc", chord, error) == false &&
-        error.find("switches away") != std::string::npos,
-        "alt+esc was not recognized as the blocked alt+escape.");
+    // Aliases collapse so a predicate cannot be sidestepped by spelling.
+    Check(ParseKeyChord("alt+esc", chord, error) && chord.normalized == "alt+escape" &&
+        IsApplicationSwitchingChord(chord.normalized),
+        "alt+esc did not collapse onto the switching chord alt+escape.");
+    Check(ParseKeyChord("Meta+R", chord, error) && chord.normalized == "win+r" &&
+        chord.usesWindowsKey && IsCommandSurfaceChord(chord.normalized),
+        "meta+r did not collapse onto the command surface win+r.");
     Check(ParseKeyChord("f12", chord, error) && chord.virtualKey == 0x7B,
         "A function key did not parse.");
 }
@@ -292,6 +351,136 @@ void TestLaunchArgumentStaysInsideApprovedRoots()
     Check(outside.verdict == PolicyVerdict::Blocked &&
         outside.reason.find("outside every approved root") != std::string::npos,
         "A launch argument escaped the approved roots.");
+}
+
+void TestConfinedInputNeedsAnApplication()
+{
+    PolicyFixture fixture;
+    fixture.Allow(true, true, false, true);
+    const auto policy = fixture.Policy();
+    for (const ActionType type : {ActionType::MoveCursor, ActionType::ClickPointer,
+             ActionType::DragPointer, ActionType::ScrollPointer, ActionType::PressKeys,
+             ActionType::TypeText})
+    {
+        const auto decision = policy.Evaluate(ScreenRequest(type));
+        Check(decision.verdict == PolicyVerdict::Blocked &&
+            decision.reason.find("needs an executable name") != std::string::npos,
+            "Screen-space input was accepted while input was confined: " + ToString(type));
+    }
+}
+
+void TestWholeDesktopNeedsItsPrerequisites()
+{
+    revia::policy::PermissionStore store;
+    CapabilitySettings loaded;
+    std::string error;
+
+    PolicyFixture noPointer;
+    noPointer.Allow(false, true, false, false);
+    noPointer.settings["desktopControl"]["scope"] = "whole_desktop";
+    Check(!store.Load(noPointer.Write("no-pointer.json"), loaded, error) &&
+        error.find("requires pointer control") != std::string::npos,
+        "The whole desktop was granted without a pointer.");
+
+    PolicyFixture noCoordinates;
+    noCoordinates.Allow(true, true, false, false);
+    noCoordinates.settings["desktopControl"]["scope"] = "whole_desktop";
+    Check(!store.Load(noCoordinates.Write("no-coordinates.json"), loaded, error),
+        "The whole desktop was granted to a pointer that may not choose a point.");
+
+    PolicyFixture nonsense;
+    nonsense.Allow(true, true, false, true);
+    nonsense.settings["desktopControl"]["scope"] = "everything";
+    Check(!store.Load(nonsense.Write("nonsense.json"), loaded, error) &&
+        error.find("Unsupported desktop control scope") != std::string::npos,
+        "An unreadable scope was not rejected.");
+
+    // A file that never mentions the scope is the narrow one, so an older capability
+    // file cannot acquire the desktop by omission.
+    PolicyFixture silent;
+    silent.Allow(true, true, false, true);
+    Check(store.Load(silent.Write("silent.json"), loaded, error) &&
+        loaded.desktopControl.scope ==
+            CapabilitySettings::DesktopControl::InputScope::ApprovedApplications,
+        "A capability file with no scope did not default to approved applications.");
+}
+
+void TestWholeDesktopAcceptsScreenSpaceInput()
+{
+    PolicyFixture fixture;
+    fixture.AllowWholeDesktop();
+    const auto policy = fixture.Policy();
+    for (const ActionType type : {ActionType::MoveCursor, ActionType::ClickPointer,
+             ActionType::DragPointer, ActionType::ScrollPointer, ActionType::PressKeys,
+             ActionType::TypeText})
+    {
+        const auto decision = policy.Evaluate(ScreenRequest(type));
+        Check(decision.verdict == PolicyVerdict::RequiresConfirmation,
+            "The whole desktop refused screen-space input: " + ToString(type) +
+                " (" + decision.reason + ")");
+    }
+
+    // A scroll turns the wheel wherever the pointer already is, so it is the one action
+    // that needs no point at all.
+    ActionRequest scroll = ScreenRequest(ActionType::ScrollPointer);
+    scroll.input.hasPoint = false;
+    Check(policy.Evaluate(scroll).verdict == PolicyVerdict::RequiresConfirmation,
+        "A scroll at the current pointer position was refused.");
+
+    // Everything else still has to say where it is going.
+    ActionRequest aimless = ScreenRequest(ActionType::ClickPointer);
+    aimless.input.hasPoint = false;
+    Check(policy.Evaluate(aimless).verdict == PolicyVerdict::Blocked,
+        "A click with no target at all was accepted on the whole desktop.");
+
+    ActionRequest halfDrag = ScreenRequest(ActionType::DragPointer);
+    halfDrag.input.hasEndPoint = false;
+    Check(policy.Evaluate(halfDrag).verdict == PolicyVerdict::Blocked,
+        "A drag with no end point was accepted.");
+
+    // Naming an application still means the confined form, and that form still checks
+    // the allowlist. Widening the scope did not delete the narrow one.
+    ActionRequest named = PointerRequest();
+    named.application = "cmd.exe";
+    Check(policy.Evaluate(named).verdict == PolicyVerdict::Blocked,
+        "The wide scope let a named request skip the approved application list.");
+}
+
+void TestCommandSurfacesStayOutOfReach()
+{
+    PolicyFixture fixture;
+    fixture.AllowWholeDesktop();
+    const auto policy = fixture.Policy();
+    for (const std::string chord : {"win+r", "win+x", "win+s", "win+i"})
+    {
+        ActionRequest request = KeyRequest(chord);
+        request.application.clear();
+        const auto decision = policy.Evaluate(request);
+        Check(decision.verdict == PolicyVerdict::Blocked &&
+            decision.reason.find("command or settings") != std::string::npos,
+            "A command-surface chord was accepted: " + chord);
+    }
+
+    // Naming a shell is the same request as reaching one by keystroke, so the approved
+    // application list does not become a way around this.
+    PolicyFixture named;
+    named.Allow(true, true, false, true);
+    named.settings["approvedApplications"] = {"notepad.exe", "cmd.exe"};
+    named.settings["approvedControls"] = {{"notepad.exe", {"File"}}, {"cmd.exe", {"*"}}};
+    ActionRequest shell = PointerRequest();
+    shell.application = "cmd.exe";
+    const auto shellDecision = named.Policy().Evaluate(shell);
+    Check(shellDecision.verdict == PolicyVerdict::Blocked &&
+        shellDecision.reason.find("command surface") != std::string::npos,
+        "An approved command interpreter was reachable without the extra permission.");
+
+    // And it is a permission, not a wall: the owner can decide otherwise.
+    PolicyFixture allowed;
+    allowed.AllowWholeDesktop(true, true);
+    ActionRequest runBox = KeyRequest("win+r");
+    runBox.application.clear();
+    Check(allowed.Policy().Evaluate(runBox).verdict == PolicyVerdict::RequiresConfirmation,
+        "Allowing command surfaces did not admit the run box.");
 }
 
 void TestOwnerFullAccessRaisesOnlyTheCeiling()
@@ -430,22 +619,70 @@ void TestCommandsAndJsonParseIntoTypedRequests()
     Check(scroll.succeeded && scroll.request.input.scrollClicks == -3,
         "A scroll proposal did not carry its detents.");
 
+    // Screen-space forms. An executable name never parses as a whole number, so the two
+    // shapes of the same command never collide.
+    const auto screenClick = parser.ParseCommand("/click \"820\" \"140\" \"right\"");
+    Check(screenClick.succeeded && screenClick.request.application.empty() &&
+        screenClick.request.input.x == 820 && screenClick.request.input.y == 140 &&
+        screenClick.request.input.button ==
+            ActionRequest::DesktopInput::PointerButton::Right,
+        "The screen-space click command did not parse.");
+
+    const auto drag = parser.ParseCommand("/drag \"10\" \"20\" \"90\" \"120\"");
+    Check(drag.succeeded && drag.request.type == ActionType::DragPointer &&
+        drag.request.input.hasPoint && drag.request.input.hasEndPoint &&
+        drag.request.input.endX == 90 && drag.request.input.endY == 120,
+        "The screen-space drag command did not parse.");
+
+    const auto windowDrag = parser.ParseCommand(
+        "/drag \"notepad.exe\" \"Untitled\" \"10\" \"20\" \"90\" \"120\" \"middle\"");
+    Check(windowDrag.succeeded && windowDrag.request.application == "notepad.exe" &&
+        windowDrag.request.input.endY == 120 &&
+        windowDrag.request.input.button ==
+            ActionRequest::DesktopInput::PointerButton::Middle,
+        "The window-scoped drag command did not parse.");
+
+    const auto screenPress = parser.ParseCommand("/press \"alt+tab\"");
+    Check(screenPress.succeeded && screenPress.request.application.empty() &&
+        screenPress.request.input.keys == "alt+tab",
+        "The screen-space press command did not parse.");
+
+    // Text that happens to look like a number is still text: the keyboard commands are
+    // told apart by field count rather than by what the field contains.
+    const auto numericText = parser.ParseCommand("/type \"2026\"");
+    Check(numericText.succeeded && numericText.request.value == "2026" &&
+        numericText.request.application.empty(),
+        "Typing a number was mistaken for a window-scoped command.");
+
+    const auto screenScroll = parser.ParseCommand("/scroll \"-4\"");
+    Check(screenScroll.succeeded && screenScroll.request.input.scrollClicks == -4 &&
+        screenScroll.request.application.empty(),
+        "The screen-space scroll command did not parse.");
+
+    // A desktop-aimed proposal parses; whether that scope exists is policy's answer,
+    // not the parser's.
+    const auto screenJson = parser.ParseJson(
+        R"({"action":"click_pointer","x":1,"y":2})");
+    Check(screenJson.succeeded && screenJson.request.application.empty(),
+        "A screen-space proposal was rejected by the parser.");
+    const auto launchJson = parser.ParseJson(R"({"action":"launch_application"})");
+    Check(launchJson.recognized && !launchJson.succeeded,
+        "A launch proposal without an executable was accepted.");
+
     // Rejections. A malformed command must not become a request with defaults.
     for (const std::string command : {
              "/click \"notepad.exe\" \"Untitled\" \"x\" \"4\"",
              "/click \"notepad.exe\" \"Untitled\"",
+             "/click \"820\"",
+             "/drag \"10\" \"20\" \"90\"",
              "/scroll \"notepad.exe\" \"Untitled\"",
-             "/press \"notepad.exe\"",
+             "/scroll \"sideways\"",
              "/launch"})
     {
         const auto rejected = parser.ParseCommand(command);
         Check(rejected.recognized && !rejected.succeeded,
             "A malformed desktop command was accepted: " + command);
     }
-    const auto missingApplication = parser.ParseJson(
-        R"({"action":"click_pointer","x":1,"y":2})");
-    Check(missingApplication.recognized && !missingApplication.succeeded,
-        "A desktop proposal without an application was accepted.");
 }
 
 void TestRuntimeRegistersAndReportsDesktopControl()
@@ -478,16 +715,29 @@ void TestRuntimeRegistersAndReportsDesktopControl()
     Check(runtime.ResumeDesktopControl() && !runtime.DesktopControlStopped(),
         "Desktop control could not be resumed.");
 
+    using InputScope = CapabilitySettings::DesktopControl::InputScope;
+    // The wide scope round-trips through the editor and the store.
+    Check(runtime.SetDesktopControl(
+            true, true, false, true, false, InputScope::WholeDesktop, false, error) &&
+        runtime.Settings().desktopControl.scope == InputScope::WholeDesktop,
+        "The whole-desktop scope did not persist: " + error);
+
     // Persisted permission changes survive the reload and drop their subset authorities.
-    Check(runtime.SetDesktopControl(false, true, false, true, true, error),
+    Check(runtime.SetDesktopControl(
+            false, true, false, true, true, InputScope::WholeDesktop, true, error),
         "Desktop control settings could not be written: " + error);
     const auto reloaded = runtime.Settings().desktopControl;
     Check(!reloaded.pointer && reloaded.keyboard && !reloaded.rawCoordinates &&
         reloaded.autonomous,
-        "Withdrawing pointer control did not withdraw raw coordinates with it.");
-    Check(runtime.SetDesktopControl(false, false, false, false, true, error) &&
-        !runtime.Settings().desktopControl.autonomous,
-        "Autonomy survived the withdrawal of every desktop capability.");
+        "Withdrawing pointer control did not withdraw chosen coordinates with it.");
+    Check(reloaded.scope == InputScope::ApprovedApplications,
+        "The whole desktop survived the withdrawal of the pointer it was built on.");
+    Check(runtime.SetDesktopControl(
+            false, false, false, false, true, InputScope::ApprovedApplications, true,
+            error) &&
+        !runtime.Settings().desktopControl.autonomous &&
+        !runtime.Settings().desktopControl.allowCommandSurfaces,
+        "Autonomy or command surfaces survived the withdrawal of every capability.");
 
     Check(runtime.SetExecutionMode(ExecutionMode::OwnerFullAccess, error) &&
         runtime.Settings().mode == ExecutionMode::OwnerFullAccess,
@@ -559,7 +809,12 @@ void RunDesktopControlTests()
     TestRawCoordinatesCannotOutliveThePointer();
     TestAutonomousDesktopWorkIsSeparatelyPermitted();
     TestKeyChordsCannotLeaveTheApplication();
+    TestSwitchingChordsFollowTheScope();
     TestKeyChordNormalization();
+    TestConfinedInputNeedsAnApplication();
+    TestWholeDesktopNeedsItsPrerequisites();
+    TestWholeDesktopAcceptsScreenSpaceInput();
+    TestCommandSurfacesStayOutOfReach();
     TestTypedTextIsBounded();
     TestLaunchArgumentStaysInsideApprovedRoots();
     TestOwnerFullAccessRaisesOnlyTheCeiling();

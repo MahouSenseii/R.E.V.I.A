@@ -229,6 +229,16 @@ bool PermissionStore::Load(
             settings.desktopControl.rawCoordinates =
                 desktop.value("rawCoordinates", false);
             settings.desktopControl.autonomous = desktop.value("autonomous", false);
+            const std::string scopeName =
+                desktop.value("scope", std::string("approved_applications"));
+            if (scopeName != "approved_applications" && scopeName != "whole_desktop")
+            {
+                outError = "Unsupported desktop control scope: " + scopeName;
+                return false;
+            }
+            settings.desktopControl.scope = actions::InputScopeFromString(scopeName);
+            settings.desktopControl.allowCommandSurfaces =
+                desktop.value("allowCommandSurfaces", false);
             settings.desktopControl.maxInputActionsPerMinute = BoundedInteger<int>(
                 desktop, "maxInputActionsPerMinute", 30, 1, 600);
             settings.desktopControl.minimumInputIntervalMs = BoundedInteger<int>(
@@ -245,6 +255,16 @@ bool PermissionStore::Load(
             if (settings.desktopControl.autonomous && !settings.desktopControl.AnyEnabled())
             {
                 outError = "Autonomous desktop control requires at least one enabled desktop capability.";
+                return false;
+            }
+            // The whole desktop is only meaningful for a pointer that is allowed to aim
+            // at points it chose. Accepting the scope without them would be a setting
+            // that reads as granted and behaves as denied.
+            if (settings.desktopControl.scope ==
+                    actions::CapabilitySettings::DesktopControl::InputScope::WholeDesktop &&
+                (!settings.desktopControl.pointer || !settings.desktopControl.rawCoordinates))
+            {
+                outError = "Whole-desktop input requires pointer control and chosen coordinates.";
                 return false;
             }
         }

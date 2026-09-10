@@ -24,6 +24,20 @@ struct GoalProgress
     std::string message;
 };
 
+// One answer to "what should she do next?", produced fresh from what the machine looks
+// like right now rather than read off a plan written before any of it was seen.
+//
+// Three outcomes, deliberately distinct. A step to take; nothing left to take because
+// the goal is met; or no usable answer at all. Collapsing the last two would make
+// "finished" and "stuck" the same record, and they are opposite outcomes.
+struct NextStep
+{
+    bool hasStep = false;
+    bool finished = false;
+    GoalStep step;
+    std::string reason;
+};
+
 // Bounded plan / act / observe / verify loop over the existing typed actions.
 //
 // The runner adds no execution authority of its own. Every action goes through
@@ -37,6 +51,11 @@ public:
     using ConfirmationHandler = std::function<bool(
         const actions::ActionRequest&,
         const actions::PolicyDecision&)>;
+    // Consulted once per iteration by Operate. It receives the goal with every
+    // attempt so far already recorded on it, which is the whole history the decision
+    // gets. Observing the machine is the provider's job, not the runner's: keeping the
+    // observation on that side is what stops Goals from depending on Windows.
+    using StepProvider = std::function<NextStep(const Goal&, std::uint32_t iteration)>;
 
     GoalRunner(actions::ActionRuntime& runtime, const GoalStore& store);
 
@@ -45,10 +64,25 @@ public:
 
     void SetProgressHandler(ProgressHandler handler);
     void SetConfirmationHandler(ConfirmationHandler handler);
+    void SetStepProvider(StepProvider provider);
 
     // Validates the plan, then runs it. Returns the goal in its final state;
     // that same state has already been written to the store.
     [[nodiscard]] Goal Run(Goal goal, std::stop_token stopToken = {});
+
+    // The iterative form: observe, decide one action, do it, prove it happened, look
+    // again. `goal.steps` starts empty and is appended to as the run discovers what the
+    // work actually turned out to be, so the record afterwards is what she really did
+    // rather than what someone guessed beforehand.
+    //
+    // A separate entry point rather than a mode on Run, because the planned path works
+    // and there is no reason for this to be able to break it. Everything underneath is
+    // shared: the same budgets, the same scoped policy, the same RunStep, the same
+    // audit log, the same store.
+    //
+    // Requires a step provider. Without one it refuses rather than running zero steps
+    // and reporting success.
+    [[nodiscard]] Goal Operate(Goal goal, std::stop_token stopToken = {});
 
     // Reloads a goal an earlier process left unfinished and continues it.
     [[nodiscard]] Goal Resume(const std::string& goalId, std::stop_token stopToken = {});
@@ -57,6 +91,9 @@ public:
     // verification action, when that action is not read-only, or when the step
     // does not say what success looks like.
     [[nodiscard]] static bool Validate(const Goal& goal, std::string& outError);
+    // The same rules applied to one step. Operate checks every step it is handed with
+    // this, so a step invented mid-run faces exactly the checks a planned one does.
+    [[nodiscard]] static bool ValidateStep(const GoalStep& step, std::string& outError);
 
 private:
     bool RunStep(
@@ -72,6 +109,7 @@ private:
     const GoalStore& goalStore;
     ProgressHandler progressHandler;
     ConfirmationHandler confirmationHandler;
+    StepProvider stepProvider;
 };
 
 } // namespace revia::goals

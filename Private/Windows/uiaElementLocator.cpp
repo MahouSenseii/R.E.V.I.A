@@ -314,6 +314,58 @@ IUIAutomationElement* FindControl(
     return result;
 }
 
+std::string PointDescription::Summary() const
+{
+    if (!found)
+    {
+        return "nothing identifiable";
+    }
+    std::string summary = elementName.empty() ? "an unnamed control" : elementName;
+    if (controlType != 0)
+    {
+        summary += " [type=" + std::to_string(controlType) + "]";
+    }
+    if (!executable.empty())
+    {
+        summary += " in " + executable;
+    }
+    return summary;
+}
+
+PointDescription DescribePoint(IUIAutomation* automation, const int x, const int y)
+{
+    PointDescription description;
+    if (automation == nullptr)
+    {
+        return description;
+    }
+    POINT point{static_cast<LONG>(x), static_cast<LONG>(y)};
+    IUIAutomationElement* element = nullptr;
+    if (FAILED(automation->ElementFromPoint(point, &element)) || element == nullptr)
+    {
+        // Fall back to the window, which still answers "whose pixel is this".
+        const HWND window = WindowFromPoint(point);
+        if (window != nullptr)
+        {
+            DWORD processId = 0;
+            GetWindowThreadProcessId(window, &processId);
+            description.executable = WideToUtf8(ProcessFileName(static_cast<int>(processId)));
+            description.found = !description.executable.empty();
+        }
+        return description;
+    }
+    int processId = 0;
+    element->get_CurrentProcessId(&processId);
+    CONTROLTYPEID controlType = 0;
+    element->get_CurrentControlType(&controlType);
+    description.executable = WideToUtf8(ProcessFileName(processId));
+    description.elementName = WideToUtf8(ElementName(element));
+    description.controlType = static_cast<int>(controlType);
+    description.found = true;
+    element->Release();
+    return description;
+}
+
 } // namespace revia::actions::windows
 
 #endif

@@ -101,10 +101,13 @@ ParsedAction StructuredActionParser::ParseObject(const nlohmann::json& data)
             result.request.windowTitle = data.value("window_title", "");
             result.request.value = data.value("value", data.value("text", std::string{}));
             result.request.input.keys = data.value("keys", "");
-            if (result.request.application.empty())
+            // Only a launch has to name an application. Everything else may leave it out
+            // to mean the desktop itself; policy decides whether that scope exists.
+            if (result.request.type == actions::ActionType::LaunchApplication &&
+                result.request.application.empty())
             {
                 return Error(true,
-                    "Desktop operation requires an application executable name.");
+                    "Starting an application requires an executable name.");
             }
             if (data.contains("x") && data.contains("y") &&
                 data["x"].is_number_integer() && data["y"].is_number_integer())
@@ -112,6 +115,13 @@ ParsedAction StructuredActionParser::ParseObject(const nlohmann::json& data)
                 result.request.input.x = data["x"].get<int>();
                 result.request.input.y = data["y"].get<int>();
                 result.request.input.hasPoint = true;
+            }
+            if (data.contains("end_x") && data.contains("end_y") &&
+                data["end_x"].is_number_integer() && data["end_y"].is_number_integer())
+            {
+                result.request.input.endX = data["end_x"].get<int>();
+                result.request.input.endY = data["end_y"].get<int>();
+                result.request.input.hasEndPoint = true;
             }
             result.request.input.clickCount = data.value("clicks", 1);
             result.request.input.scrollClicks = data.value("scroll", 0);
@@ -211,6 +221,7 @@ ParsedAction StructuredActionParser::ParseCommand(const std::string& input) cons
     else if (command == "/launch") type = actions::ActionType::LaunchApplication;
     else if (command == "/move-cursor") type = actions::ActionType::MoveCursor;
     else if (command == "/click") type = actions::ActionType::ClickPointer;
+    else if (command == "/drag") type = actions::ActionType::DragPointer;
     else if (command == "/scroll") type = actions::ActionType::ScrollPointer;
     else if (command == "/press") type = actions::ActionType::PressKeys;
     else if (command == "/type") type = actions::ActionType::TypeText;
@@ -256,65 +267,113 @@ ParsedAction StructuredActionParser::ParseCommand(const std::string& input) cons
             return result;
         }
 
-        // Every remaining desktop-operation command names the application and the
-        // window it is aimed at, so a command can never mean "whatever is in front".
-        if (tokens.size() < 3)
+        // Two forms per command. Naming an application and window asks for the confined
+        // form; starting straight at the arguments asks for the desktop itself. An
+        // executable name never parses as a whole number, so the two never collide, and
+        // policy -- not the parser -- decides whether the second form is permitted.
+        int leadingNumber = 0;
+        const bool keyboardCommand = type == actions::ActionType::PressKeys ||
+            type == actions::ActionType::TypeText;
+        // A chord or a run of text can look like anything, including a number, so the
+        // keyboard commands are told apart by how many fields they carry instead.
+        const bool screenSpace = keyboardCommand
+            ? tokens.size() == 2
+            : tokens.size() > 1 && WholeNumber(tokens[1], leadingNumber);
+        std::size_t next = 1;
+        if (!screenSpace)
         {
-            return Error(true,
-                "Desktop operation commands require a quoted application and window title.");
+            if (tokens.size() < 3)
+            {
+                return Error(true, "Desktop operation needs either an application and "
+                    "window title, or screen coordinates.");
+            }
+            result.request.application = tokens[1];
+            result.request.windowTitle = tokens[2];
+            next = 3;
         }
-        result.request.application = tokens[1];
-        result.request.windowTitle = tokens[2];
+        const std::size_t arguments = tokens.size() - next;
+
+        const auto usage = [&](const char* screenForm, const char* windowForm)
+        {
+            return Error(true, std::string("Usage: ") + screenForm + "  or  " + windowForm);
+        };
+
         if (type == actions::ActionType::MoveCursor || type == actions::ActionType::ClickPointer)
         {
-            const std::size_t maximum = type == actions::ActionType::ClickPointer ? 7U : 5U;
-            if (tokens.size() < 5 || tokens.size() > maximum)
+            const std::size_t maximum = type == actions::ActionType::ClickPointer ? 4U : 2U;
+            if (arguments < 2 || arguments > maximum)
             {
-                return Error(true, type == actions::ActionType::ClickPointer
-                    ? "Usage: /click \"application.exe\" \"window\" \"x\" \"y\" [\"button\"] [\"clicks\"]"
-                    : "Usage: /move-cursor \"application.exe\" \"window\" \"x\" \"y\"");
+                return type == actions::ActionType::ClickPointer
+                    ? usage("/click \"x\" \"y\" [\"button\"] [\"clicks\"]",
+                        "/click \"application.exe\" \"window\" \"x\" \"y\" [\"button\"] [\"clicks\"]")
+                    : usage("/move-cursor \"x\" \"y\"",
+                        "/move-cursor \"application.exe\" \"window\" \"x\" \"y\"");
             }
-            if (!WholeNumber(tokens[3], result.request.input.x) ||
-                !WholeNumber(tokens[4], result.request.input.y))
+            if (!WholeNumber(tokens[next], result.request.input.x) ||
+                !WholeNumber(tokens[next + 1], result.request.input.y))
             {
                 return Error(true, "A pointer position needs whole-number x and y values.");
             }
             result.request.input.hasPoint = true;
-            if (tokens.size() >= 6 &&
-                !PointerButtonFromString(tokens[5], result.request.input.button))
+            if (arguments >= 3 &&
+                !PointerButtonFromString(tokens[next + 2], result.request.input.button))
             {
                 return Error(true, "A pointer button must be left, right, or middle.");
             }
-            if (tokens.size() == 7 &&
-                !WholeNumber(tokens[6], result.request.input.clickCount))
+            if (arguments == 4 &&
+                !WholeNumber(tokens[next + 3], result.request.input.clickCount))
             {
                 return Error(true, "A click count must be a whole number.");
             }
         }
+        else if (type == actions::ActionType::DragPointer)
+        {
+            if (arguments < 4 || arguments > 5)
+            {
+                return usage("/drag \"x\" \"y\" \"toX\" \"toY\" [\"button\"]",
+                    "/drag \"application.exe\" \"window\" \"x\" \"y\" \"toX\" \"toY\" [\"button\"]");
+            }
+            if (!WholeNumber(tokens[next], result.request.input.x) ||
+                !WholeNumber(tokens[next + 1], result.request.input.y) ||
+                !WholeNumber(tokens[next + 2], result.request.input.endX) ||
+                !WholeNumber(tokens[next + 3], result.request.input.endY))
+            {
+                return Error(true, "A drag needs whole-number start and end coordinates.");
+            }
+            result.request.input.hasPoint = true;
+            result.request.input.hasEndPoint = true;
+            if (arguments == 5 &&
+                !PointerButtonFromString(tokens[next + 4], result.request.input.button))
+            {
+                return Error(true, "A pointer button must be left, right, or middle.");
+            }
+        }
         else if (type == actions::ActionType::ScrollPointer)
         {
-            if (tokens.size() != 4 ||
-                !WholeNumber(tokens[3], result.request.input.scrollClicks))
+            if (arguments != 1 ||
+                !WholeNumber(tokens[next], result.request.input.scrollClicks))
             {
-                return Error(true,
-                    "Usage: /scroll \"application.exe\" \"window\" \"detents\"");
+                return usage("/scroll \"detents\"",
+                    "/scroll \"application.exe\" \"window\" \"detents\"");
             }
         }
         else if (type == actions::ActionType::PressKeys)
         {
-            if (tokens.size() != 4)
+            if (arguments != 1)
             {
-                return Error(true, "Usage: /press \"application.exe\" \"window\" \"ctrl+s\"");
+                return usage("/press \"ctrl+s\"",
+                    "/press \"application.exe\" \"window\" \"ctrl+s\"");
             }
-            result.request.input.keys = tokens[3];
+            result.request.input.keys = tokens[next];
         }
         else
         {
-            if (tokens.size() != 4)
+            if (arguments != 1)
             {
-                return Error(true, "Usage: /type \"application.exe\" \"window\" \"text\"");
+                return usage("/type \"text\"",
+                    "/type \"application.exe\" \"window\" \"text\"");
             }
-            result.request.value = tokens[3];
+            result.request.value = tokens[next];
         }
         result.succeeded = true;
         return result;

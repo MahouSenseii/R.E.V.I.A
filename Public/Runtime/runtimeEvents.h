@@ -62,6 +62,10 @@ enum class RuntimeEventKind
     // `resource` the file it was saved to. Distinct from AssistantMessage because a
     // picture belongs on a canvas, not in the middle of a chat transcript.
     Diagram,
+    // A song. `phase` carries the performance event kind, `message` what to show, and
+    // `detail` the karaoke line when the song marks one. Distinct from AssistantMessage
+    // because a performance is a timeline a shell can follow, not a line of dialogue.
+    Performance,
     Error
 };
 

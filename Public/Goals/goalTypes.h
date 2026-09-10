@@ -47,7 +47,14 @@ enum class StopReason
     BudgetTokens,
     Cancelled,
     InvalidPlan,
-    StoreError
+    StoreError,
+    // The iterative loop kept choosing the same action and the desktop kept not
+    // changing. Distinct from a budget: the run was not too expensive, it was stuck,
+    // and those want different responses from whoever reads the record.
+    NoProgress,
+    // The loop asked what to do next and got no usable answer. Also distinct from
+    // failure: nothing went wrong, she just could not see a next move.
+    Undecided
 };
 
 // Hard ceilings. The runner stops when any single one is reached; it never
@@ -59,6 +66,11 @@ struct GoalBudget
     std::uint32_t maxTotalRetries = 6;
     std::uint32_t maxTokens = 8192;
     std::uint64_t maxDurationMs = 120000;
+    // How many times in a row the loop may choose the identical action before it is
+    // declared stuck. A budget stops work that costs too much; this stops work that
+    // costs anything at all and achieves nothing, which a budget alone would let run
+    // to exhaustion.
+    std::uint32_t maxIdenticalSteps = 3;
 };
 
 // What has actually been spent. Compared against GoalBudget after every step.

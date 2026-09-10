@@ -30,6 +30,7 @@ enum class ActionType
     LaunchApplication,
     MoveCursor,
     ClickPointer,
+    DragPointer,
     ScrollPointer,
     PressKeys,
     TypeText,
@@ -105,6 +106,11 @@ struct ActionRequest
         int x = 0;
         int y = 0;
         bool hasPoint = false;
+        // Where a drag ends. The button is held from the first point to this one and is
+        // always released, including when the stop guard interrupts the movement.
+        int endX = 0;
+        int endY = 0;
+        bool hasEndPoint = false;
         PointerButton button = PointerButton::Left;
         int clickCount = 1;
         // Wheel detents. Positive scrolls away from the user, or right when horizontal.
@@ -232,6 +238,25 @@ struct CapabilitySettings
     // that belong to an approved application.
     struct DesktopControl
     {
+        // Where the hands may reach.
+        //
+        // ApprovedApplications is the narrow original: every action names an approved
+        // executable, and input is confined to that executable's window. It is safe
+        // because it is small, and small is also why it cannot learn anything general.
+        //
+        // WholeDesktop is the owner deciding that a general skill is the point: the
+        // pointer goes anywhere on the virtual desktop and the keyboard goes to whatever
+        // has focus, the way it does for the person sitting there. Containment stops
+        // being categorical at that moment. What remains is the owner's explicit grant,
+        // the command-surface refusal below, the input budget, the audit trail, and the
+        // latched emergency stop -- and none of those is a proof that a general input
+        // capability cannot eventually reach something it should not.
+        enum class InputScope
+        {
+            ApprovedApplications,
+            WholeDesktop
+        };
+
         bool pointer = false;
         bool keyboard = false;
         bool applicationLaunch = false;
@@ -243,6 +268,12 @@ struct CapabilitySettings
         // ordinary lookup: delegating a task is not standing consent to drive the
         // machine whenever she feels like it.
         bool autonomous = false;
+        InputScope scope = InputScope::ApprovedApplications;
+        // A shell reached by keystroke is still model text reaching a shell. Command
+        // interpreters, script hosts, and the chords that summon them are refused unless
+        // the owner separately says otherwise, so that stays a decision rather than a
+        // side effect of granting the desktop.
+        bool allowCommandSurfaces = false;
         int maxInputActionsPerMinute = 30;
         int minimumInputIntervalMs = 120;
         std::size_t maxTypedCharacters = 512;
@@ -275,6 +306,9 @@ struct CapabilitySettings
 [[nodiscard]] std::string ToString(RiskLevel value);
 [[nodiscard]] std::string ToString(PolicyVerdict value);
 [[nodiscard]] std::string ToString(ExecutionMode value);
+[[nodiscard]] std::string ToString(CapabilitySettings::DesktopControl::InputScope value);
+[[nodiscard]] CapabilitySettings::DesktopControl::InputScope InputScopeFromString(
+    const std::string& value);
 [[nodiscard]] ActionType ActionTypeFromString(const std::string& value);
 [[nodiscard]] RiskLevel RiskLevelFromString(const std::string& value);
 [[nodiscard]] ExecutionMode ExecutionModeFromString(const std::string& value);
@@ -287,21 +321,38 @@ struct CapabilitySettings
 // True for a request Revia raised on her own rather than one a user turn asked for.
 // The prefix convention is shared with internet research.
 [[nodiscard]] bool IsAutonomousRequest(const std::string& requestedBy);
-// One accepted keyboard chord. Modifiers are limited to ctrl/alt/shift on purpose:
-// every Windows-key chord opens a system surface rather than an application control,
-// and a shell reachable by keystroke would be a shell reachable by model text.
+// One parsed keyboard chord: modifiers plus exactly one key. Parsing says whether the
+// chord is well formed. Whether it is *permitted* is a policy question that depends on
+// the current input scope, and lives in the three predicates below.
 struct KeyChord
 {
     std::string normalized;
     std::vector<int> modifierVirtualKeys;
     int virtualKey = 0;
+    bool usesWindowsKey = false;
 };
 
-// Accepts "Ctrl + Shift+S" as "ctrl+shift+s": modifiers plus exactly one supported key.
-// Rejects unknown names, empty chords, chords with no key, and the chords that would
-// let Revia leave the approved application. Returns false with a reason on rejection.
+// Accepts "Ctrl + Shift+S" as "ctrl+shift+s". Modifier order is normalized to
+// win+ctrl+alt+shift and key aliases collapse to one spelling, so a chord cannot be
+// spelled around a predicate below. Rejects unknown names and anything that is not
+// modifiers plus one key.
 [[nodiscard]] bool ParseKeyChord(
     const std::string& value, KeyChord& outChord, std::string& outError);
+
+// Moves focus to a different application. Refused while input is confined to one
+// approved application, because leaving it is exactly what confinement means; allowed
+// on the whole desktop, where switching windows is ordinary use.
+[[nodiscard]] bool IsApplicationSwitchingChord(const std::string& normalizedChord);
+// Opens a run box, a search field, or a menu that offers a terminal. Refused unless the
+// owner has allowed command surfaces, in either scope.
+[[nodiscard]] bool IsCommandSurfaceChord(const std::string& normalizedChord);
+// Refused everywhere. Windows will not synthesize the secure attention sequence anyway,
+// so accepting it would only be a lie about what happened.
+[[nodiscard]] bool IsAlwaysRefusedChord(const std::string& normalizedChord);
+// Executables that are a command interpreter or a script host. Input into one of these
+// is model text reaching a shell however it got there, so it needs the same permission
+// the chords do.
+[[nodiscard]] bool IsCommandSurfaceExecutable(const std::string& executableName);
 [[nodiscard]] std::string NewActionId();
 [[nodiscard]] std::filesystem::path Utf8ToPath(const std::string& value);
 [[nodiscard]] std::string PathToUtf8(const std::filesystem::path& value);

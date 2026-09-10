@@ -52,6 +52,7 @@ std::string ToString(ActionType value)
         case ActionType::LaunchApplication: return "launch_application";
         case ActionType::MoveCursor: return "move_cursor";
         case ActionType::ClickPointer: return "click_pointer";
+        case ActionType::DragPointer: return "drag_pointer";
         case ActionType::ScrollPointer: return "scroll_pointer";
         case ActionType::PressKeys: return "press_keys";
         case ActionType::TypeText: return "type_text";
@@ -95,6 +96,21 @@ std::string ToString(ExecutionMode value)
     }
 }
 
+std::string ToString(const CapabilitySettings::DesktopControl::InputScope value)
+{
+    return value == CapabilitySettings::DesktopControl::InputScope::WholeDesktop
+        ? "whole_desktop" : "approved_applications";
+}
+
+CapabilitySettings::DesktopControl::InputScope InputScopeFromString(const std::string& value)
+{
+    // Anything unrecognized falls back to the narrow scope, because an unreadable
+    // setting must not be the reason the pointer gets the whole machine.
+    return NormalizeName(value) == "whole_desktop"
+        ? CapabilitySettings::DesktopControl::InputScope::WholeDesktop
+        : CapabilitySettings::DesktopControl::InputScope::ApprovedApplications;
+}
+
 ActionType ActionTypeFromString(const std::string& value)
 {
     const std::string normalized = NormalizeName(value);
@@ -118,6 +134,8 @@ ActionType ActionTypeFromString(const std::string& value)
         return ActionType::MoveCursor;
     if (normalized == "click_pointer" || normalized == "click")
         return ActionType::ClickPointer;
+    if (normalized == "drag_pointer" || normalized == "drag")
+        return ActionType::DragPointer;
     if (normalized == "scroll_pointer" || normalized == "scroll")
         return ActionType::ScrollPointer;
     if (normalized == "press_keys" || normalized == "press") return ActionType::PressKeys;
@@ -168,6 +186,7 @@ RiskLevel RiskForAction(ActionType value)
         case ActionType::LaunchApplication:
         case ActionType::MoveCursor:
         case ActionType::ClickPointer:
+        case ActionType::DragPointer:
         case ActionType::ScrollPointer:
         case ActionType::PressKeys:
         case ActionType::TypeText:
@@ -187,8 +206,8 @@ bool IsUiAutomationAction(const ActionType value)
 bool IsSynthesizedInputAction(const ActionType value)
 {
     return value == ActionType::MoveCursor || value == ActionType::ClickPointer ||
-        value == ActionType::ScrollPointer || value == ActionType::PressKeys ||
-        value == ActionType::TypeText;
+        value == ActionType::DragPointer || value == ActionType::ScrollPointer ||
+        value == ActionType::PressKeys || value == ActionType::TypeText;
 }
 
 bool IsDesktopControlAction(const ActionType value)
@@ -237,17 +256,6 @@ const std::map<std::string, int>& SupportedKeys()
     return keys;
 }
 
-// Chords that leave the approved application rather than operating inside it. The
-// Windows key is not a supported modifier at all, so every start-menu, run-box, and
-// search chord is already unreachable; these are the remaining ctrl/alt escapes.
-bool IsEscapeChord(const std::string& normalized)
-{
-    static const std::vector<std::string> blocked = {
-        "ctrl+escape", "ctrl+shift+escape", "alt+tab", "alt+shift+tab", "alt+escape",
-        "ctrl+alt+delete", "ctrl+alt+escape"};
-    return std::find(blocked.begin(), blocked.end(), normalized) != blocked.end();
-}
-
 std::vector<std::string> SplitChord(const std::string& value)
 {
     std::vector<std::string> parts;
@@ -279,6 +287,7 @@ bool ParseKeyChord(const std::string& value, KeyChord& outChord, std::string& ou
         return false;
     }
 
+    bool windows = false;
     bool control = false;
     bool alt = false;
     bool shift = false;
@@ -295,9 +304,8 @@ bool ParseKeyChord(const std::string& value, KeyChord& outChord, std::string& ou
         if (part == "shift") { shift = true; continue; }
         if (part == "win" || part == "meta" || part == "cmd" || part == "super")
         {
-            outError = "The Windows key is not available: its chords open system "
-                "surfaces rather than controls inside the approved application.";
-            return false;
+            windows = true;
+            continue;
         }
         if (!keyName.empty())
         {
@@ -319,6 +327,7 @@ bool ParseKeyChord(const std::string& value, KeyChord& outChord, std::string& ou
     }
 
     std::string normalized;
+    if (windows) { normalized += "win+"; outChord.modifierVirtualKeys.push_back(0x5B); }
     if (control) { normalized += "ctrl+"; outChord.modifierVirtualKeys.push_back(0x11); }
     if (alt) { normalized += "alt+"; outChord.modifierVirtualKeys.push_back(0x12); }
     if (shift) { normalized += "shift+"; outChord.modifierVirtualKeys.push_back(0x10); }
@@ -333,15 +342,53 @@ bool ParseKeyChord(const std::string& value, KeyChord& outChord, std::string& ou
         }
     }
     normalized += canonicalName;
-    if (IsEscapeChord(normalized))
-    {
-        outError = "This chord switches away from the approved application: " + normalized;
-        return false;
-    }
     outChord.normalized = normalized;
     outChord.virtualKey = found->second;
+    outChord.usesWindowsKey = windows;
     outError.clear();
     return true;
+}
+
+bool IsApplicationSwitchingChord(const std::string& normalizedChord)
+{
+    static const std::vector<std::string> switching = {
+        "alt+tab", "alt+shift+tab", "alt+escape", "ctrl+alt+escape", "ctrl+escape",
+        "ctrl+shift+escape", "win+tab", "win+d", "win+m", "win+shift+m", "win+b",
+        "win+comma", "win+l"};
+    return std::find(switching.begin(), switching.end(), normalizedChord) != switching.end();
+}
+
+bool IsCommandSurfaceChord(const std::string& normalizedChord)
+{
+    // Each of these ends at a field that runs whatever is typed into it, which is the
+    // shell boundary wearing a different hat.
+    static const std::vector<std::string> commandSurfaces = {
+        "win+r", "win+x", "win+s", "win+q", "win+i", "win+u"};
+    return std::find(commandSurfaces.begin(), commandSurfaces.end(), normalizedChord) !=
+        commandSurfaces.end();
+}
+
+bool IsAlwaysRefusedChord(const std::string& normalizedChord)
+{
+    // Windows will not let SendInput produce the secure attention sequence, so accepting
+    // this would only be a lie about what happened.
+    return normalizedChord == "ctrl+alt+delete";
+}
+
+bool IsCommandSurfaceExecutable(const std::string& executableName)
+{
+    static const std::vector<std::string> shells = {
+        "cmd.exe", "powershell.exe", "pwsh.exe", "windowsterminal.exe", "wt.exe",
+        "conhost.exe", "openconsole.exe", "bash.exe", "sh.exe", "zsh.exe", "wsl.exe",
+        "wslhost.exe", "python.exe", "pythonw.exe", "wscript.exe", "cscript.exe",
+        "mshta.exe", "regedit.exe", "reg.exe", "mmc.exe", "taskmgr.exe"};
+    std::string lowered = executableName;
+    std::transform(lowered.begin(), lowered.end(), lowered.begin(),
+        [](const unsigned char character)
+        {
+            return static_cast<char>(std::tolower(character));
+        });
+    return std::find(shells.begin(), shells.end(), lowered) != shells.end();
 }
 
 std::string NewActionId()

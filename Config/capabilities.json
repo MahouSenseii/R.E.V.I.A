@@ -23,6 +23,8 @@
     "keyboard": false,
     "applicationLaunch": false,
     "rawCoordinates": false,
+    "scope": "approved_applications",
+    "allowCommandSurfaces": false,
     "autonomous": false,
     "maxInputActionsPerMinute": 30,
     "minimumInputIntervalMs": 120,

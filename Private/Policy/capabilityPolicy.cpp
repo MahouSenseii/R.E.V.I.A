@@ -171,16 +171,41 @@ actions::PolicyDecision CapabilityPolicy::Evaluate(
     }
     if (actions::IsDesktopControlAction(request.type))
     {
-        if (request.application.empty() ||
-            request.application.find_first_of("/\\") != std::string::npos)
+        using InputScope = actions::CapabilitySettings::DesktopControl::InputScope;
+        // Naming an application is what asks for the narrow, confined form. Leaving it
+        // out is what asks for the desktop itself, and that only exists if the owner
+        // turned the scope up. Starting a process always names one, because the
+        // allowlist is the whole of that permission.
+        const bool screenSpace = request.application.empty() &&
+            request.type != actions::ActionType::LaunchApplication;
+        if (screenSpace && settings.desktopControl.scope != InputScope::WholeDesktop)
         {
-            decision.reason = "Desktop operation requires an executable name without a path.";
+            decision.reason = "Desktop operation is confined to approved applications, "
+                "so it needs an executable name.";
             return decision;
         }
-        if (!ApplicationIsApproved(settings, request.application))
+        if (!screenSpace)
         {
-            decision.reason = "The target application is outside the approved application list.";
-            return decision;
+            if (request.application.empty() ||
+                request.application.find_first_of("/\\") != std::string::npos)
+            {
+                decision.reason = "Desktop operation requires an executable name without a path.";
+                return decision;
+            }
+            if (!ApplicationIsApproved(settings, request.application))
+            {
+                decision.reason = "The target application is outside the approved application list.";
+                return decision;
+            }
+            // The shell boundary does not move when the scope does. Naming a command
+            // interpreter is the same request as reaching one by keystroke.
+            if (actions::IsCommandSurfaceExecutable(request.application) &&
+                !settings.desktopControl.allowCommandSurfaces)
+            {
+                decision.reason = "That application is a command surface, and reaching "
+                    "one is a separate permission that is off.";
+                return decision;
+            }
         }
         // Delegating a task is not standing consent to drive the machine unprompted.
         if (actions::IsAutonomousRequest(request.requestedBy) &&
@@ -197,6 +222,7 @@ actions::PolicyDecision CapabilityPolicy::Evaluate(
         }
         const bool pointerAction = request.type == actions::ActionType::MoveCursor ||
             request.type == actions::ActionType::ClickPointer ||
+            request.type == actions::ActionType::DragPointer ||
             request.type == actions::ActionType::ScrollPointer;
         if (pointerAction && !settings.desktopControl.pointer)
         {
@@ -236,25 +262,33 @@ actions::PolicyDecision CapabilityPolicy::Evaluate(
         else if (pointerAction)
         {
             // Aiming is either an element the vision-to-UIA resolver re-verified or a
-            // point the owner separately allowed. There is no third option, and the
-            // executor still confines the point to the target window.
-            if (!request.resolution.visionResolved)
+            // point Revia chose. The second is what a general pointer skill is made of,
+            // so it has its own switch; where that point may land is the scope's job.
+            // A scroll is the exception that needs neither: it turns the wheel wherever
+            // the pointer already is, the way a hand on a mouse does.
+            const bool aimsSomewhere =
+                request.resolution.visionResolved || request.input.hasPoint;
+            if (!aimsSomewhere && request.type != actions::ActionType::ScrollPointer)
             {
-                if (!request.input.hasPoint)
-                {
-                    decision.reason = "A pointer action needs a resolved element or an explicit point.";
-                    return decision;
-                }
-                if (!settings.desktopControl.rawCoordinates)
-                {
-                    decision.reason = "Pointing at raw coordinates is disabled; resolve the element first.";
-                    return decision;
-                }
+                decision.reason = "A pointer action needs a resolved element or an explicit point.";
+                return decision;
+            }
+            if (request.input.hasPoint && !request.resolution.visionResolved &&
+                !settings.desktopControl.rawCoordinates)
+            {
+                decision.reason = "Pointing at a chosen coordinate is disabled; resolve the element first.";
+                return decision;
             }
             if (request.type == actions::ActionType::ClickPointer &&
                 (request.input.clickCount < 1 || request.input.clickCount > 3))
             {
                 decision.reason = "A click may repeat between one and three times.";
+                return decision;
+            }
+            if (request.type == actions::ActionType::DragPointer &&
+                (!request.input.hasPoint || !request.input.hasEndPoint))
+            {
+                decision.reason = "A drag needs a start point and an end point.";
                 return decision;
             }
             if (request.type == actions::ActionType::ScrollPointer &&
@@ -272,6 +306,35 @@ actions::PolicyDecision CapabilityPolicy::Evaluate(
             if (!actions::ParseKeyChord(request.input.keys, chord, chordError))
             {
                 decision.reason = chordError;
+                return decision;
+            }
+            if (actions::IsAlwaysRefusedChord(chord.normalized))
+            {
+                decision.reason = "Windows does not let a program synthesize " +
+                    chord.normalized + ", so it is refused rather than pretended.";
+                return decision;
+            }
+            // Learning the desktop includes learning to switch windows. Learning it
+            // does not include learning to open a box that runs what she types.
+            if (actions::IsCommandSurfaceChord(chord.normalized) &&
+                !settings.desktopControl.allowCommandSurfaces)
+            {
+                decision.reason = chord.normalized + " opens a command or settings "
+                    "surface, and reaching one is a separate permission that is off.";
+                return decision;
+            }
+            if (actions::IsApplicationSwitchingChord(chord.normalized) &&
+                settings.desktopControl.scope != InputScope::WholeDesktop)
+            {
+                decision.reason = chord.normalized + " switches away from the approved "
+                    "application, which confined input may not do.";
+                return decision;
+            }
+            if (chord.usesWindowsKey &&
+                settings.desktopControl.scope != InputScope::WholeDesktop)
+            {
+                decision.reason = "Windows-key chords address the desktop rather than a "
+                    "control inside the approved application.";
                 return decision;
             }
         }

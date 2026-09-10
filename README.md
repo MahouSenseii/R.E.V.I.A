@@ -16,8 +16,9 @@ Revia can currently:
 - look things up in a visible, restricted browser when internet access is enabled;
 - suggest something on her own when she has real evidence and policy allows it;
 - draw diagrams, maintain a working document, and generate images when those features are enabled;
+- perform a song from WAV assets you supply, with timed sections and measured sung phrases;
 - perform a narrow set of confirmed filesystem and Windows UI Automation actions;
-- when the owner turns it on, move the pointer, type, and start approved applications inside a verified approved window, with a physical emergency stop; and
+- when the owner turns it on, move the pointer, drag, type, and start applications — either confined to one approved window or across the whole desktop — with a physical emergency stop; and
 - show exactly which models, GPUs, queues, timings, and errors are active.
 
 The design rule is simple even though the internals are not: **one Revia**. Reflex, Fast, Main, and Expert share one identity, mood, memory, relationship state, and desktop context; routing changes how much effort she uses, not who she is.
@@ -48,6 +49,59 @@ The design rule is simple even though the internals are not: **one Revia**. Refl
 - The installed Qwen package does **not** provide true incremental audio generation. Revia therefore uses accurately named text-pipelined phrase generation, not fake “streaming audio.”
 - Barge-in lets the user interrupt a spoken reply without unloading the voice model.
 
+### Karaoke
+
+Singing is a performer capability, not a long sentence through the TTS queue. It has its
+own audio device, its own thread, and its own owner, so a song that fails to load cannot
+cost Revia her voice.
+
+Songs live in `RuntimeData/Songs/<name>/`, which is created on first run:
+
+```text
+RuntimeData/Songs/my-song/
+  instrumental.wav   optional backing track
+  vocal.wav          optional vocal track
+  song.json          optional title, credit, gains, and timed lines
+```
+
+At least one track is required. A folder holding a single `.wav` and no `song.json` is
+still a song, so dropping one file in and asking her to sing it works with no
+configuration. Two tracks are mixed sample-accurately into one stream — there is no
+second player to drift out of time with the first.
+
+| Command | Purpose |
+|---|---|
+| `/songs` | List what is in the library, including folders that cannot be played and why |
+| `/sing <name>` | Perform a song; matches an exact id, or a unique id/title prefix |
+| `/sing` or `/sing status` | Position, current section, and current line |
+| `/sing check <name>` | Load and mix without playing, to see whether a new asset works |
+| `/sing stop` | Stop the performance |
+
+Details worth knowing:
+
+- **One voice.** She stops singing to answer you rather than talking over herself.
+  Set `performance.interruptSongToSpeak` to `false` to keep the music running and leave
+  the reply on screen only. Stop stops the song along with everything else.
+- **Sung phrases are measured, not declared.** `VocalStarted`/`VocalEnded` events come
+  from the loudness of the vocal track itself, so an avatar's mouth follows the audio
+  rather than a file that claims what the audio does.
+- **Both tracks must share a sample rate.** Mismatches are refused with both numbers
+  rather than run through a hasty resampler that would sound worse than the refusal.
+  Mono is upmixed to stereo; 8/16/24/32-bit PCM and 32/64-bit float are all accepted.
+- **Clipping is reported.** `/sing check` says how many samples hit the limit when the
+  two tracks are summed, so a mix that is quietly destroying itself says so instead of
+  just sounding harsh. Lower `instrumentalGain` or `vocalGain` in `song.json`.
+- The library reads that folder and never writes to it or reaches outside it. A song
+  name arrives from a chat message, so it is treated as untrusted text and validated as
+  a plain folder name before it is ever joined to a path.
+
+Revia performs the audio you put in that folder — the project ships no songs, and
+nothing here generates singing. `song.json`'s title, credit, and line text are carried
+through as opaque data for display and timing. What goes in the library, and whether you
+have the right to perform it, is yours to decide. `ISingingEngine` is the intended
+replacement point later: it changes where the vocal samples come from, not the mixing,
+timing, or event machinery.
+
 ### Research, initiative, and actions
 
 - Internet grounding is opt-in. The visible browser uses a dedicated profile, blocks downloads and private/local destinations, and exposes the exact query, sources, and bounded text returned to Revia. Explicit lookups fall back to allow-listed DuckDuckGo/Wikipedia APIs when the visible results page cannot be extracted; autonomous research remains visible-browser-only.
@@ -59,29 +113,68 @@ The design rule is simple even though the internals are not: **one Revia**. Refl
 ### Driving the desktop
 
 Pointer, keyboard, and application launch are off in the checked-in capability template
-and each is granted separately in the **Permissions** tab. Once granted:
+and each is granted separately in the **Permissions** tab. There are two scopes, and the
+scope is the whole question.
 
-- Input is only ever synthesized into a window belonging to an application on the
-  approved list, and the executor re-checks the real foreground window immediately
-  before it presses anything. If focus moved, nothing is sent.
-- The Windows key is not a supported modifier, and application-switching chords
-  (`alt+tab`, `ctrl+esc`, `ctrl+shift+esc`, `ctrl+alt+delete`) are refused. There is no
-  keystroke route to the Run box, the start menu, or search, so there is no keystroke
-  route to a shell.
-- A click aimed at something Revia saw re-finds that exact UI Automation element and
-  uses its **current** bounds. The coordinate captured when the plan was made is never
-  the coordinate clicked. Aiming at a point she chose instead is a separate permission,
-  and the point must still land inside the approved window.
+**`approved_applications`** (the default). Every action names an executable on the
+approved list. Input is only ever synthesized into a window belonging to that
+executable, and the executor re-checks the real foreground window immediately before it
+presses anything — if focus moved, nothing is sent. A point must land inside that
+window. Windows-key chords and application-switching chords are refused, because leaving
+the application is exactly what confinement means. A click aimed at something Revia saw
+re-finds that exact UI Automation element and uses its **current** bounds; the
+coordinate captured when the plan was made is never the coordinate clicked.
+
+**`whole_desktop`**. The pointer goes anywhere on the virtual desktop and the keyboard
+goes to whatever has focus, the way it does for the person sitting there. This exists
+because a general skill — move the pointer, see what is under it, press a key, see what
+changed — cannot be learned one integration at a time, and Revia is meant to learn the
+machine rather than be wired into it.
+
+It is worth being plain about the trade: **confinement is what is given up.** The scope
+requires pointer control and permission to aim at chosen coordinates, needs an explicit
+answer to a dialog that says so, and is off until then. What remains after it is on:
+
+- **Command surfaces are still refused.** Terminals, script hosts, and `regedit` are
+  refused by executable name at the moment of injection, and `win+r`, `win+x`, `win+s`,
+  `win+i` are refused as chords. This is the surviving form of "model text never becomes
+  a shell command". `allowCommandSurfaces` turns it off, separately and deliberately.
+- The per-minute and minimum-interval **input budget**, separate from the UI Automation
+  budget.
+- The **audit trail** — two records per action, pointer geometry and key chords in full,
+  typed text by length only. It is not a keystroke log.
+- The **emergency stop**, below.
+
+None of those is a proof. A pointer that can reach any pixel can click a taskbar icon,
+and a keyboard that reaches any focused window can drive whatever is in front of it.
+That is inherent in the capability, not a gap in it, and it is why the scope is a
+deliberate grant rather than a default.
+
+Common to both scopes:
+
 - `launch_application` starts an approved executable with no arguments, or with one file
   that passes the same approved-root checks as any other filesystem action.
-- Typed text is bounded in length, may not contain control characters, and is recorded
-  in the audit log by length only. The audit trail is not a keystroke log.
-- Synthesized input has its own per-minute and minimum-interval budget, separate from
-  the UI Automation budget.
+- Typed text is bounded in length and may not contain control characters.
+- Pointer actions report what is under the pointer afterwards — the accessible name,
+  control type, and owning executable — so an action has an observable result rather
+  than a silent one. That is description, never permission: nothing about being able to
+  name a control lets her press it.
 - **Stop:** hold `ctrl+alt+shift`, press Stop in the desktop shell, use the Permissions
   tab button, or run `/desktop stop`. The stop latches; `/desktop resume` clears it. It
   does not travel through the model or the turn queue, and an executor with no stop
   path available refuses to act at all.
+
+Every command has a screen form and a window form. An executable name never parses as a
+number, so the two never collide:
+
+```text
+/click "820" "140"                              anywhere on screen
+/click "notepad.exe" "Untitled" "40" "18"       inside one approved window
+/drag  "10" "20" "90" "120" ["button"]
+/press "alt+tab"        /press "notepad.exe" "Untitled" "ctrl+s"
+/type  "hello"          /type  "notepad.exe" "Untitled" "hello"
+/scroll "-4"            /scroll "notepad.exe" "Untitled" "-4"
+```
 
 `mode` in the capability file also accepts `owner_full_access`, which is the owner
 choosing that reversible in-scope work should stop asking for confirmation. It changes
@@ -203,8 +296,9 @@ The desktop UI is the normal interface. These CLI commands are useful for diagno
 | `/internet on`, `manual`, `off` | Choose automatic, explicit-only, or no lookup |
 | `/web "query"` | Request one web lookup |
 | `/bargein`, `/bargein off` | Inspect or disable voice interruption |
+| `/songs`, `/sing <name>`, `/sing stop`, `/sing check <name>` | Karaoke from WAV assets |
 | `/desktop`, `/desktop stop`, `/desktop resume` | Desktop control state and the emergency stop |
-| `/launch`, `/click`, `/move-cursor`, `/scroll`, `/press`, `/type` | Typed desktop operation |
+| `/launch`, `/click`, `/drag`, `/move-cursor`, `/scroll`, `/press`, `/type` | Typed desktop operation |
 | `/initiative`, `accept`, `dismiss` | Review a proactive proposal |
 | `/goal <task>`, `/goals` | Rehearse and supervise a bounded multi-step goal |
 | `/plan <task>` | Plan one typed action |

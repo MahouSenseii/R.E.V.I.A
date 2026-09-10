@@ -180,6 +180,8 @@ bool CapabilityEditor::SetDesktopControl(
     const bool applicationLaunch,
     const bool rawCoordinates,
     const bool autonomous,
+    const actions::CapabilitySettings::DesktopControl::InputScope scope,
+    const bool allowCommandSurfaces,
     std::string& outError) const
 {
     DesktopControlChange change;
@@ -188,6 +190,8 @@ bool CapabilityEditor::SetDesktopControl(
     change.applicationLaunch = applicationLaunch;
     change.rawCoordinates = rawCoordinates;
     change.autonomous = autonomous;
+    change.scope = scope;
+    change.allowCommandSurfaces = allowCommandSurfaces;
     return Apply(path, Mutation::DesktopControl, {}, {}, false, false, outError,
         change, actions::ExecutionMode::Supervised);
 }
@@ -321,13 +325,26 @@ bool CapabilityEditor::Apply(
         {
             desktopControl = json::object();
         }
+        const bool rawCoordinates = desktop.pointer && desktop.rawCoordinates;
         desktopControl["pointer"] = desktop.pointer;
         desktopControl["keyboard"] = desktop.keyboard;
         desktopControl["applicationLaunch"] = desktop.applicationLaunch;
-        desktopControl["rawCoordinates"] = desktop.pointer && desktop.rawCoordinates;
+        desktopControl["rawCoordinates"] = rawCoordinates;
         desktopControl["autonomous"] =
             (desktop.pointer || desktop.keyboard || desktop.applicationLaunch) &&
             desktop.autonomous;
+        // The wide scope collapses to the narrow one the moment its prerequisites are
+        // withdrawn, so re-granting the pointer later cannot silently restore the
+        // desktop along with it.
+        const bool wholeDesktop = rawCoordinates &&
+            desktop.scope ==
+                actions::CapabilitySettings::DesktopControl::InputScope::WholeDesktop;
+        desktopControl["scope"] = actions::ToString(
+            wholeDesktop
+                ? actions::CapabilitySettings::DesktopControl::InputScope::WholeDesktop
+                : actions::CapabilitySettings::DesktopControl::InputScope::ApprovedApplications);
+        desktopControl["allowCommandSurfaces"] =
+            (desktop.pointer || desktop.keyboard) && desktop.allowCommandSurfaces;
         if (!desktopControl.contains("maxInputActionsPerMinute"))
             desktopControl["maxInputActionsPerMinute"] = 30;
         if (!desktopControl.contains("minimumInputIntervalMs"))

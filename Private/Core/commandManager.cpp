@@ -120,8 +120,11 @@ commandOutput commandManager::BuildHelpOutput() const
     stream << "/action <json> - Validate and execute a structured action\n";
     stream << "/list, /read, /mkdir, /copy, /move, /rename, /trash - Typed file actions\n";
     stream << "/inspect-window, /focus-window, /set-text, /invoke-control - Supervised UI Automation\n";
-    stream << "/launch, /click, /move-cursor, /scroll, /press, /type - Desktop operation\n";
+    stream << "/launch, /click, /drag, /move-cursor, /scroll, /press, /type - Desktop operation\n";
+    stream << "  Screen form: /click \"x\" \"y\"; window form: /click \"app.exe\" \"title\" \"x\" \"y\"\n";
     stream << "/desktop [stop|resume] - Desktop control state and emergency stop\n";
+    stream << "/songs - List the songs she can sing\n";
+    stream << "/sing <song>, /sing stop, /sing check <song> - Karaoke from WAV assets\n";
     stream << "/goal <request> - Plan, rehearse, and run a multi-step goal\n";
     stream << "/goals, /goals resume <id> - List goals and continue an unfinished one\n";
     stream << "/history [words|forget] - Search or clear durable conversation history\n";

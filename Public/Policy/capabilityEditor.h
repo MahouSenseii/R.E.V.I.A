@@ -61,6 +61,8 @@ public:
         bool applicationLaunch,
         bool rawCoordinates,
         bool autonomous,
+        actions::CapabilitySettings::DesktopControl::InputScope scope,
+        bool allowCommandSurfaces,
         std::string& outError) const;
     // Execution mode is the owner's choice of how much stops to ask. It never changes
     // which roots, applications, or controls are in scope.
@@ -90,6 +92,9 @@ private:
         bool applicationLaunch = false;
         bool rawCoordinates = false;
         bool autonomous = false;
+        actions::CapabilitySettings::DesktopControl::InputScope scope =
+            actions::CapabilitySettings::DesktopControl::InputScope::ApprovedApplications;
+        bool allowCommandSurfaces = false;
     };
 
     [[nodiscard]] bool Apply(

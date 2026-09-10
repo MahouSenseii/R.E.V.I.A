@@ -31,6 +31,7 @@
 #include "Learning/selfAssessment.h"
 #include "Perception/activityHistory.h"
 #include "Perception/windowEventMonitor.h"
+#include "Performance/performanceRuntime.h"
 #include "Presence/presenceRuntime.h"
 #include "Runtime/affectController.h"
 #include "Runtime/conversationRuntime.h"
@@ -236,6 +237,18 @@ public:
     // confirmation, dispatch, and audit.
     SessionResult ActOnScreen(const std::string& instruction);
 
+    // Karaoke. She performs a song asset from the library folder; nothing here generates
+    // singing, and a failure stays inside the performance owner.
+    [[nodiscard]] bool StartSong(const std::string& songQuery, std::string& outError);
+    void StopSong(const std::string& reason);
+    [[nodiscard]] performance::PerformanceStatus SongStatus() const;
+    [[nodiscard]] std::vector<performance::SongSummary> Songs() const;
+    // Load and mix a song without playing it, to answer "will this one work?" before
+    // committing to three minutes of audio.
+    [[nodiscard]] performance::SongRehearsal RehearseSong(const std::string& songQuery) const;
+    [[nodiscard]] std::string SongListingText() const;
+    [[nodiscard]] std::string SongStatusText() const;
+
     [[nodiscard]] actions::CapabilitySettings Capabilities() const;
     [[nodiscard]] actions::windows::ApplicationControlInventory
         DiscoverForegroundApplicationControls() const;
@@ -258,7 +271,9 @@ public:
         bool keyboard,
         bool applicationLaunch,
         bool rawCoordinates,
-        bool autonomous);
+        bool autonomous,
+        actions::CapabilitySettings::DesktopControl::InputScope scope,
+        bool allowCommandSurfaces);
     // How much of Revia's in-scope work stops to ask. It never widens which roots,
     // applications, or controls are in scope.
     CapabilityUpdateResult SetExecutionMode(actions::ExecutionMode mode);
@@ -654,6 +669,9 @@ private:
     std::chrono::steady_clock::time_point lastActivityAt{};
     speech::SpeechService speechService;
     speech::SpeechRecognitionService speechRecognitionService;
+    // A separate audio owner with its own device and its own thread. Nothing in here
+    // touches the speech queue, so a song that fails to load cannot cost Revia her voice.
+    performance::PerformanceRuntime performanceRuntime;
     presence::PresenceRuntime presenceRuntime;
     perception::WindowEventMonitor windowEventMonitor;
     perception::ActivityHistory activityHistory;

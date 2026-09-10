@@ -83,6 +83,8 @@ std::string ToString(const StopReason value)
         case StopReason::Cancelled: return "cancelled";
         case StopReason::InvalidPlan: return "invalid_plan";
         case StopReason::StoreError: return "store_error";
+        case StopReason::NoProgress: return "no_progress";
+        case StopReason::Undecided: return "undecided";
     }
     return "none";
 }
@@ -127,6 +129,8 @@ StopReason StopReasonFromString(const std::string& value)
     if (name == "cancelled" || name == "canceled") return StopReason::Cancelled;
     if (name == "invalid_plan") return StopReason::InvalidPlan;
     if (name == "store_error") return StopReason::StoreError;
+    if (name == "no_progress") return StopReason::NoProgress;
+    if (name == "undecided") return StopReason::Undecided;
     return StopReason::None;
 }
 

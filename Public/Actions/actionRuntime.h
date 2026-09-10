@@ -108,6 +108,8 @@ public:
         bool applicationLaunch,
         bool rawCoordinates,
         bool autonomous,
+        CapabilitySettings::DesktopControl::InputScope scope,
+        bool allowCommandSurfaces,
         std::string& outError);
     [[nodiscard]] bool SetExecutionMode(ExecutionMode mode, std::string& outError);
 
