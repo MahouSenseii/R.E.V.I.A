@@ -8524,6 +8524,37 @@ int main(const int argc, char** argv)
             RunOperatorLoopTests();
             return 0;
         }
+        if (argc > 1 && std::string(argv[1]) == "--desktop-authorization")
+        {
+            RunDesktopAuthorizationTests();
+            return 0;
+        }
+        if (argc > 1 && std::string(argv[1]) == "--target-binding")
+        {
+            RunTargetBindingTests();
+            return 0;
+        }
+        if (argc > 1 && std::string(argv[1]) == "--action-approval")
+        {
+            RunActionApprovalTests();
+            return 0;
+        }
+        if (argc > 1 && std::string(argv[1]) == "--consequence-corpus")
+        {
+            RunConsequenceCorpusTests();
+            return 0;
+        }
+        // Deliberately absent from the default suite: it synthesizes real input.
+        if (argc > 1 && std::string(argv[1]) == "--native-desktop")
+        {
+            RunNativeDesktopTests();
+            return 0;
+        }
+        if (argc > 1 && std::string(argv[1]) == "--workspace-demo")
+        {
+            RunWorkspaceDemonstration();
+            return 0;
+        }
         if (argc > 1 && std::string(argv[1]) == "--action-cancellation")
         {
             RunActionCancellationTests();
@@ -8686,6 +8717,10 @@ int main(const int argc, char** argv)
         RunDesktopControlTests();
         RunPerformanceTests();
         RunOperatorLoopTests();
+        RunDesktopAuthorizationTests();
+        RunTargetBindingTests();
+        RunActionApprovalTests();
+        RunConsequenceCorpusTests();
         TestGoalRunnerStopsOnUnverifiableStep();
         RunIdentityPersistenceTests();
         RunLearningDurabilityTests();

@@ -72,7 +72,8 @@ bool ActionRuntime::InitializeUnlocked(
     dispatcher.Register(std::make_unique<internet::InternetSearchExecutor>(
         settings.internet, internetCancellation));
 #ifdef _WIN32
-    dispatcher.Register(std::make_unique<windows::WindowsAutomationExecutor>());
+    dispatcher.Register(std::make_unique<windows::WindowsAutomationExecutor>(
+        settings.desktopControl));
     dispatcher.Register(std::make_unique<windows::DesktopControlExecutor>(
         settings.desktopControl, desktopInputGuard));
 #endif

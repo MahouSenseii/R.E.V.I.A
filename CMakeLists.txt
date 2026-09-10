@@ -263,6 +263,10 @@ if(BUILD_TESTING)
     file(GLOB_RECURSE REVIA_TEST_SOURCES CONFIGURE_DEPENDS
             "${CMAKE_CURRENT_SOURCE_DIR}/Tests/*.cpp"
     )
+    # The disposable Windows fixture is its own GUI program with its own entry point.
+    # It lives under Tests/ because that is what it is for, but it must not be linked
+    # into the test binary.
+    list(FILTER REVIA_TEST_SOURCES EXCLUDE REGEX "/Tests/Fixture/")
     add_executable(ReviaTests ${REVIA_TEST_SOURCES})
     # Split test suites include testSupport.h from the Tests directory.
     target_include_directories(ReviaTests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/Tests")
@@ -275,6 +279,22 @@ if(BUILD_TESTING)
     else()
         target_compile_options(ReviaTests PRIVATE -Wall -Wextra -Wpedantic)
     endif()
+    # The disposable fixture the native desktop tests drive. Windows only, and built
+    # only when tests are enabled: nothing in the shipping runtime depends on it.
+    if(WIN32)
+        add_executable(ReviaDesktopFixture WIN32
+                "${CMAKE_CURRENT_SOURCE_DIR}/Tests/Fixture/desktopFixture.cpp")
+        target_link_libraries(ReviaDesktopFixture PRIVATE comctl32 user32 gdi32)
+        if(MINGW)
+            # -municode selects the wide entry point. Without it MinGW's startup looks
+            # for WinMain and the fixture's wWinMain never links.
+            target_compile_options(ReviaDesktopFixture PRIVATE -municode)
+            target_link_options(ReviaDesktopFixture PRIVATE -static -municode)
+        endif()
+        # The native tests launch it by path, so it has to exist before they run.
+        add_dependencies(ReviaTests ReviaDesktopFixture)
+    endif()
+
     add_test(NAME Revia.Foundation COMMAND ReviaTests)
     find_program(REVIA_NODE_EXECUTABLE NAMES node node.exe)
     if(REVIA_NODE_EXECUTABLE)

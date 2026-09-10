@@ -365,6 +365,18 @@ struct CapabilitySettings
 [[nodiscard]] ActionType ActionTypeFromString(const std::string& value);
 [[nodiscard]] RiskLevel RiskLevelFromString(const std::string& value);
 [[nodiscard]] ExecutionMode ExecutionModeFromString(const std::string& value);
+// One authoritative list of what the system can actually do.
+//
+// The planner prompt and the parser used to keep separate lists, and they drifted: seven
+// action types existed and could be executed while the planner had never been told they
+// were there, so a goal could not reach them. Anything that needs to name the vocabulary
+// derives it from here, and a test asserts the two agree.
+[[nodiscard]] const std::vector<ActionType>& AllActionTypes();
+// Comma-separated canonical names, for a prompt. `readOnlyOnly` narrows it to the
+// actions that observe without changing anything, which is what a verification step is
+// allowed to use.
+[[nodiscard]] std::string ActionVocabulary(bool readOnlyOnly = false);
+
 [[nodiscard]] RiskLevel RiskForAction(ActionType value);
 // UI Automation and desktop operation both drive an application, but only the second
 // synthesizes input or starts a process, so they are gated separately.

@@ -1,6 +1,7 @@
 #include "testSupport.h"
 
 #include "Actions/actionRuntime.h"
+#include "Planning/goalPlanner.h"
 #include "Planning/structuredActionParser.h"
 #include "Policy/capabilityPolicy.h"
 #include "Policy/desktopActionRateLimiter.h"
@@ -584,6 +585,36 @@ void TestTheCeilingOnlyEverAddsRefusals()
         "OwnerFullAccess quietly raised the consequence ceiling.");
 }
 
+void TestThePlannerAndParserShareOneVocabulary()
+{
+    // Seven action types existed and could be executed while the planner had never been
+    // told they were there, so a goal could not reach them. Two hand-maintained lists
+    // will always drift eventually; this asserts they are the same list.
+    const std::string prompt = revia::planning::GoalPlanner::PlannerPrompt();
+    for (const ActionType type : AllActionTypes())
+    {
+        const std::string name = ToString(type);
+        Check(ActionTypeFromString(name) == type,
+            "The canonical name \"" + name + "\" does not parse back to its own type.");
+        Check(prompt.find(name) != std::string::npos,
+            "The planner was never told \"" + name + "\" exists.");
+    }
+
+    // A verification step must not be able to change anything, so the list offered for
+    // checks has to contain only read-only actions.
+    const std::string readOnly = ActionVocabulary(/*readOnlyOnly=*/true);
+    for (const ActionType type : AllActionTypes())
+    {
+        const bool offered = readOnly.find(ToString(type)) != std::string::npos;
+        const bool isReadOnly = RiskForAction(type) == RiskLevel::ReadOnly;
+        Check(offered == isReadOnly,
+            "The read-only vocabulary disagrees with the risk table about \"" +
+                ToString(type) + "\".");
+    }
+    Check(readOnly.find("click_pointer") == std::string::npos,
+        "A mutating action was offered as a verification step.");
+}
+
 void TestOwnerFullAccessRaisesOnlyTheCeiling()
 {
     PolicyFixture fixture;
@@ -916,6 +947,7 @@ void RunDesktopControlTests()
     TestWholeDesktopNeedsItsPrerequisites();
     TestWholeDesktopAcceptsScreenSpaceInput();
     TestCommandSurfacesStayOutOfReach();
+    TestThePlannerAndParserShareOneVocabulary();
     TestConsequenceIsReadFromTheTargetNotTheVerb();
     TestTheConsequenceCeilingLoadsAndDefaultsNarrow();
     TestTheCeilingOnlyEverAddsRefusals();

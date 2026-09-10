@@ -1,5 +1,6 @@
 #include "Windows/windowsAutomationExecutor.h"
 
+#include "Policy/desktopAuthorization.h"
 #include "Windows/uiaElementLocator.h"
 
 #include <algorithm>
@@ -80,6 +81,52 @@ namespace
 #endif
 }
 
+namespace
+{
+#ifdef _WIN32
+
+// Builds the same evidence the pointer path builds, from the element that is about to be
+// driven, and asks the same shared authorizer.
+bool AuthorizeUiaEffect(
+    IUIAutomationElement* control,
+    IUIAutomationElement* window,
+    const ActionRequest& request,
+    const CapabilitySettings::DesktopControl& settings,
+    std::string& outFailure)
+{
+    policy::TargetEvidence evidence;
+    evidence.resolved = control != nullptr;
+    evidence.controlName = WideToUtf8(ElementName(control));
+    evidence.automationId = WideToUtf8(ElementAutomationId(control));
+    // The surrounding window, so a "Confirm" carries the meaning of the dialog it is in.
+    evidence.windowTitle = WideToUtf8(ElementName(window));
+    evidence.executable = request.application;
+    if (control != nullptr)
+    {
+        CONTROLTYPEID controlType = 0;
+        BOOL isPassword = FALSE;
+        control->get_CurrentControlType(&controlType);
+        control->get_CurrentIsPassword(&isPassword);
+        evidence.controlType = static_cast<int>(controlType);
+        evidence.isPassword = isPassword != FALSE;
+    }
+
+    const policy::DesktopOperation operation =
+        request.type == ActionType::SetControlText
+            ? policy::DesktopOperation::SetValue
+            : policy::DesktopOperation::Invoke;
+    return policy::AuthorizeOrExplain(operation, evidence, settings, request, outFailure);
+}
+
+#endif
+} // namespace
+
+WindowsAutomationExecutor::WindowsAutomationExecutor(
+    CapabilitySettings::DesktopControl inputSettings)
+    : settings(std::move(inputSettings))
+{
+}
+
 bool WindowsAutomationExecutor::Handles(const ActionType type) const
 {
     return IsUiAutomationAction(type);
@@ -144,6 +191,12 @@ ActionResult WindowsAutomationExecutor::Execute(
             result.message = request.resolution.visionResolved
                 ? "The vision-resolved UI Automation element changed or disappeared; no action was taken."
                 : "No matching control was found.";
+        }
+        else if (!AuthorizeUiaEffect(control, window, request, settings, result.message))
+        {
+            // Already refused, with the reason in result.message. Reaching a consequence
+            // through a control pattern costs the same authority as reaching it with the
+            // mouse; which route was chosen is not a property of the consequence.
         }
         else if (request.type == ActionType::SetControlText)
         {

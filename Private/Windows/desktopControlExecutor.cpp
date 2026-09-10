@@ -1,5 +1,7 @@
 #include "Windows/desktopControlExecutor.h"
 
+#include "Policy/desktopAuthorization.h"
+#include "Windows/targetBinding.h"
 #include "Windows/uiaElementLocator.h"
 
 #include <algorithm>
@@ -17,6 +19,36 @@
 
 namespace revia::actions::windows
 {
+
+// Splits UTF-16 into Unicode scalar values, keeping a surrogate pair together.
+//
+// The previous loop walked code units, so a non-BMP character -- an emoji, most
+// historic scripts -- was delivered as two separate SendInput calls with a stop check
+// between them. Windows composes a pair only when both halves arrive together, so that
+// was both a corruption bug and a place where a cancellation could tear a character in
+// half.
+std::vector<std::wstring> SplitScalars(const std::wstring& text)
+{
+    std::vector<std::wstring> scalars;
+    scalars.reserve(text.size());
+    for (std::size_t index = 0; index < text.size();)
+    {
+        const wchar_t unit = text[index];
+        const bool highSurrogate = unit >= 0xD800 && unit <= 0xDBFF;
+        const bool pairFollows = highSurrogate && index + 1 < text.size() &&
+            text[index + 1] >= 0xDC00 && text[index + 1] <= 0xDFFF;
+        if (pairFollows)
+        {
+            scalars.emplace_back(text.substr(index, 2));
+            index += 2;
+            continue;
+        }
+        scalars.emplace_back(1, unit);
+        ++index;
+    }
+    return scalars;
+}
+
 
 namespace
 {
@@ -172,6 +204,20 @@ HWND NativeWindowHandle(IUIAutomationElement* element)
     return static_cast<HWND>(handle);
 }
 
+// Revia may not type or click into Revia.
+//
+// Her own confirmation dialogs are ordinary windows. Under the confined scope the
+// approved-application list keeps her out of them by accident; under whole_desktop
+// nothing did, which made "ask the user" and "click the button yourself" the same
+// gesture. An approval she can grant herself is not an approval.
+//
+// Unconditional, and not a capability switch: there is no legitimate reason for
+// synthesized input to arrive in the process that is synthesizing it.
+bool BelongsToRevia(const WindowIdentity& identity)
+{
+    return identity.processId != 0 && identity.processId == GetCurrentProcessId();
+}
+
 std::string ExecutableOfProcess(const DWORD processId)
 {
     return processId == 0
@@ -242,35 +288,45 @@ bool FocusAndConfirm(
 // once there is a button. It can only refuse: everything else -- mode, scope, capability
 // switches, risk ceiling, rate limit -- has already had its say by the time this is
 // asked, and a permissive answer here does not override any of them.
-bool ConsequenceAllowed(
+policy::TargetEvidence ToEvidence(
     const PointDescription& target,
-    const CapabilitySettings::DesktopControl& settings,
-    const char* what,
-    std::string& outFailure)
+    const std::string& windowTitle,
+    const bool stale = false)
 {
-    const ConsequenceClass consequence =
-        ClassifyControlConsequence(target.elementName, target.isPassword);
-    if (static_cast<int>(consequence) <=
-        static_cast<int>(settings.maxUnconfirmedConsequence))
-    {
-        return true;
-    }
-    outFailure = std::string("Refused: ") + what + " \"" +
-        (target.elementName.empty() ? std::string("an unnamed control")
-                                    : target.elementName) +
-        "\" reads as " + ToString(consequence) + ", above the configured ceiling of " +
-        ToString(settings.maxUnconfirmedConsequence) + ".";
-    return false;
+    policy::TargetEvidence evidence;
+    evidence.resolved = target.found;
+    evidence.controlName = target.elementName;
+    evidence.windowTitle = windowTitle;
+    evidence.executable = target.executable;
+    evidence.controlType = target.controlType;
+    evidence.isPassword = target.isPassword;
+    evidence.stale = stale;
+    return evidence;
 }
 
-// Chords that commit whatever currently has the caret. Enter on a focused Send button is
-// the same event as clicking it, and it would be strange for one to be checked and the
-// other not.
-bool IsActivationChord(const std::string& normalizedChord)
+// Which chords only move around, and which might do something.
+//
+// The default direction matters here. Enumerating the chords that commit would mean
+// every application-specific shortcut nobody listed is treated as harmless -- and
+// ctrl+enter sends a message in a great many programs. So the list is of chords known
+// to be navigation, and everything else is assumed to be capable of committing until
+// something says otherwise.
+policy::DesktopOperation ClassifyChord(const std::string& normalizedChord)
 {
-    return normalizedChord == "enter" || normalizedChord == "return" ||
-        normalizedChord == "space";
+    static const std::vector<std::string> navigation = {
+        "left", "right", "up", "down", "home", "end", "pageup", "pagedown",
+        "tab", "shift+tab", "escape", "ctrl+c", "ctrl+left", "ctrl+right",
+        "ctrl+home", "ctrl+end", "ctrl+a", "ctrl+f", "f3", "shift+left",
+        "shift+right", "shift+up", "shift+down", "shift+home", "shift+end"};
+    return std::find(navigation.begin(), navigation.end(), normalizedChord) !=
+        navigation.end()
+        ? policy::DesktopOperation::KeyNavigate
+        : policy::DesktopOperation::KeyActivate;
 }
+
+// Every route in this file asks through the shared component rather than deciding for
+// itself, so a pointer, a keystroke and a UI Automation pattern cannot drift apart.
+using policy::AuthorizeOrExplain;
 
 std::wstring ResolveExecutable(const std::string& application)
 {
@@ -467,7 +523,9 @@ DWORD ButtonUpFlag(const ActionRequest::DesktopInput::PointerButton button)
 ActionResult Drag(
     const ActionRequest& request,
     const PointerTarget& target,
-    policy::DesktopInputGuard& guard)
+    policy::DesktopInputGuard& guard,
+    IUIAutomation* automation,
+    const TargetBinding& destination)
 {
     ActionResult result;
     result.attempted = true;
@@ -508,18 +566,45 @@ ActionResult Drag(
         delivered = MoveTo(x, y);
         std::this_thread::sleep_for(std::chrono::milliseconds(8));
     }
+
+    // Where the button comes up is the whole consequence of a drag. Dragging onto a
+    // folder and dragging onto a Delete target are the same gesture, and the pointer has
+    // been travelling for a fifth of a second: the destination authorized before
+    // mouse-down is a claim about the past. Re-checked here, at the last moment it can
+    // still be acted on.
+    std::string destinationDrift;
+    if (!interrupted && delivered && destination.valid)
+    {
+        destinationDrift = RevalidatePointBinding(
+            automation, destination, target.endX, target.endY,
+            std::chrono::steady_clock::now());
+    }
+
+    if (!destinationDrift.empty())
+    {
+        // Nowhere safe to drop. Return to where the drag began before letting go, so the
+        // item lands back where it started instead of wherever the pointer happens to be.
+        static_cast<void>(MoveTo(target.x, target.y));
+    }
+
+    // Unconditional, and last: every path above ends here, so a button Revia pressed is
+    // never left held by a refusal, a stop, or a rejected move.
     const bool released = Send({MouseEvent(up)});
 
-    result.succeeded = delivered && released && !interrupted;
+    result.succeeded =
+        delivered && released && !interrupted && destinationDrift.empty();
     result.message = interrupted
         ? "The drag was stopped and the button released: " + guard.Reason()
-        : !released
-            ? "The drag finished but Windows rejected the button release."
-            : !delivered
-                ? "The drag was interrupted by a rejected move; the button was released."
-                : "Dragged from " + std::to_string(target.x) + ", " +
-                    std::to_string(target.y) + " to " + std::to_string(target.endX) +
-                    ", " + std::to_string(target.endY) + ".";
+        : !destinationDrift.empty()
+            ? "The drop was refused and the item returned to where it started: " +
+                destinationDrift + "."
+            : !released
+                ? "The drag finished but Windows rejected the button release."
+                : !delivered
+                    ? "The drag was interrupted by a rejected move; the button was released."
+                    : "Dragged from " + std::to_string(target.x) + ", " +
+                        std::to_string(target.y) + " to " + std::to_string(target.endX) +
+                        ", " + std::to_string(target.endY) + ".";
     return result;
 }
 
@@ -527,7 +612,9 @@ ActionResult TypeTextInput(
     const ActionRequest& request,
     const CapabilitySettings::DesktopControl& settings,
     policy::DesktopInputGuard& guard,
-    const WindowIdentity& bound)
+    const WindowIdentity& bound,
+    IUIAutomation* automation,
+    const TargetBinding& control)
 {
     ActionResult result;
     result.attempted = true;
@@ -559,33 +646,113 @@ ActionResult TypeTextInput(
         return result;
     }
 
+    const std::vector<std::wstring> scalars = SplitScalars(text);
     std::size_t sent = 0;
-    for (const wchar_t unit : text)
+    std::size_t index = 0;
+    // Bounded so a long run cannot continue blindly. Sixteen scalars is a short burst --
+    // roughly one SendInput batch -- against a revalidation that costs a UI Automation
+    // read. Smaller would spend most of the time re-observing; larger would widen the
+    // window in which text can land somewhere it was not authorized to go. The exposure
+    // is one chunk either way, and this keeps that chunk small without making ordinary
+    // typing crawl.
+    constexpr std::size_t ChunkScalars = 16;
+
+    const auto stillAimedCorrectly = [&](std::string& outReason)
     {
         if (guard.IsTripped())
         {
-            result.message = "Typing stopped after " + std::to_string(sent) +
-                " characters: " + guard.Reason();
-            return result;
+            outReason = guard.Reason();
+            return false;
         }
         if (!(ForegroundIdentity() == bound))
         {
+            outReason = "focus left the window it was aimed at";
+            return false;
+        }
+        // The window is not enough. Two controls in one window can mean entirely
+        // different things, and focus moving from a document to a Send button is a
+        // change of consequence with no change of handle.
+        if (control.valid)
+        {
+            const std::string drift = RevalidateFocusBinding(
+                automation, control, std::chrono::steady_clock::now());
+            if (!drift.empty())
+            {
+                outReason = drift;
+                return false;
+            }
+        }
+        return true;
+    };
+
+    while (index < scalars.size())
+    {
+        std::string reason;
+        if (!stillAimedCorrectly(reason))
+        {
             result.message = "Typing stopped after " + std::to_string(sent) +
-                " characters because focus left the window it was aimed at.";
+                " characters: " + reason + ".";
             return result;
         }
-        const bool delivered = unit == L'\n'
-            ? Send({KeyEvent(VK_RETURN, true), KeyEvent(VK_RETURN, false)})
-            : unit == L'\t'
-                ? Send({KeyEvent(VK_TAB, true), KeyEvent(VK_TAB, false)})
-                : Send({UnicodeEvent(unit, true), UnicodeEvent(unit, false)});
-        if (!delivered)
+
+        // A newline or a tab is a control operation, not a character. Both can move
+        // focus or submit, so each is delivered alone and the binding is re-checked
+        // afterwards rather than assumed to have survived.
+        const std::wstring& scalar = scalars[index];
+        if (scalar == L"\n" || scalar == L"\t")
+        {
+            const WORD key = scalar == L"\n" ? VK_RETURN : VK_TAB;
+            if (!Send({KeyEvent(key, true), KeyEvent(key, false)}))
+            {
+                result.message = "Windows rejected synthesized keyboard input after " +
+                    std::to_string(sent) + " characters.";
+                return result;
+            }
+            ++sent;
+            ++index;
+            // Whatever had focus may not have it now. Anything further has to be
+            // authorized against wherever the caret actually went.
+            std::string moved;
+            if (!stillAimedCorrectly(moved))
+            {
+                result.message = "Stopped after " + std::to_string(sent) +
+                    " characters: the control operation moved focus (" + moved + ").";
+                return result;
+            }
+            continue;
+        }
+
+        // One batch per chunk, and a surrogate pair never spans two batches: both code
+        // units of one scalar go into the same SendInput call, which is the only way
+        // Windows reliably composes them into a single character.
+        std::vector<INPUT> batch;
+        std::size_t inChunk = 0;
+        while (index < scalars.size() && inChunk < ChunkScalars)
+        {
+            const std::wstring& unitPair = scalars[index];
+            if (unitPair == L"\n" || unitPair == L"\t")
+            {
+                break;
+            }
+            for (const wchar_t unit : unitPair)
+            {
+                batch.push_back(UnicodeEvent(unit, true));
+                batch.push_back(UnicodeEvent(unit, false));
+            }
+            ++index;
+            ++inChunk;
+        }
+        if (batch.empty())
+        {
+            continue;
+        }
+        if (!Send(std::move(batch)))
         {
             result.message = "Windows rejected synthesized keyboard input after " +
                 std::to_string(sent) + " characters.";
             return result;
         }
-        ++sent;
+        sent += inChunk;
     }
     result.succeeded = true;
     // The text itself is never echoed into a message that reaches logs, the UI, or
@@ -595,7 +762,12 @@ ActionResult TypeTextInput(
     return result;
 }
 
-ActionResult PressKeyChord(const ActionRequest& request)
+ActionResult PressKeyChord(
+    const ActionRequest& request,
+    policy::DesktopInputGuard* guard,
+    const WindowIdentity& bound,
+    IUIAutomation* automation,
+    const TargetBinding& control)
 {
     ActionResult result;
     result.attempted = true;
@@ -606,6 +778,30 @@ ActionResult PressKeyChord(const ActionRequest& request)
     {
         result.message = error;
         return result;
+    }
+
+    // Re-checked here rather than trusted from the caller. A chord authorized against a
+    // focused text field must not be delivered to a Send button that took focus while
+    // the decision was being made, and this is the last point where that is knowable.
+    if (guard != nullptr && guard->IsTripped())
+    {
+        result.message = "The chord was not sent: " + guard->Reason();
+        return result;
+    }
+    if (bound.Valid() && !(ForegroundIdentity() == bound))
+    {
+        result.message = "The chord was not sent: focus left the window it was aimed at.";
+        return result;
+    }
+    if (control.valid)
+    {
+        const std::string drift = RevalidateFocusBinding(
+            automation, control, std::chrono::steady_clock::now());
+        if (!drift.empty())
+        {
+            result.message = "The chord was not sent: " + drift + ".";
+            return result;
+        }
     }
 
     std::vector<INPUT> events;
@@ -759,26 +955,63 @@ ActionResult DesktopControlExecutor::Execute(
                 return finish();
             }
         }
+        // Before anything else: she does not get to type into her own windows. An
+        // approval dialog she can answer herself authorizes nothing.
+        if (BelongsToRevia(ForegroundIdentity()))
+        {
+            result.message = "Refused: the focused window belongs to Revia herself, and "
+                "she does not answer her own dialogs.";
+            return finish();
+        }
+
         // Typing goes into whatever holds the caret, so that is what gets classified.
         // The password check is the reliable half of this: a secret field says so
         // itself rather than being inferred from a label.
+        //
+        // Note there is no `found` guard here. Failing to read the target is not a
+        // reason to skip the question -- it is the answer "I do not know what this is",
+        // which the authorizer weighs for itself.
         const PointDescription focused = automation != nullptr
             ? DescribeFocusedElement(automation) : PointDescription{};
+
+        policy::DesktopOperation operation;
+        if (request.type == ActionType::TypeText)
+        {
+            // A newline in literal text presses Enter on the way past, which can commit
+            // whatever the field belongs to. Text that carries an activation is not the
+            // same operation as text that does not.
+            operation = request.value.find('\n') != std::string::npos
+                ? policy::DesktopOperation::TextEntryWithActivation
+                : policy::DesktopOperation::TextEntry;
+        }
+        else
+        {
+            KeyChord chord;
+            std::string chordError;
+            operation = ParseKeyChord(request.input.keys, chord, chordError)
+                ? ClassifyChord(chord.normalized)
+                : policy::DesktopOperation::KeyActivate;
+        }
+
         std::string refusal;
-        KeyChord chord;
-        std::string chordError;
-        const bool commits = request.type == ActionType::TypeText ||
-            (ParseKeyChord(request.input.keys, chord, chordError) &&
-                IsActivationChord(chord.normalized));
-        if (commits && focused.found &&
-            !ConsequenceAllowed(focused, settings, "the focused control", refusal))
+        if (!AuthorizeOrExplain(operation, ToEvidence(focused, request.windowTitle), settings,
+                request, refusal))
         {
             result.message = refusal;
             return finish();
         }
 
+        // Minted after authorization, from what is actually focused right now. This is
+        // what every later chunk is compared against, so that focus moving to another
+        // control inside the same window ends the run rather than silently redirecting
+        // it. The runtime observes and mints; nothing from the request reaches it.
+        const TargetBinding typingBinding = automation != nullptr
+            ? BindFocusedControl(automation, request.requestedBy, policy::PolicyVersion(settings))
+            : TargetBinding{};
+
         result = request.type == ActionType::PressKeys
-            ? PressKeyChord(request) : TypeTextInput(request, settings, *guard, bound);
+            ? PressKeyChord(request, guard.get(), bound, automation, typingBinding)
+            : TypeTextInput(request, settings, *guard, bound, automation, typingBinding);
         return finish();
     }
 
@@ -838,6 +1071,16 @@ ActionResult DesktopControlExecutor::Execute(
         }
     }
 
+    // Same rule for the pointer: she does not click her own dialogs. Checked against the
+    // window that owns the pixel she is aiming at, before the pointer ever moves there.
+    if (target.aimed && BelongsToRevia(IdentityOf(WindowFromPoint(POINT{
+            static_cast<LONG>(target.x), static_cast<LONG>(target.y)}))))
+    {
+        result.message = "Refused: that point belongs to Revia herself, and she does "
+            "not answer her own dialogs.";
+        return finish();
+    }
+
     // Which window owns the pixel, captured before the pointer moves. Moving the cursor
     // can itself change what is under it -- a hover menu, a tooltip, a window raised on
     // hover -- so the thing that was decided about has to be re-identified before it is
@@ -873,14 +1116,41 @@ ActionResult DesktopControlExecutor::Execute(
 
     // Moving the pointer commits nothing, so it is not gated. Anything that presses a
     // button is, and the button is only nameable now that the pointer is on it.
+    //
+    // There is deliberately no `under.found` guard. A failed lookup is not silence, it
+    // is the answer "nothing identifiable is there", and the authorizer decides what
+    // that means. Skipping the question on a failed read was the old defect: the check
+    // passed most reliably exactly when it knew least.
     if (request.type == ActionType::ClickPointer || request.type == ActionType::DragPointer)
     {
         std::string refusal;
-        if (under.found && !ConsequenceAllowed(under, settings, "the control at", refusal))
+        if (!AuthorizeOrExplain(policy::DesktopOperation::PointerActivate,
+                ToEvidence(under, request.windowTitle), settings, request, refusal))
         {
             result.message = refusal;
             return finish();
         }
+    }
+
+    // A drag ends somewhere else, and where it is released is its own consequence: a
+    // file dropped onto a folder and the same file dropped onto a Delete target are the
+    // same gesture. The destination is assessed before the button ever goes down, and
+    // the binding minted here is what Drag re-checks immediately before releasing.
+    TargetBinding dropBinding;
+    if (request.type == ActionType::DragPointer && automation != nullptr)
+    {
+        const PointDescription destination =
+            DescribePoint(automation, target.endX, target.endY);
+        std::string refusal;
+        if (!AuthorizeOrExplain(policy::DesktopOperation::PointerActivate,
+                ToEvidence(destination, request.windowTitle), settings, request, refusal))
+        {
+            result.message = "Refused at the drop point: " + refusal;
+            return finish();
+        }
+        dropBinding = BindPoint(
+            automation, target.endX, target.endY, request.requestedBy,
+            policy::PolicyVersion(settings));
     }
 
     if (request.type == ActionType::MoveCursor)
@@ -891,7 +1161,7 @@ ActionResult DesktopControlExecutor::Execute(
     }
     else if (request.type == ActionType::DragPointer)
     {
-        result = Drag(request, target, *guard);
+        result = Drag(request, target, *guard, automation, dropBinding);
     }
     else if (request.type == ActionType::ScrollPointer)
     {
@@ -909,6 +1179,7 @@ ActionResult DesktopControlExecutor::Execute(
         const DWORD down = ButtonDownFlag(request.input.button);
         const DWORD up = ButtonUpFlag(request.input.button);
         bool delivered = true;
+        bool targetChanged = false;
         int completed = 0;
         for (int click = 0; click < request.input.clickCount && delivered; ++click)
         {
@@ -916,16 +1187,34 @@ ActionResult DesktopControlExecutor::Execute(
             {
                 break;
             }
+            // Re-checked between clicks, not only before the first. The first click is
+            // what opens the dialog that the second one would land on, so a target
+            // verified once and then trusted for three clicks is verified for the wrong
+            // thing.
+            if (click > 0)
+            {
+                const WindowIdentity stillThere = IdentityOf(WindowFromPoint(POINT{
+                    static_cast<LONG>(target.x), static_cast<LONG>(target.y)}));
+                if (!(stillThere == aimedAt))
+                {
+                    targetChanged = true;
+                    break;
+                }
+            }
             delivered = Send({MouseEvent(down), MouseEvent(up)});
             if (delivered) ++completed;
         }
-        result.succeeded = delivered && completed == request.input.clickCount;
+        result.succeeded = delivered && !targetChanged &&
+            completed == request.input.clickCount;
         result.message = result.succeeded
             ? "Clicked " + std::to_string(completed) + " time(s) at " +
                 std::to_string(target.x) + ", " + std::to_string(target.y) + "." + where
-            : guard->IsTripped()
-                ? "The click was stopped: " + guard->Reason()
-                : "Windows rejected the synthesized click.";
+            : targetChanged
+                ? "Stopped after " + std::to_string(completed) +
+                    " click(s): what was under the pointer changed."
+                : guard->IsTripped()
+                    ? "The click was stopped: " + guard->Reason()
+                    : "Windows rejected the synthesized click.";
     }
     return finish();
 #else

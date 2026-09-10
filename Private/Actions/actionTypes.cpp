@@ -283,6 +283,35 @@ ExecutionMode ExecutionModeFromString(const std::string& value)
     return ExecutionMode::Disabled;
 }
 
+const std::vector<ActionType>& AllActionTypes()
+{
+    // Unknown is deliberately absent: it is the parse failure, not a capability.
+    static const std::vector<ActionType> types = {
+        ActionType::ListDirectory, ActionType::ReadTextFile, ActionType::CreateDirectory,
+        ActionType::CopyFile, ActionType::MoveFile, ActionType::RenamePath,
+        ActionType::MoveToRecycleBin, ActionType::InspectWindow, ActionType::FocusWindow,
+        ActionType::SetControlText, ActionType::InvokeControl,
+        ActionType::LaunchApplication, ActionType::MoveCursor, ActionType::ClickPointer,
+        ActionType::DragPointer, ActionType::ScrollPointer, ActionType::PressKeys,
+        ActionType::TypeText, ActionType::WebSearch};
+    return types;
+}
+
+std::string ActionVocabulary(const bool readOnlyOnly)
+{
+    std::string list;
+    for (const ActionType type : AllActionTypes())
+    {
+        if (readOnlyOnly && RiskForAction(type) != RiskLevel::ReadOnly)
+        {
+            continue;
+        }
+        if (!list.empty()) list += ", ";
+        list += ToString(type);
+    }
+    return list;
+}
+
 RiskLevel RiskForAction(ActionType value)
 {
     switch (value)

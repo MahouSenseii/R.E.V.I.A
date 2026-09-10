@@ -50,16 +50,19 @@ std::string GoalPlanner::PlannerPrompt()
         "does\",\"action\":{...},\"check\":{...},\"expected\":\"text the check output must "
         "contain\"}]}\n"
         "Every step needs all four fields. `action` performs the work; `check` observes the "
-        "result and MUST be a read-only action (list_directory, read_text_file, or "
-        "inspect_window); `expected` is a literal substring that will appear in the check "
+        "result and MUST be a read-only action (" +
+        actions::ActionVocabulary(/*readOnlyOnly=*/true) +
+        "); `expected` is a literal substring that will appear in the check "
         "output only if the action worked.\n"
-        "Allowed action values are list_directory, read_text_file, create_directory, "
-        "copy_file, move_file, rename_path, move_to_recycle_bin, inspect_window, "
-        "focus_window, set_control_text, and invoke_control. Filesystem actions use an "
+        "Allowed action values are " + actions::ActionVocabulary() +
+        ". Filesystem actions use an "
         "absolute Windows path in source or path; copy_file, move_file, and rename_path also "
         "require destination. Desktop actions require application (an exe name) and may use "
         "window_title; set_control_text requires control and value; invoke_control requires "
-        "control.\n"
+        "control. Pointer actions take x and y, drag_pointer also end_x and end_y, "
+        "press_keys takes keys such as \"ctrl+s\", and type_text takes value. Many of "
+        "these need permissions that may be switched off, in which case the step is "
+        "refused with a reason rather than performed.\n"
         "Plan the fewest steps that achieve the request, at most 12. Never emit shell "
         "commands, scripts, or explanations. If the request cannot be expressed as these "
         "actions, return {\"goal\":\"unknown\",\"reason\":\"brief reason\"}.";
