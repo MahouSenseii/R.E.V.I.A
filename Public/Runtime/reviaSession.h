@@ -33,10 +33,15 @@
 #include "Perception/windowEventMonitor.h"
 #include "Performance/performanceRuntime.h"
 #include "Presence/presenceRuntime.h"
+#include "Presentation/avatarState.h"
+#include "Presentation/debugPresentationSink.h"
+#include "Presentation/presentationBus.h"
+#include "Skills/skillManager.h"
 #include "Runtime/affectController.h"
 #include "Runtime/conversationRuntime.h"
 #include "Runtime/outputChannelPolicy.h"
 #include "Runtime/runtimeEvents.h"
+#include "Speech/speechCoordinator.h"
 #include "Runtime/sessionResult.h"
 #include "Resources/loadGovernor.h"
 #include "Resources/resourceMonitor.h"
@@ -668,11 +673,32 @@ private:
     std::deque<std::chrono::steady_clock::time_point> recentActivities;
     std::chrono::steady_clock::time_point lastActivityAt{};
     speech::SpeechService speechService;
+    // Who owns the audio channel right now.
+    //
+    // Every part of Revia that wants to be heard -- a reply, a proposal, a greeting, a
+    // song, and later a skill or a game -- goes through this rather than calling
+    // SpeechService directly. It does not synthesise anything: the Qwen3-TTS pool below
+    // is still the only voice and PerformanceRuntime is still the only thing that plays
+    // a song. What this decides is which of them is allowed to make a sound.
+    speech::SpeechCoordinator speechCoordinator;
+    // Which coordinated intent currently owns the speech backend, so the floor is
+    // released by the utterance that actually held it rather than by whatever happens to
+    // be active when a late event arrives. Zero when the coordinator started nothing.
+    std::atomic<std::uint64_t> speakingIntentId{0};
     speech::SpeechRecognitionService speechRecognitionService;
     // A separate audio owner with its own device and its own thread. Nothing in here
     // touches the speech queue, so a song that fails to load cannot cost Revia her voice.
     performance::PerformanceRuntime performanceRuntime;
     presence::PresenceRuntime presenceRuntime;
+    // The boundary an avatar will eventually sit behind. Her core publishes what she is
+    // doing; a renderer decides what that looks like. The debug sink is the proof the
+    // boundary carries enough to draw from, before there is anything to draw.
+    presentation::PresentationBus presentationBus;
+    std::shared_ptr<presentation::PresentationController> avatar;
+    std::shared_ptr<presentation::DebugPresentationSink> presentationDebug;
+    // Integrations. They observe and propose; they never execute and never hold
+    // authority of their own.
+    skills::SkillManager skillManager;
     perception::WindowEventMonitor windowEventMonitor;
     perception::ActivityHistory activityHistory;
     initiative::InitiativeController initiativeController;

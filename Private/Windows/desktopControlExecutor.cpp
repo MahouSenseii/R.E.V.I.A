@@ -282,6 +282,42 @@ bool FocusAndConfirm(
     return false;
 }
 
+// Whether a child control -- rather than the frame itself -- currently has the caret.
+//
+// Bringing a top-level window forward does not give any of its children focus, so after
+// activation the focused element is often the window. Keystrokes sent then are accepted
+// by SendInput and applied by nobody: they reach a window with no edit control under the
+// caret and vanish. That is the shape of the defect this exists to catch -- input that
+// is submitted successfully and lands nowhere reads as success everywhere except the
+// application it was aimed at.
+// The runtime id of whatever currently holds the caret, or empty if that cannot be read.
+std::string FocusedRuntimeId(IUIAutomation* automation)
+{
+    if (automation == nullptr) return {};
+    IUIAutomationElement* focused = nullptr;
+    if (FAILED(automation->GetFocusedElement(&focused)) || focused == nullptr) return {};
+    std::string id = ElementRuntimeId(focused);
+    Release(focused);
+    return id;
+}
+
+bool FocusedChildOf(const HWND window, HWND& outFocused)
+{
+    outFocused = nullptr;
+    if (window == nullptr)
+    {
+        return false;
+    }
+    GUITHREADINFO info{};
+    info.cbSize = sizeof(info);
+    if (GetGUIThreadInfo(GetWindowThreadProcessId(window, nullptr), &info) == FALSE)
+    {
+        return false;
+    }
+    outFocused = info.hwndFocus;
+    return info.hwndFocus != nullptr && info.hwndFocus != window;
+}
+
 // The consequence gate.
 //
 // It runs at the last possible moment, because the name on a button is only knowable
@@ -755,10 +791,17 @@ ActionResult TypeTextInput(
         sent += inChunk;
     }
     result.succeeded = true;
+    // Worded as submission, not as effect, because that is the whole of what is known
+    // here. SendInput returning true means Windows accepted the events onto the input
+    // queue; whether the target applied them is a different question, answerable only by
+    // looking afterwards. Saying "typed" on this evidence produced a result that claimed
+    // 600 characters had been entered while no field had changed.
+    //
     // The text itself is never echoed into a message that reaches logs, the UI, or
     // memory. The audit record keeps its length for the same reason.
-    result.message = "Typed " + std::to_string(sent) + " characters into " +
-        ExecutableOfProcess(bound.processId) + ".";
+    result.message = "Submitted " + std::to_string(sent) + " characters to " +
+        ExecutableOfProcess(bound.processId) +
+        ". Whether they were applied is for the verification step to observe.";
     return result;
 }
 
@@ -964,6 +1007,72 @@ ActionResult DesktopControlExecutor::Execute(
             return finish();
         }
 
+        // A usable target has to exist before anything is authorized against it.
+        //
+        // Activation brings the frame forward without giving any child the caret, so
+        // this is where "the window is in front" stops being good enough. When the
+        // request names a control, focus that; otherwise refuse rather than submit
+        // keystrokes to a window that will drop them and call it success.
+        std::string intendedRuntimeId;
+        if (!screenSpace)
+        {
+            HWND focusedChild = nullptr;
+            if (!request.control.empty())
+            {
+                // A named control is a claim about where the text will go, and the
+                // claim has to hold at the moment of typing rather than at the moment
+                // of asking.
+                //
+                // An earlier version asked only whether *some* child held the caret.
+                // That is not the same question. A native run caught it: the request
+                // named the document field, another field held the caret, the check
+                // passed because a child was focused, and 560 characters went into the
+                // wrong field and were reported as success. The binding minted from
+                // focus agreed with itself, so no drift was ever detectable. Confirming
+                // identity is what makes the rest of this machinery mean anything.
+                if (automation == nullptr)
+                {
+                    result.message = "Without UI Automation the caret cannot be placed "
+                        "on " + request.control + " or confirmed to be there, so "
+                        "nothing was typed.";
+                    return finish();
+                }
+                IUIAutomationElement* intended = FindControl(automation, window, request);
+                if (intended == nullptr)
+                {
+                    result.message = "No control called " + request.control + " in " +
+                        request.application + ", so there is nothing to type into.";
+                    return finish();
+                }
+                intendedRuntimeId = ElementRuntimeId(intended);
+                static_cast<void>(intended->SetFocus());
+                Release(intended);
+
+                // Focus changes are asynchronous, so this confirms rather than assumes.
+                bool onTarget = false;
+                for (int attempt = 0; attempt < 10 && !onTarget; ++attempt)
+                {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+                    onTarget = !intendedRuntimeId.empty() &&
+                        FocusedRuntimeId(automation) == intendedRuntimeId;
+                }
+                if (!onTarget)
+                {
+                    result.message = "The caret is not on " + request.control + " in " +
+                        request.application + ", so the text would go somewhere else. "
+                        "Nothing was typed.";
+                    return finish();
+                }
+            }
+            if (!FocusedChildOf(bound.window, focusedChild))
+            {
+                result.message = "No control in " + request.application +
+                    " has the caret, so keystrokes would be discarded rather than "
+                    "applied. Name the control to type into.";
+                return finish();
+            }
+        }
+
         // Typing goes into whatever holds the caret, so that is what gets classified.
         // The password check is the reliable half of this: a secret field says so
         // itself rather than being inferred from a label.
@@ -1008,6 +1117,16 @@ ActionResult DesktopControlExecutor::Execute(
         const TargetBinding typingBinding = automation != nullptr
             ? BindFocusedControl(automation, request.requestedBy, policy::PolicyVersion(settings))
             : TargetBinding{};
+
+        // Focus can move between the confirmation above and this line. If it did, the
+        // binding describes a control nobody asked for, and every later comparison
+        // would agree with it.
+        if (!intendedRuntimeId.empty() && typingBinding.runtimeId != intendedRuntimeId)
+        {
+            result.message = "The caret left " + request.control + " in " +
+                request.application + " before typing began, so nothing was typed.";
+            return finish();
+        }
 
         result = request.type == ActionType::PressKeys
             ? PressKeyChord(request, guard.get(), bound, automation, typingBinding)

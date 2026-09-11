@@ -8720,6 +8720,10 @@ int main(const int argc, char** argv)
         RunDesktopAuthorizationTests();
         RunTargetBindingTests();
         RunActionApprovalTests();
+        RunSpeechCoordinatorTests();
+        RunPresentationTests();
+        RunSkillTests();
+        RunCoordinationOverheadTests();
         RunConsequenceCorpusTests();
         TestGoalRunnerStopsOnUnverifiableStep();
         RunIdentityPersistenceTests();

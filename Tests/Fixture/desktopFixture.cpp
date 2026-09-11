@@ -216,6 +216,16 @@ LRESULT CALLBACK MainWindowProc(HWND window, UINT message, WPARAM wparam, LPARAM
                 Record("CONTROL relabelled");
             }
             return 0;
+        case WM_APP + 5:
+            // Test hook: clear every field and mark the log. Tests assert on the field's
+            // whole value, so leftover text from an earlier test makes a later assertion
+            // impossible to write correctly -- deterministic state beats a cleverer
+            // substring match.
+            SetWindowTextW(documentField, L"");
+            SetWindowTextW(secondField, L"");
+            SetWindowTextW(passwordField, L"");
+            Record("STATE cleared");
+            return 0;
         case WM_APP + 4:
             // Test hook: put focus back on the document field, so a test can establish
             // where typing starts before it asserts anything about where it stops.

@@ -636,6 +636,65 @@ bool ReviaSession::Start()
         }
     }
 
+    // One throat, and one boundary an avatar can sit behind. Both are wired before
+    // anything can speak, so there is no window in which a producer bypasses them.
+    {
+        speech::SpeechChannel audio;
+        audio.speak = [this](const speech::SpeechIntent& intent, const std::uint64_t id)
+        {
+            speakingIntentId.store(id);
+            speechService.Speak(intent.text, intent.affect, intent.utteranceId);
+        };
+        audio.stopSpeech = [this]() { speechService.StopSpeaking(); };
+        audio.stopSong = [this](const std::string& reason)
+        {
+            performanceRuntime.Stop(reason);
+        };
+        speechCoordinator.SetChannel(std::move(audio));
+
+        speech::SongPolicy songPolicy;
+        songPolicy.interruptSongToSpeak = settings.performance.bInterruptSongToSpeak;
+        speechCoordinator.SetSongPolicy(songPolicy);
+
+        // The streaming reply path talks to SpeechService directly, because routing it
+        // through the coordinator's queue would serialise synthesis and make every
+        // answer slower. This is how the coordinator still knows the throat is occupied.
+        speechCoordinator.SetBusyProbe([this]()
+        {
+            return speechService.HasPendingSpeech();
+        });
+
+        // Ownership, visible. Carries who and how long, never what was said.
+        speechCoordinator.SetTraceHandler([this](const speech::SpeechTrace& step)
+        {
+            RuntimeEvent event;
+            event.kind = RuntimeEventKind::ComponentStatus;
+            event.state = state.load();
+            event.component = "Speech ownership";
+            event.phase = speech::ToString(step.state);
+            event.initiator = speech::ToString(step.owner);
+            event.message = speech::ToString(step.owner) + ": " + step.reason;
+            event.elapsedMilliseconds = static_cast<double>(step.sinceStart.count());
+            eventBus.Publish(std::move(event));
+        });
+
+        avatar = std::make_shared<presentation::PresentationController>();
+        presentationDebug = std::make_shared<presentation::DebugPresentationSink>();
+        presentationBus.Add(avatar);
+        presentationBus.Add(presentationDebug);
+        // The core keeps publishing exactly what it published before. The translation is
+        // a deliberate narrowing -- her private reasoning has no presentation event and
+        // cannot acquire one by a renderer subscribing differently.
+        eventBus.Subscribe([this](const RuntimeEvent& event)
+        {
+            if (std::optional<presentation::PresentationEvent> visible =
+                presentation::TranslateRuntimeEvent(event))
+            {
+                presentationBus.Publish(std::move(*visible));
+            }
+        });
+    }
+
     stageStarted = std::chrono::steady_clock::now();
     speechService.Start(settings.speech, [this](const speech::SpeechEvent& speechEvent)
     {
@@ -656,6 +715,14 @@ bool ReviaSession::Start()
             speechEvent.phase == "Disabled" || speechEvent.phase == "Fallback")
         {
             speechRecognitionService.SetOutputActive(false);
+            // The throat is free. Whatever was waiting for it may go now.
+            //
+            // Exchanged rather than read, so a late report about an utterance that was
+            // already interrupted cannot end the one that replaced it.
+            if (const std::uint64_t finished = speakingIntentId.exchange(0); finished != 0)
+            {
+                speechCoordinator.NotePlaybackFinished(finished);
+            }
         }
         if (speechEvent.phase == "Generated" && speechEvent.elapsedMilliseconds >= 0.0)
         {
@@ -745,6 +812,11 @@ bool ReviaSession::Start()
     speechService.ConfigureBargeIn(settings.bargeIn, settings.speechRecognition.sampleRate);
     speechService.SetBargeInHandler([this]()
     {
+        // The user started talking. Yield, and drop what she was going to say next --
+        // finishing an autonomous thought after talking over someone is worse than
+        // either half of it.
+        speakingIntentId.store(0);
+        speechCoordinator.NoteUserSpoke();
         if (settings.speechRecognition.bEnabled &&
             !speechRecognitionService.IsHandsFreeEnabled())
         {
@@ -768,6 +840,19 @@ bool ReviaSession::Start()
         // is what keeps a three-minute song from touching the conversation path at all.
         performanceRuntime.SetObserver([this](const performance::PerformanceEvent& song)
         {
+            // The song is an audio owner like any other, so the coordinator is told when
+            // it takes the channel and when it gives it back.
+            if (song.kind == performance::PerformanceEventKind::SongStarted)
+            {
+                speechCoordinator.NotePerformanceStarted(song.songId);
+            }
+            else if (song.kind == performance::PerformanceEventKind::SongEnded ||
+                song.kind == performance::PerformanceEventKind::SongInterrupted ||
+                song.kind == performance::PerformanceEventKind::SongFailed)
+            {
+                speechCoordinator.NotePerformanceEnded();
+            }
+
             RuntimeEvent event;
             event.kind = RuntimeEventKind::Performance;
             event.state = state.load();
@@ -1074,7 +1159,12 @@ bool ReviaSession::Start()
     StartStateMaintenance();
     if (settings.speech.bEnabled && settings.speech.bSpeakGreeting && !Greeting().empty())
     {
-        speechService.Speak(Greeting(), emotionRuntime.ToAffectSnapshot());
+        speech::SpeechIntent greeting;
+        greeting.owner = speech::SpeechOwner::System;
+        greeting.behavior = speech::SpeechBehavior::Queue;
+        greeting.text = Greeting();
+        greeting.affect = emotionRuntime.ToAffectSnapshot();
+        static_cast<void>(speechCoordinator.Submit(std::move(greeting)));
     }
     return true;
 }
@@ -1866,8 +1956,21 @@ void ReviaSession::StartInitiativeLoop()
             appLogger.Log("Proposal offered: " + consideration.proposal.evidence);
             if (speechService.IsEnabled())
             {
-                speechService.Speak(
-                    consideration.proposal.message, emotionRuntime.ToAffectSnapshot());
+                // Autonomous, and it says so. It cannot cut across an answer to the
+                // user, and it cannot stop a song; if the moment has passed it is not
+                // said at all rather than said late.
+                speech::SpeechIntent offer;
+                offer.owner = speech::SpeechOwner::Autonomy;
+                offer.behavior = speech::SpeechBehavior::IgnoreIfBusy;
+                offer.text = consideration.proposal.message;
+                offer.affect = emotionRuntime.ToAffectSnapshot();
+                offer.activityId = consideration.proposal.id;
+                const speech::SpeechSubmission spoken =
+                    speechCoordinator.Submit(std::move(offer));
+                if (!spoken.accepted)
+                {
+                    appLogger.Log("Proposal not spoken: " + spoken.reason);
+                }
             }
         }
     });
@@ -5587,6 +5690,11 @@ void ReviaSession::ObserveDrives(const emotion::Stimulus& stimulus)
 autonomy::AutonomyEvidence ReviaSession::GatherAutonomyEvidence() const
 {
     autonomy::AutonomyEvidence evidence;
+    // Skills contribute the things they are in a position to know: something she was
+    // waiting on finished, an attempt keeps failing, something happened worth mentioning.
+    // They cannot reach the rest, and evidence remains an input to the decision rather
+    // than the decision -- the scheduler may still answer "not worth doing".
+    const_cast<skills::SkillManager&>(skillManager).ContributeEvidence(evidence);
 
     // An approved goal that stopped part-way. The most defensible reason to act on her
     // own, because the work was already sanctioned and resuming adds no authority.

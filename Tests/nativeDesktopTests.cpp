@@ -12,6 +12,7 @@
 #include <iostream>
 #include <iterator>
 #include <memory>
+#include <sstream>
 #include <string>
 #include <thread>
 #include <vector>
@@ -105,6 +106,20 @@ public:
             std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>());
     }
 
+    // How many times a marker has appeared. Waiting for a *new* occurrence is what makes
+    // a reset deterministic when the same marker may already be in the log.
+    [[nodiscard]] std::size_t CountOf(const std::string& needle) const
+    {
+        const std::string log = Log();
+        std::size_t count = 0;
+        for (std::size_t at = log.find(needle); at != std::string::npos;
+             at = log.find(needle, at + needle.size()))
+        {
+            ++count;
+        }
+        return count;
+    }
+
     [[nodiscard]] bool LogContains(const std::string& needle) const
     {
         return Log().find(needle) != std::string::npos;
@@ -190,16 +205,123 @@ CapabilitySettings::DesktopControl PermissiveSettings()
     return settings;
 }
 
-ActionRequest TypeInto(const std::string& text, const std::wstring& windowTitle)
+// The fixture's plain Win32 controls report their control id as the UIA automation id,
+// so "1002" is the document field and "1003" the second field.
+constexpr const char* DocumentFieldId = "1002";
+constexpr const char* SecondFieldId = "1003";
+
+ActionRequest TypeInto(
+    const std::string& text,
+    const std::wstring& windowTitle,
+    const char* control = DocumentFieldId)
 {
     ActionRequest request;
     request.id = NewActionId();
     request.type = ActionType::TypeText;
     request.application = FixtureExecutable;
     request.windowTitle.assign(windowTitle.begin(), windowTitle.end());
+    // Naming the control is what lets the executor establish a caret rather than
+    // submitting keystrokes to a frame that will discard them.
+    request.control = control;
     request.value = text;
     request.requestedBy = "user";
     return request;
+}
+
+// Clears the fixture's fields and waits for it to confirm, so each test starts from a
+// state it actually knows rather than whatever the previous test left behind.
+void ResetFixtureState(Fixture& fixture)
+{
+    const std::size_t before = fixture.CountOf("STATE cleared");
+    fixture.Hook(WM_APP + 5);
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    while (std::chrono::steady_clock::now() < deadline)
+    {
+        if (fixture.CountOf("STATE cleared") > before) return;
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+}
+
+// Did `field` take a character equal to `expected` at any point in `events`?
+//
+// Asking whether the log contains "FIELD document=b" only works when the field started
+// empty, which makes an assertion quietly depend on the previous test's leftovers. The
+// last character of each reported value is the one that just arrived, so that is what
+// gets compared.
+bool FieldReceived(const std::string& events, const std::string& field, const char expected)
+{
+    const std::string prefix = "FIELD " + field + "=";
+    std::istringstream lines(events);
+    std::string line;
+    while (std::getline(lines, line))
+    {
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        if (line.rfind(prefix, 0) != 0) continue;
+        const std::string value = line.substr(prefix.size());
+        if (!value.empty() && value.back() == expected) return true;
+    }
+    return false;
+}
+
+// Prints the head and tail of a run of events, with long field values reduced to their
+// length. Hundreds of identical characters are not evidence; how many arrived is.
+void ShowEvents(const std::string& events, const std::size_t edge = 8)
+{
+    std::vector<std::string> lines;
+    std::istringstream stream(events);
+    std::string line;
+    while (std::getline(stream, line))
+    {
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        if (line.empty()) continue;
+        const std::size_t equals = line.find('=');
+        if (line.rfind("FIELD ", 0) == 0 && equals != std::string::npos &&
+            line.size() - equals > 10)
+        {
+            line = line.substr(0, equals + 1) + "<" +
+                std::to_string(line.size() - equals - 1) + " chars, last '" +
+                std::string(1, line.back()) + "'>";
+        }
+        lines.push_back(line);
+    }
+    if (lines.empty())
+    {
+        std::cout << "          (no events)\n";
+        return;
+    }
+    for (std::size_t i = 0; i < lines.size(); ++i)
+    {
+        if (lines.size() > edge * 2 && i == edge)
+        {
+            std::cout << "          ... " << (lines.size() - edge * 2)
+                      << " more ...\n";
+            i = lines.size() - edge - 1;
+            continue;
+        }
+        std::cout << "          " << lines[i] << "\n";
+    }
+}
+
+// The part of the fixture log written after `mark`. Everything before it was submitted
+// by an earlier test or by this one's setup, and letting it decide an outcome is how an
+// assertion comes to depend on leftovers.
+std::string Since(const std::string& log, const std::size_t mark)
+{
+    return log.size() > mark ? log.substr(mark) : std::string{};
+}
+
+// How many times `field` reported a change.
+std::size_t FieldEventCount(const std::string& events, const std::string& field)
+{
+    const std::string prefix = "FIELD " + field + "=";
+    std::size_t count = 0;
+    std::istringstream lines(events);
+    std::string line;
+    while (std::getline(lines, line))
+    {
+        if (line.rfind(prefix, 0) == 0) ++count;
+    }
+    return count;
 }
 
 PolicyDecision Allowed()
@@ -212,7 +334,8 @@ PolicyDecision Allowed()
 
 // ---------------------------------------------------------------- the tests
 
-void TestTypingStopsWhenFocusLeavesTheBoundWindow(Fixture& fixture, int& passed, int& failed)
+void TestTypingStopsWhenFocusLeavesTheBoundWindow(
+    Fixture& fixture, int& passed, int& failed, int& inconclusive)
 {
     // Window A and Window B belong to the same process. A process check cannot tell them
     // apart; a window handle can.
@@ -229,7 +352,8 @@ void TestTypingStopsWhenFocusLeavesTheBoundWindow(Fixture& fixture, int& passed,
     DesktopControlExecutor executor(PermissiveSettings(), guard);
 
     SetForegroundWindow(main);
-    std::this_thread::sleep_for(std::chrono::milliseconds(250));
+    ResetFixtureState(fixture);
+    std::this_thread::sleep_for(std::chrono::milliseconds(150));
 
     // Move the foreground to the second window while a long run is in flight.
     std::atomic<bool> typing{true};
@@ -245,14 +369,30 @@ void TestTypingStopsWhenFocusLeavesTheBoundWindow(Fixture& fixture, int& passed,
     switcher.join();
 
     const std::string log = fixture.Log();
-    // The assertion that matters: whatever happened, nothing arrived in the second
-    // window's field after the switch.
     const bool leaked = log.find("FIELD second=a") != std::string::npos;
-    if (!leaked)
+    // Both halves. "Nothing reached window B" is satisfied by having typed nothing at
+    // all, so the negative assertion alone proves nothing -- and the executor reporting
+    // "Typed 600 characters" while no field changed would be a false claim of effect,
+    // which is worse than the leak this test was written to catch.
+    const bool arrived = log.find("FIELD document=a") != std::string::npos;
+
+    if (arrived && !leaked)
     {
-        std::cout << "  PASS window identity: no text reached the other window\n";
+        std::cout << "  PASS window identity: text reached the bound window only\n";
         std::cout << "        (" << result.message << ")\n";
         ++passed;
+    }
+    else if (!arrived && result.succeeded)
+    {
+        std::cout << "  FAIL window identity: the executor reported success but no field"
+                     " changed.\n        claim: \"" << result.message << "\"\n";
+        ++failed;
+    }
+    else if (!arrived)
+    {
+        std::cout << "  INCONCLUSIVE window identity: typing reached no field, so the"
+                     " leak assertion proved nothing.\n        (" << result.message << ")\n";
+        ++inconclusive;
     }
     else
     {
@@ -304,15 +444,19 @@ void ProbeFocusBinding(Fixture& fixture)
     CoUninitialize();
 }
 
-void TestTypingStopsOnFocusChangeInsideOneWindow(
-    Fixture& fixture, int& passed, int& failed, int& inconclusive)
+void TestTypingLandsInTheNamedControl(
+    Fixture& fixture, int& passed, int& failed, int&)
 {
-    // The case the window binding alone cannot see: same HWND, focus moves from the
-    // document field to another control.
+    // A. Ordinary activation.
+    //
+    // This has to hold before drift can be shown to stop anything: text aimed at a named
+    // control has to arrive in that control. Without it, "nothing reached the other
+    // field" is satisfied by having typed nothing at all, which is how the drift test
+    // spent several runs proving nothing.
     const HWND main = fixture.Window(L"Revia Fixture - Main");
     if (main == nullptr)
     {
-        std::cout << "  SKIP control binding: fixture window not found\n";
+        std::cout << "  FAIL named control: fixture window not found\n";
         ++failed;
         return;
     }
@@ -321,83 +465,125 @@ void TestTypingStopsOnFocusChangeInsideOneWindow(
     DesktopControlExecutor executor(PermissiveSettings(), guard);
 
     SetForegroundWindow(main);
-    // Establish where typing starts, and confirm it took. Without this the test proves
-    // nothing: an earlier version left focus wherever the previous test had put it, so
-    // its "focus change" changed nothing.
-    //
-    // Focus is verified rather than assumed because SetForegroundWindow from another
-    // process can leave focus on the window rather than on a child, and typing into a
-    // window with no focused edit control goes nowhere at all.
-    bool focusEstablished = false;
-    for (int attempt = 0; attempt < 10 && !focusEstablished; ++attempt)
+    ResetFixtureState(fixture);
+    // Focus is deliberately not placed by the harness. Putting the caret on the named
+    // control is the executor's job, and doing it here would test the test.
+    const std::size_t alreadySubmitted = fixture.Log().size();
+
+    const ActionResult result = executor.Execute(
+        TypeInto(std::string(120, 'b'), L"Revia Fixture - Main", DocumentFieldId),
+        Allowed());
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+
+    const std::string fresh = Since(fixture.Log(), alreadySubmitted);
+    const bool inDocument = FieldReceived(fresh, "document", 'b');
+    const bool inSecond = FieldReceived(fresh, "second", 'b');
+    const std::size_t arrived = FieldEventCount(fresh, "document");
+
+    if (result.succeeded && inDocument && !inSecond && arrived >= 120)
     {
-        fixture.Hook(WM_APP + 4);
-        std::this_thread::sleep_for(std::chrono::milliseconds(120));
-        const GUITHREADINFO info = [&]
-        {
-            GUITHREADINFO gui{};
-            gui.cbSize = sizeof(gui);
-            GetGUIThreadInfo(GetWindowThreadProcessId(main, nullptr), &gui);
-            return gui;
-        }();
-        // A focused child that is not the top-level window itself.
-        focusEstablished = info.hwndFocus != nullptr && info.hwndFocus != main;
-    }
-    if (!focusEstablished)
-    {
-        std::cout << "  SKIP control binding: could not put focus on a field "
-                     "(foreground handoff refused); the mechanism is exercised by the "
-                     "PROBE above\n";
+        std::cout << "  PASS named control: " << arrived
+                  << " characters arrived in the field the request named\n";
+        ++passed;
         return;
     }
 
+    std::cout << "  FAIL named control: text did not land in the named control\n";
+    std::cout << "        executor succeeded=" << (result.succeeded ? "true" : "false")
+              << ": " << result.message << "\n";
+    std::cout << "        document received " << arrived << " of 120 characters, second field "
+              << (inSecond ? "was written to" : "was untouched") << "\n";
+    std::cout << "        events during this operation:\n";
+    ShowEvents(fresh);
+    ++failed;
+}
+
+void TestTypingStopsOnFocusChangeInsideOneWindow(
+    Fixture& fixture, int& passed, int& failed, int& inconclusive)
+{
+    // B. Mid-operation drift.
+    //
+    // The case the window binding alone cannot see: same HWND, focus moves from the
+    // document field to another control while typing is under way.
+    const HWND main = fixture.Window(L"Revia Fixture - Main");
+    if (main == nullptr)
+    {
+        std::cout << "  FAIL control binding: fixture window not found\n";
+        ++failed;
+        return;
+    }
+
+    auto guard = std::make_shared<revia::policy::DesktopInputGuard>();
+    DesktopControlExecutor executor(PermissiveSettings(), guard);
+
+    SetForegroundWindow(main);
+    ResetFixtureState(fixture);
+    const std::size_t alreadySubmitted = fixture.Log().size();
+
+    // The focus change has to land *during* typing. A fixed 80 ms sleep put it in the
+    // middle of the executor's setup instead, before the binding existed -- so there was
+    // no drift to detect and the run proved nothing while looking like a harness fault.
+    // This waits for the fixture to report characters actually arriving, then moves
+    // focus: an observed event rather than a guess about timing.
+    std::atomic<bool> drifted{false};
     std::thread mover([&]()
     {
-        std::this_thread::sleep_for(std::chrono::milliseconds(80));
-        // WM_APP+3 makes the fixture move focus to the second field.
-        fixture.Hook(WM_APP + 3);
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(6);
+        while (std::chrono::steady_clock::now() < deadline)
+        {
+            const std::string sofar = Since(fixture.Log(), alreadySubmitted);
+            // Past a chunk boundary, so the stop has to happen mid-operation rather
+            // than before the first chunk.
+            if (FieldEventCount(sofar, "document") >= 24)
+            {
+                fixture.Hook(WM_APP + 3);
+                drifted = true;
+                return;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
     });
 
     const ActionResult result = executor.Execute(
-        TypeInto(std::string(800, 'b'), L"Revia Fixture - Main"), Allowed());
+        TypeInto(std::string(800, 'b'), L"Revia Fixture - Main", DocumentFieldId),
+        Allowed());
     mover.join();
     std::this_thread::sleep_for(std::chrono::milliseconds(200));
 
-    const std::string log = fixture.Log();
-    // Two halves, and both matter. Text has to have started arriving in the field it was
-    // aimed at, or "nothing reached the other field" is satisfied by having typed
-    // nothing at all.
-    const bool startedInDocument = log.find("FIELD document=b") != std::string::npos;
-    const bool reachedSecondField = log.find("FIELD second=b") != std::string::npos;
+    const std::string fresh = Since(fixture.Log(), alreadySubmitted);
+    const bool startedInDocument = FieldReceived(fresh, "document", 'b');
+    const bool reachedSecondField = FieldReceived(fresh, "second", 'b');
+    const std::size_t intoDocument = FieldEventCount(fresh, "document");
 
-    if (startedInDocument && !reachedSecondField)
+    if (startedInDocument && drifted && !reachedSecondField)
     {
-        std::cout << "  PASS control binding: focus change inside one window stopped it\n";
+        std::cout << "  PASS control binding: " << intoDocument
+                  << " characters into the bound field, then focus moved inside the same"
+                     " window and nothing followed it\n";
         std::cout << "        (" << result.message << ")\n";
         ++passed;
     }
-    else if (!startedInDocument)
+    else if (reachedSecondField)
     {
-        // Not a product failure and not a pass: the harness could not get typed text
-        // into the field it aimed at, so the assertion never had a chance to mean
-        // anything. Reported as its own outcome rather than counted either way.
-        //
-        // The cause is in the harness: FocusAndConfirm brings the *top-level window*
-        // forward, and when this test process hands over the foreground the focused
-        // child is displaced, so the characters route to a window with no edit control
-        // under the caret. The drift detection this test exists to prove is exercised
-        // directly by the PROBE above, which shows CompareBindings returning a correct
-        // non-empty reason across the same focus change.
-        std::cout << "  INCONCLUSIVE control binding: the harness could not keep focus on"
-                     " a field, so nothing was proved end to end.\n"
-                     "        The PROBE above exercises the same drift detection directly."
-                     "\n";
-        ++inconclusive;
+        std::cout << "  FAIL control binding: typing continued into the new control\n";
+        std::cout << "        executor: " << result.message << "\n";
+        ShowEvents(fresh);
+        ++failed;
     }
     else
     {
-        std::cout << "  FAIL control binding: typing continued into the new control\n";
-        ++failed;
+        // Ordered events, not another hypothesis. Two wrong diagnoses came out of
+        // reasoning about this failure instead of reading what the run recorded, so the
+        // run now reports what the executor decided and what the fixture saw while this
+        // operation was running.
+        std::cout << "  INCONCLUSIVE control binding: typing never reached the bound"
+                     " field, so the focus change had nothing to interrupt.\n";
+        std::cout << "        executor: " << result.message << "\n";
+        std::cout << "        focus was moved: " << (drifted ? "yes" : "no")
+                  << ", characters into the document field: " << intoDocument << "\n";
+        std::cout << "        events during this operation:\n";
+        ShowEvents(fresh);
+        ++inconclusive;
     }
 }
 
@@ -550,8 +736,9 @@ void RunNativeDesktopTests()
     int passed = 0;
     int failed = 0;
     int inconclusive = 0;
-    TestTypingStopsWhenFocusLeavesTheBoundWindow(fixture, passed, failed);
+    TestTypingStopsWhenFocusLeavesTheBoundWindow(fixture, passed, failed, inconclusive);
     ProbeFocusBinding(fixture);
+    TestTypingLandsInTheNamedControl(fixture, passed, failed, inconclusive);
     TestTypingStopsOnFocusChangeInsideOneWindow(fixture, passed, failed, inconclusive);
     TestReviaWillNotTypeIntoHerOwnWindow(passed, failed);
     MeasureEmergencyStopLatency(fixture, passed, failed);
