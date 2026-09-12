@@ -646,6 +646,18 @@ struct conversationSettings
     // Turns that must pass before she may think out loud again. Deliberation on every
     // hard turn in a row stops being thinking and becomes a preamble.
     int selfInquiryCooldownTurns = 3;
+    // Whether a self-inquiry may continue into further rounds when the first one leaves
+    // something material unsettled.
+    //
+    // Separate from whether the work summaries are displayed. Hiding the panel is a
+    // display preference; this is whether the verification happens at all, and conflating
+    // the two would make "I do not want to watch" mean "do not check".
+    bool bIterativeInvestigationEnabled = false;
+    // Bounds. Reaching any of them pauses the investigation; none of them makes it
+    // succeed.
+    int investigationMaximumRounds = 3;
+    int investigationQuestionsPerRound = 2;
+    int investigationBudgetMilliseconds = 45000;
 };
 
 // Response filtering is deliberately separate from the personality prompt. A profile

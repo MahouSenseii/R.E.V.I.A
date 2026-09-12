@@ -284,6 +284,14 @@ ReviaSession::ReviaSession()
            {
                agents::SelfInquiryLimits limits;
                limits.enabled = settings.conversation.bSelfInquiryEnabled;
+               limits.iterativeEnabled =
+                   settings.conversation.bIterativeInvestigationEnabled;
+               limits.maximumRounds = static_cast<std::size_t>(
+                   std::max(1, settings.conversation.investigationMaximumRounds));
+               limits.questionsPerRound = static_cast<std::size_t>(
+                   std::max(1, settings.conversation.investigationQuestionsPerRound));
+               limits.investigationBudget = std::chrono::milliseconds(
+                   std::max(1000, settings.conversation.investigationBudgetMilliseconds));
                limits.cooldownTurns = static_cast<std::size_t>(
                    std::max(0, settings.conversation.selfInquiryCooldownTurns));
                return limits;

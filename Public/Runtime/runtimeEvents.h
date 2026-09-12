@@ -62,6 +62,16 @@ enum class RuntimeEventKind
     // `resource` the file it was saved to. Distinct from AssistantMessage because a
     // picture belongs on a canvas, not in the middle of a chat transcript.
     Diagram,
+    // One round of an iterative investigation: the questions being checked now.
+    //
+    // A distinct kind rather than a SelfInquiry with a different phase, because the shell
+    // must be able to render "checking" and "findings" as alternating blocks without
+    // matching on a speaker name or parsing a string. `message` is a short work summary,
+    // `detail` the expandable evidence behind it, and `turnId` ties the round to the task
+    // that raised it so a stale round cannot appear under a later question.
+    InvestigationChecking,
+    // The observations that round produced, and what remains uncertain.
+    InvestigationFindings,
     // A song. `phase` carries the performance event kind, `message` what to show, and
     // `detail` the karaoke line when the song marks one. Distinct from AssistantMessage
     // because a performance is a timeline a shell can follow, not a line of dialogue.

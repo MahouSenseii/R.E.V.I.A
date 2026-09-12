@@ -4,6 +4,7 @@
 #include "Intelligence/intelligenceTypes.h"
 #include "Library/structLibrary.h"
 
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <stop_token>
@@ -59,6 +60,18 @@ struct SelfInquiryLimits
     // router said. "why" routes to Main; it is not a problem worth deliberating over.
     std::size_t minimumInputCharacters = 40;
     std::size_t maximumQuestions = 4;
+
+    // Whether a completed inquiry may continue into further rounds.
+    //
+    // Carried on the same limits object the single pass already uses, because this is the
+    // same feature extended rather than a second one bolted alongside it -- and because a
+    // second settings path would eventually disagree with the first about whether she is
+    // allowed to think.
+    bool iterativeEnabled = false;
+    // Total rounds including the opening inquiry. One means the original behaviour.
+    std::size_t maximumRounds = 3;
+    std::size_t questionsPerRound = 2;
+    std::chrono::milliseconds investigationBudget{45000};
 };
 
 // Decides whether this turn is a major enough problem to be worth stopping over.

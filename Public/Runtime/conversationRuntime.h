@@ -1,6 +1,8 @@
 #pragma once
 
 #include "Actions/actionTypes.h"
+#include "Agents/investigation.h"
+#include "Agents/investigationAgent.h"
 #include "Agents/turnCoordinator.h"
 #include "Agents/conversationQualityMonitor.h"
 #include "Agents/selfInquiry.h"
@@ -185,6 +187,32 @@ private:
     // publishes the questions so they are visible in chat, and returns what she worked
     // out. Returns an empty result whenever the gate stays shut, and a failed pass is
     // never fatal to the turn: she answers as she would have without it.
+    // What further rounds established, if any ran.
+    struct InvestigationSummary
+    {
+        bool ran = false;
+        // Appended to the turn's posture, exactly as the single inquiry's block is.
+        std::string promptBlock;
+        std::size_t rounds = 0;
+        std::size_t observations = 0;
+        agents::InvestigationOutcome outcome = agents::InvestigationOutcome::Running;
+        std::string reason;
+        double elapsedMilliseconds = 0.0;
+    };
+
+    // Continues a completed self-inquiry into further rounds.
+    //
+    // Round one is the existing SelfInquiryAgent pass, unchanged. This seeds an
+    // investigation from the questions it produced and lets later rounds choose their
+    // questions from what earlier rounds actually found -- which is the whole of what the
+    // single pass could not do.
+    [[nodiscard]] InvestigationSummary RunInvestigation(
+        const agents::SelfInquiryResult& seed,
+        const std::string& policyInput,
+        const std::string& basePosture,
+        std::uint64_t turnId,
+        std::stop_token stopToken);
+
     [[nodiscard]] agents::SelfInquiryResult RunSelfInquiry(
         const std::string& policyInput,
         const std::vector<conversationMessage>& promptContext,
@@ -255,6 +283,9 @@ private:
     // holds the one bounded model call.
     agents::SelfInquiryPolicy selfInquiryPolicy;
     agents::SelfInquiryAgent selfInquiryAgent;
+    // Task-scoped: rebuilt per turn, so a round from a superseded question can never be
+    // read back under a later one.
+    agents::Investigation activeInvestigation;
     std::string previousReflexResponse;
     std::string previousReflexInput;
     std::size_t repeatedReflexCalls = 0;

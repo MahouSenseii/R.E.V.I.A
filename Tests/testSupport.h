@@ -71,6 +71,8 @@ void RunMicrophoneTests();
 void RunActivityExecutionTests();
 void RunAuditFindingsTests();
 void RunSpeechInterruptionTests();
+void RunInvestigationTests();
+void RunInvestigationLive(const std::string& host, int port);
 void RunSpeechCoordinatorTests();
 void RunPresentationTests();
 void RunSkillTests();

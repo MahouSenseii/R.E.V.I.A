@@ -8451,6 +8451,14 @@ void TestVocalizationParsingAndGating()
 
 int main(const int argc, char** argv)
 {
+    // Opt-in, and outside the default suite: it needs a llama-server listening, and a
+    // suite that fails because a server is absent teaches nobody anything.
+    if (argc > 1 && std::string(argv[1]) == "--investigation-live")
+    {
+        RunInvestigationLive("127.0.0.1", argc > 2 ? std::stoi(argv[2]) : 8080);
+        return 0;
+    }
+
     try
     {
         if (argc > 1 && std::string(argv[1]) == "--learning-durability")
@@ -8720,6 +8728,7 @@ int main(const int argc, char** argv)
         RunDesktopAuthorizationTests();
         RunTargetBindingTests();
         RunActionApprovalTests();
+        RunInvestigationTests();
         RunSpeechCoordinatorTests();
         RunPresentationTests();
         RunSkillTests();

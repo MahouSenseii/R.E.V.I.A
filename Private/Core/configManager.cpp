@@ -1052,6 +1052,26 @@ bool configManager::LoadSettings(appSettings& outSettings) const
                 outSettings.conversation.bSelfInquiryEnabled =
                     conversationData["selfInquiryEnabled"].get<bool>();
             }
+            if (conversationData.contains("iterativeInvestigationEnabled"))
+            {
+                outSettings.conversation.bIterativeInvestigationEnabled =
+                    conversationData["iterativeInvestigationEnabled"].get<bool>();
+            }
+            if (conversationData.contains("investigationMaximumRounds"))
+            {
+                outSettings.conversation.investigationMaximumRounds =
+                    conversationData["investigationMaximumRounds"].get<int>();
+            }
+            if (conversationData.contains("investigationQuestionsPerRound"))
+            {
+                outSettings.conversation.investigationQuestionsPerRound =
+                    conversationData["investigationQuestionsPerRound"].get<int>();
+            }
+            if (conversationData.contains("investigationBudgetMilliseconds"))
+            {
+                outSettings.conversation.investigationBudgetMilliseconds =
+                    conversationData["investigationBudgetMilliseconds"].get<int>();
+            }
             if (conversationData.contains("selfInquiryCooldownTurns"))
             {
                 outSettings.conversation.selfInquiryCooldownTurns =

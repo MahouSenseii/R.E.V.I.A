@@ -445,6 +445,95 @@ std::string ConversationRuntime::BuildTurnPosture(
     return postureLine.str();
 }
 
+ConversationRuntime::InvestigationSummary ConversationRuntime::RunInvestigation(
+    const agents::SelfInquiryResult& seed,
+    const std::string& policyInput,
+    const std::string& basePosture,
+    const std::uint64_t turnId,
+    const std::stop_token stopToken)
+{
+    InvestigationSummary summary;
+    if (!seed.HasQuestions()) return summary;
+
+    const agents::SelfInquiryLimits limits = selfInquirySettingsProvider
+        ? selfInquirySettingsProvider() : selfInquiryPolicy.Limits();
+    if (!limits.iterativeEnabled) return summary;
+    if (limits.maximumRounds <= 1) return summary;
+
+    // A fresh investigation per turn. Reusing one across turns is how a finding from an
+    // abandoned question ends up cited under a new one.
+    activeInvestigation = agents::Investigation(
+        turnId, policyInput,
+        "The original question is addressed and what matters is supported.");
+    for (const std::string& question : seed.questions)
+    {
+        activeInvestigation.AddQuestion(question, 0.7, 0);
+    }
+
+    agents::InvestigationBudget budget;
+    // Round one already happened as the self-inquiry, so the loop gets the remainder.
+    budget.maximumRounds = limits.maximumRounds - 1;
+    budget.maximumQuestionsPerRound = std::max<std::size_t>(1, limits.questionsPerRound);
+    budget.wallClock = limits.investigationBudget;
+
+    // No check executor is wired in this pass, so every round is reasoning only and the
+    // agent says so in its envelope. Findings are recorded as interpretation, never as
+    // observation; the seam exists for real checks and is deliberately left empty rather
+    // than filled with something that would let generated text pass as a measurement.
+    const agents::RoundRunner runner =
+        agents::InvestigationAgent::MakeRunner(router, basePosture, {}, stopToken);
+
+    const auto started = std::chrono::steady_clock::now();
+    const agents::InvestigationLoop loop(budget);
+    const agents::RoundObserver observer =
+        [this, turnId](const agents::RoundReport& round)
+    {
+        // Published as it happens, so the shell shows "checking" then "findings" in step
+        // with the work rather than after all of it.
+        RuntimeEvent event;
+        const bool checking = round.phase == agents::RoundPhase::Checking;
+        event.kind = checking ? RuntimeEventKind::InvestigationChecking
+                              : RuntimeEventKind::InvestigationFindings;
+        event.state = RuntimeState::Thinking;
+        event.component = "Investigation";
+        event.phase = checking ? "Checking" : "Findings";
+        event.message = checking ? round.checkingSummary : round.findingsSummary;
+        event.detail = round.evidenceDetail;
+        event.initiator = "conversation turn #" + std::to_string(turnId);
+        event.turnId = turnId;
+        // queueDepth carries the round number; the shell reads it to label the block.
+        event.queueDepth = static_cast<int>(round.round);
+        if (!event.message.empty()) events.Publish(std::move(event));
+    };
+
+    const agents::InvestigationRunReport report =
+        loop.Run(activeInvestigation, runner, stopToken, observer);
+
+    summary.ran = report.rounds > 0;
+    summary.rounds = report.rounds;
+    summary.observations = activeInvestigation.ObservationCount();
+    summary.outcome = report.outcome;
+    summary.reason = report.reason;
+    summary.elapsedMilliseconds = ElapsedMilliseconds(started);
+    if (report.outcome == agents::InvestigationOutcome::Cancelled)
+    {
+        // Nothing from a cancelled investigation reaches the answer.
+        activeInvestigation = agents::Investigation{};
+        return summary;
+    }
+    summary.promptBlock = activeInvestigation.PromptBlock();
+
+    PublishComponent(
+        "Investigation", ToString(report.outcome) == "completed" ? "Ready" : "Partial",
+        report.reason, summary.elapsedMilliseconds,
+        static_cast<int>(report.rounds), turnId);
+    log.Log(
+        "Investigation turn #" + std::to_string(turnId) + " | rounds=" +
+        std::to_string(report.rounds) + " | outcome=" + ToString(report.outcome) +
+        " | " + report.reason);
+    return summary;
+}
+
 agents::SelfInquiryResult ConversationRuntime::RunSelfInquiry(
     const std::string& policyInput,
     const std::vector<conversationMessage>& promptContext,
@@ -994,6 +1083,20 @@ SessionResult ConversationRuntime::Generate(
         if (const std::string inquiryBlock = inquiry.PromptBlock(); !inquiryBlock.empty())
         {
             postureLine << "\n\n" << inquiryBlock;
+        }
+        // Further rounds, when they ran. Appended after the opening questions so the
+        // answer reads them in the order they were arrived at.
+        const InvestigationSummary investigated = RunInvestigation(
+            inquiry, policyInput, basePosture, currentTurn, stopToken);
+        if (!investigated.promptBlock.empty())
+        {
+            postureLine << "\n\n" << investigated.promptBlock;
+        }
+        if (stopToken.stop_requested())
+        {
+            result.fromAssistant = true;
+            result.reason = "The response was cancelled while she was still checking.";
+            return finish(std::move(result));
         }
         if (!turnPolicy.instruction.empty())
         {

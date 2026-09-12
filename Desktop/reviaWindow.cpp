@@ -1352,11 +1352,26 @@ void ReviaWindow::HandleRuntimeEvent(const revia::runtime::RuntimeEvent& event)
         // Shown in the transcript rather than collapsed behind "Thought process". These
         // are the questions Revia put to herself on a hard turn, and the point of them is
         // that the user sees what she was actually wondering before the answer arrives.
-        AppendChat(
-            QString::fromStdString(session.DisplayName()) + QStringLiteral(" is thinking"),
-            QString::fromStdString(event.message));
+        AppendWorkEntry(
+            EntryKind::SelfInquiry, QString::fromStdString(event.message),
+            QString::fromStdString(event.detail), event.turnId, 0);
         AppendActivity(QStringLiteral("Self-inquiry: ") +
             QString::fromStdString(event.detail));
+        return;
+    }
+    if (event.kind == revia::runtime::RuntimeEventKind::InvestigationChecking ||
+        event.kind == revia::runtime::RuntimeEventKind::InvestigationFindings)
+    {
+        // The alternating blocks. `phase` carries the round number so an entry always
+        // lands under the task that raised it.
+        const bool checking =
+            event.kind == revia::runtime::RuntimeEventKind::InvestigationChecking;
+        AppendWorkEntry(
+            checking ? EntryKind::InvestigationChecking : EntryKind::InvestigationFindings,
+            QString::fromStdString(event.message),
+            QString::fromStdString(event.detail),
+            event.turnId,
+            event.queueDepth);
         return;
     }
     if (event.kind == revia::runtime::RuntimeEventKind::Memory)
@@ -1688,6 +1703,25 @@ void ReviaWindow::AppendChat(
     RenderChat();
 }
 
+void ReviaWindow::AppendWorkEntry(
+    const EntryKind kind,
+    const QString& body,
+    const QString& detail,
+    const quint64 taskId,
+    const int round)
+{
+    // Recorded whether or not it is displayed. Hiding the panel must not become a way of
+    // losing the record, and it must not touch whether the work happened.
+    ChatEntry entry;
+    entry.body = body;
+    entry.reasoning = detail;
+    entry.kind = kind;
+    entry.taskId = taskId;
+    entry.round = round;
+    chatEntries.push_back(std::move(entry));
+    RenderChat();
+}
+
 void ReviaWindow::RenderChat()
 {
     // Rebuilt in full rather than appended, because expanding one entry changes the
@@ -1699,8 +1733,64 @@ void ReviaWindow::RenderChat()
     for (std::size_t index = 0; index < chatEntries.size(); ++index)
     {
         const ChatEntry& entry = chatEntries[index];
+        const bool working = entry.kind != EntryKind::Message;
+        if (working && !showWorkSummaries) continue;
+
         const QString align = entry.userMessage ? "right" : "left";
         const QString speakerColour = entry.userMessage ? "#9dd7ff" : "#70e0ca";
+
+        if (working)
+        {
+            // Muted but readable, and deliberately not the same contrast as the answer:
+            // this is Revia working, not Revia replying, and the two must not be mistaken
+            // for each other at a glance.
+            QString label;
+            switch (entry.kind)
+            {
+                case EntryKind::InvestigationChecking:
+                    label = QStringLiteral("Revia is checking\u2026");
+                    break;
+                case EntryKind::InvestigationFindings:
+                    label = QStringLiteral("Findings");
+                    break;
+                default:
+                    label = QStringLiteral("Revia is thinking");
+                    break;
+            }
+            if (entry.round > 0)
+            {
+                label += QStringLiteral(" (round ") + QString::number(entry.round) +
+                    QStringLiteral(")");
+            }
+            html += QStringLiteral(
+                "<p style=\"margin-top:8px; margin-bottom:1px; text-align:left;\">"
+                "<b><span style=\"color:#7f8c9e;\">%1</span></b></p>").arg(label);
+            if (!entry.body.isEmpty())
+            {
+                html += QStringLiteral(
+                    "<p style=\"margin-top:0px; margin-bottom:2px; text-align:left; "
+                    "color:#a9b6c6;\">%1</p>").arg(HtmlParagraph(entry.body));
+            }
+            if (!entry.reasoning.isEmpty())
+            {
+                html += QStringLiteral(
+                    "<p style=\"margin-top:0px; margin-bottom:2px; text-align:left;\">"
+                    "<a href=\"thought:%1\" style=\"color:#6f7c8d; "
+                    "text-decoration:none;\">%2 Evidence</a></p>")
+                    .arg(QString::number(index),
+                        entry.expanded ? QStringLiteral("&#9662;")
+                                       : QStringLiteral("&#9656;"));
+                if (entry.expanded)
+                {
+                    html += QStringLiteral(
+                        "<p style=\"margin-top:0px; margin-bottom:6px; color:#8390a3; "
+                        "font-size:11px;\">%1</p>").arg(HtmlParagraph(entry.reasoning));
+                }
+            }
+            // A working entry never sets previousSpeaker, so the answer that follows
+            // still prints its own name.
+            continue;
+        }
 
         // Streamed speech arrives sentence by sentence. Keep those separate so each one
         // can appear when its audio begins, but do not print "Revia" above every sentence

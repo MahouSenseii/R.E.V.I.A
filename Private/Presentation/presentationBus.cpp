@@ -127,6 +127,16 @@ std::optional<PresentationEvent> TranslateRuntimeEvent(const runtime::RuntimeEve
         case RuntimeEventKind::SelfInquiry:
             return std::nullopt;
 
+        // A round of investigation is a visible *state* -- she is working -- and never
+        // its content. The renderer learns that she is checking something; it does not
+        // learn what, because that is the same leak SelfInquiry is dropped for.
+        case RuntimeEventKind::InvestigationChecking:
+            translated.kind = PresentationEventKind::StartedThinking;
+            return translated;
+        case RuntimeEventKind::InvestigationFindings:
+            translated.kind = PresentationEventKind::StoppedThinking;
+            return translated;
+
         case RuntimeEventKind::AffectChanged:
             translated.kind = PresentationEventKind::EmotionChanged;
             return translated;

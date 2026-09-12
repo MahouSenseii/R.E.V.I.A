@@ -115,6 +115,20 @@ private:
         const QString& reasoning = QString());
     // QTextBrowser supports only a subset of HTML and has no <details>, so collapsing is
     // done by re-rendering the whole transcript from this model when a link is clicked.
+    // What a transcript entry *is*, carried explicitly.
+    //
+    // Rendering branches on this rather than on the speaker string. Matching a name to
+    // decide how to draw something breaks the moment the assistant is renamed, and it
+    // cannot distinguish two kinds of entry that happen to share a speaker -- which is
+    // exactly the case for the alternating checking/findings blocks below.
+    enum class EntryKind
+    {
+        Message,
+        SelfInquiry,
+        InvestigationChecking,
+        InvestigationFindings
+    };
+
     struct ChatEntry
     {
         QString speaker;
@@ -122,7 +136,24 @@ private:
         QString reasoning;
         bool userMessage = false;
         bool expanded = false;
+        EntryKind kind = EntryKind::Message;
+        // The task and round this belongs to, so a round from a superseded question can
+        // never be drawn under a later one.
+        quint64 taskId = 0;
+        int round = 0;
     };
+
+    // Appends one of Revia's working entries. `detail` is the supporting evidence, shown
+    // only when the user expands it.
+    void AppendWorkEntry(
+        EntryKind kind,
+        const QString& body,
+        const QString& detail,
+        quint64 taskId,
+        int round);
+    // Display only. Turning this off hides the blocks and changes nothing about whether
+    // the investigation runs -- enablement lives in the runtime settings, not here.
+    bool showWorkSummaries = true;
     void RenderChat();
     std::vector<ChatEntry> chatEntries;
     enum class ActivitySeverity
