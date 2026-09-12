@@ -6,6 +6,7 @@
 
 #include <cmath>
 #include <iostream>
+#include <set>
 
 namespace
 {
@@ -85,12 +86,52 @@ void TestEmotionDecaysToNothingRatherThanLingeringForever()
 
 void TestPersistedNamesSurviveEnumReordering()
 {
+    const auto expected = std::to_array<std::pair<Emotion, const char*>>({
+        {Emotion::Joy, "joy"}, {Emotion::Curiosity, "curiosity"},
+        {Emotion::Excitement, "excitement"}, {Emotion::Amusement, "amusement"},
+        {Emotion::Affection, "affection"}, {Emotion::Pride, "pride"},
+        {Emotion::Confidence, "confidence"}, {Emotion::Sadness, "sadness"},
+        {Emotion::Loneliness, "loneliness"}, {Emotion::Disappointment, "disappointment"},
+        {Emotion::Anger, "anger"}, {Emotion::Irritation, "irritation"},
+        {Emotion::Frustration, "frustration"}, {Emotion::Boredom, "boredom"},
+        {Emotion::Envy, "envy"}, {Emotion::Embarrassment, "embarrassment"},
+        {Emotion::Fear, "fear"}, {Emotion::Concern, "concern"},
+        {Emotion::Confusion, "confusion"}, {Emotion::Relief, "relief"},
+        {Emotion::Contentment, "contentment"}, {Emotion::Gratitude, "gratitude"},
+        {Emotion::Fondness, "fondness"}, {Emotion::Warmth, "warmth"},
+        {Emotion::Admiration, "admiration"}, {Emotion::Hope, "hope"},
+        {Emotion::Anticipation, "anticipation"}, {Emotion::Delight, "delight"},
+        {Emotion::Satisfaction, "satisfaction"}, {Emotion::Playfulness, "playfulness"},
+        {Emotion::Mischief, "mischief"}, {Emotion::Smugness, "smugness"},
+        {Emotion::Determination, "determination"}, {Emotion::Absorption, "absorption"},
+        {Emotion::Nostalgia, "nostalgia"}, {Emotion::Awe, "awe"},
+        {Emotion::Annoyance, "annoyance"}, {Emotion::Impatience, "impatience"},
+        {Emotion::Indignation, "indignation"}, {Emotion::Resentment, "resentment"},
+        {Emotion::Hurt, "hurt"}, {Emotion::Regret, "regret"}, {Emotion::Guilt, "guilt"},
+        {Emotion::Shame, "shame"}, {Emotion::Insecurity, "insecurity"},
+        {Emotion::Doubt, "doubt"}, {Emotion::Apprehension, "apprehension"},
+        {Emotion::Overwhelm, "overwhelm"}, {Emotion::Weariness, "weariness"},
+        {Emotion::Restlessness, "restlessness"}, {Emotion::Wistfulness, "wistfulness"},
+        {Emotion::Defensiveness, "defensiveness"}, {Emotion::Surprise, "surprise"},
+        {Emotion::Suspicion, "suspicion"}
+    });
+    static_assert(expected.size() == EmotionCount);
+    std::set<Emotion> covered;
+    std::set<std::string> names;
+    for (const auto& [emotion, name] : expected)
+    {
+        Check(covered.insert(emotion).second, "Expected emotion mapping repeats an enum.");
+        Check(ToString(emotion) == name, "Persisted name changed for " + std::string(name));
+        Check(EmotionFromString(name) == emotion, "Persisted name resolved to the wrong enum.");
+    }
     // Persistence writes names. If it wrote indices, inserting an emotion would silently
     // reinterpret every stored file as a different feeling.
     for (std::size_t index = 0; index < EmotionCount; ++index)
     {
         const auto emotion = static_cast<Emotion>(index);
+        Check(EmotionNames()[index] != nullptr, "Emotion mapping contains a null name.");
         const std::string name = ToString(emotion);
+        Check(names.insert(name).second, "Emotion mapping repeats a persisted name.");
         Check(!name.empty() && name != "unknown",
             "An emotion has no persisted name at index " + std::to_string(index));
         Check(EmotionFromString(name) == emotion,
@@ -98,6 +139,9 @@ void TestPersistedNamesSurviveEnumReordering()
     }
     Check(EmotionFromString("not_a_real_emotion") == Emotion::Count,
         "An unknown emotion name was silently mapped onto a real emotion.");
+    Check(EmotionFromString("") == Emotion::Count && ToString(Emotion::Count) == "unknown",
+        "Unknown emotion handling changed.");
+    Check(EmotionFromString("JOY") == Emotion::Joy, "Case-insensitive persisted name lookup changed.");
 }
 
 void TestMoodIsSlowerThanEmotion()

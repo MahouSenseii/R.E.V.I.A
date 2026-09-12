@@ -4,6 +4,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <iosfwd>
 
 namespace revia::filesystem
 {
@@ -22,6 +23,8 @@ public:
         const actions::PolicyDecision& decision) override;
 
 private:
+    friend struct FileSystemExecutorTestAccess;
+    [[nodiscard]] actions::ActionResult ReadTextStream(std::istream& file) const;
     [[nodiscard]] actions::ActionResult ListDirectory(
         const actions::ActionRequest& request,
         const actions::PolicyDecision& decision) const;

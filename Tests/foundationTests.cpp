@@ -988,16 +988,16 @@ void TestStructuredLongTermMemory()
     Check(store.Save(preference, wasAdded) && !wasAdded,
         "An identical structured memory was added twice.");
 
-    memoryDecision vagueDuplicate = preference;
-    vagueDuplicate.summary = "The user prefers explanations.";
-    wasAdded = true;
-    Check(store.Save(vagueDuplicate, wasAdded) && !wasAdded,
-        "A vaguer restatement of a structured memory was added twice.");
-
     const std::vector<memoryEntry> entries = store.Load();
     Check(entries.size() == 1, "Structured memory did not load exactly one saved entry.");
     Check(entries[0].category == "preference" && entries[0].summary == preference.summary,
         "Structured memory did not preserve its category and summary.");
+
+    memoryDecision vagueDuplicate = preference;
+    vagueDuplicate.summary = "The user prefers explanations.";
+    wasAdded = false;
+    Check(store.Save(vagueDuplicate, wasAdded) && wasAdded,
+        "Token overlap discarded a statement with different specificity.");
 
     memoryDecision project = preference;
     project.category = "project";
@@ -1024,8 +1024,8 @@ void TestStructuredLongTermMemory()
         promptBlock.find(preference.summary) != std::string::npos,
         "Relevant structured memory was not included in the retrieved prompt block.");
 
-    Check(store.Load().size() == 2,
-        "SQLite memory did not preserve both structured records.");
+    Check(store.Load().size() == 3,
+        "SQLite memory did not preserve all three structured records.");
     Check(store.LoadMissingEmbeddings("test-embedding-model").empty(),
         "Saved memory vectors were not persisted for restart-safe retrieval.");
 
@@ -1244,6 +1244,11 @@ void TestFilesystemExecutorAndAudit()
     const auto readResult = executor.Execute(readRequest, readDecision);
     Check(readResult.succeeded && readResult.content == "hello Revia",
         "Text file read did not return the original content.");
+    readRequest.dryRun = true;
+    const auto dryRead = executor.Execute(readRequest, readDecision);
+    Check(dryRead.succeeded && dryRead.dryRun && !dryRead.attempted && dryRead.content.empty(),
+        "Text-file dry-run read content or reported an actual read.");
+    readRequest.dryRun = false;
 
     auto binaryRequest = Request(ActionType::ReadTextFile, approved / "binary.bin");
     const auto binaryResult = executor.Execute(binaryRequest, policy.Evaluate(binaryRequest));
@@ -8461,6 +8466,28 @@ int main(const int argc, char** argv)
 
     try
     {
+        if (argc > 1 && std::string(argv[1]) == "--bounded-file-reads")
+        {
+            RunBoundedFileReadTests();
+            TestFilesystemExecutorAndAudit();
+            return 0;
+        }
+        if (argc > 1 && std::string(argv[1]) == "--development")
+        {
+            RunDevelopmentTests();
+            RunIdentityPersistenceTests();
+            return 0;
+        }
+        if (argc > 1 && std::string(argv[1]) == "--emotion-mapping")
+        {
+            RunEmotionTests();
+            return 0;
+        }
+        if (argc > 1 && std::string(argv[1]) == "--memory-dedup")
+        {
+            RunMemoryDedupTests();
+            return 0;
+        }
         if (argc > 1 && std::string(argv[1]) == "--learning-durability")
         {
             RunLearningDurabilityTests();
@@ -8850,6 +8877,8 @@ int main(const int argc, char** argv)
         TestArbiterDropsRepeatsAndOverflow();
         // Split suites, per the testing refactor. New subsystems get their own file
         // instead of growing this one; they share the harness in testSupport.h.
+        RunMemoryDedupTests();
+        RunBoundedFileReadTests();
         RunEmotionTests();
         RunEmotionOwnershipTests();
         RunIdentityTests();

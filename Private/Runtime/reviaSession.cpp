@@ -5563,14 +5563,12 @@ void ReviaSession::RecordRelationshipEvidence(
     }
     const identity::RelationshipState updated = relationships.Apply(event);
 
-    // The same finished turn also says something about who she is becoming. Read from
-    // the same observed signals, so what moves a relationship and what moves a
-    // personality cannot disagree about what happened.
+    // Conversation supplies social/correction evidence, not proof of independent
+    // work. That evidence comes from confirmed execution outcomes.
     identity::TurnObservation observation;
     observation.succeeded = succeeded;
     observation.wasCorrected = signals.repeatedCorrection;
     observation.wasSocialAndPositive = signals.expressedAppreciation;
-    observation.actedIndependently = succeeded && !signals.repeatedCorrection;
     RecordDevelopmentEvidence(observation);
 
     // And what it says about the work itself. Read from the same observed signals for
@@ -6307,6 +6305,7 @@ autonomy::ActivityOutcome ReviaSession::ExecuteCreate(
     outcome.satisfiedDrive = true;
     outcome.drive = autonomy::Drive::Creativity;
     outcome.artifact = notePath.string();
+    outcome.completedIndependentWork = true;
     // Made, not announced. Having made something is not by itself a reason to interrupt.
     outcome.summary = "Wrote a note about \"" + subject + "\" to " + notePath.string() + ".";
     return outcome;
@@ -6632,6 +6631,14 @@ void ReviaSession::RunAutonomousActivity(
             if (*outcome.drive != autonomy::Drive::Boredom)
                 drives = driveController.Satisfy(drives, autonomy::Drive::Boredom);
         }
+    }
+
+    if (outcome.completedIndependentWork && outcome.status == autonomy::ActivityStatus::Completed &&
+        !activityToken.stop_requested() && !ActivityWasInterrupted(activity.id))
+    {
+        identity::TurnObservation observation;
+        observation.actedIndependently = true;
+        RecordDevelopmentEvidence(observation);
     }
 
     std::string journalError;

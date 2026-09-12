@@ -37,6 +37,8 @@ public:
     std::vector<memoryEntry> Load() const;
     // Returns the new or deduplicated row id when requested, so optional work
     // can address the accepted memory without saving its content a second time.
+    // Duplicates retain their stored summary; an incoming vector is accepted only
+    // for identical text. Deferred embedding work must use the stored summary.
     bool Save(const memoryDecision& decision, bool& outWasAdded,
         std::string* outMemoryId = nullptr) const;
     bool HasMemories() const;

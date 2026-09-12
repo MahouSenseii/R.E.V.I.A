@@ -36,6 +36,9 @@ struct ActivityOutcome
     // Reported so "she did something" and "she has something to show for it" stay
     // different claims.
     std::string artifact;
+    // Runtime-confirmed work, not mere completion, speech delivery or a no-op.
+    // Used only as development evidence; it grants no execution authority.
+    bool completedIndependentWork = false;
 };
 
 // The drive an activity spends when it genuinely completes.

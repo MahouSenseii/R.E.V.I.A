@@ -1,8 +1,8 @@
 #include "Filesystem/fileSystemExecutor.h"
 
 #include <algorithm>
+#include <array>
 #include <fstream>
-#include <iterator>
 #include <sstream>
 #include <system_error>
 
@@ -195,9 +195,47 @@ actions::ActionResult FileSystemExecutor::ReadTextFile(
         return Failure("Could not open text file: " + actions::PathToUtf8(path), true);
     }
 
-    std::string content{
-        std::istreambuf_iterator<char>(file),
-        std::istreambuf_iterator<char>()};
+    auto result = ReadTextStream(file);
+    if (result.succeeded)
+    {
+        result.message = "Read " + std::to_string(result.content.size()) +
+            " bytes from " + actions::PathToUtf8(path);
+    }
+    return result;
+}
+
+actions::ActionResult FileSystemExecutor::ReadTextStream(std::istream& file) const
+{
+    std::string content;
+    std::array<char, 4096> buffer;
+    while (content.size() < maxReadBytes)
+    {
+        const auto count = static_cast<std::streamsize>(std::min<std::uintmax_t>(
+            buffer.size(), maxReadBytes - content.size()));
+        file.read(buffer.data(), count);
+        if (file.bad() || (file.fail() && !file.eof()))
+        {
+            return Failure("Could not read text file.", true);
+        }
+        const auto read = static_cast<std::size_t>(file.gcount());
+        if (read > content.max_size() - content.size())
+        {
+            return Failure("Text file exceeds the supported content size.", true);
+        }
+        content.append(buffer.data(), read);
+        if (file.eof()) break;
+    }
+    // Probe one byte, without calculating maxReadBytes + 1 (which can overflow).
+    // A growing file is rejected, never returned as a successful truncated read.
+    if (content.size() == maxReadBytes && file.get() != std::char_traits<char>::eof())
+    {
+        return Failure("File exceeds the configured read limit of " +
+            std::to_string(maxReadBytes) + " bytes.", true);
+    }
+    if (file.bad() || (file.fail() && !file.eof()))
+    {
+        return Failure("Could not read text file.", true);
+    }
     if (HasNullByte(content))
     {
         return Failure("File appears to be binary and was not displayed.", true);
@@ -207,8 +245,6 @@ actions::ActionResult FileSystemExecutor::ReadTextFile(
     result.attempted = true;
     result.succeeded = true;
     result.content = std::move(content);
-    result.message = "Read " + std::to_string(result.content.size()) +
-        " bytes from " + actions::PathToUtf8(path);
     return result;
 }
 

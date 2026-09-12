@@ -203,6 +203,13 @@ public:
         for (const auto& [input, count] : successfulRequests)
             Check(count == 1, "A successfully indexed document was embedded again.");
     }
+    void CheckEmbeddedSummary(const std::string& expected)
+    {
+        std::lock_guard lock(mutex);
+        Check(successfulRequests.size() == 1 &&
+            successfulRequests.begin()->first.find(expected) != std::string::npos,
+            "Duplicate learning embedded incoming text instead of the retained summary.");
+    }
     std::vector<std::string> RequestOrder()
     {
         std::lock_guard lock(mutex);
@@ -424,8 +431,34 @@ void TestActualWorkerPriorityAndProgress()
 }
 }
 
+void TestDuplicateLearningEmbedsRetainedSummary()
+{
+    ScopedTestDirectory directory;
+    const auto path = (directory.root / "memory.db").string();
+    auto original = Finding("duplicate");
+    original.summary = "The user likes coffee.";
+    bool added = false;
+    longTermMemory store(path);
+    Check(store.Save(original, added) && added, "Could not seed unindexed duplicate.");
+    Backend backend;
+    messageRouter router;
+    backend.Configure(router);
+    MemoryAgent agent(path);
+    auto duplicate = original;
+    duplicate.summary = "  THE user\tlikes  coffee.\n";
+    Check(agent.SubmitLearnedFinding(router, duplicate) == LearnedFindingResult::SavedEmbeddingQueued,
+        "Unindexed duplicate did not queue optional embedding.");
+    Check(Until([&] { return store.LoadMissingEmbeddings("fixture-embedding").empty(); }),
+        "Retained summary was not indexed.");
+    agent.Stop();
+    backend.CheckEmbeddedSummary(original.summary);
+    Check(store.Load().size() == 1 && store.Load().front().summary == original.summary,
+        "Duplicate learning changed the accepted content.");
+}
+
 void RunEmbeddingBackfillTests()
 {
+    TestDuplicateLearningEmbedsRetainedSummary();
     TestSessionContinuationRecoveryAndProfileGates();
     TestCancellationAndInflightDeduplication();
     TestBackfillStorageErrorsAreExplicit();

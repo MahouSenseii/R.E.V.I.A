@@ -59,6 +59,8 @@ autonomy::ActivityOutcome ReviaSession::ExecuteComputer(
     outcome.satisfiedDrive = result.Succeeded();
     outcome.drive = autonomy::Drive::Exploration;
     outcome.summary = result.Message();
+    outcome.completedIndependentWork = result.Succeeded() && result.result.attempted &&
+        !result.result.dryRun && request.type != actions::ActionType::FocusWindow;
     // Local inspection stays in the local activity feed, never a search query or a
     // spontaneous spoken disclosure. Cap the display even if a file read is larger.
     RuntimeEvent observation;

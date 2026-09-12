@@ -79,7 +79,8 @@ private:
 struct TurnObservation
 {
     bool succeeded = true;
-    // She chose the approach rather than being told exactly what to do.
+    // Confirmed independent work: she chose and executed an approach. Successful
+    // conversation or the absence of corrections is not evidence of this.
     bool actedIndependently = false;
     // The attempt was impulsive: acted before checking.
     bool actedImpulsively = false;

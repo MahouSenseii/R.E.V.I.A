@@ -2,15 +2,16 @@
 
 #include <algorithm>
 #include <cctype>
+#include <string_view>
 
 namespace revia::emotion
 {
 
 namespace
 {
-    // Indices here must line up with the enum. The static_assert below is what keeps
-    // that true rather than a comment asking future edits to be careful.
-    constexpr std::array<const char*, EmotionCount> Names = {
+    // Count is derived from the initializers. Explicit enum/name tests protect the
+    // persisted associations; the assertions also reject missing or duplicate names.
+    constexpr auto Names = std::to_array<const char*>({
         "joy", "curiosity", "excitement", "amusement",
         "affection", "pride", "confidence",
         "sadness", "loneliness", "disappointment",
@@ -24,9 +25,23 @@ namespace
         "impatience", "indignation", "resentment", "hurt", "regret", "guilt", "shame",
         "insecurity", "doubt", "apprehension", "overwhelm", "weariness",
         "restlessness", "wistfulness", "defensiveness", "surprise", "suspicion"
-    };
+    });
     static_assert(Names.size() == EmotionCount,
         "Every Emotion needs exactly one persisted name.");
+
+    constexpr bool ValidNames()
+    {
+        for (std::size_t index = 0; index < Names.size(); ++index)
+        {
+            if (Names[index] == nullptr || Names[index][0] == '\0') return false;
+            for (std::size_t previous = 0; previous < index; ++previous)
+            {
+                if (std::string_view(Names[index]) == Names[previous]) return false;
+            }
+        }
+        return true;
+    }
+    static_assert(ValidNames(), "Persisted emotion names must be nonempty and unique.");
 
     std::string Lower(std::string value)
     {

@@ -53,63 +53,28 @@ std::string NormalizeSummary(const std::string& value)
 {
     std::string normalized;
     normalized.reserve(value.size());
+    bool pendingSpace = false;
     for (const unsigned char character : value)
     {
-        if (std::isalnum(character))
+        if (character == ' ' || character == '\t' || character == '\r' ||
+            character == '\n' || character == '\f' || character == '\v')
         {
-            normalized.push_back(static_cast<char>(std::tolower(character)));
+            pendingSpace = !normalized.empty();
+            continue;
         }
+        if (pendingSpace) normalized.push_back(' ');
+        pendingSpace = false;
+        normalized.push_back(static_cast<char>(character >= 'A' && character <= 'Z'
+            ? character + ('a' - 'A') : character));
     }
     return normalized;
 }
 
-std::unordered_set<std::string> SummaryTokens(const std::string& value)
-{
-    std::unordered_set<std::string> tokens;
-    std::string token;
-    for (const unsigned char character : value)
-    {
-        if (std::isalnum(character))
-        {
-            token.push_back(static_cast<char>(std::tolower(character)));
-        }
-        else if (!token.empty())
-        {
-            tokens.insert(std::move(token));
-            token.clear();
-        }
-    }
-    if (!token.empty())
-    {
-        tokens.insert(std::move(token));
-    }
-    return tokens;
-}
-
 bool IsDuplicateSummary(const std::string& existing, const std::string& candidate)
 {
-    if (NormalizeSummary(existing) == NormalizeSummary(candidate))
-    {
-        return true;
-    }
-
-    const auto existingTokens = SummaryTokens(existing);
-    const auto candidateTokens = SummaryTokens(candidate);
-    const std::size_t smallerSize = std::min(existingTokens.size(), candidateTokens.size());
-    if (smallerSize < 4)
-    {
-        return false;
-    }
-
-    std::size_t sharedTokens = 0;
-    for (const std::string& token : existingTokens)
-    {
-        if (candidateTokens.contains(token))
-        {
-            ++sharedTokens;
-        }
-    }
-    return static_cast<double>(sharedTokens) / static_cast<double>(smallerSize) >= 0.9;
+    // Only case and whitespace are formatting. Keep punctuation, word boundaries,
+    // order and every correction/negation word; overlap is not equivalence.
+    return NormalizeSummary(existing) == NormalizeSummary(candidate);
 }
 
 std::string CurrentEpochSeconds()
@@ -162,7 +127,10 @@ bool InsertEntry(sqlite3* database, const memoryEntry& entry)
     BindText(insert.get(), 1, entry.id);
     BindText(insert.get(), 2, entry.category.empty() ? "other" : entry.category);
     BindText(insert.get(), 3, entry.summary);
-    BindText(insert.get(), 4, NormalizeSummary(entry.summary));
+    // Legacy keys stripped all punctuation and spaces. A separate key namespace
+    // avoids their UNIQUE constraint discarding new propositions without rewriting
+    // old rows. Deduplication compares the stored text, not this historical key.
+    BindText(insert.get(), 4, "v2:" + NormalizeSummary(entry.summary));
     BindText(insert.get(), 5, entry.source.empty() ? "automatic" : entry.source);
     BindText(insert.get(), 6, entry.createdAt);
     return sqlite3_step(insert.get()) == SQLITE_DONE;
@@ -542,7 +510,10 @@ bool longTermMemory::Save(const memoryDecision& decision, bool& outWasAdded,
     if (duplicate != existingEntries.end())
     {
         if (outMemoryId) *outMemoryId = duplicate->id;
-        if (!decision.embedding.empty() && !decision.embeddingModel.empty())
+        // The retained summary is the embedding input, even for formatting-only
+        // duplicates. Missing vectors for that text can be filled by backfill.
+        if (duplicate->summary == decision.summary &&
+            !decision.embedding.empty() && !decision.embeddingModel.empty())
         {
             return SaveEmbedding(
                 duplicate->id,

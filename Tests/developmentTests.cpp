@@ -141,6 +141,31 @@ void TestDevelopmentHasNoPreferredDirection()
         "An uneventful turn still produced development evidence.");
 }
 
+void TestCompetenceRequiresIndependentWork()
+{
+    TurnObservation ordinary;
+    ordinary.succeeded = true;
+    ordinary.wasCorrected = false;
+    Check(ReadDevelopmentEvidence(ordinary).empty(),
+        "Success without repeated correction was mistaken for independence.");
+    ordinary.wasSocialAndPositive = true;
+    for (const auto& evidence : ReadDevelopmentEvidence(ordinary))
+        Check(evidence.trait != Trait::Confidence && evidence.trait != Trait::Independence,
+            "An appreciated conversation manufactured competence.");
+
+    TurnObservation work;
+    work.actedIndependently = true;
+    const auto evidence = ReadDevelopmentEvidence(work);
+    for (const Trait trait : {Trait::Confidence, Trait::Independence})
+        Check(std::count_if(evidence.begin(), evidence.end(), [&](const auto& item)
+            { return item.trait == trait && item.increases; }) == 1,
+            "Successful independent work did not produce competence evidence.");
+    work.succeeded = false;
+    for (const auto& item : ReadDevelopmentEvidence(work))
+        Check(!item.increases || (item.trait != Trait::Confidence && item.trait != Trait::Independence),
+            "Failed independent work earned positive competence evidence.");
+}
+
 void TestStimuliCarryCausationFromRealOutcomes()
 {
     using namespace revia::emotion;
@@ -263,6 +288,7 @@ void TestChangingBaselineKeepsEarnedDrift()
 
 void RunDevelopmentTests()
 {
+    TestCompetenceRequiresIndependentWork();
     TestOneConversationCannotRewriteHer();
     TestContradictingEvidenceCancelsRatherThanRatchets();
     TestDriftIsCappedSoSheStaysRecognisable();

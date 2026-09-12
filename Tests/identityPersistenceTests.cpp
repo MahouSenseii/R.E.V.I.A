@@ -103,6 +103,95 @@ void VerifySnapshot(const std::filesystem::path& path, const std::string& name)
         "Earned development or mood was lost.");
 }
 
+void TestConversationDoesNotEarnCompetence()
+{
+    ScopedTestDirectory temporary;
+    Configure(temporary.root, true);
+    WorkingDirectory cwd(temporary.root);
+    IdentitySnapshot saved;
+    saved.development.delta[Trait::Confidence] = 0.08F;
+    saved.development.delta[Trait::Independence] = -0.04F;
+    std::string error;
+    Check(IdentityStore(IdentityPath(temporary.root)).Save(saved, error), error);
+    {
+        ReviaSession session;
+        Check(session.Start(), "Conversation development fixture did not start.");
+        for (int index = 0; index < 8; ++index)
+        {
+            const auto reply = session.Submit("Explain why an eclipsing binary star changes brightness.");
+            Check(reply.succeeded && reply.fromAssistant, "Ordinary conversation did not complete.");
+            for (const Trait trait : {Trait::Confidence, Trait::Independence})
+            {
+                Check(Access::PendingDevelopment(session, trait) == 0.0F,
+                    "Successful chat without repeated correction earned competence evidence.");
+                Check(session.CurrentDevelopment().delta[trait] == saved.development.delta[trait],
+                    "Ordinary conversation changed persisted competence.");
+            }
+        }
+        session.Stop();
+    }
+    ReviaSession restarted;
+    Check(restarted.Start(), "Development fixture did not restart.");
+    for (const Trait trait : {Trait::Confidence, Trait::Independence})
+        Check(restarted.CurrentDevelopment().delta[trait] == saved.development.delta[trait],
+            "Previously saved development was reset or changed on restart.");
+    restarted.Stop();
+}
+
+void TestIndependentExecutionEarnsCompetence()
+{
+    ScopedTestDirectory temporary;
+    Configure(temporary.root);
+    WorkingDirectory cwd(temporary.root);
+    const auto approved = temporary.root / "Approved";
+    const auto note = approved / "note.txt";
+    Write(note, "Independent inspection fixture.");
+    Write(temporary.root / "Config/capabilities.json", nlohmann::json{
+        {"mode", "supervised"}, {"approvedRoots", {approved.string()}},
+        {"approvedApplications", nlohmann::json::array()},
+        {"autoApproveRiskThrough", "read_only"}}.dump());
+    ReviaSession session;
+    Check(session.Start(), "Independent work fixture did not start.");
+    revia::autonomy::ActivityDecision decision;
+    decision.type = revia::autonomy::ActivityType::Computer;
+    decision.subject = "Inspect an approved note";
+    decision.reason = "Development fixture";
+    decision.operation = nlohmann::json{{"action", "read_text_file"}, {"source", note.string()}}.dump();
+    const auto before = session.CurrentDevelopment();
+    for (int count = 1; count <= 4; ++count)
+    {
+        Access::AgeIdleBudget(session);
+        Access::RunIdleActivity(session, decision);
+        Check(session.CurrentActivity()->status == revia::autonomy::ActivityStatus::Completed,
+            "Independent file inspection did not complete.");
+        for (const Trait trait : {Trait::Confidence, Trait::Independence})
+        {
+            Check(Access::PendingDevelopment(session, trait) == (count == 4 ? 0.0F : float(count)),
+                "Independent execution did not supply exactly one competence observation.");
+            Check(count == 4 ? session.CurrentDevelopment().delta[trait] > before.delta[trait] :
+                session.CurrentDevelopment().delta[trait] == before.delta[trait],
+                "Independent work bypassed the existing development threshold.");
+        }
+    }
+    const auto earned = session.CurrentDevelopment();
+    for (const auto& path : {approved / "missing.txt", temporary.root / "outside.txt"})
+    {
+        Access::AgeIdleBudget(session);
+        decision.operation = nlohmann::json{{"action", "read_text_file"}, {"source", path.string()}}.dump();
+        Access::RunIdleActivity(session, decision);
+        Check(session.CurrentActivity()->status != revia::autonomy::ActivityStatus::Completed,
+            "Failed or blocked work reported completion.");
+    }
+    Access::AgeIdleBudget(session);
+    decision.type = revia::autonomy::ActivityType::Nothing;
+    Access::RunIdleActivity(session, decision);
+    for (const Trait trait : {Trait::Confidence, Trait::Independence})
+        Check(Access::PendingDevelopment(session, trait) == 0.0F &&
+            session.CurrentDevelopment().delta[trait] == earned.delta[trait],
+            "A failure, denial or completed no-op manufactured competence evidence.");
+    session.Stop();
+}
+
 void TestAutosaveAndLateShutdown(const bool finalOnly = false)
 {
     ScopedTestDirectory temporary;
@@ -256,6 +345,8 @@ void RunIdentityCrashChild(const std::filesystem::path& root)
 
 void RunIdentityPersistenceTests()
 {
+    TestConversationDoesNotEarnCompetence();
+    TestIndependentExecutionEarnsCompetence();
     TestAutosaveAndLateShutdown();
     TestFailedLoadAndReplacement();
 #ifdef _WIN32

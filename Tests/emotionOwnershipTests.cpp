@@ -588,6 +588,9 @@ void TestIdleActivitiesProduceWorkWithoutChat()
         const auto activity = session.CurrentActivity();
         Check(activity && activity->status == autonomy::ActivityStatus::Completed,
             "The completed independent activity was not exposed by its owner.");
+        for (const auto trait : {identity::Trait::Confidence, identity::Trait::Independence})
+            Check(Access::PendingDevelopment(session, trait) == 1.0F,
+                "The actual independent activity did not produce competence evidence.");
         if (action == "create")
         {
             const auto notes = directory.root / "RuntimeData/Workspace/Notes";

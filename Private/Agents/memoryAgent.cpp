@@ -368,6 +368,17 @@ LearnedFindingResult MemoryAgent::SubmitLearnedFinding(
         std::chrono::duration<double, std::milli>(
             std::chrono::steady_clock::now() - saveStarted).count()});
 
+    if (!wasAdded)
+    {
+        const auto entries = memory.LoadMemories();
+        const auto stored = std::find_if(entries.begin(), entries.end(),
+            [&](const memoryEntry& entry) { return entry.id == memoryId; });
+        if (stored == entries.end()) return LearnedFindingResult::AlreadyExists;
+        // Deduplication retains the original text. Embed that text, not the
+        // incoming restatement, including when the existing row has no vector.
+        decision.summary = stored->summary;
+    }
+
     Task task;
     task.router = &router;
     task.input = decision.summary;

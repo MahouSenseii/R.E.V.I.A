@@ -93,6 +93,8 @@ void RunIdentityPersistenceTests();
 void RunIdentityFinalSaveTests();
 void RunLearningDurabilityTests();
 void RunEmbeddingBackfillTests();
+void RunMemoryDedupTests();
+void RunBoundedFileReadTests();
 void RunSpeakerContinuityTests();
 void RunSpeechAttributionTests();
 void RunProfileActivationTests();

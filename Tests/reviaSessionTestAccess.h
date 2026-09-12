@@ -13,6 +13,9 @@ struct ReviaSessionTestAccess
     static AffectController& LegacyAffect(ReviaSession& session) { return session.affectController; }
     static identity::RelationshipRegistry& People(ReviaSession& session) { return session.relationships; }
 
+    static float PendingDevelopment(ReviaSession& session, identity::Trait trait)
+    { return session.developmentEngine.PendingEvidence(trait); }
+
     static void SampleLoad(ReviaSession& session, const resources::UsageSnapshot& usage)
     { session.UpdateResourceLoad(usage); }
 
