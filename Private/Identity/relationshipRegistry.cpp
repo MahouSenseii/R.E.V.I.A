@@ -192,7 +192,11 @@ RelationshipState RelationshipRegistry::Apply(const RelationshipEvent& event)
         fresh.entityId = event.entityId;
         found = snapshot.relationships.emplace(event.entityId, fresh).first;
     }
-    found->second = ApplyRelationshipEvent(found->second, event);
+    // The registry supplies the clock so ApplyRelationshipEvent stays pure. Seconds,
+    // matching the stamps the memory block already describes in words.
+    found->second = ApplyRelationshipEvent(found->second, event, {},
+        std::chrono::duration_cast<std::chrono::seconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count());
     frictionUpdatedAt[event.entityId] = std::chrono::steady_clock::now();
     return found->second;
 }

@@ -127,12 +127,23 @@ private:
         bool latencyCritical,
         double& outWaitMilliseconds);
     void ReleaseWorker(std::size_t index, std::size_t characters, double milliseconds);
+    // A strong reference to the current design client, or nullptr. Taken so callers
+    // can use the client without holding the pointer lock across a request.
+    [[nodiscard]] std::shared_ptr<QwenTtsClient> DesignClient() const;
+    void ReplaceDesignClient();
 
     mutable std::mutex mutex;
     std::condition_variable condition;
     std::vector<Worker> workers;
+    // Serializes design work so two designs never run at once. A render can take
+    // minutes, so nothing that has to stay responsive may wait on this.
     std::mutex designMutex;
-    std::unique_ptr<QwenTtsClient> designClient;
+    // Guards the pointer only, and is never held across a request. Cancellation takes
+    // its own strong reference under this lock and calls the client outside it, so
+    // stopping a design never queues behind the design it is trying to stop.
+    // Lock order, where both are taken: designMutex first.
+    mutable std::mutex designClientMutex;
+    std::shared_ptr<QwenTtsClient> designClient;
     speechSettings designSettings;
     bool shuttingDown = false;
 };

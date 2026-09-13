@@ -103,10 +103,15 @@ struct RelationshipLimits
 };
 
 // Applies evidence to a relationship. Pure: no clock, no storage, no I/O.
+//
+// nowEpochSeconds records when this contact happened, and is the caller's clock
+// rather than one read here, so this stays pure and a test can pin the time. Zero
+// means do not stamp, which is how every existing caller keeps its behaviour.
 [[nodiscard]] RelationshipState ApplyRelationshipEvent(
     RelationshipState state,
     const RelationshipEvent& event,
-    const RelationshipLimits& limits = {});
+    const RelationshipLimits& limits = {},
+    std::int64_t nowEpochSeconds = 0);
 
 // Time passing with no contact. Friction cools; grievance mostly does not; familiarity
 // is never lost, because forgetting someone you know is a memory problem, not a

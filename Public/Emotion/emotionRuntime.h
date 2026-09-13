@@ -9,6 +9,7 @@
 #include "Identity/relationshipState.h"
 #include "Runtime/affectTypes.h"
 
+#include <chrono>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -42,6 +43,14 @@ struct EmotionSnapshot
     EmotionVector emotion;
     MoodState mood;
     runtime::AffectSnapshot affect;
+    // What most recently caused this, in the stimulus's own words, or empty when
+    // nothing recent explains it.
+    //
+    // Read here rather than through a second call so a cause can never be paired with
+    // a feeling it did not produce. A prompt that states an emotion without its cause
+    // leaves the model to invent one, and an invented cause is indistinguishable from
+    // a hallucinated observation about the room.
+    std::string cause;
 };
 
 // Owns how Revia currently feels, and is the only thing allowed to change it.
@@ -81,6 +90,10 @@ public:
     [[nodiscard]] EmotionVector Emotion() const;
     [[nodiscard]] MoodState Mood() const;
     [[nodiscard]] EmotionSnapshot Current() const;
+    // How long a cause keeps explaining the feeling it produced. Past this it is
+    // history rather than the reason she feels something now, and repeating it would
+    // have her narrate an event that has stopped mattering.
+    static constexpr std::chrono::minutes causeLifetime{10};
     void SetMood(const MoodState& mood);
     void Reset();
 
@@ -112,6 +125,11 @@ private:
     MoodController moodController;
     std::chrono::steady_clock::time_point lastConversation = std::chrono::steady_clock::now();
     bool quietConversationObserved = false;
+    // The description of the stimulus that last actually moved her, not the whole
+    // explanation: the packet already states which emotions it produced, and saying
+    // so twice would let the two descriptions disagree.
+    std::string lastCause;
+    std::chrono::steady_clock::time_point lastCauseAt{};
 };
 
 } // namespace revia::emotion

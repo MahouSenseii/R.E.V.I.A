@@ -299,6 +299,28 @@ ReviaSession::ReviaSession()
            [this](const memory::RecallRequest& request, const std::string& currentInput)
            {
                return RecallConversation(request, currentInput);
+           },
+           [this]()
+           {
+               // Read here because this is where drives and the running activity
+               // live. Both stay empty unless there is genuinely something to say:
+               // a prompt asserting that she wants nothing would be a claim, and one
+               // naming a finished activity would have her interrupted by nothing.
+               ConversationRuntime::AutonomyContext context;
+               autonomy::DriveState currentDrives;
+               std::optional<autonomy::Activity> running;
+               {
+                   std::lock_guard autonomyLock(autonomyMutex);
+                   currentDrives = drives;
+                   running = runningActivity;
+               }
+               context.wanting = autonomy::DescribeWanting(currentDrives);
+               if (running && running->status == autonomy::ActivityStatus::Running &&
+                   !running->goal.empty())
+               {
+                   context.currentActivity = running->goal;
+               }
+               return context;
            })
 {
     appLogger.SetSink([this](const std::string& line)

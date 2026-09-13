@@ -56,6 +56,17 @@ std::string RenderEmotionSection(const ReviaStatePacket& packet)
             }
             section << ". These are simultaneous, not alternatives.";
         }
+
+        // The reason, when something recent actually produced this. Deliberately not
+        // offered on the calm branch above, which already states its own reason.
+        if (!packet.feelingCause.empty())
+        {
+            section << " What brought this on: " << packet.feelingCause;
+            if (packet.feelingCause.back() != '.')
+            {
+                section << '.';
+            }
+        }
     }
 
     if (packet.mood.IsIrritable())
@@ -70,6 +81,10 @@ std::string RenderEmotionSection(const ReviaStatePacket& packet)
     section << " This is an internal leaning, not a script. Speak from these feelings "
                "in ordinary first-person language, rather than reporting or explaining "
                "the machinery behind them. This is your state, never the user's state. "
+               "Where a reason is given above, that is the only reason you have. Do not "
+               "invent an event, a sound, a sensation, or something you noticed in order "
+               "to explain how you feel, and do not contradict the feelings stated here. "
+               "If no reason is given, you simply feel this way and can say so. "
                "Anger can sound angry: object, snap back, or be curt when it fits. Do not "
                "automatically hide a hurtful remark behind a laugh or cheerful closing. "
                "Never turn a feeling into coercion, a threat, targeted hate, or a claim "
@@ -118,7 +133,14 @@ std::string RenderStatePacket(const ReviaStatePacket& packet, const bool include
     {
         std::ostringstream relationship;
         relationship << "About the person you are speaking with: "
-            << packet.relationship.DescribeForPrompt()
+            << packet.relationship.DescribeForPrompt();
+        // Stated, never computed. The elapsed time is already in words for the same
+        // reason the memory block states its clock.
+        if (!packet.lastSpokeAt.empty())
+        {
+            relationship << " You last spoke " << packet.lastSpokeAt << ".";
+        }
+        relationship
             << " This is a long-running relationship, separate from how you feel this "
                "minute: you can be annoyed with someone you like, and civil with someone "
                "you do not.";
@@ -176,6 +198,21 @@ std::string RenderStatePacket(const ReviaStatePacket& packet, const bool include
     {
         section("Something you have not finished thinking about: " +
             packet.unresolvedThought + ".");
+    }
+
+    // WHAT SHE WANTS, AND WHAT SHE IS IN THE MIDDLE OF. Both omitted when there is
+    // nothing: rendering an empty drive state would assert that she wants nothing.
+    if (!packet.wanting.empty())
+    {
+        section("Left to yourself right now you are " + packet.wanting +
+            ". This is your own state and not a request: act on it only if it fits, "
+            "and do not turn it into a demand on the person you are talking to.");
+    }
+    if (!packet.currentActivity.empty())
+    {
+        section("You were in the middle of something when this turn arrived: " +
+            packet.currentActivity + ". Mention it only if it genuinely fits, and "
+            "never as a reason the person should wait.");
     }
 
     // PERCEPTION / RUNTIME CONTEXT. The exact leading phrase is load-bearing for the

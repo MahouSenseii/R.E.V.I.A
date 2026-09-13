@@ -156,12 +156,16 @@ VoiceOperationResult QwenTtsClient::RenderVocalizations(
             static_cast<int>(VocalizationBank::maximumVariantsPerKind));
         if (missingOnly)
         {
-            std::error_code error;
-            // The first variant standing in for the kind, matching how the bank stops
-            // at the first gap: a kind with clip 1 present is a kind it can play.
-            const std::filesystem::path first =
-                directory / (ToString(entry.kind) + "-1.wav");
-            if (std::filesystem::is_regular_file(first, error) && !error)
+            // Every requested variant, and every one of them playable. Standing in for
+            // the kind by its first clip left a partly rendered kind looking complete,
+            // so a bank that lost clips to a failed render could never repair itself.
+            bool complete = true;
+            for (int variant = 1; variant <= variants && complete; ++variant)
+            {
+                complete = IsPlayableWavFile(
+                    directory / (ToString(entry.kind) + "-" + std::to_string(variant) + ".wav"));
+            }
+            if (complete)
             {
                 continue;
             }

@@ -263,6 +263,9 @@ private:
     std::jthread shutdownWorker;
     std::jthread voiceWorker;
     std::jthread capabilityWorker;
+    // Device probes hold a microphone open for seconds. Separate from voiceWorker so
+    // a running test cannot be joined by an unrelated voice operation.
+    std::jthread deviceWorker;
     std::atomic<bool> shuttingDown = false;
     std::atomic<bool> voiceOperationRunning = false;
     // A reply that has been generated but is waiting for its audio to start, so the words

@@ -6,6 +6,8 @@
 
 #include <iostream>
 
+#include <string>
+
 namespace
 {
 using revia::tests::Check;
@@ -199,11 +201,151 @@ void TestTheLegacyPostureSentenceIsPreserved()
 }
 }
 
+void TestAFeelingReachesThePromptWithItsCause()
+{
+    using revia::emotion::EmotionRuntime;
+    using revia::emotion::Stimulus;
+    using revia::emotion::StimulusSource;
+
+    // Stated, not implied. Without this the prompt names a feeling and no reason, and a
+    // model asked to speak from a feeling it cannot account for supplies its own
+    // account -- which is how invented observations get into a reply.
+    ReviaStatePacket packet = BasePacket();
+    packet.emotion[Emotion::Irritation] = 0.44F;
+    packet.feelingCause = "the same correction arrived three times";
+    const std::string rendered = RenderStatePacket(packet);
+    Check(Contains(rendered, "Irritation at 44%"), "The feeling itself was lost.");
+    Check(Contains(rendered, "What brought this on: the same correction arrived three "
+        "times."), "A supplied cause never reached the prompt: " + rendered);
+    Check(Contains(rendered, "that is the only reason you have"),
+        "The prompt did not forbid substituting an invented reason.");
+    Check(Contains(rendered, "Do not invent an event, a sound, a sensation"),
+        "The prompt did not name the failure it is guarding against.");
+
+    // A cause is optional. Absence must read as absence, not as an empty clause.
+    ReviaStatePacket uncaused = BasePacket();
+    uncaused.emotion[Emotion::Irritation] = 0.44F;
+    const std::string bare = RenderStatePacket(uncaused);
+    Check(!Contains(bare, "What brought this on"),
+        "An absent cause rendered an empty reason clause.");
+    Check(Contains(bare, "you simply feel this way and can say so"),
+        "Without a cause the model was not told it may just feel this way.");
+
+    // Calm already states its own reason. A second one would contradict it.
+    ReviaStatePacket calm = BasePacket();
+    calm.emotion[Emotion::Boredom] = 0.02F;
+    calm.feelingCause = "something that no longer matters";
+    Check(!Contains(RenderStatePacket(calm), "What brought this on"),
+        "A cause was offered for a feeling she does not have.");
+
+    // The owner supplies it, and only alongside the state it explains.
+    EmotionRuntime runtime;
+    Check(runtime.Current().cause.empty(), "A fresh runtime invented a cause.");
+    Stimulus stimulus;
+    stimulus.source = StimulusSource::Conversation;
+    stimulus.eventType = "insult";
+    stimulus.description = "the user called her useless";
+    stimulus.importance = 1.0F;
+    stimulus.certainty = 1.0F;
+    stimulus.valence = -1.0F;
+    (void)runtime.Observe(stimulus, {});
+    const auto felt = runtime.Current();
+    Check(felt.cause == "the user called her useless",
+        "The runtime did not keep the cause of what it just felt.");
+    Check(!felt.emotion.IsCalm(),
+        "The fixture stimulus produced no feeling, so the cause proves nothing.");
+
+    // A reason outlives nothing. Once the feeling is gone there is nothing to explain.
+    for (int settle = 0; settle < 200 && !runtime.Current().emotion.IsCalm(); ++settle)
+    {
+        runtime.Settle(0.5F);
+    }
+    Check(runtime.Current().emotion.IsCalm() && runtime.Current().cause.empty(),
+        "A spent feeling left its reason behind, so she would explain a mood she is no "
+        "longer in.");
+
+    (void)runtime.Observe(stimulus, {});
+    Check(!runtime.Current().cause.empty(), "A later stimulus did not restore a cause.");
+    runtime.Reset();
+    Check(runtime.Current().cause.empty(), "Reset kept the reason for a cleared feeling.");
+}
+
+void TestWantingAndUnfinishedWorkReachThePrompt()
+{
+    // Wanting something, and being interrupted in the middle of something, are two of
+    // the things that most make a person read as present rather than summoned.
+    ReviaStatePacket packet = BasePacket();
+    packet.wanting = "a little bored and curious about something";
+    packet.currentActivity = "reading back over yesterday's notes";
+    const std::string rendered = RenderStatePacket(packet);
+    Check(Contains(rendered, "Left to yourself right now you are a little bored and "
+        "curious about something."), "What she wants never reached the prompt: " + rendered);
+    Check(Contains(rendered, "do not turn it into a demand"),
+        "A drive was supplied without the guard that stops it becoming a demand.");
+    Check(Contains(rendered, "You were in the middle of something when this turn arrived: "
+        "reading back over yesterday's notes."), "Unfinished work never reached the prompt.");
+    Check(Contains(rendered, "never as a reason the person should wait"),
+        "An interrupted activity was supplied without the guard against stalling.");
+
+    // The reason these could not be added before: an empty drive state rendered into a
+    // prompt asserts that she wants nothing, which is a claim rather than a gap.
+    const std::string quiet = RenderStatePacket(BasePacket());
+    Check(!Contains(quiet, "Left to yourself") && !Contains(quiet, "in the middle of"),
+        "A quiet drive state asserted that she wants nothing: " + quiet);
+}
+
+void TestSheKnowsHowLongItHasBeen()
+{
+    ReviaStatePacket packet = BasePacket();
+    packet.relationship.displayName = "Sam";
+    packet.relationship.interactionCount = 40;
+    packet.hasRelationship = true;
+    packet.lastSpokeAt = "yesterday 19:42";
+    const std::string rendered = RenderStatePacket(packet);
+    Check(Contains(rendered, "You last spoke yesterday 19:42."),
+        "Time since last contact never reached the prompt: " + rendered);
+
+    // Already in words. A raw stamp would invite the model to do date arithmetic, which
+    // is how a confident wrong date gets into a reply.
+    Check(!Contains(rendered, "17"), "A raw timestamp leaked into the prompt.");
+
+    ReviaStatePacket unknown = BasePacket();
+    unknown.relationship.interactionCount = 40;
+    unknown.hasRelationship = true;
+    Check(!Contains(RenderStatePacket(unknown), "You last spoke"),
+        "An unknown last contact rendered an empty clause.");
+
+    // The owner has to actually record it, which is the half that was missing: the
+    // field was persisted and loaded but never written.
+    RelationshipState state;
+    state.entityId = "local";
+    RelationshipEvent event;
+    event.entityId = "local";
+    event.positiveInteraction = 0.5F;
+    // The clock is the caller's, so this is pinned rather than read from the wall.
+    const RelationshipState after = ApplyRelationshipEvent(state, event, {}, 1000);
+    Check(after.interactionCount == 1 && after.lastSeenAt == "1000" &&
+        after.firstSeenAt == "1000",
+        "Recording contact did not stamp when it happened, so \"when did we last "
+        "speak\" has no answer to give.");
+    const RelationshipState again = ApplyRelationshipEvent(after, event, {}, 2000);
+    Check(again.firstSeenAt == "1000" && again.lastSeenAt == "2000",
+        "A later exchange overwrote when they first met, or did not move last-seen.");
+    // Existing callers that do not want a stamp keep their behaviour exactly.
+    const RelationshipState unstamped = ApplyRelationshipEvent(state, event);
+    Check(unstamped.interactionCount == 1 && unstamped.lastSeenAt.empty() &&
+        unstamped.firstSeenAt.empty(),
+        "Applying an event without a clock invented a timestamp.");
+}
+
 void RunStatePacketTests()
 {
     TestEveryTierWouldReceiveIdenticalState();
     TestSectionsAppearOnlyWhenTheyCarrySomethingReal();
     TestSimultaneousEmotionsSurviveIntoThePrompt();
+    TestAFeelingReachesThePromptWithItsCause();
+    TestWantingAndUnfinishedWorkReachThePrompt();
+    TestSheKnowsHowLongItHasBeen();
     TestMoodIsReportedSeparatelyFromTheMoment();
     TestCalmRendersAsCalmRatherThanAsNoise();
     TestTheLeakFilterStillCoversWhatThePacketSupplies();

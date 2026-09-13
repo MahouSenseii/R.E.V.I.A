@@ -156,13 +156,22 @@ void TestIndependentExecutionEarnsCompetence()
     decision.type = revia::autonomy::ActivityType::Computer;
     decision.subject = "Inspect an approved note";
     decision.reason = "Development fixture";
+    // Above ActivityLimits::minimumScore. A nomination the scheduler would decline
+    // never reaches an executor, so it could not prove anything about evidence.
+    decision.score = 0.9F;
     decision.operation = nlohmann::json{{"action", "read_text_file"}, {"source", note.string()}}.dump();
+    const auto status = [&session]
+    {
+        const auto activity = session.CurrentActivity();
+        Check(activity.has_value(), "The activity owner exposed no attempt at all.");
+        return activity->status;
+    };
     const auto before = session.CurrentDevelopment();
     for (int count = 1; count <= 4; ++count)
     {
         Access::AgeIdleBudget(session);
         Access::RunIdleActivity(session, decision);
-        Check(session.CurrentActivity()->status == revia::autonomy::ActivityStatus::Completed,
+        Check(status() == revia::autonomy::ActivityStatus::Completed,
             "Independent file inspection did not complete.");
         for (const Trait trait : {Trait::Confidence, Trait::Independence})
         {
@@ -179,7 +188,7 @@ void TestIndependentExecutionEarnsCompetence()
         Access::AgeIdleBudget(session);
         decision.operation = nlohmann::json{{"action", "read_text_file"}, {"source", path.string()}}.dump();
         Access::RunIdleActivity(session, decision);
-        Check(session.CurrentActivity()->status != revia::autonomy::ActivityStatus::Completed,
+        Check(status() != revia::autonomy::ActivityStatus::Completed,
             "Failed or blocked work reported completion.");
     }
     Access::AgeIdleBudget(session);

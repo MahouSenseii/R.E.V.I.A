@@ -122,6 +122,17 @@ std::optional<AppraisalOutcome> EmotionRuntime::Appraise(
         explanation << " \xE2\x80\x94 " << DescribeReadings(produced);
     }
     outcome.explanation = explanation.str();
+    // Kept so the prompt can say why she feels this. Only the stimulus's own words:
+    // the emotions it produced are already state, and stating them twice would let
+    // the two descriptions drift apart. Bounded because it reaches a prompt.
+    if (!stimulus.description.empty())
+    {
+        constexpr std::size_t MaximumCauseCharacters = 160;
+        lastCause = stimulus.description.size() > MaximumCauseCharacters
+            ? stimulus.description.substr(0, MaximumCauseCharacters)
+            : stimulus.description;
+        lastCauseAt = std::chrono::steady_clock::now();
+    }
     return outcome;
 }
 
@@ -133,6 +144,12 @@ void EmotionRuntime::Settle(const float emotionDecayRate)
     // annoyances still add up even as each individual one passes.
     emotion.Decay(emotionDecayRate);
     mood = moodController.Integrate(mood, emotion);
+    // A reason for a feeling that has faded is just an old event. Dropping it here
+    // keeps her from explaining a mood she is no longer in.
+    if (emotion.IsCalm())
+    {
+        lastCause.clear();
+    }
 }
 
 EmotionVector EmotionRuntime::Emotion() const
@@ -150,7 +167,11 @@ MoodState EmotionRuntime::Mood() const
 EmotionSnapshot EmotionRuntime::Current() const
 {
     std::lock_guard lock(mutex);
-    return {emotion, mood, ProjectAffect()};
+    // Expired rather than erased, so a cause that has simply aged out stops being
+    // offered without losing the state it belongs to.
+    const bool recent = !lastCause.empty() &&
+        std::chrono::steady_clock::now() - lastCauseAt < causeLifetime;
+    return {emotion, mood, ProjectAffect(), recent ? lastCause : std::string{}};
 }
 
 void EmotionRuntime::SetMood(const MoodState& inputMood)
@@ -165,6 +186,7 @@ void EmotionRuntime::Reset()
     emotion = EmotionVector{};
     lastConversation = std::chrono::steady_clock::now();
     quietConversationObserved = false;
+    lastCause.clear();
     // Mood deliberately survives a reset of momentary emotion, because a restart is not
     // a reason to have had a different afternoon.
 }

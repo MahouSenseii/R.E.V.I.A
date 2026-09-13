@@ -63,6 +63,18 @@ public:
     // provider rather than stored state: what she likes changes between turns, and a
     // copy taken at construction would go stale the first time evidence moved one.
     using PreferenceProvider = std::function<std::vector<identity::Preference>()>;
+    // What she currently wants and what she is in the middle of, already in words.
+    //
+    // A provider for the same reason the preference one is: both change between turns,
+    // and a copy taken at construction would describe a Revia who wanted something
+    // this morning. Prose rather than typed state so this header does not have to
+    // depend on the autonomy domain to describe it.
+    struct AutonomyContext
+    {
+        std::string wanting;
+        std::string currentActivity;
+    };
+    using AutonomyContextProvider = std::function<AutonomyContext()>;
     // Lets the session move drives from the same stimulus the appraisal saw, so wanting
     // and feeling cannot disagree about what happened.
     using StimulusObserver = std::function<void(const emotion::Stimulus&)>;
@@ -103,7 +115,8 @@ public:
         ScreenCaptureRequest screenCaptureRequest = {},
         PreferenceProvider preferenceProvider = {},
         SelfInquirySettingsProvider selfInquirySettingsProvider = {},
-        ConversationRecallHandler conversationRecallHandler = {});
+        ConversationRecallHandler conversationRecallHandler = {},
+        AutonomyContextProvider autonomyContextProvider = {});
 
     SessionResult Reply(
         const std::string& input,
@@ -274,6 +287,7 @@ private:
     ScreenCaptureRequest screenCaptureRequest;
     SelfInquirySettingsProvider selfInquirySettingsProvider;
     ConversationRecallHandler conversationRecall;
+    AutonomyContextProvider autonomyContextProvider;
     agents::ConversationQualityMonitor qualityMonitor;
     intelligence::HumanizationController humanization;
     intelligence::IntelligenceRouter intelligenceRouter;

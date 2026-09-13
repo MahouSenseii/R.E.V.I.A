@@ -48,6 +48,12 @@ struct DriveState
     [[nodiscard]] std::string Describe(float threshold = 0.4F) const;
 };
 
+// The same state in the words a person would use: "a little bored" rather than
+// "boredom 0.52". ToString returns persisted names, which are for files, not prompts.
+// Empty when nothing is strong enough to be worth mentioning, which is the ordinary
+// case and is a real answer rather than a gap.
+[[nodiscard]] std::string DescribeWanting(const DriveState& drives, float threshold = 0.4F);
+
 // How drives move.
 //
 // Everything decays. A drive that only ever rose would mean Revia becomes more restless

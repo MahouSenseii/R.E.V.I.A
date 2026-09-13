@@ -9,6 +9,7 @@
 #include "Internet/internetBackend.h"
 #include "Internet/internetLookupPolicy.h"
 #include "Internet/lookupQueryResolver.h"
+#include "Memory/temporalQuery.h"
 
 #include <algorithm>
 #include <cctype>
@@ -169,7 +170,8 @@ ConversationRuntime::ConversationRuntime(
     ScreenCaptureRequest inputScreenCaptureRequest,
     PreferenceProvider inputPreferenceProvider,
     SelfInquirySettingsProvider inputSelfInquirySettings,
-    ConversationRecallHandler inputConversationRecall)
+    ConversationRecallHandler inputConversationRecall,
+    AutonomyContextProvider inputAutonomyContext)
     : router(inputRouter),
       context(inputContext),
       coordinator(inputCoordinator),
@@ -190,7 +192,8 @@ ConversationRuntime::ConversationRuntime(
       stimulusObserver(std::move(inputStimulusObserver)),
       screenCaptureRequest(std::move(inputScreenCaptureRequest)),
       selfInquirySettingsProvider(std::move(inputSelfInquirySettings)),
-      conversationRecall(std::move(inputConversationRecall))
+      conversationRecall(std::move(inputConversationRecall)),
+      autonomyContextProvider(std::move(inputAutonomyContext))
 {
 }
 
@@ -370,6 +373,8 @@ std::string ConversationRuntime::BuildTurnPosture(
     packet.identity.displayName = profile.displayName;
     packet.emotion = current.emotion;
     packet.mood = current.mood;
+    // From the same snapshot as the emotion it explains, never a second read.
+    packet.feelingCause = current.cause;
     if (developmentProvider)
     {
         packet.development = developmentProvider();
@@ -388,6 +393,14 @@ std::string ConversationRuntime::BuildTurnPosture(
     const intelligence::HumanizationState social = humanization.Current();
     packet.currentInterest = social.currentInterest;
     packet.unresolvedThought = social.unresolvedThought;
+    if (autonomyContextProvider && !turnPolicy.publicAudience)
+    {
+        // Private only. What she wants and what she was in the middle of are local
+        // context, and a public turn already states that it has none.
+        AutonomyContext autonomy = autonomyContextProvider();
+        packet.wanting = std::move(autonomy.wanting);
+        packet.currentActivity = std::move(autonomy.currentActivity);
+    }
     packet.runtime.aiReviewEnabled = filters.bAiReviewEnabled;
     packet.runtime.capabilityDescription = turnPolicy.publicAudience
         ? "This public turn can only converse; private local capabilities and context "
@@ -403,6 +416,21 @@ std::string ConversationRuntime::BuildTurnPosture(
             : relationshipProvider();
         if (speaker.interactionCount > 0)
         {
+            // Described here, where the clock lives, rather than handed to the
+            // renderer as a timestamp for a model to do arithmetic on.
+            if (!speaker.lastSeenAt.empty())
+            {
+                try
+                {
+                    packet.lastSpokeAt = revia::memory::DescribeMoment(
+                        std::stoll(speaker.lastSeenAt), revia::memory::CurrentEpoch());
+                }
+                catch (const std::exception&)
+                {
+                    // An unparsable stamp is a missing answer, not a wrong one.
+                    packet.lastSpokeAt.clear();
+                }
+            }
             packet.relationship = std::move(speaker);
             packet.hasRelationship = true;
         }
@@ -969,15 +997,19 @@ SessionResult ConversationRuntime::Generate(
         }
     }
 
+    // A proactive reply waits here instead of entering history as soon as it is
+    // generated. AddMessage trims older turns to budget straight away, and the undo
+    // could only pop this message back off -- the turns it displaced were already
+    // gone. Holding it until delivery is certain is what keeps a cancelled opening
+    // from costing real conversation.
+    std::string undeliveredOpening;
     const auto finish = [&](SessionResult finished)
     {
         if (stopToken.stop_requested())
         {
             speech.StopSpeaking();
-            if (proactive && !finished.text.empty())
-            {
-                (void)context.RemoveLastMessageIf("assistant", finished.text);
-            }
+            // Nothing to undo: it never entered history.
+            undeliveredOpening.clear();
             finished.succeeded = false;
             finished.text.clear();
             finished.reason = "The autonomous response was cancelled by newer input.";
@@ -985,6 +1017,11 @@ SessionResult ConversationRuntime::Generate(
             finished.spokenAsFragments = false;
             setState(RuntimeState::Idle, "The autonomous response was cancelled.");
             return finished;
+        }
+        if (!undeliveredOpening.empty())
+        {
+            context.AddMessage("assistant", undeliveredOpening);
+            undeliveredOpening.clear();
         }
         // Read before ObserveOutcome for the same reason as above: the confidence that
         // decides whether this failure defeats or merely annoys her is the confidence she
@@ -1513,7 +1550,14 @@ SessionResult ConversationRuntime::Generate(
                 : "Reply ready for turn #" + std::to_string(currentTurn) + ".");
         if (!turnPolicy.publicAudience)
         {
-            context.AddMessage("assistant", output.response);
+            if (proactive)
+            {
+                undeliveredOpening = output.response;
+            }
+            else
+            {
+                context.AddMessage("assistant", output.response);
+            }
             // Recorded here, beside the one place a reply becomes part of this
             // conversation, so the tier a follow-up inherits is always the tier that
             // produced an answer the user actually received. A failed generation

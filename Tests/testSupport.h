@@ -2,7 +2,9 @@
 
 #include "Actions/actionTypes.h"
 
+#include <cstdint>
 #include <filesystem>
+#include <fstream>
 #include <stdexcept>
 #include <string>
 #include <system_error>
@@ -52,6 +54,39 @@ public:
 
     std::filesystem::path root;
 };
+
+// A short but genuinely playable WAV: RIFF/WAVE, a PCM fmt chunk, and a data chunk
+// whose declared samples are really present.
+//
+// Fixtures used to write the four bytes "RIFF", or a header with an empty data
+// chunk, because a clip only had to exist. It has to play now, so a bank cannot
+// count a failed render as a rendered sound.
+inline void WriteMinimalWav(const std::filesystem::path& path,
+    const std::uint32_t sampleBytes = 4)
+{
+    std::filesystem::create_directories(path.parent_path());
+    std::ofstream file(path, std::ios::binary | std::ios::trunc);
+    const auto little = [&file](const std::uint32_t value)
+    {
+        for (int shift = 0; shift < 32; shift += 8)
+        {
+            file.put(static_cast<char>((value >> shift) & 0xFF));
+        }
+    };
+    file.write("RIFF", 4);
+    little(36 + sampleBytes);
+    file.write("WAVEfmt ", 8);
+    little(16);
+    const unsigned char format[16] = {1, 0, 1, 0, 0x44, 0xAC, 0, 0,
+        0x88, 0x58, 1, 0, 2, 0, 16, 0};
+    file.write(reinterpret_cast<const char*>(format), sizeof(format));
+    file.write("data", 4);
+    little(sampleBytes);
+    for (std::uint32_t index = 0; index < sampleBytes; ++index)
+    {
+        file.put(static_cast<char>(index % 256));
+    }
+}
 
 } // namespace revia::tests
 

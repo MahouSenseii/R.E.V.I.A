@@ -51,8 +51,10 @@ void TestInterruptionUsesThePreparedAudioLifetime(const bool bargeIn)
 {
     ScopedTestDirectory directory;
     const auto clip = BankClip(directory.root);
-    const std::string original = "RIFF persistent fixture clip";
-    WriteBytes(clip, original);
+    // Real audio, because the bank only offers a clip it could actually play. The
+    // bytes are read back so the survival checks below still compare exact content.
+    revia::tests::WriteMinimalWav(clip);
+    const std::string original = ReadBytes(clip);
     const auto scratch = directory.root / "temporary-phrase.wav";
     WriteBytes(scratch, "temporary generated phrase");
 
@@ -98,8 +100,8 @@ void TestLatePreparationAfterBargeInPreservesTheBank()
 {
     ScopedTestDirectory directory;
     const auto clip = BankClip(directory.root);
-    const std::string original = "RIFF persistent late fixture clip";
-    WriteBytes(clip, original);
+    revia::tests::WriteMinimalWav(clip);
+    const std::string original = ReadBytes(clip);
 
     SpeechService service;
     SpeechServiceTestAccess::ConfigureWithoutWorkers(service, directory.root);

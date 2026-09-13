@@ -177,6 +177,10 @@ ReviaWindow::~ReviaWindow()
     {
         capabilityWorker.join();
     }
+    if (deviceWorker.joinable())
+    {
+        deviceWorker.join();
+    }
     session.Stop();
     if (voiceWorker.joinable())
     {
@@ -855,20 +859,29 @@ void ReviaWindow::RunMicrophoneTest()
     {
         return;
     }
+    if (deviceWorker.joinable())
+    {
+        deviceWorker.join();
+    }
     testMicrophoneButton->setEnabled(false);
     microphoneTestResultLabel->setText(QStringLiteral("Testing microphone..."));
-    // Synchronous and short. Running it on the UI thread keeps the device lifetime
-    // trivially correct, and the button is disabled for the few seconds it takes.
-    QApplication::processEvents();
-    const revia::speech::MicrophoneTestResult result = session.TestMicrophone(3, true);
-    const QString status = QString::fromStdString(result.status);
-    const QString message = QString::fromStdString(result.message);
-    microphoneTestResultLabel->setText(
-        (result.succeeded ? QStringLiteral("Microphone OK - ")
-                          : QStringLiteral("Microphone error: ")) + message);
-    AppendActivity(QStringLiteral("Microphone test (") + status +
-        QStringLiteral("): ") + message);
-    testMicrophoneButton->setEnabled(true);
+    // Three seconds of capture is long enough to freeze the window, so the device call
+    // runs on a worker and the result is applied back on the GUI thread.
+    deviceWorker = std::jthread([this]()
+    {
+        const revia::speech::MicrophoneTestResult result = session.TestMicrophone(3, true);
+        QMetaObject::invokeMethod(this, [this, result]()
+        {
+            const QString status = QString::fromStdString(result.status);
+            const QString message = QString::fromStdString(result.message);
+            microphoneTestResultLabel->setText(
+                (result.succeeded ? QStringLiteral("Microphone OK - ")
+                                  : QStringLiteral("Microphone error: ")) + message);
+            AppendActivity(QStringLiteral("Microphone test (") + status +
+                QStringLiteral("): ") + message);
+            testMicrophoneButton->setEnabled(!shuttingDown.load());
+        }, Qt::QueuedConnection);
+    });
 }
 
 void ReviaWindow::ToggleListening()

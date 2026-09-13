@@ -270,7 +270,8 @@ std::string RelationshipState::Describe() const
 RelationshipState ApplyRelationshipEvent(
     RelationshipState state,
     const RelationshipEvent& event,
-    const RelationshipLimits& limits)
+    const RelationshipLimits& limits,
+    const std::int64_t nowEpochSeconds)
 {
     // Both scale everything. An unimportant exchange the runtime is unsure about should
     // move a relationship almost not at all.
@@ -318,6 +319,19 @@ RelationshipState ApplyRelationshipEvent(
     state.familiarity = std::clamp(
         state.familiarity + limits.familiarityStep * weight, 0.0F, 1.0F);
     ++state.interactionCount;
+    // Stamped here because this is the one place contact is recorded. Both fields
+    // were persisted and loaded but never written, so "when did we last speak" had
+    // no answer to give. The caller supplies the clock: this function stays pure, and
+    // a zero means the caller did not want a stamp rather than the epoch.
+    if (nowEpochSeconds > 0)
+    {
+        const std::string now = std::to_string(nowEpochSeconds);
+        if (state.firstSeenAt.empty())
+        {
+            state.firstSeenAt = now;
+        }
+        state.lastSeenAt = now;
+    }
 
     // Warmth cannot outrun acquaintance.
     //

@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <array>
 #include <sstream>
+#include <utility>
+#include <vector>
 
 namespace revia::autonomy
 {
@@ -91,6 +93,71 @@ std::string DriveState::Describe(const float threshold) const
             description << (index + 1 == shown ? " and " : ", ");
         }
         description << ToString(active[index].second);
+    }
+    return description.str();
+}
+
+std::string DescribeWanting(const DriveState& drives, const float threshold)
+{
+    // Phrased as wanting rather than as a level, because that is what a drive is. A
+    // prompt that says "boredom 0.52" invites the model to report a number back at the
+    // user; one that says "a little bored" gives it something to act from.
+    const auto phrase = [](const Drive drive, const bool strong) -> const char*
+    {
+        switch (drive)
+        {
+            case Drive::Curiosity:
+                return strong ? "very curious about something" : "curious about something";
+            case Drive::Boredom:
+                return strong ? "properly bored" : "a little bored";
+            case Drive::Social:
+                return strong ? "really wanting company" : "in the mood for company";
+            case Drive::UnfinishedGoal:
+                return strong ? "nagged by something you left unfinished"
+                              : "aware of something you left unfinished";
+            case Drive::Exploration:
+                return strong ? "itching to look around" : "inclined to look around";
+            case Drive::Learning:
+                return strong ? "hungry to learn something" : "up for learning something";
+            case Drive::Creativity:
+                return strong ? "badly wanting to make something"
+                              : "in the mood to make something";
+            case Drive::Count:
+                break;
+        }
+        return "";
+    };
+
+    std::vector<std::pair<float, Drive>> active;
+    for (std::size_t index = 0; index < DriveCount; ++index)
+    {
+        if (drives.values[index] >= threshold)
+        {
+            active.emplace_back(drives.values[index], static_cast<Drive>(index));
+        }
+    }
+    if (active.empty())
+    {
+        return {};
+    }
+    std::sort(active.begin(), active.end(),
+        [](const auto& left, const auto& right)
+        {
+            // Ties broken by enum order so the same state always reads identically.
+            if (left.first != right.first) return left.first > right.first;
+            return static_cast<std::size_t>(left.second) < static_cast<std::size_t>(right.second);
+        });
+
+    std::ostringstream description;
+    // Two at most. A list of everything she faintly wants reads as a status dump.
+    const std::size_t shown = std::min<std::size_t>(active.size(), 2);
+    for (std::size_t index = 0; index < shown; ++index)
+    {
+        if (index > 0)
+        {
+            description << " and ";
+        }
+        description << phrase(active[index].second, active[index].first >= 0.7F);
     }
     return description.str();
 }

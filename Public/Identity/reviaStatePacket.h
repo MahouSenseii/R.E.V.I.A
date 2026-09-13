@@ -58,10 +58,23 @@ struct ReviaStatePacket
     DevelopmentState development;
     emotion::EmotionVector emotion;
     emotion::MoodState mood;
+    // Why she feels it, in the words of whatever caused it. Empty when nothing recent
+    // explains the current state, which is a real answer and not a gap.
+    //
+    // Supplied for the same reason every other section carries its grounding: a
+    // memory arrives with its confidence and an opinion with its strength, so a
+    // feeling should not be the one piece of state handed over as a bare number. A
+    // model told what it feels and not why has to invent a why.
+    std::string feelingCause;
 
     // The person she is talking to, when it is someone she knows.
     RelationshipState relationship;
     bool hasRelationship = false;
+    // When they last spoke, already in words -- "yesterday 19:42", "a few minutes
+    // ago". Described by the runtime rather than handed over as a timestamp, for the
+    // same reason the memory block states its clock: a model asked to work out how
+    // long ago something was produces a confident wrong answer.
+    std::string lastSpokeAt;
 
     std::vector<RelevantMemoryLine> memories;
 
@@ -72,11 +85,19 @@ struct ReviaStatePacket
     std::string currentInterest;
     std::string unresolvedThought;
 
+    // What she currently wants, and what she is in the middle of. Both already in
+    // words, built by the runtime from the drive and activity state it owns.
+    //
+    // Empty when there is nothing to say, which is why they can be here at all: an
+    // empty DriveState rendered into a prompt would assert that she wants nothing,
+    // which is a claim rather than a gap. Wanting something, and being interrupted in
+    // the middle of something, are two of the things that most make a person read as
+    // present rather than summoned.
+    std::string wanting;
+    std::string currentActivity;
+
     RuntimeSelfKnowledge runtime;
 
-    // Phase 6 will add drives and the current activity here. They are deliberately
-    // absent rather than stubbed: an empty DriveState rendered into a prompt would
-    // assert that she wants nothing, which is a claim rather than a gap.
 };
 
 // Renders the packet into the block the prompt builder receives.

@@ -296,6 +296,11 @@ if(BUILD_TESTING)
     endif()
 
     add_test(NAME Revia.Foundation COMMAND ReviaTests)
+    # The only deterministic owner suite the default run does not reach. It
+    # disables periodic saving, so it must own its process to prove the final
+    # save alone persists identity. RunNativeDesktopTests stays unregistered on
+    # purpose: it synthesizes real keyboard and mouse input.
+    add_test(NAME Revia.IdentityFinalSave COMMAND ReviaTests --identity-final-save)
     find_program(REVIA_NODE_EXECUTABLE NAMES node node.exe)
     if(REVIA_NODE_EXECUTABLE)
         add_test(

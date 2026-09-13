@@ -3,6 +3,10 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <cstdint>
+#include <fstream>
+#include <string_view>
+#include <system_error>
 #include <unordered_map>
 
 namespace revia::speech
@@ -171,6 +175,60 @@ std::string StyleInstruction(const VocalizationKind kind)
             return "A calm audible exhale. Nonverbal vocal sound only, no words.";
     }
     return "A short, genuine, bright laugh. Nonverbal vocal sound only, no words.";
+}
+
+bool IsPlayableWavFile(const std::filesystem::path& path)
+{
+    std::error_code error;
+    if (!std::filesystem::is_regular_file(path, error) || error)
+    {
+        return false;
+    }
+    const std::uintmax_t size = std::filesystem::file_size(path, error);
+    // 44 bytes is the smallest canonical WAV header. Anything shorter cannot even
+    // describe audio, let alone contain any.
+    if (error || size < 44)
+    {
+        return false;
+    }
+    std::ifstream file(path, std::ios::binary);
+    std::array<char, 12> header{};
+    if (!file.read(header.data(), header.size()))
+    {
+        return false;
+    }
+    if (std::string_view(header.data(), 4) != "RIFF" ||
+        std::string_view(header.data() + 8, 4) != "WAVE")
+    {
+        return false;
+    }
+
+    // Walk the chunk list for a data chunk whose declared bytes are actually present.
+    // A render killed part way through leaves a valid header over a short or empty
+    // data chunk, which is exactly the case a name-only check cannot see.
+    std::uintmax_t offset = 12;
+    while (offset + 8 <= size)
+    {
+        std::array<char, 8> chunk{};
+        file.seekg(static_cast<std::streamoff>(offset));
+        if (!file.read(chunk.data(), chunk.size()))
+        {
+            return false;
+        }
+        std::uint32_t length = 0;
+        for (int byte = 3; byte >= 0; --byte)
+        {
+            length = (length << 8) |
+                static_cast<unsigned char>(chunk[static_cast<std::size_t>(4 + byte)]);
+        }
+        if (std::string_view(chunk.data(), 4) == "data")
+        {
+            return length > 0 && offset + 8 + static_cast<std::uintmax_t>(length) <= size;
+        }
+        // Chunks are word aligned, so an odd length carries one pad byte.
+        offset += 8 + static_cast<std::uintmax_t>(length) + (length % 2);
+    }
+    return false;
 }
 
 std::vector<VocalizationKind> AllVocalizationKinds()
@@ -575,8 +633,10 @@ void VocalizationBank::Refresh()
             const std::filesystem::path candidate =
                 root / (prefix + std::to_string(index) + ".wav");
             // Stop at the first gap rather than scanning the whole range: variants are
-            // written in order, and a gap means rendering stopped there.
-            if (!std::filesystem::is_regular_file(candidate, error))
+            // written in order, and a gap means rendering stopped there. A file that
+            // exists but carries no audio is a gap too, or the bank would keep asking
+            // for a clip that plays as silence and never be rebuilt.
+            if (!IsPlayableWavFile(candidate))
             {
                 break;
             }

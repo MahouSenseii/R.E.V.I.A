@@ -27,8 +27,11 @@ void QwenTtsPool::Configure(const speechSettings& settings)
     designSettings.qwenPort = std::min(65535, settings.qwenPort + 32);
     designSettings.qwenDevice = devices.front();
     designSettings.qwenDevices = {designSettings.qwenDevice};
-    designClient = std::make_unique<QwenTtsClient>();
-    designClient->Configure(designSettings);
+    {
+        std::lock_guard designClientLock(designClientMutex);
+        designClient = std::make_shared<QwenTtsClient>();
+        designClient->Configure(designSettings);
+    }
     for (const std::string& device : devices)
     {
         if (device.empty() || !seen.insert(device).second ||
@@ -139,6 +142,28 @@ VoiceOperationResult QwenTtsPool::PrepareVoice(const VoicePreset& preset)
     return aggregate;
 }
 
+std::shared_ptr<QwenTtsClient> QwenTtsPool::DesignClient() const
+{
+    std::lock_guard designClientLock(designClientMutex);
+    return designClient;
+}
+
+void QwenTtsPool::ReplaceDesignClient()
+{
+    // Never while shutting down: Shutdown clears the client deliberately, and putting
+    // a fresh worker back afterwards would leave one running with nothing to stop it.
+    // Shutdown and the design operations both hold designMutex, so this cannot race
+    // with the clear; shuttingDown is read under the lock that owns it.
+    {
+        std::lock_guard lock(mutex);
+        if (shuttingDown) return;
+    }
+    auto replacement = std::make_shared<QwenTtsClient>();
+    replacement->Configure(designSettings);
+    std::lock_guard designClientLock(designClientMutex);
+    designClient = std::move(replacement);
+}
+
 VoiceOperationResult QwenTtsPool::RenderVocalizations(
     const std::filesystem::path& presetDirectory,
     const std::vector<QwenTtsClient::VocalizationRequest>& kinds,
@@ -146,17 +171,17 @@ VoiceOperationResult QwenTtsPool::RenderVocalizations(
     const bool missingOnly)
 {
     std::lock_guard designLock(designMutex);
-    if (designClient == nullptr)
+    const std::shared_ptr<QwenTtsClient> client = DesignClient();
+    if (client == nullptr)
         return {false, "No Qwen3-TTS worker is configured.", {}, -1.0};
-    VoiceOperationResult result = designClient->RenderVocalizations(
+    VoiceOperationResult result = client->RenderVocalizations(
         presetDirectory, kinds, language, missingOnly);
     result.workerId = "voice-design-worker";
     // Released exactly as DesignVoice releases it. Rendering a bank is a one-off cost
     // at preset creation, and holding the design model resident afterwards would take
     // memory from the conversational workers for something that will not run again.
-    designClient->Shutdown();
-    designClient = std::make_unique<QwenTtsClient>();
-    designClient->Configure(designSettings);
+    client->Shutdown();
+    ReplaceDesignClient();
     return result;
 }
 
@@ -167,16 +192,16 @@ VoiceOperationResult QwenTtsPool::DesignVoice(
     const std::string& outputPath)
 {
     std::lock_guard designLock(designMutex);
-    if (designClient == nullptr)
+    const std::shared_ptr<QwenTtsClient> client = DesignClient();
+    if (client == nullptr)
         return {false, "No Qwen3-TTS worker is configured.", {}, -1.0};
-    VoiceOperationResult result = designClient->DesignVoice(
+    VoiceOperationResult result = client->DesignVoice(
         text, description, language, outputPath);
     result.workerId = "voice-design-worker";
     // VoiceDesign is deliberately isolated and on-demand. Releasing it cannot evict
     // either persistent conversational clone worker.
-    designClient->Shutdown();
-    designClient = std::make_unique<QwenTtsClient>();
-    designClient->Configure(designSettings);
+    client->Shutdown();
+    ReplaceDesignClient();
     return result;
 }
 
@@ -321,8 +346,13 @@ void QwenTtsPool::CancelActiveRequests()
         for (Worker& worker : workers) clients.push_back(worker.client.get());
     }
     for (QwenTtsClient* client : clients) client->CancelActiveRequest();
-    std::lock_guard designLock(designMutex);
-    if (designClient) designClient->CancelActiveRequest();
+    // Deliberately not designMutex: a design or bank render holds that for the whole
+    // request, so waiting on it here would mean cancellation arrived only once the
+    // work it was meant to stop had already finished.
+    if (const std::shared_ptr<QwenTtsClient> design = DesignClient())
+    {
+        design->CancelActiveRequest();
+    }
 }
 
 void QwenTtsPool::RequestShutdown()
@@ -351,9 +381,16 @@ void QwenTtsPool::Shutdown()
     }
     condition.notify_all();
     for (auto& client : clients) client->Shutdown();
+    // Taken after RequestShutdown has cancelled, so an in-flight design is already
+    // unwinding and this waits only for it to return rather than for it to complete.
     std::lock_guard designLock(designMutex);
-    if (designClient) designClient->Shutdown();
-    designClient.reset();
+    std::shared_ptr<QwenTtsClient> design;
+    {
+        std::lock_guard designClientLock(designClientMutex);
+        design = std::move(designClient);
+        designClient.reset();
+    }
+    if (design) design->Shutdown();
 }
 
 std::size_t SelectIdleVoiceWorker(

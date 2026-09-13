@@ -6,6 +6,7 @@
 #include <QHBoxLayout>
 #include <QHeaderView>
 #include <QLabel>
+#include <QMetaObject>
 #include <QPixmap>
 #include <QPushButton>
 #include <QSettings>
@@ -104,6 +105,17 @@ VisionPanel::VisionPanel(revia::runtime::ReviaSession& inputSession, QWidget* pa
     Refresh();
 }
 
+VisionPanel::~VisionPanel()
+{
+    // The worker holds the camera and this panel's session reference. Joining here
+    // rather than leaving it to the member's own destructor keeps the object whole
+    // for as long as the capture can still touch it.
+    if (captureWorker.joinable())
+    {
+        captureWorker.join();
+    }
+}
+
 void VisionPanel::Refresh()
 {
     RenderMonitors();
@@ -193,25 +205,49 @@ void VisionPanel::RenderCameras()
         SetStatus("The camera saved from a previous session is not attached. Pick a "
                   "camera; Revia will not use a different one on its own.", true);
     }
-    cameraCombo->setEnabled(!cameras.empty());
-    captureButton->setEnabled(allowed && !cameras.empty());
+    cameraCombo->setEnabled(!cameras.empty() && !cameraCaptureRunning);
+    captureButton->setEnabled(allowed && !cameras.empty() && !cameraCaptureRunning);
 }
 
 void VisionPanel::CaptureCameraFrame()
 {
+    if (cameraCaptureRunning)
+    {
+        return;
+    }
+    if (captureWorker.joinable())
+    {
+        captureWorker.join();
+    }
+    cameraCaptureRunning = true;
     captureButton->setEnabled(false);
+    cameraCombo->setEnabled(false);
     SetStatus("Opening the camera for one frame...");
-    // Synchronous and deliberately brief. A capture is around a second and a half, and
-    // the camera light going out is the signal that it is over.
+
+    // The selection is read here, on the GUI thread, and copied. A capture takes over a
+    // second of synchronous device work including warm-up frames, which is long enough
+    // to freeze the window, so only the device call moves off this thread.
     revia::vision::CameraSelection selection;
     selection.symbolicLink = cameraCombo->currentData().toString().toStdString();
     selection.index = cameraCombo->currentIndex() + 1;
     // A person picked this from a list. That is what makes substitution unacceptable
     // rather than merely undesirable.
     selection.explicitChoice = !selection.symbolicLink.empty();
-    const revia::vision::CameraFrame frame =
-        session.CaptureCameraFrame(false, selection);
+
+    captureWorker = std::jthread([this, selection]()
+    {
+        const revia::vision::CameraFrame frame =
+            session.CaptureCameraFrame(false, selection);
+        QMetaObject::invokeMethod(this, [this, frame]() { ShowCameraFrame(frame); },
+            Qt::QueuedConnection);
+    });
+}
+
+void VisionPanel::ShowCameraFrame(const revia::vision::CameraFrame& frame)
+{
+    cameraCaptureRunning = false;
     captureButton->setEnabled(true);
+    cameraCombo->setEnabled(true);
 
     if (!frame.succeeded)
     {

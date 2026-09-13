@@ -1258,6 +1258,20 @@ void TestFilesystemExecutorAndAudit()
     const auto largeResult = executor.Execute(largeRequest, policy.Evaluate(largeRequest));
     Check(!largeResult.succeeded, "Oversized content bypassed the read limit.");
 
+    // The public path, at the boundary itself. A file exactly at the limit must
+    // come back whole, and one byte more must be refused rather than truncated:
+    // the metadata check alone could not promise either once a file can grow.
+    WriteBytes(approved / "exact.txt", std::string(32, 'e'));
+    auto exactRequest = Request(ActionType::ReadTextFile, approved / "exact.txt");
+    const auto exactResult = executor.Execute(exactRequest, policy.Evaluate(exactRequest));
+    Check(exactResult.succeeded && exactResult.content == std::string(32, 'e'),
+        "A file exactly at the read limit was rejected or truncated.");
+    WriteBytes(approved / "over.txt", std::string(33, 'o'));
+    auto overRequest = Request(ActionType::ReadTextFile, approved / "over.txt");
+    const auto overResult = executor.Execute(overRequest, policy.Evaluate(overRequest));
+    Check(!overResult.succeeded && overResult.content.empty(),
+        "One byte past the read limit was accepted or partially returned.");
+
     auto dryRun = Request(ActionType::CreateDirectory, approved / "not-created");
     dryRun.dryRun = true;
     const auto dryDecision = policy.Evaluate(dryRun);
@@ -2680,10 +2694,15 @@ void RunInternetLookupLive()
             (outcome.result.message.empty() ? outcome.policy.reason : outcome.result.message));
 
     const nlohmann::json record = ReadAuditResult(auditPath, request.id);
+    // The bounded query is recorded deliberately: a lookup nobody can review later is
+    // not an audited capability. This assertion used to require the opposite, which
+    // stopped matching the logger once internet_activity was added. Typed desktop text
+    // is the thing that stays out of the log, and value_length still stands in for it.
     Check(record.is_object() && record.at("action") == "web_search" &&
         record.at("value_length") == request.value.size() &&
-        record.dump().find(request.value) == std::string::npos,
-        "The live lookup was not audited without retaining its query text.");
+        record.at("internet_activity").at("query") == request.value &&
+        record.at("internet_activity").at("query_truncated") == false,
+        "The live lookup did not audit its bounded query alongside its length.");
     std::cout << outcome.result.message << '\n';
     for (const std::string& source : outcome.result.entries)
     {
@@ -5789,8 +5808,8 @@ void TestVocalizationCuesAreQueuedAsSoundsInTheirOwnPlace()
     const std::filesystem::path scratch = directory.root / "phrase-1.wav";
     const auto write = [](const std::filesystem::path& path)
     {
-        std::ofstream file(path, std::ios::binary | std::ios::trunc);
-        file << "RIFF";
+        // Real audio: the bank only counts a clip it could actually play.
+        revia::tests::WriteMinimalWav(path);
     };
     write(clip);
     write(scratch);
@@ -5971,6 +5990,70 @@ void TestCreatingAVoicePresetActuallyRendersItsBank()
 // Unit 4.3D. ISSUE-REVIA-0013: the clip bank had no producer. The Python
 // /v1/vocalizations endpoint existed and the C++ caller did not, so every preset was
 // created without nonverbal clips and every cue fell silent.
+void TestUnplayableClipsAreNotARenderedBank()
+{
+    using revia::speech::IsPlayableWavFile;
+    using revia::speech::VocalizationBank;
+    using revia::speech::VocalizationKind;
+    using revia::tests::WriteMinimalWav;
+
+    ScopedTestDirectory directory;
+    const std::filesystem::path preset = directory.root / "voice";
+    const std::filesystem::path clips = preset / "vocalizations";
+    std::filesystem::create_directories(clips);
+
+    // What a failed or interrupted render actually leaves behind. Each of these is a
+    // regular file with the right name, which is all the bank used to ask for.
+    const std::filesystem::path empty = clips / "sigh-1.wav";
+    { std::ofstream file(empty, std::ios::binary | std::ios::trunc); }
+    Check(!IsPlayableWavFile(empty), "An empty file was accepted as playable audio.");
+
+    const std::filesystem::path headerOnly = clips / "gasp-1.wav";
+    WriteMinimalWav(headerOnly, 0);
+    Check(!IsPlayableWavFile(headerOnly),
+        "A header declaring no samples was accepted as playable audio.");
+
+    const std::filesystem::path truncated = clips / "hmm-1.wav";
+    WriteMinimalWav(truncated, 64);
+    std::filesystem::resize_file(truncated, 48);
+    Check(!IsPlayableWavFile(truncated),
+        "A file whose declared samples are missing was accepted as playable audio.");
+
+    const std::filesystem::path notWav = clips / "breath-1.wav";
+    WriteBytes(notWav, "this is not audio at all, but it is long enough to look like it");
+    Check(!IsPlayableWavFile(notWav), "A non-RIFF file was accepted as playable audio.");
+
+    const std::filesystem::path good = clips / "laugh-1.wav";
+    WriteMinimalWav(good);
+    Check(IsPlayableWavFile(good), "A complete WAV was rejected.");
+
+    VocalizationBank bank(preset);
+    bank.Refresh();
+    Check(bank.Has(VocalizationKind::Laugh) && bank.VariantCount(VocalizationKind::Laugh) == 1,
+        "The bank did not accept the one clip that can actually play.");
+    for (const VocalizationKind kind : {VocalizationKind::Sigh, VocalizationKind::Gasp,
+        VocalizationKind::Hmm, VocalizationKind::Breath})
+    {
+        Check(!bank.Has(kind) && bank.Next(kind).empty(),
+            "A clip that cannot play was offered as a rendered sound, so the bank would "
+            "ask for silence and never rebuild itself.");
+    }
+
+    // The second half of the same defect: a kind counted as rendered is never repaired.
+    const auto missing = bank.MissingKinds();
+    Check(std::find(missing.begin(), missing.end(), VocalizationKind::Sigh) != missing.end(),
+        "A kind whose only clip is unplayable was not reported as missing, so a bank "
+        "damaged by a failed render could never be rendered again.");
+
+    // A partly rendered kind is incomplete, not finished. Standing in for the kind by
+    // its first clip let a bank that lost later variants look complete forever.
+    WriteMinimalWav(clips / "laugh-2.wav", 0);
+    VocalizationBank partial(preset);
+    partial.Refresh();
+    Check(partial.VariantCount(VocalizationKind::Laugh) == 1,
+        "An unplayable later variant was counted, so rotation would hit silence.");
+}
+
 void TestVocalizationBankHasAProducerAndItIsIdempotent()
 {
     using revia::speech::QwenTtsClient;
@@ -6009,17 +6092,12 @@ void TestVocalizationBankHasAProducerAndItIsIdempotent()
     Check(!empty.Has(VocalizationKind::SoftLaugh),
         "An empty directory reported a usable chuckle.");
 
-    // A minimal but valid RIFF/WAVE file, because the bank must accept what the
-    // renderer writes and nothing else about the format matters here.
+    // A minimal but genuinely playable RIFF/WAVE file, because the bank must accept
+    // what the renderer writes. It previously declared an empty data chunk, which is
+    // now correctly read as a clip that would only ever play as silence.
     const auto writeWav = [](const std::filesystem::path& path)
     {
-        std::ofstream file(path, std::ios::binary | std::ios::trunc);
-        const char header[] = "RIFF\x24\x00\x00\x00WAVEfmt ";
-        file.write(header, 16);
-        const unsigned char rest[20] = {16, 0, 0, 0, 1, 0, 1, 0, 0x44, 0xAC,
-            0, 0, 0x88, 0x58, 1, 0, 2, 0, 16, 0};
-        file.write(reinterpret_cast<const char*>(rest), sizeof(rest));
-        file.write("data\x00\x00\x00\x00", 8);
+        revia::tests::WriteMinimalWav(path);
     };
     writeWav(clips / "soft-laugh-1.wav");
     writeWav(clips / "soft-laugh-2.wav");
@@ -8434,8 +8512,7 @@ void TestVocalizationParsingAndGating()
     std::filesystem::create_directories(clips);
     for (const std::string name : {"laugh-1.wav", "laugh-2.wav", "hmm-1.wav", "hmm-3.wav"})
     {
-        std::ofstream file(clips / name, std::ios::binary);
-        file << "RIFF";
+        revia::tests::WriteMinimalWav(clips / name);
     }
     VocalizationBank bank(root / "revia-bright");
     Check(bank.VariantCount(VocalizationKind::Laugh) == 2, "Bank variants were not found.");
@@ -8834,6 +8911,7 @@ int main(const int argc, char** argv)
         TestOnlySoundEffectsSurviveInAsterisks();
         TestHardFilterStripsStageDirectionsFromACompletedReply();
         TestSpeechNormalizerKeepsTheSoundAndDropsTheMarkdown();
+        TestUnplayableClipsAreNotARenderedBank();
         TestVocalizationBankHasAProducerAndItIsIdempotent();
         TestCreatingAVoicePresetActuallyRendersItsBank();
         TestVocalizationCuesAreQueuedAsSoundsInTheirOwnPlace();

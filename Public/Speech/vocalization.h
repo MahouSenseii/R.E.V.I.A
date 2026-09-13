@@ -30,6 +30,15 @@ enum class VocalizationKind
 [[nodiscard]] std::string StyleInstruction(VocalizationKind kind);
 [[nodiscard]] std::vector<VocalizationKind> AllVocalizationKinds();
 
+// Whether a file is a WAV that actually carries audio.
+//
+// A clip that exists is not a clip that plays. An interrupted or failed render
+// leaves a correctly named file that is empty, header-only, or truncated, and a bank
+// that counts it as present will ask for silence and never repair itself. Checks the
+// RIFF/WAVE header and requires a data chunk whose declared samples are really in the
+// file. This is a completeness check, not a decoder: it does not validate the format.
+[[nodiscard]] bool IsPlayableWavFile(const std::filesystem::path& path);
+
 // Maps one written form to a kind. Accepts the synonyms a small local model actually
 // emits, not only the canonical spelling.
 [[nodiscard]] bool VocalizationFromWord(const std::string& word, VocalizationKind& outKind);
