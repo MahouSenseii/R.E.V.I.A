@@ -3,6 +3,7 @@
 
 #include "Memory/sensitiveContent.h"
 #include "Agents/conversationStylePolicy.h"
+#include "Actions/actionTypes.h"
 #include "Planning/goalPlanner.h"
 #include <httplib.h>
 #include <nlohmann/json.hpp>
@@ -1016,15 +1017,23 @@ void llamaCppService::SetPosture(std::string posture)
 
 responseOutput llamaCppService::GenerateActionProposal(const std::string& userRequest) const
 {
+    // One vocabulary, shared with the goal planner. Hardcoding it here left the
+    // natural-language route unable to name actions the parser, the policy, the
+    // executors and the slash commands had all supported for some time, so asking
+    // for something Revia could do returned "unknown". Naming an action grants no
+    // authority: every proposal still passes capability policy, risk ceiling and
+    // confirmation exactly as the equivalent slash command does.
     const std::string plannerPrompt =
         "You are Revia's constrained action planner. Return exactly one JSON object and no markdown. "
-        "Allowed actions are list_directory, read_text_file, create_directory, copy_file, move_file, "
-        "rename_path, move_to_recycle_bin, inspect_window, focus_window, set_control_text, and "
-        "invoke_control. Filesystem actions use an absolute Windows path in source or path. "
-        "copy_file, move_file, and rename_path also require destination. Never emit shell commands, "
-        "scripts, multiple actions, or explanations. Desktop actions require application (an exe name) "
-        "and may use window_title. set_control_text requires control and value; invoke_control requires "
-        "control. If the request cannot map to one allowed action, "
+        "Allowed actions are " + revia::actions::ActionVocabulary() + ". "
+        "Filesystem actions use an absolute Windows path in source or path; copy_file, move_file, "
+        "and rename_path also require destination. Window actions require application (an exe name) "
+        "and may use window_title; set_control_text requires control and value, and invoke_control "
+        "requires control. launch_application requires application and may name one file in source. "
+        "Pointer actions use integer x and y, drag_pointer also end_x and end_y, scroll_pointer uses "
+        "scroll, and button may be left, right, or middle. press_keys uses keys; type_text uses text. "
+        "web_search uses query, which is a search query and never a URL. Never emit shell commands, "
+        "scripts, multiple actions, or explanations. If the request cannot map to one allowed action, "
         "return {\"action\":\"unknown\",\"reason\":\"brief reason\"}.";
     return GeneratePlannerResponse(plannerPrompt, userRequest, 256);
 }

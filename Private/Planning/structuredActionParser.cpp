@@ -156,6 +156,21 @@ ParsedAction StructuredActionParser::ParseObject(const nlohmann::json& data)
             return result;
         }
 
+        if (result.request.type == actions::ActionType::WebSearch)
+        {
+            // A query, never a path or a URL. The slash-command route has always put
+            // it in value; this is the same field reached from JSON, so naming
+            // web_search in a planner vocabulary stops being a promise the parser
+            // then breaks.
+            result.request.value = data.value("query", data.value("value", std::string{}));
+            if (result.request.value.empty())
+            {
+                return Error(true, "A web search requires a query.");
+            }
+            result.succeeded = true;
+            return result;
+        }
+
         std::string source;
         if (data.contains("source") && data["source"].is_string())
         {

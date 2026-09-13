@@ -294,6 +294,30 @@ void TestParser()
 {
     revia::planning::StructuredActionParser parser;
 
+    // Every action a planner is told it may use has to survive the parser it will be
+    // read by. Both planners take their vocabulary from ActionVocabulary, so anything
+    // named there and rejected here is a promise the runtime cannot keep.
+    const std::string vocabulary = revia::actions::ActionVocabulary();
+    for (const revia::actions::ActionType type : revia::actions::AllActionTypes())
+    {
+        const std::string name = revia::actions::ToString(type);
+        Check(vocabulary.find(name) != std::string::npos,
+            "An executable action is missing from the planner vocabulary: " + name);
+    }
+    const auto search = parser.ParseJson(
+        R"({"action":"web_search","query":"eclipsing binary stars"})");
+    Check(search.recognized && search.succeeded &&
+        search.request.type == ActionType::WebSearch &&
+        search.request.value == "eclipsing binary stars",
+        "A web search named in the planner vocabulary could not be parsed from JSON.");
+    Check(!parser.ParseJson(R"({"action":"web_search"})").succeeded,
+        "A web search with no query was accepted.");
+    const auto typing = parser.ParseJson(
+        R"({"action":"type_text","application":"notepad.exe","text":"hello"})");
+    Check(typing.recognized && typing.succeeded &&
+        typing.request.type == ActionType::TypeText && typing.request.value == "hello",
+        "A synthesized-input action named in the vocabulary did not parse.");
+
     const auto command = parser.ParseCommand(
         R"(/copy "C:\Test Area\one.txt" "C:\Test Area\two.txt")");
     Check(command.recognized && command.succeeded, "Quoted direct command was not parsed.");

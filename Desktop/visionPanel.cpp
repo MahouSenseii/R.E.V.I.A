@@ -246,16 +246,16 @@ void VisionPanel::CaptureCameraFrame()
 void VisionPanel::ShowCameraFrame(const revia::vision::CameraFrame& frame)
 {
     cameraCaptureRunning = false;
-    captureButton->setEnabled(true);
-    cameraCombo->setEnabled(true);
+    // Re-read rather than simply handing the controls back. Permission can be
+    // withdrawn and a camera can be unplugged while a capture is in flight, and
+    // enabling capture unconditionally would offer a camera that is no longer there
+    // or no longer allowed. RenderCameras owns that decision for every other caller.
+    RenderCameras();
 
     if (!frame.succeeded)
     {
         preview->setText("No frame. " + QString::fromStdString(frame.reason));
         SetStatus(QString::fromStdString(frame.reason), true);
-        // The device list is re-read on failure so a camera that was unplugged stops
-        // being offered, rather than staying selectable and failing again.
-        Refresh();
         return;
     }
 
