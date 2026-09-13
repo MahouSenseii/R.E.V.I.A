@@ -16,20 +16,23 @@ autonomy::ActivityOutcome ReviaSession::ExecuteComputer(
     }
     auto& request = parsed.request;
     // These activities may explore and make things in an approved scope. Moving or
-    // deleting user work, web requests and arbitrary commands have separate owners.
-    switch (request.type)
+    // deleting user work, invoking named UI controls, web requests and arbitrary
+    // commands still have separate owners and are not reachable from here.
+    //
+    // Desktop control is reachable, but only while its own autonomous permission is
+    // granted. That permission was previously unreachable from this path: every
+    // pointer, key and launch request was cancelled here before policy was ever
+    // consulted, so turning it on changed nothing (ISSUE-REVIA-0035,
+    // DECISION-REVIA-0005). This gate is not the enforcement. CapabilityPolicy
+    // re-checks the autonomous permission, every per-action switch, the approved
+    // applications and the command-surface boundary, and refuses on its own; this
+    // only stops an idle activity attempting something the developer has not enabled.
+    if (!autonomy::IsIdleComputerAction(
+            request.type, actionRuntime.Settings().desktopControl.autonomous))
     {
-        case actions::ActionType::ListDirectory:
-        case actions::ActionType::ReadTextFile:
-        case actions::ActionType::InspectWindow:
-        case actions::ActionType::FocusWindow:
-        case actions::ActionType::CreateDirectory:
-        case actions::ActionType::CopyFile:
-            break;
-        default:
-            outcome.status = autonomy::ActivityStatus::Cancelled;
-            outcome.summary = "That PC action needs a user-directed task.";
-            return outcome;
+        outcome.status = autonomy::ActivityStatus::Cancelled;
+        outcome.summary = "That PC action needs a user-directed task.";
+        return outcome;
     }
     request.id = actions::NewActionId();
     request.requestedBy = "autonomous_activity/" + activity.id;

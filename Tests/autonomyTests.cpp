@@ -1,5 +1,6 @@
 #include "testSupport.h"
 
+#include "Autonomy/activityExecution.h"
 #include "Autonomy/activityScheduler.h"
 #include "Autonomy/driveState.h"
 
@@ -291,8 +292,67 @@ void TestActivityLifecycleDistinguishesInterruptionFromDecision()
 }
 }
 
+void TestAutonomousHandsFollowTheirOwnPermission()
+{
+    using revia::actions::ActionType;
+
+    // Exploring and making things never depended on desktop control, and must not start
+    // depending on it.
+    for (const ActionType type : {ActionType::ListDirectory, ActionType::ReadTextFile,
+        ActionType::InspectWindow, ActionType::FocusWindow, ActionType::CreateDirectory,
+        ActionType::CopyFile})
+    {
+        Check(IsIdleComputerAction(type, false) && IsIdleComputerAction(type, true),
+            "An approved-scope idle action stopped being available: " +
+                revia::actions::ToString(type));
+    }
+
+    // Real hands. Off by default, and reachable only through their own permission. This
+    // gate was previously absent in the other direction: every one of these was
+    // cancelled before policy was consulted, so the permission granted nothing.
+    for (const ActionType type : {ActionType::LaunchApplication, ActionType::MoveCursor,
+        ActionType::ClickPointer, ActionType::DragPointer, ActionType::ScrollPointer,
+        ActionType::PressKeys, ActionType::TypeText})
+    {
+        Check(!IsIdleComputerAction(type, false),
+            "A desktop-control action was available to unprompted work without the "
+            "autonomous permission: " + revia::actions::ToString(type));
+        Check(IsIdleComputerAction(type, true),
+            "Granting autonomous desktop control still did not reach: " +
+                revia::actions::ToString(type));
+    }
+
+    // Separate owners, and no permission on this path reaches them.
+    for (const ActionType type : {ActionType::MoveFile, ActionType::RenamePath,
+        ActionType::MoveToRecycleBin, ActionType::SetControlText,
+        ActionType::InvokeControl, ActionType::WebSearch})
+    {
+        Check(!IsIdleComputerAction(type, false) && !IsIdleComputerAction(type, true),
+            "Unprompted work reached an action belonging to another owner: " +
+                revia::actions::ToString(type));
+    }
+
+    // The executor gate and the scope the planner is shown must not drift apart, or
+    // Revia is offered actions that get cancelled, or refused ones she may use.
+    for (const bool granted : {false, true})
+    {
+        const auto names = IdleComputerActionNames(granted);
+        for (const ActionType type : revia::actions::AllActionTypes())
+        {
+            const bool named = std::find(names.begin(), names.end(),
+                revia::actions::ToString(type)) != names.end();
+            Check(named == IsIdleComputerAction(type, granted),
+                "The planner's computer scope disagrees with the executor gate about " +
+                    revia::actions::ToString(type));
+        }
+    }
+    Check(IdleComputerActionNames(true).size() == IdleComputerActionNames(false).size() + 7,
+        "Granting autonomous desktop control did not add exactly the seven hands.");
+}
+
 void RunAutonomyTests()
 {
+    TestAutonomousHandsFollowTheirOwnPermission();
     TestATimerAloneNeverProducesActivity();
     TestDoingNothingIsTheOrdinaryOutcome();
     TestRealEvidenceCanClearTheBar();

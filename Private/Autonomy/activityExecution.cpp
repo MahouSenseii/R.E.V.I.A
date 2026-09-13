@@ -8,6 +8,39 @@
 namespace revia::autonomy
 {
 
+bool IsIdleComputerAction(const actions::ActionType type, const bool autonomousDesktop)
+{
+    switch (type)
+    {
+        // Exploring and making things inside an approved scope. Unchanged, and
+        // available whether or not desktop control is granted.
+        case actions::ActionType::ListDirectory:
+        case actions::ActionType::ReadTextFile:
+        case actions::ActionType::InspectWindow:
+        case actions::ActionType::FocusWindow:
+        case actions::ActionType::CreateDirectory:
+        case actions::ActionType::CopyFile:
+            return true;
+        default:
+            // Pointers, keys, typing and launching an application: real hands, and only
+            // while the developer has granted them for unprompted work.
+            return autonomousDesktop && actions::IsDesktopControlAction(type);
+    }
+}
+
+std::vector<std::string> IdleComputerActionNames(const bool autonomousDesktop)
+{
+    std::vector<std::string> names;
+    for (const actions::ActionType type : actions::AllActionTypes())
+    {
+        if (IsIdleComputerAction(type, autonomousDesktop))
+        {
+            names.push_back(actions::ToString(type));
+        }
+    }
+    return names;
+}
+
 namespace
 {
     std::string Lower(std::string value)

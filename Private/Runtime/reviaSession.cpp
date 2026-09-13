@@ -2180,9 +2180,13 @@ void ReviaSession::StartCuriosityLoop()
             nlohmann::json roots = nlohmann::json::array();
             for (const auto& root : capabilities.approvedRoots)
                 roots.push_back(actions::PathToUtf8(root));
+            // The same predicate the executor gate uses, so the planner is never offered
+            // an action that would be cancelled on arrival, nor denied one it may use.
             idle.computerScope = nlohmann::json({{"roots", roots},
                 {"applications", capabilities.approvedApplications},
                 {"controls", capabilities.approvedControls},
+                {"actions", autonomy::IdleComputerActionNames(
+                    capabilities.desktopControl.autonomous)},
                 {"risk_ceiling", actions::ToString(capabilities.autoApproveRiskThrough)}}).dump();
             for (auto message = recentConversation.rbegin(); message != recentConversation.rend(); ++message)
             {

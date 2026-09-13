@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Actions/actionTypes.h"
 #include "Agents/memoryAgent.h"
 #include "Autonomy/activity.h"
 #include "Autonomy/driveState.h"
@@ -10,6 +11,23 @@
 
 namespace revia::autonomy
 {
+
+// What an idle activity may attempt on the PC, when nobody asked for it.
+//
+// Defined once because two places have to agree: the executor gate, and the scope the
+// idle planner is shown. If they drift, Revia is either offered actions that will be
+// cancelled or denied actions she is permitted, and both read as the runtime lying to
+// her about what she can do.
+//
+// This is not the enforcement. CapabilityPolicy independently re-checks the autonomous
+// permission, every per-action switch, the approved applications and the command-surface
+// boundary. This only decides what an unprompted activity may put in front of policy.
+// Moving or deleting user files, invoking named UI controls and web requests are
+// deliberately absent: they have their own owners and their own permissions.
+[[nodiscard]] bool IsIdleComputerAction(actions::ActionType type, bool autonomousDesktop);
+
+// The same set as names, for the planner's computer scope.
+[[nodiscard]] std::vector<std::string> IdleComputerActionNames(bool autonomousDesktop);
 
 // What executing one activity produced.
 //
