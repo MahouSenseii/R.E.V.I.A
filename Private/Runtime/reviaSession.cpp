@@ -355,6 +355,54 @@ ReviaSession::ReviaSession()
         SetState(RuntimeState::WaitingForConfirmation, decision.reason);
         return handler(request, decision);
     });
+    // The iterative loop's one decision point. Observing the machine is this side's job
+    // by design, which is what keeps Goals from depending on Windows: the runner asks
+    // what to do next and never looks at a screen itself.
+    //
+    // This adds no authority. Every step it proposes is checked by
+    // GoalRunner::ValidateStep, executed through the same scoped policy, the same
+    // per-action confirmation and the same audit log a planned step uses, and stopped by
+    // the same budgets. What it adds is that the next action is chosen after seeing what
+    // the last one actually did.
+    goalRunner.SetStepProvider([this](const goals::Goal& goal, const std::uint32_t iteration)
+    {
+        goals::NextStep next;
+        const responseOutput decision = router.PlanNextGoalStep(
+            BuildIterativeGoalContext(goal, iteration));
+        if (!decision.bSuccess)
+        {
+            next.reason = decision.reason.empty()
+                ? "The next step could not be decided." : decision.reason;
+            return next;
+        }
+        const planning::ParsedNextStep parsed =
+            planning::GoalPlanner::ParseNextStep(decision.response);
+        if (!parsed.succeeded)
+        {
+            next.reason = parsed.error;
+            return next;
+        }
+        if (parsed.finished)
+        {
+            next.finished = true;
+            next.reason = parsed.error;
+            return next;
+        }
+        if (parsed.step.action.type == actions::ActionType::Unknown)
+        {
+            // A usable answer that proposes nothing. Distinct from a parse failure, and
+            // distinct from finishing: she looked and had no next move.
+            next.reason = parsed.error.empty()
+                ? "No next action was proposed." : parsed.error;
+            return next;
+        }
+        next.hasStep = true;
+        next.step = parsed.step;
+        next.step.ordinal = static_cast<std::uint32_t>(goal.steps.size());
+        next.step.action.requestedBy = "goal";
+        next.step.check.requestedBy = "goal";
+        return next;
+    });
 }
 
 ReviaSession::~ReviaSession()
@@ -7298,6 +7346,94 @@ goals::Goal ReviaSession::RunGoalUnlocked(goals::Goal goal)
     return FinishGoalRun(goalRunner.Run(std::move(goal), stopToken), startedAt);
 }
 
+bool ReviaSession::TryHandleOperateInput(const std::string& input, SessionResult& result)
+{
+    const std::string request = Trim(input.substr(9));
+    if (request.empty())
+    {
+        result.succeeded = false;
+        result.text = "Usage: /operate <what you want done>";
+        result.reason = "No goal was given.";
+        SetState(RuntimeState::Blocked, result.reason);
+        return true;
+    }
+    if (!actionRuntime.IsInitialized())
+    {
+        result.succeeded = false;
+        result.text = "Action runtime is not initialized.";
+        result.reason = result.text;
+        SetState(RuntimeState::Blocked, result.reason);
+        return true;
+    }
+
+    goals::Goal goal;
+    goal.id = goals::NewGoalId();
+    goal.title = request;
+    goal.status = goals::GoalStatus::Planned;
+    goal.scope = DeriveGoalScope();
+
+    // A planned goal is rehearsed and then approved as a whole, because the whole of it
+    // exists before anything runs. This one does not: its steps are invented as the work
+    // is seen, so there is no plan to show and nothing to rehearse. The approval is
+    // therefore for the goal and its limits rather than for a list of steps, and it says
+    // so plainly instead of implying a plan the user cannot actually read.
+    ConfirmationHandler handler;
+    {
+        std::lock_guard lock(confirmationMutex);
+        handler = confirmationHandler;
+    }
+    if (!handler)
+    {
+        result.succeeded = false;
+        result.text = "An iterative goal needs a confirmation handler and none is set.";
+        result.reason = "No confirmation handler is available for /operate.";
+        SetState(RuntimeState::Blocked, result.reason);
+        return true;
+    }
+
+    actions::ActionRequest summary;
+    summary.id = actions::NewActionId();
+    summary.type = actions::ActionType::InspectWindow;
+    summary.requestedBy = "goal";
+    actions::PolicyDecision decision;
+    decision.verdict = actions::PolicyVerdict::RequiresConfirmation;
+    decision.reason =
+        "Work on '" + goal.title + "' step by step, deciding each action after seeing "
+        "what the last one did?\n"
+        "There is no plan to review: she chooses as she goes, within at most " +
+        std::to_string(goal.budget.maxActions) + " actions, " +
+        std::to_string(goal.budget.maxTotalRetries) + " retries and " +
+        std::to_string(goal.budget.maxDurationMs / 1000) + " seconds.\n"
+        "Every individual action is still checked against permissions and still asks "
+        "before anything risky, and each step has to prove it worked before the next "
+        "one is chosen.";
+    SetState(RuntimeState::WaitingForConfirmation, decision.reason);
+    if (!handler(summary, decision))
+    {
+        result.succeeded = false;
+        result.text = "Iterative goal cancelled before any step ran.";
+        result.reason = "The goal was not approved.";
+        SetState(RuntimeState::Idle, result.text);
+        return true;
+    }
+
+    goals::Goal finished;
+    {
+        std::lock_guard operationLock(operationMutex);
+        (void)BeginOperation();
+        busy.store(true);
+        const std::stop_token stopToken = CurrentOperationToken();
+        const auto startedAt = std::chrono::steady_clock::now();
+        SetState(RuntimeState::Acting, "Working on: " + goal.title);
+        finished = FinishGoalRun(goalRunner.Operate(std::move(goal), stopToken), startedAt);
+    }
+
+    result.succeeded = finished.status == goals::GoalStatus::Succeeded;
+    result.text = FormatGoalSummary(finished);
+    result.reason = goals::ToString(finished.stopReason);
+    return true;
+}
+
 goals::Goal ReviaSession::ResumeGoalUnlocked(const std::string& goalId)
 {
     goals::Goal goal;
@@ -7670,6 +7806,71 @@ goals::Goal ReviaSession::RehearseGoal(const goals::Goal& goal, std::string& out
         }
     }
     return rehearsed;
+}
+
+std::string ReviaSession::BuildIterativeGoalContext(
+    const goals::Goal& goal, const std::uint32_t iteration) const
+{
+    constexpr std::size_t MaximumObservationCharacters = 400;
+    constexpr std::size_t MaximumRecordedAttempts = 8;
+
+    const auto bounded = [](std::string text, const std::size_t limit)
+    {
+        for (char& character : text)
+        {
+            if (character == '\r' || character == '\n') character = ' ';
+        }
+        if (text.size() > limit)
+        {
+            text.resize(limit);
+            text += "...";
+        }
+        return text;
+    };
+
+    // Newest attempts, because those are what the next decision turns on. An early
+    // attempt that has already been superseded is the first thing worth dropping when
+    // the history outgrows its room.
+    nlohmann::json history = nlohmann::json::array();
+    std::size_t recorded = 0;
+    for (auto step = goal.steps.rbegin();
+         step != goal.steps.rend() && recorded < MaximumRecordedAttempts; ++step)
+    {
+        for (auto attempt = step->attempts.rbegin();
+             attempt != step->attempts.rend() && recorded < MaximumRecordedAttempts;
+             ++attempt, ++recorded)
+        {
+            history.push_back({
+                {"step", step->description},
+                {"status", goals::ToString(step->status)},
+                {"executed", attempt->executed},
+                {"verified", attempt->verified},
+                // What the check actually saw, which is the only part of this the next
+                // decision may treat as fact.
+                {"observed", bounded(attempt->observation, MaximumObservationCharacters)},
+                {"failure", bounded(attempt->failure, MaximumObservationCharacters)}});
+        }
+    }
+    std::reverse(history.begin(), history.end());
+
+    nlohmann::json roots = nlohmann::json::array();
+    for (const auto& root : goal.scope.approvedRoots)
+        roots.push_back(actions::PathToUtf8(root));
+
+    return nlohmann::json({
+        {"goal", goal.title},
+        {"iteration", iteration},
+        {"steps_taken", goal.steps.size()},
+        {"actions_left", goal.budget.maxActions > goal.spend.actions
+            ? goal.budget.maxActions - goal.spend.actions : 0u},
+        {"retries_left", goal.budget.maxTotalRetries > goal.spend.retries
+            ? goal.budget.maxTotalRetries - goal.spend.retries : 0u},
+        {"scope", {
+            {"roots", roots},
+            {"applications", goal.scope.approvedApplications},
+            {"controls", goal.scope.approvedControls},
+            {"risk_ceiling", actions::ToString(goal.scope.autoApproveRiskThrough)}}},
+        {"history", std::move(history)}}).dump();
 }
 
 std::string ReviaSession::FormatGoalPlan(const goals::Goal& goal)
@@ -8222,6 +8423,11 @@ bool ReviaSession::TryHandleActionInput(const std::string& input, SessionResult&
         result.text = DesktopControlStatus();
         SetState(RuntimeState::Idle);
         return true;
+    }
+
+    if (input.rfind("/operate ", 0) == 0)
+    {
+        return TryHandleOperateInput(input, result);
     }
 
     if (input.rfind("/goals resume ", 0) == 0)

@@ -48,6 +48,7 @@ public:
         const std::string& boundedInquiryPrompt,
         std::stop_token stopToken = {}) const;
     responseOutput GenerateGoalPlan(const std::string& userRequest) const;
+    responseOutput GenerateNextGoalStep(const std::string& goalContext) const;
     responseOutput GenerateDiagram(const std::string& userRequest) const;
     responseOutput ComposeContent(
         const std::string& request,

@@ -45,6 +45,8 @@ public:
         const std::string& boundedInquiryPrompt,
         std::stop_token stopToken = {}) const;
     responseOutput PlanGoal(const std::string& request) const;
+    // The iterative form: one step at a time, from what has already happened.
+    responseOutput PlanNextGoalStep(const std::string& goalContext) const;
     responseOutput DrawDiagram(const std::string& request) const;
     responseOutput ComposeContent(
         const std::string& request,

@@ -2998,6 +2998,73 @@ void TestGoalResumesAfterRestart()
         "The resumed goal did not retry its unobserved step.");
 }
 
+void TestIterativeStepDecisionsAreDistinct()
+{
+    using revia::planning::GoalPlanner;
+
+    // A step to take, nothing left to take, and no usable answer are three outcomes, and
+    // the loop behaves oppositely for the last two. Collapsing them would let a run that
+    // got stuck be recorded as a run that finished.
+    const auto acting = GoalPlanner::ParseNextStep(R"({
+        "finished": false,
+        "description": "Make the folder",
+        "action": {"action":"create_directory","source":"C:\\Approved\\Notes"},
+        "check": {"action":"list_directory","source":"C:\\Approved"},
+        "expected": "Notes"
+    })");
+    Check(acting.succeeded && !acting.finished, "A usable step was not recognised.");
+    Check(acting.step.action.type == ActionType::CreateDirectory &&
+        acting.step.check.type == ActionType::ListDirectory &&
+        acting.step.expected == "Notes",
+        "The step lost the action, the check, or what proves it worked.");
+
+    const auto done = GoalPlanner::ParseNextStep(
+        R"({"finished":true,"reason":"The folder is already listed."})");
+    Check(done.succeeded && done.finished && !done.error.empty(),
+        "A finished run was not distinguished from a stuck one.");
+    Check(done.step.action.type == ActionType::Unknown,
+        "A finished run carried a step to execute.");
+
+    const auto stuck = GoalPlanner::ParseNextStep(
+        R"({"finished":false,"reason":"Nothing left that I can reach."})");
+    Check(stuck.succeeded && !stuck.finished &&
+        stuck.step.action.type == ActionType::Unknown && !stuck.error.empty(),
+        "Having no next action was not reported as a real answer with a reason.");
+
+    // A malformed answer is not the same as having nothing to do, and must not be able
+    // to end a run as though the work were complete.
+    for (const char* broken : {"not json at all", "[]",
+        R"({"finished":false,"action":{"action":"create_directory","source":"C:\\A"}})",
+        R"({"finished":false,"action":{"action":"nonsense"},"check":{"action":"list_directory","source":"C:\\A"}})"})
+    {
+        const auto rejected = GoalPlanner::ParseNextStep(broken);
+        Check(!rejected.succeeded && !rejected.finished && !rejected.error.empty(),
+            "A malformed step decision was accepted: " + std::string(broken));
+    }
+
+    // The contract the model is held to has to name the read-only actions a check may
+    // use, or an unverifiable step is the model's most likely answer.
+    const std::string prompt = GoalPlanner::NextStepPrompt();
+    Check(prompt.find("read-only") != std::string::npos &&
+        prompt.find("list_directory") != std::string::npos,
+        "The step contract does not tell the model what a check may be.");
+    Check(prompt.find("finished") != std::string::npos,
+        "The step contract gives the model no way to say the work is done.");
+
+    // Every step it invents still faces the rules a planned step faces.
+    revia::goals::GoalStep unverifiable = acting.step;
+    unverifiable.expected.clear();
+    std::string error;
+    Check(!revia::goals::GoalRunner::ValidateStep(unverifiable, error),
+        "A step with nothing to prove it worked passed validation.");
+    revia::goals::GoalStep writingCheck = acting.step;
+    writingCheck.check.type = ActionType::CreateDirectory;
+    Check(!revia::goals::GoalRunner::ValidateStep(writingCheck, error),
+        "A step whose check performs work passed validation.");
+    Check(revia::goals::GoalRunner::ValidateStep(acting.step, error),
+        "A well-formed invented step was rejected: " + error);
+}
+
 void TestGoalPlannerParsesMultiStepPlan()
 {
     const std::string plan = R"({
@@ -8872,6 +8939,7 @@ int main(const int argc, char** argv)
         RunProactiveStateTests();
         TestGoalScopeCannotWidenAuthority();
         TestGoalResumesAfterRestart();
+        TestIterativeStepDecisionsAreDistinct();
         TestGoalPlannerParsesMultiStepPlan();
         TestGoalPlannerRejectsUnusablePlans();
         TestGoalPlannerAcceptsRealModelOutput();

@@ -491,7 +491,14 @@ private:
     // its own scope could widen its own authority, which is the one thing the scoped
     // execution path exists to prevent.
     [[nodiscard]] actions::CapabilitySettings DeriveGoalScope() const;
+    // What the iterative planner is told: the goal, what is left of the budget, and
+    // every attempt so far with what its check actually observed. Bounded, because this
+    // grows with the run and a loop that eventually fills its own context window would
+    // fail late and for a reason nobody could see.
+    [[nodiscard]] std::string BuildIterativeGoalContext(
+        const goals::Goal& goal, std::uint32_t iteration) const;
     bool TryHandleGoalInput(const std::string& input, SessionResult& result);
+    bool TryHandleOperateInput(const std::string& input, SessionResult& result);
     // Every archived turn goes through here, so the sensitive-content refusal and the
     // enabled check live in one place rather than at each call site.
     void ArchiveTurn(const std::string& role, const std::string& content);

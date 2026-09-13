@@ -285,6 +285,20 @@ responseOutput messageRouter::PlanGoal(const std::string& request) const
     return llm.GenerateGoalPlan(request);
 }
 
+responseOutput messageRouter::PlanNextGoalStep(const std::string& goalContext) const
+{
+    if (goalContext.empty())
+    {
+        responseOutput output;
+        output.bSuccess = false;
+        output.response = "I need the run so far to decide a next step.";
+        output.reason = "Iterative goal context was empty.";
+        output.bShouldSpeak = false;
+        return output;
+    }
+    return llm.GenerateNextGoalStep(goalContext);
+}
+
 responseOutput messageRouter::DrawDiagram(const std::string& request) const
 {
     if (request.empty())

@@ -62,6 +62,8 @@ public:
         const std::string& boundedInquiryPrompt,
         std::stop_token stopToken = {}) const;
     responseOutput GenerateGoalPlan(const std::string& userRequest) const;
+    // One step of an iterative run, decided from the attempts so far.
+    responseOutput GenerateNextGoalStep(const std::string& goalContext) const;
     responseOutput GenerateDiagram(const std::string& userRequest) const;
     responseOutput ComposeContent(
         const std::string& request,

@@ -337,6 +337,41 @@ responseOutput llmService::GenerateGoalPlan(const std::string& userRequest) cons
     return llamaCpp.GenerateGoalPlan(userRequest);
 }
 
+responseOutput llmService::GenerateNextGoalStep(const std::string& goalContext) const
+{
+    // The same gates the plan path applies, for the same reasons: an iterative run
+    // that silently produced no step would look like a goal that finished.
+    if (!bIsReady)
+    {
+        responseOutput output;
+        output.bSuccess = false;
+        output.response = "My language system is not ready to continue a goal.";
+        output.reason = "LLM service was not ready.";
+        output.bShouldSpeak = false;
+        return output;
+    }
+    if (backendType != llmBackendType::LLamaCpp)
+    {
+        responseOutput output;
+        output.bSuccess = false;
+        output.response = "Iterative goals require the local llama.cpp backend.";
+        output.reason = "Step planning requires a structured-output LLM backend.";
+        output.bShouldSpeak = false;
+        return output;
+    }
+    const healthOutput health = llamaCpp.CheckHealth();
+    if (!health.bIsAvailable)
+    {
+        responseOutput output;
+        output.bSuccess = false;
+        output.response = "My configured language model is not available to continue.";
+        output.reason = health.reason;
+        output.bShouldSpeak = false;
+        return output;
+    }
+    return llamaCpp.GenerateNextGoalStep(goalContext);
+}
+
 responseOutput llmService::GenerateDiagram(const std::string& userRequest) const
 {
     if (!bIsReady)
