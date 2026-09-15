@@ -1128,6 +1128,20 @@ bool ReviaSession::Start()
         0,
         resourcePlan.ChatLabel());
 
+    // The voice starts loading here rather than at the end of startup. Qwen3-TTS is a
+    // separate Python worker on the device the plan assigned it, and nothing it does
+    // needs the tiers or the embedding server below -- so waiting for them was time the
+    // voice spent idle for no reason. The remaining stages are what it may safely
+    // overlap: Fast is CPU-resident, Expert is placed on the chat device, and the
+    // embedding server is the memory side, which is the whole point of doing both at
+    // once. What it deliberately does NOT overlap is the stage above: llama.cpp fits
+    // chat layers against the card at launch, and a voice model allocating underneath
+    // that measurement is how a plan that reserved room for both stops holding.
+    if (deferredVoiceLoad)
+    {
+        StartVoiceWarmup();
+    }
+
     stageStarted = std::chrono::steady_clock::now();
     const bool fastAvailable = fastBrainConfigured && EnsureFastBrainAvailable(stopToken);
     startupTimings.push_back({"fast_brain_health_or_start", ElapsedMilliseconds(stageStarted)});
@@ -1196,6 +1210,9 @@ bool ReviaSession::Start()
 
     if (stopToken.stop_requested())
     {
+        // The voice load is running by now and outlives this scope on its own thread.
+        // A startup that never completed must not leave a model loading behind it.
+        StopVoiceWarmup();
         SetState(RuntimeState::Offline, "Startup was stopped.");
         return false;
     }
@@ -1225,10 +1242,6 @@ bool ReviaSession::Start()
             : "Vision requires the configured multimodal llama.cpp server.";
     visionEvent.resource = resourcePlan.ChatLabel();
     eventBus.Publish(std::move(visionEvent));
-    if (deferredVoiceLoad)
-    {
-        StartVoiceWarmup();
-    }
     StartInputDrain();
     StartScreenAwareness();
     StartExternalAdapterLoop();
@@ -3778,6 +3791,7 @@ void ReviaSession::ReportVoiceBackend(const speech::VoiceOperationResult& prepar
 void ReviaSession::StartVoiceWarmup()
 {
     StopVoiceWarmup();
+    voiceWarmupWanted.store(true);
     voiceWarmupFinished.store(false);
     voiceWarmupWorker = std::jthread([this](const std::stop_token stopToken)
     {
@@ -3793,7 +3807,7 @@ void ReviaSession::StartVoiceWarmup()
         const auto startedAt = std::chrono::steady_clock::now();
         for (int attempt = 1; attempt <= MaximumAttempts; ++attempt)
         {
-            if (stopToken.stop_requested() || !started.load())
+            if (stopToken.stop_requested() || !voiceWarmupWanted.load())
             {
                 return;
             }
@@ -3809,7 +3823,7 @@ void ReviaSession::StartVoiceWarmup()
                 ReportVoiceBackend(prepared);
                 return;
             }
-            if (stopToken.stop_requested() || !started.load())
+            if (stopToken.stop_requested() || !voiceWarmupWanted.load())
             {
                 return;
             }
@@ -3834,6 +3848,7 @@ void ReviaSession::StartVoiceWarmup()
 
 void ReviaSession::StopVoiceWarmup()
 {
+    voiceWarmupWanted.store(false);
     if (!voiceWarmupWorker.joinable())
     {
         return;
@@ -4225,6 +4240,7 @@ void ReviaSession::Stop()
     // must not cost the session its voice. Shutdown is the one case where it must not
     // retry, so cancel it first, then let RequestStop kill the Qwen worker so an in-flight
     // load fails fast and the join returns instead of waiting out a model load.
+    voiceWarmupWanted.store(false);
     if (voiceWarmupWorker.joinable())
     {
         voiceWarmupWorker.request_stop();

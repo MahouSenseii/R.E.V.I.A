@@ -798,9 +798,13 @@ private:
     std::string outputApplication;
     std::stop_source activeStopSource;
     ConfirmationHandler confirmationHandler;
-    // Loads the assigned Qwen3-TTS voice after startup has already reported ready.
+    // Loads the assigned Qwen3-TTS voice alongside the remaining startup stages.
     std::jthread voiceWarmupWorker;
     std::atomic<bool> voiceWarmupFinished = true;
+    // Whether the load is still wanted. Separate from `started`, because the warmup now
+    // begins while startup is still running and `started` is deliberately false until
+    // every stage has finished -- reading it there would abandon the load immediately.
+    std::atomic<bool> voiceWarmupWanted = false;
     std::jthread screenAwarenessWorker;
     std::jthread initiativeWorker;
     std::jthread curiosityWorker;
