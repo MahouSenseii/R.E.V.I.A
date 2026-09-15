@@ -1,16 +1,22 @@
+/* One readable base for every tab. Without it each widget fell back to the platform
+   default and the explicit sizes below were all smaller again, which is why body text
+   read as fine print at window size. Font only: a QWidget background or border here
+   would repaint every child. */
+QWidget { font-size: 13px; }
+
 QWidget#rootPanel {
     background: rgba(14, 20, 34, 242);
     border-radius: 16px;
 }
 QWidget#titleBar { background: transparent; }
-QLabel#windowTitle { color: #93a4bd; font-size: 12px; }
+QLabel#windowTitle { color: #93a4bd; font-size: 13px; }
 QLabel#affectLabel, QLabel#speechLabel, QLabel#microphoneLabel,
 QLabel#automationLabel, QLabel#visionLabel, QLabel#perceptionLabel {
     background: rgba(25, 36, 55, 205);
     border: 1px solid #293b55;
     border-radius: 8px;
-    padding: 6px 7px;
-    font-size: 10px;
+    padding: 7px 10px;
+    font-size: 11px;
 }
 QLabel#affectLabel { color: #c3a6ff; }
 QLabel#speechLabel { color: #85d7c8; }
@@ -25,7 +31,7 @@ QLabel#perceptionLabel[watching="true"] {
     font-weight: 700;
 }
 QLabel#secondaryText, QLabel#voiceIntro, QLabel#settingsHint { color: #93a4bd; }
-QLabel#sectionTitle { color: #dce9f7; font-size: 15px; font-weight: 700; }
+QLabel#sectionTitle { color: #dce9f7; font-size: 18px; font-weight: 700; }
 QLabel#voiceStudioStatus, QLabel#profileActiveBanner {
     color: #85d7c8;
     background: rgba(20, 48, 57, 180);
@@ -36,7 +42,7 @@ QLabel#voiceStudioStatus, QLabel#profileActiveBanner {
 QLabel#profileActiveBanner { color: #dce9f7; font-weight: 600; }
 QLabel#profileStatus { color: #85d7c8; font-weight: 600; }
 QLabel#memoryStatus { color: #85d7c8; font-weight: 600; }
-QLabel#mindHeadline { color: #dce9f7; font-size: 14px; font-weight: 600; }
+QLabel#mindHeadline { color: #dce9f7; font-size: 16px; font-weight: 600; }
 QLabel#profileStatus[error="true"] { color: #ff7b88; }
 QLabel#activityIssueSummary, QLabel#preferenceStatus {
     color: #85d7c8;
@@ -198,3 +204,313 @@ QPushButton#openLogsButton, QPushButton#clearActivityButton { background: #35415
 QPushButton#openLogsButton:hover, QPushButton#clearActivityButton:hover { background: #46556d; }
 QCheckBox { color: #a9bad2; }
 QToolTip { color: white; background: #182438; border: 1px solid #45607f; }
+
+/* ---------------------------------------------------------------- permissions cards */
+/* Accents follow Config/avatar.json: cyan is attention, violet autonomy, amber a
+   boundary being removed, red a command surface. */
+
+QFrame#permCard, QFrame#gatedCard {
+    background: #16213A;
+    border: 1px solid #22314F;
+    border-radius: 14px;
+}
+QFrame#gatedCard {
+    background: #1D2338;
+    border: 1px solid rgba(243, 164, 70, 90);
+}
+
+QFrame#introBar {
+    background: #141E34;
+    border: 1px solid #1A2540;
+    border-left: 2px solid #55E8F2;
+    border-radius: 10px;
+}
+
+QFrame#iconWell {
+    background: rgba(85, 232, 242, 28);
+    border: 1px solid rgba(85, 232, 242, 66);
+    border-radius: 9px;
+}
+QFrame#iconWellGated {
+    background: rgba(243, 164, 70, 28);
+    border: 1px solid rgba(243, 164, 70, 76);
+    border-radius: 9px;
+}
+
+QLabel#cardTitle { color: #DCE9F7; font-size: 16px; font-weight: 600; }
+QLabel#cardSubtitle { color: #7D8FA8; font-size: 12px; }
+QLabel#permLabel { color: #DCE9F7; font-size: 14px; font-weight: 500; }
+QLabel#permLabelNested { color: #A9BAD2; font-size: 13px; }
+QLabel#permHelp { color: #7D8FA8; font-size: 12px; }
+
+QFrame#permRow, QFrame#permRowNested { background: transparent; border: none; }
+QFrame#permRow:hover, QFrame#permRowNested:hover { background: rgba(85, 232, 242, 12); border-radius: 8px; }
+QFrame#rowSeparator { background: rgba(243, 164, 70, 34); border: none; }
+
+/* Risk is carried by a chip as well as by color, so it survives a colour-blind read. */
+QLabel#chipAutonomy {
+    color: #C6A6F5; background: rgba(154, 101, 232, 36);
+    border: 1px solid rgba(154, 101, 232, 86);
+    border-radius: 5px; padding: 3px 8px; font-size: 10px; font-weight: 700;
+}
+QLabel#chipGated {
+    color: #F7C486; background: rgba(243, 164, 70, 34);
+    border: 1px solid rgba(243, 164, 70, 86);
+    border-radius: 5px; padding: 3px 8px; font-size: 10px; font-weight: 700;
+}
+QLabel#chipCritical {
+    color: #F59B9B; background: rgba(229, 84, 84, 34);
+    border: 1px solid rgba(229, 84, 84, 92);
+    border-radius: 5px; padding: 3px 8px; font-size: 10px; font-weight: 700;
+}
+QLabel#infoDot {
+    color: #68788F; border: 1px solid #33456A; border-radius: 7px;
+    font-size: 9px; font-weight: 700;
+}
+QLabel#gatedNotice {
+    color: #D9C3A4; background: rgba(243, 164, 70, 20);
+    border: 1px solid rgba(243, 164, 70, 56);
+    border-radius: 10px; padding: 12px 14px; font-size: 12px;
+}
+
+QFrame#stopBar {
+    background: rgba(229, 84, 84, 18);
+    border: 1px solid rgba(229, 84, 84, 62);
+    border-radius: 10px;
+}
+QLabel#stopState { color: #C6ADAD; font-size: 12px; }
+
+QPushButton#primaryButton {
+    background: rgba(85, 232, 242, 38);
+    border: 1px solid rgba(85, 232, 242, 128);
+    color: #A9F3F8;
+}
+QPushButton#primaryButton:hover {
+    background: rgba(85, 232, 242, 62);
+    border: 1px solid #55E8F2;
+}
+QPushButton#destructiveButton {
+    background: rgba(229, 84, 84, 30);
+    border: 1px solid rgba(229, 84, 84, 108);
+    color: #F09595;
+}
+QPushButton#destructiveButton:hover {
+    background: rgba(229, 84, 84, 58);
+    border: 1px solid #E55454;
+}
+QPushButton#primaryButton:disabled, QPushButton#destructiveButton:disabled {
+    background: #354154; border: 1px solid #354154; color: #8390a3;
+}
+
+/* ---------------------------------------------------------------- readable density */
+/* Applies to every tab, not only Permissions. Rows were drawn at the widget's default
+   height, which packs text lines against each other and makes a long table unreadable
+   before it is unhelpful. Padding here rather than a fixed height so a row still grows
+   with its own content. */
+
+QTreeWidget::item, QTableWidget::item, QListWidget::item {
+    padding: 7px 6px;
+}
+QHeaderView::section {
+    padding: 9px 10px;
+    font-size: 11px;
+}
+/* Eleven tabs have to fit the bar without a scroller. Raising these to 14px and 20px
+   pushed the row past the window and Qt answered with arrows and a clipped "Sett...",
+   which reads as broken rather than roomy. The label is the one place in this pass where
+   the tab bar's width, not readability, sets the ceiling. */
+QTabBar::tab {
+    padding: 9px 13px;
+    font-size: 13px;
+    margin-right: 1px;
+}
+QPushButton {
+    min-height: 18px;
+    font-size: 13px;
+}
+QComboBox, QLineEdit, QSpinBox, QDoubleSpinBox {
+    min-height: 18px;
+    font-size: 13px;
+}
+QPlainTextEdit, QTextBrowser {
+    font-size: 13px;
+}
+QCheckBox {
+    spacing: 8px;
+    padding: 3px 0;
+}
+QScrollArea { background: transparent; }
+/* The scrolled page must not paint its own slab over the tab background. */
+QScrollArea > QWidget > QWidget { background: transparent; }
+
+/* ---------------------------------------------------------------- modern surfaces */
+/* Brings every other tab up to the Permissions card language, through the stylesheet
+   only. Settings, Presence, Vision, Voice and Profiles are all built from QGroupBox, so
+   restyling that one class as a card reaches all of them without touching a single
+   panel's layout code -- which after two layout regressions is the point. Tables,
+   inputs, buttons and scrollbars follow the same palette from Config/avatar.json. */
+
+QGroupBox {
+    color: #DCE9F7;
+    background: #16213A;
+    border: 1px solid #22314F;
+    border-radius: 14px;
+    /* Room above the frame for the title to sit on the border, plus real inner padding
+       so controls are not pressed against the edge the way they were. */
+    margin-top: 24px;
+    padding: 20px 18px 18px 18px;
+    font-size: 15px;
+    font-weight: 600;
+}
+QGroupBox::title {
+    subcontrol-origin: margin;
+    subcontrol-position: top left;
+    left: 16px;
+    padding: 0 8px;
+    color: #DCE9F7;
+}
+
+/* Filled when on, hollow when off. No glyph: a stylesheet-painted indicator loses Qt's
+   native tick, so the state is carried by the fill instead, which is unambiguous at a
+   glance across a column of them. */
+QCheckBox { color: #C3D2E6; spacing: 10px; padding: 5px 0; }
+QCheckBox::indicator {
+    width: 17px;
+    height: 17px;
+    border-radius: 6px;
+    border: 1px solid #33456A;
+    background: #101A2E;
+}
+QCheckBox::indicator:hover { border-color: #55E8F2; }
+QCheckBox::indicator:checked {
+    background: #55E8F2;
+    border: 1px solid #55E8F2;
+}
+QCheckBox::indicator:checked:hover { background: #7BEFF7; }
+QCheckBox::indicator:disabled { background: #141C2E; border-color: #26344E; }
+
+QTableWidget, QTreeWidget, QListWidget {
+    background: #101A2E;
+    alternate-background-color: #14203A;
+    color: #DCE9F7;
+    border: 1px solid #22314F;
+    border-radius: 12px;
+    gridline-color: transparent;
+    outline: none;
+}
+QHeaderView::section {
+    background: #16213A;
+    color: #8FA2BD;
+    border: none;
+    border-bottom: 1px solid #22314F;
+    padding: 10px 12px;
+    font-size: 11px;
+    font-weight: 700;
+}
+QTableWidget::item:selected, QTreeWidget::item:selected, QListWidget::item:selected {
+    background: rgba(85, 232, 242, 38);
+    color: #EDF5FA;
+}
+
+QComboBox, QLineEdit, QSpinBox, QDoubleSpinBox, QPlainTextEdit, QTextBrowser {
+    background: #101A2E;
+    border: 1px solid #26344E;
+    border-radius: 10px;
+}
+QComboBox:focus, QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus,
+QPlainTextEdit:focus {
+    border: 1px solid #55E8F2;
+}
+
+/* Cyan rather than the old flat blue, so a button belongs to the same palette as the
+   card it sits in. The destructive and stop ids keep their own colours below. */
+QPushButton {
+    background: rgba(85, 232, 242, 34);
+    border: 1px solid rgba(85, 232, 242, 120);
+    border-radius: 10px;
+    color: #A9F3F8;
+    padding: 9px 16px;
+}
+QPushButton:hover {
+    background: rgba(85, 232, 242, 58);
+    border: 1px solid #55E8F2;
+}
+QPushButton:disabled {
+    background: #1A2338;
+    border: 1px solid #26344E;
+    color: #6A7A92;
+}
+
+QScrollBar:vertical {
+    background: transparent;
+    width: 11px;
+    margin: 2px 2px 2px 0;
+}
+QScrollBar::handle:vertical {
+    background: #2B3D5E;
+    border-radius: 5px;
+    min-height: 30px;
+}
+QScrollBar::handle:vertical:hover { background: #3C547D; }
+QScrollBar:horizontal {
+    background: transparent;
+    height: 11px;
+    margin: 0 2px 2px 2px;
+}
+QScrollBar::handle:horizontal {
+    background: #2B3D5E;
+    border-radius: 5px;
+    min-width: 30px;
+}
+QScrollBar::handle:horizontal:hover { background: #3C547D; }
+QScrollBar::add-line, QScrollBar::sub-line { width: 0; height: 0; }
+QScrollBar::add-page, QScrollBar::sub-page { background: transparent; }
+
+/* The id-styled buttons set only a background, and an id beats a type selector, so
+   without this they would keep their own fill while inheriting the cyan border and text
+   above -- maroon behind cyan letters. Each states its whole appearance. */
+QPushButton#stopButton, QPushButton#destructiveButton {
+    background: rgba(229, 84, 84, 30);
+    border: 1px solid rgba(229, 84, 84, 120);
+    color: #F09595;
+}
+QPushButton#stopButton:hover, QPushButton#destructiveButton:hover {
+    background: rgba(229, 84, 84, 62);
+    border: 1px solid #E55454;
+}
+QPushButton#microphoneButton {
+    background: rgba(138, 199, 255, 30);
+    border: 1px solid rgba(138, 199, 255, 110);
+    color: #BEDCFA;
+}
+QPushButton#microphoneButton:hover {
+    background: rgba(138, 199, 255, 54);
+    border: 1px solid #8AC7FF;
+}
+QPushButton#microphoneButton[listening="true"] {
+    background: rgba(112, 224, 202, 58);
+    border: 1px solid #70E0CA;
+    color: #D6FFF5;
+}
+QPushButton#screenActionButton {
+    background: rgba(112, 224, 202, 28);
+    border: 1px solid rgba(112, 224, 202, 110);
+    color: #A9EEDF;
+}
+QPushButton#screenActionButton:hover {
+    background: rgba(112, 224, 202, 52);
+    border: 1px solid #70E0CA;
+}
+/* Secondary utilities: present, but not competing with the primary action beside them. */
+QPushButton#fallbackVoiceButton, QPushButton#openLogsButton,
+QPushButton#clearActivityButton {
+    background: rgba(41, 59, 85, 140);
+    border: 1px solid #2E4062;
+    color: #A9BAD2;
+}
+QPushButton#fallbackVoiceButton:hover, QPushButton#openLogsButton:hover,
+QPushButton#clearActivityButton:hover {
+    background: rgba(56, 78, 110, 170);
+    border: 1px solid #3C547D;
+    color: #DCE9F7;
+}

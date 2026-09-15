@@ -33,7 +33,10 @@
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPlainTextEdit>
+#include <QMargins>
 #include <QPushButton>
+#include <QScrollArea>
+#include <QTabWidget>
 #include <QResizeEvent>
 #include <QProgressBar>
 #include <QPixmap>
@@ -131,6 +134,10 @@ ReviaWindow::ReviaWindow(
         const revia::actions::PolicyDecision& decision)
     {
         return ConfirmAction(request, decision);
+    });
+    session.SetDesktopApprovalHandler([this](const revia::policy::ApprovalPrompt& prompt)
+    {
+        return ApproveDesktopEffect(prompt);
     });
 
     // Upper bound on how long a reply waits for its audio. Qwen generation can take
@@ -297,6 +304,64 @@ void ReviaWindow::ApplyContentWidthCap()
     ui->rootLayout->setContentsMargins(side, 20, side, 20);
 }
 
+namespace
+{
+// Gives every tab page room at the bottom.
+//
+// Each page in the .ui sets bottomMargin to 0, so content of any height runs flush into
+// the window edge: a table ends on a half-drawn row, a paragraph ends on a clipped line,
+// and the rounded corner of the shell is cut through. It is the same defect on every
+// tab, which is why fixing one tab fixed one tab. Done here in one pass over every page
+// of every tab widget -- including the nested Runtime pages -- rather than as fifteen
+// identical edits to the .ui that the next page added would not inherit.
+void ApplyTabPageBottomMargin(QWidget* root, const int bottom)
+{
+    if (root == nullptr) return;
+    for (QTabWidget* tabs : root->findChildren<QTabWidget*>())
+    {
+        for (int index = 0; index < tabs->count(); ++index)
+        {
+            QWidget* page = tabs->widget(index);
+            if (page == nullptr || page->layout() == nullptr) continue;
+            QMargins margins = page->layout()->contentsMargins();
+            // Never shrink a page that already asked for more.
+            margins.setBottom(std::max(margins.bottom(), bottom));
+            page->layout()->setContentsMargins(margins);
+        }
+    }
+}
+
+// Moves a tab's existing content into a scroll area without rebuilding it.
+//
+// Settings and Presence are stacks of group boxes with nothing stretchy in them, which
+// is the shape that made Permissions unreadable: when the window is shorter than the
+// content, a plain layout has nowhere to take the shortfall from and compresses every
+// child below its minimum, so labels land on top of one another. Profiles and Voice
+// already scroll and never had the problem. Content this tall has to be scrollable
+// rather than squeezable.
+void MakePageScrollable(QWidget* page)
+{
+    if (page == nullptr) return;
+    QLayout* existing = page->layout();
+    if (existing == nullptr) return;
+
+    auto* inner = new QWidget();
+    inner->setObjectName("scrolledPage");
+    // Reparents the layout and every widget already inside it.
+    inner->setLayout(existing);
+
+    auto* scroll = new QScrollArea(page);
+    scroll->setFrameShape(QFrame::NoFrame);
+    scroll->setWidgetResizable(true);
+    scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    scroll->setWidget(inner);
+
+    auto* outer = new QVBoxLayout(page);
+    outer->setContentsMargins(0, 0, 0, 0);
+    outer->addWidget(scroll);
+}
+} // namespace
+
 void ReviaWindow::BuildInterface()
 {
     ui->setupUi(this);
@@ -376,11 +441,21 @@ void ReviaWindow::BuildInterface()
     ui->resourceHostLayout->addWidget(resourcePanel);
     canvasPanel = new CanvasPanel(ui->canvasPage);
     ui->canvasHostLayout->addWidget(canvasPanel);
+    // Scrolled, like Profiles and Voice already are. Permissions is a stack of
+    // fixed-height cards, so on a short window the layout had nowhere to take the
+    // shortfall from and compressed every card below its minimum -- which is what made
+    // titles overlap their own subtitles and hid the switches entirely. Content this
+    // tall has to be scrollable rather than squeezable.
+    auto* permissionsScroll = new QScrollArea(ui->permissionsPage);
+    permissionsScroll->setFrameShape(QFrame::NoFrame);
+    permissionsScroll->setWidgetResizable(true);
+    permissionsScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     capabilityPanel = new CapabilityPanel(
         session,
         [this]() { DiscoverApplicationPermissions(); },
-        ui->permissionsPage);
-    ui->permissionsHostLayout->addWidget(capabilityPanel);
+        permissionsScroll);
+    permissionsScroll->setWidget(capabilityPanel);
+    ui->permissionsHostLayout->addWidget(permissionsScroll);
     profilePanel = new ProfilePanel(session, ui->profilesPage);
     ui->profilesHostLayout->addWidget(profilePanel);
     memoryPanel = new MemoryPanel(session, ui->memoryTab);
@@ -584,6 +659,10 @@ void ReviaWindow::BuildInterface()
         AppendActivity("The embedded Revia theme could not be loaded.");
     }
 
+    MakePageScrollable(ui->settingsPage);
+    MakePageScrollable(ui->presencePage);
+    // After the scroll areas exist, so the outer layouts they introduce get it too.
+    ApplyTabPageBottomMargin(this, 14);
     ApplyMicrophoneUi(MicrophoneUi::Unavailable);
     ApplyContentWidthCap();
 }
@@ -2131,6 +2210,56 @@ void ReviaWindow::ShowPreferenceResult(const revia::core::PreferenceResult& resu
     AppendActivity(
         QStringLiteral("Setting: ") + message,
         result.succeeded ? ActivitySeverity::Information : ActivitySeverity::Warning);
+}
+
+bool ReviaWindow::ApproveDesktopEffect(const revia::policy::ApprovalPrompt& prompt)
+{
+    bool approved = false;
+    const auto ask = [this, &prompt, &approved]()
+    {
+        // Same reason ConfirmAction does this: a question owned by a minimized window is
+        // invisible, and the worker would wait on an answer nobody can see.
+        if (isMinimized())
+        {
+            showNormal();
+            raise();
+            activateWindow();
+        }
+        const QString control = prompt.controlName.empty()
+            ? QStringLiteral("An unnamed control")
+            : "\"" + QString::fromStdString(prompt.controlName) + "\"";
+        QString description = control + " is about to be activated.\n\n" +
+            QString::fromStdString(prompt.reason);
+        if (!prompt.application.empty())
+        {
+            description += "\n\nApplication: " +
+                QString::fromStdString(prompt.application);
+        }
+        if (!prompt.windowTitle.empty())
+        {
+            description += "\nWindow: " + QString::fromStdString(prompt.windowTitle);
+        }
+        // Says what is being approved and what is not. The prompt never carries the text
+        // being sent, so this cannot become a preview of content it does not have.
+        description += "\n\nThis approves this one activation, now. It does not raise "
+            "any permission and does not apply to the next one.";
+        approved = QMessageBox::question(
+            this,
+            "Approve this action",
+            description,
+            QMessageBox::Yes | QMessageBox::No,
+            QMessageBox::No) == QMessageBox::Yes;
+    };
+
+    if (QThread::currentThread() == thread())
+    {
+        ask();
+    }
+    else
+    {
+        QMetaObject::invokeMethod(this, ask, Qt::BlockingQueuedConnection);
+    }
+    return approved;
 }
 
 bool ReviaWindow::ConfirmAction(

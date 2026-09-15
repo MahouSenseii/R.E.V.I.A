@@ -1,6 +1,9 @@
 #pragma once
 
 #include "Actions/IActionExecutor.h"
+#include "Policy/desktopAuthorization.h"
+
+#include <memory>
 
 namespace revia::actions::windows
 {
@@ -14,7 +17,9 @@ namespace revia::actions::windows
 class WindowsAutomationExecutor final : public IActionExecutor
 {
 public:
-    explicit WindowsAutomationExecutor(CapabilitySettings::DesktopControl settings = {});
+    explicit WindowsAutomationExecutor(
+        CapabilitySettings::DesktopControl settings = {},
+        std::shared_ptr<policy::DesktopApprovalGate> approvals = {});
 
     [[nodiscard]] bool Handles(ActionType type) const override;
     [[nodiscard]] ActionResult Execute(
@@ -23,6 +28,7 @@ public:
 
 private:
     CapabilitySettings::DesktopControl settings;
+    std::shared_ptr<policy::DesktopApprovalGate> approvals;
 };
 
 } // namespace revia::actions::windows

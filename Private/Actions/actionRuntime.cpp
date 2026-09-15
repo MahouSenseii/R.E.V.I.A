@@ -73,9 +73,9 @@ bool ActionRuntime::InitializeUnlocked(
         settings.internet, internetCancellation));
 #ifdef _WIN32
     dispatcher.Register(std::make_unique<windows::WindowsAutomationExecutor>(
-        settings.desktopControl));
+        settings.desktopControl, desktopApprovals));
     dispatcher.Register(std::make_unique<windows::DesktopControlExecutor>(
-        settings.desktopControl, desktopInputGuard));
+        settings.desktopControl, desktopInputGuard, desktopApprovals));
 #endif
     auditLogger = std::make_unique<audit::ActionAuditLogger>(inputAuditPath);
     capabilityConfigPath = capabilityConfig;
@@ -379,6 +379,14 @@ bool ActionRuntime::SetInternetBrowser(
     return capabilityEditor.SetInternetBrowser(
             capabilityConfigPath, visibleBrowser, autonomousResearch, outError) &&
         ReloadUnlocked(outError);
+}
+
+void ActionRuntime::SetDesktopApprovalHandler(
+    policy::DesktopApprovalGate::Handler handler)
+{
+    // Not under `mutex`: the gate owns its own, and a reload must not be able to
+    // block behind a dialog that is waiting on a person.
+    desktopApprovals->SetHandler(std::move(handler));
 }
 
 bool ActionRuntime::SetCameraAccess(

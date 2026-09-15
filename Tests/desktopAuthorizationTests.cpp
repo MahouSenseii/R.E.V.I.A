@@ -279,6 +279,120 @@ void TestRefusalsAreActionableAndCarryNoSecrets()
 
 } // namespace
 
+// A control above the ceiling used to stop and stay stopped: RequireApproval meant a
+// human yes that the build could not obtain, so clicking Send in any application was
+// refused no matter who asked. These pin the ask, and pin what it must not become.
+void TestAnApprovableStepCanActuallyBeApproved()
+{
+    const auto settings = Ceiling(ConsequenceClass::Routine);
+    revia::actions::ActionRequest request;
+    request.id = revia::actions::NewActionId();
+    request.requestedBy = "user";
+    request.application = "msedge.exe";
+    request.windowTitle = "Messenger";
+
+    std::string refusal;
+    Check(!revia::policy::AuthorizeOrExplain(
+            revia::policy::DesktopOperation::PointerActivate,
+            Control("Send", "Messenger"), settings, request, refusal),
+        "Sending was allowed with no way to ask anyone.");
+    Check(refusal.find("Refused") != std::string::npos,
+        "A step needing approval was not reported as refused when nobody could answer.");
+
+    revia::policy::DesktopApprovalGate gate;
+    int asked = 0;
+    revia::policy::ApprovalPrompt seen;
+    gate.SetHandler([&](const revia::policy::ApprovalPrompt& prompt)
+    {
+        ++asked;
+        seen = prompt;
+        return true;
+    });
+    Check(revia::policy::AuthorizeOrExplain(
+            revia::policy::DesktopOperation::PointerActivate,
+            Control("Send", "Messenger"), settings, request, refusal, &gate),
+        "An approved step was still refused.");
+    Check(asked == 1 && refusal.empty(), "Approval did not clear the refusal.");
+    Check(seen.controlName == "Send" && seen.application == "msedge.exe" &&
+        !seen.reason.empty(),
+        "The prompt did not say which control, in which application, or why.");
+
+    // Declining is a refusal, not a retry, and it says the person declined rather than
+    // blaming the policy.
+    gate.SetHandler([](const revia::policy::ApprovalPrompt&) { return false; });
+    Check(!revia::policy::AuthorizeOrExplain(
+            revia::policy::DesktopOperation::PointerActivate,
+            Control("Send", "Messenger"), settings, request, refusal, &gate) &&
+        refusal.find("declined") != std::string::npos,
+        "Declining an approval was not reported as the person declining.");
+}
+
+void TestApprovalNeverWidensAnythingElse()
+{
+    const auto settings = Ceiling(ConsequenceClass::Routine);
+    revia::policy::DesktopApprovalGate gate;
+    int asked = 0;
+    gate.SetHandler([&](const revia::policy::ApprovalPrompt&)
+    {
+        ++asked;
+        return true;
+    });
+
+    // Unprompted work has nobody watching, so it is refused without ever asking. An
+    // approval dialog answered by an absent person is a rubber stamp.
+    revia::actions::ActionRequest autonomous;
+    autonomous.id = revia::actions::NewActionId();
+    autonomous.requestedBy = "autonomous_curiosity/idle";
+    std::string refusal;
+    Check(!revia::policy::AuthorizeOrExplain(
+            revia::policy::DesktopOperation::PointerActivate,
+            Control("Send", "Messenger"), settings, autonomous, refusal, &gate),
+        "An unprompted send was approvable.");
+    Check(asked == 0, "An unprompted step opened a dialog nobody was there to answer.");
+    Check(refusal.find("Nobody is present") != std::string::npos,
+        "The refusal did not say why an unprompted step cannot be approved.");
+
+    // A gate with no handler is a headless run: nobody approved it, so nobody did.
+    revia::policy::DesktopApprovalGate headless;
+    revia::actions::ActionRequest request;
+    request.id = revia::actions::NewActionId();
+    request.requestedBy = "user";
+    Check(!revia::policy::AuthorizeOrExplain(
+            revia::policy::DesktopOperation::PointerActivate,
+            Control("Send", "Messenger"), settings, request, refusal, &headless),
+        "An uninstalled gate behaved as a standing yes.");
+
+    // Approving one thing must not change the settings, so the next identical step asks
+    // again rather than riding the previous answer.
+    asked = 0;
+    for (int attempt = 0; attempt < 3; ++attempt)
+    {
+        Check(revia::policy::AuthorizeOrExplain(
+                revia::policy::DesktopOperation::PointerActivate,
+                Control("Send", "Messenger"), settings, request, refusal, &gate),
+            "A repeated approved step was refused.");
+    }
+    Check(asked == 3, "One approval was spent on more than one activation.");
+
+    // Observation still never asks: looking commits nothing, and a dialog for reading
+    // the screen would train the user to click yes.
+    asked = 0;
+    Check(revia::policy::AuthorizeOrExplain(
+            revia::policy::DesktopOperation::Observe,
+            Control("Send", "Messenger"), settings, request, refusal, &gate),
+        "Observation was gated.");
+    Check(asked == 0, "Observation asked for approval.");
+
+    // Within the ceiling, nothing is asked either.
+    asked = 0;
+    Check(revia::policy::AuthorizeOrExplain(
+            revia::policy::DesktopOperation::PointerActivate,
+            Control("Reply box", "Messenger"),
+            Ceiling(ConsequenceClass::ExternalMessage), request, refusal, &gate),
+        "An ordinary control was refused.");
+    Check(asked == 0, "An effect inside the ceiling still asked for approval.");
+}
+
 void RunDesktopAuthorizationTests()
 {
     TestTheSameEffectCostsTheSameWhicheverRouteReachesIt();
@@ -290,5 +404,7 @@ void RunDesktopAuthorizationTests()
     TestUsefulAutonomyIsPreserved();
     TestTheCeilingExpandsCompatibly();
     TestRefusalsAreActionableAndCarryNoSecrets();
+    TestAnApprovableStepCanActuallyBeApproved();
+    TestApprovalNeverWidensAnythingElse();
     std::cout << "Desktop authorization tests passed: one rule, every route.\n";
 }

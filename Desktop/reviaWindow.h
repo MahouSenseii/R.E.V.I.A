@@ -177,6 +177,10 @@ private:
     void ApplyUserPreferences();
     void RefreshPresenceUi();
     void ShowPreferenceResult(const revia::core::PreferenceResult& result);
+    // The specific yes a control like Send needs. Separate from ConfirmAction: that
+    // one confirms a typed action before policy runs, this one answers an
+    // authorization that stopped on the consequence of a control.
+    bool ApproveDesktopEffect(const revia::policy::ApprovalPrompt& prompt);
     bool ConfirmAction(
         const revia::actions::ActionRequest& request,
         const revia::actions::PolicyDecision& decision);

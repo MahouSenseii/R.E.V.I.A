@@ -92,7 +92,8 @@ bool AuthorizeUiaEffect(
     IUIAutomationElement* window,
     const ActionRequest& request,
     const CapabilitySettings::DesktopControl& settings,
-    std::string& outFailure)
+    std::string& outFailure,
+    const policy::DesktopApprovalGate* approvals)
 {
     policy::TargetEvidence evidence;
     evidence.resolved = control != nullptr;
@@ -115,15 +116,17 @@ bool AuthorizeUiaEffect(
         request.type == ActionType::SetControlText
             ? policy::DesktopOperation::SetValue
             : policy::DesktopOperation::Invoke;
-    return policy::AuthorizeOrExplain(operation, evidence, settings, request, outFailure);
+    return policy::AuthorizeOrExplain(
+        operation, evidence, settings, request, outFailure, approvals);
 }
 
 #endif
 } // namespace
 
 WindowsAutomationExecutor::WindowsAutomationExecutor(
-    CapabilitySettings::DesktopControl inputSettings)
-    : settings(std::move(inputSettings))
+    CapabilitySettings::DesktopControl inputSettings,
+    std::shared_ptr<policy::DesktopApprovalGate> inputApprovals)
+    : settings(std::move(inputSettings)), approvals(std::move(inputApprovals))
 {
 }
 
@@ -192,7 +195,8 @@ ActionResult WindowsAutomationExecutor::Execute(
                 ? "The vision-resolved UI Automation element changed or disappeared; no action was taken."
                 : "No matching control was found.";
         }
-        else if (!AuthorizeUiaEffect(control, window, request, settings, result.message))
+        else if (!AuthorizeUiaEffect(
+            control, window, request, settings, result.message, approvals.get()))
         {
             // Already refused, with the reason in result.message. Reaching a consequence
             // through a control pattern costs the same authority as reaching it with the

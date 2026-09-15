@@ -3,6 +3,8 @@
 #include "Actions/actionTypes.h"
 
 #include <cstdint>
+#include <functional>
+#include <mutex>
 #include <string>
 
 namespace revia::policy
@@ -179,11 +181,49 @@ struct AuthorizationRequest
 [[nodiscard]] std::string PolicyVersion(
     const actions::CapabilitySettings::DesktopControl& settings);
 
+// What a person is being asked to approve. It names the control and what that control
+// would do, and deliberately never carries the message body: approving "Send" is
+// approving an effect on a control, not endorsing text the prompt could be used to
+// display. Bounded and free of content, exactly like AuthorizationDecision::reason.
+struct ApprovalPrompt
+{
+    std::string controlName;
+    std::string application;
+    std::string windowTitle;
+    // The authorization's own sentence about why this stopped.
+    std::string reason;
+};
+
+// The one path allowed to turn RequireApproval into a yes.
+//
+// Runtime-owned and held by shared_ptr so it survives a capability reload rebuilding the
+// executors. Nothing in parsed model output can reach it, name it, or set it: a plan
+// cannot arrive carrying its own permission, and an unanswered gate is a refusal rather
+// than a default yes.
+class DesktopApprovalGate
+{
+public:
+    using Handler = std::function<bool(const ApprovalPrompt&)>;
+
+    void SetHandler(Handler handler);
+    // False when no handler is installed, which is the correct answer for a headless
+    // run: nobody is there, so nobody approved it.
+    [[nodiscard]] bool Ask(const ApprovalPrompt& prompt) const;
+    [[nodiscard]] bool HasHandler() const;
+
+private:
+    mutable std::mutex mutex;
+    Handler handler;
+};
+
+// `gate` is optional. Without one the behavior is exactly what it was before approvals
+// existed: RequireApproval renders as a refusal.
 [[nodiscard]] bool AuthorizeOrExplain(
     DesktopOperation operation,
     const TargetEvidence& evidence,
     const actions::CapabilitySettings::DesktopControl& settings,
     const actions::ActionRequest& request,
-    std::string& outFailure);
+    std::string& outFailure,
+    const DesktopApprovalGate* gate = nullptr);
 
 } // namespace revia::policy

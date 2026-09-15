@@ -338,12 +338,37 @@ std::string PolicyVersion(const actions::CapabilitySettings::DesktopControl& set
     return version;
 }
 
+void DesktopApprovalGate::SetHandler(Handler inputHandler)
+{
+    std::lock_guard lock(mutex);
+    handler = std::move(inputHandler);
+}
+
+bool DesktopApprovalGate::HasHandler() const
+{
+    std::lock_guard lock(mutex);
+    return static_cast<bool>(handler);
+}
+
+bool DesktopApprovalGate::Ask(const ApprovalPrompt& prompt) const
+{
+    // Copied out before the call so the handler -- which blocks on a person -- does not
+    // hold the lock while a dialog is open.
+    Handler current;
+    {
+        std::lock_guard lock(mutex);
+        current = handler;
+    }
+    return current ? current(prompt) : false;
+}
+
 bool AuthorizeOrExplain(
     const DesktopOperation operation,
     const TargetEvidence& evidence,
     const actions::CapabilitySettings::DesktopControl& settings,
     const actions::ActionRequest& request,
-    std::string& outFailure)
+    std::string& outFailure,
+    const DesktopApprovalGate* const gate)
 {
     AuthorizationRequest ask;
     ask.operation = operation;
@@ -356,6 +381,36 @@ bool AuthorizeOrExplain(
     {
         outFailure.clear();
         return true;
+    }
+    // RequireApproval is not a refusal on the merits: it means a specific human yes is
+    // needed. Until this existed there was no way to obtain one, so a click on Send
+    // stopped safely and uselessly. Asking is the whole of the change; the effect, the
+    // ceiling, and every other rule above are untouched.
+    if (decision.verdict == AuthorizationVerdict::RequireApproval && gate != nullptr &&
+        gate->HasHandler())
+    {
+        if (ask.autonomousOrigin)
+        {
+            // Unprompted work has nobody watching to answer. Asking an absent person is
+            // how a confirmation becomes a rubber stamp, so this stays a refusal.
+            outFailure = "Refused: " + decision.reason +
+                " Nobody is present to approve an unprompted step.";
+            return false;
+        }
+        ApprovalPrompt prompt;
+        prompt.controlName = evidence.controlName;
+        prompt.application = request.application;
+        prompt.windowTitle = request.windowTitle;
+        prompt.reason = decision.reason;
+        if (gate->Ask(prompt))
+        {
+            outFailure.clear();
+            return true;
+        }
+        outFailure = "Refused: you declined " +
+            (evidence.controlName.empty() ? std::string("that control")
+                                          : "\"" + evidence.controlName + "\"") + ".";
+        return false;
     }
     outFailure = "Refused: " + decision.reason;
     return false;

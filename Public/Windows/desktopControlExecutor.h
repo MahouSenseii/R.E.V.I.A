@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Actions/IActionExecutor.h"
+#include "Policy/desktopAuthorization.h"
 #include "Policy/desktopInputGuard.h"
 
 #include <memory>
@@ -32,7 +33,8 @@ class DesktopControlExecutor final : public IActionExecutor
 public:
     DesktopControlExecutor(
         CapabilitySettings::DesktopControl settings,
-        std::shared_ptr<policy::DesktopInputGuard> guard);
+        std::shared_ptr<policy::DesktopInputGuard> guard,
+        std::shared_ptr<policy::DesktopApprovalGate> approvals = {});
 
     [[nodiscard]] bool Handles(ActionType type) const override;
     [[nodiscard]] ActionResult Execute(
@@ -42,6 +44,7 @@ public:
 private:
     CapabilitySettings::DesktopControl settings;
     std::shared_ptr<policy::DesktopInputGuard> guard;
+    std::shared_ptr<policy::DesktopApprovalGate> approvals;
 };
 
 } // namespace revia::actions::windows

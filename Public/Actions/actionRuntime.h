@@ -6,6 +6,7 @@
 #include "Policy/capabilityEditor.h"
 #include "Policy/capabilityPolicy.h"
 #include "Policy/desktopActionRateLimiter.h"
+#include "Policy/desktopAuthorization.h"
 #include "Policy/desktopInputGuard.h"
 #include "Policy/permissionStore.h"
 
@@ -95,6 +96,11 @@ public:
         bool visibleBrowser,
         bool autonomousResearch,
         std::string& outError);
+    // Installs the one path allowed to answer a RequireApproval verdict. Runtime-owned
+    // and never reachable from parsed model output; the gate outlives capability
+    // reloads so a reconstructed executor keeps asking the same person.
+    void SetDesktopApprovalHandler(policy::DesktopApprovalGate::Handler handler);
+
     [[nodiscard]] bool SetCameraAccess(
         bool enabled,
         bool autonomousCapture,
@@ -152,6 +158,8 @@ private:
     policy::DesktopActionRateLimiter desktopRateLimiter;
     policy::DesktopActionRateLimiter desktopControlRateLimiter;
     std::shared_ptr<policy::DesktopInputGuard> desktopInputGuard;
+    std::shared_ptr<policy::DesktopApprovalGate> desktopApprovals =
+        std::make_shared<policy::DesktopApprovalGate>();
     std::filesystem::path capabilityConfigPath;
     std::filesystem::path auditPath;
 };

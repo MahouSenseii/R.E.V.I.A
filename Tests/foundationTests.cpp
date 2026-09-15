@@ -9070,6 +9070,7 @@ int main(const int argc, char** argv)
         // Split suites, per the testing refactor. New subsystems get their own file
         // instead of growing this one; they share the harness in testSupport.h.
         RunMemoryDedupTests();
+        RunOperateIntentTests();
         RunBoundedFileReadTests();
         RunEmotionTests();
         RunEmotionOwnershipTests();

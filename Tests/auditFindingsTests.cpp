@@ -735,7 +735,12 @@ void TestPreemptedClassificationIsRetriedThenGivenUp()
 {
     messageRouter router;
     ConfigurePlaceholderRouter(router);
-    MemoryAgent agent;
+    // Its own database. The default constructor resolves to Memory/revia_memory.db --
+    // the real one -- and unlike the other agent tests here this one supplies a decision
+    // that asks to be remembered, so it actually wrote a fixture sentence into the user's
+    // memory store. A test must not be able to put words in her mouth.
+    ScopedTestDirectory directory;
+    MemoryAgent agent((directory.root / "memory.db").string());
     std::atomic<int> attempts{0};
 
     // Always preempted: proves the retry is bounded and the agent still reports.

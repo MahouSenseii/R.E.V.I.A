@@ -129,6 +129,7 @@ void RunIdentityFinalSaveTests();
 void RunLearningDurabilityTests();
 void RunEmbeddingBackfillTests();
 void RunMemoryDedupTests();
+void RunOperateIntentTests();
 void RunBoundedFileReadTests();
 void RunSpeakerContinuityTests();
 void RunSpeechAttributionTests();

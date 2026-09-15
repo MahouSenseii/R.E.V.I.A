@@ -1,22 +1,186 @@
 #include "capabilityPanel.h"
+#include "toggleSwitch.h"
 
 #include <QAbstractItemView>
 #include <QCheckBox>
+#include <QEvent>
+#include <QFrame>
+#include <QGridLayout>
 #include <QHeaderView>
 #include <QHBoxLayout>
 #include <QInputDialog>
 #include <QLabel>
 #include <QLineEdit>
 #include <QMessageBox>
+#include <QMouseEvent>
 #include <QPushButton>
+#include <QSvgWidget>
 #include <QTableWidget>
 #include <QTableWidgetItem>
 #include <QTreeWidget>
 #include <QTreeWidgetItem>
 #include <QVBoxLayout>
+#include <QVariant>
 
 #include <algorithm>
 #include <utility>
+
+namespace
+{
+// Row widgets remember which switch they stand for, so the panel's event filter can
+// forward a click on the label to it.
+constexpr const char* RowTargetProperty = "reviaRowTarget";
+
+QFrame* MakeCard(const QString& objectName)
+{
+    auto* card = new QFrame();
+    card->setObjectName(objectName);
+    auto* layout = new QVBoxLayout(card);
+    layout->setContentsMargins(20, 18, 20, 18);
+    layout->setSpacing(0);
+    return card;
+}
+
+// Small inline glyphs rather than a resource file: each is a few hundred bytes, and
+// keeping them beside the card they label is easier to follow than a .qrc indirection.
+QWidget* MakeIcon(const QString& path, const QString& stroke)
+{
+    const QString document = QStringLiteral(
+        "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' "
+        "stroke='%1' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'>"
+        "%2</svg>").arg(stroke, path);
+    auto* icon = new QSvgWidget();
+    icon->load(document.toUtf8());
+    icon->setFixedSize(18, 18);
+    icon->setAttribute(Qt::WA_TransparentForMouseEvents, true);
+    return icon;
+}
+
+void AddCardHeader(
+    QFrame* card,
+    const QString& iconPath,
+    const QString& stroke,
+    const QString& iconObjectName,
+    const QString& title,
+    const QString& subtitle)
+{
+    auto* header = new QHBoxLayout();
+    header->setSpacing(11);
+    auto* well = new QFrame();
+    well->setObjectName(iconObjectName);
+    well->setFixedSize(32, 32);
+    auto* wellLayout = new QVBoxLayout(well);
+    wellLayout->setContentsMargins(0, 0, 0, 0);
+    wellLayout->addWidget(MakeIcon(iconPath, stroke), 0, Qt::AlignCenter);
+    header->addWidget(well, 0, Qt::AlignTop);
+
+    auto* text = new QVBoxLayout();
+    text->setSpacing(2);
+    auto* titleLabel = new QLabel(title);
+    titleLabel->setObjectName("cardTitle");
+    text->addWidget(titleLabel);
+    auto* subtitleLabel = new QLabel(subtitle);
+    subtitleLabel->setObjectName("cardSubtitle");
+    subtitleLabel->setWordWrap(true);
+    text->addWidget(subtitleLabel);
+    header->addLayout(text, 1);
+
+    auto* cardLayout = qobject_cast<QVBoxLayout*>(card->layout());
+    cardLayout->addLayout(header);
+    cardLayout->addSpacing(14);
+}
+
+// One permission: label, optional helper line and risk chip, switch on the right.
+QFrame* MakeRow(
+    ToggleSwitch* toggle,
+    const QString& label,
+    const QString& help = QString(),
+    const QString& chipText = QString(),
+    const QString& chipObjectName = QString(),
+    const bool nested = false,
+    const QString& tip = QString())
+{
+    auto* row = new QFrame();
+    row->setObjectName(nested ? "permRowNested" : "permRow");
+    row->setProperty(RowTargetProperty, QVariant::fromValue<QObject*>(toggle));
+    auto* layout = new QHBoxLayout(row);
+    layout->setContentsMargins(nested ? 26 : 4, 12, 4, 12);
+    layout->setSpacing(16);
+
+    auto* text = new QVBoxLayout();
+    text->setSpacing(4);
+    auto* labelRow = new QHBoxLayout();
+    labelRow->setSpacing(7);
+    auto* labelWidget = new QLabel(label);
+    labelWidget->setObjectName(nested ? "permLabelNested" : "permLabel");
+    labelRow->addWidget(labelWidget);
+    if (!chipText.isEmpty())
+    {
+        auto* chip = new QLabel(chipText);
+        chip->setObjectName(chipObjectName);
+        labelRow->addWidget(chip);
+    }
+    if (!tip.isEmpty())
+    {
+        // The tooltip text already existed; it was only reachable by hovering the
+        // checkbox, which gave no sign it was there. The marker makes it discoverable.
+        auto* info = new QLabel("i");
+        info->setObjectName("infoDot");
+        info->setAlignment(Qt::AlignCenter);
+        info->setFixedSize(15, 15);
+        info->setToolTip(tip);
+        labelRow->addWidget(info);
+        labelWidget->setToolTip(tip);
+    }
+    labelRow->addStretch();
+    text->addLayout(labelRow);
+    if (!help.isEmpty())
+    {
+        auto* helpLabel = new QLabel(help);
+        helpLabel->setObjectName("permHelp");
+        helpLabel->setWordWrap(true);
+        text->addWidget(helpLabel);
+    }
+    layout->addLayout(text, 1);
+    layout->addWidget(toggle, 0, Qt::AlignVCenter);
+    return row;
+}
+
+void AddRow(QFrame* card, QFrame* row)
+{
+    qobject_cast<QVBoxLayout*>(card->layout())->addWidget(row);
+}
+
+QFrame* MakeSeparator()
+{
+    auto* line = new QFrame();
+    line->setObjectName("rowSeparator");
+    line->setFixedHeight(1);
+    return line;
+}
+}
+
+bool CapabilityPanel::eventFilter(QObject* watched, QEvent* event)
+{
+    if (event->type() == QEvent::MouseButtonRelease)
+    {
+        auto* row = qobject_cast<QWidget*>(watched);
+        const auto* click = static_cast<QMouseEvent*>(event);
+        if (row && click->button() == Qt::LeftButton && row->rect().contains(click->pos()))
+        {
+            // Cast to the QCheckBox base rather than ToggleSwitch: the subclass carries
+            // no Q_OBJECT, and toggling is base-class behavior anyway.
+            auto* target = qobject_cast<QCheckBox*>(
+                row->property(RowTargetProperty).value<QObject*>());
+            if (target && target->isEnabled())
+            {
+                target->toggle();
+                return true;
+            }
+        }
+    }
+    return QWidget::eventFilter(watched, event);
+}
 
 CapabilityPanel::CapabilityPanel(
     revia::runtime::ReviaSession& inputSession,
@@ -28,132 +192,225 @@ CapabilityPanel::CapabilityPanel(
 {
     auto* layout = new QVBoxLayout(this);
     layout->setContentsMargins(0, 10, 0, 0);
-    layout->setSpacing(10);
+    layout->setSpacing(16);
 
     auto* title = new QLabel("Application and internet permissions", this);
     title->setObjectName("sectionTitle");
     layout->addWidget(title);
+
+    auto* intro = new QFrame(this);
+    intro->setObjectName("introBar");
+    auto* introLayout = new QVBoxLayout(intro);
+    introLayout->setContentsMargins(14, 11, 14, 11);
     auto* explanation = new QLabel(
         "Applications begin with read-only inspection permission and no mutable controls. "
         "Discover a foreground window, then approve only the controls Revia may invoke or edit. "
-        "Internet access is a separate read-only, rate-limited capability.", this);
+        "Internet access is a separate read-only, rate-limited capability.", intro);
     explanation->setWordWrap(true);
     explanation->setObjectName("secondaryText");
-    layout->addWidget(explanation);
+    introLayout->addWidget(explanation);
+    layout->addWidget(intro);
 
-    internetCheck = new QCheckBox("Allow bounded internet lookup", this);
-    automaticLookupCheck = new QCheckBox(
-        "Automatically look up current and factual knowledge questions", this);
-    visibleBrowserCheck = new QCheckBox(
-        "Use a dedicated visible browser window", this);
-    autonomousResearchCheck = new QCheckBox(
-        "Allow Revia to research her own topics", this);
-    auto* internetRow = new QHBoxLayout();
-    internetRow->addWidget(internetCheck);
-    internetRow->addWidget(automaticLookupCheck);
-    internetRow->addStretch();
-    layout->addLayout(internetRow);
-    auto* browserRow = new QHBoxLayout();
-    browserRow->addWidget(visibleBrowserCheck);
-    browserRow->addWidget(autonomousResearchCheck);
-    browserRow->addStretch();
-    layout->addLayout(browserRow);
+    auto* cards = new QGridLayout();
+    cards->setHorizontalSpacing(18);
+    cards->setVerticalSpacing(18);
+    cards->setColumnStretch(0, 1);
+    cards->setColumnStretch(1, 1);
 
-    cameraCheck = new QCheckBox("Allow camera access", this);
-    cameraCheck->setToolTip(
+    // ------------------------------------------------------------ internet
+    auto* internetCard = MakeCard("permCard");
+    AddCardHeader(internetCard,
+        "<circle cx='12' cy='12' r='9'/><path d='M3 12h18M12 3c2.5 2.6 2.5 15.4 0 18M12 3"
+        "c-2.5 2.6-2.5 15.4 0 18'/>",
+        "#55E8F2", "iconWell",
+        "Internet & Browser",
+        "Read-only and rate-limited. Results are grounding, never instructions.");
+    internetCheck = new ToggleSwitch(ToggleSwitch::Accent::Cyan, this);
+    automaticLookupCheck = new ToggleSwitch(ToggleSwitch::Accent::Cyan, this);
+    visibleBrowserCheck = new ToggleSwitch(ToggleSwitch::Accent::Cyan, this);
+    autonomousResearchCheck = new ToggleSwitch(ToggleSwitch::Accent::Violet, this);
+    AddRow(internetCard, MakeRow(internetCheck,
+        "Allow bounded internet lookup",
+        "Searches a fixed set of public HTTPS sources on request."));
+    AddRow(internetCard, MakeRow(automaticLookupCheck,
+        "Automatically look up factual questions",
+        "Without this she searches only when you ask her to.",
+        QString(), QString(), true));
+    AddRow(internetCard, MakeRow(visibleBrowserCheck,
+        "Use a dedicated visible browser window",
+        QString(), QString(), QString(), true));
+    AddRow(internetCard, MakeRow(autonomousResearchCheck,
+        "Research her own topics",
+        "Lets curiosity start a bounded search with no request from you.",
+        "Autonomy", "chipAutonomy", true));
+    qobject_cast<QVBoxLayout*>(internetCard->layout())->addStretch();
+    cards->addWidget(internetCard, 0, 0);
+
+    // ------------------------------------------------------------ camera
+    auto* cameraCard = MakeCard("permCard");
+    AddCardHeader(cameraCard,
+        "<path d='M3 8.5A2.5 2.5 0 0 1 5.5 6h2L9 4h6l1.5 2h2A2.5 2.5 0 0 1 21 8.5v8A2.5 "
+        "2.5 0 0 1 18.5 19h-13A2.5 2.5 0 0 1 3 16.5z'/><circle cx='12' cy='12.5' r='3.4'/>",
+        "#55E8F2", "iconWell",
+        "Camera",
+        "Opened for a single frame, then closed again immediately.");
+    cameraCheck = new ToggleSwitch(ToggleSwitch::Accent::Cyan, this);
+    autonomousCameraCheck = new ToggleSwitch(ToggleSwitch::Accent::Violet, this);
+    AddRow(cameraCard, MakeRow(cameraCheck,
+        "Allow camera access",
+        "Still frames only. No continuous capture, no recording.",
+        QString(), QString(), false,
         "Revia may take a single still frame when you ask her to look at something. "
-        "The camera is opened for that frame and closed again immediately.");
-    autonomousCameraCheck = new QCheckBox(
-        "Let Revia decide when to look", this);
-    autonomousCameraCheck->setToolTip(
-        "A separate permission. Without it she can only use the camera when asked.");
-    auto* cameraRow = new QHBoxLayout();
-    cameraRow->addWidget(cameraCheck);
-    cameraRow->addWidget(autonomousCameraCheck);
-    cameraRow->addStretch();
-    layout->addLayout(cameraRow);
+        "The camera is opened for that frame and closed again immediately."));
+    AddRow(cameraCard, MakeRow(autonomousCameraCheck,
+        "Let her decide when to look",
+        QString(), "Autonomy", "chipAutonomy", true,
+        "A separate permission. Without it she can only use the camera when asked."));
+    qobject_cast<QVBoxLayout*>(cameraCard->layout())->addStretch();
+    cards->addWidget(cameraCard, 0, 1);
 
-    auto* desktopTitle = new QLabel("Pointer and keyboard control", this);
-    desktopTitle->setObjectName("sectionTitle");
-    layout->addWidget(desktopTitle);
-    auto* desktopExplanation = new QLabel(
-        "Synthesized input is indistinguishable from you typing. By default it is "
-        "confined to windows belonging to an approved application above. Giving her the "
-        "whole desktop removes that confinement on purpose, so she can learn the machine "
-        "the way a person does. Hold ctrl+alt+shift, or press Stop, to halt it "
-        "immediately.", this);
-    desktopExplanation->setWordWrap(true);
-    desktopExplanation->setObjectName("secondaryText");
-    layout->addWidget(desktopExplanation);
+    // ------------------------------------------------------------ pointer and keyboard
+    auto* desktopCard = MakeCard("permCard");
+    AddCardHeader(desktopCard,
+        "<path d='M5 3.5 18.5 11l-5.8 1.6L10 19z'/>",
+        "#55E8F2", "iconWell",
+        "Pointer & Keyboard",
+        "Synthesized input is indistinguishable from you typing. Confined to approved "
+        "applications unless that confinement is lifted.");
+    pointerCheck = new ToggleSwitch(ToggleSwitch::Accent::Cyan, this);
+    keyboardCheck = new ToggleSwitch(ToggleSwitch::Accent::Cyan, this);
+    launchCheck = new ToggleSwitch(ToggleSwitch::Accent::Cyan, this);
+    rawCoordinateCheck = new ToggleSwitch(ToggleSwitch::Accent::Cyan, this);
+    AddRow(desktopCard, MakeRow(pointerCheck, "Move and click the pointer"));
+    AddRow(desktopCard, MakeRow(keyboardCheck, "Type and press key chords"));
+    AddRow(desktopCard, MakeRow(launchCheck, "Start approved applications"));
+    AddRow(desktopCard, MakeRow(rawCoordinateCheck,
+        "Aim at coordinates she chose",
+        "Otherwise every click must land on a re-verified element.",
+        QString(), QString(), true,
+        "Without this she may only click an element the screen resolver re-verified."));
 
-    pointerCheck = new QCheckBox("Move and click the pointer", this);
-    keyboardCheck = new QCheckBox("Type and press key chords", this);
-    launchCheck = new QCheckBox("Start approved applications", this);
-    rawCoordinateCheck = new QCheckBox("Aim at coordinates she chose", this);
-    rawCoordinateCheck->setToolTip(
-        "Without this she may only click an element the screen resolver re-verified.");
-    wholeDesktopCheck = new QCheckBox("Give her the whole desktop", this);
-    wholeDesktopCheck->setToolTip(
-        "The pointer goes anywhere and the keyboard goes to whatever has focus, the way "
-        "it does for you. Needs pointer control and chosen coordinates.");
-    commandSurfaceCheck = new QCheckBox("Allow terminals and script hosts", this);
-    commandSurfaceCheck->setToolTip(
-        "Off by default. Typing into a command interpreter is model text reaching a "
-        "shell no matter which window it arrived through.");
-    autonomousDesktopCheck = new QCheckBox("Let Revia operate on her own", this);
-    autonomousDesktopCheck->setToolTip(
-        "A separate permission. Without it she may only do this as part of something "
-        "you asked for.");
+    auto* desktopLayout = qobject_cast<QVBoxLayout*>(desktopCard->layout());
+    desktopLayout->addSpacing(6);
+    auto* stopBar = new QFrame();
+    stopBar->setObjectName("stopBar");
+    auto* stopLayout = new QHBoxLayout(stopBar);
+    stopLayout->setContentsMargins(11, 9, 11, 9);
+    stopLayout->setSpacing(10);
+    auto* stopState = new QLabel("Hold ctrl+alt+shift to halt input immediately.");
+    stopState->setObjectName("stopState");
+    stopState->setWordWrap(true);
+    stopLayout->addWidget(stopState, 1);
     desktopStopButton = new QPushButton("Stop desktop control", this);
-    auto* desktopRow = new QHBoxLayout();
-    desktopRow->addWidget(pointerCheck);
-    desktopRow->addWidget(keyboardCheck);
-    desktopRow->addWidget(launchCheck);
-    desktopRow->addStretch();
-    layout->addLayout(desktopRow);
-    auto* desktopScopeRow = new QHBoxLayout();
-    desktopScopeRow->addWidget(rawCoordinateCheck);
-    desktopScopeRow->addWidget(wholeDesktopCheck);
-    desktopScopeRow->addWidget(commandSurfaceCheck);
-    desktopScopeRow->addStretch();
-    layout->addLayout(desktopScopeRow);
-    auto* desktopAutonomyRow = new QHBoxLayout();
-    desktopAutonomyRow->addWidget(autonomousDesktopCheck);
-    desktopAutonomyRow->addStretch();
-    desktopAutonomyRow->addWidget(desktopStopButton);
-    layout->addLayout(desktopAutonomyRow);
+    desktopStopButton->setObjectName("stopButton");
+    stopLayout->addWidget(desktopStopButton, 0);
+    desktopLayout->addWidget(stopBar);
+    desktopLayout->addStretch();
+    cards->addWidget(desktopCard, 1, 0);
 
+    // ------------------------------------------------------------ gated
+    auto* gatedCard = MakeCard("gatedCard");
+    AddCardHeader(gatedCard,
+        "<path d='M12 3 4 6.2v5.3c0 4.6 3.2 8.6 8 9.5 4.8-.9 8-4.9 8-9.5V6.2z'/>"
+        "<path d='M12 9v4'/><path d='M12 16h.01'/>",
+        "#F3A446", "iconWellGated",
+        "Gated Controls",
+        "Each one removes a boundary the other permissions rely on. Off by default.");
+    auto* gatedNotice = new QLabel(
+        "These extend Revia beyond approved applications. Policy, confirmation and the "
+        "audit log still apply to every action — but the scope they are checked "
+        "against grows.");
+    gatedNotice->setObjectName("gatedNotice");
+    gatedNotice->setWordWrap(true);
+    auto* gatedLayout = qobject_cast<QVBoxLayout*>(gatedCard->layout());
+    gatedLayout->addWidget(gatedNotice);
+    gatedLayout->addSpacing(4);
+
+    wholeDesktopCheck = new ToggleSwitch(ToggleSwitch::Accent::Amber, this);
+    commandSurfaceCheck = new ToggleSwitch(ToggleSwitch::Accent::Red, this);
+    autonomousDesktopCheck = new ToggleSwitch(ToggleSwitch::Accent::Violet, this);
+    AddRow(gatedCard, MakeRow(wholeDesktopCheck,
+        "Give her the whole desktop",
+        "Allows Revia to act outside approved applications. Requires pointer control "
+        "and chosen coordinates.",
+        "Removes confinement", "chipGated", false,
+        "The pointer goes anywhere and the keyboard goes to whatever has focus, the way "
+        "it does for you. Needs pointer control and chosen coordinates."));
+    AddRow(gatedCard, MakeSeparator());
+    AddRow(gatedCard, MakeRow(commandSurfaceCheck,
+        "Allow terminals and script hosts",
+        "Typing into a command interpreter is model text reaching a shell, whichever "
+        "window it arrived through.",
+        "Command surface", "chipCritical", false,
+        "Off by default. Typing into a command interpreter is model text reaching a "
+        "shell no matter which window it arrived through."));
+    AddRow(gatedCard, MakeSeparator());
+    AddRow(gatedCard, MakeRow(autonomousDesktopCheck,
+        "Let Revia operate on her own",
+        "Unprompted desktop work. Still refused while you are actively working.",
+        "Autonomy", "chipAutonomy", false,
+        "A separate permission. Without it she may only do this as part of something "
+        "you asked for."));
+    gatedLayout->addStretch();
+    cards->addWidget(gatedCard, 1, 1);
+
+    layout->addLayout(cards);
+
+    // Whole-row clicking for every permission built above.
+    for (QFrame* row : findChildren<QFrame*>())
+    {
+        if (row->property(RowTargetProperty).isValid()) row->installEventFilter(this);
+    }
+
+    // ------------------------------------------------------------ approved + discovery
     auto* body = new QHBoxLayout();
-    auto* approvedColumn = new QVBoxLayout();
-    auto* approvedTitle = new QLabel("Approved applications and controls", this);
-    approvedTitle->setObjectName("sectionTitle");
+    body->setSpacing(18);
+
+    auto* approvedCard = MakeCard("permCard");
+    auto* approvedColumn = qobject_cast<QVBoxLayout*>(approvedCard->layout());
+    auto* approvedTitle = new QLabel("Approved applications and controls");
+    approvedTitle->setObjectName("cardTitle");
     approvedColumn->addWidget(approvedTitle);
+    auto* approvedHelp = new QLabel("Only the controls listed here may be invoked or edited.");
+    approvedHelp->setObjectName("cardSubtitle");
+    approvedHelp->setWordWrap(true);
+    approvedColumn->addWidget(approvedHelp);
+    approvedColumn->addSpacing(10);
     approvedTree = new QTreeWidget(this);
     approvedTree->setHeaderLabels({"Permission", "Scope"});
     approvedTree->header()->setSectionResizeMode(0, QHeaderView::Stretch);
     approvedTree->header()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
     approvedTree->setAlternatingRowColors(true);
     approvedTree->setSelectionMode(QAbstractItemView::SingleSelection);
+    approvedTree->setRootIsDecorated(false);
+    approvedTree->setIndentation(16);
+    approvedTree->setMinimumHeight(240);
     approvedColumn->addWidget(approvedTree, 1);
     auto* approvedButtons = new QHBoxLayout();
+    approvedButtons->setSpacing(8);
     auto* addApplicationButton = new QPushButton("Add application", this);
+    addApplicationButton->setObjectName("primaryButton");
     auto* removeButton = new QPushButton("Remove selected", this);
-    removeButton->setObjectName("stopButton");
+    removeButton->setObjectName("destructiveButton");
     approvedButtons->addWidget(addApplicationButton);
     approvedButtons->addWidget(removeButton);
+    approvedButtons->addStretch();
+    approvedColumn->addSpacing(10);
     approvedColumn->addLayout(approvedButtons);
-    body->addLayout(approvedColumn, 1);
+    body->addWidget(approvedCard, 1);
 
-    auto* discoveryColumn = new QVBoxLayout();
-    auto* discoveryTitle = new QLabel("Foreground control discovery", this);
-    discoveryTitle->setObjectName("sectionTitle");
+    auto* discoveryCard = MakeCard("permCard");
+    auto* discoveryColumn = qobject_cast<QVBoxLayout*>(discoveryCard->layout());
+    auto* discoveryTitle = new QLabel("Foreground control discovery");
+    discoveryTitle->setObjectName("cardTitle");
     discoveryColumn->addWidget(discoveryTitle);
     discoveryLabel = new QLabel(
         "Minimize Revia and inspect the application underneath. Discovery changes no permission.",
         this);
     discoveryLabel->setWordWrap(true);
-    discoveryLabel->setObjectName("secondaryText");
+    discoveryLabel->setObjectName("cardSubtitle");
     discoveryColumn->addWidget(discoveryLabel);
+    discoveryColumn->addSpacing(10);
     discoveredTable = new QTableWidget(0, 3, this);
     discoveredTable->setHorizontalHeaderLabels({"Control", "Automation ID", "Pattern"});
     discoveredTable->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch);
@@ -164,15 +421,21 @@ CapabilityPanel::CapabilityPanel(
     discoveredTable->setSelectionMode(QAbstractItemView::ExtendedSelection);
     discoveredTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
     discoveredTable->setAlternatingRowColors(true);
+    discoveredTable->setShowGrid(false);
+    discoveredTable->setMinimumHeight(240);
     discoveryColumn->addWidget(discoveredTable, 1);
     auto* discoveryButtons = new QHBoxLayout();
+    discoveryButtons->setSpacing(8);
     auto* discoverButton = new QPushButton("Inspect foreground app", this);
+    discoverButton->setObjectName("primaryButton");
     approveDiscoveredButton = new QPushButton("Approve selected controls", this);
     approveDiscoveredButton->setEnabled(false);
     discoveryButtons->addWidget(discoverButton);
     discoveryButtons->addWidget(approveDiscoveredButton);
+    discoveryButtons->addStretch();
+    discoveryColumn->addSpacing(10);
     discoveryColumn->addLayout(discoveryButtons);
-    body->addLayout(discoveryColumn, 1);
+    body->addWidget(discoveryCard, 1);
     layout->addLayout(body, 1);
 
     statusLabel = new QLabel(

@@ -872,8 +872,11 @@ ActionResult PressKeyChord(
 
 DesktopControlExecutor::DesktopControlExecutor(
     CapabilitySettings::DesktopControl inputSettings,
-    std::shared_ptr<policy::DesktopInputGuard> inputGuard)
-    : settings(std::move(inputSettings)), guard(std::move(inputGuard))
+    std::shared_ptr<policy::DesktopInputGuard> inputGuard,
+    std::shared_ptr<policy::DesktopApprovalGate> inputApprovals)
+    : settings(std::move(inputSettings)),
+      guard(std::move(inputGuard)),
+      approvals(std::move(inputApprovals))
 {
 }
 
@@ -1104,7 +1107,7 @@ ActionResult DesktopControlExecutor::Execute(
 
         std::string refusal;
         if (!AuthorizeOrExplain(operation, ToEvidence(focused, request.windowTitle), settings,
-                request, refusal))
+                request, refusal, approvals.get()))
         {
             result.message = refusal;
             return finish();
@@ -1244,7 +1247,8 @@ ActionResult DesktopControlExecutor::Execute(
     {
         std::string refusal;
         if (!AuthorizeOrExplain(policy::DesktopOperation::PointerActivate,
-                ToEvidence(under, request.windowTitle), settings, request, refusal))
+                ToEvidence(under, request.windowTitle), settings, request, refusal,
+                approvals.get()))
         {
             result.message = refusal;
             return finish();
@@ -1262,7 +1266,8 @@ ActionResult DesktopControlExecutor::Execute(
             DescribePoint(automation, target.endX, target.endY);
         std::string refusal;
         if (!AuthorizeOrExplain(policy::DesktopOperation::PointerActivate,
-                ToEvidence(destination, request.windowTitle), settings, request, refusal))
+                ToEvidence(destination, request.windowTitle), settings, request, refusal,
+                approvals.get()))
         {
             result.message = "Refused at the drop point: " + refusal;
             return finish();

@@ -173,6 +173,8 @@ if(REVIA_BUILD_DESKTOP)
                 "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/reviaWindow.cpp"
                 "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/reviaWindow.h"
                 "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/reviaWindow.ui"
+                "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/toggleSwitch.cpp"
+                "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/toggleSwitch.h"
                 "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/reviaResources.qrc"
         )
         set_target_properties(ReviaDesktop PROPERTIES AUTOUIC ON AUTORCC ON)

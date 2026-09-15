@@ -181,6 +181,10 @@ public:
     void Stop();
 
     void SetConfirmationHandler(ConfirmationHandler handler);
+    // Answers a desktop RequireApproval -- the specific human yes that a control like
+    // Send needs. Without one installed such a step is refused, as it always was.
+    void SetDesktopApprovalHandler(
+        revia::policy::DesktopApprovalGate::Handler handler);
     RuntimeEventBus& Events();
     RuntimeState State() const;
     bool IsStarted() const;
@@ -499,6 +503,9 @@ private:
         const goals::Goal& goal, std::uint32_t iteration) const;
     bool TryHandleGoalInput(const std::string& input, SessionResult& result);
     bool TryHandleOperateInput(const std::string& input, SessionResult& result);
+    // Shared by /operate and by an ordinary sentence that asked for the same thing, so
+    // the two routes cannot drift into different rules.
+    bool RunOperateGoal(const std::string& request, SessionResult& result);
     // Every archived turn goes through here, so the sensitive-content refusal and the
     // enabled check live in one place rather than at each call site.
     void ArchiveTurn(const std::string& role, const std::string& content);

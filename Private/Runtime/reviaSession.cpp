@@ -9,6 +9,7 @@
 #include "Identity/relationshipEvidence.h"
 #include "Memory/longTermMemory.h"
 #include "Planning/goalPlanner.h"
+#include "Planning/operateIntent.h"
 #include "Visual/drawingRequestPolicy.h"
 #include "Vision/screenAwarenessAssessment.h"
 #include "Windows/disposableApplicationFixtures.h"
@@ -4390,6 +4391,12 @@ void ReviaSession::SetConfirmationHandler(ConfirmationHandler handler)
     confirmationHandler = std::move(handler);
 }
 
+void ReviaSession::SetDesktopApprovalHandler(
+    revia::policy::DesktopApprovalGate::Handler handler)
+{
+    actionRuntime.SetDesktopApprovalHandler(std::move(handler));
+}
+
 RuntimeEventBus& ReviaSession::Events()
 {
     return eventBus;
@@ -7373,6 +7380,15 @@ bool ReviaSession::TryHandleOperateInput(const std::string& input, SessionResult
         SetState(RuntimeState::Blocked, result.reason);
         return true;
     }
+    return RunOperateGoal(request, result);
+}
+
+// The body of /operate, reachable from the command and from an ordinary sentence that
+// asked for the same thing. Split so both routes are provably the same path rather than
+// two implementations that drift: everything below -- the up-front approval, the budgets,
+// the per-action policy and audit -- happens identically whichever way the request came.
+bool ReviaSession::RunOperateGoal(const std::string& request, SessionResult& result)
+{
     if (!actionRuntime.IsInitialized())
     {
         result.succeeded = false;
@@ -8786,6 +8802,29 @@ bool ReviaSession::TryHandleActionInput(const std::string& input, SessionResult&
     auto parsed = actionRuntime.ParseCommand(input);
     if (!parsed.recognized)
     {
+        // Last, so every explicit syntax above still wins, and only then does an
+        // ordinary sentence get read as a request to operate the machine. A slash
+        // prefix cannot be spoken and speech is where this is going, so it cannot be
+        // the only way in. Routing only: the goal below is checked, confirmed and
+        // audited exactly as the command's would be.
+        const planning::OperateIntent intent = planning::DetectOperateRequest(input);
+        if (intent.matched && actionRuntime.IsInitialized())
+        {
+            const auto desktop = actionRuntime.Settings().desktopControl;
+            if (!desktop.AnyEnabled())
+            {
+                // Runtime truth rather than a conversational guess. Without this the
+                // model answers from imagination and can claim it already did the thing.
+                result.succeeded = false;
+                result.text =
+                    "I can't do that yet: pointer and keyboard control are off. Turn "
+                    "them on in the Permissions tab and ask me again.";
+                result.reason = "Desktop control is disabled in capability settings.";
+                SetState(RuntimeState::Blocked, result.reason);
+                return true;
+            }
+            return RunOperateGoal(Trim(input), result);
+        }
         return false;
     }
     if (!parsed.succeeded)
