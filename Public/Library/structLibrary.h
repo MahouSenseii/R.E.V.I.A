@@ -753,6 +753,11 @@ struct memoryDecision
 {
     bool bSuccess = false;
     bool bShouldRemember = false;
+    // The evaluation yielded to an interactive turn instead of reaching a verdict, so
+    // this decision says nothing about whether the turn was worth remembering. Distinct
+    // from bSuccess, which stays true because yielding is correct behavior rather than a
+    // failure, and distinct from a genuine "not worth remembering" answer.
+    bool bPreempted = false;
 
     std::string category;
     std::string summary;

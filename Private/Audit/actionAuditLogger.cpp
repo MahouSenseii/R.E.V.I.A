@@ -50,16 +50,40 @@ std::string BoundedUtf8Prefix(const std::string& value, const std::size_t maximu
     return value.substr(0, end);
 }
 
-// Exclude competing writers and reject a partial previous record. A failed append
-// must not permit dispatch or make the next append hide an incomplete JSON line.
-bool AppendDurably(const std::filesystem::path& path, const std::string& bytes)
+// Another writer holds the journal only while it finishes one append, so a brief
+// retry distinguishes that from a journal that is genuinely unavailable. Without it,
+// ordinary contention between two writers refuses an action outright.
+constexpr int MaximumOpenAttempts = 5;
+constexpr int OpenRetryMilliseconds = 20;
+
+// Exclude competing writers, and repair -- never hide, complete or replay -- a partial
+// previous record. A failed append must not permit dispatch.
+//
+// A torn trailing line used to refuse every later append for the life of the file, and
+// because a refused intent append blocks dispatch, one crash mid-write disabled every
+// future action until a human edited the journal. Failing closed was right; staying
+// closed forever was not. The torn line is now terminated and followed by
+// `recoveryRecord`, which names it incomplete and its outcome unknown. That is the same
+// thing an orphan intent already means, said out loud: no byte of the torn record is
+// altered, and nothing about it becomes safe to retry.
+bool AppendDurably(const std::filesystem::path& path, const std::string& bytes,
+    const std::string& recoveryRecord)
 {
 #ifdef _WIN32
-    const HANDLE file = CreateFileW(path.c_str(), GENERIC_READ | GENERIC_WRITE,
-        FILE_SHARE_READ, nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    HANDLE file = INVALID_HANDLE_VALUE;
+    for (int attempt = 0; attempt < MaximumOpenAttempts; ++attempt)
+    {
+        file = CreateFileW(path.c_str(), GENERIC_READ | GENERIC_WRITE,
+            FILE_SHARE_READ, nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+        if (file != INVALID_HANDLE_VALUE) break;
+        const DWORD error = GetLastError();
+        if (error != ERROR_SHARING_VIOLATION && error != ERROR_LOCK_VIOLATION) break;
+        Sleep(OpenRetryMilliseconds);
+    }
     if (file == INVALID_HANDLE_VALUE) return false;
     LARGE_INTEGER size{};
     bool valid = GetFileSizeEx(file, &size) != FALSE;
+    bool torn = false;
     if (valid && size.QuadPart > 0)
     {
         LARGE_INTEGER last{};
@@ -67,32 +91,44 @@ bool AppendDurably(const std::filesystem::path& path, const std::string& bytes)
         char tail = 0;
         DWORD count = 0;
         valid = SetFilePointerEx(file, last, nullptr, FILE_END) &&
-            ReadFile(file, &tail, 1, &count, nullptr) && count == 1 && tail == '\n';
+            ReadFile(file, &tail, 1, &count, nullptr) && count == 1;
+        torn = valid && tail != '\n';
     }
+    // One write, so a reader never sees the repair without the record that prompted it.
+    const std::string payload = torn ? "\n" + recoveryRecord + bytes : bytes;
     LARGE_INTEGER end{};
     DWORD written = 0;
-    valid = valid && bytes.size() <= std::numeric_limits<DWORD>::max() &&
+    valid = valid && payload.size() <= std::numeric_limits<DWORD>::max() &&
         SetFilePointerEx(file, end, nullptr, FILE_END) &&
-        WriteFile(file, bytes.data(), static_cast<DWORD>(bytes.size()), &written, nullptr) &&
-        written == bytes.size() && FlushFileBuffers(file);
+        WriteFile(file, payload.data(), static_cast<DWORD>(payload.size()), &written, nullptr) &&
+        written == payload.size() && FlushFileBuffers(file);
     const bool closed = CloseHandle(file) != FALSE;
     return valid && closed;
 #else
     const int file = open(path.c_str(), O_RDWR | O_CREAT | O_CLOEXEC, 0600);
     if (file < 0) return false;
-    bool valid = flock(file, LOCK_EX | LOCK_NB) == 0;
+    bool locked = false;
+    for (int attempt = 0; attempt < MaximumOpenAttempts && !locked; ++attempt)
+    {
+        locked = flock(file, LOCK_EX | LOCK_NB) == 0;
+        if (!locked) usleep(OpenRetryMilliseconds * 1000);
+    }
+    bool valid = locked;
     const off_t size = valid ? lseek(file, 0, SEEK_END) : -1;
     valid = valid && size >= 0;
+    bool torn = false;
     if (valid && size > 0)
     {
         char tail = 0;
-        valid = lseek(file, -1, SEEK_END) >= 0 && read(file, &tail, 1) == 1 && tail == '\n';
+        valid = lseek(file, -1, SEEK_END) >= 0 && read(file, &tail, 1) == 1;
+        torn = valid && tail != '\n';
     }
+    const std::string payload = torn ? "\n" + recoveryRecord + bytes : bytes;
     valid = valid && lseek(file, 0, SEEK_END) >= 0;
     std::size_t offset = 0;
-    while (valid && offset < bytes.size())
+    while (valid && offset < payload.size())
     {
-        const ssize_t count = write(file, bytes.data() + offset, bytes.size() - offset);
+        const ssize_t count = write(file, payload.data() + offset, payload.size() - offset);
         if (count <= 0) valid = false;
         else offset += static_cast<std::size_t>(count);
     }
@@ -256,7 +292,17 @@ bool ActionAuditLogger::WriteRecord(
                 {"match_confidence", request.resolution.matchConfidence}
             };
         }
-        return AppendDurably(path, entry.dump() + '\n');
+        // Written only if the previous append was interrupted. It marks the torn record
+        // unknown rather than failed: an interrupted write says nothing about whether
+        // the executor ran, which is precisely why it must not be replayed.
+        const nlohmann::json recovery = {
+            {"record_type", "recovery"},
+            {"timestamp", UtcTimestamp()},
+            {"observed_by_transaction", transactionId},
+            {"result", "The preceding record was written incompletely. Its outcome is "
+                "unknown: it was terminated, not completed, and must not be replayed."}
+        };
+        return AppendDurably(path, entry.dump() + '\n', recovery.dump() + '\n');
     }
     catch (const std::exception&)
     {

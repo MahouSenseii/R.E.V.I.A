@@ -1,4 +1,5 @@
 #include "testSupport.h"
+#include "memoryAgentTestAccess.h"
 
 #include <nlohmann/json.hpp>
 
@@ -724,6 +725,74 @@ void TestEventPriorityClassificationMatchesWhatMustNeverBeLostSilently()
         "A save that matched an existing memory (nothing new) was not classified Low.");
 }
 
+// A classification that yielded to the user is retried, not silently lost.
+//
+// Preemption reached no verdict, so if the task were simply dropped the turn would
+// produce no memory and look exactly like a turn judged not worth remembering. Real
+// preemption needs a live inference scheduler under contention, so the model call is
+// substituted here; the retry path it drives is production code.
+void TestPreemptedClassificationIsRetriedThenGivenUp()
+{
+    messageRouter router;
+    ConfigurePlaceholderRouter(router);
+    MemoryAgent agent;
+    std::atomic<int> attempts{0};
+
+    // Always preempted: proves the retry is bounded and the agent still reports.
+    revia::agents::MemoryAgentTestAccess::SetEvaluator(agent,
+        [&](const std::string&, const std::string&)
+        {
+            ++attempts;
+            memoryDecision decision;
+            decision.bSuccess = true;
+            decision.bPreempted = true;
+            decision.reason = "Memory evaluation yielded to an interactive conversation turn.";
+            return decision;
+        });
+    agent.Submit(router, "a turn that keeps losing to live conversation");
+    std::vector<revia::agents::MemoryAgentEvent> events;
+    for (int attempt = 0; attempt < 400 && events.empty(); ++attempt)
+    {
+        events = agent.DrainEvents();
+        if (events.empty()) std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    Check(attempts.load() == 3,
+        "A preempted evaluation was not retried exactly twice before giving up: saw " +
+        std::to_string(attempts.load()) + " attempts.");
+    Check(events.size() == 1 && events.front().decision.bPreempted,
+        "Giving up on a preempted evaluation did not report it.");
+
+    // Preempted once, then allowed to finish: the memory survives the interruption.
+    std::atomic<int> secondAttempts{0};
+    revia::agents::MemoryAgentTestAccess::SetEvaluator(agent,
+        [&](const std::string&, const std::string&)
+        {
+            memoryDecision decision;
+            decision.bSuccess = true;
+            if (++secondAttempts == 1)
+            {
+                decision.bPreempted = true;
+                return decision;
+            }
+            decision.bShouldRemember = true;
+            decision.category = "fact";
+            decision.summary = "The user survived an interruption.";
+            return decision;
+        });
+    agent.Submit(router, "a turn interrupted once");
+    events.clear();
+    for (int attempt = 0; attempt < 400 && events.empty(); ++attempt)
+    {
+        events = agent.DrainEvents();
+        if (events.empty()) std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    Check(secondAttempts.load() == 2 && events.size() == 1 &&
+        !events.front().decision.bPreempted &&
+        events.front().decision.bShouldRemember,
+        "A candidate interrupted once did not reach its verdict on the retry.");
+    agent.Stop();
+}
+
 // Exercises the documented production default (maximumPendingEvents == 512) directly,
 // with enough sustained Low-value pressure -- more submissions than the interactive
 // task queue's own bound, so every one of them actually reaches the worker and
@@ -771,11 +840,16 @@ void TestEventQueueNeverExceedsTheDocumentedDefaultBoundUnderSustainedPressure()
     // Alive and functional afterward: no deadlock, and both submission and draining
     // still work normally.
     agent.Submit(router, "after the burst");
-    for (int attempt = 0; attempt < 400 && agent.Depths().interactive > 0; ++attempt)
+    // Wait for the event, not for the queue depth. A task leaves the queue when the
+    // worker picks it up, which is before it produces its event, so draining on a zero
+    // depth could look at the gap between the two and call a working agent stuck.
+    std::vector<revia::agents::MemoryAgentEvent> afterBurst;
+    for (int attempt = 0; attempt < 400 && afterBurst.empty(); ++attempt)
     {
-        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        afterBurst = agent.DrainEvents();
+        if (afterBurst.empty()) std::this_thread::sleep_for(std::chrono::milliseconds(5));
     }
-    Check(!agent.DrainEvents().empty(),
+    Check(!afterBurst.empty(),
         "The agent stopped producing events after sustained overflow pressure.");
     agent.Stop();
 }
@@ -1283,6 +1357,7 @@ void RunAuditFindingsTests()
     TestAnUnapprovedFindingIsReportedFailedNotQueued();
     TestABurstOfApprovedFindingsUnderQueuePressureLosesNoneAndDuplicatesNone();
     TestEventPriorityClassificationMatchesWhatMustNeverBeLostSilently();
+    TestPreemptedClassificationIsRetriedThenGivenUp();
     TestEventQueueNeverExceedsTheDocumentedDefaultBoundUnderSustainedPressure();
     TestEventOverflowPreservesCriticalAndImportantEventsOverLowValueOnes();
 

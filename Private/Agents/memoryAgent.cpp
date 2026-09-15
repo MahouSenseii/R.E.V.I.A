@@ -749,12 +749,45 @@ void MemoryAgent::Run(const std::stop_token stopToken)
         }
         else
         {
-            event.decision = task.router->EvaluateMemory(
-                task.input, task.assistantResponse, stopToken);
+            std::function<memoryDecision(const std::string&, const std::string&)> evaluator;
+            {
+                std::lock_guard lock(mutex);
+                evaluator = evaluateOverride;
+            }
+            event.decision = evaluator
+                ? evaluator(task.input, task.assistantResponse)
+                : task.router->EvaluateMemory(
+                    task.input, task.assistantResponse, stopToken);
         }
         if (stopToken.stop_requested())
         {
             return;
+        }
+
+        // A preempted evaluation reached no verdict at all, and nothing else retries it,
+        // so letting it fall through here loses the turn's memory candidate outright --
+        // the one outcome that looks identical to "not worth remembering". It goes back
+        // on the queue behind fresher turns rather than ahead of them, because a newer
+        // turn describes the conversation that is actually happening. Sustained pressure
+        // still sheds it: the queue keeps its own bound, and the retry count is small.
+        if (!task.hasLearnedDecision && event.decision.bPreempted &&
+            task.preemptionRetries < maximumPreemptionRetries)
+        {
+            ++task.preemptionRetries;
+            bool requeued = false;
+            {
+                std::lock_guard lock(mutex);
+                if (interactiveTasks.size() < limits.maximumInteractive)
+                {
+                    interactiveTasks.push_back(std::move(task));
+                    requeued = true;
+                }
+            }
+            if (requeued)
+            {
+                taskAvailable.notify_one();
+                continue;
+            }
         }
 
         if (!task.hasLearnedDecision && event.decision.bSuccess && event.decision.bShouldRemember)

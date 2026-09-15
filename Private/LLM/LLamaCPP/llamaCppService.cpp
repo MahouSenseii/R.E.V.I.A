@@ -1635,6 +1635,7 @@ memoryDecision llamaCppService::EvaluateMemory(
     if (!result)
     {
         decision.bSuccess = preemptionToken.stop_requested();
+        decision.bPreempted = preemptionToken.stop_requested();
         decision.reason = preemptionToken.stop_requested()
             ? "Memory evaluation yielded to an interactive conversation turn."
             : stopToken.stop_requested()

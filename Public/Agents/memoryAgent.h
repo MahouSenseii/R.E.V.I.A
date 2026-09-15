@@ -189,7 +189,20 @@ private:
         bool hasLearnedDecision = false;
         bool learnedWasAdded = false;
         std::uint64_t turnId = 0;
+        // How many times this evaluation has already yielded to an interactive turn.
+        // Bounded so a candidate cannot cycle forever against sustained conversation.
+        int preemptionRetries = 0;
     };
+
+    // A preempted evaluation is retried, but not indefinitely: a memory candidate is
+    // worth less the further the conversation moves past it.
+    static constexpr int maximumPreemptionRetries = 2;
+
+    // Test-only stand-in for the model call. Preemption is produced by a live inference
+    // scheduler under real contention, which no deterministic test can arrange, so the
+    // retry path would otherwise be unverifiable. Never set in production:
+    // MemoryAgentTestAccess is the only writer, and it is read under `mutex`.
+    std::function<memoryDecision(const std::string&, const std::string&)> evaluateOverride;
 
     void Run(std::stop_token stopToken);
     void ScanBackfill(std::stop_token stopToken);

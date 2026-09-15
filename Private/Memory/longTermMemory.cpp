@@ -77,6 +77,24 @@ bool IsDuplicateSummary(const std::string& existing, const std::string& candidat
     return NormalizeSummary(existing) == NormalizeSummary(candidate);
 }
 
+// The key rows carried before the "v2:" namespace: alphanumerics only, lowercased.
+// Reproduced exactly, because it is the only way to reach such a row through the index
+// instead of by reading every memory. It is coarser than the current comparison and is
+// never used to decide equivalence -- only to find the one row worth comparing.
+std::string LegacyNormalizedKey(const std::string& value)
+{
+    std::string normalized;
+    normalized.reserve(value.size());
+    for (const unsigned char character : value)
+    {
+        if (std::isalnum(character))
+        {
+            normalized.push_back(static_cast<char>(std::tolower(character)));
+        }
+    }
+    return normalized;
+}
+
 std::string CurrentEpochSeconds()
 {
     const auto now = std::chrono::system_clock::now().time_since_epoch();
@@ -111,6 +129,62 @@ void BindText(sqlite3_stmt* statement, const int index, const std::string& value
         value.c_str(),
         static_cast<int>(value.size()),
         SQLITE_TRANSIENT);
+}
+
+// Deduplication is two indexed equality lookups on normalized_summary, which is UNIQUE,
+// rather than a read of every active memory into a vector.
+//
+// Two are needed, not one. The v2 key is exactly the comparison IsDuplicateSummary
+// makes, so a v2 hit is a duplicate -- but the stored text is still compared, because a
+// key that disagrees with its own row is corruption and must not quietly merge two
+// different memories. A legacy key is coarser: it dropped punctuation, so "C++" and "C"
+// share one, and a hit there proves candidacy only. Such a row cannot be missed either,
+// because equal v2 keys imply equal legacy keys -- v2 preserves everything the legacy
+// key kept, so anything the old scan called a duplicate still collides on one of these.
+bool FindDuplicate(
+    sqlite3* const database,
+    const std::string& summary,
+    std::string& outId,
+    std::string& outSummary)
+{
+    Statement query = Prepare(database,
+        "SELECT id, summary FROM memories "
+        "WHERE normalized_summary = ? AND active = 1 LIMIT 1;");
+    if (!query)
+    {
+        return false;
+    }
+
+    const std::string keys[] = {
+        "v2:" + NormalizeSummary(summary),
+        LegacyNormalizedKey(summary)
+    };
+    for (const std::string& key : keys)
+    {
+        sqlite3_reset(query.get());
+        sqlite3_clear_bindings(query.get());
+        BindText(query.get(), 1, key);
+        if (sqlite3_step(query.get()) != SQLITE_ROW)
+        {
+            continue;
+        }
+
+        const unsigned char* const id = sqlite3_column_text(query.get(), 0);
+        const unsigned char* const stored = sqlite3_column_text(query.get(), 1);
+        if (id == nullptr || stored == nullptr)
+        {
+            continue;
+        }
+        const std::string storedSummary(reinterpret_cast<const char*>(stored));
+        if (!IsDuplicateSummary(storedSummary, summary))
+        {
+            continue;
+        }
+        outId = reinterpret_cast<const char*>(id);
+        outSummary = storedSummary;
+        return true;
+    }
+    return false;
 }
 
 bool InsertEntry(sqlite3* database, const memoryEntry& entry)
@@ -499,34 +573,28 @@ bool longTermMemory::Save(const memoryDecision& decision, bool& outWasAdded,
         return false;
     }
 
-    const std::vector<memoryEntry> existingEntries = Load();
-    const auto duplicate = std::find_if(
-        existingEntries.begin(),
-        existingEntries.end(),
-        [&](const memoryEntry& entry)
-        {
-            return IsDuplicateSummary(entry.summary, decision.summary);
-        });
-    if (duplicate != existingEntries.end())
-    {
-        if (outMemoryId) *outMemoryId = duplicate->id;
-        // The retained summary is the embedding input, even for formatting-only
-        // duplicates. Missing vectors for that text can be filled by backfill.
-        if (duplicate->summary == decision.summary &&
-            !decision.embedding.empty() && !decision.embeddingModel.empty())
-        {
-            return SaveEmbedding(
-                duplicate->id,
-                decision.embeddingModel,
-                decision.embedding);
-        }
-        return true;
-    }
-
     sqlite3* const database = Acquire();
     if (!database)
     {
         return false;
+    }
+
+    std::string duplicateId;
+    std::string duplicateSummary;
+    if (FindDuplicate(database, decision.summary, duplicateId, duplicateSummary))
+    {
+        if (outMemoryId) *outMemoryId = duplicateId;
+        // The retained summary is the embedding input, even for formatting-only
+        // duplicates. Missing vectors for that text can be filled by backfill.
+        if (duplicateSummary == decision.summary &&
+            !decision.embedding.empty() && !decision.embeddingModel.empty())
+        {
+            return SaveEmbedding(
+                duplicateId,
+                decision.embeddingModel,
+                decision.embedding);
+        }
+        return true;
     }
 
     const std::string createdAt = CurrentEpochSeconds();
@@ -542,8 +610,16 @@ bool longTermMemory::Save(const memoryDecision& decision, bool& outWasAdded,
         return false;
     }
     outWasAdded = sqlite3_changes(database) > 0;
+    if (!outWasAdded)
+    {
+        // Deduplication found no active duplicate, so an ignored insert means the row
+        // collided on a key this path cannot see: an id collision, or -- once anything
+        // deactivates a memory -- an inactive row still holding the unique normalized
+        // key. Reporting success would hand the caller an id that was never written.
+        return false;
+    }
     if (outMemoryId) *outMemoryId = entry.id;
-    if (outWasAdded && !decision.embedding.empty() && !decision.embeddingModel.empty() &&
+    if (!decision.embedding.empty() && !decision.embeddingModel.empty() &&
         !UpsertEmbedding(
             database,
             entry.id,
@@ -629,7 +705,17 @@ std::vector<memoryEntry> longTermMemory::Search(
             "FROM memory_embeddings "
             "JOIN memories ON memories.id = memory_embeddings.memory_id "
             "WHERE memory_embeddings.model = ? AND memories.active = 1;");
-        if (semanticQuery)
+        // The query vector does not change between rows, so its norm is computed once
+        // here rather than recomputed inside the per-row scoring loop, and the scratch
+        // buffer is reused instead of allocating a vector per candidate.
+        double queryLength = 0.0;
+        for (const float value : queryEmbedding)
+        {
+            queryLength += static_cast<double>(value) * value;
+        }
+        const double queryNorm = std::sqrt(queryLength);
+        std::vector<float> stored(queryEmbedding.size());
+        if (semanticQuery && queryNorm > 0.0)
         {
             BindText(semanticQuery.get(), 1, embeddingModel);
             while (sqlite3_step(semanticQuery.get()) == SQLITE_ROW)
@@ -644,24 +730,21 @@ std::vector<memoryEntry> longTermMemory::Search(
                     continue;
                 }
 
-                std::vector<float> stored(queryEmbedding.size());
                 std::memcpy(stored.data(), blob, static_cast<std::size_t>(byteCount));
                 double dot = 0.0;
-                double queryLength = 0.0;
                 double storedLength = 0.0;
                 for (std::size_t index = 0; index < queryEmbedding.size(); ++index)
                 {
                     dot += static_cast<double>(queryEmbedding[index]) * stored[index];
-                    queryLength += static_cast<double>(queryEmbedding[index]) * queryEmbedding[index];
                     storedLength += static_cast<double>(stored[index]) * stored[index];
                 }
-                if (queryLength <= 0.0 || storedLength <= 0.0)
+                if (storedLength <= 0.0)
                 {
                     continue;
                 }
 
                 const float similarity = static_cast<float>(
-                    dot / (std::sqrt(queryLength) * std::sqrt(storedLength)));
+                    dot / (queryNorm * std::sqrt(storedLength)));
                 if (std::isfinite(similarity) && similarity >= 0.35f)
                 {
                     semanticEntries.push_back({ReadEntry(semanticQuery.get()), similarity});

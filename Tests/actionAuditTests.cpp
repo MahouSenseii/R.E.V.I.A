@@ -130,7 +130,26 @@ void TestCompletionFailurePreservesExecutionTruth(const bool scoped)
         "Completion audit failure was hidden or misreported as prevented execution.");
 }
 
-void TestPartialAuditIsNotSilentlyExtended()
+// Raw lines, because the first one after a recovery is deliberately not valid JSON.
+std::vector<std::string> Lines(const std::filesystem::path& path)
+{
+    std::ifstream file(path, std::ios::binary);
+    std::vector<std::string> lines;
+    std::string line;
+    while (std::getline(file, line)) lines.push_back(line);
+    return lines;
+}
+
+// A torn trailing record is recovered, and recovery is neither silent nor a replay.
+//
+// This used to require that the file be left byte-identical and the action refused. That
+// refusal was permanent: because a refused intent blocks dispatch, one crash mid-write
+// disabled every future action until a human edited the journal, and anything able to
+// append a single byte could switch Revia's hands off for good. What actually has to
+// hold is that the torn bytes survive unaltered, that the tear is stated in the journal
+// rather than papered over, and that nothing treats the interrupted record as finished
+// or safe to retry. All three are asserted here.
+void TestPartialAuditIsRecoveredNotReplayed()
 {
     AuditFixture fixture;
     const std::string partial = "{\"interrupted_record\":";
@@ -139,10 +158,30 @@ void TestPartialAuditIsNotSilentlyExtended()
         file << partial;
     }
     const auto result = fixture.Execute(false);
-    std::ifstream file(fixture.audit, std::ios::binary);
-    const std::string after{std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>()};
-    Check(!result.result.attempted && !result.auditError.empty() && after == partial,
-        "A truncated audit tail was silently extended or allowed execution.");
+    const auto lines = Lines(fixture.audit);
+    Check(result.Succeeded() && result.result.attempted && result.auditError.empty(),
+        "A torn audit tail still blocked execution permanently.");
+    // The torn fragment, the recovery marker, then this action's intent and result.
+    Check(lines.size() == 4 && lines.front() == partial,
+        "Recovery altered, completed or discarded the interrupted record.");
+
+    const auto recovery = nlohmann::json::parse(lines[1]);
+    Check(recovery.at("record_type") == "recovery" &&
+        recovery.at("result").get<std::string>().find("unknown") != std::string::npos &&
+        recovery.at("result").get<std::string>().find("must not be replayed") !=
+            std::string::npos,
+        "The tear was repaired without recording that its outcome is unknown.");
+    Check(!recovery.contains("attempted") && !recovery.contains("succeeded"),
+        "A recovery record invented a verdict for the interrupted action.");
+
+    // The journal is healthy again, so the next action adds its own two records and no
+    // second recovery. A recovery marker that reappeared would be describing nothing.
+    const auto second = fixture.Execute(false);
+    const auto after = Lines(fixture.audit);
+    Check(second.Succeeded() && after.size() == 6 && after.front() == partial &&
+        nlohmann::json::parse(after[4]).at("record_type") == "intent" &&
+        nlohmann::json::parse(after[5]).at("record_type") == "result",
+        "A healthy journal produced a spurious recovery record.");
 }
 
 void TestLegacyResultRecordsRemainIntact()
@@ -246,7 +285,7 @@ void RunActionAuditTests()
         TestIntentAndResultAreRecorded(scoped);
         TestCompletionFailurePreservesExecutionTruth(scoped);
     }
-    TestPartialAuditIsNotSilentlyExtended();
+    TestPartialAuditIsRecoveredNotReplayed();
     TestLegacyResultRecordsRemainIntact();
     TestAnExclusiveWriterBlocksAdmission();
     for (const bool afterExecution : {false, true})

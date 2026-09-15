@@ -114,6 +114,35 @@ void TestLegacyNormalizationDoesNotDiscardNewMeaning()
     Check(reopened.Save(Decision("AB"), added) && !added && reopened.Load().size() == 2,
         "Legacy row stopped deduplicating after reopening.");
 }
+// Deduplication looks only at active rows; the unique key spans every row. Nothing
+// deactivates a memory today, so this reproduces by hand what the first forget feature
+// would produce, and pins the outcome as a loud failure rather than a success carrying
+// an id that was never written.
+void TestDiscardedInsertDoesNotReportSuccess()
+{
+    ScopedTestDirectory directory;
+    const auto path = (directory.root / "memory.db").string();
+    {
+        longTermMemory store(path);
+        bool added = false;
+        Check(store.Save(Decision("The user likes coffee."), added) && added,
+            "Could not seed the collision fixture.");
+    }
+    sqlite3* database = nullptr;
+    Check(sqlite3_open(path.c_str(), &database) == SQLITE_OK, "Could not open fixture.");
+    const int result = sqlite3_exec(database, "UPDATE memories SET active = 0;",
+        nullptr, nullptr, nullptr);
+    sqlite3_close(database);
+    Check(result == SQLITE_OK, "Could not deactivate the fixture row.");
+
+    longTermMemory reopened(path);
+    bool added = true;
+    std::string id = "unwritten";
+    Check(!reopened.Save(Decision("The user likes coffee."), added, &id),
+        "An insert discarded by the unique key reported success.");
+    Check(!added && id.empty(),
+        "A discarded insert returned an id for a row that does not exist.");
+}
 }
 
 void RunMemoryDedupTests()
@@ -121,5 +150,6 @@ void RunMemoryDedupTests()
     TestMeaningChangesRemainDistinct();
     TestDuplicateKeepsStoredTextAndVector();
     TestLegacyNormalizationDoesNotDiscardNewMeaning();
+    TestDiscardedInsertDoesNotReportSuccess();
     std::cout << "Conservative memory deduplication tests passed.\n";
 }

@@ -2005,16 +2005,38 @@ void TestAffectController()
         revia::runtime::AffectState::Melancholy,
         "The affect range did not include a heavier low mood.");
 
-    std::this_thread::sleep_for(15ms);
-    const auto decayed = controller.Tick();
+    // Decay and loneliness get their own controllers, and neither shares one with the
+    // assertions above.
+    //
+    // All three used to run on `controller` with a 200ms quiet interval, and Tick()
+    // tests loneliness before decay. Every classification between that controller's last
+    // interaction and this call therefore ate into the same 200ms, so on a loaded
+    // machine the expected Neutral arrived as Lonely. Measured on the unmodified tree,
+    // it failed four times in eight runs. Nothing about the controller was wrong; the
+    // fixture was asserting one threshold through the deadline of another.
+    // Every sleep here clears the system clock's tick granularity by a wide margin.
+    // A 15ms sleep against a 5ms threshold fits inside a single ~15.6ms Windows tick,
+    // so the elapsed time could read as zero and the decay would not be due yet.
+    revia::runtime::AffectController decaying(0ms, 5ms, 1h);
+    Check(decaying.ObserveInput("You're useless, Revia.").state ==
+        revia::runtime::AffectState::Angry,
+        "The decay fixture did not start from a felt state.");
+    std::this_thread::sleep_for(120ms);
+    const auto decayed = decaying.Tick();
     Check(decayed.has_value() && decayed->state == revia::runtime::AffectState::Neutral,
         "Affect did not return to its neutral baseline after the decay interval.");
 
-    std::this_thread::sleep_for(20ms);
-    Check(!controller.Tick().has_value(),
+    revia::runtime::AffectController quiet(0ms, 5ms, 400ms);
+    Check(quiet.ObserveInput("Hi").state == revia::runtime::AffectState::Pleased,
+        "The loneliness fixture did not start from a felt state.");
+    std::this_thread::sleep_for(120ms);
+    Check(quiet.Tick().has_value(),
+        "The loneliness fixture never settled to neutral.");
+    // Neutral and still well inside the quiet interval: silence, not loneliness.
+    Check(!quiet.Tick().has_value(),
         "Loneliness appeared before the configured quiet interval.");
-    std::this_thread::sleep_for(200ms);
-    const auto lonely = controller.Tick();
+    std::this_thread::sleep_for(450ms);
+    const auto lonely = quiet.Tick();
     Check(lonely.has_value() && lonely->state == revia::runtime::AffectState::Lonely,
         "Affect did not recognize a sustained quiet interval as loneliness.");
 }

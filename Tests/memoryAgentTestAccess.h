@@ -13,5 +13,12 @@ struct MemoryAgentTestAccess
         agent.backfillRetryInterval = std::chrono::milliseconds(80);
         agent.backfillMaximumRetry = std::chrono::milliseconds(320);
     }
+
+    static void SetEvaluator(MemoryAgent& agent,
+        std::function<memoryDecision(const std::string&, const std::string&)> evaluator)
+    {
+        std::lock_guard lock(agent.mutex);
+        agent.evaluateOverride = std::move(evaluator);
+    }
 };
 }
