@@ -3,11 +3,13 @@
 #include "Actions/actionRuntime.h"
 #include "Goals/goalRunner.h"
 #include "Goals/goalStore.h"
+#include "Planning/goalPlanner.h"
 #include "Windows/desktopObserver.h"
 
 #include <fstream>
 #include <iostream>
 #include <nlohmann/json.hpp>
+#include <sqlite3.h>
 #include <string>
 #include <vector>
 
@@ -152,10 +154,50 @@ void TestStuckIsNotTheSameAsFinished()
     Check(finished.status == GoalStatus::Blocked &&
         finished.stopReason == StopReason::Undecided,
         "Running out of ideas was not distinguished from finishing.");
+    Check(finished.stopDetail == "I cannot tell what to do next" &&
+        fixture.store.Load(finished.id)->stopDetail == finished.stopDetail,
+        "The planner's stopping explanation was lost during execution or persistence.");
     // The work it did manage still stands and is still recorded.
     Check(std::filesystem::is_directory(fixture.approved / "only") &&
         finished.steps.size() == 1 && finished.steps.front().attempts.front().verified,
         "Stopping undecided discarded the step that did succeed.");
+}
+
+void TestOldGoalDatabaseRetainsItsRecords()
+{
+    revia::tests::ScopedTestDirectory directory;
+    const auto path = (directory.root / "old-goals.db").string();
+    sqlite3* database = nullptr;
+    Check(sqlite3_open(path.c_str(), &database) == SQLITE_OK, "Legacy store could not open.");
+    const int result = sqlite3_exec(database,
+        "CREATE TABLE goals (id TEXT PRIMARY KEY, title TEXT NOT NULL, status TEXT NOT NULL,"
+        "stop_reason TEXT NOT NULL, current_step INTEGER NOT NULL DEFAULT 0, budget TEXT NOT NULL,"
+        "spend TEXT NOT NULL, scope TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);"
+        "INSERT INTO goals VALUES ('old','Existing goal','blocked','undecided',0,'{}','{}','{}','1','1');",
+        nullptr, nullptr, nullptr);
+    sqlite3_close(database);
+    Check(result == SQLITE_OK, "Legacy store fixture could not be created.");
+    GoalStore store(path);
+    auto old = store.Load("old");
+    Check(old && old->title == "Existing goal" && old->status == GoalStatus::Blocked &&
+        old->stopDetail.empty(), "Adding goal explanations changed a legacy record.");
+    old->stopDetail = "New diagnostic";
+    Check(store.Save(*old) && store.Load("old")->stopDetail == "New diagnostic",
+        "An upgraded store could not retain a diagnostic.");
+}
+
+void TestStopDuringPlanningWinsOverLateCompletion()
+{
+    LoopFixture fixture;
+    std::stop_source stop;
+    fixture.runner.SetStepProvider([&](const Goal&, std::uint32_t)
+    {
+        stop.request_stop();
+        return Done("late model answer");
+    });
+    const auto result = fixture.runner.Operate(fixture.NewGoal("Stop during planning"), stop.get_token());
+    Check(result.status == GoalStatus::Cancelled && result.spend.actions == 0,
+        "A late planner answer overrode cancellation.");
 }
 
 void TestARunWithNoProviderRefuses()
@@ -422,6 +464,67 @@ void TestTheObservationDigestNoticesChange()
         "A failed observation was not distinguishable from a real one.");
 }
 
+void TestVerificationEvidenceSurvivesTheHistoryLimit()
+{
+    LoopFixture fixture;
+    for (int index = 0; index < 30; ++index)
+        std::filesystem::create_directory(fixture.approved /
+            ("aaa-unrelated-entry-" + std::to_string(index)));
+    Goal goal = fixture.NewGoal("Create the requested directory");
+    goal.steps.push_back(fixture.MakeDirectory("zzz-requested-result"));
+    const Goal finished = fixture.runner.Run(std::move(goal));
+    Check(finished.status == GoalStatus::Succeeded, "The evidence fixture did not finish.");
+    const auto persisted = fixture.store.Load(finished.id);
+    Check(persisted && persisted->steps[0].attempts[0].observation.substr(0, 400)
+        .find("zzz-requested-result") != std::string::npos,
+        "The evidence that verified the step was erased by the planner history limit.");
+}
+
+void TestExplicitPlannerDecisions()
+{
+    using revia::planning::GoalPlanner;
+    const auto act = GoalPlanner::ParseNextStep(R"({"decision":"act","description":"Open Edge","step":{
+        "action":{"action":"launch_application","application":"msedge.exe"},
+        "check":{"action":"inspect_window","application":"msedge.exe"},
+        "expected":"msedge.exe"}})");
+    Check(act.succeeded && !act.finished &&
+        act.step.action.type == revia::actions::ActionType::LaunchApplication,
+        "An explicit act decision did not reach the ordinary step parser.");
+    const auto complete = GoalPlanner::ParseNextStep(
+        R"({"decision":"complete","reason":"The page title confirms success."})");
+    const auto blocked = GoalPlanner::ParseNextStep(
+        R"({"decision":"blocked","reason":"No permitted target is visible."})");
+    Check(complete.succeeded && complete.finished && blocked.succeeded && !blocked.finished,
+        "Explicit completion and blocking were collapsed.");
+    for (const char* invalid : {R"({"decision":"act"})", R"({"decision":"other"})",
+            R"({"decision":"complete"})", R"({"decision":42})"})
+        Check(!GoalPlanner::ParseNextStep(invalid).succeeded,
+            "An incomplete explicit decision was accepted.");
+}
+
+void TestDesktopWorkNeedsEvidenceFromItsOwnWindow()
+{
+    using revia::actions::ActionType;
+    GoalStep step;
+    step.action.type = ActionType::TypeText;
+    step.action.application = "msedge.exe";
+    step.action.control = "address";
+    step.action.value = "facebook.com";
+    step.check.type = ActionType::WebSearch;
+    step.check.value = "facebook.com";
+    step.expected = "facebook.com";
+    std::string error;
+    Check(!GoalRunner::ValidateStep(step, error),
+        "A web search was accepted as proof of typing in a browser.");
+    step.check.type = ActionType::InspectWindow;
+    step.check.application = "notepad.exe";
+    Check(!GoalRunner::ValidateStep(step, error),
+        "An unrelated application's window was accepted as desktop evidence.");
+    step.check.application = "msedge.exe";
+    Check(GoalRunner::ValidateStep(step, error),
+        "A browser edit could not be verified by inspecting its own window.");
+}
+
 void TestTheObservationStaysBounded()
 {
     auto crowded = MakeObservation();
@@ -457,8 +560,158 @@ void TestTheObservationStaysBounded()
 
 } // namespace
 
+// A goal whose work actually reaches the person, rather than being auto-approved.
+// Supervised with a read-only ceiling is what an ordinary desktop session looks like:
+// every write asks.
+Goal SupervisedGoal(const LoopFixture& fixture, const std::string& title)
+{
+    Goal goal = fixture.NewGoal(title);
+    goal.scope.mode = revia::actions::ExecutionMode::Supervised;
+    goal.scope.autoApproveRiskThrough = revia::actions::RiskLevel::ReadOnly;
+    return goal;
+}
+
+// "Don't ask again" is consent with edges, and the edges are the whole feature.
+void TestAStandingYesIsBoundedByTheRunAndByRisk()
+{
+    LoopFixture fixture;
+    int prompts = 0;
+    bool grantStanding = true;
+    fixture.runner.SetConfirmationHandler([&](
+        const revia::actions::ActionRequest&,
+        const revia::actions::PolicyDecision&)
+    {
+        ++prompts;
+        // Said once, on the first thing she is asked about.
+        return prompts == 1 && grantStanding
+            ? revia::actions::ConfirmationChoice::AllowForThisTask
+            : revia::actions::ConfirmationChoice::Allow;
+    });
+    fixture.runner.SetStepProvider([&](const Goal&, const std::uint32_t iteration)
+    {
+        return iteration >= 3
+            ? Done("three directories exist")
+            : Take(fixture.MakeDirectory("folder" + std::to_string(iteration)));
+    });
+
+    const Goal finished = fixture.runner.Operate(SupervisedGoal(fixture, "three folders"));
+    Check(finished.status == GoalStatus::Succeeded,
+        "The run did not finish after a standing yes: " + ToString(finished.stopReason));
+    Check(finished.steps.size() == 3,
+        "The run did not take every step after the standing yes.");
+    Check(prompts == 1,
+        "A standing yes did not stop the asking; there were " +
+            std::to_string(prompts) + " prompts.");
+
+    // It does not survive the run. Consent was given for a task, and that task is over,
+    // so a second goal asks about every step again. Answering "once" this time makes the
+    // count unambiguous: two steps must produce two questions.
+    prompts = 0;
+    grantStanding = false;
+    fixture.runner.SetStepProvider([&](const Goal&, const std::uint32_t iteration)
+    {
+        return iteration >= 2
+            ? Done("done")
+            : Take(fixture.MakeDirectory("later" + std::to_string(iteration)));
+    });
+    static_cast<void>(fixture.runner.Operate(SupervisedGoal(fixture, "a separate task")));
+    Check(prompts == 2,
+        "A standing yes leaked past the task it was given for; the next goal asked " +
+            std::to_string(prompts) + " times instead of 2.");
+}
+
+// The other edge: it covers what was shown and nothing more dangerous.
+void TestAStandingYesDoesNotCoverEscalation()
+{
+    LoopFixture fixture;
+    std::vector<revia::actions::RiskLevel> asked;
+    fixture.runner.SetConfirmationHandler([&](
+        const revia::actions::ActionRequest&,
+        const revia::actions::PolicyDecision& decision)
+    {
+        asked.push_back(decision.risk);
+        return revia::actions::ConfirmationChoice::AllowForThisTask;
+    });
+    fixture.runner.SetStepProvider([&](const Goal&, const std::uint32_t iteration)
+    {
+        // Two folders, so the deletion can be verified by what SURVIVES it. A check is a
+        // read-only action that must find its expected text, which cannot express "the
+        // folder is gone" -- so it confirms the other one is still there instead.
+        if (iteration == 0) return Take(fixture.MakeDirectory("keep"));
+        if (iteration == 1) return Take(fixture.MakeDirectory("scratch"));
+        if (iteration == 2)
+        {
+            // Recycling is classified ReversibleWrite, exactly like the folder creations
+            // that were approved -- which is the point. Risk level alone cannot tell these
+            // apart, and a yes for one must not be a yes for the other.
+            GoalStep step;
+            step.description = "Recycle the scratch folder";
+            step.action.type = revia::actions::ActionType::MoveToRecycleBin;
+            step.action.source = fixture.approved / "scratch";
+            step.check.type = revia::actions::ActionType::ListDirectory;
+            step.check.source = fixture.approved;
+            step.expected = "keep";
+            return Take(step);
+        }
+        return Done("finished");
+    });
+
+    const Goal finished = fixture.runner.Operate(SupervisedGoal(fixture, "tidy up"));
+    Check(asked.size() == 2,
+        "A yes given for ordinary work silently covered a deletion; the person was asked " +
+            std::to_string(asked.size()) + " time(s) instead of 2. The run took " +
+            std::to_string(finished.steps.size()) + " step(s) and stopped because " +
+            ToString(finished.stopReason) + ".");
+    Check(asked.back() == revia::actions::RiskLevel::ReversibleWrite,
+        "The deletion did not arrive classified the way the risk table classifies it, "
+        "which is the whole reason it needs its own rule.");
+}
+
+// Answering the up-front goal question with "for the whole task" must actually stop the
+// per-step questions, or the offer is a lie and the user keeps clicking.
+void TestTheGoalApprovalCanAnswerForTheWholeRun()
+{
+    LoopFixture fixture;
+    int prompts = 0;
+    fixture.runner.SetConfirmationHandler([&](
+        const revia::actions::ActionRequest&,
+        const revia::actions::PolicyDecision&)
+    {
+        ++prompts;
+        return revia::actions::ConfirmationChoice::Allow;
+    });
+    fixture.runner.SetStepProvider([&](const Goal&, const std::uint32_t iteration)
+    {
+        return iteration >= 3
+            ? Done("done")
+            : Take(fixture.MakeDirectory("seeded" + std::to_string(iteration)));
+    });
+
+    // What ReviaSession does when the person answers the goal prompt that way.
+    fixture.runner.SeedStandingApproval(revia::actions::RiskLevel::ReversibleWrite);
+    const Goal finished = fixture.runner.Operate(SupervisedGoal(fixture, "seeded task"));
+    Check(finished.status == GoalStatus::Succeeded,
+        "The seeded run did not finish: " + ToString(finished.stopReason));
+    Check(prompts == 0,
+        "Answering for the whole task still produced " + std::to_string(prompts) +
+            " per-step prompt(s).");
+
+    // Used once, then gone. A seed that is not renewed does not quietly cover the next
+    // goal as well.
+    fixture.runner.SetStepProvider([&](const Goal&, const std::uint32_t iteration)
+    {
+        return iteration >= 1 ? Done("done") : Take(fixture.MakeDirectory("after"));
+    });
+    static_cast<void>(fixture.runner.Operate(SupervisedGoal(fixture, "the next task")));
+    Check(prompts == 1,
+        "A seeded approval survived into the following goal.");
+}
+
 void RunOperatorLoopTests()
 {
+    TestDesktopWorkNeedsEvidenceFromItsOwnWindow();
+    TestOldGoalDatabaseRetainsItsRecords();
+    TestStopDuringPlanningWinsOverLateCompletion();
     TestTheRunIsDiscoveredRatherThanPlanned();
     TestStuckIsNotTheSameAsFinished();
     TestARunWithNoProviderRefuses();
@@ -469,7 +722,12 @@ void RunOperatorLoopTests()
     TestTheLoopCannotWidenItsScope();
     TestBudgetsAndCancellationStillApply();
     TestPlannedRunsAreUnchanged();
+    TestAStandingYesIsBoundedByTheRunAndByRisk();
+    TestAStandingYesDoesNotCoverEscalation();
+    TestTheGoalApprovalCanAnswerForTheWholeRun();
     TestTheObservationDigestNoticesChange();
+    TestVerificationEvidenceSurvivesTheHistoryLimit();
+    TestExplicitPlannerDecisions();
     TestTheObservationStaysBounded();
     std::cout << "Operator loop tests passed: the run is discovered, verified, and bounded.\n";
 }

@@ -41,6 +41,31 @@ bool TargetBinding::Describes(const TargetBinding& other) const
         right == other.right && bottom == other.bottom;
 }
 
+bool SameControl(const TargetBinding& intended, const TargetBinding& current)
+{
+    if (!intended.valid || !current.valid)
+    {
+        return false;
+    }
+    if (intended.window != current.window || intended.processId != current.processId)
+    {
+        return false;
+    }
+    if (!intended.runtimeId.empty() && intended.runtimeId == current.runtimeId)
+    {
+        return true;
+    }
+    // Deliberately demands all of it, including the rectangle. With the id gone this is
+    // the whole of the evidence, and any one of these differing means a different
+    // control.
+    return intended.automationId == current.automationId &&
+        intended.controlType == current.controlType &&
+        intended.controlName == current.controlName &&
+        intended.isPassword == current.isPassword &&
+        intended.left == current.left && intended.top == current.top &&
+        intended.right == current.right && intended.bottom == current.bottom;
+}
+
 bool IsFresh(
     const TargetBinding& binding,
     const std::chrono::steady_clock::time_point now,

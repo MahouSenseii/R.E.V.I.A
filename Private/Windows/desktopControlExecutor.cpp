@@ -1,6 +1,8 @@
 #include "Windows/desktopControlExecutor.h"
 
 #include "Policy/desktopAuthorization.h"
+#include "Windows/applicationLocator.h"
+#include "Windows/desktopObserver.h"
 #include "Windows/targetBinding.h"
 #include "Windows/uiaElementLocator.h"
 
@@ -282,14 +284,6 @@ bool FocusAndConfirm(
     return false;
 }
 
-// Whether a child control -- rather than the frame itself -- currently has the caret.
-//
-// Bringing a top-level window forward does not give any of its children focus, so after
-// activation the focused element is often the window. Keystrokes sent then are accepted
-// by SendInput and applied by nobody: they reach a window with no edit control under the
-// caret and vanish. That is the shape of the defect this exists to catch -- input that
-// is submitted successfully and lands nowhere reads as success everywhere except the
-// application it was aimed at.
 // The runtime id of whatever currently holds the caret, or empty if that cannot be read.
 std::string FocusedRuntimeId(IUIAutomation* automation)
 {
@@ -301,7 +295,8 @@ std::string FocusedRuntimeId(IUIAutomation* automation)
     return id;
 }
 
-bool FocusedChildOf(const HWND window, HWND& outFocused)
+// A UIA control may share its parent's HWND, as Edge's address field does.
+bool NativeFocusOf(const HWND window, HWND& outFocused)
 {
     outFocused = nullptr;
     if (window == nullptr)
@@ -315,7 +310,7 @@ bool FocusedChildOf(const HWND window, HWND& outFocused)
         return false;
     }
     outFocused = info.hwndFocus;
-    return info.hwndFocus != nullptr && info.hwndFocus != window;
+    return info.hwndFocus != nullptr;
 }
 
 // The consequence gate.
@@ -364,25 +359,6 @@ policy::DesktopOperation ClassifyChord(const std::string& normalizedChord)
 // itself, so a pointer, a keystroke and a UI Automation pattern cannot drift apart.
 using policy::AuthorizeOrExplain;
 
-std::wstring ResolveExecutable(const std::string& application)
-{
-    const std::wstring name = Utf8ToWide(application);
-    if (name.empty())
-    {
-        return {};
-    }
-    std::wstring resolved(MAX_PATH, L'\0');
-    const DWORD length = SearchPathW(
-        nullptr, name.c_str(), nullptr,
-        static_cast<DWORD>(resolved.size()), resolved.data(), nullptr);
-    if (length == 0 || length >= resolved.size())
-    {
-        return {};
-    }
-    resolved.resize(length);
-    return resolved;
-}
-
 ActionResult LaunchApplication(
     const ActionRequest& request,
     const PolicyDecision& decision)
@@ -391,11 +367,12 @@ ActionResult LaunchApplication(
     result.attempted = true;
     result.backend = "windows_create_process";
 
-    const std::wstring executable = ResolveExecutable(request.application);
+    const std::wstring executable =
+        ResolveApplicationExecutable(Utf8ToWide(request.application));
     if (executable.empty())
     {
         result.message =
-            "Windows could not find " + request.application + " on the search path.";
+            "Windows could not find " + request.application + " in the search path or installed applications.";
         return result;
     }
 
@@ -443,8 +420,106 @@ struct PointerTarget
     int endY = 0;
     bool resolved = false;
     bool aimed = false;
+    // True when the target became stale rather than being wrong. The distinction is
+    // what tells the operator loop to observe again and re-decide instead of treating
+    // the step as a failure of the plan.
+    bool stale = false;
     std::string failure;
+
+    // What the caller reports. A stale target says so in words the next decision reads,
+    // because "that did not work" and "you are looking at an old screen" call for
+    // opposite responses: one means try something else, the other means look again and
+    // very possibly try the same thing.
+    [[nodiscard]] std::string Message() const
+    {
+        return stale ? failure + " The target was not acted on; observe again and "
+            "re-decide." : failure;
+    }
 };
+
+std::uint64_t SteadyMilliseconds()
+{
+    return static_cast<std::uint64_t>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count());
+}
+
+// The foreground window's rectangle, measured the way the observation measured it.
+//
+// Through UI Automation rather than GetWindowRect deliberately: DWM frame insets make
+// the two disagree by a few pixels on a normal window, and since this value is compared
+// for equality against one DesktopObserver recorded, a different ruler would report
+// every window as having moved.
+//
+// An invalid result is not a failure. It means the geometry half of the staleness check
+// is skipped while identity, generation and age still apply.
+ElementBounds ForegroundWindowBounds(IUIAutomation* automation, const HWND window)
+{
+    ElementBounds bounds;
+    if (automation == nullptr || window == nullptr)
+    {
+        return bounds;
+    }
+    IUIAutomationElement* element = nullptr;
+    if (FAILED(automation->ElementFromHandle(window, &element)) || element == nullptr)
+    {
+        return bounds;
+    }
+    bounds = ElementBoundingRectangle(element);
+    Release(element);
+    return bounds;
+}
+
+// What the screen is right now. `windowBounds` is optional because the caller in screen
+// space has no single window to measure -- there, identity is the whole check.
+VisualTargetFacts CurrentVisualFacts(
+    const WindowIdentity& foreground, const ElementBounds* windowBounds)
+{
+    VisualTargetFacts facts;
+    facts.latestGeneration = DesktopObserver::LatestGeneration();
+    facts.nowMs = SteadyMilliseconds();
+    facts.foregroundWindow = static_cast<void*>(foreground.window);
+    facts.foregroundProcessId = static_cast<std::uint32_t>(foreground.processId);
+    if (windowBounds != nullptr && windowBounds->valid)
+    {
+        facts.windowBoundsKnown = true;
+        facts.windowLeft = windowBounds->left;
+        facts.windowTop = windowBounds->top;
+        facts.windowRight = windowBounds->right;
+        facts.windowBottom = windowBounds->bottom;
+    }
+    return facts;
+}
+
+// Turns a visually grounded target into a point, or explains why it will not.
+//
+// The coordinate is computed here, at the last moment before the pointer moves, and
+// never carried in the request. That is the whole difference between acting on something
+// that was seen and acting on a number somebody wrote down earlier.
+bool AimAtVisualRegion(
+    const ActionRequest& request,
+    const WindowIdentity& foreground,
+    const ElementBounds* windowBounds,
+    PointerTarget& target)
+{
+    const std::string stale = CompareVisualTarget(
+        request.resolution, CurrentVisualFacts(foreground, windowBounds));
+    if (!stale.empty())
+    {
+        target.stale = true;
+        target.failure = stale;
+        return false;
+    }
+    target.x = request.resolution.RegionCentreX();
+    target.y = request.resolution.RegionCentreY();
+    target.aimed = true;
+    if (request.type == ActionType::DragPointer && request.input.HasEndRegion())
+    {
+        target.endX = request.input.EndRegionCentreX();
+        target.endY = request.input.EndRegionCentreY();
+    }
+    return true;
+}
 
 // Confined scope: the point comes from a re-verified element, or from a coordinate that
 // must still land inside the approved window.
@@ -461,7 +536,7 @@ PointerTarget ResolveInsideWindow(
         return target;
     }
 
-    if (request.resolution.visionResolved)
+    if (request.resolution.IsUiaElementTarget())
     {
         // The coordinate captured when the plan was made is never the coordinate
         // clicked: the element is found again and its current centre is used.
@@ -482,15 +557,29 @@ PointerTarget ResolveInsideWindow(
         target.x = bounds.left + (bounds.right - bounds.left) / 2;
         target.y = bounds.top + (bounds.bottom - bounds.top) / 2;
         target.aimed = true;
+        target.endX = request.input.endX;
+        target.endY = request.input.endY;
     }
-    else if (request.input.hasPoint)
+    else if (request.resolution.IsVisualRegionTarget())
     {
-        target.x = request.input.x;
-        target.y = request.input.y;
-        target.aimed = true;
+        // No element to re-find, so the observation is what gets re-checked instead:
+        // same window, same size and place, still the newest thing looked at.
+        if (!AimAtVisualRegion(request, ForegroundIdentity(), &windowBounds, target))
+        {
+            return target;
+        }
     }
-    target.endX = request.input.endX;
-    target.endY = request.input.endY;
+    else
+    {
+        if (request.input.hasPoint)
+        {
+            target.x = request.input.x;
+            target.y = request.input.y;
+            target.aimed = true;
+        }
+        target.endX = request.input.endX;
+        target.endY = request.input.endY;
+    }
 
     const auto inside = [&windowBounds](const int x, const int y)
     {
@@ -504,7 +593,8 @@ PointerTarget ResolveInsideWindow(
         target.failure = "The point is outside the approved application's window.";
         return target;
     }
-    if (request.input.hasEndPoint && !inside(target.endX, target.endY))
+    if ((request.input.hasEndPoint || request.input.HasEndRegion()) &&
+        !inside(target.endX, target.endY))
     {
         target.failure = "The drag would end outside the approved application's window.";
         return target;
@@ -685,13 +775,14 @@ ActionResult TypeTextInput(
     const std::vector<std::wstring> scalars = SplitScalars(text);
     std::size_t sent = 0;
     std::size_t index = 0;
-    // Bounded so a long run cannot continue blindly. Sixteen scalars is a short burst --
-    // roughly one SendInput batch -- against a revalidation that costs a UI Automation
-    // read. Smaller would spend most of the time re-observing; larger would widen the
-    // window in which text can land somewhere it was not authorized to go. The exposure
-    // is one chunk either way, and this keeps that chunk small without making ordinary
-    // typing crawl.
-    constexpr std::size_t ChunkScalars = 16;
+    // Revalidate before each Unicode scalar. Queuing a burst lets the remaining input
+    // follow focus into a different field before the next check can stop it. A scalar's
+    // key events still travel together so a surrogate pair is never split.
+    constexpr std::size_t ChunkScalars = 1;
+
+    TargetBinding lastConfirmedControl = control;
+    HWND nativeFocus = nullptr;
+    if (!NativeFocusOf(bound.window, nativeFocus)) nativeFocus = nullptr;
 
     const auto stillAimedCorrectly = [&](std::string& outReason)
     {
@@ -708,16 +799,31 @@ ActionResult TypeTextInput(
         // The window is not enough. Two controls in one window can mean entirely
         // different things, and focus moving from a document to a Send button is a
         // change of consequence with no change of handle.
-        if (control.valid)
+        const auto observedAt = std::chrono::steady_clock::now();
+        if (lastConfirmedControl.valid)
         {
             const std::string drift = RevalidateFocusBinding(
-                automation, control, std::chrono::steady_clock::now());
+                automation, lastConfirmedControl, observedAt);
             if (!drift.empty())
             {
                 outReason = drift;
                 return false;
             }
         }
+        // UIA can finish reading the old control while native focus is already moving.
+        // Check the native caret after that slower read, immediately before injection.
+        if (nativeFocus != nullptr)
+        {
+            HWND currentFocus = nullptr;
+            if (!NativeFocusOf(bound.window, currentFocus) || currentFocus != nativeFocus)
+            {
+                outReason = "native keyboard focus moved to another control";
+                return false;
+            }
+        }
+        // A successful re-observation renews freshness only inside this operation.
+        // Identity, task and policy stay fixed; stale or changed controls still stop.
+        lastConfirmedControl.observedAt = observedAt;
         return true;
     };
 
@@ -1012,11 +1118,13 @@ ActionResult DesktopControlExecutor::Execute(
 
         // A usable target has to exist before anything is authorized against it.
         //
-        // Activation brings the frame forward without giving any child the caret, so
-        // this is where "the window is in front" stops being good enough. When the
-        // request names a control, focus that; otherwise refuse rather than submit
-        // keystrokes to a window that will drop them and call it success.
+        // Named text entry must reach that exact UIA control. Unnamed text needs a
+        // native child with focus; window shortcuts can target the frame itself.
         std::string intendedRuntimeId;
+        // The control the caret was confirmed to be on, kept so the check before typing
+        // compares two descriptions of the same thing rather than an id against a
+        // description.
+        TargetBinding intendedTarget;
         if (!screenSpace)
         {
             HWND focusedChild = nullptr;
@@ -1066,8 +1174,21 @@ ActionResult DesktopControlExecutor::Execute(
                         "Nothing was typed.";
                     return finish();
                 }
+                // Captured here, with focus confirmed to be on the target, rather than
+                // from the element found before SetFocus. A control's rectangle and
+                // name can differ between its unfocused and focused states -- a browser
+                // omnibox is exactly that -- so a description taken beforehand would be
+                // compared against a control that had legitimately changed.
+                intendedTarget = BindFocusedControl(
+                    automation, request.requestedBy, policy::PolicyVersion(settings));
             }
-            if (!FocusedChildOf(bound.window, focusedChild))
+            // Browser edit fields can share the frame's native HWND. The independently
+            // verified UIA identity above still binds named text entry to that field.
+            // Window shortcuts need no edit caret; their consequence and focus checks
+            // below still apply before SendInput.
+            const bool nativeFocusKnown = NativeFocusOf(bound.window, focusedChild);
+            if (!nativeFocusKnown || (request.type == ActionType::TypeText &&
+                    intendedRuntimeId.empty() && focusedChild == bound.window))
             {
                 result.message = "No control in " + request.application +
                     " has the caret, so keystrokes would be discarded rather than "
@@ -1117,17 +1238,79 @@ ActionResult DesktopControlExecutor::Execute(
         // what every later chunk is compared against, so that focus moving to another
         // control inside the same window ends the run rather than silently redirecting
         // it. The runtime observes and mints; nothing from the request reaches it.
-        const TargetBinding typingBinding = automation != nullptr
+        TargetBinding typingBinding = automation != nullptr
             ? BindFocusedControl(automation, request.requestedBy, policy::PolicyVersion(settings))
             : TargetBinding{};
+
+        // Take the caret back from our own prompt.
+        //
+        // Asking the user is what loses it. A confirmation is a modal owned by Revia's
+        // window, so answering it hands activation to Revia, and Qt delivers that
+        // restoration asynchronously -- after this executor has already brought the
+        // target window forward and put the caret where it belongs. The observed
+        // failures said so in as many words: the caret was on
+        // ReviaWindow...chatPage.chatHistory, which is a chat log, not a browser.
+        //
+        // Deliberately narrow. Only Revia's own windows are recovered from, and only by
+        // re-focusing the control that was already authorized; if any OTHER application
+        // has taken the caret then a person or another program is using the machine, and
+        // that still ends the action. Nothing here re-authorizes anything: the target was
+        // approved above and this only puts the caret back on it.
+        if (intendedTarget.valid && automation != nullptr && !request.control.empty())
+        {
+            constexpr int MaximumRecoveryAttempts = 12;
+            for (int attempt = 0;
+                 attempt < MaximumRecoveryAttempts &&
+                     !SameControl(intendedTarget, typingBinding);
+                 ++attempt)
+            {
+                if (!BelongsToRevia(ForegroundIdentity()))
+                {
+                    // Someone else has it. Not ours to take back.
+                    break;
+                }
+                std::string reacquireFailure;
+                WindowIdentity reacquired;
+                if (!FocusAndConfirm(window, request.application, reacquired, reacquireFailure))
+                {
+                    break;
+                }
+                if (IUIAutomationElement* again = FindControl(automation, window, request))
+                {
+                    static_cast<void>(again->SetFocus());
+                    Release(again);
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds(25));
+                typingBinding = BindFocusedControl(
+                    automation, request.requestedBy, policy::PolicyVersion(settings));
+            }
+        }
 
         // Focus can move between the confirmation above and this line. If it did, the
         // binding describes a control nobody asked for, and every later comparison
         // would agree with it.
-        if (!intendedRuntimeId.empty() && typingBinding.runtimeId != intendedRuntimeId)
+        //
+        // Compared through SameControl rather than by raw runtime id. Edge refused every
+        // keystroke here: the caret was provably on the address bar -- the wait loop
+        // above had just proved it by that same id -- and by this line the id had been
+        // regenerated, because Chromium rebuilds its accessibility nodes constantly. A
+        // recreated node is not a moved caret. SameControl still demands the window, the
+        // automation id, the type, the name, the password flag and the exact rectangle
+        // all agree, which is what actually distinguishes two fields in one window.
+        if (intendedTarget.valid && !SameControl(intendedTarget, typingBinding))
         {
+            // Say where it went. The previous message named only where the caret was
+            // supposed to be, which made a real failure and a false alarm read
+            // identically and left nothing to diagnose from.
+            const std::string landedOn = typingBinding.valid
+                ? (typingBinding.controlName.empty()
+                    ? (typingBinding.automationId.empty()
+                        ? "an unnamed control" : typingBinding.automationId)
+                    : typingBinding.controlName)
+                : "nothing that can be read";
             result.message = "The caret left " + request.control + " in " +
-                request.application + " before typing began, so nothing was typed.";
+                request.application + " before typing began -- it is on " + landedOn +
+                " now -- so nothing was typed.";
             return finish();
         }
 
@@ -1140,11 +1323,26 @@ ActionResult DesktopControlExecutor::Execute(
     PointerTarget target;
     if (screenSpace)
     {
-        target.x = request.input.x;
-        target.y = request.input.y;
-        target.endX = request.input.endX;
-        target.endY = request.input.endY;
-        target.aimed = request.input.hasPoint;
+        if (request.resolution.IsVisualRegionTarget())
+        {
+            // On the whole desktop there is no approved window to measure against, so
+            // the window the target was seen in is measured instead: it must still be
+            // the one in front, and still where it was.
+            const ElementBounds live = ForegroundWindowBounds(automation, bound.window);
+            if (!AimAtVisualRegion(request, bound, live.valid ? &live : nullptr, target))
+            {
+                result.message = target.Message();
+                return finish();
+            }
+        }
+        else
+        {
+            target.x = request.input.x;
+            target.y = request.input.y;
+            target.endX = request.input.endX;
+            target.endY = request.input.endY;
+            target.aimed = request.input.hasPoint;
+        }
         target.resolved = true;
         if (target.aimed && !OnVirtualDesktop(target.x, target.y))
         {
@@ -1157,7 +1355,7 @@ ActionResult DesktopControlExecutor::Execute(
         target = ResolveInsideWindow(automation, window, request);
         if (!target.resolved)
         {
-            result.message = target.failure;
+            result.message = target.Message();
             return finish();
         }
         if (!(ForegroundIdentity() == bound))

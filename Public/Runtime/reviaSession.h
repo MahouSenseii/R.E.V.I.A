@@ -51,6 +51,7 @@
 #include "Vision/cameraCaptureService.h"
 #include "Vision/screenCaptureService.h"
 #include "Vision/visionActionParser.h"
+#include "Windows/desktopObserver.h"
 #include "Windows/visionUiaResolver.h"
 #include "Visual/imageGenerator.h"
 #include "Visual/svgCanvas.h"
@@ -145,7 +146,7 @@ class ReviaSession
     friend struct ReviaSessionTestAccess;
 
 public:
-    using ConfirmationHandler = std::function<bool(
+    using ConfirmationHandler = std::function<actions::ConfirmationChoice(
         const actions::ActionRequest&,
         const actions::PolicyDecision&)>;
 
@@ -280,6 +281,7 @@ public:
         bool keyboard,
         bool applicationLaunch,
         bool rawCoordinates,
+        bool visualTargeting,
         bool autonomous,
         actions::CapabilitySettings::DesktopControl::InputScope scope,
         bool allowCommandSurfaces);
@@ -495,12 +497,31 @@ private:
     // its own scope could widen its own authority, which is the one thing the scoped
     // execution path exists to prevent.
     [[nodiscard]] actions::CapabilitySettings DeriveGoalScope() const;
-    // What the iterative planner is told: the goal, what is left of the budget, and
-    // every attempt so far with what its check actually observed. Bounded, because this
-    // grows with the run and a loop that eventually fills its own context window would
-    // fail late and for a reason nobody could see.
+    // What the iterative planner is told: what the machine looks like right now, the
+    // goal, what is left of the budget, and every attempt so far with what its check
+    // actually observed. Bounded, because this grows with the run and a loop that
+    // eventually fills its own context window would fail late and for a reason nobody
+    // could see.
+    //
+    // Not const: it records the screen digest it just took so the next call can say
+    // whether anything actually moved. A decision that cannot tell acting from achieving
+    // will keep repeating an action that does nothing.
     [[nodiscard]] std::string BuildIterativeGoalContext(
-        const goals::Goal& goal, std::uint32_t iteration) const;
+        const goals::Goal& goal, std::uint32_t iteration);
+    // Turns a region a model pointed at into a target with evidence behind it.
+    //
+    // This is where the strongest available route is chosen, and the order is the point:
+    // the UI Automation resolver is tried first, and only a genuine failure to find an
+    // element -- not an ambiguous match, and not skipping the attempt -- permits falling
+    // back to the region itself. An ambiguous match is left as no target at all rather
+    // than downgraded into a claim that UI Automation succeeded.
+    //
+    // The runtime stamps every piece of evidence from `observation`. Nothing here is
+    // read out of model output, because evidence a model could write would be an
+    // authorization it granted itself.
+    void ResolveVisualTarget(
+        actions::ActionRequest& request,
+        const actions::windows::DesktopObservation& observation);
     bool TryHandleGoalInput(const std::string& input, SessionResult& result);
     bool TryHandleOperateInput(const std::string& input, SessionResult& result);
     // Shared by /operate and by an ordinary sentence that asked for the same thing, so
@@ -726,6 +747,22 @@ private:
     std::deque<std::chrono::steady_clock::time_point> recentCameraCaptures;
     vision::VisionActionParser visionActionParser;
     actions::windows::VisionUiaResolver visionUiaResolver;
+    // Eyes for the operator loop. It performs no action and holds no capability: what it
+    // sees still reaches the machine only as a typed action through the same policy,
+    // confirmation and audit path as everything else.
+    actions::windows::DesktopObserver desktopObserver;
+    // The digest of the screen as it looked at the previous decision. Compared rather
+    // than stored for its own sake, so the loop can tell "I clicked and the world moved"
+    // from "I clicked and nothing happened".
+    std::string lastObservedScreen;
+    // The observation the current decision was made from, kept so a region the model
+    // chose can be bound back to the screen it was chosen from.
+    //
+    // Deliberately left empty when the window in front was excluded from observation.
+    // There is then nothing to stamp a target with, so an excluded window cannot be
+    // reached by visual targeting -- the exclusion holds by construction rather than by
+    // a second check somebody has to remember to write.
+    actions::windows::DesktopObservation lastObservation;
     actions::windows::ApplicationControlDiscovery applicationControlDiscovery;
     llamaCppServerProcess llamaServerProcess;
     llamaCppServerProcess fastServerProcess;

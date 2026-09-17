@@ -31,6 +31,14 @@ namespace
     {
         ActionResult result;
         result.attempted = true;
+        int processId = 0;
+        window->get_CurrentProcessId(&processId);
+        result.content = "Application: " + WideToUtf8(ProcessFileName(processId)) +
+            "\nWindow: " + WideToUtf8(ElementName(window));
+        UIA_HWND handle = nullptr;
+        if (SUCCEEDED(window->get_CurrentNativeWindowHandle(&handle)))
+            result.content += std::string("\nForeground: ") +
+                (reinterpret_cast<HWND>(handle) == GetForegroundWindow() ? "true" : "false");
         IUIAutomationCondition* condition = nullptr;
         IUIAutomationElementArray* elements = nullptr;
         if (FAILED(automation->CreateTrueCondition(&condition)) || condition == nullptr ||
@@ -52,11 +60,11 @@ namespace
                 continue;
             }
             const std::wstring name = ElementName(element);
-            if (!name.empty())
+            CONTROLTYPEID type = 0;
+            element->get_CurrentControlType(&type);
+            if (!name.empty() || type == UIA_EditControlTypeId)
             {
-                CONTROLTYPEID type = 0;
                 BOOL isEnabled = FALSE;
-                element->get_CurrentControlType(&type);
                 element->get_CurrentIsEnabled(&isEnabled);
                 const std::string automationId = WideToUtf8(ElementAutomationId(element));
                 std::ostringstream line;
@@ -66,6 +74,31 @@ namespace
                 {
                     line << ", id=" << automationId;
                 }
+                BOOL focused = FALSE;
+                if (SUCCEEDED(element->get_CurrentHasKeyboardFocus(&focused)) && focused)
+                    line << ", focused=true";
+                // A name alone cannot verify that typing changed an edit field. Only
+                // read a value when UIA positively identifies a non-password control.
+                BOOL password = TRUE;
+                if (SUCCEEDED(element->get_CurrentIsPassword(&password)) && !password &&
+                    type == UIA_EditControlTypeId)
+                {
+                    IUIAutomationValuePattern* value = nullptr;
+                    if (SUCCEEDED(element->GetCurrentPatternAs(UIA_ValuePatternId,
+                            IID_IUIAutomationValuePattern, reinterpret_cast<void**>(&value))) && value)
+                    {
+                        BSTR text = nullptr;
+                        if (SUCCEEDED(value->get_CurrentValue(&text)) && text)
+                        {
+                            std::wstring bounded(text, std::min<UINT>(SysStringLen(text), 512));
+                            std::replace(bounded.begin(), bounded.end(), L'\n', L' ');
+                            std::replace(bounded.begin(), bounded.end(), L'\r', L' ');
+                            line << ", value=" << WideToUtf8(bounded);
+                        }
+                        SysFreeString(text);
+                    }
+                    Release(value);
+                }
                 line << ']';
                 result.entries.push_back(line.str());
             }
@@ -73,7 +106,7 @@ namespace
         }
         result.succeeded = true;
         result.message = "Inspected " + std::to_string(result.entries.size()) +
-            " named controls.";
+            " controls.";
         Release(elements);
         Release(condition);
         return result;
@@ -191,7 +224,7 @@ ActionResult WindowsAutomationExecutor::Execute(
         result.attempted = true;
         if (control == nullptr)
         {
-            result.message = request.resolution.visionResolved
+            result.message = request.resolution.IsUiaElementTarget()
                 ? "The vision-resolved UI Automation element changed or disappeared; no action was taken."
                 : "No matching control was found.";
         }

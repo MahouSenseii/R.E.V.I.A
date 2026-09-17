@@ -121,6 +121,68 @@ bool DeniesAvailableScreenVision(const std::string& lowered)
         "describe what's on your screen", "describe what is on your screen"});
 }
 
+// Present-tense claims to be looking at the screen right now.
+//
+// Every phrase here is anchored to a screen, window, tab, page or browser on purpose.
+// A bare "i'm looking at" is ordinary conversation about something pasted into the chat,
+// and catching that would be worse than the defect: a filter that fires on innocent
+// speech teaches nobody anything and makes her unusable.
+bool ClaimsCurrentScreenSight(const std::string& lowered)
+{
+    return ContainsAny(lowered, {
+        "looking at the screen", "looking at your screen", "looking at my screen",
+        "staring at the screen", "staring at your screen", "staring at that tab",
+        "staring at that edge", "staring at it right now",
+        "watching the screen", "watching your screen",
+        "on my screen right now", "on your screen right now",
+        "my screen is showing", "my screen is literally showing", "my screen shows",
+        "i can see the tab", "i can see the page", "i can see the window",
+        "i can see the browser", "i can see that tab", "i see the tab",
+        "i see the page", "i see the window",
+        "the tab is already open", "the page is already open",
+        "the browser is already open", "the page is already there",
+        "already open in edge", "already open in chrome", "already open in firefox",
+        "i'm looking right at it", "im looking right at it"});
+}
+
+// Claims to have acted on the machine, or to be about to, when there are no hands.
+//
+// Stalling counts. "Give me a sec to actually click the thing" asserts that clicking is
+// something she is in the middle of doing, which is the same false claim as saying she
+// already did it, with the falsification deferred.
+bool ClaimsDesktopAction(const std::string& lowered)
+{
+    return ContainsAny(lowered, {
+        "i clicked", "i'll click", "i will click", "ill click", "i'm clicking",
+        "im clicking", "let me click", "give me a sec to", "give me a second to",
+        "i'm about to click", "im about to click", "i opened it", "i'll open it",
+        "i will open it", "i'm opening", "im opening", "let me open",
+        "i'll pull it up", "i will pull it up", "let me pull it up",
+        "i'm pulling it up", "im pulling it up", "i'll bring it up",
+        "i typed", "i'll type", "let me type", "i pressed", "i'll press",
+        "i navigated", "i'll navigate"});
+}
+
+// What she should have said, from runtime state rather than from the model.
+//
+// Two facts, said in the order that matters: she has not looked, and -- when that is
+// also true -- she has no hands. The second without the first would invite "but I can
+// see it", which is the claim being corrected.
+std::string GroundedCapabilityReply(const ResponseFilterContext& context)
+{
+    std::string reply =
+        "I haven't actually looked. No screen observation was taken this turn, so I don't "
+        "know what's open or what's in front -- I was about to make something up, and I'd "
+        "rather not.";
+    if (context.desktopStateKnown && !context.AnyDesktopHands())
+    {
+        reply += " And my hands are off: pointer, keyboard and application launch are all "
+            "disabled in settings, so I can't open or click anything even once I can see "
+            "it. Turn those on in the permissions panel and ask me again.";
+    }
+    return reply;
+}
+
 std::string GroundedScreenReply(const ResponseFilterContext& context)
 {
     std::string observation = context.screenObservation;
@@ -284,6 +346,23 @@ std::string ResponseFilterContext::Describe() const
         description += " A current local screen observation is available for this turn; "
             "do not claim that the screens are invisible.";
     }
+    else
+    {
+        // The other half of the same sentence, and the half that was missing. Saying
+        // only the first taught her that claiming sight is always the safe answer.
+        description += " No screen observation was taken this turn. You do not know what "
+            "is on the screen, what is open, or which window is in front. Do not say you "
+            "are looking at, watching, or can see anything on it, and do not describe "
+            "what is there.";
+    }
+    if (desktopStateKnown && !AnyDesktopHands())
+    {
+        description += " Desktop control is off: pointer, keyboard and application "
+            "launch are all disabled in settings. You cannot click, type, open an "
+            "application or navigate a browser at all this turn. If asked to, say plainly "
+            "that the permission is off rather than agreeing, stalling, or describing the "
+            "action as already underway.";
+    }
     return description;
 }
 
@@ -352,6 +431,29 @@ HardFilterResult ResponseFilter::ApplyHard(
         result.blocked = true;
         result.reason =
             "Hard response filter replaced a screen-visibility claim that contradicted a real observation.";
+        return result;
+    }
+    // The inverse of the rule above, and the one that was missing. It is deliberately
+    // not gated on the user having raised the subject: she volunteered the claim in a
+    // conversation about opening a page, and a rule that only fires when screens are
+    // already being discussed would have watched this happen twice and said nothing.
+    if (!context.screenObservationAvailable && ClaimsCurrentScreenSight(loweredReply))
+    {
+        result.text = GroundedCapabilityReply(context);
+        result.changed = true;
+        result.blocked = true;
+        result.reason =
+            "Hard response filter replaced a claim to be seeing a screen that was never observed.";
+        return result;
+    }
+    if (context.desktopStateKnown && !context.AnyDesktopHands() &&
+        ClaimsDesktopAction(loweredReply))
+    {
+        result.text = GroundedCapabilityReply(context);
+        result.changed = true;
+        result.blocked = true;
+        result.reason =
+            "Hard response filter replaced a claim to be operating a desktop she has no permission to touch.";
         return result;
     }
     if (context.internetStateKnown && context.internetTopicIsActive &&

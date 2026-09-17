@@ -48,7 +48,7 @@ class GoalRunner
 {
 public:
     using ProgressHandler = std::function<void(const GoalProgress&)>;
-    using ConfirmationHandler = std::function<bool(
+    using ConfirmationHandler = std::function<actions::ConfirmationChoice(
         const actions::ActionRequest&,
         const actions::PolicyDecision&)>;
     // Consulted once per iteration by Operate. It receives the goal with every
@@ -64,6 +64,21 @@ public:
 
     void SetProgressHandler(ProgressHandler handler);
     void SetConfirmationHandler(ConfirmationHandler handler);
+    // Drops any standing yes. Called at the start of every run, so an approval can never
+    // leak from one goal into the next.
+    void ClearStandingApproval();
+    // Answers the per-step question in advance, because the person already answered it.
+    //
+    // A goal is approved up front, as a whole. When that approval was "and stop asking
+    // me for this task", asking again about every routine step inside it is not a second
+    // safeguard -- it is the same question repeated until it stops being read. Driving a
+    // browser is a launch, a focus, a chord, a type and an enter, and five prompts for
+    // one sentence is how a person learns to click Yes without looking.
+    //
+    // Consumed by the next run and forgotten. It is the same standing yes the dialog can
+    // grant mid-run and carries exactly the same limits: this run only, never stored, no
+    // permission raised, nothing above the ceiling, and a deletion still asks.
+    void SeedStandingApproval(actions::RiskLevel ceiling, bool refuseEscalation = false);
     void SetStepProvider(StepProvider provider);
 
     // Validates the plan, then runs it. Returns the goal in its final state;
@@ -109,6 +124,16 @@ private:
     const GoalStore& goalStore;
     ProgressHandler progressHandler;
     ConfirmationHandler confirmationHandler;
+    // A standing yes for the current run. Reset at the start of every Run and Operate,
+    // never persisted, and never consulted for anything riskier than what was shown.
+    bool blanketApproval = false;
+    bool refuseAdditionalApproval = false;
+    actions::RiskLevel blanketRiskCeiling = actions::RiskLevel::ReadOnly;
+    // Set before a run starts, consumed by it. Separate from the live flag so that
+    // starting a run still clears whatever the previous one left behind.
+    bool seededApproval = false;
+    bool seededRefuseEscalation = false;
+    actions::RiskLevel seededCeiling = actions::RiskLevel::ReadOnly;
     StepProvider stepProvider;
 };
 

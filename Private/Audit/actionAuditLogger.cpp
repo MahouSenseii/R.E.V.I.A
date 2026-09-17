@@ -268,7 +268,52 @@ bool ActionAuditLogger::WriteRecord(
             }
             entry["desktop_input"] = std::move(desktop);
         }
-        if (request.resolution.visionResolved)
+        // Which route actually executed. Recorded for every targeted action rather
+        // than only the resolved ones, because "this was aimed by pixels" and "this was
+        // aimed at a control Windows named" are the two facts an audit most needs to
+        // tell apart afterwards.
+        if (request.resolution.kind != actions::TargetResolutionKind::None)
+        {
+            entry["target_resolution"] = actions::ToString(request.resolution.kind);
+        }
+        else if (request.input.hasPoint && actions::IsSynthesizedInputAction(request.type))
+        {
+            entry["target_resolution"] =
+                actions::ToString(actions::TargetResolutionKind::RawCoordinate);
+        }
+        if (request.resolution.IsVisualRegionTarget())
+        {
+            // Bounded evidence for a target that had no element behind it: what it was
+            // said to be, where, how sure, and which observation it came from. The
+            // description is the model's own words about a button, which is not
+            // sensitive in the way typed text is -- and typed text still never lands
+            // here, only its length.
+            entry["visual_target"] = {
+                {"target_description", request.resolution.modelTarget},
+                {"region", {
+                    {"left", request.resolution.regionLeft},
+                    {"top", request.resolution.regionTop},
+                    {"right", request.resolution.regionRight},
+                    {"bottom", request.resolution.regionBottom}}},
+                {"model_confidence", request.resolution.modelConfidence},
+                {"observation_id", request.resolution.observationId},
+                {"observation_generation", request.resolution.observationGeneration},
+                {"screen_digest", request.resolution.screenDigest},
+                {"application", request.resolution.observedApplication},
+                {"window_title", request.windowTitle},
+                {"window", {
+                    {"left", request.resolution.observedWindowLeft},
+                    {"top", request.resolution.observedWindowTop},
+                    {"right", request.resolution.observedWindowRight},
+                    {"bottom", request.resolution.observedWindowBottom}}},
+                // Whether the stronger route was tried, and what it said. Without this a
+                // reader cannot tell an interface that exposes nothing from a resolver
+                // that was never asked.
+                {"uia_attempted", request.resolution.uiaAttempted},
+                {"uia_failure", request.resolution.uiaFailure}
+            };
+        }
+        if (request.resolution.IsUiaElementTarget())
         {
             entry["vision_resolution"] = {
                 {"model_target", request.resolution.modelTarget},

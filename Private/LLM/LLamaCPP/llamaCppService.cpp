@@ -1138,7 +1138,9 @@ responseOutput llamaCppService::GenerateNextGoalStep(const std::string& goalCont
     // One step carries two action objects and an expectation, so it needs more room
     // than the single-action planner's 256 and far less than a whole plan's 1536.
     return GeneratePlannerResponse(
-        revia::planning::GoalPlanner::NextStepPrompt(), goalContext, 512);
+        revia::planning::GoalPlanner::NextStepPrompt(), goalContext, 512, true, {},
+        revia::llm::InferencePriority::Interactive, 0.1F, "goal step planning",
+        revia::planning::GoalPlanner::NextStepSchema(goalContext));
 }
 
 responseOutput llamaCppService::GenerateDiagram(const std::string& userRequest) const

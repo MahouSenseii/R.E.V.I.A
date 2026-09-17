@@ -30,5 +30,7 @@ struct OperateIntent
 };
 
 [[nodiscard]] OperateIntent DetectOperateRequest(const std::string& input);
+// Routing evidence for a user-requested message, never a permission from model output.
+[[nodiscard]] bool RequestsExternalMessage(const std::string& input);
 
 } // namespace revia::planning

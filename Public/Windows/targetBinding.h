@@ -96,6 +96,25 @@ inline constexpr std::chrono::milliseconds BindingFreshnessLimit{2000};
     const std::string& taskOrigin,
     const std::string& policyVersion);
 
+// Whether two bindings describe the same control, when one of them was minted a moment
+// before the other for the same intended target.
+//
+// Separate from Describes, which is the right rule for "has the world drifted since I
+// authorized this" and the wrong one here. Describes lets a runtime id decide whenever
+// both sides have one, and a Chromium-based application -- Edge, Chrome, anything
+// Electron -- rebuilds its accessibility nodes constantly. A regenerated id there means
+// the node was recreated, not that the caret moved, and treating the two as the same
+// thing makes typing into a browser impossible: the caret is provably on the target, the
+// id no longer matches, and the text is refused.
+//
+// So a matching id still accepts immediately, and a mismatched one falls through to
+// requiring every stable property to agree -- automation id, control type, name,
+// password-ness, and the exact rectangle. That keeps the protection this check exists
+// for. The incident behind it was two text fields in one window, and two distinct fields
+// do not occupy the same rectangle.
+[[nodiscard]] bool SameControl(
+    const TargetBinding& intended, const TargetBinding& current);
+
 // Re-observes and compares. Empty return means it still holds; otherwise the reason.
 [[nodiscard]] std::string RevalidateFocusBinding(
     IUIAutomation* automation,

@@ -7,6 +7,7 @@
 #include <functional>
 
 class QLabel;
+class QComboBox;
 class QLineEdit;
 class QPushButton;
 class QTableWidget;
@@ -52,6 +53,7 @@ private:
     QTableWidget* discoveredTable = nullptr;
     QLabel* discoveryLabel = nullptr;
     QLabel* statusLabel = nullptr;
+    QComboBox* taskApprovalMode = nullptr;
     ToggleSwitch* internetCheck = nullptr;
     ToggleSwitch* automaticLookupCheck = nullptr;
     ToggleSwitch* visibleBrowserCheck = nullptr;
@@ -62,6 +64,7 @@ private:
     ToggleSwitch* keyboardCheck = nullptr;
     ToggleSwitch* launchCheck = nullptr;
     ToggleSwitch* rawCoordinateCheck = nullptr;
+    ToggleSwitch* visualTargetCheck = nullptr;
     ToggleSwitch* wholeDesktopCheck = nullptr;
     ToggleSwitch* commandSurfaceCheck = nullptr;
     ToggleSwitch* autonomousDesktopCheck = nullptr;

@@ -119,7 +119,8 @@ void TestSessionConfirmation(const bool cancel, const bool approve)
     {
         prompted = true;
         if (cancel) session.RequestStop();
-        return approve;
+        return approve ? revia::actions::ConfirmationChoice::Allow
+                       : revia::actions::ConfirmationChoice::Decline;
     });
     const auto request = fixture.MakeDirectory();
     const auto result = revia::runtime::ReviaSessionTestAccess::Execute(session, request);
@@ -145,7 +146,8 @@ void TestGoalCancellation(const CancelAt point, const bool approve = true)
     {
         prompted = true;
         if (point == CancelAt::Confirmation) stop.request_stop();
-        return approve;
+        return approve ? revia::actions::ConfirmationChoice::Allow
+                       : revia::actions::ConfirmationChoice::Decline;
     });
     fixture.runtime.SetDispatchObserver([&](const ActionRequest& request, const bool beginning)
     {

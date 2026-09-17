@@ -179,6 +179,7 @@ bool CapabilityEditor::SetDesktopControl(
     const bool keyboard,
     const bool applicationLaunch,
     const bool rawCoordinates,
+    const bool visualTargeting,
     const bool autonomous,
     const actions::CapabilitySettings::DesktopControl::InputScope scope,
     const bool allowCommandSurfaces,
@@ -189,6 +190,7 @@ bool CapabilityEditor::SetDesktopControl(
     change.keyboard = keyboard;
     change.applicationLaunch = applicationLaunch;
     change.rawCoordinates = rawCoordinates;
+    change.visualTargeting = visualTargeting;
     change.autonomous = autonomous;
     change.scope = scope;
     change.allowCommandSurfaces = allowCommandSurfaces;
@@ -330,6 +332,7 @@ bool CapabilityEditor::Apply(
         desktopControl["keyboard"] = desktop.keyboard;
         desktopControl["applicationLaunch"] = desktop.applicationLaunch;
         desktopControl["rawCoordinates"] = rawCoordinates;
+        desktopControl["visualTargeting"] = desktop.pointer && desktop.visualTargeting;
         desktopControl["autonomous"] =
             (desktop.pointer || desktop.keyboard || desktop.applicationLaunch) &&
             desktop.autonomous;

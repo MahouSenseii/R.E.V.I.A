@@ -312,6 +312,25 @@ std::string ActionVocabulary(const bool readOnlyOnly)
     return list;
 }
 
+std::string ToString(const TargetResolutionKind value)
+{
+    switch (value)
+    {
+        case TargetResolutionKind::UiaElement: return "uia_element";
+        case TargetResolutionKind::VisualRegion: return "visual_region";
+        case TargetResolutionKind::RawCoordinate: return "raw_coordinate";
+        case TargetResolutionKind::None:
+        default: return "none";
+    }
+}
+
+bool AlwaysNeedsItsOwnConfirmation(const ActionType value)
+{
+    // Deleting is the case where the mechanism and the consequence disagree, and the
+    // consequence is what a person answering a prompt is thinking about.
+    return value == ActionType::MoveToRecycleBin;
+}
+
 RiskLevel RiskForAction(ActionType value)
 {
     switch (value)

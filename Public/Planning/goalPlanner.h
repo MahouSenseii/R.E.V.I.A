@@ -50,6 +50,7 @@ public:
     // observed outcome. It therefore also has to be able to say the work is already
     // done, which a plan never says about itself.
     [[nodiscard]] static std::string NextStepPrompt();
+    [[nodiscard]] static std::string NextStepSchema(const std::string& goalContext = {});
 
     // Reads one step decision. Distinguishes a step to take, nothing left to take, and
     // no usable answer, because the last two are opposite outcomes and collapsing them

@@ -244,6 +244,15 @@ bool PerceptionFilter::IsExcludedTitle(
         });
 }
 
+bool PerceptionFilter::IsExcludedWindow(
+    const perceptionSettings& settings,
+    const std::string& application,
+    const std::string& windowTitle)
+{
+    return IsExcludedApplication(settings, application) ||
+        IsExcludedTitle(settings, windowTitle);
+}
+
 Suppression PerceptionFilter::Admit(
     const WindowObservation& candidate,
     const std::chrono::steady_clock::time_point now)

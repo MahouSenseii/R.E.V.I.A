@@ -179,7 +179,6 @@ bool InternetLookupPolicy::ShouldLookup(
     //
     // "release date" stays: asking for a date is asking about a schedule, not a language.
     if (ContainsAny(lowered, {
-            "today", "currently", "right now",
             "news", "weather", "forecast", "price", "release date",
             "schedule", "score", "president", "ceo", "law", "regulation"}))
     {

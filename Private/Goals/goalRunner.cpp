@@ -27,7 +27,7 @@ std::string ToLower(std::string value)
 
 // The observation is stored, not just its verdict, so a wrong verification is
 // diagnosable afterwards rather than only visible in its consequences.
-std::string SummarizeResult(const actions::ActionResult& result)
+std::string SummarizeResult(const actions::ActionResult& result, const std::string& expected)
 {
     std::string summary = result.message;
     const auto append = [&summary](const std::string& value)
@@ -44,9 +44,18 @@ std::string SummarizeResult(const actions::ActionResult& result)
     };
 
     append(result.content);
+    // Keep the evidence that verified this step ahead of unrelated controls. The
+    // next planner receives a bounded prefix, so list order must not erase success.
+    const std::string needle = ToLower(expected);
+    const auto matches = [&](const std::string& entry)
+    {
+        return !needle.empty() && ToLower(entry).find(needle) != std::string::npos;
+    };
+    for (const std::string& entry : result.entries)
+        if (matches(entry)) append(entry);
     for (const std::string& entry : result.entries)
     {
-        append(entry);
+        if (!matches(entry)) append(entry);
     }
 
     if (summary.size() > MaxObservationCharacters)
@@ -104,6 +113,25 @@ void GoalRunner::SetStepProvider(StepProvider provider)
     stepProvider = std::move(provider);
 }
 
+void GoalRunner::ClearStandingApproval()
+{
+    // Whatever the last run ended with is dropped; whatever this one was handed is taken
+    // up, once. A seed that is never used by a run does not survive into a later one.
+    blanketApproval = seededApproval;
+    blanketRiskCeiling = seededCeiling;
+    refuseAdditionalApproval = seededRefuseEscalation;
+    seededApproval = false;
+    seededRefuseEscalation = false;
+    seededCeiling = actions::RiskLevel::ReadOnly;
+}
+
+void GoalRunner::SeedStandingApproval(const actions::RiskLevel ceiling, const bool refuseEscalation)
+{
+    seededApproval = true;
+    seededCeiling = ceiling;
+    seededRefuseEscalation = refuseEscalation;
+}
+
 void GoalRunner::SetConfirmationHandler(ConfirmationHandler handler)
 {
     confirmationHandler = std::move(handler);
@@ -137,6 +165,8 @@ std::string ActionFingerprint(const actions::ActionRequest& action)
 
 Goal GoalRunner::Operate(Goal goal, std::stop_token stopToken)
 {
+    ClearStandingApproval();
+    goal.stopDetail.clear();
     if (goal.id.empty())
     {
         goal.id = NewGoalId();
@@ -196,12 +226,22 @@ Goal GoalRunner::Operate(Goal goal, std::stop_token stopToken)
         }
 
         const NextStep next = stepProvider(goal, iteration);
+        // Stop during inference wins over a late planner answer.
+        if (stopToken.stop_requested())
+        {
+            goal.status = GoalStatus::Cancelled;
+            goal.stopReason = StopReason::Cancelled;
+            goal.spend.elapsedMs = priorElapsed + ElapsedMilliseconds(startedAt);
+            static_cast<void>(Persist(goal));
+            return goal;
+        }
         if (!next.hasStep)
         {
             // Finished and stuck are opposite outcomes and are recorded as such.
             goal.status = next.finished ? GoalStatus::Succeeded : GoalStatus::Blocked;
             goal.stopReason =
                 next.finished ? StopReason::Completed : StopReason::Undecided;
+            goal.stopDetail = next.reason.substr(0, MaxObservationCharacters);
             goal.spend.elapsedMs = priorElapsed + ElapsedMilliseconds(startedAt);
             static_cast<void>(Persist(goal));
             return goal;
@@ -216,6 +256,7 @@ Goal GoalRunner::Operate(Goal goal, std::stop_token stopToken)
             // the loop cannot become a way to execute something unverifiable.
             goal.status = GoalStatus::Failed;
             goal.stopReason = StopReason::InvalidPlan;
+            goal.stopDetail = stepError.substr(0, MaxObservationCharacters);
             goal.spend.elapsedMs = priorElapsed + ElapsedMilliseconds(startedAt);
             static_cast<void>(Persist(goal));
             return goal;
@@ -434,8 +475,13 @@ bool GoalRunner::RunStep(
         action.requestedBy = "goal:" + goal.id;
         record.actionId = action.id;
 
-        const actions::PolicyDecision decision =
+        actions::PolicyDecision decision =
             actionRuntime.EvaluateScoped(action, scopedPolicy);
+        if (refuseAdditionalApproval && actions::AlwaysNeedsItsOwnConfirmation(action.type))
+        {
+            decision.verdict = actions::PolicyVerdict::Blocked;
+            decision.reason = "Deletion is outside this task's approval.";
+        }
         record.verdict = decision.verdict;
 
         if (decision.verdict == actions::PolicyVerdict::Blocked)
@@ -451,7 +497,27 @@ bool GoalRunner::RunStep(
         bool confirmationGranted = false;
         if (decision.verdict == actions::PolicyVerdict::RequiresConfirmation)
         {
-            confirmationGranted = confirmationHandler && confirmationHandler(action, decision);
+            // A standing yes covers only what it was given for: this run, and work no
+            // riskier than the action the person actually saw. A step that escalates
+            // asks again, which is the difference between answering once and signing a
+            // blank cheque.
+            if (blanketApproval &&
+                !actions::AlwaysNeedsItsOwnConfirmation(action.type) &&
+                static_cast<int>(decision.risk) <= static_cast<int>(blanketRiskCeiling))
+            {
+                confirmationGranted = true;
+            }
+            else if (confirmationHandler && !refuseAdditionalApproval)
+            {
+                const actions::ConfirmationChoice choice =
+                    confirmationHandler(action, decision);
+                confirmationGranted = actions::Granted(choice);
+                if (choice == actions::ConfirmationChoice::AllowForThisTask)
+                {
+                    blanketApproval = true;
+                    blanketRiskCeiling = decision.risk;
+                }
+            }
             if (cancelled()) return false;
             if (!confirmationGranted)
             {
@@ -485,7 +551,7 @@ bool GoalRunner::RunStep(
             const actions::ActionOutcome checkOutcome =
                 actionRuntime.ExecuteScoped(check, scopedPolicy, false, stopToken);
             if (!stopToken.stop_requested() || checkOutcome.result.attempted) ++goal.spend.actions;
-            record.observation = SummarizeResult(checkOutcome.result);
+            record.observation = SummarizeResult(checkOutcome.result, step.expected);
             if (auditFailed(checkOutcome)) return false;
             record.verified = Observed(checkOutcome.result, step.expected);
             if (cancelled()) return false;
@@ -533,6 +599,8 @@ bool GoalRunner::RunStep(
 
 Goal GoalRunner::Run(Goal goal, std::stop_token stopToken)
 {
+    ClearStandingApproval();
+    goal.stopDetail.clear();
     if (goal.id.empty())
     {
         goal.id = NewGoalId();
@@ -649,6 +717,9 @@ Goal GoalRunner::Run(Goal goal, std::stop_token stopToken)
 
 Goal GoalRunner::Resume(const std::string& goalId, std::stop_token stopToken)
 {
+    // Cleared here too, deliberately. Resuming is a new sitting and a standing yes given
+    // in an earlier run -- possibly in an earlier process -- is not consent given now.
+    ClearStandingApproval();
     const std::optional<Goal> stored = goalStore.Load(goalId);
     if (!stored.has_value())
     {

@@ -115,6 +115,38 @@ struct ReviaSessionTestAccess
         return session.ExecuteAction(std::move(request));
     }
 
+    static void PrepareOperator(ReviaSession& session, const std::filesystem::path& root,
+        goals::GoalRunner::StepProvider provider = {})
+    {
+        PrepareActions(session, root);
+        session.goalStore = goals::GoalStore((root / "goals.db").string());
+        if (provider) session.goalRunner.SetStepProvider(std::move(provider));
+    }
+
+    static void ConfigureLiveOperatorPlanner(ReviaSession& session, const int port)
+    {
+        tests::Check(session.config.LoadSettings(session.settings), "Live planner settings did not load.");
+        session.settings.llm.port = port;
+        session.router.ApplyLLMSettings(session.settings.llm, embeddingSettings{}, aiProfile{});
+    }
+
+    static SessionResult SubmitOperator(ReviaSession& session, const std::string& input)
+    {
+        // Exercise the real input/lock owner without starting model or sensor workers.
+        session.started.store(true);
+        try
+        {
+            auto result = session.Submit(input);
+            session.started.store(false);
+            return result;
+        }
+        catch (...)
+        {
+            session.started.store(false);
+            throw;
+        }
+    }
+
     static void ObserveActions(ReviaSession& session, actions::ActionRuntime::DispatchObserver observer)
     {
         session.actionRuntime.SetDispatchObserver(std::move(observer));

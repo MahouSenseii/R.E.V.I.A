@@ -113,23 +113,31 @@ void reviaApp::Run()
     session.Stop();
 }
 
-bool reviaApp::ConfirmAction(
+revia::actions::ConfirmationChoice reviaApp::ConfirmAction(
     const revia::actions::ActionRequest& request,
     const revia::actions::PolicyDecision& decision) const
 {
     std::cout << "Action: " << revia::actions::ToString(request.type) << '\n'
         << "Policy: " << revia::actions::ToString(decision.verdict)
         << " (" << decision.reason << ")\n"
-        << "Allow this action? [y/N]: " << std::flush;
+        // "a" rather than a second yes/no question, so the standing answer stays a
+        // deliberate keystroke and cannot be reached by holding down the ordinary one.
+        << "Allow this action? [y]es / [a]ll of this task / [N]o: " << std::flush;
     std::string answer;
     if (!std::getline(std::cin, answer))
     {
-        return false;
+        return revia::actions::ConfirmationChoice::Decline;
     }
     std::transform(answer.begin(), answer.end(), answer.begin(),
         [](const unsigned char character)
         {
             return static_cast<char>(std::tolower(character));
         });
-    return answer == "y" || answer == "yes";
+    if (answer == "a" || answer == "all")
+    {
+        return revia::actions::ConfirmationChoice::AllowForThisTask;
+    }
+    return answer == "y" || answer == "yes"
+        ? revia::actions::ConfirmationChoice::Allow
+        : revia::actions::ConfirmationChoice::Decline;
 }

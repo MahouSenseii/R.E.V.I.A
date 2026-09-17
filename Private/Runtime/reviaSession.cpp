@@ -236,6 +236,10 @@ ReviaSession::ReviaSession()
           {
               return actionRuntime.Settings().internet;
           },
+          [this]()
+          {
+              return actionRuntime.Settings().desktopControl;
+          },
           [this](const std::string& query, const std::string& requestedBy)
           {
               actions::ActionRequest request;
@@ -351,10 +355,17 @@ ReviaSession::ReviaSession()
         }
         if (!handler)
         {
-            return false;
+            return actions::ConfirmationChoice::Decline;
         }
         SetState(RuntimeState::WaitingForConfirmation, decision.reason);
-        return handler(request, decision);
+        // Carried through whole. Whether a standing yes is honoured, and how far it
+        // reaches, is the runner's decision; this only relays the answer.
+        const actions::ConfirmationChoice choice = handler(request, decision);
+        if (actions::Granted(choice) && !CurrentOperationToken().stop_requested())
+        {
+            SetState(RuntimeState::Acting, "Executing the approved goal action.");
+        }
+        return choice;
     });
     // The iterative loop's one decision point. Observing the machine is this side's job
     // by design, which is what keeps Goals from depending on Windows: the runner asks
@@ -402,6 +413,10 @@ ReviaSession::ReviaSession()
         next.step.ordinal = static_cast<std::uint32_t>(goal.steps.size());
         next.step.action.requestedBy = "goal";
         next.step.check.requestedBy = "goal";
+        // A region the model pointed at becomes a target with evidence behind it, or it
+        // stays a bare region that policy will refuse. Only the action: a check is
+        // read-only and aims at nothing.
+        ResolveVisualTarget(next.step.action, lastObservation);
         return next;
     });
 }
@@ -4022,8 +4037,7 @@ SessionResult ReviaSession::RunTurnLocked(const std::string& acceptedInput)
             std::ostringstream trace;
             trace << "Ran the "
                 << (space == std::string::npos ? acceptedInput : acceptedInput.substr(0, space))
-                << " command directly. No model call was involved; this path is "
-                   "deterministic code, not a reply.";
+                << " request through the command/action handler.";
             if (!result.succeeded && !result.reason.empty())
             {
                 trace << "\n\nRefused: " << result.reason;
@@ -5125,13 +5139,22 @@ SessionResult ReviaSession::ActOnScreen(const std::string& instruction)
     resolverSettings.minimumNameAgreement = settings.vision.minimumNameAgreement;
     resolverSettings.ambiguityMargin = settings.vision.ambiguityMargin;
     resolverSettings.maxCandidates = settings.vision.maxResolverElements;
-    const vision::UiaResolutionResult resolution = visionUiaResolver.Resolve(
-        capture.foregroundApplication,
-        capture.foregroundWindowTitle,
-        parsed.intent,
-        resolverSettings);
+    // A keystroke aims at nothing, so it never needs an element. Resolving one for it
+    // would be inventing a target it does not use.
+    const bool needsTarget = parsed.intent.NeedsRegion();
+    const vision::UiaResolutionResult resolution = needsTarget
+        ? visionUiaResolver.Resolve(
+            capture.foregroundApplication,
+            capture.foregroundWindowTitle,
+            parsed.intent,
+            resolverSettings)
+        : vision::UiaResolutionResult{};
     timings.push_back({"uia_resolution", ElapsedMilliseconds(resolutionStarted)});
-    if (!resolution.succeeded)
+    // Only the UI Automation family has no second route: invoking a control means naming
+    // one, and without a match there is nothing to invoke.
+    const bool uiaFamily = parsed.intent.action == actions::ActionType::InvokeControl ||
+        parsed.intent.action == actions::ActionType::SetControlText;
+    if (needsTarget && !resolution.succeeded && uiaFamily)
     {
         return finishFailure(
             "I found the area, but not a safe Windows control to use.",
@@ -5141,14 +5164,60 @@ SessionResult ReviaSession::ActOnScreen(const std::string& instruction)
     actions::ActionRequest request;
     request.id = actions::NewActionId();
     request.type = parsed.intent.action;
+    request.value = parsed.intent.value;
+    request.input.keys = parsed.intent.keys;
+    request.input.scrollClicks = parsed.intent.scrollClicks;
+    request.input.horizontalScroll = parsed.intent.horizontalScroll;
+    request.input.clickCount = parsed.intent.clickCount;
+    request.requestedBy = "user_via_vision";
+    if (!resolution.succeeded)
+    {
+        // Pointer work on an interface UI Automation could not describe. The region is
+        // bound to an observation taken now, so the executor can check that the window
+        // it was seen in is still in front and still where it was. A keystroke takes
+        // this branch too and simply carries no target.
+        request.resolution.regionLeft = parsed.intent.region.left;
+        request.resolution.regionTop = parsed.intent.region.top;
+        request.resolution.regionRight = parsed.intent.region.right;
+        request.resolution.regionBottom = parsed.intent.region.bottom;
+        request.input.endRegionLeft = parsed.intent.endRegion.left;
+        request.input.endRegionTop = parsed.intent.endRegion.top;
+        request.input.endRegionRight = parsed.intent.endRegion.right;
+        request.input.endRegionBottom = parsed.intent.endRegion.bottom;
+        request.resolution.modelTarget = parsed.intent.targetDescription.empty()
+            ? parsed.intent.targetName : parsed.intent.targetDescription;
+        request.resolution.modelConfidence = parsed.intent.modelConfidence;
+        request.resolution.uiaAttempted = needsTarget;
+        request.resolution.uiaFailure = resolution.reason;
+        if (needsTarget)
+        {
+            // Observed here rather than reusing the screenshot: the target has to be
+            // bound to the newest look at the machine, and the capture above is already
+            // a vision inference old.
+            ResolveVisualTarget(request, desktopObserver.Observe());
+            if (!request.resolution.IsVisualRegionTarget() &&
+                !request.resolution.IsUiaElementTarget())
+            {
+                return finishFailure(
+                    "I found the area, but could not bind it to what is on screen now.",
+                    request.resolution.uiaFailure.empty()
+                        ? "The screen could not be observed for a visual target."
+                        : request.resolution.uiaFailure);
+            }
+        }
+        result = ExecuteAction(std::move(request));
+        result.fromAssistant = true;
+        timings.push_back({"vision_action_total", ElapsedMilliseconds(totalStarted), true});
+        appLogger.Timing("vision action", timings);
+        busy.store(false);
+        return result;
+    }
     request.application = resolution.reference.application;
     request.windowTitle = resolution.reference.windowTitle;
     request.control = !resolution.reference.element.automationId.empty()
         ? resolution.reference.element.automationId
         : resolution.reference.element.name;
-    request.value = parsed.intent.value;
-    request.requestedBy = "user_via_vision";
-    request.resolution.visionResolved = true;
+    request.resolution.kind = actions::TargetResolutionKind::UiaElement;
     request.resolution.modelTarget = resolution.reference.modelTarget;
     request.resolution.regionLeft = resolution.reference.modelRegion.left;
     request.resolution.regionTop = resolution.reference.modelRegion.top;
@@ -5374,6 +5443,7 @@ CapabilityUpdateResult ReviaSession::SetDesktopControl(
     const bool keyboard,
     const bool applicationLaunch,
     const bool rawCoordinates,
+    const bool visualTargeting,
     const bool autonomous,
     const actions::CapabilitySettings::DesktopControl::InputScope scope,
     const bool allowCommandSurfaces)
@@ -5381,7 +5451,8 @@ CapabilityUpdateResult ReviaSession::SetDesktopControl(
     CapabilityUpdateResult result;
     std::string error;
     result.succeeded = actionRuntime.SetDesktopControl(
-        pointer, keyboard, applicationLaunch, rawCoordinates, autonomous, scope,
+        pointer, keyboard, applicationLaunch, rawCoordinates, visualTargeting,
+        autonomous, scope,
         allowCommandSurfaces, error);
     if (!result.succeeded)
     {
@@ -5477,6 +5548,7 @@ std::string ReviaSession::DesktopControlStatus() const
     stream << "  Keyboard:            " << (desktop.keyboard ? "on" : "off") << '\n';
     stream << "  Start applications:  " << (desktop.applicationLaunch ? "on" : "off") << '\n';
     stream << "  Chosen coordinates:  " << (desktop.rawCoordinates ? "on" : "off") << '\n';
+    stream << "  Visual targeting:    " << (desktop.visualTargeting ? "on" : "off") << '\n';
     stream << "  Reach:               "
            << (desktop.scope ==
                    actions::CapabilitySettings::DesktopControl::InputScope::WholeDesktop
@@ -7389,6 +7461,9 @@ bool ReviaSession::TryHandleOperateInput(const std::string& input, SessionResult
 // the per-action policy and audit -- happens identically whichever way the request came.
 bool ReviaSession::RunOperateGoal(const std::string& request, SessionResult& result)
 {
+    result.reasoning = "Routed to the iterative operator. It chooses one step at a time "
+        "through the goal planner, then checks permissions and verifies each action. "
+        "The result below records how far this run reached.";
     if (!actionRuntime.IsInitialized())
     {
         result.succeeded = false;
@@ -7403,6 +7478,21 @@ bool ReviaSession::RunOperateGoal(const std::string& request, SessionResult& res
     goal.title = request;
     goal.status = goals::GoalStatus::Planned;
     goal.scope = DeriveGoalScope();
+    const bool freeMode = actionRuntime.Settings().mode == actions::ExecutionMode::OwnerFullAccess;
+    const bool messaging = planning::RequestsExternalMessage(request);
+    if (messaging)
+    {
+        // An uncertain observation must not replay a message that may already be sent.
+        goal.budget.maxRetriesPerStep = 0;
+        goal.budget.maxTotalRetries = 0;
+    }
+    // This is an interactive run with a confirmation handler. Preserve supervised
+    // approval instead of turning every above-ceiling action into an unattended denial.
+    // The global policy still checks each action, and all scope/budget limits remain.
+    if (actionRuntime.Settings().mode == actions::ExecutionMode::Supervised || freeMode)
+    {
+        goal.scope.mode = actionRuntime.Settings().mode;
+    }
 
     // A planned goal is rehearsed and then approved as a whole, because the whole of it
     // exists before anything runs. This one does not: its steps are invented as the work
@@ -7414,7 +7504,7 @@ bool ReviaSession::RunOperateGoal(const std::string& request, SessionResult& res
         std::lock_guard lock(confirmationMutex);
         handler = confirmationHandler;
     }
-    if (!handler)
+    if (!handler && !freeMode)
     {
         result.succeeded = false;
         result.text = "An iterative goal needs a confirmation handler and none is set.";
@@ -7436,11 +7526,20 @@ bool ReviaSession::RunOperateGoal(const std::string& request, SessionResult& res
         std::to_string(goal.budget.maxActions) + " actions, " +
         std::to_string(goal.budget.maxTotalRetries) + " retries and " +
         std::to_string(goal.budget.maxDurationMs / 1000) + " seconds.\n"
-        "Every individual action is still checked against permissions and still asks "
-        "before anything risky, and each step has to prove it worked before the next "
-        "one is chosen.";
-    SetState(RuntimeState::WaitingForConfirmation, decision.reason);
-    if (!handler(summary, decision))
+        "Approve this task once. Routine steps and content editing will continue "
+        "within your existing permissions. Each step must be checked before continuing.\n" +
+        std::string(messaging
+            ? "This includes composing and sending the message you requested.\n"
+            : "This does not include sending or publishing messages.\n") +
+        "Purchases, deletion, account changes and commands outside existing grants "
+        "stop the task instead of opening more prompts.";
+    actions::ConfirmationChoice goalChoice = actions::ConfirmationChoice::AllowForThisTask;
+    if (!freeMode)
+    {
+        SetState(RuntimeState::WaitingForConfirmation, decision.reason);
+        goalChoice = handler(summary, decision);
+    }
+    if (!actions::Granted(goalChoice))
     {
         result.succeeded = false;
         result.text = "Iterative goal cancelled before any step ran.";
@@ -7448,21 +7547,22 @@ bool ReviaSession::RunOperateGoal(const std::string& request, SessionResult& res
         SetState(RuntimeState::Idle, result.text);
         return true;
     }
+    goalRunner.SeedStandingApproval(actions::RiskLevel::ReversibleWrite, true);
+    const auto desktopApproval = actionRuntime.ApproveDesktopTask(goal.id, messaging);
 
-    goals::Goal finished;
-    {
-        std::lock_guard operationLock(operationMutex);
-        (void)BeginOperation();
-        busy.store(true);
-        const std::stop_token stopToken = CurrentOperationToken();
-        const auto startedAt = std::chrono::steady_clock::now();
-        SetState(RuntimeState::Acting, "Working on: " + goal.title);
-        finished = FinishGoalRun(goalRunner.Operate(std::move(goal), stopToken), startedAt);
-    }
+    // RunTurnLocked already owns operationMutex and this turn's cancellation token.
+    // Locking again deadlocks after approval; starting a new operation would erase Stop.
+    const std::stop_token stopToken = CurrentOperationToken();
+    const auto startedAt = std::chrono::steady_clock::now();
+    SetState(RuntimeState::Acting, "Working on: " + goal.title);
+    const goals::Goal finished =
+        FinishGoalRun(goalRunner.Operate(std::move(goal), stopToken), startedAt);
 
     result.succeeded = finished.status == goals::GoalStatus::Succeeded;
     result.text = FormatGoalSummary(finished);
     result.reason = goals::ToString(finished.stopReason);
+    if (!finished.stopDetail.empty()) result.reason += ": " + finished.stopDetail;
+    result.reasoning += "\n\n" + result.text;
     return true;
 }
 
@@ -7599,6 +7699,13 @@ std::string ReviaSession::FormatGoalSummary(const goals::Goal& goal)
         << ", actions " << goal.spend.actions << '/' << goal.budget.maxActions
         << ", retries " << goal.spend.retries << '/' << goal.budget.maxTotalRetries
         << ", elapsed " << goal.spend.elapsedMs << "ms.";
+    if (!goal.stopDetail.empty()) stream << "\nReason: " << goal.stopDetail;
+    else if (goal.status != goals::GoalStatus::Succeeded && !goal.steps.empty())
+    {
+        const auto& attempts = goal.steps.back().attempts;
+        if (!attempts.empty() && !attempts.back().failure.empty())
+            stream << "\nReason: " << attempts.back().failure;
+    }
     return stream.str();
 }
 
@@ -7714,7 +7821,9 @@ bool ReviaSession::TryHandleGoalInput(const std::string& input, SessionResult& r
             (parsed.goal.steps.size() == 1 ? " step" : " steps") + ")?\n" +
             FormatGoalPlan(parsed.goal) + "\n" + rehearsalSummary;
         SetState(RuntimeState::WaitingForConfirmation, decision.reason);
-        if (!handler(summary, decision))
+        // A plan is approved whole, before any step runs, so a standing yes has nothing
+        // to stand over and simply means yes.
+        if (!actions::Granted(handler(summary, decision)))
         {
             parsed.goal.status = goals::GoalStatus::Cancelled;
             parsed.goal.stopReason = goals::StopReason::Cancelled;
@@ -7813,9 +7922,10 @@ goals::Goal ReviaSession::RehearseGoal(const goals::Goal& goal, std::string& out
     // approved roots are that directory, so anything reaching outside is blocked by policy
     // rather than by asking. Prompting here would train the habit of approving a dialog
     // twice for one decision.
+    // Rehearsal touches nothing, so it approves everything and never asks a person.
     rehearsalRunner.SetConfirmationHandler([](
         const actions::ActionRequest&,
-        const actions::PolicyDecision&) { return true; });
+        const actions::PolicyDecision&) { return actions::ConfirmationChoice::Allow; });
 
     rehearsed = rehearsalRunner.Run(sandbox.goal, CurrentOperationToken());
     if (rehearsed.status == goals::GoalStatus::Succeeded)
@@ -7840,11 +7950,112 @@ goals::Goal ReviaSession::RehearseGoal(const goals::Goal& goal, std::string& out
     return rehearsed;
 }
 
+void ReviaSession::ResolveVisualTarget(
+    actions::ActionRequest& request,
+    const actions::windows::DesktopObservation& observation)
+{
+    // Only pointer actions aim at anything. A keystroke goes wherever focus is, and
+    // giving it visual evidence would be claiming an authority it does not use.
+    const bool aims = request.type == actions::ActionType::MoveCursor ||
+        request.type == actions::ActionType::ClickPointer ||
+        request.type == actions::ActionType::DragPointer ||
+        request.type == actions::ActionType::ScrollPointer;
+    if (!aims || !request.resolution.HasRegion())
+    {
+        return;
+    }
+    if (!observation.succeeded || observation.foregroundWindow == nullptr)
+    {
+        // Nothing was seen, so nothing can be grounded in it. The request keeps whatever
+        // it had, which policy then judges as a bare coordinate or as nothing at all.
+        return;
+    }
+
+    vision::VisionActionIntent intent;
+    intent.action = request.type;
+    intent.targetName = request.resolution.modelTarget;
+    intent.targetDescription = request.resolution.modelTarget;
+    intent.region.left = request.resolution.regionLeft;
+    intent.region.top = request.resolution.regionTop;
+    intent.region.right = request.resolution.regionRight;
+    intent.region.bottom = request.resolution.regionBottom;
+    intent.modelConfidence = request.resolution.modelConfidence;
+
+    actions::windows::VisionResolverSettings resolverSettings;
+    resolverSettings.minimumConfidence = settings.vision.resolutionConfidence;
+    resolverSettings.minimumNameAgreement = settings.vision.minimumNameAgreement;
+    resolverSettings.ambiguityMargin = settings.vision.ambiguityMargin;
+    resolverSettings.maxCandidates = settings.vision.maxResolverElements;
+    const vision::UiaResolutionResult resolved = visionUiaResolver.Resolve(
+        observation.foregroundApplication,
+        observation.foregroundTitle,
+        intent,
+        resolverSettings);
+
+    request.resolution.uiaAttempted = true;
+    if (resolved.succeeded)
+    {
+        // The strongest route, and the existing one: an exact runtime identity the
+        // executor re-finds before it acts.
+        request.resolution.kind = actions::TargetResolutionKind::UiaElement;
+        request.resolution.resolvedName = resolved.reference.element.name;
+        request.resolution.resolvedAutomationId = resolved.reference.element.automationId;
+        request.resolution.resolvedRuntimeId = resolved.reference.element.runtimeId;
+        request.resolution.resolvedControlType = resolved.reference.element.controlType;
+        request.resolution.boundsLeft = resolved.reference.element.bounds.left;
+        request.resolution.boundsTop = resolved.reference.element.bounds.top;
+        request.resolution.boundsRight = resolved.reference.element.bounds.right;
+        request.resolution.boundsBottom = resolved.reference.element.bounds.bottom;
+        request.resolution.spatialAgreement = resolved.reference.score.spatial;
+        request.resolution.nameAgreement = resolved.reference.score.nameAgreement;
+        request.resolution.matchConfidence = resolved.reference.score.total;
+        if (request.application.empty())
+        {
+            request.application = resolved.reference.application;
+            request.windowTitle = resolved.reference.windowTitle;
+        }
+        return;
+    }
+
+    request.resolution.uiaFailure = resolved.reason;
+    // Falling back is for an interface that exposes nothing to match, not for one where
+    // the match was merely unclear. Acting on a guess between two candidates is worse
+    // than looking again, and this is the case the resolver's ambiguity margin exists to
+    // catch -- so it is left with no target and the loop re-decides.
+    if (resolved.candidatesInspected > 0 &&
+        resolved.reason.find("ambiguous") != std::string::npos)
+    {
+        request.resolution.kind = actions::TargetResolutionKind::None;
+        return;
+    }
+
+    request.resolution.kind = actions::TargetResolutionKind::VisualRegion;
+    request.resolution.observationId = observation.id;
+    request.resolution.observationGeneration = observation.generation;
+    request.resolution.screenDigest = observation.Fingerprint();
+    request.resolution.observedWindow = observation.foregroundWindow;
+    request.resolution.observedProcessId = observation.foregroundProcessId;
+    request.resolution.observedApplication = observation.foregroundApplication;
+    request.resolution.observedWindowLeft = observation.windowLeft;
+    request.resolution.observedWindowTop = observation.windowTop;
+    request.resolution.observedWindowRight = observation.windowRight;
+    request.resolution.observedWindowBottom = observation.windowBottom;
+    request.resolution.observedAtMs = observation.observedAtMs;
+    // A region resolves to its own centre when it runs, so a point carried alongside it
+    // would be dead weight at best and a second, unauthorized aim at worst.
+    request.input.hasPoint = false;
+    request.input.hasEndPoint = false;
+}
+
 std::string ReviaSession::BuildIterativeGoalContext(
-    const goals::Goal& goal, const std::uint32_t iteration) const
+    const goals::Goal& goal, const std::uint32_t iteration)
 {
     constexpr std::size_t MaximumObservationCharacters = 400;
     constexpr std::size_t MaximumRecordedAttempts = 8;
+    // What fits in a decision prompt beside the goal and the history. A browser
+    // advertises thousands of elements; the whole tree is not a usable answer to "what
+    // is on screen", and an unbounded one would push the history out of context.
+    constexpr std::size_t MaximumListedControls = 40;
 
     const auto bounded = [](std::string text, const std::size_t limit)
     {
@@ -7874,6 +8085,8 @@ std::string ReviaSession::BuildIterativeGoalContext(
         {
             history.push_back({
                 {"step", step->description},
+                {"action", actions::ToString(step->action.type)},
+                {"expected", bounded(step->expected, MaximumObservationCharacters)},
                 {"status", goals::ToString(step->status)},
                 {"executed", attempt->executed},
                 {"verified", attempt->verified},
@@ -7889,9 +8102,104 @@ std::string ReviaSession::BuildIterativeGoalContext(
     for (const auto& root : goal.scope.approvedRoots)
         roots.push_back(actions::PathToUtf8(root));
 
+    // Look before deciding. Without this the loop chose its next action from the goal
+    // and its own history alone -- it acted on the machine it expected rather than the
+    // one in front of it, which is the failure the act/observe/verify cycle exists to
+    // prevent.
+    //
+    // Observation is not authority and does not become it here. Nothing below grants a
+    // permission, widens a scope, or reaches an executor; every action this informs is
+    // still parsed, still checked by CapabilityPolicy, still confirmed, still rate
+    // limited and still audited exactly as before.
+    const actions::windows::DesktopObservation screen = desktopObserver.Observe();
+    nlohmann::json observation;
+    if (!screen.succeeded)
+    {
+        observation = {
+            {"available", false},
+            {"reason", bounded(screen.failure.empty()
+                ? std::string("The desktop could not be observed.")
+                : screen.failure, MaximumObservationCharacters)}};
+    }
+    else if (perception::PerceptionFilter::IsExcludedWindow(
+                 settings.perception, screen.foregroundApplication, screen.foregroundTitle))
+    {
+        // The same exclusion list ordinary perception honours, for the same reason. A
+        // goal run is not a reason to read the password manager the user just switched
+        // to, and the window is reported as withheld rather than described, so the
+        // decision knows it is blind here instead of concluding the screen is empty.
+        observation = {
+            {"available", false},
+            {"reason", "The window in front is excluded from observation, so nothing "
+                       "about its contents is available."}};
+    }
+    else
+    {
+        observation = {
+            {"available", true},
+            {"application", bounded(screen.foregroundApplication, 120)},
+            {"title", bounded(screen.foregroundTitle, MaximumObservationCharacters)},
+            {"window", {
+                {"left", screen.windowLeft},
+                {"top", screen.windowTop},
+                {"right", screen.windowRight},
+                {"bottom", screen.windowBottom}}},
+            {"controls", screen.Describe(MaximumListedControls)}};
+    }
+
+    // Constrain proposed control operations to observed Windows patterns. This only
+    // removes unusable choices; execution still rechecks policy and target identity.
+    nlohmann::json controlTargets = {
+        {"invoke_control", nlohmann::json::array()},
+        {"set_control_text", nlohmann::json::array()},
+        {"type_text", nlohmann::json::array()}};
+    if (observation.value("available", false))
+    {
+        const policy::CapabilityPolicy scope(goal.scope);
+        const std::size_t count = std::min(MaximumListedControls, screen.controls.size());
+        for (std::size_t index = 0; index < count; ++index)
+        {
+            const auto& control = screen.controls[index];
+            if (!control.enabled) continue;
+            const std::string target = control.automationId.empty() ? control.name : control.automationId;
+            if (target.empty() || target.size() > 240) continue;
+            for (const auto type : {actions::ActionType::InvokeControl,
+                    actions::ActionType::SetControlText, actions::ActionType::TypeText})
+            {
+                if (type == actions::ActionType::InvokeControl ? !control.invokable : !control.editable)
+                    continue;
+                actions::ActionRequest candidate;
+                candidate.type = type;
+                candidate.application = screen.foregroundApplication;
+                candidate.control = target;
+                candidate.value = " ";
+                if (scope.Evaluate(candidate).verdict != actions::PolicyVerdict::Blocked)
+                    controlTargets[actions::ToString(type)].push_back(target);
+            }
+        }
+    }
+    observation["control_targets"] = std::move(controlTargets);
+
+    // Kept only when it may actually be used. A withheld window leaves this empty, so
+    // there is nothing for a visual target to be bound to and the exclusion cannot be
+    // reached around.
+    lastObservation = observation.value("available", false)
+        ? screen : actions::windows::DesktopObservation{};
+
+    // Acting is not achieving. An action that ran, succeeded, and left the screen
+    // identical has made no progress, and saying so is what stops the loop from
+    // repeating it until a budget runs out.
+    const std::string digest = screen.Fingerprint();
+    if (iteration > 0 && !lastObservedScreen.empty())
+    {
+        observation["screen_changed_since_last_decision"] = digest != lastObservedScreen;
+    }
+    lastObservedScreen = digest;
+
     return nlohmann::json({
         {"goal", goal.title},
         {"iteration", iteration},
+        {"observation", std::move(observation)},
         {"steps_taken", goal.steps.size()},
         {"actions_left", goal.budget.maxActions > goal.spend.actions
             ? goal.budget.maxActions - goal.spend.actions : 0u},
@@ -7901,7 +8209,12 @@ std::string ReviaSession::BuildIterativeGoalContext(
             {"roots", roots},
             {"applications", goal.scope.approvedApplications},
             {"controls", goal.scope.approvedControls},
-            {"risk_ceiling", actions::ToString(goal.scope.autoApproveRiskThrough)}}},
+            {"mode", actions::ToString(goal.scope.mode)},
+            {"auto_approve_risk_through", actions::ToString(goal.scope.autoApproveRiskThrough)},
+            {"desktop_control", {
+                {"application_launch", goal.scope.desktopControl.applicationLaunch},
+                {"keyboard", goal.scope.desktopControl.keyboard},
+                {"pointer", goal.scope.desktopControl.pointer}}}}},
         {"history", std::move(history)}}).dump();
 }
 
@@ -8862,7 +9175,9 @@ SessionResult ReviaSession::ExecuteAction(actions::ActionRequest request)
             std::lock_guard lock(confirmationMutex);
             handler = confirmationHandler;
         }
-        confirmed = handler && handler(request, decision);
+        // A single interactive action has no run to stand over, so "don't ask again"
+        // collapses to plain consent for this one thing.
+        confirmed = handler && actions::Granted(handler(request, decision));
     }
 
     const auto actionStarted = std::chrono::steady_clock::now();

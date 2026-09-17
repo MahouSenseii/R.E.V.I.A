@@ -276,7 +276,7 @@ IUIAutomationElement* FindControl(
     IUIAutomationElement* window,
     const ActionRequest& request)
 {
-    if (request.resolution.visionResolved)
+    if (request.resolution.IsUiaElementTarget())
     {
         // Never fall back to a name or coordinate after a typed resolution. If the
         // exact element disappeared while confirmation was open, refusing is safer.

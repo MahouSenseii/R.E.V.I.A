@@ -329,6 +329,7 @@ std::string PolicyVersion(const actions::CapabilitySettings::DesktopControl& set
     version += settings.keyboard ? 'k' : '-';
     version += settings.applicationLaunch ? 'l' : '-';
     version += settings.rawCoordinates ? 'r' : '-';
+    version += settings.visualTargeting ? 'v' : '-';
     version += settings.allowCommandSurfaces ? 'c' : '-';
     version += settings.autonomous ? 'a' : '-';
     version += settings.scope ==
@@ -336,6 +337,38 @@ std::string PolicyVersion(const actions::CapabilitySettings::DesktopControl& set
     version += ':';
     version += actions::ToString(settings.maxUnconfirmedConsequence);
     return version;
+}
+
+DesktopApprovalGate::TaskApproval::TaskApproval(
+    DesktopApprovalGate& inputOwner, std::string inputGoalId, const bool messaging)
+    : owner(inputOwner), goalId(std::move(inputGoalId))
+{
+    std::lock_guard lock(owner.mutex);
+    if (!goalId.empty())
+        owner.taskApprovals["goal:" + goalId] =
+            static_cast<DesktopEffects>(DesktopEffect::UserContent) |
+            (messaging ? static_cast<DesktopEffects>(DesktopEffect::ExternalMessage) : 0u);
+}
+
+DesktopApprovalGate::TaskApproval::~TaskApproval()
+{
+    std::lock_guard lock(owner.mutex);
+    owner.taskApprovals.erase("goal:" + goalId);
+}
+
+DesktopApprovalGate::TaskApproval DesktopApprovalGate::ApproveTask(
+    std::string goalId, const bool messaging)
+{
+    return TaskApproval(*this, std::move(goalId), messaging);
+}
+
+std::optional<bool> DesktopApprovalGate::TaskDecision(
+    const std::string& requestedBy, const DesktopEffects effects) const
+{
+    std::lock_guard lock(mutex);
+    const auto found = taskApprovals.find(requestedBy);
+    if (found == taskApprovals.end()) return std::nullopt;
+    return (effects & ~found->second) == 0u;
 }
 
 void DesktopApprovalGate::SetHandler(Handler inputHandler)
@@ -381,6 +414,16 @@ bool AuthorizeOrExplain(
     {
         outFailure.clear();
         return true;
+    }
+    if (decision.verdict == AuthorizationVerdict::RequireApproval && gate != nullptr &&
+        !ask.autonomousOrigin)
+    {
+        if (const auto task = gate->TaskDecision(request.requestedBy, decision.effects))
+        {
+            outFailure = *task ? std::string{} :
+                "Refused: this effect is outside the approved task. " + decision.reason;
+            return *task;
+        }
     }
     // RequireApproval is not a refusal on the merits: it means a specific human yes is
     // needed. Until this existed there was no way to obtain one, so a click on Send

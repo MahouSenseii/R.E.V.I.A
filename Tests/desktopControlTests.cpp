@@ -7,7 +7,10 @@
 #include "Policy/desktopActionRateLimiter.h"
 #include "Policy/desktopInputGuard.h"
 #include "Policy/permissionStore.h"
+#include "Vision/visionActionParser.h"
 #include "Windows/desktopControlExecutor.h"
+#include "Windows/desktopObserver.h"
+#include "Windows/targetBinding.h"
 
 #include <chrono>
 #include <fstream>
@@ -48,13 +51,15 @@ struct PolicyFixture
         const bool keyboard,
         const bool launch,
         const bool raw = false,
-        const bool autonomous = false)
+        const bool autonomous = false,
+        const bool visual = false)
     {
         settings["desktopControl"] = {
             {"pointer", pointer},
             {"keyboard", keyboard},
             {"applicationLaunch", launch},
             {"rawCoordinates", raw},
+            {"visualTargeting", visual},
             {"autonomous", autonomous}};
     }
 
@@ -188,7 +193,7 @@ void TestRawCoordinatesNeedTheirOwnPermission()
     // re-finds the element rather than trusting the coordinate.
     ActionRequest resolved = PointerRequest();
     resolved.input.hasPoint = false;
-    resolved.resolution.visionResolved = true;
+    resolved.resolution.kind = revia::actions::TargetResolutionKind::UiaElement;
     resolved.resolution.resolvedRuntimeId = "42.7";
     Check(policy.Evaluate(resolved).verdict == PolicyVerdict::RequiresConfirmation,
         "A vision-resolved click was not offered for confirmation.");
@@ -197,6 +202,337 @@ void TestRawCoordinatesNeedTheirOwnPermission()
     aimless.input.hasPoint = false;
     Check(policy.Evaluate(aimless).verdict == PolicyVerdict::Blocked,
         "A pointer action with no target at all was not blocked.");
+}
+
+// A target grounded in an observation, as the runtime would stamp one.
+ActionRequest VisualRequest()
+{
+    ActionRequest request;
+    request.id = "visual-1";
+    request.type = ActionType::ClickPointer;
+    request.application = "notepad.exe";
+    request.resolution.kind = TargetResolutionKind::VisualRegion;
+    request.resolution.modelTarget = "large Play button in the centre of the game menu";
+    request.resolution.regionLeft = 810;
+    request.resolution.regionTop = 540;
+    request.resolution.regionRight = 1050;
+    request.resolution.regionBottom = 630;
+    request.resolution.modelConfidence = 0.94;
+    request.resolution.observationId = "observation-7";
+    request.resolution.observationGeneration = 7;
+    request.resolution.observedWindow = reinterpret_cast<void*>(0x1234);
+    request.resolution.observedProcessId = 4242;
+    request.resolution.observedApplication = "notepad.exe";
+    request.resolution.observedWindowLeft = 0;
+    request.resolution.observedWindowTop = 0;
+    request.resolution.observedWindowRight = 1920;
+    request.resolution.observedWindowBottom = 1080;
+    request.resolution.observedAtMs = 1000;
+    request.resolution.uiaAttempted = true;
+    request.resolution.uiaFailure = "No candidate elements were found in the window.";
+    return request;
+}
+
+// The whole point of the change: three levels of evidence are three permissions, and
+// neither of the two narrow ones is reachable through the other.
+void TestVisualTargetingIsItsOwnPermission()
+{
+    // Chosen coordinates do not imply it. This is the direction that matters most: if
+    // granting the wider permission quietly granted this one, the distinction would be
+    // decorative.
+    PolicyFixture rawOnly;
+    rawOnly.Allow(true, false, false, /*raw=*/true, false, /*visual=*/false);
+    const auto rawPolicy = rawOnly.Policy();
+    const auto refused = rawPolicy.Evaluate(VisualRequest());
+    Check(refused.verdict == PolicyVerdict::Blocked &&
+        refused.reason.find("only see") != std::string::npos,
+        "Chosen coordinates silently granted visual targeting: " + refused.reason);
+
+    // And it does not imply them. A visual target is usable with the wider permission
+    // switched off, which is what makes it narrower rather than a euphemism.
+    PolicyFixture visualOnly;
+    visualOnly.Allow(true, false, false, /*raw=*/false, false, /*visual=*/true);
+    const auto visualPolicy = visualOnly.Policy();
+    Check(visualPolicy.Evaluate(VisualRequest()).verdict ==
+        PolicyVerdict::RequiresConfirmation,
+        "A visually grounded click was refused under its own permission.");
+    const auto stillRefused = visualPolicy.Evaluate(PointerRequest());
+    Check(stillRefused.verdict == PolicyVerdict::Blocked &&
+        stillRefused.reason.find("chosen coordinate is disabled") != std::string::npos,
+        "Visual targeting was accepted as permission to aim at a bare coordinate.");
+
+    // A visual target is never an exact UIA element, whatever else it is. Every check
+    // that used to read visionResolved means that, and must keep meaning it.
+    Check(!VisualRequest().resolution.IsUiaElementTarget(),
+        "A visual region claimed to be a re-findable UI Automation element.");
+}
+
+// What a visual target has to carry before it is one at all.
+void TestAVisualTargetMustBeGroundedInSomething()
+{
+    PolicyFixture fixture;
+    fixture.Allow(true, false, false, false, false, /*visual=*/true);
+    const auto policy = fixture.Policy();
+
+    ActionRequest noRegion = VisualRequest();
+    noRegion.resolution.regionRight = noRegion.resolution.regionLeft;
+    Check(policy.Evaluate(noRegion).verdict == PolicyVerdict::Blocked,
+        "A visual target with no region was accepted.");
+
+    // Nothing observed it. Without this the kind would be doing no work except skipping
+    // the raw-coordinate switch, which is exactly the hole to avoid.
+    ActionRequest unobserved = VisualRequest();
+    unobserved.resolution.observationGeneration = 0;
+    unobserved.resolution.observationId.clear();
+    unobserved.resolution.observedWindow = nullptr;
+    const auto ungrounded = policy.Evaluate(unobserved);
+    Check(ungrounded.verdict == PolicyVerdict::Blocked &&
+        ungrounded.reason.find("not bound to an observation") != std::string::npos,
+        "A visual target with no observation behind it was accepted.");
+
+    // A point riding along under the narrower permission. The point would be what the
+    // executor acted on, and it is not what was authorized.
+    ActionRequest smuggled = VisualRequest();
+    smuggled.input.hasPoint = true;
+    smuggled.input.x = 10;
+    smuggled.input.y = 10;
+    const auto refusedPoint = policy.Evaluate(smuggled);
+    Check(refusedPoint.verdict == PolicyVerdict::Blocked &&
+        refusedPoint.reason.find("not a chosen point") != std::string::npos,
+        "A chosen coordinate travelled under visual targeting: " + refusedPoint.reason);
+
+    ActionRequest overconfident = VisualRequest();
+    overconfident.resolution.modelConfidence = 1.4;
+    Check(policy.Evaluate(overconfident).verdict == PolicyVerdict::Blocked,
+        "A visual target with impossible confidence was accepted.");
+
+    // A drag deals in two regions when it is visual, and needs both.
+    ActionRequest halfDrag = VisualRequest();
+    halfDrag.type = ActionType::DragPointer;
+    Check(policy.Evaluate(halfDrag).verdict == PolicyVerdict::Blocked,
+        "A visual drag with only a start region was accepted.");
+    ActionRequest wholeDrag = halfDrag;
+    wholeDrag.input.endRegionLeft = 200;
+    wholeDrag.input.endRegionTop = 200;
+    wholeDrag.input.endRegionRight = 260;
+    wholeDrag.input.endRegionBottom = 240;
+    Check(policy.Evaluate(wholeDrag).verdict == PolicyVerdict::RequiresConfirmation,
+        "A visual drag naming both regions was refused.");
+}
+
+// A region belongs to one observation of one window. These are the ways that stops
+// being true, and every one of them has to end the action rather than move the pointer.
+void TestAStaleVisualTargetIsNotClicked()
+{
+    using revia::actions::windows::CompareVisualTarget;
+    using revia::actions::windows::VisualTargetFacts;
+
+    const ActionRequest request = VisualRequest();
+    const auto factsNow = []()
+    {
+        VisualTargetFacts facts;
+        facts.latestGeneration = 7;
+        facts.nowMs = 1500;
+        facts.foregroundWindow = reinterpret_cast<void*>(0x1234);
+        facts.foregroundProcessId = 4242;
+        facts.windowBoundsKnown = true;
+        facts.windowLeft = 0;
+        facts.windowTop = 0;
+        facts.windowRight = 1920;
+        facts.windowBottom = 1080;
+        return facts;
+    };
+
+    Check(CompareVisualTarget(request.resolution, factsNow()).empty(),
+        "A target that still describes the screen was called stale.");
+
+    // Something has been looked at since. This is what catches the changes geometry
+    // cannot see: navigation, a scroll, a modal opening inside the same window.
+    VisualTargetFacts superseded = factsNow();
+    superseded.latestGeneration = 8;
+    Check(CompareVisualTarget(request.resolution, superseded)
+            .find("observed again") != std::string::npos,
+        "A target from a superseded observation was still considered current.");
+
+    VisualTargetFacts elsewhere = factsNow();
+    elsewhere.foregroundWindow = reinterpret_cast<void*>(0x9999);
+    Check(!CompareVisualTarget(request.resolution, elsewhere).empty(),
+        "A target was accepted while a different window was in front.");
+
+    VisualTargetFacts reused = factsNow();
+    reused.foregroundProcessId = 5;
+    Check(!CompareVisualTarget(request.resolution, reused).empty(),
+        "A recycled window handle in another process was accepted.");
+
+    VisualTargetFacts moved = factsNow();
+    moved.windowLeft += 40;
+    moved.windowRight += 40;
+    Check(CompareVisualTarget(request.resolution, moved)
+            .find("moved or been resized") != std::string::npos,
+        "A window that moved did not invalidate the region measured against it.");
+
+    VisualTargetFacts resized = factsNow();
+    resized.windowBottom = 700;
+    Check(!CompareVisualTarget(request.resolution, resized).empty(),
+        "A window that was resized did not invalidate its region.");
+
+    VisualTargetFacts late = factsNow();
+    late.nowMs = request.resolution.observedAtMs +
+        revia::actions::windows::VisualTargetFreshnessMs + 1;
+    Check(CompareVisualTarget(request.resolution, late)
+            .find("too old") != std::string::npos,
+        "A target held past the freshness limit was still acted on.");
+
+    // The window shrank around the region rather than moving. Checked separately
+    // because the point, not the rectangle, is what the pointer would go to.
+    ActionRequest outside = VisualRequest();
+    outside.resolution.regionLeft = 4000;
+    outside.resolution.regionRight = 4200;
+    Check(!CompareVisualTarget(outside.resolution, factsNow()).empty(),
+        "A region outside the window it was seen in was accepted.");
+
+    // Kinds that are not visual must not be answerable by this check at all, or a raw
+    // coordinate could be laundered through it.
+    ActionRequest raw = VisualRequest();
+    raw.resolution.kind = TargetResolutionKind::RawCoordinate;
+    Check(!CompareVisualTarget(raw.resolution, factsNow()).empty(),
+        "A raw coordinate was validated as a visual target.");
+}
+
+// Vision could previously say only "invoke this control" or "put this text in it",
+// which is nothing at all about a game.
+void TestVisionCanProposeTheOrdinaryVocabulary()
+{
+    const revia::vision::VisionActionParser parser;
+
+    const auto click = parser.Parse(
+        R"({"action":"click_pointer","target_description":"large Play button",)"
+        R"("region":{"left":810,"top":540,"right":1050,"bottom":630},"confidence":0.94})");
+    Check(click.succeeded && click.intent.action == ActionType::ClickPointer &&
+        click.intent.region.left == 810,
+        "Vision could not propose a click on something it can see: " + click.reason);
+
+    // A keystroke aims at nothing, so it needs no region and no visual authority. This
+    // is the transferable route -- ctrl+l focuses an address bar in every browser --
+    // and requiring a rectangle for it would be asking for the wrong permission.
+    const auto keys = parser.Parse(
+        R"({"action":"press_keys","keys":"ctrl+l","confidence":0.98})");
+    Check(keys.succeeded && keys.intent.action == ActionType::PressKeys &&
+        keys.intent.keys == "ctrl+l",
+        "Vision could not propose a key chord without a region: " + keys.reason);
+
+    const auto scroll = parser.Parse(
+        R"({"action":"scroll_pointer","target_description":"results list","scroll":3,)"
+        R"("region":{"left":10,"top":10,"right":600,"bottom":800},"confidence":0.8})");
+    Check(scroll.succeeded && scroll.intent.scrollClicks == 3,
+        "Vision could not propose a scroll: " + scroll.reason);
+
+    // A point the model wrote is not a visual target. Accepting one would turn this
+    // parser into a way around the raw-coordinate permission.
+    const auto pointed = parser.Parse(
+        R"({"action":"click_pointer","target_description":"button","x":927,"y":587,)"
+        R"("region":{"left":810,"top":540,"right":1050,"bottom":630},"confidence":0.9})");
+    Check(!pointed.succeeded && pointed.reason.find("never a point") != std::string::npos,
+        "Vision was allowed to name a coordinate directly: " + pointed.reason);
+
+    const auto noRegion = parser.Parse(
+        R"({"action":"click_pointer","target_description":"button","confidence":0.9})");
+    Check(!noRegion.succeeded,
+        "A pointer proposal with no region was accepted.");
+
+    const auto anonymous = parser.Parse(
+        R"({"action":"click_pointer","region":{"left":1,"top":1,"right":9,"bottom":9},)"
+        R"("confidence":0.9})");
+    Check(!anonymous.succeeded,
+        "A pointer proposal that described nothing was accepted.");
+
+    // Still closed to everything else. Widening the vocabulary is not opening it.
+    const auto forbidden = parser.Parse(
+        R"({"action":"move_file","source":"a","destination":"b","confidence":0.9})");
+    Check(!forbidden.succeeded,
+        "Vision was allowed to propose a filesystem action.");
+
+    const auto uia = parser.Parse(
+        R"({"action":"invoke_control","target_name":"Save",)"
+        R"("region":{"left":1,"top":1,"right":9,"bottom":9},"confidence":0.9})");
+    Check(uia.succeeded && uia.intent.action == ActionType::InvokeControl,
+        "The original UI Automation route stopped working: " + uia.reason);
+}
+
+// Edge refused every keystroke with "The caret left view_1021 before typing began".
+// The caret had not left: the wait loop immediately above had just proved focus was on
+// it using that same runtime id. Chromium had regenerated the id in between, and the
+// check was a raw string comparison.
+void TestARegeneratedRuntimeIdIsNotAMovedCaret()
+{
+    using revia::actions::windows::SameControl;
+    using revia::actions::windows::TargetBinding;
+
+    const auto omnibox = []()
+    {
+        TargetBinding binding;
+        binding.valid = true;
+        binding.window = reinterpret_cast<void*>(0x2001);
+        binding.processId = 7788;
+        binding.runtimeId = "42.1.7";
+        binding.automationId = "view_1021";
+        binding.controlName = "Address and search bar";
+        binding.controlType = 50004;
+        binding.isPassword = false;
+        binding.left = 120;
+        binding.top = 60;
+        binding.right = 980;
+        binding.bottom = 92;
+        return binding;
+    };
+
+    Check(SameControl(omnibox(), omnibox()),
+        "A control did not match itself.");
+
+    // The actual failure, reproduced: everything describes the same control and only
+    // the volatile id differs.
+    TargetBinding rebuilt = omnibox();
+    rebuilt.runtimeId = "42.1.9";
+    Check(SameControl(omnibox(), rebuilt),
+        "A regenerated accessibility id was treated as the caret having moved, which is "
+        "what refused every keystroke into Edge.");
+
+    // And the protection it must not cost. The incident behind this check was two text
+    // fields in one window and 560 characters going into the wrong one.
+    TargetBinding otherField = omnibox();
+    otherField.runtimeId = "42.1.9";
+    otherField.top = 300;
+    otherField.bottom = 332;
+    Check(!SameControl(omnibox(), otherField),
+        "A different field at a different position was accepted as the same control.");
+
+    TargetBinding renamed = omnibox();
+    renamed.runtimeId.clear();
+    renamed.controlName = "Search the web";
+    Check(!SameControl(omnibox(), renamed),
+        "A differently named control was accepted as the same one.");
+
+    TargetBinding secret = omnibox();
+    secret.runtimeId.clear();
+    secret.isPassword = true;
+    Check(!SameControl(omnibox(), secret),
+        "A password field was accepted as the control that was authorized.");
+
+    TargetBinding elsewhere = omnibox();
+    elsewhere.runtimeId = "42.1.9";
+    elsewhere.window = reinterpret_cast<void*>(0x3002);
+    Check(!SameControl(omnibox(), elsewhere),
+        "A control in another window was accepted.");
+
+    TargetBinding reusedHandle = omnibox();
+    reusedHandle.runtimeId = "42.1.9";
+    reusedHandle.processId = 9;
+    Check(!SameControl(omnibox(), reusedHandle),
+        "A recycled window handle in another process was accepted.");
+
+    TargetBinding unobserved;
+    Check(!SameControl(omnibox(), unobserved) && !SameControl(unobserved, omnibox()),
+        "An unobserved binding matched something.");
 }
 
 void TestRawCoordinatesCannotOutliveThePointer()
@@ -850,23 +1186,27 @@ void TestRuntimeRegistersAndReportsDesktopControl()
     using InputScope = CapabilitySettings::DesktopControl::InputScope;
     // The wide scope round-trips through the editor and the store.
     Check(runtime.SetDesktopControl(
-            true, true, false, true, false, InputScope::WholeDesktop, false, error) &&
+            true, true, false, true, false, false, InputScope::WholeDesktop, false, error) &&
         runtime.Settings().desktopControl.scope == InputScope::WholeDesktop,
         "The whole-desktop scope did not persist: " + error);
 
     // Persisted permission changes survive the reload and drop their subset authorities.
     Check(runtime.SetDesktopControl(
-            false, true, false, true, true, InputScope::WholeDesktop, true, error),
+            false, true, false, true, true, true, InputScope::WholeDesktop, true, error),
         "Desktop control settings could not be written: " + error);
     const auto reloaded = runtime.Settings().desktopControl;
     Check(!reloaded.pointer && reloaded.keyboard && !reloaded.rawCoordinates &&
         reloaded.autonomous,
         "Withdrawing pointer control did not withdraw chosen coordinates with it.");
+    // Visual targeting aims the pointer too, so it goes when the pointer goes. It is a
+    // narrower authority than chosen coordinates, not an independent one.
+    Check(!reloaded.visualTargeting,
+        "Withdrawing pointer control left visual targeting behind.");
     Check(reloaded.scope == InputScope::ApprovedApplications,
         "The whole desktop survived the withdrawal of the pointer it was built on.");
     Check(runtime.SetDesktopControl(
-            false, false, false, false, true, InputScope::ApprovedApplications, true,
-            error) &&
+            false, false, false, false, false, true, InputScope::ApprovedApplications,
+            true, error) &&
         !runtime.Settings().desktopControl.autonomous &&
         !runtime.Settings().desktopControl.allowCommandSurfaces,
         "Autonomy or command surfaces survived the withdrawal of every capability.");
@@ -939,6 +1279,11 @@ void RunDesktopControlTests()
     TestUnapprovedApplicationIsRefused();
     TestRawCoordinatesNeedTheirOwnPermission();
     TestRawCoordinatesCannotOutliveThePointer();
+    TestARegeneratedRuntimeIdIsNotAMovedCaret();
+    TestVisualTargetingIsItsOwnPermission();
+    TestAVisualTargetMustBeGroundedInSomething();
+    TestAStaleVisualTargetIsNotClicked();
+    TestVisionCanProposeTheOrdinaryVocabulary();
     TestAutonomousDesktopWorkIsSeparatelyPermitted();
     TestKeyChordsCannotLeaveTheApplication();
     TestSwitchingChordsFollowTheScope();

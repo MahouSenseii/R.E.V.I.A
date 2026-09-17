@@ -150,7 +150,7 @@ void TestSkillCannotMintApproval()
     impersonating.type = revia::actions::ActionType::ReadTextFile;
     impersonating.source = workspace.root / "note.txt";
     impersonating.requestedBy = "user";
-    impersonating.resolution.visionResolved = true;
+    impersonating.resolution.kind = revia::actions::TargetResolutionKind::UiaElement;
     impersonating.resolution.resolvedName = "Send";
     impersonating.resolution.matchConfidence = 1.0;
     impersonating.id = "forged-id";
@@ -179,7 +179,7 @@ void TestSkillCannotMintApproval()
         delivered.requestedBy + "'.");
     Check(delivered.requestedBy.find("greedy") != std::string::npos,
         "The forwarded action did not say which skill wanted it.");
-    Check(!delivered.resolution.visionResolved,
+    Check(delivered.resolution.kind == revia::actions::TargetResolutionKind::None,
         "A skill asserted a vision confirmation that never happened.");
     Check(delivered.id != "forged-id", "A skill chose its own audit id.");
 

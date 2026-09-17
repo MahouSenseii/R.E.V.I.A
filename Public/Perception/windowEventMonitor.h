@@ -84,6 +84,17 @@ public:
     [[nodiscard]] static bool IsExcludedTitle(
         const perceptionSettings& settings,
         const std::string& windowTitle);
+    // Both halves of the same question: may what is inside this window be used at all?
+    //
+    // It has more than one caller. The ambient perception stack asks it before recording
+    // a window, and the operator loop asks it before putting what is on screen into a
+    // decision prompt. Those two must not drift apart -- a window the owner excluded from
+    // being noticed is not one to read the contents of because a goal happens to be
+    // running -- so the rule is named once here rather than spelled out at each site.
+    [[nodiscard]] static bool IsExcludedWindow(
+        const perceptionSettings& settings,
+        const std::string& application,
+        const std::string& windowTitle);
 
 private:
     perceptionSettings configuration;

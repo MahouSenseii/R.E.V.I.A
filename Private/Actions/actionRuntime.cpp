@@ -271,6 +271,7 @@ std::string ActionRuntime::StatusJson() const
             {"keyboard", settings.desktopControl.keyboard},
             {"application_launch", settings.desktopControl.applicationLaunch},
             {"raw_coordinates", settings.desktopControl.rawCoordinates},
+            {"visual_targeting", settings.desktopControl.visualTargeting},
             {"autonomous", settings.desktopControl.autonomous},
             {"scope", ToString(settings.desktopControl.scope)},
             {"allow_command_surfaces", settings.desktopControl.allowCommandSurfaces},
@@ -389,6 +390,12 @@ void ActionRuntime::SetDesktopApprovalHandler(
     desktopApprovals->SetHandler(std::move(handler));
 }
 
+policy::DesktopApprovalGate::TaskApproval ActionRuntime::ApproveDesktopTask(
+    const std::string& goalId, const bool messaging)
+{
+    return desktopApprovals->ApproveTask(goalId, messaging);
+}
+
 bool ActionRuntime::SetCameraAccess(
     const bool enabled,
     const bool autonomousCapture,
@@ -405,6 +412,7 @@ bool ActionRuntime::SetDesktopControl(
     const bool keyboard,
     const bool applicationLaunch,
     const bool rawCoordinates,
+    const bool visualTargeting,
     const bool autonomous,
     const CapabilitySettings::DesktopControl::InputScope scope,
     const bool allowCommandSurfaces,
@@ -413,6 +421,7 @@ bool ActionRuntime::SetDesktopControl(
     std::lock_guard lock(mutex);
     return capabilityEditor.SetDesktopControl(
             capabilityConfigPath, pointer, keyboard, applicationLaunch, rawCoordinates,
+            visualTargeting,
             autonomous, scope, allowCommandSurfaces, outError) &&
         ReloadUnlocked(outError);
 }

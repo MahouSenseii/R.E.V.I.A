@@ -161,6 +161,7 @@ ConversationRuntime::ConversationRuntime(
     StateHandler inputStateHandler,
     AffectHandler inputAffectHandler,
     InternetSettingsProvider inputInternetSettings,
+    DesktopSettingsProvider inputDesktopSettings,
     InternetLookupHandler inputInternetLookup,
     ResponseFilterSettingsProvider inputResponseFilterSettings,
     ScreenContextProvider inputScreenContext,
@@ -183,6 +184,7 @@ ConversationRuntime::ConversationRuntime(
       setState(std::move(inputStateHandler)),
       publishAffect(std::move(inputAffectHandler)),
       internetSettings(std::move(inputInternetSettings)),
+      desktopSettings(std::move(inputDesktopSettings)),
       internetLookup(std::move(inputInternetLookup)),
       filterSettingsProvider(std::move(inputResponseFilterSettings)),
       screenContextProvider(std::move(inputScreenContext)),
@@ -654,6 +656,16 @@ agents::ResponseFilterContext ConversationRuntime::BuildResponseFilterContext(
         contextFacts.internetProvider = access.visibleBrowser
             ? "the dedicated visible browser"
             : access.provider.empty() ? "the approved provider" : access.provider;
+    }
+    // Read live, so a permission the owner flips mid-conversation is reflected in what
+    // she says she can do rather than in what she was told at startup.
+    contextFacts.desktopStateKnown = static_cast<bool>(desktopSettings);
+    if (desktopSettings)
+    {
+        const actions::CapabilitySettings::DesktopControl hands = desktopSettings();
+        contextFacts.desktopPointer = hands.pointer;
+        contextFacts.desktopKeyboard = hands.keyboard;
+        contextFacts.desktopApplicationLaunch = hands.applicationLaunch;
     }
     contextFacts.internetTopicIsActive = MentionsInternet(policyInput);
     contextFacts.screenTopicIsActive = MentionsScreenEvidence(policyInput);
@@ -1524,6 +1536,8 @@ SessionResult ConversationRuntime::Generate(
         {
             log.Warning(output.reason);
             setState(RuntimeState::Error, output.reason);
+            result.fromAssistant = false;
+            result.text = "The local model did not return a reply. Please try again. Details: " + output.reason;
         }
         return finish(std::move(result));
     }

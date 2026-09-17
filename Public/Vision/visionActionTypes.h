@@ -26,8 +26,33 @@ struct VisionActionIntent
     std::string targetName;
     std::string targetDescription;
     ScreenRegion region;
+    // Where a drag ends, for the pointer family. Regions at both ends, never points.
+    ScreenRegion endRegion;
     std::string value;
+    // A keyboard chord, for press_keys. Vision may notice that the transferable route to
+    // something is a key rather than a click; that proposal follows the ordinary keyboard
+    // path and needs no visual-coordinate authority to do it.
+    std::string keys;
+    int scrollClicks = 0;
+    bool horizontalScroll = false;
+    int clickCount = 1;
     double modelConfidence = 0.0;
+
+    // Whether this intent needs a region at all.
+    //
+    // The pointer family aims somewhere, so it does. The keyboard family goes to whatever
+    // has focus and the UI Automation family names a control, so neither does -- and
+    // requiring a region from them would be asking for visual authority to do something
+    // that never touches a coordinate.
+    [[nodiscard]] bool NeedsRegion() const
+    {
+        return action == actions::ActionType::MoveCursor ||
+            action == actions::ActionType::ClickPointer ||
+            action == actions::ActionType::DragPointer ||
+            action == actions::ActionType::ScrollPointer ||
+            action == actions::ActionType::InvokeControl ||
+            action == actions::ActionType::SetControlText;
+    }
 };
 
 struct VisionActionParseResult

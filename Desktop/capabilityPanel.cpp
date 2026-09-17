@@ -3,6 +3,7 @@
 
 #include <QAbstractItemView>
 #include <QCheckBox>
+#include <QComboBox>
 #include <QEvent>
 #include <QFrame>
 #include <QGridLayout>
@@ -211,6 +212,36 @@ CapabilityPanel::CapabilityPanel(
     introLayout->addWidget(explanation);
     layout->addWidget(intro);
 
+    auto* taskApprovals = new QFrame(this);
+    auto* taskLayout = new QVBoxLayout(taskApprovals);
+    auto* taskTitle = new QLabel("Requested tasks", taskApprovals);
+    taskTitle->setObjectName("cardTitle");
+    taskLayout->addWidget(taskTitle);
+    taskApprovalMode = new QComboBox(taskApprovals);
+    taskApprovalMode->setObjectName("taskApprovalMode");
+    using ExecutionMode = revia::actions::ExecutionMode;
+    taskApprovalMode->addItem("Approve once at the start", static_cast<int>(ExecutionMode::Supervised));
+    taskApprovalMode->addItem("Free — use granted permissions without asking", static_cast<int>(ExecutionMode::OwnerFullAccess));
+    taskApprovalMode->addItem("Approved scope only", static_cast<int>(ExecutionMode::ApprovedScope));
+    taskApprovalMode->addItem("Actions disabled", static_cast<int>(ExecutionMode::Disabled));
+    taskLayout->addWidget(taskApprovalMode);
+    auto* taskHelp = new QLabel(
+        "Task approval covers routine steps and messages you explicitly request. "
+        "Free mode skips that initial approval. Existing permissions still apply; "
+        "work outside the task's scope stops. Background work gets no task approval.", taskApprovals);
+    taskHelp->setWordWrap(true);
+    taskHelp->setObjectName("secondaryText");
+    taskLayout->addWidget(taskHelp);
+    layout->addWidget(taskApprovals);
+    connect(taskApprovalMode, &QComboBox::activated, this, [this](const int index)
+    {
+        if (refreshing) return;
+        const auto mode = static_cast<ExecutionMode>(taskApprovalMode->itemData(index).toInt());
+        const auto result = session.SetExecutionMode(mode);
+        SetStatus(QString::fromStdString(result.message), !result.succeeded);
+        Refresh();
+    });
+
     auto* cards = new QGridLayout();
     cards->setHorizontalSpacing(18);
     cards->setVerticalSpacing(18);
@@ -281,14 +312,23 @@ CapabilityPanel::CapabilityPanel(
     keyboardCheck = new ToggleSwitch(ToggleSwitch::Accent::Cyan, this);
     launchCheck = new ToggleSwitch(ToggleSwitch::Accent::Cyan, this);
     rawCoordinateCheck = new ToggleSwitch(ToggleSwitch::Accent::Cyan, this);
+    visualTargetCheck = new ToggleSwitch(ToggleSwitch::Accent::Cyan, this);
     AddRow(desktopCard, MakeRow(pointerCheck, "Move and click the pointer"));
     AddRow(desktopCard, MakeRow(keyboardCheck, "Type and press key chords"));
     AddRow(desktopCard, MakeRow(launchCheck, "Start approved applications"));
+    AddRow(desktopCard, MakeRow(visualTargetCheck,
+        "Click what she can see",
+        "For games and drawn interfaces that expose no controls to Windows.",
+        QString(), QString(), true,
+        "The target must be something she just looked at, in the window she looked at, "
+        "still in front and still the same size. Anything else is refused and she looks "
+        "again."));
     AddRow(desktopCard, MakeRow(rawCoordinateCheck,
         "Aim at coordinates she chose",
         "Otherwise every click must land on a re-verified element.",
         QString(), QString(), true,
-        "Without this she may only click an element the screen resolver re-verified."));
+        "Wider than the setting above: this is a point with nothing behind it, rather "
+        "than a thing she was looking at."));
 
     auto* desktopLayout = qobject_cast<QVBoxLayout*>(desktopCard->layout());
     desktopLayout->addSpacing(6);
@@ -461,6 +501,8 @@ CapabilityPanel::CapabilityPanel(
         this, [this]() { ApplyDesktopControlSettings(); });
     connect(rawCoordinateCheck, &QCheckBox::toggled,
         this, [this]() { ApplyDesktopControlSettings(); });
+    connect(visualTargetCheck, &QCheckBox::toggled,
+        this, [this]() { ApplyDesktopControlSettings(); });
     connect(wholeDesktopCheck, &QCheckBox::toggled,
         this, [this]() { ApplyDesktopControlSettings(); });
     connect(commandSurfaceCheck, &QCheckBox::toggled,
@@ -513,6 +555,7 @@ void CapabilityPanel::Refresh()
         applicationItem->setExpanded(true);
     }
     internetCheck->setChecked(settings.internet.enabled);
+    taskApprovalMode->setCurrentIndex(taskApprovalMode->findData(static_cast<int>(settings.mode)));
     automaticLookupCheck->setChecked(settings.internet.automaticLookup);
     visibleBrowserCheck->setChecked(settings.internet.visibleBrowser);
     autonomousResearchCheck->setChecked(settings.internet.autonomousResearch);
@@ -529,6 +572,8 @@ void CapabilityPanel::Refresh()
     launchCheck->setChecked(desktop.applicationLaunch);
     rawCoordinateCheck->setChecked(desktop.rawCoordinates);
     rawCoordinateCheck->setEnabled(desktop.pointer);
+    visualTargetCheck->setChecked(desktop.visualTargeting);
+    visualTargetCheck->setEnabled(desktop.pointer);
     wholeDesktopCheck->setChecked(desktop.scope ==
         revia::actions::CapabilitySettings::DesktopControl::InputScope::WholeDesktop);
     wholeDesktopCheck->setEnabled(desktop.pointer && desktop.rawCoordinates);
@@ -687,6 +732,7 @@ void CapabilityPanel::ApplyDesktopControlSettings()
         keyboardCheck->isChecked(),
         launchCheck->isChecked(),
         rawCoordinateCheck->isChecked(),
+        visualTargetCheck->isChecked(),
         autonomousDesktopCheck->isChecked(),
         wholeDesktopCheck->isChecked()
             ? InputScope::WholeDesktop : InputScope::ApprovedApplications,

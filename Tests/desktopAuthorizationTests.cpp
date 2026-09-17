@@ -393,6 +393,44 @@ void TestApprovalNeverWidensAnythingElse()
     Check(asked == 0, "An effect inside the ceiling still asked for approval.");
 }
 
+void TestTaskApprovalExpiresAndDoesNotEscapeItsGoal()
+{
+    using namespace revia::policy;
+    const auto settings = Ceiling(ConsequenceClass::Routine);
+    DesktopApprovalGate gate;
+    int prompts = 0;
+    gate.SetHandler([&](const ApprovalPrompt&) { ++prompts; return false; });
+    revia::actions::ActionRequest request;
+    request.requestedBy = "goal:message-task";
+    request.application = "msedge.exe";
+    request.windowTitle = "Messenger";
+    std::string refusal;
+    const auto attempt = [&](const char* name)
+    {
+        return AuthorizeOrExplain(DesktopOperation::PointerActivate,
+            Control(name, "Messenger"), settings, request, refusal, &gate);
+    };
+    {
+        const auto grant = gate.ApproveTask("message-task", true);
+        Check(attempt("Send"), "The approved messaging task asked again at Send.");
+        Check(attempt("Save"), "The approved task could not edit its content.");
+        Check(!attempt("Buy now") && !attempt("Delete account") && !attempt("Delete") &&
+            !attempt("Send and pay"), "A messaging grant authorized an unrelated effect.");
+        Check(prompts == 0, "The task's effect boundary opened another modal.");
+        request.requestedBy = "autonomous_curiosity/idle";
+        Check(!attempt("Send") && prompts == 0, "Background work borrowed task approval.");
+        request.requestedBy = "goal:another-task";
+        Check(!attempt("Send") && prompts == 1, "Another goal borrowed task approval.");
+        request.requestedBy = "goal:message-task";
+    }
+    Check(!attempt("Send") && prompts == 2, "Approval survived the end of the task.");
+    {
+        const auto navigation = gate.ApproveTask("message-task", false);
+        Check(!attempt("Send") && prompts == 2,
+            "Navigation approval silently included sending or opened another modal.");
+    }
+}
+
 void RunDesktopAuthorizationTests()
 {
     TestTheSameEffectCostsTheSameWhicheverRouteReachesIt();
@@ -406,5 +444,6 @@ void RunDesktopAuthorizationTests()
     TestRefusalsAreActionableAndCarryNoSecrets();
     TestAnApprovableStepCanActuallyBeApproved();
     TestApprovalNeverWidensAnythingElse();
+    TestTaskApprovalExpiresAndDoesNotEscapeItsGoal();
     std::cout << "Desktop authorization tests passed: one rule, every route.\n";
 }

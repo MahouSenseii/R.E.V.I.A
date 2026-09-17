@@ -118,6 +118,8 @@ void RunActionAuditTests();
 void RunDesktopControlTests();
 void RunPerformanceTests();
 void RunOperatorLoopTests();
+void RunOperatorSessionTests();
+void RunApplicationLocatorTests();
 void RunDesktopAuthorizationTests();
 void RunTargetBindingTests();
 void RunActionApprovalTests();

@@ -3,6 +3,8 @@
 #include "Windows/uiaElementLocator.h"
 
 #include <algorithm>
+#include <atomic>
+#include <chrono>
 #include <sstream>
 
 #ifdef _WIN32
@@ -139,9 +141,92 @@ std::string DesktopObservation::Describe(const std::size_t maximumControls) cons
     return stream.str();
 }
 
+namespace
+{
+// Process-wide and monotonic. Every observation, successful or not, takes the next one.
+std::atomic<std::uint64_t> observationGeneration{0};
+
+std::uint64_t SteadyMilliseconds()
+{
+    return static_cast<std::uint64_t>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count());
+}
+}
+
+std::string CompareVisualTarget(
+    const ActionRequest::ElementResolutionEvidence& target,
+    const VisualTargetFacts& current)
+{
+    if (!target.IsVisualRegionTarget())
+    {
+        return "That target is not a visually grounded one.";
+    }
+    if (!target.HasRegion())
+    {
+        return "That visual target carries no region.";
+    }
+    if (target.observationGeneration == 0 || target.observedWindow == nullptr)
+    {
+        return "That visual target is not bound to an observation of the screen.";
+    }
+    // Something has been looked at since. The region describes a screen that has been
+    // replaced, which is what happens on navigation, on a scroll, and when a dialog
+    // opens -- none of which move the window, and none of which the checks below would
+    // otherwise catch.
+    if (current.latestGeneration > target.observationGeneration)
+    {
+        return "The screen has been observed again since that target was chosen, so it "
+            "describes an older view. Look again before acting.";
+    }
+    if (current.nowMs >= target.observedAtMs &&
+        current.nowMs - target.observedAtMs > VisualTargetFreshnessMs)
+    {
+        return "That visual target is too old to act on. Look again.";
+    }
+    if (current.foregroundWindow != target.observedWindow ||
+        current.foregroundProcessId != target.observedProcessId)
+    {
+        return "A different window is in front than the one that target was seen in, so "
+            "nothing was clicked.";
+    }
+    if (current.windowBoundsKnown &&
+        (current.windowLeft != target.observedWindowLeft ||
+         current.windowTop != target.observedWindowTop ||
+         current.windowRight != target.observedWindowRight ||
+         current.windowBottom != target.observedWindowBottom))
+    {
+        // Moved or resized. The region was measured in screen space against the old
+        // rectangle, so every coordinate derived from it now points somewhere else.
+        return "That window has moved or been resized since the target was seen, so the "
+            "region no longer points at it.";
+    }
+    const int x = target.RegionCentreX();
+    const int y = target.RegionCentreY();
+    if (current.windowBoundsKnown &&
+        (x < current.windowLeft || x >= current.windowRight ||
+         y < current.windowTop || y >= current.windowBottom))
+    {
+        return "That target's region is outside the window it was seen in.";
+    }
+    return {};
+}
+
+std::uint64_t DesktopObserver::LatestGeneration()
+{
+    return observationGeneration.load(std::memory_order_acquire);
+}
+
 DesktopObservation DesktopObserver::Observe(const std::size_t maximumControls) const
 {
     DesktopObservation observation;
+    // Claimed before anything can fail, so a failed look still supersedes an earlier
+    // one. The id carries the generation so an audit record and a log line can be
+    // matched up without a second field to keep in step.
+    observation.generation =
+        observationGeneration.fetch_add(1, std::memory_order_acq_rel) + 1;
+    observation.id = "observation-" + std::to_string(observation.generation);
+    observation.observedAtMs = SteadyMilliseconds();
 #ifdef _WIN32
     const HRESULT initialized = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
     const bool shouldUninitialize = initialized == S_OK || initialized == S_FALSE;
@@ -171,6 +256,8 @@ DesktopObservation DesktopObserver::Observe(const std::size_t maximumControls) c
     }
     DWORD processId = 0;
     GetWindowThreadProcessId(foreground, &processId);
+    observation.foregroundWindow = static_cast<void*>(foreground);
+    observation.foregroundProcessId = static_cast<std::uint32_t>(processId);
     observation.foregroundApplication =
         WideToUtf8(ProcessFileName(static_cast<int>(processId)));
 

@@ -119,7 +119,7 @@ target_link_libraries(ReviaFoundation PUBLIC
 if(WIN32)
     # Media Foundation (mfplat/mf/mfreadwrite/mfuuid) backs camera capture; shlwapi comes
     # with it. Screen capture continues to use GDI+, which also encodes the camera PNG.
-    target_link_libraries(ReviaFoundation PUBLIC shell32 dxgi sapi ole32 oleaut32 winmm gdiplus gdi32 bcrypt winhttp psapi pdh dbghelp mfplat mf mfreadwrite mfuuid shlwapi)
+    target_link_libraries(ReviaFoundation PUBLIC shell32 dxgi sapi ole32 oleaut32 winmm gdiplus gdi32 bcrypt winhttp psapi pdh dbghelp mfplat mf mfreadwrite mfuuid shlwapi advapi32)
 endif()
 
 if(MSVC)
@@ -303,6 +303,9 @@ if(BUILD_TESTING)
     # save alone persists identity. RunNativeDesktopTests stays unregistered on
     # purpose: it synthesizes real keyboard and mouse input.
     add_test(NAME Revia.IdentityFinalSave COMMAND ReviaTests --identity-final-save)
+    # A reentrant command lock must fail on a bounded timeout instead of hanging CI.
+    add_test(NAME Revia.OperatorSession COMMAND ReviaTests --operator-session)
+    set_tests_properties(Revia.OperatorSession PROPERTIES TIMEOUT 15)
     find_program(REVIA_NODE_EXECUTABLE NAMES node node.exe)
     if(REVIA_NODE_EXECUTABLE)
         add_test(

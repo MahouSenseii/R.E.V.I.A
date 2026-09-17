@@ -261,20 +261,71 @@ actions::PolicyDecision CapabilityPolicy::Evaluate(
         }
         else if (pointerAction)
         {
-            // Aiming is either an element the vision-to-UIA resolver re-verified or a
-            // point Revia chose. The second is what a general pointer skill is made of,
-            // so it has its own switch; where that point may land is the scope's job.
-            // A scroll is the exception that needs neither: it turns the wheel wherever
-            // the pointer already is, the way a hand on a mouse does.
-            const bool aimsSomewhere =
-                request.resolution.visionResolved || request.input.hasPoint;
+            // Three routes to a target, three different amounts of evidence, three
+            // different permissions. A scroll is the exception that needs none of them:
+            // it turns the wheel wherever the pointer already is, the way a hand on a
+            // mouse does.
+            const actions::ActionRequest::ElementResolutionEvidence& resolution =
+                request.resolution;
+            const bool uiaTarget = resolution.IsUiaElementTarget();
+            const bool visualTarget = resolution.IsVisualRegionTarget();
+            // Neither of the above, aimed anyway. Kind None with a point is the planner
+            // naming a coordinate directly, which is what the raw switch is about.
+            const bool rawTarget = request.input.hasPoint && !uiaTarget && !visualTarget;
+
+            const bool aimsSomewhere = uiaTarget || visualTarget || request.input.hasPoint;
             if (!aimsSomewhere && request.type != actions::ActionType::ScrollPointer)
             {
-                decision.reason = "A pointer action needs a resolved element or an explicit point.";
+                decision.reason = "A pointer action needs a resolved element, a visual "
+                    "target, or an explicit point.";
                 return decision;
             }
-            if (request.input.hasPoint && !request.resolution.visionResolved &&
-                !settings.desktopControl.rawCoordinates)
+            if (visualTarget)
+            {
+                if (!settings.desktopControl.visualTargeting)
+                {
+                    decision.reason = "Acting on something Revia can only see, rather "
+                        "than on a control Windows exposes, is a separate permission "
+                        "and it is off.";
+                    return decision;
+                }
+                // A region is the whole claim. Without one there is nothing that was
+                // looked at, and the kind would be doing no work beyond skipping the
+                // raw-coordinate switch.
+                if (!resolution.HasRegion())
+                {
+                    decision.reason = "A visually grounded target needs the region it "
+                        "was seen in.";
+                    return decision;
+                }
+                // Stamped by the runtime from its own observation. Absent means nothing
+                // observed this, which is the one thing this kind is supposed to prove.
+                if (resolution.observationGeneration == 0 ||
+                    resolution.observedWindow == nullptr ||
+                    resolution.observationId.empty())
+                {
+                    decision.reason = "That visual target is not bound to an observation "
+                        "of the screen, so there is nothing to check it against.";
+                    return decision;
+                }
+                // The point is derived from the region when the action is performed, so
+                // a request that also carries a chosen point is either confused or is
+                // smuggling a coordinate in under a narrower permission. Either way the
+                // point would be the thing acted on, and it is not what was authorized.
+                if (request.input.hasPoint)
+                {
+                    decision.reason = "A visually grounded target carries the region it "
+                        "was seen in, not a chosen point.";
+                    return decision;
+                }
+                if (resolution.modelConfidence < 0.0 || resolution.modelConfidence > 1.0)
+                {
+                    decision.reason = "A visual target needs a confidence between zero "
+                        "and one.";
+                    return decision;
+                }
+            }
+            if (rawTarget && !settings.desktopControl.rawCoordinates)
             {
                 decision.reason = "Pointing at a chosen coordinate is disabled; resolve the element first.";
                 return decision;
@@ -285,11 +336,22 @@ actions::PolicyDecision CapabilityPolicy::Evaluate(
                 decision.reason = "A click may repeat between one and three times.";
                 return decision;
             }
-            if (request.type == actions::ActionType::DragPointer &&
-                (!request.input.hasPoint || !request.input.hasEndPoint))
+            if (request.type == actions::ActionType::DragPointer)
             {
-                decision.reason = "A drag needs a start point and an end point.";
-                return decision;
+                // Both ends, in whichever currency this target deals in. A visual drag
+                // names two regions and resolves both when it runs; anything else names
+                // two points.
+                const bool visualEnds = visualTarget &&
+                    resolution.HasRegion() && request.input.HasEndRegion();
+                const bool pointEnds = request.input.hasPoint && request.input.hasEndPoint;
+                if (!visualEnds && !pointEnds)
+                {
+                    decision.reason = visualTarget
+                        ? "A visually grounded drag needs the region it starts in and "
+                          "the region it ends in."
+                        : "A drag needs a start point and an end point.";
+                    return decision;
+                }
             }
             if (request.type == actions::ActionType::ScrollPointer &&
                 (request.input.scrollClicks == 0 ||

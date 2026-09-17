@@ -120,6 +120,8 @@ struct Goal
     std::string title;
     GoalStatus status = GoalStatus::Planned;
     StopReason stopReason = StopReason::None;
+    // Bounded explanation from the planner or validator; data, never action authority.
+    std::string stopDetail;
 
     std::vector<GoalStep> steps;
     std::uint32_t currentStep = 0;

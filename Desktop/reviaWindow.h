@@ -181,7 +181,7 @@ private:
     // one confirms a typed action before policy runs, this one answers an
     // authorization that stopped on the consequence of a control.
     bool ApproveDesktopEffect(const revia::policy::ApprovalPrompt& prompt);
-    bool ConfirmAction(
+    revia::actions::ConfirmationChoice ConfirmAction(
         const revia::actions::ActionRequest& request,
         const revia::actions::PolicyDecision& decision);
     static QIcon CreateReviaIcon();

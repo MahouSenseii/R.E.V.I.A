@@ -339,7 +339,8 @@ Database OpenDatabase(const std::string& storePath)
         "  spend TEXT NOT NULL,"
         "  scope TEXT NOT NULL,"
         "  created_at TEXT NOT NULL,"
-        "  updated_at TEXT NOT NULL"
+        "  updated_at TEXT NOT NULL,"
+        "  stop_detail TEXT NOT NULL DEFAULT ''"
         ");"
         "CREATE INDEX IF NOT EXISTS goals_by_status ON goals(status, updated_at);"
         "CREATE TABLE IF NOT EXISTS goal_steps ("
@@ -372,6 +373,20 @@ Database OpenDatabase(const std::string& storePath)
     {
         return {};
     }
+    // Additive migration: old goals keep their status and receive an empty explanation.
+    // Re-check on each open so databases created by older builds remain readable.
+    bool hasStopDetail = false;
+    {
+        Statement columns = Prepare(database.get(), "PRAGMA table_info(goals);");
+        if (!columns) return {};
+        int status = SQLITE_ROW;
+        while ((status = sqlite3_step(columns.get())) == SQLITE_ROW)
+            if (ColumnText(columns.get(), 1) == "stop_detail") hasStopDetail = true;
+        if (status != SQLITE_DONE) return {};
+    }
+    if (!hasStopDetail && !Execute(database.get(),
+            "ALTER TABLE goals ADD COLUMN stop_detail TEXT NOT NULL DEFAULT '';"))
+        return {};
     return database;
 }
 
@@ -439,8 +454,8 @@ bool WriteGoal(sqlite3* database, const Goal& goal)
     Statement insert = Prepare(database,
         "INSERT OR REPLACE INTO goals "
         "(id, title, status, stop_reason, current_step, budget, spend, scope, "
-        " created_at, updated_at) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);");
+        " created_at, updated_at, stop_detail) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);");
     if (!insert)
     {
         return false;
@@ -456,6 +471,7 @@ bool WriteGoal(sqlite3* database, const Goal& goal)
     BindText(insert.get(), 8, ScopeToJson(goal.scope).dump());
     BindText(insert.get(), 9, EpochSeconds(goal.createdAt));
     BindText(insert.get(), 10, EpochSeconds(goal.updatedAt));
+    BindText(insert.get(), 11, goal.stopDetail);
     if (sqlite3_step(insert.get()) != SQLITE_DONE)
     {
         return false;
@@ -564,13 +580,14 @@ Goal ReadGoal(sqlite3* database, sqlite3_stmt* statement)
     goal.scope = ScopeFromJson(ParseJson(ColumnText(statement, 7)));
     goal.createdAt = FromEpochSeconds(ColumnText(statement, 8));
     goal.updatedAt = FromEpochSeconds(ColumnText(statement, 9));
+    goal.stopDetail = ColumnText(statement, 10);
     goal.steps = ReadSteps(database, goal.id);
     return goal;
 }
 
 constexpr const char* GoalColumns =
     "SELECT id, title, status, stop_reason, current_step, budget, spend, scope, "
-    "       created_at, updated_at FROM goals ";
+    "       created_at, updated_at, stop_detail FROM goals ";
 
 } // namespace
 

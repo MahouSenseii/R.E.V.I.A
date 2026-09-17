@@ -37,6 +37,34 @@ enum class ActionType
     WebSearch
 };
 
+// How much is actually known about what a pointer action is aimed at.
+//
+// Three different amounts of evidence, not three spellings of one thing. Collapsing them
+// is how a click ends up somewhere nobody authorized.
+//
+// UiaElement is the strongest and the oldest: vision picked a region, the resolver
+// matched it to one UI Automation element, and the executor re-finds that exact runtime
+// identity and uses its current bounds. The coordinate captured when the decision was
+// made is never the coordinate clicked.
+//
+// VisualRegion is for the interfaces UI Automation cannot describe -- a game, an Unreal
+// or UMG surface, a canvas, a custom HUD, an Electron window with a bare tree. There is
+// no element to re-find, so what gets verified instead is the *observation*: the same
+// window, still the same size and place, still the newest thing looked at, with the point
+// derived from the region at the last possible moment. Weaker than UiaElement, and
+// deliberately stronger than a bare coordinate -- a region bound to one observation of
+// one window is a claim that can be checked, and an arbitrary point is not.
+//
+// RawCoordinate is a point with no verified visual binding behind it. It keeps its own
+// switch and is not either of the other two.
+enum class TargetResolutionKind
+{
+    None,
+    UiaElement,
+    VisualRegion,
+    RawCoordinate
+};
+
 enum class RiskLevel
 {
     ReadOnly = 0,
@@ -77,6 +105,32 @@ enum class PolicyVerdict
     Blocked
 };
 
+// What a person said when they were asked.
+//
+// Three answers rather than two, because "yes" and "yes, and stop asking me for this
+// task" are different consents and only the person can tell them apart. Driving a
+// browser takes a focus, a chord, a type and an enter, and being asked four times for
+// one sentence is how a safety prompt turns into a thing people click through without
+// reading -- which is worse than not asking.
+//
+// AllowForThisTask is bounded by construction and the bounds are not negotiable: it
+// lives for one goal run, is never written anywhere, raises no permission, and covers
+// only work at or below the risk level that was actually shown. Anything above it asks
+// again. It also has no effect on the consequence ceiling, which is a separate gate
+// inside the executor -- a send, a purchase or a delete still stops for its own explicit
+// yes, as DECISION-REVIA-0007 requires.
+enum class ConfirmationChoice
+{
+    Decline,
+    Allow,
+    AllowForThisTask
+};
+
+[[nodiscard]] inline bool Granted(const ConfirmationChoice choice)
+{
+    return choice != ConfirmationChoice::Decline;
+}
+
 enum class ExecutionMode
 {
     Disabled,
@@ -94,7 +148,11 @@ struct ActionRequest
 {
     struct ElementResolutionEvidence
     {
-        bool visionResolved = false;
+        // Replaces an earlier `visionResolved` bool. A bool could only say "vision was
+        // involved", which was the same answer for an exact UIA element and for a bare
+        // region, and every reader of it meant the first. Asking the question properly
+        // is what stops a visual region from being treated as a re-findable element.
+        TargetResolutionKind kind = TargetResolutionKind::None;
         std::string modelTarget;
         int regionLeft = 0;
         int regionTop = 0;
@@ -112,6 +170,69 @@ struct ActionRequest
         double spatialAgreement = 0.0;
         double nameAgreement = 0.0;
         double matchConfidence = 0.0;
+
+        // Which observation a VisualRegion target belongs to, and what the machine
+        // looked like when it was taken. Unused by the other kinds.
+        //
+        // Every field below is stamped by the runtime from its own observation. None of
+        // it is ever read out of model output, for the reason TargetBinding gives about
+        // its own id: evidence that could be supplied from outside would be an
+        // authorization the model wrote for itself. The model says where to look; the
+        // runtime says what was there.
+        std::string observationId;
+        // Strictly increasing across the process. An older generation means something
+        // has been observed since, so the region describes a screen that has been
+        // replaced.
+        std::uint64_t observationGeneration = 0;
+        // The observation's digest. Audit evidence rather than a gate -- see
+        // DesktopObservation::Fingerprint.
+        std::string screenDigest;
+        // Stable window identity at observation time. void* rather than HWND so the
+        // comparison can be tested without Windows, matching TargetBinding.
+        void* observedWindow = nullptr;
+        std::uint32_t observedProcessId = 0;
+        std::string observedApplication;
+        int observedWindowLeft = 0;
+        int observedWindowTop = 0;
+        int observedWindowRight = 0;
+        int observedWindowBottom = 0;
+        // Milliseconds on the steady clock. Stored as a plain integer so this header
+        // stays free of <chrono> and so the value survives being written to an audit
+        // record unchanged.
+        std::uint64_t observedAtMs = 0;
+        // Set when a UIA resolution was tried for this target and did not produce one,
+        // with the resolver's own reason. This is the difference between "UI Automation
+        // had nothing usable here" and "nobody looked", and only the first is a reason
+        // to fall back to pixels.
+        bool uiaAttempted = false;
+        std::string uiaFailure;
+
+        // True only for an exact UI Automation runtime identity the executor can re-find.
+        // Named rather than compared inline because every caller that used to read
+        // `visionResolved` meant precisely this, and must keep meaning it.
+        [[nodiscard]] bool IsUiaElementTarget() const
+        {
+            return kind == TargetResolutionKind::UiaElement;
+        }
+        // True for a region bound to one observation of one window.
+        [[nodiscard]] bool IsVisualRegionTarget() const
+        {
+            return kind == TargetResolutionKind::VisualRegion;
+        }
+        [[nodiscard]] bool HasRegion() const
+        {
+            return regionRight > regionLeft && regionBottom > regionTop;
+        }
+        // The point a region resolves to. Derived rather than stored, so that nothing
+        // can carry a stale coordinate: callers ask at the moment of use.
+        [[nodiscard]] int RegionCentreX() const
+        {
+            return regionLeft + (regionRight - regionLeft) / 2;
+        }
+        [[nodiscard]] int RegionCentreY() const
+        {
+            return regionTop + (regionBottom - regionTop) / 2;
+        }
     };
 
     // Pointer and keyboard payload. Present only on the desktop-operation actions;
@@ -145,6 +266,25 @@ struct ActionRequest
         // A single normalized chord such as "ctrl+shift+s": modifiers held for exactly
         // one non-modifier key. It is deliberately not a macro language.
         std::string keys;
+        // Where a visually grounded drag ends, as a region rather than a point, for the
+        // same reason the start is one. Both ends resolve to coordinates at execution.
+        int endRegionLeft = 0;
+        int endRegionTop = 0;
+        int endRegionRight = 0;
+        int endRegionBottom = 0;
+
+        [[nodiscard]] bool HasEndRegion() const
+        {
+            return endRegionRight > endRegionLeft && endRegionBottom > endRegionTop;
+        }
+        [[nodiscard]] int EndRegionCentreX() const
+        {
+            return endRegionLeft + (endRegionRight - endRegionLeft) / 2;
+        }
+        [[nodiscard]] int EndRegionCentreY() const
+        {
+            return endRegionTop + (endRegionBottom - endRegionTop) / 2;
+        }
     };
 
     std::string id;
@@ -290,6 +430,21 @@ struct CapabilitySettings
         // vision-to-UIA resolver re-verified. The point must still land inside the
         // target application's own window.
         bool rawCoordinates = false;
+        // Permission to act on a target grounded in a fresh screen observation when UI
+        // Automation cannot provide an exact element.
+        //
+        // This is the narrower of the two and is not a weaker spelling of the one above.
+        // rawCoordinates means "aim wherever you decided"; this means "aim at the thing
+        // you just looked at, in the window you just looked at, while it is still the
+        // newest thing looked at and has not moved or resized". A target that fails any
+        // of those is refused rather than clicked, which is what makes it a different
+        // permission and not a euphemism for the same one.
+        //
+        // It exists because a game, an Unreal or UMG surface, a canvas and a bare
+        // Electron tree expose nothing for the resolver to match, and the alternative to
+        // this is granting arbitrary coordinates to reach them -- strictly more
+        // authority for strictly less evidence.
+        bool visualTargeting = false;
         // Separate authority, for the same reason autonomous research is separate from
         // ordinary lookup: delegating a task is not standing consent to drive the
         // machine whenever she feels like it.
@@ -339,6 +494,9 @@ struct CapabilitySettings
 [[nodiscard]] std::string ToString(PolicyVerdict value);
 [[nodiscard]] std::string ToString(ExecutionMode value);
 [[nodiscard]] std::string ToString(ConsequenceClass value);
+// Audit spelling for the targeting route that actually executed. Stable strings: an
+// audit trail that renames its own categories cannot be read across a version.
+[[nodiscard]] std::string ToString(TargetResolutionKind value);
 [[nodiscard]] ConsequenceClass ConsequenceClassFromString(const std::string& value);
 
 // What a named control would do if it were activated.
@@ -378,6 +536,18 @@ struct CapabilitySettings
 [[nodiscard]] std::string ActionVocabulary(bool readOnlyOnly = false);
 
 [[nodiscard]] RiskLevel RiskForAction(ActionType value);
+// Actions that must be agreed to one at a time, whatever else has been agreed to.
+//
+// A standing yes is bounded by risk level, and risk level alone is not enough here.
+// MoveToRecycleBin is classified ReversibleWrite -- correctly, because the recycle bin
+// can be emptied back out -- so a yes given for creating a folder would otherwise cover
+// deleting one, which is not what anybody means by "don't ask again". FormatGoalPlan
+// already marks this action specially for the same reason, noting that recycling is
+// reversible_write and so "nothing else in the pipeline makes it stand out".
+//
+// This is a floor under a convenience, not a security boundary: capability policy, the
+// consequence ceiling, the rate limiter and the audit trail all still apply as before.
+[[nodiscard]] bool AlwaysNeedsItsOwnConfirmation(ActionType value);
 // UI Automation and desktop operation both drive an application, but only the second
 // synthesizes input or starts a process, so they are gated separately.
 [[nodiscard]] bool IsUiAutomationAction(ActionType value);

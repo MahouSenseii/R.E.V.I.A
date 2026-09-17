@@ -44,6 +44,10 @@ public:
     using AffectHandler = std::function<void(const AffectSnapshot&)>;
     using InternetSettingsProvider =
         std::function<actions::CapabilitySettings::InternetAccess()>;
+    // The live desktop permissions, read per turn rather than cached, so a switch the
+    // owner flips mid-conversation is reflected in what she says she can do.
+    using DesktopSettingsProvider =
+        std::function<actions::CapabilitySettings::DesktopControl()>;
     using InternetLookupHandler =
         std::function<actions::ActionOutcome(const std::string&, const std::string&)>;
     using ResponseFilterSettingsProvider = std::function<responseFilterSettings()>;
@@ -106,6 +110,7 @@ public:
         StateHandler stateHandler,
         AffectHandler affectHandler,
         InternetSettingsProvider internetSettingsProvider,
+        DesktopSettingsProvider desktopSettingsProvider,
         InternetLookupHandler internetLookupHandler,
         ResponseFilterSettingsProvider responseFilterSettingsProvider,
         ScreenContextProvider screenContextProvider,
@@ -277,6 +282,7 @@ private:
     StateHandler setState;
     AffectHandler publishAffect;
     InternetSettingsProvider internetSettings;
+    DesktopSettingsProvider desktopSettings;
     InternetLookupHandler internetLookup;
     ResponseFilterSettingsProvider filterSettingsProvider;
     ScreenContextProvider screenContextProvider;

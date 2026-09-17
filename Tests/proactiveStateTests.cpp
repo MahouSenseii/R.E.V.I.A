@@ -151,6 +151,14 @@ struct Fixture
                 access.enabled = access.automaticLookup = access.autonomousResearch = true;
                 return access;
             },
+            // Hands on, so this fixture keeps measuring what it was written to measure
+            // and does not start tripping the no-permission grounding rule.
+            []
+            {
+                actions::CapabilitySettings::DesktopControl hands;
+                hands.pointer = hands.keyboard = hands.applicationLaunch = true;
+                return hands;
+            },
             [this](const std::string&, const std::string&)
             { ++lookups; return actions::ActionOutcome{}; },
             [] { responseFilterSettings filters; filters.bAiReviewEnabled = false; return filters; },

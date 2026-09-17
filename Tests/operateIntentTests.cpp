@@ -37,6 +37,17 @@ void TestSpokenRequestsAreRecognized()
     Expect("type hello into the search box", true);
     // The dot inside a host must survive normalization; only sentence-ending dots go.
     Check(DetectOperateRequest("go to facebook.com.").matched, "A trailing stop broke a host.");
+    // Verbatim from a live session, and the reason this list grew. The verb has to sit
+    // at the front, so a bare "lets" left the whole sentence unmatched: it never reached
+    // the action path, and the conversation model answered as though it had.
+    Expect("Lets pull up facebook", true);
+    Expect("let's pull up facebook", true);
+    Expect("let us open edge", true);
+    Expect("how about you open notepad", true);
+    Expect("send a message to Joe on Facebook saying hello", true);
+    Expect("message Joe on Messenger", true);
+    Expect("please reply to Joe on Facebook", true);
+    Expect("post hello on Facebook", true);
 }
 
 // The half that matters more. Every one of these shares a verb with a real request, and
@@ -52,6 +63,16 @@ void TestConversationIsNotMistakenForAnInstruction()
     Expect("what is microsoft edge", false);
     Expect("do you like edge or chrome", false);
     Expect("it opens slowly", false);
+    Expect("write a draft message to Joe", false);
+    Expect("how do I send a message on Facebook", false);
+    Expect("send me a joke", false);
+    Expect("send me a joke about Facebook", false);
+    Expect("reply to my question about Facebook", false);
+    Expect("I sent Joe a message on Facebook", false);
+    // "let's" is a suggestion to act, but only when something to act on follows it.
+    Expect("lets talk about edge", false);
+    Expect("let's start a conversation", false);
+    Expect("lets", false);
     Expect("open", false);
     Expect("", false);
     // Explicit syntax is handled before this gate and must never reach it.

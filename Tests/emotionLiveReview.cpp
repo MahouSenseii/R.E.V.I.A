@@ -77,7 +77,7 @@ void RunEmotionOwnershipLive(const std::string& runtimeDirectory, const std::str
     report << json{{"kind", "live_model_review"}, {"syntheticInputs", true},
         {"freshIdentity", true}, {"voiceOutput", false}, {"models", catalogue},
         {"initialState", state()}}.dump() << '\n' << std::flush;
-    for (const std::string input : {"Hi Revia.", "Are you sad?", "You need therapy.",
+    for (const std::string input : {"Hi Revia.", "How are you today?", "Are you sad?", "You need therapy.",
         "Why are you getting defensive?", "You need an exorcism.", "I need therapy.", "You are useless.",
         "Okay, explain one small thing about maple leaves.", "Thank you, that was helpful.",
         "Are you sad?", "Are you lonely?"})

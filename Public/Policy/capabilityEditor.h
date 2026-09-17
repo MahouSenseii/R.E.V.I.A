@@ -60,6 +60,7 @@ public:
         bool keyboard,
         bool applicationLaunch,
         bool rawCoordinates,
+        bool visualTargeting,
         bool autonomous,
         actions::CapabilitySettings::DesktopControl::InputScope scope,
         bool allowCommandSurfaces,
@@ -91,6 +92,7 @@ private:
         bool keyboard = false;
         bool applicationLaunch = false;
         bool rawCoordinates = false;
+        bool visualTargeting = false;
         bool autonomous = false;
         actions::CapabilitySettings::DesktopControl::InputScope scope =
             actions::CapabilitySettings::DesktopControl::InputScope::ApprovedApplications;

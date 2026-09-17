@@ -2262,12 +2262,12 @@ bool ReviaWindow::ApproveDesktopEffect(const revia::policy::ApprovalPrompt& prom
     return approved;
 }
 
-bool ReviaWindow::ConfirmAction(
+revia::actions::ConfirmationChoice ReviaWindow::ConfirmAction(
     const revia::actions::ActionRequest& request,
     const revia::actions::PolicyDecision& decision)
 {
-    bool confirmed = false;
-    const auto showConfirmation = [this, &request, &decision, &confirmed]()
+    revia::actions::ConfirmationChoice answer = revia::actions::ConfirmationChoice::Decline;
+    const auto showConfirmation = [this, &request, &decision, &answer]()
     {
         // A screen action hides Revia before capture so it cannot obscure the target.
         // Restore the shell before asking; a confirmation owned by a minimized window is
@@ -2290,7 +2290,7 @@ bool ReviaWindow::ConfirmAction(
                 QString::fromStdString(revia::actions::PathToUtf8(request.destination));
         }
         description += "\n\nPolicy: " + QString::fromStdString(decision.reason);
-        if (request.resolution.visionResolved)
+        if (request.resolution.IsUiaElementTarget())
         {
             description += "\n\nVision target: " +
                 QString::fromStdString(request.resolution.modelTarget) +
@@ -2300,12 +2300,40 @@ bool ReviaWindow::ConfirmAction(
                 QString::number(request.resolution.matchConfidence * 100.0, 'f', 1) + "%" +
                 "\nThe exact UIA runtime id must still match when you approve.";
         }
-        confirmed = QMessageBox::question(
-            this,
-            "Confirm Revia action",
-            description,
-            QMessageBox::Yes | QMessageBox::No,
-            QMessageBox::No) == QMessageBox::Yes;
+        // Three answers, because driving a browser is a focus, a chord, a type and an
+        // enter, and asking four times for one sentence is how a safety prompt becomes
+        // something people dismiss without reading. The middle button says exactly what
+        // it covers so that consent stays informed: this task, this risk level, and
+        // nothing that escalates.
+        QMessageBox prompt(this);
+        prompt.setWindowTitle("Confirm Revia action");
+        prompt.setText(description);
+        const bool wholeTask = request.requestedBy == "goal";
+        QPushButton* once = wholeTask ? nullptr : prompt.addButton("Allow once", QMessageBox::AcceptRole);
+        QPushButton* everything = prompt.addButton(
+            "Allow for this whole task", QMessageBox::AcceptRole);
+        QPushButton* refuse = prompt.addButton("No", QMessageBox::RejectRole);
+        everything->setToolTip(wholeTask
+            ? "Approve the task described above. Work outside its scope stops; approval ends with the task."
+            :
+            "Stops asking for the rest of this one task, for work no riskier than this. "
+            "Anything riskier still asks, and so does anything that sends, buys or "
+            "deletes. It is forgotten when the task ends and changes no permission.");
+        prompt.setDefaultButton(refuse);
+        prompt.setEscapeButton(refuse);
+        prompt.exec();
+        if (prompt.clickedButton() == everything)
+        {
+            answer = revia::actions::ConfirmationChoice::AllowForThisTask;
+        }
+        else if (once != nullptr && prompt.clickedButton() == once)
+        {
+            answer = revia::actions::ConfirmationChoice::Allow;
+        }
+        else
+        {
+            answer = revia::actions::ConfirmationChoice::Decline;
+        }
     };
 
     if (QThread::currentThread() == thread())
@@ -2316,7 +2344,7 @@ bool ReviaWindow::ConfirmAction(
     {
         QMetaObject::invokeMethod(this, showConfirmation, Qt::BlockingQueuedConnection);
     }
-    return confirmed;
+    return answer;
 }
 
 QIcon ReviaWindow::CreateReviaIcon()

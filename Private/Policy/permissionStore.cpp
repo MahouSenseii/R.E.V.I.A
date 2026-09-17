@@ -228,6 +228,8 @@ bool PermissionStore::Load(
                 desktop.value("applicationLaunch", false);
             settings.desktopControl.rawCoordinates =
                 desktop.value("rawCoordinates", false);
+            settings.desktopControl.visualTargeting =
+                desktop.value("visualTargeting", false);
             settings.desktopControl.autonomous = desktop.value("autonomous", false);
             const std::string scopeName =
                 desktop.value("scope", std::string("approved_applications"));
@@ -263,6 +265,15 @@ bool PermissionStore::Load(
             if (settings.desktopControl.rawCoordinates && !settings.desktopControl.pointer)
             {
                 outError = "Raw pointer coordinates require pointer control to be enabled.";
+                return false;
+            }
+            // Visual targeting aims the pointer, so it is meaningless without one. It is
+            // deliberately NOT made to depend on rawCoordinates: the whole point is that
+            // it is reachable without granting arbitrary coordinates, and requiring the
+            // wider permission in order to use the narrower one would defeat it.
+            if (settings.desktopControl.visualTargeting && !settings.desktopControl.pointer)
+            {
+                outError = "Visual targeting requires pointer control to be enabled.";
                 return false;
             }
             if (settings.desktopControl.autonomous && !settings.desktopControl.AnyEnabled())

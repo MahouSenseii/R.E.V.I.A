@@ -5,6 +5,8 @@
 #include <cstdint>
 #include <functional>
 #include <mutex>
+#include <map>
+#include <optional>
 #include <string>
 
 namespace revia::policy
@@ -203,7 +205,25 @@ struct ApprovalPrompt
 class DesktopApprovalGate
 {
 public:
+    class TaskApproval
+    {
+    public:
+        TaskApproval(const TaskApproval&) = delete;
+        TaskApproval& operator=(const TaskApproval&) = delete;
+        ~TaskApproval();
+    private:
+        friend class DesktopApprovalGate;
+        TaskApproval(DesktopApprovalGate& owner, std::string goalId, bool messaging);
+        DesktopApprovalGate& owner;
+        std::string goalId;
+    };
+
     using Handler = std::function<bool(const ApprovalPrompt&)>;
+
+    // Runtime-only, bounded to a submitted goal and removed on every exit.
+    [[nodiscard]] TaskApproval ApproveTask(std::string goalId, bool messaging);
+    [[nodiscard]] std::optional<bool> TaskDecision(
+        const std::string& requestedBy, DesktopEffects effects) const;
 
     void SetHandler(Handler handler);
     // False when no handler is installed, which is the correct answer for a headless
@@ -214,6 +234,7 @@ public:
 private:
     mutable std::mutex mutex;
     Handler handler;
+    std::map<std::string, DesktopEffects> taskApprovals;
 };
 
 // `gate` is optional. Without one the behavior is exactly what it was before approvals

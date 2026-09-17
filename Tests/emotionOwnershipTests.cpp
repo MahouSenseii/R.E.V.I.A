@@ -236,6 +236,13 @@ void TestContextCompactionKeepsCurrentState()
         "A brief reaction kept the monologue budget or lost the latest user turn.");
     Check(brief.dump().size() < 4000,
         "A brief reaction still sent old monologues for repeated prompt evaluation.");
+    history.push_back({"assistant", std::string(10000, 'y')});
+    history.push_back({"user", "How are you today?"});
+    Check(service.GenerateResponse(history).bSuccess, "Wellbeing greeting generation failed.");
+    const auto greeting = backend.Request();
+    Check(greeting.at("max_tokens") == 128 && greeting.at("messages").size() <= 5 &&
+        greeting.at("messages").back().value("content", "") == "How are you today?",
+        "A wellbeing greeting retained the long-turn context and response budget.");
     Check(!agents::ConversationStylePolicy::IsBriefSocialTurn("You need therapy. Explain your reasoning in detail.") &&
         !agents::ConversationStylePolicy::IsBriefSocialTurn("What do you remember about my therapy?") &&
         !agents::ConversationStylePolicy::IsBriefSocialTurn("How do you feel about the architecture we discussed?"),
@@ -411,9 +418,12 @@ void TestDeliveryRequiresEmotionalEvidence()
         "A delivered reply rewarded hostility or lost its input appraisal.");
     Access::Emotions(session).Reset();
     backend.FailReplies();
-    Check(!session.Submit("Describe a cedar leaf in one sentence.").succeeded &&
+    const auto failedReply = session.Submit("Describe a cedar leaf in one sentence.");
+    Check(!failedReply.succeeded &&
         session.CurrentEmotion()[emotion::Emotion::Frustration] > .1F,
         "A real failed inference lost confirmed setback appraisal.");
+    Check(!failedReply.text.empty() && !failedReply.fromAssistant,
+        "A failed model request silently disappeared instead of showing a system error.");
     session.Stop();
 }
 

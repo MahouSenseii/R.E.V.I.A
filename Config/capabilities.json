@@ -36,6 +36,7 @@
     "keyboard": false,
     "applicationLaunch": false,
     "rawCoordinates": false,
+    "visualTargeting": false,
     "scope": "approved_applications",
     "allowCommandSurfaces": false,
     "maxUnconfirmedConsequence": "routine",

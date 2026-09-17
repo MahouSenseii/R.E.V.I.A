@@ -100,6 +100,8 @@ public:
     // and never reachable from parsed model output; the gate outlives capability
     // reloads so a reconstructed executor keeps asking the same person.
     void SetDesktopApprovalHandler(policy::DesktopApprovalGate::Handler handler);
+    [[nodiscard]] policy::DesktopApprovalGate::TaskApproval ApproveDesktopTask(
+        const std::string& goalId, bool messaging);
 
     [[nodiscard]] bool SetCameraAccess(
         bool enabled,
@@ -113,6 +115,7 @@ public:
         bool keyboard,
         bool applicationLaunch,
         bool rawCoordinates,
+        bool visualTargeting,
         bool autonomous,
         CapabilitySettings::DesktopControl::InputScope scope,
         bool allowCommandSurfaces,

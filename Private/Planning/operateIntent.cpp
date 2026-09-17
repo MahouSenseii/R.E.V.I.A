@@ -48,11 +48,17 @@ bool StartsWith(const std::string& value, const std::string_view prefix)
 // of these than typing does.
 bool StripLeadingCourtesy(std::string& value)
 {
-    static constexpr std::array<std::string_view, 16> prefixes = {
+    // "let's" is the one that sent this list back for revision. "lets pull up
+    // facebook" is how a person actually asks, and because the verb has to sit at the
+    // front, the bare "lets" left it unmatched -- the sentence never reached the action
+    // path at all, and the conversation model answered as though it had. It is a
+    // suggestion-to-act form, exactly like "can you", not a report of anything.
+    static constexpr std::array<std::string_view, 21> prefixes = {
         "hey revia ", "revia ", "please ", "could you please ", "can you please ",
         "could you ", "can you ", "would you ", "will you ", "go ahead and ",
         "i want you to ", "i would like you to ", "i'd like you to ", "you can ",
-        "now ", "just "};
+        "now ", "just ", "let's ", "lets ", "let us ", "how about you ",
+        "what about you "};
     for (const std::string_view prefix : prefixes)
     {
         if (StartsWith(value, prefix))
@@ -117,6 +123,38 @@ bool IsReport(const std::string& value)
 
 } // namespace
 
+bool RequestsExternalMessage(const std::string& input)
+{
+    std::string value = Normalize(input);
+    for (int pass = 0; pass < 4 && StripLeadingCourtesy(value); ++pass) {}
+    if (value.empty() || IsReport(value)) return false;
+    const bool platform = value.find("facebook") != std::string::npos ||
+        value.find("messenger") != std::string::npos ||
+        value.find("discord") != std::string::npos ||
+        value.find("email") != std::string::npos;
+    const auto messageClause = [](const std::string& clause)
+    {
+        return StartsWith(clause, "message ") || StartsWith(clause, "send ") ||
+            StartsWith(clause, "reply to ") || StartsWith(clause, "post ");
+    };
+    bool destination = false;
+    for (const std::string_view service : {"facebook", "messenger", "discord", "email"})
+        for (const std::string_view preposition : {" on ", " via ", " through ", " using "})
+            destination = destination ||
+                value.find(std::string(preposition) + std::string(service)) != std::string::npos;
+    if (destination && messageClause(value)) return true;
+    // A compound desktop request may explicitly include a message after navigation.
+    // Only an imperative clause grants that scope; quoted discussion and drafts do not.
+    for (const std::string_view separator : {" and ", " then "})
+    {
+        const auto at = value.find(separator);
+        if (at != std::string::npos && platform &&
+            messageClause(value.substr(at + separator.size())))
+            return DetectOperateRequest(value.substr(0, at)).matched;
+    }
+    return false;
+}
+
 OperateIntent DetectOperateRequest(const std::string& input)
 {
     OperateIntent intent;
@@ -126,6 +164,13 @@ OperateIntent DetectOperateRequest(const std::string& input)
     // Repeated because speech stacks them: "hey revia can you please open edge".
     for (int pass = 0; pass < 4 && StripLeadingCourtesy(value); ++pass) {}
     if (value.empty() || IsReport(value)) return intent;
+
+    if (RequestsExternalMessage(value))
+    {
+        intent.matched = true;
+        intent.verb = "message";
+        return intent;
+    }
 
     for (const std::string_view verb : OperateVerbs())
     {

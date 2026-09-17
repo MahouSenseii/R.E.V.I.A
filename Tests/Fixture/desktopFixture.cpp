@@ -197,6 +197,13 @@ LRESULT CALLBACK MainWindowProc(HWND window, UINT message, WPARAM wparam, LPARAM
             }
             return 0;
         }
+        case WM_KEYDOWN:
+            if (wparam == VK_F3) Record("KEY frame_f3");
+            break;
+        case WM_APP + 6:
+            SetFocus(window);
+            Record("FOCUS frame");
+            return 0;
         case WM_APP + 1:
             // Test hook: make the vanishing control disappear on demand, so a test can
             // create the gap between observing a control and acting on it.

@@ -207,7 +207,8 @@ void TestSessionReportsTheAuditBoundary(const bool afterExecution)
     const auto audit = fixture.directory.root / "session-audit.jsonl";
     revia::runtime::ReviaSession session;
     ReviaSessionTestAccess::PrepareActions(session, fixture.directory.root);
-    session.SetConfirmationHandler([](const ActionRequest&, const PolicyDecision&) { return true; });
+    session.SetConfirmationHandler([](const ActionRequest&, const PolicyDecision&)
+        { return revia::actions::ConfirmationChoice::Allow; });
     if (afterExecution)
     {
         ReviaSessionTestAccess::ObserveActions(session, [&](const ActionRequest&, const bool beginning)
@@ -230,7 +231,8 @@ void TestGoalStopsWithoutVerificationOrRetry(const bool afterExecution)
     AuditFixture fixture;
     const GoalStore store((fixture.directory.root / "goals.db").string());
     GoalRunner runner(fixture.runtime, store);
-    runner.SetConfirmationHandler([](const ActionRequest&, const PolicyDecision&) { return true; });
+    runner.SetConfirmationHandler([](const ActionRequest&, const PolicyDecision&)
+        { return revia::actions::ConfirmationChoice::Allow; });
     int dispatches = 0;
     fixture.runtime.SetDispatchObserver([&](const ActionRequest&, const bool beginning)
     {

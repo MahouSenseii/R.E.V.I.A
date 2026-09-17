@@ -2,6 +2,7 @@
 
 #include "Policy/desktopInputGuard.h"
 #include "Windows/desktopControlExecutor.h"
+#include "Windows/windowsAutomationExecutor.h"
 #include "Windows/targetBinding.h"
 
 #include <algorithm>
@@ -334,6 +335,39 @@ PolicyDecision Allowed()
 
 // ---------------------------------------------------------------- the tests
 
+void TestWindowInspection(Fixture& fixture)
+{
+    const HWND main = fixture.Window(L"Revia Fixture - Main");
+    const HWND field = GetDlgItem(main, 1002);
+    Check(main && field, "Inspection fixture was unavailable.");
+    Check(SendMessageW(field, WM_SETTEXT, 0, reinterpret_cast<LPARAM>(L"revia-navigation-evidence")),
+        "Could not populate the separate-process inspection fixture.");
+    ActionRequest request;
+    request.type = ActionType::InspectWindow;
+    request.application = FixtureExecutable;
+    request.windowTitle = "Revia Fixture - Main";
+    WindowsAutomationExecutor executor;
+    const auto result = executor.Execute(request, Allowed());
+    std::string observation = result.content;
+    for (const auto& entry : result.entries) observation += "\n" + entry;
+    Check(result.succeeded && observation.find(FixtureExecutable) != std::string::npos &&
+        observation.find("Revia Fixture - Main") != std::string::npos &&
+        observation.find("revia-navigation-evidence") != std::string::npos,
+        "Window inspection omitted actual application/title/edit value evidence: " + observation);
+    const HWND passwordField = GetDlgItem(main, 1004);
+    Check(passwordField != nullptr, "Password fixture was unavailable.");
+    Check(SendMessageW(passwordField, WM_SETTEXT, 0, reinterpret_cast<LPARAM>(L"revia-secret-must-not-appear")),
+        "Could not populate the password fixture.");
+    const auto password = executor.Execute(request, Allowed());
+    std::string privateObservation = password.content;
+    for (const auto& entry : password.entries) privateObservation += "\n" + entry;
+    SendMessageW(passwordField, WM_SETTEXT, 0, reinterpret_cast<LPARAM>(L""));
+    SendMessageW(field, WM_SETTEXT, 0, reinterpret_cast<LPARAM>(L""));
+    Check(password.succeeded && privateObservation.find("revia-secret-must-not-appear") == std::string::npos,
+        "Window inspection exposed a password value.");
+    std::cout << "  PASS inspection reports window/field evidence and withholds passwords\n";
+}
+
 void TestTypingStopsWhenFocusLeavesTheBoundWindow(
     Fixture& fixture, int& passed, int& failed, int& inconclusive)
 {
@@ -471,7 +505,7 @@ void TestTypingLandsInTheNamedControl(
     const std::size_t alreadySubmitted = fixture.Log().size();
 
     const ActionResult result = executor.Execute(
-        TypeInto(std::string(120, 'b'), L"Revia Fixture - Main", DocumentFieldId),
+        TypeInto(std::string(512, 'b'), L"Revia Fixture - Main", DocumentFieldId),
         Allowed());
     std::this_thread::sleep_for(std::chrono::milliseconds(200));
 
@@ -480,7 +514,7 @@ void TestTypingLandsInTheNamedControl(
     const bool inSecond = FieldReceived(fresh, "second", 'b');
     const std::size_t arrived = FieldEventCount(fresh, "document");
 
-    if (result.succeeded && inDocument && !inSecond && arrived >= 120)
+    if (result.succeeded && inDocument && !inSecond && arrived == 512)
     {
         std::cout << "  PASS named control: " << arrived
                   << " characters arrived in the field the request named\n";
@@ -491,7 +525,7 @@ void TestTypingLandsInTheNamedControl(
     std::cout << "  FAIL named control: text did not land in the named control\n";
     std::cout << "        executor succeeded=" << (result.succeeded ? "true" : "false")
               << ": " << result.message << "\n";
-    std::cout << "        document received " << arrived << " of 120 characters, second field "
+    std::cout << "        document received " << arrived << " of 512 characters, second field "
               << (inSecond ? "was written to" : "was untouched") << "\n";
     std::cout << "        events during this operation:\n";
     ShowEvents(fresh);
@@ -736,6 +770,25 @@ void RunNativeDesktopTests()
     int passed = 0;
     int failed = 0;
     int inconclusive = 0;
+    TestWindowInspection(fixture);
+    {
+        const HWND main = fixture.Window(L"Revia Fixture - Main");
+        SetForegroundWindow(main);
+        fixture.Hook(WM_APP + 6);
+        Check(fixture.WaitForLog("FOCUS frame", std::chrono::seconds(2)),
+            "The fixture did not put focus on its frame.");
+        auto guard = std::make_shared<revia::policy::DesktopInputGuard>();
+        DesktopControlExecutor executor(PermissiveSettings(), guard);
+        ActionRequest shortcut = TypeInto("", L"Revia Fixture - Main", "");
+        shortcut.type = ActionType::PressKeys;
+        shortcut.input.keys = "f3";
+        const auto result = executor.Execute(shortcut, {});
+        Check(result.succeeded && fixture.WaitForLog("KEY frame_f3", std::chrono::seconds(2)),
+            "A window shortcut was lost without an edit caret: " + result.message);
+        const auto typing = executor.Execute(TypeInto("must not land", L"Revia Fixture - Main", ""), {});
+        Check(!typing.succeeded, "Unnamed typing into a frame was admitted without an edit target.");
+        std::cout << "  PASS frame focus: window shortcut delivered; unnamed typing refused\n";
+    }
     TestTypingStopsWhenFocusLeavesTheBoundWindow(fixture, passed, failed, inconclusive);
     ProbeFocusBinding(fixture);
     TestTypingLandsInTheNamedControl(fixture, passed, failed, inconclusive);

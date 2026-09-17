@@ -70,6 +70,40 @@ ParsedAction StructuredActionParser::ParseJson(const std::string& input) const
     }
 }
 
+namespace
+{
+// Reads one rectangle, and says whether there was one. Absent is ordinary rather than an
+// error: most actions name no region at all.
+bool ReadRegion(
+    const nlohmann::json& data,
+    const char* field,
+    int& left,
+    int& top,
+    int& right,
+    int& bottom)
+{
+    if (!data.contains(field) || !data[field].is_object())
+    {
+        return false;
+    }
+    const nlohmann::json& source = data[field];
+    const int parsedLeft = source.value("left", -1);
+    const int parsedTop = source.value("top", -1);
+    const int parsedRight = source.value("right", -1);
+    const int parsedBottom = source.value("bottom", -1);
+    if (parsedLeft < 0 || parsedTop < 0 || parsedRight <= parsedLeft ||
+        parsedBottom <= parsedTop)
+    {
+        return false;
+    }
+    left = parsedLeft;
+    top = parsedTop;
+    right = parsedRight;
+    bottom = parsedBottom;
+    return true;
+}
+}
+
 ParsedAction StructuredActionParser::ParseObject(const nlohmann::json& data)
 {
     ParsedAction result;
@@ -98,6 +132,7 @@ ParsedAction StructuredActionParser::ParseObject(const nlohmann::json& data)
         if (desktopControl)
         {
             result.request.application = data.value("application", "");
+            result.request.control = data.value("control", "");
             result.request.windowTitle = data.value("window_title", "");
             result.request.value = data.value("value", data.value("text", std::string{}));
             result.request.input.keys = data.value("keys", "");
@@ -109,6 +144,27 @@ ParsedAction StructuredActionParser::ParseObject(const nlohmann::json& data)
                 return Error(true,
                     "Starting an application requires an executable name.");
             }
+            // A region says "the thing I can see, there", and is the route that works
+            // in an interface UI Automation cannot describe. It is read here only as
+            // geometry and a description: the evidence that makes it a *visual target* --
+            // which observation it came from, which window, when -- is stamped by the
+            // runtime afterwards from its own observation, never taken from this JSON.
+            // A plan that could name its own observation would be authorizing itself.
+            if (ReadRegion(data, "region",
+                    result.request.resolution.regionLeft,
+                    result.request.resolution.regionTop,
+                    result.request.resolution.regionRight,
+                    result.request.resolution.regionBottom))
+            {
+                result.request.resolution.modelTarget =
+                    data.value("target_description", data.value("target_name", std::string{}));
+                result.request.resolution.modelConfidence = data.value("confidence", 1.0);
+            }
+            static_cast<void>(ReadRegion(data, "end_region",
+                result.request.input.endRegionLeft,
+                result.request.input.endRegionTop,
+                result.request.input.endRegionRight,
+                result.request.input.endRegionBottom));
             if (data.contains("x") && data.contains("y") &&
                 data["x"].is_number_integer() && data["y"].is_number_integer())
             {

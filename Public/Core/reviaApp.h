@@ -11,7 +11,7 @@ public:
     void Run();
 
 private:
-    bool ConfirmAction(
+    revia::actions::ConfirmationChoice ConfirmAction(
         const revia::actions::ActionRequest& request,
         const revia::actions::PolicyDecision& decision) const;
 

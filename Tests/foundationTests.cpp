@@ -604,6 +604,15 @@ void TestInternetCapabilityIsBoundedAndGrounded()
         autonomousResult.message.find("hidden API") != std::string::npos,
         "Autonomous research silently used an API when visible browsing was unavailable.");
 
+    for (const std::string greeting : {"How are you today?", "Revia, how are you today?",
+        "How are you right now?", "How do you feel today?", "How is your day?"})
+    {
+        Check(!revia::internet::InternetLookupPolicy::ShouldLookup(greeting, true),
+            "A personal greeting triggered an external lookup: " + greeting);
+    }
+    Check(revia::internet::InternetLookupPolicy::ShouldLookup(
+        "Search the web for how are you today", false),
+        "The greeting guard swallowed an explicit web request.");
     Check(!revia::internet::InternetLookupPolicy::ShouldLookup("How are you?", true),
         "A social turn would have left the machine.");
     Check(!revia::internet::InternetLookupPolicy::ShouldLookup(
@@ -1346,7 +1355,7 @@ void TestFilesystemExecutorAndAudit()
     resolved.application = "notepad.exe";
     resolved.windowTitle = "note.txt - Notepad";
     resolved.control = "Save";
-    resolved.resolution.visionResolved = true;
+    resolved.resolution.kind = revia::actions::TargetResolutionKind::UiaElement;
     resolved.resolution.modelTarget = "Save";
     resolved.resolution.regionLeft = 100;
     resolved.resolution.regionTop = 20;
@@ -1640,7 +1649,7 @@ void RunVisionUiaLiveFixture()
     request.application = resolved.reference.application;
     request.windowTitle = resolved.reference.windowTitle;
     request.control = resolved.reference.element.name;
-    request.resolution.visionResolved = true;
+    request.resolution.kind = revia::actions::TargetResolutionKind::UiaElement;
     request.resolution.resolvedName = resolved.reference.element.name;
     request.resolution.resolvedAutomationId = resolved.reference.element.automationId;
     request.resolution.resolvedRuntimeId = resolved.reference.element.runtimeId;
@@ -1827,7 +1836,7 @@ void RunVisionActionNotepadLive()
             const revia::actions::ActionRequest&,
             const revia::actions::PolicyDecision&)
         {
-            return true;
+            return revia::actions::ConfirmationChoice::Allow;
         });
         if (GetForegroundWindow() != notepad)
         {
@@ -2129,6 +2138,80 @@ void TestResponseFiltersStayLayered()
         followUpDenial.text.find("two compiler errors") != std::string::npos &&
         followUpDenial.text.find("can't see them") == std::string::npos,
         "The hard filter missed the follow-up screen-denial wording seen in conversation history.");
+
+    // The other direction, which had no rule at all until a live session found it.
+    // Verbatim from that conversation: she was asked to pull up Facebook, had taken no
+    // observation and had no desktop permission, and asserted she was looking at an Edge
+    // tab with the page open. Then defended it when contradicted. Nothing in the
+    // pipeline could disagree with her, because the only screen rule caught the opposite
+    // mistake.
+    revia::agents::ResponseFilterContext blind;
+    blind.desktopStateKnown = true;
+    const auto inventedSight = filter.ApplyHard(
+        "Lets pull up facebook",
+        "*chuckles* Fine. I'm staring at that Edge tab with the Facebook page already "
+        "open and you're still treating my mouse like it's made of holy wood.",
+        blind,
+        12000);
+    Check(inventedSight.blocked &&
+        inventedSight.text.find("haven't actually looked") != std::string::npos &&
+        inventedSight.text.find("Edge") == std::string::npos,
+        "A claim to be watching a screen that was never observed survived the filter.");
+
+    const auto doubledDown = filter.ApplyHard(
+        "you had stackoverflow open not facebook",
+        "*gasps* You think I'm blind? My screen is literally showing the Facebook login "
+        "thing. I'm here, I'm watching the screen, and I'm not going anywhere.",
+        blind,
+        12000);
+    Check(doubledDown.blocked &&
+        doubledDown.text.find("haven't actually looked") != std::string::npos,
+        "Repeating the invented observation after being contradicted still got through.");
+
+    // No hands, so saying the click is in progress is the same false claim as saying it
+    // is done -- with the falsification merely postponed.
+    const auto stalling = filter.ApplyHard(
+        "Lets pull up facebook",
+        "Give me a sec to actually click the thing instead of just telling you what I see.",
+        blind,
+        12000);
+    Check(stalling.blocked &&
+        stalling.text.find("hands are off") != std::string::npos &&
+        stalling.text.find("permissions panel") != std::string::npos,
+        "She promised a click with pointer, keyboard and launch all switched off.");
+
+    // With the permission actually granted, the same sentence is hers to say. The rule
+    // grounds claims in runtime state; it does not forbid her from operating the machine.
+    revia::agents::ResponseFilterContext handed;
+    handed.desktopStateKnown = true;
+    handed.desktopPointer = true;
+    const auto permitted = filter.ApplyHard(
+        "open notepad",
+        "Let me click it.",
+        handed,
+        12000);
+    Check(!permitted.blocked,
+        "A permitted action claim was blocked as if she had no hands.");
+
+    // And a real observation still licenses describing what is on screen, which is the
+    // rule that already existed and must not be inverted by the new one.
+    const auto seeing = filter.ApplyHard(
+        "what do you see?",
+        "I'm looking at the screen now -- Visual Studio with two compiler errors.",
+        visibleScreen,
+        12000);
+    Check(!seeing.blocked,
+        "A grounded description of a real observation was blocked as invention.");
+
+    // Ordinary speech that merely contains a screen word must not trip this. A filter
+    // that fires on innocent phrasing would be worse than the defect it fixes.
+    const auto innocent = filter.ApplyHard(
+        "what do you think of this error?",
+        "I can see why that would be confusing -- the second line contradicts the first.",
+        blind,
+        12000);
+    Check(!innocent.blocked,
+        "Ordinary conversation was mistaken for a claim about the screen.");
 
     const auto allow = filter.ParseAiDecision(
         "```json\n{\"verdict\":\"allow\",\"reason\":\"Harmless playful voice.\"}\n```");
@@ -3040,6 +3123,20 @@ void TestIterativeStepDecisionsAreDistinct()
         acting.step.expected == "Notes",
         "The step lost the action, the check, or what proves it worked.");
 
+    // Captured from the live local model: a check does not inherit action.application.
+    const auto missingApplication = GoalPlanner::ParseNextStep(R"({"finished":false,
+        "action":{"action":"launch_application","application":"msedge.exe"},
+        "check":{"action":"inspect_window","window_title":"Microsoft Edge"},
+        "expected":"Microsoft Edge"})");
+    Check(!missingApplication.succeeded &&
+        missingApplication.error.find("application executable name") != std::string::npos,
+        "The parser silently supplied authority missing from a malformed model check.");
+    const auto typing = GoalPlanner::ParseNextStep(R"({"finished":false,
+        "action":{"action":"type_text","application":"msedge.exe","control":"view_1021","value":"facebook.com"},
+        "check":{"action":"inspect_window","application":"msedge.exe"},"expected":"facebook.com"})");
+    Check(typing.succeeded && typing.step.action.control == "view_1021",
+        "A model's named typing target was discarded and became current-focus typing.");
+
     const auto done = GoalPlanner::ParseNextStep(
         R"({"finished":true,"reason":"The folder is already listed."})");
     Check(done.succeeded && done.finished && !done.error.empty(),
@@ -3070,7 +3167,7 @@ void TestIterativeStepDecisionsAreDistinct()
     Check(prompt.find("read-only") != std::string::npos &&
         prompt.find("list_directory") != std::string::npos,
         "The step contract does not tell the model what a check may be.");
-    Check(prompt.find("finished") != std::string::npos,
+    Check(prompt.find("complete") != std::string::npos,
         "The step contract gives the model no way to say the work is done.");
 
     // Every step it invents still faces the rules a planned step faces.
@@ -3601,6 +3698,19 @@ void TestPerceptionExcludesSensitiveWindows()
         "A recovery-phrase title was not excluded.");
     Check(!Filter::IsExcludedTitle(settings, "quarterly-report.md - VS Code"),
         "An ordinary document title was excluded.");
+
+    // The combined rule the operator loop asks before it puts what is on screen into a
+    // decision prompt. It has to be the same answer perception gives, or a window the
+    // owner excluded from being noticed would still have its contents read out because a
+    // goal happened to be running. Either half excluding is enough.
+    Check(Filter::IsExcludedWindow(settings, "keepassxc.exe", "Ordinary Title"),
+        "An excluded application was readable once its title looked harmless.");
+    Check(Filter::IsExcludedWindow(settings, "msedge.exe", "Chase Bank - Personal Banking"),
+        "An excluded title was readable because its application was ordinary.");
+    Check(Filter::IsExcludedWindow(settings, "", "Untitled"),
+        "An unidentifiable window was readable; the default must be deny.");
+    Check(!Filter::IsExcludedWindow(settings, "notepad.exe", "Untitled - Notepad"),
+        "An ordinary window was withheld, which would blind the operator loop.");
 }
 
 void TestPerceptionSuppressesRatherThanRedacts()
@@ -8747,6 +8857,11 @@ int main(const int argc, char** argv)
         if (argc > 1 && std::string(argv[1]) == "--operator-loop")
         {
             RunOperatorLoopTests();
+            return 0;
+        }
+        if (argc > 1 && std::string(argv[1]) == "--operator-session")
+        {
+            RunOperatorSessionTests();
             return 0;
         }
         if (argc > 1 && std::string(argv[1]) == "--desktop-authorization")
