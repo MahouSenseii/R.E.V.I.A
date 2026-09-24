@@ -1,0 +1,429 @@
+cmake_minimum_required(VERSION 3.20)
+
+project(R_E_V_I_A VERSION 0.2.0 LANGUAGES C CXX)
+
+# Post-build runtime sync. Tools/ is ~3,200 files; rewriting all of them into the build
+# tree on every build (twice -- once per executable) churned a sync-watched folder and
+# intermittently failed with "Error copying directory" while a file was held. Copying
+# only what changed avoids both where CMake supports it.
+if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.26)
+    set(REVIA_COPY_DIRECTORY copy_directory_if_different)
+else()
+    set(REVIA_COPY_DIRECTORY copy_directory)
+endif()
+
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
+option(REVIA_BUILD_DESKTOP "Build the optional Qt 6 desktop shell" ON)
+option(REVIA_REQUIRE_DESKTOP "Fail configuration when the Qt desktop shell cannot be built" OFF)
+set(REVIA_QT_ROOT "" CACHE PATH "Explicit Qt 6 kit directory, e.g. C:/Qt/6.8.3/mingw_64")
+
+# Qt discovery must not be pinned to one version at one path on one machine.
+# Resolution order: explicit cache variable, REVIA_QT_ROOT environment variable,
+# then the newest 6.x mingw_64 kit found in the usual install locations.
+function(revia_resolve_qt_root outVariable)
+    if(REVIA_QT_ROOT)
+        set(${outVariable} "${REVIA_QT_ROOT}" PARENT_SCOPE)
+        return()
+    endif()
+    if(DEFINED ENV{REVIA_QT_ROOT} AND EXISTS "$ENV{REVIA_QT_ROOT}")
+        set(${outVariable} "$ENV{REVIA_QT_ROOT}" PARENT_SCOPE)
+        return()
+    endif()
+
+    set(searchRoots "$ENV{USERPROFILE}/Qt" "C:/Qt" "$ENV{QT_ROOT_DIR}")
+    set(candidates "")
+    foreach(searchRoot IN LISTS searchRoots)
+        if(NOT searchRoot OR NOT IS_DIRECTORY "${searchRoot}")
+            continue()
+        endif()
+        file(GLOB kits "${searchRoot}/6.*/mingw_64")
+        list(APPEND candidates ${kits})
+    endforeach()
+
+    if(NOT candidates)
+        set(${outVariable} "" PARENT_SCOPE)
+        return()
+    endif()
+
+    # Natural sort so 6.10.0 ranks above 6.9.0 rather than below it.
+    list(REMOVE_DUPLICATES candidates)
+    list(SORT candidates COMPARE NATURAL ORDER DESCENDING)
+    list(GET candidates 0 newest)
+    set(${outVariable} "${newest}" PARENT_SCOPE)
+endfunction()
+
+if(WIN32 AND REVIA_BUILD_DESKTOP)
+    revia_resolve_qt_root(REVIA_RESOLVED_QT_ROOT)
+    if(REVIA_RESOLVED_QT_ROOT)
+        message(STATUS "Revia: using Qt kit at ${REVIA_RESOLVED_QT_ROOT}")
+        list(PREPEND CMAKE_PREFIX_PATH "${REVIA_RESOLVED_QT_ROOT}")
+    endif()
+endif()
+
+include(FetchContent)
+
+# Prevent cpp-httplib from using Windows API calls that MinGW may not expose correctly.
+set(HTTPLIB_USE_NON_BLOCKING_GETADDRINFO OFF CACHE BOOL "" FORCE)
+
+FetchContent_Declare(
+        httplib
+        GIT_REPOSITORY https://github.com/yhirose/cpp-httplib.git
+        GIT_TAG v0.18.1
+)
+
+FetchContent_Declare(
+        json
+        URL https://github.com/nlohmann/json/releases/download/v3.11.3/json.tar.xz
+        DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+)
+
+FetchContent_Declare(
+        sqlite
+        URL https://sqlite.org/2026/sqlite-amalgamation-3530400.zip
+        URL_HASH SHA3_256=628a44cfe82c66aed1ccbbe85a562d2e33ebe64b3288981ed76285612227934e
+        DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+)
+
+# A namespace-aware XML parser for untrusted SVG. It has no resource loader;
+# the sanitizer additionally rejects DTDs and all external entity callbacks.
+set(EXPAT_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+set(EXPAT_BUILD_TOOLS OFF CACHE BOOL "" FORCE)
+set(EXPAT_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(EXPAT_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(EXPAT_BUILD_DOCS OFF CACHE BOOL "" FORCE)
+set(EXPAT_BUILD_PKGCONFIG OFF CACHE BOOL "" FORCE)
+set(EXPAT_ENABLE_INSTALL OFF CACHE BOOL "" FORCE)
+FetchContent_Declare(
+        expat
+        URL https://github.com/libexpat/libexpat/archive/12cf0b1f25f026a022fe728ad8f7e3d017285b80.tar.gz
+        URL_HASH SHA256=0b53c69a66f94a3e6865f81ec353e6f4715554383848e5482d737c212d8dfccb
+        SOURCE_SUBDIR expat
+        DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+)
+
+FetchContent_MakeAvailable(httplib json sqlite expat)
+
+add_library(sqlite3 STATIC "${sqlite_SOURCE_DIR}/sqlite3.c")
+target_include_directories(sqlite3 PUBLIC "${sqlite_SOURCE_DIR}")
+target_compile_definitions(sqlite3 PRIVATE SQLITE_ENABLE_FTS5)
+
+file(GLOB_RECURSE REVIA_HEADERS CONFIGURE_DEPENDS
+        "${CMAKE_CURRENT_SOURCE_DIR}/Public/*.h"
+)
+
+file(GLOB_RECURSE REVIA_SOURCES CONFIGURE_DEPENDS
+        "${CMAKE_CURRENT_SOURCE_DIR}/Private/*.cpp"
+)
+
+set(REVIA_MAIN_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/Private/main.cpp")
+list(REMOVE_ITEM REVIA_SOURCES "${REVIA_MAIN_SOURCE}")
+
+add_library(ReviaFoundation STATIC ${REVIA_HEADERS} ${REVIA_SOURCES})
+
+target_include_directories(ReviaFoundation PUBLIC
+        "${CMAKE_CURRENT_SOURCE_DIR}/Public"
+)
+
+# L11: Windows-only definitions are no longer applied unconditionally.
+if(WIN32)
+    target_compile_definitions(ReviaFoundation PUBLIC
+            _WIN32_WINNT=0x0A00
+            WINVER=0x0A00
+            NOMINMAX
+    )
+endif()
+
+target_link_libraries(ReviaFoundation PUBLIC
+        httplib::httplib
+        nlohmann_json::nlohmann_json
+        sqlite3
+        expat::expat
+)
+
+if(WIN32)
+    # Media Foundation (mfplat/mf/mfreadwrite/mfuuid) backs camera capture; shlwapi comes
+    # with it. Screen capture continues to use GDI+, which also encodes the camera PNG.
+    target_link_libraries(ReviaFoundation PUBLIC shell32 dxgi sapi ole32 oleaut32 winmm gdiplus gdi32 bcrypt winhttp psapi pdh dbghelp mfplat mf mfreadwrite mfuuid shlwapi advapi32 dwmapi)
+endif()
+
+if(MSVC)
+    target_compile_options(ReviaFoundation PRIVATE /W4 /permissive-)
+else()
+    target_compile_options(ReviaFoundation PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
+if(MINGW)
+    # Template-heavy translation units exceed PE/COFF's ordinary section limit
+    # in Debug builds. Select the extended object format explicitly.
+    target_compile_options(ReviaFoundation PRIVATE -Wa,-mbig-obj)
+endif()
+
+function(revia_link_foundation targetName)
+    # ReviaFoundation has intentional cross-subsystem references (the session
+    # coordinator reaches speech, vision, actions, and visuals). GNU ld only
+    # scans an archive from left to right, so an object referenced by a later
+    # archive member can otherwise be skipped and reported as undefined. Keep
+    # all foundation members for MinGW; other linkers already rescan the archive.
+    if(MINGW)
+        target_link_libraries(${targetName} PRIVATE
+                -Wl,--whole-archive ReviaFoundation -Wl,--no-whole-archive)
+    else()
+        target_link_libraries(${targetName} PRIVATE ReviaFoundation)
+    endif()
+endfunction()
+
+add_executable(R_E_V_I_A "${REVIA_MAIN_SOURCE}")
+revia_link_foundation(R_E_V_I_A)
+
+if(REVIA_BUILD_DESKTOP)
+    # SvgWidgets renders the Canvas tab. It ships with the standard Qt kit, so the
+    # desktop shell still builds from an ordinary install with no extra component.
+    find_package(Qt6 6.8 COMPONENTS Core Gui Widgets Svg SvgWidgets)
+    if(Qt6_FOUND)
+        add_executable(ReviaDesktop WIN32
+                "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/canvasPanel.cpp"
+                "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/canvasPanel.h"
+                "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/capabilityPanel.cpp"
+                "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/capabilityPanel.h"
+                "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/internetActivityPanel.cpp"
+                "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/internetActivityPanel.h"
+                "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/main.cpp"
+                "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/memoryPanel.cpp"
+                "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/mindPanel.cpp"
+                "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/visionPanel.cpp"
+                "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/visionPanel.h"
+                "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/mindPanel.h"
+                "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/memoryPanel.h"
+                "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/pipelinePanel.cpp"
+                "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/pipelinePanel.h"
+                "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/profilePanel.cpp"
+                "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/profilePanel.h"
+                "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/resourcePanel.cpp"
+                "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/resourcePanel.h"
+                "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/reviaWindow.cpp"
+                "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/reviaWindow.h"
+                "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/reviaWindow.ui"
+                "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/toggleSwitch.cpp"
+                "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/toggleSwitch.h"
+                "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/reviaResources.qrc"
+        )
+        set_target_properties(ReviaDesktop PROPERTIES AUTOUIC ON AUTORCC ON)
+        target_include_directories(ReviaDesktop PRIVATE
+                "${CMAKE_CURRENT_SOURCE_DIR}/Desktop"
+        )
+        revia_link_foundation(ReviaDesktop)
+        target_link_libraries(ReviaDesktop PRIVATE
+                Qt6::Core
+                Qt6::Gui
+                Qt6::Widgets
+                Qt6::Svg
+                Qt6::SvgWidgets
+        )
+
+        # A shared Qt build cannot be fully statically linked, but the compiler
+        # runtime can be. Without this the shipped executable depends on
+        # libgcc_s_seh-1.dll, libstdc++-6.dll, and libwinpthread-1.dll being
+        # present on the target machine, which is only true on a dev box.
+        if(MINGW)
+            target_link_options(ReviaDesktop PRIVATE
+                    -static-libgcc
+                    -static-libstdc++
+                    -Wl,-Bstatic,--whole-archive -lwinpthread -Wl,--no-whole-archive
+            )
+        endif()
+
+        get_target_property(REVIA_QMAKE_EXECUTABLE Qt6::qmake IMPORTED_LOCATION)
+        get_filename_component(REVIA_QT_BIN_DIR "${REVIA_QMAKE_EXECUTABLE}" DIRECTORY)
+        find_program(REVIA_WINDEPLOYQT_EXECUTABLE
+                NAMES windeployqt
+                HINTS "${REVIA_QT_BIN_DIR}"
+                NO_DEFAULT_PATH
+        )
+        if(REVIA_WINDEPLOYQT_EXECUTABLE)
+            add_custom_command(TARGET ReviaDesktop POST_BUILD
+                    COMMAND "${REVIA_WINDEPLOYQT_EXECUTABLE}"
+                            --no-translations
+                            "$<TARGET_FILE:ReviaDesktop>"
+                    COMMENT "Deploying Qt runtime for ReviaDesktop"
+            )
+        endif()
+
+        add_custom_command(TARGET ReviaDesktop POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E ${REVIA_COPY_DIRECTORY}
+                        "${CMAKE_CURRENT_SOURCE_DIR}/Config"
+                        "$<TARGET_FILE_DIR:ReviaDesktop>/Config"
+                COMMAND ${CMAKE_COMMAND} -E ${REVIA_COPY_DIRECTORY}
+                        "${CMAKE_CURRENT_SOURCE_DIR}/Tools"
+                        "$<TARGET_FILE_DIR:ReviaDesktop>/Tools"
+                COMMENT "Synchronizing ReviaDesktop runtime configuration"
+        )
+    else()
+        set(REVIA_QT_HELP
+                "Qt 6.8 or newer was not found, so ReviaDesktop will NOT be built.\n"
+                "  Install it with:  .\\Tools\\InstallQt.ps1\n"
+                "  Or point at an existing kit:  -DREVIA_QT_ROOT=C:/Qt/6.8.3/mingw_64\n"
+                "  The MinGW kit is required; an MSVC kit is ABI-incompatible with this build.\n"
+                "  Configure with -DREVIA_BUILD_DESKTOP=OFF to silence this deliberately.")
+        if(REVIA_REQUIRE_DESKTOP)
+            message(FATAL_ERROR ${REVIA_QT_HELP})
+        endif()
+        # A warning, not a status line: silently degrading to a CLI-only build is
+        # the single most confusing failure mode this project has.
+        message(WARNING ${REVIA_QT_HELP})
+    endif()
+endif()
+
+# Produce a directly runnable Windows executable instead of requiring CLion's
+# MinGW runtime directory to be added to PATH at launch time.
+if(MINGW)
+    target_link_options(R_E_V_I_A PRIVATE -static)
+endif()
+
+# Keep runtime configuration synchronized on every build, not only configure.
+add_custom_command(TARGET R_E_V_I_A POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E ${REVIA_COPY_DIRECTORY}
+                "${CMAKE_CURRENT_SOURCE_DIR}/Config"
+                "$<TARGET_FILE_DIR:R_E_V_I_A>/Config"
+        COMMAND ${CMAKE_COMMAND} -E ${REVIA_COPY_DIRECTORY}
+                "${CMAKE_CURRENT_SOURCE_DIR}/Tools"
+                "$<TARGET_FILE_DIR:R_E_V_I_A>/Tools"
+        COMMENT "Synchronizing REVIA runtime configuration"
+)
+
+include(CTest)
+if(BUILD_TESTING)
+    file(GLOB_RECURSE REVIA_TEST_SOURCES CONFIGURE_DEPENDS
+            "${CMAKE_CURRENT_SOURCE_DIR}/Tests/*.cpp"
+    )
+    # The disposable Windows fixture is its own GUI program with its own entry point.
+    # It lives under Tests/ because that is what it is for, but it must not be linked
+    # into the test binary.
+    list(FILTER REVIA_TEST_SOURCES EXCLUDE REGEX "/Tests/Fixture/")
+    add_executable(ReviaTests ${REVIA_TEST_SOURCES})
+    add_executable(ReviaWebGuestTests Tests/Fixture/webGuestTests.cpp)
+    target_include_directories(ReviaWebGuestTests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/Tests")
+    revia_link_foundation(ReviaWebGuestTests)
+    if(MINGW)
+        target_link_options(ReviaWebGuestTests PRIVATE -static)
+    endif()
+    add_test(NAME revia_web_guest COMMAND ReviaWebGuestTests)
+    set_tests_properties(revia_web_guest PROPERTIES TIMEOUT 60)
+    add_executable(ReviaWebGuestPrivacyTests Tests/Fixture/webGuestPrivacyTests.cpp)
+    target_include_directories(ReviaWebGuestPrivacyTests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/Tests")
+    revia_link_foundation(ReviaWebGuestPrivacyTests)
+    if(MINGW)
+        # Over 32k sections; the default COFF object format stops at 32767.
+        target_compile_options(ReviaWebGuestPrivacyTests PRIVATE -Wa,-mbig-obj)
+        target_link_options(ReviaWebGuestPrivacyTests PRIVATE -static)
+    endif()
+    add_test(NAME revia_web_guest_privacy COMMAND ReviaWebGuestPrivacyTests)
+    set_tests_properties(revia_web_guest_privacy PROPERTIES TIMEOUT 90)
+    add_executable(ReviaWebGuestHost Tests/Fixture/webGuestHost.cpp)
+    revia_link_foundation(ReviaWebGuestHost)
+    if(MINGW)
+        target_link_options(ReviaWebGuestHost PRIVATE -static)
+    endif()
+    # Split test suites include testSupport.h from the Tests directory.
+    target_include_directories(ReviaTests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/Tests")
+    revia_link_foundation(ReviaTests)
+    if(MINGW)
+        target_compile_options(ReviaTests PRIVATE -Wa,-mbig-obj)
+        target_link_options(ReviaTests PRIVATE -static)
+    endif()
+    if(MSVC)
+        target_compile_options(ReviaTests PRIVATE /W4 /permissive-)
+    else()
+        target_compile_options(ReviaTests PRIVATE -Wall -Wextra -Wpedantic)
+    endif()
+    # The disposable fixture the native desktop tests drive. Windows only, and built
+    # only when tests are enabled: nothing in the shipping runtime depends on it.
+    if(WIN32)
+        add_executable(ReviaDesktopFixture WIN32
+                "${CMAKE_CURRENT_SOURCE_DIR}/Tests/Fixture/desktopFixture.cpp")
+        target_link_libraries(ReviaDesktopFixture PRIVATE comctl32 user32 gdi32)
+        if(MINGW)
+            # -municode selects the wide entry point. Without it MinGW's startup looks
+            # for WinMain and the fixture's wWinMain never links.
+            target_compile_options(ReviaDesktopFixture PRIVATE -municode)
+            target_link_options(ReviaDesktopFixture PRIVATE -static -municode)
+        endif()
+        # The native tests launch it by path, so it has to exist before they run.
+        add_dependencies(ReviaTests ReviaDesktopFixture)
+    endif()
+
+    add_test(NAME Revia.Foundation COMMAND ReviaTests)
+    # The only deterministic owner suite the default run does not reach. It
+    # disables periodic saving, so it must own its process to prove the final
+    # save alone persists identity. RunNativeDesktopTests stays unregistered on
+    # purpose: it synthesizes real keyboard and mouse input.
+    add_test(NAME Revia.IdentityFinalSave COMMAND ReviaTests --identity-final-save)
+    # A reentrant command lock must fail on a bounded timeout instead of hanging CI.
+    add_test(NAME Revia.OperatorSession COMMAND ReviaTests --operator-session)
+    set_tests_properties(Revia.OperatorSession PROPERTIES TIMEOUT 15)
+    if(WIN32)
+        # Its own process: it types into a console, and a console belongs to a process.
+        add_test(NAME Revia.TerminalInput COMMAND ReviaTests --terminal-input)
+        set_tests_properties(Revia.TerminalInput PROPERTIES TIMEOUT 30)
+    endif()
+    find_program(REVIA_NODE_EXECUTABLE NAMES node node.exe)
+    if(REVIA_NODE_EXECUTABLE)
+        add_test(
+                NAME Revia.BrowserWorkerPolicy
+                COMMAND "${REVIA_NODE_EXECUTABLE}" --test
+                        "${CMAKE_CURRENT_SOURCE_DIR}/Tools/Browser/browserHost.test.mjs"
+        )
+        add_test(
+                NAME Revia.DiscordVoiceAdapter
+                COMMAND "${REVIA_NODE_EXECUTABLE}" --test
+                        "${CMAKE_CURRENT_SOURCE_DIR}/Tools/Presence/DiscordVoice/adapter.test.mjs"
+        )
+    endif()
+    find_package(Python3 COMPONENTS Interpreter QUIET)
+    if(Python3_Interpreter_FOUND)
+        add_test(
+                NAME Revia.QwenTtsServicePolicy
+                COMMAND "${Python3_EXECUTABLE}"
+                        "${CMAKE_CURRENT_SOURCE_DIR}/Tests/qwenTtsService.test.py"
+        )
+        add_test(
+                NAME Revia.ImageServicePolicy
+                COMMAND "${Python3_EXECUTABLE}"
+                        "${CMAKE_CURRENT_SOURCE_DIR}/Tests/reviaImageService.test.py"
+        )
+    endif()
+    if(TARGET ReviaDesktop)
+        add_executable(ReviaSvgRendererTests
+                Tests/Fixture/svgRendererTests.cpp
+                Private/Visual/svgCanvas.cpp
+                Private/Visual/svgValidation.cpp)
+        target_include_directories(ReviaSvgRendererTests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/Public")
+        target_link_libraries(ReviaSvgRendererTests PRIVATE
+                Qt6::Core Qt6::Gui Qt6::Svg expat::expat httplib::httplib)
+        if(MINGW)
+            target_compile_options(ReviaSvgRendererTests PRIVATE -Wa,-mbig-obj)
+        endif()
+        add_test(NAME Revia.SvgRenderer COMMAND ReviaSvgRendererTests)
+        # windeployqt deploys the desktop's Windows platform plugin, not offscreen.
+        # Resolve the test plugin from the same imported Qt kit explicitly.
+        set_tests_properties(Revia.SvgRenderer PROPERTIES
+                ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QPA_PLATFORM_PLUGIN_PATH=$<TARGET_FILE_DIR:Qt6::QOffscreenIntegrationPlugin>"
+                TIMEOUT 15)
+        add_test(NAME Revia.DesktopSmoke COMMAND ReviaDesktop --ui-smoke-test)
+        set_tests_properties(Revia.DesktopSmoke PROPERTIES
+                ENVIRONMENT "QT_QPA_PLATFORM=windows"
+                TIMEOUT 15
+        )
+        set_property(TEST Revia.DesktopSmoke APPEND PROPERTY
+                ENVIRONMENT "REVIA_LOG_DIR=${CMAKE_CURRENT_BINARY_DIR}/TestLogs")
+    endif()
+    # Tests run from the build output, which is also the owner's runtime root. Without
+    # this their fixture goals and smoke-test sessions were appended to the real
+    # Logs/revia.log and session ledger, where they read as things Revia did.
+    set_property(TEST revia_web_guest revia_web_guest_privacy Revia.Foundation
+            Revia.IdentityFinalSave Revia.OperatorSession APPEND PROPERTY
+            ENVIRONMENT "REVIA_LOG_DIR=${CMAKE_CURRENT_BINARY_DIR}/TestLogs")
+endif()

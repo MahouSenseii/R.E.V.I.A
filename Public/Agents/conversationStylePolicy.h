@@ -1,0 +1,67 @@
+#pragma once
+
+#include "Library/structLibrary.h"
+
+#include <string>
+#include <vector>
+
+namespace revia::agents
+{
+
+// Keeps conversational presentation grounded and varied without owning inference.
+//
+// The profile defines who Revia is. This policy supplies only turn-local guidance and
+// removes stock follow-up questions and substantial decoded repetition that make
+// otherwise good replies sound broken or like a help-desk script. It never rewrites
+// factual answer content.
+class ConversationStylePolicy
+{
+public:
+    // Exact, self-contained social turns only. Requests for detail or recall retain
+    // the full history, retrieval, and response budget.
+    [[nodiscard]] static bool IsBriefSocialTurn(const std::string& input);
+    [[nodiscard]] std::string BuildTurnGuidance(
+        const std::string& input,
+        const std::vector<conversationMessage>& context) const;
+
+    // The profile's answer obligation, as one bounded instruction for the turn.
+    //
+    // Static and pure so the three modes can be compared directly in a test without
+    // assembling a conversation. Each mode says something materially different about
+    // whether an answer is owed, and every mode carries the same closing sentence: a
+    // runtime-confirmed result may be styled but never contradicted. That sentence is
+    // defence in depth rather than the guarantee itself -- action results reach the
+    // user through ReviaSession::FormatActionOutcome, which derives its text from the
+    // typed outcome and never consults the model at all.
+    [[nodiscard]] static std::string BuildAnswerObligationGuidance(
+        AnswerObligationMode mode);
+
+    [[nodiscard]] std::string RefineReply(
+        const std::string& input,
+        const std::vector<conversationMessage>& context,
+        const std::string& reply) const;
+    [[nodiscard]] bool IsGenericContinuation(const std::string& sentence) const;
+    [[nodiscard]] bool ShouldSuppressSpokenFragment(
+        const std::string& input,
+        const std::vector<conversationMessage>& context,
+        const std::string& fragment,
+        bool alreadySpokeFragment) const;
+    [[nodiscard]] bool CanStreamReply(const std::string& input,
+        const std::vector<conversationMessage>& context = {}) const;
+
+private:
+    [[nodiscard]] static bool LooksLikeCorrection(const std::string& input);
+    [[nodiscard]] static bool LooksLikeBriefAcknowledgement(const std::string& input);
+    [[nodiscard]] static bool LooksLikePreferenceStatement(const std::string& input);
+    [[nodiscard]] static bool LooksLikeMotiveQuestion(const std::string& input);
+    [[nodiscard]] static bool LooksLikeWellbeingQuestion(const std::string& input);
+    [[nodiscard]] static bool LooksLikeSocialGreeting(const std::string& input);
+    [[nodiscard]] static bool LooksLikeEmotionQuestion(const std::string& input);
+    [[nodiscard]] static bool ContainsUnsupportedOperationalClaim(const std::string& reply);
+    [[nodiscard]] static bool ContainsClaimedPreferenceAction(const std::string& reply);
+    [[nodiscard]] static bool HasExplicitReason(const std::vector<conversationMessage>& context);
+    [[nodiscard]] static bool ExpressesUncertainty(const std::string& reply);
+    [[nodiscard]] static bool SpeculatesAboutMotive(const std::string& reply);
+};
+
+} // namespace revia::agents

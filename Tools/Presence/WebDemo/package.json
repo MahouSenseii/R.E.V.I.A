@@ -1,0 +1,16 @@
+{
+  "name": "revia-web-demo",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=24.15.0 <25" },
+  "scripts": {
+    "test": "node --test test/*.test.js",
+    "test:native": "node --test test/native.integration.mjs",
+    "start": "node relay/main.js",
+    "bridge": "node bridge/main.js",
+    "check:relay": "node relay/main.js --check",
+    "check:bridge": "node bridge/main.js --check"
+  },
+  "dependencies": { "ws": "8.21.3" }
+}

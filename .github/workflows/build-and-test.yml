@@ -1,0 +1,194 @@
+# The checks that already exist locally, run on every push and pull request.
+#
+# The suites here are the ones a contributor can run themselves: a configure, a build,
+# and the registered CTest tests. Nothing in this workflow needs a GPU, a model file, a
+# llama-server, or a desktop session -- the opt-in live suites deliberately stay opt-in,
+# because a job that fails when a model is absent teaches nobody anything.
+#
+# Qt is installed so the desktop shell and its smoke test are built and run too; that
+# test is the one that catches a UI wiring break, and skipping it would leave the most
+# user-visible target unverified.
+name: Build and test
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_dispatch:
+
+# A second push to the same branch cancels the run still in flight. The older answer is
+# about code nobody has any more.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  web-text:
+    name: Public text relay and connector
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: Tools/Presence/WebDemo/package-lock.json
+      - name: Test bounded public transport
+        working-directory: Tools/Presence/WebDemo
+        run: |
+          echo "Testing commit $GITHUB_SHA"
+          npm ci --ignore-scripts
+          npm test
+
+  discord-voice:
+    name: Discord voice / offline transport
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: Tools/Presence/DiscordVoice/package-lock.json
+      - name: Install pinned voice transport
+        working-directory: Tools/Presence/DiscordVoice
+        run: npm ci --ignore-scripts --no-fund
+      - name: Test synthetic audio and adapter lifecycle
+        working-directory: Tools/Presence/DiscordVoice
+        run: npm test
+
+  windows:
+    name: Windows / MinGW
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      # Pinned to the toolchain the project is developed and tested with. MSVC is not a
+      # supported configuration here: the build uses -static with MinGW and the tests
+      # are calibrated against g++ 13.
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.8.3'
+          arch: 'win64_mingw'
+          tools: 'tools_mingw1310'
+          cache: true
+
+      - name: Select and verify Qt's MinGW 13.1 toolchain
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $qtInstall = Split-Path (Split-Path $env:QT_ROOT_DIR -Parent) -Parent
+          $compilerBin = Join-Path $qtInstall 'Tools/mingw1310_64/bin'
+          $compiler = Join-Path $compilerBin 'g++.exe'
+          if (-not (Test-Path -LiteralPath $compiler)) { throw "Missing compiler: $compiler" }
+          $version = & $compiler -dumpfullversion
+          if ($LASTEXITCODE -ne 0 -or $version -ne '13.1.0') { throw "Unexpected MinGW version: $version" }
+          & $compiler --version
+          "REVIA_COMPILER_BIN=$compilerBin" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          $compilerBin | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Install Ninja
+        uses: seanmiddleditch/gha-setup-ninja@v5
+
+      # FetchContent pulls cpp-httplib, nlohmann/json and the SQLite amalgamation on a
+      # cold tree. Cached on the lockfile-equivalent -- the CMakeLists that names the
+      # tags -- so an ordinary run does not re-download them.
+      - name: Cache fetched dependencies
+        uses: actions/cache@v4
+        with:
+          path: build/ci/_deps
+          key: deps-${{ runner.os }}-${{ hashFiles('CMakeLists.txt') }}
+
+      - name: Configure
+        run: >
+          cmake -S . -B build/ci -G Ninja
+          -DCMAKE_BUILD_TYPE=Debug
+          -DBUILD_TESTING=ON
+          -DREVIA_REQUIRE_DESKTOP=ON
+          -DCMAKE_C_COMPILER="${env:REVIA_COMPILER_BIN}/gcc.exe"
+          -DCMAKE_CXX_COMPILER="${env:REVIA_COMPILER_BIN}/g++.exe"
+          -DREVIA_QT_ROOT="${env:QT_ROOT_DIR}"
+
+      - name: Build
+        run: cmake --build build/ci
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Test relay through native public conversation with fake model
+        working-directory: Tools/Presence/WebDemo
+        env:
+          REVIA_WEB_NATIVE_HOST: ${{ github.workspace }}/build/ci/ReviaWebGuestHost.exe
+        run: |
+          Write-Output "Testing commit $env:GITHUB_SHA"
+          npm ci --ignore-scripts
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm run test:native
+          exit $LASTEXITCODE
+
+      # The desktop smoke test opens a real window, so it needs the Windows platform
+      # plugin rather than the offscreen one.
+      - name: Test
+        working-directory: build/ci
+        env:
+          QT_QPA_PLATFORM: windows
+        run: ctest --output-on-failure --timeout 600
+
+      - name: Upload test output on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ctest-output
+          path: build/ci/Testing/
+          if-no-files-found: ignore
+
+  # Cheap, fast, and catches the class of defect that has actually bitten this project:
+  # a setup script that only works on the machine it was written on.
+  scripts:
+    name: Setup scripts / PowerShell 5.1
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      # Windows PowerShell 5.1, not PowerShell 7, because that is what setup.bat
+      # launches. The two differ in ways that have already broken a fresh install:
+      # 5.1 runs on .NET Framework and does not load System.Net.Http for you.
+      - name: Parse every script under Windows PowerShell 5.1
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSVersionTable.PSVersion
+          $failed = $false
+          Get-ChildItem -Path Tools -Filter *.ps1 -Recurse | ForEach-Object {
+            $scriptPath = $_.FullName
+            Write-Host "Parsing $scriptPath"
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile(
+              $scriptPath, [ref]$null, [ref]$errors) | Out-Null
+            foreach ($parseError in $errors) {
+              $failed = $true
+              $extent = $parseError.Extent
+              Write-Host ('{0}:{1}:{2}: {3}' -f $scriptPath, $extent.StartLineNumber, $extent.StartColumnNumber, $parseError.Message)
+              Write-Host ("Source extent: " + $extent.Text)
+              Write-Host "::error file=$scriptPath,line=$($extent.StartLineNumber),col=$($extent.StartColumnNumber)::$($parseError.Message)"
+            }
+          }
+          if ($failed) { exit 1 }
+
+      # The assembly the model downloader needs must be loadable in the shell that
+      # actually runs it. Constructing HttpClient without this threw "Unable to find
+      # type" on a fresh machine, and a cached model set hid it.
+      - name: Check the model downloader's runtime dependencies
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Add-Type -AssemblyName System.Net.Http -ErrorAction SilentlyContinue
+          $client = [System.Net.Http.HttpClient]::new()
+          $client.Dispose()
+          Write-Host 'System.Net.Http is available to the downloader.'

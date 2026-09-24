@@ -1,0 +1,11 @@
+{
+  "guildId": "REPLACE_WITH_SERVER_ID",
+  "channelId": "REPLACE_WITH_VOICE_CHANNEL_ID",
+  "inbox": "C:/absolute/path/to/Revia/RuntimeData/Presence/Inbox",
+  "outbox": "C:/absolute/path/to/Revia/RuntimeData/Presence/Outbox",
+  "whisperUrl": "http://127.0.0.1:8094",
+  "language": "en",
+  "replyMode": "addressed",
+  "maxUtteranceSeconds": 20,
+  "replyTimeoutSeconds": 180
+}

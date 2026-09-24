@@ -1,0 +1,141 @@
+#pragma once
+
+#include "Library/structLibrary.h"
+#include "Runtime/runtimeEvents.h"
+
+#include <chrono>
+#include <cstdint>
+#include <deque>
+#include <filesystem>
+#include <functional>
+#include <mutex>
+#include <optional>
+#include <stop_token>
+#include <string>
+#include <thread>
+#include <unordered_set>
+#include <vector>
+
+namespace revia::presence
+{
+
+struct ExternalAdapterEvent
+{
+    int version = 1;
+    std::string id;
+    std::string source;
+    std::string channel;
+    std::string authorId;
+    std::string author;
+    std::string role = "viewer";
+    std::string text;
+    bool addressedToRevia = false;
+    // Transport selection only; this never changes the public conversation authority.
+    bool voiceReply = false;
+};
+
+struct PresenceNotice
+{
+    std::string component;
+    std::string phase;
+    std::string detail;
+    int queueDepth = 0;
+};
+
+struct PresenceSnapshot
+{
+    bool enabled = false;
+    bool avatarBridgeEnabled = false;
+    bool adaptersEnabled = false;
+    std::string phase = "offline";
+    runtime::AffectState affect = runtime::AffectState::Neutral;
+    float affectIntensity = 0.0F;
+    float conversationMomentum = 0.0F;
+    std::string attention = "local user";
+    std::uint64_t sequence = 0;
+    std::size_t pendingAdapterEvents = 0;
+};
+
+// Coordinates presentation state and narrow local adapter I/O. It consumes runtime
+// events but never calls the LLM or action runtime. External messages are handed to the
+// session through a callback, where they use a conversation-only execution path.
+class PresenceRuntime
+{
+public:
+    using NoticeHandler = std::function<void(const PresenceNotice&)>;
+    using AdapterHandler = std::function<void(const ExternalAdapterEvent&)>;
+
+    PresenceRuntime() = default;
+    ~PresenceRuntime();
+
+    PresenceRuntime(const PresenceRuntime&) = delete;
+    PresenceRuntime& operator=(const PresenceRuntime&) = delete;
+
+    bool Start(
+        const presenceSettings& settings,
+        NoticeHandler noticeHandler,
+        AdapterHandler adapterHandler);
+    void Observe(const runtime::RuntimeEvent& event);
+    void RecordUserInput(const std::string& sourceLabel);
+    void PublishAdapterReply(
+        const ExternalAdapterEvent& request,
+        const std::string& text,
+        bool succeeded,
+        const std::string& reason = {},
+        const std::vector<std::uint8_t>& audio = {},
+        const std::string& audioError = {});
+    [[nodiscard]] PresenceSnapshot Snapshot() const;
+    void Shutdown();
+
+private:
+    void RunAdapterInbox(std::stop_token stopToken);
+    void ScanAdapterInbox();
+    void PruneVoiceAudio();
+    // Bounded retention for one archive directory. Processed and Rejected are pruned
+    // separately so a burst of rejects cannot evict the successful envelopes someone is
+    // comparing them against.
+    void PruneAdapterArchive(const std::filesystem::path& directory);
+    bool ParseAdapterFile(
+        const std::filesystem::path& path,
+        ExternalAdapterEvent& outEvent,
+        std::string& outError) const;
+    bool RateLimitAllows(std::chrono::steady_clock::time_point now);
+    bool RememberAdapterEvent(const ExternalAdapterEvent& event);
+    bool StreamPolicyAllows(
+        const ExternalAdapterEvent& event,
+        std::chrono::steady_clock::time_point now,
+        std::string& outReason);
+    // False when a rotation was due and failed. Reports nothing itself: it runs under
+    // writerMutex, and a notice sent from there can come back and wait on that lock.
+    [[nodiscard]] static bool RotateAvatarEventsIfNeeded(
+        const std::filesystem::path& path, int maximumBytes);
+    void UpdatePhase(std::string phase, std::string attention = {});
+    void WriteAvatarState(bool appendEvent);
+    void Notify(PresenceNotice notice) const;
+
+    mutable std::mutex mutex;
+    // Held for the whole of one avatar-state write, and acquired before the snapshot is
+    // captured. Separate from `mutex` so disk I/O never blocks a state update, and
+    // ordered before it so a writer always serialises the newest state rather than one
+    // it captured earlier. Never acquire `mutex` and then this one.
+    std::mutex writerMutex;
+    // Highest sequence successfully written to the state file. Guarded by writerMutex.
+    std::uint64_t lastWrittenSequence = 0;
+    presenceSettings configuration;
+    NoticeHandler noticeHandler;
+    AdapterHandler adapterHandler;
+    PresenceSnapshot snapshot;
+    std::chrono::steady_clock::time_point lastConversationActivity{};
+    std::chrono::steady_clock::time_point lastStreamReply{};
+    std::chrono::steady_clock::time_point lastAudioPrune{};
+    std::deque<std::chrono::steady_clock::time_point> adapterAdmissions;
+    std::deque<std::string> recentAdapterIdOrder;
+    std::unordered_set<std::string> recentAdapterIds;
+    std::filesystem::path inboxRoot;
+    std::filesystem::path outboxRoot;
+    std::filesystem::path stateFile;
+    std::filesystem::path eventFile;
+    std::jthread adapterWorker;
+};
+
+} // namespace revia::presence

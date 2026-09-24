@@ -1,0 +1,210 @@
+{
+  "version": 1,
+  "comment": [
+    "Single source of truth for what a machine needs before Revia runs.",
+    "Tools/CheckRequirements.ps1 is the only consumer; the README links to it",
+    "rather than repeating the list, because a list repeated in prose drifts.",
+    "",
+    "Adding a dependency means adding one entry here. Nothing else.",
+    "",
+    "Probe kinds:",
+    "  file            - path under the repo root exists, optionally >= minimumBytes",
+    "  command         - name resolves on PATH, optionally matching minimumVersion",
+    "  pythonModule    - the interpreter at 'interpreter' can import every module",
+    "  settingsPath    - Config/settings.json key holds a path, and that path exists",
+    "",
+    "settingsPath exists because the hard failures are not missing files, they are",
+    "settings that point at a file nobody downloaded. Hardcoding the filename here",
+    "would hide exactly that case."
+  ],
+
+  "tiers": [
+    {
+      "id": "core",
+      "title": "Build toolchain",
+      "required": true,
+      "summary": "Needed to compile Revia at all. Without Qt the build still succeeds but produces the CLI only."
+    },
+    {
+      "id": "chat",
+      "title": "Chat and planning",
+      "required": true,
+      "summary": "The language model and its server. Required for chat, /plan, and anything that reasons."
+    },
+    {
+      "id": "memory",
+      "title": "Long-term memory",
+      "required": false,
+      "summary": "Embeddings for semantic recall. Revia runs without it but only remembers the current session."
+    },
+    {
+      "id": "vision",
+      "title": "Vision",
+      "required": false,
+      "summary": "Multimodal projector for screen understanding and /look. Must match the chat model exactly."
+    },
+    {
+      "id": "speech-recognition",
+      "title": "Listening",
+      "required": false,
+      "summary": "whisper.cpp for microphone input. Without it Revia is text-in only."
+    },
+    {
+      "id": "voice-cloning",
+      "title": "Voice Studio",
+      "required": false,
+      "summary": "Qwen3-TTS for designed character voices. Windows SAPI is the zero-setup fallback, so this is a quality upgrade, not a dependency."
+    },
+    {
+      "id": "image",
+      "title": "Image generation",
+      "required": false,
+      "summary": "Local diffusion for /imagine. Off by default in settings.json."
+    }
+  ],
+
+  "requirements": [
+    {
+      "id": "cmake",
+      "tier": "core",
+      "label": "CMake 3.20 or newer",
+      "why": "CMakeLists.txt sets cmake_minimum_required(VERSION 3.20).",
+      "probe": { "kind": "command", "command": "cmake", "versionArguments": "--version", "minimumVersion": "3.20" },
+      "fix": "Install CMake, or let .\\Tools\\InstallQt.ps1 provide Qt's bundled copy."
+    },
+    {
+      "id": "ninja",
+      "tier": "core",
+      "label": "Ninja",
+      "why": "The debug preset generates Ninja build files.",
+      "probe": { "kind": "command", "command": "ninja" },
+      "fix": "Install Ninja, or let .\\Tools\\InstallQt.ps1 provide Qt's bundled copy."
+    },
+    {
+      "id": "mingw",
+      "tier": "core",
+      "label": "MinGW g++ 13 (x86_64)",
+      "why": "The Qt kit is mingw_64. An MSVC kit is ABI-incompatible with this build and will link but crash.",
+      "probe": { "kind": "command", "command": "g++", "versionArguments": "--version", "minimumVersion": "13.0" },
+      "fix": ".\\Tools\\InstallQt.ps1  (installs MinGW 13.1.0 alongside Qt)"
+    },
+    {
+      "id": "qt",
+      "tier": "core",
+      "label": "Qt 6.8 mingw_64 (Core, Gui, Widgets, Svg, SvgWidgets)",
+      "why": "The desktop shell needs it. Missing Qt is a warning, not an error, so the build quietly produces the CLI only.",
+      "probe": { "kind": "qtKit", "minimumVersion": "6.8" },
+      "fix": ".\\Tools\\InstallQt.ps1   or   cmake --preset debug -DREVIA_QT_ROOT=C:/Qt/6.8.3/mingw_64"
+    },
+
+    {
+      "id": "llama-server",
+      "tier": "chat",
+      "label": "llama.cpp server",
+      "why": "Hosts the chat model. Revia starts and health-checks it.",
+      "probe": { "kind": "settingsPath", "settingsKey": "llm.serverExecutable" },
+      "fix": ".\\Tools\\InstallLlamaCpp.ps1"
+    },
+    {
+      "id": "chat-model",
+      "tier": "chat",
+      "label": "Chat model weights",
+      "why": "Not downloaded automatically: it is multi-gigabyte and model choice is personal.",
+      "probe": { "kind": "settingsPath", "settingsKey": "llm.modelPath", "minimumBytes": 104857600 },
+      "fix": ".\\Tools\\DownloadChatModel.ps1   (or place your own GGUF and set llm.modelPath)"
+    },
+
+    {
+      "id": "embedding-model",
+      "tier": "memory",
+      "label": "Nomic Embed Text v1.5",
+      "why": "Turns memories into vectors so recall is semantic rather than keyword.",
+      "probe": { "kind": "settingsPath", "settingsKey": "embedding.modelPath", "minimumBytes": 10485760 },
+      "fix": ".\\Tools\\DownloadEmbeddingModel.ps1"
+    },
+
+    {
+      "id": "vision-projector",
+      "tier": "vision",
+      "label": "Multimodal projector (Q8)",
+      "why": "Must be the projector built for the exact chat model. A mismatched projector loads and then produces nonsense.",
+      "probe": { "kind": "settingsPath", "settingsKey": "llm.multimodalProjectorPath", "minimumBytes": 10485760 },
+      "fix": ".\\Tools\\InstallVisionProjector.ps1"
+    },
+
+    {
+      "id": "whisper-cli",
+      "tier": "speech-recognition",
+      "label": "whisper.cpp CLI",
+      "why": "Transcribes microphone audio locally.",
+      "probe": { "kind": "settingsPath", "settingsKey": "speechRecognition.executable" },
+      "fix": ".\\Tools\\InstallWhisper.ps1"
+    },
+    {
+      "id": "whisper-model",
+      "tier": "speech-recognition",
+      "label": "Whisper small.en",
+      "why": "The speech model whisper-cli loads.",
+      "probe": { "kind": "settingsPath", "settingsKey": "speechRecognition.modelPath", "minimumBytes": 10485760 },
+      "fix": ".\\Tools\\InstallWhisper.ps1"
+    },
+
+    {
+      "id": "python-launcher",
+      "tier": "voice-cloning",
+      "label": "Python launcher with 3.12 (64-bit)",
+      "why": "InstallQwenTTS.ps1 builds its venv with 'py -3.12 -m venv'. The launcher existing is not enough; 3.12 itself must be installed. This is the step that fails most often, and it fails after the folder is created, which makes it look like the install half-worked.",
+      "probe": { "kind": "command", "command": "py", "versionArguments": "-3.12 --version", "minimumVersion": "3.12" },
+      "fix": "Install 64-bit Python 3.12 from python.org, then re-run .\\Tools\\InstallQwenTTS.ps1"
+    },
+    {
+      "id": "qwen-tts-venv",
+      "tier": "voice-cloning",
+      "label": "Qwen3-TTS Python environment",
+      "why": "Revia launches this exact interpreter to run Tools/qwen_tts_service.py. If it is missing, Create voice fails with a generic process error.",
+      "probe": { "kind": "settingsPath", "settingsKey": "speech.pythonExecutable" },
+      "fix": ".\\Tools\\InstallQwenTTS.ps1"
+    },
+    {
+      "id": "qwen-tts-packages",
+      "tier": "voice-cloning",
+      "label": "torch and qwen_tts importable",
+      "why": "The venv can exist while pip failed partway. Importing is the only honest check.",
+      "probe": {
+        "kind": "pythonModule",
+        "interpreterSettingsKey": "speech.pythonExecutable",
+        "modules": ["torch", "qwen_tts"]
+      },
+      "fix": ".\\Tools\\InstallQwenTTS.ps1"
+    },
+    {
+      "id": "qwen-tts-service-script",
+      "tier": "voice-cloning",
+      "label": "Voice service script",
+      "why": "Tracked in Git, listed so a wrong qwenServiceScript setting is caught here rather than at first use.",
+      "probe": { "kind": "settingsPath", "settingsKey": "speech.qwenServiceScript" },
+      "fix": "Restore Tools/qwen_tts_service.py from Git, or fix speech.qwenServiceScript."
+    },
+
+    {
+      "id": "image-venv",
+      "tier": "image",
+      "label": "Image generation Python environment",
+      "why": "Owned worker for /imagine. image.enabled is false by default, so this is opt-in.",
+      "probe": { "kind": "file", "path": "ThirdParty/ImageGen/.venv/Scripts/python.exe" },
+      "fix": ".\\Tools\\InstallImageModel.ps1"
+    },
+    {
+      "id": "image-packages",
+      "tier": "image",
+      "label": "torch and diffusers importable",
+      "why": "Same reason as the voice environment: a venv that exists is not a venv that works.",
+      "probe": {
+        "kind": "pythonModule",
+        "interpreter": "ThirdParty/ImageGen/.venv/Scripts/python.exe",
+        "modules": ["torch", "diffusers"]
+      },
+      "fix": ".\\Tools\\InstallImageModel.ps1"
+    }
+  ]
+}

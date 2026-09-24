@@ -1,0 +1,245 @@
+#include "Agents/inputArbiter.h"
+
+#include <algorithm>
+#include <cctype>
+#include <sstream>
+#include <utility>
+
+namespace revia::agents
+{
+
+std::string ToString(const InputVerdict value)
+{
+    switch (value)
+    {
+        case InputVerdict::Queued: return "queued";
+        case InputVerdict::IgnoredEmpty: return "ignored (empty)";
+        case InputVerdict::IgnoredNoise: return "ignored (noise)";
+        case InputVerdict::IgnoredDuplicate: return "ignored (repeat)";
+        case InputVerdict::DroppedOverflow: return "dropped (queue full)";
+    }
+    return "queued";
+}
+
+InputArbiter::InputArbiter(inputArbiterSettings settings)
+    : configuration(std::move(settings))
+{
+}
+
+void InputArbiter::Configure(inputArbiterSettings settings)
+{
+    std::lock_guard lock(mutex);
+    configuration = std::move(settings);
+    queued.clear();
+    lastAccepted.clear();
+    lastAcceptedAt = {};
+}
+
+std::string InputArbiter::Normalize(const std::string& text)
+{
+    std::string normalized;
+    normalized.reserve(text.size());
+    for (const unsigned char character : text)
+    {
+        if (std::isalnum(character) != 0)
+        {
+            normalized.push_back(static_cast<char>(std::tolower(character)));
+        }
+        else if (std::isspace(character) != 0 && !normalized.empty() &&
+            normalized.back() != ' ')
+        {
+            normalized.push_back(' ');
+        }
+    }
+    while (!normalized.empty() && normalized.back() == ' ')
+    {
+        normalized.pop_back();
+    }
+    return normalized;
+}
+
+bool InputArbiter::IsNoise(const inputArbiterSettings& settings, const std::string& text)
+{
+    const std::string normalized = Normalize(text);
+    if (normalized.empty())
+    {
+        return true;
+    }
+    for (const std::string& fragment : settings.ignoredFragments)
+    {
+        if (normalized == Normalize(fragment))
+        {
+            return true;
+        }
+    }
+    // Short and not a question is almost always the recogniser hearing the room. A short
+    // question is a real one, so "why?" survives where "uh" does not.
+    if (normalized.size() < static_cast<std::size_t>(settings.minimumMeaningfulCharacters) &&
+        text.find('?') == std::string::npos)
+    {
+        return true;
+    }
+
+    // The signature of a recogniser hallucinating on silence.
+    //
+    // Whisper does not return nothing when it hears nothing; it returns punctuation and
+    // stray initials -- "[. [. C.S.C.C.C. .. .." -- which is long enough to clear the
+    // length check above and reaches Revia as though someone had spoken. She then
+    // answers it earnestly, which makes her look broken and costs a full inference.
+    //
+    // Two independent conditions, because either alone has a false positive: density
+    // alone would reject a legitimate "ok!!!", and the word check alone would accept a
+    // long run of single letters.
+    std::size_t alphanumeric = 0;
+    std::size_t longestWord = 0;
+    std::size_t currentWord = 0;
+    std::size_t wordsOfTwoOrMore = 0;
+    for (const unsigned char character : text)
+    {
+        if (std::isalnum(character) != 0)
+        {
+            ++alphanumeric;
+            ++currentWord;
+            longestWord = std::max(longestWord, currentWord);
+        }
+        else
+        {
+            if (currentWord >= 2)
+            {
+                ++wordsOfTwoOrMore;
+            }
+            currentWord = 0;
+        }
+    }
+    if (currentWord >= 2)
+    {
+        ++wordsOfTwoOrMore;
+    }
+    if (wordsOfTwoOrMore == 0)
+    {
+        // Nothing in it is even a two-letter word.
+        return true;
+    }
+    const double density = text.empty()
+        ? 0.0
+        : static_cast<double>(alphanumeric) / static_cast<double>(text.size());
+    if (density < 0.35 && longestWord < 4)
+    {
+        // Mostly punctuation, and what letters there are do not form a real word.
+        return true;
+    }
+    return false;
+}
+
+InputVerdict InputArbiter::Offer(
+    const std::string& text,
+    const InputSource source,
+    const std::chrono::system_clock::time_point now)
+{
+    std::lock_guard lock(mutex);
+    const std::string normalized = Normalize(text);
+    if (normalized.empty())
+    {
+        return InputVerdict::IgnoredEmpty;
+    }
+
+    // Typed input bypasses the noise filter entirely. Filtering something a person
+    // deliberately typed is a far worse failure than answering one stray "hmm".
+    if (source != InputSource::Typed && IsNoise(configuration, text))
+    {
+        return InputVerdict::IgnoredNoise;
+    }
+
+    // Recognisers commonly emit the same phrase twice from one utterance.
+    if (source != InputSource::Typed && normalized == lastAccepted &&
+        now - lastAcceptedAt < std::chrono::seconds(8))
+    {
+        return InputVerdict::IgnoredDuplicate;
+    }
+    const auto duplicateInQueue = std::find_if(
+        queued.begin(),
+        queued.end(),
+        [&normalized](const PendingInput& pending)
+        {
+            return Normalize(pending.text) == normalized;
+        });
+    if (duplicateInQueue != queued.end())
+    {
+        return InputVerdict::IgnoredDuplicate;
+    }
+
+    if (queued.size() >= static_cast<std::size_t>(configuration.maxQueuedInputs))
+    {
+        return InputVerdict::DroppedOverflow;
+    }
+
+    queued.push_back({text, source, now});
+    lastAccepted = normalized;
+    lastAcceptedAt = now;
+    return InputVerdict::Queued;
+}
+
+bool InputArbiter::IsReady(const std::chrono::system_clock::time_point now) const
+{
+    std::lock_guard lock(mutex);
+    if (queued.empty())
+    {
+        return false;
+    }
+    // Typed input belongs to the Submit call that offered it, which takes the queue as
+    // soon as it holds the conversation lock. Reporting it ready here let the drain
+    // worker take it first: Submit then found an empty queue ("the input arbiter
+    // produced an empty turn"), and a typed /quit ran on the drain worker, whose exit
+    // result nobody reads -- the CLI waited for input forever.
+    if (std::any_of(queued.begin(), queued.end(),
+            [](const PendingInput& pending) { return pending.source == InputSource::Typed; }))
+    {
+        return false;
+    }
+    // Ready once nothing new has arrived for the merge window. Someone speaking in bursts
+    // gets one reply to the whole thought rather than one per pause.
+    return now - queued.back().receivedAt >=
+        std::chrono::milliseconds(configuration.mergeWindowMs);
+}
+
+std::string InputArbiter::Take()
+{
+    std::lock_guard lock(mutex);
+    std::ostringstream stream;
+    for (std::size_t index = 0; index < queued.size(); ++index)
+    {
+        std::string text = queued[index].text;
+        while (!text.empty() && std::isspace(static_cast<unsigned char>(text.back())) != 0)
+        {
+            text.pop_back();
+        }
+        if (text.empty())
+        {
+            continue;
+        }
+        if (index > 0)
+        {
+            // Joined so the model reads it as one turn. A separator that ends the previous
+            // fragment keeps two statements from fusing into one malformed sentence.
+            const char last = text.empty() ? ' ' : stream.str().back();
+            stream << (last == '.' || last == '!' || last == '?' ? " " : ". ");
+        }
+        stream << text;
+    }
+    queued.clear();
+    return stream.str();
+}
+
+std::size_t InputArbiter::Size() const
+{
+    std::lock_guard lock(mutex);
+    return queued.size();
+}
+
+void InputArbiter::Clear()
+{
+    std::lock_guard lock(mutex);
+    queued.clear();
+}
+
+} // namespace revia::agents

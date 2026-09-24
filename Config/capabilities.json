@@ -1,0 +1,68 @@
+{
+  "mode": "supervised",
+  "approvedRoots": [
+    "%USERPROFILE%\\Documents\\ReviaSandbox"
+  ],
+  "approvedApplications": [
+    "notepad.exe",
+    "explorer.exe"
+  ],
+  "approvedControls": {
+    "notepad.exe": [
+      "File",
+      "Edit",
+      "View"
+    ],
+    "explorer.exe": [
+      "Address Bar",
+      "backButton",
+      "forwardButton",
+      "upButton",
+      "refreshButton",
+      "New",
+      "SortAndGroupButton",
+      "View"
+    ]
+  },
+  "autoApproveRiskThrough": "read_only",
+  "createMissingApprovedRoots": true,
+  "maxReadBytes": 1048576,
+  "maxDirectoryEntries": 500,
+  "maxAffectedEntries": 200,
+  "maxDesktopActionsPerMinute": 12,
+  "minimumDesktopActionIntervalMs": 250,
+  "desktopControl": {
+    "pointer": false,
+    "keyboard": false,
+    "applicationLaunch": false,
+    "rawCoordinates": false,
+    "visualTargeting": false,
+    "scope": "approved_applications",
+    "allowCommandSurfaces": false,
+    "maxUnconfirmedConsequence": "routine",
+    "autonomous": false,
+    "maxInputActionsPerMinute": 30,
+    "minimumInputIntervalMs": 120,
+    "maxTypedCharacters": 512
+  },
+  "internet": {
+    "enabled": true,
+    "automaticLookup": true,
+    "provider": "duckduckgo",
+    "approvedHosts": [
+      "api.duckduckgo.com",
+      "en.wikipedia.org"
+    ],
+    "requestTimeoutMs": 8000,
+    "maxResponseBytes": 262144,
+    "maxRequestsPerMinute": 12,
+    "maxResults": 5,
+    "visibleBrowser": true,
+    "autonomousResearch": true,
+    "visibleBrowserPort": 8095,
+    "visibleBrowserStartupTimeoutMs": 8000,
+    "visibleBrowserRequestTimeoutMs": 30000,
+    "visibleBrowserMaxPages": 3,
+    "visibleBrowserStepDelayMs": 250
+  }
+}

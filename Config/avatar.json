@@ -1,0 +1,67 @@
+{
+  "version": 1,
+  "character": {
+    "name": "Revia",
+    "concept": "A bright living digital signal: curious, expressive, mischievous, and capable.",
+    "presentation": "Youthful but not a literal child; friendly and non-sexualized.",
+    "silhouette": "Compact anime-inspired figure with a short oversized technical jacket and shoulder-length asymmetric hair.",
+    "hair": {
+      "base": "#11182F",
+      "tips": "#6547A8",
+      "signalStreak": "#55E8F2"
+    },
+    "eyes": {
+      "outer": "#55E8F2",
+      "inner": "#9A65E8",
+      "pattern": "subtle segmented digital iris"
+    },
+    "clothing": {
+      "base": "charcoal and midnight-navy high-collar tunic",
+      "outer": "short oversized technical jacket with cyan seams and violet lining",
+      "lower": "dark skirt or fitted shorts with opaque tights",
+      "footwear": "lightweight futuristic high-top boots"
+    },
+    "motif": "four-segment signal core",
+    "avoid": [
+      "sexualized clothing",
+      "literal child framing",
+      "maid or catgirl shorthand",
+      "dense cyberpunk clutter",
+      "copying an existing character or streamer"
+    ]
+  },
+  "palette": {
+    "midnightNavy": "#11182F",
+    "cyan": "#55E8F2",
+    "violet": "#9A65E8",
+    "warmMagenta": "#ED6CB7",
+    "warningAmber": "#F3A446",
+    "dangerRed": "#E55454",
+    "softWhite": "#EDF5FA"
+  },
+  "expressionMap": {
+    "neutral": "neutral",
+    "curious": "curious",
+    "happy": "happy",
+    "excited": "excited",
+    "playful": "playful",
+    "bored": "bored",
+    "sulky": "sulky",
+    "sad": "sad",
+    "melancholy": "sad",
+    "angry": "angry",
+    "lonely": "sad",
+    "frustrated": "frustrated",
+    "concerned": "concerned",
+    "confused": "confused",
+    "focused": "focused"
+  },
+  "renderer": {
+    "target": "unselected",
+    "modelPath": "",
+    "lipSync": "audio_amplitude",
+    "visemes": "future",
+    "statePath": "RuntimeData/Presence/avatar_state.json",
+    "eventPath": "RuntimeData/Presence/avatar_events.jsonl"
+  }
+}

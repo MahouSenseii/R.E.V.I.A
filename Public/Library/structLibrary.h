@@ -1,0 +1,890 @@
+#pragma once
+
+#include <cstdint>
+#include <map>
+#include <string>
+#include <utility>
+#include <vector>
+
+#include "enumLibrary.h"
+
+struct latencySample
+{
+    std::string stage;
+    double milliseconds = 0.0;
+    bool bAggregate = false;
+};
+
+// One named span of the assembled prompt, measured where it is assembled.
+//
+// Characters rather than tokens because the tokenizer lives in the server process and a
+// second, approximate one here would disagree with the only count that matters. The
+// ratio is stable enough per model that a character breakdown ranks the sections
+// correctly, and llama.cpp still reports the real token total for the whole prompt.
+//
+// `stable` is the load-bearing field. A section that is byte-identical between turns can
+// live in the cached prefix; one that is not invalidates itself and everything after it,
+// which is why the order these are emitted in is the order they occupy in the prompt.
+struct promptSection
+{
+    std::string name;
+    std::size_t characters = 0;
+    bool stable = false;
+};
+
+struct responseOutput
+{
+    bool bSuccess = false;
+    bool bShouldRemember = false;
+    bool bShouldSpeak = true;
+    bool bWasStreamed = false;  // true when visible deltas were delivered to a consumer
+
+    std::string response;
+    // What the model actually produced, before the deterministic style repair ran. The
+    // delivered reply is what the user experiences and what quality is scored on, but a
+    // regression suite has to be able to tell "the model is still good" apart from "the
+    // repair layer caught it again", because only one of those keeps working.
+    std::string rawResponse;
+    std::string reason;
+    // Anything the model produced inside <think> tags, removed from the reply itself.
+    // Reasoning is not an answer: speaking it or showing it inline would be wrong, but
+    // discarding it hides what Revia actually did.
+    std::string reasoning;
+    // The hard layer is deterministic and always runs. The optional AI review is a
+    // second, independent pass over the completed candidate before it can reach speech,
+    // memory, or dialogue history. These fields are observability, not hidden policy.
+    bool bHardFilterChanged = false;
+    // The hard layer did not repair the reply, it refused it: the candidate leaked
+    // internal prompt structure or contradicted verified runtime state, and what the
+    // user received is the filter's replacement rather than anything the model wrote.
+    //
+    // Distinct from bHardFilterChanged, which is also true for cosmetic repairs like
+    // removing stage directions. Routing needs the difference: a reply that had to be
+    // replaced is evidence the next turn deserves more effort, and a reply that merely
+    // lost a pair of asterisks is not.
+    bool bHardFilterBlocked = false;
+    bool bAiFilterReviewed = false;
+    bool bAiFilterChanged = false;
+    std::string filterSummary;
+    // Pre-generation routing telemetry. Strings keep this transport structure independent
+    // of the router implementation while still making every fallback auditable.
+    std::string requestedTier;
+    std::string selectedTier;
+    std::string selectedModel;
+    std::string reasoningMode;
+    std::string routingReason;
+    float routingConfidence = 0.0F;
+    bool bRoutingFallback = false;
+    std::string routingFallbackReason;
+    std::vector<latencySample> timings;
+    // How the prompt that produced this reply was made up, in prompt order.
+    std::vector<promptSection> promptSections;
+    // What the backend said this cost, so a caller with a budget can charge it.
+    //
+    // Zero means the backend did not report usage, which is not the same as free.
+    // `bTokensReported` is what a budget must look at before deciding it has room:
+    // treating an unreported call as costless is how a token ceiling ends up unable to
+    // stop anything. A caller that cannot get a number bounds the work some other way.
+    std::uint32_t promptTokens = 0;
+    std::uint32_t completionTokens = 0;
+    bool bTokensReported = false;
+
+    [[nodiscard]] std::uint32_t TotalTokens() const
+    {
+        return promptTokens + completionTokens;
+    }
+};
+
+struct llmSettings
+{
+    std::string backend = "LLamaCpp";
+    std::string host = "127.0.0.1";
+    int port = 8080;
+    std::string modelName = "local-model";
+    std::string apiKey;
+
+    bool bAutoStartServer = false;
+    std::string serverExecutable;
+    std::string modelPath;
+    bool bAutoTune = true;
+    // Leave enough room for normal desktop GPU use to grow after startup. A one-GiB
+    // reserve proved too narrow on an 8-GiB laptop once the compositor and UI changed.
+    int autoFitTargetMiB = 2048;
+    // Set at runtime, not from settings.json. VRAM that llama.cpp must leave free on top
+    // of autoFitTargetMiB because another local model still has to load into it. The
+    // Qwen3-TTS service chooses CPU over CUDA when free VRAM is below its own threshold,
+    // so without this reservation a voice loaded after llama.cpp would land on the CPU.
+    int reservedVramMiB = 0;
+    // Filled by the resource planner at startup. "auto" preserves llama.cpp's own
+    // backend choice; an explicit comma-separated list pins this process to those
+    // devices. Keeping placement out of the process owner makes the launch path usable
+    // by both automatic and manual plans.
+    std::string device = "auto";
+    std::string splitMode = "none";
+    std::string tensorSplit;
+    std::string fitTargetMiB;
+    int cpuThreads = 0;
+    int cpuBatchThreads = 0;
+    // -1 leaves the llama.cpp default alone, 0 disables its prompt cache, and a
+    // positive value is the real maximum RAM allocation passed to --cache-ram.
+    int ramCacheMiB = -1;
+    std::string modelLoadMode = "auto";
+    int contextSize = 8192;
+    int parallelRequests = 2;
+    int startupTimeoutSeconds = 120;
+    bool bShutdownServerOnExit = true;
+    bool bVisionEnabled = true;
+    std::string multimodalProjectorPath =
+        "Models/Qwen3-VL-8B-Instruct-Unredacted-MAX.mmproj-q8_0.gguf";
+    std::string mediaPath = "RuntimeData/Vision";
+
+    float temperature = 0.7f;
+    bool bAutoMaxTokens = true;
+    int maxTokens = 4096;
+    // Keeps the system message identical between turns by sending the per-turn state
+    // (posture, memories) at the start of the newest user message instead. llama.cpp can
+    // then reuse the cached prompt instead of re-processing all of it every turn.
+    bool bStablePromptPrefix = true;
+};
+
+// The three conversational roles share one profile, prompt builder, memory store, and
+// humanization state. These settings describe only the extra model endpoints; hardware
+// placement is resolved at runtime so a one-GPU laptop never inherits workstation GPU
+// ordinals.
+struct modelTierSettings
+{
+    bool bEnabled = false;
+    std::string host = "127.0.0.1";
+    int port = 0;
+    std::string modelName;
+    std::string modelPath;
+    bool bVisionEnabled = false;
+    std::string multimodalProjectorPath;
+    int contextSize = 8192;
+    int maxTokens = 384;
+    float temperature = 0.75F;
+    int startupTimeoutSeconds = 120;
+    bool bWarmAtStartup = true;
+    // Whether this tier may be put away while it is not being used.
+    //
+    // Off, which is the behaviour that existed: the tier is loaded at startup and stays
+    // resident for the session. Turning it on trades first-use latency for the memory it
+    // was holding, and that is a deliberate choice about this machine rather than a
+    // default anyone should inherit.
+    bool bOnDemand = false;
+    // How long unused before it is put away, and how long it is safe from that after it
+    // arrives. The second is what stops a load, an eviction and a reload costing more
+    // than never unloading at all.
+    int idleGraceSeconds = 300;
+    int minimumResidencySeconds = 60;
+};
+
+struct intelligenceSettings
+{
+    bool bEnabled = true;
+    modelTierSettings fast = {
+        true,
+        "127.0.0.1",
+        8082,
+        "Qwen3.5-0.8B-Q4_K_M.gguf",
+        "Models/Qwen3.5-0.8B-Q4_K_M.gguf",
+        false,
+        "",
+        8192,
+        256,
+        0.78F,
+        90,
+        true};
+    modelTierSettings expert = {
+        true,
+        "127.0.0.1",
+        8083,
+        "Qwen3-VL-8B-Instruct-Unredacted-MAX.Q4_K_M.gguf",
+        "Models/Qwen3-VL-8B-Instruct-Unredacted-MAX.Q4_K_M.gguf",
+        true,
+        "Models/Qwen3-VL-8B-Instruct-Unredacted-MAX.mmproj-q8_0.gguf",
+        8192,
+        1024,
+        0.72F,
+        180,
+        true};
+};
+
+struct embeddingSettings
+{
+    bool bEnabled = true;
+    std::string host = "127.0.0.1";
+    int port = 8081;
+    std::string modelName = "nomic-embed-text-v1.5.Q4_K_M.gguf";
+    std::string apiKey;
+
+    bool bAutoStartServer = true;
+    std::string serverExecutable;
+    std::string modelPath;
+    int contextSize = 2048;
+    int parallelRequests = 2;
+    int startupTimeoutSeconds = 60;
+    bool bShutdownServerOnExit = true;
+    std::string pooling = "mean";
+    std::string device = "none";
+    int cpuThreads = 0;
+    int cpuBatchThreads = 0;
+    int ramCacheMiB = 0;
+    std::string modelLoadMode = "mmap";
+    std::string queryPrefix = "search_query: ";
+    std::string documentPrefix = "search_document: ";
+};
+
+struct speechSettings
+{
+    bool bEnabled = true;
+    bool bSpeakGreeting = false;
+    std::string backend = "Auto";
+    std::string pythonExecutable = "python";
+    std::string qwenServiceScript = "Tools/qwen_tts_service.py";
+    std::string qwenHost = "127.0.0.1";
+    int qwenPort = 8092;
+    int qwenStartupTimeoutSeconds = 60;
+    int qwenRequestTimeoutSeconds = 600;
+    std::string qwenDevice = "auto";
+    // One long-lived Qwen process is created per entry. The resource planner replaces
+    // the default with the exact devices that can hold an independent clone model.
+    // Keeping qwenDevice preserves older configurations and the single-worker UI path.
+    std::vector<std::string> qwenDevices = {"auto"};
+    int qwenMaxWorkers = 2;
+    int qwenPrefetchFragments = 3;
+    // Short replies stay on the fastest worker. Longer replies are split into bounded
+    // phrases, allowing additional local workers to synthesize ahead while playback
+    // remains sequence-ordered.
+    int qwenFirstPhraseCharacters = 28;
+    int qwenPhraseCharacters = 64;
+    bool bQwenParallelLongReplies = false;
+    // Synthesize the phrases after the first one in a single batched call.
+    //
+    // The clone path is overhead-bound rather than compute-bound: a phrase costs about
+    // 670 sequential forward passes, and almost all of that is per-step Python and
+    // kernel-launch cost that a batch pays once for every sequence at the same time.
+    // Measured on an RTX 5070, one phrase runs at a real-time factor near 3.2 while
+    // four in one call run near 0.9 -- the difference between a queue that can drain
+    // and one that falls further behind with every phrase.
+    //
+    // The first phrase is deliberately never batched. It is what the listener is
+    // waiting on, and holding it back to collect company for it would trade the only
+    // latency anybody experiences for throughput they do not.
+    // Runs the codebook predictor's inner sub-token loop directly instead of through
+    // a nested Hugging Face generate() call, and optionally replays that loop as a
+    // CUDA graph.
+    //
+    // This is the first-phrase lever, and it is a different problem from batching.
+    // Batching fixed throughput by amortising per-launch overhead across sequences;
+    // it cannot help the one phrase that has nobody to share a call with. The graph
+    // removes the overhead itself: measured on an RTX 5070, one frame's inner loop
+    // costs 171.9 ms eager and 13.1 ms replayed, because a forward of this predictor
+    // costs the same at batch 32 as at batch 1 and a comparable bare matmul runs in
+    // 0.04 ms. The work was never arithmetic.
+    //
+    // On by default as of the 2026-09-02 live session, which was the gate the offline
+    // work was waiting for. That session ran the stock path end to end and measured
+    // what it costs in a conversation rather than on a bench: 19.6 to 34.8 seconds to
+    // first audible audio, replies taking 95 to 285 seconds to finish speaking, and a
+    // real-time factor of 4.13 on the RTX 2070 and 5.78 on the RTX 5070. Generation
+    // was 1516 seconds to produce 342 seconds of audio, so the queue could never
+    // drain. The graphed path was measured at 0.29 to 0.34 offline; the live number
+    // for it is the point of the next session.
+    //
+    // A worker that cannot install this path falls back to stock generation and says
+    // so, so the failure mode of turning it on is the behaviour that was already
+    // shipping, not silence.
+    bool bQwenLowLatencyPhrase = true;
+    // Only meaningful with the low-latency path on. Capture is attempted once per
+    // model load and costs a few hundred milliseconds; failure is reported and the
+    // eager direct loop carries the phrase instead.
+    bool bQwenCudaGraph = true;
+    // Stage 2: replays the talker's 28-layer decode step from a graph as well.
+    //
+    // A separate switch from the predictor graph on purpose. Stage 1 is the path that
+    // has been measured end to end, and a talker graph that fails to capture must not
+    // take it down with it. Requires bQwenCudaGraph; on its own it does nothing.
+    //
+    // Measured on an RTX 5070: the talker decode step is 64.7 ms eager and 5.5 ms
+    // replayed, which is the same launch-overhead story as the predictor. Prefill stays
+    // eager because its length varies, and sampling, end-of-sequence detection and the
+    // token budget are deliberately left with Hugging Face -- a graph that took
+    // responsibility for stopping is how a corrupted state would look like a hang.
+    bool bQwenTalkerGraph = true;
+    bool bQwenBatchReplyPhrases = true;
+    // Ceilings on one batch, in phrases and in characters.
+    //
+    // Both are needed. The phrase count bounds how long the batch delays the phrases at
+    // the end of it; the character count bounds memory, which scales with the audio
+    // being generated rather than with the number of sequences. Peak allocation grew by
+    // roughly 375 MiB per 118-character phrase in measurement, and twelve long phrases
+    // filled a 12 GiB card outright -- on a card already holding chat and vision
+    // weights, an unbounded batch is an allocation failure waiting for a long reply.
+    // 480 characters keeps the batch under about 1.6 GiB above the resident model while
+    // still reaching a real-time factor near 0.9.
+    int qwenMaxBatchPhrases = 6;
+    int qwenMaxBatchCharacters = 480;
+    bool bQwenDirectPcm = true;
+    bool bQwenPrecomputeVoicePrompt = true;
+    std::string qwenAttentionBackend = "adaptive";
+    std::string qwenInputMode = "simulated-stream";
+    int qwenMaxBufferedAudioMiB = 128;
+    int qwenMinimumFreeVramMiB = 4600;
+    // Effective host-thread cap applied inside the PyTorch worker. The resource planner
+    // fills this even for CUDA because model preparation and audio encoding use CPU work.
+    int qwenCpuThreads = 2;
+    std::string qwenVoiceDesignModel = "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign";
+    std::string qwenCloneModel = "Qwen/Qwen3-TTS-12Hz-0.6B-Base";
+    std::string voiceDataPath = "RuntimeData/Voices";
+    int volume = 90;
+    int rate = 1;
+    int maxCharacters = 1400;
+    // Sized for sentences, not whole replies. Streaming hands the worker one utterance
+    // per sentence, and generation easily outruns realtime playback, so a small cap here
+    // silently drops the OLDEST unsaid sentence -- you would hear a reply start midway.
+    int maxQueuedUtterances = 16;
+};
+
+struct speechRecognitionSettings
+{
+    bool bEnabled = true;
+    std::string executable = "ThirdParty/whisper/whisper-cli.exe";
+    bool bUseServer = true;
+    std::string serverExecutable = "ThirdParty/whisper/whisper-server.exe";
+    std::string serverHost = "127.0.0.1";
+    int serverPort = 8094;
+    int serverStartupTimeoutSeconds = 60;
+    int requestTimeoutSeconds = 180;
+    std::string modelPath = "Models/ggml-small.en.bin";
+    std::string language = "en";
+    int sampleRate = 16000;
+    int threads = 6;
+    bool bUseGpu = true;
+    // "cpu", "auto", or "cuda:N". `useGpu` remains as the backward-compatible
+    // coarse switch; the startup resource plan resolves auto to one exact device.
+    std::string device = "auto";
+    // Hands-free mode records only voiced segments. It is deliberately a local comfort
+    // setting rather than an authority setting: transcripts still enter the same input
+    // arbiter and cannot widen action permissions.
+    bool bHandsFree = false;
+    // Which Windows recording device to capture from, by product name. Empty or
+    // "Default" follows whatever Windows is set to.
+    //
+    // By name rather than by waveIn ordinal deliberately: ordinals renumber whenever a
+    // device is plugged in or removed, so a saved index quietly becomes a different
+    // microphone. A name that is no longer present is a reportable condition; a wrong
+    // device that still works is not, which is why the index cannot be trusted.
+    std::string microphoneDevice;
+    int vadEnergyThreshold = 900;
+    int vadSpeechFrames = 3;
+    int vadSilenceMs = 350;
+    int minimumUtteranceMs = 350;
+    int maximumUtteranceSeconds = 24;
+};
+
+// Presence is a presentation and input-routing layer. It never owns inference, memory,
+// actions, or rendering. A VRM renderer and narrow external integrations consume its
+// bounded local files and can disappear without taking down the assistant.
+struct presenceSettings
+{
+    bool bEnabled = true;
+    bool bAvatarBridgeEnabled = true;
+    std::string statePath = "RuntimeData/Presence/avatar_state.json";
+    std::string eventPath = "RuntimeData/Presence/avatar_events.jsonl";
+    bool bExternalAdaptersEnabled = false;
+    std::string inboxPath = "RuntimeData/Presence/Inbox";
+    std::string outboxPath = "RuntimeData/Presence/Outbox";
+    int adapterPollMs = 150;
+    int maxAdapterEventsPerMinute = 30;
+    int maxAdapterTextCharacters = 4000;
+    int maxAvatarEventBytes = 4194304;
+    int rememberedAdapterIds = 2048;
+    // How many distinct public channel histories are kept at once. Each channel is
+    // already capped by publicContextTurns; this caps how many channels exist, which is
+    // the growth path an adapter that sees many channel identifiers opens up.
+    int maxPublicConversationContexts = 32;
+    // Bounded retention for consumed adapter envelopes. Enough to debug what an adapter
+    // sent, not an indefinite archive of everything it ever sent -- these files hold
+    // message content, so unlimited retention is a privacy decision as much as a disk
+    // one. Processed and Rejected are capped separately: a burst of rejects should not
+    // evict the successful envelopes someone is trying to compare them against.
+    int adapterArchiveMaximumFiles = 200;
+    int adapterArchiveMaximumAgeDays = 14;
+    int publicContextTurns = 6;
+    int streamReplyCooldownSeconds = 4;
+    bool bRequireAddressedStreamMessages = true;
+    bool bSpeakStreamReplies = false;
+    std::vector<std::string> allowedAdapters = {"discord", "stream", "game"};
+};
+
+// Cross-pipeline placement policy. These are budgets and preferences, not work queues:
+// each service still owns its process/thread lifecycle and the planner only decides what
+// resources that owner is allowed to consume.
+struct resourceSettings
+{
+    bool bAutoPlan = true;
+    int reserveLogicalCores = 2;
+    int minimumFreeRamMiB = 4096;
+    // 0 derives a bounded value from total and currently available RAM.
+    int llamaPromptCacheMiB = 0;
+    // Combined SQLite page+mmap ceiling per connection. Zero derives 1/256 of system
+    // RAM, capped at 512 MiB; this is a ceiling, not a preallocation.
+    int sqliteCacheMiB = 0;
+    int gpuReserveMiB = 1536;
+    // How often live usage is sampled against the plan. Zero turns the monitor off; the
+    // plan itself is unaffected either way, because observing never re-places a worker.
+    int usageSampleSeconds = 2;
+    bool bAllowChatModelSplit = false;
+    std::string chat = "auto-primary";
+    std::string voice = "auto-secondary";
+    std::string speechRecognition = "auto-secondary";
+    std::string embeddings = "cpu";
+};
+
+struct visionSettings
+{
+    bool bEnabled = true;
+    bool bRequireConfirmation = true;
+    int maxResponseTokens = 768;
+    // Event-driven continuous awareness is separate from action authority. It may keep a
+    // short local description of the virtual desktop, but it can never click or type.
+    bool bContinuousAwareness = false;
+    int awarenessDebounceMs = 1500;
+    int awarenessMinimumIntervalMs = 6000;
+    // Event hooks provide immediate updates. This idle refresh is a backstop for apps
+    // that repaint without changing focus or title, so screen context cannot stay stale
+    // forever just because Windows emitted no useful event.
+    int awarenessRefreshSeconds = 30;
+    int awarenessMaxResponseTokens = 160;
+    double resolutionConfidence = 0.72;
+    double minimumNameAgreement = 0.35;
+    double ambiguityMargin = 0.08;
+    int maxResolverElements = 500;
+};
+
+// Stage 6 Tier 0 records window and focus events. When vision's separately configured
+// continuous-awareness layer is enabled, accepted events may also trigger a temporary
+// local virtual-desktop capture whose bounded summary is kept in memory.
+//
+// Activity metadata collection is opt-in. An application or title that matches an
+// exclusion produces no WindowObservation, including no redacted activity record.
+// These lists filter metadata only. Separately permitted screen captures can still
+// contain excluded windows; their pixels are not masked before vision inference.
+struct perceptionSettings
+{
+    bool bEnabled = false;
+    // Coalescing window. Title changes fire per keystroke in some editors, and a
+    // per-keystroke record of a document title is a transcript by another name.
+    int minimumEventIntervalMs = 750;
+    int maxObservationsPerMinute = 60;
+    std::vector<std::string> excludedApplications = {
+        "keepass.exe", "keepassxc.exe", "1password.exe", "bitwarden.exe",
+        "lastpass.exe", "dashlane.exe", "protonpass.exe", "enpass.exe"
+    };
+    std::vector<std::string> excludedTitleFragments = {
+        "incognito", "inprivate", "private browsing", "private window",
+        "password", "passphrase", "seed phrase", "recovery phrase",
+        "authenticator", "one-time code", "bank", "banking", "credit card"
+    };
+};
+
+// Where a reply is going. Revia speaks when she is talking to the person in front of her;
+// text she is composing into someone else's application is not something to read aloud.
+enum class outputChannel
+{
+    LocalVoice,
+    ExternalApplication
+};
+
+struct conversationChannelSettings
+{
+    // Executables Revia may speak for even when composing into them. Empty by default:
+    // typing into Discord or a browser is text, and narrating it is noise.
+    std::vector<std::string> voiceEnabledApplications;
+    // Named so the reason a reply was silent can be reported rather than guessed at.
+    std::vector<std::string> textOnlyApplications = {
+        "discord.exe", "slack.exe", "teams.exe", "telegram.exe", "whatsapp.exe",
+        "msedge.exe", "chrome.exe", "firefox.exe", "thunderbird.exe", "outlook.exe"
+    };
+};
+
+// Merging and filtering what arrives, instead of answering every fragment separately.
+struct inputArbiterSettings
+{
+    // Inputs landing inside this window are treated as one thought. Speaking in three
+    // bursts should not produce three replies.
+    int mergeWindowMs = 350;
+    // Below this, a fragment is treated as noise unless it is clearly addressed to Revia.
+    int minimumMeaningfulCharacters = 3;
+    int maxQueuedInputs = 8;
+    // Recognisers emit these constantly from room noise. They are dropped rather than
+    // answered.
+    std::vector<std::string> ignoredFragments = {
+        "uh", "um", "erm", "hmm", "mm", "mhm", "ah", "oh", "eh", "huh",
+        "you", "thanks for watching", "thank you", "[blank_audio]", "..."
+    };
+};
+
+// Stage 6's attention model and Stage 7's proposal rate, together: when Revia is allowed
+// to speak first, and how quickly it must back off when it turns out to be wrong.
+//
+// Silence is the default. A proposal has to clear a confidence threshold, not a relevance
+// one -- "this might be related" is not a reason to interrupt someone.
+struct initiativeSettings
+{
+    bool bEnabled = false;
+    // Curiosity is a candidate generator, not an interruption permission. It may
+    // consider recent dialogue or a meaningful affect transition, but an empty clock
+    // tick can never create a topic and AttentionPolicy still owns the final gate.
+    bool bCuriosityEnabled = true;
+    bool bSpontaneousSpeechEnabled = true;
+    bool bSpeakWhenUserAway = true;
+    // When a permitted autonomous lookup produces a grounded spoken finding, keep a
+    // bounded model-written summary plus source URLs as durable memory. Raw page bodies
+    // and private reasoning are never stored.
+    bool bAutonomousLearningEnabled = false;
+    int curiosityCheckSeconds = 30;
+    int autonomousQuietSeconds = 45;
+    int curiosityTopicCooldownMinutes = 1440;
+    // Below this, Revia stays quiet no matter how relevant the observation looks.
+    float minimumConfidence = 0.72f;
+    int maxUtterancesPerHour = 4;
+    int cooldownSeconds = 900;
+    // Longer after a dismissal than after an accepted one. Being told "no" should cost
+    // more than being ignored.
+    int dismissalCooldownSeconds = 3600;
+    // Do not interrupt someone mid-keystroke. Measured from the last input event of any
+    // kind, which needs no keyboard hook and records nothing about what was typed.
+    int quietInputSeconds = 4;
+    // Proposals accepted versus dismissed. Below this, Revia halves its own rate. An
+    // assistant that cannot tell it is being annoying is a defect.
+    float minimumPrecision = 0.34f;
+    int precisionSampleFloor = 5;
+    bool bSuppressWhenFullScreen = true;
+    // Event-pattern thresholds. Time constrains what counts as meaningful evidence; it
+    // never creates an utterance by itself. A foreground transition must complete the
+    // pattern and wake the initiative worker.
+    int focusSessionMinutes = 12;
+    int returnAfterMinutes = 20;
+    int contextSwitchWindowSeconds = 300;
+    int contextSwitchCount = 6;
+    int cueMaxAgeMinutes = 10;
+};
+
+// Stopping mid-sentence when the user starts talking, the way a person does.
+//
+// The hard part is that the microphone hears the speakers for the whole utterance, not
+// just the start of it. A fixed threshold therefore cannot separate "the user is talking"
+// from "Revia is talking and the room is echoing it back" -- which is why detection here
+// tracks a rolling noise floor and looks for a step above it, rather than an absolute
+// level. The floor is learned from the frames that did not trigger, so Revia's own voice
+// raises the bar instead of tripping it.
+struct bargeInSettings
+{
+    bool bEnabled = true;
+    // Absolute floor. Nothing below this is ever an interruption regardless of how quiet
+    // the room is, so a silent microphone cannot produce a hair trigger.
+    int energyThreshold = 1400;
+    // How far above the learned floor a frame must sit to count. Speech arrives on top of
+    // the echo, so a genuine interruption is a step change, not a slow drift.
+    float echoMarginMultiplier = 2.6f;
+    // Consecutive qualifying frames before Revia yields, so one cough, a door, or a burst
+    // of laughter from the speakers does not cut a reply short. Frames are ~50 ms.
+    int consecutiveFramesRequired = 8;
+    // Time to learn the floor before any interruption is possible. Must be long enough to
+    // capture what Revia's own playback sounds like through the microphone.
+    int startupGraceMs = 700;
+};
+
+struct aiProfile
+{
+    std::string id = "assistant";
+    std::string displayName = "Assistant";
+    // Shown in the profile picker so a profile can be recognised without reading the
+    // whole system prompt. Optional: an empty description is a valid profile.
+    std::string description;
+    std::string systemPrompt = "You are a helpful local AI assistant.";
+
+    // H3: when false, user input is not written to long-term memory.
+    bool bMemoryEnabled = true;
+
+    bool bHasTemperatureOverride = false;
+    bool bHasMaxTokensOverride = false;
+
+    float temperature = 0.7f;
+    int maxTokens = 512;
+
+    // Starting personality by trait name, supplied by the profile instead of compiled in.
+    // Absent names keep the built-in default, so a profile may tune one trait without
+    // restating all sixteen. Identity owns which names are real; this only carries the
+    // numbers, so adding a trait does not require touching configuration code.
+    std::map<std::string, float> personalityBaseline;
+
+    // Opinions the profile declares she starts with, as subject and signed strength.
+    // Seeded only when she does not already hold one for that subject, so experience
+    // outranks an authored starting point. Identity owns what a preference means; this
+    // carries the pairs.
+    std::vector<std::pair<std::string, float>> preferences;
+
+    // Whether this profile obliges her to answer. A configured preference rather than
+    // earned state, which is why it lives here beside the other authored starting
+    // points and not in relationship, development, or affect. Balanced by default, and
+    // a profile written before this field existed loads as Balanced rather than as the
+    // most permissive option.
+    AnswerObligationMode answerObligation = AnswerObligationMode::Balanced;
+};
+
+// Local image generation. Off by default: it is an optional Python runtime and a
+// multi-gigabyte model download, and a machine without it should behave as though the
+// feature simply does not exist rather than failing at the moment it is asked.
+struct imageSettings
+{
+    bool bEnabled = false;
+    std::string pythonExecutable = "ThirdParty/ImageGen/.venv/Scripts/python.exe";
+    std::string serviceScript = "Tools/revia_image_service.py";
+    std::string cacheDirectory = "ThirdParty/ImageGen/cache";
+    std::string outputPath = "RuntimeData/Images";
+    std::string host = "127.0.0.1";
+    int port = 8093;
+    std::string model = "stabilityai/sd-turbo";
+    // "auto", "cpu", or "cuda:N". The planner resolves auto against real free VRAM.
+    std::string device = "auto";
+    // Below this much free video memory the worker chooses CPU. Loading onto a card the
+    // chat model has already filled does not fail cleanly; it thrashes or dies mid-step.
+    int minimumFreeVramMiB = 4200;
+    // sd-turbo produces an image in a handful of steps. On CPU that is the difference
+    // between under a minute and several.
+    int steps = 4;
+    float guidance = 1.0f;
+    int width = 512;
+    int height = 512;
+    int startupTimeoutSeconds = 120;
+    // Generation on CPU is slow rather than broken, so the ceiling is generous.
+    int requestTimeoutSeconds = 900;
+    bool bShutdownOnExit = true;
+};
+
+// Durable conversation history. A separate block from memory because it is a separate
+// promise: memory keeps facts a classifier judged worth having, this keeps what was said.
+struct conversationSettings
+{
+    bool bArchiveEnabled = true;
+    // Ceilings, not targets. An archive that grows without bound becomes a liability the
+    // user never agreed to keep.
+    int maxSessions = 200;
+    int maxTurnsPerSession = 500;
+    int maxTurnCharacters = 8000;
+    // How much of the previous session is replayed into context at startup, so a restart
+    // continues a conversation instead of restarting one. Costs prompt tokens every turn
+    // it survives, which is why it is small.
+    int restoreTurns = 6;
+    // Whether Revia may stop on a hard turn, ask herself a few questions, and show them.
+    // It costs one extra bounded inference on the turns it fires, which is why it is
+    // gated to the problems the intelligence router already judged difficult.
+    bool bSelfInquiryEnabled = true;
+    // Turns that must pass before she may think out loud again. Deliberation on every
+    // hard turn in a row stops being thinking and becomes a preamble.
+    int selfInquiryCooldownTurns = 3;
+    // Which turns she stops and thinks on. "hard" is only what the router already judged
+    // difficult (Expert or deep reasoning). "questions" also includes ordinary questions
+    // and tasks put to her, skipping small talk, so her thought process is visible on
+    // the turns where there is something to work out.
+    std::string selfInquiryScope = "hard";
+    // Whether a self-inquiry may continue into further rounds when the first one leaves
+    // something material unsettled.
+    //
+    // Separate from whether the work summaries are displayed. Hiding the panel is a
+    // display preference; this is whether the verification happens at all, and conflating
+    // the two would make "I do not want to watch" mean "do not check".
+    bool bIterativeInvestigationEnabled = false;
+    // Bounds. Reaching any of them pauses the investigation; none of them makes it
+    // succeed.
+    int investigationMaximumRounds = 3;
+    int investigationQuestionsPerRound = 2;
+    int investigationBudgetMilliseconds = 45000;
+};
+
+// Response filtering is deliberately separate from the personality prompt. A profile
+// may be playful or bratty without being trusted to police its own output. The hard
+// structural/grounding pass cannot be disabled; the model review can be traded for
+// lower latency and is exposed as a live comfort preference.
+struct responseFilterSettings
+{
+    bool bAiReviewEnabled = false;
+    int aiMaxReviewTokens = 192;
+    int maxReplyCharacters = 12000;
+};
+
+// Singing. Separate from speechSettings on purpose: a song is one continuous timeline
+// with its own audio device, and nothing here may change how ordinary speech behaves.
+struct performanceSettings
+{
+    bool bEnabled = true;
+    std::string songLibraryPath = "RuntimeData/Songs";
+    // One voice: she stops singing to answer rather than talking over herself. Turning
+    // this off leaves the song playing and the reply on screen only.
+    bool bInterruptSongToSpeak = true;
+    int maxSongSeconds = 600;
+    int outputBufferMs = 120;
+    double instrumentalGain = 1.0;
+    double vocalGain = 1.0;
+};
+
+// Revia reviewing her own source and proving what she suggests. She never edits the real
+// source: a proposal is a patch a person applies.
+struct improvementSettings
+{
+    bool bEnabled = true;
+    // Review parts of herself on her own while idle, not only when a problem is recorded
+    // or someone asks.
+    bool bExplore = true;
+    // Build and test each proposal in the workbench copy before reporting it.
+    bool bVerify = true;
+    // The estimated benefit (0..1) a proposal needs before she keeps it. Found on her own,
+    // the bar is high; aimed at a measured problem, it is lower, because the problem is real.
+    double minimumBenefit = 0.6;
+    double evidenceMinimumBenefit = 0.4;
+    // Her estimated chance (0..1) that the change breaks something.
+    double maximumRisk = 0.5;
+    int explorationIntervalMinutes = 120;
+    // Quiet time before a build starts on its own. A build uses much of the machine, so it
+    // waits longer than conversation-level background work, and stops when you return.
+    int idleMinutesBeforeBuilding = 10;
+    // New reviews pause while this many proven proposals wait for your decision.
+    int maximumAwaitingDecision = 5;
+    int windowLines = 220;
+    // 0 = half the CPU cores.
+    int buildJobs = 0;
+    int buildTimeoutMinutes = 120;
+    // Empty = %LOCALAPPDATA%/Revia/ImprovementWorkbench, outside any synced folder.
+    std::string workbenchPath;
+    std::string proposalsPath = "RuntimeData/Improvement/Proposals";
+};
+
+// Which decision provider answers an operator run, and whether anything is recorded.
+//
+// Every default here preserves what the application did before the feature existed:
+// the existing model-driven path decides, nothing is recorded, and no learned artifact
+// is loaded. Changing these changes who decides and what is kept; it changes no
+// permission, and it cannot. Capability settings live in the capability file and are
+// the only thing that says what Revia may do -- these say only how the next step is
+// chosen, and every step either way goes through the same validation, policy check,
+// confirmation and audit.
+struct computerControlSettings
+{
+    // "legacy", "shadow", "assisted" or "learned". Anything unrecognised reads back as
+    // legacy, so a typo in a configuration file leaves behaviour where it was rather
+    // than somewhere new.
+    std::string providerMode = "legacy";
+    // How many times a cheaper provider may hand a run back to the model before the run
+    // stops paying for the attempt.
+    int escalationBudget = 3;
+    // The experience recorder. Off, and separately off from the mode: comparing
+    // providers and keeping a dataset are different things wanting different consent.
+    bool bRecordingEnabled = false;
+    // Where an opt-in dataset is written, relative to the runtime data directory.
+    std::string datasetDirectory = "ComputerExperience";
+    // Structural metadata only unless this is raised to "control_values", which is its
+    // own opt-in because the words in a box are not the same kind of thing as the fact
+    // that a box exists.
+    std::string captureDepth = "structure";
+    // A learned artifact, when one has been qualified. Empty leaves learned mode
+    // inactive rather than loading whatever is lying around.
+    std::string learnedArtifactPath;
+};
+
+struct appSettings
+{
+    std::string activeProfile = "assistant";
+    llmSettings llm;
+    intelligenceSettings intelligence;
+    embeddingSettings embedding;
+    speechSettings speech;
+    speechRecognitionSettings speechRecognition;
+    performanceSettings performance;
+    improvementSettings improvement;
+    presenceSettings presence;
+    resourceSettings resources;
+    visionSettings vision;
+    perceptionSettings perception;
+    initiativeSettings initiative;
+    bargeInSettings bargeIn;
+    conversationChannelSettings channels;
+    conversationSettings conversation;
+    responseFilterSettings responseFilter;
+    imageSettings image;
+    inputArbiterSettings inputArbiter;
+    computerControlSettings computerControl;
+};
+
+struct commandOutput
+{
+    bool bWasCommand = false;
+    bool bShouldExit = false;
+    bool bSuccess = true;
+
+    std::string output;
+    std::string reason;
+};
+
+struct conversationMessage
+{
+    std::string role;
+    std::string content;
+};
+
+struct healthOutput
+{
+    bool bIsAvailable = false;
+
+    systemStatus status = systemStatus::Red;
+
+    std::string name;
+    std::string message;
+    std::string reason;
+    int contextTokens = 0;
+    int parallelSlots = 0;
+    int responseTokenLimit = 0;
+};
+
+struct memoryEntry
+{
+    std::string id;
+    std::string category;
+    std::string summary;
+    std::string source;
+    std::string createdAt;
+
+    memoryImportance importance = memoryImportance::Medium;
+};
+
+struct memoryDecision
+{
+    bool bSuccess = false;
+    bool bShouldRemember = false;
+    // The evaluation yielded to an interactive turn instead of reaching a verdict, so
+    // this decision says nothing about whether the turn was worth remembering. Distinct
+    // from bSuccess, which stays true because yielding is correct behavior rather than a
+    // failure, and distinct from a genuine "not worth remembering" answer.
+    bool bPreempted = false;
+
+    std::string category;
+    std::string summary;
+    std::string reason;
+    // Identifies how a preclassified memory entered the store. Ordinary conversation
+    // remains "automatic"; sourced background findings use "autonomous_research".
+    std::string source = "automatic";
+    std::vector<float> embedding;
+    std::string embeddingModel;
+    std::vector<latencySample> timings;
+};
+
+struct embeddingOutput
+{
+    bool bSuccess = false;
+    std::vector<float> values;
+    std::string model;
+    std::string reason;
+    double elapsedMilliseconds = 0.0;
+};

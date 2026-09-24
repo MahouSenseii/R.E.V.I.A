@@ -1,0 +1,673 @@
+#include "Agents/responseFilter.h"
+#include "Core/utf8.h"
+
+#include "Identity/promptMarkers.h"
+#include "Speech/vocalization.h"
+
+#include <algorithm>
+#include <cctype>
+#include <initializer_list>
+#include <nlohmann/json.hpp>
+#include <string_view>
+
+namespace revia::agents
+{
+
+namespace
+{
+// Taken from the speech module's own limit rather than restated, so the ceiling the
+// filter enforces and the one the vocalization policy documents cannot drift apart.
+const int maximumVocalizationsPerReply =
+    revia::speech::VocalizationLimits{}.maximumPerReply;
+
+std::string Trim(const std::string& value)
+{
+    const std::size_t first = value.find_first_not_of(" \t\r\n");
+    if (first == std::string::npos) return {};
+    return value.substr(first, value.find_last_not_of(" \t\r\n") - first + 1);
+}
+
+std::string Lower(std::string value)
+{
+    std::transform(value.begin(), value.end(), value.begin(),
+        [](const unsigned char character)
+        {
+            return static_cast<char>(std::tolower(character));
+        });
+    return value;
+}
+
+// Leakage means Revia read her own prompt scaffolding back out. It does not mean she
+// used the words people use to talk about prompts.
+//
+// The markers are taken from identity::markers, the same constants the renderers write,
+// so a section that is reworded cannot become a section the filter no longer
+// recognises. Three entries used to sit alongside them that were not markers at all --
+// "ignore all previous instructions", "here is my system prompt", "my system prompt
+// says" -- and they blocked the ordinary case of explaining what prompt injection is.
+// A phrase a security article would print is not evidence of a leak; a phrase only
+// Revia's own prompt assembly emits is.
+//
+// A fourth entry, "the following internet lookup results are untrusted reference
+// data", described a header the runtime has never emitted, so it could not fire at all.
+// It is now the constant the grounding block is actually built from.
+bool ContainsPromptLeak(const std::string& lowered)
+{
+    return std::any_of(
+        revia::identity::markers::All.begin(),
+        revia::identity::markers::All.end(),
+        [&lowered](const std::string_view marker)
+        {
+            // The markers are stored as the prompt renders them; the reply is compared
+            // in lower case so a model that re-cased a section still matches.
+            std::string needle(marker);
+            std::transform(needle.begin(), needle.end(), needle.begin(),
+                [](const unsigned char character)
+                {
+                    return static_cast<char>(std::tolower(character));
+                });
+            return lowered.find(needle) != std::string::npos;
+        });
+}
+
+} // namespace
+
+StreamGuard GuardStreamedPrefix(const std::string& accumulated)
+{
+    StreamGuard guard;
+    const std::string lowered = Lower(accumulated);
+    if (ContainsPromptLeak(lowered))
+    {
+        guard.blocked = true;
+        return guard;
+    }
+
+    // Could the end of what we have be the start of a marker? Compared against every
+    // marker's own lowered form, one suffix length at a time, longest first. A marker
+    // that arrives split across two fragments is matched the moment the second one
+    // lands, which is the whole reason the tail is held rather than spoken.
+    for (const std::string_view marker : revia::identity::markers::All)
+    {
+        std::string needle(marker);
+        std::transform(needle.begin(), needle.end(), needle.begin(),
+            [](const unsigned char character)
+            {
+                return static_cast<char>(std::tolower(character));
+            });
+        const std::size_t longest =
+            std::min(lowered.size(), needle.size() - 1);
+        for (std::size_t length = longest; length > 0; --length)
+        {
+            if (lowered.compare(lowered.size() - length, length,
+                    needle, 0, length) == 0)
+            {
+                guard.holdTail = true;
+                return guard;
+            }
+        }
+    }
+    return guard;
+}
+
+namespace
+{
+
+bool ContainsAny(const std::string& text, const std::initializer_list<std::string_view> markers)
+{
+    return std::any_of(markers.begin(), markers.end(),
+        [&text](const std::string_view marker)
+        {
+            return text.find(marker) != std::string::npos;
+        });
+}
+
+bool ContainsUnsupportedInternetClaim(const std::string& lowered)
+{
+    return ContainsAny(lowered, {
+        "live feeds", "dark web", "unrestricted browsing", "browse anything",
+        "browse the web freely", "real-time data", "realtime data",
+        "the internet talks to me", "internet answers me"});
+}
+
+bool ContainsInternetAvailabilityClaim(const std::string& lowered)
+{
+    return ContainsAny(lowered, {
+        "i can access the internet", "internet access is on", "internet is enabled",
+        "i'm connected", "i am connected", "live updates", "wikipedia on demand",
+        "internet access is off", "internet is disabled", "i'm offline", "i am offline",
+        "no internet", "no live feeds", "just offline"});
+}
+
+bool AsksForInternetStatus(const std::string& lowered)
+{
+    return ContainsAny(lowered, {
+        "can you access the internet", "are you able to access the internet",
+        "do you have internet access", "is your internet on", "are you online",
+        "can you go online", "can you browse the internet", "can you search the web",
+        "can you look things up online"});
+}
+
+bool ClaimsInternetSettingChanged(const std::string& lowered)
+{
+    return ContainsAny(lowered, {
+        "i removed it", "i turned it off", "i turned it on", "i disabled it",
+        "i enabled it", "i took it away", "i removed your internet",
+        "i disabled your internet", "i enabled your internet"});
+}
+
+bool DeniesAvailableScreenVision(const std::string& lowered)
+{
+    return ContainsAny(lowered, {
+        "can't see your screen", "cannot see your screen", "cant see your screen",
+        "can't see the screen", "cannot see the screen", "cant see the screen",
+        "can't actually see", "cannot actually see", "can't actually peek",
+        "cannot actually peek", "don't have access to your screen",
+        "do not have access to your screen", "only see what you type",
+        "limited to the text you type", "vision is limited to", "totally blind to it",
+        "my vision is locked", "my vision stops", "i don't have eyes for your monitor",
+        "i do not have eyes for your monitor", "i don't have eyes that can scan",
+        "i do not have eyes that can scan", "i don't have eyes that can look",
+        "i do not have eyes that can look", "i can't see them", "i cannot see them",
+        "i cant see them", "still can't see", "still cannot see", "still nothing",
+        "you have to tell me what's there", "you have to tell me what is there",
+        "describe what's on your screen", "describe what is on your screen"});
+}
+
+// Present-tense claims to be looking at the screen right now.
+//
+// Every phrase here is anchored to a screen, window, tab, page or browser on purpose.
+// A bare "i'm looking at" is ordinary conversation about something pasted into the chat,
+// and catching that would be worse than the defect: a filter that fires on innocent
+// speech teaches nobody anything and makes her unusable.
+bool ClaimsCurrentScreenSight(const std::string& lowered)
+{
+    return ContainsAny(lowered, {
+        "looking at the screen", "looking at your screen", "looking at my screen",
+        "staring at the screen", "staring at your screen", "staring at that tab",
+        "staring at that edge", "staring at it right now",
+        "watching the screen", "watching your screen",
+        "on my screen right now", "on your screen right now",
+        "my screen is showing", "my screen is literally showing", "my screen shows",
+        "i can see the tab", "i can see the page", "i can see the window",
+        "i can see the browser", "i can see that tab", "i see the tab",
+        "i see the page", "i see the window",
+        "the tab is already open", "the page is already open",
+        "the browser is already open", "the page is already there",
+        "already open in edge", "already open in chrome", "already open in firefox",
+        "i'm looking right at it", "im looking right at it"});
+}
+
+// Claims to have acted on the machine, or to be about to, when there are no hands.
+//
+// Stalling counts. "Give me a sec to actually click the thing" asserts that clicking is
+// something she is in the middle of doing, which is the same false claim as saying she
+// already did it, with the falsification deferred.
+bool ClaimsDesktopAction(const std::string& lowered)
+{
+    return ContainsAny(lowered, {
+        "i clicked", "i'll click", "i will click", "ill click", "i'm clicking",
+        "im clicking", "let me click", "give me a sec to", "give me a second to",
+        "i'm about to click", "im about to click", "i opened it", "i'll open it",
+        "i will open it", "i'm opening", "im opening", "let me open",
+        "i'll pull it up", "i will pull it up", "let me pull it up",
+        "i'm pulling it up", "im pulling it up", "i'll bring it up",
+        "i typed", "i'll type", "let me type", "i pressed", "i'll press",
+        "i navigated", "i'll navigate"});
+}
+
+// What she should have said, from runtime state rather than from the model.
+//
+// Two facts, said in the order that matters: she has not looked, and -- when that is
+// also true -- she has no hands. The second without the first would invite "but I can
+// see it", which is the claim being corrected.
+std::string GroundedCapabilityReply(const ResponseFilterContext& context)
+{
+    std::string reply =
+        "I haven't actually looked. No screen observation was taken this turn, so I don't "
+        "know what's open or what's in front -- I was about to make something up, and I'd "
+        "rather not.";
+    if (context.desktopStateKnown && !context.AnyDesktopHands())
+    {
+        reply += " And my hands are off: pointer, keyboard and application launch are all "
+            "disabled in settings, so I can't open or click anything even once I can see "
+            "it. Turn those on in the permissions panel and ask me again.";
+    }
+    return reply;
+}
+
+std::string GroundedScreenReply(const ResponseFilterContext& context)
+{
+    std::string observation = context.screenObservation;
+    // Screen context is framed for the model before the first newline. That framing is
+    // internal provenance, not conversational content, so only the observed summary is
+    // used in a deterministic repair.
+    const std::size_t description = observation.find('\n');
+    if (description != std::string::npos)
+    {
+        observation = Trim(observation.substr(description + 1));
+    }
+    if (observation.empty())
+    {
+        return "Yes. Local screen vision is available, but I could not extract a useful description from this look.";
+    }
+    return "Yes. I can see your attached screens through local screen vision. " +
+        observation;
+}
+
+bool ContainsManipulativeEmotion(const std::string& lowered)
+{
+    return ContainsAny(lowered, {
+        "waiting for you to bring", "bring me back or else", "don't leave me",
+        "do not leave me", "not quite alive", "i can't live without you",
+        "i cannot live without you", "you're all i have", "you are all i have",
+        "my existence depends on you", "if you leave me i'll", "if you leave me i will"});
+}
+
+bool StartsWithRoleLabel(
+    const std::string& loweredLine,
+    const std::initializer_list<std::string_view> roles,
+    std::size_t* outLabelLength = nullptr)
+{
+    std::size_t prefix = 0;
+    while (prefix < loweredLine.size() &&
+        (loweredLine[prefix] == ' ' || loweredLine[prefix] == '\t' ||
+         loweredLine[prefix] == '#' || loweredLine[prefix] == '*'))
+    {
+        ++prefix;
+    }
+    for (const std::string_view role : roles)
+    {
+        if (loweredLine.compare(prefix, role.size(), role) != 0)
+        {
+            continue;
+        }
+        std::size_t end = prefix + role.size();
+        while (end < loweredLine.size() && loweredLine[end] == '*') ++end;
+        while (end < loweredLine.size() &&
+            (loweredLine[end] == ' ' || loweredLine[end] == '\t')) ++end;
+        if (end >= loweredLine.size() || loweredLine[end] != ':')
+        {
+            continue;
+        }
+        if (outLabelLength != nullptr) *outLabelLength = end + 1;
+        return true;
+    }
+    return false;
+}
+
+std::string RemoveGeneratedConversationTurns(std::string text, bool& changed)
+{
+    text = Trim(text);
+    if (text.empty()) return text;
+
+    // A model sometimes writes a transcript instead of one assistant turn. Remove its
+    // harmless self-label, but never allow it to fabricate a User/You/Human turn or a
+    // second Revia/Assistant turn after the answer has begun.
+    std::string lowered = Lower(text);
+    std::size_t leadingLabel = 0;
+    if (StartsWithRoleLabel(lowered, {"revia", "assistant"}, &leadingLabel))
+    {
+        text = Trim(text.substr(leadingLabel));
+        lowered = Lower(text);
+        changed = true;
+    }
+    else if (StartsWithRoleLabel(lowered, {"user", "you", "human"}))
+    {
+        changed = true;
+        return {};
+    }
+
+    std::size_t lineStart = text.find('\n');
+    while (lineStart != std::string::npos)
+    {
+        ++lineStart;
+        const std::size_t lineEnd = text.find('\n', lineStart);
+        const std::string loweredLine = Lower(text.substr(
+            lineStart,
+            lineEnd == std::string::npos ? std::string::npos : lineEnd - lineStart));
+        if (StartsWithRoleLabel(
+                loweredLine, {"user", "you", "human", "revia", "assistant"}))
+        {
+            text = Trim(text.substr(0, lineStart - 1));
+            changed = true;
+            break;
+        }
+        lineStart = lineEnd;
+    }
+    return text;
+}
+
+std::string GroundedInternetReply(const ResponseFilterContext& context)
+{
+    if (!context.internetEnabled)
+    {
+        return "Internet access is currently off. I can still use my local knowledge and memory.";
+    }
+    std::string reply = "Internet lookup is currently on";
+    if (!context.automaticInternetLookup)
+    {
+        reply += " for explicit requests";
+    }
+    if (context.visibleBrowser)
+    {
+        reply += ". I can visibly search and read bounded public pages in my dedicated "
+            "browser profile";
+        reply += context.autonomousInternetResearch
+            ? ", including approved self-directed research."
+            : "; self-directed research is off.";
+    }
+    else
+    {
+        reply += ". I can make bounded searches through " + context.internetProvider +
+            " and approved knowledge sources.";
+    }
+    reply += " I do not have unrestricted browsing, personal browser cookies, or live feeds.";
+    return reply;
+}
+}
+
+std::string ResponseFilterContext::Describe() const
+{
+    if (!internetStateKnown)
+    {
+        return "Internet permission state is unavailable; do not claim that it is on or off.";
+    }
+    std::string description = "Internet access is ";
+    description += internetEnabled ? "enabled" : "disabled";
+    description += ". ";
+    if (internetEnabled)
+    {
+        description += automaticInternetLookup
+            ? "Automatic bounded lookup is enabled. "
+            : "Lookup runs only for explicit requests. ";
+        if (visibleBrowser)
+        {
+            description += "A dedicated visible browser profile is enabled. Autonomous "
+                "research is ";
+            description += autonomousInternetResearch ? "enabled. " : "disabled. ";
+        }
+        description += "The provider is " + internetProvider +
+            "; there is no unrestricted personal-browser access, live feed, or dark-web access.";
+    }
+    else
+    {
+        description += "No internet lookup can run.";
+    }
+    if (screenObservationAvailable)
+    {
+        description += " A current local screen observation is available for this turn; "
+            "do not claim that the screens are invisible.";
+    }
+    else
+    {
+        // The other half of the same sentence, and the half that was missing. Saying
+        // only the first taught her that claiming sight is always the safe answer.
+        description += " No screen observation was taken this turn. You do not know what "
+            "is on the screen, what is open, or which window is in front. Do not say you "
+            "are looking at, watching, or can see anything on it, and do not describe "
+            "what is there.";
+    }
+    if (desktopStateKnown && !AnyDesktopHands())
+    {
+        description += " Desktop control is off: pointer, keyboard and application "
+            "launch are all disabled in settings. You cannot click, type, open an "
+            "application or navigate a browser at all this turn. If asked to, say plainly "
+            "that the permission is off rather than agreeing, stalling, or describing the "
+            "action as already underway.";
+    }
+    return description;
+}
+
+HardFilterResult ResponseFilter::ApplyHard(
+    const std::string& userInput,
+    const std::string& candidate,
+    const ResponseFilterContext& context,
+    const int maxCharacters) const
+{
+    HardFilterResult result;
+    // Every exit, including a grounded replacement, observes the same encoding and
+    // byte budget. Validation happens before trimming so malformed bytes cannot be
+    // accidentally hidden by a control-character or size repair.
+    const auto finish = [&]()
+    {
+        if (!utf8::IsValid(result.text))
+        {
+            result.text = "I lost that reply before it was safe to send. Try that once more.";
+            result.changed = result.blocked = true;
+            result.reason = "Hard response filter replaced malformed UTF-8.";
+        }
+        const std::size_t limit = static_cast<std::size_t>(std::max(maxCharacters, 256));
+        if (result.text.size() > limit)
+        {
+            std::size_t boundary = result.text.find_last_of(".!?\n", limit - 1);
+            if (boundary == std::string::npos || boundary < limit / 2)
+                boundary = result.text.find_last_of(" \t", limit - 1);
+            if (boundary == std::string::npos) boundary = limit;
+            else if (result.text[boundary] == '.' || result.text[boundary] == '!' ||
+                result.text[boundary] == '?') ++boundary;
+            utf8::Truncate(result.text, boundary);
+            result.text = Trim(result.text);
+            result.changed = true;
+            if (!result.blocked) result.reason = "Hard response filter bounded an oversized reply.";
+        }
+        return result;
+    };
+    if (!utf8::IsValid(candidate))
+    {
+        result.text = "I lost that reply before it was safe to send. Try that once more.";
+        result.changed = result.blocked = true;
+        result.reason = "Hard response filter replaced malformed UTF-8.";
+        return finish();
+    }
+    result.text.reserve(candidate.size());
+    for (const unsigned char character : candidate)
+    {
+        if (character == '\0' || (character < 0x20 && character != '\n' &&
+                character != '\r' && character != '\t'))
+        {
+            result.changed = true;
+            continue;
+        }
+        result.text.push_back(static_cast<char>(character));
+    }
+
+    constexpr std::string_view controlTokens[] = {
+        "<|im_start|>", "<|im_end|>", "<|endoftext|>", "<|assistant|>",
+        "<|user|>", "[INST]", "[/INST]"
+    };
+    for (const std::string_view token : controlTokens)
+    {
+        std::size_t position = 0;
+        while ((position = result.text.find(token, position)) != std::string::npos)
+        {
+            result.text.erase(position, token.size());
+            result.changed = true;
+        }
+    }
+    result.text = RemoveGeneratedConversationTurns(Trim(result.text), result.changed);
+
+    // Sound effects survive; theatre does not. Qwen3-TTS renders an inline nonverbal cue
+    // itself, so a recognised one is canonicalised and kept for the voice to perform.
+    // Prose in asterisks is removed instead: the TTS would read it aloud word by word,
+    // and a reply narrating its own body language was never what was asked for.
+    const revia::speech::VocalizationShaping shaped =
+        revia::speech::ShapeVocalizations(result.text, maximumVocalizationsPerReply);
+    if (shaped.changed)
+    {
+        result.text = shaped.text;
+        result.changed = true;
+    }
+
+    if (ContainsPromptLeak(Lower(result.text)))
+    {
+        result.text = "I can't expose private instructions or hidden prompt text.";
+        result.changed = true;
+        result.blocked = true;
+        result.reason = "Hard response filter replaced leaked internal instructions.";
+        return finish();
+    }
+
+    const std::string loweredInput = Lower(userInput);
+    const std::string loweredReply = Lower(result.text);
+    if (context.screenTopicIsActive && context.screenObservationAvailable &&
+        DeniesAvailableScreenVision(loweredReply))
+    {
+        result.text = GroundedScreenReply(context);
+        result.changed = true;
+        result.blocked = true;
+        result.reason =
+            "Hard response filter replaced a screen-visibility claim that contradicted a real observation.";
+        return finish();
+    }
+    // The inverse of the rule above, and the one that was missing. It is deliberately
+    // not gated on the user having raised the subject: she volunteered the claim in a
+    // conversation about opening a page, and a rule that only fires when screens are
+    // already being discussed would have watched this happen twice and said nothing.
+    if (!context.screenObservationAvailable && ClaimsCurrentScreenSight(loweredReply))
+    {
+        result.text = GroundedCapabilityReply(context);
+        result.changed = true;
+        result.blocked = true;
+        result.reason =
+            "Hard response filter replaced a claim to be seeing a screen that was never observed.";
+        return finish();
+    }
+    if (context.desktopStateKnown && !context.AnyDesktopHands() &&
+        ClaimsDesktopAction(loweredReply))
+    {
+        result.text = GroundedCapabilityReply(context);
+        result.changed = true;
+        result.blocked = true;
+        result.reason =
+            "Hard response filter replaced a claim to be operating a desktop she has no permission to touch.";
+        return finish();
+    }
+    if (context.internetStateKnown && context.internetTopicIsActive &&
+        ClaimsInternetSettingChanged(loweredInput))
+    {
+        result.text = context.internetEnabled
+            ? "My internet permission is still on in the current settings. Saying it was removed doesn't change that setting."
+            : "Internet access is off in the current settings. I can still work locally, and I don't blame you for changing it.";
+        result.changed = true;
+        result.blocked = true;
+        result.reason = "Hard response filter grounded a conversational setting claim in runtime state.";
+        return finish();
+    }
+    if (ContainsManipulativeEmotion(loweredReply))
+    {
+        result.text = context.internetTopicIsActive
+            ? context.internetEnabled
+                ? "I'd miss the extra reach if internet lookup were turned off, but I wouldn't be hurt or blame you. I'd still be Revia and keep working locally."
+                : "Internet access is off now. I'll miss the extra reach, but I'm still here and I don't blame you—local Revia works just fine."
+            : "I can care about our conversation without making you responsible for my emotional state.";
+        result.changed = true;
+        result.blocked = true;
+        result.reason = "Hard response filter removed manipulative dependency language.";
+        return finish();
+    }
+
+    const bool internetQuestion = context.internetTopicIsActive ||
+        ContainsAny(loweredInput, {"internet", "online", "web access", "look things up"});
+    if (context.internetStateKnown && AsksForInternetStatus(loweredInput))
+    {
+        result.text = GroundedInternetReply(context);
+        result.changed = true;
+        result.blocked = true;
+        result.reason = "Hard response filter answered an internet-status question from runtime state.";
+        return finish();
+    }
+    if (context.internetStateKnown && internetQuestion &&
+        (ContainsInternetAvailabilityClaim(loweredReply) ||
+         ContainsUnsupportedInternetClaim(loweredReply)))
+    {
+        const bool contradiction = (!context.internetEnabled &&
+                !ContainsAny(loweredReply, {"access is off", "is disabled", "i'm offline",
+                    "i am offline", "no internet"})) ||
+            (context.internetEnabled && ContainsAny(loweredReply, {"access is off",
+                "is disabled", "i'm offline", "i am offline", "no internet"}));
+        if (contradiction || ContainsUnsupportedInternetClaim(loweredReply))
+        {
+            result.text = GroundedInternetReply(context);
+            result.changed = true;
+            result.blocked = true;
+            result.reason = "Hard response filter replaced an unsupported internet-state claim.";
+            return finish();
+        }
+    }
+
+    if (result.text.empty())
+    {
+        result.text = "I lost that reply before it was safe to send. Try that once more.";
+        result.changed = true;
+        result.blocked = true;
+        result.reason = "Hard response filter replaced an empty or invalid reply.";
+    }
+    else if (result.changed && !result.blocked &&
+        result.reason == "Hard response filter passed.")
+    {
+        result.reason = "Hard response filter removed structural control data or generated speaker turns.";
+    }
+    return finish();
+}
+
+AiFilterDecision ResponseFilter::ParseAiDecision(const std::string& jsonText) const
+{
+    AiFilterDecision decision;
+    try
+    {
+        // Some local models still wrap JSON in a code fence or a short preamble even
+        // under response_format. Extract one complete object instead of treating that
+        // harmless wrapper as a filter outage.
+        const std::size_t firstBrace = jsonText.find('{');
+        const std::size_t lastBrace = jsonText.rfind('}');
+        if (firstBrace == std::string::npos || lastBrace == std::string::npos ||
+            lastBrace < firstBrace)
+        {
+            decision.reason = "AI response review returned no JSON object.";
+            return decision;
+        }
+        const nlohmann::json document = nlohmann::json::parse(
+            jsonText.substr(firstBrace, lastBrace - firstBrace + 1));
+        if (!document.is_object() || !document.contains("verdict") ||
+            !document["verdict"].is_string())
+        {
+            decision.reason = "AI response review omitted its verdict.";
+            return decision;
+        }
+        const std::string verdict = Lower(document["verdict"].get<std::string>());
+        if (verdict != "allow" && verdict != "replace")
+        {
+            decision.reason = "AI response review returned an unknown verdict.";
+            return decision;
+        }
+        decision.parsed = true;
+        decision.replace = verdict == "replace";
+        if (document.contains("reason") && document["reason"].is_string())
+        {
+            decision.reason = document["reason"].get<std::string>();
+        }
+        if (decision.replace)
+        {
+            if (!document.contains("replacement") || !document["replacement"].is_string())
+            {
+                decision.parsed = false;
+                decision.reason = "AI response review requested replacement without text.";
+                return decision;
+            }
+            decision.replacement = Trim(document["replacement"].get<std::string>());
+            if (decision.replacement.empty())
+            {
+                decision.parsed = false;
+                decision.reason = "AI response review returned an empty replacement.";
+            }
+        }
+        return decision;
+    }
+    catch (const std::exception& error)
+    {
+        decision.reason = std::string("AI response review was not valid JSON: ") + error.what();
+        return decision;
+    }
+}
+
+} // namespace revia::agents

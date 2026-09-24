@@ -1,0 +1,26 @@
+# Create deliberately in the owner's existing Render account. No deployment is implied.
+services:
+  - type: web
+    name: revia-text-relay
+    runtime: node
+    plan: free
+    rootDir: Tools/Presence/WebDemo
+    buildCommand: npm ci --omit=dev --ignore-scripts
+    startCommand: npm start
+    healthCheckPath: /healthz
+    autoDeployTrigger: off
+    envVars:
+      - key: NODE_VERSION
+        value: 24.21.0
+      - key: NODE_ENV
+        value: production
+      - key: REVIA_WEB_BIND
+        value: 0.0.0.0
+      - key: REVIA_WEB_HOST_ID
+        value: revia-public
+      - key: REVIA_WEB_ORIGINS
+        sync: false
+      - key: REVIA_WEB_HOST_TOKEN_SHA256
+        sync: false
+      - key: REVIA_WEB_INVITE_SHA256
+        sync: false

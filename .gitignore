@@ -1,0 +1,29 @@
+# Build output
+cmake-build-*/
+build/
+out/
+*.exe
+*.obj
+*.o
+aqtinstall.log
+
+# Runtime data
+/Logs/
+/Memory/
+/Audit/
+/Goals/
+/Models/*.gguf
+/Models/*.bin
+/ThirdParty/
+/RuntimeData/
+__pycache__/
+*.pyc
+
+# IDE
+.idea/workspace.xml
+.vs/
+.vscode/
+
+# OS
+.DS_Store
+Thumbs.db

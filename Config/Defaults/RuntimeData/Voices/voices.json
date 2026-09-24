@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "presets": [
+    {
+      "id": "revia-bright",
+      "name": "Revia Bright",
+      "description": "A bright youthful synthetic girl voice with clear diction, curious energy, gentle confidence, and a lightly playful android quality. Warm and expressive, but never babyish, shrill, breathy, or exaggerated.",
+      "language": "English",
+      "referenceText": "Wait, I found it. The pattern is clearer now, and I think this part matters.",
+      "referenceAudioPath": "RuntimeData/Voices/revia-bright/reference.wav",
+      "createdAt": "2026-08-16T20:43:00Z"
+    }
+  ],
+  "profileAssignments": {
+    "revia": "revia-bright"
+  }
+}

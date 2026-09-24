@@ -1,0 +1,14 @@
+{
+  "epoch": "00000000-0000-4000-8000-000000000001",
+  "sessionId": "00000000-0000-4000-8000-000000000002",
+  "requestId": "00000000-0000-4000-8000-000000000003",
+  "valid": [
+    { "direction": "relay", "frame": { "version": 1, "type": "welcome", "epoch": "00000000-0000-4000-8000-000000000001" } },
+    { "direction": "host", "frame": { "version": 1, "type": "ready", "epoch": "00000000-0000-4000-8000-000000000001", "state": "online" } },
+    { "direction": "relay", "frame": { "version": 1, "type": "turn", "epoch": "00000000-0000-4000-8000-000000000001", "sessionId": "00000000-0000-4000-8000-000000000002", "requestId": "00000000-0000-4000-8000-000000000003", "text": "Hello 😀", "deadline": 1790035320000 } },
+    { "direction": "host", "frame": { "version": 1, "type": "result", "epoch": "00000000-0000-4000-8000-000000000001", "sessionId": "00000000-0000-4000-8000-000000000002", "requestId": "00000000-0000-4000-8000-000000000003", "state": "completed", "text": "Literal <b>text</b>." } },
+    { "direction": "relay", "frame": { "version": 1, "type": "cancel", "epoch": "00000000-0000-4000-8000-000000000001", "sessionId": "00000000-0000-4000-8000-000000000002", "requestId": "00000000-0000-4000-8000-000000000003" } },
+    { "direction": "host", "frame": { "version": 1, "type": "cancelled", "epoch": "00000000-0000-4000-8000-000000000001", "sessionId": "00000000-0000-4000-8000-000000000002", "requestId": "00000000-0000-4000-8000-000000000003" } },
+    { "direction": "relay", "frame": { "version": 1, "type": "end", "epoch": "00000000-0000-4000-8000-000000000001", "sessionId": "00000000-0000-4000-8000-000000000002" } }
+  ]
+}

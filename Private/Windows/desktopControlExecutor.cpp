@@ -1,0 +1,1638 @@
+#include "Windows/desktopControlExecutor.h"
+
+#include "Policy/desktopAuthorization.h"
+#include "Windows/applicationLocator.h"
+#include "Windows/desktopObserver.h"
+#include "Windows/targetBinding.h"
+#include "Windows/uiaElementLocator.h"
+
+#include <algorithm>
+#include <chrono>
+#include <cwctype>
+#include <filesystem>
+#include <sstream>
+#include <thread>
+#include <vector>
+
+#ifdef _WIN32
+#include <windows.h>
+#include <uiautomation.h>
+#endif
+
+namespace revia::actions::windows
+{
+
+// Splits UTF-16 into Unicode scalar values, keeping a surrogate pair together.
+//
+// The previous loop walked code units, so a non-BMP character -- an emoji, most
+// historic scripts -- was delivered as two separate SendInput calls with a stop check
+// between them. Windows composes a pair only when both halves arrive together, so that
+// was both a corruption bug and a place where a cancellation could tear a character in
+// half.
+std::vector<std::wstring> SplitScalars(const std::wstring& text)
+{
+    std::vector<std::wstring> scalars;
+    scalars.reserve(text.size());
+    for (std::size_t index = 0; index < text.size();)
+    {
+        const wchar_t unit = text[index];
+        const bool highSurrogate = unit >= 0xD800 && unit <= 0xDBFF;
+        const bool pairFollows = highSurrogate && index + 1 < text.size() &&
+            text[index + 1] >= 0xDC00 && text[index + 1] <= 0xDFFF;
+        if (pairFollows)
+        {
+            scalars.emplace_back(text.substr(index, 2));
+            index += 2;
+            continue;
+        }
+        scalars.emplace_back(1, unit);
+        ++index;
+    }
+    return scalars;
+}
+
+
+namespace
+{
+#ifdef _WIN32
+
+template <typename T>
+void Release(T*& value)
+{
+    if (value != nullptr)
+    {
+        value->Release();
+        value = nullptr;
+    }
+}
+
+struct VirtualDesktop
+{
+    int left = 0;
+    int top = 0;
+    int width = 0;
+    int height = 0;
+};
+
+VirtualDesktop DesktopBounds()
+{
+    VirtualDesktop bounds;
+    bounds.left = GetSystemMetrics(SM_XVIRTUALSCREEN);
+    bounds.top = GetSystemMetrics(SM_YVIRTUALSCREEN);
+    bounds.width = GetSystemMetrics(SM_CXVIRTUALSCREEN);
+    bounds.height = GetSystemMetrics(SM_CYVIRTUALSCREEN);
+    return bounds;
+}
+
+bool OnVirtualDesktop(const int x, const int y)
+{
+    const VirtualDesktop desktop = DesktopBounds();
+    return desktop.width > 1 && desktop.height > 1 &&
+        x >= desktop.left && y >= desktop.top &&
+        x < desktop.left + desktop.width && y < desktop.top + desktop.height;
+}
+
+// SendInput's absolute space is 0..65535 across the whole virtual desktop, which is the
+// same space the screen-capture service already reports monitors in, so a coordinate
+// that came from what Revia saw and a coordinate injected here mean the same pixel.
+bool ToAbsolute(const int x, const int y, LONG& outX, LONG& outY)
+{
+    const VirtualDesktop desktop = DesktopBounds();
+    if (!OnVirtualDesktop(x, y))
+    {
+        return false;
+    }
+    outX = static_cast<LONG>(
+        (static_cast<long long>(x - desktop.left) * 65535) / (desktop.width - 1));
+    outY = static_cast<LONG>(
+        (static_cast<long long>(y - desktop.top) * 65535) / (desktop.height - 1));
+    return true;
+}
+
+bool Send(std::vector<INPUT> events)
+{
+    if (events.empty())
+    {
+        return false;
+    }
+    const UINT sent = SendInput(
+        static_cast<UINT>(events.size()), events.data(), sizeof(INPUT));
+    return sent == events.size();
+}
+
+INPUT MouseEvent(const DWORD flags, const LONG x = 0, const LONG y = 0, const DWORD data = 0)
+{
+    INPUT event{};
+    event.type = INPUT_MOUSE;
+    event.mi.dx = x;
+    event.mi.dy = y;
+    event.mi.mouseData = data;
+    event.mi.dwFlags = flags;
+    return event;
+}
+
+INPUT KeyEvent(const WORD virtualKey, const bool down)
+{
+    INPUT event{};
+    event.type = INPUT_KEYBOARD;
+    event.ki.wVk = virtualKey;
+    event.ki.wScan = static_cast<WORD>(MapVirtualKeyW(virtualKey, MAPVK_VK_TO_VSC));
+    event.ki.dwFlags = down ? 0U : KEYEVENTF_KEYUP;
+    return event;
+}
+
+INPUT UnicodeEvent(const wchar_t unit, const bool down)
+{
+    INPUT event{};
+    event.type = INPUT_KEYBOARD;
+    event.ki.wScan = static_cast<WORD>(unit);
+    event.ki.dwFlags = KEYEVENTF_UNICODE | (down ? 0U : KEYEVENTF_KEYUP);
+    return event;
+}
+
+// Which window, not merely which program.
+//
+// A process id alone cannot tell two windows of one program apart, and a browser or an
+// editor with two documents open is the ordinary case, not an exotic one. Binding the
+// window handle as well is what makes "the window I decided about" and "the window this
+// keystroke is about to reach" the same claim.
+//
+// The pair is checked together: a dead handle reports no process, and a reused process
+// id belongs to a different handle, so neither half can drift alone.
+struct WindowIdentity
+{
+    HWND window = nullptr;
+    DWORD processId = 0;
+
+    [[nodiscard]] bool Valid() const { return window != nullptr && processId != 0; }
+    [[nodiscard]] bool operator==(const WindowIdentity& other) const
+    {
+        return window == other.window && processId == other.processId;
+    }
+};
+
+WindowIdentity IdentityOf(const HWND window)
+{
+    WindowIdentity identity;
+    if (window == nullptr)
+    {
+        return identity;
+    }
+    DWORD processId = 0;
+    GetWindowThreadProcessId(window, &processId);
+    identity.window = window;
+    identity.processId = processId;
+    return identity;
+}
+
+WindowIdentity ForegroundIdentity()
+{
+    return IdentityOf(GetForegroundWindow());
+}
+
+DWORD ForegroundProcessId()
+{
+    return ForegroundIdentity().processId;
+}
+
+HWND NativeWindowHandle(IUIAutomationElement* element)
+{
+    UIA_HWND handle = nullptr;
+    if (element == nullptr ||
+        FAILED(element->get_CurrentNativeWindowHandle(&handle)))
+    {
+        return nullptr;
+    }
+    return static_cast<HWND>(handle);
+}
+
+// Revia may not type or click into Revia.
+//
+// Her own confirmation dialogs are ordinary windows. Under the confined scope the
+// approved-application list keeps her out of them by accident; under whole_desktop
+// nothing did, which made "ask the user" and "click the button yourself" the same
+// gesture. An approval she can grant herself is not an approval.
+//
+// Unconditional, and not a capability switch: there is no legitimate reason for
+// synthesized input to arrive in the process that is synthesizing it.
+bool BelongsToRevia(const WindowIdentity& identity)
+{
+    return identity.processId != 0 && identity.processId == GetCurrentProcessId();
+}
+
+std::string ExecutableOfProcess(const DWORD processId)
+{
+    return processId == 0
+        ? std::string{} : WideToUtf8(ProcessFileName(static_cast<int>(processId)));
+}
+
+std::string ExecutableAtPoint(const int x, const int y)
+{
+    const POINT point{static_cast<LONG>(x), static_cast<LONG>(y)};
+    const HWND window = WindowFromPoint(point);
+    if (window == nullptr)
+    {
+        return {};
+    }
+    DWORD processId = 0;
+    GetWindowThreadProcessId(window, &processId);
+    return ExecutableOfProcess(processId);
+}
+
+// Brings the requested window forward and confirms that *that exact window* is the one
+// receiving input, not merely some window of the right program.
+//
+// Fails closed when the element exposes no window handle: without one there is nothing
+// to bind the action to, and an unbindable target is not a target.
+bool FocusAndConfirm(
+    IUIAutomationElement* window,
+    const std::string& application,
+    WindowIdentity& outIdentity,
+    std::string& outFailure)
+{
+    const WindowIdentity wanted = IdentityOf(NativeWindowHandle(window));
+    if (!wanted.Valid())
+    {
+        outFailure = "The target window of " + application +
+            " exposes no window handle, so input could not be bound to it.";
+        return false;
+    }
+
+    if (ForegroundIdentity() == wanted)
+    {
+        outIdentity = wanted;
+        return true;
+    }
+    if (window == nullptr || FAILED(window->SetFocus()))
+    {
+        outFailure = "The target window of " + application + " could not be focused.";
+        return false;
+    }
+    // Windows can defer a foreground change; a bounded poll is the difference between
+    // "the window was not ready yet" and "something else owns the keyboard".
+    for (int attempt = 0; attempt < 12; ++attempt)
+    {
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        if (ForegroundIdentity() == wanted)
+        {
+            outIdentity = wanted;
+            return true;
+        }
+    }
+    outFailure = "The foreground window is not the requested window of " + application +
+        "; no input was synthesized.";
+    return false;
+}
+
+// The runtime id of whatever currently holds the caret, or empty if that cannot be read.
+std::string FocusedRuntimeId(IUIAutomation* automation)
+{
+    if (automation == nullptr) return {};
+    IUIAutomationElement* focused = nullptr;
+    if (FAILED(automation->GetFocusedElement(&focused)) || focused == nullptr) return {};
+    std::string id = ElementRuntimeId(focused);
+    Release(focused);
+    return id;
+}
+
+// A UIA control may share its parent's HWND, as Edge's address field does.
+bool NativeFocusOf(const HWND window, HWND& outFocused)
+{
+    outFocused = nullptr;
+    if (window == nullptr)
+    {
+        return false;
+    }
+    GUITHREADINFO info{};
+    info.cbSize = sizeof(info);
+    if (GetGUIThreadInfo(GetWindowThreadProcessId(window, nullptr), &info) == FALSE)
+    {
+        return false;
+    }
+    outFocused = info.hwndFocus;
+    return info.hwndFocus != nullptr;
+}
+
+// The consequence gate.
+//
+// It runs at the last possible moment, because the name on a button is only knowable
+// once there is a button. It can only refuse: everything else -- mode, scope, capability
+// switches, risk ceiling, rate limit -- has already had its say by the time this is
+// asked, and a permissive answer here does not override any of them.
+policy::TargetEvidence ToEvidence(const TargetBinding& binding)
+{
+    policy::TargetEvidence evidence;
+    evidence.resolved = binding.valid;
+    evidence.controlName = binding.controlName;
+    evidence.automationId = binding.automationId;
+    evidence.controlType = binding.controlType;
+    evidence.isPassword = binding.isPassword;
+    evidence.windowTitle = binding.windowTitle;
+    evidence.executable = binding.executable;
+    return evidence;
+}
+
+// Which chords only move around, and which might do something.
+//
+// The default direction matters here. Enumerating the chords that commit would mean
+// every application-specific shortcut nobody listed is treated as harmless -- and
+// ctrl+enter sends a message in a great many programs. So the list is of chords known
+// to be navigation, and everything else is assumed to be capable of committing until
+// something says otherwise.
+policy::DesktopOperation ClassifyChord(const std::string& normalizedChord)
+{
+    static const std::vector<std::string> navigation = {
+        "left", "right", "up", "down", "home", "end", "pageup", "pagedown",
+        "tab", "shift+tab", "escape", "ctrl+c", "ctrl+left", "ctrl+right",
+        "ctrl+home", "ctrl+end", "ctrl+a", "ctrl+f", "f3", "shift+left",
+        "shift+right", "shift+up", "shift+down", "shift+home", "shift+end"};
+    return std::find(navigation.begin(), navigation.end(), normalizedChord) !=
+        navigation.end()
+        ? policy::DesktopOperation::KeyNavigate
+        : policy::DesktopOperation::KeyActivate;
+}
+
+// Every route in this file asks through the shared component rather than deciding for
+// itself, so a pointer, a keystroke and a UI Automation pattern cannot drift apart.
+using policy::AuthorizeOrExplain;
+
+ActionResult LaunchApplication(
+    const ActionRequest& request,
+    const PolicyDecision& decision)
+{
+    ActionResult result;
+    result.attempted = true;
+    result.backend = "windows_create_process";
+
+    const std::wstring executable =
+        ResolveApplicationExecutable(Utf8ToWide(request.application));
+    if (executable.empty())
+    {
+        result.message =
+            "Windows could not find " + request.application + " in the search path or installed applications.";
+        return result;
+    }
+
+    // The command line is assembled here rather than taken from the model: the only
+    // variable part is a path policy already confined to an approved root, so there is
+    // no free-form argument string for anything to hide in.
+    std::wstring commandLine = L"\"" + executable + L"\"";
+    const std::filesystem::path& openTarget =
+        decision.canonicalSource.empty() ? request.source : decision.canonicalSource;
+    if (!openTarget.empty())
+    {
+        commandLine += L" \"" + openTarget.wstring() + L"\"";
+    }
+
+    STARTUPINFOW startup{};
+    startup.cb = sizeof(startup);
+    PROCESS_INFORMATION process{};
+    std::vector<wchar_t> mutableCommandLine(commandLine.begin(), commandLine.end());
+    mutableCommandLine.push_back(L'\0');
+    if (CreateProcessW(
+            executable.c_str(), mutableCommandLine.data(), nullptr, nullptr, FALSE,
+            CREATE_NEW_PROCESS_GROUP, nullptr, nullptr, &startup, &process) == FALSE)
+    {
+        result.message = "Windows refused to start " + request.application + ".";
+        return result;
+    }
+
+    std::ostringstream message;
+    message << "Started " << request.application << " as process "
+            << process.dwProcessId << '.';
+    // Give the window a moment to exist so a following action has something to focus.
+    WaitForInputIdle(process.hProcess, 5000);
+    CloseHandle(process.hThread);
+    CloseHandle(process.hProcess);
+    result.succeeded = true;
+    result.message = message.str();
+    return result;
+}
+
+struct PointerTarget
+{
+    int x = 0;
+    int y = 0;
+    int endX = 0;
+    int endY = 0;
+    bool resolved = false;
+    bool aimed = false;
+    // True when the target became stale rather than being wrong. The distinction is
+    // what tells the operator loop to observe again and re-decide instead of treating
+    // the step as a failure of the plan.
+    bool stale = false;
+    std::string failure;
+
+    // What the caller reports. A stale target says so in words the next decision reads,
+    // because "that did not work" and "you are looking at an old screen" call for
+    // opposite responses: one means try something else, the other means look again and
+    // very possibly try the same thing.
+    [[nodiscard]] std::string Message() const
+    {
+        return stale ? failure + " The target was not acted on; observe again and "
+            "re-decide." : failure;
+    }
+};
+
+std::uint64_t SteadyMilliseconds()
+{
+    return static_cast<std::uint64_t>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count());
+}
+
+// The foreground window's rectangle, measured the way the observation measured it.
+//
+// Through UI Automation rather than GetWindowRect deliberately: DWM frame insets make
+// the two disagree by a few pixels on a normal window, and since this value is compared
+// for equality against one DesktopObserver recorded, a different ruler would report
+// every window as having moved.
+//
+// An invalid result is not a failure. It means the geometry half of the staleness check
+// is skipped while identity, generation and age still apply.
+ElementBounds ForegroundWindowBounds(IUIAutomation* automation, const HWND window)
+{
+    ElementBounds bounds;
+    if (automation == nullptr || window == nullptr)
+    {
+        return bounds;
+    }
+    IUIAutomationElement* element = nullptr;
+    if (FAILED(automation->ElementFromHandle(window, &element)) || element == nullptr)
+    {
+        return bounds;
+    }
+    bounds = ElementBoundingRectangle(element);
+    Release(element);
+    return bounds;
+}
+
+// What the screen is right now. `windowBounds` is optional because the caller in screen
+// space has no single window to measure -- there, identity is the whole check.
+VisualTargetFacts CurrentVisualFacts(
+    const WindowIdentity& foreground, const ElementBounds* windowBounds)
+{
+    VisualTargetFacts facts;
+    facts.latestGeneration = DesktopObserver::LatestGeneration();
+    facts.nowMs = SteadyMilliseconds();
+    facts.foregroundWindow = static_cast<void*>(foreground.window);
+    facts.foregroundProcessId = static_cast<std::uint32_t>(foreground.processId);
+    if (windowBounds != nullptr && windowBounds->valid)
+    {
+        facts.windowBoundsKnown = true;
+        facts.windowLeft = windowBounds->left;
+        facts.windowTop = windowBounds->top;
+        facts.windowRight = windowBounds->right;
+        facts.windowBottom = windowBounds->bottom;
+    }
+    return facts;
+}
+
+// Turns a visually grounded target into a point, or explains why it will not.
+//
+// The coordinate is computed here, at the last moment before the pointer moves, and
+// never carried in the request. That is the whole difference between acting on something
+// that was seen and acting on a number somebody wrote down earlier.
+bool AimAtVisualRegion(
+    const ActionRequest& request,
+    const WindowIdentity& foreground,
+    const ElementBounds* windowBounds,
+    PointerTarget& target)
+{
+    const std::string stale = CompareVisualTarget(
+        request.resolution, CurrentVisualFacts(foreground, windowBounds));
+    if (!stale.empty())
+    {
+        target.stale = true;
+        target.failure = stale;
+        return false;
+    }
+    target.x = request.resolution.RegionCentreX();
+    target.y = request.resolution.RegionCentreY();
+    target.aimed = true;
+    if (request.type == ActionType::DragPointer && request.input.HasEndRegion())
+    {
+        target.endX = request.input.EndRegionCentreX();
+        target.endY = request.input.EndRegionCentreY();
+    }
+    return true;
+}
+
+// Confined scope: the point comes from a re-verified element, or from a coordinate that
+// must still land inside the approved window.
+PointerTarget ResolveInsideWindow(
+    IUIAutomation* automation,
+    IUIAutomationElement* window,
+    const ActionRequest& request)
+{
+    PointerTarget target;
+    const ElementBounds windowBounds = ElementBoundingRectangle(window);
+    if (!windowBounds.valid)
+    {
+        target.failure = "The target window has no usable bounds on screen.";
+        return target;
+    }
+
+    if (request.resolution.IsUiaElementTarget())
+    {
+        // The coordinate captured when the plan was made is never the coordinate
+        // clicked: the element is found again and its current centre is used.
+        IUIAutomationElement* element = FindResolvedControl(automation, window, request);
+        if (element == nullptr)
+        {
+            target.failure =
+                "The vision-resolved element changed or disappeared; nothing was clicked.";
+            return target;
+        }
+        const ElementBounds bounds = ElementBoundingRectangle(element);
+        Release(element);
+        if (!bounds.valid)
+        {
+            target.failure = "The resolved element is not currently visible on screen.";
+            return target;
+        }
+        target.x = bounds.left + (bounds.right - bounds.left) / 2;
+        target.y = bounds.top + (bounds.bottom - bounds.top) / 2;
+        target.aimed = true;
+        target.endX = request.input.endX;
+        target.endY = request.input.endY;
+    }
+    else if (request.resolution.IsVisualRegionTarget())
+    {
+        // No element to re-find, so the observation is what gets re-checked instead:
+        // same window, same size and place, still the newest thing looked at.
+        if (!AimAtVisualRegion(request, ForegroundIdentity(), &windowBounds, target))
+        {
+            return target;
+        }
+    }
+    else
+    {
+        if (request.input.hasPoint)
+        {
+            target.x = request.input.x;
+            target.y = request.input.y;
+            target.aimed = true;
+        }
+        target.endX = request.input.endX;
+        target.endY = request.input.endY;
+    }
+
+    const auto inside = [&windowBounds](const int x, const int y)
+    {
+        return x >= windowBounds.left && x < windowBounds.right &&
+            y >= windowBounds.top && y < windowBounds.bottom;
+    };
+    // Even an owner-approved chosen coordinate stays inside the window Revia was given
+    // permission to operate. Nothing here can reach another application by arithmetic.
+    if (target.aimed && !inside(target.x, target.y))
+    {
+        target.failure = "The point is outside the approved application's window.";
+        return target;
+    }
+    if ((request.input.hasEndPoint || request.input.HasEndRegion()) &&
+        !inside(target.endX, target.endY))
+    {
+        target.failure = "The drag would end outside the approved application's window.";
+        return target;
+    }
+    target.resolved = true;
+    return target;
+}
+
+bool MoveTo(const int x, const int y)
+{
+    LONG absoluteX = 0;
+    LONG absoluteY = 0;
+    if (!ToAbsolute(x, y, absoluteX, absoluteY))
+    {
+        return false;
+    }
+    return Send({MouseEvent(
+        MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK,
+        absoluteX, absoluteY)});
+}
+
+DWORD ButtonDownFlag(const ActionRequest::DesktopInput::PointerButton button)
+{
+    switch (button)
+    {
+        case ActionRequest::DesktopInput::PointerButton::Right:
+            return MOUSEEVENTF_RIGHTDOWN;
+        case ActionRequest::DesktopInput::PointerButton::Middle:
+            return MOUSEEVENTF_MIDDLEDOWN;
+        case ActionRequest::DesktopInput::PointerButton::Left:
+        default:
+            return MOUSEEVENTF_LEFTDOWN;
+    }
+}
+
+DWORD ButtonUpFlag(const ActionRequest::DesktopInput::PointerButton button)
+{
+    switch (button)
+    {
+        case ActionRequest::DesktopInput::PointerButton::Right:
+            return MOUSEEVENTF_RIGHTUP;
+        case ActionRequest::DesktopInput::PointerButton::Middle:
+            return MOUSEEVENTF_MIDDLEUP;
+        case ActionRequest::DesktopInput::PointerButton::Left:
+        default:
+            return MOUSEEVENTF_LEFTUP;
+    }
+}
+
+// A drag is the one action that leaves the machine in a changed state partway through.
+// The release is therefore unconditional: every early exit still lets go of the button.
+ActionResult Drag(
+    const ActionRequest& request,
+    const PointerTarget& target,
+    policy::DesktopInputGuard& guard,
+    IUIAutomation* automation,
+    const TargetBinding& destination)
+{
+    ActionResult result;
+    result.attempted = true;
+    result.backend = "windows_send_input";
+    if (!MoveTo(target.x, target.y))
+    {
+        result.message = "The drag start point is not on any attached display.";
+        return result;
+    }
+    if (!OnVirtualDesktop(target.endX, target.endY))
+    {
+        result.message = "The drag end point is not on any attached display.";
+        return result;
+    }
+
+    const DWORD down = ButtonDownFlag(request.input.button);
+    const DWORD up = ButtonUpFlag(request.input.button);
+    if (request.onCommitStarted) request.onCommitStarted(destination.controlName);
+    if (!Send({MouseEvent(down)}))
+    {
+        result.message = "Windows rejected the synthesized button press.";
+        return result;
+    }
+
+    // Interpolated rather than teleported: a drag that jumps in one step is not a drag
+    // as far as most applications are concerned, because they never see it move.
+    constexpr int Steps = 24;
+    bool interrupted = false;
+    bool delivered = true;
+    for (int step = 1; step <= Steps && delivered; ++step)
+    {
+        if (guard.IsTripped())
+        {
+            interrupted = true;
+            break;
+        }
+        const int x = target.x + ((target.endX - target.x) * step) / Steps;
+        const int y = target.y + ((target.endY - target.y) * step) / Steps;
+        delivered = MoveTo(x, y);
+        std::this_thread::sleep_for(std::chrono::milliseconds(8));
+    }
+
+    // Where the button comes up is the whole consequence of a drag. Dragging onto a
+    // folder and dragging onto a Delete target are the same gesture, and the pointer has
+    // been travelling for a fifth of a second: the destination authorized before
+    // mouse-down is a claim about the past. Re-checked here, at the last moment it can
+    // still be acted on.
+    std::string destinationDrift;
+    if (!interrupted && delivered && destination.valid)
+    {
+        destinationDrift = RevalidatePointBinding(
+            automation, destination, target.endX, target.endY,
+            std::chrono::steady_clock::now());
+    }
+
+    if (!destinationDrift.empty())
+    {
+        // Nowhere safe to drop. Return to where the drag began before letting go, so the
+        // item lands back where it started instead of wherever the pointer happens to be.
+        static_cast<void>(MoveTo(target.x, target.y));
+    }
+
+    // Unconditional, and last: every path above ends here, so a button Revia pressed is
+    // never left held by a refusal, a stop, or a rejected move.
+    const bool released = Send({MouseEvent(up)});
+
+    result.succeeded =
+        delivered && released && !interrupted && destinationDrift.empty();
+    result.message = interrupted
+        ? "The drag was stopped and the button released: " + guard.Reason()
+        : !destinationDrift.empty()
+            ? "The drop was refused and the item returned to where it started: " +
+                destinationDrift + "."
+            : !released
+                ? "The drag finished but Windows rejected the button release."
+                : !delivered
+                    ? "The drag was interrupted by a rejected move; the button was released."
+                    : "Dragged from " + std::to_string(target.x) + ", " +
+                        std::to_string(target.y) + " to " + std::to_string(target.endX) +
+                        ", " + std::to_string(target.endY) + ".";
+    return result;
+}
+
+ActionResult TypeTextInput(
+    const ActionRequest& request,
+    const CapabilitySettings::DesktopControl& settings,
+    policy::DesktopInputGuard& guard,
+    const WindowIdentity& bound,
+    IUIAutomation* automation,
+    const TargetBinding& control)
+{
+    ActionResult result;
+    result.attempted = true;
+    result.backend = "windows_send_input";
+    // Policy already applied this ceiling. Re-checking it at the boundary that actually
+    // presses the keys means a future caller cannot reach SendInput around it.
+    if (request.value.size() > settings.maxTypedCharacters)
+    {
+        result.message = "The text exceeds the configured typing length limit.";
+        return result;
+    }
+    const std::wstring text = Utf8ToWide(request.value);
+    if (text.empty())
+    {
+        result.message = "The text could not be encoded for keyboard entry.";
+        return result;
+    }
+
+    // Bound once, then compared per character.
+    //
+    // The comparison is window handle and process id together, not the process alone.
+    // A process check catches a switch to another program and misses the case that
+    // actually happens: a second document in the same program. Text meant for one
+    // window must not finish in the other, and two windows of one process share a
+    // process id but never a handle.
+    if (!bound.Valid())
+    {
+        result.message = "No window could be bound to, so nothing was typed.";
+        return result;
+    }
+
+    const std::vector<std::wstring> scalars = SplitScalars(text);
+    std::size_t sent = 0;
+    std::size_t index = 0;
+    // Revalidate before each Unicode scalar. Queuing a burst lets the remaining input
+    // follow focus into a different field before the next check can stop it. A scalar's
+    // key events still travel together so a surrogate pair is never split.
+    constexpr std::size_t ChunkScalars = 1;
+
+    TargetBinding lastConfirmedControl = control;
+    HWND nativeFocus = nullptr;
+    if (!NativeFocusOf(bound.window, nativeFocus)) nativeFocus = nullptr;
+
+    const auto stillAimedCorrectly = [&](std::string& outReason)
+    {
+        if (guard.IsTripped())
+        {
+            outReason = guard.Reason();
+            return false;
+        }
+        if (!(ForegroundIdentity() == bound))
+        {
+            outReason = "focus left the window it was aimed at";
+            return false;
+        }
+        // The window is not enough. Two controls in one window can mean entirely
+        // different things, and focus moving from a document to a Send button is a
+        // change of consequence with no change of handle.
+        const auto observedAt = std::chrono::steady_clock::now();
+        if (lastConfirmedControl.valid)
+        {
+            const std::string drift = RevalidateFocusBinding(
+                automation, lastConfirmedControl, observedAt);
+            if (!drift.empty())
+            {
+                outReason = drift;
+                return false;
+            }
+        }
+        // UIA can finish reading the old control while native focus is already moving.
+        // Check the native caret after that slower read, immediately before injection.
+        if (nativeFocus != nullptr)
+        {
+            HWND currentFocus = nullptr;
+            if (!NativeFocusOf(bound.window, currentFocus) || currentFocus != nativeFocus)
+            {
+                outReason = "native keyboard focus moved to another control";
+                return false;
+            }
+        }
+        // A successful re-observation renews freshness only inside this operation.
+        // Identity, task and policy stay fixed; stale or changed controls still stop.
+        lastConfirmedControl.observedAt = observedAt;
+        return true;
+    };
+
+    while (index < scalars.size())
+    {
+        std::string reason;
+        if (!stillAimedCorrectly(reason))
+        {
+            result.message = "Typing stopped after " + std::to_string(sent) +
+                " characters: " + reason + ".";
+            return result;
+        }
+
+        // A newline or a tab is a control operation, not a character. Both can move
+        // focus or submit, so each is delivered alone and the binding is re-checked
+        // afterwards rather than assumed to have survived.
+        const std::wstring& scalar = scalars[index];
+        if (scalar == L"\n" || scalar == L"\t")
+        {
+            const WORD key = scalar == L"\n" ? VK_RETURN : VK_TAB;
+            if (!Send({KeyEvent(key, true), KeyEvent(key, false)}))
+            {
+                result.message = "Windows rejected synthesized keyboard input after " +
+                    std::to_string(sent) + " characters.";
+                return result;
+            }
+            ++sent;
+            ++index;
+            // Whatever had focus may not have it now. Anything further has to be
+            // authorized against wherever the caret actually went.
+            std::string moved;
+            if (!stillAimedCorrectly(moved))
+            {
+                result.message = "Stopped after " + std::to_string(sent) +
+                    " characters: the control operation moved focus (" + moved + ").";
+                return result;
+            }
+            continue;
+        }
+
+        // One batch per chunk, and a surrogate pair never spans two batches: both code
+        // units of one scalar go into the same SendInput call, which is the only way
+        // Windows reliably composes them into a single character.
+        std::vector<INPUT> batch;
+        std::size_t inChunk = 0;
+        while (index < scalars.size() && inChunk < ChunkScalars)
+        {
+            const std::wstring& unitPair = scalars[index];
+            if (unitPair == L"\n" || unitPair == L"\t")
+            {
+                break;
+            }
+            for (const wchar_t unit : unitPair)
+            {
+                batch.push_back(UnicodeEvent(unit, true));
+                batch.push_back(UnicodeEvent(unit, false));
+            }
+            ++index;
+            ++inChunk;
+        }
+        if (batch.empty())
+        {
+            continue;
+        }
+        if (!Send(std::move(batch)))
+        {
+            result.message = "Windows rejected synthesized keyboard input after " +
+                std::to_string(sent) + " characters.";
+            return result;
+        }
+        sent += inChunk;
+    }
+    result.succeeded = true;
+    // Worded as submission, not as effect, because that is the whole of what is known
+    // here. SendInput returning true means Windows accepted the events onto the input
+    // queue; whether the target applied them is a different question, answerable only by
+    // looking afterwards. Saying "typed" on this evidence produced a result that claimed
+    // 600 characters had been entered while no field had changed.
+    //
+    // The text itself is never echoed into a message that reaches logs, the UI, or
+    // memory. The audit record keeps its length for the same reason.
+    result.message = "Submitted " + std::to_string(sent) + " characters to " +
+        ExecutableOfProcess(bound.processId) +
+        ". Whether they were applied is for the verification step to observe.";
+    return result;
+}
+
+ActionResult PressKeyChord(
+    const ActionRequest& request,
+    policy::DesktopInputGuard* guard,
+    const WindowIdentity& bound,
+    IUIAutomation* automation,
+    const TargetBinding& control)
+{
+    ActionResult result;
+    result.attempted = true;
+    result.backend = "windows_send_input";
+    KeyChord chord;
+    std::string error;
+    if (!ParseKeyChord(request.input.keys, chord, error))
+    {
+        result.message = error;
+        return result;
+    }
+
+    // Re-checked here rather than trusted from the caller. A chord authorized against a
+    // focused text field must not be delivered to a Send button that took focus while
+    // the decision was being made, and this is the last point where that is knowable.
+    if (guard != nullptr && guard->IsTripped())
+    {
+        result.message = "The chord was not sent: " + guard->Reason();
+        return result;
+    }
+    if (bound.Valid() && !(ForegroundIdentity() == bound))
+    {
+        result.message = "The chord was not sent: focus left the window it was aimed at.";
+        return result;
+    }
+    if (control.valid)
+    {
+        const std::string drift = RevalidateFocusBinding(
+            automation, control, std::chrono::steady_clock::now());
+        if (!drift.empty())
+        {
+            result.message = "The chord was not sent: " + drift + ".";
+            return result;
+        }
+    }
+
+    std::vector<INPUT> events;
+    for (const int modifier : chord.modifierVirtualKeys)
+    {
+        events.push_back(KeyEvent(static_cast<WORD>(modifier), true));
+    }
+    events.push_back(KeyEvent(static_cast<WORD>(chord.virtualKey), true));
+    events.push_back(KeyEvent(static_cast<WORD>(chord.virtualKey), false));
+    for (auto modifier = chord.modifierVirtualKeys.rbegin();
+         modifier != chord.modifierVirtualKeys.rend(); ++modifier)
+    {
+        events.push_back(KeyEvent(static_cast<WORD>(*modifier), false));
+    }
+    // One SendInput call, so a modifier can never be left held by a partial batch.
+    if (request.beforeCommit)
+    {
+        const std::string refusal = request.beforeCommit();
+        if (!refusal.empty())
+        {
+            result.message = "The chord was not sent: " + refusal + ".";
+            return result;
+        }
+        const std::string drift = RevalidateFocusBinding(
+            automation, control, std::chrono::steady_clock::now());
+        if (!drift.empty() || (bound.Valid() && !(ForegroundIdentity() == bound)))
+        {
+            result.message = "The keyboard target changed while the draft was checked.";
+            return result;
+        }
+    }
+    if (request.onCommitStarted) request.onCommitStarted(control.controlName);
+    result.succeeded = Send(std::move(events));
+    result.message = result.succeeded
+        ? "Pressed " + chord.normalized + "."
+        : "Windows rejected the synthesized key chord.";
+    return result;
+}
+
+#endif // _WIN32
+} // namespace
+
+DesktopControlExecutor::DesktopControlExecutor(
+    CapabilitySettings::DesktopControl inputSettings,
+    std::shared_ptr<policy::DesktopInputGuard> inputGuard,
+    std::shared_ptr<policy::DesktopApprovalGate> inputApprovals)
+    : settings(std::move(inputSettings)),
+      guard(std::move(inputGuard)),
+      approvals(std::move(inputApprovals))
+{
+}
+
+bool DesktopControlExecutor::Handles(const ActionType type) const
+{
+    return IsDesktopControlAction(type);
+}
+
+ActionResult DesktopControlExecutor::Execute(
+    const ActionRequest& request,
+    const PolicyDecision& decision)
+{
+    ActionResult result;
+    result.dryRun = request.dryRun;
+    if (request.dryRun)
+    {
+        result.succeeded = true;
+        result.message =
+            "Desktop-operation dry-run passed policy; no input was synthesized.";
+        return result;
+    }
+    if (!guard)
+    {
+        // The stop path is not optional equipment. Without it there is no way to
+        // interrupt what this executor starts, so it does not start anything.
+        result.message = "Desktop control has no emergency stop, so it refused to act.";
+        return result;
+    }
+    if (request.requiresRuntimeGuard && !request.beforeCommit && !request.navigationConstraint.enabled)
+    {
+        result.message = ValidateActionTarget(request, {});
+        return result;
+    }
+#ifdef _WIN32
+    // Sampled before anything is injected, and only here: Revia's own modifier
+    // keystrokes would otherwise look exactly like the physical stop hold.
+    if (guard->CheckPhysicalStop())
+    {
+        result.message = "Desktop control is stopped: " + guard->Reason();
+        return result;
+    }
+
+    if (request.type == ActionType::LaunchApplication)
+    {
+        return LaunchApplication(request, decision);
+    }
+
+    // Naming an application asks for the confined form; leaving it out asks for the
+    // desktop. Policy has already refused the second unless the owner widened the scope.
+    const bool screenSpace = request.application.empty();
+
+    const HRESULT initialized = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+    const bool shouldUninitialize = initialized == S_OK || initialized == S_FALSE;
+    if (FAILED(initialized) && initialized != RPC_E_CHANGED_MODE)
+    {
+        result.message = "COM could not initialize for desktop operation.";
+        return result;
+    }
+
+    IUIAutomation* automation = nullptr;
+    if (FAILED(CoCreateInstance(
+            CLSID_CUIAutomation, nullptr, CLSCTX_INPROC_SERVER, IID_IUIAutomation,
+            reinterpret_cast<void**>(&automation))) || automation == nullptr)
+    {
+        // Confined actions need it to verify the window. Screen-space actions only use
+        // it to describe what they touched, which is worth losing but not worth failing.
+        if (!screenSpace)
+        {
+            result.message = "Windows UI Automation is unavailable, so the target window "
+                "cannot be verified and no input was synthesized.";
+            if (shouldUninitialize) CoUninitialize();
+            return result;
+        }
+    }
+
+    IUIAutomationElement* window = nullptr;
+    WindowIdentity bound;
+    result.attempted = true;
+    result.backend = "windows_send_input";
+    if (!screenSpace)
+    {
+        window = FindApplicationWindow(automation, request);
+        if (window == nullptr)
+        {
+            result.message = "No matching window was found for " + request.application + ".";
+            Release(automation);
+            if (shouldUninitialize) CoUninitialize();
+            return result;
+        }
+        std::string focusFailure;
+        if (!FocusAndConfirm(window, request.application, bound, focusFailure))
+        {
+            result.message = focusFailure;
+            Release(window);
+            Release(automation);
+            if (shouldUninitialize) CoUninitialize();
+            return result;
+        }
+    }
+    else
+    {
+        // Screen space names no window, so the binding is whatever is in front at the
+        // moment the decision is acted on. Captured here so every check below compares
+        // against one fixed answer rather than re-asking a question that can change.
+        bound = ForegroundIdentity();
+    }
+
+    const auto finish = [&]()
+    {
+        Release(window);
+        Release(automation);
+        if (shouldUninitialize) CoUninitialize();
+        return result;
+    };
+
+    if (request.type == ActionType::PressKeys || request.type == ActionType::TypeText)
+    {
+        // A shell reached by keystroke is still model text reaching a shell, and in
+        // screen space the only way to know which window will receive it is to look.
+        if (screenSpace && !settings.allowCommandSurfaces)
+        {
+            const std::string focused = ExecutableOfProcess(ForegroundProcessId());
+            if (IsCommandSurfaceExecutable(focused))
+            {
+                result.message = "The focused window is " + focused +
+                    ", a command surface, so nothing was typed.";
+                return finish();
+            }
+        }
+        // Before anything else: she does not get to type into her own windows. An
+        // approval dialog she can answer herself authorizes nothing.
+        if (BelongsToRevia(ForegroundIdentity()))
+        {
+            result.message = "Refused: the focused window belongs to Revia herself, and "
+                "she does not answer her own dialogs.";
+            return finish();
+        }
+
+        // A usable target has to exist before anything is authorized against it.
+        //
+        // Named text entry must reach that exact UIA control. Unnamed text needs a
+        // native child with focus; window shortcuts can target the frame itself.
+        std::string intendedRuntimeId;
+        // The control the caret was confirmed to be on, kept so the check before typing
+        // compares two descriptions of the same thing rather than an id against a
+        // description.
+        TargetBinding intendedTarget;
+        if (!screenSpace)
+        {
+            HWND focusedChild = nullptr;
+            if (!request.control.empty())
+            {
+                // A named control is a claim about where the text will go, and the
+                // claim has to hold at the moment of typing rather than at the moment
+                // of asking.
+                //
+                // An earlier version asked only whether *some* child held the caret.
+                // That is not the same question. A native run caught it: the request
+                // named the document field, another field held the caret, the check
+                // passed because a child was focused, and 560 characters went into the
+                // wrong field and were reported as success. The binding minted from
+                // focus agreed with itself, so no drift was ever detectable. Confirming
+                // identity is what makes the rest of this machinery mean anything.
+                if (automation == nullptr)
+                {
+                    result.message = "Without UI Automation the caret cannot be placed "
+                        "on " + request.control + " or confirmed to be there, so "
+                        "nothing was typed.";
+                    return finish();
+                }
+                IUIAutomationElement* intended = FindControl(automation, window, request);
+                if (intended == nullptr)
+                {
+                    result.message = "No control called " + request.control + " in " +
+                        request.application + ", so there is nothing to type into.";
+                    return finish();
+                }
+                intendedRuntimeId = ElementRuntimeId(intended);
+                static_cast<void>(intended->SetFocus());
+                Release(intended);
+
+                // Focus changes are asynchronous, so this confirms rather than assumes.
+                bool onTarget = false;
+                for (int attempt = 0; attempt < 10 && !onTarget; ++attempt)
+                {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+                    onTarget = !intendedRuntimeId.empty() &&
+                        FocusedRuntimeId(automation) == intendedRuntimeId;
+                }
+                if (!onTarget)
+                {
+                    result.message = "The caret is not on " + request.control + " in " +
+                        request.application + ", so the text would go somewhere else. "
+                        "Nothing was typed.";
+                    return finish();
+                }
+                // Captured here, with focus confirmed to be on the target, rather than
+                // from the element found before SetFocus. A control's rectangle and
+                // name can differ between its unfocused and focused states -- a browser
+                // omnibox is exactly that -- so a description taken beforehand would be
+                // compared against a control that had legitimately changed.
+                intendedTarget = BindFocusedControl(
+                    automation, request.requestedBy, policy::PolicyVersion(settings));
+            }
+            // Browser edit fields can share the frame's native HWND. The independently
+            // verified UIA identity above still binds named text entry to that field.
+            // Window shortcuts need no edit caret; their consequence and focus checks
+            // below still apply before SendInput.
+            const bool nativeFocusKnown = NativeFocusOf(bound.window, focusedChild);
+            if (!nativeFocusKnown || (request.type == ActionType::TypeText &&
+                    intendedRuntimeId.empty() && focusedChild == bound.window))
+            {
+                result.message = "No control in " + request.application +
+                    " has the caret, so keystrokes would be discarded rather than "
+                    "applied. Name the control to type into.";
+                return finish();
+            }
+        }
+
+        // Typing goes into whatever holds the caret, so that is what gets classified.
+        // The password check is the reliable half of this: a secret field says so
+        // itself rather than being inferred from a label.
+        //
+        // Note there is no `found` guard here. Failing to read the target is not a
+        // reason to skip the question -- it is the answer "I do not know what this is",
+        // which the authorizer weighs for itself.
+        const TargetBinding approvedKeyboard = BindFocusedControl(automation,
+            request.requestedBy, policy::PolicyVersion(settings));
+        if (!(result.message = ValidateActionTarget(request, approvedKeyboard)).empty())
+            return finish();
+
+        policy::DesktopOperation operation;
+        if (request.type == ActionType::TypeText)
+        {
+            // A newline in literal text presses Enter on the way past, which can commit
+            // whatever the field belongs to. Text that carries an activation is not the
+            // same operation as text that does not.
+            operation = request.value.find('\n') != std::string::npos
+                ? policy::DesktopOperation::TextEntryWithActivation
+                : policy::DesktopOperation::TextEntry;
+        }
+        else
+        {
+            KeyChord chord;
+            std::string chordError;
+            operation = ParseKeyChord(request.input.keys, chord, chordError)
+                ? ClassifyChord(chord.normalized)
+                : policy::DesktopOperation::KeyActivate;
+        }
+
+        std::string refusal;
+        if (!AuthorizeOrExplain(operation, ToEvidence(approvedKeyboard), settings,
+                request, refusal, approvals.get()))
+        {
+            result.message = refusal;
+            return finish();
+        }
+
+        // Minted after authorization, from what is actually focused right now. This is
+        // what every later chunk is compared against, so that focus moving to another
+        // control inside the same window ends the run rather than silently redirecting
+        // it. The runtime observes and mints; nothing from the request reaches it.
+        TargetBinding typingBinding = automation != nullptr
+            ? BindFocusedControl(automation, request.requestedBy, policy::PolicyVersion(settings))
+            : TargetBinding{};
+
+        // Take the caret back from our own prompt.
+        //
+        // Asking the user is what loses it. A confirmation is a modal owned by Revia's
+        // window, so answering it hands activation to Revia, and Qt delivers that
+        // restoration asynchronously -- after this executor has already brought the
+        // target window forward and put the caret where it belongs. The observed
+        // failures said so in as many words: the caret was on
+        // ReviaWindow...chatPage.chatHistory, which is a chat log, not a browser.
+        //
+        // Deliberately narrow. Only Revia's own windows are recovered from, and only by
+        // re-focusing the control that was already authorized; if any OTHER application
+        // has taken the caret then a person or another program is using the machine, and
+        // that still ends the action. Nothing here re-authorizes anything: the target was
+        // approved above and this only puts the caret back on it.
+        if (intendedTarget.valid && automation != nullptr && !request.control.empty())
+        {
+            constexpr int MaximumRecoveryAttempts = 12;
+            for (int attempt = 0;
+                 attempt < MaximumRecoveryAttempts &&
+                     !SameControl(intendedTarget, typingBinding);
+                 ++attempt)
+            {
+                if (!BelongsToRevia(ForegroundIdentity()))
+                {
+                    // Someone else has it. Not ours to take back.
+                    break;
+                }
+                std::string reacquireFailure;
+                WindowIdentity reacquired;
+                if (!FocusAndConfirm(window, request.application, reacquired, reacquireFailure))
+                {
+                    break;
+                }
+                if (IUIAutomationElement* again = FindControl(automation, window, request))
+                {
+                    static_cast<void>(again->SetFocus());
+                    Release(again);
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds(25));
+                typingBinding = BindFocusedControl(
+                    automation, request.requestedBy, policy::PolicyVersion(settings));
+            }
+        }
+
+        // Focus can move between the confirmation above and this line. If it did, the
+        // binding describes a control nobody asked for, and every later comparison
+        // would agree with it.
+        //
+        // Compared through SameControl rather than by raw runtime id. Edge refused every
+        // keystroke here: the caret was provably on the address bar -- the wait loop
+        // above had just proved it by that same id -- and by this line the id had been
+        // regenerated, because Chromium rebuilds its accessibility nodes constantly. A
+        // recreated node is not a moved caret. SameControl still demands the window, the
+        // automation id, the type, the name, the password flag and the exact rectangle
+        // all agree, which is what actually distinguishes two fields in one window.
+        if (intendedTarget.valid && !SameControl(intendedTarget, typingBinding))
+        {
+            // Say where it went. The previous message named only where the caret was
+            // supposed to be, which made a real failure and a false alarm read
+            // identically and left nothing to diagnose from.
+            const std::string landedOn = typingBinding.valid
+                ? (typingBinding.controlName.empty()
+                    ? (typingBinding.automationId.empty()
+                        ? "an unnamed control" : typingBinding.automationId)
+                    : typingBinding.controlName)
+                : "nothing that can be read";
+            result.message = "The caret left " + request.control + " in " +
+                request.application + " before typing began -- it is on " + landedOn +
+                " now -- so nothing was typed.";
+            return finish();
+        }
+
+        if (policy::IsCommittingOperation(operation))
+        {
+            const std::string drift = CompareBindings(approvedKeyboard, typingBinding);
+            if (!drift.empty())
+            {
+                result.message = "The approved keyboard target changed: " + drift + ".";
+                return finish();
+            }
+        }
+        result = request.type == ActionType::PressKeys
+            ? PressKeyChord(request, guard.get(), bound, automation, typingBinding)
+            : TypeTextInput(request, settings, *guard, bound, automation, typingBinding);
+        return finish();
+    }
+
+    PointerTarget target;
+    if (screenSpace)
+    {
+        if (request.resolution.IsVisualRegionTarget())
+        {
+            // On the whole desktop there is no approved window to measure against, so
+            // the window the target was seen in is measured instead: it must still be
+            // the one in front, and still where it was.
+            const ElementBounds live = ForegroundWindowBounds(automation, bound.window);
+            if (!AimAtVisualRegion(request, bound, live.valid ? &live : nullptr, target))
+            {
+                result.message = target.Message();
+                return finish();
+            }
+        }
+        else
+        {
+            target.x = request.input.x;
+            target.y = request.input.y;
+            target.endX = request.input.endX;
+            target.endY = request.input.endY;
+            target.aimed = request.input.hasPoint;
+        }
+        target.resolved = true;
+        if (target.aimed && !OnVirtualDesktop(target.x, target.y))
+        {
+            result.message = "The point is not on any attached display.";
+            return finish();
+        }
+    }
+    else
+    {
+        target = ResolveInsideWindow(automation, window, request);
+        if (!target.resolved)
+        {
+            result.message = target.Message();
+            return finish();
+        }
+        if (!(ForegroundIdentity() == bound))
+        {
+            // Re-verified against the exact window, not the program: resolution walks
+            // the whole element tree, which is long enough for another document of the
+            // same application to come forward.
+            result.message = "Focus left the window this was aimed at while the target "
+                "was being verified; nothing was clicked.";
+            return finish();
+        }
+    }
+
+    // Where the pointer actually is, for a scroll that named no point.
+    if (!target.aimed)
+    {
+        POINT cursor{};
+        if (GetCursorPos(&cursor) != FALSE)
+        {
+            target.x = static_cast<int>(cursor.x);
+            target.y = static_cast<int>(cursor.y);
+        }
+    }
+
+    if (screenSpace && !settings.allowCommandSurfaces)
+    {
+        const std::string owner = ExecutableAtPoint(target.x, target.y);
+        if (IsCommandSurfaceExecutable(owner))
+        {
+            result.message = "That point belongs to " + owner +
+                ", a command surface, so nothing was clicked.";
+            return finish();
+        }
+    }
+
+    // Same rule for the pointer: she does not click her own dialogs. Checked against the
+    // window that owns the pixel she is aiming at, before the pointer ever moves there.
+    if (target.aimed && BelongsToRevia(IdentityOf(WindowFromPoint(POINT{
+            static_cast<LONG>(target.x), static_cast<LONG>(target.y)}))))
+    {
+        result.message = "Refused: that point belongs to Revia herself, and she does "
+            "not answer her own dialogs.";
+        return finish();
+    }
+
+    // Which window owns the pixel, captured before the pointer moves. Moving the cursor
+    // can itself change what is under it -- a hover menu, a tooltip, a window raised on
+    // hover -- so the thing that was decided about has to be re-identified before it is
+    // clicked rather than assumed to have stayed put.
+    const WindowIdentity aimedAt = target.aimed
+        ? IdentityOf(WindowFromPoint(POINT{
+            static_cast<LONG>(target.x), static_cast<LONG>(target.y)}))
+        : WindowIdentity{};
+
+    if (target.aimed && !MoveTo(target.x, target.y))
+    {
+        result.message = "The point is not on any attached display.";
+        return finish();
+    }
+
+    if (target.aimed && request.type != ActionType::MoveCursor)
+    {
+        const WindowIdentity nowUnderPointer = IdentityOf(WindowFromPoint(POINT{
+            static_cast<LONG>(target.x), static_cast<LONG>(target.y)}));
+        if (!(nowUnderPointer == aimedAt))
+        {
+            result.message = "What is under that point changed as the pointer arrived; "
+                "nothing was clicked.";
+            return finish();
+        }
+    }
+
+    // What is under the pointer, read after moving. This is the feedback that makes a
+    // pointer skill learnable rather than blind; it is description, never permission.
+    const PointDescription under = automation != nullptr
+        ? DescribePoint(automation, target.x, target.y) : PointDescription{};
+    const std::string where = " Pointer is over " + under.Summary() + ".";
+
+    // The very same observation supplies both the approved identity and consequence.
+    // Approval may take arbitrarily long: compare with a new observation afterwards,
+    // rather than refreshing the old timestamp or approving a newly discovered target.
+    const TargetBinding approvedPointer = BindPoint(automation, target.x, target.y,
+        request.requestedBy, policy::PolicyVersion(settings));
+    policy::AuthorizationRequest approvedEffect;
+    approvedEffect.operation = policy::DesktopOperation::PointerActivate;
+    approvedEffect.evidence = ToEvidence(approvedPointer);
+    const auto approvedEffects = policy::AssessEffects(approvedEffect);
+    const auto refreshPointer = [&]() -> std::string {
+        if (request.resolution.IsUiaElementTarget())
+        {
+            if (window == nullptr) return "the resolved element has no bound window";
+            const PointerTarget current = ResolveInsideWindow(automation, window, request);
+            if (!current.resolved) return current.Message();
+            target = current;
+        }
+        const TargetBinding current = BindPoint(automation, target.x, target.y,
+            request.requestedBy, policy::PolicyVersion(settings));
+        const std::string drift = CompareBindings(approvedPointer, current);
+        if (!drift.empty()) return drift;
+        const std::string constraint = ValidateActionTarget(request, current);
+        if (!constraint.empty()) return constraint;
+        policy::AuthorizationRequest effect = approvedEffect;
+        effect.evidence = ToEvidence(current);
+        if (policy::AssessEffects(effect) != approvedEffects)
+            return "the approved consequence changed";
+        if (!MoveTo(target.x, target.y)) return "the approved point left the display";
+        // Moving can open a hover surface. Re-observe after the cursor arrives too.
+        return CompareBindings(approvedPointer, BindPoint(automation, target.x, target.y,
+            request.requestedBy, policy::PolicyVersion(settings)));
+    };
+    if (request.type == ActionType::ClickPointer || request.type == ActionType::DragPointer)
+    {
+        if (!(result.message = ValidateActionTarget(request, approvedPointer)).empty())
+            return finish();
+        if (!approvedPointer.valid)
+        {
+            result.message = "The target control could not be observed; nothing was clicked.";
+            return finish();
+        }
+        std::string refusal;
+        if (!AuthorizeOrExplain(policy::DesktopOperation::PointerActivate,
+                approvedEffect.evidence, settings, request, refusal, approvals.get()))
+        {
+            result.message = refusal;
+            return finish();
+        }
+        refusal = refreshPointer();
+        if (!refusal.empty())
+        {
+            result.message = "The approved target changed: " + refusal + "; nothing was clicked.";
+            return finish();
+        }
+    }
+    // A drag ends somewhere else, and where it is released is its own consequence: a
+    // file dropped onto a folder and the same file dropped onto a Delete target are the
+    // same gesture. The destination is assessed before the button ever goes down, and
+    // the binding minted here is what Drag re-checks immediately before releasing.
+    TargetBinding dropBinding;
+    if (request.type == ActionType::DragPointer && automation != nullptr)
+    {
+        dropBinding = BindPoint(automation, target.endX, target.endY,
+            request.requestedBy, policy::PolicyVersion(settings));
+        std::string refusal;
+        if (!AuthorizeOrExplain(policy::DesktopOperation::PointerActivate,
+                ToEvidence(dropBinding), settings, request, refusal,
+                approvals.get()))
+        {
+            result.message = "Refused at the drop point: " + refusal;
+            return finish();
+        }
+        const TargetBinding currentDrop = BindPoint(
+            automation, target.endX, target.endY, request.requestedBy,
+            policy::PolicyVersion(settings));
+        const std::string drift = CompareBindings(dropBinding, currentDrop);
+        if (!drift.empty())
+        {
+            result.message = "The approved drop target changed: " + drift + ".";
+            return finish();
+        }
+        dropBinding = currentDrop;
+    }
+
+    if (request.type == ActionType::MoveCursor)
+    {
+        result.succeeded = true;
+        result.message = "Moved the pointer to " + std::to_string(target.x) + ", " +
+            std::to_string(target.y) + "." + where;
+    }
+    else if (request.type == ActionType::DragPointer)
+    {
+        if (request.beforeCommit && !(result.message = request.beforeCommit()).empty())
+            return finish();
+        if (!refreshPointer().empty())
+        {
+            result.message = "The approved drag source changed before input.";
+            return finish();
+        }
+        result = Drag(request, target, *guard, automation, dropBinding);
+    }
+    else if (request.type == ActionType::ScrollPointer)
+    {
+        const DWORD flags = request.input.horizontalScroll
+            ? MOUSEEVENTF_HWHEEL : MOUSEEVENTF_WHEEL;
+        const DWORD amount = static_cast<DWORD>(
+            static_cast<int>(WHEEL_DELTA) * request.input.scrollClicks);
+        result.succeeded = Send({MouseEvent(flags, 0, 0, amount)});
+        result.message = result.succeeded
+            ? "Scrolled " + std::to_string(request.input.scrollClicks) + " detents." + where
+            : "Windows rejected the synthesized scroll.";
+    }
+    else
+    {
+        const DWORD down = ButtonDownFlag(request.input.button);
+        const DWORD up = ButtonUpFlag(request.input.button);
+        bool delivered = true;
+        bool targetChanged = false;
+        int completed = 0;
+        for (int click = 0; click < request.input.clickCount && delivered; ++click)
+        {
+            if (guard->IsTripped())
+            {
+                break;
+            }
+            // Every injection reuses the approved control, including the first and
+            // every member of a multi-click gesture.
+            if (!refreshPointer().empty())
+            {
+                targetChanged = true;
+                break;
+            }
+            if (request.beforeCommit && !(result.message = request.beforeCommit()).empty())
+            {
+                targetChanged = true;
+                break;
+            }
+            // Reading the draft may take time or allow another window to move. Restore
+            // and revalidate the approved point after that last potentially slow read.
+            if (request.beforeCommit && !refreshPointer().empty())
+            {
+                targetChanged = true;
+                break;
+            }
+            if (guard->IsTripped()) break;
+            if (request.onCommitStarted) request.onCommitStarted(approvedPointer.controlName);
+            delivered = Send({MouseEvent(down), MouseEvent(up)});
+            if (delivered) ++completed;
+        }
+        result.succeeded = delivered && !targetChanged &&
+            completed == request.input.clickCount;
+        result.message = result.succeeded
+            ? "Clicked " + std::to_string(completed) + " time(s) at " +
+                std::to_string(target.x) + ", " + std::to_string(target.y) + "." + where
+            : targetChanged
+                ? "Stopped after " + std::to_string(completed) +
+                    " click(s): what was under the pointer changed."
+                : guard->IsTripped()
+                    ? "The click was stopped: " + guard->Reason()
+                    : "Windows rejected the synthesized click.";
+    }
+    return finish();
+#else
+    (void)decision;
+    (void)settings;
+    result.message = "Desktop operation is only available on Windows.";
+    return result;
+#endif
+}
+
+} // namespace revia::actions::windows

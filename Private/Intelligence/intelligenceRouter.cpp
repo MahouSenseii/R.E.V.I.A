@@ -1,0 +1,238 @@
+#include "Intelligence/intelligenceRouter.h"
+
+#include <algorithm>
+#include <array>
+#include <cctype>
+#include <string_view>
+
+namespace revia::intelligence
+{
+namespace
+{
+std::string Normalize(std::string value)
+{
+    std::transform(value.begin(), value.end(), value.begin(),
+        [](const unsigned char character)
+        {
+            return static_cast<char>(std::tolower(character));
+        });
+    const auto first = value.find_first_not_of(" \t\r\n");
+    if (first == std::string::npos) return {};
+    const auto last = value.find_last_not_of(" \t\r\n.!?");
+    return value.substr(first, last - first + 1);
+}
+
+template <std::size_t Size>
+bool ContainsAny(
+    const std::string& value,
+    const std::array<std::string_view, Size>& signals)
+{
+    return std::any_of(signals.begin(), signals.end(), [&](const std::string_view signal)
+    {
+        return value.find(signal) != std::string::npos;
+    });
+}
+
+// A short turn that cannot be understood on its own, only against the answer before it.
+//
+// Deliberately an exact match against a small closed list rather than a prefix or
+// substring test: "why" has to mean the bare follow-up, while "why does vector growth
+// invalidate iterators?" is a complete question that must route on its own merits. The
+// list stays short on purpose. Normalize() has already lowercased the text and removed
+// trailing punctuation, so no entry carries a question mark.
+bool IsContextualFollowUp(const std::string& normalizedInput)
+{
+    static constexpr std::array FollowUps = {
+        std::string_view{"why"}, std::string_view{"how"},
+        std::string_view{"why not"}, std::string_view{"explain that"},
+        std::string_view{"what do you mean"}, std::string_view{"and then"},
+        std::string_view{"what about that"},
+        // Both spellings, matching how FastExact already carries "that's funny" and
+        // "thats funny", because normalization does not touch apostrophes.
+        std::string_view{"it still doesn't work"},
+        std::string_view{"it still doesnt work"},
+        std::string_view{"it still does not work"}
+    };
+    return std::find(FollowUps.begin(), FollowUps.end(), normalizedInput) !=
+        FollowUps.end();
+}
+
+IntelligenceDecision Decision(
+    const IntelligenceTier tier,
+    const ReasoningMode mode,
+    std::string model,
+    std::string reason,
+    const float confidence)
+{
+    IntelligenceDecision result;
+    result.requestedTier = tier;
+    result.selectedTier = tier;
+    result.mode = mode;
+    result.selectedModel = std::move(model);
+    result.reason = std::move(reason);
+    result.confidence = confidence;
+    return result;
+}
+}
+
+IntelligenceDecision IntelligenceRouter::Route(
+    const std::string& input,
+    const RoutingContext& context) const
+{
+    const std::string text = Normalize(input);
+
+    static constexpr std::array ReflexSignals = {
+        std::string_view{"revia"}, std::string_view{"stop"},
+        std::string_view{"cancel"}, std::string_view{"wait"},
+        std::string_view{"pause"}, std::string_view{"quiet"},
+        std::string_view{"shut up"}, std::string_view{"never mind"},
+        std::string_view{"nevermind"}
+    };
+    if (std::find(ReflexSignals.begin(), ReflexSignals.end(), text) != ReflexSignals.end())
+    {
+        return Decision(
+            IntelligenceTier::Reflex, ReasoningMode::Fast, "C++ ReflexRouter",
+            "An exact immediate-interruption or attention phrase needs no model.", 0.99F);
+    }
+
+    if (context.visionRequired)
+    {
+        const bool expert = context.expertVisionPreferred || context.previousUncertainty;
+        return Decision(
+            expert ? IntelligenceTier::ExpertVision : IntelligenceTier::Vision,
+            expert ? ReasoningMode::Deep : ReasoningMode::Fast,
+            expert
+                ? "Qwen3-VL-8B-Instruct-Unredacted-MAX.Q4_K_M.gguf"
+                : "Qwen3.5-4B-Q4_K_M.gguf",
+            expert
+                ? "Difficult or multi-image visual reasoning needs the Expert projector."
+                : "The request depends on visual evidence from the normal desktop context.",
+            expert ? 0.88F : 0.9F);
+    }
+
+    static constexpr std::array ExpertSignals = {
+        std::string_view{"deadlock"}, std::string_view{"race condition"},
+        std::string_view{"use-after-free"}, std::string_view{"undefined behavior"},
+        std::string_view{"system architecture"}, std::string_view{"across these files"},
+        std::string_view{"multi-file"}, std::string_view{"root cause"},
+        std::string_view{"unreal engine"}, std::string_view{"blueprint graph"},
+        std::string_view{"think hard"}, std::string_view{"deep analysis"},
+        std::string_view{"research synthesis"}, std::string_view{"threat model"},
+        std::string_view{"ownership across"}, std::string_view{"shutdown invalidates"}
+    };
+    const bool looksLikeStackTrace = text.find("exception") != std::string::npos ||
+        text.find("stack trace") != std::string::npos ||
+        (text.find(" at ") != std::string::npos && text.find("line ") != std::string::npos);
+    if (context.previousUncertainty || looksLikeStackTrace ||
+        ContainsAny(text, ExpertSignals))
+    {
+        return Decision(
+            IntelligenceTier::Expert, ReasoningMode::Deep,
+            "Qwen3-VL-8B-Instruct-Unredacted-MAX.Q4_K_M.gguf",
+            context.previousUncertainty
+                ? "The previous answer in this conversation was unreliable, so this "
+                  "turn is worth more effort."
+                : "The request contains high-complexity technical or deep-analysis signals.",
+            0.87F);
+    }
+
+    // Conversational continuity, checked only after every explicit current-turn signal
+    // above has had its chance: a clear new intent always outranks what came before, so
+    // "What is on my screen?" still routes to vision and "deadlock" still routes to
+    // Expert even mid-thread. What is left here is a follow-up that carries no intent of
+    // its own, and answering it with the smallest brain is what made Revia get weaker
+    // exactly when the user asked her to go deeper.
+    //
+    // This sits above MainSignals because "Explain that." contains "explain": read as a
+    // fresh request it looks like ordinary Main work, but it is anaphoric -- "that" is
+    // the previous answer -- so the tier that produced that answer is the right effort.
+    //
+    // Only Main and Expert are inherited. Fast and Reflex are not escalated and not
+    // preserved, so a social exchange never makes the next turn expensive and a cheap
+    // route is never inherited onto a question that may deserve more; those fall through
+    // to the conservative default below. Vision tiers are not inherited either, because
+    // re-selecting a projector without a current visual requirement would point a vision
+    // model at no image.
+    if (context.previousAssistantTier.has_value() && IsContextualFollowUp(text))
+    {
+        if (*context.previousAssistantTier == IntelligenceTier::Expert)
+        {
+            return Decision(
+                IntelligenceTier::Expert, ReasoningMode::Deep,
+                "Qwen3-VL-8B-Instruct-Unredacted-MAX.Q4_K_M.gguf",
+                "A short follow-up to an Expert answer keeps the effort that answer "
+                "was worth.",
+                0.8F);
+        }
+        if (*context.previousAssistantTier == IntelligenceTier::Main)
+        {
+            return Decision(
+                IntelligenceTier::Main, ReasoningMode::Fast,
+                "Qwen3.5-4B-Q4_K_M.gguf",
+                "A short follow-up to a Main answer keeps the effort that answer was "
+                "worth.",
+                0.8F);
+        }
+    }
+
+    static constexpr std::array MainSignals = {
+        std::string_view{"explain"}, std::string_view{"implement"},
+        std::string_view{"debug"}, std::string_view{"error"},
+        std::string_view{"crash"}, std::string_view{"code"},
+        std::string_view{"function"}, std::string_view{"pointer"},
+        std::string_view{"plan"}, std::string_view{"summarize"},
+        std::string_view{"remember"}, std::string_view{"project"},
+        std::string_view{"compare"}, std::string_view{"why does"},
+        std::string_view{"how do"}, std::string_view{"look up"},
+        std::string_view{"search"}, std::string_view{"latest"}
+    };
+    if (context.explicitResearch || context.recentContextCharacters > 6000 ||
+        ContainsAny(text, MainSignals))
+    {
+        const bool deep = context.explicitResearch || looksLikeStackTrace;
+        return Decision(
+            IntelligenceTier::Main,
+            deep ? ReasoningMode::Deep : ReasoningMode::Fast,
+            "Qwen3.5-4B-Q4_K_M.gguf",
+            context.explicitResearch
+                ? "Research requires grounded synthesis by the Main brain."
+                : "The turn needs normal explanation, planning, code, or contextual nuance.",
+            0.84F);
+    }
+
+    // "why" deliberately is not here. It is the one entry that was not social: bare
+    // "Why?" is a substantive follow-up to whatever was just said, and matching it
+    // unconditionally sent every technical follow-up to the smallest brain. It is
+    // handled by the continuity rule above when there is an answer to follow up on, and
+    // otherwise falls to the conservative default rather than to Fast.
+    static constexpr std::array FastExact = {
+        std::string_view{"hi"}, std::string_view{"hello"},
+        std::string_view{"hey"}, std::string_view{"thanks"},
+        std::string_view{"thank you"}, std::string_view{"okay"},
+        std::string_view{"ok"}, std::string_view{"cool"},
+        std::string_view{"really"},
+        std::string_view{"what's up"}, std::string_view{"whats up"},
+        std::string_view{"that's funny"}, std::string_view{"thats funny"}
+    };
+    static constexpr std::array FastSocialSignals = {
+        std::string_view{"do you like"}, std::string_view{"how are you"},
+        std::string_view{"you're annoying"}, std::string_view{"you are annoying"},
+        std::string_view{"tell me a joke"}, std::string_view{"what are you doing"}
+    };
+    if (std::find(FastExact.begin(), FastExact.end(), text) != FastExact.end() ||
+        ContainsAny(text, FastSocialSignals))
+    {
+        return Decision(
+            IntelligenceTier::Fast, ReasoningMode::Fast,
+            "Qwen3.5-0.8B-Q4_K_M.gguf",
+            "A simple social or conversational turn does not need deeper inference.", 0.94F);
+    }
+
+    return Decision(
+        IntelligenceTier::Main, ReasoningMode::Fast,
+        "Qwen3.5-4B-Q4_K_M.gguf",
+        "Ambiguous conversation defaults to the balanced Main brain to preserve nuance.",
+        0.62F);
+}
+
+} // namespace revia::intelligence
