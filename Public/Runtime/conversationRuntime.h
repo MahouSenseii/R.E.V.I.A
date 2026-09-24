@@ -167,12 +167,15 @@ public:
     // Set once at startup, before the first turn.
     void SetSongListProvider(SongListProvider provider);
 
+    // `turnReference` is added to this turn's context only, never to its history: text
+    // the runtime fetched for the question, such as what the user copied.
     SessionResult Reply(
         const std::string& input,
         const aiProfile& profile,
         bool llmAvailable,
         bool shouldSpeak,
-        std::stop_token stopToken = {});
+        std::stop_token stopToken = {},
+        const std::string& turnReference = {});
 
     // Public integrations get Revia's identity and the supplied channel history, but
     // never inherit the local user's dialogue, compressed history, durable memories,

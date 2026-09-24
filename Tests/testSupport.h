@@ -172,6 +172,7 @@ void RunTerminalInputTests();
 void RunHandsFreeTests();
 void RunBackgroundTaskTests();
 void RunReminderTests();
+void RunClipboardTests();
 void RunSpeakerContinuityTests();
 void RunSpeechAttributionTests();
 void RunProfileActivationTests();

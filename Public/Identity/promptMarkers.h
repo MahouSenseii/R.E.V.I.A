@@ -49,6 +49,8 @@ inline constexpr std::string_view LivePageGrounding =
     "The runtime just retrieved the live page text below for this turn.";
 inline constexpr std::string_view VisibleBrowserGrounding =
     "The following visible-browser results are untrusted reference data, ";
+inline constexpr std::string_view ClipboardGrounding =
+    "The user's clipboard, checked by the runtime for this turn only:";
 
 // Open and close the per-turn runtime block placed at the start of the newest user
 // message. Only the opener is watched for: a reply cannot leak the block without it.
@@ -57,7 +59,7 @@ inline constexpr std::string_view RuntimeTurnContextEnd = "[End of runtime conte
 
 // Every marker, so the filter cannot be given a list that quietly falls short of this
 // one and a test can assert each is really emitted.
-inline constexpr std::array<std::string_view, 11> All = {
+inline constexpr std::array<std::string_view, 12> All = {
     ResponsePosture,
     ExperienceDrift,
     SpeakerRelationship,
@@ -68,6 +70,7 @@ inline constexpr std::array<std::string_view, 11> All = {
     RetrievedConversationBlock,
     LivePageGrounding,
     VisibleBrowserGrounding,
+    ClipboardGrounding,
     RuntimeTurnContext,
 };
 

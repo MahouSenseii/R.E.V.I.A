@@ -241,9 +241,12 @@ SessionResult ConversationRuntime::Reply(
     const aiProfile& profile,
     const bool llmAvailable,
     const bool shouldSpeak,
-    const std::stop_token stopToken)
+    const std::stop_token stopToken,
+    const std::string& turnReference)
 {
     context.AddMessage("user", input);
+    TurnPolicy policy;
+    policy.instruction = turnReference;
     return Generate(
         input,
         context.GetRecentMessages(),
@@ -255,7 +258,7 @@ SessionResult ConversationRuntime::Reply(
         {},
         {},
         stopToken,
-        {});
+        policy);
 }
 
 SessionResult ConversationRuntime::ReplyPublic(

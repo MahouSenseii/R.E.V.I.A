@@ -38,6 +38,11 @@ struct ReviaSessionTestAccess
     static void DeliverReminders(ReviaSession& session, planning::WallClock::time_point now)
     { session.DeliverDueReminders(now); }
     static std::string Reminders(const ReviaSession& session) { return session.DescribeReminders(); }
+    static void SetClipboard(ReviaSession& session,
+        std::function<std::optional<perception::ClipboardText>()> reader)
+    { session.clipboardReader = std::move(reader); }
+    static std::string ClipboardReference(ReviaSession& session, const std::string& input)
+    { return session.ClipboardReference(input); }
     static void Hear(ReviaSession& session, const speech::RecognitionEvent& event)
     { session.OnRecognitionEvent(event); }
     static std::string TakeOfferedInput(ReviaSession& session) { return session.inputArbiter.Take(); }

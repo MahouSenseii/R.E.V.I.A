@@ -466,8 +466,35 @@ void TestBackgroundVisionContractAndPreemption()
 }
 }
 
+// Text fetched for one question, such as what the user copied, reaches that turn's
+// prompt and nothing else: not the history, not the next turn.
+void TestTurnReferenceStaysInItsTurn()
+{
+    tests::ScopedTestDirectory directory;
+    WorkingDirectory cwd(directory.root);
+    Backend backend;
+    Fixture fixture(backend.port);
+    const std::size_t before = backend.Count();
+    const auto asked = fixture.runtime.Reply("What's on my clipboard?", fixture.profile, true,
+        false, {}, "CLIPBOARD_SENTINEL copied text");
+    const auto requests = backend.RequestsSince(before);
+    Check(asked.succeeded && std::any_of(requests.begin(), requests.end(), [](const json& request)
+        { return SystemText(request).find("CLIPBOARD_SENTINEL") != std::string::npos; }),
+        "Text fetched for the turn never reached the model.");
+    Check(History(fixture.context).dump().find("CLIPBOARD_SENTINEL") == std::string::npos,
+        "Text fetched for one turn was written into the conversation history.");
+
+    const std::size_t next = backend.Count();
+    const auto followUp = fixture.runtime.Reply("And the next thing?", fixture.profile, true, false);
+    const auto later = backend.RequestsSince(next);
+    Check(followUp.succeeded && std::none_of(later.begin(), later.end(), [](const json& request)
+        { return request.dump().find("CLIPBOARD_SENTINEL") != std::string::npos; }),
+        "Text fetched for one turn was sent again with the next.");
+}
+
 void RunProactiveStateTests()
 {
+    TestTurnReferenceStaysInItsTurn();
     TestProactiveGenerationAndPublicBoundary();
     TestCancelledProactiveCommit();
     TestCpuFastBrainDefersToGpuMain();

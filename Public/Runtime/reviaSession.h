@@ -36,6 +36,7 @@
 #include "Learning/selfAssessment.h"
 #include "Perception/activityHistory.h"
 #include "Perception/screenAwarenessSchedule.h"
+#include "Perception/clipboardText.h"
 #include "Perception/windowEventMonitor.h"
 #include "Planning/reminders.h"
 #include "Performance/performanceRuntime.h"
@@ -697,6 +698,10 @@ private:
     void DeliverDueReminders(planning::WallClock::time_point now);
     // "'stretch' at 3:05 PM (in 12 min); ..." for the state packet. Empty if none.
     [[nodiscard]] std::string DescribeReminders() const;
+
+    // What the user copied, for a turn that asks about it; empty for any other turn.
+    // Bounded, marked as untrusted, never saved, and withheld if it holds a credential.
+    [[nodiscard]] std::string ClipboardReference(const std::string& input);
     // The goal runner serves one goal at a time: work that needs it while a task holds
     // it is refused here, with a way out. Returns true when it refused.
     bool RefuseWhileTaskRuns(SessionResult& result);
@@ -959,6 +964,8 @@ private:
         std::chrono::steady_clock::time_point finishedAt;
     };
     planning::ReminderBook reminders;
+    std::function<std::optional<perception::ClipboardText>()> clipboardReader =
+        [] { return perception::ReadClipboardText(6000); };
     // Serialises launching against launching and stopping. The worker never takes it.
     std::mutex taskLaunchMutex;
     mutable std::mutex taskMutex;
