@@ -226,6 +226,11 @@ std::string RenderStatePacket(const ReviaStatePacket& packet, const bool include
         section("A task the user gave you recently ended. The runtime's record: " +
             packet.finishedTask + " Answer questions about it from this record only.");
     }
+    if (!packet.reminders.empty())
+    {
+        section("Reminders you are holding for the user, which the runtime will deliver: " +
+            packet.reminders + ". They can list or cancel them with /reminders.");
+    }
 
     // PERCEPTION / RUNTIME CONTEXT. The exact leading phrase is load-bearing for the
     // prompt-leak filter.

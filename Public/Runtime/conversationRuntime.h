@@ -113,6 +113,7 @@ public:
         std::string currentActivity;
         std::string backgroundTask;
         std::string finishedTask;
+        std::string reminders;
     };
     using AutonomyContextProvider = std::function<AutonomyContext()>;
     // Lets the session move drives from the same stimulus the appraisal saw, so wanting

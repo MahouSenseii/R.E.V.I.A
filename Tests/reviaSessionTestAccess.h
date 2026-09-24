@@ -35,6 +35,9 @@ struct ReviaSessionTestAccess
     }
     static std::string RunningTask(const ReviaSession& session) { return session.DescribeRunningTask(); }
     static std::string FinishedTask(const ReviaSession& session) { return session.DescribeFinishedTask(); }
+    static void DeliverReminders(ReviaSession& session, planning::WallClock::time_point now)
+    { session.DeliverDueReminders(now); }
+    static std::string Reminders(const ReviaSession& session) { return session.DescribeReminders(); }
     static void Hear(ReviaSession& session, const speech::RecognitionEvent& event)
     { session.OnRecognitionEvent(event); }
     static std::string TakeOfferedInput(ReviaSession& session) { return session.inputArbiter.Take(); }

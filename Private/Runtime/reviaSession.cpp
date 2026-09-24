@@ -363,6 +363,7 @@ ReviaSession::ReviaSession()
                }
                context.backgroundTask = DescribeRunningTask();
                context.finishedTask = DescribeFinishedTask();
+               context.reminders = DescribeReminders();
                return context;
            }),
       documentWorkshop(router, imageGenerator, diagramStore, appLogger)
@@ -529,6 +530,11 @@ bool ReviaSession::Start()
             "RuntimeData/Initiative/curiosity.jsonl", curiosityJournalError))
     {
         appLogger.Warning("Curiosity journal is unavailable: " + curiosityJournalError);
+    }
+    std::string remindersError;
+    if (!reminders.Initialize("RuntimeData/Reminders/reminders.json", remindersError))
+    {
+        appLogger.Warning("Saved reminders were set aside: " + remindersError);
     }
     std::string selfAssessmentError;
     if (!selfAssessment.Initialize(
@@ -4324,6 +4330,7 @@ void ReviaSession::PollBackgroundEvents()
     // a second thread to notice that nothing is happening would be its own answer to the
     // wrong question.
     modelLifetime.SweepIdle();
+    DeliverDueReminders(planning::WallClock::now());
 
     (void)selfAssessment.Assess();
 
@@ -8173,6 +8180,154 @@ bool ReviaSession::RefuseWhileTaskRuns(SessionResult& result)
     return true;
 }
 
+bool ReviaSession::TryHandleReminderInput(const std::string& input, SessionResult& result)
+{
+    const planning::WallClock::time_point now = planning::WallClock::now();
+    const auto when = [now](const planning::WallClock::time_point due)
+    {
+        return planning::DescribeWhen(due, now) + " (in " + planning::DescribeSpan(due - now) + ")";
+    };
+    if (input == "/reminders" || input.rfind("/reminders ", 0) == 0)
+    {
+        const std::string argument =
+            input.size() > 10 ? Trim(input.substr(10)) : std::string();
+        if (argument.empty())
+        {
+            const std::vector<planning::Reminder> pending = reminders.Pending();
+            std::ostringstream list;
+            if (pending.empty()) list << "No reminders set.";
+            for (std::size_t index = 0; index < pending.size(); ++index)
+            {
+                list << (index == 0 ? "" : "\n") << index + 1 << ". "
+                    << planning::Label(pending[index].request) << " - "
+                    << when(pending[index].request.due);
+            }
+            if (!pending.empty())
+            {
+                list << "\nCancel one with /reminders cancel <number>, or all with /reminders clear.";
+            }
+            result.text = list.str();
+        }
+        else if (argument == "clear")
+        {
+            const std::size_t cleared = reminders.Clear();
+            result.text = cleared == 0 ? "No reminders to clear."
+                : "Cleared " + std::to_string(cleared) + (cleared == 1 ? " reminder." : " reminders.");
+        }
+        else if (argument.rfind("cancel ", 0) == 0)
+        {
+            const std::string number = Trim(argument.substr(7));
+            std::optional<planning::Reminder> removed;
+            if (!number.empty() && number.size() < 4 &&
+                std::all_of(number.begin(), number.end(),
+                    [](const unsigned char digit) { return std::isdigit(digit) != 0; }))
+            {
+                removed = reminders.Cancel(static_cast<std::size_t>(std::stoul(number)));
+            }
+            result.succeeded = removed.has_value();
+            result.text = removed
+                ? "Cancelled: " + planning::Label(removed->request) + "."
+                : "There is no reminder " + number + ". /reminders lists them.";
+        }
+        else
+        {
+            result.succeeded = false;
+            result.text = "Usage: /reminders [cancel <number> | clear]";
+            result.reason = "Unrecognized reminders argument.";
+        }
+        SetState(RuntimeState::Idle);
+        return true;
+    }
+
+    planning::ReminderRequest request;
+    std::string error;
+    switch (planning::ParseReminderRequest(input, now, request, error))
+    {
+        case planning::ReminderParse::NotAReminder:
+            return false;
+        case planning::ReminderParse::Invalid:
+            result.succeeded = false;
+            result.fromAssistant = true;
+            result.text = error;
+            result.reason = "The reminder could not be set.";
+            SetState(RuntimeState::Idle);
+            return true;
+        case planning::ReminderParse::Parsed:
+            break;
+    }
+    std::string saveError;
+    const std::optional<planning::Reminder> added = reminders.Add(request, saveError);
+    result.fromAssistant = true;
+    if (!added)
+    {
+        result.succeeded = false;
+        result.text = saveError;
+        result.reason = saveError;
+        SetState(RuntimeState::Idle);
+        return true;
+    }
+    result.text = request.timer
+        ? "Timer set: " + planning::Label(request) + ". It goes off at " + when(request.due) + "."
+        : "Okay, I'll remind you at " + when(request.due) + ": " + request.text + ".";
+    if (!saveError.empty())
+    {
+        result.text += " " + saveError;
+        appLogger.Warning(saveError);
+    }
+    result.reasoning = "Set by the reminder parser, not the model; the runtime delivers it.";
+    PublishComponent("Reminder", "Set", "Due at " + when(request.due) + ".");
+    SetState(RuntimeState::Idle);
+    return true;
+}
+
+void ReviaSession::DeliverDueReminders(const planning::WallClock::time_point now)
+{
+    for (const planning::Reminder& due : reminders.TakeDue(now))
+    {
+        std::string text = planning::Announcement(due.request);
+        // Missed while she was closed: still said, and said to be late.
+        if (now - due.request.due > std::chrono::minutes{2})
+        {
+            text += " It was due at " + planning::DescribeWhen(due.request.due, now) +
+                ", while I was offline.";
+        }
+        PublishComponent("Reminder", "Due", text);
+        RuntimeEvent message;
+        message.kind = RuntimeEventKind::AssistantMessage;
+        message.state = state.load();
+        message.component = "Reminder";
+        message.message = text;
+        eventBus.Publish(std::move(message));
+
+        // Shown but not said during a call.
+        if (speechService.IsEnabled() && !perception::InCall())
+        {
+            speech::SpeechIntent spoken;
+            spoken.owner = speech::SpeechOwner::Research;
+            spoken.behavior = speech::SpeechBehavior::Queue;
+            spoken.text = text;
+            spoken.affect = emotionRuntime.ToAffectSnapshot();
+            const speech::SpeechSubmission submitted = speechCoordinator.Submit(std::move(spoken));
+            if (!submitted.accepted) appLogger.Log("Reminder not spoken: " + submitted.reason);
+        }
+    }
+}
+
+std::string ReviaSession::DescribeReminders() const
+{
+    const std::vector<planning::Reminder> pending = reminders.Pending();
+    const planning::WallClock::time_point now = planning::WallClock::now();
+    std::string described;
+    for (std::size_t index = 0; index < pending.size() && index < 5; ++index)
+    {
+        if (!described.empty()) described += "; ";
+        described += "'" + planning::Label(pending[index].request) + "' at " +
+            planning::DescribeWhen(pending[index].request.due, now);
+    }
+    if (pending.size() > 5) described += "; and " + std::to_string(pending.size() - 5) + " more";
+    return described;
+}
+
 std::string ReviaSession::DescribeRunningTask() const
 {
     std::lock_guard lock(taskMutex);
@@ -8640,6 +8795,7 @@ std::string ReviaSession::FormatGoalList(const std::vector<goals::Goal>& goalLis
 bool ReviaSession::TryHandleActionInput(const std::string& input, SessionResult& result)
 {
     if (HandleImprovementCommand(input, result)) return true;
+    if (TryHandleReminderInput(input, result)) return true;
 
     // The background task: status, and cancelling it by command or in plain words.
     const bool taskCommand = input == "/task" || input.rfind("/task ", 0) == 0;

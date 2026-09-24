@@ -99,6 +99,8 @@ struct ReviaStatePacket
     // in the last few minutes, so "how's it going?" and "did it work?" have answers.
     std::string backgroundTask;
     std::string finishedTask;
+    // Reminders she holds for the user, soonest first.
+    std::string reminders;
 
     RuntimeSelfKnowledge runtime;
 

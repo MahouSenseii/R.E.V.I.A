@@ -127,6 +127,9 @@ commandOutput commandManager::BuildHelpOutput() const
     stream << "/sing <song>, /sing stop, /sing check <song> - Karaoke from WAV assets\n";
     stream << "/goal <request> - Plan, rehearse, and run a multi-step goal\n";
     stream << "/goals, /goals resume <id> - List goals and continue an unfinished one\n";
+    stream << "/task, /task cancel - The task she is running in the background\n";
+    stream << "/remind <when> <what>, /reminders [cancel <n>|clear] - Reminders and timers\n";
+    stream << "  Or just say: \"remind me in 20 minutes to stretch\", \"set a timer for 5 minutes\"\n";
     stream << "/controller [status|mode <legacy|shadow|assisted|learned>] - Who decides each step\n";
     stream << "/controller record on <app.exe>|off, sessions, forget <id> - Opt-in demonstrations\n";
     stream << "/history [words|forget] - Search or clear durable conversation history\n";

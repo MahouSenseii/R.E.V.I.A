@@ -323,6 +323,8 @@ Type these in Chat or the CLI. `/help` lists everything, including direct file a
 | `/launch`, `/click`, `/drag`, `/move-cursor`, `/scroll`, `/press`, `/type` | Typed desktop operation |
 | `/initiative`, `accept`, `dismiss` | Review something she proposed on her own |
 | `/goal <task>`, `/goals` | Rehearse and supervise a multi-step goal |
+| `/task`, `/task cancel` | The goal she is running in the background (or say "cancel the task") |
+| `/remind <when> <what>`, `/reminders`, `/reminders cancel <n>` | Reminders and timers (or say "remind me at 3pm to call Sam", "set a timer for 5 minutes") |
 | `/plan <task>` | Plan one typed action |
 | `/draw <description>` | Sanitized SVG diagram |
 | `/imagine <description>` | Local image (when enabled) |

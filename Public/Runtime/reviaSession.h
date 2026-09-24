@@ -37,6 +37,7 @@
 #include "Perception/activityHistory.h"
 #include "Perception/screenAwarenessSchedule.h"
 #include "Perception/windowEventMonitor.h"
+#include "Planning/reminders.h"
 #include "Performance/performanceRuntime.h"
 #include "Presence/presenceRuntime.h"
 #include "Presence/webGuestRuntime.h"
@@ -689,6 +690,13 @@ private:
     void StopTaskWorker();
     // Empty when no task is running.
     [[nodiscard]] std::string RunningTaskTitle() const;
+
+    // Reminders and timers: set in plain words, listed and cancelled with /reminders,
+    // delivered from PollBackgroundEvents.
+    bool TryHandleReminderInput(const std::string& input, SessionResult& result);
+    void DeliverDueReminders(planning::WallClock::time_point now);
+    // "'stretch' at 3:05 PM (in 12 min); ..." for the state packet. Empty if none.
+    [[nodiscard]] std::string DescribeReminders() const;
     // The goal runner serves one goal at a time: work that needs it while a task holds
     // it is refused here, with a way out. Returns true when it refused.
     bool RefuseWhileTaskRuns(SessionResult& result);
@@ -950,6 +958,7 @@ private:
         goals::GoalStatus status = goals::GoalStatus::Planned;
         std::chrono::steady_clock::time_point finishedAt;
     };
+    planning::ReminderBook reminders;
     // Serialises launching against launching and stopping. The worker never takes it.
     std::mutex taskLaunchMutex;
     mutable std::mutex taskMutex;
