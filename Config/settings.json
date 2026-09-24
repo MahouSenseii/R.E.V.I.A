@@ -132,7 +132,10 @@
     "vadSpeechFrames": 3,
     "vadSilenceMs": 350,
     "minimumUtteranceMs": 350,
-    "maximumUtteranceSeconds": 24
+    "maximumUtteranceSeconds": 24,
+    "requireWakeWord": true,
+    "wakeWords": ["revia", "rivia", "revya", "reviya", "revea"],
+    "followUpSeconds": 20
   },
   "performance": {
     "enabled": true,

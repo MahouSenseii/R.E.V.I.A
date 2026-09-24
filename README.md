@@ -55,7 +55,7 @@ The design rule: **one Revia**. Reflex, Fast, Main, and Expert share one identit
 ### See, listen, and speak
 
 - **Watch your screens.** She notices what you are doing across every monitor, with no "Analyze screen" button. Screenshots are deleted immediately; only a short summary stays in memory. Text on screen is treated as information, never as instructions.
-- **Listen.** Hold **Ctrl+Space** (or the mic button) to talk, or turn on **Hands-free local conversation** in the Presence tab.
+- **Listen.** Hold **Ctrl+Space** (or the mic button) to talk, or turn on **Hands-free local conversation** in the Presence tab. Hands-free answers only when you say "Revia" or reply within 20 seconds of talking with her (`speechRecognition.requireWakeWord`, `wakeWords`, `followUpSeconds`).
 - **Speak in her own voice.** Qwen3-TTS starts speaking after the first complete sentence and spreads later sentences across both GPUs. Windows SAPI is the fallback.
 - **Be interrupted.** Start talking while she speaks and she stops.
 - **Look through the camera (optional).** One still frame, only with permission, and the camera light is on only while the frame is taken.

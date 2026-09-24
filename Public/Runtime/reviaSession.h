@@ -55,6 +55,7 @@
 #include "Resources/resourcePlanner.h"
 #include "Speech/speechService.h"
 #include "Speech/speechRecognitionService.h"
+#include "Speech/addresseeGate.h"
 #include "Vision/cameraCaptureService.h"
 #include "Vision/screenCaptureService.h"
 #include "Vision/visionActionParser.h"
@@ -625,6 +626,8 @@ private:
     // Shared by the immediate typed path and the merged voice path. Callers hold
     // operationMutex; the arbiter has already decided what the turn's text is.
     SessionResult RunTurnLocked(const std::string& acceptedInput);
+    // What the microphone reports: status, and hands-free transcripts meant for her.
+    void OnRecognitionEvent(const speech::RecognitionEvent& recognitionEvent);
     // Runs one turn so that a throw is a failed turn rather than a lost session: the
     // voice drain and adapter loops have no one above them to catch it, and every caller
     // would otherwise be left with busy set and nothing ever clearing it.
@@ -750,6 +753,8 @@ private:
     // be active when a late event arrives. Zero when the coordinator started nothing.
     std::atomic<std::uint64_t> speakingIntentId{0};
     speech::SpeechRecognitionService speechRecognitionService;
+    // Whether hands-free speech was meant for her: her name, or a follow-up in time.
+    speech::AddresseeGate addresseeGate;
     // A separate audio owner with its own device and its own thread. Nothing in here
     // touches the speech queue, so a song that fails to load cannot cost Revia her voice.
     performance::PerformanceRuntime performanceRuntime;

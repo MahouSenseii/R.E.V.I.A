@@ -381,6 +381,11 @@ struct speechRecognitionSettings
     int vadSilenceMs = 350;
     int minimumUtteranceMs = 350;
     int maximumUtteranceSeconds = 24;
+    // Hands-free answers only speech that names her or follows up on a conversation
+    // with her within followUpSeconds. False answers everything the microphone hears.
+    bool bRequireWakeWord = true;
+    std::vector<std::string> wakeWords = {"revia", "rivia", "revya", "reviya", "revea"};
+    int followUpSeconds = 20;
 };
 
 // Presence is a presentation and input-routing layer. It never owns inference, memory,

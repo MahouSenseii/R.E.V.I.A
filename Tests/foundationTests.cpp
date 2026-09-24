@@ -9839,6 +9839,7 @@ int main(const int argc, char** argv)
         RunDiscordVoiceTests();
         RunActivityExecutionTests();
         RunAuditFindingsTests();
+        RunHandsFreeTests();
         RunSelfAssessmentTests();
         RunSecretDetectionTests();
         RunPromptSecurityTests();

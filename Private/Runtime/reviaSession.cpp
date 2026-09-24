@@ -843,6 +843,8 @@ bool ReviaSession::Start()
             speechEvent.phase == "Disabled" || speechEvent.phase == "Fallback")
         {
             speechRecognitionService.SetOutputActive(false);
+            // She just spoke, so an answer without her name is still for her.
+            addresseeGate.NoteExchange(speech::AddresseeGate::Clock::now());
             // The throat is free. Whatever was waiting for it may go now.
             //
             // Exchanged rather than read, so a late report about an utterance that was
@@ -1035,98 +1037,13 @@ bool ReviaSession::Start()
     startupTimings.push_back({"performance_init", ElapsedMilliseconds(stageStarted)});
 
     stageStarted = std::chrono::steady_clock::now();
+    addresseeGate.Configure({settings.speechRecognition.bRequireWakeWord,
+        settings.speechRecognition.wakeWords, settings.speechRecognition.followUpSeconds});
     speechRecognitionService.Start(
         settings.speechRecognition,
         [this](const speech::RecognitionEvent& recognitionEvent)
         {
-            if (recognitionEvent.automatic && recognitionEvent.phase == "SpeechDetected")
-            {
-                speechService.YieldToUser();
-                std::stop_source source;
-                {
-                    std::lock_guard lock(cancellationMutex);
-                    source = activeStopSource;
-                }
-                source.request_stop();
-            }
-            RuntimeEvent event;
-            event.kind = RuntimeEventKind::ComponentStatus;
-            event.state = state.load();
-            event.message = recognitionEvent.transcript.empty()
-                ? recognitionEvent.detail
-                : recognitionEvent.transcript;
-            event.component = "Microphone";
-            event.phase = recognitionEvent.phase;
-            event.resource = settings.speechRecognition.device == "cpu"
-                ? "CPU"
-                : settings.speechRecognition.device;
-            event.elapsedMilliseconds = recognitionEvent.elapsedMilliseconds;
-            event.detail = recognitionEvent.automatic ? "hands-free" : "manual";
-            eventBus.Publish(std::move(event));
-
-            // The stages of one capture, in the log, where a failure is still readable
-            // tomorrow. Events on the bus reach the shell and are gone; a microphone
-            // that could not open left nothing behind at all, which is most of why
-            // "Listen does nothing" was so hard to pin down.
-            //
-            // The transcript's LENGTH, never its text. What was said belongs in the
-            // conversation, not in a diagnostic log, and the length is what answers
-            // "did whisper.cpp produce anything".
-            const std::string mode =
-                recognitionEvent.automatic ? "hands-free" : "manual";
-            if (recognitionEvent.phase == "Error" ||
-                recognitionEvent.phase == "Diagnostics" ||
-                recognitionEvent.phase.starts_with("Test"))
-            {
-                const std::string line = "[Microphone] " + mode + " " +
-                    recognitionEvent.phase + ": " + recognitionEvent.detail;
-                if (recognitionEvent.phase == "Error")
-                {
-                    appLogger.Warning(line);
-                }
-                else
-                {
-                    appLogger.Log(line);
-                }
-            }
-            else if (recognitionEvent.phase == "Recording" ||
-                recognitionEvent.phase == "Captured" ||
-                recognitionEvent.phase == "Transcribing")
-            {
-                appLogger.Log("[Microphone] " + mode + " " + recognitionEvent.phase +
-                    ": " + recognitionEvent.detail +
-                    (recognitionEvent.elapsedMilliseconds >= 0.0
-                        ? " (" + std::to_string(static_cast<long long>(
-                            recognitionEvent.elapsedMilliseconds)) + "ms)"
-                        : std::string()));
-            }
-            else if (recognitionEvent.phase == "Transcript")
-            {
-                appLogger.Log("[Microphone] " + mode +
-                    " Transcript: whisper backend=" +
-                    (settings.speechRecognition.bUseServer ? "server" : "cli") +
-                    " device=" + settings.speechRecognition.device +
-                    " transcript_chars=" +
-                    std::to_string(recognitionEvent.transcript.size()) +
-                    (recognitionEvent.elapsedMilliseconds >= 0.0
-                        ? " transcription_ms=" + std::to_string(static_cast<long long>(
-                            recognitionEvent.elapsedMilliseconds))
-                        : std::string()));
-            }
-
-            if (recognitionEvent.automatic && recognitionEvent.phase == "Transcript" &&
-                !recognitionEvent.transcript.empty())
-            {
-                presenceRuntime.RecordUserInput("local voice");
-                RuntimeEvent userEvent;
-                userEvent.kind = RuntimeEventKind::UserMessage;
-                userEvent.state = state.load();
-                userEvent.component = "Microphone";
-                userEvent.phase = "HandsFree";
-                userEvent.message = recognitionEvent.transcript;
-                eventBus.Publish(std::move(userEvent));
-                OfferInput(recognitionEvent.transcript, agents::InputSource::Voice);
-            }
+            OnRecognitionEvent(recognitionEvent);
         });
     startupTimings.push_back({"speech_recognition_init", ElapsedMilliseconds(stageStarted)});
 
@@ -4087,9 +4004,115 @@ SessionResult ReviaSession::Submit(
     return RunTurnLocked(acceptedInput);
 }
 
+void ReviaSession::OnRecognitionEvent(const speech::RecognitionEvent& recognitionEvent)
+{
+    if (recognitionEvent.automatic && recognitionEvent.phase == "SpeechDetected")
+    {
+        // Only her voice yields here. Whether the speech is for her is not known
+        // until it is transcribed, and a voice in the room must not cancel work.
+        speechService.YieldToUser();
+    }
+    RuntimeEvent event;
+    event.kind = RuntimeEventKind::ComponentStatus;
+    event.state = state.load();
+    event.message = recognitionEvent.transcript.empty()
+        ? recognitionEvent.detail
+        : recognitionEvent.transcript;
+    event.component = "Microphone";
+    event.phase = recognitionEvent.phase;
+    event.resource = settings.speechRecognition.device == "cpu"
+        ? "CPU"
+        : settings.speechRecognition.device;
+    event.elapsedMilliseconds = recognitionEvent.elapsedMilliseconds;
+    event.detail = recognitionEvent.automatic ? "hands-free" : "manual";
+    eventBus.Publish(std::move(event));
+
+    // The stages of one capture, in the log, where a failure is still readable
+    // tomorrow. Events on the bus reach the shell and are gone; a microphone
+    // that could not open left nothing behind at all, which is most of why
+    // "Listen does nothing" was so hard to pin down.
+    //
+    // The transcript's LENGTH, never its text. What was said belongs in the
+    // conversation, not in a diagnostic log, and the length is what answers
+    // "did whisper.cpp produce anything".
+    const std::string mode =
+        recognitionEvent.automatic ? "hands-free" : "manual";
+    if (recognitionEvent.phase == "Error" ||
+        recognitionEvent.phase == "Diagnostics" ||
+        recognitionEvent.phase.starts_with("Test"))
+    {
+        const std::string line = "[Microphone] " + mode + " " +
+            recognitionEvent.phase + ": " + recognitionEvent.detail;
+        if (recognitionEvent.phase == "Error")
+        {
+            appLogger.Warning(line);
+        }
+        else
+        {
+            appLogger.Log(line);
+        }
+    }
+    else if (recognitionEvent.phase == "Recording" ||
+        recognitionEvent.phase == "Captured" ||
+        recognitionEvent.phase == "Transcribing")
+    {
+        appLogger.Log("[Microphone] " + mode + " " + recognitionEvent.phase +
+            ": " + recognitionEvent.detail +
+            (recognitionEvent.elapsedMilliseconds >= 0.0
+                ? " (" + std::to_string(static_cast<long long>(
+                    recognitionEvent.elapsedMilliseconds)) + "ms)"
+                : std::string()));
+    }
+    else if (recognitionEvent.phase == "Transcript")
+    {
+        appLogger.Log("[Microphone] " + mode +
+            " Transcript: whisper backend=" +
+            (settings.speechRecognition.bUseServer ? "server" : "cli") +
+            " device=" + settings.speechRecognition.device +
+            " transcript_chars=" +
+            std::to_string(recognitionEvent.transcript.size()) +
+            (recognitionEvent.elapsedMilliseconds >= 0.0
+                ? " transcription_ms=" + std::to_string(static_cast<long long>(
+                    recognitionEvent.elapsedMilliseconds))
+                : std::string()));
+    }
+
+    if (recognitionEvent.automatic && recognitionEvent.phase == "Transcript" &&
+        !recognitionEvent.transcript.empty())
+    {
+        if (!addresseeGate.Accept(recognitionEvent.transcript,
+                speech::AddresseeGate::Clock::now(), false))
+        {
+            appLogger.Log("[Microphone] hands-free speech ignored: not addressed to "
+                "Revia (transcript_chars=" +
+                std::to_string(recognitionEvent.transcript.size()) + ")");
+            RuntimeEvent ignored;
+            ignored.kind = RuntimeEventKind::ComponentStatus;
+            ignored.state = state.load();
+            ignored.component = "Microphone";
+            ignored.phase = "NotAddressed";
+            ignored.message = "Heard speech that was not for Revia.";
+            eventBus.Publish(std::move(ignored));
+            return;
+        }
+        presenceRuntime.RecordUserInput("local voice");
+        RuntimeEvent userEvent;
+        userEvent.kind = RuntimeEventKind::UserMessage;
+        userEvent.state = state.load();
+        userEvent.component = "Microphone";
+        userEvent.phase = "HandsFree";
+        userEvent.message = recognitionEvent.transcript;
+        eventBus.Publish(std::move(userEvent));
+        OfferInput(recognitionEvent.transcript, agents::InputSource::Voice);
+    }
+}
+
 SessionResult ReviaSession::RunTurnLocked(const std::string& acceptedInput)
 {
-    return GuardTurn([this, &acceptedInput]() { return RunTurnUnguarded(acceptedInput); });
+    SessionResult result =
+        GuardTurn([this, &acceptedInput]() { return RunTurnUnguarded(acceptedInput); });
+    addresseeGate.NoteExchange(speech::AddresseeGate::Clock::now());
+    return result;
 }
 
 SessionResult ReviaSession::GuardTurn(const std::function<SessionResult()>& turn)

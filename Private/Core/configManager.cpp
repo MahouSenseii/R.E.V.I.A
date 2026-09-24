@@ -583,6 +583,21 @@ bool configManager::LoadSettings(appSettings& outSettings) const
                 outSettings.speechRecognition.maximumUtteranceSeconds =
                     recognitionData["maximumUtteranceSeconds"].get<int>();
             }
+            if (recognitionData.contains("requireWakeWord"))
+            {
+                outSettings.speechRecognition.bRequireWakeWord =
+                    recognitionData["requireWakeWord"].get<bool>();
+            }
+            if (recognitionData.contains("wakeWords"))
+            {
+                outSettings.speechRecognition.wakeWords =
+                    recognitionData["wakeWords"].get<std::vector<std::string>>();
+            }
+            if (recognitionData.contains("followUpSeconds"))
+            {
+                outSettings.speechRecognition.followUpSeconds =
+                    recognitionData["followUpSeconds"].get<int>();
+            }
         }
 
         if (data.contains("performance"))
@@ -1367,7 +1382,11 @@ bool configManager::LoadSettings(appSettings& outSettings) const
                 outSettings.speechRecognition.minimumUtteranceMs < 100 ||
                 outSettings.speechRecognition.minimumUtteranceMs > 5000 ||
                 outSettings.speechRecognition.maximumUtteranceSeconds < 2 ||
-                outSettings.speechRecognition.maximumUtteranceSeconds > 120)) ||
+                outSettings.speechRecognition.maximumUtteranceSeconds > 120 ||
+                outSettings.speechRecognition.followUpSeconds < 0 ||
+                outSettings.speechRecognition.followUpSeconds > 600 ||
+                (outSettings.speechRecognition.bRequireWakeWord &&
+                    outSettings.speechRecognition.wakeWords.empty()))) ||
         outSettings.presence.statePath.empty() ||
         outSettings.presence.eventPath.empty() ||
         outSettings.presence.inboxPath.empty() ||

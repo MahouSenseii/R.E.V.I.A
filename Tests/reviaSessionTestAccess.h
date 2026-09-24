@@ -21,6 +21,9 @@ struct ReviaSessionTestAccess
     static SessionResult GuardTurn(ReviaSession& session, const std::function<SessionResult()>& turn)
     { return session.GuardTurn(turn); }
     static void MarkBusy(ReviaSession& session) { session.busy.store(true); }
+    static void Hear(ReviaSession& session, const speech::RecognitionEvent& event)
+    { session.OnRecognitionEvent(event); }
+    static std::string TakeOfferedInput(ReviaSession& session) { return session.inputArbiter.Take(); }
     static bool IsBusy(const ReviaSession& session) { return session.busy.load(); }
     static void RunBackgroundLoop(ReviaSession& session, std::stop_token stopToken,
         const std::function<void()>& loop)
