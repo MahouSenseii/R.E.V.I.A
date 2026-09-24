@@ -23,7 +23,8 @@ enum class AttentionVerdict
     ReducedForPrecision,
     UserIsBusy,
     FullScreen,
-    ExcludedApplication
+    ExcludedApplication,
+    InCall
 };
 
 [[nodiscard]] std::string ToString(AttentionVerdict value);
@@ -100,6 +101,8 @@ struct AttentionContext
     bool inputNeverPauses = false;
     bool foregroundIsFullScreen = false;
     bool foregroundIsExcluded = false;
+    // Another app is using the microphone: a call or a meeting she must not talk over.
+    bool inCall = false;
 };
 
 struct InitiativeCounters

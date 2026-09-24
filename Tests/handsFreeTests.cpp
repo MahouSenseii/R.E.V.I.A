@@ -1,4 +1,6 @@
 #include "reviaSessionTestAccess.h"
+#include "Initiative/attentionPolicy.h"
+#include "Perception/microphoneUse.h"
 #include "Speech/addresseeGate.h"
 
 #include <iostream>
@@ -79,6 +81,26 @@ void TestVoicesInTheRoomNeitherInterruptNorReachHer()
         "Speech addressed to her did not reach her or supersede the reply in progress.");
 }
 
+void TestACallKeepsHerQuiet()
+{
+    using revia::perception::MicrophoneUse;
+    using revia::perception::OtherAppUsingMicrophone;
+    const std::vector<std::string> own = {"ReviaDesktop.exe", "R_E_V_I_A.exe"};
+    Check(OtherAppUsingMicrophone({{"Zoom.exe", true}, {"reviadesktop.exe", true}}, own),
+        "A call app holding the microphone was not recognised as a call.");
+    Check(!OtherAppUsingMicrophone({{"ReviaDesktop.exe", true}, {"Zoom.exe", false}}, own),
+        "Revia's own hands-free microphone, or a finished call, was taken as a call.");
+
+    initiativeSettings talkative;
+    talkative.bEnabled = true;
+    revia::initiative::AttentionPolicy policy{talkative};
+    revia::initiative::AttentionContext context;
+    context.sinceLastInput = std::chrono::minutes{10};
+    context.inCall = true;
+    Check(policy.Evaluate(0.99f, context) == revia::initiative::AttentionVerdict::InCall,
+        "She would speak up unprompted during a call.");
+}
+
 } // namespace
 
 void RunHandsFreeTests()
@@ -86,6 +108,7 @@ void RunHandsFreeTests()
     TestHerNameIsMatchedAsAWholeWord();
     TestFollowUpsNeedNoNameButOthersAreIgnored();
     TestVoicesInTheRoomNeitherInterruptNorReachHer();
+    TestACallKeepsHerQuiet();
     std::cout << "Hands-free answers only speech meant for Revia; other voices neither reach "
         "nor interrupt her.\n";
 }

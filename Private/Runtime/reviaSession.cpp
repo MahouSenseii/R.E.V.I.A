@@ -12,6 +12,7 @@
 #include "Emotion/stimulusBuilder.h"
 #include "Identity/relationshipEvidence.h"
 #include "Memory/longTermMemory.h"
+#include "Perception/microphoneUse.h"
 #include "Planning/goalPlanner.h"
 #include "Planning/operateIntent.h"
 #include "Visual/drawingRequestPolicy.h"
@@ -4081,7 +4082,7 @@ void ReviaSession::OnRecognitionEvent(const speech::RecognitionEvent& recognitio
         !recognitionEvent.transcript.empty())
     {
         if (!addresseeGate.Accept(recognitionEvent.transcript,
-                speech::AddresseeGate::Clock::now(), false))
+                speech::AddresseeGate::Clock::now(), perception::InCall()))
         {
             appLogger.Log("[Microphone] hands-free speech ignored: not addressed to "
                 "Revia (transcript_chars=" +
@@ -6098,7 +6099,7 @@ autonomy::AutonomyCost ReviaSession::GatherAutonomyCost() const
         initiative::SampleDesktop(settings.perception);
     cost.sinceLastUserInteraction = desktop.sinceLastInput;
     cost.userPresent = desktop.sinceLastInput < std::chrono::minutes{5};
-    cost.userIsBusy = desktop.foregroundIsFullScreen ||
+    cost.userIsBusy = desktop.foregroundIsFullScreen || desktop.inCall ||
         desktop.sinceLastInput < std::chrono::seconds{30};
     cost.conversationActive = busy.load();
     cost.resourcesBusy = busy.load();

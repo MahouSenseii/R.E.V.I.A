@@ -63,7 +63,7 @@ The design rule: **one Revia**. Reflex, Fast, Main, and Expert share one identit
 ### Do things
 
 - **Look things up** in a visible, locked-down browser (Edge or Chrome) and show you the exact query and sources.
-- **Bring things up on her own** when she has something specific to say: a reaction to what you're doing, a follow-up on something from earlier, or a question. At most four times an hour, at least 15 minutes apart. She waits for a pause in your typing and stays quiet over a full-screen game, video or presentation (`initiative.suppressWhenFullScreen`).
+- **Bring things up on her own** when she has something specific to say: a reaction to what you're doing, a follow-up on something from earlier, or a question. At most four times an hour, at least 15 minutes apart. She waits for a pause in your typing and stays quiet over a full-screen game, video or presentation (`initiative.suppressWhenFullScreen`), and while another app is using the microphone (a call or meeting).
 - **Draw diagrams, keep a working document, generate images** (images need the optional installer).
 - **Sing** recordings you put in `RuntimeData/Songs/` (karaoke playback of your WAV files, not generated singing). Ask "Revia, sing <name>" or use `/sing`.
 - **Review her own code** and suggest one improvement at a time, with the problem, the reason, and a patch that she has already built and tested in a separate copy. She never edits her real source; you apply what you agree with (see [Self-improvement](#self-improvement)).

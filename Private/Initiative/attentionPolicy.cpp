@@ -1,4 +1,5 @@
 #include "Initiative/attentionPolicy.h"
+#include "Perception/microphoneUse.h"
 #include "Perception/windowEventMonitor.h"
 
 #include <algorithm>
@@ -116,6 +117,7 @@ AttentionContext SampleDesktop(
     context.sinceLastInput =
         std::chrono::duration_cast<std::chrono::seconds>(SinceLastInput());
 #ifdef _WIN32
+    context.inCall = revia::perception::InCall();
     const HWND foreground = GetForegroundWindow();
     context.foregroundIsExcluded =
         revia::perception::PerceptionFilter::IsExcludedApplication(
@@ -163,6 +165,7 @@ std::string ToString(const AttentionVerdict value)
         case AttentionVerdict::UserIsBusy: return "user is mid-input";
         case AttentionVerdict::FullScreen: return "full-screen application";
         case AttentionVerdict::ExcludedApplication: return "excluded application";
+        case AttentionVerdict::InCall: return "call in progress";
     }
     return "suppressed";
 }
@@ -235,6 +238,10 @@ AttentionVerdict AttentionPolicy::Evaluate(
     if (configuration.bSuppressWhenFullScreen && context.foregroundIsFullScreen)
     {
         return AttentionVerdict::FullScreen;
+    }
+    if (context.inCall)
+    {
+        return AttentionVerdict::InCall;
     }
     if (!context.inputNeverPauses &&
         context.sinceLastInput < std::chrono::seconds(configuration.quietInputSeconds))
