@@ -20,6 +20,7 @@
 #include "Windows/disposableApplicationFixtures.h"
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <chrono>
 #include <cstdlib>
@@ -39,6 +40,30 @@ namespace revia::runtime
 
 namespace
 {
+    // "cancel the task", "stop working on it" and the like, said as the whole message.
+    bool IsTaskCancelRequest(const std::string& input)
+    {
+        std::string words;
+        for (const unsigned char character : input)
+        {
+            if (std::isalpha(character) != 0)
+            {
+                words.push_back(static_cast<char>(std::tolower(character)));
+            }
+            else if (!words.empty() && words.back() != ' ')
+            {
+                words.push_back(' ');
+            }
+        }
+        while (!words.empty() && words.back() == ' ') words.pop_back();
+        if (words.rfind("revia ", 0) == 0) words.erase(0, 6);
+        static const std::array<const char*, 8> phrases = {
+            "cancel the task", "stop the task", "cancel task", "stop task",
+            "cancel that task", "stop that task", "stop working on it",
+            "stop working on that"};
+        return std::find(phrases.begin(), phrases.end(), words) != phrases.end();
+    }
+
     bool EnsureCapabilityConfig(
         const std::filesystem::path& runtimePath,
         const std::filesystem::path& templatePath,
@@ -336,6 +361,8 @@ ReviaSession::ReviaSession()
                {
                    context.currentActivity = running->goal;
                }
+               context.backgroundTask = DescribeRunningTask();
+               context.finishedTask = DescribeFinishedTask();
                return context;
            }),
       documentWorkshop(router, imageGenerator, diagramStore, appLogger)
@@ -365,7 +392,8 @@ ReviaSession::ReviaSession()
             std::lock_guard lock(confirmationMutex);
             handler = confirmationHandler;
         }
-        if (!handler)
+        // A cancelled task asks nothing more.
+        if (!handler || GoalToken().stop_requested())
         {
             return actions::ConfirmationChoice::Decline;
         }
@@ -373,7 +401,7 @@ ReviaSession::ReviaSession()
         // Carried through whole. Whether a standing yes is honoured, and how far it
         // reaches, is the runner's decision; this only relays the answer.
         const actions::ConfirmationChoice choice = handler(request, decision);
-        if (actions::Granted(choice) && !CurrentOperationToken().stop_requested())
+        if (actions::Granted(choice) && !GoalToken().stop_requested())
         {
             SetState(RuntimeState::Acting, "Executing the approved goal action.");
         }
@@ -418,7 +446,7 @@ ReviaSession::ReviaSession()
     goalRunner.SetStepProvider([this](const goals::Goal& goal, const std::uint32_t iteration)
     {
         goals::NextStep next = computerTasks.Decide(
-            goal, iteration, settings.perception, CurrentOperationToken());
+            goal, iteration, settings.perception, GoalToken());
         if (!next.hasStep)
         {
             return next;
@@ -3222,13 +3250,15 @@ SessionResult ReviaSession::AcceptProposal(const std::string& proposalId)
     {
         // Straight to the runner, which re-verifies every remaining step. Accepting a
         // proposal is a shortcut for typing the command, never a way around it.
-        const goals::Goal finished = ResumeGoalUnlocked(resumeGoalId);
-        result.succeeded = finished.status == goals::GoalStatus::Succeeded;
-        result.text = FormatGoalSummary(finished);
-        if (!result.succeeded)
-        {
-            result.reason = goals::ToString(finished.stopReason);
-        }
+        std::string message;
+        result.succeeded = LaunchTask("resume goal " + resumeGoalId,
+            [this, resumeGoalId](const std::stop_token stopToken)
+            {
+                return ExecuteResume(resumeGoalId, stopToken, false);
+            },
+            message);
+        result.text = message;
+        if (!result.succeeded) result.reason = message;
         return result;
     }
     // A proposal that names a goal hands it to the runner, which rehearses, confirms,
@@ -4414,6 +4444,8 @@ void ReviaSession::RequestStop()
         source = activeStopSource;
     }
     source.request_stop();
+    // Stop means stop: a background task ends too. A new message does not do this.
+    CancelTask("stop was requested");
     Publish(RuntimeEventKind::Activity, "Stop requested.");
 }
 
@@ -4451,6 +4483,9 @@ void ReviaSession::Stop()
         conversationArchive.EndSession(conversationSessionId);
     }
     std::lock_guard operationLock(operationMutex);
+    // Under the lock, so no turn can launch another task after this. The task worker
+    // never takes operationMutex, so joining it here cannot deadlock.
+    StopTaskWorker();
     // Start also holds operationMutex: join here so startup cannot create a
     // save worker after shutdown has already tried to stop it.
     StopStateMaintenance();
@@ -6843,17 +6878,22 @@ autonomy::ActivityOutcome ReviaSession::ExecuteActivity(
                 outcome.summary = "There was no goal to continue.";
                 return outcome;
             }
-            // Unchanged, and deliberately so: through the ordinary goal runner, which
-            // re-verifies every remaining step against policy. Resuming adds no
-            // authority whatsoever.
-            const goals::Goal finished = ResumeGoal(*decision.relatedGoal);
-            const bool succeeded = finished.status == goals::GoalStatus::Succeeded;
-            outcome.status = succeeded
+            // Through the ordinary goal runner, which re-verifies every remaining step
+            // against policy, as a background task so conversation stays live. Resuming
+            // adds no authority whatsoever.
+            const std::string goalId = *decision.relatedGoal;
+            std::string message;
+            const bool launched = LaunchTask("resume goal " + goalId,
+                [this, goalId](const std::stop_token token)
+                {
+                    return ExecuteResume(goalId, token, false);
+                },
+                message);
+            outcome.status = launched
                 ? autonomy::ActivityStatus::Completed
                 : autonomy::ActivityStatus::Failed;
-            outcome.satisfiedDrive = succeeded;
             outcome.drive = autonomy::Drive::UnfinishedGoal;
-            outcome.summary = FormatGoalSummary(finished);
+            outcome.summary = message;
             return outcome;
         }
         case autonomy::ActivityType::OrganizeMemory:
@@ -7636,11 +7676,27 @@ std::vector<goals::Goal> ReviaSession::ResumableGoals() const
 
 goals::Goal ReviaSession::RunGoalUnlocked(goals::Goal goal)
 {
+    if (const std::string running = RunningTaskTitle(); !running.empty())
+    {
+        goal.status = goals::GoalStatus::Failed;
+        goal.stopReason = goals::StopReason::PolicyBlocked;
+        goal.stopDetail = "A background task is running: " + running;
+        return goal;
+    }
+    busy.store(true);
+    goals::Goal finished = ExecuteGoal(std::move(goal), CurrentOperationToken(), true);
+    busy.store(false);
+    return finished;
+}
+
+goals::Goal ReviaSession::ExecuteGoal(
+    goals::Goal goal, const std::stop_token stopToken, const bool reportState)
+{
     if (!actionRuntime.IsInitialized())
     {
         goal.status = goals::GoalStatus::Failed;
         goal.stopReason = goals::StopReason::PolicyBlocked;
-        SetState(RuntimeState::Blocked, "Action runtime is not initialized.");
+        if (reportState) SetState(RuntimeState::Blocked, "Action runtime is not initialized.");
         return goal;
     }
     // Validate before announcing anything, so an unverifiable plan is rejected without
@@ -7651,15 +7707,14 @@ goals::Goal ReviaSession::RunGoalUnlocked(goals::Goal goal)
         goal.status = goals::GoalStatus::Failed;
         goal.stopReason = goals::StopReason::InvalidPlan;
         appLogger.Warning("Goal plan rejected: " + planError);
-        SetState(RuntimeState::Blocked, "Goal plan rejected: " + planError);
+        if (reportState) SetState(RuntimeState::Blocked, "Goal plan rejected: " + planError);
         return goal;
     }
 
-    busy.store(true);
-    const std::stop_token stopToken = CurrentOperationToken();
     const auto startedAt = std::chrono::steady_clock::now();
-    SetState(RuntimeState::Acting, "Running goal: " + goal.title);
-    return FinishGoalRun(goalRunner.Run(std::move(goal), stopToken), startedAt);
+    if (reportState) SetState(RuntimeState::Acting, "Running goal: " + goal.title);
+    const GoalTokenScope scope(*this, stopToken);
+    return FinishGoalRun(goalRunner.Run(std::move(goal), stopToken), startedAt, reportState);
 }
 
 bool ReviaSession::TryHandleOperateInput(const std::string& input, SessionResult& result)
@@ -7693,6 +7748,8 @@ bool ReviaSession::RunOperateGoal(const std::string& request, SessionResult& res
         SetState(RuntimeState::Blocked, result.reason);
         return true;
     }
+    // Refused before the approval prompt, not after it.
+    if (RefuseWhileTaskRuns(result)) return true;
 
     goals::Goal goal;
     goal.id = goals::NewGoalId();
@@ -7768,14 +7825,29 @@ bool ReviaSession::RunOperateGoal(const std::string& request, SessionResult& res
         SetState(RuntimeState::Idle, result.text);
         return true;
     }
+    // The work itself runs in the background, so she can keep talking while it runs.
+    SetState(RuntimeState::Acting, "Working on: " + goal.title);
+    std::string message;
+    const bool launched = LaunchTask(goal.title,
+        [this, goal, request, messaging](const std::stop_token stopToken) mutable
+        {
+            return ExecuteOperate(std::move(goal), request, messaging, stopToken, false);
+        },
+        message);
+    result.succeeded = launched;
+    result.text = message;
+    if (!launched) result.reason = message;
+    result.reasoning += "\n\n" + message;
+    return true;
+}
+
+goals::Goal ReviaSession::ExecuteOperate(goals::Goal goal, const std::string& request,
+    const bool messaging, const std::stop_token stopToken, const bool reportState)
+{
     goalRunner.SeedStandingApproval(actions::RiskLevel::ReversibleWrite, true);
     const auto desktopApproval = actionRuntime.ApproveDesktopTask(goal.id, messaging);
-
-    // RunTurnLocked already owns operationMutex and this turn's cancellation token.
-    // Locking again deadlocks after approval; starting a new operation would erase Stop.
-    const std::stop_token stopToken = CurrentOperationToken();
     const auto startedAt = std::chrono::steady_clock::now();
-    SetState(RuntimeState::Acting, "Working on: " + goal.title);
+    if (reportState) SetState(RuntimeState::Acting, "Working on: " + goal.title);
 
     // The task boundary. Providers, the subgoal and the payload vault all belong to one
     // run: starting here means a mode change cannot take effect mid-goal, and ending
@@ -7794,22 +7866,35 @@ bool ReviaSession::RunOperateGoal(const std::string& request, SessionResult& res
         ~TaskScope() { tasks.EndTask(); }
     } taskScope{computerTasks};
 
+    const GoalTokenScope scope(*this, stopToken);
     const goals::Goal finished =
-        FinishGoalRun(goalRunner.Operate(std::move(goal), stopToken), startedAt);
+        FinishGoalRun(goalRunner.Operate(std::move(goal), stopToken), startedAt, reportState);
     // The run's own record, handed back so the last decision's row can be completed
     // from what the runner actually established rather than from what it intended. The
     // scope guard above still ends the task if this line is never reached.
     computerTasks.CompleteTask(finished);
-
-    result.succeeded = finished.status == goals::GoalStatus::Succeeded;
-    result.text = FormatGoalSummary(finished);
-    result.reason = goals::ToString(finished.stopReason);
-    if (!finished.stopDetail.empty()) result.reason += ": " + finished.stopDetail;
-    result.reasoning += "\n\n" + result.text;
-    return true;
+    return finished;
 }
 
 goals::Goal ReviaSession::ResumeGoalUnlocked(const std::string& goalId)
+{
+    if (const std::string running = RunningTaskTitle(); !running.empty())
+    {
+        goals::Goal goal;
+        goal.id = goalId;
+        goal.status = goals::GoalStatus::Failed;
+        goal.stopReason = goals::StopReason::PolicyBlocked;
+        goal.stopDetail = "A background task is running: " + running;
+        return goal;
+    }
+    busy.store(true);
+    goals::Goal finished = ExecuteResume(goalId, CurrentOperationToken(), true);
+    busy.store(false);
+    return finished;
+}
+
+goals::Goal ReviaSession::ExecuteResume(
+    const std::string& goalId, const std::stop_token stopToken, const bool reportState)
 {
     goals::Goal goal;
     goal.id = goalId;
@@ -7817,32 +7902,31 @@ goals::Goal ReviaSession::ResumeGoalUnlocked(const std::string& goalId)
     {
         goal.status = goals::GoalStatus::Failed;
         goal.stopReason = goals::StopReason::PolicyBlocked;
-        SetState(RuntimeState::Blocked, "Action runtime is not initialized.");
+        if (reportState) SetState(RuntimeState::Blocked, "Action runtime is not initialized.");
         return goal;
     }
 
-    busy.store(true);
-    const std::stop_token stopToken = CurrentOperationToken();
     const auto startedAt = std::chrono::steady_clock::now();
-    SetState(RuntimeState::Acting, "Resuming goal " + goalId + ".");
-    return FinishGoalRun(goalRunner.Resume(goalId, stopToken), startedAt);
+    if (reportState) SetState(RuntimeState::Acting, "Resuming goal " + goalId + ".");
+    const GoalTokenScope scope(*this, stopToken);
+    return FinishGoalRun(goalRunner.Resume(goalId, stopToken), startedAt, reportState);
 }
 
 goals::Goal ReviaSession::FinishGoalRun(
     goals::Goal finished,
-    const std::chrono::steady_clock::time_point startedAt)
+    const std::chrono::steady_clock::time_point startedAt,
+    const bool reportState)
 {
     appLogger.Timing("goal", {
         {"goal_actions", static_cast<double>(finished.spend.actions)},
         {"goal_retries", static_cast<double>(finished.spend.retries)},
         {"goal_run", ElapsedMilliseconds(startedAt), true}});
-    busy.store(false);
 
     const std::string summary = FormatGoalSummary(finished);
     if (finished.status == goals::GoalStatus::Succeeded)
     {
         appLogger.Log(summary);
-        SetState(RuntimeState::Idle, summary);
+        if (reportState) SetState(RuntimeState::Idle, summary);
     }
     else
     {
@@ -7850,11 +7934,14 @@ goals::Goal ReviaSession::FinishGoalRun(
         // that exhausted its budget stopping quietly is the failure mode Stage 4 exists
         // to prevent.
         appLogger.Warning(summary);
-        SetState(
-            finished.status == goals::GoalStatus::Cancelled
-                ? RuntimeState::Idle
-                : RuntimeState::Blocked,
-            summary);
+        if (reportState)
+        {
+            SetState(
+                finished.status == goals::GoalStatus::Cancelled
+                    ? RuntimeState::Idle
+                    : RuntimeState::Blocked,
+                summary);
+        }
     }
     // A goal run is an outcome the runtime confirmed, which makes it something Revia is
     // allowed to feel. Steps she chose and budgets she spent make it self-caused, so a
@@ -7917,8 +8004,207 @@ goals::Goal ReviaSession::FinishGoalRun(
     return finished;
 }
 
-void ReviaSession::PublishGoalProgress(const goals::GoalProgress& progress) const
+ReviaSession::GoalTokenScope::GoalTokenScope(ReviaSession& owner, std::stop_token token)
+    : session(owner)
 {
+    std::lock_guard lock(session.taskMutex);
+    session.executingGoalToken = std::move(token);
+}
+
+ReviaSession::GoalTokenScope::~GoalTokenScope()
+{
+    std::lock_guard lock(session.taskMutex);
+    session.executingGoalToken.reset();
+}
+
+std::stop_token ReviaSession::GoalToken() const
+{
+    {
+        std::lock_guard lock(taskMutex);
+        if (executingGoalToken) return *executingGoalToken;
+    }
+    return CurrentOperationToken();
+}
+
+bool ReviaSession::LaunchTask(const std::string& title,
+    std::function<goals::Goal(std::stop_token)> execute, std::string& outMessage)
+{
+    std::lock_guard launching(taskLaunchMutex);
+    std::jthread previous;
+    {
+        std::lock_guard lock(taskMutex);
+        if (activeTask)
+        {
+            outMessage = "I'm still working on '" + activeTask->title +
+                "'. Say /task cancel if you want me to drop it first.";
+            return false;
+        }
+        previous = std::move(taskWorker);
+    }
+    // The previous task has already reported; its thread is on its last lines.
+    if (previous.joinable()) previous.join();
+
+    std::stop_source source;
+    // A stop pressed while the task was being approved still applies to it.
+    if (CurrentOperationToken().stop_requested()) source.request_stop();
+    {
+        std::lock_guard lock(taskMutex);
+        taskStopSource = source;
+        activeTask = BackgroundTask{title, std::chrono::steady_clock::now(), "starting"};
+        tasksLaunched.fetch_add(1);
+        taskWorker = std::jthread([this, source, execute = std::move(execute)](
+            const std::stop_token workerStop) mutable
+        {
+            std::stop_callback stopWithWorker(workerStop, [source]() mutable { source.request_stop(); });
+            goals::Goal finished;
+            try
+            {
+                finished = execute(source.get_token());
+            }
+            catch (const std::exception& error)
+            {
+                finished.status = goals::GoalStatus::Failed;
+                finished.stopDetail = std::string("The task stopped on an internal error: ") + error.what();
+            }
+            catch (...)
+            {
+                finished.status = goals::GoalStatus::Failed;
+                finished.stopDetail = "The task stopped on an internal error.";
+            }
+            FinishTask(finished);
+        });
+    }
+    PublishComponent("Task", "Started", "Working on '" + title + "' in the background.");
+    outMessage = "On it: '" + title + "'. I'll work on it in the background and tell you "
+        "when it's done. You can keep talking to me meanwhile.";
+    return true;
+}
+
+void ReviaSession::FinishTask(const goals::Goal& finished)
+{
+    const std::string summary = FormatGoalSummary(finished);
+    std::string title;
+    {
+        std::lock_guard lock(taskMutex);
+        if (activeTask) title = activeTask->title;
+        lastTaskReport = TaskReport{summary, finished.status, std::chrono::steady_clock::now()};
+        activeTask.reset();
+    }
+    if (title.empty()) title = finished.title;
+    const bool succeeded = finished.status == goals::GoalStatus::Succeeded;
+    const bool cancelled = finished.status == goals::GoalStatus::Cancelled;
+    PublishComponent("Task", goals::ToString(finished.status), summary);
+
+    std::string report = succeeded ? "Done: '" + title + "'."
+        : cancelled ? "Stopped '" + title + "'."
+        : "I couldn't finish '" + title + "'.";
+    if (!succeeded && !cancelled && !finished.stopDetail.empty())
+    {
+        report += " " + utf8::Prefix(finished.stopDetail, 200);
+    }
+    // A conversation turn in progress owns the state; otherwise the task sets it back.
+    if (!busy.load())
+    {
+        SetState(succeeded || cancelled ? RuntimeState::Idle : RuntimeState::Blocked, report);
+    }
+    RuntimeEvent message;
+    message.kind = RuntimeEventKind::AssistantMessage;
+    message.state = state.load();
+    message.component = "Task";
+    message.message = report;
+    message.detail = summary;
+    eventBus.Publish(std::move(message));
+
+    // Said out loud unless she was stopped, or a call is on.
+    if (!cancelled && speechService.IsEnabled() && !perception::InCall())
+    {
+        speech::SpeechIntent spoken;
+        spoken.owner = speech::SpeechOwner::Research;
+        spoken.behavior = speech::SpeechBehavior::Queue;
+        spoken.text = report;
+        spoken.affect = emotionRuntime.ToAffectSnapshot();
+        const speech::SpeechSubmission submitted = speechCoordinator.Submit(std::move(spoken));
+        if (!submitted.accepted) appLogger.Log("Task report not spoken: " + submitted.reason);
+    }
+}
+
+bool ReviaSession::CancelTask(const std::string& because)
+{
+    std::stop_source source;
+    std::string title;
+    {
+        std::lock_guard lock(taskMutex);
+        if (!activeTask) return false;
+        source = taskStopSource;
+        title = activeTask->title;
+    }
+    source.request_stop();
+    appLogger.Log("Background task '" + title + "' cancelled: " + because);
+    return true;
+}
+
+void ReviaSession::StopTaskWorker()
+{
+    std::lock_guard launching(taskLaunchMutex);
+    CancelTask("the session is stopping");
+    std::jthread worker;
+    {
+        std::lock_guard lock(taskMutex);
+        worker = std::move(taskWorker);
+    }
+    if (worker.joinable()) worker.join();
+}
+
+std::string ReviaSession::RunningTaskTitle() const
+{
+    std::lock_guard lock(taskMutex);
+    return activeTask ? activeTask->title : std::string();
+}
+
+bool ReviaSession::RefuseWhileTaskRuns(SessionResult& result)
+{
+    const std::string running = RunningTaskTitle();
+    if (running.empty()) return false;
+    result.succeeded = false;
+    result.text = "I'm still working on '" + running +
+        "'. Say /task cancel if you want me to drop it first.";
+    result.reason = "A background task is running.";
+    SetState(RuntimeState::Idle);
+    return true;
+}
+
+std::string ReviaSession::DescribeRunningTask() const
+{
+    std::lock_guard lock(taskMutex);
+    if (!activeTask) return {};
+    const auto minutes = std::chrono::duration_cast<std::chrono::minutes>(
+        std::chrono::steady_clock::now() - activeTask->startedAt).count();
+    return "'" + activeTask->title + "', started " +
+        (minutes < 1 ? std::string("under a minute") : std::to_string(minutes) + " min") +
+        " ago; latest " + activeTask->progress;
+}
+
+std::string ReviaSession::DescribeFinishedTask() const
+{
+    std::lock_guard lock(taskMutex);
+    if (activeTask || !lastTaskReport ||
+        std::chrono::steady_clock::now() - lastTaskReport->finishedAt > std::chrono::minutes{15})
+    {
+        return {};
+    }
+    return lastTaskReport->summary;
+}
+
+void ReviaSession::PublishGoalProgress(const goals::GoalProgress& progress)
+{
+    {
+        std::lock_guard lock(taskMutex);
+        if (activeTask && !progress.message.empty())
+        {
+            activeTask->progress = "step " + std::to_string(progress.ordinal + 1) + ": " +
+                utf8::Prefix(progress.message, 160);
+        }
+    }
     RuntimeEvent event;
     event.kind = RuntimeEventKind::ComponentStatus;
     event.state = state.load();
@@ -7979,6 +8265,7 @@ bool ReviaSession::TryHandleGoalInput(const std::string& input, SessionResult& r
         SetState(RuntimeState::Blocked, result.reason);
         return true;
     }
+    if (RefuseWhileTaskRuns(result)) return true;
 
     SetState(RuntimeState::Thinking, "Planning a goal.");
     const responseOutput proposal = router.PlanGoal(request);
@@ -8078,13 +8365,17 @@ bool ReviaSession::TryHandleGoalInput(const std::string& input, SessionResult& r
         }
     }
 
-    const goals::Goal finished = RunGoalUnlocked(std::move(parsed.goal));
-    result.succeeded = finished.status == goals::GoalStatus::Succeeded;
-    result.text = FormatGoalSummary(finished);
-    if (!result.succeeded)
-    {
-        result.reason = goals::ToString(finished.stopReason);
-    }
+    std::string message;
+    const std::string title = parsed.goal.title;
+    SetState(RuntimeState::Acting, "Running goal: " + title);
+    result.succeeded = LaunchTask(title,
+        [this, goal = std::move(parsed.goal)](const std::stop_token stopToken) mutable
+        {
+            return ExecuteGoal(std::move(goal), stopToken, false);
+        },
+        message);
+    result.text = message;
+    if (!result.succeeded) result.reason = message;
     return true;
 }
 
@@ -8349,6 +8640,37 @@ std::string ReviaSession::FormatGoalList(const std::vector<goals::Goal>& goalLis
 bool ReviaSession::TryHandleActionInput(const std::string& input, SessionResult& result)
 {
     if (HandleImprovementCommand(input, result)) return true;
+
+    // The background task: status, and cancelling it by command or in plain words.
+    const bool taskCommand = input == "/task" || input.rfind("/task ", 0) == 0;
+    if (taskCommand || IsTaskCancelRequest(input))
+    {
+        const std::string argument =
+            taskCommand && input.size() > 5 ? Trim(input.substr(5)) : std::string();
+        if (!taskCommand || argument == "cancel" || argument == "stop")
+        {
+            result.succeeded = CancelTask("you asked");
+            result.text = result.succeeded
+                ? "Stopping the task."
+                : "I'm not working on a task right now.";
+        }
+        else if (argument.empty())
+        {
+            const std::string running = DescribeRunningTask();
+            const std::string finished = DescribeFinishedTask();
+            result.text = !running.empty() ? "Working on " + running + "."
+                : !finished.empty() ? "Last task: " + finished
+                : "I'm not working on a task right now.";
+        }
+        else
+        {
+            result.succeeded = false;
+            result.text = "Usage: /task [cancel]";
+            result.reason = "Unrecognized task argument.";
+        }
+        SetState(RuntimeState::Idle);
+        return true;
+    }
 
     // "Revia, sing Bright Lights" does what /sing does -- but only for a song that is
     // really in her library. Anything else ("sing happy birthday" with no such file) is
@@ -8865,6 +9187,8 @@ bool ReviaSession::TryHandleActionInput(const std::string& input, SessionResult&
 
     if (input == "/controller" || input.rfind("/controller ", 0) == 0)
     {
+        // The running task is using the controller.
+        if (RefuseWhileTaskRuns(result)) return true;
         const std::string argument =
             input.size() > 12 ? Trim(input.substr(12)) : std::string();
 
@@ -9050,13 +9374,15 @@ bool ReviaSession::TryHandleActionInput(const std::string& input, SessionResult&
             SetState(RuntimeState::Blocked, result.reason);
             return true;
         }
-        const goals::Goal finished = ResumeGoalUnlocked(goalId);
-        result.succeeded = finished.status == goals::GoalStatus::Succeeded;
-        result.text = FormatGoalSummary(finished);
-        if (!result.succeeded)
-        {
-            result.reason = goals::ToString(finished.stopReason);
-        }
+        std::string message;
+        result.succeeded = LaunchTask("resume goal " + goalId,
+            [this, goalId](const std::stop_token stopToken)
+            {
+                return ExecuteResume(goalId, stopToken, false);
+            },
+            message);
+        result.text = message;
+        if (!result.succeeded) result.reason = message;
         return true;
     }
 
@@ -9513,12 +9839,23 @@ std::stop_token ReviaSession::CurrentOperationToken() const
     return activeStopSource.get_token();
 }
 
-void ReviaSession::SetState(const RuntimeState newState, const std::string& activity)
+void ReviaSession::SetState(RuntimeState newState, const std::string& activity)
 {
+    std::string shown = activity.empty() ? ToString(newState) : activity;
+    // Idle means nothing is happening. With a task running she is still at work, and the
+    // shell keeps Stop available for it.
+    if (newState == RuntimeState::Idle)
+    {
+        if (const std::string running = RunningTaskTitle(); !running.empty())
+        {
+            newState = RuntimeState::Acting;
+            shown = activity.empty()
+                ? "Working on '" + running + "' in the background."
+                : activity + " (still working on '" + running + "')";
+        }
+    }
     state.store(newState);
-    Publish(
-        RuntimeEventKind::StateChanged,
-        activity.empty() ? ToString(newState) : activity);
+    Publish(RuntimeEventKind::StateChanged, shown);
 }
 
 void ReviaSession::PublishAffect()

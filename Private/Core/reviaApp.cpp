@@ -45,6 +45,11 @@ void reviaApp::Run()
         {
             std::cout << "\n[Memory] " << event.message << "\n" << std::flush;
         }
+        else if (event.kind == revia::runtime::RuntimeEventKind::AssistantMessage)
+        {
+            // Said outside a typed turn: a finished task, or her speaking up.
+            std::cout << "\nRevia: " << event.message << "\n" << std::flush;
+        }
         else if (event.kind == revia::runtime::RuntimeEventKind::Proposal)
         {
             std::cout << "\nRevia: " << event.message

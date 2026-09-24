@@ -73,6 +73,7 @@
 #include <deque>
 #include <functional>
 #include <mutex>
+#include <optional>
 #include <stop_token>
 #include <string>
 #include <thread>
@@ -493,8 +494,15 @@ private:
     // not recursive, so the command path uses these and the public entry points lock.
     goals::Goal RunGoalUnlocked(goals::Goal goal);
     goals::Goal ResumeGoalUnlocked(const std::string& goalId);
-    goals::Goal FinishGoalRun(goals::Goal finished, std::chrono::steady_clock::time_point startedAt);
-    void PublishGoalProgress(const goals::GoalProgress& progress) const;
+    // The goal work itself, on whatever thread runs it. `reportState` is false for a
+    // background task, which must not overwrite the state of a conversation turn.
+    goals::Goal ExecuteGoal(goals::Goal goal, std::stop_token stopToken, bool reportState);
+    goals::Goal ExecuteResume(const std::string& goalId, std::stop_token stopToken, bool reportState);
+    goals::Goal ExecuteOperate(goals::Goal goal, const std::string& request, bool messaging,
+        std::stop_token stopToken, bool reportState);
+    goals::Goal FinishGoalRun(goals::Goal finished, std::chrono::steady_clock::time_point startedAt,
+        bool reportState = true);
+    void PublishGoalProgress(const goals::GoalProgress& progress);
     static std::string FormatGoalSummary(const goals::Goal& goal);
     static std::string FormatGoalList(const std::vector<goals::Goal>& goalList);
     static std::string FormatGoalPlan(const goals::Goal& goal);
@@ -670,6 +678,25 @@ private:
     // source, so a nested run must not call it: doing so would discard a stop the user
     // requested while the outer operation was still dispatching.
     [[nodiscard]] std::stop_token CurrentOperationToken() const;
+
+    // Background tasks. One runs at a time on its own thread with its own stop source,
+    // so she can keep talking while she works and a new message never cancels it.
+    bool LaunchTask(const std::string& title,
+        std::function<goals::Goal(std::stop_token)> execute, std::string& outMessage);
+    void FinishTask(const goals::Goal& finished);
+    // Returns false when no task was running.
+    bool CancelTask(const std::string& because);
+    void StopTaskWorker();
+    // Empty when no task is running.
+    [[nodiscard]] std::string RunningTaskTitle() const;
+    // The goal runner serves one goal at a time: work that needs it while a task holds
+    // it is refused here, with a way out. Returns true when it refused.
+    bool RefuseWhileTaskRuns(SessionResult& result);
+    // The token of the goal executing now: the task's own, or the operation's.
+    [[nodiscard]] std::stop_token GoalToken() const;
+    // "Working on X (latest: ...)" or a recent result, for the state packet. Empty if none.
+    [[nodiscard]] std::string DescribeRunningTask() const;
+    [[nodiscard]] std::string DescribeFinishedTask() const;
     // Turn one subsystem's account of what it did into what the session actually does.
     //
     // The only place a TurnEvent becomes a session effect. A subsystem returns events; it
@@ -911,6 +938,37 @@ private:
     std::atomic<RuntimeState> state = RuntimeState::Offline;
     std::atomic<bool> started = false;
     std::atomic<bool> busy = false;
+    struct BackgroundTask
+    {
+        std::string title;
+        std::chrono::steady_clock::time_point startedAt;
+        std::string progress;
+    };
+    struct TaskReport
+    {
+        std::string summary;
+        goals::GoalStatus status = goals::GoalStatus::Planned;
+        std::chrono::steady_clock::time_point finishedAt;
+    };
+    // Serialises launching against launching and stopping. The worker never takes it.
+    std::mutex taskLaunchMutex;
+    mutable std::mutex taskMutex;
+    std::optional<BackgroundTask> activeTask;
+    std::optional<TaskReport> lastTaskReport;
+    std::stop_source taskStopSource;
+    // Set while a goal executes, so its callbacks honour that goal's stop.
+    std::optional<std::stop_token> executingGoalToken;
+    std::jthread taskWorker;
+    // Counts launches, so a caller can tell whether its request started a task.
+    std::atomic<std::uint64_t> tasksLaunched{0};
+    struct GoalTokenScope
+    {
+        GoalTokenScope(ReviaSession& session, std::stop_token token);
+        ~GoalTokenScope();
+        GoalTokenScope(const GoalTokenScope&) = delete;
+        GoalTokenScope& operator=(const GoalTokenScope&) = delete;
+        ReviaSession& session;
+    };
     std::atomic<bool> llmAvailable = false;
     std::atomic<std::uint64_t> userInteractionGeneration = 0;
     std::atomic<std::uint64_t> curiosityRunCounter = 0;

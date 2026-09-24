@@ -532,6 +532,8 @@ std::string ConversationRuntime::BuildTurnPosture(
         AutonomyContext autonomy = autonomyContextProvider();
         packet.wanting = std::move(autonomy.wanting);
         packet.currentActivity = std::move(autonomy.currentActivity);
+        packet.backgroundTask = std::move(autonomy.backgroundTask);
+        packet.finishedTask = std::move(autonomy.finishedTask);
     }
     packet.runtime.aiReviewEnabled = filters.bAiReviewEnabled;
     packet.runtime.capabilityDescription = turnPolicy.publicAudience

@@ -21,6 +21,20 @@ struct ReviaSessionTestAccess
     static SessionResult GuardTurn(ReviaSession& session, const std::function<SessionResult()>& turn)
     { return session.GuardTurn(turn); }
     static void MarkBusy(ReviaSession& session) { session.busy.store(true); }
+    static bool LaunchTask(ReviaSession& session, const std::string& title,
+        std::function<goals::Goal(std::stop_token)> execute, std::string& outMessage)
+    { return session.LaunchTask(title, std::move(execute), outMessage); }
+    static void WaitForTask(ReviaSession& session)
+    {
+        std::jthread worker;
+        {
+            std::lock_guard lock(session.taskMutex);
+            worker = std::move(session.taskWorker);
+        }
+        if (worker.joinable()) worker.join();
+    }
+    static std::string RunningTask(const ReviaSession& session) { return session.DescribeRunningTask(); }
+    static std::string FinishedTask(const ReviaSession& session) { return session.DescribeFinishedTask(); }
     static void Hear(ReviaSession& session, const speech::RecognitionEvent& event)
     { session.OnRecognitionEvent(event); }
     static std::string TakeOfferedInput(ReviaSession& session) { return session.inputArbiter.Take(); }
@@ -191,13 +205,26 @@ struct ReviaSessionTestAccess
         return finished;
     }
 
+    // Tasks run in the background. This waits for one the input started and reports
+    // its outcome, which is what the operator tests assert on.
     static SessionResult SubmitOperator(ReviaSession& session, const std::string& input)
     {
         // Exercise the real input/lock owner without starting model or sensor workers.
         session.started.store(true);
         try
         {
+            const std::uint64_t launchedBefore = session.tasksLaunched.load();
             auto result = session.Submit(input);
+            if (session.tasksLaunched.load() != launchedBefore)
+            {
+                WaitForTask(session);
+                std::lock_guard lock(session.taskMutex);
+                if (session.lastTaskReport)
+                {
+                    result.succeeded = session.lastTaskReport->status == goals::GoalStatus::Succeeded;
+                    result.text = session.lastTaskReport->summary;
+                }
+            }
             session.started.store(false);
             return result;
         }

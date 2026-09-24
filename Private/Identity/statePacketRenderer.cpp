@@ -215,6 +215,17 @@ std::string RenderStatePacket(const ReviaStatePacket& packet, const bool include
             packet.currentActivity + ". Mention it only if it genuinely fits, and "
             "never as a reason the person should wait.");
     }
+    if (!packet.backgroundTask.empty())
+    {
+        section("You are working in the background on a task the user gave you: " +
+            packet.backgroundTask + ". Keep talking normally; if they ask how it is going, "
+            "answer from this, and do not claim it is finished.");
+    }
+    if (!packet.finishedTask.empty())
+    {
+        section("A task the user gave you recently ended. The runtime's record: " +
+            packet.finishedTask + " Answer questions about it from this record only.");
+    }
 
     // PERCEPTION / RUNTIME CONTEXT. The exact leading phrase is load-bearing for the
     // prompt-leak filter.

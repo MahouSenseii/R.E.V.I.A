@@ -95,6 +95,10 @@ struct ReviaStatePacket
     // present rather than summoned.
     std::string wanting;
     std::string currentActivity;
+    // A task the user gave her that is running in the background, or one she finished
+    // in the last few minutes, so "how's it going?" and "did it work?" have answers.
+    std::string backgroundTask;
+    std::string finishedTask;
 
     RuntimeSelfKnowledge runtime;
 

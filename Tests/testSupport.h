@@ -170,6 +170,7 @@ void RunOperateIntentTests();
 void RunBoundedFileReadTests();
 void RunTerminalInputTests();
 void RunHandsFreeTests();
+void RunBackgroundTaskTests();
 void RunSpeakerContinuityTests();
 void RunSpeechAttributionTests();
 void RunProfileActivationTests();
