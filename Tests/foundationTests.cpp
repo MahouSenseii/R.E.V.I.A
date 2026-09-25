@@ -9843,6 +9843,7 @@ int main(const int argc, char** argv)
         RunBackgroundTaskTests();
         RunReminderTests();
         RunClipboardTests();
+        RunQuestionRelayTests();
         RunSelfAssessmentTests();
         RunSecretDetectionTests();
         RunPromptSecurityTests();

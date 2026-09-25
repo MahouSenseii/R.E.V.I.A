@@ -204,6 +204,10 @@ ReviaWindow::ReviaWindow(
 
 ReviaWindow::~ReviaWindow()
 {
+    // First: the joins below run on this thread, which will never show another dialog,
+    // so a worker waiting for one must be refused rather than wait for ever.
+    shuttingDown.store(true);
+    AbandonQuestions();
     session.Events().Unsubscribe(subscriptionId);
     session.RequestStop();
     if (operationWorker.joinable())
@@ -1135,6 +1139,8 @@ void ReviaWindow::BeginShutdown(
     {
         return;
     }
+    // Nothing is approved on the way out, and nothing waits on an approval.
+    AbandonQuestions();
     // Recorded here rather than after the workers stop, so the reason survives even if
     // shutdown itself is what fails.
     revia::core::ExitReporter::Record(reason, detail);
@@ -2324,8 +2330,8 @@ void ReviaWindow::ShowPreferenceResult(const revia::core::PreferenceResult& resu
 
 bool ReviaWindow::ApproveDesktopEffect(const revia::policy::ApprovalPrompt& prompt)
 {
-    bool approved = false;
-    const auto ask = [this, &prompt, &approved]()
+    // A copy: the question can outlive the caller's wait during shutdown.
+    std::function<bool()> ask = [this, prompt]()
     {
         // Same reason ConfirmAction does this: a question owned by a minimized window is
         // invisible, and the worker would wait on an answer nobody can see.
@@ -2353,31 +2359,23 @@ bool ReviaWindow::ApproveDesktopEffect(const revia::policy::ApprovalPrompt& prom
         // being sent, so this cannot become a preview of content it does not have.
         description += "\n\nThis approves this one activation, now. It does not raise "
             "any permission and does not apply to the next one.";
-        approved = QMessageBox::question(
-            this,
-            "Approve this action",
-            description,
-            QMessageBox::Yes | QMessageBox::No,
-            QMessageBox::No) == QMessageBox::Yes;
+        QMessageBox question(QMessageBox::Question, "Approve this action", description,
+            QMessageBox::Yes | QMessageBox::No, this);
+        question.setDefaultButton(QMessageBox::No);
+        openQuestion = &question;
+        return question.exec() == QMessageBox::Yes;
     };
-
-    if (QThread::currentThread() == thread())
-    {
-        ask();
-    }
-    else
-    {
-        QMetaObject::invokeMethod(this, ask, Qt::BlockingQueuedConnection);
-    }
-    return approved;
+    return questions.Ask<bool>(PostToWindow(), QThread::currentThread() == thread(),
+        std::move(ask), false);
 }
 
 revia::actions::ConfirmationChoice ReviaWindow::ConfirmAction(
     const revia::actions::ActionRequest& request,
     const revia::actions::PolicyDecision& decision)
 {
-    revia::actions::ConfirmationChoice answer = revia::actions::ConfirmationChoice::Decline;
-    const auto showConfirmation = [this, &request, &decision, &answer]()
+    using revia::actions::ConfirmationChoice;
+    // Copies: the question can outlive the caller's wait during shutdown.
+    std::function<ConfirmationChoice()> showConfirmation = [this, request, decision]()
     {
         // A screen action hides Revia before capture so it cannot obscure the target.
         // Restore the shell before asking; a confirmation owned by a minimized window is
@@ -2431,30 +2429,37 @@ revia::actions::ConfirmationChoice ReviaWindow::ConfirmAction(
             "deletes. It is forgotten when the task ends and changes no permission.");
         prompt.setDefaultButton(refuse);
         prompt.setEscapeButton(refuse);
+        openQuestion = &prompt;
         prompt.exec();
         if (prompt.clickedButton() == everything)
         {
-            answer = revia::actions::ConfirmationChoice::AllowForThisTask;
+            return ConfirmationChoice::AllowForThisTask;
         }
-        else if (once != nullptr && prompt.clickedButton() == once)
+        if (once != nullptr && prompt.clickedButton() == once)
         {
-            answer = revia::actions::ConfirmationChoice::Allow;
+            return ConfirmationChoice::Allow;
         }
-        else
-        {
-            answer = revia::actions::ConfirmationChoice::Decline;
-        }
+        return ConfirmationChoice::Decline;
     };
+    return questions.Ask<ConfirmationChoice>(PostToWindow(),
+        QThread::currentThread() == thread(), std::move(showConfirmation),
+        ConfirmationChoice::Decline);
+}
 
-    if (QThread::currentThread() == thread())
+revia::core::QuestionRelay::Post ReviaWindow::PostToWindow()
+{
+    return [this](std::function<void()> work)
     {
-        showConfirmation();
-    }
-    else
-    {
-        QMetaObject::invokeMethod(this, showConfirmation, Qt::BlockingQueuedConnection);
-    }
-    return answer;
+        // Queued, never blocking: Qt drops it if the window is destroyed first.
+        QMetaObject::invokeMethod(this, std::move(work), Qt::QueuedConnection);
+    };
+}
+
+void ReviaWindow::AbandonQuestions()
+{
+    questions.Abandon();
+    // An approval already on screen would hold shutdown until someone answered it.
+    if (openQuestion) openQuestion->reject();
 }
 
 QIcon ReviaWindow::CreateReviaIcon()

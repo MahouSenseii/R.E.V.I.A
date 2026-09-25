@@ -149,6 +149,13 @@ void reviaApp::Run()
     // Covers end-of-input as well: closing the terminal is still a reason worth naming.
     revia::core::ExitReporter::Record(
         revia::core::ExitReason::EventLoopEnded, "the input loop ended");
+    // Before Stop joins the workers: one waiting for an approval must be refused, not
+    // left waiting for a line nobody will type.
+    {
+        std::lock_guard lock(input->mutex);
+        input->closing = true;
+    }
+    input->changed.notify_all();
 
     polling.store(false);
     pollWorker.request_stop();
@@ -182,6 +189,7 @@ revia::actions::ConfirmationChoice reviaApp::ConfirmAction(
         // Registered before the question is printed, so an answer typed the instant it
         // appears is routed here rather than into the conversation.
         std::lock_guard lock(input->mutex);
+        if (input->closing) return revia::actions::ConfirmationChoice::Decline;
         ++input->confirmationsWaiting;
     }
     std::cout << "\nAction: " << revia::actions::ToString(request.type) << '\n'
@@ -195,7 +203,7 @@ revia::actions::ConfirmationChoice reviaApp::ConfirmAction(
         std::unique_lock lock(input->mutex);
         input->changed.wait(lock, [this]
         {
-            return input->confirmationLine.has_value() || input->ended;
+            return input->confirmationLine.has_value() || input->ended || input->closing;
         });
         --input->confirmationsWaiting;
         if (!input->confirmationLine.has_value())

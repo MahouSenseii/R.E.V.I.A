@@ -1,9 +1,11 @@
 #pragma once
 
 #include "Core/exitReporter.h"
+#include "Core/questionRelay.h"
 #include "Runtime/reviaSession.h"
 
 #include <QMainWindow>
+#include <QPointer>
 
 #include <atomic>
 #include <map>
@@ -18,6 +20,7 @@ class QComboBox;
 class QEvent;
 class QLabel;
 class QLineEdit;
+class QMessageBox;
 class QPlainTextEdit;
 class QProgressBar;
 class QPushButton;
@@ -184,8 +187,14 @@ private:
     revia::actions::ConfirmationChoice ConfirmAction(
         const revia::actions::ActionRequest& request,
         const revia::actions::PolicyDecision& decision);
+    revia::core::QuestionRelay::Post PostToWindow();
+    // Refuses every pending approval and closes the one on screen. UI thread only.
+    void AbandonQuestions();
     static QIcon CreateReviaIcon();
 
+    // Before the session, so it outlives every worker that could ask a question.
+    revia::core::QuestionRelay questions;
+    QPointer<QMessageBox> openQuestion;
     revia::runtime::ReviaSession session;
     revia::runtime::RuntimeEventBus::SubscriptionId subscriptionId = 0;
     std::unique_ptr<Ui::ReviaWindow> ui;

@@ -30,6 +30,8 @@ private:
         std::optional<std::string> confirmationLine;
         int confirmationsWaiting = 0;
         bool ended = false;
+        // The chat loop has ended: nobody will answer another question.
+        bool closing = false;
     };
 
     std::optional<std::string> NextChatLine();
