@@ -1,5 +1,10 @@
 # Optional Revia public text demo transport
 
+For this Portfolio, follow the [Windows setup and Render activation guide](WINDOWS.md).
+It includes separate relay/bridge/native templates, one-command local startup,
+status checks, and a real deployed-browser smoke test. The exact production CORS
+origin is `https://mahousenseii.github.io` (no `/Portfolio/`).
+
 This directory contains the hosted relay, separate outbound Windows connector, and canonical version-1 protocol. The portfolio and native application integrate with them; this is not a deployed service. Public activation stays disabled until the owner configures hosting, credentials, native readiness and the portfolio URL, then verifies the complete deployed path.
 
 ```mermaid
@@ -47,13 +52,13 @@ Generate independent, cryptographically random credentials of at least 32 bytes 
 | Connector | `REVIA_WEB_LOCAL_URL` | Default `http://127.0.0.1:17864`; only a literal loopback HTTP origin is accepted |
 | Portfolio | `data/revia-demo.json` | Public relay HTTPS origin and enabled flag only; leave disabled until deployed |
 
-`.env.example` contains placeholders, not valid credentials. Use separate `.env.relay` and `.env.bridge` files on the appropriate machines, restrict them to the service account, and keep them out of backups/log capture that the operator does not control. Both filenames are ignored. Node reads an environment file only when explicitly passed `--env-file`; `npm start` uses the process environment supplied by the hosting platform. No dotenv package is needed.
+The `.env.relay.example`, `.env.bridge.example`, and `.env.revia.example` templates contain no valid credentials. Keep real local files outside the repository, preferably in `%LOCALAPPDATA%\Revia\WebDemo`, restricted to your account. Local `.env.*` files inside WebDemo are ignored by Git, but the native build copies Tools into build output, another reason to keep secrets outside the source tree. The Windows helper reads `.env.revia` and shares its native token/port with the connector; manual bridge commands must also load that file. Node reads an environment file only when explicitly passed `--env-file`; `npm start` uses the process environment supplied by the hosting platform. No dotenv package is needed.
 
 The checks below validate locally and make **no network connection**:
 
 ```powershell
 node --env-file=.env.relay relay/main.js --check
-node --env-file=.env.bridge bridge/main.js --check
+node --env-file=.env.revia --env-file=.env.bridge bridge/main.js --check
 ```
 
 ## Windows start, pause, stop and recover
@@ -62,7 +67,7 @@ node --env-file=.env.bridge bridge/main.js --check
 2. Check connector settings with the command above. Start the connector in a PowerShell terminal:
 
    ```powershell
-   node --env-file=.env.bridge bridge/main.js
+   node --env-file=.env.revia --env-file=.env.bridge bridge/main.js
    ```
 
 3. Enable public mode using the authenticated native owner control, then check `GET /v1/status` at the real HTTPS relay. `online` allows admission; `busy` means work is active or the owner has priority. Native control is never forwarded by the connector.
@@ -78,7 +83,7 @@ Start a **local development relay** with `NODE_ENV=development`, `REVIA_WEB_BIND
 
 Create one Node Web Service from this repository on `main`. Use root directory **`Tools/Presence/WebDemo`**, build command **`npm ci --omit=dev --ignore-scripts`**, start command **`npm start`**, and health path **`/healthz`**. Set `NODE_VERSION=24.21.0`; use one instance and no autoscaling. The optional [render.yaml](render.yaml) is a reviewable Blueprint recipe with automatic deploys off; creating it still requires the owner's Render account and secret setup. No service has been created by these files.
 
-Configure relay environment values from the table in Render secret/environment storage. Render supplies `PORT`; the application binds it on `0.0.0.0`. Use the exact portfolio origin (for example, `https://OWNER.github.io`, **without** `/Portfolio/`). Browser CORS origins never contain paths. After deployment, the portfolio's URL is `https://YOUR-SERVICE.onrender.com`; connector URL is `wss://YOUR-SERVICE.onrender.com/v1/host`. These are placeholders, not claimed live endpoints.
+Configure relay environment values from the table in Render secret/environment storage. Render supplies `PORT`; the application binds it on `0.0.0.0`. Use the exact portfolio origin `https://mahousenseii.github.io`, **without** `/Portfolio/`. Browser CORS origins never contain paths. After deployment, the portfolio's URL is `https://YOUR-SERVICE.onrender.com`; connector URL is `wss://YOUR-SERVICE.onrender.com/v1/host`. These are placeholders, not claimed live endpoints.
 
 Render accepts HTTP and WebSockets on the same public service and handles public TLS. Its health check here establishes only relay process health, not model availability. Confirm behavior against [Render Web Services](https://render.com/docs/web-services), [WebSockets](https://render.com/docs/websocket), [Node version selection](https://render.com/docs/node-version), and [Blueprint schema](https://render.com/docs/blueprint-spec). A rolling replacement loses process-local sessions; users reconnect with fresh sessions. Do not scale to multiple relay instances without a shared coordinator for admission, queues, tokens, epochs and budgets.
 

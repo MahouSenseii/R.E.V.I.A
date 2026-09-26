@@ -30,6 +30,11 @@ The boundary protects owner state and capabilities through code and separate dat
 
 ## Build and opt in on Windows
 
+The [Windows operator guide](../Tools/Presence/WebDemo/WINDOWS.md) now provides
+`WebDemo.ps1 start` to launch the desktop and bridge from private configuration
+files, plus separate launch and status actions. The manual procedure below
+remains supported.
+
 Build the current source using the existing setup/toolchain workflow:
 
 ```powershell

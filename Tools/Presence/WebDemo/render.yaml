@@ -19,7 +19,7 @@ services:
       - key: REVIA_WEB_HOST_ID
         value: revia-public
       - key: REVIA_WEB_ORIGINS
-        sync: false
+        value: https://mahousenseii.github.io
       - key: REVIA_WEB_HOST_TOKEN_SHA256
         sync: false
       - key: REVIA_WEB_INVITE_SHA256
