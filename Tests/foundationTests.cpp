@@ -2654,6 +2654,12 @@ void TestSelfInquiryAnswersHerOwnQuestions()
     Check(parsed.ReplyNote().find("The IDE is holding the cache open") != std::string::npos &&
               parsed.ReplyNote().find("must agree") != std::string::npos,
         "Her conclusion was not restated for the reply to follow.");
+    // A conclusion reached on partial information must not outrank the evidence. It
+    // once overrode a fresh screen observation, and she insisted she could not see.
+    Check(parsed.ReplyNote().find("saw on the screen") != std::string::npos &&
+              parsed.ReplyNote().find("said earlier in this conversation") !=
+                  std::string::npos,
+        "Her earlier thought was allowed to outrank what she saw or what was said.");
     SelfInquiryResult unsettled = parsed;
     unsettled.settled.clear();
     Check(unsettled.ReplyNote().empty(), "A reply note was invented with no conclusion.");
@@ -2703,7 +2709,9 @@ void TestSelfInquiryEnvelopeStaysBounded()
 
     const std::string envelope =
         SelfInquiryAgent::BuildEnvelope(problem, posture, context);
-    Check(envelope.size() < 7500,
+    // Three exchanges of earlier conversation, not two, is what moved the bound up: with
+    // fewer she reasoned about a conversation she could barely see.
+    Check(envelope.size() < 8500,
         "The self-inquiry envelope grew without bound and would cost more than the turn.");
 
     // The runtime facts about her close the posture. A bound that kept only its opening
@@ -2727,6 +2735,34 @@ void TestSelfInquiryEnvelopeStaysBounded()
         "Her saved memories never reached the thinking that decides her answer.");
     Check(remembering.size() < envelope.size() + 400,
         "Remembering made the self-inquiry envelope unbounded.");
+
+    // The message being answered is the problem, not something said before it. The
+    // runtime appends it to the context before asking, and it used to take one of the
+    // earlier-conversation slots as a verbatim repeat.
+    const std::vector<conversationMessage> withCurrent = {
+        {"user", "EARLIER_USER_LINE"},
+        {"assistant", "EARLIER_REVIA_LINE"},
+        {"user", "CURRENT_QUESTION_TEXT?"}};
+    const std::string answering =
+        SelfInquiryAgent::BuildEnvelope("CURRENT_QUESTION_TEXT?", posture, withCurrent);
+    const std::size_t firstMention = answering.find("CURRENT_QUESTION_TEXT?");
+    Check(firstMention != std::string::npos &&
+              answering.find("CURRENT_QUESTION_TEXT?", firstMention + 1) == std::string::npos,
+        "The message being answered was repeated as something said before it.");
+    Check(answering.find("EARLIER_USER_LINE") != std::string::npos &&
+              answering.find("EARLIER_REVIA_LINE") != std::string::npos,
+        "The earlier conversation did not reach the thinking.");
+
+    // What she saw is its own section. Reasoned out without it, a screen question
+    // concluded "I can't see it", and the reply was told to agree.
+    const std::string looking = SelfInquiryAgent::BuildEnvelope(
+        "What is on my screen?", posture, {}, {}, "SCREEN_OBSERVATION_MARK");
+    Check(looking.find("What you saw on their screen") != std::string::npos &&
+              looking.find("SCREEN_OBSERVATION_MARK") != std::string::npos,
+        "The screen observation never reached the thinking that decides her answer.");
+    Check(SelfInquiryAgent::BuildEnvelope("What is on my screen?", posture, {}, {},
+              std::string(9000, 's')).size() < 8500,
+        "A long screen observation made the self-inquiry envelope unbounded.");
 }
 
 void TestModelResidencyIsAuditable()

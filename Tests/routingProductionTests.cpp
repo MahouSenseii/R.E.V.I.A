@@ -48,6 +48,29 @@ void TestEveryRoutingInputHasAProducer()
     Check(BuildRoutingContext(screen).visionRequired,
         "A screen question did not set visionRequired.");
 
+    // Ordinary ways of asking her to look. Each of these took no fresh look, and with
+    // nothing cached she said she could not see.
+    for (const char* phrasing : {
+             "Look at my screen", "What's on my second monitor?",
+             "Can you tell what game is on the left monitor", "check my other screen",
+             "what am I playing right now"})
+    {
+        RoutingInputs asked;
+        asked.input = phrasing;
+        Check(BuildRoutingContext(asked).visionRequired,
+            std::string("A request to look was not treated as one: ") + phrasing);
+    }
+    // And ordinary talk that merely contains "monitor" or "screen" is not a request.
+    for (const char* phrasing : {
+             "Can you monitor my progress this week?", "I watched it on the big screen",
+             "the screenplay was great", "What is open source software?"})
+    {
+        RoutingInputs chat;
+        chat.input = phrasing;
+        Check(!BuildRoutingContext(chat).visionRequired,
+            std::string("Ordinary talk was treated as a request to look: ") + phrasing);
+    }
+
     RoutingInputs blueprint;
     blueprint.input = "Look at my screen and explain this blueprint graph.";
     Check(BuildRoutingContext(blueprint).expertVisionPreferred,

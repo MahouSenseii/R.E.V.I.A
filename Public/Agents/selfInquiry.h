@@ -147,7 +147,10 @@ public:
         std::stop_token stopToken = {},
         // Her saved memories related to this turn. Its own section, not part of the
         // posture, so the posture's bounds can never cut it.
-        const std::string& remembered = {}) const;
+        const std::string& remembered = {},
+        // The screen observation this turn carries, if any. Its own section for the
+        // same reason.
+        const std::string& seen = {}) const;
 
     // The parse, exposed so the schema can be tested without a model or a socket.
     [[nodiscard]] static SelfInquiryResult Parse(
@@ -163,7 +166,8 @@ public:
         const std::string& input,
         const std::string& identityPosture,
         const std::vector<conversationMessage>& context,
-        const std::string& remembered = {});
+        const std::string& remembered = {},
+        const std::string& seen = {});
 };
 
 } // namespace revia::agents

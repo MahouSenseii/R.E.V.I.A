@@ -256,12 +256,17 @@ private:
     // the live speech state. Shared by the turn posture and the self-inquiry so the two
     // cannot describe her body differently.
     [[nodiscard]] std::string DescribeBody() const;
+    // screenObservation is the look this turn will carry, when it carries one. It must
+    // be known before the posture is written: the posture states whether she has looked,
+    // and a posture written first said "no screen observation was taken" on every turn,
+    // including the ones that went on to hand her a fresh observation.
     [[nodiscard]] std::string BuildTurnPosture(
         const std::string& policyInput,
         const std::vector<conversationMessage>& promptContext,
         const aiProfile& profile,
         bool llmAvailable,
-        const TurnPolicy& turnPolicy) const;
+        const TurnPolicy& turnPolicy,
+        const std::string& screenObservation = {}) const;
     // Runs one bounded deliberation when the router already judged this turn hard,
     // publishes the questions so they are visible in chat, and returns what she worked
     // out. Returns an empty result whenever the gate stays shut, and a failed pass is
@@ -299,7 +304,8 @@ private:
         const intelligence::IntelligenceDecision& routing,
         bool modelAvailable,
         std::uint64_t turnId,
-        std::stop_token stopToken);
+        std::stop_token stopToken,
+        const std::string& screenObservation = {});
     [[nodiscard]] agents::ResponseFilterContext BuildResponseFilterContext(
         const std::string& policyInput,
         const std::vector<conversationMessage>& promptContext) const;

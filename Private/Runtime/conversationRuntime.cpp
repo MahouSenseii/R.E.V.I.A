@@ -75,12 +75,24 @@ bool MentionsInternet(const std::string& text)
 bool MentionsScreenEvidence(const std::string& text)
 {
     const std::string lowered = LowerCopy(text);
+    // Every phrase is anchored to a screen, a monitor, or what the user is doing on one.
+    // A miss here is not neutral: the turn takes no fresh look, and with nothing cached
+    // she is told she has not looked and says she cannot see. "Look at my screen" and
+    // "my second monitor" were both missed that way.
     constexpr std::string_view signals[] = {
         "on my screen", "on screen", "what i'm looking at", "what i am looking at",
         "what am i doing", "what i am doing", "what do you see", "what you see",
         "can you see", "see my screen", "see the screen", "computer screen",
         "computer screens", "this window", "these monitors", "my monitor",
-        "my monitors", "my screens", "screenshot", "blueprint graph"
+        "my monitors", "my screens", "screenshot", "blueprint graph",
+        "my screen", "at the screen", "the screens", "my display", "my displays",
+        "second monitor", "other monitor", "left monitor", "right monitor",
+        "main monitor", "primary monitor", "both monitors", "all monitors",
+        "which monitor", "this monitor", "that monitor",
+        "second screen", "other screen", "left screen", "right screen", "main screen",
+        "both screens", "all screens", "which screen", "this screen", "that screen",
+        "that window", "which window",
+        "what am i playing", "what am i watching", "what game is this"
     };
     return std::any_of(std::begin(signals), std::end(signals),
         [&lowered](const std::string_view signal)
@@ -479,7 +491,8 @@ std::string ConversationRuntime::BuildTurnPosture(
     const std::vector<conversationMessage>& promptContext,
     const aiProfile& profile,
     const bool llmAvailable,
-    const TurnPolicy& turnPolicy) const
+    const TurnPolicy& turnPolicy,
+    const std::string& screenObservation) const
 {
     const agents::ConversationStylePolicy conversationStyle;
     const emotion::EmotionSnapshot current = emotions.Current();
@@ -488,6 +501,11 @@ std::string ConversationRuntime::BuildTurnPosture(
         : responseFilterSettings{};
     agents::ResponseFilterContext runtimeFacts =
         BuildResponseFilterContext(policyInput, promptContext);
+    if (!screenObservation.empty())
+    {
+        runtimeFacts.screenObservationAvailable = true;
+        runtimeFacts.screenObservation = screenObservation;
+    }
     if (turnPolicy.publicAudience)
     {
         runtimeFacts.internetEnabled = false;
@@ -716,7 +734,8 @@ agents::SelfInquiryResult ConversationRuntime::RunSelfInquiry(
     const intelligence::IntelligenceDecision& routing,
     const bool modelAvailable,
     const std::uint64_t turnId,
-    const std::stop_token stopToken)
+    const std::stop_token stopToken,
+    const std::string& screenObservation)
 {
     agents::SelfInquiryResult inquiry;
     if (selfInquirySettingsProvider)
@@ -752,7 +771,8 @@ agents::SelfInquiryResult ConversationRuntime::RunSelfInquiry(
         promptContext,
         selfInquiryPolicy.Limits().maximumQuestions,
         stopToken,
-        router.RelatedMemories(policyInput, stopToken));
+        router.RelatedMemories(policyInput, stopToken),
+        screenObservation);
     if (!inquiry.HasQuestions())
     {
         // Never fatal. A deliberation that failed, was preempted, or came back unusable
@@ -1257,12 +1277,41 @@ SessionResult ConversationRuntime::Generate(
     agents::SelfInquiryResult inquiry;
     if (!proactive)
     {
+        // Looked at first, before anything describes this turn to her. The posture says
+        // whether she has seen the screen and the self-inquiry reasons from it; resolved
+        // afterwards, both were written as if she had not looked, told her so, and the
+        // observation then arrived contradicting them. She believed the first statement.
+        std::string screenContext;
+        if (turnPolicy.allowScreenContext && routingContext.visionRequired &&
+            screenCaptureRequest)
+        {
+            // An explicit screen question always gets a current look. Reusing a cached
+            // ambient summary skipped the strongly grounded capture path and let the
+            // model insist it was blind while the vision worker was visibly succeeding.
+            screenContext = screenCaptureRequest();
+        }
+        if (turnPolicy.allowScreenContext && screenContext.empty() &&
+            !agents::ConversationStylePolicy::IsBriefSocialTurn(policyInput) &&
+            screenContextProvider)
+        {
+            // Preserve the most recent successful observation if an on-demand capture
+            // is temporarily unavailable. The provider includes age/provenance so the
+            // response remains honest about how current that fallback is.
+            screenContext = screenContextProvider();
+        }
+        if (!screenContext.empty())
+        {
+            filterContext.screenObservationAvailable = true;
+            filterContext.screenObservation = screenContext;
+        }
+
         // Built once and used twice: the deliberation is handed the identical description
         // of this moment that the answer is generated under, which is what keeps the
         // questions hers rather than a detached reasoner's.
         const std::string basePosture =
             BuildTurnPosture(
-                policyInput, promptContext, profile, llmAvailable, turnPolicy);
+                policyInput, promptContext, profile, llmAvailable, turnPolicy,
+                screenContext);
         if (turnPolicy.allowSelfInquiry)
         {
             inquiry = RunSelfInquiry(
@@ -1272,7 +1321,8 @@ SessionResult ConversationRuntime::Generate(
                 routeDecision,
                 llmAvailable && !reflex.matched,
                 currentTurn,
-                stopToken);
+                stopToken,
+                screenContext);
         }
         if (stopToken.stop_requested())
         {
@@ -1307,29 +1357,9 @@ SessionResult ConversationRuntime::Generate(
         {
             postureLine << "\n\n" << turnPolicy.instruction;
         }
-        std::string screenContext;
-        if (turnPolicy.allowScreenContext && routingContext.visionRequired &&
-            screenCaptureRequest)
-        {
-            // An explicit screen question always gets a current look. Reusing a cached
-            // ambient summary skipped the strongly grounded capture path and let the
-            // model insist it was blind while the vision worker was visibly succeeding.
-            screenContext = screenCaptureRequest();
-        }
-        if (turnPolicy.allowScreenContext && screenContext.empty() &&
-            !agents::ConversationStylePolicy::IsBriefSocialTurn(policyInput) &&
-            screenContextProvider)
-        {
-            // Preserve the most recent successful observation if an on-demand capture
-            // is temporarily unavailable. The provider includes age/provenance so the
-            // response remains honest about how current that fallback is.
-            screenContext = screenContextProvider();
-        }
         if (!screenContext.empty())
         {
             postureLine << "\n\n" << screenContext;
-            filterContext.screenObservationAvailable = true;
-            filterContext.screenObservation = screenContext;
         }
         if (!recallGrounding.empty())
         {
@@ -1346,19 +1376,22 @@ SessionResult ConversationRuntime::Generate(
     {
         // Speaking first changes the conversational purpose, not who is speaking.
         // Event/research instructions extend the same bounded state as a private reply.
+        // The observation is read before the posture for the same reason as a reply: the
+        // posture has to say she looked when she did.
+        const std::string screenContext =
+            turnPolicy.allowScreenContext && screenContextProvider
+                ? screenContextProvider()
+                : std::string{};
         std::string posture = BuildTurnPosture(
-            policyInput, promptContext, profile, llmAvailable, turnPolicy) +
+            policyInput, promptContext, profile, llmAvailable, turnPolicy,
+            screenContext) +
             "\n\n" + proactiveInstruction;
-        if (turnPolicy.allowScreenContext && screenContextProvider)
+        if (!screenContext.empty())
         {
-            const std::string screenContext = screenContextProvider();
-            if (!screenContext.empty())
-            {
-                posture += "\n\n" + screenContext;
-                filterContext.screenTopicIsActive = true;
-                filterContext.screenObservationAvailable = true;
-                filterContext.screenObservation = screenContext;
-            }
+            posture += "\n\n" + screenContext;
+            filterContext.screenTopicIsActive = true;
+            filterContext.screenObservationAvailable = true;
+            filterContext.screenObservation = screenContext;
         }
         if (!internetGrounding.empty())
         {

@@ -46,6 +46,9 @@ struct ReviaSessionTestAccess
     static void Hear(ReviaSession& session, const speech::RecognitionEvent& event)
     { session.OnRecognitionEvent(event); }
     static std::string TakeOfferedInput(ReviaSession& session) { return session.inputArbiter.Take(); }
+    // What background screen awareness would have recorded, without a vision model.
+    static void SeeScreen(ReviaSession& session, std::string description)
+    { session.screenAwareness.Record(std::move(description)); }
     static bool IsBusy(const ReviaSession& session) { return session.busy.load(); }
     static void RunBackgroundLoop(ReviaSession& session, std::stop_token stopToken,
         const std::function<void()>& loop)

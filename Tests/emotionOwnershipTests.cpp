@@ -501,6 +501,52 @@ void TestReportedSpeechThroughSession()
     session.Stop();
 }
 
+// The reproduction for "she says she can't see anything".
+//
+// The turn's posture was written before the screen was looked at, so it said "no screen
+// observation was taken this turn ... do not say you can see anything" on every turn --
+// and then the observation was appended after it. She was handed both, and believed the
+// first. The posture has to be written knowing what she saw.
+void TestScreenObservationIsNotContradictedByThePosture()
+{
+    tests::ScopedTestDirectory directory;
+    WorkingDirectory cwd(directory.root);
+    Backend backend;
+    Configure(directory.root, backend.port);
+    ReviaSession session;
+    Check(session.Start(), "Screen posture session did not start.");
+
+    // Nothing observed: she is told plainly that she has not looked.
+    Check(session.Submit("Can you tell me what you think of the plan so far?").succeeded,
+        "The unobserved turn failed.");
+    Check(backend.Prompt().find("No screen observation was taken this turn") !=
+              std::string::npos,
+        "A turn with no observation was not told that she has not looked.");
+
+    Access::SeeScreen(session,
+        "Monitor 1: SCREEN_FIXTURE_EDITOR with a build log. Monitor 2: a paused video.");
+    for (const char* asked : {
+             "Can you tell me what you think of the plan so far?",
+             // A direct request whose fresh capture is unavailable in this fixture, so it
+             // falls back to the cached look exactly as a failed capture does live.
+             "What's on my second monitor?"})
+    {
+        Check(session.Submit(asked).succeeded,
+            std::string("The observed turn failed: ") + asked);
+        const std::string prompt = backend.Prompt();
+        Check(prompt.find("SCREEN_FIXTURE_EDITOR") != std::string::npos,
+            std::string("The observation did not reach the turn: ") + asked);
+        Check(prompt.find("No screen observation was taken this turn") == std::string::npos,
+            std::string("The turn carried an observation and was still told she had "
+                "not looked: ") + asked);
+        Check(prompt.find("A current local screen observation is available") !=
+                  std::string::npos,
+            std::string("The posture did not say an observation was available: ") +
+                asked);
+    }
+    session.Stop();
+}
+
 void TestMaintenanceAndPersistence()
 {
     tests::ScopedTestDirectory directory;
@@ -876,6 +922,7 @@ void RunEmotionOwnershipTests()
     TestContextBudgetsAndBoundedOverflowRecovery();
     TestConversationConsumers();
     TestReportedSpeechThroughSession();
+    TestScreenObservationIsNotContradictedByThePosture();
     TestDeliveryRequiresEmotionalEvidence();
     TestMaintenanceAndPersistence();
     TestQuietAdmissionAndRelationshipClocks();
