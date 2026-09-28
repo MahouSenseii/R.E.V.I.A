@@ -49,6 +49,10 @@ struct ReviaSessionTestAccess
     // What background screen awareness would have recorded, without a vision model.
     static void SeeScreen(ReviaSession& session, std::string description)
     { session.screenAwareness.Record(std::move(description)); }
+    static std::string CompressedHistory(const ReviaSession& session)
+    { return session.context.GetCompressedHistorySummary(); }
+    static std::vector<conversationMessage> RecentMessages(const ReviaSession& session)
+    { return session.context.GetRecentMessages(); }
     static bool IsBusy(const ReviaSession& session) { return session.busy.load(); }
     static void RunBackgroundLoop(ReviaSession& session, std::stop_token stopToken,
         const std::function<void()>& loop)

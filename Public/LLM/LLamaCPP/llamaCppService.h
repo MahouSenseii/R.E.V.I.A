@@ -67,6 +67,10 @@ public:
     responseOutput Deliberate(
         const std::string& boundedInquiryPrompt,
         std::stop_token stopToken = {}) const;
+    // One running-summary update of the oldest conversation. Background priority.
+    responseOutput SummarizeConversation(
+        const std::string& boundedHistory,
+        std::stop_token stopToken = {}) const;
     responseOutput GenerateGoalPlan(const std::string& userRequest) const;
     // One step of an iterative run, decided from the attempts so far.
     // One bounded subgoal, under its own grammar.

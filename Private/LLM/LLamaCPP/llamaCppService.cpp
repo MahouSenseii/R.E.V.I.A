@@ -7,6 +7,7 @@
 #include "Memory/memoryAttribution.h"
 #include "Memory/sensitiveContent.h"
 #include "Agents/conversationStylePolicy.h"
+#include "Agents/historyCompactor.h"
 #include "Actions/actionTypes.h"
 #include "Planning/goalPlanner.h"
 #include <httplib.h>
@@ -1282,6 +1283,24 @@ Do not answer the person here. Do not greet anyone, apologise, address anyone, w
         0.35F,
         "self-inquiry",
         InquirySchema);
+}
+
+responseOutput llamaCppService::SummarizeConversation(
+    const std::string& boundedHistory,
+    const std::stop_token stopToken) const
+{
+    // Low temperature: this is a record, and a creative one is a wrong one. The schema
+    // bounds the length; the token ceiling leaves room to close the object.
+    return GeneratePlannerResponse(
+        revia::agents::HistoryCompactor::SystemPrompt(),
+        boundedHistory,
+        640,
+        true,
+        stopToken,
+        revia::llm::InferencePriority::Background,
+        0.2F,
+        "history compaction",
+        revia::agents::HistoryCompactor::ResponseSchema());
 }
 
 responseOutput llamaCppService::GenerateGoalPlan(const std::string& userRequest) const

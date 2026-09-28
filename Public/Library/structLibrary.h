@@ -684,6 +684,11 @@ struct conversationSettings
     // continues a conversation instead of restarting one. Costs prompt tokens every turn
     // it survives, which is why it is small.
     int restoreTurns = 6;
+    // Whether the oldest conversation is folded into a running summary once the kept
+    // history reaches three quarters of its budget. The Main model writes it in the
+    // background after a reply; without it, turns leaving the window keep only their
+    // first line.
+    bool bHistoryCompactionEnabled = true;
     // Whether Revia may stop on a hard turn, ask herself a few questions, and show them.
     // It costs one extra bounded inference on the turns it fires, which is why it is
     // gated to the problems the intelligence router already judged difficult.

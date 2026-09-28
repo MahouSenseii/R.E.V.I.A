@@ -137,7 +137,14 @@ Database OpenDatabase(const std::string& archivePath)
         "  AFTER DELETE ON conversation_turns BEGIN "
         "  INSERT INTO conversation_search(conversation_search, rowid, content) "
         "  VALUES ('delete', old.rowid, old.content);"
-        "END;";
+        "END;"
+        // The running summary of a session's compacted history, one row per session, so
+        // a restart continues from it rather than from the last few turns alone.
+        "CREATE TABLE IF NOT EXISTS conversation_summaries ("
+        "  session_id TEXT PRIMARY KEY,"
+        "  summary TEXT NOT NULL,"
+        "  updated_at TEXT NOT NULL"
+        ");";
     if (!Execute(database.get(), Schema))
     {
         return {};
@@ -466,6 +473,35 @@ std::vector<ArchivedTurn> ConversationArchive::LoadSession(
     return turns;
 }
 
+std::string ConversationArchive::PreviousSessionId(
+    sqlite3* const database,
+    const std::string& currentSessionId) const
+{
+    Statement statement;
+    sqlite3_stmt* raw = nullptr;
+    // The previous conversation is the latest one that said anything. A start that
+    // was closed again before a single turn -- a crash, a quick restart, a test --
+    // leaves an empty session, and restoring "the latest session" then restored
+    // nothing while the real conversation sat one row further back.
+    if (sqlite3_prepare_v2(database,
+            "SELECT s.session_id FROM conversation_sessions s WHERE s.session_id <> ? "
+            "AND EXISTS (SELECT 1 FROM conversation_turns t "
+            "WHERE t.session_id = s.session_id) "
+            "ORDER BY CAST(s.started_at AS INTEGER) DESC LIMIT 1;",
+            -1, &raw, nullptr) != SQLITE_OK)
+    {
+        return {};
+    }
+    statement.reset(raw);
+    sqlite3_bind_text(
+        statement.get(), 1, currentSessionId.c_str(), -1, SQLITE_TRANSIENT);
+    if (sqlite3_step(statement.get()) != SQLITE_ROW)
+    {
+        return {};
+    }
+    return ColumnText(statement.get(), 0);
+}
+
 std::vector<ArchivedTurn> ConversationArchive::LoadPreviousSessionTail(
     const std::string& currentSessionId,
     const std::size_t maxTurns) const
@@ -477,31 +513,10 @@ std::vector<ArchivedTurn> ConversationArchive::LoadPreviousSessionTail(
         return turns;
     }
 
-    std::string previous;
+    const std::string previous = PreviousSessionId(database, currentSessionId);
+    if (previous.empty())
     {
-        Statement statement;
-        sqlite3_stmt* raw = nullptr;
-        // The previous conversation is the latest one that said anything. A start that
-        // was closed again before a single turn -- a crash, a quick restart, a test --
-        // leaves an empty session, and restoring "the latest session" then restored
-        // nothing while the real conversation sat one row further back.
-        if (sqlite3_prepare_v2(database,
-                "SELECT s.session_id FROM conversation_sessions s WHERE s.session_id <> ? "
-                "AND EXISTS (SELECT 1 FROM conversation_turns t "
-                "WHERE t.session_id = s.session_id) "
-                "ORDER BY CAST(s.started_at AS INTEGER) DESC LIMIT 1;",
-                -1, &raw, nullptr) != SQLITE_OK)
-        {
-            return turns;
-        }
-        statement.reset(raw);
-        sqlite3_bind_text(
-            statement.get(), 1, currentSessionId.c_str(), -1, SQLITE_TRANSIENT);
-        if (sqlite3_step(statement.get()) != SQLITE_ROW)
-        {
-            return turns;
-        }
-        previous = ColumnText(statement.get(), 0);
+        return turns;
     }
 
     Statement statement;
@@ -523,6 +538,94 @@ std::vector<ArchivedTurn> ConversationArchive::LoadPreviousSessionTail(
     // order a conversation is replayed in.
     std::reverse(turns.begin(), turns.end());
     return turns;
+}
+
+bool ConversationArchive::SaveSummary(
+    const std::string& sessionId,
+    const std::string& summary,
+    std::string& outReason)
+{
+    if (sessionId.empty() || summary.empty())
+    {
+        outReason = "Nothing to record.";
+        return false;
+    }
+    if (!revia::utf8::IsValid(summary))
+    {
+        outReason = "Malformed UTF-8 was not archived.";
+        return false;
+    }
+    // The same rule as a turn, for the same reason. The summary was written from the live
+    // conversation, which can hold a turn the archive itself refused.
+    if (const SensitiveFinding finding = DetectSensitiveContent(summary))
+    {
+        outReason = "The summary matched a sensitive-content marker (" +
+            ToString(finding.kind) + ") and was not archived.";
+        return false;
+    }
+    std::string stored = summary;
+    if (stored.size() > limits.maxContentCharacters)
+    {
+        revia::utf8::Truncate(stored, limits.maxContentCharacters);
+    }
+    sqlite3* const database = Acquire();
+    if (database == nullptr)
+    {
+        outReason = "The conversation archive could not be opened.";
+        return false;
+    }
+    Statement statement;
+    sqlite3_stmt* raw = nullptr;
+    if (sqlite3_prepare_v2(database,
+            "INSERT INTO conversation_summaries(session_id, summary, updated_at) "
+            "VALUES (?, ?, ?) ON CONFLICT(session_id) DO UPDATE SET "
+            "summary = excluded.summary, updated_at = excluded.updated_at;",
+            -1, &raw, nullptr) != SQLITE_OK)
+    {
+        outReason = "The conversation archive rejected the summary.";
+        return false;
+    }
+    statement.reset(raw);
+    const std::string now = CurrentEpochSeconds();
+    sqlite3_bind_text(statement.get(), 1, sessionId.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(statement.get(), 2, stored.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(statement.get(), 3, now.c_str(), -1, SQLITE_TRANSIENT);
+    if (sqlite3_step(statement.get()) != SQLITE_DONE)
+    {
+        outReason = "The conversation archive could not store the summary.";
+        return false;
+    }
+    return true;
+}
+
+std::string ConversationArchive::LoadPreviousSessionSummary(
+    const std::string& currentSessionId) const
+{
+    sqlite3* const database = Acquire();
+    if (database == nullptr)
+    {
+        return {};
+    }
+    // The same session the tail is restored from, so the two always describe one
+    // conversation.
+    const std::string previous = PreviousSessionId(database, currentSessionId);
+    if (previous.empty())
+    {
+        return {};
+    }
+    Statement statement;
+    sqlite3_stmt* raw = nullptr;
+    if (sqlite3_prepare_v2(database,
+            "SELECT summary FROM conversation_summaries WHERE session_id = ?;",
+            -1, &raw, nullptr) != SQLITE_OK)
+    {
+        return {};
+    }
+    statement.reset(raw);
+    sqlite3_bind_text(statement.get(), 1, previous.c_str(), -1, SQLITE_TRANSIENT);
+    return sqlite3_step(statement.get()) == SQLITE_ROW
+        ? ColumnText(statement.get(), 0)
+        : std::string{};
 }
 
 std::vector<ArchivedSession> ConversationArchive::RecentSessions(
@@ -728,6 +831,7 @@ std::size_t ConversationArchive::Forget()
     }
     if (!Execute(database,
             "DELETE FROM conversation_turns;"
+            "DELETE FROM conversation_summaries;"
             "DELETE FROM conversation_sessions;"))
     {
         return 0;
@@ -776,6 +880,7 @@ std::size_t ConversationArchive::ForgetSession(const std::string& sessionId)
 
     for (const char* sql : {
             "DELETE FROM conversation_turns WHERE session_id = ?;",
+            "DELETE FROM conversation_summaries WHERE session_id = ?;",
             "DELETE FROM conversation_sessions WHERE session_id = ?;"})
     {
         Statement statement;

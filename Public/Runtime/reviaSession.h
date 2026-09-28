@@ -2,6 +2,7 @@
 
 #include "Actions/actionRuntime.h"
 #include "Agents/curiosityAgent.h"
+#include "Agents/historyCompactor.h"
 #include "Agents/turnCoordinator.h"
 #include "Agents/inputArbiter.h"
 #include "Core/commandManager.h"
@@ -658,6 +659,13 @@ private:
     void StartScreenAwareness();
     void StopScreenAwareness();
     void SignalScreenAwareness(const std::string& reason);
+    // Folds the oldest conversation into its running summary once the history fills.
+    // Asked after every delivered reply; the worker also rechecks on its own now and
+    // then, so a pass a person's turn preempted is picked up again.
+    void StartHistoryCompaction();
+    void StopHistoryCompaction();
+    void SignalHistoryCompaction();
+    void CompactHistoryOnce(std::stop_token workerStop);
     void CancelScreenAwarenessAttempt();
     [[nodiscard]] std::string CurrentScreenContext() const;
     // Its own thread, not the shell's poll timer. A companion that only considers speaking
@@ -942,6 +950,13 @@ private:
     // this class that nothing else touched.
     perception::ScreenAwarenessSchedule screenAwareness;
     std::jthread screenAwarenessWorker;
+    agents::HistoryCompactor historyCompactor;
+    std::mutex historyCompactionMutex;
+    std::condition_variable_any historyCompactionCondition;
+    bool historyCompactionWanted = false;
+    // Touched only by the worker below.
+    std::string historyCompactionLastDeferral;
+    std::jthread historyCompactionWorker;
     std::jthread initiativeWorker;
     std::jthread curiosityWorker;
     std::jthread inputDrainWorker;

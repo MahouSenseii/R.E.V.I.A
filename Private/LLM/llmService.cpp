@@ -317,6 +317,19 @@ responseOutput llmService::Deliberate(
     return llamaCpp.Deliberate(boundedInquiryPrompt, stopToken);
 }
 
+responseOutput llmService::SummarizeConversation(
+    const std::string& boundedHistory,
+    const std::stop_token stopToken) const
+{
+    if (!bIsReady || backendType != llmBackendType::LLamaCpp)
+    {
+        responseOutput output;
+        output.reason = "History compaction requires the active llama.cpp backend.";
+        return output;
+    }
+    return llamaCpp.SummarizeConversation(boundedHistory, stopToken);
+}
+
 responseOutput llmService::GenerateGoalPlan(const std::string& userRequest) const
 {
     if (!bIsReady)

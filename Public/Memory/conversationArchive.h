@@ -96,6 +96,15 @@ public:
     [[nodiscard]] std::vector<ArchivedTurn> LoadPreviousSessionTail(
         const std::string& currentSessionId,
         std::size_t maxTurns = 6) const;
+    // The running summary of a session's compacted history. Refused, like a turn, when it
+    // matches a sensitive-content marker. Replaces the session's previous summary.
+    bool SaveSummary(
+        const std::string& sessionId,
+        const std::string& summary,
+        std::string& outReason);
+    // The summary of the session LoadPreviousSessionTail restores from, or empty.
+    [[nodiscard]] std::string LoadPreviousSessionSummary(
+        const std::string& currentSessionId) const;
     [[nodiscard]] std::vector<ArchivedSession> RecentSessions(
         std::size_t maxSessions = 20) const;
     // Exact-phrase search, which is what a user typing words into /history means.
@@ -142,6 +151,10 @@ private:
     // and each open re-ran the schema before it could insert anything, which measured at
     // ten milliseconds a call on a database of a few hundred rows.
     [[nodiscard]] sqlite3* Acquire() const;
+    // The latest other session that recorded a turn, or empty.
+    [[nodiscard]] std::string PreviousSessionId(
+        sqlite3* database,
+        const std::string& currentSessionId) const;
 
     std::string archivePath;
     ArchiveLimits limits;

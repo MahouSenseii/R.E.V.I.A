@@ -1343,6 +1343,7 @@ bool ReviaSession::Start()
     eventBus.Publish(std::move(visionEvent));
     StartInputDrain();
     StartScreenAwareness();
+    StartHistoryCompaction();
     StartExternalAdapterLoop();
     // A separately opted-in source. Discord enablement never starts this listener.
     // Environment values are owner configuration, never supplied by a visitor.
@@ -1735,6 +1736,154 @@ void ReviaSession::CancelScreenAwarenessAttempt()
 std::string ReviaSession::CurrentScreenContext() const
 {
     return screenAwareness.CurrentContext();
+}
+
+void ReviaSession::StartHistoryCompaction()
+{
+    StopHistoryCompaction();
+    if (!settings.conversation.bHistoryCompactionEnabled)
+    {
+        return;
+    }
+    {
+        std::lock_guard lock(historyCompactionMutex);
+        historyCompactionWanted = false;
+    }
+    historyCompactionWorker = std::jthread([this](const std::stop_token workerStop)
+    {
+        RunBackgroundLoop("History compaction", workerStop, [&]()
+        {
+            while (!workerStop.stop_requested())
+            {
+                {
+                    std::unique_lock lock(historyCompactionMutex);
+                    // The timeout is the retry. A pass a person's turn preempted has
+                    // nobody else to ask for it again until the next reply lands.
+                    historyCompactionCondition.wait_for(
+                        lock, workerStop, std::chrono::seconds(45),
+                        [this] { return historyCompactionWanted; });
+                    historyCompactionWanted = false;
+                }
+                if (workerStop.stop_requested()) break;
+                CompactHistoryOnce(workerStop);
+            }
+        });
+    });
+    // A conversation restored at startup can already be past the mark.
+    SignalHistoryCompaction();
+}
+
+void ReviaSession::StopHistoryCompaction()
+{
+    if (!historyCompactionWorker.joinable()) return;
+    historyCompactionWorker.request_stop();
+    historyCompactionWorker.join();
+}
+
+void ReviaSession::SignalHistoryCompaction()
+{
+    if (!settings.conversation.bHistoryCompactionEnabled || !context.NeedsCompaction())
+    {
+        return;
+    }
+    {
+        std::lock_guard lock(historyCompactionMutex);
+        historyCompactionWanted = true;
+    }
+    historyCompactionCondition.notify_all();
+}
+
+void ReviaSession::CompactHistoryOnce(const std::stop_token workerStop)
+{
+    // A turn in flight will ask again when it ends; starting now would only be preempted.
+    if (!started.load() || !llmAvailable.load() || busy.load())
+    {
+        return;
+    }
+    const std::optional<conversationContext::CompactionJob> job = context.BeginCompaction();
+    if (!job)
+    {
+        return;
+    }
+
+    const std::size_t folding = job->messages.size();
+    PublishComponent(
+        "Conversation history", "Compacting",
+        "Summarizing the " + std::to_string(folding) +
+            " oldest messages in the background.",
+        -1.0, static_cast<int>(folding));
+    const agents::HistoryCompactionResult compacted =
+        historyCompactor.Compact(router, *job, workerStop);
+    if (!compacted.succeeded)
+    {
+        const bool yielded = workerStop.stop_requested() ||
+            compacted.reason.find("preempted") != std::string::npos;
+        // The same failure is retried every pass; saying so once is enough.
+        if (!yielded && compacted.reason == historyCompactionLastDeferral)
+        {
+            return;
+        }
+        historyCompactionLastDeferral = yielded ? std::string{} : compacted.reason;
+        appLogger.Log("History compaction deferred: " + compacted.reason);
+        PublishComponent(
+            "Conversation history", yielded ? "Yielded" : "Deferred",
+            yielded
+                ? std::string("Summarizing yielded to your message and will finish after it.")
+                : compacted.reason + " The oldest turns keep their excerpts until it works.",
+            compacted.elapsedMilliseconds);
+        return;
+    }
+    historyCompactionLastDeferral.clear();
+
+    // Applied between turns, never during one. A turn reads the recent messages and the
+    // summary at different moments, and replacing both underneath it could show her a
+    // gap or the same exchange twice. The summary was written without the lock, so
+    // nobody waited on it; only this short step waits for a turn to finish.
+    std::unique_lock operationLock(operationMutex, std::defer_lock);
+    while (!operationLock.try_lock())
+    {
+        if (workerStop.stop_requested()) return;
+        std::this_thread::sleep_for(std::chrono::milliseconds(250));
+    }
+    if (!context.ApplyCompaction(*job, compacted.summary))
+    {
+        // Published outside the lock, like everything this worker says.
+        operationLock.unlock();
+        PublishComponent(
+            "Conversation history", "Superseded",
+            "The conversation was cleared or replaced while it was being summarized, so "
+            "nothing was folded.");
+        return;
+    }
+    std::string kept = "kept for this session only";
+    if (settings.conversation.bArchiveEnabled && !conversationSessionId.empty())
+    {
+        std::string reason;
+        if (conversationArchive.SaveSummary(conversationSessionId, compacted.summary, reason))
+        {
+            kept = "saved with the conversation archive";
+        }
+        else
+        {
+            kept = "not saved: " + reason;
+            appLogger.Log("The history summary was not archived: " + reason);
+        }
+    }
+    operationLock.unlock();
+
+    RuntimeEvent event;
+    event.kind = RuntimeEventKind::ComponentStatus;
+    event.state = state.load();
+    event.component = "Conversation history";
+    event.phase = "Compacted";
+    event.message = "Summarized the " + std::to_string(folding) +
+        " oldest messages; the last " + std::to_string(job->keptVerbatim) +
+        " stay word for word (" + kept + ").";
+    event.detail = compacted.summary;
+    event.elapsedMilliseconds = compacted.elapsedMilliseconds;
+    event.queueDepth = static_cast<int>(folding);
+    appLogger.Log("History compacted: " + event.message);
+    eventBus.Publish(std::move(event));
 }
 
 void ReviaSession::StartExternalAdapterLoop()
@@ -3307,17 +3456,34 @@ void ReviaSession::RestoreConversationContext()
     {
         return;
     }
+    // The summary of what came before that tail, from the same session. Older than every
+    // restored turn, so it goes in first.
+    const std::string summary =
+        conversationArchive.LoadPreviousSessionSummary(conversationSessionId);
+    if (!summary.empty())
+    {
+        context.RestoreSummary(summary);
+        // Carried forward under this session as well. A restart before this session
+        // compacts anything of its own would otherwise restore from here and find none.
+        std::string reason;
+        if (!conversationArchive.SaveSummary(conversationSessionId, summary, reason))
+        {
+            appLogger.Log("The restored history summary was not carried forward: " + reason);
+        }
+    }
     for (const memory::ArchivedTurn& turn : tail)
     {
         context.AddMessage(turn.role, turn.content);
     }
     appLogger.Log("Restored " + std::to_string(tail.size()) +
-        " turns from the previous conversation.");
+        " turns from the previous conversation" +
+        (summary.empty() ? "." : ", with its summary."));
     PublishComponent(
         "Conversation history",
         "Restored",
         "Continuing from the last " + std::to_string(tail.size()) +
-            (tail.size() == 1 ? " turn" : " turns") + " of the previous conversation.",
+            (tail.size() == 1 ? " turn" : " turns") + " of the previous conversation" +
+            (summary.empty() ? "." : ", and its summary of everything before them."),
         -1.0,
         static_cast<int>(tail.size()));
 }
@@ -4321,6 +4487,9 @@ SessionResult ReviaSession::RunTurnUnguarded(const std::string& acceptedInput)
     if (result.succeeded && result.fromAssistant && !result.text.empty())
     {
         SignalCuriosity("a completed conversation left new context to consider");
+        // After the reply, never before it: the summary is written while she waits for
+        // the next message, not while the person waits for this one.
+        SignalHistoryCompaction();
     }
     return result;
 }
@@ -4477,6 +4646,9 @@ void ReviaSession::Stop()
     // Must precede speechService.Shutdown() below, which both workers still call into.
     StopInputDrain();
     StopScreenAwareness();
+    // Before operationMutex is taken below: the worker only ever try-locks it, but it
+    // must not be left waiting on a lock shutdown is holding.
+    StopHistoryCompaction();
     StopExternalAdapterLoop();
     // Before the models stop: a review in flight is waiting on one.
     StopSelfImprovement();

@@ -1830,6 +1830,12 @@ void ReviaWindow::HandleRuntimeEvent(const revia::runtime::RuntimeEvent& event)
             {
                 detail += QStringLiteral(" queue=") + QString::number(event.queueDepth);
             }
+            // What the older conversation was folded into, so the summary she now carries
+            // can be read and checked rather than taken on trust.
+            if (event.component == "Conversation history" && !event.detail.empty())
+            {
+                detail += QStringLiteral("\n") + QString::fromStdString(event.detail);
+            }
             AppendComponentActivity(event, detail);
         }
         return;

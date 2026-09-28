@@ -1155,6 +1155,11 @@ bool configManager::LoadSettings(appSettings& outSettings) const
                 outSettings.conversation.restoreTurns =
                     conversationData["restoreTurns"].get<int>();
             }
+            if (conversationData.contains("historyCompactionEnabled"))
+            {
+                outSettings.conversation.bHistoryCompactionEnabled =
+                    conversationData["historyCompactionEnabled"].get<bool>();
+            }
             if (conversationData.contains("selfInquiryEnabled"))
             {
                 outSettings.conversation.bSelfInquiryEnabled =

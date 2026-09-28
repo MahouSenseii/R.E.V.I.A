@@ -378,6 +378,35 @@ responseOutput messageRouter::Deliberate(
     return output;
 }
 
+responseOutput messageRouter::SummarizeConversation(
+    const std::string& boundedHistory,
+    const std::stop_token stopToken) const
+{
+    if (boundedHistory.empty())
+    {
+        responseOutput output;
+        output.reason = "There was no conversation to summarise.";
+        return output;
+    }
+    // Main or nothing. The CPU-resident Fast model would hold nearly every core for the
+    // better part of a minute to do what the plain excerpts already do badly, and nobody
+    // is waiting on this: when Main is back, the next pass catches up.
+    if (!llm.IsBackendAvailable())
+    {
+        responseOutput output;
+        output.reason = "The Main brain is unavailable, so the history keeps its excerpts.";
+        return output;
+    }
+    residency.BeginInference(revia::intelligence::IntelligenceTier::Main, "background");
+    responseOutput output = llm.SummarizeConversation(boundedHistory, stopToken);
+    residency.EndInference(revia::intelligence::IntelligenceTier::Main);
+    output.requestedTier = "Main";
+    output.selectedTier = "Main";
+    output.selectedModel = "Qwen3.5-4B-Q4_K_M.gguf";
+    output.routingReason = "History compaction runs on Main at background priority.";
+    return output;
+}
+
 responseOutput messageRouter::PlanGoal(const std::string& request) const
 {
     if (request.empty())

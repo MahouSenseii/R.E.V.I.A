@@ -51,6 +51,9 @@ public:
     responseOutput Deliberate(
         const std::string& boundedInquiryPrompt,
         std::stop_token stopToken = {}) const;
+    responseOutput SummarizeConversation(
+        const std::string& boundedHistory,
+        std::stop_token stopToken = {}) const;
     responseOutput GenerateGoalPlan(const std::string& userRequest) const;
     responseOutput GenerateCodeReview(
         const std::string& instructions,

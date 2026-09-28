@@ -61,6 +61,12 @@ public:
     responseOutput Deliberate(
         const std::string& boundedInquiryPrompt,
         std::stop_token stopToken = {}) const;
+    // Folds the oldest part of the conversation into its running summary. Main only, at
+    // background priority: a person's turn preempts it, and when Main is not there the
+    // history keeps its plain excerpts rather than paying for the CPU model.
+    responseOutput SummarizeConversation(
+        const std::string& boundedHistory,
+        std::stop_token stopToken = {}) const;
     responseOutput PlanGoal(const std::string& request) const;
     // The iterative form: one step at a time, from what has already happened.
     // Ask Main for one bounded subgoal.

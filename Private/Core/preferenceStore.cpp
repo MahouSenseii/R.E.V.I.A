@@ -112,6 +112,9 @@ const std::vector<PreferenceKey>& PreferenceStore::Writable()
             0, 0, {}},
         {"conversation.archiveEnabled", PreferenceType::Boolean,
             "Keep a durable, searchable record of conversations.", 0, 0, {}},
+        {"conversation.historyCompactionEnabled", PreferenceType::Boolean,
+            "Summarise the oldest conversation in the background as the history fills.",
+            0, 0, {}},
         {"responseFilter.aiReviewEnabled", PreferenceType::Boolean,
             "Run the AI response review after the always-on hard filter.", 0, 0, {}},
         {"activeProfile", PreferenceType::Text,
@@ -399,6 +402,8 @@ void PreferenceStore::Apply(appSettings& settings) const
     boolean("presence.externalAdaptersEnabled", settings.presence.bExternalAdaptersEnabled);
     integer("resources.usageSampleSeconds", settings.resources.usageSampleSeconds);
     boolean("conversation.archiveEnabled", settings.conversation.bArchiveEnabled);
+    boolean("conversation.historyCompactionEnabled",
+        settings.conversation.bHistoryCompactionEnabled);
     boolean("responseFilter.aiReviewEnabled", settings.responseFilter.bAiReviewEnabled);
 
     const auto voiceDevice = values.find("resources.voiceDevice");

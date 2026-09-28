@@ -50,6 +50,7 @@ The design rule: **one Revia**. Reflex, Fast, Main, and Expert share one identit
 - **Stay in character.** Personality, mood, recent conversation, relevant memories, and what is on your screen go into every turn. Her mood carries over between turns instead of resetting.
 - **Develop over time.** She forms durable likes, dislikes, opinions, and feelings about the people she talks to.
 - **Remember across restarts.** Useful facts go to `build/debug/Memory/revia_memory.db`; conversation goes to `build/debug/Memory/revia_conversations.db`. Turns that look sensitive (passwords, keys, and so on) are not saved at all.
+- **Keep track of long conversations.** When the conversation fills about three quarters of its space, the Main model summarizes the oldest half in the background after a reply (your next message interrupts it), and the recent exchanges stay word for word. The summary is shown in the Activity feed, saved with the conversation archive, restored after a restart, and removed by `/history forget`. Turn it off with `conversation.historyCompactionEnabled`.
 - **Clean up her own output.** Leaked prompt text, control tokens, fake "User:" lines, repetitive loops, and cut-off endings are removed before anything is spoken or saved.
 
 ### See, listen, and speak

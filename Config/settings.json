@@ -224,6 +224,7 @@
     "maxTurnsPerSession": 500,
     "maxTurnCharacters": 8000,
     "restoreTurns": 6,
+    "historyCompactionEnabled": true,
     "selfInquiryEnabled": true,
     "selfInquiryCooldownTurns": 0,
     "selfInquiryScope": "questions"
