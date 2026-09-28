@@ -354,6 +354,18 @@ in the same currency the runtime spends it in.
 **Remaining limitation.** The calibration is against one tokenizer. Replacing the model
 invalidates it, which the suite states rather than silently re-fitting.
 
+**Follow-up: the safe bound cost the conversation.** The character-class estimator was
+later replaced by one token per byte, which can never under-count but charges English
+prose about five times its real cost. An 8K context then held roughly 6.8 KB of text; her
+system prompt alone is close to 5 KB, so on most turns everything between it and the
+current message was dropped and she lost the thread mid-conversation. The fitter
+(`LLM/contextFitting`) now asks llama-server's `/tokenize` for the model's own count,
+remembers counts so repeated history costs nothing on later turns, and never asks at all
+when the byte bound already fits. A server without `/tokenize`, or a failed call, falls
+back to the byte bound, and the one overflow retry still spends the byte bound. Measured in
+`contextFittingTests`: the same 20-exchange conversation keeps 1 earlier message by bytes
+and 36 by the model's count.
+
 ---
 
 ## Verification performed

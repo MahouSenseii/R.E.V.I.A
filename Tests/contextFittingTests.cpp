@@ -1,9 +1,11 @@
 #include "testSupport.h"
 
+#include "LLM/contextFitting.h"
 #include "LLM/tokenEstimate.h"
 
 #include <nlohmann/json.hpp>
 
+#include <algorithm>
 #include <chrono>
 #include <iostream>
 #include <string>
@@ -19,8 +21,10 @@
 // have to be measured again rather than adjusted until the suite passes.
 namespace
 {
+using revia::llm::BoundMessagesForContext;
 using revia::llm::CompactToTokenBudget;
 using revia::llm::EstimateTokens;
+using revia::llm::TokenCounter;
 using revia::tests::Check;
 
 std::string Repeat(const std::string& unit, const int times)
@@ -281,6 +285,167 @@ void TestCompactedMultilingualTextSerializes()
     }
 }
 
+// The request shape the conversation path builds: her system prompt, a long run of
+// ordinary conversation, and the turn being answered.
+nlohmann::json ConversationRequest(const int exchanges)
+{
+    const std::string prose = Corpus().front().text;
+    nlohmann::json messages = nlohmann::json::array();
+    messages.push_back({{"role", "system"}, {"content", prose.substr(0, 4800)}});
+    for (int index = 0; index < exchanges; ++index)
+    {
+        messages.push_back({{"role", "user"},
+            {"content", "EXCHANGE_" + std::to_string(index) + " " + prose.substr(0, 600)}});
+        messages.push_back({{"role", "assistant"}, {"content", prose.substr(0, 600)}});
+    }
+    messages.push_back({{"role", "user"}, {"content", "NEWEST_TURN " + prose.substr(0, 900)}});
+    return messages;
+}
+
+// What the English corpus sample measures: 5.17 bytes per token. A tokenizer stand-in
+// that never under-counts it.
+std::size_t ProseTokens(const std::string& text)
+{
+    return text.size() / 5 + 1;
+}
+
+std::size_t CostOf(const nlohmann::json& messages, const TokenCounter& count)
+{
+    std::size_t total = 0;
+    for (const auto& message : messages)
+    {
+        total += count(message.value("content", "")) +
+            revia::llm::ChatTemplateTokensPerMessage;
+    }
+    return total;
+}
+
+// The reproduction for "she forgets what we just said".
+//
+// With the byte bound, an 8K context held her system prompt, the turn being answered
+// and almost nothing between them: the conversation before the current message was
+// dropped on nearly every turn. Counted by the model's own tokenizer, the same request
+// keeps most of it.
+void TestTheModelsOwnCountKeepsTheConversation()
+{
+    const nlohmann::json request = ConversationRequest(20);
+    constexpr int ContextTokens = 8192;
+    constexpr int ResponseTokens = 1024;
+    const std::size_t usable = static_cast<std::size_t>(
+        ContextTokens - ResponseTokens - revia::llm::ContextReserveTokens);
+
+    const nlohmann::json byBytes =
+        BoundMessagesForContext(request, ContextTokens, ResponseTokens);
+    const nlohmann::json counted = BoundMessagesForContext(
+        request, ContextTokens, ResponseTokens, revia::llm::MaximumPromptBytes, ProseTokens);
+
+    // System and newest turn are always there; everything else is conversation.
+    const std::size_t keptByBytes = byBytes.size() - 2;
+    const std::size_t keptCounted = counted.size() - 2;
+    std::cout << "  Conversation kept in an 8K context: " << keptByBytes
+              << " messages by bytes, " << keptCounted << " by the model's count.\n";
+    Check(keptCounted >= 3 * std::max<std::size_t>(1, keptByBytes) && keptCounted >= 20,
+        "Counting with the model's tokenizer did not recover the conversation: " +
+            std::to_string(keptCounted) + " messages kept against " +
+            std::to_string(keptByBytes) + " by bytes.");
+    Check(CostOf(counted, ProseTokens) <= usable,
+        "The counted request is over its budget as the tokenizer counts it.");
+    Check(counted.front().value("content", "") == request.front().value("content", ""),
+        "Her system prompt was cut even though it fits once it is counted properly.");
+    Check(counted.back().value("content", "").starts_with("NEWEST_TURN"),
+        "The turn being answered was lost.");
+    // What is dropped is the oldest, never a gap: the kept exchanges run without a break
+    // up to the one just before the new turn.
+    int expected = -1;
+    for (std::size_t index = counted.size() - 1; index-- > 1;)
+    {
+        const std::string content = counted[index].value("content", "");
+        if (!content.starts_with("EXCHANGE_")) continue;
+        const int exchange = std::stoi(content.substr(9));
+        Check(expected < 0 ? exchange == 19 : exchange == expected,
+            "The kept conversation has a gap or does not end at the latest exchange.");
+        expected = exchange - 1;
+    }
+}
+
+// A request that fits by bytes fits by any tokenizer. Asking it anyway would put a
+// round trip in front of every short turn for nothing.
+void TestTheTokenizerIsNotAskedWhenBytesAlreadyFit()
+{
+    nlohmann::json small = nlohmann::json::array();
+    small.push_back({{"role", "system"}, {"content", "You are Revia."}});
+    small.push_back({{"role", "user"}, {"content", "Hi."}});
+    std::size_t asked = 0;
+    const TokenCounter counting = [&asked](const std::string& text)
+    {
+        ++asked;
+        return text.size();
+    };
+    const nlohmann::json fitted =
+        BoundMessagesForContext(small, 8192, 1024, revia::llm::MaximumPromptBytes, counting);
+    Check(fitted == small, "A request that fits was changed.");
+    Check(asked == 0, "The tokenizer was asked about a request that already fits by bytes.");
+}
+
+// Compaction spends the counted budget, not a fifth of it.
+void TestCountedCompactionKeepsMoreOfAnOversizedTurn()
+{
+    const std::string prose = Corpus().front().text;
+    nlohmann::json request = nlohmann::json::array();
+    request.push_back({{"role", "system"}, {"content", "You are Revia."}});
+    std::string huge;
+    while (huge.size() < 60000) huge += prose;
+    request.push_back({{"role", "user"}, {"content", huge + " END_OF_TURN"}});
+
+    constexpr int ContextTokens = 8192;
+    constexpr int ResponseTokens = 1024;
+    const std::size_t usable = static_cast<std::size_t>(
+        ContextTokens - ResponseTokens - revia::llm::ContextReserveTokens);
+    const nlohmann::json byBytes =
+        BoundMessagesForContext(request, ContextTokens, ResponseTokens);
+    const nlohmann::json counted = BoundMessagesForContext(
+        request, ContextTokens, ResponseTokens, revia::llm::MaximumPromptBytes, ProseTokens);
+    const std::string keptByBytes = byBytes.back().value("content", "");
+    const std::string keptCounted = counted.back().value("content", "");
+    Check(CostOf(counted, ProseTokens) <= usable,
+        "The compacted turn is over its budget as the tokenizer counts it.");
+    Check(keptCounted.size() > 3 * keptByBytes.size(),
+        "Compaction cut a counted turn as hard as a byte-bounded one.");
+    Check(keptCounted.ends_with("END_OF_TURN") && IsValidUtf8(keptCounted),
+        "Counted compaction lost the end of the turn or split a character.");
+}
+
+// A tokenizer that disagrees with the proportional guess still gets a request that
+// fits: the check after the scaled attempt falls back to the byte budget.
+void TestCountedCompactionFallsBackWhenTheGuessIsWrong()
+{
+    nlohmann::json request = nlohmann::json::array();
+    request.push_back({{"role", "system"}, {"content", "You are Revia."}});
+    // Dense where compaction keeps the most (the opening), nearly free elsewhere, so a
+    // cut proportional to the average density keeps far too much.
+    const std::string text = std::string(10000, '}') + std::string(30000, 'a');
+    request.push_back({{"role", "user"}, {"content", text}});
+    // Never more than one token per byte, like any real tokenizer.
+    const TokenCounter lopsided = [](const std::string& value)
+    {
+        std::size_t tokens = 0;
+        for (const char character : value) tokens += character == 'a' ? 0 : 1;
+        return tokens;
+    };
+    constexpr int ContextTokens = 4096;
+    constexpr int ResponseTokens = 512;
+    const std::size_t usable = static_cast<std::size_t>(
+        ContextTokens - ResponseTokens - revia::llm::ContextReserveTokens);
+    const nlohmann::json fitted = BoundMessagesForContext(
+        request, ContextTokens, ResponseTokens, revia::llm::MaximumPromptBytes, lopsided);
+    Check(fitted.size() == 2 && CostOf(fitted, lopsided) <= usable,
+        "A tokenizer that disagreed with the proportional guess got an oversized request.");
+    // The proportional attempt would have kept about eleven thousand bytes; landing
+    // inside the plain byte budget shows the fallback, not luck, made it fit.
+    Check(fitted.back().value("content", "").size() <= usable,
+        "The fallback after a failed proportional guess did not use the byte budget.");
+}
+
 } // namespace
 
 void RunContextFittingTests()
@@ -292,6 +457,10 @@ void RunContextFittingTests()
     TestCompactionNeverSplitsACharacter();
     TestCompactedMultilingualTextSerializes();
     TestEstimationCostIsNegligible();
+    TestTheModelsOwnCountKeepsTheConversation();
+    TestTheTokenizerIsNotAskedWhenBytesAlreadyFit();
+    TestCountedCompactionKeepsMoreOfAnOversizedTurn();
+    TestCountedCompactionFallsBackWhenTheGuessIsWrong();
     std::cout << "Context fitting is measured against the configured tokenizer: the "
                  "estimate never under-counts it, compaction lands inside its budget, "
                  "and whitespace consumes an independent byte allowance.\n";

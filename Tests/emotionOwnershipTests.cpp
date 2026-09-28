@@ -102,6 +102,23 @@ public:
                     {"message", {{"role", "assistant"}, {"content", answer}}},
                     {"finish_reason", "stop"}}})}}.dump(), "application/json");
         });
+        // Absent (404) unless a test turns it on, like a server without the endpoint, so
+        // every other test here keeps exercising the byte-bound fallback.
+        server.Post("/tokenize", [this](const auto& request, auto& response)
+        {
+            const std::size_t bytesPerToken = tokenizerBytesPerToken.load();
+            if (bytesPerToken == 0)
+            {
+                response.status = 404;
+                return;
+            }
+            ++tokenizeRequests;
+            const std::string content = json::parse(request.body).value("content", "");
+            json tokens = json::array();
+            for (std::size_t index = 0; index < content.size() / bytesPerToken + 1; ++index)
+                tokens.push_back(0);
+            response.set_content(json{{"tokens", tokens}}.dump(), "application/json");
+        });
         server.new_task_queue = [] { return new httplib::ThreadPool(2); };
         port = server.bind_to_any_port("127.0.0.1");
         Check(port > 0, "Could not bind emotion fixture backend.");
@@ -130,8 +147,13 @@ public:
     { std::lock_guard lock(mutex); contextOverflows = count; requests.clear(); }
     std::vector<json> Requests()
     { std::lock_guard lock(mutex); return requests; }
+    // Serve /tokenize, counting one token per `bytesPerToken` bytes. Zero turns it off.
+    void ServeTokenizer(std::size_t bytesPerToken) { tokenizerBytesPerToken.store(bytesPerToken); }
+    int TokenizeRequests() const { return tokenizeRequests.load(); }
     int port = 0;
 private:
+    std::atomic<std::size_t> tokenizerBytesPerToken = 0;
+    std::atomic<int> tokenizeRequests = 0;
     httplib::Server server;
     std::mutex mutex;
     json last;
@@ -348,6 +370,80 @@ void TestContextCompactionKeepsCurrentState()
         !agents::ConversationStylePolicy::IsBriefSocialTurn("What do you remember about my therapy?") &&
         !agents::ConversationStylePolicy::IsBriefSocialTurn("How do you feel about the architecture we discussed?"),
         "A substantive request or memory query received the small-talk budget.");
+}
+
+// The reproduction for "she forgets what we just said", through the real request path.
+//
+// Counted by bytes, an 8K context held the system prompt, the turn being answered and
+// almost nothing between them. With the server's own tokenizer the same conversation
+// survives, a server without /tokenize still gets the safe bound, and the history
+// repeated every turn is counted once rather than on every request.
+void TestConversationSurvivesWhenCountedByTheModel()
+{
+    tests::ScopedTestDirectory directory;
+    WorkingDirectory cwd(directory.root);
+    Backend backend;
+    llmSettings settings;
+    settings.port = backend.port;
+    settings.contextSize = 8192;
+    settings.maxTokens = 1024;
+    settings.bAutoMaxTokens = false;
+    embeddingSettings embeddings;
+    embeddings.bEnabled = false;
+    aiProfile profile;
+    profile.systemPrompt = "You are Revia. " + std::string(4800, 's');
+    profile.bMemoryEnabled = false;
+    llamaCppService service;
+    service.ApplySettings(settings, embeddings, profile);
+    service.SetPosture("Current state: calm and attentive.");
+    std::vector<conversationMessage> history;
+    for (int index = 0; index < 20; ++index)
+    {
+        history.push_back({"user", "EXCHANGE_" + std::to_string(index) + " " +
+            std::string(600, 'x')});
+        history.push_back({"assistant", std::string(600, 'y')});
+    }
+    history.push_back({"user", "What did I say at the start of this?"});
+    const auto dialogue = [](const json& request)
+    {
+        std::size_t kept = 0;
+        for (const auto& message : request.at("messages"))
+            if (message.value("role", "") != "system") ++kept;
+        return kept;
+    };
+
+    // No tokenizer: the byte bound, as before.
+    Check(service.GenerateResponse(history).bSuccess, "The byte-bounded turn failed.");
+    const std::size_t keptByBytes = dialogue(backend.Request());
+
+    // A real server answers /tokenize. Applying settings again is what clears the
+    // remembered 404; a different model is a different tokenizer anyway.
+    backend.ServeTokenizer(5);
+    service.ApplySettings(settings, embeddings, profile);
+    service.SetPosture("Current state: calm and attentive.");
+    Check(service.GenerateResponse(history).bSuccess, "The counted turn failed.");
+    const json counted = backend.Request();
+    const std::size_t keptCounted = dialogue(counted);
+    const int firstPass = backend.TokenizeRequests();
+    Check(firstPass > 0, "The model's tokenizer was never asked.");
+    Check(keptCounted >= 3 * std::max<std::size_t>(2, keptByBytes) && keptCounted >= 20,
+        "Counting with the model's tokenizer did not keep the conversation: " +
+            std::to_string(keptCounted) + " messages against " +
+            std::to_string(keptByBytes) + " by bytes.");
+    Check(counted.at("messages").front().value("content", "").find(std::string(4800, 's')) !=
+              std::string::npos,
+        "Her system prompt was cut although it fits once counted properly.");
+    std::size_t tokens = 0;
+    for (const auto& message : counted.at("messages"))
+        tokens += message.value("content", "").size() / 5 + 1 +
+            revia::llm::ChatTemplateTokensPerMessage;
+    Check(tokens <= static_cast<std::size_t>(8192 - 1024 - 384),
+        "The counted request is over its budget as the server counts it.");
+
+    // The same turn again costs no tokenizer calls: every message was counted already.
+    Check(service.GenerateResponse(history).bSuccess, "The repeated turn failed.");
+    Check(backend.TokenizeRequests() == firstPass,
+        "History that had already been counted was sent to the tokenizer again.");
 }
 
 void TestContextBudgetsAndBoundedOverflowRecovery()
@@ -919,6 +1015,7 @@ void RunEmotionOwnershipTests()
 {
     TestPerTurnStateLeavesTheSystemMessageStable();
     TestContextCompactionKeepsCurrentState();
+    TestConversationSurvivesWhenCountedByTheModel();
     TestContextBudgetsAndBoundedOverflowRecovery();
     TestConversationConsumers();
     TestReportedSpeechThroughSession();

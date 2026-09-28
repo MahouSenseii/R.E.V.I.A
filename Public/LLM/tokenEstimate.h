@@ -7,7 +7,9 @@ namespace revia::llm
 {
 
 // Conservative content allowance: one token per UTF-8 byte, including whitespace.
-// This intentionally sacrifices history compared with a calibrated language heuristic.
+// This intentionally sacrifices history compared with a calibrated language heuristic,
+// which is why the conversation fitter asks the model's own tokenizer first and spends
+// this only when the server cannot answer (see LLM/contextFitting.h).
 // It bounds content for byte-fallback tokenizers; it is not an exact count of a model
 // or its serialized chat template. The caller reserves framing/generation overhead
 // and performs at most one smaller retry on an explicit backend context overflow.

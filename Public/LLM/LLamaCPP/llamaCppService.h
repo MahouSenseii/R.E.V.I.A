@@ -4,11 +4,14 @@
 #include "Library/structLibrary.h"
 #include "LLM/inferenceScheduler.h"
 #include <atomic>
+#include <cstddef>
 #include <functional>
 #include <filesystem>
+#include <optional>
 #include <string>
 #include <mutex>
 #include <stop_token>
+#include <unordered_map>
 #include <vector>
 
 #include "LLM/promptBuilder.h"
@@ -125,6 +128,12 @@ private:
         const std::string& line,
         std::string* outFinishReason = nullptr);
     int ResponseTokenLimit() const;
+    // The model's own token count for `text`, from llama-server's /tokenize, remembered
+    // so the history repeated every turn is counted once. Empty when the server cannot
+    // say; the caller then spends the byte estimate, which is safe but costs history.
+    std::optional<std::size_t> CountTokens(
+        const std::string& text,
+        std::stop_token stopToken) const;
     // Shared by both planners: same low temperature, same JSON-object response format,
     // different contract and token ceiling.
     // structuredJson forces the server's JSON object mode. A diagram turns it off: the
@@ -162,4 +171,11 @@ private:
     std::string activePosture;
     std::string activeReplyNote;
     mutable revia::llm::InferenceScheduler inferenceScheduler;
+    // Keyed by a hash of the text and its length. Cleared with the settings, because a
+    // different model is a different tokenizer.
+    mutable std::mutex tokenCountMutex;
+    mutable std::unordered_map<std::size_t, std::size_t> tokenCounts;
+    // Set when the server answers /tokenize with 404, so a backend without it is not
+    // asked once per message on every turn.
+    mutable std::atomic<bool> bTokenizerUnavailable = false;
 };

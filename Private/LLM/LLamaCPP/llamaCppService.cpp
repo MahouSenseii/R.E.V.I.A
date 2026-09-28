@@ -1,8 +1,8 @@
 #include "LLM/LLamaCPP/llamaCppService.h"
 #include "cancellableHttpClient.h"
 #include "Core/utf8.h"
-#include "Identity/promptMarkers.h"
 
+#include "LLM/contextFitting.h"
 #include "LLM/tokenEstimate.h"
 #include "Memory/memoryAttribution.h"
 #include "Memory/sensitiveContent.h"
@@ -55,142 +55,6 @@ namespace
     };
 
     constexpr size_t StreamHoldbackChars = 32;
-
-    constexpr std::size_t MaximumPromptBytes = 256 * 1024;
-
-    // Compacts the newest message without cutting the runtime block's markers, so the
-    // model can still tell the runtime's words from the user's. The user's words get at
-    // least half the budget; the block keeps whatever they do not need.
-    std::string CompactNewestMessage(const std::string& content, const std::size_t budget)
-    {
-        namespace markers = revia::identity::markers;
-        const std::string turnMarker = "\n[Earlier part of this turn compacted.]\n";
-        const std::string open = std::string(markers::RuntimeTurnContext) + "\n";
-        const std::string close = "\n" + std::string(markers::RuntimeTurnContextEnd) + "\n\n";
-        const std::size_t closeAt = content.rfind(open, 0) == 0
-            ? content.find(close, open.size()) : std::string::npos;
-        if (closeAt == std::string::npos)
-        {
-            return revia::llm::CompactToTokenBudget(content, budget, turnMarker);
-        }
-        const std::string block = content.substr(open.size(), closeAt - open.size());
-        const std::string user = content.substr(closeAt + close.size());
-        if (budget <= open.size() + close.size())
-        {
-            return revia::llm::CompactToTokenBudget(user, budget, turnMarker);
-        }
-        const std::size_t available = budget - open.size() - close.size();
-        const std::size_t userShare = std::min(user.size(),
-            std::max(available / 2, available > block.size() ? available - block.size() : 0));
-        return open + revia::llm::CompactToTokenBudget(
-                block, available - userShare, "\n[Runtime context compacted.]\n") +
-            close + revia::llm::CompactToTokenBudget(user, userShare, turnMarker);
-    }
-    constexpr int ContextReserveTokens = 384;
-
-    // Content uses a byte-conservative allowance, including whitespace, with both
-    // per-message framing and a request-wide reserve. Custom templates may still
-    // exceed that reserve, so GenerateResponse has one context-specific recovery.
-    json BoundMessagesForContext(
-        const json& messages,
-        const int contextTokens,
-        const int responseTokens,
-        const std::size_t maximumPromptTokens = MaximumPromptBytes)
-    {
-        if (!messages.is_array() || messages.empty())
-        {
-            return messages;
-        }
-        const auto usableTokens = static_cast<long long>(contextTokens) -
-            responseTokens - ContextReserveTokens;
-        if (usableTokens <= 0) return json::array();
-        const std::size_t tokenBudget = std::min({
-            static_cast<std::size_t>(usableTokens), maximumPromptTokens, MaximumPromptBytes});
-        if (tokenBudget <= 2 * revia::llm::ChatTemplateTokensPerMessage)
-            return json::array();
-        // This is the text-only conversation path. An unexpected structured or
-        // multimodal message must not receive a zero content cost and slip through.
-        for (const auto& message : messages)
-            if (!message.is_object() || !message.contains("content") ||
-                !message["content"].is_string() || !message.contains("role") ||
-                !message["role"].is_string()) return json::array();
-
-        const auto messageCost = [](const json& message)
-        {
-            const std::size_t content =
-                message.contains("content") && message["content"].is_string()
-                    ? revia::llm::EstimateTokens(
-                        message["content"].get_ref<const std::string&>())
-                    : 0;
-            return content + revia::llm::ChatTemplateTokensPerMessage;
-        };
-
-        std::size_t total = 0;
-        for (const auto& message : messages) total += messageCost(message);
-        if (total <= tokenBudget)
-        {
-            return messages;
-        }
-
-        json bounded = json::array();
-        std::size_t used = 0;
-        std::size_t firstDialogue = 0;
-        if (messages.front().value("role", "") == "system")
-        {
-            json system = messages.front();
-            const std::string content = system.value("content", "");
-            const std::size_t systemBudget =
-                (tokenBudget - 2 * revia::llm::ChatTemplateTokensPerMessage) * 7 / 10;
-            system["content"] = revia::llm::CompactToTokenBudget(
-                content,
-                systemBudget,
-                "\n\n[Older runtime context compacted to fit this model.]\n\n");
-            used = messageCost(system);
-            bounded.push_back(std::move(system));
-            firstDialogue = 1;
-        }
-
-        std::vector<json> recent;
-        for (std::size_t index = messages.size(); index > firstDialogue; --index)
-        {
-            json message = messages[index - 1];
-            const std::string content = message.value("content", "");
-            if (content.empty())
-            {
-                continue;
-            }
-            const std::size_t remaining = tokenBudget > used ? tokenBudget - used : 0;
-            if (remaining < 32 && !recent.empty())
-            {
-                break;
-            }
-            const std::size_t cost = messageCost(message);
-            if (cost > remaining)
-            {
-                // The newest turn is the one being answered. If it alone does not fit,
-                // it is compacted rather than dropped, because a request with no
-                // current turn in it is not a smaller request -- it is a different one.
-                if (recent.empty() &&
-                    remaining > revia::llm::ChatTemplateTokensPerMessage)
-                {
-                    message["content"] = CompactNewestMessage(
-                        content,
-                        remaining - revia::llm::ChatTemplateTokensPerMessage);
-                    used += messageCost(message);
-                    recent.push_back(std::move(message));
-                }
-                break;
-            }
-            used += cost;
-            recent.push_back(std::move(message));
-        }
-        std::reverse(recent.begin(), recent.end());
-        for (json& message : recent)
-        {
-            bounded.push_back(std::move(message));
-        }
-        return bounded;
-    }
 
     bool IsContextOverflow(const int status, std::string body)
     {
@@ -802,6 +666,11 @@ void llamaCppService::ApplySettings(
     effectiveContextTokens.store(configuredContextTokens);
     effectiveParallelSlots.store(0);
     inferenceScheduler.SetCapacity(settings.parallelRequests);
+    {
+        std::lock_guard lock(tokenCountMutex);
+        tokenCounts.clear();
+    }
+    bTokenizerUnavailable.store(false);
 
     embeddings.ApplySettings(embeddingSettings);
 }
@@ -959,10 +828,18 @@ responseOutput llamaCppService::GenerateResponse(
     const int contextTokens = activeContextTokens > 0 ? activeContextTokens : configuredContextTokens;
     const int requestedResponse = briefSocial ? std::min(128, ResponseTokenLimit()) : ResponseTokenLimit();
     const int responseTokens = std::clamp(requestedResponse, 1, std::max(1, contextTokens / 4));
-    messages = BoundMessagesForContext(
+    // Counted by the model's own tokenizer where the server offers one. The byte bound
+    // alone kept about a fifth of the history that fits, and she lost the conversation.
+    const revia::llm::TokenCounter countTokens = [this, stopToken](const std::string& text)
+    {
+        return CountTokens(text, stopToken).value_or(revia::llm::EstimateTokens(text));
+    };
+    messages = revia::llm::BoundMessagesForContext(
         messages,
         contextTokens,
-        responseTokens);
+        responseTokens,
+        revia::llm::MaximumPromptBytes,
+        countTokens);
     if (messages.empty())
     {
         output.response = "The model context is too small for this request.";
@@ -1112,12 +989,14 @@ responseOutput llamaCppService::GenerateResponse(
         IsContextOverflow(result->status, errorBody.empty() ? result->body : errorBody))
     {
         // One smaller retry only, before any generated text has escaped. Keep the
-        // generation reservation unchanged and halve the already bounded prompt.
+        // generation reservation unchanged and halve the already bounded prompt. No
+        // counter is passed: the retry spends the byte bound, which cannot be exceeded
+        // whatever went wrong with the first count.
         std::size_t promptCost = 0;
         for (const auto& message : requestBody["messages"])
             promptCost += message["content"].get_ref<const std::string&>().size() +
                 revia::llm::ChatTemplateTokensPerMessage;
-        auto retryMessages = BoundMessagesForContext(
+        auto retryMessages = revia::llm::BoundMessagesForContext(
             requestBody["messages"], contextTokens, responseTokens, promptCost / 2);
         if (!retryMessages.empty())
         {
@@ -2380,6 +2259,74 @@ healthOutput llamaCppService::CheckHealth(const std::stop_token stopToken) const
     output.responseTokenLimit = ResponseTokenLimit();
 
     return output;
+}
+
+std::optional<std::size_t> llamaCppService::CountTokens(
+    const std::string& text,
+    const std::stop_token stopToken) const
+{
+    if (text.empty()) return 0;
+    if (bTokenizerUnavailable.load() || stopToken.stop_requested()) return std::nullopt;
+
+    constexpr std::size_t MaximumCachedTokenCounts = 512;
+    const std::size_t key = std::hash<std::string>{}(text) ^
+        (text.size() * static_cast<std::size_t>(0x9E3779B97F4A7C15ULL));
+    {
+        std::lock_guard lock(tokenCountMutex);
+        if (const auto found = tokenCounts.find(key); found != tokenCounts.end())
+        {
+            return found->second;
+        }
+    }
+
+    std::string body;
+    try
+    {
+        // add_special off: the chat template supplies its own framing, which the fitter
+        // reserves separately.
+        body = json{{"content", text}, {"add_special", false}}.dump();
+    }
+    catch (const std::exception&)
+    {
+        return std::nullopt;
+    }
+    revia::llm::CancellableHttpClient client(host, port, stopToken);
+    ApplyApiKey(client, apiKey);
+    // Short on purpose. llama-server answers /tokenize outside the generation queue in a
+    // millisecond or two; a server that takes longer is not going to, and the turn is
+    // better served by the safe estimate than by waiting.
+    client.set_connection_timeout(2);
+    client.set_read_timeout(5);
+    const auto result = client.Post("/tokenize", body, "application/json");
+    if (!result) return std::nullopt;
+    if (result->status == 404)
+    {
+        bTokenizerUnavailable.store(true);
+        return std::nullopt;
+    }
+    if (result->status != 200) return std::nullopt;
+
+    std::size_t tokens = 0;
+    try
+    {
+        const json parsed = json::parse(result->body);
+        if (!parsed.is_object() || !parsed.contains("tokens") || !parsed["tokens"].is_array())
+        {
+            return std::nullopt;
+        }
+        tokens = parsed["tokens"].size();
+    }
+    catch (const std::exception&)
+    {
+        return std::nullopt;
+    }
+
+    std::lock_guard lock(tokenCountMutex);
+    // A turn repeats the history and adds two messages; this holds many turns of it.
+    // Clearing rather than evicting one at a time costs a few recounts once in a while.
+    if (tokenCounts.size() >= MaximumCachedTokenCounts) tokenCounts.clear();
+    tokenCounts.emplace(key, tokens);
+    return tokens;
 }
 
 int llamaCppService::ResponseTokenLimit() const
