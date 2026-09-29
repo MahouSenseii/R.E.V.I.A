@@ -738,6 +738,13 @@ bool configManager::LoadSettings(appSettings& outSettings) const
             if (presenceData.contains("streamSafetyEnabled"))
                 outSettings.presence.bStreamSafetyEnabled =
                     presenceData["streamSafetyEnabled"].get<bool>();
+            if (presenceData.contains("streamTalkativeness"))
+                outSettings.presence.streamTalkativeness =
+                    presenceData["streamTalkativeness"].get<float>();
+            number("chatQueueCapacity", outSettings.presence.chatQueueCapacity);
+            number("chatMaximumAgeSeconds", outSettings.presence.chatMaximumAgeSeconds);
+            number("chatAuthorCooldownSeconds", outSettings.presence.chatAuthorCooldownSeconds);
+            text("captionPath", outSettings.presence.captionPath);
             text("streamFilteredMarker", outSettings.presence.streamFilteredMarker);
             number("streamReplyMaximumCharacters",
                 outSettings.presence.streamReplyMaximumCharacters);

@@ -42,6 +42,7 @@
 #include "Planning/reminders.h"
 #include "Performance/performanceRuntime.h"
 #include "Presence/presenceRuntime.h"
+#include "Presence/chatSelector.h"
 #include "Presence/streamSafety.h"
 #include "Presence/webGuestRuntime.h"
 #include "Presentation/avatarState.h"
@@ -932,7 +933,9 @@ private:
     mutable std::mutex curiositySignalMutex;
     mutable std::mutex externalAdapterMutex;
     std::condition_variable_any externalAdapterCondition;
-    std::deque<presence::ExternalAdapterEvent> externalAdapterQueue;
+    // What arrived from outside and is waiting to be answered, in the order the
+    // selector decides rather than the order it arrived. Guarded by externalAdapterMutex.
+    presence::ChatSelector chatSelector;
     // Public history is deliberately channel-scoped and memory-only. It never enters
     // the local user's conversationContext or durable conversation archive.
     std::unordered_map<std::string, std::deque<conversationMessage>>

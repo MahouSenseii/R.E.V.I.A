@@ -471,6 +471,16 @@ struct presenceSettings
     std::vector<std::string> streamBlockedTerms;
     std::string streamFilteredMarker = "Filtered.";
     int streamReplyMaximumCharacters = 600;
+    // The chat selector (Presence/chatSelector.h). Talkativeness is how much of a
+    // stream's chat she picks up on her own: below 0.5 only what addresses her, and
+    // the replies-per-minute allowance grows with it. The rest bound the queue.
+    float streamTalkativeness = 0.35F;
+    int chatQueueCapacity = 64;
+    int chatMaximumAgeSeconds = 90;
+    int chatAuthorCooldownSeconds = 20;
+    // The latest public reply as a caption, for an OBS text source that reads a file.
+    // Empty switches it off.
+    std::string captionPath = "RuntimeData/Presence/caption.txt";
 };
 
 // Cross-pipeline placement policy. These are budgets and preferences, not work queues:

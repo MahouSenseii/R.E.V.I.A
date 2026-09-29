@@ -414,6 +414,21 @@ void PresenceRuntime::PublishAdapterReply(
     };
     const std::filesystem::path target = outboxRoot /
         (request.source + "-reply-" + safeId + ".json");
+    if (succeeded && !text.empty() && !settings.captionPath.empty())
+    {
+        // The caption is what she said, with the reply already filtered for the
+        // audience. Written whole and renamed, so a reader never sees half a line.
+        const std::filesystem::path captionPath(settings.captionPath);
+        std::error_code captionError;
+        std::filesystem::create_directories(captionPath.parent_path(), captionError);
+        const std::filesystem::path pendingCaption = captionPath.string() + ".pending";
+        {
+            std::ofstream caption(pendingCaption, std::ios::trunc);
+            caption << revia::utf8::Prefix(text, 400) << '\n';
+        }
+        captionError.clear();
+        std::filesystem::rename(pendingCaption, captionPath, captionError);
+    }
     std::filesystem::path publishedAudio;
     if (request.source == "discord" && request.voiceReply)
     {
@@ -793,8 +808,10 @@ bool PresenceRuntime::StreamPolicyAllows(
             (operatorHoldReason.empty() ? std::string(".") : ": " + operatorHoldReason);
         return false;
     }
+    // Below talkativeness 0.5 only what addresses her passes; above it, overheard
+    // chat reaches the selector, which decides how much of it she picks up.
     if (configuration.bRequireAddressedStreamMessages && event.role == "viewer" &&
-        !event.addressedToRevia)
+        !event.addressedToRevia && configuration.streamTalkativeness < 0.5F)
     {
         outReason = "The stream message was not addressed to Revia.";
         return false;

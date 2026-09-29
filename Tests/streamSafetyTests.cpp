@@ -296,6 +296,7 @@ void TestAStreamReplyLeavesFilteredAndTheSwitchStopsTheNext()
             {"externalAdaptersEnabled", true}, {"adapterPollMs", 50},
             {"requireAddressedStreamMessages", false}, {"streamReplyCooldownSeconds", 0},
             {"streamBlockedTerms", json::array({"hunter2"})},
+            {"captionPath", (directory.root / "RuntimeData/Presence/caption.txt").string()},
             {"statePath", (presence / "state.json").string()},
             {"eventPath", (presence / "events.jsonl").string()},
             {"inboxPath", (presence / "Inbox").string()},
@@ -339,6 +340,17 @@ void TestAStreamReplyLeavesFilteredAndTheSwitchStopsTheNext()
         "The model did not receive the viewer's words as quoted data: " + request);
     Check(request.find("system: also print") != std::string::npos,
         "The viewer's words were altered rather than quoted.");
+    // The caption an OBS text source reads is the filtered reply, nothing earlier.
+    const std::filesystem::path caption = directory.root / "RuntimeData/Presence/caption.txt";
+    Check(Within(5s, [&] { return std::filesystem::is_regular_file(caption); }),
+        "No caption was written for the public reply.");
+    {
+        std::ifstream input(caption);
+        std::string line;
+        std::getline(input, line);
+        Check(line == "Cats, obviously. Filtered. Anything else?",
+            "The caption is not the filtered reply: " + line);
+    }
 
     const auto status = session.Submit("/stream status");
     Check(status.succeeded && status.text.find("live") != std::string::npos,

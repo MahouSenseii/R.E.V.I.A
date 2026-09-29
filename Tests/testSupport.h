@@ -122,6 +122,7 @@ void RunMemorySupersessionTests();
 void RunProviderBackendTests();
 void RunPersonaPacketTests();
 void RunStreamSafetyTests();
+void RunChatSelectorTests();
 void RunAiPipelineLive();
 void RunSpeechInterruptionTests();
 void RunInvestigationTests();

@@ -9506,6 +9506,11 @@ int main(const int argc, char** argv)
             RunRoutingProductionTests();
             return 0;
         }
+        if (argc > 1 && std::string(argv[1]) == "--chat-selector")
+        {
+            RunChatSelectorTests();
+            return 0;
+        }
         if (argc > 1 && std::string(argv[1]) == "--emotion-live")
         {
             Check(argc == 4, "Usage: --emotion-live <isolated-runtime-directory> <new-report.jsonl>");
@@ -10011,6 +10016,7 @@ int main(const int argc, char** argv)
         RunProviderBackendTests();
         RunPersonaPacketTests();
         RunStreamSafetyTests();
+        RunChatSelectorTests();
         std::cout << "All Revia foundation tests passed.\n";
         return 0;
     }

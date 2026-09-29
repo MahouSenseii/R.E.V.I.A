@@ -1371,6 +1371,10 @@ bool ReviaSession::Start()
     StartScreenAwareness();
     StartHistoryCompaction();
     streamSafety.Configure(settings.presence);
+    {
+        std::lock_guard lock(externalAdapterMutex);
+        chatSelector.Configure(settings.presence);
+    }
     StartExternalAdapterLoop();
     // A separately opted-in source. Discord enablement never starts this listener.
     // Environment values are owner configuration, never supplied by a visitor.
@@ -2082,11 +2086,27 @@ void ReviaSession::StartExternalAdapterLoop()
                 presence::ExternalAdapterEvent request;
                 {
                     std::unique_lock lock(externalAdapterMutex);
-                    const bool ready = externalAdapterCondition.wait(
-                        lock, stopToken, [this] { return !externalAdapterQueue.empty(); });
-                    if (!ready || stopToken.stop_requested()) return;
-                    request = std::move(externalAdapterQueue.front());
-                    externalAdapterQueue.pop_front();
+                    // The selector may hold what is waiting (the allowance for this
+                    // minute is spent), so the wait has a timeout as well as a signal.
+                    std::optional<presence::ExternalAdapterEvent> chosen;
+                    while (!chosen)
+                    {
+                        const bool ready = externalAdapterCondition.wait_for(
+                            lock, stopToken, std::chrono::seconds(1),
+                            [this] { return chatSelector.Pending() > 0; });
+                        if (stopToken.stop_requested()) return;
+                        if (!ready) continue;
+                        chosen = chatSelector.Next(std::chrono::steady_clock::now());
+                        if (!chosen)
+                        {
+                            // Held for the allowance, or everything waiting went stale.
+                            externalAdapterCondition.wait_for(
+                                lock, stopToken, std::chrono::seconds(2),
+                                [] { return false; });
+                            if (stopToken.stop_requested()) return;
+                        }
+                    }
+                    request = std::move(*chosen);
                 }
 
                 RuntimeEvent userEvent;
@@ -2276,7 +2296,7 @@ void ReviaSession::StopExternalAdapterLoop()
         externalAdapterWorker.join();
     }
     std::lock_guard lock(externalAdapterMutex);
-    externalAdapterQueue.clear();
+    chatSelector.Clear();
     publicConversationContexts.clear();
     publicContextLastUsed.clear();
 }
@@ -2285,21 +2305,18 @@ void ReviaSession::QueueExternalAdapterEvent(const presence::ExternalAdapterEven
 {
     int depth = 0;
     bool accepted = false;
+    std::string refusal;
     {
         std::lock_guard lock(externalAdapterMutex);
-        if (externalAdapterQueue.size() < 16)
-        {
-            externalAdapterQueue.push_back(event);
-            depth = static_cast<int>(externalAdapterQueue.size());
-            accepted = true;
-        }
+        accepted = chatSelector.Offer(event, std::chrono::steady_clock::now(), refusal);
+        depth = static_cast<int>(chatSelector.Pending());
     }
     if (!accepted)
     {
-        presenceRuntime.PublishAdapterReply(
-            event, {}, false, "The bounded adapter conversation queue is full.");
-        PublishComponent(
-            "Adapters", "Dropped", "The bounded adapter queue is full.", -1.0, 16);
+        // Told, not silently dropped: a queue that is full of higher-scoring messages
+        // and a repeated line both read as Revia ignoring someone otherwise.
+        presenceRuntime.PublishAdapterReply(event, {}, false, refusal);
+        PublishComponent("Adapters", "Dropped", refusal, -1.0, depth);
         return;
     }
     PublishComponent(
@@ -9379,7 +9396,7 @@ bool ReviaSession::TryHandleActionInput(const std::string& input, SessionResult&
             speechService.StopSpeaking();
             {
                 std::lock_guard lock(externalAdapterMutex);
-                externalAdapterQueue.clear();
+                chatSelector.Clear();
             }
             presenceRuntime.SetOperatorHold(true, reason);
             PublishComponent("Stream safety", "Killed",
@@ -9427,6 +9444,9 @@ bool ReviaSession::TryHandleActionInput(const std::string& input, SessionResult&
                    << ", viewer messages reach the model as quoted data, and the Expert "
                       "brain is never used for a public reply. /stream kill <reason> "
                       "stops everything public at once.";
+            std::lock_guard lock(externalAdapterMutex);
+            stream << " Chat queue: "
+                   << chatSelector.Describe(std::chrono::steady_clock::now()) << '.';
         }
         result.text = stream.str();
         SetState(RuntimeState::Idle);
