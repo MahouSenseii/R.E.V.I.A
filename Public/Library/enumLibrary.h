@@ -23,7 +23,8 @@ enum class llmBackendType
     None,
     Placeholder,
     LLamaCpp,
-    // Planned backends, not yet implemented:
+    // All served by the same OpenAI-compatible chat client; the type decides which
+    // extras the server is expected to have (LLM/providerCapabilities.h).
     Ollama,
     OpenAI,
     LMStudio,

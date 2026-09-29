@@ -6,6 +6,7 @@
 #include "Library/structLibrary.h"
 #include "LLM/LLamaCPP/llamaCppService.h"
 #include "LLM/privateMemoryAccess.h"
+#include "LLM/providerCapabilities.h"
 #include <string>
 #include <filesystem>
 #include <stop_token>
@@ -101,6 +102,9 @@ public:
         std::stop_token stopToken = {}) const;
 private:
     responseOutput GeneratePlaceholderResponse(const std::vector<conversationMessage>& context) const;
+    // Whether the active backend is a chat server the HTTP client talks to: llama.cpp,
+    // Ollama, LM Studio, or anything else that speaks the OpenAI chat API.
+    [[nodiscard]] bool UsesChatServer() const;
     llmBackendType backendType = llmBackendType::None;
     llamaCppService llamaCpp;
     bool bIsReady = false;

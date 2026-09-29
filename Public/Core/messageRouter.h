@@ -8,6 +8,7 @@
 
 #include "LLM/llmService.h"
 #include "LLM/privateMemoryAccess.h"
+#include "LLM/providerCapabilities.h"
 #include "Intelligence/intelligenceTypes.h"
 #include "Intelligence/modelLifetime.h"
 #include "Intelligence/modelResidencyManager.h"
@@ -132,6 +133,13 @@ public:
     // installs it on, exactly as it does for the residency inventory above.
     void SetLifetimeCoordinator(revia::intelligence::ModelLifetimeCoordinator* coordinator);
 
+    // Whether a tier whose requests leave this machine may be handed private context.
+    // Off, a remote Fast or Expert answers only turns that carry none, and memory
+    // evaluation never leaves. Main is the owner's choice: if Main itself is remote,
+    // that is the opt-in.
+    void SetRemotePrivacy(bool allowPrivateContext);
+    [[nodiscard]] bool TierIsRemote(revia::intelligence::IntelligenceTier tier) const;
+
     // The inventory the router keeps for its own tiers, so the session that owns the
     // processes can hand it to a lifetime coordinator instead of keeping a second one.
     [[nodiscard]] revia::intelligence::ModelResidencyManager& Residency() const
@@ -173,12 +181,26 @@ private:
     // quicker for everything, including the short turns Fast exists for. With no GPU
     // named for Main (automatic or CPU placement) the small model keeps its turns.
     [[nodiscard]] bool FastIsSlowerThanMain() const;
+    // The settings a tier was configured with; Vision and ExpertVision map to the brain
+    // that serves them.
+    [[nodiscard]] const llmSettings& ConfigurationOf(
+        revia::intelligence::IntelligenceTier tier) const;
+    // The model name a service was configured with, which is what the Activity feed
+    // shows. It used to be the file name of the shipped model, which was wrong the
+    // moment settings named another.
+    [[nodiscard]] const std::string& ModelNameOf(const llmService* service) const;
+    // Whether a tier may be handed her private context: local, opted in, or Main is
+    // itself remote and the owner has already sent everything there.
+    [[nodiscard]] bool MayCarryPrivateContext(
+        revia::intelligence::IntelligenceTier tier) const;
+    [[nodiscard]] std::string RemoteNote(revia::intelligence::IntelligenceTier tier) const;
 
     llmService llm;
     llmService fastLlm;
     llmService expertLlm;
     bool fastConfigured = false;
     bool expertConfigured = false;
+    bool allowRemotePrivateContext = false;
     revia::intelligence::ModelLifetimeCoordinator* lifetime = nullptr;
     llmSettings mainConfiguration;
     llmSettings fastConfiguration;

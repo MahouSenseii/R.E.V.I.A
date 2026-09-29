@@ -655,6 +655,7 @@ void llamaCppService::ApplySettings(
     const embeddingSettings& embeddingSettings,
     const aiProfile& profile)
 {
+    capabilities = revia::llm::CapabilitiesFor(settings.backend);
     host = settings.host;
     port = settings.port;
     modelName = settings.modelName;
@@ -706,7 +707,7 @@ bool llamaCppService::WarmUp(
     client.set_read_timeout(180);
     std::stop_callback cancelRequest(stopToken, [&client]() { client.stop(); });
 
-    const json requestBody = {
+    json requestBody = {
         {"model", modelName},
         {"messages", json::array({{
             {"role", "user"},
@@ -714,9 +715,12 @@ bool llamaCppService::WarmUp(
         }})},
         {"temperature", 0.0},
         {"max_tokens", 1},
-        {"chat_template_kwargs", {{"enable_thinking", false}}},
         {"stream", false}
     };
+    if (capabilities.chatTemplateKwargs)
+    {
+        requestBody["chat_template_kwargs"] = {{"enable_thinking", false}};
+    }
 
     auto inferenceLease = inferenceScheduler.Acquire(
         revia::llm::InferencePriority::Background,
@@ -855,18 +859,24 @@ responseOutput llamaCppService::GenerateResponse(
     requestBody["temperature"] = temperature;
     requestBody["max_tokens"]  = responseTokens;
     requestBody["stream"]      = true;
-    requestBody["cache_prompt"] = true;
+    if (capabilities.cachePrompt) requestBody["cache_prompt"] = true;
     // Qwen3.5 thinks by default. Ordinary companion conversation should begin speaking
     // immediately; explicit/complex technical turns may opt into the same model's deep
-    // mode without loading a second brain.
-    requestBody["chat_template_kwargs"] = {{"enable_thinking", deepReasoning}};
+    // mode without loading a second brain. Another server decides that for itself.
+    if (capabilities.chatTemplateKwargs)
+    {
+        requestBody["chat_template_kwargs"] = {{"enable_thinking", deepReasoning}};
+    }
     // The configured Qwen model can otherwise fall into a fluent phrase loop and run
     // all the way to the response ceiling. DRY penalizes repeated token sequences while
     // leaving short, intentional emphasis alone.
-    requestBody["dry_multiplier"] = 0.8;
-    requestBody["dry_base"] = 1.75;
-    requestBody["dry_allowed_length"] = 2;
-    requestBody["dry_penalty_last_n"] = 4096;
+    if (capabilities.drySampling)
+    {
+        requestBody["dry_multiplier"] = 0.8;
+        requestBody["dry_base"] = 1.75;
+        requestBody["dry_allowed_length"] = 2;
+        requestBody["dry_penalty_last_n"] = 4096;
+    }
     requestBody["stop"]        = json::array();
     for (const char* marker : StopMarkers)
     {
@@ -1519,23 +1529,24 @@ responseOutput llamaCppService::GeneratePlannerResponse(
         {"max_tokens", std::clamp(maxTokens, 32, 4096)},
         {"stream", false}
     };
-    if (operation == "private creation")
+    if (operation == "private creation" && capabilities.chatTemplateKwargs)
         requestBody["chat_template_kwargs"] = {{"enable_thinking", false}};
     if (structuredJson)
     {
         requestBody["response_format"] = {{"type", "json_object"}};
-        if (!responseSchema.empty())
+        if (!responseSchema.empty() && capabilities.jsonSchema)
             requestBody["response_format"] = {
                 {"type", "json_schema"}, {"json_schema", {
                     {"name", "bounded_planning"}, {"strict", true},
                     {"schema", json::parse(responseSchema)}}}};
-        requestBody["chat_template_kwargs"] = {{"enable_thinking", false}};
+        if (capabilities.chatTemplateKwargs)
+            requestBody["chat_template_kwargs"] = {{"enable_thinking", false}};
         // Not for a code review. DRY penalises repeating text that is already in the
         // context, and a review's whole job is to repeat the code it replaces exactly
         // and then most of it again as the replacement. With it on, she shortened the
         // lines she meant with "...", dropped their indentation, and replies ended
         // mid-string, and the edit could never be found in the file.
-        if (operation != "self code review")
+        if (operation != "self code review" && capabilities.drySampling)
         {
             requestBody["dry_multiplier"] = 0.8;
             requestBody["dry_penalty_last_n"] = 4096;
@@ -1688,10 +1699,13 @@ responseOutput llamaCppService::AnalyzeImage(
         }})},
         {"temperature", 0.2},
         {"max_tokens", std::clamp(maxResponseTokens, backgroundAwareness ? 192 : 64, 4096)},
-        {"chat_template_kwargs", {{"enable_thinking", false}}},
         {"stream", false}
     };
-    if (backgroundAwareness)
+    if (capabilities.chatTemplateKwargs)
+    {
+        requestBody["chat_template_kwargs"] = {{"enable_thinking", false}};
+    }
+    if (backgroundAwareness && capabilities.jsonSchema)
     {
         requestBody["response_format"] = {{"type", "json_schema"}, {"json_schema", {
             {"name", "screen_awareness"}, {"strict", true},
@@ -1904,7 +1918,7 @@ memoryDecision llamaCppService::EvaluateMemory(
     const auto ask = [&](const char* systemPrompt, const json& envelope,
         const bool aboutRevia, memoryDecision& verdict) -> bool
     {
-        const json requestBody = {
+        json requestBody = {
             {"model", modelName},
             {"messages", json::array({
                 {{"role", "system"}, {"content", std::string(systemPrompt) + duplicateGuard}},
@@ -1915,16 +1929,24 @@ memoryDecision llamaCppService::EvaluateMemory(
             // JSON mode constrains the shape; a small non-zero temperature avoids that
             // degenerate path without making the classifier meaningfully random.
             {"temperature", 0.1},
-            {"top_k", 20},
             {"top_p", 0.8},
-            {"min_p", 0.0},
-            {"dry_multiplier", 0.8},
-            {"dry_penalty_last_n", 4096},
             {"max_tokens", 256},
             {"stream", false},
-            {"response_format", {{"type", "json_object"}}},
-            {"chat_template_kwargs", {{"enable_thinking", false}}}
+            {"response_format", {{"type", "json_object"}}}
         };
+        // The samplers beyond temperature and top_p are llama.cpp's; a hosted API
+        // rejects a field it does not know.
+        if (capabilities.drySampling)
+        {
+            requestBody["top_k"] = 20;
+            requestBody["min_p"] = 0.0;
+            requestBody["dry_multiplier"] = 0.8;
+            requestBody["dry_penalty_last_n"] = 4096;
+        }
+        if (capabilities.chatTemplateKwargs)
+        {
+            requestBody["chat_template_kwargs"] = {{"enable_thinking", false}};
+        }
         const auto result = client.Post(
             "/v1/chat/completions",
             requestBody.dump(),
@@ -2147,7 +2169,8 @@ std::string llamaCppService::ParseStreamChunk(
 healthOutput llamaCppService::CheckHealth(const std::stop_token stopToken) const
 {
     healthOutput output;
-    output.name = "llama.cpp";
+    const std::string serverName = capabilities.displayName;
+    output.name = serverName;
 
     revia::llm::CancellableHttpClient client(host, port, stopToken);
     ApplyApiKey(client, apiKey);
@@ -2155,14 +2178,17 @@ healthOutput llamaCppService::CheckHealth(const std::stop_token stopToken) const
     client.set_read_timeout(5);
     std::stop_callback cancel(stopToken, [&client] { client.stop(); });
 
-    const auto result = client.Get("/health");
+    // /health is llama.cpp's; another server is reached through the model list, which
+    // every OpenAI-compatible server has.
+    const auto result = client.Get(capabilities.healthEndpoint ? "/health" : "/v1/models");
 
     if (!result)
     {
         output.bIsAvailable = false;
         output.status = systemStatus::Red;
-        output.message = "llama.cpp server is offline.";
-        output.reason = "Failed to connect to llama.cpp server at " + host + ":" + std::to_string(port) + ".";
+        output.message = serverName + " is offline.";
+        output.reason = "Failed to connect to " + serverName + " at " + host + ":" +
+            std::to_string(port) + ".";
         return output;
     }
 
@@ -2170,17 +2196,23 @@ healthOutput llamaCppService::CheckHealth(const std::stop_token stopToken) const
     {
         output.bIsAvailable = false;
         output.status = systemStatus::Red;
-        output.message = "llama.cpp server responded with an error.";
-        output.reason = "HTTP status: " + std::to_string(result->status);
+        output.message = serverName + " responded with an error.";
+        output.reason = "HTTP status: " + std::to_string(result->status) +
+            (result->status == 401 || result->status == 403
+                ? " (check the API key in settings)" : "");
         return output;
     }
 
-    const auto modelsResult = client.Get("/v1/models");
+    // When /v1/models was the probe its answer is reused; httplib's Result is move-only,
+    // so that is a reference rather than a copy.
+    const httplib::Result modelsFetched = capabilities.healthEndpoint
+        ? client.Get("/v1/models") : httplib::Result{nullptr, httplib::Error::Unknown};
+    const httplib::Result& modelsResult = capabilities.healthEndpoint ? modelsFetched : result;
     if (!modelsResult || modelsResult->status != 200)
     {
         output.bIsAvailable = false;
         output.status = systemStatus::Yellow;
-        output.message = "llama.cpp is online, but its loaded model could not be verified.";
+        output.message = serverName + " is online, but its loaded model could not be verified.";
         output.reason = "Expected model " + modelName + ", but /v1/models was unavailable.";
         return output;
     }
@@ -2223,7 +2255,10 @@ healthOutput llamaCppService::CheckHealth(const std::stop_token stopToken) const
             return std::filesystem::path(loadedName).filename().string() ==
                 std::filesystem::path(modelName).filename().string();
         };
-        if (std::none_of(loadedModels.begin(), loadedModels.end(), sameModel))
+        // A gateway may list nothing, or everything it can reach; the model named in
+        // settings is what the request carries either way.
+        if (capabilities.strictModelList &&
+            std::none_of(loadedModels.begin(), loadedModels.end(), sameModel))
         {
             std::ostringstream loadedList;
             for (std::size_t index = 0; index < loadedModels.size(); ++index)
@@ -2237,10 +2272,13 @@ healthOutput llamaCppService::CheckHealth(const std::stop_token stopToken) const
 
             output.bIsAvailable = false;
             output.status = systemStatus::Yellow;
-            output.message = "llama.cpp is online with a different model.";
+            output.message = serverName + " is online with a different model.";
             output.reason = "Expected model " + modelName + ", but the server loaded " +
                 (loadedModels.empty() ? std::string("no reported model") : loadedList.str()) +
-                ". Exit the older Revia or llama.cpp process, then restart Revia.";
+                (capabilities.kind == revia::llm::ProviderKind::LlamaCpp
+                    ? ". Exit the older Revia or llama.cpp process, then restart Revia."
+                    : ". Load or pull that model on the server, or name one it has in "
+                      "settings.");
             return output;
         }
     }
@@ -2248,12 +2286,15 @@ healthOutput llamaCppService::CheckHealth(const std::stop_token stopToken) const
     {
         output.bIsAvailable = false;
         output.status = systemStatus::Yellow;
-        output.message = "llama.cpp is online, but its model response was invalid.";
+        output.message = serverName + " is online, but its model response was invalid.";
         output.reason = std::string("Could not parse /v1/models: ") + error.what();
         return output;
     }
 
-    const auto propsResult = client.Get("/props");
+    // Without /props the context size is the configured one and the server's own
+    // modality list is unknown; a vision request then simply fails or succeeds.
+    const auto propsResult = capabilities.propsEndpoint
+        ? client.Get("/props") : httplib::Result{nullptr, httplib::Error::Unknown};
     if (propsResult && propsResult->status == 200)
     {
         try
@@ -2298,7 +2339,7 @@ healthOutput llamaCppService::CheckHealth(const std::stop_token stopToken) const
 
     output.bIsAvailable = true;
     output.status = systemStatus::Green;
-    output.message = "llama.cpp server is online.";
+    output.message = serverName + " is online.";
     output.reason = "";
     output.responseTokenLimit = ResponseTokenLimit();
 
@@ -2310,7 +2351,11 @@ std::optional<std::size_t> llamaCppService::CountTokens(
     const std::stop_token stopToken) const
 {
     if (text.empty()) return 0;
-    if (bTokenizerUnavailable.load() || stopToken.stop_requested()) return std::nullopt;
+    if (!capabilities.tokenizeEndpoint || bTokenizerUnavailable.load() ||
+        stopToken.stop_requested())
+    {
+        return std::nullopt;
+    }
 
     constexpr std::size_t MaximumCachedTokenCounts = 512;
     const std::size_t key = std::hash<std::string>{}(text) ^

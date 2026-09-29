@@ -9,6 +9,7 @@
 #include "Core/localApiKey.h"
 #include "Core/runtimePath.h"
 #include "Internet/internetBackend.h"
+#include "LLM/providerCapabilities.h"
 #include "Emotion/stimulusBuilder.h"
 #include "Identity/relationshipEvidence.h"
 #include "Memory/longTermMemory.h"
@@ -177,6 +178,9 @@ namespace
         const int fitTargetMiB)
     {
         llmSettings output = base;
+        output.backend = tier.backend;
+        output.apiKey = tier.apiKey;
+        output.bTreatAsRemote = tier.bTreatAsRemote;
         output.host = tier.host;
         output.port = tier.port;
         output.modelName = tier.modelName;
@@ -196,7 +200,8 @@ namespace
         output.reservedVramMiB = 0;
         output.ramCacheMiB = 0;
         output.bAutoTune = true;
-        output.bAutoStartServer = true;
+        // Started by Revia only when it is hers to start.
+        output.bAutoStartServer = tier.backend == "LLamaCpp";
         return output;
     }
 
@@ -1129,6 +1134,7 @@ bool ReviaSession::Start()
     startupTimings.push_back({"perception_init", ElapsedMilliseconds(stageStarted)});
 
     stageStarted = std::chrono::steady_clock::now();
+    router.SetRemotePrivacy(settings.intelligence.bAllowRemotePrivateContext);
     router.ApplyLLMSettings(
         settings.llm,
         fastLlmSettings,
@@ -1137,6 +1143,25 @@ bool ReviaSession::Start()
         profile,
         fastBrainConfigured,
         expertBrainConfigured);
+    // A brain that is not llama.cpp is one Revia does not start, and one that is not on
+    // this machine is one the owner should see named at startup, with what it is
+    // allowed to read.
+    const auto describeBackend =
+        [this](const char* role, const llmSettings& tier, const bool configured)
+    {
+        if (!configured || tier.backend == "LLamaCpp") return;
+        const bool remote = revia::llm::IsCloudEndpoint(tier);
+        appLogger.Log(std::string(role) + " brain: " +
+            revia::llm::CapabilitiesFor(tier.backend).displayName + " at " + tier.host +
+            ":" + std::to_string(tier.port) + " serving " + tier.modelName +
+            (!remote ? " (on this machine)."
+                : settings.intelligence.bAllowRemotePrivateContext
+                    ? " (remote; allowed her private context)."
+                    : " (remote; given her private context only if it is Main)."));
+    };
+    describeBackend("Main", settings.llm, true);
+    describeBackend("Fast", fastLlmSettings, fastBrainConfigured);
+    describeBackend("Expert", expertLlmSettings, expertBrainConfigured);
     if (settings.llm.bAutoTune)
     {
         appLogger.Log(
@@ -1782,7 +1807,11 @@ void ReviaSession::StopHistoryCompaction()
 
 void ReviaSession::SignalHistoryCompaction()
 {
-    if (!settings.conversation.bHistoryCompactionEnabled || !context.NeedsCompaction())
+    // Either kind of pending work. A pass that recorded the oldest turns and then found
+    // a turn in flight leaves the record long but the history short; asked only about
+    // the history, this stayed quiet and the tidying waited on the worker's timeout.
+    if (!settings.conversation.bHistoryCompactionEnabled ||
+        (!context.NeedsCompaction() && !context.NeedsReflection()))
     {
         return;
     }
@@ -7871,6 +7900,13 @@ bool ReviaSession::EnsureFastBrainAvailable(const std::stop_token stopToken)
 {
     healthOutput health = router.CheckFastHealth();
     if (health.bIsAvailable) return true;
+    if (!fastLlmSettings.bAutoStartServer)
+    {
+        appLogger.Warning("Fast brain (" + fastLlmSettings.backend + " at " +
+            fastLlmSettings.host + ":" + std::to_string(fastLlmSettings.port) +
+            ") is unavailable and is not Revia's to start: " + health.reason);
+        return false;
+    }
 
     std::string launchError;
     appLogger.Log("Fast brain is offline. Starting Qwen3.5 0.8B on CPU...");
@@ -7915,6 +7951,13 @@ bool ReviaSession::EnsureExpertBrainAvailable(const std::stop_token stopToken)
 {
     healthOutput health = router.CheckExpertHealth();
     if (health.bIsAvailable) return true;
+    if (!expertLlmSettings.bAutoStartServer)
+    {
+        appLogger.Warning("Expert brain (" + expertLlmSettings.backend + " at " +
+            expertLlmSettings.host + ":" + std::to_string(expertLlmSettings.port) +
+            ") is unavailable and is not Revia's to start: " + health.reason);
+        return false;
+    }
 
     std::string launchError;
     appLogger.Log("Expert brain is offline. Starting Qwen3-VL 8B with safe fitting...");
@@ -10020,6 +10063,15 @@ bool ReviaSession::TryHandleActionInput(const std::string& input, SessionResult&
                 stream << " + projector " << model.projector;
             }
             stream << " (" << model.artifactMiB << " MiB artifact)";
+            // A brain that is not the llama.cpp worker is named by what serves it.
+            const llmSettings& served = model.role == "Fast" ? fastLlmSettings
+                : model.role == "Expert" ? expertLlmSettings : settings.llm;
+            if (served.backend != "LLamaCpp")
+            {
+                stream << " via " << revia::llm::CapabilitiesFor(served.backend).displayName
+                    << " at " << served.host << ":" << served.port
+                    << (revia::llm::IsCloudEndpoint(served) ? ", remote" : ", on this machine");
+            }
         }
         stream << "\n  Memory embeddings: " << settings.embedding.modelName
             << " — " << (settings.embedding.device == "none"

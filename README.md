@@ -356,9 +356,36 @@ Having a file in `Models\` does not mean it is used. This is the live map:
 
 The Qwen2.5-Omni and Llama 3.1 8B files that may sit in `Models\` are not used. `/models` shows exactly what is loaded this session.
 
-All workers are separate local processes bound to `127.0.0.1` so each GPU gets its own CUDA context and a crash cannot take Revia down. Nothing is sent to a cloud model.
+All workers are separate local processes bound to `127.0.0.1` so each GPU gets its own CUDA context and a crash cannot take Revia down. Nothing is sent to a cloud model unless you point a brain at one yourself (below).
 
 On one GPU, or none, the resource planner moves work to what is available instead of switching features off.
+
+### Another server than llama.cpp
+
+Each brain (Main, Fast, Expert) can be served by something other than the llama.cpp worker Revia starts herself: Ollama, LM Studio, or anything that speaks the OpenAI chat API (vLLM, a gateway, a hosted service). They all take the same requests; what differs is the extras around them, and Revia only relies on the ones the named server has.
+
+| `backend` | What Revia expects | Started by Revia |
+|---|---|---|
+| `LLamaCpp` (default) | `/health`, `/props`, `/tokenize`, `cache_prompt`, thinking switch, DRY sampler, JSON schema | Yes, from `modelPath` |
+| `Ollama` | `/v1/models` lists exactly what is pulled; JSON schema | No |
+| `LMStudio` | `/v1/models` lists what is loaded; JSON schema | No |
+| `OpenAI` / `CustomHttp` | The chat API alone; the model list is not checked against `modelName` | No |
+
+In `Config/settings.json`, on `llm` (Main) or on `intelligence.fast` / `intelligence.expert`:
+
+```json
+"llm": {
+  "backend": "Ollama",
+  "host": "127.0.0.1",
+  "port": 11434,
+  "modelName": "qwen3:4b",
+  "apiKey": ""
+}
+```
+
+`apiKey` is sent as a bearer token when set. `treatAsRemote: true` tells Revia that a loopback address is really a tunnel to somewhere else. A server that is not llama.cpp has to be running already; Revia reports it at startup and in `/models`, and the Activity panel names the model that answered each turn.
+
+**Privacy rule.** A brain whose requests leave this machine (a host that is not loopback, or `treatAsRemote`) is not handed her private context -- the conversation, her memories, the record, screenshots for Expert vision -- unless `intelligence.allowRemotePrivateContext` is `true`. With it off, a remote Fast or Expert is passed over and Main answers instead, the Activity panel says why, and memory evaluation stays on a local brain. Main is the exception by design: pointing Main at a remote server is the opt-in for Main itself, since every turn goes there anyway. The startup log names each non-llama.cpp brain and what it is allowed to read.
 
 ### Voice speed: what to expect
 

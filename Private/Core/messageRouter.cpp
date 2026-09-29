@@ -68,6 +68,12 @@ responseOutput messageRouter::RouteMessage(
                 routingNote = " The Fast brain runs on the CPU, so Main on the GPU "
                     "answered this short turn sooner.";
             }
+            else if (fastConfigured &&
+                !MayCarryPrivateContext(revia::intelligence::IntelligenceTier::Fast))
+            {
+                fallbackReason = "The Fast brain is a remote backend and is not given "
+                    "her private context; used Main.";
+            }
             else if (fastConfigured && fastLlm.IsBackendAvailable())
             {
                 selected = &fastLlm;
@@ -84,7 +90,13 @@ responseOutput messageRouter::RouteMessage(
             // the idle sweep cannot put the model away underneath the answer it is
             // producing. With no coordinator this is exactly the question it always
             // was, and the behaviour is unchanged.
-            if (expertConfigured)
+            if (expertConfigured &&
+                !MayCarryPrivateContext(revia::intelligence::IntelligenceTier::Expert))
+            {
+                fallbackReason = "The Expert brain is a remote backend and is not given "
+                    "her private context; used Main in Deep mode.";
+            }
+            else if (expertConfigured)
             {
                 const bool managed = lifetime != nullptr &&
                     lifetime->IsManaged(revia::intelligence::IntelligenceTier::Expert);
@@ -119,6 +131,7 @@ responseOutput messageRouter::RouteMessage(
     }
 
     if (fastConfigured && selected != &fastLlm &&
+        MayCarryPrivateContext(revia::intelligence::IntelligenceTier::Fast) &&
         !selected->IsBackendAvailable(stopToken) && fastLlm.IsBackendAvailable(stopToken))
     {
         selected = &fastLlm;
@@ -126,6 +139,7 @@ responseOutput messageRouter::RouteMessage(
         selectedTier = "Fast";
         fallbackReason = "Preferred endpoint unavailable; used the Fast brain.";
     }
+    routingNote += RemoteNote(effectiveTier);
 
     residency.BeginInference(effectiveTier, "interactive");
     DeltaHandler retryDelta = onDelta;
@@ -161,14 +175,11 @@ responseOutput messageRouter::RouteMessage(
         selectedTier = "Main";
         fallbackReason = rejectedTier +
             " rejected the bounded request; used Main instead.";
+        routingNote = RemoteNote(effectiveTier);
     }
     routed.requestedTier = revia::intelligence::ToString(decision.requestedTier);
     routed.selectedTier = selectedTier;
-    routed.selectedModel = selected == &fastLlm
-        ? "Qwen3.5-0.8B-Q4_K_M.gguf"
-        : selected == &expertLlm
-            ? "Qwen3-VL-8B-Instruct-Unredacted-MAX.Q4_K_M.gguf"
-            : "Qwen3.5-4B-Q4_K_M.gguf";
+    routed.selectedModel = ModelNameOf(selected);
     routed.routingReason = decision.reason + routingNote;
     routed.routingConfidence = decision.confidence;
     routed.bRoutingFallback = !fallbackReason.empty();
@@ -188,7 +199,10 @@ responseOutput messageRouter::ReviewCode(
     const llmService* selected = &llm;
     revia::intelligence::IntelligenceTier tier = revia::intelligence::IntelligenceTier::Main;
     bool loadedForThisReview = false;
-    if (expertConfigured)
+    // The material is her own code or the owner's, so a remote Expert reads it only
+    // with the same opt-in an interactive turn needs.
+    if (expertConfigured &&
+        MayCarryPrivateContext(revia::intelligence::IntelligenceTier::Expert))
     {
         const bool managed = lifetime != nullptr &&
             lifetime->IsManaged(revia::intelligence::IntelligenceTier::Expert);
@@ -216,9 +230,8 @@ responseOutput messageRouter::ReviewCode(
         (void)lifetime->ReleaseNow(revia::intelligence::IntelligenceTier::Expert);
     }
     output.selectedTier = revia::intelligence::ToString(tier);
-    output.selectedModel = selected == &expertLlm
-        ? "Qwen3-VL-8B-Instruct-Unredacted-MAX.Q4_K_M.gguf"
-        : "Qwen3.5-4B-Q4_K_M.gguf";
+    output.selectedModel = ModelNameOf(selected);
+    output.routingReason += RemoteNote(tier);
     return output;
 }
 
@@ -230,6 +243,65 @@ bool messageRouter::FastIsSlowerThanMain() const
     };
     return fastConfigured && onCpu(fastConfiguration.device) &&
         !mainConfiguration.device.empty() && !onCpu(mainConfiguration.device);
+}
+
+const llmSettings& messageRouter::ConfigurationOf(
+    const revia::intelligence::IntelligenceTier tier) const
+{
+    switch (tier)
+    {
+        case revia::intelligence::IntelligenceTier::Fast:
+            return fastConfiguration;
+        case revia::intelligence::IntelligenceTier::Expert:
+        case revia::intelligence::IntelligenceTier::ExpertVision:
+            return expertConfiguration;
+        default:
+            return mainConfiguration;
+    }
+}
+
+const std::string& messageRouter::ModelNameOf(const llmService* service) const
+{
+    if (service == &fastLlm) return fastConfiguration.modelName;
+    if (service == &expertLlm) return expertConfiguration.modelName;
+    return mainConfiguration.modelName;
+}
+
+bool messageRouter::TierIsRemote(const revia::intelligence::IntelligenceTier tier) const
+{
+    switch (tier)
+    {
+        case revia::intelligence::IntelligenceTier::Fast:
+            return fastConfigured && revia::llm::IsCloudEndpoint(fastConfiguration);
+        case revia::intelligence::IntelligenceTier::Expert:
+        case revia::intelligence::IntelligenceTier::ExpertVision:
+            return expertConfigured && revia::llm::IsCloudEndpoint(expertConfiguration);
+        case revia::intelligence::IntelligenceTier::Reflex:
+            return false;
+        default:
+            return revia::llm::IsCloudEndpoint(mainConfiguration);
+    }
+}
+
+bool messageRouter::MayCarryPrivateContext(
+    const revia::intelligence::IntelligenceTier tier) const
+{
+    return allowRemotePrivateContext || !TierIsRemote(tier) ||
+        TierIsRemote(revia::intelligence::IntelligenceTier::Main);
+}
+
+std::string messageRouter::RemoteNote(const revia::intelligence::IntelligenceTier tier) const
+{
+    if (!TierIsRemote(tier)) return {};
+    const llmSettings& configuration = ConfigurationOf(tier);
+    return " Answered by a remote backend (" +
+        std::string(revia::llm::CapabilitiesFor(configuration.backend).displayName) +
+        " at " + configuration.host + ":" + std::to_string(configuration.port) + ").";
+}
+
+void messageRouter::SetRemotePrivacy(const bool allowPrivateContext)
+{
+    allowRemotePrivateContext = allowPrivateContext;
 }
 
 void messageRouter::SetPosture(std::string posture)
@@ -314,11 +386,12 @@ responseOutput messageRouter::GenerateCuriosityPlan(
         responseOutput output = llm.GenerateCuriosityPlan(boundedContextPrompt, availableActions, stopToken);
         residency.EndInference(revia::intelligence::IntelligenceTier::Main);
         output.requestedTier = output.selectedTier = "Main";
-        output.selectedModel = "Qwen3.5-4B-Q4_K_M.gguf";
+        output.selectedModel = mainConfiguration.modelName;
         output.routingReason = "Bounded self-directed topic selection uses the resident Main model.";
         return output;
     }
-    if (fastConfigured && fastLlm.IsBackendAvailable())
+    if (fastConfigured && MayCarryPrivateContext(revia::intelligence::IntelligenceTier::Fast) &&
+        fastLlm.IsBackendAvailable())
     {
         residency.BeginInference(
             revia::intelligence::IntelligenceTier::Fast, "background");
@@ -327,7 +400,7 @@ responseOutput messageRouter::GenerateCuriosityPlan(
         residency.EndInference(revia::intelligence::IntelligenceTier::Fast);
         output.requestedTier = "Main";
         output.selectedTier = "Fast";
-        output.selectedModel = "Qwen3.5-0.8B-Q4_K_M.gguf";
+        output.selectedModel = fastConfiguration.modelName;
         output.bRoutingFallback = true;
         output.routingFallbackReason = "Main was unavailable; Fast can still nominate a bounded topic.";
         return output;
@@ -335,7 +408,7 @@ responseOutput messageRouter::GenerateCuriosityPlan(
     responseOutput output = llm.GenerateCuriosityPlan(boundedContextPrompt, availableActions, stopToken);
     output.requestedTier = "Main";
     output.selectedTier = "Main";
-    output.selectedModel = "Qwen3.5-4B-Q4_K_M.gguf";
+    output.selectedModel = mainConfiguration.modelName;
     output.routingReason = "No alternate background brain was available.";
     return output;
 }
@@ -363,11 +436,12 @@ responseOutput messageRouter::Deliberate(
         residency.EndInference(revia::intelligence::IntelligenceTier::Main);
         output.requestedTier = "Main";
         output.selectedTier = "Main";
-        output.selectedModel = "Qwen3.5-4B-Q4_K_M.gguf";
+        output.selectedModel = mainConfiguration.modelName;
         output.routingReason = "One bounded self-inquiry runs on the balanced Main brain.";
         return output;
     }
-    if (fastConfigured && fastLlm.IsBackendAvailable())
+    if (fastConfigured && MayCarryPrivateContext(revia::intelligence::IntelligenceTier::Fast) &&
+        fastLlm.IsBackendAvailable())
     {
         residency.BeginInference(
             revia::intelligence::IntelligenceTier::Fast, "interactive");
@@ -375,7 +449,7 @@ responseOutput messageRouter::Deliberate(
         residency.EndInference(revia::intelligence::IntelligenceTier::Fast);
         output.requestedTier = "Main";
         output.selectedTier = "Fast";
-        output.selectedModel = "Qwen3.5-0.8B-Q4_K_M.gguf";
+        output.selectedModel = fastConfiguration.modelName;
         output.bRoutingFallback = true;
         output.routingFallbackReason = "The Main brain was unavailable for self-inquiry.";
         return output;
@@ -394,6 +468,7 @@ template <class Call>
 responseOutput OnMainInBackground(
     const llmService& llm,
     revia::intelligence::ModelResidencyManager& residency,
+    const std::string& modelName,
     const std::string& input,
     const char* emptyReason,
     Call call)
@@ -415,7 +490,7 @@ responseOutput OnMainInBackground(
     residency.EndInference(revia::intelligence::IntelligenceTier::Main);
     output.requestedTier = "Main";
     output.selectedTier = "Main";
-    output.selectedModel = "Qwen3.5-4B-Q4_K_M.gguf";
+    output.selectedModel = modelName;
     output.routingReason = "The conversation record is kept on Main at background priority.";
     return output;
 }
@@ -425,7 +500,7 @@ responseOutput messageRouter::ObserveConversation(
     const std::string& boundedHistory,
     const std::stop_token stopToken) const
 {
-    return OnMainInBackground(llm, residency, boundedHistory,
+    return OnMainInBackground(llm, residency, mainConfiguration.modelName, boundedHistory,
         "There was no conversation to record.",
         [&] { return llm.ObserveConversation(boundedHistory, stopToken); });
 }
@@ -434,7 +509,7 @@ responseOutput messageRouter::ReflectOnConversation(
     const std::string& boundedRecord,
     const std::stop_token stopToken) const
 {
-    return OnMainInBackground(llm, residency, boundedRecord,
+    return OnMainInBackground(llm, residency, mainConfiguration.modelName, boundedRecord,
         "There was no record to reflect on.",
         [&] { return llm.ReflectOnConversation(boundedRecord, stopToken); });
 }
@@ -533,24 +608,30 @@ responseOutput messageRouter::AnalyzeImage(
         lowered.find("architecture") != std::string::npos ||
         lowered.find("difficult") != std::string::npos ||
         lowered.find("expert") != std::string::npos;
-    const bool expertAvailable = expertRequested && expertConfigured &&
-        expertLlm.IsBackendAvailable();
+    // A screenshot is the most private thing she sees, so a remote Expert gets one
+    // only with the opt-in.
+    const bool expertAllowed = expertRequested && expertConfigured &&
+        MayCarryPrivateContext(revia::intelligence::IntelligenceTier::ExpertVision);
+    const bool expertAvailable = expertAllowed && expertLlm.IsBackendAvailable();
     responseOutput output = (expertAvailable ? expertLlm : llm).AnalyzeImage(
         imagePath, prompt, maxResponseTokens, stopToken, backgroundAwareness);
     output.requestedTier = expertRequested ? "ExpertVision" : "Vision";
     output.selectedTier = expertAvailable ? "ExpertVision" : "Vision";
-    output.selectedModel = expertAvailable
-        ? "Qwen3-VL-8B-Instruct-Unredacted-MAX.Q4_K_M.gguf"
-        : "Qwen3.5-4B-Q4_K_M.gguf";
+    output.selectedModel = ModelNameOf(expertAvailable ? &expertLlm : &llm);
     output.reasoningMode = expertRequested ? "Deep" : "Fast";
-    output.routingReason = expertRequested
+    output.routingReason = (expertRequested
         ? "The visual prompt contains difficult architecture or Blueprint signals."
-        : "Normal desktop perception uses the Main model and matching projector.";
+        : "Normal desktop perception uses the Main model and matching projector.") +
+        RemoteNote(expertAvailable
+            ? revia::intelligence::IntelligenceTier::ExpertVision
+            : revia::intelligence::IntelligenceTier::Main);
     if (expertRequested && !expertAvailable)
     {
         output.bRoutingFallback = true;
-        output.routingFallbackReason =
-            "Expert vision was unavailable; used normal Main vision.";
+        output.routingFallbackReason = expertConfigured && !expertAllowed
+            ? "Expert vision is a remote backend and is not shown the screen; used "
+              "normal Main vision."
+            : "Expert vision was unavailable; used normal Main vision.";
     }
     return output;
 }
@@ -568,6 +649,10 @@ memoryDecision messageRouter::EvaluateMemory(
     // example, and it filed the user's stated preference as Revia's. Those decisions
     // become durable memory that every later prompt carries. Main answers both correctly
     // in about a second of GPU time, at background priority, so a turn still preempts it.
+    //
+    // What is being judged is the exchange itself, which is the private context the
+    // remote rule is about. Main is the owner's choice; a remote Fast stands in for it
+    // only with the opt-in.
     if (llm.IsBackendAvailable())
     {
         residency.BeginInference(revia::intelligence::IntelligenceTier::Main, "background");
@@ -576,13 +661,21 @@ memoryDecision messageRouter::EvaluateMemory(
         residency.EndInference(revia::intelligence::IntelligenceTier::Main);
         return decision;
     }
-    if (fastConfigured && fastLlm.IsBackendAvailable())
+    if (fastConfigured && MayCarryPrivateContext(revia::intelligence::IntelligenceTier::Fast) &&
+        fastLlm.IsBackendAvailable())
     {
         residency.BeginInference(
             revia::intelligence::IntelligenceTier::Fast, "background");
         memoryDecision decision = fastLlm.EvaluateMemory(
             userMessage, assistantMessage, provenance, stopToken);
         residency.EndInference(revia::intelligence::IntelligenceTier::Fast);
+        return decision;
+    }
+    if (fastConfigured && fastLlm.IsBackendAvailable())
+    {
+        memoryDecision decision;
+        decision.reason = "Memory evaluation stays on this machine: Main is unavailable "
+            "and the Fast brain is a remote backend that is not given her private context.";
         return decision;
     }
     return llm.EvaluateMemory(userMessage, assistantMessage, provenance, stopToken);

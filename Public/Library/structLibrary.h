@@ -97,11 +97,17 @@ struct responseOutput
 
 struct llmSettings
 {
+    // "LLamaCpp", "Ollama", "LMStudio", "OpenAI" or "CustomHttp". All of them speak the
+    // OpenAI chat API; the name says which extras the server has (see
+    // LLM/providerCapabilities.h) and whether Revia may start it herself.
     std::string backend = "LLamaCpp";
     std::string host = "127.0.0.1";
     int port = 8080;
     std::string modelName = "local-model";
     std::string apiKey;
+    // Treat the endpoint as leaving this machine even on a loopback address: a tunnel,
+    // a gateway forwarding elsewhere, or a test standing in for one.
+    bool bTreatAsRemote = false;
 
     bool bAutoStartServer = false;
     std::string serverExecutable;
@@ -154,10 +160,15 @@ struct llmSettings
 struct modelTierSettings
 {
     bool bEnabled = false;
+    // As llmSettings::backend. Only a llama.cpp tier is started by Revia; any other
+    // is expected to be running already, here or elsewhere.
+    std::string backend = "LLamaCpp";
     std::string host = "127.0.0.1";
     int port = 0;
     std::string modelName;
     std::string modelPath;
+    std::string apiKey;
+    bool bTreatAsRemote = false;
     bool bVisionEnabled = false;
     std::string multimodalProjectorPath;
     int contextSize = 8192;
@@ -182,32 +193,48 @@ struct modelTierSettings
 struct intelligenceSettings
 {
     bool bEnabled = true;
+    // Whether a tier whose requests leave this machine may be handed private context:
+    // her memories, the conversation record and the posture. Off, a remote tier only
+    // answers turns that carry none, and memory evaluation stays on a local tier.
+    bool bAllowRemotePrivateContext = false;
     modelTierSettings fast = {
-        true,
-        "127.0.0.1",
-        8082,
-        "Qwen3.5-0.8B-Q4_K_M.gguf",
-        "Models/Qwen3.5-0.8B-Q4_K_M.gguf",
-        false,
-        "",
-        8192,
-        256,
-        0.78F,
-        90,
-        true};
+        .bEnabled = true,
+        .backend = "LLamaCpp",
+        .host = "127.0.0.1",
+        .port = 8082,
+        .modelName = "Qwen3.5-0.8B-Q4_K_M.gguf",
+        .modelPath = "Models/Qwen3.5-0.8B-Q4_K_M.gguf",
+        .apiKey = "",
+        .bTreatAsRemote = false,
+        .bVisionEnabled = false,
+        .multimodalProjectorPath = "",
+        .contextSize = 8192,
+        .maxTokens = 256,
+        .temperature = 0.78F,
+        .startupTimeoutSeconds = 90,
+        .bWarmAtStartup = true,
+        .bOnDemand = false,
+        .idleGraceSeconds = 300,
+        .minimumResidencySeconds = 60};
     modelTierSettings expert = {
-        true,
-        "127.0.0.1",
-        8083,
-        "Qwen3-VL-8B-Instruct-Unredacted-MAX.Q4_K_M.gguf",
-        "Models/Qwen3-VL-8B-Instruct-Unredacted-MAX.Q4_K_M.gguf",
-        true,
-        "Models/Qwen3-VL-8B-Instruct-Unredacted-MAX.mmproj-q8_0.gguf",
-        8192,
-        1024,
-        0.72F,
-        180,
-        true};
+        .bEnabled = true,
+        .backend = "LLamaCpp",
+        .host = "127.0.0.1",
+        .port = 8083,
+        .modelName = "Qwen3-VL-8B-Instruct-Unredacted-MAX.Q4_K_M.gguf",
+        .modelPath = "Models/Qwen3-VL-8B-Instruct-Unredacted-MAX.Q4_K_M.gguf",
+        .apiKey = "",
+        .bTreatAsRemote = false,
+        .bVisionEnabled = true,
+        .multimodalProjectorPath = "Models/Qwen3-VL-8B-Instruct-Unredacted-MAX.mmproj-q8_0.gguf",
+        .contextSize = 8192,
+        .maxTokens = 1024,
+        .temperature = 0.72F,
+        .startupTimeoutSeconds = 180,
+        .bWarmAtStartup = true,
+        .bOnDemand = false,
+        .idleGraceSeconds = 300,
+        .minimumResidencySeconds = 60};
 };
 
 struct embeddingSettings

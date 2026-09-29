@@ -16,6 +16,7 @@
 
 #include "LLM/promptBuilder.h"
 #include "LLM/privateMemoryAccess.h"
+#include "LLM/providerCapabilities.h"
 #include "LLM/LLamaCPP/llamaCppEmbeddingService.h"
 
 class llamaCppService
@@ -162,6 +163,9 @@ private:
         const std::string& operation = "structured planning",
         const std::string& responseSchema = {}) const;
 
+    // Which server this is, and so which requests it can take. Everything llama.cpp-
+    // specific is sent only when the capabilities say the server understands it.
+    revia::llm::ProviderCapabilities capabilities;
     std::string host = "127.0.0.1";
     int port = 8080;
     std::string modelName = "local-model";

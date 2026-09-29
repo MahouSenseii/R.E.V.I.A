@@ -119,6 +119,7 @@ void RunQuotedPayloadTests();
 void RunContextFittingTests();
 void RunHistoryCompactionTests();
 void RunMemorySupersessionTests();
+void RunProviderBackendTests();
 void RunAiPipelineLive();
 void RunSpeechInterruptionTests();
 void RunInvestigationTests();

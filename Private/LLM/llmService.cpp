@@ -4,14 +4,45 @@ llmService::llmService() = default;
 
 llmService::~llmService() = default;
 
+namespace
+{
+llmBackendType BackendTypeFor(const std::string& backend)
+{
+    switch (revia::llm::CapabilitiesFor(backend).kind)
+    {
+        case revia::llm::ProviderKind::LlamaCpp: return llmBackendType::LLamaCpp;
+        case revia::llm::ProviderKind::Ollama: return llmBackendType::Ollama;
+        case revia::llm::ProviderKind::LMStudio: return llmBackendType::LMStudio;
+        case revia::llm::ProviderKind::OpenAICompatible:
+        default:
+            return backend == "OpenAI" ? llmBackendType::OpenAI : llmBackendType::CustomHttp;
+    }
+}
+}
+
+bool llmService::UsesChatServer() const
+{
+    switch (backendType)
+    {
+        case llmBackendType::LLamaCpp:
+        case llmBackendType::Ollama:
+        case llmBackendType::OpenAI:
+        case llmBackendType::LMStudio:
+        case llmBackendType::CustomHttp:
+            return true;
+        default:
+            return false;
+    }
+}
+
 void llmService::ApplySettings(
     const llmSettings& settings,
     const embeddingSettings& embeddingSettings,
     const aiProfile& profile)
 {
-    if (settings.backend == "LLamaCpp")
+    if (revia::llm::IsChatBackend(settings.backend))
     {
-        backendType = llmBackendType::LLamaCpp;
+        backendType = BackendTypeFor(settings.backend);
         llamaCpp.ApplySettings(settings, embeddingSettings, profile);
         bIsReady = true;
         return;
@@ -53,14 +84,14 @@ std::string llmService::RelatedMemories(
     const std::string& query,
     const std::stop_token stopToken) const
 {
-    return bIsReady && backendType == llmBackendType::LLamaCpp
+    return bIsReady && UsesChatServer()
         ? llamaCpp.RelatedMemories(query, stopToken)
         : std::string{};
 }
 
 healthOutput llmService::CheckEmbeddingHealth(std::stop_token stopToken) const
 {
-    if (backendType == llmBackendType::LLamaCpp)
+    if (UsesChatServer())
     {
         return llamaCpp.CheckEmbeddingHealth(stopToken);
     }
@@ -77,7 +108,7 @@ embeddingOutput llmService::EmbedMemory(
     const std::string& summary,
     const std::stop_token stopToken) const
 {
-    if (backendType == llmBackendType::LLamaCpp)
+    if (UsesChatServer())
     {
         return llamaCpp.EmbedMemory(summary, stopToken);
     }
@@ -92,6 +123,10 @@ bool llmService::IsBackendAvailable(const std::stop_token stopToken) const
     switch (backendType)
     {
         case llmBackendType::LLamaCpp:
+        case llmBackendType::Ollama:
+        case llmBackendType::OpenAI:
+        case llmBackendType::LMStudio:
+        case llmBackendType::CustomHttp:
             return llamaCpp.IsServerAvailable(stopToken);
 
         case llmBackendType::Placeholder:
@@ -107,9 +142,9 @@ bool llmService::WarmUp(
     const std::stop_token stopToken,
     std::string& outError) const
 {
-    if (!bIsReady || backendType != llmBackendType::LLamaCpp)
+    if (!bIsReady || !UsesChatServer())
     {
-        outError = "A ready llama.cpp backend is required for warmup.";
+        outError = "A ready chat model backend is required for warmup.";
         return false;
     }
     return llamaCpp.WarmUp(stopToken, outError);
@@ -120,6 +155,10 @@ healthOutput llmService::CheckBackendHealth(const std::stop_token stopToken) con
     switch (backendType)
     {
         case llmBackendType::LLamaCpp:
+        case llmBackendType::Ollama:
+        case llmBackendType::OpenAI:
+        case llmBackendType::LMStudio:
+        case llmBackendType::CustomHttp:
             return llamaCpp.CheckHealth(stopToken);
 
         case llmBackendType::Placeholder:
@@ -171,6 +210,14 @@ responseOutput llmService::GenerateResponse(
             return GeneratePlaceholderResponse(context);
 
         case llmBackendType::LLamaCpp:
+
+        case llmBackendType::Ollama:
+
+        case llmBackendType::OpenAI:
+
+        case llmBackendType::LMStudio:
+
+        case llmBackendType::CustomHttp:
         {
             const healthOutput health = llamaCpp.CheckHealth(stopToken);
             if (!health.bIsAvailable)
@@ -217,6 +264,10 @@ responseOutput llmService::GenerateActionProposal(const std::string& userRequest
     switch (backendType)
     {
         case llmBackendType::LLamaCpp:
+        case llmBackendType::Ollama:
+        case llmBackendType::OpenAI:
+        case llmBackendType::LMStudio:
+        case llmBackendType::CustomHttp:
         {
             const healthOutput health = llamaCpp.CheckHealth();
             if (!health.bIsAvailable)
@@ -259,10 +310,10 @@ responseOutput llmService::ReviewConversationReply(
     const int maxReviewTokens,
     const std::stop_token stopToken) const
 {
-    if (!bIsReady || backendType != llmBackendType::LLamaCpp)
+    if (!bIsReady || !UsesChatServer())
     {
         responseOutput output;
-        output.reason = "AI response review requires the active llama.cpp backend.";
+        output.reason = "AI response review requires a chat model backend.";
         return output;
     }
     return llamaCpp.ReviewConversationReply(
@@ -272,7 +323,7 @@ responseOutput llmService::ReviewConversationReply(
 responseOutput llmService::GenerateActivityDraft(
     const std::string& topic, const std::string& context, const std::stop_token stopToken) const
 {
-    if (!bIsReady || backendType != llmBackendType::LLamaCpp)
+    if (!bIsReady || !UsesChatServer())
     { responseOutput result; result.reason = "A private draft requires the local model."; return result; }
     return llamaCpp.GenerateActivityDraft(topic, context, stopToken);
 }
@@ -282,10 +333,10 @@ responseOutput llmService::GenerateCuriosityPlan(
     const std::vector<std::string>& availableActions,
     const std::stop_token stopToken) const
 {
-    if (!bIsReady || backendType != llmBackendType::LLamaCpp)
+    if (!bIsReady || !UsesChatServer())
     {
         responseOutput output;
-        output.reason = "Curiosity planning requires the active llama.cpp backend.";
+        output.reason = "Curiosity planning requires a chat model backend.";
         return output;
     }
     const healthOutput health = llamaCpp.CheckHealth();
@@ -304,10 +355,10 @@ responseOutput llmService::Deliberate(
     const std::string& boundedInquiryPrompt,
     const std::stop_token stopToken) const
 {
-    if (!bIsReady || backendType != llmBackendType::LLamaCpp)
+    if (!bIsReady || !UsesChatServer())
     {
         responseOutput output;
-        output.reason = "Self-inquiry requires the active llama.cpp backend.";
+        output.reason = "Self-inquiry requires a chat model backend.";
         return output;
     }
     const healthOutput health = llamaCpp.CheckHealth();
@@ -326,10 +377,10 @@ responseOutput llmService::ObserveConversation(
     const std::string& boundedHistory,
     const std::stop_token stopToken) const
 {
-    if (!bIsReady || backendType != llmBackendType::LLamaCpp)
+    if (!bIsReady || !UsesChatServer())
     {
         responseOutput output;
-        output.reason = "The conversation record requires the active llama.cpp backend.";
+        output.reason = "The conversation record requires a chat model backend.";
         return output;
     }
     return llamaCpp.ObserveConversation(boundedHistory, stopToken);
@@ -339,10 +390,10 @@ responseOutput llmService::ReflectOnConversation(
     const std::string& boundedRecord,
     const std::stop_token stopToken) const
 {
-    if (!bIsReady || backendType != llmBackendType::LLamaCpp)
+    if (!bIsReady || !UsesChatServer())
     {
         responseOutput output;
-        output.reason = "The conversation record requires the active llama.cpp backend.";
+        output.reason = "The conversation record requires a chat model backend.";
         return output;
     }
     return llamaCpp.ReflectOnConversation(boundedRecord, stopToken);
@@ -360,7 +411,7 @@ responseOutput llmService::GenerateGoalPlan(const std::string& userRequest) cons
         return output;
     }
 
-    if (backendType != llmBackendType::LLamaCpp)
+    if (!UsesChatServer())
     {
         responseOutput output;
         output.bSuccess = false;
@@ -389,7 +440,7 @@ responseOutput llmService::GenerateCodeReview(
     const std::string& schema,
     const std::stop_token stopToken) const
 {
-    if (!bIsReady || backendType != llmBackendType::LLamaCpp)
+    if (!bIsReady || !UsesChatServer())
     {
         responseOutput output;
         output.bSuccess = false;
@@ -423,7 +474,7 @@ responseOutput llmService::GenerateNextGoalStep(
         output.bShouldSpeak = false;
         return output;
     }
-    if (backendType != llmBackendType::LLamaCpp)
+    if (!UsesChatServer())
     {
         responseOutput output;
         output.bSuccess = false;
@@ -457,7 +508,7 @@ responseOutput llmService::GenerateDiagram(const std::string& userRequest) const
         return output;
     }
 
-    if (backendType != llmBackendType::LLamaCpp)
+    if (!UsesChatServer())
     {
         responseOutput output;
         output.bSuccess = false;
@@ -497,7 +548,7 @@ responseOutput llmService::ComposeContent(
     const std::string& request,
     const std::string& context) const
 {
-    if (!bIsReady || backendType != llmBackendType::LLamaCpp ||
+    if (!bIsReady || !UsesChatServer() ||
         !llamaCpp.CheckHealth().bIsAvailable)
     {
         return ContentUnavailable("draft");
@@ -510,7 +561,7 @@ responseOutput llmService::ReviseBlock(
     const std::string& neighbourhood,
     const std::string& target) const
 {
-    if (!bIsReady || backendType != llmBackendType::LLamaCpp ||
+    if (!bIsReady || !UsesChatServer() ||
         !llamaCpp.CheckHealth().bIsAvailable)
     {
         return ContentUnavailable("revise");
@@ -525,7 +576,7 @@ responseOutput llmService::AnalyzeImage(
     const std::stop_token stopToken,
     const bool backgroundAwareness) const
 {
-    if (!bIsReady || backendType != llmBackendType::LLamaCpp)
+    if (!bIsReady || !UsesChatServer())
     {
         responseOutput output;
         output.response = "My local vision system is not ready.";
@@ -559,6 +610,10 @@ memoryDecision llmService::EvaluateMemory(
     switch (backendType)
     {
         case llmBackendType::LLamaCpp:
+        case llmBackendType::Ollama:
+        case llmBackendType::OpenAI:
+        case llmBackendType::LMStudio:
+        case llmBackendType::CustomHttp:
             return llamaCpp.EvaluateMemory(
                 userMessage, assistantMessage, provenance, stopToken);
         case llmBackendType::Placeholder:

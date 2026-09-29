@@ -1,4 +1,5 @@
 #include "Core/configManager.h"
+#include "LLM/providerCapabilities.h"
 
 #include <algorithm>
 #include <exception>
@@ -42,6 +43,10 @@ namespace
     void ReadModelTier(const json& data, modelTierSettings& output)
     {
         if (data.contains("enabled")) output.bEnabled = data["enabled"].get<bool>();
+        if (data.contains("backend")) output.backend = data["backend"].get<std::string>();
+        if (data.contains("apiKey")) output.apiKey = data["apiKey"].get<std::string>();
+        if (data.contains("treatAsRemote"))
+            output.bTreatAsRemote = data["treatAsRemote"].get<bool>();
         if (data.contains("host")) output.host = data["host"].get<std::string>();
         if (data.contains("port")) output.port = data["port"].get<int>();
         if (data.contains("modelName"))
@@ -77,8 +82,13 @@ namespace
     bool IsValidModelTier(const modelTierSettings& tier)
     {
         if (!tier.bEnabled) return true;
-        return tier.host == "127.0.0.1" && tier.port > 0 && tier.port <= 65535 &&
-            !tier.modelName.empty() && !tier.modelPath.empty() &&
+        if (!revia::llm::IsChatBackend(tier.backend)) return false;
+        // A llama.cpp tier is one Revia starts herself, from a model file on this
+        // machine. Any other backend is a server that already exists, wherever it is.
+        const bool local = tier.backend == "LLamaCpp";
+        if (local && (tier.host != "127.0.0.1" || tier.modelPath.empty())) return false;
+        return !tier.host.empty() && tier.port > 0 && tier.port <= 65535 &&
+            !tier.modelName.empty() &&
             tier.contextSize >= 512 && tier.contextSize <= 1048576 &&
             tier.maxTokens >= 1 && tier.maxTokens <= 32768 &&
             tier.temperature >= 0.0F && tier.temperature <= 2.0F &&
@@ -136,6 +146,10 @@ bool configManager::LoadSettings(appSettings& outSettings) const
             if (llmData.contains("apiKey"))
             {
                 outSettings.llm.apiKey = llmData["apiKey"].get<std::string>();
+            }
+            if (llmData.contains("treatAsRemote"))
+            {
+                outSettings.llm.bTreatAsRemote = llmData["treatAsRemote"].get<bool>();
             }
 
             if (llmData.contains("autoStartServer"))
@@ -225,6 +239,9 @@ bool configManager::LoadSettings(appSettings& outSettings) const
                 outSettings.intelligence.bEnabled =
                     intelligenceData["enabled"].get<bool>();
             }
+            if (intelligenceData.contains("allowRemotePrivateContext"))
+                outSettings.intelligence.bAllowRemotePrivateContext =
+                    intelligenceData["allowRemotePrivateContext"].get<bool>();
             if (intelligenceData.contains("fast"))
                 ReadModelTier(intelligenceData["fast"], outSettings.intelligence.fast);
             if (intelligenceData.contains("expert"))
@@ -1270,6 +1287,10 @@ bool configManager::LoadSettings(appSettings& outSettings) const
           outSettings.intelligence.fast.port == outSettings.intelligence.expert.port));
 
     if (outSettings.activeProfile.empty() || outSettings.llm.host.empty() ||
+        // "None" is a deliberate absence (a fixture with no brain); "Placeholder"
+        // answers without one. Everything else has to be a server the client can serve.
+        (outSettings.llm.backend != "Placeholder" && outSettings.llm.backend != "None" &&
+            !revia::llm::IsChatBackend(outSettings.llm.backend)) ||
         outSettings.llm.modelName.empty() || outSettings.llm.port < 1 ||
         outSettings.llm.port > 65535 || outSettings.llm.temperature < 0.0f ||
         outSettings.llm.temperature > 2.0f || outSettings.llm.maxTokens < 1 ||
