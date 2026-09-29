@@ -227,6 +227,38 @@ ParsedAction StructuredActionParser::ParseObject(const nlohmann::json& data)
             return result;
         }
 
+        if (result.request.type == actions::ActionType::McpTool)
+        {
+            // "<server>/<tool>" and a JSON object of arguments. Which tools exist,
+            // and what each costs, is the registry's to say from the manifest; the
+            // parser only keeps the shape honest.
+            const std::string server = data.value("server", "");
+            const std::string tool = data.value("tool", "");
+            if (server.empty() || tool.empty())
+            {
+                return Error(true, "An MCP tool call requires server and tool.");
+            }
+            if (server.find('/') != std::string::npos)
+            {
+                return Error(true, "An MCP server id cannot contain '/'.");
+            }
+            result.request.value = server + "/" + tool;
+            if (data.contains("arguments"))
+            {
+                if (!data["arguments"].is_object())
+                {
+                    return Error(true, "MCP tool arguments must be a JSON object.");
+                }
+                result.request.arguments = data["arguments"].dump();
+            }
+            else
+            {
+                result.request.arguments = "{}";
+            }
+            result.succeeded = true;
+            return result;
+        }
+
         std::string source;
         if (data.contains("source") && data["source"].is_string())
         {

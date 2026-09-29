@@ -129,6 +129,7 @@ void RunFallbackVoiceTests();
 void RunAdvisorTests();
 void RunWebReaderTests();
 void RunSearchProviderTests();
+void RunMcpTests();
 void RunAiPipelineLive();
 void RunSpeechInterruptionTests();
 void RunInvestigationTests();

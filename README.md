@@ -22,6 +22,7 @@ The design rule: **one Revia**. Reflex, Fast, Main, and Expert share one identit
 | Windows SAPI voice fallback | **Verified live** | Used automatically when Qwen is not installed or not ready |
 | Kokoro fallback voice (opt-in) | **Tested** | Speaks a phrase Qwen could not, before SAPI; the worker contract and the hand-off are covered by tests, not yet heard in a live session |
 | A brain on call: cloud advisor (opt-in) | **Tested** | A redacted brief to Claude or an OpenAI-compatible service, its notes into her prompt as input; covered end to end against a fake advisor, not yet run against a live API |
+| MCP tools with pinned manifests (opt-in) | **Tested** | Tools on MCP servers as typed actions through the same policy, confirmation and audit; a manifest pins each tool's description and risk; covered against a fake server and a fake stdio server through the bridge, not yet run against a real one |
 | Speech recognition (push-to-talk and hands-free) | **Verified live** | whisper.cpp on GPU, ~0.3–1.0 s per utterance |
 | Web lookups in a visible browser | **Verified live** | Shows query and sources; ~11 s per lookup |
 | Quarantined page reading with citations | **Tested** | Fetched pages go to a reader with no tools; only its checked findings reach her prompt, and the reply carries the lookup's own addresses as sources. Covered through a real session against a fake page with an injected instruction |
@@ -330,6 +331,7 @@ Type these in Chat or the CLI. `/help` lists everything, including direct file a
 |---|---|
 | `/status`, `/backend`, `/resources`, `/models` | Models, services, placement, hardware state |
 | `/advisor`, `/advisor on\|off\|auto\|ask\|never`, `/consult <question>` | The cloud advisor: what it is and what it has cost this session, the session switch, when it is consulted, one question taken to it now |
+| `/skills`, `/skills connect\|pin\|on\|off <server>` | MCP servers and their tools: what is offered and why the rest is not; connect one; pin its tools as they are now; enable or disable it |
 | `/perception`, `/perception pause`, `resume`, `forget` | Screen awareness state and control |
 | `/history <words>`, `/history forget` | Search or clear conversation history |
 | `/stream status`, `/stream kill <reason>`, `/stream resume` | The live-audience kill switch: stops speech, drops queued public messages, holds every public reply and sets the avatar phase to `brb` until resumed |
@@ -437,6 +439,10 @@ The local brains write every word she says. For the turns a 4B model handles bad
 When she consults is a rule, never the small model's opinion of its own difficulty (Anthropic's own measurements say a weak executor stops noticing it is stuck). `escalation: "ask"` (the default) consults only when you say so: "ask Claude why this deadlocks", "check with the advisor", or `/consult <question>`. `"auto"` also consults on a code listing, a request for a plan, a design or a comparison, a question about something newer than the local model (a recent year, "the latest version"), a long pasted document, or a follow-up to an answer that went wrong; short and ordinary turns stay local. A public audience (Discord, a stream) never consults. `share: "question"` sends the question and the date; `"conversation"` adds the last few turns, each cut to 600 characters and withheld outright when it carries a credential (the same detector that keeps secrets out of her memory), and `C:\Users\<name>\` loses the account name. A question that itself carries a key is refused before anything is sent. `sessionBudgetTurns` caps consults per session, `/advisor status` shows the count, characters and tokens so far, and `/advisor off` stops it for the session.
 
 Cost, at Opus 5.5 prices: a typical consult is under two cents; a session that hits the default budget of 100 is a dollar or three.
+
+### Tools on MCP servers (opt-in)
+
+Anything with an MCP server (OBS, Home Assistant, Playwright, your own) can be a tool she uses, and it is used exactly as everything else she does: a typed action (`mcp_tool`) that passes capability policy, asks for confirmation when its risk says so, and is written to the audit log. Two things keep it hers rather than the server's. She never starts a server: a manifest under `Config\Skills\` names an HTTP endpoint you run (most servers speak stdio, so `node Tools\Mcp\bridge.mjs` exposes them on loopback). And every tool is **pinned**: the manifest holds a SHA-256 of the description and schema as you saw them and the risk you assigned; at every connection the live list is compared, a tool that changed, disappeared or was never pinned is not offered, and the planner only ever sees the pinned text. `/skills pin obs` is the one act of trust, and it pins every new tool at `destructive`, which asks every time until you lower it in the manifest. The client speaks `initialize`, `tools/list` and `tools/call` and nothing else, so a server cannot ask her for anything. `Config\capabilities.json` → `"mcp": {"enabled": true}` turns it on; [Tools/Mcp/README.md](Tools/Mcp/README.md) has the steps and the example manifests.
 
 ### Voice speed: what to expect
 

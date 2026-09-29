@@ -53,7 +53,10 @@ public:
         DeltaHandler onDelta = {},
         bool deepReasoning = false,
         revia::llm::PrivateMemoryAccess memoryAccess = revia::llm::PrivateMemoryAccess::ProfileSetting) const;
-    responseOutput GenerateActionProposal(const std::string& userRequest) const;
+    // `toolCatalog`: the MCP tools the planner may name, with their pinned
+    // descriptions (Skills/mcpRegistry.h), or empty when none is offered.
+    responseOutput GenerateActionProposal(
+        const std::string& userRequest, const std::string& toolCatalog = {}) const;
     responseOutput ReviewConversationReply(
         const std::string& userInput,
         const std::string& candidateReply,

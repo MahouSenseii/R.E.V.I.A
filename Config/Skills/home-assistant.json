@@ -1,0 +1,9 @@
+{
+  "id": "home-assistant",
+  "enabled": false,
+  "transport": {
+    "kind": "http",
+    "url": "http://127.0.0.1:8760/home-assistant"
+  },
+  "tools": []
+}

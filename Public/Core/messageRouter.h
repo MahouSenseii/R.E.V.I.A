@@ -38,7 +38,8 @@ public:
     // The saved memories related to `query`, for work that happens before the reply's
     // own prompt is built -- the self-inquiry.
     std::string RelatedMemories(const std::string& query, std::stop_token stopToken = {}) const;
-    responseOutput PlanAction(const std::string& request) const;
+    // `toolCatalog`: the MCP tools the planner may name (Skills/mcpRegistry.h).
+    responseOutput PlanAction(const std::string& request, const std::string& toolCatalog = {}) const;
     // A review of her own code. Expert when it can be had -- loaded on demand if it is
     // managed that way -- because this is the hardest reading she does and nobody is
     // waiting on it; Main otherwise.

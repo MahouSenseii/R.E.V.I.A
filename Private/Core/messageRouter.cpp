@@ -332,7 +332,7 @@ void messageRouter::SetReplyNote(std::string note)
     if (expertConfigured) expertLlm.SetReplyNote(std::move(note));
 }
 
-responseOutput messageRouter::PlanAction(const std::string& request) const
+responseOutput messageRouter::PlanAction(const std::string& request, const std::string& toolCatalog) const
 {
     if (request.empty())
     {
@@ -343,7 +343,7 @@ responseOutput messageRouter::PlanAction(const std::string& request) const
         output.bShouldSpeak = false;
         return output;
     }
-    return llm.GenerateActionProposal(request);
+    return llm.GenerateActionProposal(request, toolCatalog);
 }
 
 responseOutput messageRouter::ReviewConversationReply(

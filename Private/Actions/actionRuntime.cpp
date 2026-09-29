@@ -3,6 +3,8 @@
 #include "Filesystem/fileSystemExecutor.h"
 #include "Internet/internetSearchExecutor.h"
 #include "Internet/visibleBrowserClient.h"
+#include "Core/runtimePath.h"
+#include "Skills/mcpToolExecutor.h"
 #include "Windows/desktopControlExecutor.h"
 #include "Windows/windowsAutomationExecutor.h"
 
@@ -56,7 +58,20 @@ bool ActionRuntime::InitializeUnlocked(
     }
 
     policy = std::make_unique<policy::CapabilityPolicy>(settings);
+    // The manifests are read now; no server is contacted until a tool is asked for
+    // or /skills connect names it, and none is ever started from here.
+    mcpRegistry = std::make_shared<skills::McpRegistry>();
+    if (settings.mcp.enabled)
+    {
+        mcpRegistry->Load(core::ResolveRuntimePath(settings.mcp.manifestDirectory));
+    }
+    policy->SetMcpToolResolver(
+        [registry = mcpRegistry](const std::string& server, const std::string& tool, std::string& reason)
+        {
+            return registry->ResolveTool(server, tool, reason);
+        });
     dispatcher.Clear();
+    dispatcher.Register(std::make_unique<skills::McpToolExecutor>(mcpRegistry));
     desktopRateLimiter.Configure(
         settings.maxDesktopActionsPerMinute,
         settings.minimumDesktopActionIntervalMs,
@@ -460,6 +475,17 @@ void ActionRuntime::CancelActiveInternet()
     // Deliberately do not acquire `mutex`: Execute() owns it for the full synchronous
     // request, and cancellation exists specifically to interrupt that wait.
     if (internetCancellation) internetCancellation->CancelActive();
+}
+
+} // namespace revia::actions
+
+namespace revia::actions
+{
+
+std::shared_ptr<skills::McpRegistry> ActionRuntime::Mcp() const
+{
+    std::lock_guard lock(mutex);
+    return mcpRegistry;
 }
 
 } // namespace revia::actions

@@ -203,6 +203,23 @@ bool PermissionStore::Load(
             }
         }
 
+        if (data.contains("mcp"))
+        {
+            const json& mcp = data["mcp"];
+            if (!mcp.is_object())
+            {
+                outError = "mcp must be an object.";
+                return false;
+            }
+            settings.mcp.enabled = mcp.value("enabled", false);
+            settings.mcp.manifestDirectory = mcp.value("manifestDirectory", "Config/Skills");
+            if (settings.mcp.manifestDirectory.empty())
+            {
+                outError = "mcp.manifestDirectory must name a directory.";
+                return false;
+            }
+        }
+
         if (data.contains("camera"))
         {
             const json& camera = data["camera"];

@@ -37,7 +37,11 @@ enum class ActionType
     ScrollPointer,
     PressKeys,
     TypeText,
-    WebSearch
+    WebSearch,
+    // A tool on an MCP server the owner wrote a manifest for (Skills/mcpManifest.h):
+    // value names it as "<server>/<tool>", arguments carries its JSON object. Its
+    // risk is whatever the manifest pinned, never what the server or the planner says.
+    McpTool
 };
 
 // How much is actually known about what a pointer action is aimed at.
@@ -298,6 +302,8 @@ struct ActionRequest
     std::string windowTitle;
     std::string control;
     std::string value;
+    // A JSON object, as text: the arguments of an MCP tool call. Empty otherwise.
+    std::string arguments;
     // Present only after the vision-to-UIA resolver has produced a typed element
     // reference. Execution re-finds this exact runtime id and fails closed if it changed.
     ElementResolutionEvidence resolution;
@@ -403,6 +409,15 @@ struct CapabilitySettings
         bool quarantinedReader = true;
         // How much page text the reader is handed in one lookup, across its sources.
         int readerMaximumCharacters = 12000;
+    };
+
+    // MCP servers, by manifest. Off until the owner turns it on; with it on, only a
+    // server with a manifest in the directory, enabled there, with its tools pinned,
+    // can be reached, and Revia never launches one.
+    struct McpAccess
+    {
+        bool enabled = false;
+        std::string manifestDirectory = "Config/Skills";
     };
 
     // The camera is the most physically invasive thing this application can reach, so it
@@ -524,6 +539,7 @@ struct CapabilitySettings
     int maxDesktopActionsPerMinute = 12;
     int minimumDesktopActionIntervalMs = 250;
     InternetAccess internet;
+    McpAccess mcp;
     CameraAccess camera;
     DesktopControl desktopControl;
 };

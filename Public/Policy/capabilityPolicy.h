@@ -3,6 +3,7 @@
 #include "Actions/actionTypes.h"
 
 #include <filesystem>
+#include <functional>
 #include <optional>
 #include <string>
 #include <vector>
@@ -20,6 +21,13 @@ public:
 
     [[nodiscard]] const actions::CapabilitySettings& Settings() const;
 
+    // Where an MCP tool's pinned risk comes from: the registry, through the runtime.
+    // Without one every MCP tool is blocked, which is what a goal's scoped policy gets
+    // and what the runtime gets before its registry is loaded.
+    using McpToolResolver = std::function<std::optional<actions::RiskLevel>(
+        const std::string& server, const std::string& tool, std::string& outReason)>;
+    void SetMcpToolResolver(McpToolResolver resolver);
+
 private:
     [[nodiscard]] std::filesystem::path ResolveForPolicy(
         const std::filesystem::path& value) const;
@@ -34,6 +42,7 @@ private:
     actions::CapabilitySettings settings;
     std::vector<std::filesystem::path> lexicalRoots;
     std::vector<std::filesystem::path> canonicalRoots;
+    McpToolResolver mcpToolResolver;
 };
 
 } // namespace revia::policy

@@ -1,0 +1,19 @@
+{
+  "port": 8760,
+  "token": "",
+  "servers": {
+    "obs": {
+      "command": "npx",
+      "args": ["-y", "obs-mcp@latest"],
+      "env": { "OBS_WEBSOCKET_URL": "ws://127.0.0.1:4455", "OBS_WEBSOCKET_PASSWORD": "" }
+    },
+    "home-assistant": {
+      "command": "npx",
+      "args": ["-y", "mcp-remote@latest", "http://homeassistant.local:8123/mcp_server/sse", "--header", "Authorization: Bearer ${HOME_ASSISTANT_TOKEN}"]
+    },
+    "playwright": {
+      "command": "npx",
+      "args": ["-y", "@playwright/mcp@latest", "--headless"]
+    }
+  }
+}

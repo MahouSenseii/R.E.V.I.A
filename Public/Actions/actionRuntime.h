@@ -9,6 +9,7 @@
 #include "Policy/desktopAuthorization.h"
 #include "Policy/desktopInputGuard.h"
 #include "Policy/permissionStore.h"
+#include "Skills/mcpRegistry.h"
 
 #include <filesystem>
 #include <functional>
@@ -133,6 +134,9 @@ public:
     // Lock-free with respect to Execute(): shutdown must be able to interrupt a browser
     // request while that request owns the main action-runtime mutex.
     void CancelActiveInternet();
+    // The MCP servers the manifests name, loaded with the capabilities. Null before
+    // Initialize, and empty when mcp is off or the directory holds nothing.
+    [[nodiscard]] std::shared_ptr<skills::McpRegistry> Mcp() const;
 
 private:
     // Called under mutex. Cancellation is checked after the observer callback,
@@ -153,6 +157,7 @@ private:
     policy::PermissionStore permissionStore;
     policy::CapabilityEditor capabilityEditor;
     std::unique_ptr<policy::CapabilityPolicy> policy;
+    std::shared_ptr<skills::McpRegistry> mcpRegistry;
     std::shared_ptr<internet::VisibleBrowserCancellation> internetCancellation;
     ActionDispatcher dispatcher;
     std::unique_ptr<audit::ActionAuditLogger> auditLogger;

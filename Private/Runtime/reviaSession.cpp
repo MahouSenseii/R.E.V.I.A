@@ -9455,6 +9455,68 @@ bool ReviaSession::TryHandleActionInput(const std::string& input, SessionResult&
         return true;
     }
 
+    if (input == "/skills" || input.rfind("/skills ", 0) == 0)
+    {
+        const std::string argument = input.size() > 7 ? Trim(input.substr(7)) : std::string();
+        const auto mcp = actionRuntime.Mcp();
+        if (!mcp || !actionRuntime.Settings().mcp.enabled)
+        {
+            result.succeeded = false;
+            result.text = "MCP tools are off. Set \"mcp\": {\"enabled\": true} in Config/capabilities.json "
+                          "and write a manifest for each server under Config/Skills/ (see the ones there).";
+            result.reason = "MCP is disabled in capability settings.";
+            SetState(RuntimeState::Blocked, result.reason);
+            return true;
+        }
+        const std::size_t space = argument.find(' ');
+        const std::string verb = argument.substr(0, space);
+        const std::string serverId = space == std::string::npos ? std::string() : Trim(argument.substr(space + 1));
+        std::string error;
+        if (verb == "connect" || verb == "pin" || verb == "on" || verb == "off")
+        {
+            if (serverId.empty())
+            {
+                result.succeeded = false;
+                result.text = "Usage: /skills " + verb + " <server id>";
+                result.reason = "No server named.";
+                SetState(RuntimeState::Blocked, result.reason);
+                return true;
+            }
+            const bool done = verb == "connect" ? mcp->Connect(serverId, error)
+                : verb == "pin" ? mcp->Pin(serverId, error)
+                : mcp->SetEnabled(serverId, verb == "on", error);
+            if (!done)
+            {
+                result.succeeded = false;
+                result.text = "Could not " + verb + " " + serverId + ": " + error;
+                result.reason = error;
+                SetState(RuntimeState::Blocked, result.reason);
+                return true;
+            }
+            PublishComponent("Skills", verb == "pin" ? "Pinned" : verb == "connect" ? "Connected"
+                : verb == "on" ? "Enabled" : "Disabled", serverId);
+            result.text = (verb == "pin"
+                ? "Pinned " + serverId + "'s tools as they are now; new ones ask for confirmation "
+                  "until their risk is set in the manifest.\n"
+                : verb == "connect" ? "Connected to " + serverId + ".\n"
+                : verb == "on" ? "Enabled " + serverId + ".\n" : "Disabled " + serverId + ".\n") +
+                mcp->Describe();
+            SetState(RuntimeState::Idle);
+            return true;
+        }
+        if (!argument.empty() && argument != "status")
+        {
+            result.succeeded = false;
+            result.text = "Usage: /skills [status|connect <id>|pin <id>|on <id>|off <id>]";
+            result.reason = "Unrecognized skills argument.";
+            SetState(RuntimeState::Blocked, result.reason);
+            return true;
+        }
+        result.text = mcp->Describe();
+        SetState(RuntimeState::Idle);
+        return true;
+    }
+
     if (input == "/consult" || input.rfind("/consult ", 0) == 0)
     {
         // Reached only without a question or without an advisor: with both, the turn
@@ -10588,7 +10650,10 @@ bool ReviaSession::TryHandleActionInput(const std::string& input, SessionResult&
         }
 
         SetState(RuntimeState::Thinking, "Planning a constrained action.");
-        const responseOutput proposal = router.PlanAction(input.substr(6));
+        // The MCP tools the planner may name: the pinned catalog, nothing a server said.
+        const auto mcp = actionRuntime.Mcp();
+        const responseOutput proposal = router.PlanAction(
+            input.substr(6), mcp ? mcp->PlannerCatalog() : std::string{});
         if (!proposal.bSuccess)
         {
             result.succeeded = false;

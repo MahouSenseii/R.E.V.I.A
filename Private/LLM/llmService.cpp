@@ -249,7 +249,8 @@ responseOutput llmService::GenerateResponse(
     }
 }
 
-responseOutput llmService::GenerateActionProposal(const std::string& userRequest) const
+responseOutput llmService::GenerateActionProposal(
+    const std::string& userRequest, const std::string& toolCatalog) const
 {
     if (!bIsReady)
     {
@@ -279,7 +280,7 @@ responseOutput llmService::GenerateActionProposal(const std::string& userRequest
                 output.bShouldSpeak = false;
                 return output;
             }
-            return llamaCpp.GenerateActionProposal(userRequest);
+            return llamaCpp.GenerateActionProposal(userRequest, toolCatalog);
         }
         case llmBackendType::Placeholder:
         {

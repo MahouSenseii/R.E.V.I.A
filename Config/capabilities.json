@@ -70,5 +70,9 @@
     "searxngPort": 8888,
     "providerKeyName": "",
     "providerKeyEnvironmentVariable": ""
+  },
+  "mcp": {
+    "enabled": false,
+    "manifestDirectory": "Config/Skills"
   }
 }

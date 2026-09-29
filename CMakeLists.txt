@@ -381,6 +381,11 @@ if(BUILD_TESTING)
                 COMMAND "${REVIA_NODE_EXECUTABLE}" --test
                         "${CMAKE_CURRENT_SOURCE_DIR}/Tools/Presence/DiscordVoice/adapter.test.mjs"
         )
+        add_test(
+                NAME Revia.McpBridge
+                COMMAND "${REVIA_NODE_EXECUTABLE}" --test
+                        "${CMAKE_CURRENT_SOURCE_DIR}/Tools/Mcp/bridge.test.mjs"
+        )
     endif()
     find_package(Python3 COMPONENTS Interpreter QUIET)
     if(Python3_Interpreter_FOUND)

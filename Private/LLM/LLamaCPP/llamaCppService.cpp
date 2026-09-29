@@ -1141,7 +1141,8 @@ void llamaCppService::SetStableContext(std::string context)
     activeStableContext = std::move(context);
 }
 
-responseOutput llamaCppService::GenerateActionProposal(const std::string& userRequest) const
+responseOutput llamaCppService::GenerateActionProposal(
+    const std::string& userRequest, const std::string& toolCatalog) const
 {
     // One vocabulary, shared with the goal planner. Hardcoding it here left the
     // natural-language route unable to name actions the parser, the policy, the
@@ -1158,10 +1159,15 @@ responseOutput llamaCppService::GenerateActionProposal(const std::string& userRe
         "requires control. launch_application requires application and may name one file in source. "
         "Pointer actions use integer x and y, drag_pointer also end_x and end_y, scroll_pointer uses "
         "scroll, and button may be left, right, or middle. press_keys uses keys; type_text uses text. "
-        "web_search uses query, which is a search query and never a URL. Never emit shell commands, "
-        "scripts, multiple actions, or explanations. If the request cannot map to one allowed action, "
-        "return {\"action\":\"unknown\",\"reason\":\"brief reason\"}.";
-    return GeneratePlannerResponse(plannerPrompt, userRequest, 256);
+        "web_search uses query, which is a search query and never a URL. " +
+        (toolCatalog.empty()
+            ? std::string("mcp_tool is available only when tools are listed, and none are. ")
+            : "mcp_tool calls one tool of a connected server: it requires server, tool and arguments "
+              "(an object with the tool's argument names). The tools that exist, with what each does "
+              "and its risk, are exactly these and no others:" + toolCatalog + "\n") +
+        "Never emit shell commands, scripts, multiple actions, or explanations. If the request cannot "
+        "map to one allowed action, return {\"action\":\"unknown\",\"reason\":\"brief reason\"}.";
+    return GeneratePlannerResponse(plannerPrompt, userRequest, toolCatalog.empty() ? 256 : 512);
 }
 
 responseOutput llamaCppService::GenerateActivityDraft(

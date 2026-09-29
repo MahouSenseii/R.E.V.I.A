@@ -169,6 +169,50 @@ actions::PolicyDecision CapabilityPolicy::Evaluate(
         decision.reason = "Read-only search approved through the configured bounded provider.";
         return decision;
     }
+    if (request.type == actions::ActionType::McpTool)
+    {
+        // The risk is the manifest's, fetched through the registry; the server, the
+        // planner and the request itself get no say in it. Without a registry -- a goal's
+        // scoped policy, or a runtime before it loaded one -- nothing is admitted.
+        if (!settings.mcp.enabled)
+        {
+            decision.reason = "MCP tools are disabled in capability settings.";
+            return decision;
+        }
+        if (!mcpToolResolver)
+        {
+            decision.reason = "No MCP registry answers for this policy.";
+            return decision;
+        }
+        const std::size_t slash = request.value.find('/');
+        if (slash == std::string::npos || slash == 0 || slash + 1 >= request.value.size())
+        {
+            decision.reason = "An MCP tool is named as <server>/<tool>.";
+            return decision;
+        }
+        if (request.arguments.size() > 16384)
+        {
+            decision.reason = "MCP tool arguments are limited to 16 KiB.";
+            return decision;
+        }
+        std::string reason;
+        const std::optional<actions::RiskLevel> risk = mcpToolResolver(
+            request.value.substr(0, slash), request.value.substr(slash + 1), reason);
+        if (!risk)
+        {
+            decision.reason = reason.empty() ? "The MCP tool is not offered." : reason;
+            return decision;
+        }
+        decision.risk = *risk;
+        decision.verdict = *risk <= automaticCeiling
+            ? actions::PolicyVerdict::Allowed
+            : actions::PolicyVerdict::RequiresConfirmation;
+        decision.reason = decision.verdict == actions::PolicyVerdict::Allowed
+            ? "MCP tool " + request.value + " admitted at its pinned " + actions::ToString(*risk) + " risk."
+            : "MCP tool " + request.value + " is pinned at " + actions::ToString(*risk) +
+                " risk and needs confirmation.";
+        return decision;
+    }
     if (actions::IsDesktopControlAction(request.type))
     {
         using InputScope = actions::CapabilitySettings::DesktopControl::InputScope;
@@ -691,6 +735,16 @@ bool CapabilityPolicy::HasReparsePointBelowApprovedRoot(
         }
     }
     return false;
+}
+
+} // namespace revia::policy
+
+namespace revia::policy
+{
+
+void CapabilityPolicy::SetMcpToolResolver(McpToolResolver resolver)
+{
+    mcpToolResolver = std::move(resolver);
 }
 
 } // namespace revia::policy

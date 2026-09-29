@@ -1,0 +1,9 @@
+{
+  "id": "obs",
+  "enabled": false,
+  "transport": {
+    "kind": "http",
+    "url": "http://127.0.0.1:8760/obs"
+  },
+  "tools": []
+}

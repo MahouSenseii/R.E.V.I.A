@@ -57,6 +57,7 @@ std::string ToString(ActionType value)
         case ActionType::PressKeys: return "press_keys";
         case ActionType::TypeText: return "type_text";
         case ActionType::WebSearch: return "web_search";
+        case ActionType::McpTool: return "mcp_tool";
         case ActionType::Unknown:
         default: return "unknown";
     }
@@ -259,6 +260,8 @@ ActionType ActionTypeFromString(const std::string& value)
     if (normalized == "type_text" || normalized == "type") return ActionType::TypeText;
     if (normalized == "web_search" || normalized == "search_web")
         return ActionType::WebSearch;
+    if (normalized == "mcp_tool" || normalized == "call_tool" || normalized == "use_tool")
+        return ActionType::McpTool;
     return ActionType::Unknown;
 }
 
@@ -293,7 +296,7 @@ const std::vector<ActionType>& AllActionTypes()
         ActionType::SetControlText, ActionType::InvokeControl,
         ActionType::LaunchApplication, ActionType::MoveCursor, ActionType::ClickPointer,
         ActionType::DragPointer, ActionType::ScrollPointer, ActionType::PressKeys,
-        ActionType::TypeText, ActionType::WebSearch};
+        ActionType::TypeText, ActionType::WebSearch, ActionType::McpTool};
     return types;
 }
 
@@ -356,6 +359,9 @@ RiskLevel RiskForAction(ActionType value)
         case ActionType::PressKeys:
         case ActionType::TypeText:
             return RiskLevel::ReversibleWrite;
+        // Destructive on its own: the policy replaces this with the risk the tool's
+        // manifest pinned, and a tool no manifest knows keeps the ceiling.
+        case ActionType::McpTool:
         case ActionType::Unknown:
         default:
             return RiskLevel::Destructive;
