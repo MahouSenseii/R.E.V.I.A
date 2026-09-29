@@ -271,6 +271,13 @@ private:
     // batch that could not run, so the two paths cannot drift apart in what they
     // publish or in how they account for a phrase still being generated.
     void SynthesizeOne(Utterance utterance, int depth);
+    // The settings the fallback voice worker runs under: a Qwen worker's contract,
+    // pointed at the Kokoro script, port and environment, on the CPU, with the
+    // configured Kokoro voice on its command line.
+    static speechSettings FallbackVoiceSettings(const speechSettings& settings);
+    // Gives a phrase Qwen could not voice to the fallback worker. True when it took it;
+    // otherwise the item keeps a failure that names both attempts.
+    bool VoiceWithFallback(const Utterance& utterance, PreparedUtterance& item, int depth);
     // Attempts one generation call covering the whole group, in order.
     //
     // False means nothing was published and the caller must fall back to synthesizing
@@ -332,6 +339,10 @@ private:
     // whether it is heard, and it is deliberately not the model's to overrule.
     VocalizationPolicy vocalizationPolicy;
     QwenTtsPool qwenPool;
+    // Kokoro, for the phrase that finds every Qwen worker down. One client, one
+    // process, its own port; never in the pool, because it is not her voice.
+    QwenTtsClient fallbackVoice;
+    std::jthread fallbackWarmup;
     VoiceActivityMonitor bargeInMonitor;
     std::function<void()> bargeInHandler;
     std::jthread worker;

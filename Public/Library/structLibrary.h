@@ -286,6 +286,21 @@ struct speechSettings
     std::string qwenServiceScript = "Tools/qwen_tts_service.py";
     std::string qwenHost = "127.0.0.1";
     int qwenPort = 8092;
+    // Appended verbatim to every Qwen worker's command line, after the arguments
+    // Revia builds, the way llm.serverArguments reaches llama-server.
+    std::string qwenWorkerArguments;
+    // A second voice for when every Qwen worker is down or its card is full: Kokoro-82M
+    // (Tools/kokoro_tts_service.py) on the same HTTP contract, on its own port and its
+    // own CPU-only Python environment, so it needs nothing the Qwen workers need. A
+    // phrase Qwen could not voice goes to it before Windows SAPI. Off until
+    // Tools/InstallKokoro.ps1 has installed the environment and turned it on. The
+    // voice is a Kokoro voice id; it cannot clone hers, so it is a stand-in, named as
+    // such in the Activity panel.
+    bool bFallbackVoiceEnabled = false;
+    std::string fallbackVoiceScript = "Tools/kokoro_tts_service.py";
+    std::string fallbackVoicePythonExecutable = "ThirdParty/Kokoro/.venv/Scripts/python.exe";
+    int fallbackVoicePort = 8097;
+    std::string fallbackVoice = "af_heart";
     int qwenStartupTimeoutSeconds = 60;
     int qwenRequestTimeoutSeconds = 600;
     std::string qwenDevice = "auto";

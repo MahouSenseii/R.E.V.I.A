@@ -232,7 +232,19 @@ if (-not $SkipConfigUpdate) {
         $settings.intelligence.expert.enabled = $Profile -eq 'Full'
     }
     $settings.embedding.modelPath = 'Models/nomic-embed-text-v1.5.Q4_K_M.gguf'
-    $settings.speechRecognition.modelPath = 'Models/ggml-distil-small.en.bin'
+    if ($Profile -eq 'Large') {
+        # Whisper large-v3-turbo hears any language and works out which one; "auto"
+        # is what lets a song title in Japanese or a friend speaking Spanish be
+        # understood. Slower than distil-small.en on the same card (how much is
+        # unmeasured here), which is why only the opt-in profile pays for it. Put
+        # the two lines below back to distil-small.en and "en" for English only.
+        $settings.speechRecognition.modelPath = 'Models/ggml-large-v3-turbo.bin'
+        Set-ReviaSetting -Object $settings.speechRecognition -Name 'language' -Value 'auto'
+    } else {
+        $settings.speechRecognition.modelPath = 'Models/ggml-distil-small.en.bin'
+        # An English-only model with "auto" left over from Large would refuse to start.
+        Set-ReviaSetting -Object $settings.speechRecognition -Name 'language' -Value 'en'
+    }
     Save-ReviaJsonFile -Path $settingsPath -Value $settings
     Write-Host 'Updated Config/settings.json to the verified runtime stack.'
 }

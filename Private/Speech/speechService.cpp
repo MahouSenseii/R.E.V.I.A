@@ -31,6 +31,19 @@ namespace
     }
 
     constexpr const char* WindowsSapiResource = "CPU / Windows SAPI";
+    constexpr const char* FallbackVoiceResource = "CPU / Kokoro";
+
+    // A Kokoro voice id goes onto a command line, so it is letters, digits, '_' and '-'
+    // or it is the default. Nothing else is a voice.
+    std::string SafeFallbackVoiceId(const std::string& voice)
+    {
+        const bool plain = !voice.empty() && std::all_of(voice.begin(), voice.end(),
+            [](const unsigned char character)
+            {
+                return std::isalnum(character) || character == '_' || character == '-';
+            });
+        return plain ? voice : std::string("af_heart");
+    }
 
     std::string PlannedQwenResource(const speechSettings& settings)
     {
@@ -244,6 +257,7 @@ bool SpeechService::Start(const speechSettings& settings, EventHandler handler)
         configuration = settings;
         presetStore.SetRoot(settings.voiceDataPath);
         qwenPool.Configure(settings);
+        fallbackVoice.Configure(FallbackVoiceSettings(settings));
         const std::string assigned = presetStore.AssignedPresetId(activeProfile);
         SetActiveVoiceLocked(assigned.empty() ? std::nullopt : presetStore.Find(assigned));
         eventHandler = std::move(handler);
@@ -267,6 +281,63 @@ bool SpeechService::Start(const speechSettings& settings, EventHandler handler)
             [this](const std::stop_token stopToken) { Generate(stopToken); });
     }
     worker = std::jthread([this](const std::stop_token stopToken) { Run(stopToken); });
+    if (settings.bFallbackVoiceEnabled)
+    {
+        // Brought up now rather than at the first failure, so the phrase that finds the
+        // Qwen workers down does not also wait for Kokoro to start.
+        fallbackWarmup = std::jthread(
+            [this, voice = SafeFallbackVoiceId(settings.fallbackVoice)](const std::stop_token stopToken)
+            {
+                std::string detail;
+                const bool available = fallbackVoice.IsAvailable(detail);
+                if (stopToken.stop_requested()) return;
+                Notify({"Fallback",
+                    available
+                        ? "Kokoro fallback voice is ready (" + voice +
+                            "); it speaks when Qwen3-TTS cannot."
+                        : "Kokoro fallback voice is unavailable: " + detail +
+                            " Windows SAPI remains the last resort.",
+                    -1.0, 0, 0, FallbackVoiceResource});
+            });
+    }
+    return true;
+}
+
+speechSettings SpeechService::FallbackVoiceSettings(const speechSettings& settings)
+{
+    speechSettings fallback = settings;
+    fallback.qwenServiceScript = settings.fallbackVoiceScript;
+    fallback.pythonExecutable = settings.fallbackVoicePythonExecutable;
+    fallback.qwenPort = settings.fallbackVoicePort;
+    // CPU on purpose: this voice exists for the moment the card is full or its worker
+    // is dead, so it must need neither. Kokoro is faster than real time there.
+    fallback.qwenDevice = "cpu";
+    fallback.qwenDevices = {"cpu"};
+    fallback.bQwenLowLatencyPhrase = false;
+    fallback.qwenWorkerArguments = "--voice " + SafeFallbackVoiceId(settings.fallbackVoice);
+    return fallback;
+}
+
+bool SpeechService::VoiceWithFallback(
+    const Utterance& utterance,
+    PreparedUtterance& item,
+    const int depth)
+{
+    if (!configuration.bFallbackVoiceEnabled || !utterance.preset.has_value()) return false;
+    if (!configuration.bQwenDirectPcm && item.audioPath.empty()) return false;
+    const std::string qwenFailure = item.result.message;
+    Notify({"Fallback",
+        "Qwen3-TTS could not voice the phrase (" + qwenFailure +
+            ") so Kokoro is speaking it in its stand-in voice.",
+        -1.0, depth, utterance.utteranceId, FallbackVoiceResource});
+    item.result = configuration.bQwenDirectPcm
+        ? fallbackVoice.SynthesizePcm(utterance.text, *utterance.preset)
+        : fallbackVoice.Synthesize(utterance.text, *utterance.preset, item.audioPath.string());
+    if (!item.result.succeeded)
+    {
+        item.result.message = qwenFailure + " Kokoro: " + item.result.message;
+        return false;
+    }
     return true;
 }
 
@@ -326,6 +397,7 @@ VoiceOperationResult SpeechService::RenderAdapterSpeech(const std::string& text)
 {
     std::optional<VoicePreset> preset;
     std::size_t maximumCharacters = 0;
+    bool fallbackAllowed = false;
     {
         std::lock_guard lock(mutex);
         if (!enabled.load() || configuration.backend == "WindowsSapi" || !activePreset)
@@ -334,10 +406,20 @@ VoiceOperationResult SpeechService::RenderAdapterSpeech(const std::string& text)
         }
         preset = activePreset;
         maximumCharacters = static_cast<std::size_t>(std::clamp(configuration.maxCharacters, 1, 5000));
+        fallbackAllowed = configuration.bFallbackVoiceEnabled;
     }
     const std::string spoken = NormalizeForSpeech(text, maximumCharacters);
     if (spoken.empty()) return {false, "The public reply contained no speakable text.", {}, 0.0};
     auto result = qwenPool.SynthesizePcm(spoken, *preset, false);
+    if (!result.succeeded && fallbackAllowed && enabled.load())
+    {
+        // A call or a stream would rather hear the stand-in voice than a dropped reply.
+        const std::string qwenFailure = result.message;
+        Notify({"Fallback", "Qwen3-TTS could not voice the public reply (" + qwenFailure +
+            ") so Kokoro is speaking it in its stand-in voice.", -1.0, 0, 0, FallbackVoiceResource});
+        result = fallbackVoice.SynthesizePcm(spoken, *preset);
+        if (!result.succeeded) result.message = qwenFailure + " Kokoro: " + result.message;
+    }
     if (!enabled.load())
         return {false, "Discord voice rendering was muted or stopped.", {}, 0.0};
     return result;
@@ -789,6 +871,7 @@ void SpeechService::DisarmBargeIn()
 void SpeechService::CancelVoiceOperationsForShutdown()
 {
     qwenPool.CancelActiveRequests();
+    fallbackVoice.CancelActiveRequest();
 }
 
 void SpeechService::RequestVoiceShutdown()
@@ -820,6 +903,15 @@ void SpeechService::Shutdown()
     generationWorkers.clear();
     ready.store(false);
     qwenPool.Shutdown();
+    // Closed before the warm-up is joined: a Kokoro still starting is waited on in
+    // 250 ms steps that read the closed flag, so this returns at once instead of at
+    // the startup timeout.
+    fallbackVoice.Shutdown();
+    if (fallbackWarmup.joinable())
+    {
+        fallbackWarmup.request_stop();
+        fallbackWarmup.join();
+    }
 }
 
 SpeechService::AudioLifetime SpeechService::LifetimeOf(const SegmentKind kind)
@@ -1632,6 +1724,10 @@ void SpeechService::SynthesizeOne(Utterance utterance, const int depth)
                     utterance.text, *utterance.preset, item.audioPath.string(),
                     utterance.latencyCritical);
             }
+        }
+        if (!item.result.succeeded)
+        {
+            VoiceWithFallback(utterance, item, depth);
         }
         if (item.result.succeeded)
         {

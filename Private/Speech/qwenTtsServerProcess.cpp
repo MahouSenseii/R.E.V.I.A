@@ -183,6 +183,12 @@ bool QwenTtsServerProcess::Start(
             }
         }
     }
+    // Last, verbatim, like llm.serverArguments: the operator's flags, or the fallback
+    // worker's voice, win over anything above.
+    if (!settings.qwenWorkerArguments.empty())
+    {
+        commandLine += L" " + Utf8ToWide(settings.qwenWorkerArguments);
+    }
     std::vector<wchar_t> mutableCommandLine(commandLine.begin(), commandLine.end());
     mutableCommandLine.push_back(L'\0');
 

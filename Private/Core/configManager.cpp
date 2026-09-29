@@ -461,6 +461,36 @@ bool configManager::LoadSettings(appSettings& outSettings) const
                 outSettings.speech.bThinkingFillerEnabled =
                     speechData["thinkingFillerEnabled"].get<bool>();
             }
+            if (speechData.contains("qwenWorkerArguments"))
+            {
+                outSettings.speech.qwenWorkerArguments =
+                    speechData["qwenWorkerArguments"].get<std::string>();
+            }
+            if (speechData.contains("fallbackVoiceEnabled"))
+            {
+                outSettings.speech.bFallbackVoiceEnabled =
+                    speechData["fallbackVoiceEnabled"].get<bool>();
+            }
+            if (speechData.contains("fallbackVoiceScript"))
+            {
+                outSettings.speech.fallbackVoiceScript =
+                    speechData["fallbackVoiceScript"].get<std::string>();
+            }
+            if (speechData.contains("fallbackVoicePythonExecutable"))
+            {
+                outSettings.speech.fallbackVoicePythonExecutable =
+                    speechData["fallbackVoicePythonExecutable"].get<std::string>();
+            }
+            if (speechData.contains("fallbackVoicePort"))
+            {
+                outSettings.speech.fallbackVoicePort =
+                    speechData["fallbackVoicePort"].get<int>();
+            }
+            if (speechData.contains("fallbackVoice"))
+            {
+                outSettings.speech.fallbackVoice =
+                    speechData["fallbackVoice"].get<std::string>();
+            }
             if (speechData.contains("qwenPrecomputeVoicePrompt"))
             {
                 outSettings.speech.bQwenPrecomputeVoicePrompt =
@@ -1390,6 +1420,11 @@ bool configManager::LoadSettings(appSettings& outSettings) const
         outSettings.speech.qwenPort < 1 || outSettings.speech.qwenPort > 65535 ||
         outSettings.speech.qwenPort == outSettings.llm.port ||
         outSettings.speech.qwenPort == outSettings.embedding.port ||
+        outSettings.speech.fallbackVoicePort < 1 || outSettings.speech.fallbackVoicePort > 65535 ||
+        outSettings.speech.fallbackVoicePort == outSettings.speech.qwenPort ||
+        outSettings.speech.fallbackVoicePort == outSettings.llm.port ||
+        outSettings.speech.fallbackVoicePort == outSettings.embedding.port ||
+        outSettings.speech.fallbackVoicePort == outSettings.speechRecognition.serverPort ||
         outSettings.speech.qwenStartupTimeoutSeconds < 1 ||
         outSettings.speech.qwenStartupTimeoutSeconds > 300 ||
         outSettings.speech.qwenRequestTimeoutSeconds < 30 ||

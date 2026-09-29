@@ -20,6 +20,7 @@ The design rule: **one Revia**. Reflex, Fast, Main, and Expert share one identit
 | Continuous screen awareness across all monitors | **Verified live** | Local vision analysis every ~30 s or on window change, ~1.0–1.6 s each |
 | Qwen3-TTS cloned voice across two GPUs | **Verified live** | See [Voice speed](#voice-speed-what-to-expect) for real numbers |
 | Windows SAPI voice fallback | **Verified live** | Used automatically when Qwen is not installed or not ready |
+| Kokoro fallback voice (opt-in) | **Tested** | Speaks a phrase Qwen could not, before SAPI; the worker contract and the hand-off are covered by tests, not yet heard in a live session |
 | Speech recognition (push-to-talk and hands-free) | **Verified live** | whisper.cpp on GPU, ~0.3–1.0 s per utterance |
 | Web lookups in a visible browser | **Verified live** | Shows query and sources; ~11 s per lookup |
 | Curiosity, initiative, self-directed reflection | **Verified live** | Logs show think/research/create decisions and when she chooses to stay quiet |
@@ -58,7 +59,7 @@ The design rule: **one Revia**. Reflex, Fast, Main, and Expert share one identit
 
 - **Watch your screens.** She notices what you are doing across every monitor, with no "Analyze screen" button. Screenshots are deleted immediately; only a short summary stays in memory. Text on screen is treated as information, never as instructions.
 - **Listen.** Hold **Ctrl+Space** (or the mic button) to talk, or turn on **Hands-free local conversation** in the Presence tab. Hands-free answers only when you say "Revia" or reply within 20 seconds of talking with her (`speechRecognition.requireWakeWord`, `wakeWords`, `followUpSeconds`). She waits for the rest of a thought that trails off: a transcript ending on "and", "um", a comma or an ellipsis holds the microphone open for `speechRecognition.continuationWindowMs` (900 ms) more and the rest is appended before she answers, while "okay" or a finished question is answered at the first silence. When she stops to think about a real question she makes her own "hmm" from the voice's clip bank (`speech.thinkingFillerEnabled`), at most once a turn and not twice within 45 seconds.
-- **Speak in her own voice.** Qwen3-TTS starts speaking after the first complete sentence and spreads later sentences across both GPUs. Windows SAPI is the fallback.
+- **Speak in her own voice.** Qwen3-TTS starts speaking after the first complete sentence and spreads later sentences across both GPUs. A phrase a Qwen worker cannot voice goes to Kokoro (opt-in, `.\Tools\InstallKokoro.ps1`), which speaks it in a stand-in voice on the CPU, and to Windows SAPI after that.
 - **Be interrupted.** Start talking while she speaks and she stops.
 - **Look through the camera (optional).** One still frame, only with permission, and the camera light is on only while the frame is taken.
 
@@ -93,7 +94,7 @@ She never gets an unrestricted shell, and model text never becomes a shell comma
 | `Minimal` | ~3.7 GB | Chat, memory, speech recognition. Runs on one modest GPU or CPU. |
 | `Standard` | ~4.4 GB | Minimal + screen vision on the Main model. |
 | `Full` | ~10.7 GB | Everything, including the 8B Expert model. Best with 12 GB+ VRAM total. |
-| `Large` | ~19.2 GB | Opt-in: Standard's stack with a 35B mixture-of-experts Main brain (3B active per token) whose experts live in system RAM. Needs a 12 GB card plus 32 GB+ RAM; see [Bigger brain](#bigger-brain-opt-in). |
+| `Large` | ~20.8 GB | Opt-in: Standard's stack with a 35B mixture-of-experts Main brain (3B active per token) whose experts live in system RAM, and a multilingual recognizer that detects the language. Needs a 12 GB card plus 32 GB+ RAM; see [Bigger brain](#bigger-brain-opt-in). |
 
 Qwen voice adds a ~5 GB Python/PyTorch environment plus ~2–5 GB of voice models downloaded on first use. NVIDIA GPUs get CUDA; AMD/Intel GPUs get Vulkan for the language models; everything can fall back to CPU (slowly). Two GPUs are not required. Leave **30 GB free** for a Full install.
 
@@ -202,6 +203,8 @@ Out of the box she speaks with Windows SAPI. To use her own voice:
 6. Make sure **Speak replies** is on.
 
 Voices are stored in `build\debug\RuntimeData\Voices\`.
+
+**A voice for when hers is down.** `.\Tools\InstallKokoro.ps1` installs Kokoro-82M (Apache-2.0) in its own CPU-only environment under `ThirdParty\Kokoro\` and turns on `speech.fallbackVoiceEnabled`. From then on, a phrase every Qwen worker fails (the card is full, the worker died, the model is still loading) is spoken by Kokoro on port 8097 before Windows SAPI is tried, and the Activity panel says so ("Kokoro is speaking it in its stand-in voice"). It cannot clone her, so it is a stand-in, not her: pick the closest of Kokoro's voices with `-Voice` (`af_heart` by default; `bf_emma`, `jf_alpha` for Japanese, the first letter is the language) or set `speech.fallbackVoice`. The 330 MB model downloads from Hugging Face the first time it is needed. Discord and stream replies use it too rather than dropping the line.
 
 ### 5. Talk to her
 
@@ -356,8 +359,9 @@ Having a file in `Models\` does not mean it is used. This is the live map:
 | Main chat and normal vision | `Qwen3.5-4B-Q4_K_M.gguf` + `mmproj-F16.gguf` | RTX 5070 |
 | Expert conversation/vision | `Qwen3-VL-8B-Instruct-Unredacted-MAX.Q4_K_M.gguf` + Q8 projector | Separate fitted worker |
 | Semantic memory | `nomic-embed-text-v1.5.Q4_K_M.gguf` | CPU |
-| Speech recognition | `ggml-distil-small.en.bin` (fallback `ggml-small.en.bin`) | RTX 2070 Super |
+| Speech recognition | `ggml-distil-small.en.bin` (fallback `ggml-small.en.bin`); `ggml-large-v3-turbo.bin` with language detection on the `Large` profile | RTX 2070 Super |
 | Reply voice | `Qwen3-TTS-12Hz-0.6B-Base` | RTX 5070 (BF16) + RTX 2070 Super (FP32) |
+| Fallback voice (opt-in) | Kokoro-82M (`hexgrad/Kokoro-82M`) | CPU |
 | Voice creation | `Qwen3-TTS-12Hz-1.7B-VoiceDesign` | Loaded only while creating a voice |
 
 The Qwen2.5-Omni and Llama 3.1 8B files that may sit in `Models\` are not used. `/models` shows exactly what is loaded this session.
@@ -372,7 +376,9 @@ The default 4B Main brain is quick and fits beside her voice, and it is also why
 
 How it fits: `llm.serverArguments` is set to `--cpu-moe`, so attention and the shared layers load on the GPU and the expert weights stay in system RAM. That is what lets it share a 12 GB card with Qwen3-TTS, at the cost of speed that depends on your memory bandwidth (the exact tokens-per-second on a mixed pair of cards is unverified). Once you know how much VRAM the voice leaves, `--n-cpu-moe N` in place of `--cpu-moe` keeps the last N expert layers on the GPU and is the knob to turn. `llm.contextSize` goes to 32768 and the automatic fit trims it if it must.
 
-Back to the default: `.\setup.bat -Profile Full` (or `Standard`) rewrites `settings.json` for the 4B; the 35B file stays in `Models\` until you delete it.
+Large also changes what she hears with: `speechRecognition.modelPath` becomes `Models/ggml-large-v3-turbo.bin` (Whisper large-v3-turbo, 1.6 GB, any language) and `speechRecognition.language` becomes `auto`, so she understands a song title in Japanese or a friend who speaks Spanish and works out which language it was. It is slower than the English-only `distil-small.en` on the same card (how much is unmeasured here). Any profile can have it: download it once with `-Profile Large`, then set those two lines by hand; `"language": "ja"` pins one language and skips detection.
+
+Back to the default: `.\setup.bat -Profile Full` (or `Standard`) rewrites `settings.json` for the 4B and the English recognizer; the 35B and the recognizer files stay in `Models\` until you delete them.
 
 Two samplers are hers on llama.cpp: DRY is always on for her own turns (it stops the fluent phrase loops a small model falls into), and XTC is off until you set `llm.xtcProbability` (0.3 is the usual starting point, with `llm.xtcThreshold` 0.1). XTC drops the most predictable wording when several were plausible, which buys character at some cost to precision; neither reaches the memory classifier or a code review, which want the likeliest token.
 

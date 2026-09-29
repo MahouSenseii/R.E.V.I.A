@@ -20,6 +20,34 @@ namespace revia::speech
 struct SpeechServiceTestAccess
 {
     static QwenTtsPool& VoicePool(SpeechService& service) { return service.qwenPool; }
+    static speechSettings& Configuration(SpeechService& service) { return service.configuration; }
+    // Points the fallback voice client where the service would point it from these
+    // settings: the Kokoro script, port and environment, on the CPU.
+    static void ConfigureFallbackVoice(SpeechService& service, const speechSettings& settings)
+    {
+        service.fallbackVoice.Configure(SpeechService::FallbackVoiceSettings(settings));
+    }
+    static speechSettings FallbackVoiceSettings(const speechSettings& settings)
+    {
+        return SpeechService::FallbackVoiceSettings(settings);
+    }
+    static void ObserveEvents(SpeechService& service, SpeechService::EventHandler handler)
+    {
+        std::lock_guard lock(service.mutex);
+        service.eventHandler = std::move(handler);
+    }
+    // The generation result of every prepared phrase, in sequence order.
+    static std::vector<VoiceOperationResult> PreparedResults(SpeechService& service)
+    {
+        std::lock_guard lock(service.mutex);
+        std::vector<VoiceOperationResult> results;
+        for (const auto& [sequence, item] : service.prepared)
+        {
+            (void)sequence;
+            results.push_back(item.result);
+        }
+        return results;
+    }
     static void AssignAdapterTestVoice(SpeechService& service, VoicePreset preset = {})
     {
         service.configuration.bEnabled = true;

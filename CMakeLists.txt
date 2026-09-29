@@ -390,6 +390,11 @@ if(BUILD_TESTING)
                         "${CMAKE_CURRENT_SOURCE_DIR}/Tests/qwenTtsService.test.py"
         )
         add_test(
+                NAME Revia.KokoroTtsService
+                COMMAND "${Python3_EXECUTABLE}"
+                        "${CMAKE_CURRENT_SOURCE_DIR}/Tests/kokoroTtsService.test.py"
+        )
+        add_test(
                 NAME Revia.ImageServicePolicy
                 COMMAND "${Python3_EXECUTABLE}"
                         "${CMAKE_CURRENT_SOURCE_DIR}/Tests/reviaImageService.test.py"

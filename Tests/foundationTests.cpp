@@ -9521,6 +9521,11 @@ int main(const int argc, char** argv)
             RunTurnTakingTests();
             return 0;
         }
+        if (argc > 1 && std::string(argv[1]) == "--fallback-voice")
+        {
+            RunFallbackVoiceTests();
+            return 0;
+        }
         if (argc > 1 && std::string(argv[1]) == "--emotion-live")
         {
             Check(argc == 4, "Usage: --emotion-live <isolated-runtime-directory> <new-report.jsonl>");
@@ -10029,6 +10034,7 @@ int main(const int argc, char** argv)
         RunChatSelectorTests();
         RunStreamingVoiceTests();
         RunTurnTakingTests();
+        RunFallbackVoiceTests();
         std::cout << "All Revia foundation tests passed.\n";
         return 0;
     }

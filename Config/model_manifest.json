@@ -29,6 +29,7 @@
       "main-large",
       "main-large-vision",
       "memory",
+      "stt-multilingual",
       "stt-primary",
       "stt-fallback"
     ]
@@ -163,6 +164,19 @@
       "license": "mit",
       "quantization": "F16",
       "recommendedVramMiB": 1000,
+      "projectorFor": null
+    },
+    {
+      "id": "stt-multilingual",
+      "role": "Multilingual speech recognition with language detection (Large profile)",
+      "file": "ggml-large-v3-turbo.bin",
+      "repository": "ggerganov/whisper.cpp",
+      "revision": "5359861c739e955e79d9a303bcbc70fb988958b1",
+      "sha256": "1fc70f774d38eb169993ac391eea357ef47c88757ef72ee5943879b7e8e2bc69",
+      "bytes": 1624555275,
+      "license": "mit",
+      "quantization": "F16",
+      "recommendedVramMiB": 2000,
       "projectorFor": null
     }
   ]

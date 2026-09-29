@@ -125,6 +125,7 @@ void RunStreamSafetyTests();
 void RunChatSelectorTests();
 void RunStreamingVoiceTests();
 void RunTurnTakingTests();
+void RunFallbackVoiceTests();
 void RunAiPipelineLive();
 void RunSpeechInterruptionTests();
 void RunInvestigationTests();
