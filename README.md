@@ -412,7 +412,7 @@ Measured in ten scripted live sessions on 23 Sep 2026 (RTF is generation time di
 - The first sentence goes to the planner's card until both cards have been measured, then to whichever is measurably faster.
 - A repeated short Reflex phrase ("Okay.") is cached and plays in under 0.1 s.
 
-So the voice is quick per sentence, but long replies are still generated sentence by sentence, and it slows down when a card is also busy with chat or nearly full. The installed Qwen package cannot generate audio incrementally; Revia pipelines complete sentences instead. Benchmarks live in `RuntimeData/Benchmarks/` and [docs/TTS_PERFORMANCE.md](docs/TTS_PERFORMANCE.md).
+So the voice is quick per sentence, but long replies are still generated sentence by sentence, and it slows down when a card is also busy with chat or nearly full. The installed Qwen package cannot generate audio incrementally; Revia pipelines complete sentences instead. The first phrase of a reply now travels as a PCM stream (`/v1/audio/pcm-stream`, `speech.qwenStreamFirstPhrase`), so its first audio is measured where it lands (the `FirstAudioReceived` line in the Activity feed) and a worker that one day decodes as it generates will be played as it produces; with today's worker the stream begins only after generation, so the number it reports is the honest floor rather than an improvement. A worker without the endpoint is fallen back from on the same phrase. Benchmarks live in `RuntimeData/Benchmarks/` and [docs/TTS_PERFORMANCE.md](docs/TTS_PERFORMANCE.md).
 
 ---
 

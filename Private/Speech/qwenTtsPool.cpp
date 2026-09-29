@@ -288,6 +288,47 @@ VoiceOperationResult QwenTtsPool::SynthesizePcm(
     return result;
 }
 
+VoiceOperationResult QwenTtsPool::SynthesizePcmStream(
+    const std::string& text,
+    const VoicePreset& preset,
+    const bool latencyCritical,
+    const QwenTtsClient::ChunkHandler& onChunk)
+{
+    double poolWaitMilliseconds = 0.0;
+    const std::size_t index =
+        AcquireWorker(text.size(), latencyCritical, poolWaitMilliseconds);
+    QwenTtsClient* client = nullptr;
+    std::string id;
+    {
+        std::lock_guard lock(mutex);
+        if (index < workers.size() && !shuttingDown)
+        {
+            client = workers[index].client.get();
+            id = workers[index].id;
+        }
+        else if (index < workers.size())
+        {
+            workers[index].busy = false;
+        }
+    }
+    if (client == nullptr)
+    {
+        condition.notify_all();
+        VoiceOperationResult shuttingDownResult{
+            false, "Qwen3-TTS worker pool is shutting down.", {}, -1.0};
+        shuttingDownResult.workerPoolWaitMilliseconds = poolWaitMilliseconds;
+        return shuttingDownResult;
+    }
+    const auto startedAt = std::chrono::steady_clock::now();
+    VoiceOperationResult result = client->SynthesizePcmStream(text, preset, onChunk);
+    const double wallMilliseconds = std::chrono::duration<double, std::milli>(
+        std::chrono::steady_clock::now() - startedAt).count();
+    result.workerId = id;
+    result.workerPoolWaitMilliseconds = poolWaitMilliseconds;
+    ReleaseWorker(index, text.size(), wallMilliseconds);
+    return result;
+}
+
 std::vector<VoiceOperationResult> QwenTtsPool::SynthesizePcmBatch(
     const std::vector<std::string>& texts,
     const VoicePreset& preset)

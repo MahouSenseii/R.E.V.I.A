@@ -93,6 +93,12 @@ public:
         const std::string& text,
         const VoicePreset& preset,
         bool latencyCritical = false);
+    // The streamed form of the same call, on the worker the pool chooses.
+    VoiceOperationResult SynthesizePcmStream(
+        const std::string& text,
+        const VoicePreset& preset,
+        bool latencyCritical,
+        const QwenTtsClient::ChunkHandler& onChunk = {});
     // One generation call covering several complete phrases, on a single worker.
     //
     // Never latency-critical by construction: the first phrase of a reply is always

@@ -37,6 +37,18 @@ class FakeRuntime:
     def vocalizations(self, request: dict) -> dict:
         return {"succeeded": True, "received": request.get("sentinel")}
 
+    def synthesize_chunks(self, request: dict, request_received=None):
+        # Three chunks, the last one odd-sized, so the client has to carry a byte.
+        del request_received
+        chunks = [b"\x01\x00\x02\x00", b"\x03\x00\x04\x00\x05", b"\x00"]
+        metadata = {"succeeded": True, "sample_rate": 24000, "streaming": "whole",
+                    "elapsed_ms": 12.5, "generation_ms": 10.0, "audio_duration_ms": 0.125,
+                    "device": "cpu", "sentinel": request.get("sentinel")}
+        return metadata, iter(chunks)
+
+    def trim_cache_if_tight(self, minimum_free_mib: int = 1024) -> bool:
+        return False
+
 
 class QwenHandlerTests(unittest.TestCase):
     def test_a_wrong_or_non_ascii_token_is_refused_cleanly(self) -> None:
@@ -59,6 +71,33 @@ class QwenHandlerTests(unittest.TestCase):
                 connection.close()
         finally:
             server.shutdown()
+
+    def test_pcm_stream_endpoint_sends_raw_pcm_without_a_length(self) -> None:
+        token = "test-token"
+        server = ThreadingHTTPServer(
+            ("127.0.0.1", 0), MODULE.make_handler(FakeRuntime(), token))
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            connection = http.client.HTTPConnection(
+                "127.0.0.1", server.server_address[1], timeout=5)
+            connection.request(
+                "POST", "/v1/audio/pcm-stream", json.dumps({"sentinel": "s"}),
+                {"Authorization": f"Bearer {token}", "Content-Type": "application/json"})
+            response = connection.getresponse()
+            body = response.read()
+            self.assertEqual(response.status, 200)
+            self.assertEqual(response.getheader("Content-Type"), "audio/pcm")
+            self.assertIsNone(response.getheader("Content-Length"))
+            self.assertEqual(response.getheader("X-Revia-Sample-Rate"), "24000")
+            self.assertEqual(response.getheader("X-Revia-Streaming"), "whole")
+            self.assertEqual(response.getheader("X-Revia-Channels"), "1")
+            self.assertEqual(response.getheader("X-Revia-Bits-Per-Sample"), "16")
+            self.assertEqual(body, b"\x01\x00\x02\x00\x03\x00\x04\x00\x05\x00")
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=5)
 
     def test_vocalization_endpoint_passes_the_parsed_request(self) -> None:
         token = "test-token"

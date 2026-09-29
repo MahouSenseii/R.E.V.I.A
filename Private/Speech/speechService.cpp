@@ -1581,8 +1581,34 @@ void SpeechService::SynthesizeOne(Utterance utterance, const int depth)
             Notify({"Generating", "Synthesizing the phrase into bounded memory.",
                 -1.0, depth, utterance.utteranceId,
                 PlannedQwenResource(configuration)});
-            item.result = qwenPool.SynthesizePcm(
-                utterance.text, *utterance.preset, utterance.latencyCritical);
+            // The first phrase of a reply arrives as a stream, so its first audio is
+            // measured where it lands rather than inferred from the worker's clock,
+            // and a worker that decodes incrementally is felt the day it exists. A
+            // worker without the endpoint answers with a refusal, and the phrase is
+            // fetched again the old way; the reply is not lost to a missing feature.
+            const bool streamed = utterance.latencyCritical &&
+                configuration.bQwenStreamFirstPhrase;
+            if (streamed)
+            {
+                item.result = qwenPool.SynthesizePcmStream(
+                    utterance.text, *utterance.preset, true);
+                if (item.result.succeeded)
+                {
+                    Notify({"FirstAudioReceived",
+                        "The first phrase's audio began arriving after " +
+                            std::to_string(static_cast<long long>(
+                                item.result.firstChunkMilliseconds)) + " ms (" +
+                            std::to_string(item.result.streamedChunks) + " pieces, " +
+                            (item.result.incrementalAudio ? "decoded as generated" : "sent after generation") + ").",
+                        item.result.firstChunkMilliseconds, depth, utterance.utteranceId,
+                        ActualQwenResource(item.result)});
+                }
+            }
+            if (!streamed || !item.result.succeeded)
+            {
+                item.result = qwenPool.SynthesizePcm(
+                    utterance.text, *utterance.preset, utterance.latencyCritical);
+            }
         }
         else
         {

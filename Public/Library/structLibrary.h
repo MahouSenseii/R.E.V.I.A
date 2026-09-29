@@ -368,6 +368,11 @@ struct speechSettings
     int qwenMaxBatchPhrases = 6;
     int qwenMaxBatchCharacters = 480;
     bool bQwenDirectPcm = true;
+    // The first phrase of a reply is fetched as a PCM stream (/v1/audio/pcm-stream)
+    // rather than one WAV, so its arrival is measured chunk by chunk and a worker that
+    // decodes incrementally is played as it produces. A worker without the endpoint
+    // falls back to the WAV path on the same phrase.
+    bool bQwenStreamFirstPhrase = true;
     bool bQwenPrecomputeVoicePrompt = true;
     std::string qwenAttentionBackend = "adaptive";
     std::string qwenInputMode = "simulated-stream";

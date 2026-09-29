@@ -11,6 +11,9 @@
 #include <optional>
 #include <string>
 #include <vector>
+#include <cstddef>
+#include <cstdint>
+#include <functional>
 
 namespace revia::speech
 {
@@ -82,6 +85,17 @@ public:
     VoiceOperationResult SynthesizePcm(
         const std::string& text,
         const VoicePreset& preset);
+    // Called with each piece of raw 16-bit mono PCM as it arrives. Returning false
+    // abandons the stream. Called on the request thread, never after the call returns.
+    using ChunkHandler = std::function<bool(const std::uint8_t* bytes, std::size_t count)>;
+    // The same phrase as a PCM stream (/v1/audio/pcm-stream). The result carries the
+    // whole audio as a WAV, exactly as SynthesizePcm would, plus how it arrived: the
+    // chunk count and the time to the first one. A worker without the endpoint fails
+    // this call, and the caller falls back to SynthesizePcm.
+    VoiceOperationResult SynthesizePcmStream(
+        const std::string& text,
+        const VoicePreset& preset,
+        const ChunkHandler& onChunk = {});
     // Synthesizes several complete phrases in one generation call.
     //
     // Returns one result per input text, in the order given, or a single failed result

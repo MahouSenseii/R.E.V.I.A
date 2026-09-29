@@ -71,6 +71,13 @@ struct VoiceOperationResult
     double cppResponseMilliseconds = -1.0;
     double audioDurationMilliseconds = -1.0;
     int sampleRate = 0;
+    // For a streamed phrase: how many pieces the audio arrived in, when the first one
+    // landed (the honest first-audio figure, measured at the client), and whether the
+    // worker produced them as it generated or only after. "whole" is what the current
+    // package allows; "incremental" is the change that buys the latency.
+    int streamedChunks = 0;
+    double firstChunkMilliseconds = -1.0;
+    bool incrementalAudio = false;
     bool clonePromptCached = false;
     bool audioCacheHit = false;
     // What the card was doing while this request ran, reported by the worker that ran

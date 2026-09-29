@@ -451,6 +451,11 @@ bool configManager::LoadSettings(appSettings& outSettings) const
                 outSettings.speech.bQwenDirectPcm =
                     speechData["qwenDirectPcm"].get<bool>();
             }
+            if (speechData.contains("qwenStreamFirstPhrase"))
+            {
+                outSettings.speech.bQwenStreamFirstPhrase =
+                    speechData["qwenStreamFirstPhrase"].get<bool>();
+            }
             if (speechData.contains("qwenPrecomputeVoicePrompt"))
             {
                 outSettings.speech.bQwenPrecomputeVoicePrompt =

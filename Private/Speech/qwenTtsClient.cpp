@@ -5,6 +5,8 @@
 #include <algorithm>
 #include <chrono>
 #include <filesystem>
+#include "Speech/pcmStream.h"
+
 #include <httplib.h>
 #include <nlohmann/json.hpp>
 #include <thread>
@@ -228,6 +230,123 @@ VoiceOperationResult QwenTtsClient::SynthesizePcm(
         return {false, std::move(error), {}, -1.0};
     }
     return PostAudio("/v1/audio/pcm", VoiceRequest(text, preset).dump());
+}
+
+VoiceOperationResult QwenTtsClient::SynthesizePcmStream(
+    const std::string& text,
+    const VoicePreset& preset,
+    const ChunkHandler& onChunk)
+{
+    std::lock_guard lock(mutex);
+    std::string error;
+    if (!EnsureAvailable(error))
+    {
+        return {false, std::move(error), {}, -1.0};
+    }
+    const auto requestStarted = std::chrono::steady_clock::now();
+    httplib::Client client(configuration.qwenHost, configuration.qwenPort);
+    client.set_connection_timeout(5);
+    client.set_read_timeout(configuration.qwenRequestTimeoutSeconds);
+    client.set_write_timeout(10);
+    httplib::Headers headers{{"Authorization", "Bearer " + apiKey}};
+
+    PcmStreamAssembler assembler;
+    std::string rawBody;
+    int chunks = 0;
+    double firstChunkMilliseconds = -1.0;
+    bool abandoned = false;
+    // Built by hand: this httplib has no Post overload that takes a receiver, and the
+    // receiver is the point.
+    httplib::Request streamRequest;
+    streamRequest.method = "POST";
+    streamRequest.path = "/v1/audio/pcm-stream";
+    streamRequest.headers = headers;
+    streamRequest.set_header("Content-Type", "application/json");
+    streamRequest.body = VoiceRequest(text, preset).dump();
+    streamRequest.content_receiver =
+        [&](const char* data, const std::size_t length, std::uint64_t, std::uint64_t)
+        {
+            if (length == 0) return true;
+            if (firstChunkMilliseconds < 0.0)
+            {
+                firstChunkMilliseconds = std::chrono::duration<double, std::milli>(
+                    std::chrono::steady_clock::now() - requestStarted).count();
+            }
+            ++chunks;
+            // Kept raw as well, because a refusal arrives through the same receiver as
+            // JSON and is only known to be one once the status is in hand.
+            rawBody.append(data, length);
+            assembler.Append(reinterpret_cast<const std::uint8_t*>(data), length);
+            if (onChunk && !onChunk(reinterpret_cast<const std::uint8_t*>(data), length))
+            {
+                abandoned = true;
+                return false;
+            }
+            return true;
+        };
+    const httplib::Result response = client.send(streamRequest);
+    const double wallMilliseconds = std::chrono::duration<double, std::milli>(
+        std::chrono::steady_clock::now() - requestStarted).count();
+    if (abandoned)
+    {
+        return {false, "The Qwen3-TTS PCM stream was abandoned by its caller.", {}, wallMilliseconds};
+    }
+    if (!response)
+    {
+        return {false, "The Qwen3-TTS PCM stream did not return a response.", {}, -1.0};
+    }
+    if (response->status != 200 ||
+        response->get_header_value("Content-Type").find("audio/pcm") == std::string::npos)
+    {
+        try
+        {
+            const auto refusal = nlohmann::json::parse(rawBody);
+            return {false, refusal.value("message", "Qwen3-TTS PCM streaming failed."),
+                {}, wallMilliseconds};
+        }
+        catch (...)
+        {
+            return {false, "Qwen3-TTS PCM streaming returned HTTP " +
+                std::to_string(response->status) + ".", {}, wallMilliseconds};
+        }
+    }
+
+    VoiceOperationResult result;
+    result.succeeded = true;
+    result.message = "Qwen3-TTS streamed a conversational audio buffer.";
+    result.elapsedMilliseconds = HeaderDouble(*response, "X-Revia-Elapsed-Ms");
+    result.workerQueueMilliseconds = HeaderDouble(*response, "X-Revia-Queue-Ms");
+    result.modelReadyMilliseconds = HeaderDouble(*response, "X-Revia-Model-Ready-Ms");
+    result.clonePromptMilliseconds = HeaderDouble(*response, "X-Revia-Prompt-Ms");
+    result.generationMilliseconds = HeaderDouble(*response, "X-Revia-Generation-Ms");
+    result.wavWriteMilliseconds = HeaderDouble(*response, "X-Revia-Wav-Write-Ms");
+    result.audioDurationMilliseconds = HeaderDouble(*response, "X-Revia-Audio-Duration-Ms");
+    result.sampleRate = HeaderInt(*response, "X-Revia-Sample-Rate");
+    result.clonePromptCached = HeaderInt(*response, "X-Revia-Prompt-Cached") != 0;
+    result.audioCacheHit = HeaderInt(*response, "X-Revia-Audio-Cache-Hit") != 0;
+    result.device = response->get_header_value("X-Revia-Device");
+    result.deviceName = response->get_header_value("X-Revia-Device-Name");
+    result.dtype = response->get_header_value("X-Revia-Dtype");
+    result.attentionBackend = response->get_header_value("X-Revia-Attention");
+    result.vramUsedMiB = HeaderInt(*response, "X-Revia-Vram-Used-Mib");
+    result.vramTotalMiB = HeaderInt(*response, "X-Revia-Vram-Total-Mib");
+    result.gpuUtilizationPercent = HeaderInt(*response, "X-Revia-Gpu-Utilization");
+    result.modelResident = HeaderInt(*response, "X-Revia-Model-Resident") > 0;
+    result.backend = response->get_header_value("X-Revia-Backend");
+    result.cudaGraph = HeaderInt(*response, "X-Revia-Cuda-Graph") > 0;
+    result.talkerGraph = HeaderInt(*response, "X-Revia-Talker-Graph") > 0;
+    result.realTimeFactor = HeaderDouble(*response, "X-Revia-Real-Time-Factor");
+    result.inputMode = response->get_header_value("X-Revia-Input-Mode");
+    result.cppResponseMilliseconds = wallMilliseconds;
+    result.streamedChunks = chunks;
+    result.firstChunkMilliseconds = firstChunkMilliseconds;
+    result.incrementalAudio = response->get_header_value("X-Revia-Streaming") == "incremental";
+    if (result.audioDurationMilliseconds <= 0.0)
+    {
+        result.audioDurationMilliseconds = assembler.BufferedMilliseconds(result.sampleRate);
+    }
+    result.audioBytes = assembler.ToWav(result.sampleRate);
+    return result;
 }
 
 std::optional<std::vector<std::size_t>> ParseBatchClipSizes(

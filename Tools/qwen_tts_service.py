@@ -18,7 +18,7 @@ import traceback
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 
 REFLEX_CACHE_TEXT = frozenset({
@@ -974,6 +974,44 @@ class QwenRuntime:
             raise RuntimeError("The in-memory WAV encoder returned no audio.")
         return result, audio
 
+    def synthesize_chunks(
+        self,
+        request: dict[str, Any],
+        request_received: float | None = None,
+        chunk_ms: int = 100,
+    ) -> tuple[dict[str, Any], Iterator[bytes]]:
+        """Raw 16-bit mono PCM in chunks, for a client that plays as it receives.
+
+        The package produces the whole waveform at once ("true first audio is not
+        exposed"), so today the first chunk exists only when generation has finished
+        and the stream saves the client nothing but the WAV encode. The endpoint is
+        here so the client side is ready for the change that does buy first-audio
+        latency: a worker that decodes codec frames as the talker produces them. When
+        that lands, this is the one function that changes, and the metadata says
+        which kind of stream a client got.
+        """
+        result, audio = self._synthesize(request, True, request_received)
+        if audio is None:
+            raise RuntimeError("The in-memory WAV encoder returned no audio.")
+        import wave
+
+        with wave.open(io.BytesIO(audio), "rb") as reader:
+            if reader.getsampwidth() != 2 or reader.getnchannels() != 1:
+                raise RuntimeError("The synthesized WAV is not 16-bit mono.")
+            sample_rate = reader.getframerate()
+            frames = reader.readframes(reader.getnframes())
+        result = dict(result)
+        result["sample_rate"] = sample_rate
+        result["streaming"] = "whole"
+        result["true_incremental_audio"] = False
+        frame_bytes = max(2, (sample_rate * chunk_ms // 1000) * 2)
+
+        def chunks() -> Iterator[bytes]:
+            for start in range(0, len(frames), frame_bytes):
+                yield frames[start:start + frame_bytes]
+
+        return result, chunks()
+
 
 def make_handler(runtime: QwenRuntime, token: str) -> type[BaseHTTPRequestHandler]:
     expected_authorization = f"Bearer {token}".encode("utf-8")
@@ -1004,6 +1042,36 @@ def make_handler(runtime: QwenRuntime, token: str) -> type[BaseHTTPRequestHandle
             self.send_header("Content-Type", "audio/wav")
             self.send_header("Content-Length", str(len(audio)))
             self.send_header("Cache-Control", "no-store")
+            for name, value in self._audio_headers(metadata).items():
+                self.send_header(name, value)
+            self.end_headers()
+            self.wfile.write(audio)
+
+        def _send_audio_stream(
+            self, metadata: dict[str, Any], chunks: Iterator[bytes]
+        ) -> None:
+            # No Content-Length: the body ends when the connection closes, which every
+            # client that streams already handles and which needs no HTTP/1.1 chunked
+            # framing from this HTTP/1.0 handler. Each chunk is flushed as it exists.
+            self.send_response(200)
+            self.send_header("Content-Type", "audio/pcm")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Connection", "close")
+            self.send_header("X-Revia-Channels", "1")
+            self.send_header("X-Revia-Bits-Per-Sample", "16")
+            self.send_header("X-Revia-Streaming", str(metadata.get("streaming", "whole")))
+            for name, value in self._audio_headers(metadata).items():
+                self.send_header(name, value)
+            self.end_headers()
+            for chunk in chunks:
+                if not chunk:
+                    continue
+                self.wfile.write(chunk)
+                self.wfile.flush()
+            self.close_connection = True
+
+        @staticmethod
+        def _audio_headers(metadata: dict[str, Any]) -> dict[str, str]:
             headers = {
                 "X-Revia-Elapsed-Ms": metadata.get("elapsed_ms", -1),
                 "X-Revia-Queue-Ms": metadata.get("worker_queue_wait_ms", -1),
@@ -1029,10 +1097,10 @@ def make_handler(runtime: QwenRuntime, token: str) -> type[BaseHTTPRequestHandle
                 "X-Revia-Talker-Graph": int(bool(metadata.get("talker_graph", False))),
                 "X-Revia-Real-Time-Factor": metadata.get("real_time_factor", -1),
             }
-            for name, value in headers.items():
-                self.send_header(name, str(value).replace("\r", " ").replace("\n", " "))
-            self.end_headers()
-            self.wfile.write(audio)
+            return {
+                name: str(value).replace("\r", " ").replace("\n", " ")
+                for name, value in headers.items()
+            }
 
         def _send_audio_batch(
             self, metadata: dict[str, Any], clips: list[bytes]
@@ -1128,6 +1196,11 @@ def make_handler(runtime: QwenRuntime, token: str) -> type[BaseHTTPRequestHandle
                     result, audio = runtime.synthesize_pcm(request, request_received)
                     self._send_audio(result, audio)
                     # After the reply is on its way, so the listener never waits on it.
+                    runtime.trim_cache_if_tight()
+                    return
+                elif self.path == "/v1/audio/pcm-stream":
+                    result, chunks = runtime.synthesize_chunks(request, request_received)
+                    self._send_audio_stream(result, chunks)
                     runtime.trim_cache_if_tight()
                     return
                 elif self.path == "/v1/audio/pcm-batch":
