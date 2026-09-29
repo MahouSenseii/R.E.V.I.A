@@ -220,6 +220,49 @@ bool PermissionStore::Load(
             }
         }
 
+        if (data.contains("games"))
+        {
+            const json& games = data["games"];
+            if (!games.is_object())
+            {
+                outError = "games must be an object.";
+                return false;
+            }
+            settings.games.enabled = games.value("enabled", false);
+            if (games.contains("approvedGames"))
+            {
+                if (!games["approvedGames"].is_array())
+                {
+                    outError = "games.approvedGames must be an array of game names.";
+                    return false;
+                }
+                settings.games.approvedGames.clear();
+                for (const json& name : games["approvedGames"])
+                {
+                    if (name.is_string() && !name.get<std::string>().empty())
+                    {
+                        settings.games.approvedGames.push_back(name.get<std::string>());
+                    }
+                }
+            }
+            if (games.contains("antiCheatProcesses"))
+            {
+                if (!games["antiCheatProcesses"].is_array())
+                {
+                    outError = "games.antiCheatProcesses must be an array of executable names.";
+                    return false;
+                }
+                settings.games.antiCheatProcesses.clear();
+                for (const json& name : games["antiCheatProcesses"])
+                {
+                    if (name.is_string() && !name.get<std::string>().empty())
+                    {
+                        settings.games.antiCheatProcesses.push_back(name.get<std::string>());
+                    }
+                }
+            }
+        }
+
         if (data.contains("camera"))
         {
             const json& camera = data["camera"];

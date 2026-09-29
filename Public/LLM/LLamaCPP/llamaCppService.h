@@ -94,6 +94,12 @@ public:
     responseOutput ScoreInnerThought(
         const std::string& thoughtEnvelope,
         std::stop_token stopToken = {}) const;
+    // One move in a game (Games/gamePlayer.h), under a schema that only admits the
+    // actions the game allows. Interactive: the game is waiting.
+    responseOutput PlanGameAction(
+        const std::string& envelope,
+        const std::string& schema,
+        std::stop_token stopToken = {}) const;
     responseOutput GenerateGoalPlan(const std::string& userRequest) const;
     // One step of an iterative run, decided from the attempts so far.
     // One bounded subgoal, under its own grammar.

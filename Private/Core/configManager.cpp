@@ -875,6 +875,18 @@ bool configManager::LoadSettings(appSettings& outSettings) const
                 agent.checkMemoryLimitMiB = agentData["checkMemoryLimitMiB"].get<int>();
         }
 
+        if (data.contains("games"))
+        {
+            const json& gamesData = data["games"];
+            gamesSettings& games = outSettings.games;
+            if (gamesData.contains("host")) games.host = gamesData["host"].get<std::string>();
+            if (gamesData.contains("port")) games.port = gamesData["port"].get<int>();
+            if (gamesData.contains("autoplay")) games.bAutoplay = gamesData["autoplay"].get<bool>();
+            if (gamesData.contains("unforcedCooldownSeconds"))
+                games.unforcedCooldownSeconds = gamesData["unforcedCooldownSeconds"].get<int>();
+            if (gamesData.contains("commentary")) games.bCommentary = gamesData["commentary"].get<bool>();
+        }
+
         if (data.contains("presence"))
         {
             const json& presenceData = data["presence"];
@@ -1801,6 +1813,10 @@ bool configManager::LoadSettings(appSettings& outSettings) const
         outSettings.codingAgent.maximumOutputCharacters > 200000 ||
         (outSettings.codingAgent.bEnabled &&
             (outSettings.codingAgent.command.empty() || outSettings.codingAgent.workspace.empty())) ||
+        outSettings.games.port < 0 || outSettings.games.port > 65535 ||
+        outSettings.games.host.empty() ||
+        outSettings.games.unforcedCooldownSeconds < 1 ||
+        outSettings.games.unforcedCooldownSeconds > 3600 ||
         outSettings.codingAgent.checkOutputCharacters < 500 ||
         outSettings.codingAgent.checkOutputCharacters > 100000 ||
         outSettings.codingAgent.checkMemoryLimitMiB < 64 ||

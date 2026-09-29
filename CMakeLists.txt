@@ -147,7 +147,7 @@ target_link_libraries(ReviaFoundation PUBLIC
 if(WIN32)
     # Media Foundation (mfplat/mf/mfreadwrite/mfuuid) backs camera capture; shlwapi comes
     # with it. Screen capture continues to use GDI+, which also encodes the camera PNG.
-    target_link_libraries(ReviaFoundation PUBLIC shell32 dxgi sapi ole32 oleaut32 winmm gdiplus gdi32 bcrypt crypt32 winhttp psapi pdh dbghelp mfplat mf mfreadwrite mfuuid shlwapi advapi32 dwmapi)
+    target_link_libraries(ReviaFoundation PUBLIC shell32 dxgi sapi ole32 oleaut32 winmm gdiplus gdi32 bcrypt crypt32 winhttp psapi pdh dbghelp mfplat mf mfreadwrite mfuuid shlwapi advapi32 dwmapi ws2_32)
 endif()
 
 if(MSVC)

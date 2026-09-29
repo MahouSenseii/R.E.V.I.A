@@ -592,6 +592,46 @@ responseOutput messageRouter::ScoreInnerThought(
     return output;
 }
 
+responseOutput messageRouter::PlanGameAction(
+    const std::string& envelope,
+    const std::string& schema,
+    const std::stop_token stopToken) const
+{
+    if (envelope.empty())
+    {
+        responseOutput output;
+        output.reason = "There was no game state to decide from.";
+        return output;
+    }
+    if (fastConfigured && !FastIsSlowerThanMain() &&
+        MayCarryPrivateContext(revia::intelligence::IntelligenceTier::Fast) &&
+        fastLlm.IsBackendAvailable())
+    {
+        residency.BeginInference(revia::intelligence::IntelligenceTier::Fast, "interactive");
+        responseOutput output = fastLlm.PlanGameAction(envelope, schema, stopToken);
+        residency.EndInference(revia::intelligence::IntelligenceTier::Fast);
+        output.requestedTier = "Fast";
+        output.selectedTier = "Fast";
+        output.selectedModel = fastConfiguration.modelName;
+        output.routingReason = "The move was chosen on the Fast brain.";
+        return output;
+    }
+    if (llm.IsBackendAvailable())
+    {
+        residency.BeginInference(revia::intelligence::IntelligenceTier::Main, "interactive");
+        responseOutput output = llm.PlanGameAction(envelope, schema, stopToken);
+        residency.EndInference(revia::intelligence::IntelligenceTier::Main);
+        output.requestedTier = "Fast";
+        output.selectedTier = "Main";
+        output.selectedModel = mainConfiguration.modelName;
+        output.routingReason = "The move was chosen on the Main brain.";
+        return output;
+    }
+    responseOutput output;
+    output.reason = "No local brain was available to choose a move.";
+    return output;
+}
+
 responseOutput messageRouter::PlanGoal(const std::string& request) const
 {
     if (request.empty())

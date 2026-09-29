@@ -4,6 +4,7 @@
 #include "Internet/internetSearchExecutor.h"
 #include "Internet/visibleBrowserClient.h"
 #include "Core/runtimePath.h"
+#include "Games/gameActionExecutor.h"
 #include "Skills/mcpToolExecutor.h"
 #include "Windows/desktopControlExecutor.h"
 #include "Windows/windowsAutomationExecutor.h"
@@ -481,6 +482,20 @@ void ActionRuntime::CancelActiveInternet()
 
 namespace revia::actions
 {
+
+void ActionRuntime::AttachGames(std::shared_ptr<games::NeuroGameServer> server)
+{
+    std::lock_guard lock(mutex);
+    if (gameServer || !server) return;
+    gameServer = std::move(server);
+    dispatcher.Register(std::make_unique<games::GameActionExecutor>(gameServer));
+}
+
+std::shared_ptr<games::NeuroGameServer> ActionRuntime::Games() const
+{
+    std::lock_guard lock(mutex);
+    return gameServer;
+}
 
 std::shared_ptr<skills::McpRegistry> ActionRuntime::Mcp() const
 {

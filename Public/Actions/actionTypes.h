@@ -46,7 +46,11 @@ enum class ActionType
     // the tool's title, control its kind, arguments its input. Never planned, never
     // executed by Revia; it exists so the agent's question reaches the same
     // confirmation prompt as everything else she does.
-    AgentTool
+    AgentTool,
+    // A move in a game that speaks the Neuro SDK protocol (Games/neuroGameServer.h):
+    // application is the game, value the action's name, arguments its JSON data. It is
+    // JSON to the game's own socket and nothing else, so it never reaches the machine.
+    GameAction
 };
 
 // How much is actually known about what a pointer action is aimed at.
@@ -425,6 +429,26 @@ struct CapabilitySettings
         std::string manifestDirectory = "Config/Skills";
     };
 
+    // Games that connect to her over the Neuro SDK protocol. Off until asked for; a
+    // game must be named here unless the list is empty, which admits any that connects
+    // to the loopback port. Anti-cheat titles are never driven through the desktop:
+    // kernel anti-cheat bans hardware for synthesized input, and this list is the
+    // executables the desktop path refuses to touch whatever else is approved.
+    struct Games
+    {
+        bool enabled = false;
+        std::vector<std::string> approvedGames;
+        std::vector<std::string> antiCheatProcesses = {
+            "VALORANT-Win64-Shipping.exe", "VALORANT.exe", "vgc.exe", "vgtray.exe",
+            "League of Legends.exe", "LeagueClient.exe",
+            "FortniteClient-Win64-Shipping.exe", "r5apex.exe", "r5apex_dx12.exe",
+            "EasyAntiCheat.exe", "EasyAntiCheat_EOS.exe", "BEService.exe",
+            "TslGame.exe", "RainbowSix.exe", "RainbowSix_DX11.exe", "destiny2.exe",
+            "cod.exe", "cod22-cod.exe", "cod23-cod.exe", "ModernWarfare.exe",
+            "FACEITService.exe", "faceit.exe", "EscapeFromTarkov.exe", "RustClient.exe",
+            "HuntGame.exe", "Deceive.exe"};
+    };
+
     // The camera is the most physically invasive thing this application can reach, so it
     // is off until explicitly asked for and it lives behind the same capability file as
     // everything else rather than behind a comfort preference.
@@ -545,6 +569,7 @@ struct CapabilitySettings
     int minimumDesktopActionIntervalMs = 250;
     InternetAccess internet;
     McpAccess mcp;
+    Games games;
     CameraAccess camera;
     DesktopControl desktopControl;
 };

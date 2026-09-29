@@ -90,6 +90,12 @@ public:
     responseOutput ScoreInnerThought(
         const std::string& thoughtEnvelope,
         std::stop_token stopToken = {}) const;
+    // One move in a game: Fast when it is local and there, because the game is
+    // waiting and the choice is small; Main otherwise. Never a remote tier.
+    responseOutput PlanGameAction(
+        const std::string& envelope,
+        const std::string& schema,
+        std::stop_token stopToken = {}) const;
     responseOutput PlanGoal(const std::string& request) const;
     // The iterative form: one step at a time, from what has already happened.
     // Ask Main for one bounded subgoal.

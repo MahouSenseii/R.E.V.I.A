@@ -59,6 +59,7 @@ std::string ToString(ActionType value)
         case ActionType::WebSearch: return "web_search";
         case ActionType::McpTool: return "mcp_tool";
         case ActionType::AgentTool: return "agent_tool";
+        case ActionType::GameAction: return "game_action";
         case ActionType::Unknown:
         default: return "unknown";
     }
@@ -263,6 +264,7 @@ ActionType ActionTypeFromString(const std::string& value)
         return ActionType::WebSearch;
     if (normalized == "mcp_tool" || normalized == "call_tool" || normalized == "use_tool")
         return ActionType::McpTool;
+    if (normalized == "game_action" || normalized == "play") return ActionType::GameAction;
     return ActionType::Unknown;
 }
 
@@ -343,6 +345,8 @@ RiskLevel RiskForAction(ActionType value)
         case ActionType::ReadTextFile:
         case ActionType::InspectWindow:
         case ActionType::WebSearch:
+        // JSON to a game's own socket: it can lose a round, never touch the machine.
+        case ActionType::GameAction:
             return RiskLevel::ReadOnly;
         case ActionType::CreateDirectory:
         case ActionType::CopyFile:

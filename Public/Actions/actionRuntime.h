@@ -9,6 +9,7 @@
 #include "Policy/desktopAuthorization.h"
 #include "Policy/desktopInputGuard.h"
 #include "Policy/permissionStore.h"
+#include "Games/neuroGameServer.h"
 #include "Skills/mcpRegistry.h"
 
 #include <filesystem>
@@ -137,6 +138,10 @@ public:
     // The MCP servers the manifests name, loaded with the capabilities. Null before
     // Initialize, and empty when mcp is off or the directory holds nothing.
     [[nodiscard]] std::shared_ptr<skills::McpRegistry> Mcp() const;
+    // A game server (Games/neuroGameServer.h) whose moves become typed actions here.
+    // Attached once after Initialize; a second attach replaces nothing and adds nothing.
+    void AttachGames(std::shared_ptr<games::NeuroGameServer> server);
+    [[nodiscard]] std::shared_ptr<games::NeuroGameServer> Games() const;
 
 private:
     // Called under mutex. Cancellation is checked after the observer callback,
@@ -158,6 +163,7 @@ private:
     policy::CapabilityEditor capabilityEditor;
     std::unique_ptr<policy::CapabilityPolicy> policy;
     std::shared_ptr<skills::McpRegistry> mcpRegistry;
+    std::shared_ptr<games::NeuroGameServer> gameServer;
     std::shared_ptr<internet::VisibleBrowserCancellation> internetCancellation;
     ActionDispatcher dispatcher;
     std::unique_ptr<audit::ActionAuditLogger> auditLogger;

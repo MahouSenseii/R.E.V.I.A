@@ -1384,6 +1384,7 @@ bool ReviaSession::Start()
         settings.speechRecognition.speakerMatchMargin);
     LoadVoiceprints();
     ConfigureInvestigationChecks();
+    StartGames();
     if (settings.intelligence.advisor.bEnabled)
     {
         // The key is read here, once, and handed to the runtime's client; it is not
@@ -5130,6 +5131,7 @@ void ReviaSession::Stop()
     StopSelfImprovement();
     StopCuriosityLoop();
     StopCheckWorker();
+    StopGames();
     StopInitiativeLoop();
     StopVoiceWarmup();
     // Stopped before the children are torn down, so a sample cannot open a handle to a
@@ -8903,6 +8905,282 @@ void ReviaSession::ConfigureInvestigationChecks()
     appLogger.Log("Investigation checks: " + probe.Describe());
 }
 
+void ReviaSession::StartGames()
+{
+    StopGames();
+    if (!actionRuntime.IsInitialized() || !actionRuntime.Settings().games.enabled) return;
+    auto server = std::make_shared<games::NeuroGameServer>();
+    server->SetEventHandler([this](const games::GameEvent& event)
+    {
+        {
+            std::lock_guard lock(gameMutex);
+            gameEvents.push_back(event);
+            while (gameEvents.size() > 200) gameEvents.pop_front();
+        }
+        gameCondition.notify_all();
+    });
+    std::string error;
+    if (!server->Start(settings.games.host, static_cast<std::uint16_t>(settings.games.port), error))
+    {
+        appLogger.Warning("Game server not started: " + error);
+        PublishComponent("Games", "Unavailable", error);
+        return;
+    }
+    gameServer = server;
+    actionRuntime.AttachGames(server);
+    const std::string address = "ws://" + settings.games.host + ":" + std::to_string(server->Port());
+    appLogger.Log("Games may connect at " + address + " (Neuro SDK protocol).");
+    PublishComponent("Games", "Listening", "A game speaking the Neuro SDK protocol may connect at " + address + ".");
+    gameWorker = std::jthread([this](const std::stop_token stop)
+    {
+        RunBackgroundLoop("Games", stop, [&]() { RunGameWorker(stop); });
+    });
+}
+
+void ReviaSession::StopGames()
+{
+    if (gameWorker.joinable())
+    {
+        gameWorker.request_stop();
+        gameCondition.notify_all();
+        gameWorker.join();
+    }
+    if (gameServer)
+    {
+        gameServer->Stop();
+        gameServer.reset();
+    }
+    std::lock_guard lock(gameMutex);
+    gameEvents.clear();
+    lastUnforcedMove.clear();
+}
+
+void ReviaSession::RunGameWorker(const std::stop_token stop)
+{
+    while (!stop.stop_requested())
+    {
+        games::GameEvent event;
+        {
+            std::unique_lock lock(gameMutex);
+            gameCondition.wait(lock, stop, [this] { return !gameEvents.empty(); });
+            if (stop.stop_requested()) return;
+            event = gameEvents.front();
+            gameEvents.pop_front();
+        }
+        const std::shared_ptr<games::NeuroGameServer> server = gameServer;
+        if (!server) continue;
+        switch (event.kind)
+        {
+            case games::GameEvent::Kind::Connected:
+                appLogger.Log("Game connected: " + event.game);
+                PublishComponent("Games", "Connected", event.game);
+                break;
+            case games::GameEvent::Kind::Disconnected:
+                appLogger.Log("Game disconnected: " + event.game);
+                PublishComponent("Games", "Disconnected", event.game);
+                {
+                    std::lock_guard lock(gameMutex);
+                    lastUnforcedMove.erase(event.game);
+                }
+                break;
+            case games::GameEvent::Kind::ActionsChanged:
+                PublishComponent("Games", "Actions", event.game + ": " + event.text);
+                break;
+            case games::GameEvent::Kind::Result:
+                PublishComponent("Games", event.silent ? "Rejected" : "Accepted",
+                    event.game + (event.text.empty() ? "" : ": " + event.text));
+                break;
+            case games::GameEvent::Kind::Force:
+            {
+                const std::optional<games::GameSnapshot> game = server->Game(event.game);
+                // Stale when the game forced again, or went, before this was reached.
+                if (!game || !game->force || game->force->serial != event.serial) break;
+                const games::ForceRequest force = *game->force;
+                PlayGameMove(*game, &force, stop);
+                server->ClearForce(event.game, force.serial);
+                break;
+            }
+            case games::GameEvent::Kind::Context:
+            {
+                PublishComponent("Games", event.silent ? "Noted" : "Context",
+                    event.game + ": " + utf8::Prefix(event.text, 200));
+                if (event.silent || !settings.games.bAutoplay) break;
+                const std::optional<games::GameSnapshot> game = server->Game(event.game);
+                if (!game || game->force || game->actions.empty()) break;
+                // Without a brain she only answers what the game forces; a turn of her
+                // own needs a choice, and the least the schema accepts is not one.
+                if (!llmAvailable.load()) break;
+                const auto now = std::chrono::steady_clock::now();
+                {
+                    std::lock_guard lock(gameMutex);
+                    const auto last = lastUnforcedMove.find(event.game);
+                    if (last != lastUnforcedMove.end() &&
+                        now - last->second < std::chrono::seconds(std::max(1, settings.games.unforcedCooldownSeconds)))
+                    {
+                        break;
+                    }
+                    lastUnforcedMove[event.game] = now;
+                }
+                PlayGameMove(*game, nullptr, stop);
+                break;
+            }
+        }
+    }
+}
+
+games::GameDecision ReviaSession::DecideGameMove(
+    const games::GameSnapshot& game, const games::ForceRequest* force,
+    const std::string& lastFailure, const std::stop_token stopToken)
+{
+    const std::vector<std::string> names = force ? force->actionNames : std::vector<std::string>{};
+    const std::vector<games::GameAction> allowed = games::AllowedActions(game, names);
+    games::GameDecision decision;
+    if (allowed.empty()) return decision;
+    std::vector<std::string> allowedNames;
+    for (const games::GameAction& action : allowed) allowedNames.push_back(action.name);
+    const std::string envelope = force
+        ? games::BuildForceEnvelope(game, *force, lastFailure)
+        : games::BuildTurnEnvelope(game);
+    const responseOutput answer = router.PlanGameAction(
+        envelope, games::DecisionSchema(allowedNames, force == nullptr), stopToken);
+    std::string error;
+    if (answer.bSuccess && games::ParseDecision(answer.response, decision, error))
+    {
+        if (!decision.act) return decision;
+        const auto action = std::find_if(allowed.begin(), allowed.end(),
+            [&](const games::GameAction& candidate) { return candidate.name == decision.name; });
+        std::string why;
+        if (action != allowed.end() &&
+            games::NeuroGameServer::ValidateAgainstSchema(decision.dataJson, action->schema, why))
+        {
+            return decision;
+        }
+        error = action == allowed.end()
+            ? "the model named an action the game does not allow"
+            : "the data did not fit the action's schema: " + why;
+    }
+    else if (!answer.bSuccess)
+    {
+        error = answer.reason.empty() ? "no brain answered" : answer.reason;
+    }
+    appLogger.Log("Game move in " + game.name + " was not chosen by the model (" + error + ")" +
+        (force ? "; the least the schema accepts is sent." : "; no move this turn."));
+    if (force == nullptr) return games::GameDecision{};
+    return games::FallbackDecision(game, names);
+}
+
+void ReviaSession::PlayGameMove(
+    const games::GameSnapshot& game, const games::ForceRequest* force, const std::stop_token stopToken)
+{
+    std::string lastFailure;
+    for (int attempt = 0; attempt < 2 && !stopToken.stop_requested(); ++attempt)
+    {
+        const games::GameDecision decision = DecideGameMove(game, force, lastFailure, stopToken);
+        if (!decision.act)
+        {
+            if (force == nullptr) PublishComponent("Games", "Watching", game.name + ": nothing to do this turn.");
+            else PublishComponent("Games", "No move", game.name + ": none of the forced actions is registered.");
+            return;
+        }
+        actions::ActionRequest request;
+        request.id = actions::NewActionId();
+        request.type = actions::ActionType::GameAction;
+        request.application = game.name;
+        request.value = decision.name;
+        request.arguments = decision.dataJson;
+        request.requestedBy = force ? "game_force" : "game_turn";
+        PublishComponent("Games", force ? "Forced move" : "Move",
+            game.name + ": " + decision.name + " " + decision.dataJson + " (" + decision.source + ")");
+        const actions::ActionOutcome outcome = actionRuntime.Execute(request);
+        if (!decision.say.empty())
+        {
+            RuntimeEvent line;
+            line.kind = RuntimeEventKind::AssistantMessage;
+            line.state = state.load();
+            line.component = "Games";
+            line.phase = game.name;
+            line.message = decision.say;
+            line.detail = "Said while playing " + game.name + ": " + decision.name;
+            eventBus.Publish(std::move(line));
+            if (settings.games.bCommentary && speechService.IsEnabled() && !perception::InCall())
+            {
+                speech::SpeechIntent spoken;
+                spoken.owner = speech::SpeechOwner::Game;
+                spoken.behavior = speech::SpeechBehavior::Queue;
+                spoken.text = decision.say;
+                spoken.affect = emotionRuntime.ToAffectSnapshot();
+                spoken.activityId = "game:" + game.name;
+                (void)speechCoordinator.Submit(std::move(spoken));
+            }
+            if (gameServer) (void)gameServer->SendSpeechFinished(game.name);
+        }
+        if (outcome.Succeeded())
+        {
+            PublishComponent("Games", "Accepted", game.name + ": " + decision.name +
+                (outcome.result.content.empty() ? "" : " (" + outcome.result.content + ")"));
+            return;
+        }
+        lastFailure = outcome.Message().empty() ? outcome.policy.reason : outcome.Message();
+        PublishComponent("Games", "Rejected", game.name + ": " + decision.name + ": " + lastFailure);
+        // Refused by policy, or not a force: there is no second try to be had.
+        if (!outcome.result.attempted || force == nullptr) return;
+    }
+}
+
+bool ReviaSession::TryHandleGameInput(const std::string& input, SessionResult& result)
+{
+    const std::string argument = input.size() > 5 ? Trim(input.substr(5)) : std::string();
+    result.fromAssistant = true;
+    if (!gameServer)
+    {
+        result.succeeded = false;
+        result.text = actionRuntime.IsInitialized() && actionRuntime.Settings().games.enabled
+            ? "The game server is not running; the log says why it did not start."
+            : "Games are off. Turn on games.enabled in the capability file (Permissions tab); "
+              "then any game that speaks the Neuro SDK protocol can connect at ws://" +
+              settings.games.host + ":" + std::to_string(settings.games.port) + ".";
+        result.reason = "No game server.";
+        SetState(RuntimeState::Idle);
+        return true;
+    }
+    if (argument.rfind("disconnect ", 0) == 0)
+    {
+        const std::string name = Trim(argument.substr(11));
+        gameServer->Disconnect(name);
+        result.text = "Told " + name + " to go.";
+        SetState(RuntimeState::Idle);
+        return true;
+    }
+    if (!argument.empty())
+    {
+        result.succeeded = false;
+        result.text = "Usage: /game [disconnect <game>]";
+        result.reason = "Unrecognized game argument.";
+        SetState(RuntimeState::Idle);
+        return true;
+    }
+    const std::vector<games::GameSnapshot> connected = gameServer->Games();
+    std::ostringstream text;
+    text << "Listening at ws://" << settings.games.host << ":" << gameServer->Port()
+         << " (Neuro SDK protocol).";
+    if (connected.empty()) text << " No game is connected.";
+    for (const games::GameSnapshot& game : connected)
+    {
+        text << "\n" << (game.name.empty() ? "(unnamed game)" : game.name) << ": "
+             << game.actions.size() << (game.actions.size() == 1 ? " action" : " actions");
+        for (std::size_t index = 0; index < game.actions.size() && index < 12; ++index)
+        {
+            text << (index == 0 ? " (" : ", ") << game.actions[index].name;
+        }
+        if (!game.actions.empty()) text << (game.actions.size() > 12 ? ", ...)" : ")");
+        if (!game.context.empty()) text << "\n  last: " << utf8::Prefix(game.context.back().message, 160);
+        if (game.force) text << "\n  waiting on: " << utf8::Prefix(game.force->query, 160);
+    }
+    result.text = text.str();
+    SetState(RuntimeState::Idle);
+    return true;
+}
+
 bool ReviaSession::TryHandleCodeInput(const std::string& input, SessionResult& result)
 {
     const std::string task = input.size() > 5 ? Trim(input.substr(5)) : std::string();
@@ -10999,6 +11277,10 @@ bool ReviaSession::TryHandleActionInput(const std::string& input, SessionResult&
     if (input == "/code" || input.rfind("/code ", 0) == 0)
     {
         return TryHandleCodeInput(input, result);
+    }
+    if (input == "/game" || input.rfind("/game ", 0) == 0)
+    {
+        return TryHandleGameInput(input, result);
     }
 
     if (input == "/bargein" || input.rfind("/bargein ", 0) == 0)

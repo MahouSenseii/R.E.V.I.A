@@ -104,6 +104,25 @@ bool ApplicationIsApproved(
         [&wanted](const std::string& allowed) { return Lower(allowed) == wanted; });
 }
 
+// Whether the executable is a title the desktop path never drives.
+bool IsAntiCheatTitle(const actions::CapabilitySettings& settings, const std::string& application)
+{
+    if (application.empty()) return false;
+    std::string wanted = Lower(application);
+    const std::size_t slash = wanted.find_last_of("/\\");
+    if (slash != std::string::npos) wanted = wanted.substr(slash + 1);
+    return std::any_of(settings.games.antiCheatProcesses.begin(), settings.games.antiCheatProcesses.end(),
+        [&wanted](const std::string& banned) { return Lower(banned) == wanted; });
+}
+
+bool GameIsApproved(const actions::CapabilitySettings& settings, const std::string& game)
+{
+    if (settings.games.approvedGames.empty()) return true;
+    const std::string wanted = Lower(game);
+    return std::any_of(settings.games.approvedGames.begin(), settings.games.approvedGames.end(),
+        [&wanted](const std::string& allowed) { return Lower(allowed) == wanted; });
+}
+
 bool TypedTextIsAcceptable(const std::string& value)
 {
     return std::none_of(value.begin(), value.end(), [](const unsigned char character)
@@ -213,9 +232,49 @@ actions::PolicyDecision CapabilityPolicy::Evaluate(
                 " risk and needs confirmation.";
         return decision;
     }
+    if (request.type == actions::ActionType::GameAction)
+    {
+        // A move in a game's own API. No confirmation: it reaches nothing but the game,
+        // and a game that forced a choice is waiting on it. The switch and the
+        // game list are the whole of the permission.
+        if (!settings.games.enabled)
+        {
+            decision.reason = "Playing games is disabled in capability settings.";
+            return decision;
+        }
+        if (request.application.empty())
+        {
+            decision.reason = "A game action must name the game.";
+            return decision;
+        }
+        if (!GameIsApproved(settings, request.application))
+        {
+            decision.reason = "The game '" + request.application + "' is not on the approved game list.";
+            return decision;
+        }
+        if (request.value.empty())
+        {
+            decision.reason = "A game action must name the action.";
+            return decision;
+        }
+        decision.risk = actions::RiskLevel::ReadOnly;
+        decision.verdict = actions::PolicyVerdict::Allowed;
+        decision.reason = "Game action '" + request.value + "' in " + request.application +
+            " goes to the game's own API and nothing else.";
+        return decision;
+    }
     if (actions::IsDesktopControlAction(request.type))
     {
         using InputScope = actions::CapabilitySettings::DesktopControl::InputScope;
+        // Titles with kernel anti-cheat are refused before anything else is weighed:
+        // synthesized input there earns a hardware ban, whatever the owner approved.
+        if (IsAntiCheatTitle(settings, request.application) ||
+            IsAntiCheatTitle(settings, request.resolution.observedApplication))
+        {
+            decision.reason = "That is an anti-cheat title, and Revia never drives one: play it "
+                "through its own game API instead.";
+            return decision;
+        }
         // Naming an application is what asks for the narrow, confined form. Leaving it
         // out is what asks for the desktop itself, and that only exists if the owner
         // turned the scope up. Starting a process always names one, because the

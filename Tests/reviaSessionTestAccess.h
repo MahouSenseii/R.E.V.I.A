@@ -21,6 +21,9 @@ struct ReviaSessionTestAccess
     static agents::ConfinedCheckSettings CheckSettings(const ReviaSession& session)
     { return session.CheckSettingsNow(); }
     static void ConfigureChecks(ReviaSession& session) { session.ConfigureInvestigationChecks(); }
+    static void StartGames(ReviaSession& session) { session.StartGames(); }
+    static void StopGames(ReviaSession& session) { session.StopGames(); }
+    static std::shared_ptr<games::NeuroGameServer> GameServer(ReviaSession& session) { return session.gameServer; }
     static ConversationRuntime& Conversation(ReviaSession& session) { return session.conversationRuntime; }
     static identity::VoiceprintRegistry& Voiceprints(ReviaSession& session) { return session.voiceprints; }
     static std::string CurrentSpeaker(ReviaSession& session)

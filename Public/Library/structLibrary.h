@@ -992,6 +992,21 @@ struct codingAgentSettings
     int checkMemoryLimitMiB = 2048;
 };
 
+// Where games that speak the Neuro SDK protocol connect (Games/neuroGameServer.h).
+// Whether she may play at all is the games section of the capability file; this is
+// only how the door is reached and how she behaves once through it.
+struct gamesSettings
+{
+    std::string host = "127.0.0.1";
+    int port = 8000;
+    // Act on her own when the game tells her something, not only when it forces a
+    // choice; at most once per cooldown per game.
+    bool bAutoplay = true;
+    int unforcedCooldownSeconds = 20;
+    // Say the one line the move came with, out loud.
+    bool bCommentary = true;
+};
+
 // Which decision provider answers an operator run, and whether anything is recorded.
 //
 // Every default here preserves what the application did before the feature existed:
@@ -1035,6 +1050,7 @@ struct appSettings
     performanceSettings performance;
     improvementSettings improvement;
     codingAgentSettings codingAgent;
+    gamesSettings games;
     presenceSettings presence;
     resourceSettings resources;
     visionSettings vision;

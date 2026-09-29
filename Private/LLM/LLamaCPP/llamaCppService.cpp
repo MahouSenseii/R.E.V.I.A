@@ -10,6 +10,7 @@
 #include "Agents/historyCompactor.h"
 #include "Internet/webReader.h"
 #include "Initiative/innerThoughts.h"
+#include "Games/gamePlayer.h"
 #include "Actions/actionTypes.h"
 #include "Planning/goalPlanner.h"
 #include <httplib.h>
@@ -1387,6 +1388,23 @@ responseOutput llamaCppService::ScoreInnerThought(
         0.1F,
         "thought scoring",
         revia::initiative::ThoughtScoringSchema());
+}
+
+responseOutput llamaCppService::PlanGameAction(
+    const std::string& envelope,
+    const std::string& schema,
+    const std::stop_token stopToken) const
+{
+    return GeneratePlannerResponse(
+        revia::games::GamePlayerPrompt(),
+        envelope,
+        384,
+        true,
+        stopToken,
+        revia::llm::InferencePriority::Interactive,
+        0.4F,
+        "game action",
+        schema);
 }
 
 responseOutput llamaCppService::GenerateGoalPlan(const std::string& userRequest) const

@@ -66,6 +66,10 @@ public:
     responseOutput ScoreInnerThought(
         const std::string& thoughtEnvelope,
         std::stop_token stopToken = {}) const;
+    responseOutput PlanGameAction(
+        const std::string& envelope,
+        const std::string& schema,
+        std::stop_token stopToken = {}) const;
     responseOutput GenerateGoalPlan(const std::string& userRequest) const;
     responseOutput GenerateCodeReview(
         const std::string& instructions,

@@ -3,6 +3,7 @@
 #include "Actions/actionRuntime.h"
 #include "Agents/checkExecutor.h"
 #include "Coding/acpClient.h"
+#include "Games/gamePlayer.h"
 #include "Agents/curiosityAgent.h"
 #include "Agents/historyCompactor.h"
 #include "Agents/turnCoordinator.h"
@@ -74,6 +75,7 @@
 #include "Windows/applicationControlDiscovery.h"
 
 #include <atomic>
+#include <map>
 #include <chrono>
 #include <condition_variable>
 #include <cstddef>
@@ -551,6 +553,20 @@ private:
     // agent's workspace and the configured check commands; wired at startup.
     [[nodiscard]] agents::ConfinedCheckSettings CheckSettingsNow() const;
     void ConfigureInvestigationChecks();
+    // Games that speak the Neuro SDK protocol (Games/neuroGameServer.h): the server
+    // is started when the capability file allows play, and a worker answers what the
+    // games ask for -- a forced choice always, a turn of her own when autoplay is on.
+    void StartGames();
+    void StopGames();
+    void RunGameWorker(std::stop_token stopToken);
+    // One move: the model under the game's schema, or the least the schema accepts
+    // when no brain can choose and the game is waiting.
+    [[nodiscard]] games::GameDecision DecideGameMove(
+        const games::GameSnapshot& game, const games::ForceRequest* force,
+        const std::string& lastFailure, std::stop_token stopToken);
+    void PlayGameMove(const games::GameSnapshot& game, const games::ForceRequest* force,
+        std::stop_token stopToken);
+    bool TryHandleGameInput(const std::string& input, SessionResult& result);
     // The agent's permission request, through the same confirmation the rest of her
     // actions use. `blanket` is set when the person allowed the whole task.
     coding::PermissionAnswer AskCodingPermission(
@@ -1041,6 +1057,12 @@ private:
     planning::ReminderBook reminders;
     std::jthread checkWorker;
     std::atomic<bool> checkRunning = false;
+    std::shared_ptr<games::NeuroGameServer> gameServer;
+    std::jthread gameWorker;
+    std::mutex gameMutex;
+    std::condition_variable_any gameCondition;
+    std::deque<games::GameEvent> gameEvents;
+    std::map<std::string, std::chrono::steady_clock::time_point> lastUnforcedMove;
     std::function<std::optional<perception::ClipboardText>()> clipboardReader =
         [] { return perception::ReadClipboardText(6000); };
     // Serialises launching against launching and stopping. The worker never takes it.

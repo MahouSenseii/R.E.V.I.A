@@ -426,6 +426,20 @@ responseOutput llmService::ScoreInnerThought(
     return llamaCpp.ScoreInnerThought(thoughtEnvelope, stopToken);
 }
 
+responseOutput llmService::PlanGameAction(
+    const std::string& envelope,
+    const std::string& schema,
+    const std::stop_token stopToken) const
+{
+    if (!bIsReady || !UsesChatServer())
+    {
+        responseOutput output;
+        output.reason = "Planning a game move requires a chat model backend.";
+        return output;
+    }
+    return llamaCpp.PlanGameAction(envelope, schema, stopToken);
+}
+
 responseOutput llmService::GenerateGoalPlan(const std::string& userRequest) const
 {
     if (!bIsReady)
