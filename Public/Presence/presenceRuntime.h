@@ -85,6 +85,11 @@ public:
         const std::vector<std::uint8_t>& audio = {},
         const std::string& audioError = {});
     [[nodiscard]] PresenceSnapshot Snapshot() const;
+    // The operator's kill switch as the stage sees it: held, the phase reads "brb" so a
+    // scene adapter can cut away, and no stream message passes the inbox. Released,
+    // the phase follows the runtime again.
+    void SetOperatorHold(bool held, std::string reason = {});
+    [[nodiscard]] bool OperatorHeld() const;
     void Shutdown();
 
 private:
@@ -127,6 +132,8 @@ private:
     PresenceSnapshot snapshot;
     std::chrono::steady_clock::time_point lastConversationActivity{};
     std::chrono::steady_clock::time_point lastStreamReply{};
+    bool operatorHold = false;
+    std::string operatorHoldReason;
     std::chrono::steady_clock::time_point lastAudioPrune{};
     std::deque<std::chrono::steady_clock::time_point> adapterAdmissions;
     std::deque<std::string> recentAdapterIdOrder;

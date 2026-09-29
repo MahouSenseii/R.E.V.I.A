@@ -70,6 +70,10 @@ struct RoutingContext
     // persisted, never enters the identity packet, memory, relationships, or
     // development, and it does not change who Revia is.
     std::optional<IntelligenceTier> previousAssistantTier;
+    // The reply is broadcast to an audience. Expert is never selected for one: its
+    // checkpoint is a community "unredacted" variant, which makes what it says harder
+    // to filter, and the filter is what stands between her and the channel.
+    bool publicAudience = false;
 };
 
 struct IntelligenceDecision

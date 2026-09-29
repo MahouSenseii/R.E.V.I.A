@@ -463,6 +463,14 @@ struct presenceSettings
     bool bRequireAddressedStreamMessages = true;
     bool bSpeakStreamReplies = false;
     std::vector<std::string> allowedAdapters = {"discord", "stream", "game"};
+    // The stream safety layer (Presence/streamSafety.h): on by default, because a
+    // public reply that skipped it is the one that gets the channel banned. The
+    // blocklist is the owner's, whole words, case-insensitive; the marker is what is
+    // said in place of a blocked sentence; the maximum is a broadcast reply's length.
+    bool bStreamSafetyEnabled = true;
+    std::vector<std::string> streamBlockedTerms;
+    std::string streamFilteredMarker = "Filtered.";
+    int streamReplyMaximumCharacters = 600;
 };
 
 // Cross-pipeline placement policy. These are budgets and preferences, not work queues:

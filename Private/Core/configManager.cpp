@@ -735,6 +735,22 @@ bool configManager::LoadSettings(appSettings& outSettings) const
                 outSettings.presence.adapterArchiveMaximumAgeDays);
             number("streamReplyCooldownSeconds",
                 outSettings.presence.streamReplyCooldownSeconds);
+            if (presenceData.contains("streamSafetyEnabled"))
+                outSettings.presence.bStreamSafetyEnabled =
+                    presenceData["streamSafetyEnabled"].get<bool>();
+            text("streamFilteredMarker", outSettings.presence.streamFilteredMarker);
+            number("streamReplyMaximumCharacters",
+                outSettings.presence.streamReplyMaximumCharacters);
+            if (presenceData.contains("streamBlockedTerms") &&
+                presenceData["streamBlockedTerms"].is_array())
+            {
+                outSettings.presence.streamBlockedTerms.clear();
+                for (const auto& term : presenceData["streamBlockedTerms"])
+                {
+                    if (term.is_string())
+                        outSettings.presence.streamBlockedTerms.push_back(term.get<std::string>());
+                }
+            }
             if (presenceData.contains("allowedAdapters") &&
                 presenceData["allowedAdapters"].is_array())
             {

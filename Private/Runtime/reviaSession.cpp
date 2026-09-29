@@ -1370,6 +1370,7 @@ bool ReviaSession::Start()
     StartInputDrain();
     StartScreenAwareness();
     StartHistoryCompaction();
+    streamSafety.Configure(settings.presence);
     StartExternalAdapterLoop();
     // A separately opted-in source. Discord enablement never starts this listener.
     // Environment values are owner configuration, never supplied by a visitor.
@@ -2147,8 +2148,21 @@ void ReviaSession::StartExternalAdapterLoop()
                             {
                                 channelHistory.assign(found->second.begin(), found->second.end());
                             }
+                            // The audience's gate, before the model is asked: a message that
+                            // carries control text or a blocklisted term is not answered, and
+                            // nothing is answered while the operator holds the switch.
+                            std::string refusal;
+                            if (!streamSafety.AdmitChatMessage(request, refusal))
+                            {
+                                result.succeeded = false;
+                                result.reason = refusal;
+                                PublishComponent("Stream safety", "Held", refusal);
+                                busy.store(false);
+                                return result;
+                            }
+                            // The viewer's words as quoted data, author outside the fence.
                             const std::string publicInput =
-                                request.author + " [" + request.role + "]: " + request.text;
+                                presence::StreamSafety::QuoteChatMessage(request);
                             const std::string publicInstruction =
                                 "This is a PUBLIC broadcast conversation through the approved " +
                                 request.source + " adapter in channel '" + request.channel + "'. "
@@ -2156,9 +2170,33 @@ void ReviaSession::StartExternalAdapterLoop()
                                 "to broadcast. Use only the public messages supplied in this turn. "
                                 "Never reveal or infer private desktop, camera, local-user, file, "
                                 "memory, credential, path, or application details. Do not perform "
-                                "actions, emit commands, or claim that an action or web lookup ran.";
+                                "actions, emit commands, or claim that an action or web lookup ran. " +
+                                presence::StreamSafety::ChatAsDataInstruction();
                             const bool shouldSpeak = request.source == "stream" &&
                                 settings.presence.bSpeakStreamReplies;
+                            // The sentence filter, applied inside the turn so the spoken and
+                            // the written reply are the same filtered one.
+                            const auto broadcastFilter = [this](const std::string& text)
+                            {
+                                const presence::StreamFilterOutcome outcome =
+                                    streamSafety.FilterReply(text);
+                                if (outcome.filteredSentences > 0)
+                                {
+                                    std::string rules;
+                                    for (const std::string& reason : outcome.reasons)
+                                    {
+                                        if (!rules.empty()) rules += ", ";
+                                        rules += reason;
+                                    }
+                                    PublishComponent("Stream safety",
+                                        outcome.blocked ? "Blocked" : "Filtered",
+                                        std::to_string(outcome.filteredSentences) + " of " +
+                                            std::to_string(outcome.totalSentences) +
+                                            " sentences replaced by \"" + streamSafety.Marker() +
+                                            "\" (" + rules + ").");
+                                }
+                                return outcome.text;
+                            };
                             result = conversationRuntime.ReplyPublic(
                                 publicInput,
                                 channelHistory,
@@ -2167,7 +2205,8 @@ void ReviaSession::StartExternalAdapterLoop()
                                 profile,
                                 llmAvailable,
                                 shouldSpeak,
-                                operationToken);
+                                operationToken,
+                                broadcastFilter);
                             if (request.source == "discord" && request.voiceReply && result.succeeded &&
                                 !result.text.empty() && !operationToken.stop_requested() && !stopToken.stop_requested())
                             {
@@ -9324,6 +9363,72 @@ bool ReviaSession::TryHandleActionInput(const std::string& input, SessionResult&
     if (input == "/capabilities")
     {
         result.text = actionRuntime.StatusJson();
+        SetState(RuntimeState::Idle);
+        return true;
+    }
+
+    if (input == "/stream" || input.rfind("/stream ", 0) == 0)
+    {
+        const std::string argument = input.size() > 7 ? Trim(input.substr(7)) : std::string();
+        if (argument.rfind("kill", 0) == 0)
+        {
+            const std::string reason = Trim(argument.substr(4));
+            streamSafety.Kill(reason);
+            // Silence first: whatever was being said stops now, whatever was queued from
+            // outside is dropped, and the stage reads brb before the next word.
+            speechService.StopSpeaking();
+            {
+                std::lock_guard lock(externalAdapterMutex);
+                externalAdapterQueue.clear();
+            }
+            presenceRuntime.SetOperatorHold(true, reason);
+            PublishComponent("Stream safety", "Killed",
+                reason.empty() ? std::string("The kill switch is on.")
+                               : "The kill switch is on: " + reason);
+            result.text = "Kill switch on" + (reason.empty() ? std::string(".") : ": " + reason) +
+                " Speech stopped, queued public messages dropped, no public reply until "
+                "/stream resume; the avatar state reads brb for the scene.";
+            SetState(RuntimeState::Idle);
+            return true;
+        }
+        if (argument == "resume")
+        {
+            streamSafety.Resume();
+            presenceRuntime.SetOperatorHold(false);
+            PublishComponent("Stream safety", "Resumed", "The kill switch is off.");
+            result.text = "Stream resumed: public replies are answered again, through the filter.";
+            SetState(RuntimeState::Idle);
+            return true;
+        }
+        if (!argument.empty() && argument != "status")
+        {
+            result.succeeded = false;
+            result.text = "Usage: /stream [status|kill <reason>|resume]";
+            result.reason = "Unrecognized stream argument.";
+            SetState(RuntimeState::Blocked, result.reason);
+            return true;
+        }
+        std::ostringstream stream;
+        if (streamSafety.IsKilled())
+        {
+            stream << "Stream is held by the kill switch"
+                   << (streamSafety.KillReason().empty() ? "." : ": " + streamSafety.KillReason())
+                   << " /stream resume releases it.";
+        }
+        else
+        {
+            stream << "Stream is live. ";
+            stream << (streamSafety.Enabled()
+                ? "Every public reply passes the sentence filter (" +
+                  std::to_string(settings.presence.streamBlockedTerms.size()) +
+                  " blocklisted terms; a blocked sentence is said as \"" +
+                  streamSafety.Marker() + "\")"
+                : "The sentence filter is OFF in settings, which is not safe for a live audience")
+                   << ", viewer messages reach the model as quoted data, and the Expert "
+                      "brain is never used for a public reply. /stream kill <reason> "
+                      "stops everything public at once.";
+        }
+        result.text = stream.str();
         SetState(RuntimeState::Idle);
         return true;
     }

@@ -334,6 +334,8 @@ void PresenceRuntime::Observe(const runtime::RuntimeEvent& event)
                 snapshot.phase = "listening";
             else if (event.phase == "Transcribing") snapshot.phase = "thinking";
         }
+        // Held by the operator, the stage stays on "brb" whatever the runtime is doing.
+        if (operatorHold) snapshot.phase = "brb";
         if (event.kind == runtime::RuntimeEventKind::ComponentStatus &&
             event.component == "Perception" && !event.message.empty())
         {
@@ -785,6 +787,12 @@ bool PresenceRuntime::StreamPolicyAllows(
 {
     if (event.source != "stream") return true;
     std::lock_guard lock(mutex);
+    if (operatorHold)
+    {
+        outReason = "The operator's kill switch is on" +
+            (operatorHoldReason.empty() ? std::string(".") : ": " + operatorHoldReason);
+        return false;
+    }
     if (configuration.bRequireAddressedStreamMessages && event.role == "viewer" &&
         !event.addressedToRevia)
     {
@@ -821,11 +829,31 @@ void PresenceRuntime::UpdatePhase(std::string phase, std::string attention)
 {
     {
         std::lock_guard lock(mutex);
-        snapshot.phase = std::move(phase);
+        // Held by the operator, the stage stays on "brb" whatever the runtime is doing.
+        if (!operatorHold) snapshot.phase = std::move(phase);
         if (!attention.empty()) snapshot.attention = std::move(attention);
         ++snapshot.sequence;
     }
     WriteAvatarState(true);
+}
+
+void PresenceRuntime::SetOperatorHold(const bool held, std::string reason)
+{
+    {
+        std::lock_guard lock(mutex);
+        operatorHold = held;
+        operatorHoldReason = held ? std::move(reason) : std::string{};
+        snapshot.phase = held ? "brb" : "idle";
+        if (held) snapshot.attention = "operator";
+        ++snapshot.sequence;
+    }
+    WriteAvatarState(true);
+}
+
+bool PresenceRuntime::OperatorHeld() const
+{
+    std::lock_guard lock(mutex);
+    return operatorHold;
 }
 
 void PresenceRuntime::WriteAvatarState(const bool appendEvent)

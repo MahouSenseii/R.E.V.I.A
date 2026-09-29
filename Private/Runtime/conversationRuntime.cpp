@@ -196,6 +196,7 @@ intelligence::RoutingContext BuildRoutingContext(const RoutingInputs& inputs)
         context.previousAssistantTier = inputs.previousDeliveredTier;
         context.previousUncertainty = inputs.previousTurnWasUnreliable;
     }
+    context.publicAudience = inputs.publicAudience;
     return context;
 }
 
@@ -282,7 +283,8 @@ SessionResult ConversationRuntime::ReplyPublic(
     const aiProfile& profile,
     const bool llmAvailable,
     const bool shouldSpeak,
-    const std::stop_token stopToken)
+    const std::stop_token stopToken,
+    const PublicReplyFilter& outputFilter)
 {
     std::vector<conversationMessage> promptContext = channelHistory;
     promptContext.push_back({"user", input});
@@ -296,6 +298,7 @@ SessionResult ConversationRuntime::ReplyPublic(
     policy.includePrivateHistory = false;
     policy.relationship = relationship;
     policy.instruction = publicInstruction;
+    policy.publicReplyFilter = outputFilter;
     return Generate(
         input,
         promptContext,
@@ -1814,6 +1817,13 @@ SessionResult ConversationRuntime::Generate(
     result.text = output.response;
     result.reason = output.reason;
     result.wasStreamed = output.bWasStreamed;
+    // A public reply passes the audience's filter here, before it is spoken, archived
+    // to the channel history, or handed back: a sentence the filter takes out never
+    // reaches a viewer by any route.
+    if (output.bSuccess && turnPolicy.publicAudience && turnPolicy.publicReplyFilter)
+    {
+        result.text = turnPolicy.publicReplyFilter(result.text);
+    }
     if (!output.bSuccess)
     {
         if (stopToken.stop_requested())

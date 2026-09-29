@@ -42,6 +42,7 @@
 #include "Planning/reminders.h"
 #include "Performance/performanceRuntime.h"
 #include "Presence/presenceRuntime.h"
+#include "Presence/streamSafety.h"
 #include "Presence/webGuestRuntime.h"
 #include "Presentation/avatarState.h"
 #include "Presentation/debugPresentationSink.h"
@@ -824,6 +825,9 @@ private:
     // touches the speech queue, so a song that fails to load cannot cost Revia her voice.
     performance::PerformanceRuntime performanceRuntime;
     presence::PresenceRuntime presenceRuntime;
+    // The audience's filter and the operator's kill switch, owned here because the
+    // session is what generates a public reply and what holds the speech to stop.
+    presence::StreamSafety streamSafety;
     std::atomic<std::shared_ptr<presence::WebGuestRuntime>> webGuestRuntime;
     // The boundary an avatar will eventually sit behind. Her core publishes what she is
     // doing; a renderer decides what that looks like. The debug sink is the proof the

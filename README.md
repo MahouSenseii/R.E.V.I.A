@@ -320,6 +320,7 @@ Type these in Chat or the CLI. `/help` lists everything, including direct file a
 | `/status`, `/backend`, `/resources`, `/models` | Models, services, placement, hardware state |
 | `/perception`, `/perception pause`, `resume`, `forget` | Screen awareness state and control |
 | `/history <words>`, `/history forget` | Search or clear conversation history |
+| `/stream status`, `/stream kill <reason>`, `/stream resume` | The live-audience kill switch: stops speech, drops queued public messages, holds every public reply and sets the avatar phase to `brb` until resumed |
 | `/internet on`, `manual`, `off` | Automatic, only-when-asked, or no web lookups |
 | `/web "query"` | One web lookup |
 | `/bargein`, `/bargein off` | Inspect or disable voice interruption |
@@ -527,6 +528,7 @@ The capability `mode` can be `supervised` (default) or `owner_full_access`. The 
 - Anything she does because of what she saw must map back to an approved UI element that is re-checked right before acting.
 - Action logs record typed text by length, not content.
 - She cannot edit her own source, change her models or settings, or widen her own permissions.
+- **A live audience gets defence in depth.** Every public reply (Discord, a stream adapter) passes a sentence-level filter after the model: a sentence that carries a path, a credential, prompt text, personal data, a threat, sexual framing or a term from `presence.streamBlockedTerms` is said as `Filtered.` and the rest is delivered, with the reason in the Activity feed. Viewer messages reach the model as quoted data with the author labelled outside the fence, a message carrying control text is not answered at all, the Expert brain is never used for a public reply, and `/stream kill` holds everything public until `/stream resume`. The filter is on by default (`presence.streamSafetyEnabled`).
 
 The live permissions file is `build\debug\RuntimeData\Capabilities\capabilities.json`, seeded once from `Config\capabilities.json` and never overwritten by builds. Use the **Permissions** tab rather than editing it.
 

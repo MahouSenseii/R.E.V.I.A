@@ -79,6 +79,28 @@ IntelligenceDecision IntelligenceRouter::Route(
     const std::string& input,
     const RoutingContext& context) const
 {
+    IntelligenceDecision decision = RouteForEffort(input, context);
+    // A public turn is capped at Main whatever the question deserved. The tier it
+    // wanted stays recorded as the request, so the Activity feed shows the cap.
+    const bool expert = decision.selectedTier == IntelligenceTier::Expert ||
+        decision.selectedTier == IntelligenceTier::ExpertVision;
+    if (context.publicAudience && expert)
+    {
+        decision.requestedTier = decision.selectedTier;
+        decision.selectedTier = decision.selectedTier == IntelligenceTier::ExpertVision
+            ? IntelligenceTier::Vision : IntelligenceTier::Main;
+        decision.selectedModel = "Qwen3.5-4B-Q4_K_M.gguf";
+        decision.fallbackUsed = true;
+        decision.fallbackReason = "The audience is public, and the Expert brain is never "
+            "used for a broadcast reply.";
+    }
+    return decision;
+}
+
+IntelligenceDecision IntelligenceRouter::RouteForEffort(
+    const std::string& input,
+    const RoutingContext& context) const
+{
     const std::string text = Normalize(input);
 
     static constexpr std::array ReflexSignals = {

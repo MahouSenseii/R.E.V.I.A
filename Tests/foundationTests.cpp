@@ -9496,6 +9496,16 @@ int main(const int argc, char** argv)
             RunPersonaPacketTests();
             return 0;
         }
+        if (argc > 1 && std::string(argv[1]) == "--stream-safety")
+        {
+            RunStreamSafetyTests();
+            return 0;
+        }
+        if (argc > 1 && std::string(argv[1]) == "--routing-production")
+        {
+            RunRoutingProductionTests();
+            return 0;
+        }
         if (argc > 1 && std::string(argv[1]) == "--emotion-live")
         {
             Check(argc == 4, "Usage: --emotion-live <isolated-runtime-directory> <new-report.jsonl>");
@@ -10000,6 +10010,7 @@ int main(const int argc, char** argv)
         RunMemorySupersessionTests();
         RunProviderBackendTests();
         RunPersonaPacketTests();
+        RunStreamSafetyTests();
         std::cout << "All Revia foundation tests passed.\n";
         return 0;
     }

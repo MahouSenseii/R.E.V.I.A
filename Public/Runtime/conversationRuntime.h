@@ -189,6 +189,9 @@ public:
     // never inherit the local user's dialogue, compressed history, durable memories,
     // screen/camera observations, or automatic web lookup. The caller supplies the
     // already-resolved viewer relationship so speaker identity cannot lag by one turn.
+    // Applied to a public reply before it is spoken or returned: the audience's own
+    // filter, which the session owns. Given the reply, returns what may be broadcast.
+    using PublicReplyFilter = std::function<std::string(const std::string&)>;
     SessionResult ReplyPublic(
         const std::string& input,
         const std::vector<conversationMessage>& channelHistory,
@@ -197,7 +200,8 @@ public:
         const aiProfile& profile,
         bool llmAvailable,
         bool shouldSpeak,
-        std::stop_token stopToken = {});
+        std::stop_token stopToken = {},
+        const PublicReplyFilter& outputFilter = {});
 
     // Guest overload: the caller owns an isolated router with PublicGuestProfile(),
     // never the desktop router. No instance state, provider, logger or event bus is
@@ -256,6 +260,7 @@ private:
         bool includePrivateHistory = true;
         std::optional<identity::RelationshipState> relationship;
         std::string instruction;
+        PublicReplyFilter publicReplyFilter;
     };
 
     // Canonical state and posture for replies, proactive openings and evaluation.

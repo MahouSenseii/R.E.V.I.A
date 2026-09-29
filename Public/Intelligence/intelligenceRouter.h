@@ -16,6 +16,12 @@ public:
     [[nodiscard]] IntelligenceDecision Route(
         const std::string& input,
         const RoutingContext& context = {}) const;
+
+private:
+    // The decision before the audience rule: what the turn deserves on its own.
+    [[nodiscard]] IntelligenceDecision RouteForEffort(
+        const std::string& input,
+        const RoutingContext& context) const;
 };
 
 } // namespace revia::intelligence

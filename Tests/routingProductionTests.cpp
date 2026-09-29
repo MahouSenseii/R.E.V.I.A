@@ -34,13 +34,14 @@ void TestEveryRoutingInputHasAProducer()
 {
     RoutingContext context;
     auto& [visionRequired, expertVisionPreferred, explicitResearch, previousUncertainty,
-           recentContextCharacters, previousAssistantTier] = context;
+           recentContextCharacters, previousAssistantTier, publicAudience] = context;
     static_cast<void>(visionRequired);
     static_cast<void>(expertVisionPreferred);
     static_cast<void>(explicitResearch);
     static_cast<void>(previousUncertainty);
     static_cast<void>(recentContextCharacters);
     static_cast<void>(previousAssistantTier);
+    static_cast<void>(publicAudience);
 
     // And each one is really reachable from a turn's own state.
     RoutingInputs screen;
@@ -204,6 +205,13 @@ void TestAPublicTurnInheritsNothingFromTheLocalThread()
         "A public-audience turn inherited the local conversation's tier.");
     Check(!context.previousUncertainty,
         "A public-audience turn inherited the local conversation's last outcome.");
+    // And the router is told it is public, which is what keeps the Expert brain off it.
+    Check(context.publicAudience,
+        "A public-audience turn did not tell the router its audience.");
+    RoutingInputs local;
+    local.input = "Why?";
+    Check(!BuildRoutingContext(local).publicAudience,
+        "A local turn was marked as public.");
 }
 
 // A proactive opening is Revia choosing to speak, not a request to classify.
