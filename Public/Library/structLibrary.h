@@ -373,6 +373,9 @@ struct speechSettings
     // decodes incrementally is played as it produces. A worker without the endpoint
     // falls back to the WAV path on the same phrase.
     bool bQwenStreamFirstPhrase = true;
+    // A "hmm" from her own clip bank when she stops to think about a real question, so
+    // the pause reads as thinking rather than as a dropped line. Rare by policy.
+    bool bThinkingFillerEnabled = true;
     bool bQwenPrecomputeVoicePrompt = true;
     std::string qwenAttentionBackend = "adaptive";
     std::string qwenInputMode = "simulated-stream";
@@ -426,6 +429,10 @@ struct speechRecognitionSettings
     int vadEnergyThreshold = 900;
     int vadSpeechFrames = 3;
     int vadSilenceMs = 350;
+    // How long to wait for the rest of a thought that trailed off ("and then I..."),
+    // on top of vadSilenceMs, before answering what was heard. 0 answers at the first
+    // silence whatever the words. Speech/turnTaking.h decides which transcripts wait.
+    int continuationWindowMs = 900;
     int minimumUtteranceMs = 350;
     int maximumUtteranceSeconds = 24;
     // Hands-free answers only speech that names her or follows up on a conversation

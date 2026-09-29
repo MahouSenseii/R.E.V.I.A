@@ -766,7 +766,8 @@ agents::SelfInquiryResult ConversationRuntime::RunSelfInquiry(
     const bool modelAvailable,
     const std::uint64_t turnId,
     const std::stop_token stopToken,
-    const std::string& screenObservation)
+    const std::string& screenObservation,
+    const bool speechAllowed)
 {
     agents::SelfInquiryResult inquiry;
     if (selfInquirySettingsProvider)
@@ -789,6 +790,14 @@ agents::SelfInquiryResult ConversationRuntime::RunSelfInquiry(
     setState(RuntimeState::Thinking,
         "Stopping to think about turn #" + std::to_string(turnId) + ".");
     PublishComponent("Self-inquiry", "Thinking", decision.reason, -1.0, 0, turnId);
+    if (thinkingFillerEnabled.load() && thinkingFiller.Consider(policyInput, true, speechAllowed,
+            turnId, std::chrono::steady_clock::now()))
+    {
+        // Her own "hmm" from the clip bank, through the same path a cue in a reply
+        // takes: the bank and the rate policy decide whether it is actually heard, and a
+        // voice without the clip stays silent rather than synthesizing the word.
+        speech.Speak("*hmm*", emotions.ToAffectSnapshot(), ++utteranceCounter, false);
+    }
 
     const auto started = std::chrono::steady_clock::now();
     // The facts about her body lead the posture handed to the inquiry. Inside the
@@ -1356,7 +1365,8 @@ SessionResult ConversationRuntime::Generate(
                 llmAvailable && !reflex.matched,
                 currentTurn,
                 stopToken,
-                screenContext);
+                screenContext,
+                shouldSpeak && speech.IsEnabled() && !turnPolicy.publicAudience);
         }
         if (stopToken.stop_requested())
         {

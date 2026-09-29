@@ -1375,6 +1375,7 @@ bool ReviaSession::Start()
         std::lock_guard lock(externalAdapterMutex);
         chatSelector.Configure(settings.presence);
     }
+    conversationRuntime.SetThinkingFillerEnabled(settings.speech.bThinkingFillerEnabled);
     StartExternalAdapterLoop();
     // A separately opted-in source. Discord enablement never starts this listener.
     // Environment values are owner configuration, never supplied by a visitor.

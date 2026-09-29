@@ -23,6 +23,7 @@
 #include "Runtime/runtimeEvents.h"
 #include "Runtime/sessionResult.h"
 #include "Speech/speechService.h"
+#include "Speech/turnTaking.h"
 
 #include <cstdint>
 #include <functional>
@@ -185,6 +186,9 @@ public:
     void SetIncognito(bool enabled) { incognito.store(enabled); }
     [[nodiscard]] bool Incognito() const { return incognito.load(); }
 
+    // Whether she makes her "hmm" while she stops to think (speech.thinkingFillerEnabled).
+    void SetThinkingFillerEnabled(const bool enabled) { thinkingFillerEnabled.store(enabled); }
+
     // Public integrations get Revia's identity and the supplied channel history, but
     // never inherit the local user's dialogue, compressed history, durable memories,
     // screen/camera observations, or automatic web lookup. The caller supplies the
@@ -320,7 +324,8 @@ private:
         bool modelAvailable,
         std::uint64_t turnId,
         std::stop_token stopToken,
-        const std::string& screenObservation = {});
+        const std::string& screenObservation = {},
+        bool speechAllowed = false);
     [[nodiscard]] agents::ResponseFilterContext BuildResponseFilterContext(
         const std::string& policyInput,
         const std::vector<conversationMessage>& promptContext) const;
@@ -408,6 +413,9 @@ private:
     bool previousTurnWasUnreliable = false;
     std::uint64_t turnCounter = 0;
     std::uint64_t utteranceCounter = 0;
+    // The pause before a hard answer, made audible: rare by policy, off by setting.
+    speech::ThinkingFillerPolicy thinkingFiller;
+    std::atomic<bool> thinkingFillerEnabled = true;
 };
 
 } // namespace revia::runtime

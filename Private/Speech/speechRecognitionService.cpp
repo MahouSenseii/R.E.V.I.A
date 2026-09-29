@@ -1,4 +1,5 @@
 #include "Speech/speechRecognitionService.h"
+#include "Speech/turnTaking.h"
 
 #include <httplib.h>
 #include <nlohmann/json.hpp>
@@ -1022,11 +1023,13 @@ void SpeechRecognitionService::Capture(
 
 bool SpeechRecognitionService::CaptureHandsFree(
     const std::stop_token stopToken,
-    const std::filesystem::path outputPath)
+    const std::filesystem::path outputPath,
+    const int waitForSpeechMs)
 {
 #ifndef _WIN32
     (void)stopToken;
     (void)outputPath;
+    (void)waitForSpeechMs;
     return false;
 #else
     WAVEFORMATEX format{};
@@ -1072,6 +1075,7 @@ bool SpeechRecognitionService::CaptureHandsFree(
     int qualifyingFrames = 0;
     int silentMilliseconds = 0;
     int capturedMilliseconds = 0;
+    int waitedMilliseconds = 0;
     double noiseFloor = 150.0;
     waveInStart(input);
     while (!stopToken.stop_requested() && handsFreeEnabled.load())
@@ -1113,6 +1117,7 @@ bool SpeechRecognitionService::CaptureHandsFree(
                     preRoll.pop_front();
                 }
                 qualifyingFrames = voiced ? qualifyingFrames + 1 : 0;
+                waitedMilliseconds += 50;
                 if (qualifyingFrames >= configuration.vadSpeechFrames)
                 {
                     speechStarted = true;
@@ -1146,6 +1151,12 @@ bool SpeechRecognitionService::CaptureHandsFree(
         if (speechStarted && (silentMilliseconds >= configuration.vadSilenceMs ||
             capturedMilliseconds >= configuration.maximumUtteranceSeconds * 1000))
         {
+            break;
+        }
+        // A bounded wait that saw no speech: the thought was finished after all.
+        if (!speechStarted && waitForSpeechMs > 0 && waitedMilliseconds >= waitForSpeechMs)
+        {
+            pcm.clear();
             break;
         }
         if (!processed)
@@ -1208,7 +1219,12 @@ void SpeechRecognitionService::RunHandsFree(const std::stop_token stopToken)
         }
         transcriptionCancelled.store(false);
         transcribing.store(true);
-        Transcribe(stopToken, wavePath, true);
+        if (!HandsFreeTurn(stopToken, wavePath))
+        {
+            // The server was unavailable, or the segment needs the CLI: the plain path,
+            // which answers at the first silence whatever the words.
+            Transcribe(stopToken, wavePath, true);
+        }
         if (!stopToken.stop_requested() && handsFreeEnabled.load())
         {
             RecognitionEvent waiting{
@@ -1217,6 +1233,74 @@ void SpeechRecognitionService::RunHandsFree(const std::stop_token stopToken)
             Notify(std::move(waiting));
         }
     }
+}
+
+// One hands-free turn through the whisper server, with the rest of a thought waited
+// for: a transcript that trailed off ("and then I") holds while the microphone stays
+// open for continuationWindowMs more, and what follows is appended before anything is
+// delivered. False when the server path could not answer, so the caller falls back.
+bool SpeechRecognitionService::HandsFreeTurn(
+    const std::stop_token stopToken,
+    const std::filesystem::path& wavePath)
+{
+    if (!configuration.bUseServer) return false;
+    const auto startedAt = std::chrono::steady_clock::now();
+    RecognitionEvent transcribingEvent{
+        "Transcribing", "whisper.cpp is transcribing the captured audio."};
+    transcribingEvent.automatic = true;
+    Notify(std::move(transcribingEvent));
+    std::string serverError;
+    std::optional<std::string> transcript = TranscribeWithServer(wavePath, stopToken, serverError);
+    if (!transcript.has_value())
+    {
+        return false;
+    }
+    std::error_code ignored;
+    std::filesystem::remove(wavePath, ignored);
+    std::string text = *transcript;
+    // Up to two continuations, so a thought that trails off twice is still one turn,
+    // and a person who never stops does not hold the microphone forever.
+    for (int continuation = 0; continuation < 2 && configuration.continuationWindowMs > 0; ++continuation)
+    {
+        const TurnJudgement judgement = JudgeTurnCompletion(text);
+        if (judgement.completion == TurnCompletion::Complete || text.empty() ||
+            text == "[BLANK_AUDIO]" || stopToken.stop_requested() || !handsFreeEnabled.load())
+        {
+            break;
+        }
+        const int window = ContinuationWindowMs(judgement.completion, 0,
+            configuration.continuationWindowMs);
+        RecognitionEvent holding{"HandsFree",
+            "Waiting " + std::to_string(window) + " ms for the rest of the thought (" +
+                judgement.because + ")."};
+        holding.automatic = true;
+        Notify(std::move(holding));
+        transcribing.store(false);
+        const std::filesystem::path more = wavePath.parent_path() /
+            (wavePath.stem().string() + "-" + std::to_string(continuation + 1) + ".wav");
+        const bool heardMore = CaptureHandsFree(stopToken, more, window);
+        transcribing.store(true);
+        if (!heardMore) break;
+        std::string moreError;
+        const std::optional<std::string> rest = TranscribeWithServer(more, stopToken, moreError);
+        std::filesystem::remove(more, ignored);
+        if (!rest.has_value() || rest->empty() || *rest == "[BLANK_AUDIO]") break;
+        text += " " + *rest;
+    }
+    transcribing.store(false);
+    if (text.empty() || text == "[BLANK_AUDIO]")
+    {
+        RecognitionEvent empty{
+            "Ready", "No clear speech was detected.", ElapsedMilliseconds(startedAt)};
+        empty.automatic = true;
+        Notify(std::move(empty));
+        return true;
+    }
+    RecognitionEvent completed{
+        "Transcript", "Speech transcription completed.", text, ElapsedMilliseconds(startedAt)};
+    completed.automatic = true;
+    Notify(std::move(completed));
+    return true;
 }
 
 bool SpeechRecognitionService::EnsureServerReady(

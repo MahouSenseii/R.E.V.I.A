@@ -171,8 +171,12 @@ public:
 
 private:
     void Capture(std::stop_token stopToken, std::filesystem::path outputPath);
-    bool CaptureHandsFree(std::stop_token stopToken, std::filesystem::path outputPath);
+    // waitForSpeechMs bounds how long to wait for speech to begin; 0 waits as long as
+    // hands-free stays on. The bound is what a continuation window is made of.
+    bool CaptureHandsFree(std::stop_token stopToken, std::filesystem::path outputPath,
+        int waitForSpeechMs = 0);
     void RunHandsFree(std::stop_token stopToken);
+    bool HandsFreeTurn(std::stop_token stopToken, const std::filesystem::path& wavePath);
     void Transcribe(
         std::stop_token stopToken,
         std::filesystem::path wavePath,

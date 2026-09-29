@@ -456,6 +456,11 @@ bool configManager::LoadSettings(appSettings& outSettings) const
                 outSettings.speech.bQwenStreamFirstPhrase =
                     speechData["qwenStreamFirstPhrase"].get<bool>();
             }
+            if (speechData.contains("thinkingFillerEnabled"))
+            {
+                outSettings.speech.bThinkingFillerEnabled =
+                    speechData["thinkingFillerEnabled"].get<bool>();
+            }
             if (speechData.contains("qwenPrecomputeVoicePrompt"))
             {
                 outSettings.speech.bQwenPrecomputeVoicePrompt =
@@ -608,6 +613,11 @@ bool configManager::LoadSettings(appSettings& outSettings) const
             {
                 outSettings.speechRecognition.vadSilenceMs =
                     recognitionData["vadSilenceMs"].get<int>();
+            }
+            if (recognitionData.contains("continuationWindowMs"))
+            {
+                outSettings.speechRecognition.continuationWindowMs =
+                    recognitionData["continuationWindowMs"].get<int>();
             }
             if (recognitionData.contains("minimumUtteranceMs"))
             {
