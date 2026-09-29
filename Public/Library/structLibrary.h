@@ -135,6 +135,10 @@ struct llmSettings
     // positive value is the real maximum RAM allocation passed to --cache-ram.
     int ramCacheMiB = -1;
     std::string modelLoadMode = "auto";
+    // Flags appended verbatim to the llama-server command line: what a particular
+    // model needs, such as --cpu-moe for a mixture of experts whose experts live in
+    // system RAM. Nothing Revia plans is taken away by them.
+    std::string serverArguments;
     int contextSize = 8192;
     int parallelRequests = 2;
     int startupTimeoutSeconds = 120;
@@ -167,6 +171,8 @@ struct modelTierSettings
     int port = 0;
     std::string modelName;
     std::string modelPath;
+    // As llmSettings::serverArguments, for this tier's own llama-server.
+    std::string serverArguments;
     std::string apiKey;
     bool bTreatAsRemote = false;
     bool bVisionEnabled = false;
@@ -204,6 +210,7 @@ struct intelligenceSettings
         .port = 8082,
         .modelName = "Qwen3.5-0.8B-Q4_K_M.gguf",
         .modelPath = "Models/Qwen3.5-0.8B-Q4_K_M.gguf",
+        .serverArguments = "",
         .apiKey = "",
         .bTreatAsRemote = false,
         .bVisionEnabled = false,
@@ -223,6 +230,7 @@ struct intelligenceSettings
         .port = 8083,
         .modelName = "Qwen3-VL-8B-Instruct-Unredacted-MAX.Q4_K_M.gguf",
         .modelPath = "Models/Qwen3-VL-8B-Instruct-Unredacted-MAX.Q4_K_M.gguf",
+        .serverArguments = "",
         .apiKey = "",
         .bTreatAsRemote = false,
         .bVisionEnabled = true,

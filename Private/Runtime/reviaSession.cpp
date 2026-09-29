@@ -185,6 +185,7 @@ namespace
         output.port = tier.port;
         output.modelName = tier.modelName;
         output.modelPath = tier.modelPath;
+        output.serverArguments = tier.serverArguments;
         output.bVisionEnabled = tier.bVisionEnabled;
         output.multimodalProjectorPath = tier.multimodalProjectorPath;
         output.contextSize = tier.contextSize;

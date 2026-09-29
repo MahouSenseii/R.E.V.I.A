@@ -467,6 +467,17 @@ bool llamaCppServerProcess::StartInternal(
         {
             commandLine += L" --fit off --flash-attn auto";
         }
+        if (!settings.serverArguments.empty())
+        {
+            // Last, so a flag the model needs wins over the plan's default for it.
+            const std::wstring extraWide = Utf8ToWide(settings.serverArguments);
+            if (extraWide.empty())
+            {
+                outError = "The extra llama.cpp server arguments could not be encoded by Windows.";
+                return false;
+            }
+            commandLine += L" " + extraWide;
+        }
     }
     if (embeddingMode)
     {

@@ -1,5 +1,5 @@
 param(
-    [ValidateSet('Minimal', 'Standard', 'Full')]
+    [ValidateSet('Minimal', 'Standard', 'Full', 'Large')]
     [string]$Profile = 'Full',
     [switch]$SkipModels,
     [switch]$SkipVoice,

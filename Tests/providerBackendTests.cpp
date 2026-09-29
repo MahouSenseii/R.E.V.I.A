@@ -1,11 +1,14 @@
 #include "testSupport.h"
 
+#include "Core/configManager.h"
 #include "Core/messageRouter.h"
 #include "LLM/llmService.h"
 #include "LLM/providerCapabilities.h"
 #include "Library/structLibrary.h"
 
 #include <chrono>
+#include <filesystem>
+#include <fstream>
 #include <httplib.h>
 #include <iostream>
 #include <mutex>
@@ -317,6 +320,57 @@ void TestARemoteTierIsNotHandedPrivateContext()
     Check(verdict.bSuccess && verdict.bShouldRemember && fast.Requests() == 2,
         "With the opt-in, the remote Fast brain did not evaluate memory: " + verdict.reason);
 }
+// What a model needs on its own llama-server command line is a setting, per tier, and
+// a tier does not inherit Main's: --cpu-moe for the 35B mixture of experts is not for
+// the 0.8B beside it.
+void TestServerArgumentsAreReadPerTier()
+{
+    revia::tests::ScopedTestDirectory directory;
+    const std::filesystem::path previous = std::filesystem::current_path();
+    std::filesystem::current_path(directory.root);
+    struct Restore
+    {
+        std::filesystem::path path;
+        ~Restore() { std::filesystem::current_path(path); }
+    } restore{previous};
+
+    std::filesystem::create_directories(directory.root / "Config/Profiles");
+    {
+        std::ofstream profile(directory.root / "Config/Profiles/fixture.json");
+        profile << R"({"id":"fixture","displayName":"Fixture","systemPrompt":"Fixture."})";
+    }
+    {
+        std::ofstream settings(directory.root / "Config/settings.json");
+        settings << json{
+            {"activeProfile", "fixture"},
+            {"llm", {{"backend", "LLamaCpp"}, {"host", "127.0.0.1"}, {"port", 8080},
+                {"modelName", "Qwen3.6-35B-A3B-UD-Q3_K_XL.gguf"},
+                {"modelPath", "Models/Qwen3.6-35B-A3B-UD-Q3_K_XL.gguf"},
+                {"serverArguments", "--cpu-moe"}, {"contextSize", 32768},
+                {"autoStartServer", false}, {"visionEnabled", false}}},
+            {"intelligence", {{"enabled", true},
+                {"fast", {{"enabled", true}, {"host", "127.0.0.1"}, {"port", 8082},
+                    {"modelName", "small"}, {"modelPath", "Models/small.gguf"}}},
+                {"expert", {{"enabled", true}, {"host", "127.0.0.1"}, {"port", 8083},
+                    {"modelName", "big"}, {"modelPath", "Models/big.gguf"},
+                    {"serverArguments", "--n-cpu-moe 8"}}}}},
+            {"embedding", {{"enabled", false}, {"autoStartServer", false}}},
+            {"speech", {{"enabled", false}, {"backend", "WindowsSapi"}}},
+            {"speechRecognition", {{"enabled", false}}}}.dump(2);
+    }
+
+    configManager config;
+    appSettings loaded;
+    Check(config.LoadSettings(loaded), "The settings with server arguments did not load.");
+    Check(loaded.llm.serverArguments == "--cpu-moe" && loaded.llm.contextSize == 32768,
+        "Main's server arguments or context were not read: '" + loaded.llm.serverArguments + "'");
+    Check(loaded.intelligence.fast.serverArguments.empty(),
+        "A tier without server arguments inherited some: '" +
+        loaded.intelligence.fast.serverArguments + "'");
+    Check(loaded.intelligence.expert.serverArguments == "--n-cpu-moe 8",
+        "A tier's own server arguments were not read: '" +
+        loaded.intelligence.expert.serverArguments + "'");
+}
 } // namespace
 
 void RunProviderBackendTests()
@@ -324,7 +378,9 @@ void RunProviderBackendTests()
     TestCapabilitiesFollowTheBackendName();
     TestAnOpenAiCompatibleServerIsSpokenToInItsOwnDialect();
     TestARemoteTierIsNotHandedPrivateContext();
+    TestServerArgumentsAreReadPerTier();
     std::cout << "An OpenAI-compatible server is spoken to without llama.cpp's extras, a "
-                 "llama.cpp profile still insists on /health, and a remote tier gets her "
-                 "private context only with the opt-in.\n";
+                 "llama.cpp profile still insists on /health, a remote tier gets her "
+                 "private context only with the opt-in, and each tier's llama-server "
+                 "flags are its own.\n";
 }

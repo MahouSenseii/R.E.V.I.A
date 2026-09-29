@@ -1,5 +1,5 @@
 param(
-    [ValidateSet('Minimal', 'Standard', 'Full')]
+    [ValidateSet('Minimal', 'Standard', 'Full', 'Large')]
     [string]$Profile = 'Standard',
     [switch]$IncludeBackgroundModel,
     [switch]$Force,
@@ -33,6 +33,10 @@ $artifacts = @(
         if ($profileIds -contains $entry.id) {
             @{
                 Name = [string]$entry.file
+                # The file as the repository names it, when that differs from the local
+                # name: two models' projectors are both "mmproj-F16.gguf" upstream.
+                Remote = if ($entry.PSObject.Properties['source'] -and $entry.source) {
+                    [string]$entry.source } else { [string]$entry.file }
                 Repository = [string]$entry.repository
                 Commit = [string]$entry.revision
                 Sha256 = [string]$entry.sha256
@@ -108,7 +112,7 @@ function Receive-ReviaArtifact {
         return
     }
 
-    $uri = "https://huggingface.co/$($Artifact.Repository)/resolve/$($Artifact.Commit)/$($Artifact.Name)?download=true"
+    $uri = "https://huggingface.co/$($Artifact.Repository)/resolve/$($Artifact.Commit)/$($Artifact.Remote)?download=true"
     # Loaded explicitly. setup.bat launches Windows PowerShell 5.1, which runs on .NET
     # Framework and does not load System.Net.Http for you -- so constructing HttpClient
     # threw "Unable to find type" before a single model was fetched. A machine with the
@@ -187,9 +191,29 @@ foreach ($artifact in $artifacts) {
 if (-not $SkipConfigUpdate) {
     $settingsPath = Join-Path $repoRoot 'Config\settings.json'
     $settings = Get-Content -LiteralPath $settingsPath -Raw | ConvertFrom-Json
-    $settings.llm.modelName = 'Qwen3.5-4B-Q4_K_M.gguf'
-    $settings.llm.modelPath = 'Models/Qwen3.5-4B-Q4_K_M.gguf'
-    $settings.llm.multimodalProjectorPath = 'Models/mmproj-F16.gguf'
+    # A key the file may not have yet is added rather than assigned, which fails.
+    function Set-ReviaSetting {
+        param([object]$Object, [string]$Name, [object]$Value)
+        $Object | Add-Member -NotePropertyName $Name -NotePropertyValue $Value -Force
+    }
+    if ($Profile -eq 'Large') {
+        # The 35B mixture of experts: 3B parameters active per token. Attention and
+        # the shared layers stay on the GPU; --cpu-moe keeps the experts in system
+        # RAM, which is what lets it share a card with the voice. Replace it with
+        # "--n-cpu-moe N" to keep the last N expert layers on the GPU once you know
+        # how much room the voice leaves.
+        $settings.llm.modelName = 'Qwen3.6-35B-A3B-UD-Q3_K_XL.gguf'
+        $settings.llm.modelPath = 'Models/Qwen3.6-35B-A3B-UD-Q3_K_XL.gguf'
+        $settings.llm.multimodalProjectorPath = 'Models/Qwen3.6-35B-A3B.mmproj-F16.gguf'
+        Set-ReviaSetting -Object $settings.llm -Name 'serverArguments' -Value '--cpu-moe'
+        Set-ReviaSetting -Object $settings.llm -Name 'contextSize' -Value 32768
+    } else {
+        $settings.llm.modelName = 'Qwen3.5-4B-Q4_K_M.gguf'
+        $settings.llm.modelPath = 'Models/Qwen3.5-4B-Q4_K_M.gguf'
+        $settings.llm.multimodalProjectorPath = 'Models/mmproj-F16.gguf'
+        Set-ReviaSetting -Object $settings.llm -Name 'serverArguments' -Value ''
+        Set-ReviaSetting -Object $settings.llm -Name 'contextSize' -Value 8192
+    }
     $settings.llm.visionEnabled = $Profile -ne 'Minimal'
     if ($null -ne $settings.vision) {
         $settings.vision.enabled = $Profile -ne 'Minimal'
@@ -204,7 +228,7 @@ if (-not $SkipConfigUpdate) {
             'Models/Qwen3-VL-8B-Instruct-Unredacted-MAX.Q4_K_M.gguf'
         $settings.intelligence.expert.multimodalProjectorPath =
             'Models/Qwen3-VL-8B-Instruct-Unredacted-MAX.mmproj-q8_0.gguf'
-        $settings.intelligence.fast.enabled = $Profile -in @('Minimal', 'Standard', 'Full')
+        $settings.intelligence.fast.enabled = $Profile -in @('Minimal', 'Standard', 'Full', 'Large')
         $settings.intelligence.expert.enabled = $Profile -eq 'Full'
     }
     $settings.embedding.modelPath = 'Models/nomic-embed-text-v1.5.Q4_K_M.gguf'

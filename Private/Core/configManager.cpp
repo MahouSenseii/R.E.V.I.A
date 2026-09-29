@@ -53,6 +53,8 @@ namespace
             output.modelName = data["modelName"].get<std::string>();
         if (data.contains("modelPath"))
             output.modelPath = data["modelPath"].get<std::string>();
+        if (data.contains("serverArguments"))
+            output.serverArguments = data["serverArguments"].get<std::string>();
         if (data.contains("visionEnabled"))
             output.bVisionEnabled = data["visionEnabled"].get<bool>();
         if (data.contains("multimodalProjectorPath"))
@@ -160,6 +162,10 @@ bool configManager::LoadSettings(appSettings& outSettings) const
             if (llmData.contains("serverExecutable"))
             {
                 outSettings.llm.serverExecutable = llmData["serverExecutable"].get<std::string>();
+            }
+            if (llmData.contains("serverArguments"))
+            {
+                outSettings.llm.serverArguments = llmData["serverArguments"].get<std::string>();
             }
 
             if (llmData.contains("modelPath"))

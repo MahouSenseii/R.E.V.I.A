@@ -1,9 +1,37 @@
 {
   "schemaVersion": 1,
   "profiles": {
-    "Minimal": ["fast", "main", "memory", "stt-primary"],
-    "Standard": ["fast", "main", "main-vision", "memory", "stt-primary"],
-    "Full": ["fast", "main", "main-vision", "expert", "expert-vision", "memory", "stt-primary", "stt-fallback"]
+    "Minimal": [
+      "fast",
+      "main",
+      "memory",
+      "stt-primary"
+    ],
+    "Standard": [
+      "fast",
+      "main",
+      "main-vision",
+      "memory",
+      "stt-primary"
+    ],
+    "Full": [
+      "fast",
+      "main",
+      "main-vision",
+      "expert",
+      "expert-vision",
+      "memory",
+      "stt-primary",
+      "stt-fallback"
+    ],
+    "Large": [
+      "fast",
+      "main-large",
+      "main-large-vision",
+      "memory",
+      "stt-primary",
+      "stt-fallback"
+    ]
   },
   "artifacts": [
     {
@@ -70,6 +98,33 @@
       "quantization": "Q8_0",
       "recommendedVramMiB": 800,
       "projectorFor": "expert"
+    },
+    {
+      "id": "main-large",
+      "role": "Main conversational brain, 35B mixture of experts (opt-in)",
+      "file": "Qwen3.6-35B-A3B-UD-Q3_K_XL.gguf",
+      "repository": "unsloth/Qwen3.6-35B-A3B-GGUF",
+      "revision": "a483e9e6cbd595906af30beda3187c2663a1118c",
+      "sha256": "a832b9689925f1bd335bbe985cdfb06c36bf2cf268f4f8f6eceafa3ceb515617",
+      "bytes": 16845511648,
+      "license": "apache-2.0",
+      "quantization": "UD-Q3_K_XL",
+      "recommendedVramMiB": 7000,
+      "projectorFor": null
+    },
+    {
+      "id": "main-large-vision",
+      "role": "Main vision projector for the 35B mixture of experts",
+      "file": "Qwen3.6-35B-A3B.mmproj-F16.gguf",
+      "source": "mmproj-F16.gguf",
+      "repository": "unsloth/Qwen3.6-35B-A3B-GGUF",
+      "revision": "a483e9e6cbd595906af30beda3187c2663a1118c",
+      "sha256": "8971ee4f331ff0a4c609374f32984b3d4e6dc086c0aa35f1d637fad1829e887f",
+      "bytes": 899283680,
+      "license": "apache-2.0",
+      "quantization": "F16",
+      "recommendedVramMiB": 900,
+      "projectorFor": "main-large"
     },
     {
       "id": "memory",

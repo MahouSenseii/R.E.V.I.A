@@ -93,6 +93,7 @@ She never gets an unrestricted shell, and model text never becomes a shell comma
 | `Minimal` | ~3.7 GB | Chat, memory, speech recognition. Runs on one modest GPU or CPU. |
 | `Standard` | ~4.4 GB | Minimal + screen vision on the Main model. |
 | `Full` | ~10.7 GB | Everything, including the 8B Expert model. Best with 12 GB+ VRAM total. |
+| `Large` | ~19.2 GB | Opt-in: Standard's stack with a 35B mixture-of-experts Main brain (3B active per token) whose experts live in system RAM. Needs a 12 GB card plus 32 GB+ RAM; see [Bigger brain](#bigger-brain-opt-in). |
 
 Qwen voice adds a ~5 GB Python/PyTorch environment plus ~2–5 GB of voice models downloaded on first use. NVIDIA GPUs get CUDA; AMD/Intel GPUs get Vulkan for the language models; everything can fall back to CPU (slowly). Two GPUs are not required. Leave **30 GB free** for a Full install.
 
@@ -359,6 +360,14 @@ The Qwen2.5-Omni and Llama 3.1 8B files that may sit in `Models\` are not used. 
 All workers are separate local processes bound to `127.0.0.1` so each GPU gets its own CUDA context and a crash cannot take Revia down. Nothing is sent to a cloud model unless you point a brain at one yourself (below).
 
 On one GPU, or none, the resource planner moves work to what is available instead of switching features off.
+
+### Bigger brain (opt-in)
+
+The default 4B Main brain is quick and fits beside her voice, and it is also why she can "perform personality instead of delivering substance" on a hard question. `.\setup.bat -Profile Large` swaps Main for **Qwen3.6-35B-A3B** (Apache-2.0, vision, 262K native context), a mixture of experts with 3B parameters active per token, pinned at Unsloth's UD-Q3_K_XL quantization (16.8 GB on disk). Nothing else changes: Fast, memory and speech stay as they are, and Expert is switched off because the 35B outranks it.
+
+How it fits: `llm.serverArguments` is set to `--cpu-moe`, so attention and the shared layers load on the GPU and the expert weights stay in system RAM. That is what lets it share a 12 GB card with Qwen3-TTS, at the cost of speed that depends on your memory bandwidth (the exact tokens-per-second on a mixed pair of cards is unverified). Once you know how much VRAM the voice leaves, `--n-cpu-moe N` in place of `--cpu-moe` keeps the last N expert layers on the GPU and is the knob to turn. `llm.contextSize` goes to 32768 and the automatic fit trims it if it must.
+
+Back to the default: `.\setup.bat -Profile Full` (or `Standard`) rewrites `settings.json` for the 4B; the 35B file stays in `Models\` until you delete it.
 
 ### Another server than llama.cpp
 
