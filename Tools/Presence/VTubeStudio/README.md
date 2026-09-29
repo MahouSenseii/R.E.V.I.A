@@ -59,5 +59,6 @@ been run against a real VTube Studio; the API calls follow its published contrac
 
 ## What comes next
 
-Visemes from Revia's own speech timing in place of the envelope; VRM behind the same
-avatar bridge; and a desktop-pet window for assistant mode.
+Visemes from Revia's own speech timing in place of the envelope, and a desktop-pet
+window for assistant mode. VRM is already behind the same avatar bridge through the
+[VMC adapter](../VMC/README.md).

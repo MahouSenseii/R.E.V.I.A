@@ -1,0 +1,22 @@
+{
+  "host": "127.0.0.1",
+  "port": 39539,
+  "blendShapeSet": "vrm0",
+  "bundle": true,
+  "statePath": "C:/absolute/path/to/Revia/build/debug/RuntimeData/Presence/avatar_state.json",
+  "expressionBlendShapes": {
+    "happy": { "joy": 1 },
+    "excited": { "joy": 0.8, "surprised": 0.5 },
+    "playful": { "fun": 0.8, "joy": 0.3 },
+    "curious": { "fun": 0.3, "surprised": 0.3 },
+    "sad": { "sorrow": 0.9 },
+    "angry": { "angry": 0.9 },
+    "sulky": { "angry": 0.35, "sorrow": 0.3 },
+    "bored": { "sorrow": 0.2 },
+    "frustrated": { "angry": 0.6 },
+    "concerned": { "sorrow": 0.5 },
+    "confused": { "sorrow": 0.2, "fun": 0.1 },
+    "focused": {},
+    "neutral": {}
+  }
+}

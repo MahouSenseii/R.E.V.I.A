@@ -23,7 +23,9 @@ never call inference or grant an action.
 
 The first consumer is the [VTube Studio adapter](VTubeStudio/README.md), which drives a
 Live2D model from this snapshot alone: mouth from `speaking`, a hotkey from `expression`,
-gaze from `attention`.
+gaze from `attention`. The second is the [VMC adapter](VMC/README.md), which drives a VRM
+model through any VMC receiver from the same snapshot: a mouth viseme, blend-shape
+weights from `expression` and `affect_intensity`, the head bone from `attention`.
 
 The canonical design, palette, expression mapping, and selected renderer target are in
 `Config/avatar.json`. `target` remains `unselected` until a real Live2D/VRM model and its

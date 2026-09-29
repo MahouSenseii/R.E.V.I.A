@@ -386,6 +386,16 @@ if(BUILD_TESTING)
                 COMMAND "${REVIA_NODE_EXECUTABLE}" --test
                         "${CMAKE_CURRENT_SOURCE_DIR}/Tools/Mcp/bridge.test.mjs"
         )
+        add_test(
+                NAME Revia.VTubeStudioAdapter
+                COMMAND "${REVIA_NODE_EXECUTABLE}" --test
+                        "${CMAKE_CURRENT_SOURCE_DIR}/Tools/Presence/VTubeStudio/vts.test.mjs"
+        )
+        add_test(
+                NAME Revia.VmcAdapter
+                COMMAND "${REVIA_NODE_EXECUTABLE}" --test
+                        "${CMAKE_CURRENT_SOURCE_DIR}/Tools/Presence/VMC/vmc.test.mjs"
+        )
     endif()
     find_package(Python3 COMPONENTS Interpreter QUIET)
     if(Python3_Interpreter_FOUND)
