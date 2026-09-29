@@ -5955,6 +5955,14 @@ std::string ReviaSession::SongListingText() const
         stream << "  " << song.id;
         if (song.title != song.id) stream << "  \"" << song.title << '"';
         if (!song.artist.empty()) stream << "  - " << song.artist;
+        if (!song.madeWith.empty() || !song.voice.empty())
+        {
+            stream << "  (";
+            if (!song.madeWith.empty()) stream << "made with " << song.madeWith;
+            if (!song.madeWith.empty() && !song.voice.empty()) stream << ", ";
+            if (!song.voice.empty()) stream << "voice: " << song.voice;
+            stream << ')';
+        }
         stream << "  [";
         stream << (song.hasInstrumental ? "instrumental" : "no instrumental");
         stream << (song.hasVocal ? " + vocal" : ", no vocal");

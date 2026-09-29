@@ -60,6 +60,13 @@ struct SongMetadata
     // Credit for the work being performed, as supplied by whoever assembled the asset.
     std::string artist;
     std::string notes;
+    // Where the recording came from and whose voice sings it, as the assembler stated
+    // them: "Suno" and "Revia (RVC)" for a song made for her and converted to her
+    // voice, or the original singer. Carried through to the listing and the
+    // announcement, so what she performs is never presented as more than it is.
+    std::string madeWith;
+    std::string voice;
+    std::string license;
     double instrumentalGain = 1.0;
     double vocalGain = 1.0;
     std::vector<SongSection> sections;
@@ -86,6 +93,8 @@ struct SongSummary
     std::string id;
     std::string title;
     std::string artist;
+    std::string madeWith;
+    std::string voice;
     bool hasInstrumental = false;
     bool hasVocal = false;
     bool usable = false;

@@ -598,8 +598,67 @@ void TestAFinishedSongIsNotLeftStopping()
 
 } // namespace
 
+// A song a tool prepared: timed lyrics in lyrics.lrc, and a descriptor that says where
+// the recording came from and whose voice it is. What she performs is listed as what it
+// is, and a hand-written descriptor's sections still win over the lyrics file.
+void TestLyricsComeFromLrcAndProvenanceIsListed()
+{
+    using revia::performance::ParseLrc;
+    const std::vector<SongSection> parsed = ParseLrc(
+        "[ti:Bright Lights]\n[ar:made with Suno]\n"
+        "[00:12.50]first line\r\n"
+        "[00:05.2] early line  \n"
+        "[00:40.000][01:10.00]the chorus\n"
+        "not a lyric line\n"
+        "[00:50:12]colon fraction\n"
+        "[00:55.00]\n");
+    Check(parsed.size() == 5, "The LRC lines were not all read: " + std::to_string(parsed.size()));
+    Check(parsed[0].startMs == 5200 && parsed[0].line == "early line" &&
+        parsed[1].startMs == 12500 && parsed[1].line == "first line" &&
+        parsed[2].startMs == 40000 && parsed[2].line == "the chorus" &&
+        parsed[3].startMs == 50120 && parsed[3].line == "colon fraction" &&
+        parsed[4].startMs == 70000 && parsed[4].line == "the chorus" &&
+        parsed[0].label.empty(),
+        "The LRC stamps, repeats or order came out wrong.");
+
+    SongFixture fixture;
+    const auto made = fixture.Make("bright-lights");
+    WriteWav(made / "instrumental.wav", Tone(22050, 400, 2, 0.3), 22050, 2);
+    WriteWav(made / "vocal.wav", Tone(22050, 400, 1, 0.5), 22050, 1);
+    fixture.Describe("bright-lights", {
+        {"title", "Bright Lights"}, {"madeWith", "Suno"}, {"voice", "Revia (RVC)"},
+        {"license", "made for this channel"}});
+    {
+        std::ofstream lyrics(made / "lyrics.lrc");
+        lyrics << "[00:00.50]hello\n[00:01.00]world\n";
+    }
+    SongLibrary library;
+    library.SetRoot(fixture.root);
+    SongAsset asset;
+    std::string error;
+    Check(library.Load("bright-lights", asset, error), "The prepared song did not load: " + error);
+    Check(asset.metadata.madeWith == "Suno" && asset.metadata.voice == "Revia (RVC)" &&
+        asset.metadata.license == "made for this channel",
+        "The provenance was not read from song.json.");
+    Check(asset.metadata.sections.size() == 2 && asset.metadata.sections[1].line == "world" &&
+        asset.metadata.sections[1].startMs == 1000,
+        "The lyrics file did not become the song's lines.");
+    const std::vector<SongSummary> songs = library.List();
+    Check(songs.size() == 1 && songs[0].madeWith == "Suno" && songs[0].voice == "Revia (RVC)",
+        "The listing does not carry the provenance.");
+
+    // The author's own sections outrank the lyrics file.
+    fixture.Describe("bright-lights", {
+        {"title", "Bright Lights"},
+        {"sections", {{{"startMs", 0}, {"label", "Intro"}, {"line", "authored"}}}}});
+    Check(library.Load("bright-lights", asset, error) && asset.metadata.sections.size() == 1 &&
+        asset.metadata.sections[0].line == "authored",
+        "A lyrics file overrode the descriptor's own sections.");
+}
+
 void RunPerformanceTests()
 {
+    TestLyricsComeFromLrcAndProvenanceIsListed();
     TestWavRoundTrip();
     TestUnreadableAudioIsRefusedByName();
     TestMonoBecomesStereoAndMixSaturates();

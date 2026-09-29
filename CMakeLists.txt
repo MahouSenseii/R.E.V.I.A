@@ -394,6 +394,11 @@ if(BUILD_TESTING)
                 COMMAND "${Python3_EXECUTABLE}"
                         "${CMAKE_CURRENT_SOURCE_DIR}/Tests/reviaImageService.test.py"
         )
+        add_test(
+                NAME Revia.PrepareSongTool
+                COMMAND "${Python3_EXECUTABLE}"
+                        "${CMAKE_CURRENT_SOURCE_DIR}/Tests/prepareSong.test.py"
+        )
     endif()
     if(TARGET ReviaDesktop)
         add_executable(ReviaSvgRendererTests

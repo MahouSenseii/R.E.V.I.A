@@ -7,6 +7,7 @@
 #include <cctype>
 #include <fstream>
 #include <nlohmann/json.hpp>
+#include <optional>
 #include <system_error>
 
 namespace revia::performance
@@ -99,6 +100,33 @@ void FindTracks(
     {
         outVocal = loose.front();
     }
+}
+
+// One "[mm:ss.xx]" or "[mm:ss]" stamp at the start of `text`, as milliseconds.
+std::optional<std::int64_t> ReadLrcStamp(const std::string& text, std::size_t& outLength)
+{
+    if (text.size() < 6 || text[0] != '[') return std::nullopt;
+    const std::size_t close = text.find(']');
+    if (close == std::string::npos || close > 14) return std::nullopt;
+    const std::string inside = text.substr(1, close - 1);
+    const std::size_t colon = inside.find(':');
+    if (colon == std::string::npos || colon == 0) return std::nullopt;
+    const std::string minutes = inside.substr(0, colon);
+    const std::string rest = inside.substr(colon + 1);
+    if (minutes.find_first_not_of("0123456789") != std::string::npos) return std::nullopt;
+    const std::size_t dot = rest.find_first_of(".:");
+    const std::string seconds = dot == std::string::npos ? rest : rest.substr(0, dot);
+    std::string fraction = dot == std::string::npos ? std::string() : rest.substr(dot + 1);
+    if (seconds.empty() || seconds.find_first_not_of("0123456789") != std::string::npos ||
+        fraction.find_first_not_of("0123456789") != std::string::npos)
+    {
+        return std::nullopt;
+    }
+    // Two digits are hundredths, three are milliseconds; anything longer is truncated.
+    while (fraction.size() < 3) fraction += '0';
+    fraction = fraction.substr(0, 3);
+    outLength = close + 1;
+    return std::stoll(minutes) * 60000 + std::stoll(seconds) * 1000 + std::stoll(fraction);
 }
 
 bool IsTrimmable(const char character)
@@ -273,6 +301,8 @@ SongSummary SongLibrary::Inspect(const std::filesystem::directory_entry& entry) 
                 const std::string title = BoundedText(data, "title", MaximumTextBytes);
                 if (!title.empty()) summary.title = title;
                 summary.artist = BoundedText(data, "artist", MaximumTextBytes);
+                summary.madeWith = BoundedText(data, "madeWith", MaximumTextBytes);
+                summary.voice = BoundedText(data, "voice", MaximumTextBytes);
             }
         }
         catch (const std::exception&)
@@ -317,6 +347,52 @@ std::vector<SongSummary> SongLibrary::List() const
         return Lower(first.title) < Lower(second.title);
     });
     return songs;
+}
+
+std::vector<SongSection> ParseLrc(const std::string& text)
+{
+    std::vector<SongSection> lines;
+    std::size_t start = 0;
+    while (start < text.size() && lines.size() < MaximumSections)
+    {
+        std::size_t end = text.find('\n', start);
+        if (end == std::string::npos) end = text.size();
+        std::string line = text.substr(start, end - start);
+        start = end + 1;
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        // Every stamp on the line shares its words: "[00:10.00][00:40.00]chorus line".
+        std::vector<std::int64_t> stamps;
+        std::size_t consumed = 0;
+        while (consumed < line.size())
+        {
+            std::size_t length = 0;
+            const std::optional<std::int64_t> stamp = ReadLrcStamp(line.substr(consumed), length);
+            if (!stamp.has_value()) break;
+            stamps.push_back(*stamp);
+            consumed += length;
+        }
+        if (stamps.empty()) continue;
+        std::string words = line.substr(consumed);
+        const std::size_t first = words.find_first_not_of(" \t");
+        words = first == std::string::npos ? std::string() : words.substr(first);
+        while (!words.empty() && (words.back() == ' ' || words.back() == '\t')) words.pop_back();
+        if (words.empty()) continue;
+        revia::utf8::Truncate(words, MaximumTextBytes);
+        for (const std::int64_t stamp : stamps)
+        {
+            if (lines.size() >= MaximumSections) break;
+            SongSection section;
+            section.startMs = stamp;
+            section.line = words;
+            lines.push_back(std::move(section));
+        }
+    }
+    std::stable_sort(lines.begin(), lines.end(),
+        [](const SongSection& first, const SongSection& second)
+        {
+            return first.startMs < second.startMs;
+        });
+    return lines;
 }
 
 bool SongLibrary::Load(
@@ -365,6 +441,9 @@ bool SongLibrary::Load(
             if (!title.empty()) outAsset.metadata.title = title;
             outAsset.metadata.artist = BoundedText(data, "artist", MaximumTextBytes);
             outAsset.metadata.notes = BoundedText(data, "notes", MaximumTextBytes);
+            outAsset.metadata.madeWith = BoundedText(data, "madeWith", MaximumTextBytes);
+            outAsset.metadata.voice = BoundedText(data, "voice", MaximumTextBytes);
+            outAsset.metadata.license = BoundedText(data, "license", MaximumTextBytes);
             outAsset.metadata.instrumentalGain = BoundedGain(data, "instrumentalGain", 1.0);
             outAsset.metadata.vocalGain = BoundedGain(data, "vocalGain", 1.0);
             if (data.contains("sections") && data["sections"].is_array())
@@ -402,6 +481,20 @@ bool SongLibrary::Load(
         {
             outError = std::string("song.json could not be read: ") + failure.what();
             return false;
+        }
+    }
+
+    // Timed lyrics from lyrics.lrc when the descriptor marks no sections of its own:
+    // a hand-written song.json stays the author's word, and a file a tool wrote fills
+    // in when there is nothing else.
+    if (outAsset.metadata.sections.empty())
+    {
+        const std::filesystem::path lyrics = directory / "lyrics.lrc";
+        if (std::filesystem::is_regular_file(lyrics, error))
+        {
+            std::ifstream file(lyrics, std::ios::binary);
+            std::string text((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+            outAsset.metadata.sections = ParseLrc(text);
         }
     }
 

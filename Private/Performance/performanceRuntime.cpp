@@ -411,6 +411,16 @@ void PerformanceRuntime::Perform(std::stop_token stopToken, SongAsset asset)
     started.message = asset.metadata.artist.empty()
         ? asset.metadata.title
         : asset.metadata.title + " - " + asset.metadata.artist;
+    // Said as what it is: a song made for her and sung in her converted voice is
+    // announced that way, and an original recording is not presented as her singing.
+    if (!asset.metadata.madeWith.empty() || !asset.metadata.voice.empty())
+    {
+        started.message += " (";
+        if (!asset.metadata.madeWith.empty()) started.message += "made with " + asset.metadata.madeWith;
+        if (!asset.metadata.madeWith.empty() && !asset.metadata.voice.empty()) started.message += ", ";
+        if (!asset.metadata.voice.empty()) started.message += "voice: " + asset.metadata.voice;
+        started.message += ")";
+    }
     Publish(started);
 
 #ifdef _WIN32

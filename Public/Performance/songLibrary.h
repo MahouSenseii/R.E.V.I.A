@@ -25,12 +25,19 @@ struct SingRequest
 // conversation, and return nothing.
 [[nodiscard]] std::optional<SingRequest> ParseSingRequest(const std::string& text);
 
+// Timed lyrics in the LRC form ("[mm:ss.xx]words", several stamps per line allowed),
+// which is what song tools export and what a forced aligner writes. Tag lines such as
+// [ti:...] are skipped. The lines come back sorted by time, one section each, with the
+// label empty: a lyric is a line to show, not a part of the song's structure.
+[[nodiscard]] std::vector<SongSection> ParseLrc(const std::string& text);
+
 // Reads what is in the songs folder. It never writes there and never reaches outside it.
 //
 // A song is a directory under the library root:
 //
 //   RuntimeData/Songs/<id>/
-//     song.json          optional - title, credit, gains, sections
+//     song.json          optional - title, credit, provenance, gains, sections
+//     lyrics.lrc         optional - timed lines, used when song.json marks no sections
 //     instrumental.wav   optional
 //     vocal.wav          optional
 //

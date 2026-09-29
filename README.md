@@ -450,6 +450,8 @@ At least one `.wav` is required; a folder with a single WAV and no `song.json` w
 
 She stops singing to answer you (set `performance.interruptSongToSpeak` to `false` to keep the music and show the reply on screen only). Song names are validated as plain folder names, and the library never writes to that folder. The project ships no songs and nothing generates singing; what you put there and whether you have the right to perform it is up to you.
 
+**Songs made with Suno, in her voice.** `Tools\Singing\prepare_song.py` takes a song you made with Suno (so there is no one else's performance to license), separates the vocal from the instrumental, converts the vocal into Revia's voice with an RVC model trained on her own speech (`build_voice_dataset.py` makes the training clips from her Qwen voice), times the lyrics against the vocal through the local whisper server, and writes the folder above with a `song.json` that records `madeWith` and `voice`. She announces a song as what it is ("Bright Lights (made with Suno, voice: Revia (RVC))"), `/songs` lists it that way, and `lyrics.lrc` next to the tracks supplies the karaoke lines when `song.json` marks none. `.\Tools\InstallSinging.ps1` installs the tools; [Tools/Singing/README.md](Tools/Singing/README.md) has the steps, including training the voice model.
+
 ---
 
 ## Self-improvement
