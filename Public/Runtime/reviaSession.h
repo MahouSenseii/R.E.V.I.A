@@ -4,6 +4,8 @@
 #include "Agents/checkExecutor.h"
 #include "Coding/acpClient.h"
 #include "Games/gamePlayer.h"
+#include "Learning/playbook.h"
+#include "Learning/skillLibrary.h"
 #include "Agents/curiosityAgent.h"
 #include "Agents/historyCompactor.h"
 #include "Agents/turnCoordinator.h"
@@ -567,6 +569,13 @@ private:
     void PlayGameMove(const games::GameSnapshot& game, const games::ForceRequest* force,
         std::stop_token stopToken);
     bool TryHandleGameInput(const std::string& input, SessionResult& result);
+    // The learning ladder's first two rungs (Learning/playbook.h, Learning/skillLibrary.h):
+    // guidance the owner wrote or accepted, and procedures that worked. Loaded at
+    // startup; a finished goal feeds the library; a new goal's planner reads from it.
+    bool TryHandlePlaybookInput(const std::string& input, SessionResult& result);
+    bool TryHandleProceduresInput(const std::string& input, SessionResult& result);
+    void RememberProcedure(const goals::Goal& finished);
+    [[nodiscard]] std::string ProcedureHints(const std::string& request) const;
     // The agent's permission request, through the same confirmation the rest of her
     // actions use. `blanket` is set when the person allowed the whole task.
     coding::PermissionAnswer AskCodingPermission(
@@ -1057,6 +1066,8 @@ private:
     planning::ReminderBook reminders;
     std::jthread checkWorker;
     std::atomic<bool> checkRunning = false;
+    learning::Playbook playbook;
+    learning::SkillLibrary procedures;
     std::shared_ptr<games::NeuroGameServer> gameServer;
     std::jthread gameWorker;
     std::mutex gameMutex;

@@ -180,6 +180,10 @@ public:
         agents::CheckKind, const std::string&, const std::string&, std::stop_token)>;
     void SetCheckExecutor(CheckRunner runner, std::string description);
     [[nodiscard]] bool HasCheckExecutor() const { return static_cast<bool>(checkRunner); }
+    // The playbook block for a turn (Learning/playbook.h), given whoever is speaking.
+    // Rendered by the session's book; empty when it has nothing to say to that person.
+    using PlaybookProvider = std::function<std::string(const std::string& speakerEntityId)>;
+    void SetPlaybookProvider(PlaybookProvider provider);
 
     // `turnReference` is added to this turn's context only, never to its history: text
     // the runtime fetched for the question, such as what the user copied.
@@ -447,6 +451,7 @@ private:
     InternetLookupHandler internetLookup;
     CheckRunner checkRunner;
     std::string checksDescription;
+    PlaybookProvider playbookProvider;
     ResponseFilterSettingsProvider filterSettingsProvider;
     ScreenContextProvider screenContextProvider;
     RelationshipProvider relationshipProvider;

@@ -1385,6 +1385,27 @@ bool ReviaSession::Start()
     LoadVoiceprints();
     ConfigureInvestigationChecks();
     StartGames();
+    {
+        std::string learningError;
+        if (!playbook.Initialize(
+                core::ResolveRuntimeWritePath(std::filesystem::path("RuntimeData/Learning/playbook.json")),
+                learningError))
+        {
+            appLogger.Warning("Playbook: " + learningError);
+        }
+        if (!procedures.Initialize(
+                core::ResolveRuntimeWritePath(std::filesystem::path("RuntimeData/Learning/procedures.json")),
+                learningError))
+        {
+            appLogger.Warning("Procedure library: " + learningError);
+        }
+        conversationRuntime.SetPlaybookProvider([this](const std::string& speaker)
+        {
+            return playbook.Render(speaker);
+        });
+        appLogger.Log("Learning: " + std::to_string(playbook.Size()) + " playbook lines, " +
+            std::to_string(procedures.Entries().size()) + " procedures.");
+    }
     if (settings.intelligence.advisor.bEnabled)
     {
         // The key is read here, once, and handed to the runtime's client; it is not
@@ -8605,6 +8626,7 @@ goals::Goal ReviaSession::FinishGoalRun(
         {"goal_run", ElapsedMilliseconds(startedAt), true}});
 
     const std::string summary = FormatGoalSummary(finished);
+    RememberProcedure(finished);
     if (finished.status == goals::GoalStatus::Succeeded)
     {
         appLogger.Log(summary);
@@ -9179,6 +9201,198 @@ bool ReviaSession::TryHandleGameInput(const std::string& input, SessionResult& r
     result.text = text.str();
     SetState(RuntimeState::Idle);
     return true;
+}
+
+void ReviaSession::RememberProcedure(const goals::Goal& finished)
+{
+    if (finished.status == goals::GoalStatus::Succeeded)
+    {
+        if (const std::optional<learning::Procedure> kept = procedures.Learn(finished))
+        {
+            PublishComponent("Procedures", kept->successes > 1 ? "Confirmed" : "Learned",
+                kept->title + " (" + std::to_string(kept->steps.size()) +
+                    (kept->steps.size() == 1 ? " step" : " steps") + ")");
+        }
+    }
+    else if (finished.status == goals::GoalStatus::Failed || finished.status == goals::GoalStatus::Exhausted)
+    {
+        procedures.RecordFailure(finished.title);
+    }
+}
+
+std::string ReviaSession::ProcedureHints(const std::string& request) const
+{
+    return learning::SkillLibrary::RenderForPlanner(procedures.Similar(request, 3));
+}
+
+bool ReviaSession::TryHandlePlaybookInput(const std::string& input, SessionResult& result)
+{
+    const std::string argument = input.size() > 9 ? Trim(input.substr(9)) : std::string();
+    result.fromAssistant = true;
+    const auto finish = [&](const std::string& text, const bool ok)
+    {
+        result.succeeded = ok;
+        result.text = text;
+        if (!ok) result.reason = text;
+        SetState(RuntimeState::Idle);
+        return true;
+    };
+    const auto number = [](const std::string& text) -> std::size_t
+    {
+        if (text.empty() || text.size() > 4 ||
+            !std::all_of(text.begin(), text.end(), [](const unsigned char c) { return std::isdigit(c) != 0; }))
+        {
+            return 0;
+        }
+        return static_cast<std::size_t>(std::stoul(text));
+    };
+    if (argument.rfind("add ", 0) == 0)
+    {
+        std::string text = Trim(argument.substr(4));
+        std::string scope;
+        std::string scopeName;
+        // "add for Sam: keep it short" scopes the line to one person she knows.
+        if (text.rfind("for ", 0) == 0)
+        {
+            const std::size_t colon = text.find(':');
+            if (colon == std::string::npos) return finish("Usage: /playbook add for <name>: <what works with them>", false);
+            scopeName = Trim(text.substr(4, colon - 4));
+            text = Trim(text.substr(colon + 1));
+            const auto lowered = [](std::string value)
+            {
+                for (char& c : value) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+                return value;
+            };
+            for (const identity::RelationshipState& person : relationships.All())
+            {
+                if (lowered(person.displayName) == lowered(scopeName)) scope = person.entityId;
+            }
+            if (scope.empty()) return finish("I don't know anyone called " + scopeName + " yet.", false);
+        }
+        std::string error;
+        const std::optional<learning::PlaybookEntry> added =
+            playbook.Add(text, scope, scopeName, "owner", "", true, error);
+        if (!added) return finish(error, false);
+        PublishComponent("Playbook", "Added", added->text);
+        return finish("Noted" + (scopeName.empty() ? std::string() : " for " + scopeName) + ": " + added->text +
+            (error.empty() ? "" : " " + error), true);
+    }
+    if (argument.rfind("accept ", 0) == 0)
+    {
+        const std::string lessonId = Trim(argument.substr(7));
+        for (const learning::Lesson& lesson : DrawLessons())
+        {
+            if (lesson.id != lessonId) continue;
+            std::string error;
+            const std::optional<learning::PlaybookEntry> added =
+                playbook.Add(lesson.statement, "", "", "lesson", lesson.evidence, true, error);
+            if (!added) return finish(error, false);
+            PublishComponent("Playbook", "Accepted", added->text);
+            return finish("Added to the playbook: " + added->text, true);
+        }
+        return finish("No lesson with that id is on offer; /playbook lists them.", false);
+    }
+    if (argument.rfind("on ", 0) == 0 || argument.rfind("off ", 0) == 0)
+    {
+        const bool enable = argument.rfind("on ", 0) == 0;
+        const std::size_t which = number(Trim(argument.substr(enable ? 3 : 4)));
+        if (!playbook.SetEnabled(which, enable)) return finish("There is no playbook line " + std::to_string(which) + ".", false);
+        return finish("Line " + std::to_string(which) + (enable ? " is on." : " is off; it stays written down."), true);
+    }
+    if (argument.rfind("remove ", 0) == 0)
+    {
+        const std::optional<learning::PlaybookEntry> removed = playbook.Remove(number(Trim(argument.substr(7))));
+        if (!removed) return finish("There is no playbook line to remove by that number.", false);
+        return finish("Removed: " + removed->text, true);
+    }
+    if (!argument.empty())
+    {
+        return finish("Usage: /playbook [add <line> | add for <name>: <line> | accept <lesson-id> | on <n> | off <n> | remove <n>]", false);
+    }
+    const std::vector<learning::PlaybookEntry> entries = playbook.Entries();
+    std::ostringstream text;
+    if (entries.empty())
+    {
+        text << "The playbook is empty. Tell me what works: /playbook add keep answers short "
+                "after 10pm, or /playbook add for Sam: give the reasoning first.";
+    }
+    else
+    {
+        text << "What works, as written down (" << entries.size() << "):";
+        for (std::size_t index = 0; index < entries.size(); ++index)
+        {
+            const learning::PlaybookEntry& entry = entries[index];
+            text << "\n" << index + 1 << ". " << (entry.enabled ? "" : "[off] ") << entry.text;
+            if (!entry.scopeName.empty()) text << " (about " << entry.scopeName << ")";
+            if (entry.source != "owner") text << " [from a " << entry.source << "]";
+            if (entry.uses > 0) text << " - used " << entry.uses << (entry.uses == 1 ? " time" : " times");
+        }
+    }
+    const std::vector<learning::Lesson> lessons = DrawLessons();
+    if (!lessons.empty())
+    {
+        text << "\nLessons on offer from her own record (accept one with /playbook accept <id>):";
+        for (const learning::Lesson& lesson : lessons)
+        {
+            text << "\n  " << lesson.id << ": " << lesson.statement;
+        }
+    }
+    return finish(text.str(), true);
+}
+
+bool ReviaSession::TryHandleProceduresInput(const std::string& input, SessionResult& result)
+{
+    const std::string argument = input.size() > 11 ? Trim(input.substr(11)) : std::string();
+    result.fromAssistant = true;
+    const auto finish = [&](const std::string& text, const bool ok)
+    {
+        result.succeeded = ok;
+        result.text = text;
+        if (!ok) result.reason = text;
+        SetState(RuntimeState::Idle);
+        return true;
+    };
+    if (argument.rfind("forget ", 0) == 0)
+    {
+        const std::string which = Trim(argument.substr(7));
+        std::size_t index = 0;
+        if (!which.empty() && which.size() < 5 &&
+            std::all_of(which.begin(), which.end(), [](const unsigned char c) { return std::isdigit(c) != 0; }))
+        {
+            index = static_cast<std::size_t>(std::stoul(which));
+        }
+        const std::optional<learning::Procedure> removed = procedures.Forget(index);
+        if (!removed) return finish("There is no procedure by that number.", false);
+        return finish("Forgotten: " + removed->title, true);
+    }
+    if (argument.rfind("for ", 0) == 0)
+    {
+        const std::string hints = ProcedureHints(Trim(argument.substr(4)));
+        return finish(hints.empty() ? "Nothing in the library resembles that request." : hints, true);
+    }
+    if (!argument.empty()) return finish("Usage: /procedures [for <request> | forget <n>]", false);
+    const std::vector<learning::Procedure> entries = procedures.Entries();
+    std::ostringstream text;
+    if (entries.empty())
+    {
+        text << "No procedures yet. A goal that runs to the end with its checks passing is "
+                "kept here, and offered to the planner the next time a request reads like it.";
+    }
+    else
+    {
+        text << "Procedures that worked (" << entries.size() << "):";
+        for (std::size_t index = 0; index < entries.size(); ++index)
+        {
+            const learning::Procedure& procedure = entries[index];
+            text << "\n" << index + 1 << ". " << procedure.title << " - " << procedure.steps.size()
+                 << (procedure.steps.size() == 1 ? " step" : " steps") << ", worked " << procedure.successes
+                 << (procedure.successes == 1 ? " time" : " times");
+            if (procedure.failures > 0) text << ", failed " << procedure.failures;
+            if (!procedure.Trusted()) text << " (not offered)";
+        }
+        text << "\nForget one with /procedures forget <number>; see what a request would get with /procedures for <request>.";
+    }
+    return finish(text.str(), true);
 }
 
 bool ReviaSession::TryHandleCodeInput(const std::string& input, SessionResult& result)
@@ -9829,7 +10043,9 @@ bool ReviaSession::TryHandleGoalInput(const std::string& input, SessionResult& r
     if (RefuseWhileTaskRuns(result)) return true;
 
     SetState(RuntimeState::Thinking, "Planning a goal.");
-    const responseOutput proposal = router.PlanGoal(request);
+    const std::string hints = ProcedureHints(request);
+    if (!hints.empty()) PublishComponent("Procedures", "Offered", utf8::Prefix(hints, 200));
+    const responseOutput proposal = router.PlanGoal(hints.empty() ? request : request + "\n\n" + hints);
     if (!proposal.bSuccess)
     {
         result.succeeded = false;
@@ -11281,6 +11497,14 @@ bool ReviaSession::TryHandleActionInput(const std::string& input, SessionResult&
     if (input == "/game" || input.rfind("/game ", 0) == 0)
     {
         return TryHandleGameInput(input, result);
+    }
+    if (input == "/playbook" || input.rfind("/playbook ", 0) == 0)
+    {
+        return TryHandlePlaybookInput(input, result);
+    }
+    if (input == "/procedures" || input.rfind("/procedures ", 0) == 0)
+    {
+        return TryHandleProceduresInput(input, result);
     }
 
     if (input == "/bargein" || input.rfind("/bargein ", 0) == 0)

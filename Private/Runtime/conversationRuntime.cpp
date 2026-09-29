@@ -696,6 +696,11 @@ SessionResult ConversationRuntime::AnswerCheck(
     return result;
 }
 
+void ConversationRuntime::SetPlaybookProvider(PlaybookProvider provider)
+{
+    playbookProvider = std::move(provider);
+}
+
 void ConversationRuntime::SetCheckExecutor(CheckRunner runner, std::string description)
 {
     checkRunner = std::move(runner);
@@ -863,6 +868,15 @@ std::string ConversationRuntime::BuildTurnPosture(
     const bool briefSocial = agents::ConversationStylePolicy::IsBriefSocialTurn(policyInput);
     postureLine << identity::RenderStatePacket(packet, !briefSocial)
         << "\n\n" << conversationStyle.BuildTurnGuidance(policyInput, promptContext);
+    if (!turnPolicy.publicAudience && !briefSocial && playbookProvider)
+    {
+        // What the person wrote down about how to be with them, for the turns that are
+        // theirs. A public audience never gets it: the playbook is about the owner and
+        // the people they named, and it stays in the private conversation.
+        const std::string playbook = playbookProvider(
+            packet.hasRelationship ? packet.relationship.entityId : std::string());
+        if (!playbook.empty()) postureLine << "\n\n" << playbook;
+    }
     if (!briefSocial)
     {
         // The profile's answer obligation, alongside the turn guidance rather than

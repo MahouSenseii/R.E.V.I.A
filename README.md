@@ -26,6 +26,8 @@ The design rule: **one Revia**. Reflex, Fast, Main, and Expert share one identit
 | Knowing who is at the microphone (opt-in) | **Tested** | Voiceprints kept only at a person's request, matched per utterance through a sherpa-onnx worker; covered against a fake worker and through the session, not yet heard live |
 | Inner Thoughts: weighing a remark before saying it | **Tested** | Every thought the curiosity planner nominates is scored on relevance, informativeness, timing, social fit and motivation before it is voiced; one under the bar shows as a thought bubble, never speech. Scoring and the bubble are covered by tests; not yet watched in a live session |
 | Real checks inside her investigations | **Tested** | When a hard question has her investigating, a proposed check can now run: a command you named in settings (tests, a build) in the coding workspace under time and memory limits, or a file under that workspace or her logs. What the check returns is the finding; the model's description of it never is. Covered against real commands; not yet watched in a live investigation |
+| Playbook and procedure library (`/playbook`, `/procedures`) | **Tested** | What works, written down by you or accepted from her own record, enters her prompt for the turns it is for; a goal that ran to the end becomes a procedure offered to the planner next time. Covered through the session |
+| Persona adapter tooling (export, train, gate) | Not yet run | The scripts and the sycophancy gate are tested against fixtures; no adapter has been trained or gated on a real archive |
 | A VRM face through VMC | **Tested** | Blend shapes and a head bone over OSC/UDP to VSeeFace, VNyan or Warudo from the same avatar state the Live2D adapter reads; covered against a UDP listener, not yet seen on a real model |
 | Playing games through their own API (opt-in) | **Tested** | Any game that speaks the Neuro SDK protocol connects to her, registers its moves with schemas, and she answers a forced choice within them; anti-cheat titles are never driven through the desktop. Covered against a fake game over a real WebSocket; no real game has connected yet |
 | Hosting a coding agent (`/code`, opt-in) | **Tested** | Claude Code, Codex or Gemini CLI driven over the Agent Client Protocol as a background task: its permission requests reach you through the same confirmation prompt, its file access through her stays in one workspace, it gets no terminal from her. Covered against a fake agent; not yet run against a real one |
@@ -358,6 +360,8 @@ Type these in Chat or the CLI. `/help` lists everything, including direct file a
 | `/initiative`, `accept`, `dismiss` | Review something she proposed on her own |
 | `/goal <task>`, `/goals` | Rehearse and supervise a multi-step goal |
 | `/code <task>` | Hand a coding task to the hosted coding agent (opt-in), as a background task |
+| `/playbook`, `/playbook add <line>`, `/playbook add for <name>: <line>`, `/playbook accept <lesson-id>`, `/playbook on\|off\|remove <n>` | What works with you (or with one person), in your words; it enters her prompt for the turns it is for |
+| `/procedures`, `/procedures for <request>`, `/procedures forget <n>` | Procedures that worked, kept from finished goals and offered to the planner for similar requests |
 | `/game`, `/game disconnect <name>` | The games connected over the Neuro SDK protocol (opt-in), their moves and what they are waiting on |
 | `/task`, `/task cancel` | The goal she is running in the background (or say "cancel the task") |
 | `/remind <when> <what>`, `/reminders`, `/reminders cancel <n>` | Reminders and timers (or say "remind me at 3pm to call Sam", "set a timer for 5 minutes", "remind me every 30 minutes to stretch") |
@@ -557,6 +561,15 @@ She stops singing to answer you (set `performance.interruptSongToSpeak` to `fals
 **Songs made with Suno, in her voice.** `Tools\Singing\prepare_song.py` takes a song you made with Suno (so there is no one else's performance to license), separates the vocal from the instrumental, converts the vocal into Revia's voice with an RVC model trained on her own speech (`build_voice_dataset.py` makes the training clips from her Qwen voice), times the lyrics against the vocal through the local whisper server, and writes the folder above with a `song.json` that records `madeWith` and `voice`. She announces a song as what it is ("Bright Lights (made with Suno, voice: Revia (RVC))"), `/songs` lists it that way, and `lyrics.lrc` next to the tracks supplies the karaoke lines when `song.json` marks none. `.\Tools\InstallSinging.ps1` installs the tools; [Tools/Singing/README.md](Tools/Singing/README.md) has the steps, including training the voice model.
 
 ---
+
+## How she learns
+
+She learns in rungs, and the lower rungs never touch the model's weights.
+
+1. **Evidence.** Preferences and relationships move only on evidence, as they always have; `/review` shows the lessons she draws from her own record of finished goals and judged proposals, and nothing is remembered until you approve it.
+2. **The playbook.** `/playbook add keep answers short after 10pm`, or `/playbook add for Sam: give the reasoning first`. Each line enters her prompt, marked as guidance and never as orders, on the turns it is for: lines for everyone on every private turn, lines about one person only when that person is speaking, never on a public (Discord or stream) turn. `/playbook accept <lesson-id>` turns a lesson she drew into a line; `off`, `on` and `remove` are yours at any time. It lives in `RuntimeData\Learning\playbook.json`.
+3. **Procedures.** A goal that ran to the end with its checks passing is kept as a procedure: the request in your words and the steps that did it. When a later request reads like one, the planner gets those steps as a starting point, labelled as her own record and not as the request; a procedure that fails as often as it works stops being offered. `/procedures` lists them, `/procedures for <request>` shows what a request would get, `forget <n>` drops one.
+4. **A persona adapter, gated.** The top rung, optional and never automatic: `Tools\Learning` exports her private conversations with secrets and public turns dropped, trains a small QLoRA adapter with Unsloth, and gates it with sycophancy probes and the persona regression suite before you name it in `llm.serverArguments`. Removing that line rolls it back. See [Tools/Learning/README.md](Tools/Learning/README.md). No adapter has been trained on a real archive yet.
 
 ## Self-improvement
 

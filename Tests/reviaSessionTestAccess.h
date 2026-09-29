@@ -24,6 +24,13 @@ struct ReviaSessionTestAccess
     static void StartGames(ReviaSession& session) { session.StartGames(); }
     static void StopGames(ReviaSession& session) { session.StopGames(); }
     static std::shared_ptr<games::NeuroGameServer> GameServer(ReviaSession& session) { return session.gameServer; }
+    static learning::Playbook& Playbook(ReviaSession& session) { return session.playbook; }
+    static learning::SkillLibrary& Procedures(ReviaSession& session) { return session.procedures; }
+    static void RememberProcedure(ReviaSession& session, const goals::Goal& finished) { session.RememberProcedure(finished); }
+    static std::string ProcedureHints(const ReviaSession& session, const std::string& request)
+    { return session.ProcedureHints(request); }
+    static goals::Goal FinishGoal(ReviaSession& session, goals::Goal finished)
+    { return session.FinishGoalRun(std::move(finished), std::chrono::steady_clock::now(), false); }
     static ConversationRuntime& Conversation(ReviaSession& session) { return session.conversationRuntime; }
     static identity::VoiceprintRegistry& Voiceprints(ReviaSession& session) { return session.voiceprints; }
     static std::string CurrentSpeaker(ReviaSession& session)

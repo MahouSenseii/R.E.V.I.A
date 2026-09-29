@@ -135,6 +135,7 @@ void RunInnerThoughtTests();
 void RunCodingAgentTests();
 void RunCheckExecutorTests();
 void RunGameTests();
+void RunLearningLadderTests();
 void RunAiPipelineLive();
 void RunSpeechInterruptionTests();
 void RunInvestigationTests();

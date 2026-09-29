@@ -24,6 +24,10 @@ struct ConversationRuntimeTestAccess
     {
         return runtime.checksDescription;
     }
+    static std::string PlaybookBlock(const ConversationRuntime& runtime, const std::string& speaker)
+    {
+        return runtime.playbookProvider ? runtime.playbookProvider(speaker) : std::string();
+    }
 };
 
 } // namespace revia::runtime

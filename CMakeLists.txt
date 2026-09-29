@@ -410,6 +410,11 @@ if(BUILD_TESTING)
                         "${CMAKE_CURRENT_SOURCE_DIR}/Tests/kokoroTtsService.test.py"
         )
         add_test(
+                NAME Revia.LearningTools
+                COMMAND "${Python3_EXECUTABLE}"
+                        "${CMAKE_CURRENT_SOURCE_DIR}/Tests/learningTools.test.py"
+        )
+        add_test(
                 NAME Revia.SpeakerIdService
                 COMMAND "${Python3_EXECUTABLE}"
                         "${CMAKE_CURRENT_SOURCE_DIR}/Tests/speakerIdService.test.py"
