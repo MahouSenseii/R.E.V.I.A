@@ -1,0 +1,22 @@
+{
+  "url": "ws://127.0.0.1:8001",
+  "pluginName": "Revia",
+  "pluginDeveloper": "Revia",
+  "tokenPath": "C:/absolute/path/to/Revia/build/debug/RuntimeData/Presence/vtube-studio.token",
+  "statePath": "C:/absolute/path/to/Revia/build/debug/RuntimeData/Presence/avatar_state.json",
+  "expressionHotkeys": {
+    "neutral": "Neutral",
+    "happy": "Smile",
+    "excited": "Excited",
+    "playful": "Playful",
+    "curious": "Curious",
+    "sad": "Sad",
+    "angry": "Angry",
+    "sulky": "Sulky",
+    "bored": "Bored",
+    "frustrated": "Frustrated",
+    "concerned": "Concerned",
+    "confused": "Confused",
+    "focused": "Focused"
+  }
+}

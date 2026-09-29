@@ -21,6 +21,10 @@ Audio-amplitude or phoneme-driven visemes can replace the base mouth gate later 
 changing the state owner or the rest of the schema. Rendering remains a consumer: it must
 never call inference or grant an action.
 
+The first consumer is the [VTube Studio adapter](VTubeStudio/README.md), which drives a
+Live2D model from this snapshot alone: mouth from `speaking`, a hotkey from `expression`,
+gaze from `attention`.
+
 The canonical design, palette, expression mapping, and selected renderer target are in
 `Config/avatar.json`. `target` remains `unselected` until a real Live2D/VRM model and its
 renderer are chosen. The transition stream rotates to `avatar_events.jsonl.1` at the

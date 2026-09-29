@@ -277,6 +277,8 @@ What to expect in Discord: up to four speakers are heard at once; a phrase ends 
 
 **Twitch, YouTube and OBS** have their own connector in `Tools\Presence\StreamChat\` (Node 22, no packages): it reads chat from Twitch (IRC; read-only without a token, replying with a `chat:read`/`chat:edit` user token in `TWITCH_OAUTH_TOKEN`) and YouTube (Data API v3 polling with `YOUTUBE_API_KEY`; replies need `YOUTUBE_OAUTH_TOKEN`), hands each line to Revia through the same inbox, sends back the reply she wrote, and keeps OBS (obs-websocket 5, `OBS_WEBSOCKET_PASSWORD`) on the BRB scene while `/stream kill` holds her and on a caption text source showing her latest filtered reply. Subs, gifts, raids, super chats and new members arrive as supporter events she always acknowledges. `npm test` in that folder runs it against fake platforms; it has not yet been run against a live one. Details: [Tools/Presence/StreamChat/README.md](Tools/Presence/StreamChat/README.md).
 
+**A Live2D face** comes through `Tools\Presence\VTubeStudio\` (Node 22, no packages): it reads her avatar state and drives the model loaded in [VTube Studio](https://denchisoft.com/) over its API -- mouth while she speaks, an expression hotkey for her emotion (mapped by name in its config), gaze toward whoever has her attention, blinks and idle look-around. Tested against a fake VTube Studio only so far. Details: [Tools/Presence/VTubeStudio/README.md](Tools/Presence/VTubeStudio/README.md).
+
 For **text** chat from Discord, streams, or games, any connector can drop a JSON file into the Presence inbox. See [Tools/Presence/README.md](Tools/Presence/README.md). You can test it without Discord:
 
 ```powershell
