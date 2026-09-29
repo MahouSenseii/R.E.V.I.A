@@ -2,43 +2,70 @@
 
 #include "Core/conversationContext.h"
 #include "Core/messageRouter.h"
+#include "Memory/observationLog.h"
 
 #include <stop_token>
 #include <string>
+#include <vector>
 
 namespace revia::agents
 {
 
+// What the observer drew from the turns leaving the window.
 struct HistoryCompactionResult
 {
     bool succeeded = false;
-    std::string summary;
+    std::vector<revia::memory::Observation> observations;
     std::string reason;
     double elapsedMilliseconds = 0.0;
 };
 
-// Folds the oldest part of the conversation into one running summary.
+// What the reflector decided to merge.
+struct HistoryReflectionResult
+{
+    bool succeeded = false;
+    std::vector<conversationContext::Merge> merges;
+    std::string reason;
+    double elapsedMilliseconds = 0.0;
+};
+
+// Keeps the record of a conversation's earlier part.
 //
-// Runs on the Main model at background priority, after a reply has been delivered, so a
-// person never waits on it: a message of theirs preempts it, and it is simply tried again
-// after that turn. The summary replaces the turns it covers, so what matters is what later
-// turns depend on -- names, facts, decisions, promises, open questions -- and that it
-// invents none of them.
+// Two passes, both on the Main model at background priority after a reply has been
+// delivered, so a person never waits on either: a message of theirs preempts the pass,
+// and it is tried again after that turn.
+//
+// The observer turns the turns leaving the window into dated observations and only
+// ever adds to the log. The reflector, once the log is long, merges observations that
+// overlap into one that supersedes them. Neither rewrites what is already there: a
+// summary that a small model rewrites every time it grows loses detail with each pass.
 class HistoryCompactor
 {
 public:
-    [[nodiscard]] HistoryCompactionResult Compact(
+    [[nodiscard]] HistoryCompactionResult Observe(
         const messageRouter& router,
         const conversationContext::CompactionJob& job,
         std::stop_token stopToken = {}) const;
 
-    // The instructions, shared with the model call so the two cannot drift apart.
-    [[nodiscard]] static const char* SystemPrompt();
-    // A strict schema, so the summary is bounded by the grammar rather than by trust.
-    [[nodiscard]] static const char* ResponseSchema();
-    // The bounded material handed to the model, exposed so it can be tested without one.
-    [[nodiscard]] static std::string BuildEnvelope(const conversationContext::CompactionJob& job);
-    [[nodiscard]] static HistoryCompactionResult Parse(const std::string& raw);
+    [[nodiscard]] HistoryReflectionResult Reflect(
+        const messageRouter& router,
+        const conversationContext::ReflectionJob& job,
+        std::stop_token stopToken = {}) const;
+
+    // The instructions and grammars, shared with the model calls so they cannot drift.
+    [[nodiscard]] static const char* ObserverPrompt();
+    [[nodiscard]] static const char* ObserverSchema();
+    [[nodiscard]] static const char* ReflectorPrompt();
+    [[nodiscard]] static const char* ReflectorSchema();
+
+    // The bounded material handed to each pass, exposed so it can be tested without a
+    // model.
+    [[nodiscard]] static std::string BuildObserverEnvelope(
+        const conversationContext::CompactionJob& job);
+    [[nodiscard]] static std::string BuildReflectorEnvelope(
+        const conversationContext::ReflectionJob& job);
+    [[nodiscard]] static HistoryCompactionResult ParseObservations(const std::string& raw);
+    [[nodiscard]] static HistoryReflectionResult ParseMerges(const std::string& raw);
 };
 
 } // namespace revia::agents

@@ -138,13 +138,26 @@ Database OpenDatabase(const std::string& archivePath)
         "  INSERT INTO conversation_search(conversation_search, rowid, content) "
         "  VALUES ('delete', old.rowid, old.content);"
         "END;"
-        // The running summary of a session's compacted history, one row per session, so
-        // a restart continues from it rather than from the last few turns alone.
-        "CREATE TABLE IF NOT EXISTS conversation_summaries ("
-        "  session_id TEXT PRIMARY KEY,"
-        "  summary TEXT NOT NULL,"
-        "  updated_at TEXT NOT NULL"
-        ");";
+        // The record of each session's compacted history, one row per observation, so a
+        // restart continues from the record rather than from the last few turns alone.
+        // Superseded rows stay, with the id that replaced them, so the record keeps its
+        // provenance; a forget removes them with everything else.
+        "CREATE TABLE IF NOT EXISTS conversation_observations ("
+        "  session_id TEXT NOT NULL,"
+        "  observation_id INTEGER NOT NULL,"
+        "  kind TEXT NOT NULL,"
+        "  priority INTEGER NOT NULL,"
+        "  text TEXT NOT NULL,"
+        "  observed_at INTEGER NOT NULL,"
+        "  refers_to TEXT NOT NULL,"
+        "  source_from INTEGER NOT NULL,"
+        "  source_to INTEGER NOT NULL,"
+        "  superseded_by INTEGER NOT NULL DEFAULT 0,"
+        "  PRIMARY KEY(session_id, observation_id)"
+        ");"
+        // The one-row running summary this replaced. Never shipped in a release, but a
+        // development build did create it.
+        "DROP TABLE IF EXISTS conversation_summaries;";
     if (!Execute(database.get(), Schema))
     {
         return {};
@@ -540,33 +553,28 @@ std::vector<ArchivedTurn> ConversationArchive::LoadPreviousSessionTail(
     return turns;
 }
 
-bool ConversationArchive::SaveSummary(
+bool ConversationArchive::SaveObservation(
     const std::string& sessionId,
-    const std::string& summary,
+    const Observation& observation,
     std::string& outReason)
 {
-    if (sessionId.empty() || summary.empty())
+    if (sessionId.empty() || observation.id == 0 || observation.text.empty())
     {
         outReason = "Nothing to record.";
         return false;
     }
-    if (!revia::utf8::IsValid(summary))
+    if (!revia::utf8::IsValid(observation.text) || !revia::utf8::IsValid(observation.refersTo))
     {
         outReason = "Malformed UTF-8 was not archived.";
         return false;
     }
-    // The same rule as a turn, for the same reason. The summary was written from the live
-    // conversation, which can hold a turn the archive itself refused.
-    if (const SensitiveFinding finding = DetectSensitiveContent(summary))
+    // The same rule as a turn, for the same reason. The observation was written from the
+    // live conversation, which can hold a turn the archive itself refused.
+    if (const SensitiveFinding finding = DetectSensitiveContent(observation.text))
     {
-        outReason = "The summary matched a sensitive-content marker (" +
+        outReason = "The observation matched a sensitive-content marker (" +
             ToString(finding.kind) + ") and was not archived.";
         return false;
-    }
-    std::string stored = summary;
-    if (stored.size() > limits.maxContentCharacters)
-    {
-        revia::utf8::Truncate(stored, limits.maxContentCharacters);
     }
     sqlite3* const database = Acquire();
     if (database == nullptr)
@@ -577,55 +585,99 @@ bool ConversationArchive::SaveSummary(
     Statement statement;
     sqlite3_stmt* raw = nullptr;
     if (sqlite3_prepare_v2(database,
-            "INSERT INTO conversation_summaries(session_id, summary, updated_at) "
-            "VALUES (?, ?, ?) ON CONFLICT(session_id) DO UPDATE SET "
-            "summary = excluded.summary, updated_at = excluded.updated_at;",
+            "INSERT OR REPLACE INTO conversation_observations"
+            "(session_id, observation_id, kind, priority, text, observed_at, refers_to,"
+            " source_from, source_to, superseded_by) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);",
             -1, &raw, nullptr) != SQLITE_OK)
     {
-        outReason = "The conversation archive rejected the summary.";
+        outReason = "The conversation archive rejected the observation.";
         return false;
     }
     statement.reset(raw);
-    const std::string now = CurrentEpochSeconds();
     sqlite3_bind_text(statement.get(), 1, sessionId.c_str(), -1, SQLITE_TRANSIENT);
-    sqlite3_bind_text(statement.get(), 2, stored.c_str(), -1, SQLITE_TRANSIENT);
-    sqlite3_bind_text(statement.get(), 3, now.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_int64(statement.get(), 2, static_cast<sqlite3_int64>(observation.id));
+    sqlite3_bind_text(statement.get(), 3, observation.kind.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_int(statement.get(), 4, observation.priority);
+    sqlite3_bind_text(statement.get(), 5, observation.text.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_int64(statement.get(), 6, static_cast<sqlite3_int64>(observation.observedAt));
+    sqlite3_bind_text(statement.get(), 7, observation.refersTo.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_int64(statement.get(), 8, static_cast<sqlite3_int64>(observation.sourceFrom));
+    sqlite3_bind_int64(statement.get(), 9, static_cast<sqlite3_int64>(observation.sourceTo));
+    sqlite3_bind_int64(statement.get(), 10, static_cast<sqlite3_int64>(observation.supersededBy));
     if (sqlite3_step(statement.get()) != SQLITE_DONE)
     {
-        outReason = "The conversation archive could not store the summary.";
+        outReason = "The conversation archive could not store the observation.";
         return false;
     }
     return true;
 }
 
-std::string ConversationArchive::LoadPreviousSessionSummary(
+bool ConversationArchive::MarkObservationSuperseded(
+    const std::string& sessionId,
+    const std::uint64_t observationId,
+    const std::uint64_t supersededBy)
+{
+    sqlite3* const database = Acquire();
+    if (database == nullptr) return false;
+    Statement statement;
+    sqlite3_stmt* raw = nullptr;
+    if (sqlite3_prepare_v2(database,
+            "UPDATE conversation_observations SET superseded_by = ? "
+            "WHERE session_id = ? AND observation_id = ?;",
+            -1, &raw, nullptr) != SQLITE_OK)
+    {
+        return false;
+    }
+    statement.reset(raw);
+    sqlite3_bind_int64(statement.get(), 1, static_cast<sqlite3_int64>(supersededBy));
+    sqlite3_bind_text(statement.get(), 2, sessionId.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_int64(statement.get(), 3, static_cast<sqlite3_int64>(observationId));
+    return sqlite3_step(statement.get()) == SQLITE_DONE && sqlite3_changes(database) > 0;
+}
+
+std::vector<Observation> ConversationArchive::LoadPreviousSessionObservations(
     const std::string& currentSessionId) const
 {
+    std::vector<Observation> observations;
     sqlite3* const database = Acquire();
     if (database == nullptr)
     {
-        return {};
+        return observations;
     }
     // The same session the tail is restored from, so the two always describe one
     // conversation.
     const std::string previous = PreviousSessionId(database, currentSessionId);
     if (previous.empty())
     {
-        return {};
+        return observations;
     }
     Statement statement;
     sqlite3_stmt* raw = nullptr;
     if (sqlite3_prepare_v2(database,
-            "SELECT summary FROM conversation_summaries WHERE session_id = ?;",
+            "SELECT observation_id, kind, priority, text, observed_at, refers_to,"
+            " source_from, source_to FROM conversation_observations "
+            "WHERE session_id = ? AND superseded_by = 0 ORDER BY observation_id ASC;",
             -1, &raw, nullptr) != SQLITE_OK)
     {
-        return {};
+        return observations;
     }
     statement.reset(raw);
     sqlite3_bind_text(statement.get(), 1, previous.c_str(), -1, SQLITE_TRANSIENT);
-    return sqlite3_step(statement.get()) == SQLITE_ROW
-        ? ColumnText(statement.get(), 0)
-        : std::string{};
+    while (sqlite3_step(statement.get()) == SQLITE_ROW)
+    {
+        Observation observation;
+        observation.id = static_cast<std::uint64_t>(sqlite3_column_int64(statement.get(), 0));
+        observation.kind = ColumnText(statement.get(), 1);
+        observation.priority = sqlite3_column_int(statement.get(), 2);
+        observation.text = ColumnText(statement.get(), 3);
+        observation.observedAt = sqlite3_column_int64(statement.get(), 4);
+        observation.refersTo = ColumnText(statement.get(), 5);
+        observation.sourceFrom = static_cast<std::uint64_t>(sqlite3_column_int64(statement.get(), 6));
+        observation.sourceTo = static_cast<std::uint64_t>(sqlite3_column_int64(statement.get(), 7));
+        observations.push_back(std::move(observation));
+    }
+    return observations;
 }
 
 std::vector<ArchivedSession> ConversationArchive::RecentSessions(
@@ -831,7 +883,7 @@ std::size_t ConversationArchive::Forget()
     }
     if (!Execute(database,
             "DELETE FROM conversation_turns;"
-            "DELETE FROM conversation_summaries;"
+            "DELETE FROM conversation_observations;"
             "DELETE FROM conversation_sessions;"))
     {
         return 0;
@@ -880,7 +932,7 @@ std::size_t ConversationArchive::ForgetSession(const std::string& sessionId)
 
     for (const char* sql : {
             "DELETE FROM conversation_turns WHERE session_id = ?;",
-            "DELETE FROM conversation_summaries WHERE session_id = ?;",
+            "DELETE FROM conversation_observations WHERE session_id = ?;",
             "DELETE FROM conversation_sessions WHERE session_id = ?;"})
     {
         Statement statement;

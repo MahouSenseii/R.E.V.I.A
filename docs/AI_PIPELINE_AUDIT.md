@@ -354,6 +354,8 @@ in the same currency the runtime spends it in.
 **Remaining limitation.** The calibration is against one tokenizer. Replacing the model
 invalidates it, which the suite states rather than silently re-fitting.
 
+**Follow-up: history compaction.** A first version folded evicted turns into one running summary that the model rewrote every time it grew; a small model summarising its own summary keeps less each pass (the "context collapse" the ACE paper measured). It was replaced by an append-only observation log (`Memory/observationLog`): the observer only adds dated, prioritised observations sourced to the turns they came from, and a reflector merges related ones into an observation that supersedes them, so the record keeps its provenance and `/history forget` removes everything derived. The record sits in the system message, where it is byte-identical between turns until it changes, so llama-server reuses its cached prefix.
+
 **Follow-up: the safe bound cost the conversation.** The character-class estimator was
 later replaced by one token per byte, which can never under-count but charges English
 prose about five times its real cost. An 8K context then held roughly 6.8 KB of text; her

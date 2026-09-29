@@ -256,6 +256,8 @@ private:
     // the live speech state. Shared by the turn posture and the self-inquiry so the two
     // cannot describe her body differently.
     [[nodiscard]] std::string DescribeBody() const;
+    // Places the conversation record for this turn, or clears it for a public one.
+    void ApplyStableContext(const TurnPolicy& turnPolicy) const;
     // screenObservation is the look this turn will carry, when it carries one. It must
     // be known before the posture is written: the posture states whether she has looked,
     // and a posture written first said "no screen observation was taken" on every turn,

@@ -142,7 +142,7 @@ The current memory foundation works, but a multi-brain Revia needs a shared cont
 - ✅ Retrieve relevant memory with FTS plus semantic embeddings.
 - ✅ Classify/store memory after the visible reply so memory does not delay speech.
 - ✅ Context is bounded per tier while prioritizing identity, newest request, current posture, and recent dialogue.
-- ✅ Evicted conversation is compacted into a deterministic bounded history summary.
+- ✅ Evicted conversation is recorded as dated observations by the Main model in the background (append and merge, never rewrite), with a deterministic excerpt fallback while the model is busy.
 - ⬜ Represent strong memory, familiarity, partial recall, uncertainty, and forgotten detail naturally.
 - ⬜ Track preference evidence and confidence so opinions can evolve instead of randomly changing.
 

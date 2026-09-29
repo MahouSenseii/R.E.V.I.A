@@ -246,6 +246,13 @@ std::string messageRouter::RelatedMemories(
     return llm.RelatedMemories(query, stopToken);
 }
 
+void messageRouter::SetStableContext(std::string context)
+{
+    llm.SetStableContext(context);
+    if (fastConfigured) fastLlm.SetStableContext(context);
+    if (expertConfigured) expertLlm.SetStableContext(std::move(context));
+}
+
 void messageRouter::SetReplyNote(std::string note)
 {
     llm.SetReplyNote(note);
@@ -378,19 +385,25 @@ responseOutput messageRouter::Deliberate(
     return output;
 }
 
-responseOutput messageRouter::SummarizeConversation(
-    const std::string& boundedHistory,
-    const std::stop_token stopToken) const
+namespace
 {
-    if (boundedHistory.empty())
+// Main or nothing. The CPU-resident Fast model would hold nearly every core for the
+// better part of a minute to do what the plain excerpts already do badly, and nobody
+// is waiting on this: when Main is back, the next pass catches up.
+template <class Call>
+responseOutput OnMainInBackground(
+    const llmService& llm,
+    revia::intelligence::ModelResidencyManager& residency,
+    const std::string& input,
+    const char* emptyReason,
+    Call call)
+{
+    if (input.empty())
     {
         responseOutput output;
-        output.reason = "There was no conversation to summarise.";
+        output.reason = emptyReason;
         return output;
     }
-    // Main or nothing. The CPU-resident Fast model would hold nearly every core for the
-    // better part of a minute to do what the plain excerpts already do badly, and nobody
-    // is waiting on this: when Main is back, the next pass catches up.
     if (!llm.IsBackendAvailable())
     {
         responseOutput output;
@@ -398,13 +411,32 @@ responseOutput messageRouter::SummarizeConversation(
         return output;
     }
     residency.BeginInference(revia::intelligence::IntelligenceTier::Main, "background");
-    responseOutput output = llm.SummarizeConversation(boundedHistory, stopToken);
+    responseOutput output = call();
     residency.EndInference(revia::intelligence::IntelligenceTier::Main);
     output.requestedTier = "Main";
     output.selectedTier = "Main";
     output.selectedModel = "Qwen3.5-4B-Q4_K_M.gguf";
-    output.routingReason = "History compaction runs on Main at background priority.";
+    output.routingReason = "The conversation record is kept on Main at background priority.";
     return output;
+}
+}
+
+responseOutput messageRouter::ObserveConversation(
+    const std::string& boundedHistory,
+    const std::stop_token stopToken) const
+{
+    return OnMainInBackground(llm, residency, boundedHistory,
+        "There was no conversation to record.",
+        [&] { return llm.ObserveConversation(boundedHistory, stopToken); });
+}
+
+responseOutput messageRouter::ReflectOnConversation(
+    const std::string& boundedRecord,
+    const std::stop_token stopToken) const
+{
+    return OnMainInBackground(llm, residency, boundedRecord,
+        "There was no record to reflect on.",
+        [&] { return llm.ReflectOnConversation(boundedRecord, stopToken); });
 }
 
 responseOutput messageRouter::PlanGoal(const std::string& request) const

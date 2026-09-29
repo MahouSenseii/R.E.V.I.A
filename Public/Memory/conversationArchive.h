@@ -3,6 +3,8 @@
 // Forward declared so sqlite3 stays out of every caller's translation unit.
 struct sqlite3;
 
+#include "Memory/observationLog.h"
+
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -96,14 +98,21 @@ public:
     [[nodiscard]] std::vector<ArchivedTurn> LoadPreviousSessionTail(
         const std::string& currentSessionId,
         std::size_t maxTurns = 6) const;
-    // The running summary of a session's compacted history. Refused, like a turn, when it
-    // matches a sensitive-content marker. Replaces the session's previous summary.
-    bool SaveSummary(
+    // One observation of a session's record, by its id within the session. Writing an
+    // id again replaces that observation. Refused, like a turn, when it matches a
+    // sensitive-content marker.
+    bool SaveObservation(
         const std::string& sessionId,
-        const std::string& summary,
+        const Observation& observation,
         std::string& outReason);
-    // The summary of the session LoadPreviousSessionTail restores from, or empty.
-    [[nodiscard]] std::string LoadPreviousSessionSummary(
+    // Records that `observationId` was merged into `supersededBy`.
+    bool MarkObservationSuperseded(
+        const std::string& sessionId,
+        std::uint64_t observationId,
+        std::uint64_t supersededBy);
+    // The current observations of the session LoadPreviousSessionTail restores from,
+    // oldest first. Superseded ones stay in the file for provenance but do not return.
+    [[nodiscard]] std::vector<Observation> LoadPreviousSessionObservations(
         const std::string& currentSessionId) const;
     [[nodiscard]] std::vector<ArchivedSession> RecentSessions(
         std::size_t maxSessions = 20) const;

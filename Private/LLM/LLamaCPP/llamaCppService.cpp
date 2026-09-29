@@ -802,10 +802,12 @@ responseOutput llamaCppService::GenerateResponse(
 
     std::string posture;
     std::string replyNote;
+    std::string stableContext;
     {
         std::lock_guard postureLock(postureMutex);
         posture = activePosture;
         replyNote = activeReplyNote;
+        stableContext = activeStableContext;
     }
 
     json requestBody;
@@ -819,7 +821,8 @@ responseOutput llamaCppService::GenerateResponse(
         &output.promptSections,
         memoryAccess,
         replyNote,
-        bStablePromptPrefix);
+        bStablePromptPrefix,
+        stableContext);
 
     const auto requestPreparationStarted = std::chrono::steady_clock::now();
 
@@ -1112,6 +1115,12 @@ void llamaCppService::SetReplyNote(std::string note)
     activeReplyNote = std::move(note);
 }
 
+void llamaCppService::SetStableContext(std::string context)
+{
+    std::lock_guard postureLock(postureMutex);
+    activeStableContext = std::move(context);
+}
+
 responseOutput llamaCppService::GenerateActionProposal(const std::string& userRequest) const
 {
     // One vocabulary, shared with the goal planner. Hardcoding it here left the
@@ -1285,22 +1294,38 @@ Do not answer the person here. Do not greet anyone, apologise, address anyone, w
         InquirySchema);
 }
 
-responseOutput llamaCppService::SummarizeConversation(
+responseOutput llamaCppService::ObserveConversation(
     const std::string& boundedHistory,
     const std::stop_token stopToken) const
 {
     // Low temperature: this is a record, and a creative one is a wrong one. The schema
-    // bounds the length; the token ceiling leaves room to close the object.
+    // bounds every line; the token ceiling leaves room to close the object.
     return GeneratePlannerResponse(
-        revia::agents::HistoryCompactor::SystemPrompt(),
+        revia::agents::HistoryCompactor::ObserverPrompt(),
         boundedHistory,
-        640,
+        900,
         true,
         stopToken,
         revia::llm::InferencePriority::Background,
         0.2F,
         "history compaction",
-        revia::agents::HistoryCompactor::ResponseSchema());
+        revia::agents::HistoryCompactor::ObserverSchema());
+}
+
+responseOutput llamaCppService::ReflectOnConversation(
+    const std::string& boundedRecord,
+    const std::stop_token stopToken) const
+{
+    return GeneratePlannerResponse(
+        revia::agents::HistoryCompactor::ReflectorPrompt(),
+        boundedRecord,
+        1200,
+        true,
+        stopToken,
+        revia::llm::InferencePriority::Background,
+        0.2F,
+        "history reflection",
+        revia::agents::HistoryCompactor::ReflectorSchema());
 }
 
 responseOutput llamaCppService::GenerateGoalPlan(const std::string& userRequest) const

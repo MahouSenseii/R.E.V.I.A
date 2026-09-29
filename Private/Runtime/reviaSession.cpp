@@ -1800,73 +1800,192 @@ void ReviaSession::CompactHistoryOnce(const std::stop_token workerStop)
     {
         return;
     }
-    const std::optional<conversationContext::CompactionJob> job = context.BeginCompaction();
-    if (!job)
+    if (const std::optional<conversationContext::CompactionJob> job = context.BeginCompaction())
     {
-        return;
+        ObserveHistory(*job, workerStop);
     }
+    if (workerStop.stop_requested() || busy.load()) return;
+    // The record is tidied after it is added to, never instead: an observer pass that
+    // was deferred must not be followed by a reflection over an incomplete record.
+    if (const std::optional<conversationContext::ReflectionJob> job = context.BeginReflection())
+    {
+        ReflectOnHistory(*job, workerStop);
+    }
+}
 
-    const std::size_t folding = job->messages.size();
+// The first line of a component event names what happened; the detail carries the
+// observations themselves, so what she now carries can be read and checked.
+namespace
+{
+std::string DescribeObservations(const std::vector<memory::Observation>& observations)
+{
+    std::string text;
+    for (const memory::Observation& observation : observations)
+    {
+        text += "- " + observation.text + "\n";
+    }
+    return text;
+}
+}
+
+bool ReviaSession::WaitForQuietTurn(std::unique_lock<std::mutex>& operationLock,
+    const std::stop_token workerStop)
+{
+    // Applied between turns, never during one. A turn reads the recent messages and the
+    // record at different moments, and replacing both underneath it could show her a
+    // gap or the same exchange twice. The model work was done without the lock, so
+    // nobody waited on it; only this short step waits for a turn to finish.
+    while (!operationLock.try_lock())
+    {
+        if (workerStop.stop_requested()) return false;
+        std::this_thread::sleep_for(std::chrono::milliseconds(250));
+    }
+    return true;
+}
+
+void ReviaSession::ObserveHistory(
+    const conversationContext::CompactionJob& job,
+    const std::stop_token workerStop)
+{
+    const std::size_t folding = job.messages.size();
     PublishComponent(
         "Conversation history", "Compacting",
-        "Summarizing the " + std::to_string(folding) +
+        "Recording the " + std::to_string(folding) +
             " oldest messages in the background.",
         -1.0, static_cast<int>(folding));
-    const agents::HistoryCompactionResult compacted =
-        historyCompactor.Compact(router, *job, workerStop);
-    if (!compacted.succeeded)
+    const agents::HistoryCompactionResult observed =
+        historyCompactor.Observe(router, job, workerStop);
+    if (!observed.succeeded)
     {
         const bool yielded = workerStop.stop_requested() ||
-            compacted.reason.find("preempted") != std::string::npos;
+            observed.reason.find("preempted") != std::string::npos;
         // The same failure is retried every pass; saying so once is enough.
-        if (!yielded && compacted.reason == historyCompactionLastDeferral)
+        if (!yielded && observed.reason == historyCompactionLastDeferral)
         {
             return;
         }
-        historyCompactionLastDeferral = yielded ? std::string{} : compacted.reason;
-        appLogger.Log("History compaction deferred: " + compacted.reason);
+        historyCompactionLastDeferral = yielded ? std::string{} : observed.reason;
+        appLogger.Log("History compaction deferred: " + observed.reason);
         PublishComponent(
             "Conversation history", yielded ? "Yielded" : "Deferred",
             yielded
-                ? std::string("Summarizing yielded to your message and will finish after it.")
-                : compacted.reason + " The oldest turns keep their excerpts until it works.",
-            compacted.elapsedMilliseconds);
+                ? std::string("Recording yielded to your message and will finish after it.")
+                : observed.reason + " The oldest turns keep their excerpts until it works.",
+            observed.elapsedMilliseconds);
         return;
     }
     historyCompactionLastDeferral.clear();
-
-    // Applied between turns, never during one. A turn reads the recent messages and the
-    // summary at different moments, and replacing both underneath it could show her a
-    // gap or the same exchange twice. The summary was written without the lock, so
-    // nobody waited on it; only this short step waits for a turn to finish.
-    std::unique_lock operationLock(operationMutex, std::defer_lock);
-    while (!operationLock.try_lock())
+    if (observed.observations.empty())
     {
-        if (workerStop.stop_requested()) return;
-        std::this_thread::sleep_for(std::chrono::milliseconds(250));
+        // Nothing durable in the oldest turns. They stay until eviction cuts them to
+        // excerpts, and the next pass sees those excerpts and can still record them.
+        PublishComponent(
+            "Conversation history", "Nothing to record",
+            "The oldest turns held nothing worth keeping, so they were left as they are.",
+            observed.elapsedMilliseconds);
+        return;
     }
-    if (!context.ApplyCompaction(*job, compacted.summary))
+
+    std::unique_lock operationLock(operationMutex, std::defer_lock);
+    if (!WaitForQuietTurn(operationLock, workerStop)) return;
+    const std::vector<std::uint64_t> ids = context.ApplyCompaction(job, observed.observations);
+    if (ids.empty())
     {
         // Published outside the lock, like everything this worker says.
         operationLock.unlock();
         PublishComponent(
             "Conversation history", "Superseded",
-            "The conversation was cleared or replaced while it was being summarized, so "
-            "nothing was folded.");
+            "The conversation was cleared or its record changed while it was being "
+            "recorded, so nothing was folded.");
         return;
     }
-    std::string kept = "kept for this session only";
+    std::vector<memory::Observation> added;
+    for (const memory::Observation& observation : context.Observations())
+    {
+        if (std::find(ids.begin(), ids.end(), observation.id) != ids.end())
+        {
+            added.push_back(observation);
+        }
+    }
+    const std::string kept = PersistObservations(added);
+    operationLock.unlock();
+
+    RuntimeEvent event;
+    event.kind = RuntimeEventKind::ComponentStatus;
+    event.state = state.load();
+    event.component = "Conversation history";
+    event.phase = "Compacted";
+    event.message = "Recorded the " + std::to_string(folding) + " oldest messages as " +
+        std::to_string(added.size()) + (added.size() == 1 ? " observation" : " observations") +
+        "; the last " + std::to_string(job.keptVerbatim) + " stay word for word (" + kept + ").";
+    event.detail = DescribeObservations(added);
+    event.elapsedMilliseconds = observed.elapsedMilliseconds;
+    event.queueDepth = static_cast<int>(folding);
+    appLogger.Log("History compacted: " + event.message);
+    eventBus.Publish(std::move(event));
+}
+
+void ReviaSession::ReflectOnHistory(
+    const conversationContext::ReflectionJob& job,
+    const std::stop_token workerStop)
+{
+    PublishComponent(
+        "Conversation history", "Reflecting",
+        "Tidying a record of " + std::to_string(job.observations.size()) +
+            " observations in the background.",
+        -1.0, static_cast<int>(job.observations.size()));
+    const agents::HistoryReflectionResult reflected =
+        historyCompactor.Reflect(router, job, workerStop);
+    if (!reflected.succeeded)
+    {
+        const bool yielded = workerStop.stop_requested() ||
+            reflected.reason.find("preempted") != std::string::npos;
+        appLogger.Log("History reflection deferred: " + reflected.reason);
+        PublishComponent(
+            "Conversation history", yielded ? "Yielded" : "Deferred",
+            yielded
+                ? std::string("Tidying yielded to your message and will finish after it.")
+                : reflected.reason + " The record stays as it is until it works.",
+            reflected.elapsedMilliseconds);
+        return;
+    }
+    if (reflected.merges.empty())
+    {
+        PublishComponent(
+            "Conversation history", "Tidy",
+            "The record had nothing to merge.", reflected.elapsedMilliseconds);
+        return;
+    }
+
+    std::unique_lock operationLock(operationMutex, std::defer_lock);
+    if (!WaitForQuietTurn(operationLock, workerStop)) return;
+    const std::vector<conversationContext::Merge> applied =
+        context.ApplyReflection(job, reflected.merges);
+    if (applied.empty())
+    {
+        operationLock.unlock();
+        PublishComponent(
+            "Conversation history", "Superseded",
+            "The record changed while it was being tidied, so nothing was merged.");
+        return;
+    }
+    std::vector<memory::Observation> merged;
+    std::size_t replaced = 0;
+    for (const conversationContext::Merge& merge : applied)
+    {
+        merged.push_back(merge.merged);
+        replaced += merge.replaces.size();
+    }
+    std::string kept = PersistObservations(merged);
     if (settings.conversation.bArchiveEnabled && !conversationSessionId.empty())
     {
-        std::string reason;
-        if (conversationArchive.SaveSummary(conversationSessionId, compacted.summary, reason))
+        for (const conversationContext::Merge& merge : applied)
         {
-            kept = "saved with the conversation archive";
-        }
-        else
-        {
-            kept = "not saved: " + reason;
-            appLogger.Log("The history summary was not archived: " + reason);
+            for (const std::uint64_t id : merge.replaces)
+            {
+                (void)conversationArchive.MarkObservationSuperseded(
+                    conversationSessionId, id, merge.merged.id);
+            }
         }
     }
     operationLock.unlock();
@@ -1875,15 +1994,41 @@ void ReviaSession::CompactHistoryOnce(const std::stop_token workerStop)
     event.kind = RuntimeEventKind::ComponentStatus;
     event.state = state.load();
     event.component = "Conversation history";
-    event.phase = "Compacted";
-    event.message = "Summarized the " + std::to_string(folding) +
-        " oldest messages; the last " + std::to_string(job->keptVerbatim) +
-        " stay word for word (" + kept + ").";
-    event.detail = compacted.summary;
-    event.elapsedMilliseconds = compacted.elapsedMilliseconds;
-    event.queueDepth = static_cast<int>(folding);
-    appLogger.Log("History compacted: " + event.message);
+    event.phase = "Reflected";
+    event.message = "Merged " + std::to_string(replaced) + " observations into " +
+        std::to_string(merged.size()) + " (" + kept + ").";
+    event.detail = DescribeObservations(merged);
+    event.elapsedMilliseconds = reflected.elapsedMilliseconds;
+    event.queueDepth = static_cast<int>(merged.size());
+    appLogger.Log("History reflected: " + event.message);
     eventBus.Publish(std::move(event));
+}
+
+std::string ReviaSession::PersistObservations(const std::vector<memory::Observation>& observations)
+{
+    if (!settings.conversation.bArchiveEnabled || conversationSessionId.empty())
+    {
+        return "kept for this session only";
+    }
+    std::size_t saved = 0;
+    std::string firstReason;
+    for (const memory::Observation& observation : observations)
+    {
+        std::string reason;
+        if (conversationArchive.SaveObservation(conversationSessionId, observation, reason))
+        {
+            ++saved;
+        }
+        else if (firstReason.empty())
+        {
+            firstReason = reason;
+            appLogger.Log("An observation was not archived: " + reason);
+        }
+    }
+    if (saved == observations.size()) return "saved with the conversation archive";
+    if (saved == 0) return "not saved: " + firstReason;
+    return std::to_string(saved) + " of " + std::to_string(observations.size()) +
+        " saved with the conversation archive; " + firstReason;
 }
 
 void ReviaSession::StartExternalAdapterLoop()
@@ -3456,20 +3601,18 @@ void ReviaSession::RestoreConversationContext()
     {
         return;
     }
-    // The summary of what came before that tail, from the same session. Older than every
+    // The record of what came before that tail, from the same session. Older than every
     // restored turn, so it goes in first.
-    const std::string summary =
-        conversationArchive.LoadPreviousSessionSummary(conversationSessionId);
-    if (!summary.empty())
+    std::vector<memory::Observation> record =
+        conversationArchive.LoadPreviousSessionObservations(conversationSessionId);
+    const std::size_t recorded = record.size();
+    if (!record.empty())
     {
-        context.RestoreSummary(summary);
-        // Carried forward under this session as well. A restart before this session
-        // compacts anything of its own would otherwise restore from here and find none.
-        std::string reason;
-        if (!conversationArchive.SaveSummary(conversationSessionId, summary, reason))
-        {
-            appLogger.Log("The restored history summary was not carried forward: " + reason);
-        }
+        context.RestoreObservations(std::move(record));
+        // Carried forward under this session as well, with the ids this session gave
+        // them. A restart before this session records anything of its own would
+        // otherwise restore from here and find none.
+        (void)PersistObservations(context.Observations());
     }
     for (const memory::ArchivedTurn& turn : tail)
     {
@@ -3477,13 +3620,14 @@ void ReviaSession::RestoreConversationContext()
     }
     appLogger.Log("Restored " + std::to_string(tail.size()) +
         " turns from the previous conversation" +
-        (summary.empty() ? "." : ", with its summary."));
+        (recorded == 0 ? "." : ", with its record of " + std::to_string(recorded) +
+            " observations."));
     PublishComponent(
         "Conversation history",
         "Restored",
         "Continuing from the last " + std::to_string(tail.size()) +
             (tail.size() == 1 ? " turn" : " turns") + " of the previous conversation" +
-            (summary.empty() ? "." : ", and its summary of everything before them."),
+            (recorded == 0 ? "." : ", and its record of everything before them."),
         -1.0,
         static_cast<int>(tail.size()));
 }

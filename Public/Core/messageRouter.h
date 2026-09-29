@@ -27,6 +27,10 @@ public:
         const revia::intelligence::IntelligenceDecision& decision = {},
         revia::llm::PrivateMemoryAccess memoryAccess = revia::llm::PrivateMemoryAccess::ProfileSetting) const;
     void SetPosture(std::string posture);
+    // Context that changes rarely -- the record of the earlier conversation -- placed
+    // in the system message so llama.cpp reuses its cache between turns. Empty for a
+    // turn that may not see private history.
+    void SetStableContext(std::string context);
     // Set after SetPosture, which clears it: the lines this turn's answer must follow,
     // placed at the end of the prompt rather than in the system message.
     void SetReplyNote(std::string note);
@@ -61,11 +65,15 @@ public:
     responseOutput Deliberate(
         const std::string& boundedInquiryPrompt,
         std::stop_token stopToken = {}) const;
-    // Folds the oldest part of the conversation into its running summary. Main only, at
-    // background priority: a person's turn preempts it, and when Main is not there the
-    // history keeps its plain excerpts rather than paying for the CPU model.
-    responseOutput SummarizeConversation(
+    // Records the oldest part of the conversation as observations, and merges an
+    // overgrown record. Main only, at background priority: a person's turn preempts
+    // either, and when Main is not there the history keeps its plain excerpts rather
+    // than paying for the CPU model.
+    responseOutput ObserveConversation(
         const std::string& boundedHistory,
+        std::stop_token stopToken = {}) const;
+    responseOutput ReflectOnConversation(
+        const std::string& boundedRecord,
         std::stop_token stopToken = {}) const;
     responseOutput PlanGoal(const std::string& request) const;
     // The iterative form: one step at a time, from what has already happened.

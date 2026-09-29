@@ -38,7 +38,13 @@ public:
         // When the newest message is the user's, send posture and memories at its start
         // instead of in the system message, so the system message is identical between
         // turns and the backend can reuse its cached prompt.
-        bool stablePrefix = false
+        bool stablePrefix = false,
+        // Context that changes only now and then -- the record of the earlier part of
+        // the conversation -- appended to the system message after the profile prompt.
+        // There it is byte-identical between turns until the record changes, so the
+        // backend's cached prefix survives; in the newest user message it would be
+        // re-evaluated with the rest of the turn every time.
+        const std::string& stableContext = ""
     ) const;
     std::string BuildMemoryBlock(const std::string& query = "") const;
     // The saved memories closest to `query`, for a caller deciding whether something is

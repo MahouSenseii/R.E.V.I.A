@@ -38,6 +38,9 @@ public:
     // request shape does not.
     void SetPosture(std::string posture);
     void SetReplyNote(std::string note);
+    // Kept in the system message, after the profile prompt, because it changes only
+    // when the record does: the prefix stays cacheable between turns.
+    void SetStableContext(std::string context);
 
     healthOutput CheckHealth(std::stop_token stopToken = {}) const;
     // onDelta receives visible text as it is generated, so a caller can begin speaking
@@ -67,9 +70,13 @@ public:
     responseOutput Deliberate(
         const std::string& boundedInquiryPrompt,
         std::stop_token stopToken = {}) const;
-    // One running-summary update of the oldest conversation. Background priority.
-    responseOutput SummarizeConversation(
+    // The observer and reflector passes over the conversation record. Background
+    // priority.
+    responseOutput ObserveConversation(
         const std::string& boundedHistory,
+        std::stop_token stopToken = {}) const;
+    responseOutput ReflectOnConversation(
+        const std::string& boundedRecord,
         std::stop_token stopToken = {}) const;
     responseOutput GenerateGoalPlan(const std::string& userRequest) const;
     // One step of an iterative run, decided from the attempts so far.
@@ -174,6 +181,7 @@ private:
     mutable std::mutex postureMutex;
     std::string activePosture;
     std::string activeReplyNote;
+    std::string activeStableContext;
     mutable revia::llm::InferenceScheduler inferenceScheduler;
     // Keyed by a hash of the text and its length. Cleared with the settings, because a
     // different model is a different tokenizer.

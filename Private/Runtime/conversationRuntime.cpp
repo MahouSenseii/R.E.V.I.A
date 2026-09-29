@@ -486,6 +486,16 @@ void ConversationRuntime::SetSongListProvider(SongListProvider provider)
     songListProvider = std::move(provider);
 }
 
+void ConversationRuntime::ApplyStableContext(const TurnPolicy& turnPolicy) const
+{
+    // The record of the earlier conversation, or nothing for a turn that may not see
+    // private history. Set beside the posture every time, so a public turn can never
+    // inherit the record a private one placed.
+    router.SetStableContext(turnPolicy.includePrivateHistory
+        ? context.RenderObservations()
+        : std::string{});
+}
+
 std::string ConversationRuntime::BuildTurnPosture(
     const std::string& policyInput,
     const std::vector<conversationMessage>& promptContext,
@@ -612,15 +622,17 @@ std::string ConversationRuntime::BuildTurnPosture(
         postureLine << "\n\n" << agents::ConversationStylePolicy::BuildAnswerObligationGuidance(
             profile.answerObligation);
     }
-    // Runtime policy still governs every action. A greeting or personal reaction has
-    // no operation to report; filling it with filter/build/command internals primed
+    // Only the lines eviction cut short travel here, with the rest of the per-turn
+    // text; they change whenever something is evicted. The record itself goes into the
+    // stable context (see ApplyStableContext), where it survives between turns.
+    // A greeting or personal reaction gets neither: filling it with internals primed
     // the model to explain its feelings as a software malfunction.
-    const std::string compressedHistory = turnPolicy.includePrivateHistory && !briefSocial
-        ? context.GetCompressedHistorySummary()
+    const std::string cutShort = turnPolicy.includePrivateHistory && !briefSocial
+        ? context.RenderExcerpts()
         : std::string{};
-    if (!compressedHistory.empty())
+    if (!cutShort.empty())
     {
-        postureLine << "\n\n" << compressedHistory;
+        postureLine << "\n\n" << cutShort;
     }
     if (!turnPolicy.publicAudience && IsExplicitRuntimeQuestion(policyInput))
     {
@@ -861,6 +873,7 @@ evaluation::EvaluationReply ConversationRuntime::EvaluateTurn(
     // measures the corpus and not whatever the user happened to say beforehand.
     std::vector<conversationMessage> promptContext = priorTurns;
     promptContext.push_back({"user", input});
+    ApplyStableContext({});
     router.SetPosture(BuildTurnPosture(input, promptContext, profile, llmAvailable, {}));
 
     // The same builder the live turn uses, so an evaluation run measures the routing
@@ -1369,6 +1382,7 @@ SessionResult ConversationRuntime::Generate(
         {
             postureLine << "\n\n" << internetGrounding;
         }
+        ApplyStableContext(turnPolicy);
         router.SetPosture(postureLine.str());
         router.SetReplyNote(inquiry.ReplyNote());
     }
@@ -1397,6 +1411,7 @@ SessionResult ConversationRuntime::Generate(
         {
             posture += "\n\n" + internetGrounding;
         }
+        ApplyStableContext(turnPolicy);
         router.SetPosture(std::move(posture));
     }
 

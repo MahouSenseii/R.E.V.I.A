@@ -25,6 +25,7 @@ public:
     bool IsBackendAvailable(std::stop_token stopToken = {}) const;
     bool WarmUp(std::stop_token stopToken, std::string& outError) const;
     void SetPosture(std::string posture);
+    void SetStableContext(std::string context);
     void SetReplyNote(std::string note);
     std::string RelatedMemories(const std::string& query, std::stop_token stopToken = {}) const;
     healthOutput CheckBackendHealth(std::stop_token stopToken = {}) const;
@@ -51,8 +52,11 @@ public:
     responseOutput Deliberate(
         const std::string& boundedInquiryPrompt,
         std::stop_token stopToken = {}) const;
-    responseOutput SummarizeConversation(
+    responseOutput ObserveConversation(
         const std::string& boundedHistory,
+        std::stop_token stopToken = {}) const;
+    responseOutput ReflectOnConversation(
+        const std::string& boundedRecord,
         std::stop_token stopToken = {}) const;
     responseOutput GenerateGoalPlan(const std::string& userRequest) const;
     responseOutput GenerateCodeReview(

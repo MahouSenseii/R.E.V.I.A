@@ -666,6 +666,16 @@ private:
     void StopHistoryCompaction();
     void SignalHistoryCompaction();
     void CompactHistoryOnce(std::stop_token workerStop);
+    void ObserveHistory(
+        const conversationContext::CompactionJob& job, std::stop_token workerStop);
+    void ReflectOnHistory(
+        const conversationContext::ReflectionJob& job, std::stop_token workerStop);
+    // Takes the operation lock once no turn holds it; false when asked to stop first.
+    [[nodiscard]] bool WaitForQuietTurn(
+        std::unique_lock<std::mutex>& operationLock, std::stop_token workerStop);
+    // Saves observations with the archive; returns how that went, for the event line.
+    [[nodiscard]] std::string PersistObservations(
+        const std::vector<memory::Observation>& observations);
     void CancelScreenAwarenessAttempt();
     [[nodiscard]] std::string CurrentScreenContext() const;
     // Its own thread, not the shell's poll timer. A companion that only considers speaking

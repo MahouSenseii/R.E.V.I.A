@@ -51,6 +51,8 @@ struct ReviaSessionTestAccess
     { session.screenAwareness.Record(std::move(description)); }
     static std::string CompressedHistory(const ReviaSession& session)
     { return session.context.GetCompressedHistorySummary(); }
+    static std::vector<memory::Observation> Observations(const ReviaSession& session)
+    { return session.context.Observations(); }
     static std::vector<conversationMessage> RecentMessages(const ReviaSession& session)
     { return session.context.GetRecentMessages(); }
     static bool IsBusy(const ReviaSession& session) { return session.busy.load(); }

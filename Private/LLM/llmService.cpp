@@ -39,6 +39,11 @@ void llmService::SetPosture(std::string posture)
     llamaCpp.SetPosture(std::move(posture));
 }
 
+void llmService::SetStableContext(std::string context)
+{
+    llamaCpp.SetStableContext(std::move(context));
+}
+
 void llmService::SetReplyNote(std::string note)
 {
     llamaCpp.SetReplyNote(std::move(note));
@@ -317,17 +322,30 @@ responseOutput llmService::Deliberate(
     return llamaCpp.Deliberate(boundedInquiryPrompt, stopToken);
 }
 
-responseOutput llmService::SummarizeConversation(
+responseOutput llmService::ObserveConversation(
     const std::string& boundedHistory,
     const std::stop_token stopToken) const
 {
     if (!bIsReady || backendType != llmBackendType::LLamaCpp)
     {
         responseOutput output;
-        output.reason = "History compaction requires the active llama.cpp backend.";
+        output.reason = "The conversation record requires the active llama.cpp backend.";
         return output;
     }
-    return llamaCpp.SummarizeConversation(boundedHistory, stopToken);
+    return llamaCpp.ObserveConversation(boundedHistory, stopToken);
+}
+
+responseOutput llmService::ReflectOnConversation(
+    const std::string& boundedRecord,
+    const std::stop_token stopToken) const
+{
+    if (!bIsReady || backendType != llmBackendType::LLamaCpp)
+    {
+        responseOutput output;
+        output.reason = "The conversation record requires the active llama.cpp backend.";
+        return output;
+    }
+    return llamaCpp.ReflectOnConversation(boundedRecord, stopToken);
 }
 
 responseOutput llmService::GenerateGoalPlan(const std::string& userRequest) const

@@ -39,7 +39,8 @@ const std::string& posture,
 std::vector<promptSection>* sections,
 const revia::llm::PrivateMemoryAccess memoryAccess,
 const std::string& replyNote,
-const bool stablePrefix) const
+const bool stablePrefix,
+const std::string& stableContext) const
 {
     nlohmann::json messages = nlohmann::json::array();
 
@@ -58,6 +59,12 @@ const bool stablePrefix) const
     // recorded in the order it is concatenated, because that order decides how much of
     // the cache survives.
     record("system_prompt", profile.systemPrompt, true);
+    if (!stableContext.empty())
+    {
+        if (!systemContent.empty()) systemContent += "\n\n";
+        systemContent += stableContext;
+        record("stable_context", stableContext, true);
+    }
 
     // Posture and memories change every turn. In the system message they invalidate the
     // cache for everything after them, and for a hybrid model like Qwen3.5 llama.cpp can
