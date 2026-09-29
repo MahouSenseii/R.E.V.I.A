@@ -449,6 +449,24 @@ struct CapabilitySettings
             "HuntGame.exe", "Deceive.exe"};
     };
 
+    // The Revia-Stage guest (Stage/stageProtocol.h): a machine that is not this one
+    // where her desktop actions are performed instead. Off, and the local executors
+    // are used; on, every admitted desktop action goes over the channel, bounded by
+    // the tier granted here and by the tier the guest itself was started with.
+    struct Stage
+    {
+        bool enabled = false;
+        std::string host = "127.0.0.1";
+        int port = 39610;
+        // 0 observe, 1 confined to approved applications, 2 the guest's whole desktop,
+        // 3 starting processes in the guest.
+        int grantedTier = 1;
+        int connectTimeoutSeconds = 5;
+        int timeoutSeconds = 30;
+        // The Hyper-V machine, for the scripts that checkpoint and stop it.
+        std::string vmName;
+    };
+
     // The camera is the most physically invasive thing this application can reach, so it
     // is off until explicitly asked for and it lives behind the same capability file as
     // everything else rather than behind a comfort preference.
@@ -570,6 +588,7 @@ struct CapabilitySettings
     InternetAccess internet;
     McpAccess mcp;
     Games games;
+    Stage stage;
     CameraAccess camera;
     DesktopControl desktopControl;
 };

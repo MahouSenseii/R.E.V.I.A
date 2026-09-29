@@ -150,6 +150,13 @@ if(WIN32)
     target_link_libraries(ReviaFoundation PUBLIC shell32 dxgi sapi ole32 oleaut32 winmm gdiplus gdi32 bcrypt crypt32 winhttp psapi pdh dbghelp mfplat mf mfreadwrite mfuuid shlwapi advapi32 dwmapi ws2_32)
 endif()
 
+if(WIN32)
+    # The Revia-Stage guest: her desktop executors served over the stage channel inside
+    # a Hyper-V guest (Tools/Stage/README.md). Windows only, like the executors.
+    add_executable(ReviaStageGuest "${CMAKE_CURRENT_SOURCE_DIR}/Stage/reviaStageGuest.cpp")
+    target_link_libraries(ReviaStageGuest PRIVATE ReviaFoundation)
+endif()
+
 if(MSVC)
     target_compile_options(ReviaFoundation PRIVATE /W4 /permissive-)
 else()

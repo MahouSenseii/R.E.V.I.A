@@ -5,6 +5,7 @@
 #include "Internet/visibleBrowserClient.h"
 #include "Core/runtimePath.h"
 #include "Games/gameActionExecutor.h"
+#include "Stage/stageActionExecutor.h"
 #include "Skills/mcpToolExecutor.h"
 #include "Windows/desktopControlExecutor.h"
 #include "Windows/windowsAutomationExecutor.h"
@@ -87,6 +88,14 @@ bool ActionRuntime::InitializeUnlocked(
         settings.maxAffectedEntries));
     dispatcher.Register(std::make_unique<internet::InternetSearchExecutor>(
         settings.internet, internetCancellation));
+    // Ahead of the local desktop executors, so with the stage on every desktop action
+    // the policy admits is performed in the guest and none on this machine.
+    stageClient.reset();
+    if (settings.stage.enabled)
+    {
+        stageClient = std::make_shared<stage::StageChannelClient>();
+        dispatcher.Register(std::make_unique<stage::StageActionExecutor>(settings.stage, stageClient));
+    }
 #ifdef _WIN32
     dispatcher.Register(std::make_unique<windows::WindowsAutomationExecutor>(
         settings.desktopControl, desktopApprovals));
@@ -489,6 +498,12 @@ void ActionRuntime::AttachGames(std::shared_ptr<games::NeuroGameServer> server)
     if (gameServer || !server) return;
     gameServer = std::move(server);
     dispatcher.Register(std::make_unique<games::GameActionExecutor>(gameServer));
+}
+
+std::shared_ptr<stage::StageChannelClient> ActionRuntime::Stage() const
+{
+    std::lock_guard lock(mutex);
+    return stageClient;
 }
 
 std::shared_ptr<games::NeuroGameServer> ActionRuntime::Games() const

@@ -10,6 +10,7 @@
 #include "Policy/desktopInputGuard.h"
 #include "Policy/permissionStore.h"
 #include "Games/neuroGameServer.h"
+#include "Stage/stageChannel.h"
 #include "Skills/mcpRegistry.h"
 
 #include <filesystem>
@@ -142,6 +143,8 @@ public:
     // Attached once after Initialize; a second attach replaces nothing and adds nothing.
     void AttachGames(std::shared_ptr<games::NeuroGameServer> server);
     [[nodiscard]] std::shared_ptr<games::NeuroGameServer> Games() const;
+    // The stage channel, when the capability file turns the stage on; empty otherwise.
+    [[nodiscard]] std::shared_ptr<stage::StageChannelClient> Stage() const;
 
 private:
     // Called under mutex. Cancellation is checked after the observer callback,
@@ -164,6 +167,7 @@ private:
     std::unique_ptr<policy::CapabilityPolicy> policy;
     std::shared_ptr<skills::McpRegistry> mcpRegistry;
     std::shared_ptr<games::NeuroGameServer> gameServer;
+    std::shared_ptr<stage::StageChannelClient> stageClient;
     std::shared_ptr<internet::VisibleBrowserCancellation> internetCancellation;
     ActionDispatcher dispatcher;
     std::unique_ptr<audit::ActionAuditLogger> auditLogger;

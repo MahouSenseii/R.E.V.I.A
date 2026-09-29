@@ -263,6 +263,38 @@ bool PermissionStore::Load(
             }
         }
 
+        if (data.contains("stage"))
+        {
+            const json& stage = data["stage"];
+            if (!stage.is_object())
+            {
+                outError = "stage must be an object.";
+                return false;
+            }
+            settings.stage.enabled = stage.value("enabled", false);
+            settings.stage.host = stage.value("host", "127.0.0.1");
+            settings.stage.port = stage.value("port", 39610);
+            settings.stage.grantedTier = stage.value("grantedTier", 1);
+            settings.stage.connectTimeoutSeconds = stage.value("connectTimeoutSeconds", 5);
+            settings.stage.timeoutSeconds = stage.value("timeoutSeconds", 30);
+            settings.stage.vmName = stage.value("vmName", "");
+            if (settings.stage.port < 1 || settings.stage.port > 65535)
+            {
+                outError = "stage.port must be a TCP port number.";
+                return false;
+            }
+            if (settings.stage.grantedTier < 0 || settings.stage.grantedTier > 3)
+            {
+                outError = "stage.grantedTier must be 0 (observe), 1 (confined), 2 (desktop) or 3 (system).";
+                return false;
+            }
+            if (settings.stage.timeoutSeconds < 1 || settings.stage.connectTimeoutSeconds < 1)
+            {
+                outError = "stage timeouts must be at least one second.";
+                return false;
+            }
+        }
+
         if (data.contains("camera"))
         {
             const json& camera = data["camera"];

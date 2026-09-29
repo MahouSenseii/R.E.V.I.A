@@ -76,6 +76,15 @@
     "enabled": false,
     "manifestDirectory": "Config/Skills"
   },
+  "stage": {
+    "enabled": false,
+    "host": "127.0.0.1",
+    "port": 39610,
+    "grantedTier": 1,
+    "connectTimeoutSeconds": 5,
+    "timeoutSeconds": 30,
+    "vmName": ""
+  },
   "games": {
     "enabled": false,
     "approvedGames": [],
