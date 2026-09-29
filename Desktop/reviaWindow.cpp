@@ -2411,16 +2411,31 @@ revia::actions::ConfirmationChoice ReviaWindow::ConfirmAction(
             raise();
             activateWindow();
         }
-        QString description = "Action: " + QString::fromStdString(revia::actions::ToString(request.type)) +
-            (request.application.empty()
-                ? "\nSource: " + QString::fromStdString(revia::actions::PathToUtf8(request.source))
-                : "\nApplication: " + QString::fromStdString(request.application) +
-                    "\nWindow: " + QString::fromStdString(request.windowTitle) +
-                    "\nControl: " + QString::fromStdString(request.control));
-        if (!request.destination.empty())
+        QString description;
+        if (request.type == revia::actions::ActionType::AgentTool)
         {
-            description += "\nDestination: " +
-                QString::fromStdString(revia::actions::PathToUtf8(request.destination));
+            // A hosted coding agent asking. What it wants to do is its own title and
+            // input; the answer is the whole of Revia's say in it.
+            description = "The coding agent (" + QString::fromStdString(request.application) +
+                ") wants to: " + QString::fromStdString(request.value) +
+                "\nKind: " + QString::fromStdString(request.control) +
+                (request.arguments.empty()
+                    ? QString()
+                    : "\nInput: " + QString::fromStdString(request.arguments).left(600));
+        }
+        else
+        {
+            description = "Action: " + QString::fromStdString(revia::actions::ToString(request.type)) +
+                (request.application.empty()
+                    ? "\nSource: " + QString::fromStdString(revia::actions::PathToUtf8(request.source))
+                    : "\nApplication: " + QString::fromStdString(request.application) +
+                        "\nWindow: " + QString::fromStdString(request.windowTitle) +
+                        "\nControl: " + QString::fromStdString(request.control));
+            if (!request.destination.empty())
+            {
+                description += "\nDestination: " +
+                    QString::fromStdString(revia::actions::PathToUtf8(request.destination));
+            }
         }
         description += "\n\nPolicy: " + QString::fromStdString(decision.reason);
         if (request.resolution.IsUiaElementTarget())

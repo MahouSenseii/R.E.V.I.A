@@ -58,6 +58,7 @@ std::string ToString(ActionType value)
         case ActionType::TypeText: return "type_text";
         case ActionType::WebSearch: return "web_search";
         case ActionType::McpTool: return "mcp_tool";
+        case ActionType::AgentTool: return "agent_tool";
         case ActionType::Unknown:
         default: return "unknown";
     }
@@ -362,6 +363,7 @@ RiskLevel RiskForAction(ActionType value)
         // Destructive on its own: the policy replaces this with the risk the tool's
         // manifest pinned, and a tool no manifest knows keeps the ceiling.
         case ActionType::McpTool:
+        case ActionType::AgentTool:
         case ActionType::Unknown:
         default:
             return RiskLevel::Destructive;

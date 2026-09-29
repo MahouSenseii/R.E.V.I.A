@@ -25,6 +25,7 @@ The design rule: **one Revia**. Reflex, Fast, Main, and Expert share one identit
 | MCP tools with pinned manifests (opt-in) | **Tested** | Tools on MCP servers as typed actions through the same policy, confirmation and audit; a manifest pins each tool's description and risk; covered against a fake server and a fake stdio server through the bridge, not yet run against a real one |
 | Knowing who is at the microphone (opt-in) | **Tested** | Voiceprints kept only at a person's request, matched per utterance through a sherpa-onnx worker; covered against a fake worker and through the session, not yet heard live |
 | Inner Thoughts: weighing a remark before saying it | **Tested** | Every thought the curiosity planner nominates is scored on relevance, informativeness, timing, social fit and motivation before it is voiced; one under the bar shows as a thought bubble, never speech. Scoring and the bubble are covered by tests; not yet watched in a live session |
+| Hosting a coding agent (`/code`, opt-in) | **Tested** | Claude Code, Codex or Gemini CLI driven over the Agent Client Protocol as a background task: its permission requests reach you through the same confirmation prompt, its file access through her stays in one workspace, it gets no terminal from her. Covered against a fake agent; not yet run against a real one |
 | Scheduled checks and repeating reminders | **Tested** | "Check the weather in Boston every hour" runs the same bounded lookup as a question of yours and says what it found; repeats come back until cancelled. Covered through the session against a scripted lookup |
 | Speech recognition (push-to-talk and hands-free) | **Verified live** | whisper.cpp on GPU, ~0.3–1.0 s per utterance |
 | Web lookups in a visible browser | **Verified live** | Shows query and sources; ~11 s per lookup |
@@ -74,6 +75,7 @@ The design rule: **one Revia**. Reflex, Fast, Main, and Expert share one identit
 - **Look things up** in a visible, locked-down browser (Edge or Chrome) and show you the exact query and sources. The pages are read by a separate reader with no tools; she answers from its findings, cites them as `[1]`, and the addresses under her reply are the lookup's own.
 - **Bring things up on her own** when she has something specific to say: a reaction to what you're doing, a follow-up on something from earlier, or a question. At most four times an hour, at least 15 minutes apart. She waits for a pause in your typing and stays quiet over a full-screen game, video or presentation (`initiative.suppressWhenFullScreen`), and while another app is using the microphone (a call or meeting). Before any of it is said, the thought is weighed (Inner Thoughts): does it bear on what you were doing, does it add anything, is this the moment, is it welcome after the last one went unanswered, does she actually want to say it. One that falls short stays hers and shows in the chat as a thought bubble ("Revia, to herself"), never spoken; `initiative.innerThoughtThreshold` (0.6) is the bar and `initiative.showInnerThoughts` hides the bubbles.
 - **Work in the background.** `/goal` and "operate" tasks run while she keeps talking; ask how it's going, or say "cancel the task". Only Stop or that request ends one.
+- **Hand coding to a coding agent.** `/code add a retry to the uploader` starts the agent you configured (Claude Code, Codex, Gemini CLI or anything else that speaks the [Agent Client Protocol](https://agentclientprotocol.com)) in one workspace folder, as a background task. Every permission it asks for comes to you as a confirmation; what it reads and writes through her stays in that folder; it gets no terminal from her. Its report comes back quoted as the agent's, not as hers. See [Hosting a coding agent](#hosting-a-coding-agent-opt-in).
 - **Remind you.** "Remind me in 20 minutes to stretch", "remind me at 3pm to call Sam", "set a timer for 5 minutes", "remind me every day at 9am to take my pills". Saved across restarts; a repeating one comes back until cancelled; `/reminders` lists and cancels them.
 - **Check things for you.** "Check the weather in Boston every hour", "check if the build is green in 20 minutes", "/check 30m is the release out". When it is due she looks it up the way she would for a question of yours (same bounded lookup, same quarantined reader, sources under the answer) and tells you, in a line or two. If the lookup cannot run, she says so instead of guessing. At most every 5 minutes.
 - **Help with what you copied.** Ask about "the code I just copied" or "what's on my clipboard" and she reads it for that one question. It is not saved, and text that looks like a password or key is withheld.
@@ -349,6 +351,7 @@ Type these in Chat or the CLI. `/help` lists everything, including direct file a
 | `/launch`, `/click`, `/drag`, `/move-cursor`, `/scroll`, `/press`, `/type` | Typed desktop operation |
 | `/initiative`, `accept`, `dismiss` | Review something she proposed on her own |
 | `/goal <task>`, `/goals` | Rehearse and supervise a multi-step goal |
+| `/code <task>` | Hand a coding task to the hosted coding agent (opt-in), as a background task |
 | `/task`, `/task cancel` | The goal she is running in the background (or say "cancel the task") |
 | `/remind <when> <what>`, `/reminders`, `/reminders cancel <n>` | Reminders and timers (or say "remind me at 3pm to call Sam", "set a timer for 5 minutes", "remind me every 30 minutes to stretch") |
 | `/check [every] <when> <question>` | A scheduled lookup, once or repeating (or say "check the weather in Boston every hour"); listed and cancelled with `/reminders` |
@@ -451,6 +454,25 @@ Cost, at Opus 5.5 prices: a typical consult is under two cents; a session that h
 By default a second person at her microphone is indistinguishable from you: she attributes local turns to whoever last introduced themselves ("I'm Sam"). `.\Tools\InstallSpeakerId.ps1` installs a speaker-embedding worker (sherpa-onnx with the WeSpeaker CAM++ model, Apache-2.0, CPU, pinned by SHA-256) and turns `speechRecognition.speakerIdentificationEnabled` on. From then on every utterance she transcribes also becomes a voice embedding, and she matches it against the voices people asked her to keep.
 
 Nobody is recognised until they ask. "Revia, remember my voice, I'm Sam" keeps that utterance as Sam's (say it a few times, or `/voice enroll Sam` after speaking, for up to five samples); "forget my voice" or `/voice forget Sam` drops it. A match moves local conversation attribution to that person, exactly as saying their name does, and grants nothing else: a cloned voice defeats a voiceprint, so it is never authentication. A voice she does not know puts attribution back on the anonymous local user rather than the last named person. The voiceprints live in the DPAPI secret store under `RuntimeData\Secrets`, the embeddings never enter a prompt, a log or a memory, and nothing leaves the machine. `speakerMatchThreshold` (0.62) and `speakerMatchMargin` (0.08) are the knobs; `/voice` shows the state.
+
+### Hosting a coding agent (opt-in)
+
+She does not write code by herself beyond `/improve` on her own source; for real coding work she hosts an agent built for it, the way an editor does. Any agent that speaks the Agent Client Protocol works: Claude Code through its adapter (`npx @zed-industries/claude-code-acp`, which uses your Claude Code login), Codex or Gemini CLI through theirs. In `Config\settings.json`:
+
+```json
+"codingAgent": {
+  "enabled": true,
+  "command": "cmd.exe",
+  "arguments": ["/d", "/c", "npx", "-y", "@zed-industries/claude-code-acp"],
+  "workspace": "RuntimeData/CodingWorkspace",
+  "allowWrites": true,
+  "turnTimeoutMinutes": 20
+}
+```
+
+Then `/code <what you want>`. She starts the agent in the workspace folder, gives it the task and streams its plan and tool calls to the Runtime tab; ask "how is it going?" or say "cancel the task" as with any background task. The agent's finished report is shown quoted as the agent's own words, never as hers.
+
+What keeps it hers: every permission the agent asks for (edit this file, run this command) comes to you as a confirmation prompt, with the tool's name, kind and input, and "Allow for this whole task" is remembered for that task only. File reads and writes the agent routes through her are confined to the workspace, links included; `allowWrites: false` makes them read-only. She never offers the agent a terminal. Be clear about the limit: an agent's own tools run in the agent's process, and Revia cannot confine those; your answer to the prompt is the only gate on them, which is why the prompt says so. Run it in a workspace that holds nothing you would not hand the agent, and nothing here has been run against a real agent yet.
 
 ### Tools on MCP servers (opt-in)
 

@@ -162,6 +162,15 @@
     "workbenchPath": "",
     "proposalsPath": "RuntimeData/Improvement/Proposals"
   },
+  "codingAgent": {
+    "enabled": false,
+    "command": "cmd.exe",
+    "arguments": ["/d", "/c", "npx", "-y", "@zed-industries/claude-code-acp"],
+    "workspace": "RuntimeData/CodingWorkspace",
+    "allowWrites": true,
+    "turnTimeoutMinutes": 20,
+    "maximumOutputCharacters": 20000
+  },
   "presence": {
     "enabled": true,
     "avatarBridgeEnabled": true,

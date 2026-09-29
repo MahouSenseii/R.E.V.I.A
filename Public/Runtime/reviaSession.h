@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Actions/actionRuntime.h"
+#include "Coding/acpClient.h"
 #include "Agents/curiosityAgent.h"
 #include "Agents/historyCompactor.h"
 #include "Agents/turnCoordinator.h"
@@ -542,6 +543,13 @@ private:
         const actions::windows::DesktopObservation& observation);
     bool TryHandleGoalInput(const std::string& input, SessionResult& result);
     bool TryHandleOperateInput(const std::string& input, SessionResult& result);
+    // /code <task>: a coding agent she hosts over the Agent Client Protocol
+    // (Coding/acpClient.h), run as a background task in the configured workspace.
+    bool TryHandleCodeInput(const std::string& input, SessionResult& result);
+    // The agent's permission request, through the same confirmation the rest of her
+    // actions use. `blanket` is set when the person allowed the whole task.
+    coding::PermissionAnswer AskCodingPermission(
+        const coding::PermissionRequest& request, const std::string& agentName, bool& blanket);
     // Shared by /operate and by an ordinary sentence that asked for the same thing, so
     // the two routes cannot drift into different rules.
     bool RunOperateGoal(const std::string& request, SessionResult& result);

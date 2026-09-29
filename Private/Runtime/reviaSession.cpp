@@ -8851,6 +8851,207 @@ bool ReviaSession::RefuseWhileTaskRuns(SessionResult& result)
     return true;
 }
 
+bool ReviaSession::TryHandleCodeInput(const std::string& input, SessionResult& result)
+{
+    const std::string task = input.size() > 5 ? Trim(input.substr(5)) : std::string();
+    result.fromAssistant = true;
+    if (!settings.codingAgent.bEnabled)
+    {
+        result.succeeded = false;
+        result.text = "No coding agent is set up. In Config\\settings.json turn on "
+            "codingAgent.enabled and point codingAgent.command at an agent that speaks the "
+            "Agent Client Protocol, for example Claude Code through "
+            "npx @zed-industries/claude-code-acp.";
+        result.reason = "The coding agent is disabled.";
+        SetState(RuntimeState::Idle);
+        return true;
+    }
+    if (task.empty())
+    {
+        result.succeeded = false;
+        result.text = "Usage: /code <what you want written or changed>";
+        result.reason = "No coding task was given.";
+        SetState(RuntimeState::Idle);
+        return true;
+    }
+    if (RefuseWhileTaskRuns(result)) return true;
+
+    std::error_code error;
+    const std::filesystem::path workspace = std::filesystem::absolute(
+        core::ResolveRuntimeWritePath(settings.codingAgent.workspace), error).lexically_normal();
+    std::filesystem::create_directories(workspace, error);
+    if (error)
+    {
+        result.succeeded = false;
+        result.text = "The coding workspace could not be created: " + workspace.string() +
+            " (" + error.message() + ").";
+        result.reason = result.text;
+        SetState(RuntimeState::Idle);
+        return true;
+    }
+    const codingAgentSettings agentSettings = settings.codingAgent;
+    const std::string title = "code: " + utf8::Prefix(task, 60);
+    std::string launchMessage;
+    const bool launched = LaunchTask(title,
+        [this, task, workspace, agentSettings, title](const std::stop_token stop) -> goals::Goal
+    {
+        goals::Goal goal;
+        goal.id = goals::NewGoalId();
+        goal.title = title;
+        coding::AcpLaunch launch;
+        launch.command = agentSettings.command;
+        launch.arguments = agentSettings.arguments;
+        launch.workspace = workspace;
+        launch.allowWrites = agentSettings.bAllowWrites;
+        coding::AcpClient agent;
+        PublishComponent("Coding agent", "Starting",
+            agentSettings.command + " in " + workspace.string());
+        std::string error;
+        if (!agent.Start(launch, error))
+        {
+            goal.status = goals::GoalStatus::Failed;
+            goal.stopDetail = error;
+            PublishComponent("Coding agent", "Unavailable", error);
+            return goal;
+        }
+        PublishComponent("Coding agent", "Connected",
+            agent.AgentName() + (agent.AgentVersion().empty() ? "" : " " + agent.AgentVersion()) +
+                ". Through Revia it may read" + (agentSettings.bAllowWrites ? " and write" : "") +
+                " files under " + workspace.string() +
+                " and nowhere else; it gets no terminal from her. What its own tools do is "
+                "gated by your answers alone.");
+        std::string sessionId;
+        if (!agent.NewSession(sessionId, error))
+        {
+            goal.status = goals::GoalStatus::Failed;
+            goal.stopDetail = error;
+            PublishComponent("Coding agent", "Unavailable", error);
+            return goal;
+        }
+        bool blanket = false;
+        const auto progress = [this](const std::string& text)
+        {
+            std::lock_guard lock(taskMutex);
+            if (activeTask) activeTask->progress = utf8::Prefix(text, 160);
+        };
+        progress("the agent is working");
+        const std::string agentName = agent.AgentName();
+        const coding::PromptResult outcome = agent.Prompt(
+            sessionId, task,
+            [&](const coding::AgentUpdate& update)
+            {
+                switch (update.kind)
+                {
+                    case coding::AgentUpdate::Kind::ToolCall:
+                        PublishComponent("Coding agent", "Tool",
+                            update.title + (update.toolKind.empty() ? "" : " (" + update.toolKind + ")"));
+                        progress(update.title);
+                        break;
+                    case coding::AgentUpdate::Kind::ToolCallUpdate:
+                        if (!update.status.empty())
+                        {
+                            PublishComponent("Coding agent", "Tool " + update.status,
+                                update.title.empty() ? update.toolCallId : update.title);
+                        }
+                        break;
+                    case coding::AgentUpdate::Kind::Plan:
+                        PublishComponent("Coding agent", "Plan", update.text);
+                        break;
+                    // Its words are gathered into the result; its thinking is its own
+                    // and is neither shown nor kept.
+                    case coding::AgentUpdate::Kind::MessageChunk:
+                    case coding::AgentUpdate::Kind::ThoughtChunk:
+                    case coding::AgentUpdate::Kind::Other:
+                        break;
+                }
+            },
+            [&](const coding::PermissionRequest& request)
+            {
+                return AskCodingPermission(request, agentName, blanket);
+            },
+            stop,
+            std::chrono::minutes(agentSettings.turnTimeoutMinutes),
+            static_cast<std::size_t>(agentSettings.maximumOutputCharacters));
+        agent.Stop();
+
+        const std::string counts = std::to_string(outcome.toolCalls) + " tool call" +
+            (outcome.toolCalls == 1 ? "" : "s") + ", " + std::to_string(outcome.permissionsAsked) +
+            " permission" + (outcome.permissionsAsked == 1 ? "" : "s") + " asked, " +
+            std::to_string(outcome.filesRead) + " read and " + std::to_string(outcome.filesWritten) +
+            " written through Revia, " + std::to_string(outcome.refusedRequests) + " refused.";
+        // The agent's report reaches the person as the agent's, quoted and labelled, never
+        // as something Revia said.
+        if (!outcome.message.empty())
+        {
+            RuntimeEvent message;
+            message.kind = RuntimeEventKind::AssistantMessage;
+            message.state = state.load();
+            message.component = "Coding agent";
+            message.phase = agentName;
+            message.message = "From " + agentName + ": " + outcome.message;
+            message.detail = "The coding agent's own words, quoted. " + counts;
+            eventBus.Publish(std::move(message));
+        }
+        goal.status = outcome.completed ? goals::GoalStatus::Succeeded
+            : outcome.cancelled ? goals::GoalStatus::Cancelled
+            : goals::GoalStatus::Failed;
+        goal.stopDetail = outcome.completed ? std::string()
+            : outcome.cancelled ? "Stopped at your request." : outcome.error;
+        goal.spend.actions = static_cast<std::uint32_t>(outcome.toolCalls);
+        PublishComponent("Coding agent",
+            outcome.completed ? "Finished" : outcome.cancelled ? "Cancelled" : "Failed",
+            (outcome.completed ? "" : goal.stopDetail + " ") + counts);
+        return goal;
+    }, launchMessage);
+    result.succeeded = launched;
+    result.text = launchMessage;
+    if (!launched) result.reason = launchMessage;
+    SetState(RuntimeState::Idle);
+    return true;
+}
+
+coding::PermissionAnswer ReviaSession::AskCodingPermission(
+    const coding::PermissionRequest& request, const std::string& agentName, bool& blanket)
+{
+    if (blanket)
+    {
+        PublishComponent("Coding agent", "Allowed", request.title + " (allowed for this whole task)");
+        return coding::PermissionAnswer::AllowOnce;
+    }
+    if (!confirmationHandler)
+    {
+        PublishComponent("Coding agent", "Declined", request.title + ": nobody could be asked.");
+        return coding::PermissionAnswer::RejectOnce;
+    }
+    actions::ActionRequest action;
+    action.id = actions::NewActionId();
+    action.type = actions::ActionType::AgentTool;
+    action.application = agentName;
+    action.value = request.title;
+    action.control = request.toolKind;
+    action.arguments = request.rawInput;
+    action.requestedBy = "coding_agent";
+    actions::PolicyDecision decision;
+    decision.verdict = actions::PolicyVerdict::RequiresConfirmation;
+    decision.risk = request.toolKind == "read" || request.toolKind == "search" ||
+            request.toolKind == "fetch" || request.toolKind == "think"
+        ? actions::RiskLevel::ReadOnly
+        : actions::RiskLevel::Destructive;
+    decision.reason = "A hosted coding agent asked to run one of its own tools. Revia does not "
+        "run it and cannot confine it; your answer is the only gate.";
+    const actions::ConfirmationChoice choice = confirmationHandler(action, decision);
+    PublishComponent("Coding agent", actions::Granted(choice) ? "Allowed" : "Declined", request.title);
+    switch (choice)
+    {
+        case actions::ConfirmationChoice::Allow: return coding::PermissionAnswer::AllowOnce;
+        case actions::ConfirmationChoice::AllowForThisTask:
+            blanket = true;
+            return coding::PermissionAnswer::AllowAlways;
+        case actions::ConfirmationChoice::Decline: break;
+    }
+    return coding::PermissionAnswer::RejectOnce;
+}
+
 bool ReviaSession::TryHandleReminderInput(const std::string& input, SessionResult& result)
 {
     const planning::WallClock::time_point now = planning::WallClock::now();
@@ -10742,6 +10943,10 @@ bool ReviaSession::TryHandleActionInput(const std::string& input, SessionResult&
     if (input.rfind("/goal ", 0) == 0)
     {
         return TryHandleGoalInput(input, result);
+    }
+    if (input == "/code" || input.rfind("/code ", 0) == 0)
+    {
+        return TryHandleCodeInput(input, result);
     }
 
     if (input == "/bargein" || input.rfind("/bargein ", 0) == 0)

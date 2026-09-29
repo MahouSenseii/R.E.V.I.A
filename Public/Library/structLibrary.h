@@ -959,6 +959,24 @@ struct improvementSettings
     std::string proposalsPath = "RuntimeData/Improvement/Proposals";
 };
 
+// A coding agent she hosts over the Agent Client Protocol (Coding/acpClient.h).
+//
+// Off by default: nothing here runs unless the owner names an agent. The command is
+// the agent's own launcher; on Windows most are npm packages, so the default goes
+// through cmd.exe so that npx resolves. The workspace is the only place the agent's
+// file reads and writes through her may reach; what the agent does with its own tools
+// inside its own process is governed by the permission prompts, and by nothing else.
+struct codingAgentSettings
+{
+    bool bEnabled = false;
+    std::string command = "cmd.exe";
+    std::vector<std::string> arguments = {"/d", "/c", "npx", "-y", "@zed-industries/claude-code-acp"};
+    std::string workspace = "RuntimeData/CodingWorkspace";
+    bool bAllowWrites = true;
+    int turnTimeoutMinutes = 20;
+    int maximumOutputCharacters = 20000;
+};
+
 // Which decision provider answers an operator run, and whether anything is recorded.
 //
 // Every default here preserves what the application did before the feature existed:
@@ -1001,6 +1019,7 @@ struct appSettings
     speechRecognitionSettings speechRecognition;
     performanceSettings performance;
     improvementSettings improvement;
+    codingAgentSettings codingAgent;
     presenceSettings presence;
     resourceSettings resources;
     visionSettings vision;

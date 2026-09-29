@@ -829,6 +829,28 @@ bool configManager::LoadSettings(appSettings& outSettings) const
                 improvement.proposalsPath = improvementData["proposalsPath"].get<std::string>();
         }
 
+        if (data.contains("codingAgent"))
+        {
+            const json& agentData = data["codingAgent"];
+            codingAgentSettings& agent = outSettings.codingAgent;
+            if (agentData.contains("enabled")) agent.bEnabled = agentData["enabled"].get<bool>();
+            if (agentData.contains("command")) agent.command = agentData["command"].get<std::string>();
+            if (agentData.contains("arguments") && agentData["arguments"].is_array())
+            {
+                agent.arguments.clear();
+                for (const json& argument : agentData["arguments"])
+                {
+                    if (argument.is_string()) agent.arguments.push_back(argument.get<std::string>());
+                }
+            }
+            if (agentData.contains("workspace")) agent.workspace = agentData["workspace"].get<std::string>();
+            if (agentData.contains("allowWrites")) agent.bAllowWrites = agentData["allowWrites"].get<bool>();
+            if (agentData.contains("turnTimeoutMinutes"))
+                agent.turnTimeoutMinutes = agentData["turnTimeoutMinutes"].get<int>();
+            if (agentData.contains("maximumOutputCharacters"))
+                agent.maximumOutputCharacters = agentData["maximumOutputCharacters"].get<int>();
+        }
+
         if (data.contains("presence"))
         {
             const json& presenceData = data["presence"];
@@ -1749,6 +1771,12 @@ bool configManager::LoadSettings(appSettings& outSettings) const
         outSettings.initiative.minimumPrecision > 1.0f ||
         outSettings.initiative.innerThoughtThreshold < 0.0f ||
         outSettings.initiative.innerThoughtThreshold > 1.0f ||
+        outSettings.codingAgent.turnTimeoutMinutes < 1 ||
+        outSettings.codingAgent.turnTimeoutMinutes > 240 ||
+        outSettings.codingAgent.maximumOutputCharacters < 1000 ||
+        outSettings.codingAgent.maximumOutputCharacters > 200000 ||
+        (outSettings.codingAgent.bEnabled &&
+            (outSettings.codingAgent.command.empty() || outSettings.codingAgent.workspace.empty())) ||
         outSettings.bargeIn.energyThreshold < 100 ||
         outSettings.bargeIn.energyThreshold > 30000 ||
         outSettings.bargeIn.consecutiveFramesRequired < 1 ||

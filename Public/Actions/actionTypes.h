@@ -41,7 +41,12 @@ enum class ActionType
     // A tool on an MCP server the owner wrote a manifest for (Skills/mcpManifest.h):
     // value names it as "<server>/<tool>", arguments carries its JSON object. Its
     // risk is whatever the manifest pinned, never what the server or the planner says.
-    McpTool
+    McpTool,
+    // A tool a hosted coding agent (Coding/acpClient.h) asked permission for: value is
+    // the tool's title, control its kind, arguments its input. Never planned, never
+    // executed by Revia; it exists so the agent's question reaches the same
+    // confirmation prompt as everything else she does.
+    AgentTool
 };
 
 // How much is actually known about what a pointer action is aimed at.

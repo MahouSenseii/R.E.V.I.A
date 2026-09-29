@@ -17,6 +17,7 @@ namespace revia::runtime
 struct ReviaSessionTestAccess
 {
     static speech::SpeechService& Speech(ReviaSession& session) { return session.speechService; }
+    static appSettings& Settings(ReviaSession& session) { return session.settings; }
     static ConversationRuntime& Conversation(ReviaSession& session) { return session.conversationRuntime; }
     static identity::VoiceprintRegistry& Voiceprints(ReviaSession& session) { return session.voiceprints; }
     static std::string CurrentSpeaker(ReviaSession& session)
