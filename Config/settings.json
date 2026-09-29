@@ -169,7 +169,10 @@
     "workspace": "RuntimeData/CodingWorkspace",
     "allowWrites": true,
     "turnTimeoutMinutes": 20,
-    "maximumOutputCharacters": 20000
+    "maximumOutputCharacters": 20000,
+    "checkCommands": [],
+    "checkOutputCharacters": 6000,
+    "checkMemoryLimitMiB": 2048
   },
   "presence": {
     "enabled": true,

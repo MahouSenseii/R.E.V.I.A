@@ -17,6 +17,7 @@
 #include "Memory/sensitiveContent.h"
 #include "Perception/microphoneUse.h"
 #include "Initiative/innerThoughts.h"
+#include "Agents/checkExecutor.h"
 #include "Planning/goalPlanner.h"
 #include "Planning/operateIntent.h"
 #include "Visual/drawingRequestPolicy.h"
@@ -1382,6 +1383,7 @@ bool ReviaSession::Start()
     voiceprints.Configure(settings.speechRecognition.speakerMatchThreshold,
         settings.speechRecognition.speakerMatchMargin);
     LoadVoiceprints();
+    ConfigureInvestigationChecks();
     if (settings.intelligence.advisor.bEnabled)
     {
         // The key is read here, once, and handed to the runtime's client; it is not
@@ -8849,6 +8851,56 @@ bool ReviaSession::RefuseWhileTaskRuns(SessionResult& result)
     result.reason = "A background task is running.";
     SetState(RuntimeState::Idle);
     return true;
+}
+
+agents::ConfinedCheckSettings ReviaSession::CheckSettingsNow() const
+{
+    agents::ConfinedCheckSettings checks;
+    std::error_code error;
+    if (!settings.codingAgent.workspace.empty())
+    {
+        checks.workspace = std::filesystem::absolute(
+            core::ResolveRuntimeWritePath(settings.codingAgent.workspace), error).lexically_normal();
+    }
+    for (const checkCommandSettings& command : settings.codingAgent.checkCommands)
+    {
+        agents::CheckCommand configured;
+        configured.name = command.name;
+        configured.command = command.command;
+        configured.arguments = command.arguments;
+        configured.timeoutSeconds = command.timeoutSeconds;
+        checks.commands.push_back(std::move(configured));
+    }
+    checks.logDirectory = std::filesystem::path(ReviaLogDirectory());
+    checks.maximumOutputCharacters = static_cast<std::size_t>(settings.codingAgent.checkOutputCharacters);
+    checks.memoryLimitMiB = static_cast<std::uint64_t>(settings.codingAgent.checkMemoryLimitMiB);
+    return checks;
+}
+
+void ReviaSession::ConfigureInvestigationChecks()
+{
+    const agents::ConfinedCheckExecutor probe(CheckSettingsNow());
+    if (!probe.Available())
+    {
+        conversationRuntime.SetCheckExecutor({}, {});
+        appLogger.Log("Investigation checks: none available (no workspace and no check commands).");
+        return;
+    }
+    conversationRuntime.SetCheckExecutor(
+        [this](const agents::CheckKind kind, const std::string& description,
+            const std::string& questionText, const std::stop_token stopToken)
+        {
+            // Built per check from the settings as they are now, so a command added
+            // while she runs is there for the next investigation.
+            const agents::ConfinedCheckExecutor executor(CheckSettingsNow(),
+                [this](const std::string& phase, const std::string& message)
+                {
+                    PublishComponent("Investigation check", phase, message);
+                });
+            return executor.Execute(kind, description, questionText, stopToken);
+        },
+        probe.Describe());
+    appLogger.Log("Investigation checks: " + probe.Describe());
 }
 
 bool ReviaSession::TryHandleCodeInput(const std::string& input, SessionResult& result)

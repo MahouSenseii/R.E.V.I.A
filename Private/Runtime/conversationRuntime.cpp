@@ -696,6 +696,12 @@ SessionResult ConversationRuntime::AnswerCheck(
     return result;
 }
 
+void ConversationRuntime::SetCheckExecutor(CheckRunner runner, std::string description)
+{
+    checkRunner = std::move(runner);
+    checksDescription = std::move(description);
+}
+
 std::string ConversationRuntime::DescribeBody() const
 {
     std::string body = "You run entirely on this computer, not in the cloud. You think with "
@@ -939,12 +945,21 @@ ConversationRuntime::InvestigationSummary ConversationRuntime::RunInvestigation(
     budget.maximumQuestionsPerRound = std::max<std::size_t>(1, limits.questionsPerRound);
     budget.wallClock = limits.investigationBudget;
 
-    // No check executor is wired in this pass, so every round is reasoning only and the
-    // agent says so in its envelope. Findings are recorded as interpretation, never as
-    // observation; the seam exists for real checks and is deliberately left empty rather
-    // than filled with something that would let generated text pass as a measurement.
-    const agents::RoundRunner runner =
-        agents::InvestigationAgent::MakeRunner(router, basePosture, {}, stopToken);
+    // With a check runner wired, a proposed check really runs -- a configured command or
+    // a file under the workspace -- and what it returns is the observation; the model's
+    // description of it never is. Without one, every round is reasoning only and the
+    // envelope says so, so generated text cannot pass as a measurement.
+    agents::CheckExecutor executor;
+    if (checkRunner)
+    {
+        executor = [this, stopToken](const agents::CheckKind kind, const std::string& description,
+            const std::string& questionText)
+        {
+            return checkRunner(kind, description, questionText, stopToken);
+        };
+    }
+    const agents::RoundRunner runner = agents::InvestigationAgent::MakeRunner(
+        router, basePosture, std::move(executor), stopToken, checksDescription);
 
     const auto started = std::chrono::steady_clock::now();
     const agents::InvestigationLoop loop(budget);

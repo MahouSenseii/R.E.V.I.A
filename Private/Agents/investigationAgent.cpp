@@ -180,7 +180,8 @@ std::vector<ProposedQuestion> InvestigationAgent::ParseOpeningQuestions(
 std::string InvestigationAgent::BuildRoundEnvelope(
     const RoundRequest& request,
     const std::string& identityPosture,
-    const bool checksAreAvailable)
+    const bool checksAreAvailable,
+    const std::string& checksDescription)
 {
     std::ostringstream envelope;
     envelope << identityPosture << "\n\n";
@@ -223,7 +224,18 @@ std::string InvestigationAgent::BuildRoundEnvelope(
 
     if (checksAreAvailable)
     {
-        envelope << "You may consult configuration, source, logs, tests, or file state.\n";
+        if (checksDescription.empty())
+        {
+            envelope << "You may consult configuration, source, logs, tests, or file state.\n";
+        }
+        else
+        {
+            // What can really be run or read, so <what you did> names a real command or
+            // an existing file; a check that names neither runs nothing and is refused.
+            envelope << "You may propose checks, which the runtime performs for you and "
+                        "reports back; write in <what you did> exactly what to run or read. "
+                     << checksDescription << "\n";
+        }
     }
     else
     {
@@ -429,17 +441,19 @@ RoundRunner InvestigationAgent::MakeRunner(
     const messageRouter& router,
     std::string identityPosture,
     CheckExecutor executor,
-    const std::stop_token stopToken)
+    const std::stop_token stopToken,
+    std::string checksDescription)
 {
     return [&router, posture = std::move(identityPosture),
-            executor = std::move(executor), stopToken](const RoundRequest& request)
+            executor = std::move(executor), stopToken,
+            checks = std::move(checksDescription)](const RoundRequest& request)
     {
         RoundResult result;
         if (stopToken.stop_requested()) return result;
 
         const bool checksAvailable = static_cast<bool>(executor);
         const responseOutput response = router.Deliberate(
-            InvestigationAgent::BuildRoundEnvelope(request, posture, checksAvailable),
+            InvestigationAgent::BuildRoundEnvelope(request, posture, checksAvailable, checks),
             stopToken);
         // One model call per round, counted honestly whether or not it produced anything.
         result.tokensUsed = response.response.size() / 4;

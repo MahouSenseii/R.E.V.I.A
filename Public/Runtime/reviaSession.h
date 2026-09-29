@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Actions/actionRuntime.h"
+#include "Agents/checkExecutor.h"
 #include "Coding/acpClient.h"
 #include "Agents/curiosityAgent.h"
 #include "Agents/historyCompactor.h"
@@ -546,6 +547,10 @@ private:
     // /code <task>: a coding agent she hosts over the Agent Client Protocol
     // (Coding/acpClient.h), run as a background task in the configured workspace.
     bool TryHandleCodeInput(const std::string& input, SessionResult& result);
+    // What the investigation loop may check (Agents/checkExecutor.h), from the coding
+    // agent's workspace and the configured check commands; wired at startup.
+    [[nodiscard]] agents::ConfinedCheckSettings CheckSettingsNow() const;
+    void ConfigureInvestigationChecks();
     // The agent's permission request, through the same confirmation the rest of her
     // actions use. `blanket` is set when the person allowed the whole task.
     coding::PermissionAnswer AskCodingPermission(

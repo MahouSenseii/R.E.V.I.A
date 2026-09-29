@@ -966,6 +966,16 @@ struct improvementSettings
 // through cmd.exe so that npx resolves. The workspace is the only place the agent's
 // file reads and writes through her may reach; what the agent does with its own tools
 // inside its own process is governed by the permission prompts, and by nothing else.
+// One check the investigation loop may run by name (Agents/checkExecutor.h): the
+// owner's program and arguments, in the coding workspace, under a time limit.
+struct checkCommandSettings
+{
+    std::string name;
+    std::string command;
+    std::vector<std::string> arguments;
+    int timeoutSeconds = 300;
+};
+
 struct codingAgentSettings
 {
     bool bEnabled = false;
@@ -975,6 +985,11 @@ struct codingAgentSettings
     bool bAllowWrites = true;
     int turnTimeoutMinutes = 20;
     int maximumOutputCharacters = 20000;
+    // Checks she may run when thinking a hard question through: none until named.
+    // Files under the workspace and her own logs can be read regardless.
+    std::vector<checkCommandSettings> checkCommands;
+    int checkOutputCharacters = 6000;
+    int checkMemoryLimitMiB = 2048;
 };
 
 // Which decision provider answers an operator run, and whether anything is recorded.

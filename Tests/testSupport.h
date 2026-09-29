@@ -133,6 +133,7 @@ void RunMcpTests();
 void RunVoiceprintTests();
 void RunInnerThoughtTests();
 void RunCodingAgentTests();
+void RunCheckExecutorTests();
 void RunAiPipelineLive();
 void RunSpeechInterruptionTests();
 void RunInvestigationTests();

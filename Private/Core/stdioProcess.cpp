@@ -14,6 +14,7 @@
 #include <csignal>
 #include <fcntl.h>
 #include <poll.h>
+#include <sys/resource.h>
 #include <sys/wait.h>
 #include <unistd.h>
 #endif
@@ -112,6 +113,7 @@ bool StdioProcess::Start(const StdioLaunch& launch, std::string& outError)
     }
     Stop();
     pending.clear();
+    exitCode = -1;
     const std::filesystem::path command = ResolveCommand(launch.command);
     if (launch.command.empty())
     {
@@ -190,6 +192,17 @@ bool StdioProcess::Start(const StdioLaunch& launch, std::string& outError)
     const HANDLE job = CreateJobObjectW(nullptr, nullptr);
     JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits{};
     limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+    if (launch.memoryLimitMiB > 0)
+    {
+        limits.BasicLimitInformation.LimitFlags |= JOB_OBJECT_LIMIT_PROCESS_MEMORY;
+        limits.ProcessMemoryLimit = static_cast<SIZE_T>(launch.memoryLimitMiB * 1024ULL * 1024ULL);
+    }
+    if (launch.cpuSecondsLimit > 0)
+    {
+        limits.BasicLimitInformation.LimitFlags |= JOB_OBJECT_LIMIT_JOB_TIME;
+        limits.BasicLimitInformation.PerJobUserTimeLimit.QuadPart =
+            static_cast<LONGLONG>(launch.cpuSecondsLimit) * 10000000LL;
+    }
     if (job != nullptr && SetInformationJobObject(job, JobObjectExtendedLimitInformation, &limits, sizeof(limits)) &&
         AssignProcessToJobObject(job, information.hProcess))
     {
@@ -248,6 +261,19 @@ bool StdioProcess::Start(const StdioLaunch& launch, std::string& outError)
         if (errors >= 0) { dup2(errors, STDERR_FILENO); close(errors); }
         close(inPipe[0]); close(inPipe[1]); close(outPipe[0]); close(outPipe[1]);
         if (!workingDirectory.empty() && chdir(workingDirectory.c_str()) != 0) _exit(126);
+        if (launch.memoryLimitMiB > 0)
+        {
+            rlimit memory{};
+            memory.rlim_cur = memory.rlim_max =
+                static_cast<rlim_t>(launch.memoryLimitMiB) * 1024ULL * 1024ULL;
+            (void)setrlimit(RLIMIT_AS, &memory);
+        }
+        if (launch.cpuSecondsLimit > 0)
+        {
+            rlimit cpu{};
+            cpu.rlim_cur = cpu.rlim_max = static_cast<rlim_t>(launch.cpuSecondsLimit);
+            (void)setrlimit(RLIMIT_CPU, &cpu);
+        }
         execvp(argv[0], argv.data());
         _exit(127);
     }
@@ -266,14 +292,44 @@ bool StdioProcess::IsRunning() const
 {
 #ifdef _WIN32
     if (processHandle == nullptr) return false;
-    DWORD exitCode = 0;
-    return GetExitCodeProcess(static_cast<HANDLE>(processHandle), &exitCode) && exitCode == STILL_ACTIVE;
+    DWORD code = 0;
+    if (!GetExitCodeProcess(static_cast<HANDLE>(processHandle), &code)) return false;
+    if (code == STILL_ACTIVE) return true;
+    const_cast<StdioProcess*>(this)->exitCode = static_cast<int>(code);
+    return false;
 #else
     if (pid <= 0) return false;
     int status = 0;
     const pid_t reaped = waitpid(pid, &status, WNOHANG);
-    return reaped == 0;
+    if (reaped == 0) return true;
+    if (reaped == pid)
+    {
+        StdioProcess* self = const_cast<StdioProcess*>(this);
+        self->exitCode = WIFEXITED(status) ? WEXITSTATUS(status)
+            : WIFSIGNALED(status) ? 128 + WTERMSIG(status) : -1;
+        self->pid = -1;
+    }
+    return false;
 #endif
+}
+
+void StdioProcess::CloseInput()
+{
+#ifdef _WIN32
+    CloseIf(stdinWrite);
+#else
+    if (stdinWrite >= 0)
+    {
+        close(stdinWrite);
+        stdinWrite = -1;
+    }
+#endif
+}
+
+int StdioProcess::ExitCode() const
+{
+    (void)IsRunning();
+    return exitCode;
 }
 
 bool StdioProcess::Write(const std::string& bytes)
@@ -420,6 +476,8 @@ void StdioProcess::Stop()
             TerminateProcess(handle, 0);
         }
         WaitForSingleObject(handle, 2000);
+        DWORD code = 0;
+        if (GetExitCodeProcess(handle, &code) && code != STILL_ACTIVE) exitCode = static_cast<int>(code);
         CloseHandle(handle);
         processHandle = nullptr;
     }
@@ -433,18 +491,26 @@ void StdioProcess::Stop()
     if (pid > 0)
     {
         int status = 0;
-        if (waitpid(pid, &status, WNOHANG) == 0)
+        pid_t reaped = waitpid(pid, &status, WNOHANG);
+        if (reaped == 0)
         {
             kill(pid, SIGTERM);
-            for (int slice = 0; slice < 200 && waitpid(pid, &status, WNOHANG) == 0; ++slice)
+            for (int slice = 0; slice < 200; ++slice)
             {
+                reaped = waitpid(pid, &status, WNOHANG);
+                if (reaped != 0) break;
                 usleep(10000);
             }
-            if (waitpid(pid, &status, WNOHANG) == 0)
+            if (reaped == 0)
             {
                 kill(pid, SIGKILL);
-                waitpid(pid, &status, 0);
+                reaped = waitpid(pid, &status, 0);
             }
+        }
+        if (reaped == pid)
+        {
+            exitCode = WIFEXITED(status) ? WEXITSTATUS(status)
+                : WIFSIGNALED(status) ? 128 + WTERMSIG(status) : -1;
         }
         pid = -1;
     }

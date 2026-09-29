@@ -25,6 +25,7 @@ The design rule: **one Revia**. Reflex, Fast, Main, and Expert share one identit
 | MCP tools with pinned manifests (opt-in) | **Tested** | Tools on MCP servers as typed actions through the same policy, confirmation and audit; a manifest pins each tool's description and risk; covered against a fake server and a fake stdio server through the bridge, not yet run against a real one |
 | Knowing who is at the microphone (opt-in) | **Tested** | Voiceprints kept only at a person's request, matched per utterance through a sherpa-onnx worker; covered against a fake worker and through the session, not yet heard live |
 | Inner Thoughts: weighing a remark before saying it | **Tested** | Every thought the curiosity planner nominates is scored on relevance, informativeness, timing, social fit and motivation before it is voiced; one under the bar shows as a thought bubble, never speech. Scoring and the bubble are covered by tests; not yet watched in a live session |
+| Real checks inside her investigations | **Tested** | When a hard question has her investigating, a proposed check can now run: a command you named in settings (tests, a build) in the coding workspace under time and memory limits, or a file under that workspace or her logs. What the check returns is the finding; the model's description of it never is. Covered against real commands; not yet watched in a live investigation |
 | Hosting a coding agent (`/code`, opt-in) | **Tested** | Claude Code, Codex or Gemini CLI driven over the Agent Client Protocol as a background task: its permission requests reach you through the same confirmation prompt, its file access through her stays in one workspace, it gets no terminal from her. Covered against a fake agent; not yet run against a real one |
 | Scheduled checks and repeating reminders | **Tested** | "Check the weather in Boston every hour" runs the same bounded lookup as a question of yours and says what it found; repeats come back until cancelled. Covered through the session against a scripted lookup |
 | Speech recognition (push-to-talk and hands-free) | **Verified live** | whisper.cpp on GPU, ~0.3–1.0 s per utterance |
@@ -471,6 +472,16 @@ She does not write code by herself beyond `/improve` on her own source; for real
 ```
 
 Then `/code <what you want>`. She starts the agent in the workspace folder, gives it the task and streams its plan and tool calls to the Runtime tab; ask "how is it going?" or say "cancel the task" as with any background task. The agent's finished report is shown quoted as the agent's own words, never as hers.
+
+The same workspace is where her own investigations can check things. When a hard question has her investigating (the rounds of "checking" and "findings" you see in the chat), every check she proposes used to be reasoning only, because nothing could run. Now `codingAgent.checkCommands` names what may run:
+
+```json
+"checkCommands": [
+  {"name": "tests", "command": "ctest", "arguments": ["--test-dir", "build", "--output-on-failure"], "timeoutSeconds": 600}
+]
+```
+
+A check that names one of these by name runs it in the workspace with no input, under its time limit and `checkMemoryLimitMiB`, in a job that ends the whole process tree, and the exit code and the tail of the output (`checkOutputCharacters`) become the finding. A check that names a file under the workspace, or one of her own logs, reads it. Anything else is refused and the question is recorded as blocked, not answered. The command list is the trust boundary: a listed command runs with your rights, so list only what you would run yourself.
 
 What keeps it hers: every permission the agent asks for (edit this file, run this command) comes to you as a confirmation prompt, with the tool's name, kind and input, and "Allow for this whole task" is remembered for that task only. File reads and writes the agent routes through her are confined to the workspace, links included; `allowWrites: false` makes them read-only. She never offers the agent a terminal. Be clear about the limit: an agent's own tools run in the agent's process, and Revia cannot confine those; your answer to the prompt is the only gate on them, which is why the prompt says so. Run it in a workspace that holds nothing you would not hand the agent, and nothing here has been run against a real agent yet.
 

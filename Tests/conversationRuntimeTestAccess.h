@@ -20,6 +20,10 @@ struct ConversationRuntimeTestAccess
     {
         runtime.internetSettings = std::move(provider);
     }
+    static const std::string& ChecksDescription(const ConversationRuntime& runtime)
+    {
+        return runtime.checksDescription;
+    }
 };
 
 } // namespace revia::runtime

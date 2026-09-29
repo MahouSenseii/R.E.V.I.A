@@ -849,6 +849,30 @@ bool configManager::LoadSettings(appSettings& outSettings) const
                 agent.turnTimeoutMinutes = agentData["turnTimeoutMinutes"].get<int>();
             if (agentData.contains("maximumOutputCharacters"))
                 agent.maximumOutputCharacters = agentData["maximumOutputCharacters"].get<int>();
+            if (agentData.contains("checkCommands") && agentData["checkCommands"].is_array())
+            {
+                agent.checkCommands.clear();
+                for (const json& entry : agentData["checkCommands"])
+                {
+                    if (!entry.is_object()) continue;
+                    checkCommandSettings command;
+                    command.name = entry.value("name", "");
+                    command.command = entry.value("command", "");
+                    command.timeoutSeconds = entry.value("timeoutSeconds", 300);
+                    if (entry.contains("arguments") && entry["arguments"].is_array())
+                    {
+                        for (const json& argument : entry["arguments"])
+                        {
+                            if (argument.is_string()) command.arguments.push_back(argument.get<std::string>());
+                        }
+                    }
+                    agent.checkCommands.push_back(std::move(command));
+                }
+            }
+            if (agentData.contains("checkOutputCharacters"))
+                agent.checkOutputCharacters = agentData["checkOutputCharacters"].get<int>();
+            if (agentData.contains("checkMemoryLimitMiB"))
+                agent.checkMemoryLimitMiB = agentData["checkMemoryLimitMiB"].get<int>();
         }
 
         if (data.contains("presence"))
@@ -1777,6 +1801,16 @@ bool configManager::LoadSettings(appSettings& outSettings) const
         outSettings.codingAgent.maximumOutputCharacters > 200000 ||
         (outSettings.codingAgent.bEnabled &&
             (outSettings.codingAgent.command.empty() || outSettings.codingAgent.workspace.empty())) ||
+        outSettings.codingAgent.checkOutputCharacters < 500 ||
+        outSettings.codingAgent.checkOutputCharacters > 100000 ||
+        outSettings.codingAgent.checkMemoryLimitMiB < 64 ||
+        std::any_of(outSettings.codingAgent.checkCommands.begin(),
+            outSettings.codingAgent.checkCommands.end(),
+            [](const checkCommandSettings& command)
+            {
+                return command.name.empty() || command.command.empty() ||
+                    command.timeoutSeconds < 1 || command.timeoutSeconds > 3600;
+            }) ||
         outSettings.bargeIn.energyThreshold < 100 ||
         outSettings.bargeIn.energyThreshold > 30000 ||
         outSettings.bargeIn.consecutiveFramesRequired < 1 ||

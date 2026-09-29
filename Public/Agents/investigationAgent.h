@@ -51,10 +51,13 @@ public:
     //
     // Static and pure so the schema can be tested without a model or a socket, which is
     // the same reason SelfInquiryAgent exposes its envelope.
+    // `checksDescription` is what the executor can actually do, in the model's terms,
+    // so a proposed check names a real command or file rather than an imagined tool.
     [[nodiscard]] static std::string BuildRoundEnvelope(
         const RoundRequest& request,
         const std::string& identityPosture,
-        bool checksAreAvailable);
+        bool checksAreAvailable,
+        const std::string& checksDescription = {});
 
     // Parses one round's reply.
     //
@@ -72,7 +75,8 @@ public:
         const messageRouter& router,
         std::string identityPosture,
         CheckExecutor executor = {},
-        std::stop_token stopToken = {});
+        std::stop_token stopToken = {},
+        std::string checksDescription = {});
 
     // The opening questions, derived from the goal in one bounded call. Separate from the
     // rounds so an investigation that cannot even be started fails before any round runs.

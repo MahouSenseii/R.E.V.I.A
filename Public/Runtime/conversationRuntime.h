@@ -173,6 +173,13 @@ public:
 
     // Set once at startup, before the first turn.
     void SetSongListProvider(SongListProvider provider);
+    // A check the investigation loop may really run (Agents/checkExecutor.h): the
+    // runner performs one, the description tells the model what it may ask for. Unset,
+    // every round is reasoning only and says so.
+    using CheckRunner = std::function<agents::ExecutedCheck(
+        agents::CheckKind, const std::string&, const std::string&, std::stop_token)>;
+    void SetCheckExecutor(CheckRunner runner, std::string description);
+    [[nodiscard]] bool HasCheckExecutor() const { return static_cast<bool>(checkRunner); }
 
     // `turnReference` is added to this turn's context only, never to its history: text
     // the runtime fetched for the question, such as what the user copied.
@@ -438,6 +445,8 @@ private:
     InternetSettingsProvider internetSettings;
     DesktopSettingsProvider desktopSettings;
     InternetLookupHandler internetLookup;
+    CheckRunner checkRunner;
+    std::string checksDescription;
     ResponseFilterSettingsProvider filterSettingsProvider;
     ScreenContextProvider screenContextProvider;
     RelationshipProvider relationshipProvider;

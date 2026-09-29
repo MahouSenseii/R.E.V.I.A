@@ -1,6 +1,7 @@
 #pragma once
 
 #include <chrono>
+#include <cstdint>
 #include <filesystem>
 #include <string>
 #include <vector>
@@ -25,6 +26,11 @@ struct StdioLaunch
     std::string logName = "child";
     // What the errors call it.
     std::string displayName = "child process";
+    // Limits on the child and everything it starts; 0 leaves one unset. Memory is the
+    // process's commit on Windows and its address space elsewhere; CPU seconds are
+    // the job's user time on Windows and the process's on POSIX.
+    std::uint64_t memoryLimitMiB = 0;
+    int cpuSecondsLimit = 0;
 };
 
 class StdioProcess
@@ -43,6 +49,10 @@ public:
     // One line without its newline. False on a timeout (outLine untouched) and when the
     // child closed its stdout, which outClosed says.
     bool ReadLine(std::string& outLine, std::chrono::milliseconds timeout, bool& outClosed);
+    // Closes the child's stdin, so a child that reads until end of input can finish.
+    void CloseInput();
+    // The exit code once the child has ended; -1 while it runs or when unknown.
+    [[nodiscard]] int ExitCode() const;
     // Ends the child if it is still running, and reaps it.
     void Stop();
 
@@ -50,6 +60,7 @@ private:
     bool Fill(std::chrono::milliseconds timeout, bool& outClosed);
 
     std::string pending;
+    int exitCode = -1;
 #ifdef _WIN32
     void* processHandle = nullptr;
     void* jobHandle = nullptr;

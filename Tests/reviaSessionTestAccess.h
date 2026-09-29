@@ -18,6 +18,9 @@ struct ReviaSessionTestAccess
 {
     static speech::SpeechService& Speech(ReviaSession& session) { return session.speechService; }
     static appSettings& Settings(ReviaSession& session) { return session.settings; }
+    static agents::ConfinedCheckSettings CheckSettings(const ReviaSession& session)
+    { return session.CheckSettingsNow(); }
+    static void ConfigureChecks(ReviaSession& session) { session.ConfigureInvestigationChecks(); }
     static ConversationRuntime& Conversation(ReviaSession& session) { return session.conversationRuntime; }
     static identity::VoiceprintRegistry& Voiceprints(ReviaSession& session) { return session.voiceprints; }
     static std::string CurrentSpeaker(ReviaSession& session)
