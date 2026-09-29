@@ -1518,11 +1518,20 @@ void ReviaSession::StartInputDrain()
                 RuntimeEvent event;
                 event.kind = RuntimeEventKind::AssistantMessage;
                 event.state = state.load();
-                event.message = result.text;
+                event.message = result.text + RenderSourcesFooter(result.sources);
                 event.detail = result.reasoning;
                 // Non-zero means the shell should hold the text until this utterance
                 // starts speaking, exactly as it does for a typed turn.
                 event.turnId = result.speechPending ? result.utteranceId : 0;
+                eventBus.Publish(std::move(event));
+            }
+            else if (result.spokenAsFragments && !result.sources.empty())
+            {
+                // The sentences went out as they were spoken; the sources follow them.
+                RuntimeEvent event;
+                event.kind = RuntimeEventKind::AssistantMessage;
+                event.state = state.load();
+                event.message = RenderSourcesFooter(result.sources).substr(2);
                 eventBus.Publish(std::move(event));
             }
         }

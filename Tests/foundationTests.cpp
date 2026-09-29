@@ -9531,6 +9531,16 @@ int main(const int argc, char** argv)
             RunAdvisorTests();
             return 0;
         }
+        if (argc > 1 && std::string(argv[1]) == "--web-reader")
+        {
+            RunWebReaderTests();
+            return 0;
+        }
+        if (argc > 1 && std::string(argv[1]) == "--search-providers")
+        {
+            RunSearchProviderTests();
+            return 0;
+        }
         if (argc > 1 && std::string(argv[1]) == "--emotion-live")
         {
             Check(argc == 4, "Usage: --emotion-live <isolated-runtime-directory> <new-report.jsonl>");
@@ -10041,6 +10051,8 @@ int main(const int argc, char** argv)
         RunTurnTakingTests();
         RunFallbackVoiceTests();
         RunAdvisorTests();
+        RunWebReaderTests();
+        RunSearchProviderTests();
         std::cout << "All Revia foundation tests passed.\n";
         return 0;
     }

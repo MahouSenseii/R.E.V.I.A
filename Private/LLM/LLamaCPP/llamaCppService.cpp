@@ -8,6 +8,7 @@
 #include "Memory/sensitiveContent.h"
 #include "Agents/conversationStylePolicy.h"
 #include "Agents/historyCompactor.h"
+#include "Internet/webReader.h"
 #include "Actions/actionTypes.h"
 #include "Planning/goalPlanner.h"
 #include <httplib.h>
@@ -1345,6 +1346,24 @@ responseOutput llamaCppService::ReflectOnConversation(
         0.2F,
         "history reflection",
         revia::agents::HistoryCompactor::ReflectorSchema());
+}
+
+responseOutput llamaCppService::ReadWebPages(
+    const std::string& boundedEnvelope,
+    const std::stop_token stopToken) const
+{
+    // Low temperature and a strict shape: this is extraction, not writing, and the
+    // schema is the whole point -- a page cannot talk its way out of it.
+    return GeneratePlannerResponse(
+        revia::internet::ReaderPrompt(),
+        boundedEnvelope,
+        900,
+        true,
+        stopToken,
+        revia::llm::InferencePriority::Interactive,
+        0.1F,
+        "web reading",
+        revia::internet::ReaderSchema());
 }
 
 responseOutput llamaCppService::GenerateGoalPlan(const std::string& userRequest) const

@@ -59,6 +59,9 @@ public:
     responseOutput ReflectOnConversation(
         const std::string& boundedRecord,
         std::stop_token stopToken = {}) const;
+    responseOutput ReadWebPages(
+        const std::string& boundedEnvelope,
+        std::stop_token stopToken = {}) const;
     responseOutput GenerateGoalPlan(const std::string& userRequest) const;
     responseOutput GenerateCodeReview(
         const std::string& instructions,

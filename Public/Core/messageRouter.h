@@ -76,6 +76,13 @@ public:
     responseOutput ReflectOnConversation(
         const std::string& boundedRecord,
         std::stop_token stopToken = {}) const;
+    // The quarantined reader over looked-up pages, at interactive priority: Fast when
+    // it is local and there, because extraction under a schema is its size of job
+    // and the reply is waiting; Main otherwise. Never a remote tier that may not
+    // carry the question.
+    responseOutput ReadWebPages(
+        const std::string& boundedEnvelope,
+        std::stop_token stopToken = {}) const;
     responseOutput PlanGoal(const std::string& request) const;
     // The iterative form: one step at a time, from what has already happened.
     // Ask Main for one bounded subgoal.

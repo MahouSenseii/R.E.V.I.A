@@ -1,6 +1,10 @@
 #include "Internet/internetSearchExecutor.h"
+#include "Core/runtimePath.h"
+#include "Core/secretStore.h"
 #include "Internet/internetBackend.h"
 #include "Internet/visibleBrowserClient.h"
+#include <cstdlib>
+#include <httplib.h>
 
 #include <algorithm>
 #include <cctype>
@@ -377,8 +381,13 @@ ActionResult InternetSearchExecutor::Execute(
             return result;
         }
     }
-    const auto apiResult = [&browserStartupFailure](ActionResult fallback)
+    std::string providerFailure;
+    const auto apiResult = [&browserStartupFailure, &providerFailure](ActionResult fallback)
     {
+        if (!providerFailure.empty())
+        {
+            fallback.message = providerFailure + " Bounded API fallback: " + fallback.message;
+        }
         if (!browserStartupFailure.empty())
         {
             fallback.message = "Visible browser path was unavailable (" +
@@ -386,6 +395,19 @@ ActionResult InternetSearchExecutor::Execute(
         }
         return fallback;
     };
+    // The configured provider, when it is not the DuckDuckGo path below: a SearXNG of
+    // the owner's own, or a keyed search API. It fails into the same DuckDuckGo and
+    // Wikipedia fallback the visible browser has, with its reason kept in the message.
+    if (settings.provider != "duckduckgo")
+    {
+        ActionResult provided = SearchProvider(request.value);
+        if (provided.succeeded)
+        {
+            return apiResult(std::move(provided));
+        }
+        providerFailure = BackendDisplayName(provided.backend) + " lookup failed (" +
+            provided.message + ").";
+    }
     if (!HostAllowed(settings, "api.duckduckgo.com"))
     {
         result.backend = std::string(DuckDuckGoApiBackend);
@@ -543,6 +565,297 @@ ActionResult InternetSearchExecutor::ParseWikipediaResponse(
         result.message = std::string("The knowledge response was invalid JSON: ") + error.what();
         return result;
     }
+}
+
+} // namespace revia::actions::internet
+
+namespace revia::actions::internet
+{
+
+namespace
+{
+using json = nlohmann::json;
+
+std::string ReadString(const json& value, const char* name)
+{
+    if (!value.is_object() || !value.contains(name) || !value[name].is_string()) return {};
+    return value[name].get<std::string>();
+}
+
+bool PublicWebUrl(const std::string& url)
+{
+    return url.rfind("https://", 0) == 0 || url.rfind("http://", 0) == 0;
+}
+
+// One result, in the shape the visible browser writes and the reader splits.
+void AppendResult(
+    ActionResult& result,
+    const std::string& title,
+    const std::string& url,
+    const std::string& snippet)
+{
+    if (!PublicWebUrl(url)) return;
+    if (!result.content.empty()) result.content += "\n\n";
+    result.content += (title.empty() ? std::string("Untitled result") : title) +
+        "\nURL: " + url + "\n" + (snippet.empty() ? std::string("(no summary)") : snippet) +
+        "\nSource: " + url;
+    result.entries.push_back(url);
+}
+
+ActionResult ParseResultList(
+    const json& list,
+    const int maxResults,
+    const char* titleKey,
+    const char* urlKey,
+    const char* snippetKey,
+    const std::string& providerName,
+    const std::string& backend)
+{
+    ActionResult result;
+    result.attempted = true;
+    result.backend = backend;
+    if (!list.is_array())
+    {
+        result.message = providerName + " returned no result list.";
+        return result;
+    }
+    const int bounded = std::clamp(maxResults, 1, 20);
+    for (const json& item : list)
+    {
+        if (static_cast<int>(result.entries.size()) >= bounded) break;
+        AppendResult(result, ReadString(item, titleKey), ReadString(item, urlKey),
+            ReadString(item, snippetKey));
+    }
+    result.succeeded = !result.entries.empty();
+    result.message = result.succeeded
+        ? providerName + " returned " + std::to_string(result.entries.size()) +
+            (result.entries.size() == 1 ? " result." : " results.")
+        : providerName + " returned no usable results.";
+    return result;
+}
+
+json ParseBody(const std::string& body, std::string& outError)
+{
+    try
+    {
+        return json::parse(body);
+    }
+    catch (const std::exception& error)
+    {
+        outError = std::string("the answer was not JSON (") + error.what() + ")";
+        return json{};
+    }
+}
+} // namespace
+
+ActionResult InternetSearchExecutor::ParseSearxngResponse(const std::string& body, const int maxResults)
+{
+    std::string error;
+    const json parsed = ParseBody(body, error);
+    if (!error.empty())
+    {
+        ActionResult result;
+        result.attempted = true;
+        result.backend = std::string(SearxngBackend);
+        result.message = "SearXNG: " + error + ".";
+        return result;
+    }
+    return ParseResultList(parsed.value("results", json::array()), maxResults,
+        "title", "url", "content", "SearXNG", std::string(SearxngBackend));
+}
+
+ActionResult InternetSearchExecutor::ParseBraveResponse(const std::string& body, const int maxResults)
+{
+    std::string error;
+    const json parsed = ParseBody(body, error);
+    if (!error.empty())
+    {
+        ActionResult result;
+        result.attempted = true;
+        result.backend = std::string(BraveApiBackend);
+        result.message = "Brave Search: " + error + ".";
+        return result;
+    }
+    const json web = parsed.value("web", json::object());
+    return ParseResultList(web.value("results", json::array()), maxResults,
+        "title", "url", "description", "Brave Search", std::string(BraveApiBackend));
+}
+
+ActionResult InternetSearchExecutor::ParseTavilyResponse(const std::string& body, const int maxResults)
+{
+    std::string error;
+    const json parsed = ParseBody(body, error);
+    if (!error.empty())
+    {
+        ActionResult result;
+        result.attempted = true;
+        result.backend = std::string(TavilyApiBackend);
+        result.message = "Tavily: " + error + ".";
+        return result;
+    }
+    return ParseResultList(parsed.value("results", json::array()), maxResults,
+        "title", "url", "content", "Tavily", std::string(TavilyApiBackend));
+}
+
+std::string InternetSearchExecutor::ProviderHost(const CapabilitySettings::InternetAccess& settings)
+{
+    if (settings.provider == "duckduckgo") return "api.duckduckgo.com";
+    if (settings.provider == "searxng") return settings.searxngHost;
+    if (settings.provider == "brave") return "api.search.brave.com";
+    if (settings.provider == "tavily") return "api.tavily.com";
+    return {};
+}
+
+revia::llm::HttpsRequest InternetSearchExecutor::BuildProviderRequest(
+    const CapabilitySettings::InternetAccess& settings,
+    const std::string& query,
+    const std::string& key)
+{
+    revia::llm::HttpsRequest request;
+    request.host = ProviderHost(settings);
+    request.timeoutSeconds = std::max(1, settings.requestTimeoutMs / 1000);
+    const int count = std::clamp(settings.maxResults, 1, 20);
+    if (settings.provider == "tavily")
+    {
+        request.method = "POST";
+        request.path = "/search";
+        request.headers.emplace_back("Content-Type", "application/json");
+        request.headers.emplace_back("Authorization", "Bearer " + key);
+        request.body = json{
+            {"query", query}, {"max_results", count},
+            {"include_answer", false}, {"search_depth", "basic"}}.dump();
+        return request;
+    }
+    request.method = "GET";
+    request.path = "/res/v1/web/search?q=" + UrlEncode(query) + "&count=" + std::to_string(count) +
+        "&text_decorations=false";
+    request.headers.emplace_back("Accept", "application/json");
+    request.headers.emplace_back("X-Subscription-Token", key);
+    return request;
+}
+
+void InternetSearchExecutor::SetHttpsTransport(std::unique_ptr<revia::llm::HttpsTransport> replacement)
+{
+    if (replacement) transport = std::move(replacement);
+}
+
+void InternetSearchExecutor::SetProviderKey(std::string key)
+{
+    std::lock_guard lock(keyMutex);
+    providerKey = std::move(key);
+}
+
+std::string InternetSearchExecutor::ProviderKey(std::string& outError)
+{
+    std::lock_guard lock(keyMutex);
+    if (providerKey) return *providerKey;
+    // The store first, the environment second; read once, kept in memory only.
+    const std::string name = settings.providerKeyName.empty()
+        ? settings.provider : settings.providerKeyName;
+    const std::string variable = settings.providerKeyEnvironmentVariable.empty()
+        ? (settings.provider == "brave" ? "BRAVE_SEARCH_API_KEY" : "TAVILY_API_KEY")
+        : settings.providerKeyEnvironmentVariable;
+    std::string storeError;
+    const revia::core::SecretStore secrets(
+        revia::core::ResolveRuntimeWritePath(std::filesystem::path("RuntimeData/Secrets")));
+    if (const auto stored = secrets.Load(name, storeError))
+    {
+        providerKey = *stored;
+        return *providerKey;
+    }
+    if (const char* fromEnvironment = std::getenv(variable.c_str());
+        fromEnvironment != nullptr && *fromEnvironment != '\0')
+    {
+        providerKey = std::string(fromEnvironment);
+        return *providerKey;
+    }
+    outError = "no key for " + settings.provider + " (" + storeError +
+        "; " + variable + " is unset). Tools\\SetAdvisorKey.ps1 -Name " + name + " stores one";
+    return {};
+}
+
+ActionResult InternetSearchExecutor::SearchProvider(const std::string& query)
+{
+    ActionResult result;
+    result.attempted = true;
+    const std::string host = ProviderHost(settings);
+    result.backend = settings.provider == "searxng" ? std::string(SearxngBackend)
+        : settings.provider == "brave" ? std::string(BraveApiBackend)
+        : settings.provider == "tavily" ? std::string(TavilyApiBackend)
+        : settings.provider;
+    if (host.empty())
+    {
+        result.message = "unknown provider \"" + settings.provider + "\"";
+        return result;
+    }
+    if (!HostAllowed(settings, host))
+    {
+        result.message = host + " is not in the approved host list";
+        return result;
+    }
+    if (settings.provider == "searxng")
+    {
+        // The owner's own instance, over plain HTTP on this machine or the LAN; JSON
+        // output has to be enabled in its settings.yml (search.formats).
+        httplib::Client client(settings.searxngHost, settings.searxngPort);
+        client.set_connection_timeout(std::max(1, settings.requestTimeoutMs / 1000));
+        client.set_read_timeout(std::max(1, settings.requestTimeoutMs / 1000));
+        const auto response = client.Get(
+            "/search?q=" + UrlEncode(query) + "&format=json&safesearch=1&language=auto");
+        if (!response)
+        {
+            result.message = "SearXNG at " + settings.searxngHost + ":" +
+                std::to_string(settings.searxngPort) + " did not answer";
+            return result;
+        }
+        if (response->status != 200)
+        {
+            result.message = "SearXNG answered HTTP " + std::to_string(response->status) +
+                (response->status == 403 ? " (is the json format enabled in its settings.yml?)" : "");
+            return result;
+        }
+        if (response->body.size() > settings.maxResponseBytes)
+        {
+            result.message = "SearXNG's answer exceeded the response limit";
+            return result;
+        }
+        return ParseSearxngResponse(response->body, settings.maxResults);
+    }
+    std::string keyError;
+    const std::string key = ProviderKey(keyError);
+    if (key.empty())
+    {
+        result.message = keyError;
+        return result;
+    }
+    if (!transport) transport = revia::llm::MakeSystemHttpsTransport();
+    if (!transport->Available())
+    {
+        result.message = transport->Describe();
+        return result;
+    }
+    const revia::llm::HttpsResponse response =
+        transport->Post(BuildProviderRequest(settings, query, key), {});
+    if (!response.completed)
+    {
+        result.message = response.error.empty() ? "no answer arrived" : response.error;
+        return result;
+    }
+    if (response.status != 200)
+    {
+        result.message = "HTTP " + std::to_string(response.status) +
+            (response.status == 401 || response.status == 403 ? " (the key was rejected)"
+                : response.status == 429 ? " (rate-limited or out of quota)" : "");
+        return result;
+    }
+    if (response.body.size() > settings.maxResponseBytes)
+    {
+        result.message = "the answer exceeded the response limit";
+        return result;
+    }
+    return settings.provider == "brave"
+        ? ParseBraveResponse(response.body, settings.maxResults)
+        : ParseTavilyResponse(response.body, settings.maxResults);
 }
 
 } // namespace revia::actions::internet

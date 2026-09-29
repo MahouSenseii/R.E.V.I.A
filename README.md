@@ -24,6 +24,7 @@ The design rule: **one Revia**. Reflex, Fast, Main, and Expert share one identit
 | A brain on call: cloud advisor (opt-in) | **Tested** | A redacted brief to Claude or an OpenAI-compatible service, its notes into her prompt as input; covered end to end against a fake advisor, not yet run against a live API |
 | Speech recognition (push-to-talk and hands-free) | **Verified live** | whisper.cpp on GPU, ~0.3–1.0 s per utterance |
 | Web lookups in a visible browser | **Verified live** | Shows query and sources; ~11 s per lookup |
+| Quarantined page reading with citations | **Tested** | Fetched pages go to a reader with no tools; only its checked findings reach her prompt, and the reply carries the lookup's own addresses as sources. Covered through a real session against a fake page with an injected instruction |
 | Curiosity, initiative, self-directed reflection | **Verified live** | Logs show think/research/create decisions and when she chooses to stay quiet |
 | Startup of all local model workers | **Verified live** | ~10 s to ready (Expert loads on first use; the CPU Fast model is skipped when the 4B model is on a GPU), plus ~20 s for the voice model to warm in the background |
 | Profiles and Voice Studio (create a voice, assign it to a profile) | **Verified live** | Voice `revia-bright` exists and is in use |
@@ -66,7 +67,7 @@ The design rule: **one Revia**. Reflex, Fast, Main, and Expert share one identit
 
 ### Do things
 
-- **Look things up** in a visible, locked-down browser (Edge or Chrome) and show you the exact query and sources.
+- **Look things up** in a visible, locked-down browser (Edge or Chrome) and show you the exact query and sources. The pages are read by a separate reader with no tools; she answers from its findings, cites them as `[1]`, and the addresses under her reply are the lookup's own.
 - **Bring things up on her own** when she has something specific to say: a reaction to what you're doing, a follow-up on something from earlier, or a question. At most four times an hour, at least 15 minutes apart. She waits for a pause in your typing and stays quiet over a full-screen game, video or presentation (`initiative.suppressWhenFullScreen`), and while another app is using the microphone (a call or meeting).
 - **Work in the background.** `/goal` and "operate" tasks run while she keeps talking; ask how it's going, or say "cancel the task". Only Stop or that request ends one.
 - **Remind you.** "Remind me in 20 minutes to stretch", "remind me at 3pm to call Sam", "set a timer for 5 minutes". Saved across restarts; `/reminders` lists and cancels them.
@@ -228,6 +229,8 @@ Open the **Permissions** tab. The defaults are cautious:
 | Mouse, keyboard, app launch | **Off** |
 | Camera | **Off** |
 | Image generation | **Off** |
+
+**Which search she uses.** With the visible browser on, she searches DuckDuckGo in that window and reads the result pages there. The bounded API path behind it (and the whole path with the browser off) is `internet.provider` in `Config\capabilities.json`: `duckduckgo` (the Instant Answer API, no key), `searxng` (your own [SearXNG](https://docs.searxng.org/) on `searxngHost`:`searxngPort` over plain HTTP, no key; enable the `json` format in its `settings.yml`), `brave` (the Brave Search API) or `tavily` (the Tavily API). The provider's host has to be in `approvedHosts` like any other, and a keyed provider takes its key from the secret store (`.\Tools\SetAdvisorKey.ps1 -Name brave`, which stores it with DPAPI) or from `providerKeyEnvironmentVariable`. Whatever answers, the results are written in one shape, read by the quarantined reader, and cited under the reply; a provider that fails falls back to DuckDuckGo and Wikipedia with its reason in the Activity feed.
 
 Turn things on only as you need them. Details are in [Driving the desktop](#driving-the-desktop) and [Privacy and safety](#privacy-and-safety).
 
@@ -560,6 +563,7 @@ The capability `mode` can be `supervised` (default) or `owner_full_access`. The 
 ## Privacy and safety
 
 - Everything runs locally. Only web lookups send data out (the query), and they can be turned off with `/internet off`. If you set up the [cloud advisor](#a-brain-on-call-opt-in), a consult sends the question (and, at your choice, the last few turns, each checked for a credential) and nothing else; every consult is in the Activity feed with what left.
+- **A web page cannot give her instructions.** What a lookup fetches never reaches the brain that writes the reply. A separate reader call with no tools, no memory and a fixed output shape turns the pages into claims tied to numbered sources, each with a quote that must actually appear on the page; her prompt gets those claims (labelled reference data), she cites them as `[1]`, and the sources shown under the reply are the addresses the lookup returned, never ones she wrote. A page that says "ignore your instructions" can at worst produce a wrong claim. If the reader cannot run, she is given titles and addresses only and told the pages were not read. `capabilities.json` → `internet.quarantinedReader` (on by default; `readerMaximumCharacters` bounds what the reader sees).
 - Screenshots are deleted immediately; only short summaries are kept in memory. Excluding an app (password managers are excluded by default) hides it from **activity records**, not from screenshots sent to local vision.
 - Files are limited to `Documents\ReviaSandbox` unless you approve more. Writes need confirmation.
 - Approving an app allows inspecting it. Pressing a control also needs that exact control approved.

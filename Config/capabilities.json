@@ -63,6 +63,12 @@
     "visibleBrowserStartupTimeoutMs": 8000,
     "visibleBrowserRequestTimeoutMs": 30000,
     "visibleBrowserMaxPages": 3,
-    "visibleBrowserStepDelayMs": 250
+    "visibleBrowserStepDelayMs": 250,
+    "quarantinedReader": true,
+    "readerMaximumCharacters": 12000,
+    "searxngHost": "127.0.0.1",
+    "searxngPort": 8888,
+    "providerKeyName": "",
+    "providerKeyEnvironmentVariable": ""
   }
 }

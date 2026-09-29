@@ -892,17 +892,22 @@ void ReviaWindow::SendMessage(const bool voiceInput)
                 const QString speaker = result.fromAssistant
                     ? QString::fromStdString(session.DisplayName())
                     : QStringLiteral("System");
-                const QString body = QString::fromStdString(result.text);
+                // The web sources the reply drew on, under it: a citation is worth showing
+                // only as the address the lookup returned, which is what these are.
+                const QString body = QString::fromStdString(
+                    result.text + revia::runtime::RenderSourcesFooter(result.sources));
                 // Text is already ready. Qwen synthesis and queued playback must not
                 // hold the visible answer behind seconds of audio preparation.
                 AppendChat(speaker, body, false, reasoning);
             }
-            else if (result.spokenAsFragments && !reasoning.isEmpty())
+            else if (result.spokenAsFragments && (!reasoning.isEmpty() || !result.sources.empty()))
             {
                 // The reply was shown a sentence at a time, so the trace for the turn as a
                 // whole gets its own collapsed line rather than being attached to whichever
-                // fragment happened to be last.
-                AppendChat(QString(), QString(), false, reasoning);
+                // fragment happened to be last; the sources, when there are any, go with it.
+                const std::string footer = revia::runtime::RenderSourcesFooter(result.sources);
+                AppendChat(QString(), QString::fromStdString(
+                    footer.empty() ? footer : footer.substr(2)), false, reasoning);
             }
             if (!result.succeeded && !result.reason.empty())
             {

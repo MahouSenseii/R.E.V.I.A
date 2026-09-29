@@ -79,6 +79,12 @@ public:
     responseOutput ReflectOnConversation(
         const std::string& boundedRecord,
         std::stop_token stopToken = {}) const;
+    // The quarantined reader over looked-up pages (Internet/webReader.h): a bounded
+    // call with no tools whose only output is claims tied to numbered sources.
+    // Interactive priority, because the reply is waiting on it.
+    responseOutput ReadWebPages(
+        const std::string& boundedEnvelope,
+        std::stop_token stopToken = {}) const;
     responseOutput GenerateGoalPlan(const std::string& userRequest) const;
     // One step of an iterative run, decided from the attempts so far.
     // One bounded subgoal, under its own grammar.

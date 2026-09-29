@@ -451,6 +451,7 @@ private:
     bool previousTurnWasUnreliable = false;
     std::uint64_t turnCounter = 0;
     std::uint64_t utteranceCounter = 0;
+    friend struct ConversationRuntimeTestAccess;
     // The pause before a hard answer, made audible: rare by policy, off by setting.
     speech::ThinkingFillerPolicy thinkingFiller;
     std::atomic<bool> thinkingFillerEnabled = true;

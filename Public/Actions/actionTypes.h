@@ -366,7 +366,18 @@ struct CapabilitySettings
         // it may submit only a search query to this configured provider.
         bool enabled = false;
         bool automaticLookup = true;
+        // "duckduckgo" (the Instant Answer API, no key), "searxng" (your own SearXNG,
+        // over plain HTTP on this machine or your LAN, no key), "brave" (the Brave
+        // Search API) or "tavily" (the Tavily search API). The last two take a key
+        // from the secret store under `providerKeyName` (Tools/SetAdvisorKey.ps1
+        // -Name brave) or from `providerKeyEnvironmentVariable`. Any of them is the
+        // bounded API path: the visible browser, when on, still goes first, and
+        // DuckDuckGo and Wikipedia remain the fallback after a provider fails.
         std::string provider = "duckduckgo";
+        std::string searxngHost = "127.0.0.1";
+        int searxngPort = 8888;
+        std::string providerKeyName;
+        std::string providerKeyEnvironmentVariable;
         std::vector<std::string> approvedHosts = {
             "api.duckduckgo.com", "en.wikipedia.org"};
         int requestTimeoutMs = 8000;
@@ -385,6 +396,13 @@ struct CapabilitySettings
         int visibleBrowserRequestTimeoutMs = 30000;
         int visibleBrowserMaxPages = 3;
         int visibleBrowserStepDelayMs = 250;
+        // Fetched pages go to a separate reader with no tools (Internet/webReader.h),
+        // and only its claims, each tied to a numbered source and checked against the
+        // page, reach the reply's prompt. Off, the page text goes in whole, labelled
+        // untrusted -- the behaviour that existed, kept for comparison, not for use.
+        bool quarantinedReader = true;
+        // How much page text the reader is handed in one lookup, across its sources.
+        int readerMaximumCharacters = 12000;
     };
 
     // The camera is the most physically invasive thing this application can reach, so it

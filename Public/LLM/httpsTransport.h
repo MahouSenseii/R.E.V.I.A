@@ -18,6 +18,8 @@ namespace revia::llm
 // Windows and a refusal elsewhere, behind an interface the tests replace with a fake.
 struct HttpsRequest
 {
+    // "POST" or "GET"; a GET sends no body.
+    std::string method = "POST";
     std::string host;
     int port = 443;
     std::string path;

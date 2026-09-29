@@ -141,6 +141,15 @@ bool PermissionStore::Load(
                 internet, "visibleBrowserMaxPages", 3, 1, 5);
             settings.internet.visibleBrowserStepDelayMs = BoundedInteger<int>(
                 internet, "visibleBrowserStepDelayMs", 250, 0, 3000);
+            settings.internet.quarantinedReader = internet.value("quarantinedReader", true);
+            settings.internet.searxngHost = internet.value("searxngHost", "127.0.0.1");
+            settings.internet.searxngPort = BoundedInteger<int>(
+                internet, "searxngPort", 8888, 1, 65535);
+            settings.internet.providerKeyName = internet.value("providerKeyName", "");
+            settings.internet.providerKeyEnvironmentVariable =
+                internet.value("providerKeyEnvironmentVariable", "");
+            settings.internet.readerMaximumCharacters = BoundedInteger<int>(
+                internet, "readerMaximumCharacters", 12000, 1000, 60000);
             if (settings.internet.autonomousResearch &&
                 (!settings.internet.enabled || !settings.internet.visibleBrowser))
             {
@@ -162,28 +171,34 @@ bool PermissionStore::Load(
                 }
                 settings.internet.approvedHosts.push_back(host.get<std::string>());
             }
-            if (settings.internet.provider != "duckduckgo")
+            // Each provider talks to exactly one host, and that host has to be on the
+            // approved list like any other: naming a provider is not a way around it.
+            const std::string providerHost =
+                settings.internet.provider == "duckduckgo" ? std::string("api.duckduckgo.com")
+                : settings.internet.provider == "searxng" ? settings.internet.searxngHost
+                : settings.internet.provider == "brave" ? std::string("api.search.brave.com")
+                : settings.internet.provider == "tavily" ? std::string("api.tavily.com")
+                : std::string{};
+            if (providerHost.empty())
             {
                 outError = "Unsupported internet search provider: " +
-                    settings.internet.provider;
+                    settings.internet.provider + " (duckduckgo, searxng, brave or tavily).";
                 return false;
             }
+            const auto lowered = [](std::string value)
+            {
+                std::transform(value.begin(), value.end(), value.begin(),
+                    [](const unsigned char c) { return static_cast<char>(std::tolower(c)); });
+                return value;
+            };
             const bool providerAllowed = std::any_of(
                 settings.internet.approvedHosts.begin(),
                 settings.internet.approvedHosts.end(),
-                [](const std::string& host)
-                {
-                    std::string lowered = host;
-                    std::transform(lowered.begin(), lowered.end(), lowered.begin(),
-                        [](const unsigned char c)
-                        {
-                            return static_cast<char>(std::tolower(c));
-                        });
-                    return lowered == "api.duckduckgo.com";
-                });
+                [&](const std::string& host) { return lowered(host) == lowered(providerHost); });
             if (settings.internet.enabled && !providerAllowed)
             {
-                outError = "Enabled DuckDuckGo lookup requires api.duckduckgo.com in approvedHosts.";
+                outError = "Enabled " + settings.internet.provider + " lookup requires " +
+                    providerHost + " in approvedHosts.";
                 return false;
             }
         }

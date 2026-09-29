@@ -399,6 +399,19 @@ responseOutput llmService::ReflectOnConversation(
     return llamaCpp.ReflectOnConversation(boundedRecord, stopToken);
 }
 
+responseOutput llmService::ReadWebPages(
+    const std::string& boundedEnvelope,
+    const std::stop_token stopToken) const
+{
+    if (!bIsReady || !UsesChatServer())
+    {
+        responseOutput output;
+        output.reason = "Reading web pages requires a chat model backend.";
+        return output;
+    }
+    return llamaCpp.ReadWebPages(boundedEnvelope, stopToken);
+}
+
 responseOutput llmService::GenerateGoalPlan(const std::string& userRequest) const
 {
     if (!bIsReady)

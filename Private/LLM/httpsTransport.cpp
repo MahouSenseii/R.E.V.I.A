@@ -51,7 +51,8 @@ public:
             WinHttpCloseHandle(session);
             return response;
         }
-        const HINTERNET handle = WinHttpOpenRequest(connection, L"POST",
+        const std::wstring method = Widen(request.method == "GET" ? "GET" : "POST");
+        const HINTERNET handle = WinHttpOpenRequest(connection, method.c_str(),
             Widen(request.path).c_str(), nullptr, WINHTTP_NO_REFERER,
             WINHTTP_DEFAULT_ACCEPT_TYPES, WINHTTP_FLAG_SECURE);
         if (handle == nullptr)
@@ -79,13 +80,13 @@ public:
         {
             headerBlock += Widen(name) + L": " + Widen(value) + L"\r\n";
         }
+        const bool withBody = request.method != "GET" && !request.body.empty();
         const BOOL sent = WinHttpSendRequest(handle,
             headerBlock.empty() ? WINHTTP_NO_ADDITIONAL_HEADERS : headerBlock.c_str(),
             headerBlock.empty() ? 0 : static_cast<DWORD>(-1L),
-            request.body.empty() ? WINHTTP_NO_REQUEST_DATA
-                                 : const_cast<char*>(request.body.data()),
-            static_cast<DWORD>(request.body.size()),
-            static_cast<DWORD>(request.body.size()), 0);
+            withBody ? const_cast<char*>(request.body.data()) : WINHTTP_NO_REQUEST_DATA,
+            withBody ? static_cast<DWORD>(request.body.size()) : 0,
+            withBody ? static_cast<DWORD>(request.body.size()) : 0, 0);
         if (!sent || !WinHttpReceiveResponse(handle, nullptr))
         {
             response.error = stopToken.stop_requested()

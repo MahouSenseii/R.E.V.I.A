@@ -421,6 +421,14 @@ bool CapabilityEditor::Apply(
             internet["visibleBrowserMaxPages"] = 3;
         if (!internet.contains("visibleBrowserStepDelayMs"))
             internet["visibleBrowserStepDelayMs"] = 250;
+        if (!internet.contains("quarantinedReader")) internet["quarantinedReader"] = true;
+        if (!internet.contains("searxngHost")) internet["searxngHost"] = "127.0.0.1";
+        if (!internet.contains("searxngPort")) internet["searxngPort"] = 8888;
+        if (!internet.contains("providerKeyName")) internet["providerKeyName"] = "";
+        if (!internet.contains("providerKeyEnvironmentVariable"))
+            internet["providerKeyEnvironmentVariable"] = "";
+        if (!internet.contains("readerMaximumCharacters"))
+            internet["readerMaximumCharacters"] = 12000;
     }
 
     return ReplaceValidated(path, data, outError);

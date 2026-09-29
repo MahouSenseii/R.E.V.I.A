@@ -514,6 +514,45 @@ responseOutput messageRouter::ReflectOnConversation(
         [&] { return llm.ReflectOnConversation(boundedRecord, stopToken); });
 }
 
+responseOutput messageRouter::ReadWebPages(
+    const std::string& boundedEnvelope,
+    const std::stop_token stopToken) const
+{
+    if (boundedEnvelope.empty())
+    {
+        responseOutput output;
+        output.reason = "There were no pages to read.";
+        return output;
+    }
+    if (fastConfigured && !FastIsSlowerThanMain() &&
+        MayCarryPrivateContext(revia::intelligence::IntelligenceTier::Fast) &&
+        fastLlm.IsBackendAvailable())
+    {
+        residency.BeginInference(revia::intelligence::IntelligenceTier::Fast, "interactive");
+        responseOutput output = fastLlm.ReadWebPages(boundedEnvelope, stopToken);
+        residency.EndInference(revia::intelligence::IntelligenceTier::Fast);
+        output.requestedTier = "Fast";
+        output.selectedTier = "Fast";
+        output.selectedModel = fastConfiguration.modelName;
+        output.routingReason = "The pages were read on the Fast brain.";
+        return output;
+    }
+    if (llm.IsBackendAvailable())
+    {
+        residency.BeginInference(revia::intelligence::IntelligenceTier::Main, "interactive");
+        responseOutput output = llm.ReadWebPages(boundedEnvelope, stopToken);
+        residency.EndInference(revia::intelligence::IntelligenceTier::Main);
+        output.requestedTier = "Fast";
+        output.selectedTier = "Main";
+        output.selectedModel = mainConfiguration.modelName;
+        output.routingReason = "The pages were read on the Main brain.";
+        return output;
+    }
+    responseOutput output;
+    output.reason = "No local brain was available to read the pages.";
+    return output;
+}
+
 responseOutput messageRouter::PlanGoal(const std::string& request) const
 {
     if (request.empty())
