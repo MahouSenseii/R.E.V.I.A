@@ -21,6 +21,7 @@ The design rule: **one Revia**. Reflex, Fast, Main, and Expert share one identit
 | Qwen3-TTS cloned voice across two GPUs | **Verified live** | See [Voice speed](#voice-speed-what-to-expect) for real numbers |
 | Windows SAPI voice fallback | **Verified live** | Used automatically when Qwen is not installed or not ready |
 | Kokoro fallback voice (opt-in) | **Tested** | Speaks a phrase Qwen could not, before SAPI; the worker contract and the hand-off are covered by tests, not yet heard in a live session |
+| A brain on call: cloud advisor (opt-in) | **Tested** | A redacted brief to Claude or an OpenAI-compatible service, its notes into her prompt as input; covered end to end against a fake advisor, not yet run against a live API |
 | Speech recognition (push-to-talk and hands-free) | **Verified live** | whisper.cpp on GPU, ~0.3–1.0 s per utterance |
 | Web lookups in a visible browser | **Verified live** | Shows query and sources; ~11 s per lookup |
 | Curiosity, initiative, self-directed reflection | **Verified live** | Logs show think/research/create decisions and when she chooses to stay quiet |
@@ -325,6 +326,7 @@ Type these in Chat or the CLI. `/help` lists everything, including direct file a
 | Command | Purpose |
 |---|---|
 | `/status`, `/backend`, `/resources`, `/models` | Models, services, placement, hardware state |
+| `/advisor`, `/advisor on\|off\|auto\|ask\|never`, `/consult <question>` | The cloud advisor: what it is and what it has cost this session, the session switch, when it is consulted, one question taken to it now |
 | `/perception`, `/perception pause`, `resume`, `forget` | Screen awareness state and control |
 | `/history <words>`, `/history forget` | Search or clear conversation history |
 | `/stream status`, `/stream kill <reason>`, `/stream resume` | The live-audience kill switch: stops speech, drops queued public messages, holds every public reply and sets the avatar phase to `brb` until resumed |
@@ -408,6 +410,30 @@ In `Config/settings.json`, on `llm` (Main) or on `intelligence.fast` / `intellig
 `apiKey` is sent as a bearer token when set. `treatAsRemote: true` tells Revia that a loopback address is really a tunnel to somewhere else. A server that is not llama.cpp has to be running already; Revia reports it at startup and in `/models`, and the Activity panel names the model that answered each turn.
 
 **Privacy rule.** A brain whose requests leave this machine (a host that is not loopback, or `treatAsRemote`) is not handed her private context -- the conversation, her memories, the record, screenshots for Expert vision -- unless `intelligence.allowRemotePrivateContext` is `true`. With it off, a remote Fast or Expert is passed over and Main answers instead, the Activity panel says why, and memory evaluation stays on a local brain. Main is the exception by design: pointing Main at a remote server is the opt-in for Main itself, since every turn goes there anyway. The startup log names each non-llama.cpp brain and what it is allowed to read.
+
+### A brain on call (opt-in)
+
+The local brains write every word she says. For the turns a 4B model handles badly, she can first take the question to a frontier model and read its notes: facts with how sure it is, a plan, verbatim code, what it could not settle. The notes go into her prompt as input she checks and rewrites in her own voice; the advisor never talks to you, never sees her memories or her posture, and is named in the Activity feed every time ("Consulting: sending 412 characters (the question) to claude-opus-5-5 at api.anthropic.com because the person asked for the advisor").
+
+```json
+"intelligence": {
+  "advisor": {
+    "enabled": true,
+    "dialect": "Anthropic",
+    "host": "api.anthropic.com",
+    "modelName": "claude-opus-5-5",
+    "escalation": "ask",
+    "share": "question",
+    "sessionBudgetTurns": 100
+  }
+}
+```
+
+`.\Tools\SetAdvisorKey.ps1 -Enable` asks for the API key as a hidden prompt and stores it under `RuntimeData\Secrets\advisor.dpapi`, protected with Windows DPAPI for your account; `settings.json` refuses to hold a key at all, and a key in the environment variable named by `keyEnvironmentVariable` (`ANTHROPIC_API_KEY`) works when the store has none. The request goes out through Windows' own HTTPS (WinHTTP, so the system's certificate checks and proxy apply); `dialect: "OpenAI"` with a `host` and `path` reaches OpenRouter (`openrouter.ai`, `/api/v1/chat/completions`, a `zdr` model for zero data retention) or any chat-completions service.
+
+When she consults is a rule, never the small model's opinion of its own difficulty (Anthropic's own measurements say a weak executor stops noticing it is stuck). `escalation: "ask"` (the default) consults only when you say so: "ask Claude why this deadlocks", "check with the advisor", or `/consult <question>`. `"auto"` also consults on a code listing, a request for a plan, a design or a comparison, a question about something newer than the local model (a recent year, "the latest version"), a long pasted document, or a follow-up to an answer that went wrong; short and ordinary turns stay local. A public audience (Discord, a stream) never consults. `share: "question"` sends the question and the date; `"conversation"` adds the last few turns, each cut to 600 characters and withheld outright when it carries a credential (the same detector that keeps secrets out of her memory), and `C:\Users\<name>\` loses the account name. A question that itself carries a key is refused before anything is sent. `sessionBudgetTurns` caps consults per session, `/advisor status` shows the count, characters and tokens so far, and `/advisor off` stops it for the session.
+
+Cost, at Opus 5.5 prices: a typical consult is under two cents; a session that hits the default budget of 100 is a dollar or three.
 
 ### Voice speed: what to expect
 
@@ -533,7 +559,7 @@ The capability `mode` can be `supervised` (default) or `owner_full_access`. The 
 
 ## Privacy and safety
 
-- Everything runs locally. Only web lookups send data out (the query), and they can be turned off with `/internet off`.
+- Everything runs locally. Only web lookups send data out (the query), and they can be turned off with `/internet off`. If you set up the [cloud advisor](#a-brain-on-call-opt-in), a consult sends the question (and, at your choice, the last few turns, each checked for a credential) and nothing else; every consult is in the Activity feed with what left.
 - Screenshots are deleted immediately; only short summaries are kept in memory. Excluding an app (password managers are excluded by default) hides it from **activity records**, not from screenshots sent to local vision.
 - Files are limited to `Documents\ReviaSandbox` unless you approve more. Writes need confirmation.
 - Approving an app allows inspecting it. Pressing a control also needs that exact control approved.

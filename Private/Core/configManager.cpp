@@ -5,6 +5,7 @@
 #include <exception>
 #include <filesystem>
 #include <fstream>
+#include <iostream>
 #include <nlohmann/json.hpp>
 #include <regex>
 
@@ -96,6 +97,20 @@ namespace
             tier.temperature >= 0.0F && tier.temperature <= 2.0F &&
             tier.startupTimeoutSeconds >= 1 && tier.startupTimeoutSeconds <= 600 &&
             (!tier.bVisionEnabled || !tier.multimodalProjectorPath.empty());
+    }
+
+    bool IsValidAdvisor(const advisorSettings& advisor)
+    {
+        return (advisor.dialect == "Anthropic" || advisor.dialect == "OpenAI") &&
+            !advisor.host.empty() && advisor.port > 0 && advisor.port <= 65535 &&
+            !advisor.modelName.empty() && advisor.maxTokens >= 64 && advisor.maxTokens <= 16000 &&
+            advisor.timeoutSeconds >= 5 && advisor.timeoutSeconds <= 600 &&
+            !advisor.keyName.empty() &&
+            (advisor.escalation == "never" || advisor.escalation == "ask" ||
+                advisor.escalation == "auto") &&
+            (advisor.share == "question" || advisor.share == "conversation") &&
+            advisor.maximumBriefCharacters >= 400 && advisor.maximumBriefCharacters <= 60000 &&
+            advisor.sessionBudgetTurns >= 0 && advisor.sessionBudgetTurns <= 10000;
     }
 }
 
@@ -260,6 +275,50 @@ bool configManager::LoadSettings(appSettings& outSettings) const
                 ReadModelTier(intelligenceData["fast"], outSettings.intelligence.fast);
             if (intelligenceData.contains("expert"))
                 ReadModelTier(intelligenceData["expert"], outSettings.intelligence.expert);
+            if (intelligenceData.contains("advisor"))
+            {
+                const json& advisorData = intelligenceData["advisor"];
+                advisorSettings& advisor = outSettings.intelligence.advisor;
+                if (advisorData.contains("enabled"))
+                    advisor.bEnabled = advisorData["enabled"].get<bool>();
+                if (advisorData.contains("dialect"))
+                    advisor.dialect = advisorData["dialect"].get<std::string>();
+                if (advisorData.contains("host"))
+                    advisor.host = advisorData["host"].get<std::string>();
+                if (advisorData.contains("port"))
+                    advisor.port = advisorData["port"].get<int>();
+                if (advisorData.contains("path"))
+                    advisor.path = advisorData["path"].get<std::string>();
+                if (advisorData.contains("modelName"))
+                    advisor.modelName = advisorData["modelName"].get<std::string>();
+                if (advisorData.contains("maxTokens"))
+                    advisor.maxTokens = advisorData["maxTokens"].get<int>();
+                if (advisorData.contains("timeoutSeconds"))
+                    advisor.timeoutSeconds = advisorData["timeoutSeconds"].get<int>();
+                if (advisorData.contains("keyName"))
+                    advisor.keyName = advisorData["keyName"].get<std::string>();
+                if (advisorData.contains("keyEnvironmentVariable"))
+                    advisor.keyEnvironmentVariable =
+                        advisorData["keyEnvironmentVariable"].get<std::string>();
+                if (advisorData.contains("escalation"))
+                    advisor.escalation = advisorData["escalation"].get<std::string>();
+                if (advisorData.contains("share"))
+                    advisor.share = advisorData["share"].get<std::string>();
+                if (advisorData.contains("maximumBriefCharacters"))
+                    advisor.maximumBriefCharacters =
+                        advisorData["maximumBriefCharacters"].get<int>();
+                if (advisorData.contains("sessionBudgetTurns"))
+                    advisor.sessionBudgetTurns = advisorData["sessionBudgetTurns"].get<int>();
+                // A key in the settings file is the one place it must not be. Refused
+                // outright rather than read, so nobody learns that it works.
+                if (advisorData.contains("apiKey"))
+                {
+                    std::cerr << "intelligence.advisor.apiKey is not read from settings.json: "
+                                 "run Tools/SetAdvisorKey.ps1 or set " << advisor.keyEnvironmentVariable
+                              << ".\n";
+                    return false;
+                }
+            }
         }
 
         if (data.contains("embedding"))
@@ -1393,6 +1452,8 @@ bool configManager::LoadSettings(appSettings& outSettings) const
             (!IsValidModelTier(outSettings.intelligence.fast) ||
              !IsValidModelTier(outSettings.intelligence.expert) ||
              intelligencePortsConflict)) ||
+        (outSettings.intelligence.advisor.bEnabled &&
+            !IsValidAdvisor(outSettings.intelligence.advisor)) ||
         (outSettings.embedding.bEnabled &&
             (outSettings.embedding.host.empty() || outSettings.embedding.modelName.empty() ||
                 outSettings.embedding.port < 1 || outSettings.embedding.port > 65535 ||

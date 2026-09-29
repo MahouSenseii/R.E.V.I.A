@@ -11,6 +11,7 @@
 #include <atomic>
 #include "Core/logger.h"
 #include "Core/messageRouter.h"
+#include "Intelligence/advisor.h"
 #include "Intelligence/humanizationState.h"
 #include "Intelligence/intelligenceRouter.h"
 #include "Intelligence/reflexRouter.h"
@@ -27,6 +28,8 @@
 
 #include <cstdint>
 #include <functional>
+#include <memory>
+#include <mutex>
 #include <optional>
 #include <stop_token>
 #include <string>
@@ -188,6 +191,41 @@ public:
 
     // Whether she makes her "hmm" while she stops to think (speech.thinkingFillerEnabled).
     void SetThinkingFillerEnabled(const bool enabled) { thinkingFillerEnabled.store(enabled); }
+
+    // The remote advisor (intelligence.advisor): consulted before the reply on the
+    // turns the rules in Intelligence/advisor.h name, or on any turn the person asks
+    // it for, never for a public audience, with a redacted brief; its notes enter her
+    // prompt as input to check. The key arrives already read from the secret store or
+    // the environment and lives in the client only. `keySource` is for the status line.
+    void ConfigureAdvisor(const advisorSettings& settings, std::string apiKey, std::string keySource);
+    // The transport a test puts behind the client; the settings and key stay.
+    void SetAdvisorTransport(std::unique_ptr<llm::HttpsTransport> transport);
+    struct AdvisorStatus
+    {
+        bool configured = false;
+        bool enabled = false;
+        bool keyPresent = false;
+        std::string keySource;
+        std::string dialect;
+        std::string host;
+        std::string model;
+        std::string escalation;
+        std::string share;
+        std::string transport;
+        int consults = 0;
+        int budgetTurns = 0;
+        std::size_t charactersSent = 0;
+        int inputTokens = 0;
+        int outputTokens = 0;
+        std::string lastOutcome;
+    };
+    [[nodiscard]] AdvisorStatus AdvisorState() const;
+    // /advisor on|off for this session; the setting in the file is untouched.
+    void SetAdvisorEnabled(bool enabled);
+    // /advisor auto|ask|never for this session.
+    void SetAdvisorEscalation(std::string escalation);
+    // /consult: the next turn goes to the advisor whatever the rules say.
+    void RequestAdvisorForNextTurn();
 
     // Public integrations get Revia's identity and the supplied channel history, but
     // never inherit the local user's dialogue, compressed history, durable memories,
@@ -416,6 +454,29 @@ private:
     // The pause before a hard answer, made audible: rare by policy, off by setting.
     speech::ThinkingFillerPolicy thinkingFiller;
     std::atomic<bool> thinkingFillerEnabled = true;
+
+    // Consults the advisor for this turn when the rules say so, and returns the prompt
+    // block carrying its notes, or nothing. Every step is published to the Activity
+    // feed: what would leave, what was withheld, what came back.
+    [[nodiscard]] std::string ConsultAdvisor(
+        const std::string& policyInput,
+        const std::vector<conversationMessage>& promptContext,
+        bool previousUncertainty,
+        bool publicAudience,
+        std::uint64_t turnId,
+        const std::stop_token& stopToken);
+    intelligence::AdvisorClient advisor;
+    advisorSettings advisorConfiguration;
+    bool advisorConfigured = false;
+    bool advisorEnabled = false;
+    std::string advisorKeySource;
+    std::atomic<bool> advisorForced = false;
+    int advisorConsults = 0;
+    std::size_t advisorCharactersSent = 0;
+    int advisorInputTokens = 0;
+    int advisorOutputTokens = 0;
+    std::string advisorLastOutcome;
+    mutable std::mutex advisorMutex;
 };
 
 } // namespace revia::runtime

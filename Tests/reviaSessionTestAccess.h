@@ -17,6 +17,7 @@ namespace revia::runtime
 struct ReviaSessionTestAccess
 {
     static speech::SpeechService& Speech(ReviaSession& session) { return session.speechService; }
+    static ConversationRuntime& Conversation(ReviaSession& session) { return session.conversationRuntime; }
 
     static SessionResult GuardTurn(ReviaSession& session, const std::function<SessionResult()>& turn)
     { return session.GuardTurn(turn); }

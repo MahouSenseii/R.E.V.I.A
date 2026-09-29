@@ -203,6 +203,49 @@ struct modelTierSettings
     int minimumResidencySeconds = 60;
 };
 
+// A frontier model on call, consulted rather than put in her seat.
+//
+// Revia writes every reply herself, on the local brains. For a hard turn -- code, a
+// plan, a fact newer than the local model, a question the person asks her to take to
+// the cloud -- she sends a redacted brief to this model and gets notes back: facts,
+// a plan, verbatim code, what it could not settle. The notes enter her prompt as input
+// she checks, never as her words. The key is never in this file: it lives in the
+// secret store (Tools/SetAdvisorKey.ps1 writes it with DPAPI), or in the environment
+// variable named below.
+struct advisorSettings
+{
+    bool bEnabled = false;
+    // "Anthropic": the Messages API. "OpenAI": chat completions over HTTPS, which is
+    // what OpenRouter, a gateway and most hosted services speak.
+    std::string dialect = "Anthropic";
+    std::string host = "api.anthropic.com";
+    int port = 443;
+    // Empty takes the dialect's own: /v1/messages or /v1/chat/completions.
+    std::string path;
+    std::string modelName = "claude-opus-5-5";
+    int maxTokens = 1200;
+    int timeoutSeconds = 90;
+    // Which secret in RuntimeData/Secrets holds the key, and which environment
+    // variable is read when the store has none.
+    std::string keyName = "advisor";
+    std::string keyEnvironmentVariable = "ANTHROPIC_API_KEY";
+    // "ask": consulted only on a turn where the person asks for it ("ask Claude",
+    // "check with the advisor", /consult). "auto": also on the turns the deterministic
+    // rules in Intelligence/advisor.h name -- code, a plan, a recent fact, a long
+    // document, a follow-up to an answer that went wrong. "never": configured but
+    // idle, which is what /advisor off does for a session.
+    std::string escalation = "ask";
+    // What leaves the machine besides the question. "question": the question and a
+    // few runtime facts. "conversation": also the last few turns, each checked for a
+    // credential and withheld when it carries one. Her memories, observations and
+    // posture never go, whatever this says, unless intelligence.allowRemotePrivateContext.
+    std::string share = "question";
+    // Characters the brief may hold, and consults one session may make. Cost control
+    // that does not depend on remembering to look at a bill.
+    int maximumBriefCharacters = 6000;
+    int sessionBudgetTurns = 100;
+};
+
 struct intelligenceSettings
 {
     bool bEnabled = true;
@@ -210,6 +253,7 @@ struct intelligenceSettings
     // her memories, the conversation record and the posture. Off, a remote tier only
     // answers turns that carry none, and memory evaluation stays on a local tier.
     bool bAllowRemotePrivateContext = false;
+    advisorSettings advisor;
     modelTierSettings fast = {
         .bEnabled = true,
         .backend = "LLamaCpp",

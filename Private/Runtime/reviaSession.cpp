@@ -8,6 +8,7 @@
 #include "Core/exitReporter.h"
 #include "Core/localApiKey.h"
 #include "Core/runtimePath.h"
+#include "Core/secretStore.h"
 #include "Internet/internetBackend.h"
 #include "LLM/providerCapabilities.h"
 #include "Emotion/stimulusBuilder.h"
@@ -1376,6 +1377,41 @@ bool ReviaSession::Start()
         chatSelector.Configure(settings.presence);
     }
     conversationRuntime.SetThinkingFillerEnabled(settings.speech.bThinkingFillerEnabled);
+    if (settings.intelligence.advisor.bEnabled)
+    {
+        // The key is read here, once, and handed to the runtime's client; it is not
+        // kept on the session and never logged. The store first, the environment
+        // second, and the startup log says which -- or that there is none.
+        const advisorSettings& advisorConfiguration = settings.intelligence.advisor;
+        const core::SecretStore secrets(
+            core::ResolveRuntimeWritePath(std::filesystem::path("RuntimeData/Secrets")));
+        std::string key;
+        std::string keySource;
+        std::string keyError;
+        if (const auto stored = secrets.Load(advisorConfiguration.keyName, keyError))
+        {
+            key = *stored;
+            keySource = "the secret store (" + secrets.PathOf(advisorConfiguration.keyName).filename().string() + ")";
+        }
+        else if (const char* fromEnvironment = std::getenv(advisorConfiguration.keyEnvironmentVariable.c_str());
+            fromEnvironment != nullptr && *fromEnvironment != '\0')
+        {
+            key = fromEnvironment;
+            keySource = "the environment variable " + advisorConfiguration.keyEnvironmentVariable;
+        }
+        conversationRuntime.ConfigureAdvisor(advisorConfiguration, key, keySource);
+        appLogger.Log("Advisor: " + advisorConfiguration.modelName + " at " + advisorConfiguration.host +
+            ":" + std::to_string(advisorConfiguration.port) + " (" + advisorConfiguration.dialect +
+            "), consulted " + (advisorConfiguration.escalation == "auto"
+                ? "on hard turns and when asked" : advisorConfiguration.escalation == "ask"
+                ? "only when asked" : "never") +
+            ", sharing " + (advisorConfiguration.share == "conversation"
+                ? "the question and the recent conversation" : "the question only") +
+            (key.empty() ? "; no key (" + keyError + "; " + advisorConfiguration.keyEnvironmentVariable +
+                " is unset), so it cannot be reached"
+                         : "; key from " + keySource) +
+            ". Every consult is shown in the Activity feed with what left the machine.");
+    }
     StartExternalAdapterLoop();
     // A separately opted-in source. Discord enablement never starts this listener.
     // Environment values are owner configuration, never supplied by a visitor.
@@ -4577,7 +4613,24 @@ void ReviaSession::OnRecognitionEvent(const speech::RecognitionEvent& recognitio
 SessionResult ReviaSession::RunTurnLocked(const std::string& acceptedInput)
 {
     SessionResult result =
-        GuardTurn([this, &acceptedInput]() { return RunTurnUnguarded(acceptedInput); });
+        GuardTurn([this, &acceptedInput]()
+        {
+            // /consult <question>: the question runs as an ordinary turn with the
+            // advisor forced for it, so the reply is hers as always and only the
+            // decision to consult is taken here. Without an advisor set up the command
+            // falls through to its handler, which says so.
+            if (acceptedInput.rfind("/consult ", 0) == 0 &&
+                conversationRuntime.AdvisorState().configured)
+            {
+                const std::string question = Trim(acceptedInput.substr(9));
+                if (!question.empty())
+                {
+                    conversationRuntime.RequestAdvisorForNextTurn();
+                    return RunTurnUnguarded(question);
+                }
+            }
+            return RunTurnUnguarded(acceptedInput);
+        });
     addresseeGate.NoteExchange(speech::AddresseeGate::Clock::now());
     return result;
 }
@@ -9393,6 +9446,83 @@ bool ReviaSession::TryHandleActionInput(const std::string& input, SessionResult&
         return true;
     }
 
+    if (input == "/consult" || input.rfind("/consult ", 0) == 0)
+    {
+        // Reached only without a question or without an advisor: with both, the turn
+        // entry already ran the question as a consulted turn.
+        result.succeeded = false;
+        result.text = conversationRuntime.AdvisorState().configured
+            ? "Usage: /consult <question> -- the question is taken to the advisor and answered by her."
+            : "No advisor is set up. Set intelligence.advisor in Config/settings.json and store its "
+              "key with Tools\\SetAdvisorKey.ps1 -Enable.";
+        result.reason = "Nothing to consult about.";
+        SetState(RuntimeState::Blocked, result.reason);
+        return true;
+    }
+
+    if (input == "/advisor" || input.rfind("/advisor ", 0) == 0)
+    {
+        const std::string argument = input.size() > 8 ? Trim(input.substr(8)) : std::string();
+        const auto state = conversationRuntime.AdvisorState();
+        if (!state.configured)
+        {
+            result.succeeded = false;
+            result.text = "No advisor is set up. Set intelligence.advisor in Config/settings.json "
+                          "(enabled, dialect, host, modelName) and store its key with "
+                          "Tools\\SetAdvisorKey.ps1 -Enable.";
+            result.reason = "The advisor is not configured.";
+            SetState(RuntimeState::Blocked, result.reason);
+            return true;
+        }
+        if (argument == "on" || argument == "off")
+        {
+            conversationRuntime.SetAdvisorEnabled(argument == "on");
+            result.text = argument == "on"
+                ? "Advisor on for this session (" + state.model + "; consulted " +
+                    (state.escalation == "auto" ? "on hard turns and when asked" : "only when asked") + ")."
+                : "Advisor off for this session: nothing leaves the machine for it until /advisor on.";
+            SetState(RuntimeState::Idle);
+            return true;
+        }
+        if (argument == "auto" || argument == "ask" || argument == "never")
+        {
+            conversationRuntime.SetAdvisorEscalation(argument);
+            result.text = argument == "auto"
+                ? "Advisor consulted on hard turns (code, a plan, a recent fact, a long input, a "
+                  "follow-up to a doubtful answer) and whenever you ask, for this session."
+                : argument == "ask"
+                ? "Advisor consulted only when you ask (\"ask Claude ...\", /consult), for this session."
+                : "Advisor never consulted this session.";
+            SetState(RuntimeState::Idle);
+            return true;
+        }
+        if (!argument.empty() && argument != "status")
+        {
+            result.succeeded = false;
+            result.text = "Usage: /advisor [status|on|off|auto|ask|never]";
+            result.reason = "Unrecognized advisor argument.";
+            SetState(RuntimeState::Blocked, result.reason);
+            return true;
+        }
+        std::ostringstream stream;
+        stream << "Advisor: " << state.model << " at " << state.host << " (" << state.dialect
+               << "), " << (state.enabled ? "on" : "off for this session") << ", consulted "
+               << (state.escalation == "auto" ? "on hard turns and when asked"
+                   : state.escalation == "ask" ? "only when asked" : "never")
+               << ", sharing " << (state.share == "conversation"
+                   ? "the question and the recent conversation" : "the question only")
+               << ".\n  Key: " << (state.keyPresent ? "present, from " + state.keySource
+                   : "none (Tools\\SetAdvisorKey.ps1 stores one)")
+               << ".\n  Transport: " << state.transport
+               << ".\n  This session: " << state.consults << " of " << state.budgetTurns
+               << " consults, " << state.charactersSent << " characters sent, "
+               << state.inputTokens << " tokens in, " << state.outputTokens << " out; last: "
+               << state.lastOutcome << ".";
+        result.text = stream.str();
+        SetState(RuntimeState::Idle);
+        return true;
+    }
+
     if (input == "/stream" || input.rfind("/stream ", 0) == 0)
     {
         const std::string argument = input.size() > 7 ? Trim(input.substr(7)) : std::string();
@@ -10219,6 +10349,15 @@ bool ReviaSession::TryHandleActionInput(const std::string& input, SessionResult&
             << " attention, " << settings.speech.qwenInputMode << " text input";
         stream << "\n  Voice creation: " << settings.speech.qwenVoiceDesignModel
             << " — isolated on-demand worker";
+        if (const auto advisorState = conversationRuntime.AdvisorState(); advisorState.configured)
+        {
+            stream << "\n  Advisor: " << advisorState.model << " — remote, at " << advisorState.host
+                << ", " << (advisorState.enabled ? "consulted " +
+                    std::string(advisorState.escalation == "auto" ? "on hard turns and when asked"
+                        : advisorState.escalation == "ask" ? "only when asked" : "never")
+                    : std::string("off this session"))
+                << (advisorState.keyPresent ? "" : ", no key");
+        }
         result.text = stream.str();
         SetState(RuntimeState::Idle);
         return true;

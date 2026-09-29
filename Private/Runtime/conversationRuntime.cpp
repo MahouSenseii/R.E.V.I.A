@@ -18,6 +18,7 @@
 #include <algorithm>
 #include <cctype>
 #include <chrono>
+#include <ctime>
 #include <sstream>
 #include <string_view>
 #include <utility>
@@ -1377,6 +1378,11 @@ SessionResult ConversationRuntime::Generate(
                 ElapsedMilliseconds(turnStarted), 0, currentTurn);
             return finish(std::move(result));
         }
+        // After her own thinking, before her answer: the notes are one more thing she
+        // reads, and the local brains still write every word.
+        const std::string advisorBlock = ConsultAdvisor(
+            policyInput, promptContext, routingContext.previousUncertainty,
+            turnPolicy.publicAudience, currentTurn, stopToken);
         std::ostringstream postureLine;
         postureLine << basePosture;
         if (const std::string inquiryBlock = inquiry.PromptBlock(); !inquiryBlock.empty())
@@ -1390,6 +1396,10 @@ SessionResult ConversationRuntime::Generate(
         if (!investigated.promptBlock.empty())
         {
             postureLine << "\n\n" << investigated.promptBlock;
+        }
+        if (!advisorBlock.empty())
+        {
+            postureLine << "\n\n" << advisorBlock;
         }
         if (stopToken.stop_requested())
         {
@@ -1979,6 +1989,200 @@ void ConversationRuntime::PublishInternetActivity(
     event.queueDepth = sourceCount;
     event.turnId = turnId;
     events.Publish(std::move(event));
+}
+
+} // namespace revia::runtime
+
+namespace revia::runtime
+{
+
+void ConversationRuntime::ConfigureAdvisor(
+    const advisorSettings& settings, std::string apiKey, std::string keySource)
+{
+    std::lock_guard lock(advisorMutex);
+    advisorConfiguration = settings;
+    advisorConfigured = settings.bEnabled;
+    advisorEnabled = settings.bEnabled;
+    advisorKeySource = std::move(keySource);
+    advisor.Configure(settings, std::move(apiKey));
+    advisorConsults = 0;
+    advisorCharactersSent = 0;
+    advisorInputTokens = 0;
+    advisorOutputTokens = 0;
+    advisorLastOutcome = advisor.HasKey() ? "not consulted yet" : "no key";
+}
+
+void ConversationRuntime::SetAdvisorTransport(std::unique_ptr<llm::HttpsTransport> transport)
+{
+    std::lock_guard lock(advisorMutex);
+    advisor.SetTransport(std::move(transport));
+}
+
+ConversationRuntime::AdvisorStatus ConversationRuntime::AdvisorState() const
+{
+    std::lock_guard lock(advisorMutex);
+    AdvisorStatus status;
+    status.configured = advisorConfigured;
+    status.enabled = advisorEnabled;
+    status.keyPresent = advisor.HasKey();
+    status.keySource = advisorKeySource;
+    status.dialect = advisorConfiguration.dialect;
+    status.host = advisorConfiguration.host + ":" + std::to_string(advisorConfiguration.port);
+    status.model = advisorConfiguration.modelName;
+    status.escalation = advisorConfiguration.escalation;
+    status.share = advisorConfiguration.share;
+    status.transport = advisor.TransportDescription();
+    status.consults = advisorConsults;
+    status.budgetTurns = advisorConfiguration.sessionBudgetTurns;
+    status.charactersSent = advisorCharactersSent;
+    status.inputTokens = advisorInputTokens;
+    status.outputTokens = advisorOutputTokens;
+    status.lastOutcome = advisorLastOutcome;
+    return status;
+}
+
+void ConversationRuntime::SetAdvisorEnabled(const bool enabled)
+{
+    std::lock_guard lock(advisorMutex);
+    advisorEnabled = enabled && advisorConfigured;
+}
+
+void ConversationRuntime::SetAdvisorEscalation(std::string escalation)
+{
+    std::lock_guard lock(advisorMutex);
+    if (escalation == "auto" || escalation == "ask" || escalation == "never")
+    {
+        advisorConfiguration.escalation = std::move(escalation);
+        advisor.ApplySettings(advisorConfiguration);
+    }
+}
+
+void ConversationRuntime::RequestAdvisorForNextTurn()
+{
+    advisorForced.store(true);
+}
+
+std::string ConversationRuntime::ConsultAdvisor(
+    const std::string& policyInput,
+    const std::vector<conversationMessage>& promptContext,
+    const bool previousUncertainty,
+    const bool publicAudience,
+    const std::uint64_t turnId,
+    const std::stop_token& stopToken)
+{
+    const bool forced = advisorForced.exchange(false);
+    advisorSettings configuration;
+    {
+        std::lock_guard lock(advisorMutex);
+        if (!advisorConfigured || !advisorEnabled) return {};
+        configuration = advisorConfiguration;
+    }
+    const intelligence::AdvisorDecision decision = intelligence::DecideAdvisorConsult(
+        policyInput, configuration.escalation, previousUncertainty, publicAudience, forced);
+    if (!decision.consult)
+    {
+        // Silent unless the person asked: the rules declining a turn is the normal
+        // case, and the feed would be all of it.
+        if (forced || intelligence::AsksForAdvisor(policyInput))
+        {
+            PublishComponent("Advisor", "Declined", decision.reason, -1.0, 0, turnId);
+        }
+        return {};
+    }
+    {
+        std::lock_guard lock(advisorMutex);
+        if (advisorConsults >= configuration.sessionBudgetTurns)
+        {
+            advisorLastOutcome = "the session budget is spent";
+            PublishComponent("Advisor", "Declined",
+                "The session's advisor budget (" + std::to_string(configuration.sessionBudgetTurns) +
+                    " consults) is spent; /advisor status shows it.", -1.0, 0, turnId);
+            return {};
+        }
+    }
+
+    const auto trim = [](const std::string& value)
+    {
+        const auto begin = value.find_first_not_of(" \t\r\n");
+        if (begin == std::string::npos) return std::string{};
+        const auto end = value.find_last_not_of(" \t\r\n");
+        return value.substr(begin, end - begin + 1);
+    };
+    // The turns before this one: the context already carries the question as its last
+    // line, and the brief says it once.
+    std::vector<conversationMessage> earlier = promptContext;
+    if (!earlier.empty() && earlier.back().role == "user" &&
+        trim(earlier.back().content) == trim(policyInput))
+    {
+        earlier.pop_back();
+    }
+    const std::time_t now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+    std::tm local{};
+#ifdef _WIN32
+    localtime_s(&local, &now);
+#else
+    localtime_r(&now, &local);
+#endif
+    char date[16] = {};
+    std::strftime(date, sizeof(date), "%Y-%m-%d", &local);
+    const std::string facts = "Today is " + std::string(date) +
+        ". Revia is a local program on the person's Windows PC; she will write the reply "
+        "herself from these notes and what she knows.";
+    const intelligence::AdvisorBrief brief = intelligence::BuildAdvisorBrief(
+        policyInput, earlier, facts, configuration.share,
+        static_cast<std::size_t>(std::max(400, configuration.maximumBriefCharacters)));
+    if (brief.refused)
+    {
+        {
+            std::lock_guard lock(advisorMutex);
+            advisorLastOutcome = "refused: " + brief.refusal;
+        }
+        PublishComponent("Advisor", "Refused", brief.refusal, -1.0, 0, turnId);
+        return {};
+    }
+
+    std::ostringstream sending;
+    sending << "Sending " << brief.Characters() << " characters (the question"
+        << (brief.context.empty() ? "" : " and the recent conversation")
+        << ") to " << configuration.modelName << " at " << configuration.host
+        << " because " << decision.reason;
+    if (!brief.redactions.empty())
+    {
+        sending << " Withheld: ";
+        for (std::size_t index = 0; index < brief.redactions.size(); ++index)
+        {
+            if (index > 0) sending << "; ";
+            sending << brief.redactions[index];
+        }
+        sending << '.';
+    }
+    setState(RuntimeState::Thinking, "Consulting the advisor about turn #" + std::to_string(turnId) + ".");
+    PublishComponent("Advisor", "Consulting", sending.str(), -1.0, 0, turnId);
+    log.Log("Advisor consulted for turn #" + std::to_string(turnId) + ": " + sending.str());
+
+    const intelligence::AdvisorNotes notes = advisor.Consult(brief, stopToken);
+    {
+        std::lock_guard lock(advisorMutex);
+        ++advisorConsults;
+        advisorCharactersSent += brief.Characters();
+        advisorInputTokens += notes.inputTokens;
+        advisorOutputTokens += notes.outputTokens;
+        advisorLastOutcome = notes.succeeded
+            ? "notes from " + notes.model + " for turn #" + std::to_string(turnId)
+            : "failed: " + notes.reason;
+    }
+    if (!notes.succeeded)
+    {
+        PublishComponent("Advisor", "Unavailable",
+            "No notes came back (" + notes.reason + "); she answers on her own.",
+            notes.elapsedMilliseconds, 0, turnId);
+        return {};
+    }
+    PublishComponent("Advisor", "Consulted",
+        "Notes from " + notes.model + " (" + std::to_string(notes.inputTokens) + " tokens in, " +
+            std::to_string(notes.outputTokens) + " out) were handed to her prompt as input to check.",
+        notes.elapsedMilliseconds, 0, turnId);
+    return intelligence::AdvisorClient::RenderNotesForPrompt(notes);
 }
 
 } // namespace revia::runtime
