@@ -432,7 +432,8 @@ an explicit contrast/antonym stage in front of the similarity.
 
 ### ISSUE-REVIA-0080 — a contradiction is kept but not superseded
 
-**Severity:** low. **Status:** CONFIRMED, OPEN.
+**Severity:** low. **Status:** FIXED AND VERIFIED (see the follow-up below the original
+finding).
 
 When a correction arrives, both records are kept and neither is marked historical. That is
 deliberate — deleting the older one is the only irreversible option — but it is not the
@@ -445,6 +446,19 @@ consumes it.
 **Required verification to close.** A `superseded_by` column, a migration, and recall and
 prompt rendering that can express "used to, now" — then a restart test showing the
 superseded record is retained, retrievable, and rendered as past rather than present.
+
+**Follow-up: fixed.** `memories` gained `superseded_by` and `valid_to` (added to an
+existing store on open). A save supersedes one earlier memory only when all three hold:
+the new summary *states a change* (`StatesAChange`: "no longer", "switched", "used to";
+deliberately not "rather", per ISSUE-REVIA-0088), the classifier reads the pair as a
+`Contradiction`, and the vectors sit above the related-similarity threshold. The older
+row stays: recall by topic no longer offers it, the correction renders "(this corrected
+an earlier note: ...)", and a question naming a time still reaches it "(since
+corrected)". The Memory tab shows *Corrected* with the replacing id, and **Forget
+selected** is the only delete, restoring anything the forgotten memory had corrected.
+`Tests/memorySupersessionTests.cpp` covers the chain of corrections, a reopen, the
+non-cases, forgetting, and an incognito session. ISSUE-REVIA-0079 (paraphrase
+accumulation) stays open: nothing here merges.
 
 ### ISSUE-REVIA-0086 — reconciliation merged a preference with its opposite
 

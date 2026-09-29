@@ -865,8 +865,15 @@ struct memoryEntry
     std::string summary;
     std::string source;
     std::string createdAt;
+    // Set once a later memory corrected this one: the id that replaced it, and when
+    // (epoch seconds, as text). The row stays, retrievable and rendered as past, so a
+    // correction can never delete what it corrected.
+    std::string supersededBy;
+    std::string validTo;
 
     memoryImportance importance = memoryImportance::Medium;
+
+    [[nodiscard]] bool Current() const { return supersededBy.empty(); }
 };
 
 struct memoryDecision

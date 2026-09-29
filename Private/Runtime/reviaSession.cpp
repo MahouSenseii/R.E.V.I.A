@@ -2006,6 +2006,10 @@ void ReviaSession::ReflectOnHistory(
 
 std::string ReviaSession::PersistObservations(const std::vector<memory::Observation>& observations)
 {
+    if (incognito.load())
+    {
+        return "kept for this session only: incognito is on";
+    }
     if (!settings.conversation.bArchiveEnabled || conversationSessionId.empty())
     {
         return "kept for this session only";
@@ -3572,9 +3576,37 @@ SessionResult ReviaSession::AcceptProposal(const std::string& proposalId)
     return result;
 }
 
+void ReviaSession::SetIncognito(const bool enabled)
+{
+    incognito.store(enabled);
+    conversationRuntime.SetIncognito(enabled);
+    appLogger.Log(enabled
+        ? "Incognito on: turns are not archived, not offered to memory, and the record "
+          "is not persisted until it is turned off."
+        : "Incognito off: archiving and memory resume for the turns that follow.");
+    PublishComponent("Conversation history", enabled ? "Incognito" : "Recording",
+        enabled ? "Nothing said from now on is saved." : "Turns are saved again.");
+}
+
+bool ReviaSession::IsIncognito() const
+{
+    return incognito.load();
+}
+
+bool ReviaSession::ForgetMemory(const std::string& memoryId)
+{
+    const longTermMemory store;
+    const bool removed = store.Forget(memoryId);
+    appLogger.Log(removed
+        ? "A memory was forgotten at the user's request."
+        : "A memory could not be forgotten: no such memory " + memoryId + ".");
+    return removed;
+}
+
 void ReviaSession::ArchiveTurn(const std::string& role, const std::string& content)
 {
-    if (conversationSessionId.empty() || !settings.conversation.bArchiveEnabled)
+    if (conversationSessionId.empty() || !settings.conversation.bArchiveEnabled ||
+        incognito.load())
     {
         return;
     }
@@ -4673,7 +4705,10 @@ void ReviaSession::PollBackgroundEvents()
         PublishComponent(
             event.operation == "memory_backfill" ? "Embeddings" : "Memory",
             phase,
-            !event.decision.reason.empty()
+            !event.supersededId.empty()
+                ? "A durable memory was saved and corrects an earlier one, which is now "
+                  "kept as past."
+                : !event.decision.reason.empty()
                 ? event.decision.reason
                 : phase == "Saved" ? "A durable memory was saved."
                 : phase == "Backfilled" ? "A missing memory vector was backfilled."
@@ -9245,6 +9280,28 @@ bool ReviaSession::TryHandleActionInput(const std::string& input, SessionResult&
     if (input == "/capabilities")
     {
         result.text = actionRuntime.StatusJson();
+        SetState(RuntimeState::Idle);
+        return true;
+    }
+
+    if (input == "/incognito" || input.rfind("/incognito ", 0) == 0)
+    {
+        const std::string argument = input.size() > 10 ? Trim(input.substr(10)) : std::string();
+        if (argument == "on" || argument == "off")
+        {
+            SetIncognito(argument == "on");
+        }
+        else if (!argument.empty())
+        {
+            result.text = "/incognito takes on or off.";
+            SetState(RuntimeState::Idle);
+            return true;
+        }
+        result.text = IsIncognito()
+            ? "Incognito is on. Nothing said now is archived, offered to durable memory, "
+              "or kept in the record past this session. /incognito off resumes saving."
+            : "Incognito is off. Turns are archived and may become durable memories. "
+              "/incognito on stops that for the turns that follow.";
         SetState(RuntimeState::Idle);
         return true;
     }

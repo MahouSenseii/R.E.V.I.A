@@ -133,6 +133,37 @@ bool CarriesPolarityShift(const std::string& text)
 
 } // namespace
 
+bool StatesAChange(const std::string& summary)
+{
+    // Matched on whole words: the text is lowered, punctuation becomes spaces, and every
+    // phrase is looked up padded with spaces, so "use" cannot be found inside "user".
+    std::string padded = " ";
+    for (const unsigned char character : summary)
+    {
+        padded.push_back(std::isalnum(character) != 0 || character == '\''
+            ? static_cast<char>(std::tolower(character))
+            : ' ');
+    }
+    padded.push_back(' ');
+    const auto has = [&padded](const std::string_view phrase)
+    {
+        return padded.find(" " + std::string(phrase) + " ") != std::string::npos;
+    };
+    static constexpr std::array<std::string_view, 24> Phrases = {
+        "no longer", "not anymore", "anymore", "any more", "used to", "stopped",
+        "quit", "switched", "changed to", "changed from", "moved to", "moved from",
+        "now prefers", "now likes", "now uses", "now drinks", "now eats", "now plays",
+        "now works", "now lives", "now wants", "instead of", "from now on", "gave up"
+    };
+    for (const std::string_view phrase : Phrases)
+    {
+        if (has(phrase)) return true;
+    }
+    // Contracted negations that say a habit ended: "doesn't ... anymore" is caught
+    // above; "no longer" too. "isn't" and "doesn't" alone describe a state, not a change.
+    return false;
+}
+
 std::string ToString(const MemoryRelation value)
 {
     switch (value)

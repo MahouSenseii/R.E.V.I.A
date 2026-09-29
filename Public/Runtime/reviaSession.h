@@ -371,6 +371,13 @@ public:
     [[nodiscard]] std::vector<memory::ArchivedSession> RecentConversations(
         std::size_t maxSessions = 20) const;
     std::size_t ForgetConversations();
+    // Removes one durable memory for good, by id, and restores anything it had
+    // corrected. The owner's "forget this"; nothing else deletes a memory.
+    bool ForgetMemory(const std::string& memoryId);
+    // While on, turns are not archived, not offered to durable memory, and the
+    // conversation record is not persisted. What she already remembers stays.
+    void SetIncognito(bool enabled);
+    [[nodiscard]] bool IsIncognito() const;
 
     // Durable non-authority settings. The store cannot reach a capability, so nothing
     // here can widen what Revia is permitted to do.
@@ -1011,6 +1018,7 @@ private:
         ReviaSession& session;
     };
     std::atomic<bool> llmAvailable = false;
+    std::atomic<bool> incognito = false;
     std::atomic<std::uint64_t> userInteractionGeneration = 0;
     std::atomic<std::uint64_t> curiosityRunCounter = 0;
     std::atomic<std::int64_t> lastUserInteractionSteadyMs = 0;

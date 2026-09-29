@@ -118,6 +118,7 @@ void RunMemoryDedupLimitsTests();
 void RunQuotedPayloadTests();
 void RunContextFittingTests();
 void RunHistoryCompactionTests();
+void RunMemorySupersessionTests();
 void RunAiPipelineLive();
 void RunSpeechInterruptionTests();
 void RunInvestigationTests();

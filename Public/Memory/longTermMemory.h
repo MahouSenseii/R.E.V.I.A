@@ -5,6 +5,7 @@
 struct sqlite3;
 
 #include "Library/structLibrary.h"
+#include "Memory/memoryReconciliation.h"
 #include "Memory/temporalQuery.h"
 
 #include <cstddef>
@@ -39,8 +40,18 @@ public:
     // can address the accepted memory without saving its content a second time.
     // Duplicates retain their stored summary; an incoming vector is accepted only
     // for identical text. Deferred embedding work must use the stored summary.
+    // outSupersededId names the older memory this one corrected, when it did: the
+    // decision states a change and contradicts one existing memory its vector sits
+    // close to. That memory is kept and marked, never removed.
     bool Save(const memoryDecision& decision, bool& outWasAdded,
-        std::string* outMemoryId = nullptr) const;
+        std::string* outMemoryId = nullptr, std::string* outSupersededId = nullptr) const;
+    // Marks `olderId` as corrected by `newerId` from now on. Both rows stay. Refused when
+    // either is missing or the older is already superseded.
+    bool Supersede(const std::string& olderId, const std::string& newerId) const;
+    // Removes one memory and its vectors for good. For the owner's "forget this", which
+    // is the one case where keeping a marked row would be wrong.
+    bool Forget(const std::string& memoryId) const;
+    [[nodiscard]] std::optional<memoryEntry> Find(const std::string& memoryId) const;
     bool HasMemories() const;
     // A query that names a time -- "what did I say yesterday", "that thing from last
     // Tuesday" -- is resolved to a window and answered from the created_at index rather

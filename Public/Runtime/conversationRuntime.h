@@ -7,6 +7,8 @@
 #include "Agents/conversationQualityMonitor.h"
 #include "Agents/selfInquiry.h"
 #include "Core/conversationContext.h"
+
+#include <atomic>
 #include "Core/logger.h"
 #include "Core/messageRouter.h"
 #include "Intelligence/humanizationState.h"
@@ -177,6 +179,12 @@ public:
         std::stop_token stopToken = {},
         const std::string& turnReference = {});
 
+    // Incognito: nothing from the conversation is offered to durable memory while it is
+    // on. The session stops archiving turns and persisting the record at the same time;
+    // this is the half that lives here, where the memory evaluation is queued.
+    void SetIncognito(bool enabled) { incognito.store(enabled); }
+    [[nodiscard]] bool Incognito() const { return incognito.load(); }
+
     // Public integrations get Revia's identity and the supplied channel history, but
     // never inherit the local user's dialogue, compressed history, durable memories,
     // screen/camera observations, or automatic web lookup. The caller supplies the
@@ -341,6 +349,7 @@ private:
 
     messageRouter& router;
     conversationContext& context;
+    std::atomic<bool> incognito = false;
     agents::TurnCoordinator& coordinator;
     speech::SpeechService& speech;
     AffectController& affect;

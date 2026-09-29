@@ -52,6 +52,9 @@ struct MemoryAgentEvent
     std::string operation = "memory_evaluation";
     bool saveSucceeded = true;
     bool wasAdded = false;
+    // The older memory this save corrected, when the new one stated a change that
+    // contradicted it. Empty otherwise.
+    std::string supersededId;
     // Optional vector work failed after the semantic content was committed.
     // Keep that failure separate from saveSucceeded, which describes the memory.
     std::string embeddingError;

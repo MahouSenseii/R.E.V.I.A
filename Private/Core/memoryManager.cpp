@@ -9,9 +9,14 @@ memoryManager::memoryManager(std::string databasePath) : store(std::move(databas
 memoryManager::~memoryManager() = default;
 
 bool memoryManager::SaveAutomaticMemory(const memoryDecision& decision, bool& outWasAdded,
-    std::string* outMemoryId) const
+    std::string* outMemoryId, std::string* outSupersededId) const
 {
-    return store.Save(decision, outWasAdded, outMemoryId);
+    return store.Save(decision, outWasAdded, outMemoryId, outSupersededId);
+}
+
+bool memoryManager::ForgetMemory(const std::string& memoryId) const
+{
+    return store.Forget(memoryId);
 }
 
 std::vector<memoryEntry> memoryManager::LoadMemories() const

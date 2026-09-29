@@ -37,6 +37,7 @@ private:
     QLabel* statusLabel = nullptr;
     QLineEdit* searchInput = nullptr;
     QPushButton* refreshButton = nullptr;
+    QPushButton* forgetButton = nullptr;
     QCheckBox* highImportanceOnly = nullptr;
     QTableWidget* table = nullptr;
 };

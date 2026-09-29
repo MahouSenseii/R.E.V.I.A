@@ -16,7 +16,8 @@ public:
     ~memoryManager();
 
     bool SaveAutomaticMemory(const memoryDecision& decision, bool& outWasAdded,
-        std::string* outMemoryId = nullptr) const;
+        std::string* outMemoryId = nullptr, std::string* outSupersededId = nullptr) const;
+    bool ForgetMemory(const std::string& memoryId) const;
     std::vector<memoryEntry> LoadMemories() const;
     std::vector<memoryEntry> LoadMissingEmbeddings(
         const std::string& embeddingModel,

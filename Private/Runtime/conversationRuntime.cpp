@@ -634,6 +634,13 @@ std::string ConversationRuntime::BuildTurnPosture(
     {
         postureLine << "\n\n" << cutShort;
     }
+    if (!turnPolicy.publicAudience && incognito.load())
+    {
+        // Stated every turn it applies, so "are you saving this?" is answered from fact.
+        postureLine << "\n\nIncognito is on for this conversation: nothing said in it "
+            "is being saved to your memory or the conversation archive, and it will not "
+            "be there after a restart.";
+    }
     if (!turnPolicy.publicAudience && IsExplicitRuntimeQuestion(policyInput))
     {
         postureLine << "\n\n" << identity::markers::RuntimeStatusGroundTruth
@@ -923,7 +930,7 @@ SessionResult ConversationRuntime::Generate(
     const aiProfile& profile,
     const bool llmAvailable,
     const bool shouldSpeak,
-    const bool evaluateMemory,
+    const bool wantEvaluateMemory,
     const bool proactive,
     const std::string& proactiveInstruction,
     const std::string& precomputedInternetGrounding,
@@ -931,6 +938,8 @@ SessionResult ConversationRuntime::Generate(
     const TurnPolicy& turnPolicy)
 {
     SessionResult result;
+    // Decided once, here, so no path below can offer an incognito turn to memory.
+    const bool evaluateMemory = wantEvaluateMemory && !incognito.load();
     std::uint64_t streamedUtterances = 0;
     const std::uint64_t currentTurn = ++turnCounter;
     const auto turnStarted = std::chrono::steady_clock::now();

@@ -797,7 +797,8 @@ void MemoryAgent::Run(const std::stop_token stopToken)
         if (!task.hasLearnedDecision && event.decision.bSuccess && event.decision.bShouldRemember)
         {
             const auto saveStarted = std::chrono::steady_clock::now();
-            event.saveSucceeded = memory.SaveAutomaticMemory(event.decision, event.wasAdded);
+            event.saveSucceeded = memory.SaveAutomaticMemory(
+                event.decision, event.wasAdded, nullptr, &event.supersededId);
             event.decision.timings.push_back({
                 "memory_db_save",
                 std::chrono::duration<double, std::milli>(

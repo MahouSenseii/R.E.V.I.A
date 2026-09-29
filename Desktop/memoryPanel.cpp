@@ -7,6 +7,7 @@
 #include <QHeaderView>
 #include <QLabel>
 #include <QLineEdit>
+#include <QMessageBox>
 #include <QPushButton>
 #include <QTableWidget>
 #include <QTableWidgetItem>
@@ -85,14 +86,20 @@ MemoryPanel::MemoryPanel(
     controls->addWidget(highImportanceOnly);
     refreshButton = new QPushButton("Refresh", this);
     controls->addWidget(refreshButton);
+    // The one write this window allows, and it needs a selected row and a confirmation.
+    // Forgetting is for good: the row, its vector and its place in the search index go,
+    // and anything it had corrected becomes current again.
+    forgetButton = new QPushButton("Forget selected", this);
+    forgetButton->setEnabled(false);
+    controls->addWidget(forgetButton);
     layout->addLayout(controls);
 
     table = new QTableWidget(this);
-    table->setColumnCount(5);
+    table->setColumnCount(6);
     table->setHorizontalHeaderLabels(
-        {"Summary", "Category", "Importance", "Source", "Remembered"});
+        {"Summary", "Category", "Importance", "Source", "Remembered", "Status"});
     table->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch);
-    for (int column = 1; column < 5; ++column)
+    for (int column = 1; column < 6; ++column)
     {
         table->horizontalHeader()->setSectionResizeMode(column, QHeaderView::ResizeToContents);
     }
@@ -120,6 +127,30 @@ MemoryPanel::MemoryPanel(
         ApplyFilter();
     });
     connect(refreshButton, &QPushButton::clicked, this, [this]() { Refresh(); });
+    connect(table, &QTableWidget::itemSelectionChanged, this, [this]()
+    {
+        forgetButton->setEnabled(table->currentRow() >= 0);
+    });
+    connect(forgetButton, &QPushButton::clicked, this, [this]()
+    {
+        const int row = table->currentRow();
+        if (row < 0 || table->item(row, 0) == nullptr) return;
+        const QString id = table->item(row, 0)->data(Qt::UserRole).toString();
+        const QString summary = table->item(row, 0)->text();
+        if (QMessageBox::question(this, QStringLiteral("Forget this memory?"),
+                QStringLiteral("Revia will forget for good:\n\n") + summary +
+                    QStringLiteral("\n\nIf this note had corrected an earlier one, that "
+                                   "earlier note becomes current again."),
+                QMessageBox::Yes | QMessageBox::No, QMessageBox::No) != QMessageBox::Yes)
+        {
+            return;
+        }
+        if (!session.ForgetMemory(id.toStdString()))
+        {
+            statusLabel->setText(QStringLiteral("That memory could not be forgotten."));
+        }
+        Refresh();
+    });
 
     // Populated immediately rather than waiting for the runtime to finish starting. An
     // empty table with no status line is indistinguishable from a broken panel, and the
@@ -169,12 +200,26 @@ void MemoryPanel::Render(const std::vector<memoryEntry>& entries)
             item->setToolTip(QString::fromStdString(value));
             return item;
         };
-        table->setItem(row, 0, cell(entry.summary));
+        QTableWidgetItem* summary = cell(entry.summary);
+        summary->setData(Qt::UserRole, QString::fromStdString(entry.id));
+        table->setItem(row, 0, summary);
         table->setItem(row, 1, cell(entry.category));
         table->setItem(row, 2, new QTableWidgetItem(ImportanceLabel(entry.importance)));
         table->setItem(row, 3, cell(entry.source));
         table->setItem(row, 4, new QTableWidgetItem(RememberedAt(entry.createdAt)));
+        // A corrected memory is kept and shown as such, never quietly dropped: the
+        // reader can see what she used to believe and what replaced it.
+        auto* status = new QTableWidgetItem(entry.Current()
+            ? QStringLiteral("Current")
+            : QStringLiteral("Corrected ") + RememberedAt(entry.validTo));
+        if (!entry.Current())
+        {
+            status->setToolTip(QStringLiteral("Replaced by memory ") +
+                QString::fromStdString(entry.supersededBy));
+        }
+        table->setItem(row, 5, status);
     }
+    forgetButton->setEnabled(table->currentRow() >= 0);
     if (entries.empty())
     {
         // An empty table and an empty memory look identical, and the difference matters:
