@@ -220,6 +220,14 @@ bool configManager::LoadSettings(appSettings& outSettings) const
             {
                 outSettings.llm.temperature = llmData["temperature"].get<float>();
             }
+            if (llmData.contains("xtcProbability"))
+            {
+                outSettings.llm.xtcProbability = llmData["xtcProbability"].get<float>();
+            }
+            if (llmData.contains("xtcThreshold"))
+            {
+                outSettings.llm.xtcThreshold = llmData["xtcThreshold"].get<float>();
+            }
 
             if (llmData.contains("autoMaxTokens"))
             {
@@ -1299,6 +1307,8 @@ bool configManager::LoadSettings(appSettings& outSettings) const
             !revia::llm::IsChatBackend(outSettings.llm.backend)) ||
         outSettings.llm.modelName.empty() || outSettings.llm.port < 1 ||
         outSettings.llm.port > 65535 || outSettings.llm.temperature < 0.0f ||
+        outSettings.llm.xtcProbability < 0.0f || outSettings.llm.xtcProbability > 1.0f ||
+        outSettings.llm.xtcThreshold < 0.0f || outSettings.llm.xtcThreshold > 0.5f ||
         outSettings.llm.temperature > 2.0f || outSettings.llm.maxTokens < 1 ||
         outSettings.llm.maxTokens > 32768 ||
         outSettings.llm.contextSize < 512 || outSettings.llm.contextSize > 1048576 ||
@@ -1615,6 +1625,50 @@ bool configManager::LoadProfile(const std::string& profileId, aiProfile& outProf
             outProfile.systemPrompt = data["systemPrompt"].get<std::string>();
         }
 
+        // The persona packet. Each part is optional and a wrongly typed part is left
+        // empty rather than refusing the profile, which would take the character with it.
+        if (data.contains("persona") && data["persona"].is_object())
+        {
+            const json& persona = data["persona"];
+            if (persona.contains("version") && persona["version"].is_string())
+            {
+                outProfile.persona.version = persona["version"].get<std::string>();
+            }
+            if (persona.contains("identity") && persona["identity"].is_string())
+            {
+                outProfile.persona.identity = persona["identity"].get<std::string>();
+            }
+            if (persona.contains("style") && persona["style"].is_array())
+            {
+                for (const auto& line : persona["style"])
+                {
+                    if (line.is_string() && !line.get<std::string>().empty())
+                    {
+                        outProfile.persona.style.push_back(line.get<std::string>());
+                    }
+                }
+            }
+            if (persona.contains("exchanges") && persona["exchanges"].is_array())
+            {
+                for (const auto& entry : persona["exchanges"])
+                {
+                    if (!entry.is_object()) continue;
+                    personaExchange exchange;
+                    exchange.user = entry.value("user", std::string());
+                    exchange.revia = entry.value("revia", std::string());
+                    // Half an exchange shows nothing.
+                    if (!exchange.user.empty() && !exchange.revia.empty())
+                    {
+                        outProfile.persona.exchanges.push_back(std::move(exchange));
+                    }
+                }
+            }
+            if (persona.contains("anchor") && persona["anchor"].is_string())
+            {
+                outProfile.persona.anchor = persona["anchor"].get<std::string>();
+            }
+        }
+
         // H3: memoryEnabled was previously ignored, so profiles that disable
         // memory had no effect. Parse it into the profile.
         if (data.contains("memoryEnabled"))
@@ -1826,6 +1880,24 @@ bool configManager::SaveProfile(const aiProfile& profile, std::string& outError)
         : profile.answerObligation == AnswerObligationMode::CharacterFirst
             ? "characterFirst"
             : "balanced";
+    // Written when the profile carries one; a profile without one leaves whatever the
+    // file already holds, so a save from a code path that never loaded the packet
+    // cannot strip it.
+    if (!profile.persona.Empty())
+    {
+        json persona = json::object();
+        persona["version"] = profile.persona.version;
+        persona["identity"] = profile.persona.identity;
+        persona["style"] = profile.persona.style;
+        json exchanges = json::array();
+        for (const personaExchange& exchange : profile.persona.exchanges)
+        {
+            exchanges.push_back({{"user", exchange.user}, {"revia", exchange.revia}});
+        }
+        persona["exchanges"] = std::move(exchanges);
+        persona["anchor"] = profile.persona.anchor;
+        document["persona"] = std::move(persona);
+    }
     if (profile.bHasTemperatureOverride)
     {
         document["temperature"] = profile.temperature;

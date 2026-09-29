@@ -149,6 +149,13 @@ struct llmSettings
     std::string mediaPath = "RuntimeData/Vision";
 
     float temperature = 0.7f;
+    // llama.cpp's XTC sampler for chat turns. With this probability, every token above
+    // the threshold except the least likely of them is dropped, which removes the most
+    // predictable phrasing when the model had several plausible ones. Off at 0, which
+    // is the default: it buys character at some cost to precision, and that trade is
+    // the owner's to make once they have heard the difference.
+    float xtcProbability = 0.0f;
+    float xtcThreshold = 0.1f;
     bool bAutoMaxTokens = true;
     int maxTokens = 4096;
     // Keeps the system message identical between turns by sending the per-turn state
@@ -637,6 +644,36 @@ struct bargeInSettings
     int startupGraceMs = 700;
 };
 
+// One exchange that shows her manner: what someone said, and what she answered.
+struct personaExchange
+{
+    std::string user;
+    std::string revia;
+};
+
+// The versioned persona packet a profile may carry beside its system prompt
+// (Identity/personaPacket.h renders it). Every part is optional; a profile written
+// before it existed has none and renders as its system prompt alone.
+struct personaPacket
+{
+    // Bumped by whoever edits the packet, so a regression run can say which persona
+    // it judged.
+    std::string version;
+    // The identity sheet: openly an AI, what she runs on, what she is not.
+    std::string identity;
+    // Positive directives about how she speaks, one per line.
+    std::vector<std::string> style;
+    // Gold exchanges, including technical answers that lead with substance.
+    std::vector<personaExchange> exchanges;
+    // Two to four lines re-injected after the record of a long conversation.
+    std::string anchor;
+
+    [[nodiscard]] bool Empty() const
+    {
+        return identity.empty() && style.empty() && exchanges.empty() && anchor.empty();
+    }
+};
+
 struct aiProfile
 {
     std::string id = "assistant";
@@ -673,6 +710,10 @@ struct aiProfile
     // a profile written before this field existed loads as Balanced rather than as the
     // most permissive option.
     AnswerObligationMode answerObligation = AnswerObligationMode::Balanced;
+
+    // The stable persona beyond the system prompt. Authored, like the prompt, and
+    // rendered ahead of everything that changes per turn.
+    personaPacket persona;
 };
 
 // Local image generation. Off by default: it is an optional Python runtime and a

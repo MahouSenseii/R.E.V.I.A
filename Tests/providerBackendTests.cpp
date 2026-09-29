@@ -219,7 +219,8 @@ void TestAnOpenAiCompatibleServerIsSpokenToInItsOwnDialect()
     json request = server.LastRequest();
     Check(request.value("model", "") == "fixture-ollama" &&
         !request.contains("cache_prompt") && !request.contains("chat_template_kwargs") &&
-        !request.contains("dry_multiplier") && !request.contains("dry_base"),
+        !request.contains("dry_multiplier") && !request.contains("dry_base") &&
+        !request.contains("xtc_probability"),
         "A chat request carried a llama.cpp extra to a server that rejects it: " +
         request.dump());
     Check(server.LastAuthorization() == "Bearer sk-fixture",
@@ -235,6 +236,33 @@ void TestAnOpenAiCompatibleServerIsSpokenToInItsOwnDialect()
         request.value("stream", true) == false &&
         request["response_format"].value("type", "") == "json_object",
         "The memory classifier sent llama.cpp samplers to another server: " + request.dump());
+
+    // On llama.cpp the samplers travel, and XTC only once the owner turned it on.
+    {
+        ChatServer llama(true, {"fixture-main"}, "Understood.");
+        llmSettings tuned = Settings("LLamaCpp", llama.port, "fixture-main");
+        llmService plain;
+        plain.ApplySettings(tuned, NoEmbeddings(), aiProfile{});
+        Check(plain.GenerateResponse(context).bSuccess, "A llama.cpp chat turn failed.");
+        json sent = llama.LastRequest();
+        Check(sent.contains("dry_multiplier") && sent.contains("cache_prompt") &&
+            !sent.contains("xtc_probability"),
+            "XTC was sent although it is off by default: " + sent.dump());
+        tuned.xtcProbability = 0.3f;
+        tuned.xtcThreshold = 0.15f;
+        llmService withXtc;
+        withXtc.ApplySettings(tuned, NoEmbeddings(), aiProfile{});
+        Check(withXtc.GenerateResponse(context).bSuccess, "A llama.cpp chat turn failed.");
+        sent = llama.LastRequest();
+        Check(sent.value("xtc_probability", 0.0) > 0.29 && sent.value("xtc_probability", 0.0) < 0.31 &&
+            sent.value("xtc_threshold", 0.0) > 0.14,
+            "XTC was not sent once turned on: " + sent.dump());
+        const memoryDecision judged = withXtc.EvaluateMemory("I like cats.", "Noted.",
+            revia::agents::ResponseProvenance::NormalGeneration);
+        (void)judged;
+        Check(!llama.LastRequest().contains("xtc_probability"),
+            "XTC reached the memory classifier, which wants the likeliest token.");
+    }
 
     // The same server, expected to be llama.cpp: no /health, so not llama.cpp.
     llmService strict;

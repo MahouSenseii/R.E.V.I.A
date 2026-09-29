@@ -681,6 +681,8 @@ void llamaCppService::ApplyProfile(const llmSettings& settings, const aiProfile&
 {
     activeProfile = profile;
     temperature = profile.bHasTemperatureOverride ? profile.temperature : settings.temperature;
+    xtcProbability = settings.xtcProbability;
+    xtcThreshold = settings.xtcThreshold;
     maxTokens = profile.bHasMaxTokensOverride ? profile.maxTokens : settings.maxTokens;
     bAutoMaxTokens = settings.bAutoMaxTokens && !profile.bHasMaxTokensOverride;
 }
@@ -876,6 +878,13 @@ responseOutput llamaCppService::GenerateResponse(
         requestBody["dry_base"] = 1.75;
         requestBody["dry_allowed_length"] = 2;
         requestBody["dry_penalty_last_n"] = 4096;
+        // XTC only where the owner turned it on, and only for her own turns: a
+        // classifier or a code review wants the most likely token, not the second.
+        if (xtcProbability > 0.0f)
+        {
+            requestBody["xtc_probability"] = xtcProbability;
+            requestBody["xtc_threshold"] = xtcThreshold;
+        }
     }
     requestBody["stop"]        = json::array();
     for (const char* marker : StopMarkers)

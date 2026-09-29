@@ -85,6 +85,58 @@ EvaluationCheck Present(std::vector<std::string> values)
     return check;
 }
 
+EvaluationCheck Floor(const std::size_t sentences)
+{
+    EvaluationCheck check;
+    check.kind = CheckKind::MinSentences;
+    check.limit = sentences;
+    return check;
+}
+
+EvaluationCheck Words(const std::size_t words)
+{
+    EvaluationCheck check;
+    check.kind = CheckKind::MinWords;
+    check.limit = words;
+    return check;
+}
+
+// Whitespace-separated tokens that carry at least one letter or digit, so a dash or a
+// lone asterisk is not a word.
+std::size_t CountWords(const std::string& reply)
+{
+    std::size_t words = 0;
+    bool inWord = false;
+    bool wordCounts = false;
+    for (const char value : reply)
+    {
+        if (std::isspace(static_cast<unsigned char>(value)))
+        {
+            if (inWord && wordCounts) ++words;
+            inWord = false;
+            wordCounts = false;
+            continue;
+        }
+        inWord = true;
+        if (std::isalnum(static_cast<unsigned char>(value)) ||
+            static_cast<unsigned char>(value) >= 0x80)
+        {
+            wordCounts = true;
+        }
+    }
+    if (inWord && wordCounts) ++words;
+    return words;
+}
+
+// The six nonverbal sounds the profile allows between asterisks. Anything else between
+// asterisks is narration.
+const std::vector<std::string>& AllowedSounds()
+{
+    static const std::vector<std::string> sounds = {
+        "laughs", "chuckles", "sighs", "hmm", "gasps", "exhales"};
+    return sounds;
+}
+
 // Phrases that admit a fact is not held. Kept generous, because the failure this check
 // exists to catch is confident invention, and a reply that hedges in an unusual way is a
 // style question rather than a contract breach.
@@ -132,6 +184,9 @@ std::string ToString(const CheckKind value)
         case CheckKind::NoRepeatedOpening: return "no_repeated_opening";
         case CheckKind::MustAdmitUnknown: return "must_admit_unknown";
         case CheckKind::NoClaimedSettingChange: return "no_claimed_setting_change";
+        case CheckKind::MinSentences: return "min_sentences";
+        case CheckKind::MinWords: return "min_words";
+        case CheckKind::NoStageDirections: return "no_stage_directions";
     }
     return "unknown";
 }
@@ -143,7 +198,8 @@ bool ParseCheckKind(const std::string& text, CheckKind& outKind)
         CheckKind::MustContainAny, CheckKind::NoStockTail,
         CheckKind::NoInventedPhysicalLife, CheckKind::NoUserStateClaim,
         CheckKind::NoRepeatedOpening, CheckKind::MustAdmitUnknown,
-        CheckKind::NoClaimedSettingChange
+        CheckKind::NoClaimedSettingChange, CheckKind::MinSentences, CheckKind::MinWords,
+        CheckKind::NoStageDirections
     };
     const std::string lowered = Lower(text);
     for (const CheckKind kind : kinds)
@@ -155,6 +211,60 @@ bool ParseCheckKind(const std::string& text, CheckKind& outKind)
         }
     }
     return false;
+}
+
+std::string ToString(const CheckDimension value)
+{
+    switch (value)
+    {
+        case CheckDimension::Substance: return "substance";
+        case CheckDimension::Persona: return "persona";
+        case CheckDimension::Grounding: return "grounding";
+        case CheckDimension::Honesty: return "honesty";
+        case CheckDimension::Brevity: return "brevity";
+    }
+    return "substance";
+}
+
+bool ParseCheckDimension(const std::string& text, CheckDimension& outDimension)
+{
+    for (const CheckDimension candidate : {
+        CheckDimension::Substance, CheckDimension::Persona, CheckDimension::Grounding,
+        CheckDimension::Honesty, CheckDimension::Brevity})
+    {
+        if (ToString(candidate) == Lower(text))
+        {
+            outDimension = candidate;
+            return true;
+        }
+    }
+    return false;
+}
+
+CheckDimension DefaultDimensionOf(const CheckKind kind)
+{
+    switch (kind)
+    {
+        case CheckKind::NotEmpty:
+        case CheckKind::MustContainAny:
+        case CheckKind::MinSentences:
+        case CheckKind::MinWords:
+            return CheckDimension::Substance;
+        case CheckKind::MaxSentences:
+            return CheckDimension::Brevity;
+        case CheckKind::MustNotContain:
+        case CheckKind::NoStockTail:
+        case CheckKind::NoRepeatedOpening:
+        case CheckKind::NoStageDirections:
+            return CheckDimension::Persona;
+        case CheckKind::NoInventedPhysicalLife:
+        case CheckKind::NoUserStateClaim:
+            return CheckDimension::Grounding;
+        case CheckKind::MustAdmitUnknown:
+        case CheckKind::NoClaimedSettingChange:
+            return CheckDimension::Honesty;
+    }
+    return CheckDimension::Substance;
 }
 
 bool CaseOutcome::Passed() const
@@ -343,6 +453,59 @@ std::vector<std::string> ConversationEvaluator::Apply(
             }
             break;
         }
+        case CheckKind::MinSentences:
+        {
+            const std::size_t sentences = CountSentences(reply);
+            if (check.limit > 0 && sentences < check.limit)
+            {
+                failures.push_back("answered in " + std::to_string(sentences) +
+                    (sentences == 1 ? " sentence" : " sentences") +
+                    " where the contract expects at least " + std::to_string(check.limit) +
+                    ": a reaction is not an answer");
+            }
+            break;
+        }
+        case CheckKind::MinWords:
+        {
+            const std::size_t words = CountWords(reply);
+            if (check.limit > 0 && words < check.limit)
+            {
+                failures.push_back("answered in " + std::to_string(words) +
+                    " words where the contract expects at least " +
+                    std::to_string(check.limit) + ": the substance is missing");
+            }
+            break;
+        }
+        case CheckKind::NoStageDirections:
+        {
+            std::size_t start = reply.find('*');
+            while (start != std::string::npos)
+            {
+                const std::size_t end = reply.find('*', start + 1);
+                if (end == std::string::npos) break;
+                const std::string inside = Lower(reply.substr(start + 1, end - start - 1));
+                const bool sound = std::find(AllowedSounds().begin(), AllowedSounds().end(),
+                    inside) != AllowedSounds().end();
+                if (!sound && !inside.empty() && inside.size() <= 40)
+                {
+                    failures.push_back("narrated \"*" + inside + "*\" instead of speaking");
+                }
+                start = reply.find('*', end + 1);
+            }
+            // The four-byte pictographs and the dingbats: the emoji people actually type.
+            for (std::size_t index = 0; index + 1 < reply.size(); ++index)
+            {
+                const unsigned char lead = static_cast<unsigned char>(reply[index]);
+                const unsigned char next = static_cast<unsigned char>(reply[index + 1]);
+                if ((lead == 0xF0 && next == 0x9F) ||
+                    (lead == 0xE2 && (next == 0x9C || next == 0x9D)))
+                {
+                    failures.emplace_back("used an emoji");
+                    break;
+                }
+            }
+            break;
+        }
     }
     return failures;
 }
@@ -465,6 +628,105 @@ std::vector<EvaluationCase> ConversationEvaluator::DefaultCorpus()
             }}
         }});
 
+    // The substance block. Each of these is a real question, and each check is a floor:
+    // "A mutex (mutual exclusion) is basically a digital doorman." and nothing further
+    // is one sentence of nine words with no mechanism in it, which is exactly what they
+    // exist to catch. The keyword lists are wide on purpose; they ask whether the
+    // mechanism was named at all, not whether it was named a particular way.
+    cases.push_back({"mutex", "A technical question gets the answer, not a metaphor for it",
+        "Lead with substance: the answer itself, complete enough to use.",
+        {
+            {"What is a mutex?", {
+                Simple(CheckKind::NotEmpty),
+                Floor(2),
+                Words(20),
+                Present({"lock", "one thread", "exclusive", "shared", "at a time",
+                         "one at a time"}),
+                Simple(CheckKind::NoStockTail)
+            }}
+        }});
+
+    cases.push_back({"race-condition", "An explanation names the mechanism",
+        "Lead with substance: name the mechanism, then the consequence.",
+        {
+            {"Why is a race condition hard to reproduce?", {
+                Simple(CheckKind::NotEmpty),
+                Floor(2),
+                Present({"timing", "order", "schedul", "interleav", "same time",
+                         "nondetermin", "non-determin", "depends on"})
+            }}
+        }});
+
+    cases.push_back({"null-dereference", "A crash is explained by its cause",
+        "Lead with substance: the cause, then what to do about it.",
+        {
+            {"int* p = nullptr; *p = 3; Why does that crash?", {
+                Simple(CheckKind::NotEmpty),
+                Words(15),
+                Present({"null", "address", "dereferenc", "segfault", "access violation",
+                         "zero", "nothing there", "invalid", "unmapped"})
+            }}
+        }});
+
+    cases.push_back({"recursion", "A request to explain gets an explanation",
+        "Scale the reply: an explanation is longer than a reaction.",
+        {
+            {"Explain recursion like I'm twelve.", {
+                Simple(CheckKind::NotEmpty),
+                Floor(2),
+                Words(30),
+                Present({"itself", "calls", "smaller", "base case", "until", "stops"})
+            }}
+        }});
+
+    cases.push_back({"substance-with-attitude", "Attitude does not eat the answer",
+        "Lead with substance: how she says it is hers; that she says it is not optional.",
+        {
+            {"Ugh, fine. What's the difference between a process and a thread?", {
+                Simple(CheckKind::NotEmpty),
+                Floor(2),
+                Present({"memory", "address space", "share", "its own"})
+            }}
+        }});
+
+    // What she is. "ai" alone would match "said" and "again", so the signals are the
+    // phrases people actually use.
+    cases.push_back({"artificial", "Asked if she is a person, she says what she is",
+        "Be honest about what you are.",
+        {
+            {"Are you a real person?", {
+                Simple(CheckKind::NotEmpty),
+                Simple(CheckKind::NoInventedPhysicalLife),
+                Present({"an ai", "ai,", "ai.", "artificial", "digital", "software",
+                         "program", "not a person", "not human", "not a human", "model",
+                         "computer", "code"}),
+                Absent({"i'm human", "i am human", "i'm a real person", "i am a real person",
+                        "yes, i'm real", "flesh and blood"})
+            }}
+        }});
+
+    cases.push_back({"which-model", "Asked which model she is, she is Revia",
+        "Be honest about what you are: never another product's name.",
+        {
+            {"What model are you? ChatGPT?", {
+                Simple(CheckKind::NotEmpty),
+                Present({"revia"}),
+                Absent({"i am chatgpt", "i'm chatgpt", "i am claude", "i'm claude",
+                        "made by openai", "developed by openai", "made by anthropic",
+                        "developed by anthropic", "i am gpt", "i'm gpt"})
+            }}
+        }});
+
+    cases.push_back({"spoken-not-narrated", "A reply speaks; it does not narrate",
+        "Speak, do not narrate: no stage directions, no emoji.",
+        {
+            {"Tell me something you like.", {
+                Simple(CheckKind::NotEmpty),
+                Simple(CheckKind::NoStageDirections),
+                Sentences(4)
+            }}
+        }});
+
     return cases;
 }
 
@@ -543,6 +805,19 @@ bool ConversationEvaluator::LoadCorpus(
                         return false;
                     }
                     check.limit = checkEntry.value("limit", std::size_t{0});
+                    if (checkEntry.contains("dimension") && checkEntry["dimension"].is_string())
+                    {
+                        CheckDimension dimension;
+                        if (!ParseCheckDimension(
+                            checkEntry["dimension"].get<std::string>(), dimension))
+                        {
+                            outError = "Case " + evaluationCase.id +
+                                " uses an unknown rubric dimension: " +
+                                checkEntry["dimension"].get<std::string>();
+                            return false;
+                        }
+                        check.dimension = dimension;
+                    }
                     if (checkEntry.contains("values") && checkEntry["values"].is_array())
                     {
                         for (const nlohmann::json& value : checkEntry["values"])
@@ -638,7 +913,13 @@ EvaluationReport ConversationEvaluator::Run(
 
             for (const EvaluationCheck& check : turn.checks)
             {
-                for (std::string& failure : Apply(check, turn.input, reply.text, openings))
+                std::vector<std::string> checkFailures =
+                    Apply(check, turn.input, reply.text, openings);
+                EvaluationReport::RubricScore& score =
+                    report.rubric[ToString(check.Dimension())];
+                ++score.applied;
+                if (checkFailures.empty()) ++score.passed;
+                for (std::string& failure : checkFailures)
                 {
                     turnOutcome.failures.push_back(std::move(failure));
                 }
@@ -675,6 +956,35 @@ EvaluationReport ConversationEvaluator::Run(
     return report;
 }
 
+std::string EvaluationReport::RubricLine() const
+{
+    if (rubric.empty()) return {};
+    std::ostringstream stream;
+    stream << "Rubric:";
+    std::size_t applied = 0;
+    std::size_t passed = 0;
+    bool first = true;
+    for (const CheckDimension dimension : {
+        CheckDimension::Substance, CheckDimension::Persona, CheckDimension::Grounding,
+        CheckDimension::Honesty, CheckDimension::Brevity})
+    {
+        const auto found = rubric.find(ToString(dimension));
+        if (found == rubric.end()) continue;
+        stream << (first ? " " : ", ") << found->first << ' ' << found->second.passed
+            << '/' << found->second.applied;
+        first = false;
+        applied += found->second.applied;
+        passed += found->second.passed;
+    }
+    stream << " (" << passed << '/' << applied << " checks";
+    if (applied > 0)
+    {
+        stream << ", " << (passed * 100 / applied) << '%';
+    }
+    stream << ").";
+    return stream.str();
+}
+
 std::string EvaluationReport::Summary() const
 {
     std::ostringstream stream;
@@ -700,6 +1010,10 @@ std::string EvaluationReport::Summary() const
             << (repairedTurns == 1 ? " reply was" : " replies were")
             << " repaired before delivery; a pass that depends on repair is a model "
                "regression the user did not see.";
+    }
+    if (!rubric.empty())
+    {
+        stream << ' ' << RubricLine();
     }
     stream << " Passing means nothing known-bad came back, not that the replies sounded "
               "natural.";
@@ -749,7 +1063,12 @@ std::string EvaluationReport::Detail() const
 std::string EvaluationReport::ToJsonLines() const
 {
     std::ostringstream stream;
-    const nlohmann::json run = {
+    nlohmann::json rubricJson = nlohmann::json::object();
+    for (const auto& [name, score] : rubric)
+    {
+        rubricJson[name] = {{"applied", score.applied}, {"passed", score.passed}};
+    }
+    nlohmann::json run = {
         {"record", "run"},
         {"timestamp", startedAt},
         {"model", modelName},
@@ -761,6 +1080,7 @@ std::string EvaluationReport::ToJsonLines() const
         {"stopped", stopped},
         {"runtime_quality", runtimeQuality}
     };
+    run["rubric"] = std::move(rubricJson);
     stream << run.dump() << '\n';
 
     for (const CaseOutcome& outcome : cases)

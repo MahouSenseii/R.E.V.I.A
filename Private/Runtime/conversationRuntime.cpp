@@ -1,6 +1,7 @@
 #include "Core/utf8.h"
 #include "Runtime/conversationRuntime.h"
 
+#include "Identity/personaPacket.h"
 #include "Identity/promptMarkers.h"
 
 #include "Agents/conversationStylePolicy.h"
@@ -621,6 +622,14 @@ std::string ConversationRuntime::BuildTurnPosture(
         // conversation, not a fact about who she is or what she has earned.
         postureLine << "\n\n" << agents::ConversationStylePolicy::BuildAnswerObligationGuidance(
             profile.answerObligation);
+    }
+    if (!briefSocial && !context.Observations().empty())
+    {
+        // The record of a long conversation sits in the stable prefix, far from the
+        // reply. This is the short anchor near the end that brings her back to the
+        // present turn as herself, which is what a compacted context drifts from.
+        const std::string anchor = identity::RenderPersonaAnchor(profile);
+        if (!anchor.empty()) postureLine << "\n\n" << anchor;
     }
     // Only the lines eviction cut short travel here, with the rest of the per-turn
     // text; they change whenever something is evicted. The record itself goes into the

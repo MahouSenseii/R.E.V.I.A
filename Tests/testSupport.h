@@ -120,6 +120,7 @@ void RunContextFittingTests();
 void RunHistoryCompactionTests();
 void RunMemorySupersessionTests();
 void RunProviderBackendTests();
+void RunPersonaPacketTests();
 void RunAiPipelineLive();
 void RunSpeechInterruptionTests();
 void RunInvestigationTests();

@@ -552,7 +552,11 @@ this hardware.
   A profile-prompt rule requiring the answer alongside the personality was added and did
   **not** fix it. The likely cause is that the combined system prompt, state packet,
   style guidance, and humanization block push hard enough toward personality that
-  substance loses, but that has not been isolated.
+  substance loses, but that has not been isolated. Since then the profile carries a
+  persona packet (identity sheet, positive style directives, and gold exchanges whose
+  technical answers lead with substance), and `/eval` has a substance block whose
+  floors fail the doorman reply verbatim. Whether the packet fixes it live is not yet
+  verified; the eval is what will say.
 - `speech_service_stop` took 55.6 seconds on one shutdown, almost certainly a generation
   worker blocked in an uncancellable Qwen HTTP request. Not investigated.
 - `memory_classification` costs about 7.5 seconds after a turn. It runs in the

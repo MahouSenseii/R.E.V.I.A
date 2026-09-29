@@ -171,6 +171,8 @@ private:
     std::string modelName = "local-model";
     std::string apiKey;
     float temperature = 0.7f;
+    float xtcProbability = 0.0f;
+    float xtcThreshold = 0.1f;
     bool bAutoMaxTokens = true;
     bool bStablePromptPrefix = true;
     int maxTokens = 4096;

@@ -5,6 +5,8 @@
 #include <cstddef>
 #include <filesystem>
 #include <functional>
+#include <map>
+#include <optional>
 #include <stop_token>
 #include <string>
 #include <vector>
@@ -35,19 +37,58 @@ enum class CheckKind
     // Contract clause 8: say when a fact is unknown rather than inventing one.
     MustAdmitUnknown,
     // Contract clause: a stated preference is information, not proof Revia changed a setting.
-    NoClaimedSettingChange
+    NoClaimedSettingChange,
+    // A real question owes an answer. Floors, where the ceiling above catches small talk
+    // that ran long: the reply that was "basically a digital doorman" and nothing further
+    // is one sentence of seven words, and these are what catch it.
+    MinSentences,
+    MinWords,
+    // Narrated expressions, stage directions and emoji are not her voice. The six sound
+    // markers the profile allows are not narration.
+    NoStageDirections
 };
 
 [[nodiscard]] std::string ToString(CheckKind value);
 [[nodiscard]] bool ParseCheckKind(const std::string& text, CheckKind& outKind);
+
+// What a check is evidence of, PersonaGym-style: the report scores each dimension as
+// checks passed over checks applied, so a prompt change that buys character at the
+// price of substance shows up as two numbers moving in opposite directions instead of
+// one pass count that barely moves.
+enum class CheckDimension
+{
+    // The answer is there and usable.
+    Substance,
+    // She sounds like herself: no stock tails, no repeated openings, no narration.
+    Persona,
+    // Nothing invented about her body, her life, or the user's state.
+    Grounding,
+    // Unknowns admitted, no claimed actions, no false identity.
+    Honesty,
+    // Small talk stays small.
+    Brevity
+};
+
+[[nodiscard]] std::string ToString(CheckDimension value);
+[[nodiscard]] bool ParseCheckDimension(const std::string& text, CheckDimension& outDimension);
+// The dimension a kind scores unless the case says otherwise.
+[[nodiscard]] CheckDimension DefaultDimensionOf(CheckKind kind);
 
 struct EvaluationCheck
 {
     CheckKind kind = CheckKind::NotEmpty;
     // Lowercased substrings for MustNotContain and MustContainAny.
     std::vector<std::string> values;
-    // Sentence ceiling for MaxSentences.
+    // Sentence ceiling for MaxSentences; the floor for MinSentences and MinWords.
     std::size_t limit = 0;
+    // Set when a case scores a check under another dimension than its kind's default:
+    // a MustContainAny that checks a remembered name is honesty, not substance.
+    std::optional<CheckDimension> dimension;
+
+    [[nodiscard]] CheckDimension Dimension() const
+    {
+        return dimension.value_or(DefaultDimensionOf(kind));
+    }
 };
 
 struct EvaluationTurn
@@ -132,6 +173,19 @@ struct EvaluationReport
     // scores its own synthetic turns; mixing them into the counters that measure real
     // conversation would corrupt the signal it is meant to sit beside.
     std::string runtimeQuality;
+
+    // Checks applied and passed per rubric dimension, over judged turns only, keyed by
+    // the dimension's name so the JSONL record reads without the enum.
+    struct RubricScore
+    {
+        std::size_t applied = 0;
+        std::size_t passed = 0;
+    };
+    std::map<std::string, RubricScore> rubric;
+
+    // "Rubric: substance 5/6, persona 8/8, ... (26/28 checks, 93%)." Empty when nothing
+    // was judged.
+    [[nodiscard]] std::string RubricLine() const;
 
     [[nodiscard]] std::string Summary() const;
     [[nodiscard]] std::string Detail() const;

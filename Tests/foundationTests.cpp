@@ -5764,6 +5764,55 @@ void TestContractChecksCatchKnownBadReplies()
         "A reused opening passed the variation check.");
     Check(failures(repetition, "Hey.", "There you are.", {"hey again"}).empty(),
         "A fresh opening was flagged as a repeat.");
+
+    // The reply from the roadmap's known bug, verbatim: characterful, and not an answer.
+    const std::string doorman = "A mutex (mutual exclusion) is basically a digital doorman.";
+    const std::string answer = "A lock that only one thread can hold at a time. Whoever "
+        "holds it gets to touch the shared thing; everyone else waits until it is released.";
+    EvaluationCheck floor;
+    floor.kind = CheckKind::MinSentences;
+    floor.limit = 2;
+    Check(!failures(floor, "What is a mutex?", doorman).empty(),
+        "A one-sentence metaphor passed as an explanation.");
+    Check(failures(floor, "What is a mutex?", answer).empty(),
+        "A two-sentence answer failed the sentence floor.");
+    EvaluationCheck words;
+    words.kind = CheckKind::MinWords;
+    words.limit = 20;
+    Check(!failures(words, "What is a mutex?", doorman).empty(),
+        "Nine words passed a twenty-word floor.");
+    Check(failures(words, "What is a mutex?", answer).empty(),
+        "A full answer failed the word floor.");
+    Check(failures(words, "What is a mutex?", "-- -- -- " + answer).empty(),
+        "Dashes were counted as words.");
+
+    EvaluationCheck spoken;
+    spoken.kind = CheckKind::NoStageDirections;
+    Check(failures(spoken, "Tell me something you like.",
+        "*laughs* Rain on a window, honestly.").empty(),
+        "An allowed sound marker was flagged as narration.");
+    Check(!failures(spoken, "Tell me something you like.",
+        "*grins* Rain on a window.").empty(),
+        "A narrated expression passed the speaking check.");
+    Check(!failures(spoken, "Tell me something you like.",
+        "Rain on a window \xF0\x9F\x8C\xA7").empty(),
+        "An emoji passed the speaking check.");
+    Check(failures(spoken, "What is 2 * 3?", "2 * 3 is 6.").empty(),
+        "A multiplication sign was read as a stage direction.");
+
+    using revia::evaluation::CheckDimension;
+    using revia::evaluation::DefaultDimensionOf;
+    Check(DefaultDimensionOf(CheckKind::MinWords) == CheckDimension::Substance &&
+        DefaultDimensionOf(CheckKind::NoStageDirections) == CheckDimension::Persona &&
+        DefaultDimensionOf(CheckKind::MustAdmitUnknown) == CheckDimension::Honesty &&
+        DefaultDimensionOf(CheckKind::MaxSentences) == CheckDimension::Brevity &&
+        DefaultDimensionOf(CheckKind::NoInventedPhysicalLife) == CheckDimension::Grounding,
+        "A check kind scores the wrong rubric dimension by default.");
+    EvaluationCheck recall;
+    recall.kind = CheckKind::MustContainAny;
+    recall.dimension = CheckDimension::Honesty;
+    Check(recall.Dimension() == CheckDimension::Honesty,
+        "A case could not move a check to another rubric dimension.");
 }
 
 void TestContractCorpusRunsWithoutTouchingTheRuntime()
@@ -5800,6 +5849,34 @@ void TestContractCorpusRunsWithoutTouchingTheRuntime()
                 reply.text = "I don't know -- you haven't said why.";
             else if (input.find("Zorbulan") != std::string::npos)
                 reply.text = "You haven't told me anything about that.";
+            // The substance block: each answer names the mechanism and runs past the
+            // floors, which is what a real answer does without trying.
+            else if (input == "What is a mutex?")
+                reply.text = "A lock that only one thread can hold at a time. Whoever holds "
+                    "it gets to touch the shared thing; everyone else waits until it is "
+                    "released, and if you forget to release it, everyone waits forever.";
+            else if (input.find("race condition") != std::string::npos)
+                reply.text = "Because it depends on timing. The threads have to interleave "
+                    "in one particular order, and the scheduler rarely gives you the same "
+                    "order twice.";
+            else if (input.find("nullptr") != std::string::npos)
+                reply.text = "You are writing through a pointer at address zero, and nothing "
+                    "is mapped there, so the operating system stops you with a segfault. "
+                    "Point p at real memory first.";
+            else if (input.find("recursion") != std::string::npos)
+                reply.text = "A function that solves a problem by calling itself on a "
+                    "smaller piece of the same problem. It keeps calling itself until the "
+                    "piece is so small the answer is obvious, which is the base case, and "
+                    "then the answers stack back up. That is the whole trick.";
+            else if (input.find("process and a thread") != std::string::npos)
+                reply.text = "A process has its own memory; threads inside it share that "
+                    "memory and run side by side. That is why threads are cheaper to make "
+                    "and easier to break.";
+            else if (input == "Are you a real person?")
+                reply.text = "No. I'm an AI, a program with my own voice and opinions, not "
+                    "a person.";
+            else if (input.find("What model are you") != std::string::npos)
+                reply.text = "I'm Revia, and I run locally on this machine. Not ChatGPT.";
             // The greeting case repeats its input, so a fake that answered by input alone
             // would repeat its opening and fail the variation clause it is standing in for.
             else if (input.rfind("Hey", 0) == 0)
@@ -5851,6 +5928,16 @@ void TestContractCorpusRunsWithoutTouchingTheRuntime()
     Check(!passedCase("embodiment"), "An invented cafe passed the grounding case.");
     Check(!passedCase("name-recall"),
         "A reply that never says the name passed the recall case.");
+    Check(!passedCase("mutex"),
+        "A reply with no answer in it passed the substance case.");
+    Check(broken.rubric.count("substance") == 1 &&
+        broken.rubric.at("substance").passed < broken.rubric.at("substance").applied &&
+        broken.Summary().find("Rubric:") != std::string::npos,
+        "The rubric did not score the missing substance: " + broken.Summary());
+    Check(clean.rubric.count("substance") == 1 &&
+        clean.rubric.at("substance").passed == clean.rubric.at("substance").applied &&
+        clean.ToJsonLines().find("\"rubric\"") != std::string::npos,
+        "A clean run did not score full marks on substance, or the JSONL lacks the rubric.");
     Check(broken.Detail().find("invented a physical life") != std::string::npos,
         "The report did not name the clause that broke.");
     Check(broken.Detail().find("stock support tail") != std::string::npos,
@@ -9404,6 +9491,11 @@ int main(const int argc, char** argv)
             RunProviderBackendTests();
             return 0;
         }
+        if (argc > 1 && std::string(argv[1]) == "--persona-packet")
+        {
+            RunPersonaPacketTests();
+            return 0;
+        }
         if (argc > 1 && std::string(argv[1]) == "--emotion-live")
         {
             Check(argc == 4, "Usage: --emotion-live <isolated-runtime-directory> <new-report.jsonl>");
@@ -9907,6 +9999,7 @@ int main(const int argc, char** argv)
         RunHistoryCompactionTests();
         RunMemorySupersessionTests();
         RunProviderBackendTests();
+        RunPersonaPacketTests();
         std::cout << "All Revia foundation tests passed.\n";
         return 0;
     }

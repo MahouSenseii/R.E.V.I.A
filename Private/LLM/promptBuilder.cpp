@@ -2,6 +2,7 @@
 #include "Core/utf8.h"
 #include "Agents/conversationStylePolicy.h"
 #include "Core/speechAttribution.h"
+#include "Identity/personaPacket.h"
 #include "Identity/promptMarkers.h"
 
 #include <chrono>
@@ -53,12 +54,13 @@ const std::string& stableContext) const
         }
     };
 
-    std::string systemContent = profile.systemPrompt;
+    // The persona packet, or the system prompt alone for a profile without one.
+    std::string systemContent = revia::identity::RenderPersonaPacket(profile);
     // The only part of the system message that is byte-identical between turns, and so
     // the only part a prefix cache can ever reuse. Everything recorded after this is
     // recorded in the order it is concatenated, because that order decides how much of
     // the cache survives.
-    record("system_prompt", profile.systemPrompt, true);
+    record("system_prompt", systemContent, true);
     if (!stableContext.empty())
     {
         if (!systemContent.empty()) systemContent += "\n\n";
