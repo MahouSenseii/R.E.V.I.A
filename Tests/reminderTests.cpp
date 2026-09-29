@@ -1,6 +1,8 @@
 #include "reviaSessionTestAccess.h"
+#include "conversationRuntimeTestAccess.h"
 #include "Planning/reminders.h"
 
+#include <algorithm>
 #include <ctime>
 #include <fstream>
 #include <iostream>
@@ -107,6 +109,123 @@ void TestRemindersAreReadWithoutTheModel()
         "Spans are described wrongly.");
 }
 
+void TestRepeatsAndChecksAreRead()
+{
+    const auto now = JuneMorning();
+    const ReminderRequest halfHourly = Parsed("remind me every 30 minutes to stretch", now);
+    Check(halfHourly.repeatEvery == 30min && halfHourly.due - now == 30min &&
+            halfHourly.text == "stretch" && !halfHourly.check &&
+            revia::planning::Label(halfHourly) == "stretch (every 30 min)",
+        "A half-hourly reminder was not read: " + revia::planning::Label(halfHourly));
+    const ReminderRequest trailing = Parsed("remind me to drink water every hour", now);
+    Check(trailing.repeatEvery == 1h && trailing.due - now == 1h && trailing.text == "drink water",
+        "A repeat clause at the end was not read: " + revia::planning::Label(trailing));
+    const ReminderRequest daily = Parsed("remind me every day at 9am to take my pills", now);
+    Check(daily.repeatEvery == 24h && daily.due - now == 23h && daily.text == "take your pills",
+        "A daily reminder at a clock time was not read: " + revia::planning::Label(daily));
+    const ReminderRequest dailyTrailing = Parsed("remind me to take my pills at 9am every day", now);
+    Check(dailyTrailing.repeatEvery == 24h && dailyTrailing.due - now == 23h &&
+            dailyTrailing.text == "take your pills",
+        "A daily reminder with the clock first was not read.");
+    Check(Parsed("/remind every 30m stretch", now).repeatEvery == 30min &&
+            Parsed("/remind every day at 9am take my pills", now).text == "take your pills" &&
+            Parsed("remind me daily to write", now).repeatEvery == 24h,
+        "The command and 'daily' forms were not read.");
+    Check(revia::planning::DescribeRepeat(daily) == "every day" &&
+            revia::planning::DescribeRepeat(trailing) == "every hour" &&
+            revia::planning::DescribeRepeat(halfHourly) == "every 30 min" &&
+            revia::planning::DescribeRepeat(Parsed("remind me weekly to water the plants", now)) == "every week",
+        "Repeats are not described as expected.");
+
+    const ReminderRequest weather = Parsed("check the weather in Boston every hour", now);
+    Check(weather.check && weather.repeatEvery == 1h && weather.due - now == 1h &&
+            weather.text == "the weather in Boston" &&
+            revia::planning::Label(weather) == "check: the weather in Boston (every hour)",
+        "An hourly check was not read: " + revia::planning::Label(weather));
+    const ReminderRequest build = Parsed("check if the build is green in 20 minutes", now);
+    Check(build.check && !build.Repeats() && build.due - now == 20min && build.text == "if the build is green",
+        "A one-off check was not read: " + revia::planning::Label(build));
+    const ReminderRequest order = Parsed("Revia, keep checking the order status every 2 hours", now);
+    Check(order.check && order.repeatEvery == 2h && order.text == "the order status",
+        "'keep checking' was not read: " + revia::planning::Label(order));
+    const ReminderRequest release = Parsed("/check 30m is the release out?", now);
+    Check(release.check && !release.Repeats() && release.due - now == 30min && release.text == "is the release out",
+        "The command form of a check was not read: " + revia::planning::Label(release));
+    const ReminderRequest morning = Parsed("/check every day at 9am is the release out", now);
+    Check(morning.check && morning.repeatEvery == 24h && morning.due - now == 23h,
+        "A daily check at a clock time was not read.");
+    const ReminderRequest late = Parsed("check the scores at 3pm", now);
+    Check(late.check && !late.Repeats() && late.due - now == 5h && late.text == "the scores",
+        "A check at a clock time was not read.");
+
+    ReminderRequest ignored;
+    std::string error;
+    Check(ParseReminderRequest("remind me every 10 seconds to blink", now, ignored, error) ==
+            ReminderParse::Invalid && Contains(error, "once a minute"),
+        "A ten-second repeat was accepted.");
+    Check(ParseReminderRequest("check every minute if it rains", now, ignored, error) ==
+            ReminderParse::Invalid && Contains(error, "every 5 minutes"),
+        "A one-minute check was accepted.");
+    for (const char* ordinary : {"check my email", "check in with me every hour",
+        "can you check whether that's right", "check the oven"})
+    {
+        Check(ParseReminderRequest(ordinary, now, ignored, error) == ReminderParse::NotAReminder,
+            std::string("Read as a check: ") + ordinary);
+    }
+    Check(ParseReminderRequest("/check", now, ignored, error) == ReminderParse::Invalid &&
+            Contains(error, "how often"),
+        "A bare /check did not explain itself.");
+    Check(ParseReminderRequest("/check 10m", now, ignored, error) == ReminderParse::Invalid &&
+            Contains(error, "What should I check"),
+        "A check with no question was accepted.");
+}
+
+void TestRepeatingOnesComeBack()
+{
+    revia::tests::ScopedTestDirectory directory;
+    const auto file = directory.root / "reminders.json";
+    const auto now = JuneMorning();
+    ReminderBook book;
+    std::string error;
+    Check(book.Initialize(file, error), "A new reminder book could not start.");
+    ReminderRequest stretch;
+    stretch.text = "stretch";
+    stretch.due = now + 30min;
+    stretch.repeatEvery = 30min;
+    ReminderRequest weather;
+    weather.text = "the weather";
+    weather.check = true;
+    weather.due = now + 2h;
+    weather.repeatEvery = 1h;
+    const auto stretchId = book.Add(stretch, error)->id;
+    (void)book.Add(weather, error);
+
+    std::vector<revia::planning::Reminder> due = book.TakeDue(now + 31min);
+    Check(due.size() == 1 && due.front().request.text == "stretch" && due.front().request.Repeats(),
+        "The half-hourly reminder was not delivered.");
+    std::vector<revia::planning::Reminder> pending = book.Pending();
+    Check(pending.size() == 2 && pending.front().request.text == "stretch" &&
+            pending.front().request.due == now + 60min && pending.front().id == stretchId,
+        "The delivered repeat did not come back for its next time under the same id.");
+
+    // Missed for hours: back once, for the next time after now, not once per interval.
+    due = book.TakeDue(now + 5h + 10min);
+    Check(due.size() == 2, "Two overdue repeats were not both delivered once.");
+    pending = book.Pending();
+    Check(pending.size() == 2 && pending[0].request.due == now + 5h + 30min &&
+            pending[1].request.due == now + 6h,
+        "Overdue repeats did not come back for the next time past now.");
+
+    ReminderBook reopened;
+    Check(reopened.Initialize(file, error), "The book could not be reopened.");
+    pending = reopened.Pending();
+    Check(pending.size() == 2 && pending[0].request.repeatEvery == 30min && !pending[0].request.check &&
+            pending[1].request.repeatEvery == 1h && pending[1].request.check,
+        "Repeat and check did not survive a restart.");
+    Check(reopened.Cancel(2).has_value() && reopened.Pending().size() == 1,
+        "A repeating reminder could not be cancelled.");
+}
+
 void TestTheBookKeepsThemAcrossRestarts()
 {
     revia::tests::ScopedTestDirectory directory;
@@ -204,13 +323,103 @@ void TestSheSetsAndDeliversThem()
     session.Events().Unsubscribe(id);
 }
 
+void TestSheChecksWhatSheWasAsked()
+{
+    revia::tests::ScopedTestDirectory directory;
+    ReviaSession session;
+    std::mutex mutex;
+    std::vector<RuntimeEvent> said;
+    std::vector<std::string> statuses;
+    std::vector<std::string> lookups;
+    const auto id = session.Events().Subscribe([&](const RuntimeEvent& event)
+    {
+        std::lock_guard lock(mutex);
+        if (event.kind == RuntimeEventKind::AssistantMessage && event.component == "Reminder")
+        {
+            said.push_back(event);
+        }
+        if (event.kind == RuntimeEventKind::ComponentStatus && event.component == "Reminder")
+        {
+            statuses.push_back(event.phase);
+        }
+    });
+    revia::runtime::ConversationRuntime& runtime = Access::Conversation(session);
+    revia::runtime::ConversationRuntimeTestAccess::SetInternetSettings(runtime, []
+    {
+        revia::actions::CapabilitySettings::InternetAccess access;
+        access.enabled = true;
+        access.automaticLookup = true;
+        access.quarantinedReader = false;
+        return access;
+    });
+    revia::runtime::ConversationRuntimeTestAccess::SetInternetLookup(runtime,
+        [&](const std::string& query, const std::string&)
+        {
+            {
+                std::lock_guard lock(mutex);
+                lookups.push_back(query);
+            }
+            revia::actions::ActionOutcome outcome;
+            outcome.result.succeeded = true;
+            outcome.result.content = "Boston weather\nURL: https://example.test/boston\n"
+                "Cloudy, 61 F.\nSource: https://example.test/boston";
+            outcome.result.entries = {"https://example.test/boston"};
+            outcome.result.message = "1 result";
+            return outcome;
+        });
+
+    const auto now = WallClock::now();
+    const auto set = Access::SubmitOperator(session, "check the weather in Boston every hour");
+    Check(set.fromAssistant && Contains(set.text, "every hour") && Contains(set.text, "the weather in Boston"),
+        "She did not confirm the check: " + set.text);
+    Check(Contains(Access::SubmitOperator(session, "/reminders").text, "check: the weather in Boston (every hour)"),
+        "The check is not listed.");
+
+    // Not yet due: nothing runs.
+    Access::MarkStarted(session, true);
+    Access::DeliverReminders(session, now + 30min);
+    Access::WaitForCheck(session);
+    {
+        std::lock_guard lock(mutex);
+        Check(lookups.empty() && said.empty(), "A check ran before it was due.");
+    }
+    Access::DeliverReminders(session, now + 61min);
+    Access::WaitForCheck(session);
+    Access::MarkStarted(session, false);
+    {
+        std::lock_guard lock(mutex);
+        Check(lookups.size() == 1 && Contains(lookups.front(), "Boston"),
+            "The check did not look the question up: " +
+                (lookups.empty() ? std::string("no lookup") : lookups.front()));
+        Check(std::find(statuses.begin(), statuses.end(), "Checking") != statuses.end(),
+            "The check was not announced on the activity feed.");
+        // No model here, so the honest line; with one, the answer. Either way it is a
+        // Reminder message and never a fabricated answer.
+        Check(said.size() == 1 && said.front().phase == "check" &&
+                (Contains(said.front().message, "couldn't check") ||
+                    Contains(said.front().message, "not ready") ||
+                    Contains(said.front().message, "Boston")),
+            "The check's outcome was not delivered as a reminder message: " +
+                (said.empty() ? std::string("nothing") : said.front().message));
+    }
+    const std::string listed = Access::SubmitOperator(session, "/reminders").text;
+    Check(Contains(listed, "check: the weather in Boston (every hour)"),
+        "The hourly check did not come back after running: " + listed);
+    Check(Contains(Access::SubmitOperator(session, "/reminders cancel 1").text, "Cancelled"),
+        "The check could not be cancelled.");
+    session.Events().Unsubscribe(id);
+}
+
 } // namespace
 
 void RunReminderTests()
 {
     TestRemindersAreReadWithoutTheModel();
+    TestRepeatsAndChecksAreRead();
     TestTheBookKeepsThemAcrossRestarts();
+    TestRepeatingOnesComeBack();
     TestSheSetsAndDeliversThem();
-    std::cout << "Reminders and timers are read without the model, survive restarts and "
-        "arrive on time.\n";
+    TestSheChecksWhatSheWasAsked();
+    std::cout << "Reminders, timers, repeats and checks are read without the model, survive "
+        "restarts, arrive on time and come back when they repeat.\n";
 }

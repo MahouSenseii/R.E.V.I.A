@@ -12,6 +12,7 @@
 #include "Core/logger.h"
 #include "Core/messageRouter.h"
 #include "Intelligence/advisor.h"
+#include "Internet/webReader.h"
 #include "Intelligence/humanizationState.h"
 #include "Intelligence/intelligenceRouter.h"
 #include "Intelligence/reflexRouter.h"
@@ -275,6 +276,17 @@ public:
         bool shouldSpeak,
         std::stop_token stopToken = {});
 
+    // A check the user scheduled ("check the weather in Boston every hour"), now due:
+    // the same bounded lookup and quarantined reader a question of theirs gets, then
+    // one or two lines with the answer as a proactive opening, its sources rendered
+    // under it. When the lookup cannot run she says so in one line rather than guess.
+    SessionResult AnswerCheck(
+        const std::string& question,
+        const aiProfile& profile,
+        bool llmAvailable,
+        bool shouldSpeak,
+        std::stop_token stopToken = {});
+
     // Runs one conversation-contract evaluation turn against the active model.
     //
     // It uses the same posture assembly, style guidance, and turn coordinator a real
@@ -394,6 +406,22 @@ private:
         double elapsedMilliseconds,
         int sourceCount,
         std::uint64_t turnId) const;
+    // One bounded lookup, read in quarantine when the settings say so: what a turn
+    // gets as grounding, the trace for the log, and the findings the citations come
+    // from. Shared by a user's question and a scheduled check so the two cannot drift.
+    struct LookupResult
+    {
+        bool succeeded = false;
+        std::string grounding;
+        std::string trace;
+        std::optional<internet::WebFindings> findings;
+        double milliseconds = -1.0;
+    };
+    [[nodiscard]] LookupResult LookUp(
+        const std::string& lookupQuery,
+        const actions::CapabilitySettings::InternetAccess& access,
+        std::uint64_t turnId,
+        std::stop_token stopToken) const;
 
     messageRouter& router;
     conversationContext& context;

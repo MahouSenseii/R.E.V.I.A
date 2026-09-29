@@ -44,6 +44,16 @@ struct ReviaSessionTestAccess
     static std::string FinishedTask(const ReviaSession& session) { return session.DescribeFinishedTask(); }
     static void DeliverReminders(ReviaSession& session, planning::WallClock::time_point now)
     { session.DeliverDueReminders(now); }
+    // A check runs on its own worker; this waits for it. `started` is what a running
+    // session has set and a check requires, so a test sets it around the delivery.
+    static void MarkStarted(ReviaSession& session, const bool started) { session.started.store(started); }
+    static void WaitForCheck(ReviaSession& session)
+    {
+        if (session.checkWorker.joinable()) session.checkWorker.join();
+    }
+    static void PublishThought(ReviaSession& session, const std::string& topic,
+        const std::string& detail)
+    { session.PublishThought(topic, detail, 0); }
     static std::string Reminders(const ReviaSession& session) { return session.DescribeReminders(); }
     static void SetClipboard(ReviaSession& session,
         std::function<std::optional<perception::ClipboardText>()> reader)

@@ -1572,6 +1572,17 @@ void ReviaWindow::HandleRuntimeEvent(const revia::runtime::RuntimeEvent& event)
             QString::fromStdString(event.detail));
         return;
     }
+    if (event.kind == revia::runtime::RuntimeEventKind::Thought)
+    {
+        // A thought bubble: what she considered on her own and kept to herself, with
+        // the reason it stayed hers. Same muted treatment as her other working
+        // entries, because it is not a reply and must not read as one.
+        AppendWorkEntry(
+            EntryKind::Thought, QString::fromStdString(event.message),
+            QString::fromStdString(event.detail), event.turnId, 0);
+        AppendActivity(QStringLiteral("Thought: ") + QString::fromStdString(event.message));
+        return;
+    }
     if (event.kind == revia::runtime::RuntimeEventKind::InvestigationChecking ||
         event.kind == revia::runtime::RuntimeEventKind::InvestigationFindings)
     {
@@ -1971,6 +1982,9 @@ void ReviaWindow::RenderChat()
                     break;
                 case EntryKind::InvestigationFindings:
                     label = QStringLiteral("Findings");
+                    break;
+                case EntryKind::Thought:
+                    label = QStringLiteral("Revia, to herself");
                     break;
                 default:
                     label = QStringLiteral("Revia is thinking");

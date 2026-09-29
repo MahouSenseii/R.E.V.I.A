@@ -413,6 +413,19 @@ responseOutput llmService::ReadWebPages(
     return llamaCpp.ReadWebPages(boundedEnvelope, stopToken);
 }
 
+responseOutput llmService::ScoreInnerThought(
+    const std::string& thoughtEnvelope,
+    const std::stop_token stopToken) const
+{
+    if (!bIsReady || !UsesChatServer())
+    {
+        responseOutput output;
+        output.reason = "Scoring a thought requires a chat model backend.";
+        return output;
+    }
+    return llamaCpp.ScoreInnerThought(thoughtEnvelope, stopToken);
+}
+
 responseOutput llmService::GenerateGoalPlan(const std::string& userRequest) const
 {
     if (!bIsReady)

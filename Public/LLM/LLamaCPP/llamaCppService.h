@@ -88,6 +88,12 @@ public:
     responseOutput ReadWebPages(
         const std::string& boundedEnvelope,
         std::stop_token stopToken = {}) const;
+    // Inner Thoughts (Initiative/innerThoughts.h): three numbers on a thought she is
+    // considering saying. Background priority: a conversation turn preempts it, and
+    // an unscored thought simply stays a thought.
+    responseOutput ScoreInnerThought(
+        const std::string& thoughtEnvelope,
+        std::stop_token stopToken = {}) const;
     responseOutput GenerateGoalPlan(const std::string& userRequest) const;
     // One step of an iterative run, decided from the attempts so far.
     // One bounded subgoal, under its own grammar.

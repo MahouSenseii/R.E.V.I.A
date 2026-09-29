@@ -129,7 +129,9 @@ private:
         Message,
         SelfInquiry,
         InvestigationChecking,
-        InvestigationFindings
+        InvestigationFindings,
+        // A thought she kept to herself, from initiative: shown, never spoken.
+        Thought
     };
 
     struct ChatEntry

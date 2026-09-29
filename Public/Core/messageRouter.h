@@ -84,6 +84,12 @@ public:
     responseOutput ReadWebPages(
         const std::string& boundedEnvelope,
         std::stop_token stopToken = {}) const;
+    // Three numbers on a thought she might say: Fast when it is local and there,
+    // because it is a small judgement and nothing is waiting on it; Main otherwise.
+    // Never a remote tier: the envelope carries the recent conversation.
+    responseOutput ScoreInnerThought(
+        const std::string& thoughtEnvelope,
+        std::stop_token stopToken = {}) const;
     responseOutput PlanGoal(const std::string& request) const;
     // The iterative form: one step at a time, from what has already happened.
     // Ask Main for one bounded subgoal.

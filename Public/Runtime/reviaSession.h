@@ -724,6 +724,15 @@ private:
     // delivered from PollBackgroundEvents.
     bool TryHandleReminderInput(const std::string& input, SessionResult& result);
     void DeliverDueReminders(planning::WallClock::time_point now);
+    // A due check ("check the weather every hour"): the lookup and the answer run on
+    // their own worker, in the conversation lane, so the shell's timer never waits on a
+    // model. One at a time; a second due while one runs comes back in a minute.
+    void StartCheck(const planning::Reminder& due);
+    void StopCheckWorker();
+    // Back in a minute as a one-off; the repeating series, if any, is already booked.
+    void PostponeCheck(const planning::Reminder& check, const std::string& why);
+    // A thought she kept to herself, for the thought bubble and the log.
+    void PublishThought(const std::string& topic, const std::string& detail, std::uint64_t runId);
     // "'stretch' at 3:05 PM (in 12 min); ..." for the state packet. Empty if none.
     [[nodiscard]] std::string DescribeReminders() const;
 
@@ -1017,6 +1026,8 @@ private:
         std::chrono::steady_clock::time_point finishedAt;
     };
     planning::ReminderBook reminders;
+    std::jthread checkWorker;
+    std::atomic<bool> checkRunning = false;
     std::function<std::optional<perception::ClipboardText>()> clipboardReader =
         [] { return perception::ReadClipboardText(6000); };
     // Serialises launching against launching and stopping. The worker never takes it.

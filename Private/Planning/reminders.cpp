@@ -431,8 +431,96 @@ ReminderParse Finish(ReminderRequest& request, const WallClock::time_point now,
         outError = "I can only hold reminders up to 30 days ahead.";
         return ReminderParse::Invalid;
     }
+    if (request.Repeats())
+    {
+        const std::chrono::seconds shortest =
+            request.check ? ShortestCheckRepeat : ShortestRepeat;
+        if (request.repeatEvery < shortest)
+        {
+            outError = request.check
+                ? "I can check something at most every 5 minutes."
+                : "I can repeat a reminder at most once a minute.";
+            return ReminderParse::Invalid;
+        }
+        if (request.repeatEvery > std::chrono::duration_cast<std::chrono::seconds>(LongestReminder))
+        {
+            outError = "I can repeat something at most every 30 days.";
+            return ReminderParse::Invalid;
+        }
+    }
     out = std::move(request);
     return ReminderParse::Parsed;
+}
+
+// "every 30 minutes", "every hour", "every day", "every week", "daily", "hourly".
+std::optional<std::chrono::seconds> ReadRepeat(
+    const std::vector<Word>& words, const std::size_t at, std::size_t& consumed)
+{
+    consumed = 0;
+    if (at >= words.size()) return std::nullopt;
+    const std::string& word = words[at].lower;
+    if (word == "daily") { consumed = 1; return std::chrono::hours(24); }
+    if (word == "hourly") { consumed = 1; return std::chrono::hours(1); }
+    if (word == "weekly") { consumed = 1; return std::chrono::hours(24 * 7); }
+    if (word != "every") return std::nullopt;
+    static const std::map<std::string, std::chrono::seconds> units = {
+        {"minute", std::chrono::minutes(1)}, {"hour", std::chrono::hours(1)},
+        {"day", std::chrono::hours(24)}, {"morning", std::chrono::hours(24)},
+        {"evening", std::chrono::hours(24)}, {"night", std::chrono::hours(24)},
+        {"week", std::chrono::hours(24 * 7)}};
+    if (at + 1 < words.size())
+    {
+        if (const auto unit = units.find(words[at + 1].lower); unit != units.end())
+        {
+            consumed = 2;
+            return unit->second;
+        }
+    }
+    std::size_t durationWords = 0;
+    if (const auto seconds = ReadDuration(words, at + 1, durationWords))
+    {
+        consumed = 1 + durationWords;
+        return std::chrono::seconds(std::llround(*seconds));
+    }
+    return std::nullopt;
+}
+
+// The words with the first repeat clause from `from` taken out, and that clause's
+// interval in `repeat` (zero when there was none).
+std::vector<Word> WithoutRepeat(
+    const std::vector<Word>& words, const std::size_t from, std::chrono::seconds& repeat)
+{
+    repeat = std::chrono::seconds(0);
+    for (std::size_t at = from; at < words.size(); ++at)
+    {
+        std::size_t consumed = 0;
+        if (const auto interval = ReadRepeat(words, at, consumed))
+        {
+            repeat = *interval;
+            std::vector<Word> stripped(words.begin(), words.begin() + static_cast<std::ptrdiff_t>(at));
+            stripped.insert(stripped.end(),
+                words.begin() + static_cast<std::ptrdiff_t>(at + consumed), words.end());
+            // "remind me to stretch, every hour": the comma belonged to the clause.
+            return stripped;
+        }
+    }
+    return words;
+}
+
+// The words as typed, for a question she will look up rather than say back.
+std::string Verbatim(const std::vector<Word>& words, const std::size_t from, const std::size_t to)
+{
+    std::string text;
+    for (std::size_t index = from; index < to && index < words.size(); ++index)
+    {
+        if (!text.empty()) text += " ";
+        text += words[index].original;
+    }
+    while (!text.empty() && std::string(".!?,;:").find(text.back()) != std::string::npos)
+    {
+        text.pop_back();
+    }
+    return utf8::Prefix(text, LongestText);
 }
 
 WallClock::time_point After(const WallClock::time_point now, const double seconds)
@@ -487,28 +575,114 @@ ReminderParse ReadTimer(const std::vector<Word>& words, std::size_t index,
 
 } // namespace
 
-ReminderParse ParseReminderRequest(const std::string& input, const WallClock::time_point now,
-    ReminderRequest& out, std::string& outError)
+namespace
 {
-    std::vector<Word> words = Words(input);
-    // "... please" and "... thanks" are not part of what to be reminded of.
-    while (!words.empty() && (words.back().lower == "please" || words.back().lower == "thanks"))
-    {
-        words.pop_back();
-    }
-    std::size_t index = 0;
-    if (IsAny(words, index, {"hey", "ok", "okay"}) && Is(words, index + 1, "revia")) index += 2;
-    else if (Is(words, index, "revia")) ++index;
-    while (IsAny(words, index, {"please", "can", "could", "would", "will", "you"})) ++index;
-    if (index >= words.size()) return ReminderParse::NotAReminder;
 
-    const bool command = Is(words, index, "/remind");
-    const bool spoken = Is(words, index, "remind") && Is(words, index + 1, "me");
-    if (!command && !spoken)
+// "check the weather in Boston every hour", "check if the build is green in 20 minutes",
+// "/check 30m is the release out", "keep checking the order status every 2 hours".
+ReminderParse ReadCheck(const std::vector<Word>& words, std::size_t at,
+    const WallClock::time_point now, const bool command, ReminderRequest& out,
+    std::string& outError)
+{
+    const char* usage = "Tell me when or how often as well, for example: check the weather "
+        "in Boston every hour, or /check 20m is the build green.";
+    if (Is(words, at, "on")) ++at;
+    // "check in with me every hour" is not a lookup.
+    if (Is(words, at, "in") && at + 1 < words.size() &&
+        !NumberWord(words[at + 1].lower) && !CompactDuration(words[at + 1].lower) &&
+        !IsAny(words, at + 1, {"a", "an", "half"}))
     {
-        return ReadTimer(words, index, now, out, outError);
+        return command ? (outError = usage, ReminderParse::Invalid) : ReminderParse::NotAReminder;
     }
-    const std::size_t start = index + (command ? 1 : 2);
+    std::chrono::seconds repeat{0};
+    const std::vector<Word> body = WithoutRepeat(words, at, repeat);
+    ReminderRequest request;
+    request.check = true;
+    request.repeatEvery = repeat;
+    std::size_t questionFrom = at;
+    std::size_t questionTo = body.size();
+    bool sawTime = false;
+    std::size_t consumed = 0;
+    std::string whenError;
+    // Leading: "in 20 minutes ...", "at 5pm ...", or for the command "20m ...".
+    if (Is(body, at, "in") || (command && !Is(body, at, "at")))
+    {
+        const std::size_t from = at + (Is(body, at, "in") ? 1 : 0);
+        if (const auto seconds = ReadDuration(body, from, consumed))
+        {
+            request.due = After(now, *seconds);
+            questionFrom = from + consumed;
+            sawTime = true;
+        }
+    }
+    if (!sawTime)
+    {
+        if (const auto due = ReadWhen(body, at, now, consumed, whenError))
+        {
+            request.due = *due;
+            questionFrom = at + consumed;
+            sawTime = true;
+        }
+        else if (!whenError.empty())
+        {
+            outError = whenError;
+            return ReminderParse::Invalid;
+        }
+    }
+    // Trailing: "... in 20 minutes", "... at 5pm", "... tomorrow at 9".
+    for (std::size_t position = at + 1; !sawTime && position < body.size(); ++position)
+    {
+        consumed = 0;
+        if (Is(body, position, "in"))
+        {
+            const auto seconds = ReadDuration(body, position + 1, consumed);
+            if (seconds && position + 1 + consumed == body.size())
+            {
+                request.due = After(now, *seconds);
+                questionTo = position;
+                sawTime = true;
+                break;
+            }
+        }
+        const auto due = ReadWhen(body, position, now, consumed, whenError);
+        if (position + consumed == body.size() && (due || !whenError.empty()))
+        {
+            if (!due)
+            {
+                outError = whenError;
+                return ReminderParse::Invalid;
+            }
+            request.due = *due;
+            questionTo = position;
+            sawTime = true;
+            break;
+        }
+        whenError.clear();
+    }
+    if (!sawTime && repeat.count() == 0)
+    {
+        if (!command) return ReminderParse::NotAReminder;
+        outError = usage;
+        return ReminderParse::Invalid;
+    }
+    request.text = Verbatim(body, questionFrom, questionTo);
+    if (request.text.empty())
+    {
+        outError = "What should I check?";
+        return ReminderParse::Invalid;
+    }
+    if (!sawTime) request.due = now + repeat;
+    return Finish(request, now, out, outError);
+}
+
+// Everything after "remind me" or "/remind", with any repeat clause already taken out.
+// `sawTime` reports whether a time was recognised at all, so a repeating reminder
+// with no time of its own can fall back to its interval.
+ReminderParse ReadRemindBody(const std::vector<Word>& words, const std::size_t start,
+    const bool command, const WallClock::time_point now, ReminderRequest& request,
+    std::string& outError, bool& sawTime)
+{
+    sawTime = false;
     const auto remainder = [&](std::size_t from)
     {
         if (IsAny(words, from, {"to", "that", "about"})) ++from;
@@ -516,8 +690,14 @@ ReminderParse ParseReminderRequest(const std::string& input, const WallClock::ti
     };
     const char* usage = "Tell me when as well, for example: remind me in 20 minutes to "
         "stretch, or remind me at 3pm to call Sam.";
+    const auto finish = [&](ReminderRequest& parsed)
+    {
+        ReminderRequest out;
+        const ReminderParse parse = Finish(parsed, now, out, outError);
+        if (parse == ReminderParse::Parsed) request = std::move(out);
+        return parse;
+    };
 
-    ReminderRequest request;
     std::size_t consumed = 0;
     std::string whenError;
     // "in 10 minutes to ...", or for the command "10m ..."
@@ -526,6 +706,7 @@ ReminderParse ParseReminderRequest(const std::string& input, const WallClock::ti
         const std::size_t from = start + (Is(words, start, "in") ? 1 : 0);
         if (const auto seconds = ReadDuration(words, from, consumed))
         {
+            sawTime = true;
             request.due = After(now, *seconds);
             request.text = remainder(from + consumed);
             if (request.text.empty())
@@ -533,12 +714,13 @@ ReminderParse ParseReminderRequest(const std::string& input, const WallClock::ti
                 request.timer = true;
                 request.timerLength = SpokenLength(std::llround(*seconds));
             }
-            return Finish(request, now, out, outError);
+            return finish(request);
         }
     }
     // "at 3pm to ...", "tomorrow at 9 to ..."
     if (const auto due = ReadWhen(words, start, now, consumed, whenError))
     {
+        sawTime = true;
         request.due = *due;
         request.text = remainder(start + consumed);
         if (request.text.empty())
@@ -546,10 +728,11 @@ ReminderParse ParseReminderRequest(const std::string& input, const WallClock::ti
             outError = "What should I remind you about?";
             return ReminderParse::Invalid;
         }
-        return Finish(request, now, out, outError);
+        return finish(request);
     }
     if (!whenError.empty())
     {
+        sawTime = true;
         outError = whenError;
         return ReminderParse::Invalid;
     }
@@ -566,14 +749,16 @@ ReminderParse ParseReminderRequest(const std::string& input, const WallClock::ti
                 const auto seconds = ReadDuration(words, at + 1, consumed);
                 if (seconds && at + 1 + consumed == words.size())
                 {
+                    sawTime = true;
                     request.due = After(now, *seconds);
                     request.text = AddressedToUser(words, start + 1, at);
-                    return Finish(request, now, out, outError);
+                    return finish(request);
                 }
             }
             const auto due = ReadWhen(words, at, now, consumed, whenError);
             if (at + consumed == words.size() && (due || !whenError.empty()))
             {
+                sawTime = true;
                 if (!due)
                 {
                     outError = whenError;
@@ -581,7 +766,7 @@ ReminderParse ParseReminderRequest(const std::string& input, const WallClock::ti
                 }
                 request.due = *due;
                 request.text = AddressedToUser(words, start + 1, at);
-                return Finish(request, now, out, outError);
+                return finish(request);
             }
             whenError.clear();
         }
@@ -595,17 +780,80 @@ ReminderParse ParseReminderRequest(const std::string& input, const WallClock::ti
     }
     if (command)
     {
-        outError = "Usage: /remind <when> <what>, for example /remind 10m stretch or "
-            "/remind at 3pm call Sam.";
+        outError = "Usage: /remind <when> <what>, for example /remind 10m stretch, "
+            "/remind at 3pm call Sam or /remind every day at 9am take my pills.";
         return ReminderParse::Invalid;
     }
     // "remind me in a bit": a reminder, with a time she cannot read.
     if (IsAny(words, start, {"in", "at", "today", "tonight", "tomorrow"}))
     {
+        sawTime = true;
         outError = usage;
         return ReminderParse::Invalid;
     }
     return ReminderParse::NotAReminder;
+}
+
+} // namespace
+
+ReminderParse ParseReminderRequest(const std::string& input, const WallClock::time_point now,
+    ReminderRequest& out, std::string& outError)
+{
+    std::vector<Word> words = Words(input);
+    // "... please" and "... thanks" are not part of what to be reminded of.
+    while (!words.empty() && (words.back().lower == "please" || words.back().lower == "thanks"))
+    {
+        words.pop_back();
+    }
+    std::size_t index = 0;
+    if (IsAny(words, index, {"hey", "ok", "okay"}) && Is(words, index + 1, "revia")) index += 2;
+    else if (Is(words, index, "revia")) ++index;
+    while (IsAny(words, index, {"please", "can", "could", "would", "will", "you"})) ++index;
+    if (index >= words.size()) return ReminderParse::NotAReminder;
+
+    if (Is(words, index, "/check"))
+    {
+        return ReadCheck(words, index + 1, now, true, out, outError);
+    }
+    if (Is(words, index, "check") ||
+        (Is(words, index, "keep") && Is(words, index + 1, "checking")))
+    {
+        return ReadCheck(words, index + (Is(words, index, "keep") ? 2 : 1), now, false,
+            out, outError);
+    }
+
+    const bool command = Is(words, index, "/remind");
+    const bool spoken = Is(words, index, "remind") && Is(words, index + 1, "me");
+    if (!command && !spoken)
+    {
+        return ReadTimer(words, index, now, out, outError);
+    }
+    const std::size_t start = index + (command ? 1 : 2);
+    std::chrono::seconds repeat{0};
+    const std::vector<Word> body = WithoutRepeat(words, start, repeat);
+    ReminderRequest request;
+    request.repeatEvery = repeat;
+    bool sawTime = false;
+    const ReminderParse parse = ReadRemindBody(body, start, command, now, request, outError, sawTime);
+    if (parse == ReminderParse::Parsed || sawTime || repeat.count() == 0)
+    {
+        if (parse == ReminderParse::Parsed) out = std::move(request);
+        return parse;
+    }
+    // "remind me every 30 minutes to stretch": no time of its own, so the first one is
+    // one interval away.
+    outError.clear();
+    std::size_t from = start;
+    if (IsAny(body, from, {"to", "that", "about"})) ++from;
+    request.text = AddressedToUser(body, from, body.size());
+    if (request.text.empty())
+    {
+        outError = "What should I remind you about?";
+        return ReminderParse::Invalid;
+    }
+    request.timer = false;
+    request.due = now + repeat;
+    return Finish(request, now, out, outError);
 }
 
 std::string DescribeWhen(const WallClock::time_point when, const WallClock::time_point now)
@@ -644,6 +892,16 @@ std::string DescribeSpan(const WallClock::duration span)
         (minutes % 60 == 0 ? std::string() : " " + std::to_string(minutes % 60) + " min");
 }
 
+std::string DescribeRepeat(const ReminderRequest& request)
+{
+    if (!request.Repeats()) return {};
+    const long long seconds = request.repeatEvery.count();
+    if (seconds == 3600) return "every hour";
+    if (seconds == 86400) return "every day";
+    if (seconds == 7 * 86400) return "every week";
+    return "every " + DescribeSpan(request.repeatEvery);
+}
+
 std::string Announcement(const ReminderRequest& request)
 {
     if (request.timer)
@@ -657,10 +915,17 @@ std::string Announcement(const ReminderRequest& request)
 
 std::string Label(const ReminderRequest& request)
 {
-    if (!request.timer) return request.text;
-    return "timer for " + (request.text.empty()
-        ? request.timerLength
-        : request.text + " (" + request.timerLength + ")");
+    std::string label;
+    if (request.check) label = "check: " + request.text;
+    else if (!request.timer) label = request.text;
+    else
+    {
+        label = "timer for " + (request.text.empty()
+            ? request.timerLength
+            : request.text + " (" + request.timerLength + ")");
+    }
+    if (request.Repeats()) label += " (" + DescribeRepeat(request) + ")";
+    return label;
 }
 
 bool ReminderBook::Initialize(const std::filesystem::path& file, std::string& outError)
@@ -682,6 +947,9 @@ bool ReminderBook::Initialize(const std::filesystem::path& file, std::string& ou
             reminder.request.text = utf8::Prefix(entry.value("text", ""), LongestText);
             reminder.request.timer = entry.value("timer", false);
             reminder.request.timerLength = utf8::Prefix(entry.value("timer_length", ""), 64);
+            reminder.request.repeatEvery = std::chrono::seconds(
+                std::max<std::int64_t>(0, entry.value<std::int64_t>("repeat_seconds", 0)));
+            reminder.request.check = entry.value("check", false);
             reminder.request.due = WallClock::time_point(std::chrono::duration_cast<WallClock::duration>(
                 std::chrono::milliseconds(entry.value<std::int64_t>("due_ms", 0))));
             if (reminder.id == 0 || (reminder.request.text.empty() && !reminder.request.timer))
@@ -741,6 +1009,20 @@ std::vector<Reminder> ReminderBook::TakeDue(const WallClock::time_point now)
     if (!due.empty())
     {
         reminders.erase(reminders.begin(), firstLater);
+        for (const Reminder& delivered : due)
+        {
+            if (!delivered.request.Repeats()) continue;
+            Reminder next = delivered;
+            // Past now, not merely one interval on: a reminder missed for a day while
+            // she was closed comes back once, not forty-eight times.
+            while (next.request.due <= now) next.request.due += next.request.repeatEvery;
+            const auto position = std::upper_bound(reminders.begin(), reminders.end(), next,
+                [](const Reminder& left, const Reminder& right)
+                {
+                    return left.request.due < right.request.due;
+                });
+            reminders.insert(position, std::move(next));
+        }
         std::string ignored;
         (void)SaveLocked(ignored);
     }
@@ -785,6 +1067,8 @@ bool ReminderBook::SaveLocked(std::string& outError) const
             {"text", reminder.request.text},
             {"timer", reminder.request.timer},
             {"timer_length", reminder.request.timerLength},
+            {"repeat_seconds", reminder.request.repeatEvery.count()},
+            {"check", reminder.request.check},
             {"due_ms", std::chrono::duration_cast<std::chrono::milliseconds>(
                 reminder.request.due.time_since_epoch()).count()}});
     }

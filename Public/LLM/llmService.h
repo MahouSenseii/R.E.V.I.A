@@ -63,6 +63,9 @@ public:
     responseOutput ReadWebPages(
         const std::string& boundedEnvelope,
         std::stop_token stopToken = {}) const;
+    responseOutput ScoreInnerThought(
+        const std::string& thoughtEnvelope,
+        std::stop_token stopToken = {}) const;
     responseOutput GenerateGoalPlan(const std::string& userRequest) const;
     responseOutput GenerateCodeReview(
         const std::string& instructions,

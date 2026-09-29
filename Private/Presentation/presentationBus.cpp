@@ -126,6 +126,10 @@ std::optional<PresentationEvent> TranslateRuntimeEvent(const runtime::RuntimeEve
         // sink cannot subscribe its way around the rule.
         case RuntimeEventKind::SelfInquiry:
             return std::nullopt;
+        // A thought she kept to herself is the same: the shell shows it as a thought
+        // bubble; a renderer or a stream never learns it existed.
+        case RuntimeEventKind::Thought:
+            return std::nullopt;
 
         // A round of investigation is a visible *state* -- she is working -- and never
         // its content. The renderer learns that she is checking something; it does not

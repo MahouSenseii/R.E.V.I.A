@@ -16,6 +16,7 @@
 #include "Memory/longTermMemory.h"
 #include "Memory/sensitiveContent.h"
 #include "Perception/microphoneUse.h"
+#include "Initiative/innerThoughts.h"
 #include "Planning/goalPlanner.h"
 #include "Planning/operateIntent.h"
 #include "Visual/drawingRequestPolicy.h"
@@ -2978,6 +2979,10 @@ void ReviaSession::StartCuriosityLoop()
                     PublishComponent(
                         "Curiosity", "Kept private", decision.rationale,
                         planningMilliseconds, 0, runId);
+                    if (!decision.topic.empty())
+                    {
+                        PublishThought(decision.topic, "She chose not to say it. " + decision.rationale, runId);
+                    }
                     continue;
                 }
                 if (decision.action == agents::CuriosityAction::Speak &&
@@ -3021,6 +3026,13 @@ void ReviaSession::StartCuriosityLoop()
                     activity.subject = decision.topic;
                     activity.reason = decision.rationale;
                     activity.operation = decision.query;
+                    if (decision.action != agents::CuriosityAction::Computer)
+                    {
+                        PublishThought(decision.topic,
+                            "Something to " + std::string(autonomy::ToString(activity.type)) +
+                                " about on her own, not out loud. " + decision.rationale,
+                            runId);
+                    }
                     RunAutonomousActivity(activity, trigger, attemptToken);
                     lastSetAsideReason.clear();
                     continue;
@@ -3179,6 +3191,88 @@ void ReviaSession::StartCuriosityLoop()
                         "and cite only the supplied source URLs.\n\n" + lookup.result.content;
                 }
 
+                // Inner Thoughts: the nomination is content, not permission. Before the
+                // attention policy asks whether this is a moment, the thought itself is
+                // weighed -- what it bears on, what it adds and whether she wants to say
+                // it are the side model's call on the words; whether the room is right
+                // for it is known here without a model. Under the bar it stays a thought:
+                // shown as one, never spoken, and the planner is told to move on.
+                initiative::ThoughtVerdict thoughtVerdict;
+                thoughtVerdict.speak = true;
+                if (decision.action == agents::CuriosityAction::Speak ||
+                    decision.action == agents::CuriosityAction::Research)
+                {
+                    initiative::ThoughtScores modelScores;
+                    modelScores.relevance = decision.confidence;
+                    modelScores.informativeness = decision.confidence;
+                    modelScores.motivation = decision.confidence;
+                    std::string scoredBy = "the planner's confidence";
+                    std::string recent;
+                    const std::size_t firstRecent =
+                        recentConversation.size() > 6 ? recentConversation.size() - 6 : 0;
+                    for (std::size_t index = firstRecent; index < recentConversation.size(); ++index)
+                    {
+                        recent += recentConversation[index].role + ": " +
+                            utf8::Prefix(recentConversation[index].content, 300) + "\n";
+                    }
+                    const responseOutput scored = router.ScoreInnerThought(
+                        initiative::BuildThoughtEnvelope(decision.topic, decision.rationale, recent),
+                        attemptToken);
+                    std::string parseError;
+                    if (scored.bSuccess &&
+                        initiative::ParseThoughtScores(scored.response, modelScores, parseError))
+                    {
+                        scoredBy = scored.selectedTier.empty()
+                            ? std::string("the side model") : "the " + scored.selectedTier + " brain";
+                    }
+                    else
+                    {
+                        appLogger.Log("Thought scoring unavailable (" +
+                            (scored.bSuccess ? parseError : scored.reason) +
+                            "); the planner's confidence stands in.");
+                    }
+                    if (attemptToken.stop_requested() ||
+                        inputGeneration != userInteractionGeneration.load())
+                    {
+                        PublishComponent(
+                            "Curiosity", "Cancelled",
+                            "A newer user action replaced the thought while it was being weighed.",
+                            planningMilliseconds, 0, runId);
+                        continue;
+                    }
+                    initiative::ThoughtContext room;
+                    room.quietSeconds = idle.quietSeconds;
+                    room.userAtComputer = idle.userAtComputer;
+                    room.userInFullScreen = idle.userInFullScreen;
+                    room.microphoneRecording = microphoneIsRecording;
+                    room.inCall = perception::InCall();
+                    room.userIsAway = userIsAway;
+                    room.speakWhenAwayAllowed = settings.initiative.bSpeakWhenUserAway;
+                    room.unansweredOpenings = idle.unansweredOpenings;
+                    room.precision = initiativeController.Precision();
+                    const initiative::ThoughtScores scores = initiative::ScoreThought(modelScores, room);
+                    thoughtVerdict = initiative::JudgeThought(
+                        scores, settings.initiative.innerThoughtThreshold);
+                    const std::string scoreLine =
+                        initiative::DescribeScores(scores) + ", scored by " + scoredBy;
+                    PublishComponent(
+                        "Curiosity", thoughtVerdict.speak ? "Worth saying" : "Kept as a thought",
+                        thoughtVerdict.reason + " (" + scoreLine + "). Topic: " + decision.topic,
+                        planningMilliseconds, 0, runId);
+                    if (!thoughtVerdict.speak)
+                    {
+                        PublishThought(decision.topic,
+                            decision.rationale + "\nKept to herself: " + thoughtVerdict.reason +
+                                " (" + scoreLine + ").",
+                            runId);
+                        if (decision.action == agents::CuriosityAction::Speak)
+                        {
+                            setAsideTopic(decision.topic, "kept as a thought, " + thoughtVerdict.reason);
+                            continue;
+                        }
+                    }
+                }
+
                 // Network research is not an interruption, so it has already happened above
                 // whenever capability and pacing allowed it. Attention policy controls only
                 // whether the resulting thought enters the conversation. When it does not,
@@ -3186,7 +3280,8 @@ void ReviaSession::StartCuriosityLoop()
                 const bool speechPermitted =
                     settings.initiative.bSpontaneousSpeechEnabled &&
                     !microphoneIsRecording &&
-                    (settings.initiative.bSpeakWhenUserAway || !userIsAway);
+                    (settings.initiative.bSpeakWhenUserAway || !userIsAway) &&
+                    thoughtVerdict.speak;
                 initiative::InitiativeController::Consideration consideration;
                 if (speechPermitted)
                 {
@@ -3217,11 +3312,14 @@ void ReviaSession::StartCuriosityLoop()
                         speechPermitted
                             ? "Attention policy: " + initiative::ToString(consideration.verdict) +
                                 ". Topic: " + decision.topic
-                            : "Spontaneous speech is unavailable on the current channel.",
+                            : thoughtVerdict.speak
+                                ? "Spontaneous speech is unavailable on the current channel."
+                                : "Kept as a thought: " + thoughtVerdict.reason,
                         planningMilliseconds, 0, runId);
                     setAsideTopic(decision.topic, speechPermitted
                         ? "not a good moment (" + initiative::ToString(consideration.verdict) + ")"
-                        : "speech was unavailable");
+                        : thoughtVerdict.speak ? "speech was unavailable"
+                                               : "kept as a thought, " + thoughtVerdict.reason);
                     continue;
                 }
                 if (privateResearch)
@@ -3230,7 +3328,10 @@ void ReviaSession::StartCuriosityLoop()
                         "Curiosity", "Reflecting privately",
                         speechPermitted
                             ? "Research completed; attention policy kept it out of the conversation."
-                            : "Research completed while speaking was unavailable.",
+                            : thoughtVerdict.speak
+                                ? "Research completed while speaking was unavailable."
+                                : "Research completed; the finding stays a thought (" +
+                                    thoughtVerdict.reason + ").",
                         planningMilliseconds + std::max(0.0, researchMilliseconds),
                         static_cast<int>(researchSources.size()), runId,
                         "Visible browser");
@@ -5026,6 +5127,7 @@ void ReviaSession::Stop()
     // Before the models stop: a review in flight is waiting on one.
     StopSelfImprovement();
     StopCuriosityLoop();
+    StopCheckWorker();
     StopInitiativeLoop();
     StopVoiceWarmup();
     // Stopped before the children are torn down, so a sample cannot open a handle to a
@@ -8835,16 +8937,34 @@ bool ReviaSession::TryHandleReminderInput(const std::string& input, SessionResul
         SetState(RuntimeState::Idle);
         return true;
     }
-    result.text = request.timer
-        ? "Timer set: " + planning::Label(request) + ". It goes off at " + when(request.due) + "."
-        : "Okay, I'll remind you at " + when(request.due) + ": " + request.text + ".";
+    if (request.timer)
+    {
+        result.text = "Timer set: " + planning::Label(request) + ". It goes off at " +
+            when(request.due) + ".";
+    }
+    else if (request.check)
+    {
+        result.text = request.Repeats()
+            ? "Okay, I'll check " + planning::DescribeRepeat(request) + ", starting at " +
+                when(request.due) + ": " + request.text + "."
+            : "Okay, I'll check at " + when(request.due) + ": " + request.text + ".";
+    }
+    else
+    {
+        result.text = request.Repeats()
+            ? "Okay, I'll remind you " + planning::DescribeRepeat(request) + ", starting at " +
+                when(request.due) + ": " + request.text + "."
+            : "Okay, I'll remind you at " + when(request.due) + ": " + request.text + ".";
+    }
     if (!saveError.empty())
     {
         result.text += " " + saveError;
         appLogger.Warning(saveError);
     }
     result.reasoning = "Set by the reminder parser, not the model; the runtime delivers it.";
-    PublishComponent("Reminder", "Set", "Due at " + when(request.due) + ".");
+    PublishComponent("Reminder", request.check ? "Check set" : "Set",
+        "Due at " + when(request.due) + "." +
+            (request.Repeats() ? " Then " + planning::DescribeRepeat(request) + "." : std::string()));
     SetState(RuntimeState::Idle);
     return true;
 }
@@ -8853,6 +8973,11 @@ void ReviaSession::DeliverDueReminders(const planning::WallClock::time_point now
 {
     for (const planning::Reminder& due : reminders.TakeDue(now))
     {
+        if (due.request.check)
+        {
+            StartCheck(due);
+            continue;
+        }
         std::string text = planning::Announcement(due.request);
         // Missed while she was closed: still said, and said to be late.
         if (now - due.request.due > std::chrono::minutes{2})
@@ -8880,6 +9005,143 @@ void ReviaSession::DeliverDueReminders(const planning::WallClock::time_point now
             if (!submitted.accepted) appLogger.Log("Reminder not spoken: " + submitted.reason);
         }
     }
+}
+
+void ReviaSession::PostponeCheck(const planning::Reminder& check, const std::string& why)
+{
+    planning::ReminderRequest retry = check.request;
+    retry.repeatEvery = std::chrono::seconds(0);
+    retry.due = planning::WallClock::now() + std::chrono::minutes(1);
+    std::string error;
+    (void)reminders.Add(retry, error);
+    PublishComponent("Reminder", "Postponed",
+        "The check '" + check.request.text + "' will run in a minute: " + why);
+}
+
+void ReviaSession::StartCheck(const planning::Reminder& due)
+{
+    if (checkRunning.load())
+    {
+        PostponeCheck(due, "another check is still running.");
+        return;
+    }
+    if (checkWorker.joinable()) checkWorker.join();
+    checkRunning.store(true);
+    const planning::Reminder check = due;
+    checkWorker = std::jthread([this, check](const std::stop_token workerStop)
+    {
+        // One pass: the loop guard is the exception boundary, and a check that threw
+        // is logged once rather than run again.
+        bool attempted = false;
+        RunBackgroundLoop("Check", workerStop, [&]()
+        {
+            if (attempted) return;
+            attempted = true;
+            struct Done
+            {
+                std::atomic<bool>& flag;
+                ~Done() { flag.store(false); }
+            } done{checkRunning};
+            const std::string question = check.request.text;
+            PublishComponent("Reminder", "Checking", question);
+
+            // The conversation lane, taken the way curiosity takes it: never while a
+            // turn is running, and never by waiting on one for long.
+            std::unique_lock operationLock(operationMutex, std::defer_lock);
+            for (int waited = 0; !operationLock.try_lock(); ++waited)
+            {
+                if (workerStop.stop_requested()) return;
+                if (waited >= 6000)
+                {
+                    PostponeCheck(check, "a conversation is in progress.");
+                    return;
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds(5));
+            }
+            if (!started.load() || busy.load())
+            {
+                PostponeCheck(check, "she is busy.");
+                return;
+            }
+            // The worker's own token, so shutdown can cut a lookup or a model call short.
+            const SessionResult answer = GuardTurn([&]() -> SessionResult
+            {
+                busy.store(true);
+                if (!llmAvailable ||
+                    (llamaServerProcess.WasStartedByRevia() && !llamaServerProcess.IsRunning()))
+                {
+                    llmAvailable = EnsureLLMAvailable(workerStop);
+                }
+                SessionResult result = conversationRuntime.AnswerCheck(
+                    question, profile, llmAvailable, ShouldSpeakOnCurrentChannel(), workerStop);
+                if (result.succeeded && !result.text.empty())
+                {
+                    ArchiveTurn("assistant", result.text);
+                }
+                busy.store(false);
+                return result;
+            });
+            operationLock.unlock();
+            if (workerStop.stop_requested()) return;
+
+            const bool answered = answer.succeeded && !answer.text.empty();
+            const std::string text = answered
+                ? answer.text
+                : "I couldn't check \"" + question + "\" just now" +
+                    (answer.reason.empty() ? std::string() : ": " + answer.reason) + ".";
+            PublishComponent("Reminder", answered ? "Checked" : "Check failed",
+                answered ? question : text);
+            if (!answer.spokenAsFragments || !answered)
+            {
+                RuntimeEvent message;
+                message.kind = RuntimeEventKind::AssistantMessage;
+                message.state = state.load();
+                message.component = "Reminder";
+                message.phase = "check";
+                message.message = text + RenderSourcesFooter(answer.sources);
+                message.detail = "Scheduled check: " + planning::Label(check.request);
+                message.turnId = answer.speechPending ? answer.utteranceId : 0;
+                eventBus.Publish(std::move(message));
+            }
+            // The answer itself was spoken by the turn when speech was on; only the
+            // failure line still needs saying, and not during a call.
+            if (!answered && speechService.IsEnabled() && !perception::InCall())
+            {
+                speech::SpeechIntent spoken;
+                spoken.owner = speech::SpeechOwner::Research;
+                spoken.behavior = speech::SpeechBehavior::Queue;
+                spoken.text = text;
+                spoken.affect = emotionRuntime.ToAffectSnapshot();
+                const speech::SpeechSubmission submitted = speechCoordinator.Submit(std::move(spoken));
+                if (!submitted.accepted) appLogger.Log("Check not spoken: " + submitted.reason);
+            }
+        });
+    });
+}
+
+void ReviaSession::StopCheckWorker()
+{
+    if (!checkWorker.joinable()) return;
+    checkWorker.request_stop();
+    actionRuntime.CancelActiveInternet();
+    checkWorker.join();
+}
+
+void ReviaSession::PublishThought(
+    const std::string& topic, const std::string& detail, const std::uint64_t runId)
+{
+    appLogger.Log("Thought kept private: '" + topic + "' (" + detail + ")");
+    if (!settings.initiative.bShowInnerThoughts) return;
+    RuntimeEvent thought;
+    thought.kind = RuntimeEventKind::Thought;
+    thought.state = RuntimeState::Thinking;
+    thought.component = "Curiosity";
+    thought.phase = "Kept private";
+    thought.message = topic;
+    thought.detail = detail;
+    thought.initiator = "Autonomous curiosity";
+    thought.turnId = runId;
+    eventBus.Publish(std::move(thought));
 }
 
 std::string ReviaSession::ClipboardReference(const std::string& input)

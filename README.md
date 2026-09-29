@@ -24,6 +24,8 @@ The design rule: **one Revia**. Reflex, Fast, Main, and Expert share one identit
 | A brain on call: cloud advisor (opt-in) | **Tested** | A redacted brief to Claude or an OpenAI-compatible service, its notes into her prompt as input; covered end to end against a fake advisor, not yet run against a live API |
 | MCP tools with pinned manifests (opt-in) | **Tested** | Tools on MCP servers as typed actions through the same policy, confirmation and audit; a manifest pins each tool's description and risk; covered against a fake server and a fake stdio server through the bridge, not yet run against a real one |
 | Knowing who is at the microphone (opt-in) | **Tested** | Voiceprints kept only at a person's request, matched per utterance through a sherpa-onnx worker; covered against a fake worker and through the session, not yet heard live |
+| Inner Thoughts: weighing a remark before saying it | **Tested** | Every thought the curiosity planner nominates is scored on relevance, informativeness, timing, social fit and motivation before it is voiced; one under the bar shows as a thought bubble, never speech. Scoring and the bubble are covered by tests; not yet watched in a live session |
+| Scheduled checks and repeating reminders | **Tested** | "Check the weather in Boston every hour" runs the same bounded lookup as a question of yours and says what it found; repeats come back until cancelled. Covered through the session against a scripted lookup |
 | Speech recognition (push-to-talk and hands-free) | **Verified live** | whisper.cpp on GPU, ~0.3–1.0 s per utterance |
 | Web lookups in a visible browser | **Verified live** | Shows query and sources; ~11 s per lookup |
 | Quarantined page reading with citations | **Tested** | Fetched pages go to a reader with no tools; only its checked findings reach her prompt, and the reply carries the lookup's own addresses as sources. Covered through a real session against a fake page with an injected instruction |
@@ -70,9 +72,10 @@ The design rule: **one Revia**. Reflex, Fast, Main, and Expert share one identit
 ### Do things
 
 - **Look things up** in a visible, locked-down browser (Edge or Chrome) and show you the exact query and sources. The pages are read by a separate reader with no tools; she answers from its findings, cites them as `[1]`, and the addresses under her reply are the lookup's own.
-- **Bring things up on her own** when she has something specific to say: a reaction to what you're doing, a follow-up on something from earlier, or a question. At most four times an hour, at least 15 minutes apart. She waits for a pause in your typing and stays quiet over a full-screen game, video or presentation (`initiative.suppressWhenFullScreen`), and while another app is using the microphone (a call or meeting).
+- **Bring things up on her own** when she has something specific to say: a reaction to what you're doing, a follow-up on something from earlier, or a question. At most four times an hour, at least 15 minutes apart. She waits for a pause in your typing and stays quiet over a full-screen game, video or presentation (`initiative.suppressWhenFullScreen`), and while another app is using the microphone (a call or meeting). Before any of it is said, the thought is weighed (Inner Thoughts): does it bear on what you were doing, does it add anything, is this the moment, is it welcome after the last one went unanswered, does she actually want to say it. One that falls short stays hers and shows in the chat as a thought bubble ("Revia, to herself"), never spoken; `initiative.innerThoughtThreshold` (0.6) is the bar and `initiative.showInnerThoughts` hides the bubbles.
 - **Work in the background.** `/goal` and "operate" tasks run while she keeps talking; ask how it's going, or say "cancel the task". Only Stop or that request ends one.
-- **Remind you.** "Remind me in 20 minutes to stretch", "remind me at 3pm to call Sam", "set a timer for 5 minutes". Saved across restarts; `/reminders` lists and cancels them.
+- **Remind you.** "Remind me in 20 minutes to stretch", "remind me at 3pm to call Sam", "set a timer for 5 minutes", "remind me every day at 9am to take my pills". Saved across restarts; a repeating one comes back until cancelled; `/reminders` lists and cancels them.
+- **Check things for you.** "Check the weather in Boston every hour", "check if the build is green in 20 minutes", "/check 30m is the release out". When it is due she looks it up the way she would for a question of yours (same bounded lookup, same quarantined reader, sources under the answer) and tells you, in a line or two. If the lookup cannot run, she says so instead of guessing. At most every 5 minutes.
 - **Help with what you copied.** Ask about "the code I just copied" or "what's on my clipboard" and she reads it for that one question. It is not saved, and text that looks like a password or key is withheld.
 - **Draw diagrams, keep a working document, generate images** (images need the optional installer).
 - **Sing** recordings you put in `RuntimeData/Songs/` (karaoke playback of your WAV files, not generated singing). Ask "Revia, sing <name>" or use `/sing`.
@@ -347,7 +350,8 @@ Type these in Chat or the CLI. `/help` lists everything, including direct file a
 | `/initiative`, `accept`, `dismiss` | Review something she proposed on her own |
 | `/goal <task>`, `/goals` | Rehearse and supervise a multi-step goal |
 | `/task`, `/task cancel` | The goal she is running in the background (or say "cancel the task") |
-| `/remind <when> <what>`, `/reminders`, `/reminders cancel <n>` | Reminders and timers (or say "remind me at 3pm to call Sam", "set a timer for 5 minutes") |
+| `/remind <when> <what>`, `/reminders`, `/reminders cancel <n>` | Reminders and timers (or say "remind me at 3pm to call Sam", "set a timer for 5 minutes", "remind me every 30 minutes to stretch") |
+| `/check [every] <when> <question>` | A scheduled lookup, once or repeating (or say "check the weather in Boston every hour"); listed and cancelled with `/reminders` |
 | `/plan <task>` | Plan one typed action |
 | `/draw <description>` | Sanitized SVG diagram |
 | `/imagine <description>` | Local image (when enabled) |

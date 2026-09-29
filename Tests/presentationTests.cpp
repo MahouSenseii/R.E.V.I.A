@@ -124,6 +124,14 @@ void TestHiddenReasoningNeverBecomesPresentation()
     Check(!TranslateRuntimeEvent(inquiry).has_value(),
         "Private reasoning was translated into a presentation event.");
 
+    // A thought she kept to herself is private in the same way.
+    revia::runtime::RuntimeEvent thought;
+    thought.kind = revia::runtime::RuntimeEventKind::Thought;
+    thought.message = "the pattern in his commits";
+    thought.detail = "Kept to herself: not the moment (timing 0.10)";
+    Check(!TranslateRuntimeEvent(thought).has_value(),
+        "A kept thought was translated into a presentation event.");
+
     // Nor may evidence text ride along on an event that does translate.
     revia::runtime::RuntimeEvent thinking;
     thinking.kind = revia::runtime::RuntimeEventKind::StateChanged;

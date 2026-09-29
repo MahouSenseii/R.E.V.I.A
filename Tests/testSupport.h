@@ -131,6 +131,7 @@ void RunWebReaderTests();
 void RunSearchProviderTests();
 void RunMcpTests();
 void RunVoiceprintTests();
+void RunInnerThoughtTests();
 void RunAiPipelineLive();
 void RunSpeechInterruptionTests();
 void RunInvestigationTests();

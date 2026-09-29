@@ -1135,6 +1135,16 @@ bool configManager::LoadSettings(appSettings& outSettings) const
                 outSettings.initiative.bSuppressWhenFullScreen =
                     initiativeData["suppressWhenFullScreen"].get<bool>();
             }
+            if (initiativeData.contains("innerThoughtThreshold"))
+            {
+                outSettings.initiative.innerThoughtThreshold =
+                    initiativeData["innerThoughtThreshold"].get<float>();
+            }
+            if (initiativeData.contains("showInnerThoughts"))
+            {
+                outSettings.initiative.bShowInnerThoughts =
+                    initiativeData["showInnerThoughts"].get<bool>();
+            }
             if (initiativeData.contains("focusSessionMinutes"))
             {
                 outSettings.initiative.focusSessionMinutes =
@@ -1737,6 +1747,8 @@ bool configManager::LoadSettings(appSettings& outSettings) const
         outSettings.initiative.cueMaxAgeMinutes > 60 ||
         outSettings.initiative.minimumPrecision < 0.0f ||
         outSettings.initiative.minimumPrecision > 1.0f ||
+        outSettings.initiative.innerThoughtThreshold < 0.0f ||
+        outSettings.initiative.innerThoughtThreshold > 1.0f ||
         outSettings.bargeIn.energyThreshold < 100 ||
         outSettings.bargeIn.energyThreshold > 30000 ||
         outSettings.bargeIn.consecutiveFramesRequired < 1 ||

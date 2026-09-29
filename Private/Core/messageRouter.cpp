@@ -553,6 +553,45 @@ responseOutput messageRouter::ReadWebPages(
     return output;
 }
 
+responseOutput messageRouter::ScoreInnerThought(
+    const std::string& thoughtEnvelope,
+    const std::stop_token stopToken) const
+{
+    if (thoughtEnvelope.empty())
+    {
+        responseOutput output;
+        output.reason = "There was no thought to score.";
+        return output;
+    }
+    if (fastConfigured && !FastIsSlowerThanMain() &&
+        MayCarryPrivateContext(revia::intelligence::IntelligenceTier::Fast) &&
+        fastLlm.IsBackendAvailable())
+    {
+        residency.BeginInference(revia::intelligence::IntelligenceTier::Fast, "background");
+        responseOutput output = fastLlm.ScoreInnerThought(thoughtEnvelope, stopToken);
+        residency.EndInference(revia::intelligence::IntelligenceTier::Fast);
+        output.requestedTier = "Fast";
+        output.selectedTier = "Fast";
+        output.selectedModel = fastConfiguration.modelName;
+        output.routingReason = "The thought was scored on the Fast brain.";
+        return output;
+    }
+    if (llm.IsBackendAvailable())
+    {
+        residency.BeginInference(revia::intelligence::IntelligenceTier::Main, "background");
+        responseOutput output = llm.ScoreInnerThought(thoughtEnvelope, stopToken);
+        residency.EndInference(revia::intelligence::IntelligenceTier::Main);
+        output.requestedTier = "Fast";
+        output.selectedTier = "Main";
+        output.selectedModel = mainConfiguration.modelName;
+        output.routingReason = "The thought was scored on the Main brain.";
+        return output;
+    }
+    responseOutput output;
+    output.reason = "No local brain was available to score the thought.";
+    return output;
+}
+
 responseOutput messageRouter::PlanGoal(const std::string& request) const
 {
     if (request.empty())

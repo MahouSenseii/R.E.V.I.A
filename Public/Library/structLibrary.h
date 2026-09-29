@@ -713,6 +713,13 @@ struct initiativeSettings
     float minimumPrecision = 0.34f;
     int precisionSampleFloor = 5;
     bool bSuppressWhenFullScreen = true;
+    // Inner Thoughts: a thought the curiosity planner nominates is scored on relevance,
+    // informativeness, timing, social fit and motivation before it is voiced. Below this
+    // combined score it stays a thought -- shown in the shell as one, never spoken.
+    float innerThoughtThreshold = 0.6f;
+    // Show the thoughts she kept to herself as thought bubbles. Off, they only reach
+    // the log; either way they are never spoken.
+    bool bShowInnerThoughts = true;
     // Event-pattern thresholds. Time constrains what counts as meaningful evidence; it
     // never creates an utterance by itself. A foreground transition must complete the
     // pattern and wake the initiative worker.

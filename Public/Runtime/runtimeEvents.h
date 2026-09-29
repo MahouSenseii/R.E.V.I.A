@@ -76,6 +76,10 @@ enum class RuntimeEventKind
     // `detail` the karaoke line when the song marks one. Distinct from AssistantMessage
     // because a performance is a timeline a shell can follow, not a line of dialogue.
     Performance,
+    // A thought she kept to herself: something she considered saying or doing on her
+    // own and did not, with why in `detail`. Never spoken and never addressed to
+    // anyone; shown as a thought bubble so initiative is visible without interrupting.
+    Thought,
     Error
 };
 

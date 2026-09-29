@@ -9,6 +9,7 @@
 #include "Agents/conversationStylePolicy.h"
 #include "Agents/historyCompactor.h"
 #include "Internet/webReader.h"
+#include "Initiative/innerThoughts.h"
 #include "Actions/actionTypes.h"
 #include "Planning/goalPlanner.h"
 #include <httplib.h>
@@ -1370,6 +1371,22 @@ responseOutput llamaCppService::ReadWebPages(
         0.1F,
         "web reading",
         revia::internet::ReaderSchema());
+}
+
+responseOutput llamaCppService::ScoreInnerThought(
+    const std::string& thoughtEnvelope,
+    const std::stop_token stopToken) const
+{
+    return GeneratePlannerResponse(
+        revia::initiative::ThoughtScoringPrompt(),
+        thoughtEnvelope,
+        128,
+        true,
+        stopToken,
+        revia::llm::InferencePriority::Background,
+        0.1F,
+        "thought scoring",
+        revia::initiative::ThoughtScoringSchema());
 }
 
 responseOutput llamaCppService::GenerateGoalPlan(const std::string& userRequest) const

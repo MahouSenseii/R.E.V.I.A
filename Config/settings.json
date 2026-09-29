@@ -264,6 +264,8 @@
     "quietInputSeconds": 4,
     "minimumPrecision": 0.34,
     "suppressWhenFullScreen": true,
+    "innerThoughtThreshold": 0.6,
+    "showInnerThoughts": true,
     "focusSessionMinutes": 12,
     "returnAfterMinutes": 20,
     "contextSwitchWindowSeconds": 300,
