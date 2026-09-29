@@ -229,7 +229,7 @@ The planned camera path is on-demand: capture one frame when asked, analyze it l
 
 ## Active foundation: avatar embodiment
 
-The character design, palette, expression map, bounded Presence stream, and public conversation boundary are established. A real Live2D/VRM model, renderer adapter, OBS routing, and platform connectors still require explicit provider selection, credentials, assets, and live verification. Rendering remains an isolated presentation consumer and must not own models, memory, permissions, or actions. Locomotion, physics, IK, shaders, and desktop walking remain later presentation work.
+The character design, palette, expression map, bounded Presence stream, and public conversation boundary are established. A real Live2D/VRM model, renderer adapter, OBS routing, and platform connectors still require explicit provider selection, credentials, assets, and live verification. Twitch, YouTube and OBS connectors now exist in `Tools/Presence/StreamChat` behind the Presence envelope, with offline tests against fake platforms; none has been run against a live platform yet, and the stream safety filter, chat selector and `/stream kill` sit between chat and her on the runtime side. Rendering remains an isolated presentation consumer and must not own models, memory, permissions, or actions. Locomotion, physics, IK, shaders, and desktop walking remain later presentation work.
 
 ## Verification gates
 

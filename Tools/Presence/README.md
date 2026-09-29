@@ -2,7 +2,8 @@
 
 For real voice-channel audio, use the dedicated [Discord Voice Adapter](DiscordVoice/README.md).
 It connects the same public conversation path to Discord audio and Revia's active
-Qwen voice. The text contract below remains the default.
+Qwen voice. For Twitch and YouTube chat and for OBS scenes and captions, use the
+[stream connectors](StreamChat/README.md). The text contract below is what both speak.
 
 Revia's adapter boundary is deliberately local and conversation-only. A Discord bot,
 stream-chat client, or game mod writes one JSON object to `RuntimeData/Presence/Inbox`.

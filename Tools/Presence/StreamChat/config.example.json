@@ -1,0 +1,23 @@
+{
+  "inbox": "C:/absolute/path/to/Revia/build/debug/RuntimeData/Presence/Inbox",
+  "outbox": "C:/absolute/path/to/Revia/build/debug/RuntimeData/Presence/Outbox",
+  "name": "Revia",
+  "replyMode": "addressed",
+  "replyTimeoutSeconds": 180,
+  "twitch": {
+    "enabled": true,
+    "channel": "your_channel",
+    "login": "your_bot_login"
+  },
+  "youtube": {
+    "enabled": false,
+    "videoId": "REPLACE_WITH_LIVE_VIDEO_ID"
+  },
+  "obs": {
+    "enabled": false,
+    "url": "ws://127.0.0.1:4455",
+    "liveScene": "Live",
+    "brbScene": "BRB",
+    "captionSource": "Revia caption"
+  }
+}

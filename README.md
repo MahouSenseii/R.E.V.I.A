@@ -275,6 +275,8 @@ This is a separate small Node program in `Tools\Presence\DiscordVoice\`. It list
 
 What to expect in Discord: up to four speakers are heard at once; a phrase ends after 0.9 s of silence (20 s max); she does not listen while she is talking, and you cannot interrupt her in Discord yet. Discord users get a public version of her: she keeps her personality and a per-channel conversation, but she does **not** see your private history, private memories, screen, camera, or files, and nobody in Discord can make her run commands or touch your PC. Full details: [Tools/Presence/DiscordVoice/README.md](Tools/Presence/DiscordVoice/README.md).
 
+**Twitch, YouTube and OBS** have their own connector in `Tools\Presence\StreamChat\` (Node 22, no packages): it reads chat from Twitch (IRC; read-only without a token, replying with a `chat:read`/`chat:edit` user token in `TWITCH_OAUTH_TOKEN`) and YouTube (Data API v3 polling with `YOUTUBE_API_KEY`; replies need `YOUTUBE_OAUTH_TOKEN`), hands each line to Revia through the same inbox, sends back the reply she wrote, and keeps OBS (obs-websocket 5, `OBS_WEBSOCKET_PASSWORD`) on the BRB scene while `/stream kill` holds her and on a caption text source showing her latest filtered reply. Subs, gifts, raids, super chats and new members arrive as supporter events she always acknowledges. `npm test` in that folder runs it against fake platforms; it has not yet been run against a live one. Details: [Tools/Presence/StreamChat/README.md](Tools/Presence/StreamChat/README.md).
+
 For **text** chat from Discord, streams, or games, any connector can drop a JSON file into the Presence inbox. See [Tools/Presence/README.md](Tools/Presence/README.md). You can test it without Discord:
 
 ```powershell
