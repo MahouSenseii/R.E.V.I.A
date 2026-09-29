@@ -27,6 +27,7 @@
 #include <cctype>
 #include <chrono>
 #include <cstdlib>
+#include <ctime>
 #include <filesystem>
 #include <fstream>
 #include <limits>
@@ -1377,6 +1378,9 @@ bool ReviaSession::Start()
         chatSelector.Configure(settings.presence);
     }
     conversationRuntime.SetThinkingFillerEnabled(settings.speech.bThinkingFillerEnabled);
+    voiceprints.Configure(settings.speechRecognition.speakerMatchThreshold,
+        settings.speechRecognition.speakerMatchMargin);
+    LoadVoiceprints();
     if (settings.intelligence.advisor.bEnabled)
     {
         // The key is read here, once, and handed to the runtime's client; it is not
@@ -4587,6 +4591,47 @@ void ReviaSession::OnRecognitionEvent(const speech::RecognitionEvent& recognitio
                 ? " transcription_ms=" + std::to_string(static_cast<long long>(
                     recognitionEvent.elapsedMilliseconds))
                 : std::string()));
+    }
+
+    if (recognitionEvent.phase == "Transcript" && !recognitionEvent.speakerEmbedding.empty())
+    {
+        ApplySpeakerEmbedding(recognitionEvent);
+        // Consent is the request itself. A name in the same breath names the print;
+        // otherwise the person she already attributes this microphone to.
+        if (identity::AsksToEnrollVoice(recognitionEvent.transcript))
+        {
+            std::string name = identity::ReadVoiceEnrollmentName(recognitionEvent.transcript);
+            if (name.empty())
+            {
+                const identity::RelationshipState current = CurrentRelationship();
+                if (current.entityId != identity::LocalUserEntityId()) name = current.displayName;
+            }
+            std::string entityId;
+            std::string error;
+            if (name.empty())
+            {
+                PublishComponent("Voice", "Unenrolled",
+                    "Asked to remember a voice without a name: say \"remember my voice, I'm <name>\".");
+            }
+            else if (const std::size_t samples = EnrollVoice(name, entityId, error); samples > 0)
+            {
+                PublishComponent("Voice", "Enrolled", name + "'s voice: sample " +
+                    std::to_string(samples) + " of 5 kept at their request.");
+            }
+            else
+            {
+                PublishComponent("Voice", "Unenrolled", "Could not keep " + name + "'s voice: " + error);
+            }
+        }
+        else if (identity::AsksToForgetVoice(recognitionEvent.transcript))
+        {
+            const identity::RelationshipState current = CurrentRelationship();
+            if (current.entityId != identity::LocalUserEntityId() && voiceprints.Forget(current.entityId))
+            {
+                SaveVoiceprints();
+                PublishComponent("Voice", "Forgotten", current.displayName + "'s voice was forgotten at their request.");
+            }
+        }
     }
 
     if (recognitionEvent.automatic && recognitionEvent.phase == "Transcript" &&
@@ -9455,6 +9500,91 @@ bool ReviaSession::TryHandleActionInput(const std::string& input, SessionResult&
         return true;
     }
 
+    if (input == "/voice" || input.rfind("/voice ", 0) == 0)
+    {
+        const std::string argument = input.size() > 6 ? Trim(input.substr(6)) : std::string();
+        const std::size_t space = argument.find(' ');
+        const std::string verb = argument.substr(0, space);
+        const std::string name = space == std::string::npos ? std::string() : Trim(argument.substr(space + 1));
+        if (verb == "enroll" || verb == "enrol")
+        {
+            std::string entityId;
+            std::string error;
+            if (name.empty())
+            {
+                result.succeeded = false;
+                result.text = "Usage: /voice enroll <name> -- keeps the last voice heard as <name>'s, at their request.";
+                result.reason = "No name given.";
+                SetState(RuntimeState::Blocked, result.reason);
+                return true;
+            }
+            const std::size_t samples = EnrollVoice(name, entityId, error);
+            if (samples == 0)
+            {
+                result.succeeded = false;
+                result.text = "Could not keep " + name + "'s voice: " + error;
+                result.reason = error;
+                SetState(RuntimeState::Blocked, result.reason);
+                return true;
+            }
+            PublishComponent("Voice", "Enrolled", name + "'s voice: sample " + std::to_string(samples) + " of 5.");
+            result.text = "Kept " + name + "'s voice (sample " + std::to_string(samples) +
+                " of 5). Say a few more sentences and enroll again for a steadier match. "
+                "Local turns are attributed to " + name + " now.";
+            SetState(RuntimeState::Idle);
+            return true;
+        }
+        if (verb == "forget")
+        {
+            if (name.empty())
+            {
+                result.succeeded = false;
+                result.text = "Usage: /voice forget <name>";
+                result.reason = "No name given.";
+                SetState(RuntimeState::Blocked, result.reason);
+                return true;
+            }
+            const std::string entityId = identity::RelationshipRegistry::NamedLocalEntityId(name);
+            if (!voiceprints.Forget(entityId))
+            {
+                result.succeeded = false;
+                result.text = "No voice is kept for " + name + ".";
+                result.reason = result.text;
+                SetState(RuntimeState::Blocked, result.reason);
+                return true;
+            }
+            SaveVoiceprints();
+            PublishComponent("Voice", "Forgotten", name + "'s voice was forgotten.");
+            result.text = "Forgot " + name + "'s voice.";
+            SetState(RuntimeState::Idle);
+            return true;
+        }
+        if (!argument.empty() && argument != "status")
+        {
+            result.succeeded = false;
+            result.text = "Usage: /voice [status|enroll <name>|forget <name>]";
+            result.reason = "Unrecognized voice argument.";
+            SetState(RuntimeState::Blocked, result.reason);
+            return true;
+        }
+        std::ostringstream stream;
+        stream << (settings.speechRecognition.bSpeakerIdentificationEnabled
+            ? "Speaker identification is on: each utterance is matched against the voices kept here."
+            : "Speaker identification is off (Tools\\InstallSpeakerId.ps1 turns it on); voices can still be "
+              "kept once an embedding has been heard.")
+            << "\n" << voiceprints.Describe();
+        {
+            std::lock_guard speakerLock(speakerMutex);
+            stream << "\nLast voice heard: " << (lastHeardEmbedding.empty() ? "none this session"
+                : std::to_string(std::chrono::duration_cast<std::chrono::seconds>(
+                    std::chrono::steady_clock::now() - lastHeardAt).count()) + " s ago")
+                << ". Attributing local turns to " << currentSpeakerId << ".";
+        }
+        result.text = stream.str();
+        SetState(RuntimeState::Idle);
+        return true;
+    }
+
     if (input == "/skills" || input.rfind("/skills ", 0) == 0)
     {
         const std::string argument = input.size() > 7 ? Trim(input.substr(7)) : std::string();
@@ -11086,6 +11216,155 @@ std::string ReviaSession::ResourceUsageStatus() const
         return "No live reading has been taken yet.\n\n" + resourcePlan.Summary();
     }
     return snapshot.Detail() + "\n\nPlan: " + resourcePlan.Summary();
+}
+
+} // namespace revia::runtime
+
+namespace revia::runtime
+{
+
+namespace
+{
+std::string TodayIso()
+{
+    const std::time_t now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+    std::tm local{};
+#ifdef _WIN32
+    localtime_s(&local, &now);
+#else
+    localtime_r(&now, &local);
+#endif
+    char date[16] = {};
+    std::strftime(date, sizeof(date), "%Y-%m-%d", &local);
+    return date;
+}
+
+std::string TwoDecimals(const float value)
+{
+    std::ostringstream stream;
+    stream.setf(std::ios::fixed);
+    stream.precision(2);
+    stream << value;
+    return stream.str();
+}
+
+core::SecretStore VoiceprintStore()
+{
+    return core::SecretStore(core::ResolveRuntimeWritePath(std::filesystem::path("RuntimeData/Secrets")));
+}
+} // namespace
+
+void ReviaSession::LoadVoiceprints()
+{
+    const core::SecretStore store = VoiceprintStore();
+    if (!store.Has("voiceprints")) return;
+    std::string error;
+    const std::optional<std::string> text = store.Load("voiceprints", error);
+    if (!text)
+    {
+        appLogger.Warning("The kept voices could not be opened: " + error);
+        return;
+    }
+    if (!voiceprints.Deserialize(*text, error))
+    {
+        appLogger.Warning("The kept voices could not be read: " + error);
+        return;
+    }
+    appLogger.Log("Voiceprints: " + std::to_string(voiceprints.Count()) +
+        (voiceprints.Count() == 1 ? " voice kept" : " voices kept") + " at their owners' request.");
+}
+
+void ReviaSession::SaveVoiceprints()
+{
+    const core::SecretStore store = VoiceprintStore();
+    std::string error;
+    if (voiceprints.Count() == 0)
+    {
+        (void)store.Forget("voiceprints");
+        return;
+    }
+    if (!store.Store("voiceprints", voiceprints.Serialize(), error) && !voiceprintsWarned)
+    {
+        voiceprintsWarned = true;
+        appLogger.Warning("The kept voices stay in memory for this session only: " + error);
+    }
+}
+
+std::size_t ReviaSession::EnrollVoice(const std::string& name, std::string& outEntityId, std::string& outError)
+{
+    std::vector<float> embedding;
+    {
+        std::lock_guard speakerLock(speakerMutex);
+        if (lastHeardEmbedding.empty() ||
+            std::chrono::steady_clock::now() - lastHeardAt > std::chrono::minutes(2))
+        {
+            outError = "no voice was heard in the last two minutes; say something first.";
+            return 0;
+        }
+        embedding = lastHeardEmbedding;
+    }
+    const std::string entityId = relationships.ResolveNamedLocalSpeaker(name);
+    if (entityId == identity::LocalUserEntityId())
+    {
+        outError = "\"" + name + "\" is not a name that can be kept.";
+        return 0;
+    }
+    relationships.SetDisplayName(entityId, name);
+    const std::size_t samples = voiceprints.Enroll(entityId, name, embedding, TodayIso(), outError);
+    if (samples == 0) return 0;
+    {
+        std::lock_guard speakerLock(speakerMutex);
+        currentSpeakerId = entityId;
+    }
+    appLogger.Log("Voiceprint kept for " + name + " (" + entityId + "), sample " + std::to_string(samples) + ".");
+    SaveVoiceprints();
+    outEntityId = entityId;
+    return samples;
+}
+
+void ReviaSession::ApplySpeakerEmbedding(const speech::RecognitionEvent& event)
+{
+    std::string previous;
+    {
+        std::lock_guard speakerLock(speakerMutex);
+        lastHeardEmbedding = event.speakerEmbedding;
+        lastHeardAt = std::chrono::steady_clock::now();
+        previous = currentSpeakerId;
+    }
+    if (voiceprints.Count() == 0) return;
+    const identity::SpeakerMatch match = voiceprints.Match(event.speakerEmbedding);
+    if (match.matched)
+    {
+        if (match.entityId == previous) return;
+        {
+            std::lock_guard speakerLock(speakerMutex);
+            currentSpeakerId = match.entityId;
+        }
+        appLogger.Log("Voice matched " + match.displayName + " (" + match.entityId + ") at " +
+            TwoDecimals(match.score) + ".");
+        PublishComponent("Relationship", "Voice",
+            "Local turns are now attributed to " + match.displayName + " (voice match " +
+                TwoDecimals(match.score) + ").");
+        return;
+    }
+    // Clearly someone else at the microphone, and the person she had in mind is one
+    // whose voice she knows: back to the anonymous local user rather than the wrong name.
+    bool previousEnrolled = false;
+    for (const identity::Voiceprint& print : voiceprints.All())
+    {
+        if (print.entityId == previous) previousEnrolled = true;
+    }
+    if (previousEnrolled && match.score < voiceprints.Threshold() - 0.1F)
+    {
+        {
+            std::lock_guard speakerLock(speakerMutex);
+            currentSpeakerId = identity::LocalUserEntityId();
+        }
+        appLogger.Log("Voice not recognised (" + match.reason + "); attributing local turns to the local user.");
+        PublishComponent("Relationship", "Voice",
+            "A voice she does not know: local turns are attributed to the local user again (" +
+                match.reason + ").");
+    }
 }
 
 } // namespace revia::runtime

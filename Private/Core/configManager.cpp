@@ -708,6 +708,41 @@ bool configManager::LoadSettings(appSettings& outSettings) const
                 outSettings.speechRecognition.continuationWindowMs =
                     recognitionData["continuationWindowMs"].get<int>();
             }
+            if (recognitionData.contains("speakerIdentificationEnabled"))
+            {
+                outSettings.speechRecognition.bSpeakerIdentificationEnabled =
+                    recognitionData["speakerIdentificationEnabled"].get<bool>();
+            }
+            if (recognitionData.contains("speakerServiceScript"))
+            {
+                outSettings.speechRecognition.speakerServiceScript =
+                    recognitionData["speakerServiceScript"].get<std::string>();
+            }
+            if (recognitionData.contains("speakerPythonExecutable"))
+            {
+                outSettings.speechRecognition.speakerPythonExecutable =
+                    recognitionData["speakerPythonExecutable"].get<std::string>();
+            }
+            if (recognitionData.contains("speakerPort"))
+            {
+                outSettings.speechRecognition.speakerPort =
+                    recognitionData["speakerPort"].get<int>();
+            }
+            if (recognitionData.contains("speakerModelPath"))
+            {
+                outSettings.speechRecognition.speakerModelPath =
+                    recognitionData["speakerModelPath"].get<std::string>();
+            }
+            if (recognitionData.contains("speakerMatchThreshold"))
+            {
+                outSettings.speechRecognition.speakerMatchThreshold =
+                    recognitionData["speakerMatchThreshold"].get<float>();
+            }
+            if (recognitionData.contains("speakerMatchMargin"))
+            {
+                outSettings.speechRecognition.speakerMatchMargin =
+                    recognitionData["speakerMatchMargin"].get<float>();
+            }
             if (recognitionData.contains("minimumUtteranceMs"))
             {
                 outSettings.speechRecognition.minimumUtteranceMs =
@@ -1541,10 +1576,22 @@ bool configManager::LoadSettings(appSettings& outSettings) const
                      outSettings.speechRecognition.serverPort == outSettings.llm.port ||
                      outSettings.speechRecognition.serverPort == outSettings.embedding.port ||
                      outSettings.speechRecognition.serverPort == outSettings.speech.qwenPort ||
+                     outSettings.speechRecognition.serverPort == outSettings.speechRecognition.speakerPort ||
                      outSettings.speechRecognition.serverStartupTimeoutSeconds < 1 ||
                      outSettings.speechRecognition.serverStartupTimeoutSeconds > 300 ||
                      outSettings.speechRecognition.requestTimeoutSeconds < 10 ||
                      outSettings.speechRecognition.requestTimeoutSeconds > 1800)) ||
+                outSettings.speechRecognition.speakerPort < 1 ||
+                outSettings.speechRecognition.speakerPort > 65535 ||
+                outSettings.speechRecognition.speakerPort == outSettings.speech.qwenPort ||
+                outSettings.speechRecognition.speakerPort == outSettings.speech.fallbackVoicePort ||
+                outSettings.speechRecognition.speakerMatchThreshold < 0.0F ||
+                outSettings.speechRecognition.speakerMatchThreshold > 1.0F ||
+                outSettings.speechRecognition.speakerMatchMargin < 0.0F ||
+                outSettings.speechRecognition.speakerMatchMargin > 1.0F ||
+                (outSettings.speechRecognition.bSpeakerIdentificationEnabled &&
+                    (outSettings.speechRecognition.speakerServiceScript.empty() ||
+                     outSettings.speechRecognition.speakerModelPath.empty())) ||
                 outSettings.speechRecognition.sampleRate != 16000 ||
                 outSettings.speechRecognition.threads < 1 ||
                 outSettings.speechRecognition.threads > 64 ||

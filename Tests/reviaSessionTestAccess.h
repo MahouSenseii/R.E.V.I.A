@@ -18,6 +18,12 @@ struct ReviaSessionTestAccess
 {
     static speech::SpeechService& Speech(ReviaSession& session) { return session.speechService; }
     static ConversationRuntime& Conversation(ReviaSession& session) { return session.conversationRuntime; }
+    static identity::VoiceprintRegistry& Voiceprints(ReviaSession& session) { return session.voiceprints; }
+    static std::string CurrentSpeaker(ReviaSession& session)
+    {
+        std::lock_guard lock(session.speakerMutex);
+        return session.currentSpeakerId;
+    }
 
     static SessionResult GuardTurn(ReviaSession& session, const std::function<SessionResult()>& turn)
     { return session.GuardTurn(turn); }

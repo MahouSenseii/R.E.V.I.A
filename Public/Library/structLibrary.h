@@ -494,6 +494,21 @@ struct speechRecognitionSettings
     int continuationWindowMs = 900;
     int minimumUtteranceMs = 350;
     int maximumUtteranceSeconds = 24;
+    // Who is speaking, from the voice itself: each utterance also goes to a speaker
+    // embedding worker (Tools/speaker_id_service.py, sherpa-onnx on the CPU), and the
+    // session matches the embedding against the voiceprints people asked her to keep.
+    // Off until Tools/InstallSpeakerId.ps1 has installed the worker and its model. A
+    // match moves conversation attribution the way a stated name does and nothing
+    // more; the numbers never leave the machine.
+    bool bSpeakerIdentificationEnabled = false;
+    std::string speakerServiceScript = "Tools/speaker_id_service.py";
+    std::string speakerPythonExecutable = "ThirdParty/SpeakerId/.venv/Scripts/python.exe";
+    int speakerPort = 8098;
+    std::string speakerModelPath = "Models/wespeaker_en_voxceleb_CAM++.onnx";
+    // Cosine similarity a print must reach to count, and how far ahead of the next
+    // print it must be when more than one is enrolled.
+    float speakerMatchThreshold = 0.62F;
+    float speakerMatchMargin = 0.08F;
     // Hands-free answers only speech that names her or follows up on a conversation
     // with her within followUpSeconds. False answers everything the microphone hears.
     bool bRequireWakeWord = true;

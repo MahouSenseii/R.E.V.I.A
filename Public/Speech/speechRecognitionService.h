@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Library/structLibrary.h"
+#include "Speech/speakerEmbeddingClient.h"
 #include "Speech/whisperServerProcess.h"
 
 #include <atomic>
@@ -40,6 +41,10 @@ struct RecognitionEvent
     std::string transcript;
     double elapsedMilliseconds = -1.0;
     bool automatic = false;
+    // Who was speaking, as a unit embedding of the utterance, when speaker
+    // identification is on and the worker answered. A signal for the session's
+    // voiceprint registry; never text, never stored with the transcript.
+    std::vector<float> speakerEmbedding;
 };
 
 // One Windows recording device, as the operating system reports it.
@@ -168,8 +173,13 @@ public:
     bool IsRecording() const;
 
     static std::filesystem::path ResolveRuntimePath(const std::string& configuredPath);
+    // The speaker worker's client, for a test to point at a fake.
+    [[nodiscard]] SpeakerEmbeddingClient& SpeakerClient() { return speakerClient; }
 
 private:
+    // The utterance's speaker embedding, when the worker is on and answered; empty
+    // otherwise. Called while the WAV still exists.
+    [[nodiscard]] std::vector<float> EmbedSpeaker(const std::filesystem::path& wavePath);
     void Capture(std::stop_token stopToken, std::filesystem::path outputPath);
     // waitForSpeechMs bounds how long to wait for speech to begin; 0 waits as long as
     // hands-free stays on. The bound is what a continuation window is made of.
@@ -199,6 +209,7 @@ private:
     std::jthread handsFreeWorker;
     std::jthread serverWarmupWorker;
     WhisperServerProcess serverProcess;
+    SpeakerEmbeddingClient speakerClient;
     std::atomic<bool> available = false;
     std::atomic<bool> recording = false;
     std::atomic<bool> transcribing = false;

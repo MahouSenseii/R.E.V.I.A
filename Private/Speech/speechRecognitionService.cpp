@@ -246,6 +246,7 @@ bool SpeechRecognitionService::Start(
         configuration = settings;
         eventHandler = std::move(handler);
     }
+    speakerClient.Configure(settings);
     if (!settings.bEnabled)
     {
         Notify({"Disabled", "Speech recognition is off."});
@@ -808,6 +809,7 @@ void SpeechRecognitionService::Shutdown()
     }
     Cancel();
     serverProcess.Stop();
+    speakerClient.Shutdown();
     serverReady.store(false);
     if (handsFreeWorker.joinable())
     {
@@ -1255,6 +1257,8 @@ bool SpeechRecognitionService::HandsFreeTurn(
     {
         return false;
     }
+    // Who said it, from the same file, before the file goes.
+    const std::vector<float> speakerEmbedding = EmbedSpeaker(wavePath);
     std::error_code ignored;
     std::filesystem::remove(wavePath, ignored);
     std::string text = *transcript;
@@ -1299,6 +1303,7 @@ bool SpeechRecognitionService::HandsFreeTurn(
     RecognitionEvent completed{
         "Transcript", "Speech transcription completed.", text, ElapsedMilliseconds(startedAt)};
     completed.automatic = true;
+    completed.speakerEmbedding = speakerEmbedding;
     Notify(std::move(completed));
     return true;
 }
@@ -1440,6 +1445,7 @@ void SpeechRecognitionService::Transcribe(
                 TranscribeWithServer(wavePath, stopToken, serverError);
             transcript.has_value())
         {
+            const std::vector<float> speakerEmbedding = EmbedSpeaker(wavePath);
             std::error_code ignored;
             std::filesystem::remove(wavePath, ignored);
             transcribing.store(false);
@@ -1455,6 +1461,7 @@ void SpeechRecognitionService::Transcribe(
                 "Transcript", "Speech transcription completed.", *transcript,
                 ElapsedMilliseconds(startedAt)};
             completed.automatic = automatic;
+            completed.speakerEmbedding = speakerEmbedding;
             Notify(std::move(completed));
             return;
         }
@@ -1564,6 +1571,35 @@ void SpeechRecognitionService::Notify(RecognitionEvent event) const
     {
         handler(event);
     }
+}
+
+} // namespace revia::speech
+
+namespace revia::speech
+{
+
+std::vector<float> SpeechRecognitionService::EmbedSpeaker(const std::filesystem::path& wavePath)
+{
+    if (!speakerClient.Enabled()) return {};
+    static std::atomic<bool> warned = false;
+    const auto started = std::chrono::steady_clock::now();
+    std::string error;
+    if (std::optional<std::vector<float>> embedding = speakerClient.Embed(wavePath, error))
+    {
+        warned.store(false);
+        return std::move(*embedding);
+    }
+    // Once, not on every utterance: a worker that is down is one fact, and the
+    // transcript itself is unaffected.
+    if (!warned.exchange(true))
+    {
+        RecognitionEvent unavailable{"SpeakerUnavailable",
+            "No speaker embedding for this utterance (" + error + "); who is speaking is not known.",
+            ElapsedMilliseconds(started)};
+        unavailable.automatic = true;
+        Notify(std::move(unavailable));
+    }
+    return {};
 }
 
 } // namespace revia::speech

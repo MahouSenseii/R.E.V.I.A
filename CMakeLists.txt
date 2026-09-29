@@ -400,6 +400,11 @@ if(BUILD_TESTING)
                         "${CMAKE_CURRENT_SOURCE_DIR}/Tests/kokoroTtsService.test.py"
         )
         add_test(
+                NAME Revia.SpeakerIdService
+                COMMAND "${Python3_EXECUTABLE}"
+                        "${CMAKE_CURRENT_SOURCE_DIR}/Tests/speakerIdService.test.py"
+        )
+        add_test(
                 NAME Revia.ImageServicePolicy
                 COMMAND "${Python3_EXECUTABLE}"
                         "${CMAKE_CURRENT_SOURCE_DIR}/Tests/reviaImageService.test.py"

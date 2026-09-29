@@ -28,6 +28,7 @@
 #include "Identity/developmentEngine.h"
 #include "Identity/preferenceEvidence.h"
 #include "Identity/relationshipRegistry.h"
+#include "Identity/voiceprintRegistry.h"
 #include "LLM/LLamaCPP/llamaCppServerProcess.h"
 #include "Initiative/initiativeController.h"
 #include "Initiative/conversationStarter.h"
@@ -911,6 +912,19 @@ private:
     mutable std::mutex speakerMutex;
     // Local session attribution only. Adapter authors never replace this selection.
     std::string currentSpeakerId = identity::LocalUserEntityId();
+    // The voices people asked her to keep (Identity/voiceprintRegistry.h), in the
+    // DPAPI secret store between sessions, and the last voice heard, so "remember my
+    // voice" and /voice enroll have something to enroll. Guarded by speakerMutex.
+    identity::VoiceprintRegistry voiceprints;
+    std::vector<float> lastHeardEmbedding;
+    std::chrono::steady_clock::time_point lastHeardAt{};
+    bool voiceprintsWarned = false;
+    void LoadVoiceprints();
+    void SaveVoiceprints();
+    // Enrols the last voice heard under `name`; the sample count, or 0 with the reason.
+    std::size_t EnrollVoice(const std::string& name, std::string& outEntityId, std::string& outError);
+    // Matches an utterance's embedding and moves local attribution accordingly.
+    void ApplySpeakerEmbedding(const speech::RecognitionEvent& event);
     learning::SelfAssessmentEngine selfAssessment;
     // Declared after the router, bus, logger, and assessment its callbacks use, so it is
     // destroyed -- and its thread joined -- before any of them.

@@ -130,6 +130,7 @@ void RunAdvisorTests();
 void RunWebReaderTests();
 void RunSearchProviderTests();
 void RunMcpTests();
+void RunVoiceprintTests();
 void RunAiPipelineLive();
 void RunSpeechInterruptionTests();
 void RunInvestigationTests();

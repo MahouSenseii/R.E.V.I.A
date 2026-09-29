@@ -23,6 +23,7 @@ The design rule: **one Revia**. Reflex, Fast, Main, and Expert share one identit
 | Kokoro fallback voice (opt-in) | **Tested** | Speaks a phrase Qwen could not, before SAPI; the worker contract and the hand-off are covered by tests, not yet heard in a live session |
 | A brain on call: cloud advisor (opt-in) | **Tested** | A redacted brief to Claude or an OpenAI-compatible service, its notes into her prompt as input; covered end to end against a fake advisor, not yet run against a live API |
 | MCP tools with pinned manifests (opt-in) | **Tested** | Tools on MCP servers as typed actions through the same policy, confirmation and audit; a manifest pins each tool's description and risk; covered against a fake server and a fake stdio server through the bridge, not yet run against a real one |
+| Knowing who is at the microphone (opt-in) | **Tested** | Voiceprints kept only at a person's request, matched per utterance through a sherpa-onnx worker; covered against a fake worker and through the session, not yet heard live |
 | Speech recognition (push-to-talk and hands-free) | **Verified live** | whisper.cpp on GPU, ~0.3–1.0 s per utterance |
 | Web lookups in a visible browser | **Verified live** | Shows query and sources; ~11 s per lookup |
 | Quarantined page reading with citations | **Tested** | Fetched pages go to a reader with no tools; only its checked findings reach her prompt, and the reply carries the lookup's own addresses as sources. Covered through a real session against a fake page with an injected instruction |
@@ -332,6 +333,7 @@ Type these in Chat or the CLI. `/help` lists everything, including direct file a
 | `/status`, `/backend`, `/resources`, `/models` | Models, services, placement, hardware state |
 | `/advisor`, `/advisor on\|off\|auto\|ask\|never`, `/consult <question>` | The cloud advisor: what it is and what it has cost this session, the session switch, when it is consulted, one question taken to it now |
 | `/skills`, `/skills connect\|pin\|on\|off <server>` | MCP servers and their tools: what is offered and why the rest is not; connect one; pin its tools as they are now; enable or disable it |
+| `/voice`, `/voice enroll <name>`, `/voice forget <name>` | The voices she keeps: who is enrolled and who she is attributing turns to; keep the last voice heard as someone's; drop it (or say "Revia, remember my voice, I'm Sam" / "forget my voice") |
 | `/perception`, `/perception pause`, `resume`, `forget` | Screen awareness state and control |
 | `/history <words>`, `/history forget` | Search or clear conversation history |
 | `/stream status`, `/stream kill <reason>`, `/stream resume` | The live-audience kill switch: stops speech, drops queued public messages, holds every public reply and sets the avatar phase to `brb` until resumed |
@@ -439,6 +441,12 @@ The local brains write every word she says. For the turns a 4B model handles bad
 When she consults is a rule, never the small model's opinion of its own difficulty (Anthropic's own measurements say a weak executor stops noticing it is stuck). `escalation: "ask"` (the default) consults only when you say so: "ask Claude why this deadlocks", "check with the advisor", or `/consult <question>`. `"auto"` also consults on a code listing, a request for a plan, a design or a comparison, a question about something newer than the local model (a recent year, "the latest version"), a long pasted document, or a follow-up to an answer that went wrong; short and ordinary turns stay local. A public audience (Discord, a stream) never consults. `share: "question"` sends the question and the date; `"conversation"` adds the last few turns, each cut to 600 characters and withheld outright when it carries a credential (the same detector that keeps secrets out of her memory), and `C:\Users\<name>\` loses the account name. A question that itself carries a key is refused before anything is sent. `sessionBudgetTurns` caps consults per session, `/advisor status` shows the count, characters and tokens so far, and `/advisor off` stops it for the session.
 
 Cost, at Opus 5.5 prices: a typical consult is under two cents; a session that hits the default budget of 100 is a dollar or three.
+
+### Knowing who is at the microphone (opt-in)
+
+By default a second person at her microphone is indistinguishable from you: she attributes local turns to whoever last introduced themselves ("I'm Sam"). `.\Tools\InstallSpeakerId.ps1` installs a speaker-embedding worker (sherpa-onnx with the WeSpeaker CAM++ model, Apache-2.0, CPU, pinned by SHA-256) and turns `speechRecognition.speakerIdentificationEnabled` on. From then on every utterance she transcribes also becomes a voice embedding, and she matches it against the voices people asked her to keep.
+
+Nobody is recognised until they ask. "Revia, remember my voice, I'm Sam" keeps that utterance as Sam's (say it a few times, or `/voice enroll Sam` after speaking, for up to five samples); "forget my voice" or `/voice forget Sam` drops it. A match moves local conversation attribution to that person, exactly as saying their name does, and grants nothing else: a cloned voice defeats a voiceprint, so it is never authentication. A voice she does not know puts attribution back on the anonymous local user rather than the last named person. The voiceprints live in the DPAPI secret store under `RuntimeData\Secrets`, the embeddings never enter a prompt, a log or a memory, and nothing leaves the machine. `speakerMatchThreshold` (0.62) and `speakerMatchMargin` (0.08) are the knobs; `/voice` shows the state.
 
 ### Tools on MCP servers (opt-in)
 
