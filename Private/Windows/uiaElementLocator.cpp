@@ -171,9 +171,7 @@ std::wstring ProcessFileName(const int processId)
     return std::filesystem::path(path).filename().wstring();
 }
 
-IUIAutomationElement* FindApplicationWindow(
-    IUIAutomation* automation,
-    const ActionRequest& request)
+IUIAutomationElement* FindApplicationWindow(IUIAutomation* automation, const ActionRequest& request)
 {
     IUIAutomationElement* root = nullptr;
     IUIAutomationCondition* condition = nullptr;
@@ -221,10 +219,7 @@ IUIAutomationElement* FindApplicationWindow(
     return match;
 }
 
-IUIAutomationElement* FindResolvedControl(
-    IUIAutomation* automation,
-    IUIAutomationElement* window,
-    const ActionRequest& request)
+IUIAutomationElement* FindResolvedControl(IUIAutomation* automation, IUIAutomationElement* window, const ActionRequest& request)
 {
     IUIAutomationCondition* condition = nullptr;
     IUIAutomationElementArray* elements = nullptr;
@@ -271,10 +266,7 @@ IUIAutomationElement* FindResolvedControl(
     return match;
 }
 
-IUIAutomationElement* FindControl(
-    IUIAutomation* automation,
-    IUIAutomationElement* window,
-    const ActionRequest& request)
+IUIAutomationElement* FindControl(IUIAutomation* automation, IUIAutomationElement* window, const ActionRequest& request)
 {
     if (request.resolution.IsUiaElementTarget())
     {

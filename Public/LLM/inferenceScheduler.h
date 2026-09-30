@@ -48,10 +48,7 @@ public:
 
     private:
         friend class InferenceScheduler;
-        Lease(
-            InferenceScheduler* owner,
-            InferencePriority priority,
-            std::shared_ptr<std::stop_source> preemptionSource = {});
+        Lease(InferenceScheduler* owner, InferencePriority priority, std::shared_ptr<std::stop_source> preemptionSource = {});
         void Reset();
 
         InferenceScheduler* owner = nullptr;
@@ -60,9 +57,7 @@ public:
     };
 
     void SetCapacity(int slots);
-    [[nodiscard]] Lease Acquire(
-        InferencePriority priority,
-        std::stop_token stopToken = {});
+    [[nodiscard]] Lease Acquire(InferencePriority priority, std::stop_token stopToken = {});
     [[nodiscard]] InferenceSchedulerSnapshot Snapshot() const;
 
 private:

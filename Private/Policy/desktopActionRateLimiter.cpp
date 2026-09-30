@@ -5,10 +5,7 @@
 namespace revia::policy
 {
 
-void DesktopActionRateLimiter::Configure(
-    const int maxActionsPerMinute,
-    const int minimumIntervalMs,
-    const Scope inputScope)
+void DesktopActionRateLimiter::Configure(const int maxActionsPerMinute, const int minimumIntervalMs, const Scope inputScope)
 {
     std::lock_guard lock(mutex);
     scope = inputScope;
@@ -29,10 +26,8 @@ bool DesktopActionRateLimiter::Governs(const actions::ActionType type) const
         type == actions::ActionType::InvokeControl;
 }
 
-bool DesktopActionRateLimiter::Admit(
-    const actions::ActionRequest& request,
-    const std::chrono::steady_clock::time_point now,
-    std::string& outReason)
+bool DesktopActionRateLimiter::Admit(const actions::ActionRequest& request,
+    const std::chrono::steady_clock::time_point now, std::string& outReason)
 {
     if (request.dryRun ||
         actions::RiskForAction(request.type) == actions::RiskLevel::ReadOnly ||

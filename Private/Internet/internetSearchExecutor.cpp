@@ -27,13 +27,11 @@ bool IsAutonomousCuriosityRequest(const ActionRequest& request)
 class ActiveBrowserRequest final
 {
 public:
-    ActiveBrowserRequest(
-        std::shared_ptr<VisibleBrowserCancellation> inputCancellation,
-        const int port,
-        const std::string& token)
+    ActiveBrowserRequest(std::shared_ptr<VisibleBrowserCancellation> inputCancellation, const int port, const std::string& token,
+        const std::string& requestedBy)
         : cancellation(std::move(inputCancellation))
     {
-        if (cancellation) requestId = cancellation->BeginRequest(port, token);
+        if (cancellation) requestId = cancellation->BeginRequest(port, token, requestedBy);
     }
 
     ~ActiveBrowserRequest()
@@ -60,9 +58,7 @@ std::string Lower(std::string value)
     return value;
 }
 
-bool HostAllowed(
-    const CapabilitySettings::InternetAccess& settings,
-    const std::string& wanted)
+bool HostAllowed(const CapabilitySettings::InternetAccess& settings, const std::string& wanted)
 {
     const std::string lowered = Lower(wanted);
     return std::any_of(
@@ -101,12 +97,7 @@ void Close(T*& handle)
     }
 }
 
-bool GetHttps(
-    const std::wstring& host,
-    const std::wstring& path,
-    const int timeoutMs,
-    const std::size_t maxBytes,
-    std::string& outBody,
+bool GetHttps(const std::wstring& host, const std::wstring& path, const int timeoutMs, const std::size_t maxBytes, std::string& outBody,
     std::string& outError)
 {
     HINTERNET session = WinHttpOpen(
@@ -196,10 +187,7 @@ bool GetHttps(
 }
 #endif
 
-void AddRelatedTopics(
-    const nlohmann::json& topics,
-    const int maxResults,
-    ActionResult& result)
+void AddRelatedTopics(const nlohmann::json& topics, const int maxResults, ActionResult& result)
 {
     if (!topics.is_array())
     {
@@ -229,8 +217,7 @@ void AddRelatedTopics(
 }
 }
 
-InternetSearchExecutor::InternetSearchExecutor(
-    CapabilitySettings::InternetAccess inputSettings,
+InternetSearchExecutor::InternetSearchExecutor(CapabilitySettings::InternetAccess inputSettings,
     std::shared_ptr<VisibleBrowserCancellation> inputCancellation)
     : settings(std::move(inputSettings)),
       cancellation(inputCancellation
@@ -268,9 +255,7 @@ bool InternetSearchExecutor::Admit(std::string& outReason)
     return true;
 }
 
-ActionResult InternetSearchExecutor::Execute(
-    const ActionRequest& request,
-    const PolicyDecision&)
+ActionResult InternetSearchExecutor::Execute(const ActionRequest& request, const PolicyDecision&)
 {
     ActionResult result;
     result.attempted = true;
@@ -317,7 +302,7 @@ ActionResult InternetSearchExecutor::Execute(
             else
             {
                 activeRequest = std::make_unique<ActiveBrowserRequest>(
-                    cancellation, browserProcess.Port(), browserProcess.Token());
+                    cancellation, browserProcess.Port(), browserProcess.Token(), request.requestedBy);
                 VisibleBrowserClient client(browserProcess.Port(), browserProcess.Token());
                 if (!client.WaitUntilReady(
                         settings.visibleBrowserStartupTimeoutMs,
@@ -333,7 +318,7 @@ ActionResult InternetSearchExecutor::Execute(
             if (!activeRequest)
             {
                 activeRequest = std::make_unique<ActiveBrowserRequest>(
-                    cancellation, browserProcess.Port(), browserProcess.Token());
+                    cancellation, browserProcess.Port(), browserProcess.Token(), request.requestedBy);
             }
             VisibleBrowserClient client(browserProcess.Port(), browserProcess.Token());
             // Once the visible service has started, request/navigation/extraction errors
@@ -461,9 +446,7 @@ ActionResult InternetSearchExecutor::Execute(
 #endif
 }
 
-ActionResult InternetSearchExecutor::ParseDuckDuckGoResponse(
-    const std::string& body,
-    const int maxResults)
+ActionResult InternetSearchExecutor::ParseDuckDuckGoResponse(const std::string& body, const int maxResults)
 {
     ActionResult result;
     result.attempted = true;
@@ -494,9 +477,7 @@ ActionResult InternetSearchExecutor::ParseDuckDuckGoResponse(
     }
 }
 
-ActionResult InternetSearchExecutor::ParseWikipediaResponse(
-    const std::string& body,
-    const int maxResults)
+ActionResult InternetSearchExecutor::ParseWikipediaResponse(const std::string& body, const int maxResults)
 {
     ActionResult result;
     result.attempted = true;

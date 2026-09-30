@@ -31,10 +31,7 @@ bool SameApplication(const std::string& left, const std::string& right)
     return !left.empty() && Lowered(left) == Lowered(right);
 }
 
-ComputerDecision Answer(
-    const ComputerDecisionKind kind,
-    const ComputerReasonCode code,
-    std::string detail)
+ComputerDecision Answer(const ComputerDecisionKind kind, const ComputerReasonCode code, std::string detail)
 {
     ComputerDecision decision;
     decision.kind = kind;
@@ -65,10 +62,7 @@ ComputerDecision Answer(
 //
 // Without this the policy proposes the same correct action forever: the step works, the
 // screen looks the same afterwards, and the run stops on no-progress having succeeded.
-bool AlreadyDoneAndVerified(
-    const ComputerTaskContext& context,
-    const actions::ActionType expected,
-    const std::string& targetName)
+bool AlreadyDoneAndVerified(const ComputerTaskContext& context, const actions::ActionType expected, const std::string& targetName)
 {
     if (context.recentAttempts.empty()) return false;
     const ComputerAttempt& latest = context.recentAttempts.back();
@@ -113,14 +107,12 @@ bool RoutineComputerPolicy::CoversIntent(const SubgoalIntent intent) const
     }
 }
 
-TargetMatch RoutineComputerPolicy::FindTarget(
-    const ComputerTaskContext& context, const TargetAffordance affordance) const
+TargetMatch RoutineComputerPolicy::FindTarget(const ComputerTaskContext& context, const TargetAffordance affordance) const
 {
     return MatchTarget(context.observation.candidates, activeSubgoal.target, affordance);
 }
 
-ComputerDecision RoutineComputerPolicy::Decide(
-    const ComputerTaskContext& context, std::stop_token stopToken)
+ComputerDecision RoutineComputerPolicy::Decide(const ComputerTaskContext& context, std::stop_token stopToken)
 {
     // A stop that arrived before the work started still stops it. Cheap here, and the
     // habit matters more in the policies that are not.

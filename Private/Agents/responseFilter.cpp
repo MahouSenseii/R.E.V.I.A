@@ -263,10 +263,8 @@ bool ContainsManipulativeEmotion(const std::string& lowered)
         "my existence depends on you", "if you leave me i'll", "if you leave me i will"});
 }
 
-bool StartsWithRoleLabel(
-    const std::string& loweredLine,
-    const std::initializer_list<std::string_view> roles,
-    std::size_t* outLabelLength = nullptr)
+bool StartsWithRoleLabel(const std::string& loweredLine,
+    const std::initializer_list<std::string_view> roles, std::size_t* outLabelLength = nullptr)
 {
     std::size_t prefix = 0;
     while (prefix < loweredLine.size() &&
@@ -418,11 +416,8 @@ std::string ResponseFilterContext::Describe() const
     return description;
 }
 
-HardFilterResult ResponseFilter::ApplyHard(
-    const std::string& userInput,
-    const std::string& candidate,
-    const ResponseFilterContext& context,
-    const int maxCharacters) const
+HardFilterResult ResponseFilter::ApplyHard(const std::string& userInput,
+    const std::string& candidate, const ResponseFilterContext& context, const int maxCharacters) const
 {
     HardFilterResult result;
     // Every exit, including a grounded replacement, observes the same encoding and

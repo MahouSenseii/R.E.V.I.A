@@ -26,20 +26,8 @@ struct DevelopmentEvidence
     std::string reason;
 };
 
-// Accumulates evidence and applies bounded changes when enough of it agrees.
-//
-// The properties that matter, all enforced here rather than by convention:
-//
-//  - Slow. A change needs several consistent observations before anything moves.
-//  - Bounded. Each applied step is tiny and lifetime drift per trait is capped, so she
-//    can change substantially and still be recognisably herself.
-//  - Evidence-based. Nothing moves without recorded observations behind it.
-//  - Explainable. Every applied change carries its reason and how much evidence backed
-//    it, because "she got less impulsive" is otherwise indistinguishable from a bug.
-//  - Reversible. Contradicting evidence cancels rather than being ignored, so growth is
-//    not a ratchet in one direction.
-//  - Directionless. Nothing here prefers calmer, kinder, or more mature. Development
-//    that could only sand her down into a polite assistant would not be development.
+// Applies small, lifetime-bounded changes after consistent recorded evidence, with reasons.
+// Contradictory evidence cancels drift; no direction toward kindness, calm or maturity is preferred.
 class DevelopmentEngine
 {
 public:
@@ -53,10 +41,7 @@ public:
     [[nodiscard]] float PendingEvidence(Trait trait) const;
 
     // Applies a change to a development state, respecting the lifetime drift cap.
-    static DevelopmentState Apply(
-        DevelopmentState development,
-        const DevelopmentChange& change,
-        const DevelopmentLimits& limits = {});
+    static DevelopmentState Apply(DevelopmentState development, const DevelopmentChange& change, const DevelopmentLimits& limits = {});
 
     [[nodiscard]] const DevelopmentLimits& Limits() const { return limits; }
     void Reset();
@@ -92,7 +77,6 @@ struct TurnObservation
     bool followedCuriosity = false;
 };
 
-[[nodiscard]] std::vector<DevelopmentEvidence> ReadDevelopmentEvidence(
-    const TurnObservation& observation);
+[[nodiscard]] std::vector<DevelopmentEvidence> ReadDevelopmentEvidence(const TurnObservation& observation);
 
 } // namespace revia::identity

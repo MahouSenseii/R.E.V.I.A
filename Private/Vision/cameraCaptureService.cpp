@@ -275,9 +275,7 @@ std::vector<CameraDescriptor> CameraCaptureService::EnumerateCameras() const
     return cameras;
 }
 
-CameraResolution ResolveCamera(
-    const std::vector<CameraDescriptor>& cameras,
-    const CameraSelection& selection)
+CameraResolution ResolveCamera(const std::vector<CameraDescriptor>& cameras, const CameraSelection& selection)
 {
     CameraResolution resolution;
     if (cameras.empty())
@@ -335,12 +333,8 @@ CameraResolution ResolveCamera(
     return resolution;
 }
 
-CameraFrame CameraCaptureService::CaptureFrame(
-    const std::filesystem::path& outputDirectory,
-    const int cameraIndex,
-    const std::string& symbolicLink,
-    const int warmupFrames,
-    const bool requireSymbolicLink) const
+CameraFrame CameraCaptureService::CaptureFrame(const std::filesystem::path& outputDirectory, const int cameraIndex,
+    const std::string& symbolicLink, const int warmupFrames, const bool requireSymbolicLink) const
 {
     const auto started = std::chrono::steady_clock::now();
     CameraFrame result;

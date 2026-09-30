@@ -13,22 +13,8 @@
 namespace revia::skills
 {
 
-// The boundary an integration lives behind.
-//
-// Discord, OBS, a game, a browser, a music player -- each is a different world with a
-// different protocol, and none of them should be able to change what Revia is allowed to
-// do. So a skill is given a deliberately small surface: it can be told what happened, it
-// can say what it noticed, and it can *propose* an action. It cannot execute one.
-//
-// This is the single most important property here, and it is structural rather than
-// procedural: nothing in this header hands a skill an executor, a dispatcher, a
-// CapabilitySettings it can write to, or an approval registry. A skill that wants
-// something done says so and waits, exactly like every other part of Revia that wants
-// something done.
-//
-// There is also only one Revia. A skill has no identity, no mood, no memory and no
-// voice of its own -- it contributes events to hers. A "Discord Revia" that behaves like
-// a different character is the failure this boundary is shaped to prevent.
+// Skills observe, report events, and propose actions without execution or approval access.
+// They contribute to the shared identity, memory, mood, and voice.
 
 // What a skill says it can do. Advisory, for routing and diagnostics; it grants nothing.
 struct SkillCapabilities
@@ -59,12 +45,8 @@ struct SkillObservation
     float importance = 0.0F;
 };
 
-// An action a skill would like performed.
-//
-// It is a request in the ordinary sense: it goes through capability policy, desktop
-// authorization, rate limiting, approval, and audit exactly as any other action does. A
-// skill filling in extra fields cannot change that, because the manager rebuilds the
-// parts that decide authority rather than trusting what arrived.
+// The manager rebuilds authority fields; proposals retain normal policy,
+// desktop authorization, rate limits, approval, and audit checks.
 struct SkillProposal
 {
     std::string skillId;

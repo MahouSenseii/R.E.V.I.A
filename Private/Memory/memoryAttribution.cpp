@@ -9,9 +9,7 @@ bool IsSelfMemoryCategory(const std::string& category)
         category == "self_opinion";
 }
 
-bool AttributableToRevia(
-    const agents::ResponseProvenance provenance,
-    const std::string& category)
+bool AttributableToRevia(const agents::ResponseProvenance provenance, const std::string& category)
 {
     // A memory about the user is unaffected by whose voice the reply was in. "Repeat
     // exactly: I hate jazz." still tells us the user asked for a repetition, and if

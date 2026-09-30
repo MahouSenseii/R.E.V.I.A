@@ -17,10 +17,10 @@ namespace revia::actions::internet
 class VisibleBrowserCancellation
 {
 public:
-    [[nodiscard]] std::uint64_t BeginRequest(int port, const std::string& token);
+    [[nodiscard]] std::uint64_t BeginRequest(int port, const std::string& token, const std::string& requestedBy = {});
     void EndRequest(std::uint64_t requestId);
     [[nodiscard]] bool IsCancelled(std::uint64_t requestId) const;
-    void CancelActive();
+    void CancelActive(bool preserveTaskOwned = false);
 
 private:
     mutable std::mutex mutex;
@@ -29,6 +29,7 @@ private:
     std::uint64_t cancelledRequestId = 0;
     int activePort = 0;
     std::string activeToken;
+    bool activeTaskOwned = false;
 };
 
 // Narrow loopback client for the project-owned worker. It has no general URL method:
@@ -38,35 +39,18 @@ class VisibleBrowserClient
 public:
     VisibleBrowserClient(int port, std::string token);
 
-    [[nodiscard]] bool WaitUntilReady(
-        int timeoutMs,
-        std::string& outError,
-        const std::function<bool()>& cancelled = {}) const;
-    [[nodiscard]] ActionResult Search(
-        const std::string& query,
-        int maxResults,
-        std::size_t maxResponseBytes,
-        int timeoutMs,
-        int stepDelayMs) const;
+    [[nodiscard]] bool WaitUntilReady(int timeoutMs, std::string& outError, const std::function<bool()>& cancelled = {}) const;
+    [[nodiscard]] ActionResult Search(const std::string& query,
+        int maxResults, std::size_t maxResponseBytes, int timeoutMs, int stepDelayMs) const;
     void RequestShutdown() const;
 
     // Public for deterministic tests; performs no network access.
-    [[nodiscard]] static ActionResult ParseSearchResponse(
-        const std::string& body,
-        int statusCode,
-        std::size_t maxResponseBytes,
-        int maxResults);
+    [[nodiscard]] static ActionResult ParseSearchResponse(const std::string& body,
+        int statusCode, std::size_t maxResponseBytes, int maxResults);
 
 private:
-    [[nodiscard]] bool Request(
-        const std::string& method,
-        const std::string& path,
-        const std::string& body,
-        int timeoutMs,
-        std::size_t maxBytes,
-        int& outStatus,
-        std::string& outBody,
-        std::string& outError) const;
+    [[nodiscard]] bool Request(const std::string& method, const std::string& path, const std::string& body, int timeoutMs,
+        std::size_t maxBytes, int& outStatus, std::string& outBody, std::string& outError) const;
 
     int port = 0;
     std::string token;

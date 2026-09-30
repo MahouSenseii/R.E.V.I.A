@@ -1,3 +1,5 @@
+#include "Core/conversationMessage.h"
+#include "LLM/responseTypes.h"
 #include "Core/utf8.h"
 #include "Agents/investigationAgent.h"
 
@@ -73,8 +75,7 @@ QuestionStatus ParseStatus(const std::string& value)
 // Matches a question by id, or failing that by a distinctive prefix of its text. The
 // model is not reliable at echoing identifiers, and a finding attached to the wrong
 // question is worse than one attached to none.
-const InvestigationQuestion* Resolve(
-    const RoundRequest& request, const std::string& reference)
+const InvestigationQuestion* Resolve(const RoundRequest& request, const std::string& reference)
 {
     const std::string trimmed = Trim(reference);
     if (trimmed.empty()) return nullptr;
@@ -105,11 +106,8 @@ const InvestigationQuestion* Resolve(
 
 } // namespace
 
-std::string InvestigationAgent::BuildOpeningEnvelope(
-    const std::string& goal,
-    const std::string& identityPosture,
-    const std::vector<conversationMessage>& context,
-    const std::size_t maximumQuestions)
+std::string InvestigationAgent::BuildOpeningEnvelope(const std::string& goal, const std::string& identityPosture,
+    const std::vector<conversationMessage>& context, const std::size_t maximumQuestions)
 {
     std::ostringstream envelope;
     envelope << identityPosture << "\n\n";
@@ -134,8 +132,7 @@ std::string InvestigationAgent::BuildOpeningEnvelope(
     return envelope.str();
 }
 
-std::vector<ProposedQuestion> InvestigationAgent::ParseOpeningQuestions(
-    const std::string& raw, const std::size_t maximumQuestions)
+std::vector<ProposedQuestion> InvestigationAgent::ParseOpeningQuestions(const std::string& raw, const std::size_t maximumQuestions)
 {
     std::vector<ProposedQuestion> questions;
     std::istringstream stream(raw);
@@ -177,10 +174,8 @@ std::vector<ProposedQuestion> InvestigationAgent::ParseOpeningQuestions(
     return questions;
 }
 
-std::string InvestigationAgent::BuildRoundEnvelope(
-    const RoundRequest& request,
-    const std::string& identityPosture,
-    const bool checksAreAvailable)
+std::string InvestigationAgent::BuildRoundEnvelope(const RoundRequest& request,
+    const std::string& identityPosture, const bool checksAreAvailable)
 {
     std::ostringstream envelope;
     envelope << identityPosture << "\n\n";
@@ -251,10 +246,7 @@ std::string InvestigationAgent::BuildRoundEnvelope(
     return envelope.str();
 }
 
-RoundResult InvestigationAgent::ParseRound(
-    const std::string& raw,
-    const RoundRequest& request,
-    const bool checksAreAvailable)
+RoundResult InvestigationAgent::ParseRound(const std::string& raw, const RoundRequest& request, const bool checksAreAvailable)
 {
     RoundResult result;
     std::istringstream stream(raw);
@@ -425,11 +417,8 @@ RoundResult InvestigationAgent::ParseRound(
     return result;
 }
 
-RoundRunner InvestigationAgent::MakeRunner(
-    const messageRouter& router,
-    std::string identityPosture,
-    CheckExecutor executor,
-    const std::stop_token stopToken)
+RoundRunner InvestigationAgent::MakeRunner(const messageRouter& router,
+    std::string identityPosture, CheckExecutor executor, const std::stop_token stopToken)
 {
     return [&router, posture = std::move(identityPosture),
             executor = std::move(executor), stopToken](const RoundRequest& request)

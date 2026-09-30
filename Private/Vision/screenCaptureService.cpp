@@ -26,11 +26,7 @@ namespace
         int wantedIndex = 0;
     };
 
-    BOOL CALLBACK CollectMonitor(
-        const HMONITOR monitor,
-        HDC,
-        LPRECT,
-        const LPARAM data)
+    BOOL CALLBACK CollectMonitor(const HMONITOR monitor, HDC, LPRECT, const LPARAM data)
     {
         auto* enumeration = reinterpret_cast<MonitorEnumeration*>(data);
         MONITORINFOEXW information{};
@@ -144,9 +140,7 @@ namespace
         return false;
     }
 
-    bool CaptureRegion(
-        const std::filesystem::path& outputDirectory,
-        CaptureResult& result)
+    bool CaptureRegion(const std::filesystem::path& outputDirectory, CaptureResult& result)
     {
         std::error_code error;
         std::filesystem::create_directories(outputDirectory, error);
@@ -255,8 +249,7 @@ std::vector<MonitorDescriptor> ScreenCaptureService::EnumerateMonitors() const
 #endif
 }
 
-CaptureResult ScreenCaptureService::CaptureDesktop(
-    const std::filesystem::path& outputDirectory) const
+CaptureResult ScreenCaptureService::CaptureDesktop(const std::filesystem::path& outputDirectory) const
 {
     CaptureResult result;
     const auto startedAt = std::chrono::steady_clock::now();
@@ -285,8 +278,7 @@ CaptureResult ScreenCaptureService::CaptureDesktop(
     return result;
 }
 
-CaptureResult ScreenCaptureService::CaptureForegroundWindow(
-    const std::filesystem::path& outputDirectory) const
+CaptureResult ScreenCaptureService::CaptureForegroundWindow(const std::filesystem::path& outputDirectory) const
 {
     CaptureResult result;
     const auto startedAt = std::chrono::steady_clock::now();

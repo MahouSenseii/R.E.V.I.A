@@ -30,8 +30,7 @@ std::string NewPayloadId()
 
 } // namespace
 
-PayloadReference PayloadVault::Store(
-    std::string value, std::string kind, const ContentProvenance provenance)
+PayloadReference PayloadVault::Store(std::string value, std::string kind, const ContentProvenance provenance)
 {
     PayloadReference reference;
     reference.kind = kind;
@@ -63,8 +62,7 @@ bool PayloadVault::Holds(const PayloadReference& reference) const
     return entries.find(reference.id) != entries.end();
 }
 
-std::optional<PayloadReference> PayloadVault::Describe(
-    const PayloadReference& reference) const
+std::optional<PayloadReference> PayloadVault::Describe(const PayloadReference& reference) const
 {
     if (reference.id.empty()) return std::nullopt;
     std::lock_guard lock(mutex);

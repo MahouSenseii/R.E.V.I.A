@@ -1,3 +1,6 @@
+#include "Agents/responseFilterSettings.h"
+#include "Core/conversationMessage.h"
+#include "Memory/memoryTypes.h"
 #include "Agents/turnCoordinator.h"
 
 #include <utility>
@@ -5,18 +8,10 @@
 namespace revia::agents
 {
 
-TurnAgentResult TurnCoordinator::Execute(
-    const messageRouter& router,
-    const std::string& input,
-    const std::vector<conversationMessage>& context,
-    const responseFilterSettings& filterSettings,
-    const ResponseFilterContext& filterContext,
-    const bool evaluateMemory,
-    const ResponseProvenance provenance,
-    const std::uint64_t turnId,
-    const std::stop_token stopToken,
-    messageRouter::DeltaHandler onDelta,
-    const revia::intelligence::IntelligenceDecision& decision,
+TurnAgentResult TurnCoordinator::Execute(const messageRouter& router, const std::string& input,
+    const std::vector<conversationMessage>& context, const responseFilterSettings& filterSettings,
+    const ResponseFilterContext& filterContext, const bool evaluateMemory, const ResponseProvenance provenance, const std::uint64_t turnId,
+    const std::stop_token stopToken, messageRouter::DeltaHandler onDelta, const revia::intelligence::IntelligenceDecision& decision,
     const llm::PrivateMemoryAccess memoryAccess) const
 {
     TurnAgentResult result;
@@ -42,17 +37,12 @@ std::vector<MemoryAgentEvent> TurnCoordinator::DrainMemoryEvents()
     return memoryAgent.DrainEvents();
 }
 
-LearnedFindingResult TurnCoordinator::SubmitLearnedFinding(
-    const messageRouter& router,
-    memoryDecision decision,
-    const std::uint64_t turnId)
+LearnedFindingResult TurnCoordinator::SubmitLearnedFinding(const messageRouter& router, memoryDecision decision, const std::uint64_t turnId)
 {
     return memoryAgent.SubmitLearnedFinding(router, std::move(decision), turnId);
 }
 
-void TurnCoordinator::BackfillMemoryEmbeddings(
-    const messageRouter& router,
-    const std::string& embeddingModel)
+void TurnCoordinator::BackfillMemoryEmbeddings(const messageRouter& router, const std::string& embeddingModel)
 {
     memoryAgent.StartEmbeddingBackfill(router, embeddingModel);
 }

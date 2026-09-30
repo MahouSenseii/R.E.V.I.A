@@ -1,3 +1,4 @@
+#include "Core/conversationMessage.h"
 #include "testSupport.h"
 #include "Core/speechAttribution.h"
 #include "Identity/relationshipEvidence.h"

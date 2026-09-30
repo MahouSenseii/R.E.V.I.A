@@ -1,3 +1,4 @@
+#include "Speech/recognitionSettings.h"
 #include "Speech/speechRecognitionService.h"
 
 #include <httplib.h>
@@ -115,10 +116,7 @@ namespace
         }
     }
 
-    bool WriteWaveFile(
-        const std::filesystem::path& path,
-        const std::vector<std::uint8_t>& pcm,
-        const int sampleRate)
+    bool WriteWaveFile(const std::filesystem::path& path, const std::vector<std::uint8_t>& pcm, const int sampleRate)
     {
         std::ofstream stream(path, std::ios::binary | std::ios::trunc);
         if (!stream)
@@ -235,9 +233,7 @@ SpeechRecognitionService::~SpeechRecognitionService()
     Shutdown();
 }
 
-bool SpeechRecognitionService::Start(
-    const speechRecognitionSettings& settings,
-    EventHandler handler)
+bool SpeechRecognitionService::Start(const speechRecognitionSettings& settings, EventHandler handler)
 {
     Shutdown();
     {
@@ -291,9 +287,7 @@ bool SpeechRecognitionService::Start(
     return true;
 }
 
-MicrophoneSelection SelectMicrophone(
-    const std::vector<MicrophoneDevice>& devices,
-    const std::string& configuredName)
+MicrophoneSelection SelectMicrophone(const std::vector<MicrophoneDevice>& devices, const std::string& configuredName)
 {
     MicrophoneSelection selection;
     const auto trimmed = [](std::string value)
@@ -528,9 +522,7 @@ bool SpeechRecognitionService::EndRecording()
     return true;
 }
 
-MicrophoneTestResult SpeechRecognitionService::TestMicrophone(
-    const int seconds,
-    const bool transcribe)
+MicrophoneTestResult SpeechRecognitionService::TestMicrophone(const int seconds, const bool transcribe)
 {
     MicrophoneTestResult result;
     const MicrophoneSelection selection = ResolveMicrophone();
@@ -839,8 +831,7 @@ bool SpeechRecognitionService::IsRecording() const
     return recording.load();
 }
 
-std::filesystem::path SpeechRecognitionService::ResolveRuntimePath(
-    const std::string& configuredPath)
+std::filesystem::path SpeechRecognitionService::ResolveRuntimePath(const std::string& configuredPath)
 {
     std::filesystem::path configured(configuredPath);
     if (configured.is_absolute())
@@ -878,9 +869,7 @@ std::filesystem::path SpeechRecognitionService::ResolveRuntimePath(
     return currentCandidate;
 }
 
-void SpeechRecognitionService::Capture(
-    const std::stop_token stopToken,
-    const std::filesystem::path outputPath)
+void SpeechRecognitionService::Capture(const std::stop_token stopToken, const std::filesystem::path outputPath)
 {
 #ifdef _WIN32
     WAVEFORMATEX format{};
@@ -1020,9 +1009,7 @@ void SpeechRecognitionService::Capture(
 #endif
 }
 
-bool SpeechRecognitionService::CaptureHandsFree(
-    const std::stop_token stopToken,
-    const std::filesystem::path outputPath)
+bool SpeechRecognitionService::CaptureHandsFree(const std::stop_token stopToken, const std::filesystem::path outputPath)
 {
 #ifndef _WIN32
     (void)stopToken;
@@ -1219,9 +1206,7 @@ void SpeechRecognitionService::RunHandsFree(const std::stop_token stopToken)
     }
 }
 
-bool SpeechRecognitionService::EnsureServerReady(
-    const std::stop_token stopToken,
-    std::string& outError)
+bool SpeechRecognitionService::EnsureServerReady(const std::stop_token stopToken, std::string& outError)
 {
     outError.clear();
     if (!configuration.bUseServer)
@@ -1269,10 +1254,8 @@ bool SpeechRecognitionService::EnsureServerReady(
     return false;
 }
 
-std::optional<std::string> SpeechRecognitionService::TranscribeWithServer(
-    const std::filesystem::path& wavePath,
-    const std::stop_token stopToken,
-    std::string& outError)
+std::optional<std::string> SpeechRecognitionService::TranscribeWithServer(const std::filesystem::path& wavePath,
+    const std::stop_token stopToken, std::string& outError)
 {
     if (!EnsureServerReady(stopToken, outError) || stopToken.stop_requested() ||
         transcriptionCancelled.load())
@@ -1338,10 +1321,7 @@ std::optional<std::string> SpeechRecognitionService::TranscribeWithServer(
     }
 }
 
-void SpeechRecognitionService::Transcribe(
-    const std::stop_token stopToken,
-    const std::filesystem::path wavePath,
-    const bool automatic)
+void SpeechRecognitionService::Transcribe(const std::stop_token stopToken, const std::filesystem::path wavePath, const bool automatic)
 {
     const auto startedAt = std::chrono::steady_clock::now();
     RecognitionEvent transcribingEvent{

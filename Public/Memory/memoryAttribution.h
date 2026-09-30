@@ -15,15 +15,8 @@ namespace revia::memory
 // supposed to guard it silently stops covering it.
 [[nodiscard]] bool IsSelfMemoryCategory(const std::string& category);
 
-// Whether a classified memory in this category may be attributed to Revia, given how
-// the reply it came from was arrived at.
-//
-// The structured validation that follows still applies -- this is a gate, not a
-// substitute for it. What this settles is only the question the text cannot answer:
-// "I hate jazz." reads the same whether she volunteered it or was told to say it, and
-// only the runtime knows which happened.
-[[nodiscard]] bool AttributableToRevia(
-    agents::ResponseProvenance provenance,
-    const std::string& category);
+// Runtime reply provenance gates whether a classified memory may be attributed to Revia.
+// Structured validation still applies after this gate.
+[[nodiscard]] bool AttributableToRevia(agents::ResponseProvenance provenance, const std::string& category);
 
 } // namespace revia::memory

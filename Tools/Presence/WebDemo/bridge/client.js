@@ -121,6 +121,7 @@ export function createBridge(input) {
     });
     let frameWindow = Date.now(), frameCount = 0;
     connection.on('message', (data, binary) => {
+      if (stopped || connection !== ws) return;
       let f;
       try {
         if (Date.now() - frameWindow > 60000) { frameWindow = Date.now(); frameCount = 0; }

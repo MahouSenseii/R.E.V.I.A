@@ -24,12 +24,7 @@ struct ProposalVerdict
     std::string explanation;
 };
 
-// Owns the skills, and is the only thing they can talk through.
-//
-// The manager deliberately does not execute anything. It evaluates a proposal against
-// the same CapabilityPolicy the rest of Revia uses and hands the survivors to whoever
-// owns execution, which is ReviaSession. That keeps one pipeline -- policy, rate limit,
-// desktop authorization, approval, audit -- rather than a second one that skills use.
+// Owns skills and evaluates proposals; the session's single pipeline executes survivors.
 class SkillManager
 {
 public:
@@ -48,19 +43,11 @@ public:
     // Fan an event out to every running skill.
     void Dispatch(const SkillEvent& event);
 
-    // Collect what the skills want, decide, and forward what survives.
-    //
-    // Every proposal is evaluated. A skill cannot mark its own request approved, cannot
-    // name a capability it was not given, and cannot reach the sink without a policy
-    // decision attached -- the decision is produced here, from the shared policy, and
-    // travels with the request.
+    // Every proposal receives a shared-policy decision before forwarding.
+    // Skills cannot claim approval or capabilities they were not given.
     std::vector<ProposalVerdict> CollectAndForward();
 
-    // Turn what the skills noticed into autonomy evidence.
-    //
-    // Additive: this fills in the fields skills can speak to and leaves the rest of the
-    // evidence exactly as the caller built it. A skill cannot manufacture an unfinished
-    // goal or a memory backlog, because those are not its to know about.
+    // Adds only skill-owned evidence; preserves caller-owned goals and memory backlog.
     void ContributeEvidence(autonomy::AutonomyEvidence& evidence);
 
 private:
@@ -70,13 +57,7 @@ private:
     ProposalSink sink;
 };
 
-// Strips everything a proposal is not allowed to assert about its own authority.
-//
-// Exposed for testing, because "a skill cannot approve itself" is the property most
-// worth being able to check directly. A skill that sets a confirmation token, claims a
-// different origin, or marks itself already-approved gets those fields taken back before
-// anything looks at the request.
-[[nodiscard]] actions::ActionRequest SanitizeProposedRequest(
-    const actions::ActionRequest& request, const std::string& skillId);
+// Removes claimed confirmation, origin, and approval fields before evaluating a proposal.
+[[nodiscard]] actions::ActionRequest SanitizeProposedRequest(const actions::ActionRequest& request, const std::string& skillId);
 
 } // namespace revia::skills

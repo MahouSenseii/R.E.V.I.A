@@ -22,11 +22,8 @@ using revia::tests::Check;
 // language model reliably conducts an investigation -- that is a separate question,
 // answered separately, and a scripted fixture must never be presented as evidence for it.
 
-CheckOutcome Observed(
-    const std::string& questionId,
-    const QuestionStatus status,
-    const std::string& observed,
-    const CheckKind kind = CheckKind::SourceCode)
+CheckOutcome Observed(const std::string& questionId,
+    const QuestionStatus status, const std::string& observed, const CheckKind kind = CheckKind::SourceCode)
 {
     CheckOutcome outcome;
     outcome.questionId = questionId;

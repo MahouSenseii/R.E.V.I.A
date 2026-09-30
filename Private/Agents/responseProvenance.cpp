@@ -22,9 +22,7 @@ std::string Lowered(const std::string& value)
     return lowered;
 }
 
-bool ContainsAny(
-    const std::string& lowered,
-    const std::initializer_list<std::string_view> markers)
+bool ContainsAny(const std::string& lowered, const std::initializer_list<std::string_view> markers)
 {
     return std::any_of(markers.begin(), markers.end(),
         [&lowered](const std::string_view marker)

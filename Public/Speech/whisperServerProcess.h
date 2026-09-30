@@ -1,7 +1,7 @@
 #pragma once
 
-#include "Library/structLibrary.h"
 
+#include "Speech/recognitionSettings.h"
 #include <mutex>
 #include <string>
 

@@ -38,8 +38,7 @@ public:
     [[nodiscard]] std::string Name() const override { return "substring_baseline"; }
     [[nodiscard]] bool IsAvailable() const override { return true; }
 
-    [[nodiscard]] ComputerDecision Decide(
-        const ComputerTaskContext& context, std::stop_token) override
+    [[nodiscard]] ComputerDecision Decide(const ComputerTaskContext& context, std::stop_token) override
     {
         ComputerDecision decision;
         decision.provider = Name();

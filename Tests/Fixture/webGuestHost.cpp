@@ -1,3 +1,4 @@
+#include "LLM/endpointSettings.h"
 #include "Presence/webGuestRuntime.h"
 #include <atomic>
 #include <cstdlib>

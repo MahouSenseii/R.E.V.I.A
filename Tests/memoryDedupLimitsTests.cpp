@@ -1,6 +1,6 @@
+#include "Memory/memoryTypes.h"
 #include "testSupport.h"
 
-#include "Library/structLibrary.h"
 #include "Memory/longTermMemory.h"
 #include "Memory/memoryReconciliation.h"
 

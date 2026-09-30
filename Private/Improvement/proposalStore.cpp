@@ -21,8 +21,7 @@ using json = nlohmann::json;
 
 // Written beside the target and renamed over it, so a crash mid-write leaves the old
 // file rather than half of a new one.
-bool WriteWhole(const std::filesystem::path& target, const std::string& content,
-    std::string& outError)
+bool WriteWhole(const std::filesystem::path& target, const std::string& content, std::string& outError)
 {
     std::error_code error;
     std::filesystem::create_directories(target.parent_path(), error);
@@ -206,9 +205,7 @@ std::optional<CodeProposal> ProposalStore::Find(const std::string& id) const
     return std::nullopt;
 }
 
-bool ProposalStore::Decide(
-    const std::string& id, const ProposalStatus verdict, const std::string& feedback,
-    std::string& outError)
+bool ProposalStore::Decide(const std::string& id, const ProposalStatus verdict, const std::string& feedback, std::string& outError)
 {
     if (verdict != ProposalStatus::Accepted && verdict != ProposalStatus::Rejected)
     {
@@ -329,8 +326,7 @@ std::string ProposalStore::LeastRecentlyExplored(const std::vector<std::string>&
     return chosen;
 }
 
-void ProposalStore::MarkExplored(
-    const std::string& file, const std::size_t nextLine, const std::int64_t atEpoch)
+void ProposalStore::MarkExplored(const std::string& file, const std::size_t nextLine, const std::int64_t atEpoch)
 {
     std::lock_guard lock(mutex);
     explored[file] = {nextLine, atEpoch};

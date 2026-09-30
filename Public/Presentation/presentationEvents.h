@@ -9,19 +9,8 @@
 namespace revia::presentation
 {
 
-// What Revia's mind tells the outside world about itself.
-//
-// The boundary matters more than the list. Her core knows "I started singing" and "my
-// mood changed"; it does not know that a Live2D model has a parameter called
-// ParamMouthOpenY. That mapping belongs to a renderer, and keeping it there is what
-// makes a future Live2D model, a VRM avatar, an OBS overlay, and a text debug window
-// interchangeable rather than three separate rewrites of the same behaviour.
-//
-// The other half of the boundary is what may never cross it. Revia's private reasoning
-// -- the questions she puts to herself before answering something hard -- is not a
-// presentation event and has no field to travel in. "Thinking" here is a visible runtime
-// state, meaning she is busy and it is worth showing, and nothing about what she is
-// thinking.
+// Renderer-independent visible runtime events carry no private reasoning.
+// Busy/thinking is a visible state; renderer-specific animation parameters belong to the renderer.
 
 enum class PresentationEventKind
 {

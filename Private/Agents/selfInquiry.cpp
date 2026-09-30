@@ -1,3 +1,5 @@
+#include "Core/conversationMessage.h"
+#include "LLM/responseTypes.h"
 #include "Core/utf8.h"
 #include "Agents/selfInquiry.h"
 #include "Agents/conversationStylePolicy.h"
@@ -78,10 +80,7 @@ std::string BoundedBlock(const std::string& value, const std::size_t maximum)
     return revia::utf8::Prefix(value, maximum);
 }
 
-std::string BoundedEnds(
-    const std::string& value,
-    const std::size_t head,
-    const std::size_t tail)
+std::string BoundedEnds(const std::string& value, const std::size_t head, const std::size_t tail)
 {
     if (value.size() <= head + tail)
     {
@@ -307,11 +306,8 @@ bool SelfInquiryAgent::AsksForThought(const std::string& input)
         [&lowered](const std::string_view opener) { return lowered.starts_with(opener); });
 }
 
-SelfInquiryDecision SelfInquiryPolicy::Consider(
-    const std::string& input,
-    const intelligence::IntelligenceDecision& routing,
-    const bool proactive,
-    const std::uint64_t turnId) const
+SelfInquiryDecision SelfInquiryPolicy::Consider(const std::string& input,
+    const intelligence::IntelligenceDecision& routing, const bool proactive, const std::uint64_t turnId) const
 {
     SelfInquiryDecision decision;
     if (!limits.enabled)
@@ -378,8 +374,7 @@ SelfInquiryDecision SelfInquiryPolicy::Consider(
     return decision;
 }
 
-intelligence::IntelligenceDecision SelfInquiryPolicy::FinalAnswerRouting(
-    const intelligence::IntelligenceDecision& routing,
+intelligence::IntelligenceDecision SelfInquiryPolicy::FinalAnswerRouting(const intelligence::IntelligenceDecision& routing,
     const bool inquiryCompleted)
 {
     intelligence::IntelligenceDecision answer = routing;
@@ -405,11 +400,8 @@ void SelfInquiryPolicy::RecordInquiry(const std::uint64_t turnId)
     hasRun = true;
 }
 
-std::string SelfInquiryAgent::BuildEnvelope(
-    const std::string& input,
-    const std::string& identityPosture,
-    const std::vector<conversationMessage>& context,
-    const std::string& remembered)
+std::string SelfInquiryAgent::BuildEnvelope(const std::string& input, const std::string& identityPosture,
+    const std::vector<conversationMessage>& context, const std::string& remembered)
 {
     std::ostringstream envelope;
     envelope << "The problem in front of you:\n"
@@ -452,9 +444,7 @@ std::string SelfInquiryAgent::BuildEnvelope(
     return envelope.str();
 }
 
-SelfInquiryResult SelfInquiryAgent::Parse(
-    const std::string& rawInquiry,
-    const std::size_t maximumQuestions)
+SelfInquiryResult SelfInquiryAgent::Parse(const std::string& rawInquiry, const std::size_t maximumQuestions)
 {
     if (rawInquiry.empty())
     {
@@ -552,13 +542,8 @@ SelfInquiryResult SelfInquiryAgent::Parse(
     }
 }
 
-SelfInquiryResult SelfInquiryAgent::Ask(
-    const messageRouter& router,
-    const std::string& input,
-    const std::string& identityPosture,
-    const std::vector<conversationMessage>& context,
-    const std::size_t maximumQuestions,
-    const std::stop_token stopToken,
+SelfInquiryResult SelfInquiryAgent::Ask(const messageRouter& router, const std::string& input, const std::string& identityPosture,
+    const std::vector<conversationMessage>& context, const std::size_t maximumQuestions, const std::stop_token stopToken,
     const std::string& remembered) const
 {
     if (stopToken.stop_requested())

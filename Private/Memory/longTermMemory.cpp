@@ -1,3 +1,4 @@
+#include "Memory/memoryTypes.h"
 #include "Memory/longTermMemory.h"
 
 #include "Identity/promptMarkers.h"
@@ -144,11 +145,7 @@ void BindText(sqlite3_stmt* statement, const int index, const std::string& value
 // share one, and a hit there proves candidacy only. Such a row cannot be missed either,
 // because equal v2 keys imply equal legacy keys -- v2 preserves everything the legacy
 // key kept, so anything the old scan called a duplicate still collides on one of these.
-bool FindDuplicate(
-    sqlite3* const database,
-    const std::string& summary,
-    std::string& outId,
-    std::string& outSummary)
+bool FindDuplicate(sqlite3* const database, const std::string& summary, std::string& outId, std::string& outSummary)
 {
     Statement query = Prepare(database,
         "SELECT id, summary FROM memories "
@@ -190,12 +187,13 @@ bool FindDuplicate(
     return false;
 }
 
-bool InsertEntry(sqlite3* database, const memoryEntry& entry)
+bool InsertEntry(sqlite3* database, const memoryEntry& entry, std::string* outInsertedId = nullptr)
 {
+    if (outInsertedId) outInsertedId->clear();
     Statement insert = Prepare(database,
         "INSERT OR IGNORE INTO memories "
         "(id, category, summary, normalized_summary, source, created_at, active) "
-        "VALUES (?, ?, ?, ?, ?, ?, 1);");
+        "VALUES (?, ?, ?, ?, ?, ?, 1) RETURNING id;");
     if (!insert)
     {
         return false;
@@ -210,7 +208,21 @@ bool InsertEntry(sqlite3* database, const memoryEntry& entry)
     BindText(insert.get(), 4, "v2:" + NormalizeSummary(entry.summary));
     BindText(insert.get(), 5, entry.source.empty() ? "automatic" : entry.source);
     BindText(insert.get(), 6, entry.createdAt);
-    return sqlite3_step(insert.get()) == SQLITE_DONE;
+    std::string insertedId;
+    int status = sqlite3_step(insert.get());
+    if (status == SQLITE_ROW)
+    {
+        const unsigned char* const id = sqlite3_column_text(insert.get(), 0);
+        if (!id) return false;
+        insertedId = reinterpret_cast<const char*>(id);
+        status = sqlite3_step(insert.get());
+    }
+    // A returned row belongs to this INSERT, unlike the connection-wide changes
+    // counter. Complete and finalize it before publishing success.
+    if (status != SQLITE_DONE || sqlite3_finalize(insert.release()) != SQLITE_OK)
+        return false;
+    if (outInsertedId) *outInsertedId = std::move(insertedId);
+    return true; // Legacy import also accepts a successfully ignored duplicate.
 }
 
 bool IsValidEmbedding(const std::vector<float>& embedding)
@@ -224,11 +236,7 @@ bool IsValidEmbedding(const std::vector<float>& embedding)
         });
 }
 
-bool UpsertEmbedding(
-    sqlite3* database,
-    const std::string& memoryId,
-    const std::string& model,
-    const std::vector<float>& embedding)
+bool UpsertEmbedding(sqlite3* database, const std::string& memoryId, const std::string& model, const std::vector<float>& embedding)
 {
     if (memoryId.empty() || model.empty() || !IsValidEmbedding(embedding))
     {
@@ -566,8 +574,7 @@ std::vector<memoryEntry> longTermMemory::Load() const
     return entries;
 }
 
-bool longTermMemory::Save(const memoryDecision& decision, bool& outWasAdded,
-    std::string* outMemoryId) const
+bool longTermMemory::Save(const memoryDecision& decision, bool& outWasAdded, std::string* outMemoryId) const
 {
     outWasAdded = false;
     if (outMemoryId) outMemoryId->clear();
@@ -597,7 +604,7 @@ bool longTermMemory::Save(const memoryDecision& decision, bool& outWasAdded,
 
     std::string duplicateId;
     std::string duplicateSummary;
-    if (FindDuplicate(database, decision.summary, duplicateId, duplicateSummary))
+    const auto retainDuplicate = [&]()
     {
         if (outMemoryId) *outMemoryId = duplicateId;
         // The retained summary is the embedding input, even for formatting-only
@@ -611,6 +618,10 @@ bool longTermMemory::Save(const memoryDecision& decision, bool& outWasAdded,
                 decision.embedding);
         }
         return true;
+    };
+    if (FindDuplicate(database, decision.summary, duplicateId, duplicateSummary))
+    {
+        return retainDuplicate();
     }
 
     // The indexed text comparison above is the only deduplication authority.
@@ -623,24 +634,26 @@ bool longTermMemory::Save(const memoryDecision& decision, bool& outWasAdded,
     entry.source = decision.source.empty() ? "automatic" : decision.source;
     entry.createdAt = createdAt;
 
-    if (!InsertEntry(database, entry))
+    std::string insertedId;
+    if (!InsertEntry(database, entry, &insertedId))
     {
         return false;
     }
-    outWasAdded = sqlite3_changes(database) > 0;
-    if (!outWasAdded)
+    if (insertedId.empty())
     {
-        // Deduplication found no active duplicate, so an ignored insert means the row
-        // collided on a key this path cannot see: an id collision, or -- once anything
-        // deactivates a memory -- an inactive row still holding the unique normalized
-        // key. Reporting success would hand the caller an id that was never written.
+        // Another store may have won after our lookup. Only an active exact duplicate
+        // can turn an ignored insert into success; unrelated id/key collisions and
+        // inactive rows must still fail without returning an unwritten candidate id.
+        if (FindDuplicate(database, decision.summary, duplicateId, duplicateSummary))
+            return retainDuplicate();
         return false;
     }
-    if (outMemoryId) *outMemoryId = entry.id;
+    outWasAdded = true;
+    if (outMemoryId) *outMemoryId = insertedId;
     if (!decision.embedding.empty() && !decision.embeddingModel.empty() &&
         !UpsertEmbedding(
             database,
-            entry.id,
+            insertedId,
             decision.embeddingModel,
             decision.embedding))
     {
@@ -662,12 +675,8 @@ bool longTermMemory::HasMemories() const
     return query && sqlite3_step(query.get()) == SQLITE_ROW;
 }
 
-std::vector<memoryEntry> longTermMemory::Search(
-    const std::string& queryText,
-    const std::size_t maxEntries,
-    const std::vector<float>& queryEmbedding,
-    const std::string& embeddingModel,
-    const std::int64_t nowEpoch) const
+std::vector<memoryEntry> longTermMemory::Search(const std::string& queryText, const std::size_t maxEntries,
+    const std::vector<float>& queryEmbedding, const std::string& embeddingModel, const std::int64_t nowEpoch) const
 {
     if (maxEntries == 0 || (queryText.empty() && queryEmbedding.empty()))
     {
@@ -880,12 +889,8 @@ std::vector<memoryEntry> longTermMemory::Search(
     return results;
 }
 
-std::string longTermMemory::BuildPromptBlock(
-    const std::string& query,
-    const std::size_t maxEntries,
-    const std::vector<float>& queryEmbedding,
-    const std::string& embeddingModel,
-    const std::int64_t nowEpoch) const
+std::string longTermMemory::BuildPromptBlock(const std::string& query, const std::size_t maxEntries,
+    const std::vector<float>& queryEmbedding, const std::string& embeddingModel, const std::int64_t nowEpoch) const
 {
     if (maxEntries == 0)
     {
@@ -935,22 +940,18 @@ std::string longTermMemory::BuildPromptBlock(
     return stream.str();
 }
 
-std::vector<memoryEntry> longTermMemory::LoadMissingEmbeddings(
-    const std::string& embeddingModel,
-    const std::size_t maxEntries) const
+std::vector<memoryEntry> longTermMemory::LoadMissingEmbeddings(const std::string& embeddingModel, const std::size_t maxEntries) const
 {
     return ReadMissingEmbeddings(embeddingModel, maxEntries, std::nullopt).entries;
 }
 
-EmbeddingBackfillPage longTermMemory::ScanMissingEmbeddings(
-    const std::string& model, std::int64_t afterRowId, std::size_t maxEntries) const
+EmbeddingBackfillPage longTermMemory::ScanMissingEmbeddings(const std::string& model, std::int64_t afterRowId, std::size_t maxEntries) const
 {
     return ReadMissingEmbeddings(model, maxEntries, std::max<std::int64_t>(0, afterRowId));
 }
 
-EmbeddingBackfillPage longTermMemory::ReadMissingEmbeddings(
-    const std::string& embeddingModel, const std::size_t maxEntries,
-    const std::optional<std::int64_t> afterRowId) const
+EmbeddingBackfillPage longTermMemory::ReadMissingEmbeddings(const std::string& embeddingModel,
+    const std::size_t maxEntries, const std::optional<std::int64_t> afterRowId) const
 {
     EmbeddingBackfillPage page;
     page.nextRowId = afterRowId.value_or(0);
@@ -1015,10 +1016,8 @@ bool longTermMemory::NeedsEmbedding(const std::string& id, const std::string& mo
     return sqlite3_step(query.get()) == SQLITE_ROW;
 }
 
-bool longTermMemory::SaveEmbedding(
-    const std::string& memoryId,
-    const std::string& embeddingModel,
-    const std::vector<float>& embedding) const
+bool longTermMemory::SaveEmbedding(const std::string& memoryId,
+    const std::string& embeddingModel, const std::vector<float>& embedding) const
 {
     sqlite3* const database = Acquire();
     return database && UpsertEmbedding(

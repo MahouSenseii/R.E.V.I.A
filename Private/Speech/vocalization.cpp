@@ -508,9 +508,7 @@ VocalizationPolicy::VocalizationPolicy(VocalizationLimits limits)
 {
 }
 
-bool VocalizationPolicy::AffectPermits(
-    const VocalizationKind kind,
-    const revia::runtime::AffectSnapshot& affect)
+bool VocalizationPolicy::AffectPermits(const VocalizationKind kind, const revia::runtime::AffectSnapshot& affect)
 {
     // Only contradictions are blocked, and only when the state is actually held rather
     // than barely registered. A companion that may laugh only while Pleased is a
@@ -534,11 +532,8 @@ bool VocalizationPolicy::AffectPermits(
     return true;
 }
 
-VocalizationVerdict VocalizationPolicy::Evaluate(
-    const VocalizationKind kind,
-    const revia::runtime::AffectSnapshot& affect,
-    const std::chrono::steady_clock::time_point now,
-    const bool bClipAvailable)
+VocalizationVerdict VocalizationPolicy::Evaluate(const VocalizationKind kind, const revia::runtime::AffectSnapshot& affect,
+    const std::chrono::steady_clock::time_point now, const bool bClipAvailable)
 {
     // Availability is checked first so a missing clip is reported as such instead of
     // being masked by a rate rule that would also have refused it.

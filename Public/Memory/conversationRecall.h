@@ -49,22 +49,11 @@ struct RecallRequest
     }
 };
 
-// Decides whether the current turn needs the durable transcript, and what to ask it for.
-//
-// Deterministic and local. Making this a model call would put a hidden classification
-// round-trip in front of every social turn, and would let generated text decide when to
-// read the record of everything that was ever said -- which is the sort of authority the
-// trust boundary exists to withhold.
-//
-// It is written to stay quiet. A time reference alone is not enough: "I will do it
-// tomorrow" names a time and asks for nothing. Something in the turn has to be about the
-// conversation itself.
+// Deterministic local recall requests require conversation-related intent; a time reference alone is insufficient.
 class ConversationRecallPolicy
 {
 public:
-    [[nodiscard]] static RecallRequest Evaluate(
-        const std::string& input,
-        std::int64_t nowEpoch);
+    [[nodiscard]] static RecallRequest Evaluate(const std::string& input, std::int64_t nowEpoch);
 };
 
 // Renders retrieved turns into the one bounded block a turn is allowed to carry.
@@ -72,11 +61,7 @@ public:
 // Bounded twice: each turn is truncated, and the block as a whole stops at
 // maxCharacters. An archive excerpt that crowded out the conversation it was meant to
 // support would cost more than it returned.
-[[nodiscard]] std::string RenderRecallBlock(
-    const RecallRequest& request,
-    const std::vector<ArchivedTurn>& turns,
-    const std::string& assistantName,
-    std::int64_t nowEpoch,
-    std::size_t maxCharacters = 2400);
+[[nodiscard]] std::string RenderRecallBlock(const RecallRequest& request, const std::vector<ArchivedTurn>& turns,
+    const std::string& assistantName, std::int64_t nowEpoch, std::size_t maxCharacters = 2400);
 
 } // namespace revia::memory

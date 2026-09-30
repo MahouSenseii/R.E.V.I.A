@@ -1,13 +1,17 @@
+#include "Core/conversationMessage.h"
+#include "Core/profile.h"
+#include "LLM/backendTypes.h"
+#include "LLM/embeddingTypes.h"
+#include "LLM/endpointSettings.h"
+#include "LLM/responseTypes.h"
+#include "Memory/memoryTypes.h"
 #include "LLM/llmService.h"
 
 llmService::llmService() = default;
 
 llmService::~llmService() = default;
 
-void llmService::ApplySettings(
-    const llmSettings& settings,
-    const embeddingSettings& embeddingSettings,
-    const aiProfile& profile)
+void llmService::ApplySettings(const llmSettings& settings, const embeddingSettings& embeddingSettings, const aiProfile& profile)
 {
     if (settings.backend == "LLamaCpp")
     {
@@ -44,9 +48,7 @@ void llmService::SetReplyNote(std::string note)
     llamaCpp.SetReplyNote(std::move(note));
 }
 
-std::string llmService::RelatedMemories(
-    const std::string& query,
-    const std::stop_token stopToken) const
+std::string llmService::RelatedMemories(const std::string& query, const std::stop_token stopToken) const
 {
     return bIsReady && backendType == llmBackendType::LLamaCpp
         ? llamaCpp.RelatedMemories(query, stopToken)
@@ -68,9 +70,7 @@ healthOutput llmService::CheckEmbeddingHealth(std::stop_token stopToken) const
     return output;
 }
 
-embeddingOutput llmService::EmbedMemory(
-    const std::string& summary,
-    const std::stop_token stopToken) const
+embeddingOutput llmService::EmbedMemory(const std::string& summary, const std::stop_token stopToken) const
 {
     if (backendType == llmBackendType::LLamaCpp)
     {
@@ -98,9 +98,7 @@ bool llmService::IsBackendAvailable(const std::stop_token stopToken) const
     }
 }
 
-bool llmService::WarmUp(
-    const std::stop_token stopToken,
-    std::string& outError) const
+bool llmService::WarmUp(const std::stop_token stopToken, std::string& outError) const
 {
     if (!bIsReady || backendType != llmBackendType::LLamaCpp)
     {
@@ -141,12 +139,8 @@ healthOutput llmService::CheckBackendHealth(const std::stop_token stopToken) con
     }
 }
 
-responseOutput llmService::GenerateResponse(
-    const std::vector<conversationMessage>& context,
-    const std::stop_token stopToken,
-    DeltaHandler onDelta,
-    const bool deepReasoning,
-    const revia::llm::PrivateMemoryAccess memoryAccess) const
+responseOutput llmService::GenerateResponse(const std::vector<conversationMessage>& context, const std::stop_token stopToken,
+    DeltaHandler onDelta, const bool deepReasoning, const revia::llm::PrivateMemoryAccess memoryAccess) const
 {
     if (!bIsReady)
     {
@@ -247,12 +241,8 @@ responseOutput llmService::GenerateActionProposal(const std::string& userRequest
     }
 }
 
-responseOutput llmService::ReviewConversationReply(
-    const std::string& userInput,
-    const std::string& candidateReply,
-    const std::string& runtimeGroundTruth,
-    const int maxReviewTokens,
-    const std::stop_token stopToken) const
+responseOutput llmService::ReviewConversationReply(const std::string& userInput, const std::string& candidateReply,
+    const std::string& runtimeGroundTruth, const int maxReviewTokens, const std::stop_token stopToken) const
 {
     if (!bIsReady || backendType != llmBackendType::LLamaCpp)
     {
@@ -272,10 +262,8 @@ responseOutput llmService::GenerateActivityDraft(
     return llamaCpp.GenerateActivityDraft(topic, context, stopToken);
 }
 
-responseOutput llmService::GenerateCuriosityPlan(
-    const std::string& boundedContextPrompt,
-    const std::vector<std::string>& availableActions,
-    const std::stop_token stopToken) const
+responseOutput llmService::GenerateCuriosityPlan(const std::string& boundedContextPrompt,
+    const std::vector<std::string>& availableActions, const std::stop_token stopToken) const
 {
     if (!bIsReady || backendType != llmBackendType::LLamaCpp)
     {
@@ -295,9 +283,7 @@ responseOutput llmService::GenerateCuriosityPlan(
     return llamaCpp.GenerateCuriosityPlan(boundedContextPrompt, availableActions, stopToken);
 }
 
-responseOutput llmService::Deliberate(
-    const std::string& boundedInquiryPrompt,
-    const std::stop_token stopToken) const
+responseOutput llmService::Deliberate(const std::string& boundedInquiryPrompt, const std::stop_token stopToken) const
 {
     if (!bIsReady || backendType != llmBackendType::LLamaCpp)
     {
@@ -352,11 +338,8 @@ responseOutput llmService::GenerateGoalPlan(const std::string& userRequest) cons
     return llamaCpp.GenerateGoalPlan(userRequest);
 }
 
-responseOutput llmService::GenerateCodeReview(
-    const std::string& instructions,
-    const std::string& material,
-    const std::string& schema,
-    const std::stop_token stopToken) const
+responseOutput llmService::GenerateCodeReview(const std::string& instructions,
+    const std::string& material, const std::string& schema, const std::stop_token stopToken) const
 {
     if (!bIsReady || backendType != llmBackendType::LLamaCpp)
     {
@@ -369,17 +352,13 @@ responseOutput llmService::GenerateCodeReview(
     return llamaCpp.GenerateCodeReview(instructions, material, schema, stopToken);
 }
 
-responseOutput llmService::GenerateComputerSubgoal(
-    const std::string& instruction,
-    const std::string& situation,
-    const std::string& schema,
-    const std::stop_token stopToken) const
+responseOutput llmService::GenerateComputerSubgoal(const std::string& instruction,
+    const std::string& situation, const std::string& schema, const std::stop_token stopToken) const
 {
     return llamaCpp.GenerateComputerSubgoal(instruction, situation, schema, stopToken);
 }
 
-responseOutput llmService::GenerateNextGoalStep(
-    const std::string& goalContext, const std::stop_token stopToken) const
+responseOutput llmService::GenerateNextGoalStep(const std::string& goalContext, const std::stop_token stopToken) const
 {
     // The same gates the plan path applies, for the same reasons: an iterative run
     // that silently produced no step would look like a goal that finished.
@@ -462,9 +441,7 @@ responseOutput ContentUnavailable(const std::string& what)
 }
 }
 
-responseOutput llmService::ComposeContent(
-    const std::string& request,
-    const std::string& context) const
+responseOutput llmService::ComposeContent(const std::string& request, const std::string& context) const
 {
     if (!bIsReady || backendType != llmBackendType::LLamaCpp ||
         !llamaCpp.CheckHealth().bIsAvailable)
@@ -474,10 +451,7 @@ responseOutput llmService::ComposeContent(
     return llamaCpp.ComposeContent(request, context);
 }
 
-responseOutput llmService::ReviseBlock(
-    const std::string& instruction,
-    const std::string& neighbourhood,
-    const std::string& target) const
+responseOutput llmService::ReviseBlock(const std::string& instruction, const std::string& neighbourhood, const std::string& target) const
 {
     if (!bIsReady || backendType != llmBackendType::LLamaCpp ||
         !llamaCpp.CheckHealth().bIsAvailable)
@@ -487,12 +461,8 @@ responseOutput llmService::ReviseBlock(
     return llamaCpp.ReviseBlock(instruction, neighbourhood, target);
 }
 
-responseOutput llmService::AnalyzeImage(
-    const std::filesystem::path& imagePath,
-    const std::string& prompt,
-    const int maxResponseTokens,
-    const std::stop_token stopToken,
-    const bool backgroundAwareness) const
+responseOutput llmService::AnalyzeImage(const std::filesystem::path& imagePath, const std::string& prompt, const int maxResponseTokens,
+    const std::stop_token stopToken, const bool backgroundAwareness) const
 {
     if (!bIsReady || backendType != llmBackendType::LLamaCpp)
     {
@@ -512,11 +482,8 @@ responseOutput llmService::AnalyzeImage(
     return llamaCpp.AnalyzeImage(imagePath, prompt, maxResponseTokens, stopToken, backgroundAwareness);
 }
 
-memoryDecision llmService::EvaluateMemory(
-    const std::string& userMessage,
-    const std::string& assistantMessage,
-    const revia::agents::ResponseProvenance provenance,
-    const std::stop_token stopToken) const
+memoryDecision llmService::EvaluateMemory(const std::string& userMessage, const std::string& assistantMessage,
+    const revia::agents::ResponseProvenance provenance, const std::stop_token stopToken) const
 {
     if (!bIsReady)
     {

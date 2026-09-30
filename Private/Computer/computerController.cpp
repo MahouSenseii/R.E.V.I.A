@@ -193,10 +193,7 @@ void ComputerController::ResetStats()
     escalationsThisRun = 0;
 }
 
-ComputerController::Attempt ComputerController::Ask(
-    IComputerPolicy& policy,
-    const ComputerTaskContext& context,
-    std::stop_token stopToken)
+ComputerController::Attempt ComputerController::Ask(IComputerPolicy& policy, const ComputerTaskContext& context, std::stop_token stopToken)
 {
     Attempt attempt;
     if (!policy.IsAvailable())
@@ -232,8 +229,7 @@ bool ComputerController::Redeem(ComputerDecision& decision)
     return true;
 }
 
-void ComputerController::RunShadow(
-    const ComputerTaskContext& context, std::stop_token stopToken)
+void ComputerController::RunShadow(const ComputerTaskContext& context, std::stop_token stopToken)
 {
     if (!routine) return;
 
@@ -261,8 +257,7 @@ void ComputerController::RunShadow(
     if (lastRecord.shadowAgreed) ++stats.shadowAgreements;
 }
 
-goals::NextStep ComputerController::Decide(
-    const ComputerTaskContext& context, std::stop_token stopToken)
+goals::NextStep ComputerController::Decide(const ComputerTaskContext& context, std::stop_token stopToken)
 {
     lastRecord = ComputerDecisionRecord{};
     ++stats.decisions;

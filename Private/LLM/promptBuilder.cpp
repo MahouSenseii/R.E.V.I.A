@@ -1,3 +1,6 @@
+#include "Core/conversationMessage.h"
+#include "Core/profile.h"
+#include "LLM/responseTypes.h"
 #include "LLM/promptBuilder.h"
 #include "Core/utf8.h"
 #include "Agents/conversationStylePolicy.h"
@@ -30,16 +33,10 @@ promptBuilder::promptBuilder() = default;
 
 promptBuilder::~promptBuilder() = default;
 
-nlohmann::json promptBuilder::BuildMessages(const aiProfile& profile,
-const std::vector<conversationMessage>& context,
-const std::vector<float>& queryEmbedding,
-const std::string& embeddingModel,
-std::vector<latencySample>* timings,
-const std::string& posture,
-std::vector<promptSection>* sections,
-const revia::llm::PrivateMemoryAccess memoryAccess,
-const std::string& replyNote,
-const bool stablePrefix) const
+nlohmann::json promptBuilder::BuildMessages(const aiProfile& profile, const std::vector<conversationMessage>& context,
+    const std::vector<float>& queryEmbedding, const std::string& embeddingModel, std::vector<latencySample>* timings,
+    const std::string& posture, std::vector<promptSection>* sections, const revia::llm::PrivateMemoryAccess memoryAccess,
+    const std::string& replyNote, const bool stablePrefix) const
 {
     nlohmann::json messages = nlohmann::json::array();
 
@@ -195,11 +192,8 @@ const bool stablePrefix) const
     return messages;
 }
 
-std::string promptBuilder::BuildRelatedMemoryBlock(
-    const std::string& query,
-    const std::vector<float>& queryEmbedding,
-    const std::string& embeddingModel,
-    const std::size_t maxEntries) const
+std::string promptBuilder::BuildRelatedMemoryBlock(const std::string& query, const std::vector<float>& queryEmbedding,
+    const std::string& embeddingModel, const std::size_t maxEntries) const
 {
     return memory.BuildPromptBlock(query, maxEntries, queryEmbedding, embeddingModel);
 }

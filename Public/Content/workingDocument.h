@@ -27,17 +27,9 @@ struct EditOutcome
     std::string after;
 };
 
-// A document Revia is working on, held in the session.
-//
-// The point of this type is the shape of its mutations. A precise edit is not a request
-// to a model to please leave the rest alone -- it is `ReplaceBlock`, which can reach
-// exactly one block and has no expression for touching another. Asking a model to rewrite
-// a scene and preserve everything but one line works until the day it does not, and the
-// failure is silent: the scene still reads fine, and a paragraph three pages up has
-// quietly changed. Here that outcome is unreachable rather than unlikely.
-//
-// Everything else follows from that: generation replaces the whole document explicitly,
-// edits are per-block, and every mutation snapshots first so any of it can be undone.
+// Session document with explicit whole-document replacement and block-scoped edits.
+// Every mutation snapshots first for undo; ReplaceBlock cannot reach other blocks.
+// Titles and blocks replace malformed UTF-8 bytes with U+FFFD before storage.
 class WorkingDocument
 {
 public:
@@ -81,9 +73,7 @@ public:
     [[nodiscard]] std::string RenderNumbered() const;
     // The blocks around a target, for giving a model enough context to rewrite one line
     // without handing it the whole document to rewrite.
-    [[nodiscard]] std::string RenderNeighbourhood(
-        const std::string& reference,
-        std::size_t radius = 2) const;
+    [[nodiscard]] std::string RenderNeighbourhood(const std::string& reference, std::size_t radius = 2) const;
 
 private:
     void Snapshot();
@@ -107,10 +97,8 @@ class PreciseEditGuard
 {
 public:
     // True when the replacement has evidently swallowed neighbouring blocks.
-    [[nodiscard]] static bool LooksLikeWholeDocument(
-        const std::string& replacement,
-        const std::vector<Block>& others,
-        const std::string& targetId);
+    [[nodiscard]] static bool LooksLikeWholeDocument(const std::string& replacement,
+        const std::vector<Block>& others, const std::string& targetId);
 
     // Strips a model's habitual framing -- "Sure, here's the revised line:", quotes,
     // a code fence -- so the block holds the line and not the apology in front of it.

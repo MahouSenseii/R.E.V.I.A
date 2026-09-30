@@ -1,3 +1,5 @@
+#include "Runtime/channelSettings.h"
+#include "Runtime/outputChannel.h"
 #include "Runtime/outputChannelPolicy.h"
 
 #include <algorithm>
@@ -40,10 +42,7 @@ std::string ToString(const ChannelSpeechReason reason)
     return "unclassified_default";
 }
 
-ChannelPolicy ResolveOutputChannel(
-    const outputChannel channel,
-    const std::string& application,
-    const conversationChannelSettings& settings)
+ChannelPolicy ResolveOutputChannel(const outputChannel channel, const std::string& application, const conversationChannelSettings& settings)
 {
     ChannelPolicy policy;
     if (channel == outputChannel::LocalVoice)

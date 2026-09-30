@@ -1,3 +1,6 @@
+#include "LLM/backendTypes.h"
+#include "LLM/embeddingTypes.h"
+#include "LLM/endpointSettings.h"
 #include "LLM/LLamaCPP/llamaCppEmbeddingService.h"
 #include "cancellableHttpClient.h"
 
@@ -15,9 +18,7 @@ using json = nlohmann::json;
 
 namespace
 {
-    embeddingOutput FinishEmbedding(
-        embeddingOutput output,
-        const std::chrono::steady_clock::time_point started)
+    embeddingOutput FinishEmbedding(embeddingOutput output, const std::chrono::steady_clock::time_point started)
     {
         output.elapsedMilliseconds = std::chrono::duration<double, std::milli>(
             std::chrono::steady_clock::now() - started).count();
@@ -144,24 +145,17 @@ healthOutput llamaCppEmbeddingService::CheckHealth(std::stop_token stopToken) co
     return output;
 }
 
-embeddingOutput llamaCppEmbeddingService::EmbedQuery(
-    const std::string& text,
-    const std::stop_token stopToken) const
+embeddingOutput llamaCppEmbeddingService::EmbedQuery(const std::string& text, const std::stop_token stopToken) const
 {
     return Embed(text, queryPrefix, stopToken);
 }
 
-embeddingOutput llamaCppEmbeddingService::EmbedDocument(
-    const std::string& text,
-    const std::stop_token stopToken) const
+embeddingOutput llamaCppEmbeddingService::EmbedDocument(const std::string& text, const std::stop_token stopToken) const
 {
     return Embed(text, documentPrefix, stopToken);
 }
 
-embeddingOutput llamaCppEmbeddingService::Embed(
-    const std::string& text,
-    const std::string& prefix,
-    const std::stop_token stopToken) const
+embeddingOutput llamaCppEmbeddingService::Embed(const std::string& text, const std::string& prefix, const std::stop_token stopToken) const
 {
     const auto started = std::chrono::steady_clock::now();
     embeddingOutput output;

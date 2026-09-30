@@ -494,6 +494,16 @@ The live permissions file is `build\debug\RuntimeData\Capabilities\capabilities.
 
 ## Where things live
 
+Source code is organized by responsibility. `Public/<Domain>` holds interfaces
+and types; `Private/<Domain>` holds their implementations. Start with
+`Memory` for storage, `Speech` for voice/listening, `Computer` for desktop task
+decisions, `Policy` for permission checks, and `Runtime` for session coordination.
+Qt panels are in `Desktop`; setup and local services are in `Tools`.
+
+The [source and ownership map](docs/ARCHITECTURE.md#source-layout) covers every
+domain. [Coding conventions](AGENTS.md) describe file placement, compact function
+signatures, and short comments.
+
 | Path | Contents |
 |---|---|
 | `Config\` | Checked-in defaults (`settings.json`, `capabilities.json`, `model_manifest.json`, `Profiles\`) |

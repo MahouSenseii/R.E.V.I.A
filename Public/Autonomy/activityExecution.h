@@ -12,18 +12,8 @@
 namespace revia::autonomy
 {
 
-// What an idle activity may attempt on the PC, when nobody asked for it.
-//
-// Defined once because two places have to agree: the executor gate, and the scope the
-// idle planner is shown. If they drift, Revia is either offered actions that will be
-// cancelled or denied actions she is permitted, and both read as the runtime lying to
-// her about what she can do.
-//
-// This is not the enforcement. CapabilityPolicy independently re-checks the autonomous
-// permission, every per-action switch, the approved applications and the command-surface
-// boundary. This only decides what an unprompted activity may put in front of policy.
-// Moving or deleting user files, invoking named UI controls and web requests are
-// deliberately absent: they have their own owners and their own permissions.
+// Shared idle-planner/executor action eligibility; CapabilityPolicy independently enforces authority.
+// Excludes file moves/deletes, named-control invocation and web requests, which have separate permissions.
 [[nodiscard]] bool IsIdleComputerAction(actions::ActionType type, bool autonomousDesktop);
 
 // The same set as names, for the planner's computer scope.
@@ -65,13 +55,7 @@ struct ActivityOutcome
 // treating it as one would make a quiet Revia progressively less motivated.
 [[nodiscard]] std::optional<Drive> DriveSatisfiedBy(ActivityType type);
 
-// Whether a candidate string is a research topic or a command that was mistaken for one.
-//
-// This gate exists because of a real failure: the raw utterance "look up what you want !"
-// was sent verbatim to the search backend, which returned a Poison album, a Beatles song
-// and an Evanescence song, and that text was then fed back as grounding. Delegating the
-// choice of topic is not a topic, and searching the delegation is worse than not
-// searching at all -- it produces confident, irrelevant evidence.
+// Rejects commands and delegated topic selection mistaken for concrete research topics.
 struct ResearchTopicVerdict
 {
     bool usable = false;
@@ -94,24 +78,19 @@ struct ResearchTopicVerdict
 // nothing is a normal outcome and means the correct action is to not research: a topic
 // invented to satisfy a drive is exactly the random behaviour autonomy is supposed to
 // exclude.
-[[nodiscard]] ResearchTopicVerdict ChooseResearchTopic(
-    const std::vector<std::string>& candidatesInPriorityOrder);
+[[nodiscard]] ResearchTopicVerdict ChooseResearchTopic(const std::vector<std::string>& candidatesInPriorityOrder);
 
 // A bounded, filesystem-safe name for something Revia made on her own.
 //
 // Autonomous creation writes only inside her own workspace, and a title that came from a
 // model is not a filename. This strips it to a known-safe shape rather than trusting it.
-[[nodiscard]] std::string WorkspaceArtifactName(
-    const std::string& title,
-    const std::string& extension);
+[[nodiscard]] std::string WorkspaceArtifactName(const std::string& title, const std::string& extension);
 
 // What an activity should report as ActivityOutcome::artifact for a learned finding it
 // submitted, given how that submission actually resolved.
 //
 // Every successful disposition means semantic content is already in the store,
 // including SavedEmbeddingQueued. Failed submissions produce no kept artifact.
-[[nodiscard]] std::string DescribeLearnedFindingArtifact(
-    agents::LearnedFindingResult result,
-    const std::string& kept);
+[[nodiscard]] std::string DescribeLearnedFindingArtifact(agents::LearnedFindingResult result, const std::string& kept);
 
 } // namespace revia::autonomy

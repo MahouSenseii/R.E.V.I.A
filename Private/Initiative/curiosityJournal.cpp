@@ -1,4 +1,5 @@
 #include "Initiative/curiosityJournal.h"
+#include "Core/utf8.h"
 
 #include <algorithm>
 #include <cctype>
@@ -129,9 +130,7 @@ bool CuriosityJournal::SameTopic(const std::string& left, const std::string& rig
     return shared * 4 >= shorter * 3;
 }
 
-bool CuriosityJournal::Initialize(
-    const std::filesystem::path& path,
-    std::string& outError)
+bool CuriosityJournal::Initialize(const std::filesystem::path& path, std::string& outError)
 {
     std::lock_guard lock(mutex);
     journalPath = path;
@@ -185,10 +184,8 @@ bool CuriosityJournal::Initialize(
     return true;
 }
 
-bool CuriosityJournal::WasRecentlyConsidered(
-    const std::string& topic,
-    const std::chrono::minutes window,
-    const std::chrono::system_clock::time_point now) const
+bool CuriosityJournal::WasRecentlyConsidered(const std::string& topic,
+    const std::chrono::minutes window, const std::chrono::system_clock::time_point now) const
 {
     const std::string wanted = NormalizeTopic(topic);
     if (wanted.empty()) return true;
@@ -200,8 +197,7 @@ bool CuriosityJournal::WasRecentlyConsidered(
     });
 }
 
-bool CuriosityJournal::WasResearchRecentlyAttempted(
-    const std::chrono::seconds window,
+bool CuriosityJournal::WasResearchRecentlyAttempted(const std::chrono::seconds window,
     const std::chrono::system_clock::time_point now) const
 {
     std::lock_guard lock(mutex);
@@ -214,17 +210,32 @@ bool CuriosityJournal::WasResearchRecentlyAttempted(
 
 bool CuriosityJournal::Append(const CuriosityRecord& input, std::string& outError)
 {
+    if (!revia::utf8::IsValid(input.topic) || !revia::utf8::IsValid(input.query) ||
+        !revia::utf8::IsValid(input.outcome) ||
+        !std::all_of(input.sources.begin(), input.sources.end(),
+            [](const std::string& source) { return revia::utf8::IsValid(source); }))
+    {
+        outError = "Curiosity record text must be valid UTF-8.";
+        return false;
+    }
     CuriosityRecord record = input;
     if (NormalizeTopic(record.topic).empty())
     {
         outError = "A curiosity record requires a concrete topic.";
         return false;
     }
-    record.topic.resize(std::min<std::size_t>(record.topic.size(), 300));
-    record.query.resize(std::min<std::size_t>(record.query.size(), 500));
-    record.outcome.resize(std::min<std::size_t>(record.outcome.size(), 1000));
+    revia::utf8::Truncate(record.topic, 300);
+    revia::utf8::Truncate(record.query, 500);
+    revia::utf8::Truncate(record.outcome, 1000);
     if (record.sources.size() > 10) record.sources.resize(10);
 
+    const std::string line = nlohmann::json({
+        {"occurred_at_ms", EpochMilliseconds(record.occurredAt)},
+        {"topic", record.topic},
+        {"query", record.query},
+        {"sources", record.sources},
+        {"outcome", record.outcome}
+    }).dump();
     std::lock_guard lock(mutex);
     if (journalPath.empty())
     {
@@ -237,13 +248,6 @@ bool CuriosityJournal::Append(const CuriosityRecord& input, std::string& outErro
         outError = "Could not append to the curiosity journal.";
         return false;
     }
-    const std::string line = nlohmann::json({
-        {"occurred_at_ms", EpochMilliseconds(record.occurredAt)},
-        {"topic", record.topic},
-        {"query", record.query},
-        {"sources", record.sources},
-        {"outcome", record.outcome}
-    }).dump();
     stream << line << '\n';
     if (!stream.good())
     {

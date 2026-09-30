@@ -18,22 +18,9 @@ enum class TranscriptRouting
     FillAndHold
 };
 
-// Where a transcript goes, given how the user has set things up.
-//
-// Extracted from the Qt event handler so it can be tested without an event loop, a
-// microphone, or whisper.cpp. The decision is small but it is the last step of the
-// voice path, and it is where "I spoke and nothing happened" and "I spoke and it sent
-// something I wanted to edit first" both live.
-//
-// `busy` is deliberately a reason to hold rather than to drop: a transcript that
-// arrived while Revia was mid-reply is still what the user said, and discarding it
-// would lose speech the person has no way to get back. Holding it in the box lets them
-// send it when she is done.
-[[nodiscard]] constexpr TranscriptRouting DecideTranscriptRouting(
-    const bool handsFree,
-    const bool transcriptEmpty,
-    const bool autoSendEnabled,
-    const bool busy)
+// Routes transcripts according to user settings; busy holds the text for review rather than discarding it.
+[[nodiscard]] constexpr TranscriptRouting DecideTranscriptRouting(const bool handsFree,
+    const bool transcriptEmpty, const bool autoSendEnabled, const bool busy)
 {
     if (transcriptEmpty) return TranscriptRouting::Ignore;
     if (handsFree) return TranscriptRouting::HandsFreeAlreadySubmitted;

@@ -1,3 +1,4 @@
+#include "Core/appSettings.h"
 #include "Runtime/runtimeDataBootstrap.h"
 
 #include "Core/runtimePath.h"
@@ -29,11 +30,8 @@ namespace
         return true;
     }
 
-    bool CopySeedIfMissing(
-        const std::filesystem::path& source,
-        const std::filesystem::path& destination,
-        bool& copied,
-        std::string& errorMessage)
+    bool CopySeedIfMissing(const std::filesystem::path& source,
+        const std::filesystem::path& destination, bool& copied, std::string& errorMessage)
     {
         copied = false;
         std::error_code error;
@@ -70,10 +68,8 @@ namespace
     }
 }
 
-RuntimeDataBootstrapResult BootstrapRuntimeData(
-    const appSettings& settings,
-    const std::filesystem::path& runtimeRoot,
-    const std::filesystem::path& seedRoot)
+RuntimeDataBootstrapResult BootstrapRuntimeData(const appSettings& settings,
+    const std::filesystem::path& runtimeRoot, const std::filesystem::path& seedRoot)
 {
     RuntimeDataBootstrapResult result;
     const std::array directories = {

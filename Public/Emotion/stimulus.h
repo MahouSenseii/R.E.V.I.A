@@ -24,15 +24,8 @@ enum class StimulusSource
 [[nodiscard]] std::string ToString(StimulusSource source);
 [[nodiscard]] StimulusSource StimulusSourceFromString(const std::string& name);
 
-// One thing that happened, described in typed numbers rather than in prose.
-//
-// The typed fields are the point. A description string can be logged and shown, but
-// nothing downstream may branch on its wording: appraisal reads valence, importance,
-// novelty, and causation, so the same machinery serves a failed goal, a surprising
-// research result, and a sharp remark without any of them needing a keyword list.
-//
-// Only the runtime constructs these. A stimulus the model invented would be a feeling
-// with no event under it, which is the failure this whole subsystem exists to prevent.
+// Runtime-confirmed event with typed appraisal inputs; descriptions are diagnostic only.
+// Appraisal must not branch on prose or accept model-invented events.
 struct Stimulus
 {
     StimulusSource source = StimulusSource::Internal;

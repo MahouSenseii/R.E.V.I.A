@@ -48,45 +48,20 @@ struct GpuAdapterReading
     std::string adapterLuid;
     std::uint64_t dedicatedUsedMiB = 0;
     bool memoryMeasured = false;
-    // The busiest engine on the adapter, 0..100, which is what the Task Manager GPU
-    // column reports.
-    //
-    // Occupancy and activity answer different questions and must not be conflated. A card
-    // holding resident model weights while nothing is being generated reads nearly full
-    // on memory and idle on compute, and a panel that shows only the first makes an
-    // untouched GPU look overloaded.
+    // Busiest adapter engine utilization, 0..100 as in Task Manager; independent of resident memory.
     double utilizationPercent = 0.0;
     bool utilizationMeasured = false;
 };
 
-// Every process Revia started, transitively, plus Revia itself.
-//
-// Walking the tree rather than asking each owner for its handle is deliberate. The chat
-// server, the embedding server, the voice worker, and whisper bursts are all children of
-// this process, so the tree is the definition of "owned" and stays correct when a worker
-// is added later. A registry of handles would have to be updated by hand and would be
-// wrong in exactly the case that matters -- a worker somebody forgot to register.
+// Enumerates Revia and every transitively started child process without a hand-maintained handle registry.
 [[nodiscard]] std::vector<ProcessUsage> SampleOwnedProcesses();
 
 [[nodiscard]] SystemMemoryReading SampleSystemMemory();
 
 [[nodiscard]] unsigned int LogicalProcessorCount();
 
-// Owns one query over the system-wide per-adapter GPU counters: dedicated video memory
-// and engine utilisation.
-//
-// System-wide is the point: the chat server holds its weights in another process, so a
-// per-process video memory figure would report Revia using almost none of the VRAM it is
-// actually responsible for. These are the counters Task Manager reads, so the numbers
-// here and the numbers the user can check agree.
-//
-// One query for both counters rather than two samplers, because they are the same
-// question asked of the same adapters at the same instant, and two independent
-// collections would report memory and compute from moments that do not line up.
-//
-// The query stays open across samples because some counter types need a prior collection
-// before they format, and reopening it every couple of seconds would pay that cost
-// forever.
+// Owns one persistent system-wide per-adapter GPU memory/activity query.
+// Both counters share each sample; the query stays open for counters requiring prior collection.
 class GpuAdapterSampler
 {
 public:

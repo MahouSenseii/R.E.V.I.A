@@ -22,9 +22,7 @@ namespace
     }
 }
 
-EmotionVector RuleEmotionModel::RawResponse(
-    const Stimulus& stimulus,
-    const AppraisalContext& context)
+EmotionVector RuleEmotionModel::RawResponse(const Stimulus& stimulus, const AppraisalContext& context)
 {
     EmotionVector delta;
 
@@ -194,9 +192,7 @@ EmotionVector RuleEmotionModel::RawResponse(
     return delta.Clamp();
 }
 
-EmotionVector RuleEmotionModel::Evaluate(
-    const Stimulus& stimulus,
-    const AppraisalContext& context) const
+EmotionVector RuleEmotionModel::Evaluate(const Stimulus& stimulus, const AppraisalContext& context) const
 {
     EmotionVector delta = RawResponse(stimulus, context);
 

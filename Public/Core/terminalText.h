@@ -5,17 +5,8 @@
 namespace revia::core
 {
 
-// Reads standard input one line at a time, as UTF-8.
-//
-// Everything past the terminal assumes UTF-8, and a Windows console does not provide it:
-// std::getline there returns bytes in the console's input code page, so "café" typed
-// into cmd.exe arrived as 63 61 66 82 under code page 437. That is not UTF-8, and every
-// JSON request built from the turn threw on it, the archive refused it, and the reply
-// echoed it back as mojibake. A console is therefore read as UTF-16 and converted here.
-//
-// Input that is not a console -- a pipe, a redirected file -- and every other platform
-// are read with std::getline unchanged, because their bytes are already whatever the
-// sender wrote.
+// Reads UTF-8 lines, converting Windows console input from UTF-16.
+// Pipes, redirected files and other platforms retain std::getline byte behavior.
 class TerminalLineReader
 {
 public:

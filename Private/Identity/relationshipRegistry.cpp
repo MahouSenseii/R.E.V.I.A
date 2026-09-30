@@ -99,8 +99,7 @@ bool RelationshipRegistry::Save(std::string& outError) const
     return store.Save(snapshot, outError);
 }
 
-Preference RelationshipRegistry::ReinforcePreference(
-    const std::string& subject, const bool positive, const PreferenceSource source)
+Preference RelationshipRegistry::ReinforcePreference(const std::string& subject, const bool positive, const PreferenceSource source)
 {
     std::lock_guard lock(mutex);
     const Preference updated =
@@ -111,8 +110,7 @@ Preference RelationshipRegistry::ReinforcePreference(
     return updated;
 }
 
-void RelationshipRegistry::SeedPreferences(
-    const std::vector<std::pair<std::string, float>>& declared)
+void RelationshipRegistry::SeedPreferences(const std::vector<std::pair<std::string, float>>& declared)
 {
     std::lock_guard lock(mutex);
     bool inserted = false;
@@ -132,8 +130,7 @@ std::vector<Preference> RelationshipRegistry::Preferences() const
     return preferences.All();
 }
 
-std::vector<Preference> RelationshipRegistry::StrongestPreferences(
-    const std::size_t limit) const
+std::vector<Preference> RelationshipRegistry::StrongestPreferences(const std::size_t limit) const
 {
     std::lock_guard lock(mutex);
     return preferences.Strongest(limit);
@@ -154,8 +151,7 @@ RelationshipState RelationshipRegistry::Get(const std::string& entityId)
     return fresh;
 }
 
-std::optional<RelationshipState> RelationshipRegistry::Find(
-    const std::string& entityId) const
+std::optional<RelationshipState> RelationshipRegistry::Find(const std::string& entityId) const
 {
     std::lock_guard lock(mutex);
     const auto found = snapshot.relationships.find(entityId);
@@ -201,9 +197,7 @@ RelationshipState RelationshipRegistry::Apply(const RelationshipEvent& event)
     return found->second;
 }
 
-void RelationshipRegistry::SettleAll(
-    const std::chrono::steady_clock::time_point now,
-    const std::chrono::milliseconds quietInterval)
+void RelationshipRegistry::SettleAll(const std::chrono::steady_clock::time_point now, const std::chrono::milliseconds quietInterval)
 {
     std::lock_guard lock(mutex);
     for (auto& [entityId, relationship] : snapshot.relationships)
@@ -216,9 +210,7 @@ void RelationshipRegistry::SettleAll(
     }
 }
 
-void RelationshipRegistry::SetDisplayName(
-    const std::string& entityId,
-    const std::string& displayName)
+void RelationshipRegistry::SetDisplayName(const std::string& entityId, const std::string& displayName)
 {
     if (entityId.empty() || displayName.empty())
     {

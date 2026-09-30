@@ -8,19 +8,8 @@
 namespace revia::performance
 {
 
-// Singing is a performance, not a long sentence.
-//
-// Ordinary speech and a song want different things from the audio path. Speech is a
-// queue of short phrases that must stay in order and must be interruptible mid-word; a
-// song is one continuous timeline where two tracks have to stay sample-aligned for
-// minutes. Trying to serve both from the speech queue would have meant weakening the
-// ordering guarantees that make speech work, so this is a separate owner with its own
-// playback -- and a failure in here is designed to be survivable by everything else.
-//
-// What it is not: it is not a singing engine. Revia performs audio that already exists,
-// which is what DECISION-REVIA-0006 chose as the first dependable form. When a real
-// ISingingEngine arrives it replaces where the vocal samples come from, not any of the
-// mixing, timing, or event machinery below.
+// Sample-aligned playback of existing vocal/backing audio on a separate continuous timeline.
+// Song failures do not weaken ordinary speech ordering or interruption guarantees.
 
 enum class PerformanceState
 {

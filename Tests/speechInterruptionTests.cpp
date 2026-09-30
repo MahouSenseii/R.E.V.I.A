@@ -1,3 +1,4 @@
+#include "Speech/speechSettings.h"
 #include "testSupport.h"
 
 #include "speechServiceTestAccess.h"

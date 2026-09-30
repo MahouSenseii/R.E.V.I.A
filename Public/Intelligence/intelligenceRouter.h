@@ -13,9 +13,7 @@ namespace revia::intelligence
 class IntelligenceRouter
 {
 public:
-    [[nodiscard]] IntelligenceDecision Route(
-        const std::string& input,
-        const RoutingContext& context = {}) const;
+    [[nodiscard]] IntelligenceDecision Route(const std::string& input, const RoutingContext& context = {}) const;
 };
 
 } // namespace revia::intelligence

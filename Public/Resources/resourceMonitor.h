@@ -22,13 +22,7 @@ enum class MeterUnit
     Percent
 };
 
-// What a meter's percentage is a fraction of.
-//
-// The distinction is the difference between two questions a user asks separately: is the
-// hardware in trouble, and is Revia inside the allowance her plan set. A card 88% full
-// while Revia is 7% past a budget carved out of it is one healthy number and one
-// planning number, and a single bar reading 107% claims the first is critical when it is
-// not.
+// Separates physical hardware capacity from the allowance set by the resource plan.
 enum class MeterBasis
 {
     Budget,
@@ -131,19 +125,13 @@ public:
     // Pure policy: one raw reading becomes budget-relative meters. Separated from the
     // thread and from the platform calls so the arithmetic that the user will read off
     // the screen can be tested against synthetic hardware.
-    [[nodiscard]] static UsageSnapshot Compose(
-        const ResourcePlan& plan,
-        const SystemMemoryReading& memory,
-        const std::vector<ProcessUsage>& processes,
-        const std::vector<GpuAdapterReading>& gpuReadings,
-        bool gpuCountersAvailable,
-        std::uint64_t previousOwnedCpuMilliseconds,
-        double elapsedSeconds);
+    [[nodiscard]] static UsageSnapshot Compose(const ResourcePlan& plan, const SystemMemoryReading& memory,
+        const std::vector<ProcessUsage>& processes, const std::vector<GpuAdapterReading>& gpuReadings, bool gpuCountersAvailable,
+        std::uint64_t previousOwnedCpuMilliseconds, double elapsedSeconds);
 
     // The CPU thread budget the plan implies: every long-lived worker cap added up.
     [[nodiscard]] static int PlannedThreadBudget(const ResourcePlan& plan);
-    [[nodiscard]] static std::uint64_t TotalCpuMilliseconds(
-        const std::vector<ProcessUsage>& processes);
+    [[nodiscard]] static std::uint64_t TotalCpuMilliseconds(const std::vector<ProcessUsage>& processes);
 
 private:
     void Run(std::stop_token stopToken);

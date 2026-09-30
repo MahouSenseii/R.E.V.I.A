@@ -99,12 +99,8 @@ std::string Sha256Hex(const std::string& input)
     return stream.str();
 }
 
-std::string BehaviourDigestInput(
-    const std::uint32_t featureVersion,
-    const std::vector<std::string>& featureNames,
-    const std::vector<double>& weights,
-    const double abstainBelow,
-    const std::vector<std::string>& applications,
+std::string BehaviourDigestInput(const std::uint32_t featureVersion, const std::vector<std::string>& featureNames,
+    const std::vector<double>& weights, const double abstainBelow, const std::vector<std::string>& applications,
     const std::vector<std::string>& intents)
 {
     // Newline-separated and section-labelled, so that moving a value from one list to

@@ -109,11 +109,8 @@ constexpr std::array<VendorPrefix, 22> VendorPrefixes = {{
 constexpr std::array<std::string_view, 6> AwsKeyPrefixes = {
     "ASIA", "AROA", "AIDA", "ANPA", "ABIA", "ACCA"};
 
-bool MatchesVendorPrefix(
-    const std::string& text,
-    const std::string_view prefix,
-    const std::size_t minimumBody,
-    const bool exactUpperCaseWidth)
+bool MatchesVendorPrefix(const std::string& text,
+    const std::string_view prefix, const std::size_t minimumBody, const bool exactUpperCaseWidth)
 {
     std::size_t position = text.find(prefix);
     while (position != std::string::npos)

@@ -48,9 +48,7 @@ bool ContainsWord(const std::string& input, const std::string_view word)
     return false;
 }
 
-bool ContainsAnyWord(
-    const std::string& input,
-    const std::initializer_list<std::string_view> words)
+bool ContainsAnyWord(const std::string& input, const std::initializer_list<std::string_view> words)
 {
     return std::any_of(words.begin(), words.end(), [&](const std::string_view word)
     {
@@ -107,9 +105,7 @@ bool IsStaticTechnicalKnowledge(const std::string& lowered)
 }
 }
 
-bool InternetLookupPolicy::ShouldLookup(
-    const std::string& input,
-    const bool automaticLookup)
+bool InternetLookupPolicy::ShouldLookup(const std::string& input, const bool automaticLookup)
 {
     const std::string lowered = Lower(input);
     if (lowered.empty() || lowered.size() > 1024)

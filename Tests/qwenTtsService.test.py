@@ -5,9 +5,12 @@ import importlib.util
 import json
 import sys
 import threading
+import types
 import unittest
+import weakref
 from http.server import ThreadingHTTPServer
 from pathlib import Path
+from unittest.mock import patch
 
 
 SERVICE = Path(__file__).resolve().parents[1] / "Tools" / "qwen_tts_service.py"
@@ -59,6 +62,8 @@ class QwenHandlerTests(unittest.TestCase):
                 connection.close()
         finally:
             server.shutdown()
+            server.server_close()
+            thread.join(timeout=5)
 
     def test_vocalization_endpoint_passes_the_parsed_request(self) -> None:
         token = "test-token"
@@ -310,6 +315,41 @@ class BackendStateTests(unittest.TestCase):
         state = runtime._backend_state()
         self.assertFalse(state["low_latency_requested"])
         self.assertEqual(state["low_latency_state"], "off")
+        self.assertFalse(state["cuda_graph"])
+        self.assertFalse(state["talker_graph"])
+
+
+class ModelUnloadTests(unittest.TestCase):
+    def runtime(self):
+        runtime = MODULE.QwenRuntime(types.SimpleNamespace(
+            low_latency=True, cuda_graph=True, talker_graph=True))
+
+        class Resident:
+            pass
+
+        resident = Resident()
+        runtime.model = types.SimpleNamespace(predictor=resident)
+        runtime.model_kind = "clone"
+        runtime.backend = "low_latency"
+        runtime.low_latency_direct = types.SimpleNamespace(
+            code_predictor=resident,
+            graph=types.SimpleNamespace(graph=object()),
+            talker_graph=types.SimpleNamespace(graph=object()))
+        return runtime, weakref.ref(resident)
+
+    def test_unload_releases_the_low_latency_predictor_owner(self):
+        runtime, resident = self.runtime()
+        with patch.dict("sys.modules", {"torch": types.SimpleNamespace(
+                cuda=types.SimpleNamespace(is_available=lambda: False))}):
+            runtime._unload()
+        self.assertIsNone(resident(), "the released predictor remains resident")
+
+    def test_unload_reports_no_installed_backend_or_active_graphs(self):
+        runtime, _ = self.runtime()
+        runtime._unload()
+        state = runtime._backend_state()
+        self.assertEqual(state["low_latency_state"], "not-loaded")
+        self.assertFalse(state["low_latency_installed"])
         self.assertFalse(state["cuda_graph"])
         self.assertFalse(state["talker_graph"])
 

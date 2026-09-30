@@ -1,3 +1,10 @@
+#include "Core/conversationMessage.h"
+#include "Core/profile.h"
+#include "LLM/backendTypes.h"
+#include "LLM/embeddingTypes.h"
+#include "LLM/endpointSettings.h"
+#include "LLM/responseTypes.h"
+#include "Memory/memoryTypes.h"
 #include "Core/messageRouter.h"
 #include "Core/runtimePath.h"
 
@@ -6,9 +13,7 @@
 
 namespace
 {
-std::uint64_t ArtifactMiB(
-    const std::string& modelPath,
-    const std::string& projectorPath = {})
+std::uint64_t ArtifactMiB(const std::string& modelPath, const std::string& projectorPath = {})
 {
     std::error_code error;
     std::uintmax_t bytes = std::filesystem::file_size(
@@ -28,12 +33,8 @@ messageRouter::messageRouter() = default;
 
 messageRouter::~messageRouter() = default;
 
-responseOutput messageRouter::RouteMessage(
-    const std::string& message,
-    const std::vector<conversationMessage>& context,
-    const std::stop_token stopToken,
-    DeltaHandler onDelta,
-    const revia::intelligence::IntelligenceDecision& decision,
+responseOutput messageRouter::RouteMessage(const std::string& message, const std::vector<conversationMessage>& context,
+    const std::stop_token stopToken, DeltaHandler onDelta, const revia::intelligence::IntelligenceDecision& decision,
     const revia::llm::PrivateMemoryAccess memoryAccess) const
 {
     responseOutput output;
@@ -177,11 +178,8 @@ responseOutput messageRouter::RouteMessage(
     return routed;
 }
 
-responseOutput messageRouter::ReviewCode(
-    const std::string& instructions,
-    const std::string& material,
-    const std::string& schema,
-    const std::stop_token stopToken) const
+responseOutput messageRouter::ReviewCode(const std::string& instructions,
+    const std::string& material, const std::string& schema, const std::stop_token stopToken) const
 {
     // Held for the whole review, so the idle sweep cannot unload Expert mid-answer.
     revia::intelligence::ModelLifetimeCoordinator::Lease expertLease;
@@ -239,9 +237,7 @@ void messageRouter::SetPosture(std::string posture)
     if (expertConfigured) expertLlm.SetPosture(std::move(posture));
 }
 
-std::string messageRouter::RelatedMemories(
-    const std::string& query,
-    const std::stop_token stopToken) const
+std::string messageRouter::RelatedMemories(const std::string& query, const std::stop_token stopToken) const
 {
     return llm.RelatedMemories(query, stopToken);
 }
@@ -267,12 +263,8 @@ responseOutput messageRouter::PlanAction(const std::string& request) const
     return llm.GenerateActionProposal(request);
 }
 
-responseOutput messageRouter::ReviewConversationReply(
-    const std::string& userInput,
-    const std::string& candidateReply,
-    const std::string& runtimeGroundTruth,
-    const int maxReviewTokens,
-    const std::stop_token stopToken) const
+responseOutput messageRouter::ReviewConversationReply(const std::string& userInput, const std::string& candidateReply,
+    const std::string& runtimeGroundTruth, const int maxReviewTokens, const std::stop_token stopToken) const
 {
     return llm.ReviewConversationReply(
         userInput, candidateReply, runtimeGroundTruth, maxReviewTokens, stopToken);
@@ -287,10 +279,8 @@ responseOutput messageRouter::GenerateActivityDraft(
     return result;
 }
 
-responseOutput messageRouter::GenerateCuriosityPlan(
-    const std::string& boundedContextPrompt,
-    const std::vector<std::string>& availableActions,
-    const std::stop_token stopToken) const
+responseOutput messageRouter::GenerateCuriosityPlan(const std::string& boundedContextPrompt,
+    const std::vector<std::string>& availableActions, const std::stop_token stopToken) const
 {
     if (boundedContextPrompt.empty())
     {
@@ -333,9 +323,7 @@ responseOutput messageRouter::GenerateCuriosityPlan(
     return output;
 }
 
-responseOutput messageRouter::Deliberate(
-    const std::string& boundedInquiryPrompt,
-    const std::stop_token stopToken) const
+responseOutput messageRouter::Deliberate(const std::string& boundedInquiryPrompt, const std::stop_token stopToken) const
 {
     if (boundedInquiryPrompt.empty())
     {
@@ -392,11 +380,8 @@ responseOutput messageRouter::PlanGoal(const std::string& request) const
     return llm.GenerateGoalPlan(request);
 }
 
-responseOutput messageRouter::PlanComputerSubgoal(
-    const std::string& instruction,
-    const std::string& situation,
-    const std::string& schema,
-    const std::stop_token stopToken) const
+responseOutput messageRouter::PlanComputerSubgoal(const std::string& instruction,
+    const std::string& situation, const std::string& schema, const std::stop_token stopToken) const
 {
     if (instruction.empty() || situation.empty())
     {
@@ -410,8 +395,7 @@ responseOutput messageRouter::PlanComputerSubgoal(
     return llm.GenerateComputerSubgoal(instruction, situation, schema, stopToken);
 }
 
-responseOutput messageRouter::PlanNextGoalStep(
-    const std::string& goalContext, const std::stop_token stopToken) const
+responseOutput messageRouter::PlanNextGoalStep(const std::string& goalContext, const std::stop_token stopToken) const
 {
     if (goalContext.empty())
     {
@@ -439,27 +423,18 @@ responseOutput messageRouter::DrawDiagram(const std::string& request) const
     return llm.GenerateDiagram(request);
 }
 
-responseOutput messageRouter::ComposeContent(
-    const std::string& request,
-    const std::string& context) const
+responseOutput messageRouter::ComposeContent(const std::string& request, const std::string& context) const
 {
     return llm.ComposeContent(request, context);
 }
 
-responseOutput messageRouter::ReviseBlock(
-    const std::string& instruction,
-    const std::string& neighbourhood,
-    const std::string& target) const
+responseOutput messageRouter::ReviseBlock(const std::string& instruction, const std::string& neighbourhood, const std::string& target) const
 {
     return llm.ReviseBlock(instruction, neighbourhood, target);
 }
 
-responseOutput messageRouter::AnalyzeImage(
-    const std::filesystem::path& imagePath,
-    const std::string& prompt,
-    const int maxResponseTokens,
-    const std::stop_token stopToken,
-    const bool backgroundAwareness) const
+responseOutput messageRouter::AnalyzeImage(const std::filesystem::path& imagePath, const std::string& prompt, const int maxResponseTokens,
+    const std::stop_token stopToken, const bool backgroundAwareness) const
 {
     std::string lowered = prompt;
     std::transform(lowered.begin(), lowered.end(), lowered.begin(),
@@ -494,11 +469,8 @@ responseOutput messageRouter::AnalyzeImage(
     return output;
 }
 
-memoryDecision messageRouter::EvaluateMemory(
-    const std::string& userMessage,
-    const std::string& assistantMessage,
-    const revia::agents::ResponseProvenance provenance,
-    const std::stop_token stopToken) const
+memoryDecision messageRouter::EvaluateMemory(const std::string& userMessage, const std::string& assistantMessage,
+    const revia::agents::ResponseProvenance provenance, const std::stop_token stopToken) const
 {
     // Main first, like every other judgement that outlives the turn. The CPU-resident
     // 0.8B model took ~10 s of nearly every core per exchange, and what it decided was
@@ -532,16 +504,12 @@ bool messageRouter::IsLLMAvailable() const
     return llm.IsBackendAvailable();
 }
 
-bool messageRouter::WarmUpLLM(
-    const std::stop_token stopToken,
-    std::string& outError) const
+bool messageRouter::WarmUpLLM(const std::stop_token stopToken, std::string& outError) const
 {
     return llm.WarmUp(stopToken, outError);
 }
 
-bool messageRouter::WarmUpFast(
-    const std::stop_token stopToken,
-    std::string& outError) const
+bool messageRouter::WarmUpFast(const std::stop_token stopToken, std::string& outError) const
 {
     if (!fastConfigured)
     {
@@ -551,9 +519,7 @@ bool messageRouter::WarmUpFast(
     return fastLlm.WarmUp(stopToken, outError);
 }
 
-bool messageRouter::WarmUpExpert(
-    const std::stop_token stopToken,
-    std::string& outError) const
+bool messageRouter::WarmUpExpert(const std::stop_token stopToken, std::string& outError) const
 {
     if (!expertConfigured)
     {
@@ -578,25 +544,19 @@ healthOutput messageRouter::CheckExpertHealth() const
     return expertConfigured ? expertLlm.CheckBackendHealth() : healthOutput{};
 }
 
-void messageRouter::SetLifetimeCoordinator(
-    revia::intelligence::ModelLifetimeCoordinator* coordinator)
+void messageRouter::SetLifetimeCoordinator(revia::intelligence::ModelLifetimeCoordinator* coordinator)
 {
     lifetime = coordinator;
 }
 
-void messageRouter::SetTierResidency(
-    const revia::intelligence::IntelligenceTier tier,
-    const bool available,
-    const bool warm,
-    const double loadMilliseconds,
-    const std::string& detail)
+void messageRouter::SetTierResidency(const revia::intelligence::IntelligenceTier tier, const bool available, const bool warm,
+    const double loadMilliseconds, const std::string& detail)
 {
     if (available) residency.MarkReady(tier, loadMilliseconds, warm);
     else residency.MarkFailed(tier, detail.empty() ? "The model is unavailable." : detail);
 }
 
-std::vector<revia::intelligence::ModelResidency>
-messageRouter::ModelResidencySnapshot() const
+std::vector<revia::intelligence::ModelResidency> messageRouter::ModelResidencySnapshot() const
 {
     return residency.Snapshot();
 }
@@ -606,9 +566,7 @@ healthOutput messageRouter::CheckEmbeddingHealth(std::stop_token stopToken) cons
     return llm.CheckEmbeddingHealth(stopToken);
 }
 
-embeddingOutput messageRouter::EmbedMemory(
-    const std::string& summary,
-    const std::stop_token stopToken) const
+embeddingOutput messageRouter::EmbedMemory(const std::string& summary, const std::stop_token stopToken) const
 {
     return llm.EmbedMemory(summary, stopToken);
 }
@@ -618,14 +576,8 @@ bool messageRouter::IsExitCommand(const std::string& input) const
     return input == "exit" || input == "quit" || input == "bye";
 }
 
-void messageRouter::ApplyLLMSettings(
-    const llmSettings& settings,
-    const llmSettings& fastSettings,
-    const llmSettings& expertSettings,
-    const embeddingSettings& embeddingSettings,
-    const aiProfile& profile,
-    const bool fastEnabled,
-    const bool expertEnabled)
+void messageRouter::ApplyLLMSettings(const llmSettings& settings, const llmSettings& fastSettings, const llmSettings& expertSettings,
+    const embeddingSettings& embeddingSettings, const aiProfile& profile, const bool fastEnabled, const bool expertEnabled)
 {
     mainConfiguration = settings;
     fastConfiguration = fastSettings;
@@ -681,10 +633,7 @@ void messageRouter::ApplyProfile(const aiProfile& profile)
     if (expertConfigured) expertLlm.ApplyProfile(expertConfiguration, profile);
 }
 
-void messageRouter::ApplyLLMSettings(
-    const llmSettings& settings,
-    const embeddingSettings& embeddingSettings,
-    const aiProfile& profile)
+void messageRouter::ApplyLLMSettings(const llmSettings& settings, const embeddingSettings& embeddingSettings, const aiProfile& profile)
 {
     ApplyLLMSettings(settings, {}, {}, embeddingSettings, profile, false, false);
 }

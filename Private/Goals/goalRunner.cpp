@@ -435,11 +435,7 @@ bool GoalRunner::Persist(Goal& goal) const
     return goalStore.Save(goal);
 }
 
-bool GoalRunner::RunStep(
-    Goal& goal,
-    GoalStep& step,
-    const policy::CapabilityPolicy& scopedPolicy,
-    std::stop_token stopToken)
+bool GoalRunner::RunStep(Goal& goal, GoalStep& step, const policy::CapabilityPolicy& scopedPolicy, std::stop_token stopToken)
 {
     // Derived here, from the step's own action and check, and never read from what
     // proposed the step. A postcondition supplied from outside would be the actor
@@ -491,6 +487,25 @@ bool GoalRunner::RunStep(
             goal.stopReason = StopReason::StoreError;
             Publish(goal, step, message);
             return true;
+        };
+        const auto persistInFlight = [&]()
+        {
+            // Keep one partial attempt on disk without adding a second copy to the
+            // completed history. A restart must see that this action may have happened.
+            step.attempts.push_back(record);
+            const bool saved = Persist(goal);
+            step.attempts.pop_back();
+            if (saved) return true;
+            record.failure = record.executed
+                ? "The action was attempted, but its checkpoint could not be saved. Action result: " + actionResult
+                : "The goal could not be saved before executing its action.";
+            const std::string message = record.failure;
+            step.attempts.push_back(std::move(record));
+            step.status = StepStatus::Failed;
+            goal.stopReason = StopReason::StoreError;
+            goal.stopDetail = revia::utf8::Prefix(message, MaxObservationCharacters);
+            Publish(goal, step, message);
+            return false;
         };
 
         // The baseline, for a step whose evidence is that the window responded.
@@ -588,6 +603,10 @@ bool GoalRunner::RunStep(
             }
         }
 
+        // Approval is not a durable action record. Save the in-flight marker before
+        // dispatch, so a restart cannot replay an effect from a still-Pending step.
+        if (!persistInFlight()) return false;
+        if (cancelled()) return false;
         const actions::ActionOutcome outcome =
             actionRuntime.ExecuteScoped(action, scopedPolicy, confirmationGranted, stopToken);
         if (!stopToken.stop_requested() || outcome.result.attempted) ++goal.spend.actions;
@@ -599,6 +618,7 @@ bool GoalRunner::RunStep(
         if (outcome.result.succeeded)
         {
             step.status = StepStatus::Verifying;
+            if (!persistInFlight()) return false;
             Publish(goal, step, "Verifying: " + step.expected);
 
             actions::ActionRequest check = step.check;

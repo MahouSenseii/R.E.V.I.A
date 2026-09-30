@@ -23,9 +23,7 @@ std::string Normalize(std::string value)
 }
 
 template <std::size_t Size>
-bool ContainsAny(
-    const std::string& value,
-    const std::array<std::string_view, Size>& signals)
+bool ContainsAny(const std::string& value, const std::array<std::string_view, Size>& signals)
 {
     return std::any_of(signals.begin(), signals.end(), [&](const std::string_view signal)
     {
@@ -57,12 +55,8 @@ bool IsContextualFollowUp(const std::string& normalizedInput)
         FollowUps.end();
 }
 
-IntelligenceDecision Decision(
-    const IntelligenceTier tier,
-    const ReasoningMode mode,
-    std::string model,
-    std::string reason,
-    const float confidence)
+IntelligenceDecision Decision(const IntelligenceTier tier,
+    const ReasoningMode mode, std::string model, std::string reason, const float confidence)
 {
     IntelligenceDecision result;
     result.requestedTier = tier;
@@ -75,9 +69,7 @@ IntelligenceDecision Decision(
 }
 }
 
-IntelligenceDecision IntelligenceRouter::Route(
-    const std::string& input,
-    const RoutingContext& context) const
+IntelligenceDecision IntelligenceRouter::Route(const std::string& input, const RoutingContext& context) const
 {
     const std::string text = Normalize(input);
 

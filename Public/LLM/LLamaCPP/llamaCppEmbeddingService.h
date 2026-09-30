@@ -1,7 +1,9 @@
 #pragma once
 
-#include "Library/structLibrary.h"
 
+#include "LLM/backendTypes.h"
+#include "LLM/embeddingTypes.h"
+#include "LLM/endpointSettings.h"
 #include <stop_token>
 #include <string>
 
@@ -10,20 +12,13 @@ class llamaCppEmbeddingService
 public:
     void ApplySettings(const embeddingSettings& settings);
     healthOutput CheckHealth(std::stop_token stopToken = {}) const;
-    embeddingOutput EmbedQuery(
-        const std::string& text,
-        std::stop_token stopToken = {}) const;
-    embeddingOutput EmbedDocument(
-        const std::string& text,
-        std::stop_token stopToken = {}) const;
+    embeddingOutput EmbedQuery(const std::string& text, std::stop_token stopToken = {}) const;
+    embeddingOutput EmbedDocument(const std::string& text, std::stop_token stopToken = {}) const;
     bool IsEnabled() const;
     const std::string& ModelName() const;
 
 private:
-    embeddingOutput Embed(
-        const std::string& text,
-        const std::string& prefix,
-        std::stop_token stopToken) const;
+    embeddingOutput Embed(const std::string& text, const std::string& prefix, std::stop_token stopToken) const;
 
     bool enabled = false;
     std::string host = "127.0.0.1";

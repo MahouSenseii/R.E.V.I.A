@@ -12,20 +12,8 @@ namespace revia::computer
 
 {
 
-// Comparing the providers on the same problems, with the comparison written down.
-//
-// The claim this feature makes is that routine decisions can leave the model. That claim
-// is only meaningful against a baseline measured on the same tasks, in the same order,
-// from the same observations -- otherwise "fewer model calls" is a statement about which
-// tasks happened to come up.
-//
-// So a benchmark case is an observation and a subgoal, fixed in advance, and every
-// provider is asked the same ones. What comes back is a count, not an impression.
-//
-// Deliberately headless. A comparison that needed a desktop could not be run repeatedly,
-// could not be run in CI, and would be measuring the machine's state as much as the
-// policies. The controlled GUI demonstration is where the real screen is exercised; this
-// is where the decisions are counted.
+// Headless policy comparisons use fixed subgoals and observations;
+// each provider receives the same cases in the same order.
 
 // One problem, and what a correct answer to it looks like.
 struct BenchmarkCase
@@ -37,18 +25,8 @@ struct BenchmarkCase
     ComputerSubgoal subgoal;
     ComputerObservation observation;
 
-    // What a correct decision does.
-    //
-    // Three kinds of right answer, not two. A policy may act on the named control; it
-    // may decline, which is right when the screen does not identify one target; or it
-    // may do something *else* that is nevertheless correct -- most often focusing the
-    // window the target lives in before touching it.
-    //
-    // That third case was originally scored as a wrong action, and the benchmark said
-    // the deterministic policy acted wrongly twenty times. It had not: it had proposed
-    // bringing the right window forward, which is the correct bounded step. A benchmark
-    // that scores correct behaviour as a failure is worse than no benchmark, because it
-    // is the kind of failure somebody fixes by changing the policy.
+    // A correct decision may act, decline an ambiguous target, or take a valid
+    // preparatory action such as focusing the target's window.
     revia::actions::ActionType expectedAction = revia::actions::ActionType::Unknown;
     // The control for an interaction or an entry; the application for a focus.
     std::string expectedTarget;
@@ -106,30 +84,11 @@ struct BenchmarkReport
     [[nodiscard]] std::string Format() const;
 };
 
-// The standard case set.
-//
-// Built here rather than in a test so that the benchmark and the tests measure the same
-// problems, and so a later provider cannot be evaluated on an easier set by accident.
-// The vault is the caller's, and the cases reference payloads stored in it.
-//
-// Passed in rather than owned here because the policies under test hold a reference to
-// one: a benchmark with its own vault would hand every policy a payload reference it
-// cannot redeem, and every entry case would score as a refusal that looks like caution.
-// `application` is the executable every case's subgoal names.
-//
-// A parameter rather than a constant because a learned artifact carries a qualified
-// scope and the runtime refuses it outside that scope -- correctly. Running the
-// comparison on cases in an application the artifact was never evaluated on measures the
-// scope gate and reports it as the ranker's coverage, which is how a perfectly good
-// artifact came back as 0 of 240 and looked like a failed model.
-[[nodiscard]] std::vector<BenchmarkCase> StandardBenchmarkCases(
-    PayloadVault& vault, const std::string& application = "benchmarkapp.exe");
+// Cases reference payloads in the caller's vault, shared with the tested policies.
+// Choose an application within the learned artifact's qualified scope.
+[[nodiscard]] std::vector<BenchmarkCase> StandardBenchmarkCases(PayloadVault& vault, const std::string& application = "benchmarkapp.exe");
 
-// Run every case against one policy.
-//
-// The policy is asked directly rather than through the controller, because what is being
-// compared is the policies -- routing them through a coordinator that may fall back would
-// measure the fallback rather than the provider.
+// Calls the policy directly so fallback routing cannot hide its results.
 [[nodiscard]] std::vector<BenchmarkResult> RunBenchmark(
     IComputerPolicy& policy,
     const std::vector<BenchmarkCase>& cases,

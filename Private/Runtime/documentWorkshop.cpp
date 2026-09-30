@@ -1,9 +1,9 @@
+#include "LLM/responseTypes.h"
 #include "Core/utf8.h"
 #include "Runtime/documentWorkshop.h"
 
 #include "Actions/actionTypes.h"
 #include "Core/runtimePath.h"
-#include "Library/structLibrary.h"
 
 #include <algorithm>
 #include <cctype>
@@ -42,11 +42,8 @@ std::string Trim(const std::string& value)
 
 } // namespace
 
-DocumentWorkshop::DocumentWorkshop(
-    messageRouter& messageRouter,
-    visual::ImageGenerator& generator,
-    visual::DiagramStore& store,
-    logger& sessionLogger)
+DocumentWorkshop::DocumentWorkshop(messageRouter& messageRouter,
+    visual::ImageGenerator& generator, visual::DiagramStore& store, logger& sessionLogger)
     : router(messageRouter)
     , imageGenerator(generator)
     , diagramStore(store)
@@ -157,9 +154,7 @@ TurnOutcome DocumentWorkshop::ComposeDocument(const std::string& request)
     return turn;
 }
 
-TurnOutcome DocumentWorkshop::ReviseDocumentBlock(
-    const std::string& reference,
-    const std::string& instruction)
+TurnOutcome DocumentWorkshop::ReviseDocumentBlock(const std::string& reference, const std::string& instruction)
 {
     TurnOutcome turn;
     const content::Block* target = document.Find(reference);
@@ -325,8 +320,7 @@ TurnOutcome DocumentWorkshop::GenerateImage(const std::string& prompt)
     return turn;
 }
 
-TurnOutcome DocumentWorkshop::ShowPicture(
-    const std::string& path, const PictureScope& scope)
+TurnOutcome DocumentWorkshop::ShowPicture(const std::string& path, const PictureScope& scope)
 {
     TurnOutcome turn;
     if (path.empty())

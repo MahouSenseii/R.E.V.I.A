@@ -18,13 +18,7 @@
 namespace revia::emotion
 {
 
-// What one appraisal produced, kept whole so it can be logged, shown in the debug panel,
-// and later exported as a training example.
-//
-// The delta and the resulting state are both recorded because only their combination
-// explains a feeling: "she became more frustrated" and "she is frustrated" answer
-// different questions, and a system whose emotions must be causally understandable owes
-// an answer to both.
+// Records each appraisal delta and resulting state for diagnostics and training export.
 struct AppraisalOutcome
 {
     bool changed = false;
@@ -43,25 +37,12 @@ struct EmotionSnapshot
     EmotionVector emotion;
     MoodState mood;
     runtime::AffectSnapshot affect;
-    // What most recently caused this, in the stimulus's own words, or empty when
-    // nothing recent explains it.
-    //
-    // Read here rather than through a second call so a cause can never be paired with
-    // a feeling it did not produce. A prompt that states an emotion without its cause
-    // leaves the model to invent one, and an invented cause is indistinguishable from
-    // a hallucinated observation about the room.
+    // Recent stimulus cause, captured with its resulting emotion; empty when no recent cause applies.
     std::string cause;
 };
 
-// Owns how Revia currently feels, and is the only thing allowed to change it.
-//
-// Single purpose on purpose: it holds the emotion vector and mood, applies a model to a
-// stimulus, and integrates the result. It does not retrieve memories, does not decide
-// relationships, does not talk to a language model, and cannot reach a capability. The
-// caller assembles the inputs; this owns the state machine.
-//
-// Thread-safe because stimuli arrive from conversation, goal, perception, and idle
-// workers on different threads.
+// Thread-safe owner of emotion and mood, integrating caller-supplied stimuli and model deltas.
+// Does not own memory, relationships, language inference or capabilities.
 class EmotionRuntime
 {
 public:
@@ -70,11 +51,8 @@ public:
     // Appraises one event and folds the result into current emotion and mood. Returns
     // nothing when the stimulus was not meaningful enough to feel, which is the ordinary
     // outcome for most of what happens to her.
-    std::optional<AppraisalOutcome> Observe(
-        const Stimulus& stimulus,
-        const identity::DevelopmentState& development,
-        const identity::RelationshipState* relationship = nullptr,
-        std::vector<RelevantMemory> memories = {});
+    std::optional<AppraisalOutcome> Observe(const Stimulus& stimulus, const identity::DevelopmentState& development,
+        const identity::RelationshipState* relationship = nullptr, std::vector<RelevantMemory> memories = {});
 
     // Time passing with nothing happening. Emotions fade toward calm; mood eases toward
     // its baseline far more slowly. Called by an idle tick, not by a clock this owns.
@@ -113,11 +91,8 @@ public:
 
 private:
     [[nodiscard]] runtime::AffectSnapshot ProjectAffect() const;
-    std::optional<AppraisalOutcome> Appraise(
-        const Stimulus& stimulus,
-        const identity::DevelopmentState& development,
-        const identity::RelationshipState* relationship,
-        std::vector<RelevantMemory> memories);
+    std::optional<AppraisalOutcome> Appraise(const Stimulus& stimulus, const identity::DevelopmentState& development,
+        const identity::RelationshipState* relationship, std::vector<RelevantMemory> memories);
     mutable std::mutex mutex;
     std::unique_ptr<IEmotionModel> model;
     EmotionVector emotion;

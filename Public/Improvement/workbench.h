@@ -59,20 +59,12 @@ struct VerificationResult
     double seconds = 0.0;
 };
 
-// A private copy of her source where a proposal is proven.
-//
-// "Proven" means: the copy builds with the change, and no test suite that passes without
-// the change fails with it. The real source is never written. Every write this class
-// makes is checked to land inside its own root, and the change is reverted in the copy
-// once the run is over, whatever the outcome.
-//
-// It lives outside the synced documents folder on purpose: a build tree is hundreds of
-// megabytes of files rewritten constantly, which a sync client locks and corrupts.
+// Builds a proposal in an isolated root; no suite passing without it may fail with it.
+// Checks every write against that root, reverts afterward, and never writes real source; kept outside synced folders.
 class Workbench
 {
 public:
-    Workbench(std::filesystem::path sourceRoot, std::filesystem::path workbenchRoot,
-        BuildRunner runner);
+    Workbench(std::filesystem::path sourceRoot, std::filesystem::path workbenchRoot, BuildRunner runner);
 
     [[nodiscard]] const std::filesystem::path& Root() const { return root; }
     [[nodiscard]] std::filesystem::path MirrorRoot() const { return root / "src"; }
@@ -89,8 +81,7 @@ public:
 
 private:
     [[nodiscard]] bool Inside(const std::filesystem::path& path) const;
-    bool WriteMirrorFile(const std::string& relativePath, const std::string& content,
-        std::string& outError) const;
+    bool WriteMirrorFile(const std::string& relativePath, const std::string& content, std::string& outError) const;
     void LoadManifest();
     void SaveManifest() const;
     [[nodiscard]] std::string ManifestStamp() const;
@@ -107,11 +98,7 @@ private:
 
 // The real runner: Tools/VerifyWorkbench.ps1 at below-normal priority, in a job object
 // so a cancel stops the whole compiler tree, output to `logPath`.
-[[nodiscard]] BuildRunner MakeScriptRunner(
-    std::filesystem::path scriptPath,
-    std::filesystem::path dependencyRoot,
-    std::filesystem::path logDirectory,
-    int parallelJobs,
-    int timeoutMinutes);
+[[nodiscard]] BuildRunner MakeScriptRunner(std::filesystem::path scriptPath, std::filesystem::path dependencyRoot,
+    std::filesystem::path logDirectory, int parallelJobs, int timeoutMinutes);
 
 } // namespace revia::improvement

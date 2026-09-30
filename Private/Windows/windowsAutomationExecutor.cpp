@@ -134,12 +134,8 @@ namespace
 
 // Builds the same evidence the pointer path builds, from the element that is about to be
 // driven, and asks the same shared authorizer.
-bool AuthorizeUiaEffect(
-    const TargetBinding& binding,
-    const ActionRequest& request,
-    const CapabilitySettings::DesktopControl& settings,
-    std::string& outFailure,
-    const policy::DesktopApprovalGate* approvals)
+bool AuthorizeUiaEffect(const TargetBinding& binding, const ActionRequest& request, const CapabilitySettings::DesktopControl& settings,
+    std::string& outFailure, const policy::DesktopApprovalGate* approvals)
 {
     policy::TargetEvidence evidence;
     evidence.resolved = binding.valid;
@@ -162,8 +158,7 @@ bool AuthorizeUiaEffect(
 #endif
 } // namespace
 
-WindowsAutomationExecutor::WindowsAutomationExecutor(
-    CapabilitySettings::DesktopControl inputSettings,
+WindowsAutomationExecutor::WindowsAutomationExecutor(CapabilitySettings::DesktopControl inputSettings,
     std::shared_ptr<policy::DesktopApprovalGate> inputApprovals)
     : settings(std::move(inputSettings)), approvals(std::move(inputApprovals))
 {
@@ -174,9 +169,7 @@ bool WindowsAutomationExecutor::Handles(const ActionType type) const
     return IsUiAutomationAction(type);
 }
 
-ActionResult WindowsAutomationExecutor::Execute(
-    const ActionRequest& request,
-    const PolicyDecision&)
+ActionResult WindowsAutomationExecutor::Execute(const ActionRequest& request, const PolicyDecision&)
 {
     ActionResult result;
     result.dryRun = request.dryRun;

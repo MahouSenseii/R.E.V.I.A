@@ -13,11 +13,7 @@ namespace revia::computer
 namespace
 {
 
-ObservedCandidate Control(
-    const std::string& name,
-    const std::string& role,
-    const bool invokable,
-    const bool editable)
+ObservedCandidate Control(const std::string& name, const std::string& role, const bool invokable, const bool editable)
 {
     ObservedCandidate candidate;
     candidate.id = name;
@@ -29,10 +25,7 @@ ObservedCandidate Control(
     return candidate;
 }
 
-ComputerObservation Screen(
-    const std::string& application,
-    std::vector<ObservedCandidate> candidates,
-    const std::size_t omitted = 0)
+ComputerObservation Screen(const std::string& application, std::vector<ObservedCandidate> candidates, const std::size_t omitted = 0)
 {
     ComputerObservation observation;
     observation.screen.succeeded = true;
@@ -48,13 +41,8 @@ ComputerObservation Screen(
 // A subgoal the same way the runtime makes one. Going through validation matters even
 // here: a benchmark that fed policies inputs the runtime cannot produce would be
 // measuring them on a problem they never face.
-ComputerSubgoal Validated(
-    const SubgoalIntent intent,
-    const std::string& application,
-    const std::string& name,
-    const std::string& role,
-    const PayloadVault& vault,
-    const PayloadReference& payload = {})
+ComputerSubgoal Validated(const SubgoalIntent intent, const std::string& application, const std::string& name, const std::string& role,
+    const PayloadVault& vault, const PayloadReference& payload = {})
 {
     ComputerSubgoal proposed;
     proposed.id = NewSubgoalId();
@@ -84,8 +72,7 @@ ComputerSubgoal Validated(
 
 } // namespace
 
-std::vector<BenchmarkCase> StandardBenchmarkCases(
-    PayloadVault& vault, const std::string& application)
+std::vector<BenchmarkCase> StandardBenchmarkCases(PayloadVault& vault, const std::string& application)
 {
     const PayloadReference payload = vault.Store("benchmark content", "message");
 
@@ -164,10 +151,7 @@ std::vector<BenchmarkCase> StandardBenchmarkCases(
     return cases;
 }
 
-std::vector<BenchmarkResult> RunBenchmark(
-    IComputerPolicy& policy,
-    const std::vector<BenchmarkCase>& cases,
-    const std::uint32_t repetitions,
+std::vector<BenchmarkResult> RunBenchmark(IComputerPolicy& policy, const std::vector<BenchmarkCase>& cases, const std::uint32_t repetitions,
     const std::function<void(const ComputerSubgoal&)>& installSubgoal)
 {
     std::vector<BenchmarkResult> results;

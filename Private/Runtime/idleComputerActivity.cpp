@@ -3,9 +3,8 @@
 
 namespace revia::runtime
 {
-autonomy::ActivityOutcome ReviaSession::ExecuteComputer(
-    const autonomy::Activity& activity, const autonomy::ActivityDecision& decision,
-    const std::stop_token stopToken)
+autonomy::ActivityOutcome ReviaSession::ExecuteComputer(const autonomy::Activity& activity,
+    const autonomy::ActivityDecision& decision, const std::stop_token stopToken)
 {
     autonomy::ActivityOutcome outcome;
     auto parsed = actionRuntime.ParseJson(decision.operation);

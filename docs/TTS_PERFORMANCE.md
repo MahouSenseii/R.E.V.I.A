@@ -830,7 +830,7 @@ the graphed path in Pass 4.
 ## What changed
 
 `qwenLowLatencyPhrase`, `qwenCudaGraph` and `qwenTalkerGraph` now default to `true` in
-`Public/Library/structLibrary.h` and are `true` in `Config/settings.json`. Both matter:
+`Public/Speech/speechSettings.h` and are `true` in `Config/settings.json`. Both matter:
 the shipped settings file overrides the defaults, so changing one without the other
 leaves the runtime resolving to whatever the file says.
 

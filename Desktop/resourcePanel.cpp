@@ -400,11 +400,7 @@ ResourcePanel::UsageRow& ResourcePanel::EnsureUsageRow(const QString& label)
     return usageRows.emplace(label, UsageRow{row, bar}).first->second;
 }
 
-void ResourcePanel::SetCell(
-    QTableWidget* table,
-    const int row,
-    const int column,
-    const QString& text)
+void ResourcePanel::SetCell(QTableWidget* table, const int row, const int column, const QString& text)
 {
     QTableWidgetItem* item = table->item(row, column);
     if (item == nullptr)

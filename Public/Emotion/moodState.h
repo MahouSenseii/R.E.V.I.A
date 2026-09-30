@@ -5,16 +5,7 @@
 namespace revia::emotion
 {
 
-// The slow layer under the fast one.
-//
-// Emotion answers "how does she feel about what just happened"; mood answers "how has
-// she been". They need separate lifetimes: anger that fades in five minutes is an
-// emotion, and the irritability it leaves behind for an hour is a mood. Collapsing them
-// gives either a companion who forgets a bad afternoon the moment you change the
-// subject, or one who stays furious about it all week.
-//
-// Mood is fed by emotion and then feeds back into appraisal, which is what makes a mild
-// annoyance land harder on a day that has already gone badly.
+// Slow mood integrates emotion and feeds back into later appraisal.
 struct MoodState
 {
     // -1 sustained low .. +1 sustained good. Slower and smaller in range than the

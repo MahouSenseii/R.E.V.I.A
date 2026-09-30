@@ -22,9 +22,6 @@ inline constexpr std::size_t ChatTemplateTokensPerMessage = 32;
 //
 // The marker is included in the allowance and cuts preserve valid UTF-8 boundaries.
 // The function is pure and does not make a network call.
-[[nodiscard]] std::string CompactToTokenBudget(
-    const std::string& text,
-    std::size_t tokenBudget,
-    const std::string& marker);
+[[nodiscard]] std::string CompactToTokenBudget(const std::string& text, std::size_t tokenBudget, const std::string& marker);
 
 } // namespace revia::llm

@@ -139,8 +139,7 @@ public:
         return false;
     }
 
-    bool WaitForCount(const std::string& needle, const std::size_t expected,
-        const std::chrono::milliseconds limit)
+    bool WaitForCount(const std::string& needle, const std::size_t expected, const std::chrono::milliseconds limit)
     {
         const auto deadline = std::chrono::steady_clock::now() + limit;
         while (std::chrono::steady_clock::now() < deadline)
@@ -225,10 +224,7 @@ CapabilitySettings::DesktopControl PermissiveSettings()
 constexpr const char* DocumentFieldId = "1002";
 constexpr const char* SecondFieldId = "1003";
 
-ActionRequest TypeInto(
-    const std::string& text,
-    const std::wstring& windowTitle,
-    const char* control = DocumentFieldId)
+ActionRequest TypeInto(const std::string& text, const std::wstring& windowTitle, const char* control = DocumentFieldId)
 {
     ActionRequest request;
     request.id = NewActionId();
@@ -382,8 +378,7 @@ void TestWindowInspection(Fixture& fixture)
     std::cout << "  PASS inspection reports window/field evidence and withholds passwords\n";
 }
 
-void TestTypingStopsWhenFocusLeavesTheBoundWindow(
-    Fixture& fixture, int& passed, int& failed, int& inconclusive)
+void TestTypingStopsWhenFocusLeavesTheBoundWindow(Fixture& fixture, int& passed, int& failed, int& inconclusive)
 {
     // Window A and Window B belong to the same process. A process check cannot tell them
     // apart; a window handle can.
@@ -492,8 +487,7 @@ void ProbeFocusBinding(Fixture& fixture)
     CoUninitialize();
 }
 
-void TestTypingLandsInTheNamedControl(
-    Fixture& fixture, int& passed, int& failed, int&)
+void TestTypingLandsInTheNamedControl(Fixture& fixture, int& passed, int& failed, int&)
 {
     // A. Ordinary activation.
     //
@@ -546,8 +540,7 @@ void TestTypingLandsInTheNamedControl(
     ++failed;
 }
 
-void TestTypingStopsOnFocusChangeInsideOneWindow(
-    Fixture& fixture, int& passed, int& failed, int& inconclusive)
+void TestTypingStopsOnFocusChangeInsideOneWindow(Fixture& fixture, int& passed, int& failed, int& inconclusive)
 {
     // B. Mid-operation drift.
     //
@@ -802,7 +795,7 @@ void RunApprovalBindingNativeTests()
     });
     DesktopControlExecutor executor(PermissiveSettings(), guard, approvals);
     const auto changed = executor.Execute(click, {});
-    Check(asked, "The approval callback was not exercised.");
+    Check(asked, "The approval callback was not exercised: " + changed.message);
     Check(!changed.succeeded && !fixture.LogContains("EFFECT sent"),
         "A same-HWND control changed during approval and still received a click: " + changed.message);
     std::cout << "  PASS same-HWND approval drift refused before injection\n";

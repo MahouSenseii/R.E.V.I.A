@@ -16,8 +16,7 @@ std::string ToString(const LessonKind value)
     return "planning";
 }
 
-std::vector<Lesson> LearningReview::Draw(
-    const std::vector<goals::Goal>& recentGoals,
+std::vector<Lesson> LearningReview::Draw(const std::vector<goals::Goal>& recentGoals,
     const initiative::InitiativeCounters& proposalCounters)
 {
     std::vector<Lesson> lessons;

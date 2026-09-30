@@ -21,9 +21,7 @@ struct MicrophoneUse
 // Whether an app other than Revia is using the microphone now: in practice, a call or a
 // meeting. Revia's own executables are ignored, because hands-free keeps the microphone
 // open itself.
-[[nodiscard]] bool OtherAppUsingMicrophone(
-    const std::vector<MicrophoneUse>& uses,
-    const std::vector<std::string>& ownApplications);
+[[nodiscard]] bool OtherAppUsingMicrophone(const std::vector<MicrophoneUse>& uses, const std::vector<std::string>& ownApplications);
 
 // ReadMicrophoneUse, judged against this process and Revia's known executables.
 [[nodiscard]] bool InCall();

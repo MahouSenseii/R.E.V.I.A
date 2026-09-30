@@ -1,5 +1,37 @@
 # R.E.V.I.A architecture
 
+## Source layout
+
+`Public` and `Private` mirror each other by domain. A header declares a contract;
+the matching source implements it. For example, `Public/Memory/longTermMemory.h`
+and `Private/Memory/longTermMemory.cpp` both belong to memory storage.
+
+| Folder | What belongs here |
+| --- | --- |
+| `Public/<Domain>` | Class interfaces, domain value types, and domain settings |
+| `Private/<Domain>` | Those classes' implementations and private helpers |
+| `Desktop` | Qt windows, widgets, and panels |
+| `Tools` | Setup/build helpers, local Python services, browser worker, and adapters |
+| `Tests` | Behavior checks, live checks, and disposable fixtures |
+| `Config` | Checked-in settings, profiles, model manifest, and first-run defaults |
+| `docs` | Architecture, operating instructions, and design evidence |
+| `build`, `ThirdParty`, `Models` | Generated builds, installed dependencies, and local models |
+| `Memory`, `Logs`, `RuntimeData` | Local stored state; the running build also keeps these beside its executable |
+
+Choose the folder whose owner changes when the feature changes. Settings and
+transported values live beside that owner; `Core/appSettings.h` composes the
+domain settings. Include the specific header needed by a file.
+
+Classes keep their own state and resource lifetime. `ReviaSession` composes the
+owners and coordinates lifecycle; widgets consume their contracts. Use plain
+structs for values and small functions for stateless operations. See
+[AGENTS.md](../AGENTS.md) for signature and comment conventions.
+
+Within `Runtime`, `conversationRuntime` owns admitted turns and `documentWorkshop`
+owns documents and visuals. `sessionResources.cpp` holds the session's resource
+reporting and load-monitor methods; `idleComputerActivity.cpp` holds its idle
+computer activity methods. Both implement the existing `ReviaSession` class.
+
 ## Trust boundary
 
 The language model is a planner, not an operating-system authority. It can propose one typed action. Deterministic C++ code validates the proposal, computes the risk, resolves paths, enforces approved roots, asks for confirmation when required, dispatches only to a registered executor, and audits the outcome.
@@ -164,6 +196,15 @@ and `/perception` status state this boundary explicitly.
 | `Evaluation` | Hold the conversation-contract corpus, score delivered replies against the clause each case defends, and write the report | Producing replies, owning a runtime, or feeding the live quality counters |
 | `LLM` | Chat, schedule bounded shared-server slots, and propose structured actions | Terminal/widget output or direct access to the shell/filesystem |
 | `Core` | Configuration, routing, logging, bounded context, durable non-authority preferences, crash/exit accounting, and the thin CLI shell | A second runtime lifecycle, or any preference that reaches a capability |
+| `Goals` | Persist goal plans, checkpoint attempts, run bounded steps, and verify outcomes | Granting authority or retrying an uncertain effect |
+| `Intelligence` | Choose model tiers, reasoning effort, and residency from typed runtime evidence | Owning model processes or changing permissions |
+| `Initiative` | Decide whether an opening is timely and retain bounded curiosity evidence | Starting actions without admission or interrupting without evidence |
+| `Perception` | Collect filtered activity metadata and schedule permitted awareness | Executing actions or granting screen/camera access |
+| `Learning` | Assess confirmed outcomes and propose lessons for review | Saving unapproved lessons or changing policy |
+| `Improvement` | Catalog source, propose patches, and verify them in a private workbench | Editing the live checkout or applying its own proposals |
+| `Presentation` | Publish typed presentation events and reduce avatar state | Owning conversation, inference, or permissions |
+| `Skills` | Register and run narrow local integrations through their contracts | Bypassing action admission or owning session lifecycle |
+| `Diagnostics` | Keep bounded records of failures and their resolution | Deciding capabilities or replacing runtime state |
 
 ### Store connections are held, not reopened
 

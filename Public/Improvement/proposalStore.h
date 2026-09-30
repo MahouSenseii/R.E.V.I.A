@@ -35,8 +35,7 @@ public:
     [[nodiscard]] std::optional<CodeProposal> Find(const std::string& id) const;
 
     // The person's verdict. Only Accepted or Rejected; anything else is refused.
-    bool Decide(const std::string& id, ProposalStatus verdict, const std::string& feedback,
-        std::string& outError);
+    bool Decide(const std::string& id, ProposalStatus verdict, const std::string& feedback, std::string& outError);
 
     // Whether this exact edit was proposed before, whatever became of it.
     [[nodiscard]] bool Known(const std::string& fingerprint) const;

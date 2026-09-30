@@ -43,10 +43,7 @@ std::string Field(const nlohmann::json& data, const char* name)
 
 } // namespace
 
-SubgoalRequest FormatSubgoalRequest(
-    const std::string& task,
-    const ComputerTaskContext& context,
-    const PayloadReference& availablePayload)
+SubgoalRequest FormatSubgoalRequest(const std::string& task, const ComputerTaskContext& context, const PayloadReference& availablePayload)
 {
     // What is on screen, bounded, and what may be referenced. The payload appears here
     // by reference and by *kind* and never by value: describing it as "a message of 15

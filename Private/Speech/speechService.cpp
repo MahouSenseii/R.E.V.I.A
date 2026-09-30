@@ -1,3 +1,5 @@
+#include "Speech/bargeInSettings.h"
+#include "Speech/speechSettings.h"
 #include "Core/utf8.h"
 #include "Speech/speechService.h"
 
@@ -371,11 +373,8 @@ VoiceOperationResult SpeechService::PrepareActiveVoice()
     return result;
 }
 
-VoiceOperationResult SpeechService::CreateVoicePreset(
-    const std::string& name,
-    const std::string& description,
-    const std::string& referenceText,
-    const std::string& language)
+VoiceOperationResult SpeechService::CreateVoicePreset(const std::string& name,
+    const std::string& description, const std::string& referenceText, const std::string& language)
 {
     const std::string id = Slugify(name);
     if (!VoicePresetStore::IsSafeId(id) || description.empty() || referenceText.empty())
@@ -440,10 +439,8 @@ VoiceOperationResult SpeechService::CreateVoicePreset(
     return result;
 }
 
-VoiceOperationResult SpeechService::FinishVoicePreset(
-    VoicePresetStore& store,
-    const VoicePreset& preset,
-    const VocalizationRenderer& render)
+VoiceOperationResult SpeechService::FinishVoicePreset(VoicePresetStore& store,
+    const VoicePreset& preset, const VocalizationRenderer& render)
 {
     std::string saveError;
     if (!store.Save(preset, saveError))
@@ -514,9 +511,7 @@ VoiceOperationResult SpeechService::RenderVoiceBank(const std::string& presetId)
     return result;
 }
 
-VoiceOperationResult SpeechService::PreviewVoice(
-    const std::string& presetId,
-    const std::string& text)
+VoiceOperationResult SpeechService::PreviewVoice(const std::string& presetId, const std::string& text)
 {
     const auto preset = presetStore.Find(presetId);
     if (!preset)
@@ -549,9 +544,7 @@ VoiceOperationResult SpeechService::PreviewVoice(
     return result;
 }
 
-VoiceOperationResult SpeechService::AssignVoice(
-    const std::string& profileId,
-    const std::string& presetId)
+VoiceOperationResult SpeechService::AssignVoice(const std::string& profileId, const std::string& presetId)
 {
     std::string error;
     if (!presetStore.Assign(profileId, presetId, error))
@@ -621,11 +614,8 @@ std::size_t SpeechService::FirstFragmentCharacters() const
         : 0;
 }
 
-void SpeechService::Speak(
-    std::string text,
-    const runtime::AffectSnapshot affect,
-    const std::uint64_t utteranceId,
-    const bool latencyCritical)
+void SpeechService::Speak(std::string text,
+    const runtime::AffectSnapshot affect, const std::uint64_t utteranceId, const bool latencyCritical)
 {
     if (!enabled.load())
     {
@@ -829,8 +819,7 @@ SpeechService::AudioLifetime SpeechService::LifetimeOf(const SegmentKind kind)
         : AudioLifetime::Temporary;
 }
 
-void SpeechService::ReleaseAudio(
-    const std::filesystem::path& path, const AudioLifetime lifetime)
+void SpeechService::ReleaseAudio(const std::filesystem::path& path, const AudioLifetime lifetime)
 {
     if (path.empty() || lifetime == AudioLifetime::Persistent)
     {
@@ -840,18 +829,13 @@ void SpeechService::ReleaseAudio(
     std::filesystem::remove(path, error);
 }
 
-bool SpeechService::StillCurrent(
-    const std::uint64_t itemGeneration,
-    const std::uint64_t currentGeneration,
-    const bool voiceEnabled)
+bool SpeechService::StillCurrent(const std::uint64_t itemGeneration, const std::uint64_t currentGeneration, const bool voiceEnabled)
 {
     return voiceEnabled && itemGeneration == currentGeneration;
 }
 
-std::vector<SpeechService::PlannedSegment> SpeechService::PlanSpeech(
-    const std::string& reply,
-    const speechSettings& settings,
-    const std::function<VocalizationVerdict(VocalizationKind)>& decide)
+std::vector<SpeechService::PlannedSegment> SpeechService::PlanSpeech(const std::string& reply,
+    const speechSettings& settings, const std::function<VocalizationVerdict(VocalizationKind)>& decide)
 {
     std::vector<PlannedSegment> plan;
     const SpokenScript script = ParseVocalizations(reply);
@@ -884,9 +868,7 @@ std::vector<SpeechService::PlannedSegment> SpeechService::PlanSpeech(
     return plan;
 }
 
-std::string SpeechService::PrepareForSynthesis(
-    const std::string& text,
-    const speechSettings& settings)
+std::string SpeechService::PrepareForSynthesis(const std::string& text, const speechSettings& settings)
 {
     // false, for every backend, deliberately and unconditionally. Qwen would
     // synthesise the word "chuckles"; SAPI would read it aloud; a backend nobody has
@@ -899,10 +881,7 @@ std::string SpeechService::PrepareForSynthesis(
         false);
 }
 
-std::string SpeechService::NormalizeForSpeech(
-    const std::string& text,
-    const std::size_t maxCharacters,
-    const bool keepVocalizations)
+std::string SpeechService::NormalizeForSpeech(const std::string& text, const std::size_t maxCharacters, const bool keepVocalizations)
 {
     // A vocalization tag is the one asterisk pair that must reach the model intact.
     // Everything below strips '*' as markdown noise, and flattening "*laughs*" to
@@ -1172,8 +1151,7 @@ void SpeechService::Run(const std::stop_token stopToken)
 #endif
 }
 
-std::vector<SpeechService::Utterance> SpeechService::CollectBatchCompanions(
-    const Utterance& leader)
+std::vector<SpeechService::Utterance> SpeechService::CollectBatchCompanions(const Utterance& leader)
 {
     std::vector<Utterance> companions;
     if (!configuration.bQwenBatchReplyPhrases || !configuration.bQwenDirectPcm)
@@ -1246,9 +1224,7 @@ std::vector<SpeechService::Utterance> SpeechService::CollectBatchCompanions(
     return companions;
 }
 
-void SpeechService::VerifyInferenceBackend(
-    const VoiceOperationResult& result,
-    const std::uint64_t utteranceId)
+void SpeechService::VerifyInferenceBackend(const VoiceOperationResult& result, const std::uint64_t utteranceId)
 {
     // Once per session, on the first phrase that actually produced audio.
     //
@@ -1294,10 +1270,7 @@ void SpeechService::VerifyInferenceBackend(
         -1.0, 0, utteranceId, ActualQwenResource(result)});
 }
 
-void SpeechService::PublishGenerated(
-    const Utterance& utterance,
-    PreparedUtterance item,
-    const int depth)
+void SpeechService::PublishGenerated(const Utterance& utterance, PreparedUtterance item, const int depth)
 {
     const bool stale = utterance.generation != generation.load() || !enabled.load();
     const VoiceOperationResult completedResult = item.result;
@@ -1376,10 +1349,7 @@ void SpeechService::PublishGenerated(
     condition.notify_all();
 }
 
-void SpeechService::DiscardBatch(
-    const std::vector<Utterance>& group,
-    const double wallMilliseconds,
-    const int depth)
+void SpeechService::DiscardBatch(const std::vector<Utterance>& group, const double wallMilliseconds, const int depth)
 {
     if (group.empty()) return;
     {

@@ -71,8 +71,7 @@ const std::map<std::string, std::vector<std::string>>& Aliases()
 
 SourceCatalog::SourceCatalog(std::filesystem::path inputRoot) : root(std::move(inputRoot)) {}
 
-std::optional<std::filesystem::path> SourceCatalog::LocateSourceRoot(
-    const std::filesystem::path& start)
+std::optional<std::filesystem::path> SourceCatalog::LocateSourceRoot(const std::filesystem::path& start)
 {
     std::error_code error;
     std::filesystem::path current = std::filesystem::absolute(start, error);
@@ -142,8 +141,7 @@ std::vector<std::string> SourceCatalog::Files() const
     return files;
 }
 
-bool SourceCatalog::Read(
-    const std::string& relativePath, std::string& outContent, std::string& outError) const
+bool SourceCatalog::Read(const std::string& relativePath, std::string& outContent, std::string& outError) const
 {
     outContent.clear();
     if (!Valid() || !IsReviewable(relativePath))
@@ -185,10 +183,8 @@ bool SourceCatalog::Read(
     return true;
 }
 
-std::vector<std::string> SourceCatalog::FilesFor(
-    const std::vector<std::string>& components,
-    const std::vector<std::string>& metrics,
-    const std::size_t maximum) const
+std::vector<std::string> SourceCatalog::FilesFor(const std::vector<std::string>& components,
+    const std::vector<std::string>& metrics, const std::size_t maximum) const
 {
     const std::vector<std::string> files = Files();
     std::map<std::string, int> score;
@@ -272,13 +268,8 @@ std::vector<std::string> SourceCatalog::Resolve(const std::string& target) const
     return FilesFor({wanted}, {}, 3);
 }
 
-CodeWindow ExtractWindow(
-    const std::string& path,
-    const std::string& content,
-    const std::vector<std::string>& anchors,
-    const std::size_t startLine,
-    const std::size_t maximumLines,
-    const std::size_t maximumCharacters)
+CodeWindow ExtractWindow(const std::string& path, const std::string& content, const std::vector<std::string>& anchors,
+    const std::size_t startLine, const std::size_t maximumLines, const std::size_t maximumCharacters)
 {
     CodeWindow window;
     window.path = path;

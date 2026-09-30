@@ -30,9 +30,7 @@ struct ReflexResult
 class ReflexRouter
 {
 public:
-    [[nodiscard]] ReflexResult Route(
-        const std::string& input,
-        const ReflexContext& context) const;
+    [[nodiscard]] ReflexResult Route(const std::string& input, const ReflexContext& context) const;
 };
 
 } // namespace revia::intelligence

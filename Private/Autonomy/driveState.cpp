@@ -167,10 +167,7 @@ DriveController::DriveController(DriveDynamics inputDynamics)
 {
 }
 
-DriveState DriveController::Observe(
-    DriveState drives,
-    const emotion::Stimulus& stimulus,
-    const emotion::EmotionVector& emotion) const
+DriveState DriveController::Observe(DriveState drives, const emotion::Stimulus& stimulus, const emotion::EmotionVector& emotion) const
 {
     const float weight = std::clamp(stimulus.importance, 0.0F, 1.0F) *
         std::clamp(stimulus.certainty, 0.0F, 1.0F);

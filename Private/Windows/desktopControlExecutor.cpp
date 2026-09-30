@@ -244,11 +244,7 @@ std::string ExecutableAtPoint(const int x, const int y)
 //
 // Fails closed when the element exposes no window handle: without one there is nothing
 // to bind the action to, and an unbindable target is not a target.
-bool FocusAndConfirm(
-    IUIAutomationElement* window,
-    const std::string& application,
-    WindowIdentity& outIdentity,
-    std::string& outFailure)
+bool FocusAndConfirm(IUIAutomationElement* window, const std::string& application, WindowIdentity& outIdentity, std::string& outFailure)
 {
     const WindowIdentity wanted = IdentityOf(NativeWindowHandle(window));
     if (!wanted.Valid())
@@ -356,9 +352,7 @@ policy::DesktopOperation ClassifyChord(const std::string& normalizedChord)
 // itself, so a pointer, a keystroke and a UI Automation pattern cannot drift apart.
 using policy::AuthorizeOrExplain;
 
-ActionResult LaunchApplication(
-    const ActionRequest& request,
-    const PolicyDecision& decision)
+ActionResult LaunchApplication(const ActionRequest& request, const PolicyDecision& decision)
 {
     ActionResult result;
     result.attempted = true;
@@ -469,8 +463,7 @@ ElementBounds ForegroundWindowBounds(IUIAutomation* automation, const HWND windo
 
 // What the screen is right now. `windowBounds` is optional because the caller in screen
 // space has no single window to measure -- there, identity is the whole check.
-VisualTargetFacts CurrentVisualFacts(
-    const WindowIdentity& foreground, const ElementBounds* windowBounds)
+VisualTargetFacts CurrentVisualFacts(const WindowIdentity& foreground, const ElementBounds* windowBounds)
 {
     VisualTargetFacts facts;
     facts.latestGeneration = DesktopObserver::LatestGeneration();
@@ -493,11 +486,8 @@ VisualTargetFacts CurrentVisualFacts(
 // The coordinate is computed here, at the last moment before the pointer moves, and
 // never carried in the request. That is the whole difference between acting on something
 // that was seen and acting on a number somebody wrote down earlier.
-bool AimAtVisualRegion(
-    const ActionRequest& request,
-    const WindowIdentity& foreground,
-    const ElementBounds* windowBounds,
-    PointerTarget& target)
+bool AimAtVisualRegion(const ActionRequest& request,
+    const WindowIdentity& foreground, const ElementBounds* windowBounds, PointerTarget& target)
 {
     const std::string stale = CompareVisualTarget(
         request.resolution, CurrentVisualFacts(foreground, windowBounds));
@@ -520,10 +510,7 @@ bool AimAtVisualRegion(
 
 // Confined scope: the point comes from a re-verified element, or from a coordinate that
 // must still land inside the approved window.
-PointerTarget ResolveInsideWindow(
-    IUIAutomation* automation,
-    IUIAutomationElement* window,
-    const ActionRequest& request)
+PointerTarget ResolveInsideWindow(IUIAutomation* automation, IUIAutomationElement* window, const ActionRequest& request)
 {
     PointerTarget target;
     const ElementBounds windowBounds = ElementBoundingRectangle(window);
@@ -643,11 +630,7 @@ DWORD ButtonUpFlag(const ActionRequest::DesktopInput::PointerButton button)
 
 // A drag is the one action that leaves the machine in a changed state partway through.
 // The release is therefore unconditional: every early exit still lets go of the button.
-ActionResult Drag(
-    const ActionRequest& request,
-    const PointerTarget& target,
-    policy::DesktopInputGuard& guard,
-    IUIAutomation* automation,
+ActionResult Drag(const ActionRequest& request, const PointerTarget& target, policy::DesktopInputGuard& guard, IUIAutomation* automation,
     const TargetBinding& destination)
 {
     ActionResult result;
@@ -732,13 +715,8 @@ ActionResult Drag(
     return result;
 }
 
-ActionResult TypeTextInput(
-    const ActionRequest& request,
-    const CapabilitySettings::DesktopControl& settings,
-    policy::DesktopInputGuard& guard,
-    const WindowIdentity& bound,
-    IUIAutomation* automation,
-    const TargetBinding& control)
+ActionResult TypeTextInput(const ActionRequest& request, const CapabilitySettings::DesktopControl& settings,
+    policy::DesktopInputGuard& guard, const WindowIdentity& bound, IUIAutomation* automation, const TargetBinding& control)
 {
     ActionResult result;
     result.attempted = true;
@@ -909,12 +887,8 @@ ActionResult TypeTextInput(
     return result;
 }
 
-ActionResult PressKeyChord(
-    const ActionRequest& request,
-    policy::DesktopInputGuard* guard,
-    const WindowIdentity& bound,
-    IUIAutomation* automation,
-    const TargetBinding& control)
+ActionResult PressKeyChord(const ActionRequest& request, policy::DesktopInputGuard* guard, const WindowIdentity& bound,
+    IUIAutomation* automation, const TargetBinding& control)
 {
     ActionResult result;
     result.attempted = true;
@@ -991,10 +965,8 @@ ActionResult PressKeyChord(
 #endif // _WIN32
 } // namespace
 
-DesktopControlExecutor::DesktopControlExecutor(
-    CapabilitySettings::DesktopControl inputSettings,
-    std::shared_ptr<policy::DesktopInputGuard> inputGuard,
-    std::shared_ptr<policy::DesktopApprovalGate> inputApprovals)
+DesktopControlExecutor::DesktopControlExecutor(CapabilitySettings::DesktopControl inputSettings,
+    std::shared_ptr<policy::DesktopInputGuard> inputGuard, std::shared_ptr<policy::DesktopApprovalGate> inputApprovals)
     : settings(std::move(inputSettings)),
       guard(std::move(inputGuard)),
       approvals(std::move(inputApprovals))
@@ -1006,9 +978,7 @@ bool DesktopControlExecutor::Handles(const ActionType type) const
     return IsDesktopControlAction(type);
 }
 
-ActionResult DesktopControlExecutor::Execute(
-    const ActionRequest& request,
-    const PolicyDecision& decision)
+ActionResult DesktopControlExecutor::Execute(const ActionRequest& request, const PolicyDecision& decision)
 {
     ActionResult result;
     result.dryRun = request.dryRun;

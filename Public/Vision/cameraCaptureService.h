@@ -54,9 +54,7 @@ struct CameraResolution
 // Free and pure so the substitution rules are testable without a webcam. The rule that
 // matters: an explicit choice that is no longer attached resolves to unavailable rather
 // than to some other camera.
-[[nodiscard]] CameraResolution ResolveCamera(
-    const std::vector<CameraDescriptor>& cameras,
-    const CameraSelection& selection);
+[[nodiscard]] CameraResolution ResolveCamera(const std::vector<CameraDescriptor>& cameras, const CameraSelection& selection);
 
 struct CameraFrame
 {
@@ -73,17 +71,8 @@ struct CameraFrame
     double elapsedMilliseconds = 0.0;
 };
 
-// Reads single frames from a local camera. Nothing more.
-//
-// Deliberately not a stream, and deliberately not resident. The service opens the
-// device, takes what it was asked for, and closes it again, so the camera light is on
-// only while a capture is actually happening. A companion that holds the webcam open
-// for its whole session is indistinguishable from one that is recording, and the
-// hardware light is the only signal a user actually trusts.
-//
-// Capture is not authority. Producing a frame here grants nothing: the capability gate
-// decides whether this may be called at all, and the ordinary action path still governs
-// anything done as a result of what the frame contained.
+// Opens a local camera for one requested frame, then closes it; no resident stream.
+// Capability policy admits capture, and normal action policy governs any resulting action.
 class CameraCaptureService
 {
 public:

@@ -21,8 +21,7 @@ private:
     class Stream final : public httplib::Stream
     {
     public:
-        Stream(socket_t socket, std::chrono::microseconds readTimeout,
-               std::chrono::microseconds writeTimeout, std::stop_token token)
+        Stream(socket_t socket, std::chrono::microseconds readTimeout, std::chrono::microseconds writeTimeout, std::stop_token token)
             : delegate(socket, 0, 0, 0, 0), readTimeout(readTimeout),
               writeTimeout(writeTimeout), stopToken(token) {}
 
@@ -71,8 +70,7 @@ private:
         std::stop_token stopToken;
     };
 
-    bool process_socket(const Socket& socket,
-                        std::function<bool(httplib::Stream&)> callback) override
+    bool process_socket(const Socket& socket, std::function<bool(httplib::Stream&)> callback) override
     {
         using namespace std::chrono;
         Stream stream(socket.sock, seconds(read_timeout_sec_) + microseconds(read_timeout_usec_),

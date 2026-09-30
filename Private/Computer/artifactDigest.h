@@ -27,12 +27,8 @@ namespace revia::computer
 // are not here, because editing them changes nothing about what the artifact does.
 // Tools/Computer/train.py builds this same string, with the same %.17g formatting,
 // which is shortest-round-trip in both languages.
-[[nodiscard]] std::string BehaviourDigestInput(
-    std::uint32_t featureVersion,
-    const std::vector<std::string>& featureNames,
-    const std::vector<double>& weights,
-    double abstainBelow,
-    const std::vector<std::string>& applications,
+[[nodiscard]] std::string BehaviourDigestInput(std::uint32_t featureVersion, const std::vector<std::string>& featureNames,
+    const std::vector<double>& weights, double abstainBelow, const std::vector<std::string>& applications,
     const std::vector<std::string>& intents);
 
 } // namespace revia::computer

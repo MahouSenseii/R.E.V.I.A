@@ -150,10 +150,8 @@ std::string FromLegacyText(const std::string& bytes)
 
 } // namespace
 
-FileSystemExecutor::FileSystemExecutor(
-    std::uintmax_t inputMaxReadBytes,
-    std::size_t inputMaxDirectoryEntries,
-    std::size_t inputMaxAffectedEntries)
+FileSystemExecutor::FileSystemExecutor(std::uintmax_t inputMaxReadBytes,
+    std::size_t inputMaxDirectoryEntries, std::size_t inputMaxAffectedEntries)
     : maxReadBytes(inputMaxReadBytes),
       maxDirectoryEntries(inputMaxDirectoryEntries),
       maxAffectedEntries(inputMaxAffectedEntries)
@@ -171,9 +169,7 @@ bool FileSystemExecutor::Handles(actions::ActionType type) const
         type == actions::ActionType::MoveToRecycleBin;
 }
 
-actions::ActionResult FileSystemExecutor::Execute(
-    const actions::ActionRequest& request,
-    const actions::PolicyDecision& decision)
+actions::ActionResult FileSystemExecutor::Execute(const actions::ActionRequest& request, const actions::PolicyDecision& decision)
 {
     switch (request.type)
     {
@@ -196,8 +192,7 @@ actions::ActionResult FileSystemExecutor::Execute(
     }
 }
 
-actions::ActionResult FileSystemExecutor::ListDirectory(
-    const actions::ActionRequest& request,
+actions::ActionResult FileSystemExecutor::ListDirectory(const actions::ActionRequest& request,
     const actions::PolicyDecision& decision) const
 {
     const auto& path = decision.canonicalSource;
@@ -266,9 +261,7 @@ actions::ActionResult FileSystemExecutor::ListDirectory(
     return result;
 }
 
-actions::ActionResult FileSystemExecutor::ReadTextFile(
-    const actions::ActionRequest& request,
-    const actions::PolicyDecision& decision) const
+actions::ActionResult FileSystemExecutor::ReadTextFile(const actions::ActionRequest& request, const actions::PolicyDecision& decision) const
 {
     const auto& path = decision.canonicalSource;
     std::error_code error;
@@ -360,8 +353,7 @@ actions::ActionResult FileSystemExecutor::ReadTextStream(std::istream& file) con
     return result;
 }
 
-actions::ActionResult FileSystemExecutor::CreateDirectory(
-    const actions::ActionRequest& request,
+actions::ActionResult FileSystemExecutor::CreateDirectory(const actions::ActionRequest& request,
     const actions::PolicyDecision& decision) const
 {
     const auto& path = decision.canonicalSource;
@@ -392,9 +384,7 @@ actions::ActionResult FileSystemExecutor::CreateDirectory(
     return result;
 }
 
-actions::ActionResult FileSystemExecutor::CopyFile(
-    const actions::ActionRequest& request,
-    const actions::PolicyDecision& decision) const
+actions::ActionResult FileSystemExecutor::CopyFile(const actions::ActionRequest& request, const actions::PolicyDecision& decision) const
 {
     const auto& source = decision.canonicalSource;
     const auto& destination = decision.canonicalDestination;
@@ -428,9 +418,7 @@ actions::ActionResult FileSystemExecutor::CopyFile(
     return result;
 }
 
-actions::ActionResult FileSystemExecutor::MovePath(
-    const actions::ActionRequest& request,
-    const actions::PolicyDecision& decision) const
+actions::ActionResult FileSystemExecutor::MovePath(const actions::ActionRequest& request, const actions::PolicyDecision& decision) const
 {
     const auto& source = decision.canonicalSource;
     const auto& destination = decision.canonicalDestination;
@@ -467,8 +455,7 @@ actions::ActionResult FileSystemExecutor::MovePath(
     return result;
 }
 
-actions::ActionResult FileSystemExecutor::MoveToRecycleBin(
-    const actions::ActionRequest& request,
+actions::ActionResult FileSystemExecutor::MoveToRecycleBin(const actions::ActionRequest& request,
     const actions::PolicyDecision& decision) const
 {
     const auto& source = decision.canonicalSource;
@@ -512,9 +499,7 @@ actions::ActionResult FileSystemExecutor::MoveToRecycleBin(
     return result;
 }
 
-bool FileSystemExecutor::IsWithinAffectedEntryLimit(
-    const std::filesystem::path& value,
-    std::size_t& outCount) const
+bool FileSystemExecutor::IsWithinAffectedEntryLimit(const std::filesystem::path& value, std::size_t& outCount) const
 {
     outCount = 1;
     std::error_code error;

@@ -1,7 +1,7 @@
 #pragma once
 
-#include "Library/structLibrary.h"
 
+#include "Speech/bargeInSettings.h"
 #include <atomic>
 #include <cstdint>
 #include <functional>
@@ -45,13 +45,8 @@ public:
     // rule can be tested without a microphone.
     [[nodiscard]] static int FrameEnergy(const std::int16_t* samples, std::size_t count);
 
-    // Decides whether the microphone is hearing the user or hearing Revia.
-    //
-    // A fixed threshold cannot tell those apart, because the speakers are audible for the
-    // whole utterance rather than just its opening moments. So this learns what the room
-    // sounds like while Revia is talking and looks for a step above that. Frames that
-    // qualify never update the floor, or a person talking steadily would teach the
-    // detector to ignore them.
+    // Detects user speech above a learned speaker/room noise floor.
+    // Qualifying frames never update the floor, preventing sustained speech from being learned as noise.
     class Detector
     {
     public:

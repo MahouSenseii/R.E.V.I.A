@@ -55,8 +55,7 @@ struct Preference
     // Whether she should state this as her own view rather than merely hold it. Below
     // the bar she may still act on it, but asserting a taste she has almost no evidence
     // for is how a model's guess becomes her personality.
-    [[nodiscard]] bool WorthStating(
-        float minimumConfidence = 0.35F, float neutralBand = 0.15F) const;
+    [[nodiscard]] bool WorthStating(float minimumConfidence = 0.35F, float neutralBand = 0.15F) const;
 };
 
 // Bounds on how fast a taste may form or reverse.
@@ -90,20 +89,10 @@ public:
     // never do more than maximumStep.
     //
     // Returns the preference as it now stands.
-    Preference Reinforce(
-        const std::string& subject,
-        bool positive,
-        PreferenceSource source,
-        const std::string& timestamp,
+    Preference Reinforce(const std::string& subject, bool positive, PreferenceSource source, const std::string& timestamp,
         const PreferenceLimits& limits = {});
 
-    // Adds a preference the profile declares, without disturbing one she already holds.
-    //
-    // Earned opinion outranks an authored starting point for the same reason development
-    // delta survives a baseline change: replacing it would let editing a profile quietly
-    // delete what experience produced.
-    //
-    // Returns true when it was inserted.
+    // Seeds an absent profile preference without overwriting an earned opinion; true when inserted.
     bool SeedFromProfile(const std::string& subject, float strength);
 
     [[nodiscard]] const Preference* Find(const std::string& subject) const;

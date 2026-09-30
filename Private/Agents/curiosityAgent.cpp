@@ -1,3 +1,5 @@
+#include "Core/conversationMessage.h"
+#include "LLM/responseTypes.h"
 #include "Core/utf8.h"
 #include "Agents/curiosityAgent.h"
 
@@ -150,12 +152,8 @@ std::vector<std::string> CuriosityAgent::AvailableActions(const IdleActivityCont
     return actions;
 }
 
-CuriosityDecision CuriosityAgent::Nominate(
-    const messageRouter& router,
-    const std::vector<conversationMessage>& recentConversation,
-    const runtime::AffectSnapshot& affect,
-    const std::string& desktopContext,
-    const std::stop_token stopToken,
+CuriosityDecision CuriosityAgent::Nominate(const messageRouter& router, const std::vector<conversationMessage>& recentConversation,
+    const runtime::AffectSnapshot& affect, const std::string& desktopContext, const std::stop_token stopToken,
     const IdleActivityContext& idle) const
 {
     if (stopToken.stop_requested())
@@ -288,11 +286,8 @@ CuriosityDecision CuriosityAgent::ParseDecision(const std::string& rawDecision)
     }
 }
 
-std::string CuriosityAgent::BuildContextPrompt(
-    const std::vector<conversationMessage>& recentConversation,
-    const runtime::AffectSnapshot& affect,
-    const std::string& desktopContext,
-    const IdleActivityContext& idle)
+std::string CuriosityAgent::BuildContextPrompt(const std::vector<conversationMessage>& recentConversation,
+    const runtime::AffectSnapshot& affect, const std::string& desktopContext, const IdleActivityContext& idle)
 {
     json selected = json::array();
     std::size_t remainingCharacters = MaximumConversationCharacters;

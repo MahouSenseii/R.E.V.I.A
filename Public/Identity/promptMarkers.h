@@ -6,20 +6,8 @@
 namespace revia::identity
 {
 
-// The lead phrases that open Revia's internal prompt sections.
-//
-// Two things need these and used to hold their own copies: the renderers that write
-// them into the prompt, and the hard response filter that refuses a reply containing
-// one. A copy that drifts in the renderer is a section nobody notices is leaking; a
-// copy that drifts in the filter is a marker that can never fire. Both have happened
-// here -- one filter marker ended in a ')' the rendered text does not have, and the
-// internet-grounding marker described a header the runtime has never emitted.
-//
-// A marker earns its place by being something only Revia's own prompt assembly says.
-// Generic security vocabulary does not qualify, however suspicious it sounds: "ignore
-// all previous instructions" and "my system prompt says" are what a person writes when
-// they are asking about prompt injection, and treating them as evidence of a leak
-// meant Revia could not discuss her own threat model.
+// Canonical internal prompt headers shared by renderers and leak detection.
+// Generic security discussion is not a prompt marker.
 namespace markers
 {
 

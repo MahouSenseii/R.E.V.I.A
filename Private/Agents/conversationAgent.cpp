@@ -1,3 +1,6 @@
+#include "Agents/responseFilterSettings.h"
+#include "Core/conversationMessage.h"
+#include "LLM/responseTypes.h"
 #include "Agents/conversationAgent.h"
 
 #include <chrono>
@@ -6,16 +9,10 @@
 namespace revia::agents
 {
 
-responseOutput ConversationAgent::Execute(
-    const messageRouter& router,
-    const std::string& input,
-    const std::vector<conversationMessage>& context,
-    const responseFilterSettings& filterSettings,
-    const ResponseFilterContext& filterContext,
-    const std::stop_token stopToken,
-    messageRouter::DeltaHandler onDelta,
-    const revia::intelligence::IntelligenceDecision& decision,
-    const llm::PrivateMemoryAccess memoryAccess) const
+responseOutput ConversationAgent::Execute(const messageRouter& router, const std::string& input,
+    const std::vector<conversationMessage>& context, const responseFilterSettings& filterSettings,
+    const ResponseFilterContext& filterContext, const std::stop_token stopToken, messageRouter::DeltaHandler onDelta,
+    const revia::intelligence::IntelligenceDecision& decision, const llm::PrivateMemoryAccess memoryAccess) const
 {
     // Backend deltas are untrusted until the complete style/hard/optional AI filter
     // sequence has accepted them. Preserve backend streaming and cancellation while

@@ -24,9 +24,7 @@ bool Contains(const std::string& input, const std::string& signal)
 }
 }
 
-void HumanizationController::ObserveInput(
-    const std::string& input,
-    const runtime::AffectSnapshot& affect)
+void HumanizationController::ObserveInput(const std::string& input, const runtime::AffectSnapshot& affect)
 {
     std::lock_guard lock(mutex);
     state.familiarity = Clamp(state.familiarity + 0.004F);
@@ -46,9 +44,7 @@ void HumanizationController::ObserveInput(
         state.irritation = Clamp(state.irritation + 0.08F);
 }
 
-void HumanizationController::ObserveOutcome(
-    const bool succeeded,
-    const runtime::AffectSnapshot& affect)
+void HumanizationController::ObserveOutcome(const bool succeeded, const runtime::AffectSnapshot& affect)
 {
     std::lock_guard lock(mutex);
     state.confidence = Clamp(state.confidence * 0.9F + (succeeded ? 0.075F : 0.02F));

@@ -1,3 +1,5 @@
+#include "LLM/embeddingTypes.h"
+#include "Memory/memoryTypes.h"
 #include "Agents/memoryAgent.h"
 
 #include <algorithm>
@@ -49,10 +51,7 @@ std::string ToString(const MemoryTaskClass value)
     return "turn";
 }
 
-MemoryTaskClass MemoryAgent::NextClass(
-    const QueueDepths& depths,
-    int& roundPosition,
-    bool& outHasWork)
+MemoryTaskClass MemoryAgent::NextClass(const QueueDepths& depths, int& roundPosition, bool& outHasWork)
 {
     outHasWork = depths.interactive > 0 || depths.learning > 0 || depths.backfill > 0;
     if (!outHasWork) return MemoryTaskClass::InteractiveTurn;
@@ -320,11 +319,7 @@ bool MemoryAgent::Enqueue(const MemoryTaskClass taskClass, Task task)
     return admitted;
 }
 
-void MemoryAgent::Submit(
-    const messageRouter& router,
-    std::string input,
-    std::string assistantResponse,
-    const ResponseProvenance provenance,
+void MemoryAgent::Submit(const messageRouter& router, std::string input, std::string assistantResponse, const ResponseProvenance provenance,
     const std::uint64_t turnId)
 {
     if (input.empty() || worker.get_stop_token().stop_requested())
@@ -343,10 +338,7 @@ void MemoryAgent::Submit(
         std::to_string(Depths().interactive));
 }
 
-LearnedFindingResult MemoryAgent::SubmitLearnedFinding(
-    const messageRouter& router,
-    memoryDecision decision,
-    const std::uint64_t turnId)
+LearnedFindingResult MemoryAgent::SubmitLearnedFinding(const messageRouter& router, memoryDecision decision, const std::uint64_t turnId)
 {
     if (!decision.bSuccess || !decision.bShouldRemember || decision.summary.empty() ||
         worker.get_stop_token().stop_requested())
@@ -408,9 +400,7 @@ LearnedFindingResult MemoryAgent::SubmitLearnedFinding(
     return LearnedFindingResult::SavedWithoutEmbedding;
 }
 
-void MemoryAgent::SubmitEmbeddingBackfill(
-    const messageRouter& router,
-    const std::string& embeddingModel)
+void MemoryAgent::SubmitEmbeddingBackfill(const messageRouter& router, const std::string& embeddingModel)
 {
     if (embeddingModel.empty() || worker.get_stop_token().stop_requested())
     {

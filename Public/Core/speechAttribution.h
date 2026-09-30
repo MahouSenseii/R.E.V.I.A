@@ -1,7 +1,7 @@
 #pragma once
 
-#include "Library/structLibrary.h"
 
+#include "Core/conversationMessage.h"
 #include <string>
 #include <vector>
 
@@ -31,6 +31,5 @@ struct SpeechAttribution
 
 [[nodiscard]] SpeechAttribution ReadSpeechAttribution(const std::string& input);
 [[nodiscard]] std::string AnnotateReportedSpeech(const std::string& input);
-[[nodiscard]] std::string BuildSpeechAttributionGuidance(
-    const std::string& input, const std::vector<conversationMessage>& context);
+[[nodiscard]] std::string BuildSpeechAttributionGuidance(const std::string& input, const std::vector<conversationMessage>& context);
 }

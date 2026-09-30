@@ -35,8 +35,7 @@ public:
     void Configure(AddresseeSettings settings);
 
     // Whether the transcript names her as a whole word.
-    [[nodiscard]] static bool MentionsWakeWord(
-        const std::string& transcript, const std::vector<std::string>& wakeWords);
+    [[nodiscard]] static bool MentionsWakeWord(const std::string& transcript, const std::vector<std::string>& wakeWords);
 
     // True when speech heard at `now` is for her. During a call only her name counts,
     // because follow-up speech is then most likely meant for the other people.

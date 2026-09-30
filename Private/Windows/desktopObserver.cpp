@@ -87,10 +87,7 @@ std::wstring ElementLabelledBy(IUIAutomationElement* element)
 // Bounded to a handful of steps on purpose. A deep tree would otherwise cost a walk per
 // element, and the useful container is never far: it is the panel, group or list the
 // control sits in, not the application root.
-std::wstring NearestNamedAncestor(
-    IUIAutomation* automation,
-    IUIAutomationElement* element,
-    IUIAutomationElement* stopAt)
+std::wstring NearestNamedAncestor(IUIAutomation* automation, IUIAutomationElement* element, IUIAutomationElement* stopAt)
 {
     IUIAutomationTreeWalker* walker = nullptr;
     if (FAILED(automation->get_ControlViewWalker(&walker)) || walker == nullptr)
@@ -231,9 +228,7 @@ std::uint64_t SteadyMilliseconds()
 }
 }
 
-std::string CompareVisualTarget(
-    const ActionRequest::ElementResolutionEvidence& target,
-    const VisualTargetFacts& current)
+std::string CompareVisualTarget(const ActionRequest::ElementResolutionEvidence& target, const VisualTargetFacts& current)
 {
     if (!target.IsVisualRegionTarget())
     {

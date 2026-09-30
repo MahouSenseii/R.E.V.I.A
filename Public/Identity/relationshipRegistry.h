@@ -15,35 +15,19 @@
 namespace revia::identity
 {
 
-// Who Revia is talking to, as a stable identifier.
-//
-// Entity ids are namespaced by where the person came from, because "quentin" on a
-// stream and "quentin" at this keyboard are not known to be the same person and
-// assuming they are would merge two relationships that were earned separately.
-//
-// The local user gets a fixed id rather than a name. Revia may not know what to call
-// them yet, and a relationship that only begins once someone introduces themselves
-// would lose every interaction before that point.
+// Platform-namespaced person identifiers keep unrelated accounts separate.
+// Anonymous local identity records history before an introduction.
 [[nodiscard]] std::string LocalUserEntityId();
-[[nodiscard]] std::string AdapterEntityId(
-    const std::string& source, const std::string& author);
+[[nodiscard]] std::string AdapterEntityId(const std::string& source, const std::string& author);
 
-// The live, per-entity relationship database.
-//
-// Single purpose: it remembers how Revia stands with each person and applies evidence to
-// that. It does not decide what the evidence is, does not appraise, and cannot reach a
-// model. Deltas come only from RelationshipEvent, which the runtime constructs from
-// observable signals -- so "we are best friends now" cannot become true by being said.
-//
-// Thread-safe: conversation, adapters, and idle settling all touch it from different
-// threads.
+// Thread-safe per-entity relationship state updated only through runtime-observed RelationshipEvent.
+// Does not infer evidence, appraise emotion or call a model.
 class RelationshipRegistry
 {
 public:
     // Takes a path rather than a store: IdentityStore owns a mutex and so cannot be
     // moved, and constructing it in place keeps that detail out of every caller.
-    explicit RelationshipRegistry(
-        std::filesystem::path path = "RuntimeData/Identity/identity.json");
+    explicit RelationshipRegistry(std::filesystem::path path = "RuntimeData/Identity/identity.json");
 
     // Reads persisted relationships. A missing file is a first run, not a failure; a
     // corrupt one is reported so the caller can refuse to overwrite it.
@@ -71,15 +55,8 @@ public:
     // The id a named local speaker is stored under.
     [[nodiscard]] static std::string NamedLocalEntityId(const std::string& name);
 
-    // Resolves who is speaking at the keyboard once they give a name.
-    //
-    // The first person to introduce themselves inherits the anonymous local history,
-    // because they are almost certainly whoever has been talking all along and throwing
-    // that away would be worse than the small risk of attributing it wrongly. Anyone who
-    // introduces themselves afterwards becomes their own entity with their own
-    // relationship, starting neutral.
-    //
-    // Returns the entity id the caller should attribute this turn to.
+    // Returns the named local entity; the first introduction adopts anonymous local history.
+    // Later introductions keep distinct neutral-start relationships.
     std::string ResolveNamedLocalSpeaker(const std::string& name);
 
     // Who is at the keyboard when a session starts, before anyone has said a name: the
@@ -105,15 +82,9 @@ public:
     [[nodiscard]] emotion::MoodState Mood() const;
     void SetMood(const emotion::MoodState& mood);
 
-    // Opinions live in the same file, so the registry carries them through a load/save
-    // cycle for the same reason it carries development: a relationship save must not
-    // silently discard what she likes.
-    //
-    // Evidence in, bounded change out. Callers supply an observation, never a value:
-    // letting a caller set strength directly would make one sentence able to install a
-    // lifelong taste, which is what the bounded step exists to prevent.
-    Preference ReinforcePreference(
-        const std::string& subject, bool positive, PreferenceSource source);
+    // Preserves opinions in the shared identity snapshot and applies bounded observation-driven changes.
+    // Callers supply evidence rather than assigning preference strength.
+    Preference ReinforcePreference(const std::string& subject, bool positive, PreferenceSource source);
     // Inserts a profile-declared preference only when she does not already hold one for
     // that subject. Earned opinion outranks an authored starting point.
     void SeedPreferences(const std::vector<std::pair<std::string, float>>& declared);

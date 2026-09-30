@@ -46,12 +46,7 @@ struct PolicyFixture
     revia::tests::ScopedTestDirectory directory;
     nlohmann::json settings = BaseSettings(directory.root);
 
-    void Allow(
-        const bool pointer,
-        const bool keyboard,
-        const bool launch,
-        const bool raw = false,
-        const bool autonomous = false,
+    void Allow(const bool pointer, const bool keyboard, const bool launch, const bool raw = false, const bool autonomous = false,
         const bool visual = false)
     {
         settings["desktopControl"] = {

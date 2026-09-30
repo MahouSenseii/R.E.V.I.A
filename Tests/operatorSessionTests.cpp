@@ -16,10 +16,8 @@ using revia::runtime::ReviaSession;
 using revia::runtime::ReviaSessionTestAccess;
 using revia::tests::Check;
 
-void TestApprovalReachesExecution(const std::string& input, const bool approve,
-    const bool cancel, const bool inScope = true, const bool write = false,
-    const bool approveStep = true, const std::string& mode = "supervised",
-    const bool remove = false)
+void TestApprovalReachesExecution(const std::string& input, const bool approve, const bool cancel, const bool inScope = true,
+    const bool write = false, const bool approveStep = true, const std::string& mode = "supervised", const bool remove = false)
 {
     std::cout << "Operator session: " << input << " approve=" << approve
         << " cancel=" << cancel << " inScope=" << inScope << " write=" << write

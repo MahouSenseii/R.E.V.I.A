@@ -35,8 +35,7 @@ private:
     };
 
     std::optional<std::string> NextChatLine();
-    revia::actions::ConfirmationChoice ConfirmAction(
-        const revia::actions::ActionRequest& request,
+    revia::actions::ConfirmationChoice ConfirmAction(const revia::actions::ActionRequest& request,
         const revia::actions::PolicyDecision& decision);
 
     // Shared with a detached reader: a blocking terminal read cannot be interrupted, so the

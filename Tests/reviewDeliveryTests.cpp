@@ -1,3 +1,6 @@
+#include "Agents/responseFilterSettings.h"
+#include "Core/profile.h"
+#include "LLM/endpointSettings.h"
 #include "testSupport.h"
 #include "Agents/conversationAgent.h"
 #include "Agents/responseFilter.h"
@@ -83,7 +86,8 @@ void TestReviewDeliveryFiltering()
              "The leaves are green. The branches reach over the path, and the afternoon light "
              "falls across the stones beside the gate. I clicked the button for you."})
     for (const std::size_t split : {std::size_t(1), answer.size() / 2, answer.size() - 1})
-    for (const bool allowed : {false, true})
+    for (const bool observationAvailable : {false, true})
+    for (const bool desktopAllowed : {false, true})
     {
         DeliveryBackend backend(answer, split);
         messageRouter router;
@@ -96,7 +100,8 @@ void TestReviewDeliveryFiltering()
         router.ApplyLLMSettings(settings, embeddings, profile);
         ResponseFilterContext context;
         context.desktopStateKnown = true;
-        context.desktopPointer = context.screenObservationAvailable = allowed;
+        context.desktopPointer = desktopAllowed;
+        context.screenObservationAvailable = observationAvailable;
         responseFilterSettings filters; filters.bAiReviewEnabled = false;
         std::string delivered;
         bool earlyDelivery = false;
@@ -111,8 +116,12 @@ void TestReviewDeliveryFiltering()
         Check(!earlyDelivery, "Unvalidated model output reached the delivery callback before completion.");
         Check(delivered == result.response, "Speech delivery differed from the fully approved answer.");
         Check(!delivered.empty(), "No approved speech callback was delivered.");
-        if (!allowed)
-            Check(delivered.find(answer) == std::string::npos && result.bHardFilterBlocked,
+        const bool claimsScreenSight = answer.starts_with("I can see");
+        const bool forbidden = claimsScreenSight ? !observationAvailable : !desktopAllowed;
+        const std::string claim = claimsScreenSight
+            ? "I can see the window on your monitor." : "I clicked the button for you.";
+        if (forbidden)
+            Check(delivered.find(claim) == std::string::npos && result.bHardFilterBlocked,
                 "Forbidden capability claim reached the speech callback.");
         else
             Check(delivered == answer, "Capability-backed positive control was unnecessarily replaced.");

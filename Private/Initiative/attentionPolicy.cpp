@@ -1,3 +1,5 @@
+#include "Initiative/initiativeSettings.h"
+#include "Perception/perceptionSettings.h"
 #include "Initiative/attentionPolicy.h"
 #include "Perception/microphoneUse.h"
 #include "Perception/windowEventMonitor.h"
@@ -52,11 +54,7 @@ std::string ForegroundExecutable(const HWND window)
 #endif
 } // namespace
 
-bool LooksFullScreen(
-    const ScreenRect& window,
-    const ScreenRect& monitor,
-    const bool maximizedWithTitleBar,
-    const bool isDesktop)
+bool LooksFullScreen(const ScreenRect& window, const ScreenRect& monitor, const bool maximizedWithTitleBar, const bool isDesktop)
 {
     if (maximizedWithTitleBar || isDesktop)
     {
@@ -79,17 +77,13 @@ std::chrono::milliseconds SinceLastInput()
     return std::chrono::hours{1};
 }
 
-InputRhythm::InputRhythm(
-    const std::chrono::milliseconds pauseLength,
-    const std::chrono::seconds unbrokenLength)
+InputRhythm::InputRhythm(const std::chrono::milliseconds pauseLength, const std::chrono::seconds unbrokenLength)
     : pause(pauseLength)
     , unbroken(unbrokenLength)
 {
 }
 
-bool InputRhythm::Observe(
-    const std::chrono::milliseconds sinceLastInput,
-    const std::chrono::steady_clock::time_point now)
+bool InputRhythm::Observe(const std::chrono::milliseconds sinceLastInput, const std::chrono::steady_clock::time_point now)
 {
     std::lock_guard lock(mutex);
     if (!observed || sinceLastInput >= pause)
@@ -109,8 +103,7 @@ bool InputRhythm::NeverPauses() const
     return neverPauses;
 }
 
-AttentionContext SampleDesktop(
-    const perceptionSettings& perceptionConfiguration)
+AttentionContext SampleDesktop(const perceptionSettings& perceptionConfiguration)
 {
     AttentionContext context;
     context.now = std::chrono::system_clock::now();
@@ -214,9 +207,7 @@ int AttentionPolicy::EffectiveHourlyBudget() const
     return std::max(1, configured / 2);
 }
 
-AttentionVerdict AttentionPolicy::Evaluate(
-    const float confidence,
-    const AttentionContext& context) const
+AttentionVerdict AttentionPolicy::Evaluate(const float confidence, const AttentionContext& context) const
 {
     if (!configuration.bEnabled)
     {

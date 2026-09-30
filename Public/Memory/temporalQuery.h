@@ -31,13 +31,8 @@ struct TimeWindow
     }
 };
 
-// Resolves the first time reference in `text` against `nowEpoch`, in local time.
-//
-// Returns an invalid window when the text names no time, which is the common case and
-// is not an error. Recognises the phrasings people actually use to reach back into a
-// conversation -- "yesterday", "last night", "three days ago", "last Tuesday",
-// "2026-08-29" -- and deliberately stops there. An unrecognised phrase costs nothing
-// beyond the retrieval behaviour that existed before this parser.
+// Resolves the first recognized time reference against nowEpoch in local time.
+// Missing/unrecognized phrases return an invalid window without changing ordinary retrieval.
 [[nodiscard]] TimeWindow ParseTimeWindow(const std::string& text, std::int64_t nowEpoch);
 
 // Renders a moment the way someone would say it out loud: "yesterday 19:42" rather than

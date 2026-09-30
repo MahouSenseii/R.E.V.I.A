@@ -1,7 +1,8 @@
 #pragma once
 
-#include "Library/structLibrary.h"
 
+#include "Initiative/initiativeSettings.h"
+#include "Perception/perceptionSettings.h"
 #include <chrono>
 #include <cstdint>
 #include <mutex>
@@ -44,11 +45,7 @@ struct ScreenRect
 // without a title bar. A maximized window covers the monitor too whenever the taskbar
 // auto-hides or lives on another display, but it keeps its title bar and is an ordinary
 // working window. The desktop itself covers every monitor and is not an application.
-[[nodiscard]] bool LooksFullScreen(
-    const ScreenRect& window,
-    const ScreenRect& monitor,
-    bool maximizedWithTitleBar,
-    bool isDesktop);
+[[nodiscard]] bool LooksFullScreen(const ScreenRect& window, const ScreenRect& monitor, bool maximizedWithTitleBar, bool isDesktop);
 
 // Time since the last keyboard or mouse input anywhere on the desktop.
 [[nodiscard]] std::chrono::milliseconds SinceLastInput();
@@ -62,15 +59,12 @@ struct ScreenRect
 class InputRhythm
 {
 public:
-    explicit InputRhythm(
-        std::chrono::milliseconds pause = std::chrono::seconds{2},
+    explicit InputRhythm(std::chrono::milliseconds pause = std::chrono::seconds{2},
         std::chrono::seconds unbroken = std::chrono::minutes{5});
 
     // One sample of the input clock. Returns true when this sample changed the verdict,
     // so the caller can say so once rather than on every sample.
-    bool Observe(
-        std::chrono::milliseconds sinceLastInput,
-        std::chrono::steady_clock::time_point now);
+    bool Observe(std::chrono::milliseconds sinceLastInput, std::chrono::steady_clock::time_point now);
     [[nodiscard]] bool NeverPauses() const;
 
 private:
@@ -85,8 +79,7 @@ private:
 // Reads how busy the desktop looks right now. Idle time comes from GetLastInputInfo,
 // which reports only *when* the last input happened and never what it was, so this needs
 // no keyboard hook and creates no keylogging surface.
-[[nodiscard]] AttentionContext SampleDesktop(
-    const perceptionSettings& perceptionConfiguration);
+[[nodiscard]] AttentionContext SampleDesktop(const perceptionSettings& perceptionConfiguration);
 
 // What the desktop looks like right now. Gathered by the caller so the policy itself
 // stays pure and testable without a live desktop.
@@ -127,9 +120,7 @@ public:
     // Live comfort changes must not erase cooldowns, dismissals, or precision history.
     void UpdateSettings(initiativeSettings settings);
 
-    [[nodiscard]] AttentionVerdict Evaluate(
-        float confidence,
-        const AttentionContext& context) const;
+    [[nodiscard]] AttentionVerdict Evaluate(float confidence, const AttentionContext& context) const;
 
     void RecordSpoken(std::chrono::system_clock::time_point when);
     void RecordAccepted();

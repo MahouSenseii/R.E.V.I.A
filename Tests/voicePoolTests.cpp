@@ -1,3 +1,4 @@
+#include "Speech/speechSettings.h"
 #include "testSupport.h"
 #include "speechServiceTestAccess.h"
 
@@ -16,31 +17,20 @@ namespace revia::speech
 // that a real run would get from a Python worker finishing a phrase.
 struct VoicePoolTestAccess
 {
-    static void Estimate(
-        QwenTtsPool& pool,
-        const std::size_t index,
-        const double fixedOverheadMilliseconds,
-        const double millisecondsPerCharacter)
+    static void Estimate(QwenTtsPool& pool,
+        const std::size_t index, const double fixedOverheadMilliseconds, const double millisecondsPerCharacter)
     {
         std::lock_guard lock(pool.mutex);
         pool.workers[index].fixedOverheadMilliseconds = fixedOverheadMilliseconds;
         pool.workers[index].millisecondsPerCharacter = millisecondsPerCharacter;
     }
 
-    static std::size_t Acquire(
-        QwenTtsPool& pool,
-        const std::size_t characters,
-        const bool latencyCritical,
-        double& waitMilliseconds)
+    static std::size_t Acquire(QwenTtsPool& pool, const std::size_t characters, const bool latencyCritical, double& waitMilliseconds)
     {
         return pool.AcquireWorker(characters, latencyCritical, waitMilliseconds);
     }
 
-    static void Release(
-        QwenTtsPool& pool,
-        const std::size_t index,
-        const std::size_t characters,
-        const double milliseconds)
+    static void Release(QwenTtsPool& pool, const std::size_t index, const std::size_t characters, const double milliseconds)
     {
         pool.ReleaseWorker(index, characters, milliseconds);
     }

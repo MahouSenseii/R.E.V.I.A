@@ -212,9 +212,7 @@ std::vector<Issue> IssueLog::All() const
     return result;
 }
 
-std::optional<Issue> IssueLog::Find(
-    const std::string& component,
-    const std::string& code) const
+std::optional<Issue> IssueLog::Find(const std::string& component, const std::string& code) const
 {
     std::lock_guard lock(mutex);
     const auto existing = issues.find(component + "/" + code);
@@ -309,9 +307,7 @@ bool IssueLog::Load(std::string& outError)
     return true;
 }
 
-std::string IssueLog::CaptureTail(
-    const std::filesystem::path& file,
-    const std::size_t maximumLines)
+std::string IssueLog::CaptureTail(const std::filesystem::path& file, const std::size_t maximumLines)
 {
     std::error_code error;
     if (maximumLines == 0 || !std::filesystem::is_regular_file(file, error))

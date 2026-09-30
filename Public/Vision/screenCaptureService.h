@@ -45,13 +45,11 @@ public:
     // Describes the current display topology without capturing pixels.
     [[nodiscard]] std::vector<MonitorDescriptor> EnumerateMonitors() const;
 
-    [[nodiscard]] CaptureResult CaptureDesktop(
-        const std::filesystem::path& outputDirectory) const;
+    [[nodiscard]] CaptureResult CaptureDesktop(const std::filesystem::path& outputDirectory) const;
 
     // Captures only the foreground window and preserves its screen-space origin so
     // vision regions can be matched to UI Automation bounds without guessing.
-    [[nodiscard]] CaptureResult CaptureForegroundWindow(
-        const std::filesystem::path& outputDirectory) const;
+    [[nodiscard]] CaptureResult CaptureForegroundWindow(const std::filesystem::path& outputDirectory) const;
 };
 
 } // namespace revia::vision

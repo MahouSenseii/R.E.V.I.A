@@ -84,10 +84,7 @@ public:
 
     // Something happened. Drives respond to the same typed stimuli emotion does, so
     // wanting and feeling cannot disagree about what occurred.
-    [[nodiscard]] DriveState Observe(
-        DriveState drives,
-        const emotion::Stimulus& stimulus,
-        const emotion::EmotionVector& emotion) const;
+    [[nodiscard]] DriveState Observe(DriveState drives, const emotion::Stimulus& stimulus, const emotion::EmotionVector& emotion) const;
 
     // Time passing with nothing happening. Boredom rises; everything else fades.
     // userPresent matters: being alone is not the same as being ignored.

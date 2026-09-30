@@ -30,11 +30,7 @@ using revia::tests::Check;
 const std::string Message = "dinner at eight";
 const std::string Application = "reviadesktopfixture.exe";
 
-ObservedCandidate Edit(
-    const std::string& id,
-    const std::string& name,
-    const std::string& container = {},
-    const std::string& label = {})
+ObservedCandidate Edit(const std::string& id, const std::string& name, const std::string& container = {}, const std::string& label = {})
 {
     ObservedCandidate candidate;
     candidate.id = id;
@@ -58,9 +54,7 @@ ObservedCandidate Button(const std::string& id, const std::string& name)
     return candidate;
 }
 
-ComputerTaskContext Screen(
-    std::vector<ObservedCandidate> candidates,
-    const std::string& foreground = Application)
+ComputerTaskContext Screen(std::vector<ObservedCandidate> candidates, const std::string& foreground = Application)
 {
     ComputerTaskContext context;
     context.observation.screen.succeeded = true;
@@ -72,11 +66,8 @@ ComputerTaskContext Screen(
     return context;
 }
 
-TaskProgressInputs Inputs(
-    const TaskContent& content,
-    const ComputerTaskContext& context,
-    const PayloadReference& payload,
-    const bool placed)
+TaskProgressInputs Inputs(const TaskContent& content,
+    const ComputerTaskContext& context, const PayloadReference& payload, const bool placed)
 {
     TaskProgressInputs inputs;
     inputs.content = &content;

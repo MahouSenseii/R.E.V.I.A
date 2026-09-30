@@ -5,9 +5,7 @@
 namespace revia::emotion
 {
 
-Stimulus BuildConversationStimulus(
-    const std::string& entityId,
-    const identity::ConversationSignals& signals)
+Stimulus BuildConversationStimulus(const std::string& entityId, const identity::ConversationSignals& signals)
 {
     Stimulus stimulus;
     stimulus.source = StimulusSource::Conversation;
@@ -67,13 +65,8 @@ Stimulus BuildConversationStimulus(
     return stimulus;
 }
 
-Stimulus BuildGoalStimulus(
-    const bool succeeded,
-    const bool exhausted,
-    const bool blocked,
-    const std::size_t actionsSpent,
-    const std::size_t retriesSpent,
-    const std::string& summary)
+Stimulus BuildGoalStimulus(const bool succeeded, const bool exhausted, const bool blocked, const std::size_t actionsSpent,
+    const std::size_t retriesSpent, const std::string& summary)
 {
     Stimulus stimulus;
     stimulus.source = StimulusSource::Goal;
@@ -112,10 +105,7 @@ Stimulus BuildGoalStimulus(
     return stimulus;
 }
 
-Stimulus BuildDiscoveryStimulus(
-    const std::string& description,
-    const float novelty,
-    const float importance)
+Stimulus BuildDiscoveryStimulus(const std::string& description, const float novelty, const float importance)
 {
     Stimulus stimulus;
     stimulus.source = StimulusSource::Research;

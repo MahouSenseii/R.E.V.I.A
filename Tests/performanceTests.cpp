@@ -50,11 +50,7 @@ void WriteLittle16(std::ofstream& file, const std::uint16_t value)
     file.write(reinterpret_cast<const char*>(bytes), 2);
 }
 
-void WriteWav(
-    const std::filesystem::path& path,
-    const std::vector<std::int16_t>& samples,
-    const int sampleRate,
-    const int channels)
+void WriteWav(const std::filesystem::path& path, const std::vector<std::int16_t>& samples, const int sampleRate, const int channels)
 {
     std::ofstream file(path, std::ios::binary);
     Check(file.is_open(), "Could not create the test WAV at " + path.string());
@@ -78,12 +74,8 @@ void WriteWav(
 }
 
 // A plain tone. Loud stretches and silent stretches are what the vocal detector reads.
-std::vector<std::int16_t> Tone(
-    const int sampleRate,
-    const int milliseconds,
-    const int channels,
-    const double amplitude = 0.5,
-    const double frequency = 220.0)
+std::vector<std::int16_t> Tone(const int sampleRate,
+    const int milliseconds, const int channels, const double amplitude = 0.5, const double frequency = 220.0)
 {
     const std::int64_t frames = (static_cast<std::int64_t>(sampleRate) * milliseconds) / 1000;
     std::vector<std::int16_t> samples(static_cast<std::size_t>(frames) * channels);
@@ -101,8 +93,7 @@ std::vector<std::int16_t> Tone(
     return samples;
 }
 
-std::vector<std::int16_t> Silence(
-    const int sampleRate, const int milliseconds, const int channels)
+std::vector<std::int16_t> Silence(const int sampleRate, const int milliseconds, const int channels)
 {
     const std::int64_t frames = (static_cast<std::int64_t>(sampleRate) * milliseconds) / 1000;
     return std::vector<std::int16_t>(static_cast<std::size_t>(frames) * channels, 0);

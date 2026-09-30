@@ -13,6 +13,7 @@ import argparse
 import gc
 import hmac
 import json
+import math
 import sys
 import threading
 import time
@@ -24,7 +25,7 @@ from typing import Any
 class ImageRuntime:
     def __init__(self, args: argparse.Namespace) -> None:
         self.args = args
-        self.lock = threading.Lock()
+        self.lock = threading.RLock()
         self.pipeline: Any | None = None
         self.device = "cpu"
         self.device_name = "CPU"
@@ -111,28 +112,37 @@ class ImageRuntime:
             raise ValueError("An outputPath is required.")
         output_path = Path(raw_output)
 
-        state = self.ensure_loaded()
-        steps = max(1, min(int(payload.get("steps", self.args.steps)), 50))
-        width = max(256, min(int(payload.get("width", self.args.width)), 1024))
-        height = max(256, min(int(payload.get("height", self.args.height)), 1024))
+        try:
+            steps = max(1, min(int(payload.get("steps", self.args.steps)), 50))
+            width = max(256, min(int(payload.get("width", self.args.width)), 1024))
+            height = max(256, min(int(payload.get("height", self.args.height)), 1024))
+            guidance = float(payload.get("guidance", self.args.guidance))
+            seed = payload.get("seed")
+            seed = int(seed) if seed is not None else None
+        except (TypeError, ValueError, OverflowError) as error:
+            raise ValueError("Generation options must be valid numbers.") from error
+        if not math.isfinite(guidance):
+            raise ValueError("Guidance must be finite.")
         # Diffusers requires multiples of 8; rounding here beats an opaque failure.
         width -= width % 8
         height -= height % 8
 
-        import torch
-
-        generator = None
-        seed = payload.get("seed")
-        if seed is not None:
-            generator = torch.Generator(device="cpu").manual_seed(int(seed))
-
-        started = time.time()
         with self.lock:
+            # Loading and inference share ownership so unload cannot discard the
+            # pipeline after ensure_loaded reports it ready.
+            state = self.ensure_loaded()
+            import torch
+
+            generator = None
+            if seed is not None:
+                generator = torch.Generator(device="cpu").manual_seed(seed)
+
+            started = time.time()
             result = self.pipeline(
                 prompt=prompt,
                 negative_prompt=payload.get("negativePrompt") or None,
                 num_inference_steps=steps,
-                guidance_scale=float(payload.get("guidance", self.args.guidance)),
+                guidance_scale=guidance,
                 width=width,
                 height=height,
                 generator=generator,

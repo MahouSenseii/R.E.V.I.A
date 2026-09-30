@@ -55,14 +55,8 @@ struct SongRehearsal
     std::size_t totalSamples = 0;
 };
 
-// The performance owner.
-//
-// It owns one song at a time, its own playback thread, and its own audio device. It does
-// not touch SpeechService, the speech queue, or any model: a song that fails to load, a
-// missing audio device, and a corrupt WAV all end as a typed result here and leave
-// ordinary conversation and speech exactly as they were.
-//
-// ReviaSession remains the lifecycle owner; this is started, stopped, and observed by it.
+// Owns one song, playback thread and audio device; failures remain typed performance results.
+// ReviaSession controls lifecycle; speech queues and model owners are separate.
 class PerformanceRuntime
 {
 public:

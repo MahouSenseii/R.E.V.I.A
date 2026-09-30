@@ -1,6 +1,6 @@
 #pragma once
 
-#include "Library/structLibrary.h"
+#include "Speech/speechSettings.h"
 #include "Speech/qwenTtsClient.h"
 #include "Speech/voiceTypes.h"
 
@@ -29,24 +29,9 @@ struct VoiceWorkerState
     std::size_t completed = 0;
 };
 
-// The worker to dispatch to, or workers.size() when every eligible worker is busy and
-// the caller has to wait.
-//
-// Only idle workers are candidates. A busy worker is not a candidate however good its
-// measured rate is, and that is the whole correction: the previous version compared
-// busy and idle workers on predicted finish time and then waited when the winner was
-// busy. That is defensible for one request in isolation and wrong for a queue, because
-// every waiting caller runs the same comparison and reaches the same answer -- so a
-// long reply could park several phrases on one card while the other sat idle. The live
-// 2026-09-02 session split 49 phrases to the RTX 2070 against 17 to the RTX 5070 with
-// queue depth reaching 8.
-//
-// Predicted duration still decides between idle workers, where it costs nothing to be
-// wrong: the alternative worker is free either way.
-[[nodiscard]] std::size_t SelectIdleVoiceWorker(
-    const std::vector<VoiceWorkerState>& workers,
-    std::size_t characters,
-    bool latencyCritical);
+// Chooses the shortest predicted-duration idle eligible worker; busy workers never qualify.
+// Returns workers.size() when all eligible workers are busy and the caller must wait.
+[[nodiscard]] std::size_t SelectIdleVoiceWorker(const std::vector<VoiceWorkerState>& workers, std::size_t characters, bool latencyCritical);
 
 struct VoicePoolTestAccess;
 
@@ -74,34 +59,20 @@ public:
     // Renders one preset's nonverbal clip bank. Routed through the same isolated,
     // on-demand VoiceDesign worker as DesignVoice, because that is the only model that
     // accepts the style instruction which produces a sound instead of the word.
-    VoiceOperationResult RenderVocalizations(
-        const std::filesystem::path& presetDirectory,
-        const std::vector<QwenTtsClient::VocalizationRequest>& kinds,
-        const std::string& language,
-        bool missingOnly);
-    VoiceOperationResult DesignVoice(
-        const std::string& text,
-        const std::string& description,
-        const std::string& language,
-        const std::string& outputPath);
-    VoiceOperationResult Synthesize(
-        const std::string& text,
-        const VoicePreset& preset,
-        const std::string& outputPath,
-        bool latencyCritical = false);
-    VoiceOperationResult SynthesizePcm(
-        const std::string& text,
-        const VoicePreset& preset,
-        bool latencyCritical = false);
+    VoiceOperationResult RenderVocalizations(const std::filesystem::path& presetDirectory,
+        const std::vector<QwenTtsClient::VocalizationRequest>& kinds, const std::string& language, bool missingOnly);
+    VoiceOperationResult DesignVoice(const std::string& text,
+        const std::string& description, const std::string& language, const std::string& outputPath);
+    VoiceOperationResult Synthesize(const std::string& text,
+        const VoicePreset& preset, const std::string& outputPath, bool latencyCritical = false);
+    VoiceOperationResult SynthesizePcm(const std::string& text, const VoicePreset& preset, bool latencyCritical = false);
     // One generation call covering several complete phrases, on a single worker.
     //
     // Never latency-critical by construction: the first phrase of a reply is always
     // synthesized on its own so it can start playing, and only the phrases behind it
     // are batched. Returns one result per text in order, or a single failed result the
     // caller falls back from.
-    std::vector<VoiceOperationResult> SynthesizePcmBatch(
-        const std::vector<std::string>& texts,
-        const VoicePreset& preset);
+    std::vector<VoiceOperationResult> SynthesizePcmBatch(const std::vector<std::string>& texts, const VoicePreset& preset);
     void CancelActiveRequests();
     // Prevents waiting generators from acquiring another worker and interrupts requests
     // already inside Python. Worker objects remain valid until Shutdown after joins.
@@ -125,10 +96,7 @@ private:
     // took, including the case where the pool shut down while waiting -- a request
     // that waited and then got nothing still waited, and hiding that would make the
     // shutdown path look instant.
-    std::size_t AcquireWorker(
-        std::size_t characters,
-        bool latencyCritical,
-        double& outWaitMilliseconds);
+    std::size_t AcquireWorker(std::size_t characters, bool latencyCritical, double& outWaitMilliseconds);
     void ReleaseWorker(std::size_t index, std::size_t characters, double milliseconds);
     // A strong reference to the current design client, or nullptr. Taken so callers
     // can use the client without holding the pointer lock across a request.

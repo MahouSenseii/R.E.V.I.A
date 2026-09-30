@@ -1,3 +1,4 @@
+#include "Presence/presenceSettings.h"
 #include "Presence/adapterArchivePolicy.h"
 #include "Presence/presenceRuntime.h"
 #include "Core/runtimePath.h"
@@ -101,10 +102,8 @@ namespace
     // disagree with what Start() actually does: `canonical` is where every path below
     // is written, and `legacy` is where the old CWD-search would have found something
     // instead.
-    bool FindLegacyRuntimeData(
-        const std::initializer_list<std::string>& configuredPaths,
-        std::filesystem::path& outLegacy,
-        std::filesystem::path& outCanonical)
+    bool FindLegacyRuntimeData(const std::initializer_list<std::string>& configuredPaths,
+        std::filesystem::path& outLegacy, std::filesystem::path& outCanonical)
     {
         for (const std::string& configured : configuredPaths)
         {
@@ -199,10 +198,7 @@ PresenceRuntime::~PresenceRuntime()
     Shutdown();
 }
 
-bool PresenceRuntime::Start(
-    const presenceSettings& settings,
-    NoticeHandler inputNoticeHandler,
-    AdapterHandler inputAdapterHandler)
+bool PresenceRuntime::Start(const presenceSettings& settings, NoticeHandler inputNoticeHandler, AdapterHandler inputAdapterHandler)
 {
     Shutdown();
     const std::uint64_t previousSequence =
@@ -384,13 +380,8 @@ void PresenceRuntime::RecordUserInput(const std::string& sourceLabel)
     WriteAvatarState(true);
 }
 
-void PresenceRuntime::PublishAdapterReply(
-    const ExternalAdapterEvent& request,
-    const std::string& text,
-    const bool succeeded,
-    const std::string& reason,
-    const std::vector<std::uint8_t>& audio,
-    const std::string& audioError)
+void PresenceRuntime::PublishAdapterReply(const ExternalAdapterEvent& request, const std::string& text, const bool succeeded,
+    const std::string& reason, const std::vector<std::uint8_t>& audio, const std::string& audioError)
 {
     presenceSettings settings;
     {
@@ -643,10 +634,7 @@ void PresenceRuntime::ScanAdapterInbox()
     }
 }
 
-bool PresenceRuntime::ParseAdapterFile(
-    const std::filesystem::path& path,
-    ExternalAdapterEvent& outEvent,
-    std::string& outError) const
+bool PresenceRuntime::ParseAdapterFile(const std::filesystem::path& path, ExternalAdapterEvent& outEvent, std::string& outError) const
 {
     presenceSettings settings;
     {
@@ -778,10 +766,8 @@ bool PresenceRuntime::RememberAdapterEvent(const ExternalAdapterEvent& event)
     return true;
 }
 
-bool PresenceRuntime::StreamPolicyAllows(
-    const ExternalAdapterEvent& event,
-    const std::chrono::steady_clock::time_point now,
-    std::string& outReason)
+bool PresenceRuntime::StreamPolicyAllows(const ExternalAdapterEvent& event,
+    const std::chrono::steady_clock::time_point now, std::string& outReason)
 {
     if (event.source != "stream") return true;
     std::lock_guard lock(mutex);
@@ -802,9 +788,7 @@ bool PresenceRuntime::StreamPolicyAllows(
     return true;
 }
 
-bool PresenceRuntime::RotateAvatarEventsIfNeeded(
-    const std::filesystem::path& path,
-    const int maximumBytes)
+bool PresenceRuntime::RotateAvatarEventsIfNeeded(const std::filesystem::path& path, const int maximumBytes)
 {
     std::error_code error;
     if (!std::filesystem::is_regular_file(path, error) || error) return true;

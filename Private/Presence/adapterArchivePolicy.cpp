@@ -5,11 +5,8 @@
 namespace revia::presence
 {
 
-std::vector<std::filesystem::path> SelectExpiredArchiveFiles(
-    std::vector<ArchivedFile> files,
-    const int maximumFiles,
-    const int maximumAgeDays,
-    const std::filesystem::file_time_type now)
+std::vector<std::filesystem::path> SelectExpiredArchiveFiles(std::vector<ArchivedFile> files,
+    const int maximumFiles, const int maximumAgeDays, const std::filesystem::file_time_type now)
 {
     std::vector<std::filesystem::path> expired;
     // Oldest first, so both rules below read in the same direction.

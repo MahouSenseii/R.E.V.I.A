@@ -49,43 +49,11 @@ struct SensitiveFinding
     [[nodiscard]] explicit operator bool() const { return kind != SensitiveClass::None; }
 };
 
-// The one detector that keeps a secret out of durable storage.
-//
-// The memory classifier, the durable store, the conversation archive and the desktop
-// experience recorder all consult this. Several copies of the rules would eventually
-// disagree, and the copy that disagreed by being weaker would be the one that wrote a
-// credential to disk.
-//
-// WHAT IS DETECTED, and why each rule is safe to apply automatically:
-//
-//   * Vendor-prefixed API keys. A fixed table of issuer prefixes, each requiring a body
-//     of a documented minimum length containing both letters and digits. The prefix is
-//     what makes it a credential; nothing is inferred from randomness alone.
-//   * PEM / OpenSSH private-key blocks, by their armour line.
-//   * JSON Web Tokens, by three base64url segments whose first begins "eyJ".
-//   * HTTP bearer credentials, by the Authorization value's structure.
-//   * Passwords embedded in connection strings, by the scheme://user:secret@host shape.
-//   * Payment card numbers: a recognised issuer prefix, a 13-19 digit length, and a
-//     passing Luhn check -- three independent conditions, not one.
-//   * United States social-security numbers, by the 3-2-4 shape with the ranges the
-//     administration never issues excluded.
-//   * The original lexical markers, unchanged.
-//
-// WHAT IS DELIBERATELY NOT DETECTED, and why:
-//
-//   * Long random-looking strings as a class. UUIDs, content hashes, commit ids, game
-//     asset names and ordinary source constants are all high-entropy, and a rule that
-//     refused them would make automatic memory useless in exactly the project this runs
-//     inside. Entropy is not evidence of a secret.
-//   * Recovery and backup codes by shape. The common forms -- "abcd-efgh-ijkl", eight
-//     digits, five groups of four -- are indistinguishable from licence keys, order
-//     references and game codes. They are caught only when the text names them, which
-//     is the NamedSecret rule, and that gap is real rather than closed by guesswork.
-//   * Passwords with no marker around them. A password is usually an ordinary-looking
-//     string; there is nothing structural to find. The lexical markers remain the only
-//     defence, and they are not a complete one.
-//   * Anything the model was merely told not to remember. That instruction is defence
-//     in depth. This function is the enforcement.
+// Shared durable-storage secret gate; model instructions are not enforcement.
+// Detects issuer-prefixed keys with minimum-length letter/digit bodies, private-key armor and three-segment base64url JWTs starting eyJ.
+// Also detects Authorization bearer values, scheme://user:secret@host and existing lexical markers.
+// Cards require recognized issuer, 13-19 digits and Luhn; SSNs require 3-2-4 shape and valid ranges.
+// Random strings are not secrets by entropy; unnamed recovery codes and unmarked passwords are not structurally detected.
 [[nodiscard]] SensitiveFinding DetectSensitiveContent(const std::string& text);
 
 // The same decision as a boolean, for the call sites that only need the gate.

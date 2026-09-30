@@ -23,14 +23,8 @@ struct VoicePreset
 struct VoiceOperationResult
 {
     VoiceOperationResult() = default;
-    VoiceOperationResult(
-        const bool inputSucceeded,
-        std::string inputMessage,
-        std::string inputOutputPath,
-        const double inputElapsedMilliseconds,
-        std::string inputDevice = {},
-        std::string inputDeviceName = {},
-        std::string inputDtype = {},
+    VoiceOperationResult(const bool inputSucceeded, std::string inputMessage, std::string inputOutputPath,
+        const double inputElapsedMilliseconds, std::string inputDevice = {}, std::string inputDeviceName = {}, std::string inputDtype = {},
         std::string inputWorkerId = {})
         : succeeded(inputSucceeded),
           message(std::move(inputMessage)),
@@ -53,14 +47,7 @@ struct VoiceOperationResult
     std::string workerId;
     std::string attentionBackend;
     std::string inputMode;
-    // How long this request waited for a worker in QwenTtsPool, from entering
-    // AcquireWorker to holding one.
-    //
-    // This is the queue that exists. The worker also reports how long it waited for
-    // its own Python lock, but a worker only ever receives a request once the pool has
-    // already chosen it, so that number is structurally near zero and describes
-    // nothing -- reading it as pool wait is what made a queue eight phrases deep look
-    // like no queue at all.
+    // Pool wait duration from AcquireWorker entry to acquisition, distinct from worker-internal lock wait.
     double workerPoolWaitMilliseconds = -1.0;
     // The worker's own lock wait, kept separate and named for what it is.
     double workerQueueMilliseconds = -1.0;
@@ -94,14 +81,8 @@ struct VoiceOperationResult
     std::string backend;
     bool cudaGraph = false;
     bool talkerGraph = false;
-    // Whether the low-latency module actually installed on this worker, and what the
-    // worker said about it.
-    //
-    // Separate from cudaGraph because they answer different questions and can only be
-    // conflated in the direction that flatters the run. Capture is deferred to the
-    // first eligible phrase, so at voice-load time a healthy worker reports installed
-    // with no graph yet; a worker whose install raised reports neither, and the detail
-    // carries the reason.
+    // Low-latency installation status is independent of deferred first-phrase CUDA graph capture.
+    // Installation failures report neither and retain their diagnostic detail.
     bool lowLatencyInstalled = false;
     std::string backendDetail;
     // Normal conversation uses an in-memory RIFF/WAV payload. It remains bounded by

@@ -1,7 +1,7 @@
 #pragma once
 
-#include "Library/structLibrary.h"
 
+#include "Core/appSettings.h"
 #include <filesystem>
 #include <string>
 
@@ -17,9 +17,7 @@ struct RuntimeDataBootstrapResult
 
 // Creates the writable first-run directory layout and copies immutable starter
 // assets without replacing anything the user has already created or selected.
-RuntimeDataBootstrapResult BootstrapRuntimeData(
-    const appSettings& settings,
-    const std::filesystem::path& runtimeRoot = "RuntimeData",
+RuntimeDataBootstrapResult BootstrapRuntimeData(const appSettings& settings, const std::filesystem::path& runtimeRoot = "RuntimeData",
     const std::filesystem::path& seedRoot = "Config/Defaults/RuntimeData");
 
 }

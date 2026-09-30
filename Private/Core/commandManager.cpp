@@ -1,3 +1,7 @@
+#include "Core/appSettings.h"
+#include "Core/commandOutput.h"
+#include "Core/profile.h"
+#include "LLM/backendTypes.h"
 #include "Core/commandManager.h"
 #include <sstream>
 
@@ -159,11 +163,8 @@ commandOutput commandManager::BuildHelpOutput() const
     return output;
 }
 
-commandOutput commandManager::BuildStatusOutput(
-    const appSettings& settings,
-    const aiProfile& profile,
-    const healthOutput& llmHealth,
-    const healthOutput& embeddingHealth) const
+commandOutput commandManager::BuildStatusOutput(const appSettings& settings,
+    const aiProfile& profile, const healthOutput& llmHealth, const healthOutput& embeddingHealth) const
 {
     commandOutput output;
     output.bWasCommand = true;

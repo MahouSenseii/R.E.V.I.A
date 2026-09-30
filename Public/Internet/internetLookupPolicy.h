@@ -11,9 +11,7 @@ namespace revia::internet
 class InternetLookupPolicy
 {
 public:
-    [[nodiscard]] static bool ShouldLookup(
-        const std::string& input,
-        bool automaticLookup);
+    [[nodiscard]] static bool ShouldLookup(const std::string& input, bool automaticLookup);
 };
 
 } // namespace revia::internet

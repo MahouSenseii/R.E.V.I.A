@@ -42,8 +42,7 @@ enum class ReminderParse
 // Reads "remind me in 10 minutes to stretch", "remind me to call Sam at 3pm",
 // "set a timer for 5 minutes" and "/remind 10m stretch" without the model, so a reminder
 // never depends on one and is never promised by one that cannot keep it.
-ReminderParse ParseReminderRequest(const std::string& input, WallClock::time_point now,
-    ReminderRequest& out, std::string& outError);
+ReminderParse ParseReminderRequest(const std::string& input, WallClock::time_point now, ReminderRequest& out, std::string& outError);
 
 // "3:05 PM", "tomorrow 9:00 AM" or "Sep 30 9:00 AM", in local time.
 [[nodiscard]] std::string DescribeWhen(WallClock::time_point when, WallClock::time_point now);
@@ -67,13 +66,15 @@ public:
     // Empty when the book is full. A reminder that could not be saved is still kept,
     // with the reason in outError.
     std::optional<Reminder> Add(const ReminderRequest& request, std::string& outError);
-    // Removes and returns everything due by `now`, earliest first.
-    std::vector<Reminder> TakeDue(WallClock::time_point now);
+    // Removes and returns everything due by `now`, earliest first. A failed save
+    // retains them for a later retry and returns no reminders to deliver.
+    std::vector<Reminder> TakeDue(WallClock::time_point now, std::string* outError = nullptr);
     // Earliest first; the position is the number /reminders shows.
     [[nodiscard]] std::vector<Reminder> Pending() const;
-    // `number` counts from 1 in Pending() order.
-    std::optional<Reminder> Cancel(std::size_t number);
-    std::size_t Clear();
+    // `number` counts from 1 in Pending() order. Failed saves retain the pending
+    // records and return nullopt/zero; outError distinguishes failure from no match.
+    std::optional<Reminder> Cancel(std::size_t number, std::string* outError = nullptr);
+    std::size_t Clear(std::string* outError = nullptr);
 
 private:
     bool SaveLocked(std::string& outError) const;

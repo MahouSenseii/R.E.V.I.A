@@ -64,9 +64,7 @@ namespace
 
     // Anyone watching. This is the difference between a private failure that is annoying
     // and a witnessed one that is also embarrassing.
-    float DeriveSocialImportance(
-        const Stimulus& stimulus,
-        const identity::RelationshipState* relationship)
+    float DeriveSocialImportance(const Stimulus& stimulus, const identity::RelationshipState* relationship)
     {
         if (stimulus.subjectId.empty())
         {
@@ -84,13 +82,8 @@ namespace
     }
 }
 
-AppraisalContext BuildAppraisalContext(
-    const Stimulus& stimulus,
-    const identity::DevelopmentState& development,
-    const MoodState& mood,
-    const EmotionVector& currentEmotion,
-    const identity::RelationshipState* relationship,
-    std::vector<RelevantMemory> memories)
+AppraisalContext BuildAppraisalContext(const Stimulus& stimulus, const identity::DevelopmentState& development, const MoodState& mood,
+    const EmotionVector& currentEmotion, const identity::RelationshipState* relationship, std::vector<RelevantMemory> memories)
 {
     AppraisalContext context;
     context.development = development;

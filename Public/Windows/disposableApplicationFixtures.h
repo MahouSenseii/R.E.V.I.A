@@ -22,10 +22,8 @@ public:
     DisposableApplicationFixtures(const DisposableApplicationFixtures&) = delete;
     DisposableApplicationFixtures& operator=(const DisposableApplicationFixtures&) = delete;
 
-    [[nodiscard]] bool Launch(
-        const std::vector<std::string>& applications,
-        const std::filesystem::path& scratchRoot,
-        std::string& outError);
+    [[nodiscard]] bool Launch(const std::vector<std::string>& applications,
+        const std::filesystem::path& scratchRoot, std::string& outError);
     [[nodiscard]] bool Retarget(goals::Goal& goal, std::string& outError) const;
     void Close();
 

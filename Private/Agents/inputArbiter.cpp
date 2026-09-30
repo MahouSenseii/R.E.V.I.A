@@ -1,3 +1,4 @@
+#include "Agents/inputArbiterSettings.h"
 #include "Agents/inputArbiter.h"
 
 #include <algorithm>
@@ -131,10 +132,7 @@ bool InputArbiter::IsNoise(const inputArbiterSettings& settings, const std::stri
     return false;
 }
 
-InputVerdict InputArbiter::Offer(
-    const std::string& text,
-    const InputSource source,
-    const std::chrono::system_clock::time_point now)
+InputVerdict InputArbiter::Offer(const std::string& text, const InputSource source, const std::chrono::system_clock::time_point now)
 {
     std::lock_guard lock(mutex);
     const std::string normalized = Normalize(text);

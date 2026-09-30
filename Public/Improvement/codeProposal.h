@@ -10,15 +10,8 @@
 namespace revia::improvement
 {
 
-// Revia reviewing her own code.
-//
-// She reads a bounded window of her source, suggests at most one concrete change with the
-// problem and the reason, and proves it in a separate copy of the tree -- it builds and
-// the test suites still pass -- before anyone is told. She never edits the real source:
-// the change reaches it only when a person applies the patch. What makes this
-// self-improvement rather than a linter is the loop around it: what she looked at comes
-// from evidence about her own behaviour, and every verdict on a proposal is fed back into
-// the next review.
+// Bounded source review produces one patch, proven in a separate tree and informed by prior verdicts.
+// Real source changes require a person to apply the patch.
 
 enum class ProposalStatus
 {
@@ -93,8 +86,7 @@ struct CodeProposal
 
 // A model's review reply, parsed and bounded. Empty when she found nothing -- the normal,
 // correct outcome of most reviews -- with the reason in outNote either way.
-[[nodiscard]] std::optional<CodeProposal> ParseReviewReply(
-    const std::string& raw, std::string& outNote);
+[[nodiscard]] std::optional<CodeProposal> ParseReviewReply(const std::string& raw, std::string& outNote);
 
 struct ChangeCheck
 {
@@ -104,36 +96,25 @@ struct ChangeCheck
     bool notFound = false;
 };
 
-// Everything that can be decided about a change without compiling it.
-//
-// The find text must occur exactly once in the current file, the change must be small,
-// and it must not introduce anything that reaches outside the process -- starting
-// programs, the network, deleting files, the registry. "Introduce" matters: code that
-// already launches the voice worker may be edited, but a change may not add a launch
-// that was not there. Proving a change means compiling and running it, so this is the
-// gate in front of executing model-written code.
-[[nodiscard]] ChangeCheck CheckChange(
-    const CodeChange& change, const std::string& currentContent);
+// Requires one exact small replacement; rejects newly added process, network, deletion or registry access.
+// Existing such code may be edited; this gate precedes executing the proposed code in verification.
+[[nodiscard]] ChangeCheck CheckChange(const CodeChange& change, const std::string& currentContent);
 
 // The first line of `find` that appears nowhere in the file, ignoring indentation: where
 // a copy that did not match went wrong. Empty when every line is somewhere in the file,
 // which means the lines are real but not together, or together more than once.
-[[nodiscard]] std::string FirstLineNotInFile(
-    const std::string& currentContent, const std::string& find);
+[[nodiscard]] std::string FirstLineNotInFile(const std::string& currentContent, const std::string& find);
 
 // Whether two changes to the same file edit any of the same lines of it.
-[[nodiscard]] bool Overlaps(
-    const std::string& currentContent, const CodeChange& first, const CodeChange& second);
+[[nodiscard]] bool Overlaps(const std::string& currentContent, const CodeChange& first, const CodeChange& second);
 
 // The file with the change applied. Empty optional when the find text is not there
 // exactly once.
-[[nodiscard]] std::optional<std::string> ApplyChange(
-    const std::string& currentContent, const CodeChange& change);
+[[nodiscard]] std::optional<std::string> ApplyChange(const std::string& currentContent, const CodeChange& change);
 
 // A unified diff, three lines of context, that `git apply` accepts from the repository
 // root.
-[[nodiscard]] std::string MakeUnifiedDiff(
-    const std::string& currentContent, const CodeChange& change);
+[[nodiscard]] std::string MakeUnifiedDiff(const std::string& currentContent, const CodeChange& change);
 
 // The human-readable record: what, why, evidence, verification, and the diff.
 [[nodiscard]] std::string ToMarkdown(const CodeProposal& proposal, const std::string& diff);

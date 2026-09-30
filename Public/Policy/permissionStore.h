@@ -11,10 +11,7 @@ namespace revia::policy
 class PermissionStore
 {
 public:
-    [[nodiscard]] bool Load(
-        const std::filesystem::path& path,
-        actions::CapabilitySettings& outSettings,
-        std::string& outError) const;
+    [[nodiscard]] bool Load(const std::filesystem::path& path, actions::CapabilitySettings& outSettings, std::string& outError) const;
 
     [[nodiscard]] static std::string ExpandEnvironmentVariables(const std::string& value);
 };

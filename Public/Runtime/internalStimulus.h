@@ -5,19 +5,8 @@
 namespace revia::runtime
 {
 
-// Something that happened TO Revia, rather than something said to her.
-//
-// The point of this type is the boundary it draws. Conversation already reaches her
-// emotional state; nothing else could, so a goal that failed, an action the policy
-// refused, and a piece of research that turned up something surprising all left her
-// exactly as they found her. That made her reactive rather than continuous: she could
-// only feel things the user caused.
-//
-// Every kind below is an outcome the runtime itself confirmed. That restriction is the
-// load-bearing part: a feeling produced by an event only the model believes happened is
-// a fabricated feeling, and fabricated feelings are indistinguishable from a model
-// performing emotion at the user. The runtime decides what occurred; this only decides
-// what it felt like.
+// Typed internal outcomes must be confirmed by the runtime before producing affect.
+// The model cannot invent events that change emotion.
 enum class InternalEventKind
 {
     // An activity Revia was running finished the way it was meant to.

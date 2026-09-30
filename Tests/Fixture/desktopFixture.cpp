@@ -314,8 +314,7 @@ LRESULT CALLBACK MainWindowProc(HWND window, UINT message, WPARAM wparam, LPARAM
 // WS_EX_CONTROLPARENT so the edit inside stays reachable by tab, and the window text is
 // what UI Automation reports as the container's name -- which is the only thing that
 // tells one nameless field from the other.
-LRESULT CALLBACK PanelWindowProc(
-    HWND window, UINT message, WPARAM wParam, LPARAM lParam)
+LRESULT CALLBACK PanelWindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lParam)
 {
     if (message == WM_CREATE)
     {

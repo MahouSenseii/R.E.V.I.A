@@ -237,8 +237,7 @@ DesktopEffects AssessEffects(const AuthorizationRequest& request)
     return effects;
 }
 
-AuthorizationDecision AuthorizeDesktopEffect(
-    const AuthorizationRequest& request,
+AuthorizationDecision AuthorizeDesktopEffect(const AuthorizationRequest& request,
     const actions::CapabilitySettings::DesktopControl& settings)
 {
     AuthorizationDecision decision;
@@ -356,14 +355,12 @@ DesktopApprovalGate::TaskApproval::~TaskApproval()
     owner.taskApprovals.erase("goal:" + goalId);
 }
 
-DesktopApprovalGate::TaskApproval DesktopApprovalGate::ApproveTask(
-    std::string goalId, const bool messaging)
+DesktopApprovalGate::TaskApproval DesktopApprovalGate::ApproveTask(std::string goalId, const bool messaging)
 {
     return TaskApproval(*this, std::move(goalId), messaging);
 }
 
-std::optional<bool> DesktopApprovalGate::TaskDecision(
-    const std::string& requestedBy, const DesktopEffects effects) const
+std::optional<bool> DesktopApprovalGate::TaskDecision(const std::string& requestedBy, const DesktopEffects effects) const
 {
     std::lock_guard lock(mutex);
     const auto found = taskApprovals.find(requestedBy);
@@ -395,12 +392,8 @@ bool DesktopApprovalGate::Ask(const ApprovalPrompt& prompt) const
     return current ? current(prompt) : false;
 }
 
-bool AuthorizeOrExplain(
-    const DesktopOperation operation,
-    const TargetEvidence& evidence,
-    const actions::CapabilitySettings::DesktopControl& settings,
-    const actions::ActionRequest& request,
-    std::string& outFailure,
+bool AuthorizeOrExplain(const DesktopOperation operation, const TargetEvidence& evidence,
+    const actions::CapabilitySettings::DesktopControl& settings, const actions::ActionRequest& request, std::string& outFailure,
     const DesktopApprovalGate* const gate)
 {
     AuthorizationRequest ask;

@@ -144,16 +144,14 @@ std::string InvestigationQuestion::Normalized() const
     return Trim(normalized);
 }
 
-Investigation::Investigation(
-    const std::uint64_t inputTaskId, std::string inputGoal, std::string inputCriteria)
+Investigation::Investigation(const std::uint64_t inputTaskId, std::string inputGoal, std::string inputCriteria)
     : taskId(inputTaskId),
       goal(std::move(inputGoal)),
       completionCriteria(std::move(inputCriteria))
 {
 }
 
-bool Investigation::HasEquivalentQuestion(
-    const std::string& normalized, const InvestigationQuestion** outExisting) const
+bool Investigation::HasEquivalentQuestion(const std::string& normalized, const InvestigationQuestion** outExisting) const
 {
     for (const InvestigationQuestion& question : questions)
     {
@@ -166,12 +164,8 @@ bool Investigation::HasEquivalentQuestion(
     return false;
 }
 
-std::string Investigation::AddQuestion(
-    const std::string& text,
-    const double materiality,
-    const std::size_t round,
-    std::vector<std::string> dependsOn,
-    const std::string& justification)
+std::string Investigation::AddQuestion(const std::string& text, const double materiality, const std::size_t round,
+    std::vector<std::string> dependsOn, const std::string& justification)
 {
     const std::string trimmed = Trim(text);
     if (trimmed.empty()) return {};
@@ -272,8 +266,7 @@ std::string Investigation::RecordFinding(Finding finding)
     return findingId;
 }
 
-void Investigation::SetQuestionStatus(
-    const std::string& questionId, const QuestionStatus status)
+void Investigation::SetQuestionStatus(const std::string& questionId, const QuestionStatus status)
 {
     for (InvestigationQuestion& question : questions)
     {
@@ -289,8 +282,7 @@ void Investigation::MarkChecked(const std::string& questionId, const std::size_t
     }
 }
 
-void Investigation::SetHypothesisStanding(
-    const std::string& id, const Hypothesis::Standing standing)
+void Investigation::SetHypothesisStanding(const std::string& id, const Hypothesis::Standing standing)
 {
     for (Hypothesis& hypothesis : hypotheses)
     {
@@ -322,8 +314,7 @@ std::vector<InvestigationQuestion> Investigation::Selectable() const
     return ready;
 }
 
-std::vector<InvestigationQuestion> Investigation::SelectForRound(
-    const std::size_t limit) const
+std::vector<InvestigationQuestion> Investigation::SelectForRound(const std::size_t limit) const
 {
     std::vector<InvestigationQuestion> ready = Selectable();
     // Most material first: the question that could change the answer is worth more than
@@ -531,8 +522,7 @@ std::string Investigation::PromptBlock() const
 
 // ---------------------------------------------------------------- the loop
 
-bool InvestigationLoop::MayComplete(
-    const Investigation& investigation, std::string& outRefusal)
+bool InvestigationLoop::MayComplete(const Investigation& investigation, std::string& outRefusal)
 {
     // The investigator's opinion is an input, not a decision. These are the runtime's own
     // checks, and they are the reason "the model said it was finished" is not sufficient.
@@ -579,11 +569,8 @@ bool InvestigationLoop::MayComplete(
     return true;
 }
 
-InvestigationRunReport InvestigationLoop::Run(
-    Investigation& investigation,
-    const RoundRunner& runner,
-    const std::stop_token stopToken,
-    const RoundObserver& observer) const
+InvestigationRunReport InvestigationLoop::Run(Investigation& investigation,
+    const RoundRunner& runner, const std::stop_token stopToken, const RoundObserver& observer) const
 {
     InvestigationRunReport report;
     const auto started = std::chrono::steady_clock::now();

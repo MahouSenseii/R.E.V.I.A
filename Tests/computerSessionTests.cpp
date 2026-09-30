@@ -1,3 +1,5 @@
+#include "Computer/computerSettings.h"
+#include "LLM/responseTypes.h"
 #include "reviaSessionTestAccess.h"
 
 #include "Computer/subgoalPlanner.h"
@@ -49,11 +51,8 @@ responseOutput Refused(const std::string& reason)
     return output;
 }
 
-std::string SubgoalJson(
-    const std::string& intent,
-    const std::string& application,
-    const std::string& name = {},
-    const std::string& payloadId = {})
+std::string SubgoalJson(const std::string& intent,
+    const std::string& application, const std::string& name = {}, const std::string& payloadId = {})
 {
     nlohmann::json target = {{"application", application}};
     if (!name.empty()) target["name"] = name;
@@ -118,9 +117,7 @@ struct SessionFixture
         ReviaSessionTestAccess::UseRealStepProvider(session);
     }
 
-    void Script(
-        std::function<std::string(int)> subgoalAnswers,
-        std::function<std::string(int)> stepAnswers)
+    void Script(std::function<std::string(int)> subgoalAnswers, std::function<std::string(int)> stepAnswers)
     {
         ReviaSessionTestAccess::ScriptComputerProviders(
             session,

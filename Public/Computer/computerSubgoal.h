@@ -11,37 +11,14 @@
 namespace revia::computer
 {
 
-// The bounded contract between the model that understands the request and the policy
-// that takes the next step on the machine.
-//
-// Main is the only thing here that reads an open-ended sentence. What it produces is
-// not an instruction and not an authorization: it is a description of one narrow piece
-// of local progress, in a vocabulary small enough that the runtime can check every part
-// of it before anything is allowed to act on it. "Open the conversation with the
-// recipient I already identified" is a subgoal. "Message my sister" is not -- it names
-// no target, names no evidence, and would hand a policy a mandate to finish a workflow
-// nobody bounded.
-//
-// Everything in here is a *claim*. The runtime validates the claim against the task the
-// user actually authorized, attaches the origin, scope and budget itself, and refuses
-// combinations it does not support. No field here carries permission, approval or
-// freshness, because a model asserting that something is approved is a model approving
-// it.
+// A model proposes bounded local progress; the runtime validates it against
+// the authorized task and attaches origin, scope, budget, and authority.
 
-// Versioned because it crosses a process boundary into stored records and, later, into
-// training data. A record whose schema is not written down is a record nobody can
-// safely read two versions from now.
-//
-// 1 -- the initial vocabulary: approved launch, focus, target resolution, one UI
-//      interaction, exact-payload entry, waiting, and escalation.
+// Persisted subgoal schema: launch, focus, resolution, interaction,
+// exact-payload entry, waiting, and escalation.
 inline constexpr std::uint32_t CurrentSubgoalSchema = 1;
 
-// What kind of local progress is being asked for.
-//
-// Structured rather than free text so the runtime can decide whether it supports the
-// combination at all. Extended only when a new value has a tested path behind it: an
-// intent the runtime cannot check is worse than no intent, because it looks like a
-// contract and is not one.
+// Add intents only when the runtime has a tested validation and execution path.
 enum class SubgoalIntent
 {
     // No usable intent was produced, or validation stripped one it does not support.
@@ -71,15 +48,8 @@ enum class SubgoalIntent
 [[nodiscard]] std::string ToString(SubgoalIntent value);
 [[nodiscard]] SubgoalIntent SubgoalIntentFromString(const std::string& value);
 
-// How a target is described, as opposed to how it is identified.
-//
-// A description is matched against fresh candidates every time it is used. It is
-// deliberately not an id: an automation id or a runtime id produced by a model is a
-// claim about a live object that the model cannot have looked at, and treating one as
-// an identity is how an action lands on whatever now occupies that slot.
-//
-// Empty fields are "unconstrained", not "any will do". A descriptor that matches more
-// than one candidate is ambiguous and escalates; it never picks the first.
+// Match descriptions against fresh candidates, never model-supplied identities.
+// Empty fields are unconstrained; multiple matches escalate rather than choosing one.
 struct TargetDescriptor
 {
     // The window the target must be in. Checked against the scope's approved
@@ -102,17 +72,8 @@ struct TargetDescriptor
     }
 };
 
-// A handle to user content the runtime holds and the model does not.
-//
-// The exact words of a message, a filename, a search string: the model decides *where*
-// such a value belongs and never carries the value itself. It names a slot, and the
-// runtime supplies the original after the action has been authorized.
-//
-// Two separate reasons, and both matter. A model that regenerates an exact message
-// sends an approximation of what the user wrote, which is a wrong external effect
-// wearing the right intent. And a payload that travelled through a model is a payload
-// that can end up in a prompt, a log or a training set, which is a privacy boundary
-// this type exists to keep intact.
+// References exact content held by the runtime. The model selects a destination;
+// the runtime supplies the original only after authorization.
 struct PayloadReference
 {
     // Opaque and runtime-minted. Never a substring of the value, never guessable, and
@@ -123,25 +84,14 @@ struct PayloadReference
     std::string kind;
     // How long it is, which is enough to refuse an oversized entry without reading it.
     std::size_t length = 0;
-    // Where the value came from. Travels with the reference because it changes what may
-    // be done with the value: the user's own words are never regenerated, and a drafted
-    // value is fixed the moment it is chosen so that the attempt that types it and the
-    // check that reads it back are talking about the same sentence.
-    //
-    // Runtime-stamped like the rest of this type. A model naming a payload supplies an
-    // id and nothing else; validation replaces the whole reference with the vault's own,
-    // so a provenance claimed from outside is discarded rather than believed.
+    // Runtime-stamped provenance: originals are preserved and selected drafts stay fixed.
+    // Validation replaces claimed references with the vault's authoritative copy.
     ContentProvenance provenance = ContentProvenance::None;
 
     [[nodiscard]] bool Valid() const { return !id.empty(); }
 };
 
-// What finishing this subgoal would look like, as something checkable.
-//
-// Reuses the goal layer's typed postconditions rather than inventing a parallel
-// vocabulary, so the evidence a subgoal asks for is evidence the runner already knows
-// how to establish -- and so a subgoal cannot ask to be graded by a question the
-// verification path does not support.
+// Uses the goal runner's supported, typed postconditions.
 struct SubgoalPostcondition
 {
     goals::PostconditionKind kind = goals::PostconditionKind::TextObserved;
@@ -152,11 +102,8 @@ struct SubgoalPostcondition
     PayloadReference payload;
 };
 
-// Where a request came from, carried so the controller cannot relabel it.
-//
-// Idle work that presents itself as a user request would acquire the permissions,
-// pacing and interruption rules that belong to something the user actually asked for.
-// The runtime stamps this; nothing in a model's output can set it.
+// Runtime-stamped origin controls permissions, pacing, and interruption.
+// Model output cannot set or relabel it.
 enum class RequestOrigin
 {
     // No established origin. Treated as the most restricted thing it could be.
@@ -174,23 +121,9 @@ struct SubgoalContext;
 struct SubgoalValidation;
 class PayloadVault;
 
-[[nodiscard]] SubgoalValidation ValidateSubgoal(
-    const ComputerSubgoal& proposed,
-    const SubgoalContext& context,
-    const PayloadVault& vault);
+[[nodiscard]] SubgoalValidation ValidateSubgoal(const ComputerSubgoal& proposed, const SubgoalContext& context, const PayloadVault& vault);
 
-// Proof that a subgoal went through validation, in a form nothing else can produce.
-//
-// This was a plain `bool validated` and that was not good enough. A bool is a claim
-// anyone can make: a caller could set it, and every guarantee downstream -- scope
-// checked, origin attached, payload confirmed -- would rest on a field the thing being
-// checked could have written. That is precisely the shape of "no model-supplied
-// approval is trusted" failing in the one place it matters.
-//
-// So the stamp is a type whose only mutator is the validator itself. It copies with the
-// subgoal, because a validated subgoal genuinely stays validated as the runtime passes
-// it around; it cannot be minted, because there is no way to reach the member from
-// outside.
+// Only ValidateSubgoal can mint this stamp; it copies with validated subgoals.
 class SubgoalAuthority
 {
 public:
@@ -199,19 +132,13 @@ public:
     [[nodiscard]] bool Granted() const { return granted; }
 
 private:
-    friend SubgoalValidation ValidateSubgoal(
-        const ComputerSubgoal& proposed,
-        const SubgoalContext& context,
-        const PayloadVault& vault);
+    friend SubgoalValidation ValidateSubgoal(const ComputerSubgoal& proposed, const SubgoalContext& context, const PayloadVault& vault);
 
     bool granted = false;
 };
 
-// One validated unit of local progress.
-//
-// Split deliberately into what a model proposed and what the runtime attached. The
-// second half is not merely trusted-by-convention: `Validated()` is false until the
-// runtime has stamped it, and the controller refuses to act on a subgoal that fails it.
+// Separates model proposals from runtime authority. The controller refuses
+// subgoals without a validation stamp.
 struct ComputerSubgoal
 {
     std::uint32_t schemaVersion = CurrentSubgoalSchema;
@@ -279,15 +206,8 @@ enum class SubgoalRejection
     UnverifiablePostcondition,
     // A field was longer than the contract allows.
     OversizedField,
-    // The subgoal would submit, send or publish while the content this task exists to
-    // place has not been placed.
-    //
-    // Not a permission check -- the consequence gate still refuses an external message
-    // on its own terms, and it would refuse this one too. This is an *ordering* check,
-    // and the two are different: the consequence gate asks whether sending is allowed,
-    // and this asks whether there is anything to send yet. A task asked to put words in
-    // a box has not been asked to press Send, and pressing it on an empty box is not a
-    // smaller mistake for having been permitted.
+    // Submission was proposed before the required content was placed.
+    // This ordering check is separate from permission to send.
     SendBeforePlacement
 };
 

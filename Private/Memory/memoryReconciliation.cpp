@@ -145,11 +145,8 @@ std::string ToString(const MemoryRelation value)
     }
 }
 
-MemoryRelation ClassifyRelation(
-    const std::string& existingSummary,
-    const std::string& candidateSummary,
-    const float similarity,
-    const ReconciliationSettings& settings)
+MemoryRelation ClassifyRelation(const std::string& existingSummary,
+    const std::string& candidateSummary, const float similarity, const ReconciliationSettings& settings)
 {
     // Text identity establishes equivalence independently of vector quality. A
     // shared set of words cannot establish subject, order, scope or modality.

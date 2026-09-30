@@ -32,8 +32,7 @@ DevelopmentEngine::DevelopmentEngine(DevelopmentLimits inputLimits)
 {
 }
 
-std::optional<DevelopmentChange> DevelopmentEngine::Observe(
-    const DevelopmentEvidence& evidence)
+std::optional<DevelopmentChange> DevelopmentEngine::Observe(const DevelopmentEvidence& evidence)
 {
     if (evidence.trait == Trait::Count)
     {
@@ -81,10 +80,7 @@ float DevelopmentEngine::PendingEvidence(const Trait trait) const
     return found == pending.end() ? 0.0F : found->second;
 }
 
-DevelopmentState DevelopmentEngine::Apply(
-    DevelopmentState development,
-    const DevelopmentChange& change,
-    const DevelopmentLimits& limits)
+DevelopmentState DevelopmentEngine::Apply(DevelopmentState development, const DevelopmentChange& change, const DevelopmentLimits& limits)
 {
     if (change.trait == Trait::Count)
     {
@@ -107,8 +103,7 @@ void DevelopmentEngine::Reset()
     lastReason.clear();
 }
 
-std::vector<DevelopmentEvidence> ReadDevelopmentEvidence(
-    const TurnObservation& observation)
+std::vector<DevelopmentEvidence> ReadDevelopmentEvidence(const TurnObservation& observation)
 {
     std::vector<DevelopmentEvidence> evidence;
 

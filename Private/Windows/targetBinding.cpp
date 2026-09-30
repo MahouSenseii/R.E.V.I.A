@@ -70,10 +70,7 @@ bool SameControl(const TargetBinding& intended, const TargetBinding& current)
         intended.right == current.right && intended.bottom == current.bottom;
 }
 
-bool IsFresh(
-    const TargetBinding& binding,
-    const std::chrono::steady_clock::time_point now,
-    const std::chrono::milliseconds limit)
+bool IsFresh(const TargetBinding& binding, const std::chrono::steady_clock::time_point now, const std::chrono::milliseconds limit)
 {
     if (!binding.valid)
     {
@@ -129,8 +126,7 @@ std::string CompareBindings(const TargetBinding& authorized, const TargetBinding
     return {};
 }
 
-std::string CompareDraftSnapshots(const DraftSnapshot& authorized,
-    const DraftSnapshot& current, const std::string& expectedValue)
+std::string CompareDraftSnapshots(const DraftSnapshot& authorized, const DraftSnapshot& current, const std::string& expectedValue)
 {
     if (!authorized.valid || !current.valid)
         return "the draft or its surrounding fields could not be read";
@@ -206,13 +202,8 @@ std::string Fingerprint(const TargetBinding& binding, const std::string& windowT
         std::to_string(binding.controlType) + '|' + binding.controlName;
 }
 
-TargetBinding FromElement(
-    IUIAutomationElement* element,
-    const HWND window,
-    const std::string& windowTitle,
-    const std::string& taskOrigin,
-    const std::string& policyVersion,
-    const bool focused)
+TargetBinding FromElement(IUIAutomationElement* element, const HWND window, const std::string& windowTitle, const std::string& taskOrigin,
+    const std::string& policyVersion, const bool focused)
 {
     TargetBinding binding;
     binding.id = NewActionId();
@@ -283,8 +274,7 @@ TargetBinding BindElement(IUIAutomationElement* element, IUIAutomationElement* w
 namespace
 {
 
-bool ReadDraftValue(IUIAutomationElement* element, std::string& output,
-    bool* writable = nullptr)
+bool ReadDraftValue(IUIAutomationElement* element, std::string& output, bool* writable = nullptr)
 {
     constexpr UINT MaximumCharacters = 65536;
     BOOL password = TRUE;
@@ -465,10 +455,7 @@ DraftSnapshot ObserveDraft(const ActionRequest& placement)
     return snapshot;
 }
 
-TargetBinding BindFocusedControl(
-    IUIAutomation* automation,
-    const std::string& taskOrigin,
-    const std::string& policyVersion)
+TargetBinding BindFocusedControl(IUIAutomation* automation, const std::string& taskOrigin, const std::string& policyVersion)
 {
     const HWND foreground = GetForegroundWindow();
     IUIAutomationElement* element = nullptr;
@@ -482,12 +469,8 @@ TargetBinding BindFocusedControl(
     return binding;
 }
 
-TargetBinding BindPoint(
-    IUIAutomation* automation,
-    const int x,
-    const int y,
-    const std::string& taskOrigin,
-    const std::string& policyVersion)
+TargetBinding BindPoint(IUIAutomation* automation,
+    const int x, const int y, const std::string& taskOrigin, const std::string& policyVersion)
 {
     const POINT point{static_cast<LONG>(x), static_cast<LONG>(y)};
     const HWND hit = WindowFromPoint(point);
@@ -503,10 +486,8 @@ TargetBinding BindPoint(
     return binding;
 }
 
-std::string RevalidateFocusBinding(
-    IUIAutomation* automation,
-    const TargetBinding& authorized,
-    const std::chrono::steady_clock::time_point now)
+std::string RevalidateFocusBinding(IUIAutomation* automation,
+    const TargetBinding& authorized, const std::chrono::steady_clock::time_point now)
 {
     if (!IsFresh(authorized, now))
     {
@@ -517,12 +498,8 @@ std::string RevalidateFocusBinding(
     return CompareBindings(authorized, current);
 }
 
-std::string RevalidatePointBinding(
-    IUIAutomation* automation,
-    const TargetBinding& authorized,
-    const int x,
-    const int y,
-    const std::chrono::steady_clock::time_point now)
+std::string RevalidatePointBinding(IUIAutomation* automation,
+    const TargetBinding& authorized, const int x, const int y, const std::chrono::steady_clock::time_point now)
 {
     if (!IsFresh(authorized, now))
     {

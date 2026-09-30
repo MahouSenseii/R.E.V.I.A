@@ -69,9 +69,7 @@ void InferenceScheduler::SetCapacity(const int slots)
     available.notify_all();
 }
 
-InferenceScheduler::Lease InferenceScheduler::Acquire(
-    const InferencePriority priority,
-    const std::stop_token stopToken)
+InferenceScheduler::Lease InferenceScheduler::Acquire(const InferencePriority priority, const std::stop_token stopToken)
 {
     std::unique_lock lock(mutex);
     int& waiting = priority == InferencePriority::Interactive

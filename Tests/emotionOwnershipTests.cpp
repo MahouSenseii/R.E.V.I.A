@@ -1,3 +1,6 @@
+#include "Core/conversationMessage.h"
+#include "Core/profile.h"
+#include "LLM/endpointSettings.h"
 #include "LLM/tokenEstimate.h"
 #include "promptLayoutTestSupport.h"
 #include "reviaSessionTestAccess.h"
@@ -65,8 +68,14 @@ public:
         { response.set_content(R"({"total_slots":1,"default_generation_settings":{"n_ctx":8192}})", "application/json"); });
         server.Post("/v1/chat/completions", [this, curiosityFixture, idleAction, operation](const auto& request, auto& response)
         {
+            const auto body = json::parse(request.body);
+            if (body.value("max_tokens", 0) == 1 && !body.value("stream", false))
+            {
+                response.set_content(R"({"choices":[{"message":{"role":"assistant","content":"OK"},"finish_reason":"stop"}]})", "application/json");
+                return;
+            }
             std::lock_guard lock(mutex);
-            last = json::parse(request.body);
+            last = body;
             requests.push_back(last);
             if (onRequest) onRequest();
             if (contextOverflows > 0)

@@ -15,20 +15,8 @@
 namespace revia::speech
 {
 
-// One throat.
-//
-// Revia has several systems that may each decide, independently and at the same moment,
-// that something should be said out loud: a conversation reply, a proposal from the
-// initiative loop, a startup greeting, a song, and -- later -- games, streams, and
-// skills. Until now each of them called SpeechService::Speak directly and the
-// PerformanceRuntime played a song on a device of its own, which means the only thing
-// preventing two of them from talking over each other was that they rarely happened to
-// coincide.
-//
-// This is the layer that decides who owns the audio channel. It does not synthesise
-// anything: SpeechService and its Qwen3-TTS pool remain the only speech backend, and
-// PerformanceRuntime remains the only thing that plays a song. What this adds is the
-// answer to "who is allowed to make sound right now, and what happens to everyone else".
+// Arbitrates one audio channel without synthesis or playback ownership.
+// SpeechService/Qwen retain speech, and PerformanceRuntime retains song playback.
 
 enum class SpeechOwner
 {
@@ -216,19 +204,8 @@ public:
     void SetSongPolicy(SongPolicy policy);
     void SetTraceHandler(TraceHandler handler);
 
-    // Asks the world whether the audio channel is busy, for sound the coordinator did
-    // not start.
-    //
-    // The conversation reply path streams sentences into SpeechService as they are
-    // generated, and that parallelism is what makes her answer quickly; routing it
-    // through this queue would serialise synthesis and make every reply slower. So
-    // rather than pretend that speech does not exist, the coordinator asks. An
-    // autonomous remark is then correctly refused while a reply is still audible, even
-    // though the reply never passed through here.
-    //
-    // The probe is called with the coordinator's lock held, so it must not call back
-    // into the coordinator. SpeechService::HasPendingSpeech, the intended implementation,
-    // does not.
+    // Probes externally started speech so autonomous remarks cannot overlap streamed replies.
+    // Called under the coordinator lock; the probe must not call back into the coordinator.
     using BusyProbe = std::function<bool()>;
     void SetBusyProbe(BusyProbe probe);
 
@@ -270,10 +247,7 @@ private:
     void BeginLocked(Pending pending);
     void FinishActiveLocked(SpeechIntentState state, const std::string& reason);
     void RecordLocked(const TrackedIntent& tracked, const std::string& reason);
-    void RemoveQueuedLocked(
-        const std::function<bool(const Pending&)>& matches,
-        SpeechIntentState state,
-        const std::string& reason);
+    void RemoveQueuedLocked(const std::function<bool(const Pending&)>& matches, SpeechIntentState state, const std::string& reason);
     [[nodiscard]] int PriorityOfLocked(const SpeechIntent& intent) const;
     [[nodiscard]] bool ChannelBusyLocked() const;
 

@@ -1,10 +1,16 @@
+#include "Core/conversationMessage.h"
+#include "Core/profile.h"
+#include "LLM/backendTypes.h"
+#include "LLM/embeddingTypes.h"
+#include "LLM/endpointSettings.h"
+#include "LLM/responseTypes.h"
+#include "Memory/memoryTypes.h"
 #include "testSupport.h"
 
 #include "Agents/responseProvenance.h"
 #include "Intelligence/intelligenceRouter.h"
 #include "LLM/LLamaCPP/llamaCppService.h"
 #include "LLM/tokenEstimate.h"
-#include "Library/structLibrary.h"
 #include "Memory/longTermMemory.h"
 #include "Memory/memoryReconciliation.h"
 #include "Memory/sensitiveContent.h"
@@ -157,6 +163,8 @@ void RunProvenanceLive(const llamaCppService& service)
         const memoryDecision decision =
             service.EvaluateMemory(item.user, item.assistant, item.provenance);
         ReportDecision(item.label, decision);
+        Check(decision.bSuccess, std::string("Memory classifier did not complete the ") +
+            item.label + " measurement: " + decision.reason);
 
         // A self category with a summary and bShouldRemember false is the shape the
         // deterministic refusal leaves behind: the model had decided to record it, and
@@ -228,7 +236,9 @@ void RunReconciliationLive(const llamaCppService& service)
     {
         const embeddingOutput a = service.EmbedMemory(left);
         const embeddingOutput b = service.EmbedMemory(right);
-        return (a.bSuccess && b.bSuccess) ? Cosine(a.values, b.values) : -1.0F;
+        Check(a.bSuccess && b.bSuccess && !a.values.empty() && a.values.size() == b.values.size(),
+            "Embedding backend did not complete a valid similarity measurement.");
+        return Cosine(a.values, b.values);
     };
 
     const revia::memory::ReconciliationSettings settings;
@@ -238,11 +248,6 @@ void RunReconciliationLive(const llamaCppService& service)
     for (const Pair& pair : paraphrases)
     {
         const float score = similarity(pair.left, pair.right);
-        if (score < 0.0F)
-        {
-            std::cout << "  The embedding backend did not answer; section skipped.\n";
-            return;
-        }
         const auto relation =
             revia::memory::ClassifyRelation(pair.left, pair.right, score, settings);
         if (relation == revia::memory::MemoryRelation::Duplicate) ++mergedParaphrases;
@@ -258,7 +263,6 @@ void RunReconciliationLive(const llamaCppService& service)
     for (const Pair& pair : distinct)
     {
         const float score = similarity(pair.left, pair.right);
-        if (score < 0.0F) continue;
         const auto relation =
             revia::memory::ClassifyRelation(pair.left, pair.right, score, settings);
         if (relation == revia::memory::MemoryRelation::Duplicate) ++falseMerges;
@@ -299,14 +303,12 @@ void RunReconciliationLive(const llamaCppService& service)
         decision.category = "preference";
         decision.summary = summary;
         const embeddingOutput vector = service.EmbedMemory(summary);
-        if (vector.bSuccess)
-        {
-            decision.embedding = vector.values;
-            decision.embeddingModel = vector.model;
-        }
+        Check(vector.bSuccess && !vector.values.empty(), "Store measurement embedding failed.");
+        decision.embedding = vector.values;
+        decision.embeddingModel = vector.model;
         bool added = false;
         std::string id;
-        static_cast<void>(store.Save(decision, added, &id));
+        Check(store.Save(decision, added, &id), "Live reconciliation store could not save the measured claim.");
         return added;
     };
     save("The user drinks coffee every morning.");
@@ -437,7 +439,8 @@ void RunContextLive(const llamaCppService& service)
                 std::cout << "    " << detail << "\n";
             }
         }
-        Check(!result || result->status != 200,
+        Check(static_cast<bool>(result), "Old context-bound comparison received no backend response.");
+        Check(result->status != 200,
             "The old character bound did not overflow this backend, so this case no "
             "longer demonstrates the defect it was built to demonstrate.");
     }
@@ -463,6 +466,9 @@ void RunAiPipelineLive()
     Check(health.bIsAvailable,
         "No Main llama-server answered on 127.0.0.1:8080. Start one before running "
         "--ai-pipeline-live.");
+    std::string warmupError;
+    const bool warmed = service.WarmUp({}, warmupError);
+    Check(warmed, "Live Main preparation failed: " + warmupError);
 
     RunSecretLive(service);
     RunProvenanceLive(service);

@@ -57,12 +57,7 @@ QWidget* MakeIcon(const QString& path, const QString& stroke)
     return icon;
 }
 
-void AddCardHeader(
-    QFrame* card,
-    const QString& iconPath,
-    const QString& stroke,
-    const QString& iconObjectName,
-    const QString& title,
+void AddCardHeader(QFrame* card, const QString& iconPath, const QString& stroke, const QString& iconObjectName, const QString& title,
     const QString& subtitle)
 {
     auto* header = new QHBoxLayout();
@@ -92,14 +87,8 @@ void AddCardHeader(
 }
 
 // One permission: label, optional helper line and risk chip, switch on the right.
-QFrame* MakeRow(
-    ToggleSwitch* toggle,
-    const QString& label,
-    const QString& help = QString(),
-    const QString& chipText = QString(),
-    const QString& chipObjectName = QString(),
-    const bool nested = false,
-    const QString& tip = QString())
+QFrame* MakeRow(ToggleSwitch* toggle, const QString& label, const QString& help = QString(), const QString& chipText = QString(),
+    const QString& chipObjectName = QString(), const bool nested = false, const QString& tip = QString())
 {
     auto* row = new QFrame();
     row->setObjectName(nested ? "permRowNested" : "permRow");
@@ -183,10 +172,7 @@ bool CapabilityPanel::eventFilter(QObject* watched, QEvent* event)
     return QWidget::eventFilter(watched, event);
 }
 
-CapabilityPanel::CapabilityPanel(
-    revia::runtime::ReviaSession& inputSession,
-    DiscoveryRequest inputDiscoveryRequest,
-    QWidget* parent)
+CapabilityPanel::CapabilityPanel(revia::runtime::ReviaSession& inputSession, DiscoveryRequest inputDiscoveryRequest, QWidget* parent)
     : QWidget(parent),
       session(inputSession),
       requestDiscovery(std::move(inputDiscoveryRequest))
@@ -756,8 +742,7 @@ void CapabilityPanel::ToggleDesktopStop()
     Refresh();
 }
 
-void CapabilityPanel::ShowDiscovery(
-    const revia::actions::windows::ApplicationControlInventory& inventory)
+void CapabilityPanel::ShowDiscovery(const revia::actions::windows::ApplicationControlInventory& inventory)
 {
     discoveredTable->setRowCount(0);
     discoveredApplication.clear();

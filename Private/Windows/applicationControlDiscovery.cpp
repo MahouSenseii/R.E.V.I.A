@@ -76,8 +76,7 @@ std::string ExecutableForWindow(const HWND window)
 #endif
 }
 
-ApplicationControlInventory ApplicationControlDiscovery::InspectForeground(
-    const int maxControls) const
+ApplicationControlInventory ApplicationControlDiscovery::InspectForeground(const int maxControls) const
 {
     ApplicationControlInventory result;
 #ifdef _WIN32

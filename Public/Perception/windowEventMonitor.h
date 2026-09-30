@@ -1,7 +1,7 @@
 #pragma once
 
-#include "Library/structLibrary.h"
 
+#include "Perception/perceptionSettings.h"
 #include <atomic>
 #include <chrono>
 #include <cstdint>
@@ -49,8 +49,7 @@ struct WindowObservation
 // Titles of the windows that can be seen right now, front to back, without anything the
 // perception exclusions cover. Background, minimised, tool and cloaked windows are left
 // out. For telling a model reading a screenshot how the names on screen are spelled.
-[[nodiscard]] std::vector<std::string> VisibleWindowTitles(
-    const perceptionSettings& settings, std::size_t maximum);
+[[nodiscard]] std::vector<std::string> VisibleWindowTitles(const perceptionSettings& settings, std::size_t maximum);
 
 // Why an event produced no observation. Counted rather than logged with its subject, so
 // suppression is measurable without the suppressed content being written anywhere.
@@ -81,27 +80,13 @@ public:
     explicit PerceptionFilter(perceptionSettings settings);
 
     // Advances internal state (last-seen window, rate budget) only when it admits.
-    [[nodiscard]] Suppression Admit(
-        const WindowObservation& candidate,
-        std::chrono::steady_clock::time_point now);
+    [[nodiscard]] Suppression Admit(const WindowObservation& candidate, std::chrono::steady_clock::time_point now);
 
-    [[nodiscard]] static bool IsExcludedApplication(
-        const perceptionSettings& settings,
-        const std::string& application);
-    [[nodiscard]] static bool IsExcludedTitle(
-        const perceptionSettings& settings,
-        const std::string& windowTitle);
-    // Both halves of the same question: may what is inside this window be used at all?
-    //
-    // It has more than one caller. The ambient perception stack asks it before recording
-    // a window, and the operator loop asks it before putting what is on screen into a
-    // decision prompt. Those two must not drift apart -- a window the owner excluded from
-    // being noticed is not one to read the contents of because a goal happens to be
-    // running -- so the rule is named once here rather than spelled out at each site.
-    [[nodiscard]] static bool IsExcludedWindow(
-        const perceptionSettings& settings,
-        const std::string& application,
-        const std::string& windowTitle);
+    [[nodiscard]] static bool IsExcludedApplication(const perceptionSettings& settings, const std::string& application);
+    [[nodiscard]] static bool IsExcludedTitle(const perceptionSettings& settings, const std::string& windowTitle);
+    // Shared application/title exclusion check for ambient metadata and operator observation prompts.
+    [[nodiscard]] static bool IsExcludedWindow(const perceptionSettings& settings,
+        const std::string& application, const std::string& windowTitle);
 
 private:
     perceptionSettings configuration;
@@ -113,13 +98,8 @@ private:
     bool hasAdmitted = false;
 };
 
-// Tier 0 of the perception stack: foreground changes, window creation, and title changes
-// via SetWinEventHook. Event-driven, so it costs nothing while the desktop is idle.
-//
-// The hook runs on its own thread with its own message pump. WINEVENT_OUTOFCONTEXT
-// delivers callbacks through the installing thread's message queue, so without a pump on
-// a thread Revia owns, the events would either never arrive or would land on the UI
-// thread and couple perception to the Qt window being open.
+// Event-driven foreground, creation and title hooks run on an owned thread/message pump.
+// WINEVENT_OUTOFCONTEXT callbacks remain independent of the Qt UI thread.
 class WindowEventMonitor
 {
 public:
@@ -132,10 +112,7 @@ public:
     WindowEventMonitor(const WindowEventMonitor&) = delete;
     WindowEventMonitor& operator=(const WindowEventMonitor&) = delete;
 
-    bool Start(
-        const perceptionSettings& settings,
-        ObservationHandler observationHandler,
-        StatusHandler statusHandler);
+    bool Start(const perceptionSettings& settings, ObservationHandler observationHandler, StatusHandler statusHandler);
     void Shutdown();
 
     // Stops observing without stopping Revia. The hook stays installed and the thread

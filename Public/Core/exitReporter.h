@@ -31,17 +31,8 @@ enum class ExitReason
 
 [[nodiscard]] std::string ToString(ExitReason reason);
 
-// Answers "why did Revia close?" every time, including the times it could not say so.
-//
-// Most exits can record themselves on the way out. The ones that matter most cannot:
-// TerminateProcess, a power cut, and some faults leave no opportunity to write anything.
-// So a marker file is written when the session opens and removed only when a reason has
-// been recorded. A marker still present at the next start is itself the evidence -- it
-// says the previous run ended without being able to explain itself, and names when it
-// started and which process it was.
-//
-// The result is a ledger where every session has exactly one closing line, so "it closed
-// on its own again" stops being a report and becomes a lookup.
+// Writes a session marker at startup and removes it only after recording an exit reason.
+// A surviving marker identifies the prior unexplained exit on the next startup.
 class ExitReporter
 {
 public:

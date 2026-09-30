@@ -64,27 +64,22 @@ ModelLifetimeCoordinator::ModelLifetimeCoordinator(ModelResidencyManager& invent
 {
 }
 
-ModelLifetimeCoordinator::Managed* ModelLifetimeCoordinator::FindUnlocked(
-    const IntelligenceTier tier)
+ModelLifetimeCoordinator::Managed* ModelLifetimeCoordinator::FindUnlocked(const IntelligenceTier tier)
 {
     const auto found = std::find_if(managed.begin(), managed.end(),
         [tier](const Managed& entry) { return entry.tier == tier; });
     return found == managed.end() ? nullptr : &*found;
 }
 
-const ModelLifetimeCoordinator::Managed* ModelLifetimeCoordinator::FindUnlocked(
-    const IntelligenceTier tier) const
+const ModelLifetimeCoordinator::Managed* ModelLifetimeCoordinator::FindUnlocked(const IntelligenceTier tier) const
 {
     const auto found = std::find_if(managed.begin(), managed.end(),
         [tier](const Managed& entry) { return entry.tier == tier; });
     return found == managed.end() ? nullptr : &*found;
 }
 
-void ModelLifetimeCoordinator::Manage(
-    const IntelligenceTier tier,
-    Activator activate,
-    Deactivator deactivate,
-    const ModelLifetimePolicy policy)
+void ModelLifetimeCoordinator::Manage(const IntelligenceTier tier,
+    Activator activate, Deactivator deactivate, const ModelLifetimePolicy policy)
 {
     std::lock_guard lock(mutex);
     Managed* entry = FindUnlocked(tier);
@@ -120,8 +115,7 @@ std::uint32_t ModelLifetimeCoordinator::ActiveLeases(const IntelligenceTier tier
     return entry == nullptr ? 0U : entry->leases;
 }
 
-ModelLifetimeCoordinator::Lease ModelLifetimeCoordinator::Acquire(
-    const IntelligenceTier tier, std::stop_token stopToken)
+ModelLifetimeCoordinator::Lease ModelLifetimeCoordinator::Acquire(const IntelligenceTier tier, std::stop_token stopToken)
 {
     Activator activate;
     {

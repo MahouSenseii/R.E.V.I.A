@@ -1,3 +1,4 @@
+#include "Core/conversationMessage.h"
 #include "Core/utf8.h"
 #include "Core/conversationContext.h"
 
@@ -19,9 +20,7 @@ void conversationContext::AddMessage(const std::string& role, const std::string&
     TrimToBudget();
 }
 
-bool conversationContext::RemoveLastMessageIf(
-    const std::string& role,
-    const std::string& content)
+bool conversationContext::RemoveLastMessageIf(const std::string& role, const std::string& content)
 {
     if (messages.empty() || messages.back().role != role ||
         messages.back().content != content)

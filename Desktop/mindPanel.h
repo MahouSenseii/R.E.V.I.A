@@ -8,18 +8,8 @@ class QLabel;
 class QTableWidget;
 class QTabWidget;
 
-// Developer visibility into the state that decides how Revia behaves.
-//
-// Emotion, mood, development, and relationships all change slowly and invisibly. Without
-// somewhere to look at them, "she seems more cautious lately" is unfalsifiable and a
-// broken appraisal is indistinguishable from a quiet one. This is the panel that makes
-// the difference checkable.
-//
-// Read-only, and deliberately so. Every value here is earned from recorded evidence;
-// a control that let a developer set trust to 0.9 would be exactly the assignment path
-// the relationship system refuses the language model.
-//
-// This is a debug surface. Revia is not asked to recite these numbers in conversation.
+// Read-only diagnostics for evidence-derived emotion, mood, development and relationships.
+// These values are not conversation output or developer-editable state.
 class MindPanel final : public QWidget
 {
 public:

@@ -1,3 +1,7 @@
+#include "Core/appSettings.h"
+#include "Core/profile.h"
+#include "Intelligence/intelligenceSettings.h"
+#include "LLM/endpointSettings.h"
 #include "testSupport.h"
 
 #include "Core/configManager.h"

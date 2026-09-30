@@ -1,7 +1,7 @@
 #pragma once
 
-#include "Library/structLibrary.h"
 
+#include "LLM/endpointSettings.h"
 #include <string>
 #include <cstdint>
 
@@ -21,10 +21,8 @@ struct llamaHardwareMemory
 
 // Pure hardware policy used by automatic startup and tests. Parallel slots are granted
 // conservatively after subtracting VRAM reserved for another local model such as Qwen TTS.
-[[nodiscard]] llamaHardwarePlan PlanLlamaHardware(
-    std::uint64_t dedicatedVideoMemoryMiB,
-    std::uint64_t systemMemoryMiB,
-    int reservedVramMiB);
+[[nodiscard]] llamaHardwarePlan PlanLlamaHardware(std::uint64_t dedicatedVideoMemoryMiB,
+    std::uint64_t systemMemoryMiB, int reservedVramMiB);
 
 class llamaCppServerProcess
 {
@@ -42,12 +40,8 @@ public:
     void Stop();
 
 private:
-    bool StartInternal(
-        const llmSettings& settings,
-        bool embeddingMode,
-        const std::string& pooling,
-        const std::string& device,
-        std::string& outError);
+    bool StartInternal(const llmSettings& settings,
+        bool embeddingMode, const std::string& pooling, const std::string& device, std::string& outError);
 #ifdef _WIN32
     void* processHandle = nullptr;
     void* jobHandle = nullptr;

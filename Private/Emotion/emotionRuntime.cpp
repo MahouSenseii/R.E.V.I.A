@@ -38,11 +38,8 @@ EmotionRuntime::EmotionRuntime(std::unique_ptr<IEmotionModel> inputModel)
     }
 }
 
-std::optional<AppraisalOutcome> EmotionRuntime::Observe(
-    const Stimulus& stimulus,
-    const identity::DevelopmentState& development,
-    const identity::RelationshipState* relationship,
-    std::vector<RelevantMemory> memories)
+std::optional<AppraisalOutcome> EmotionRuntime::Observe(const Stimulus& stimulus, const identity::DevelopmentState& development,
+    const identity::RelationshipState* relationship, std::vector<RelevantMemory> memories)
 {
     std::lock_guard lock(mutex);
     if (stimulus.source == StimulusSource::Conversation && stimulus.userCaused)
@@ -57,10 +54,8 @@ std::optional<AppraisalOutcome> EmotionRuntime::Observe(
     return Appraise(stimulus, development, relationship, std::move(memories));
 }
 
-std::optional<AppraisalOutcome> EmotionRuntime::ObserveQuietConversation(
-    const identity::DevelopmentState& development,
-    const std::chrono::milliseconds quietInterval,
-    const bool occupied, const float boredom)
+std::optional<AppraisalOutcome> EmotionRuntime::ObserveQuietConversation(const identity::DevelopmentState& development,
+    const std::chrono::milliseconds quietInterval, const bool occupied, const float boredom)
 {
     std::lock_guard lock(mutex);
     if (occupied || quietConversationObserved || std::chrono::steady_clock::now() - lastConversation <
@@ -79,11 +74,8 @@ std::optional<AppraisalOutcome> EmotionRuntime::ObserveQuietConversation(
     return Appraise(stimulus, development, nullptr, {});
 }
 
-std::optional<AppraisalOutcome> EmotionRuntime::Appraise(
-    const Stimulus& stimulus,
-    const identity::DevelopmentState& development,
-    const identity::RelationshipState* relationship,
-    std::vector<RelevantMemory> memories)
+std::optional<AppraisalOutcome> EmotionRuntime::Appraise(const Stimulus& stimulus, const identity::DevelopmentState& development,
+    const identity::RelationshipState* relationship, std::vector<RelevantMemory> memories)
 {
     if (!stimulus.IsMeaningful())
     {

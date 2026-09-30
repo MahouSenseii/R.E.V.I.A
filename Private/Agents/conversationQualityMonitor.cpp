@@ -1,4 +1,5 @@
 #include "Agents/conversationQualityMonitor.h"
+#include "Core/utf8.h"
 
 #include <algorithm>
 #include <cctype>
@@ -61,9 +62,7 @@ bool ConversationQualityMonitor::EndsWithStockTail(const std::string& response)
         "what do you want to figure out?", "how can i help you today?"});
 }
 
-bool ConversationQualityMonitor::ProjectsStateOntoUser(
-    const std::string& userInput,
-    const std::string& response)
+bool ConversationQualityMonitor::ProjectsStateOntoUser(const std::string& userInput, const std::string& response)
 {
     const std::string input = Lower(userInput);
     if (input.find("how are you") == std::string::npos &&
@@ -78,16 +77,14 @@ bool ConversationQualityMonitor::ProjectsStateOntoUser(
 std::string ConversationQualityMonitor::OpeningOf(const std::string& response)
 {
     const std::size_t end = response.find_first_of(".!?\n");
-    std::string opening = Lower(response.substr(0, std::min<std::size_t>(
+    std::string opening = Lower(utf8::Prefix(response, std::min<std::size_t>(
         end == std::string::npos ? response.size() : end, 96)));
     opening.erase(opening.begin(), std::find_if(opening.begin(), opening.end(),
         [](const unsigned char c) { return !std::isspace(c); }));
     return opening;
 }
 
-ConversationQualitySnapshot ConversationQualityMonitor::Observe(
-    const std::string& userInput,
-    const std::string& response)
+ConversationQualitySnapshot ConversationQualityMonitor::Observe(const std::string& userInput, const std::string& response)
 {
     std::lock_guard lock(mutex);
     ++snapshot.turns;

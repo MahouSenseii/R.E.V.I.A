@@ -318,8 +318,7 @@ bool ComputerExperienceRecorder::Capturing() const
     return capturing;
 }
 
-void ComputerExperienceRecorder::SetProtocol(
-    std::string taskVariant, std::string layoutVariant)
+void ComputerExperienceRecorder::SetProtocol(std::string taskVariant, std::string layoutVariant)
 {
     std::lock_guard lock(mutex);
     protocolTask = std::move(taskVariant);
@@ -354,8 +353,7 @@ bool ComputerExperienceRecorder::WithinConsent(const ExperienceRecord& record) c
     return true;
 }
 
-std::filesystem::path ComputerExperienceRecorder::SessionPath(
-    const std::string& session) const
+std::filesystem::path ComputerExperienceRecorder::SessionPath(const std::string& session) const
 {
     return root / (session + ".jsonl");
 }
@@ -461,8 +459,7 @@ bool ComputerExperienceRecorder::Record(ExperienceRecord record)
     return true;
 }
 
-std::vector<ExperienceRecord> ComputerExperienceRecorder::Read(
-    const std::string& session) const
+std::vector<ExperienceRecord> ComputerExperienceRecorder::Read(const std::string& session) const
 {
     std::vector<ExperienceRecord> records;
     std::ifstream file(SessionPath(session));
@@ -499,8 +496,7 @@ std::vector<std::string> ComputerExperienceRecorder::Sessions() const
     return sessions;
 }
 
-ComputerExperienceRecorder::Deletion ComputerExperienceRecorder::Forget(
-    const std::string& session)
+ComputerExperienceRecorder::Deletion ComputerExperienceRecorder::Forget(const std::string& session)
 {
     Deletion deletion;
     std::error_code error;
@@ -527,11 +523,8 @@ ComputerExperienceRecorder::Deletion ComputerExperienceRecorder::Forget(
     return deletion;
 }
 
-ExperienceRecord BuildExperienceRecord(
-    const ComputerTaskContext& context,
-    const ComputerSubgoal& subgoal,
-    const ComputerDecisionRecord& decision,
-    const CaptureDepth depth)
+ExperienceRecord BuildExperienceRecord(const ComputerTaskContext& context,
+    const ComputerSubgoal& subgoal, const ComputerDecisionRecord& decision, const CaptureDepth depth)
 {
     ExperienceRecord record;
     record.schemaVersion = CurrentExperienceSchema;

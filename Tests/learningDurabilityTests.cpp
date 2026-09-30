@@ -1,3 +1,6 @@
+#include "Core/profile.h"
+#include "LLM/endpointSettings.h"
+#include "Memory/memoryTypes.h"
 #include "reviaSessionTestAccess.h"
 
 #include <algorithm>

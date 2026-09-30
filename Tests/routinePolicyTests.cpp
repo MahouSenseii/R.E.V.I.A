@@ -35,10 +35,8 @@ revia::actions::CapabilitySettings ApprovedScope()
     return scope;
 }
 
-ComputerObservation Screen(
-    const std::string& application,
-    std::vector<ObservedCandidate> candidates,
-    const std::string& title = "Untitled - Notepad")
+ComputerObservation Screen(const std::string& application,
+    std::vector<ObservedCandidate> candidates, const std::string& title = "Untitled - Notepad")
 {
     ComputerObservation observation;
     observation.screen.succeeded = true;
@@ -85,11 +83,7 @@ ComputerTaskContext Context(ComputerObservation observation)
 // A validated subgoal, made the way the runtime makes one rather than by setting the
 // flag. Going through the validator is the point: a test that stamped `validated` by
 // hand would be testing a policy against an input the runtime can never produce.
-ComputerSubgoal Validated(
-    const SubgoalIntent intent,
-    TargetDescriptor target,
-    const PayloadVault& vault,
-    PayloadReference payload = {})
+ComputerSubgoal Validated(const SubgoalIntent intent, TargetDescriptor target, const PayloadVault& vault, PayloadReference payload = {})
 {
     ComputerSubgoal proposed;
     proposed.id = NewSubgoalId();
@@ -111,9 +105,7 @@ ComputerSubgoal Validated(
     return validation.subgoal;
 }
 
-TargetDescriptor Target(
-    const std::string& application, const std::string& name = {},
-    const std::string& role = {})
+TargetDescriptor Target(const std::string& application, const std::string& name = {}, const std::string& role = {})
 {
     TargetDescriptor descriptor;
     descriptor.application = application;
@@ -475,8 +467,7 @@ public:
     [[nodiscard]] std::string Name() const override { return name; }
     [[nodiscard]] bool IsAvailable() const override { return available; }
 
-    [[nodiscard]] ComputerDecision Decide(
-        const ComputerTaskContext&, std::stop_token) override
+    [[nodiscard]] ComputerDecision Decide(const ComputerTaskContext&, std::stop_token) override
     {
         ++calls;
         ComputerDecision answer = scripted;

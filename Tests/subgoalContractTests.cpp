@@ -44,8 +44,7 @@ revia::actions::CapabilitySettings ApprovedScope()
     return scope;
 }
 
-ObservedCandidate Control(
-    const std::string& name, const std::string& role, const bool editable)
+ObservedCandidate Control(const std::string& name, const std::string& role, const bool editable)
 {
     ObservedCandidate candidate;
     candidate.id = name.empty() ? "unnamed-1" : name;

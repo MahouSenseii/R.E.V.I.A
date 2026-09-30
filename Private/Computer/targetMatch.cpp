@@ -27,10 +27,7 @@ bool Contains(const std::string& haystack, const std::string& needle)
 
 } // namespace
 
-TargetMatch MatchTarget(
-    const std::vector<ObservedCandidate>& candidates,
-    const TargetDescriptor& wanted,
-    const TargetAffordance affordance)
+TargetMatch MatchTarget(const std::vector<ObservedCandidate>& candidates, const TargetDescriptor& wanted, const TargetAffordance affordance)
 {
     enum class Tier { PublishedName, InferredLabel, ContainerAndRole };
 

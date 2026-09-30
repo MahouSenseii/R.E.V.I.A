@@ -1,3 +1,4 @@
+#include "Agents/answerObligation.h"
 #include "promptLayoutTestSupport.h"
 #include "reviaSessionTestAccess.h"
 #include "Core/preferenceStore.h"
@@ -67,6 +68,11 @@ public:
         server.Post("/v1/chat/completions", [this](const auto& request, auto& response)
         {
             const auto body = json::parse(request.body);
+            if (body.value("max_tokens", 0) == 1 && !body.value("stream", false))
+            {
+                response.set_content(R"({"choices":[{"message":{"role":"assistant","content":"OK"},"finish_reason":"stop"}]})", "application/json");
+                return;
+            }
             {
                 std::lock_guard lock(mutex);
                 requests.push_back(body);

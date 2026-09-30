@@ -123,8 +123,7 @@ nlohmann::json ParseJson(const std::string& value)
 // Spelled the way the structured action parser spells it, so a stored row and a
 // model-authored step read the same. Anything unrecognised is the left button,
 // which is what an absent field already meant.
-std::string PointerButtonToJson(
-    const actions::ActionRequest::DesktopInput::PointerButton value)
+std::string PointerButtonToJson(const actions::ActionRequest::DesktopInput::PointerButton value)
 {
     using Button = actions::ActionRequest::DesktopInput::PointerButton;
     switch (value)
@@ -136,8 +135,7 @@ std::string PointerButtonToJson(
     }
 }
 
-actions::ActionRequest::DesktopInput::PointerButton PointerButtonFromJson(
-    const std::string& value)
+actions::ActionRequest::DesktopInput::PointerButton PointerButtonFromJson(const std::string& value)
 {
     using Button = actions::ActionRequest::DesktopInput::PointerButton;
     if (value == "right") return Button::Right;

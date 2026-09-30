@@ -46,7 +46,7 @@ test('native-only settings do not require a bridge file', async t => {
 test('Windows entry point validates files with spaces without exposing credentials', { skip: process.platform !== 'win32' }, async t => {
   const dir = await settings(t);
   const script = fileURLToPath(new URL('../WebDemo.ps1', import.meta.url));
-  const child = spawn('powershell.exe', ['-NoProfile', '-File', script, 'check', '-ConfigDirectory', dir], { windowsHide: true });
+  const child = spawn('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', script, 'check', '-ConfigDirectory', dir], { windowsHide: true });
   let output = '';
   child.stdout.on('data', bytes => output += bytes);
   child.stderr.on('data', bytes => output += bytes);

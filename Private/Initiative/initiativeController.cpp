@@ -1,3 +1,4 @@
+#include "Initiative/initiativeSettings.h"
 #include "Initiative/initiativeController.h"
 
 #include <algorithm>
@@ -40,9 +41,7 @@ void InitiativeController::Configure(initiativeSettings settings)
     nextId = 1;
 }
 
-bool InitiativeController::BuildActivityProposal(
-    const std::vector<perception::ActivitySpan>& recent,
-    Proposal& outProposal)
+bool InitiativeController::BuildActivityProposal(const std::vector<perception::ActivitySpan>& recent, Proposal& outProposal)
 {
     if (recent.empty())
     {
@@ -135,9 +134,7 @@ bool InitiativeController::BuildActivityProposal(
     return true;
 }
 
-bool InitiativeController::BuildUnfinishedGoalProposal(
-    const std::vector<goals::Goal>& unfinishedGoals,
-    Proposal& outProposal)
+bool InitiativeController::BuildUnfinishedGoalProposal(const std::vector<goals::Goal>& unfinishedGoals, Proposal& outProposal)
 {
     // The most advanced one: a goal that got most of the way through is both the most
     // useful to finish and the least likely to have been abandoned deliberately.
@@ -190,9 +187,7 @@ void InitiativeController::UpdateSettings(initiativeSettings settings)
     policy.UpdateSettings(std::move(settings));
 }
 
-bool InitiativeController::BuildConversationProposal(
-    const std::vector<StarterCue>& cues,
-    Proposal& outProposal)
+bool InitiativeController::BuildConversationProposal(const std::vector<StarterCue>& cues, Proposal& outProposal)
 {
     if (cues.empty())
     {
@@ -232,9 +227,7 @@ bool InitiativeController::BuildProposal(const Evidence& evidence, Proposal& out
     return BuildActivityProposal(evidence.recentActivity, outProposal);
 }
 
-InitiativeController::Consideration InitiativeController::Consider(
-    const Evidence& evidence,
-    const AttentionContext& context)
+InitiativeController::Consideration InitiativeController::Consider(const Evidence& evidence, const AttentionContext& context)
 {
     std::lock_guard lock(mutex);
     Consideration consideration;
@@ -302,9 +295,7 @@ AttentionVerdict InitiativeController::SpeakingVerdict(AttentionContext context)
     return policy.Evaluate(1.0f, context);
 }
 
-bool InitiativeController::Commit(
-    const std::string& proposalId,
-    const std::chrono::system_clock::time_point when)
+bool InitiativeController::Commit(const std::string& proposalId, const std::chrono::system_clock::time_point when)
 {
     std::lock_guard lock(mutex);
     for (const auto& entry : proposals)
@@ -338,9 +329,7 @@ void InitiativeController::Accept(const std::string& proposalId)
     }
 }
 
-void InitiativeController::RecordConversationResponse(
-    const std::string& response,
-    const std::chrono::system_clock::time_point when)
+void InitiativeController::RecordConversationResponse(const std::string& response, const std::chrono::system_clock::time_point when)
 {
     std::string normalized;
     normalized.reserve(response.size());
@@ -383,9 +372,7 @@ void InitiativeController::RecordConversationResponse(
     }
 }
 
-void InitiativeController::Dismiss(
-    const std::string& proposalId,
-    const std::chrono::system_clock::time_point when)
+void InitiativeController::Dismiss(const std::string& proposalId, const std::chrono::system_clock::time_point when)
 {
     std::lock_guard lock(mutex);
     for (auto& entry : proposals)

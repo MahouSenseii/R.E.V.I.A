@@ -18,10 +18,8 @@ bool ApprovalScope::Matches(const ApprovalScope& other) const
         policyVersion == other.policyVersion;
 }
 
-std::string ApprovalRegistry::Grant(
-    ApprovalScope scope,
-    const std::chrono::steady_clock::time_point now,
-    const std::chrono::milliseconds lifetime)
+std::string ApprovalRegistry::Grant(ApprovalScope scope,
+    const std::chrono::steady_clock::time_point now, const std::chrono::milliseconds lifetime)
 {
     ActionApproval approval;
     // Generated here. An id that could be supplied from outside would be a permission
@@ -37,11 +35,8 @@ std::string ApprovalRegistry::Grant(
     return id;
 }
 
-bool ApprovalRegistry::Consume(
-    const std::string& approvalId,
-    const ApprovalScope& against,
-    const std::chrono::steady_clock::time_point now,
-    std::string& outReason)
+bool ApprovalRegistry::Consume(const std::string& approvalId,
+    const ApprovalScope& against, const std::chrono::steady_clock::time_point now, std::string& outReason)
 {
     std::lock_guard lock(mutex);
     const auto found = approvals.find(approvalId);

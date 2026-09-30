@@ -181,8 +181,7 @@ void ContentGate::NoteRefusedCompletion()
     ++stats.prematureCompletions;
 }
 
-ContentGate::DestinationVerdict ContentGate::CheckDestination(
-    const std::string& control, const ComputerTaskContext& context) const
+ContentGate::DestinationVerdict ContentGate::CheckDestination(const std::string& control, const ComputerTaskContext& context) const
 {
     if (task.destination.empty()) return DestinationVerdict::Unchecked;
     if (control.empty()) return DestinationVerdict::Unchecked;
@@ -208,8 +207,7 @@ ContentGate::DestinationVerdict ContentGate::CheckDestination(
     return matches ? DestinationVerdict::Matches : DestinationVerdict::Mismatch;
 }
 
-ContentDecision ContentGate::Apply(
-    goals::GoalStep& step, const ComputerTaskContext& context)
+ContentDecision ContentGate::Apply(goals::GoalStep& step, const ComputerTaskContext& context)
 {
     ContentDecision decision;
     if (!EntersText(step.action.type))

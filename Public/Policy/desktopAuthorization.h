@@ -12,31 +12,11 @@
 namespace revia::policy
 {
 
-// One place that decides whether a desktop effect may happen.
-//
-// It exists because the same consequence can be reached three ways -- a click, a
-// keystroke, or a UI Automation pattern -- and before this, only the first was checked.
-// Sending a message by clicking Send was gated; sending it by invoking the same button
-// through UIA was not. Parallel executors with different rules is how a boundary becomes
-// decorative, so the rules live here and the executors ask.
-//
-// What this enforces:
-//   * an effect needs the same authority however it is reached;
-//   * missing or ambiguous evidence about a target is not treated as permission;
-//   * effects are a set, so an action that both edits and sends needs both.
-//
-// What it does not enforce, and cannot:
-//   * it is not a sandbox. It runs inside the same process it is protecting, and a
-//     defect above it is not caught by it;
-//   * label reading is heuristic and English-shaped. It recognizes what it recognizes;
-//   * a check immediately before SendInput is still a check-to-use race. The desktop
-//     is not transactional and nothing here makes it so.
+// Shared authorization for clicks, keystrokes, and UIA; all effects require authority
+// and missing/ambiguous target evidence grants none. This is not a sandbox: labels are
+// heuristic and a pre-injection check cannot eliminate desktop races.
 
-// Effects are a set, not a ladder.
-//
-// A ladder forces "edits the document" and "sends it to someone" onto one axis and keeps
-// only the larger. An action that does both needs the authority for both, so they are
-// bits.
+// Effect bits combine: an action that edits and sends requires authority for both.
 enum class DesktopEffect : std::uint32_t
 {
     None              = 0u,
@@ -63,11 +43,7 @@ using DesktopEffects = std::uint32_t;
     return (set & static_cast<DesktopEffects>(one)) != 0u;
 }
 
-// How much is actually known about what the action will land on.
-//
-// The distinction that matters: Missing is not Routine. Before this existed, a control
-// with no readable label produced no dangerous keyword and was therefore authorized,
-// which meant the check passed most reliably exactly when it knew least.
+// Missing evidence is not Routine and must not become permission.
 enum class EvidenceQuality
 {
     // Fresh, resolved, and carrying a label that means something.
@@ -162,26 +138,12 @@ struct AuthorizationRequest
 [[nodiscard]] std::string ToString(AuthorizationVerdict verdict);
 [[nodiscard]] std::string DescribeEffects(DesktopEffects effects);
 
-[[nodiscard]] AuthorizationDecision AuthorizeDesktopEffect(
-    const AuthorizationRequest& request,
+[[nodiscard]] AuthorizationDecision AuthorizeDesktopEffect(const AuthorizationRequest& request,
     const actions::CapabilitySettings::DesktopControl& settings);
 
-// What executors call.
-//
-// It exists so there is exactly one place that turns a typed action plus a target into
-// yes or no. Both the synthesized-input executor and the UI Automation executor go
-// through it, because the alternative -- each backend deciding for itself -- is how
-// clicking Send came to be checked while invoking the same button through UIA was not.
-//
-// Task origin is taken from the request rather than passed in separately, so a caller
-// cannot quietly claim a user asked for something.
-// A short fingerprint of the settings an authorization was granted under.
-//
-// Bindings and approvals carry it so that changing a permission invalidates anything
-// already decided under the old one. Without it, a grant made a moment before the owner
-// tightened a switch would still be spendable afterwards.
-[[nodiscard]] std::string PolicyVersion(
-    const actions::CapabilitySettings::DesktopControl& settings);
+// Settings fingerprint carried by bindings and approvals; permission changes
+// invalidate decisions made under the previous policy.
+[[nodiscard]] std::string PolicyVersion(const actions::CapabilitySettings::DesktopControl& settings);
 
 // What a person is being asked to approve. It names the control and what that control
 // would do, and deliberately never carries the message body: approving "Send" is
@@ -196,12 +158,8 @@ struct ApprovalPrompt
     std::string reason;
 };
 
-// The one path allowed to turn RequireApproval into a yes.
-//
-// Runtime-owned and held by shared_ptr so it survives a capability reload rebuilding the
-// executors. Nothing in parsed model output can reach it, name it, or set it: a plan
-// cannot arrive carrying its own permission, and an unanswered gate is a refusal rather
-// than a default yes.
+// Runtime-owned approval gate survives executor reloads via shared_ptr.
+// Model output cannot reach it; unanswered approval is refusal.
 class DesktopApprovalGate
 {
 public:
@@ -222,8 +180,7 @@ public:
 
     // Runtime-only, bounded to a submitted goal and removed on every exit.
     [[nodiscard]] TaskApproval ApproveTask(std::string goalId, bool messaging);
-    [[nodiscard]] std::optional<bool> TaskDecision(
-        const std::string& requestedBy, DesktopEffects effects) const;
+    [[nodiscard]] std::optional<bool> TaskDecision(const std::string& requestedBy, DesktopEffects effects) const;
 
     void SetHandler(Handler handler);
     // False when no handler is installed, which is the correct answer for a headless
@@ -239,12 +196,8 @@ private:
 
 // `gate` is optional. Without one the behavior is exactly what it was before approvals
 // existed: RequireApproval renders as a refusal.
-[[nodiscard]] bool AuthorizeOrExplain(
-    DesktopOperation operation,
-    const TargetEvidence& evidence,
-    const actions::CapabilitySettings::DesktopControl& settings,
-    const actions::ActionRequest& request,
-    std::string& outFailure,
+[[nodiscard]] bool AuthorizeOrExplain(DesktopOperation operation, const TargetEvidence& evidence,
+    const actions::CapabilitySettings::DesktopControl& settings, const actions::ActionRequest& request, std::string& outFailure,
     const DesktopApprovalGate* gate = nullptr);
 
 } // namespace revia::policy

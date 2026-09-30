@@ -75,18 +75,8 @@ struct ContentGateStats
     std::uint32_t prematureCompletions = 0;
 };
 
-// The one place a text-entry step gets its text.
-//
-// Every provider funnels through here -- legacy, routine, learned and the fallback --
-// because the defect was never specific to one of them. The routine policy already left
-// `value` empty and let the controller redeem it; the legacy path wrote whatever a model
-// produced; a learned policy would have done whichever it was built to do. One gate
-// downstream of all four is the only arrangement where the guarantee does not depend on
-// each provider remembering it.
-//
-// It holds no authority of its own. It cannot widen a scope, approve an action or skip a
-// check: it can only replace a value with the user's, or refuse. Everything it lets
-// through is still validated, still policy-checked, still confirmed and still verified.
+// All providers pass through this gate for held text or refusal.
+// It grants no authority and retains downstream validation and permission checks.
 class ContentGate
 {
 public:
@@ -95,8 +85,7 @@ public:
     // what the vault is.
     using DraftObserver = std::function<actions::windows::DraftSnapshot(
         const actions::ActionRequest&)>;
-    explicit ContentGate(PayloadVault& payloadVault,
-        DraftObserver observer = actions::windows::ObserveDraft);
+    explicit ContentGate(PayloadVault& payloadVault, DraftObserver observer = actions::windows::ObserveDraft);
 
     ContentGate(const ContentGate&) = delete;
     ContentGate& operator=(const ContentGate&) = delete;
@@ -122,22 +111,13 @@ public:
     [[nodiscard]] bool SubmissionReady() const { return placed && baselineBeforeEntry && !submissionExecuted; }
     [[nodiscard]] bool SubmissionExecuted() const { return submissionExecuted; }
 
-    // Whether a proposed completion may be believed.
-    //
-    // False while a task that exists to place content has not placed it. This is the
-    // "typed something, declared victory" case: a provider that resolved the field, or
-    // pressed something, or simply lost track, and answered that the task was done.
+    // Refuses completion while required content remains unplaced.
     [[nodiscard]] bool CompletionAllowed() const;
     void NoteRefusedCompletion();
 
-    // Supply held text, or bind a committing action to a final live draft check.
-    //
-    // `context` is only read for the candidate list, which is what turns a control id
-    // into something a user's words can be compared against. A step naming a control
-    // the observation does not list is left to the executor to refuse; that is its job
-    // and not this one's.
-    [[nodiscard]] ContentDecision Apply(
-        goals::GoalStep& step, const ComputerTaskContext& context);
+    // Supplies held text or binds submission to a final live draft check.
+    // Candidate IDs come from context; the executor rejects absent targets.
+    [[nodiscard]] ContentDecision Apply(goals::GoalStep& step, const ComputerTaskContext& context);
 
     [[nodiscard]] const ContentGateStats& Stats() const { return stats; }
     void ResetStats() { stats = ContentGateStats{}; }
@@ -147,8 +127,7 @@ private:
     // named none, or because the observation does not describe that control -- is not
     // a mismatch, and is reported as such rather than refused.
     enum class DestinationVerdict { Unchecked, Matches, Mismatch };
-    [[nodiscard]] DestinationVerdict CheckDestination(
-        const std::string& control, const ComputerTaskContext& context) const;
+    [[nodiscard]] DestinationVerdict CheckDestination(const std::string& control, const ComputerTaskContext& context) const;
 
     PayloadVault* vault = nullptr;
     TaskContent task;

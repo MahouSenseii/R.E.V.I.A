@@ -55,11 +55,7 @@ ObservedControl Named(const std::string& name, const std::string& id, const int 
     return control;
 }
 
-ObservedControl Nameless(
-    const std::string& id,
-    const int type,
-    const std::string& container = {},
-    const std::string& inferredLabel = {})
+ObservedControl Nameless(const std::string& id, const int type, const std::string& container = {}, const std::string& inferredLabel = {})
 {
     ObservedControl control;
     control.automationId = id;
@@ -82,13 +78,8 @@ DesktopObservation Screen(std::vector<ObservedControl> controls)
     return screen;
 }
 
-ComputerSubgoal Validated(
-    const SubgoalIntent intent,
-    const std::string& name,
-    const std::string& role,
-    const std::string& container,
-    const PayloadVault& vault,
-    const PayloadReference& payload = {})
+ComputerSubgoal Validated(const SubgoalIntent intent, const std::string& name, const std::string& role, const std::string& container,
+    const PayloadVault& vault, const PayloadReference& payload = {})
 {
     ComputerSubgoal proposed;
     proposed.id = NewSubgoalId();

@@ -62,13 +62,8 @@ enum class RuntimeEventKind
     // `resource` the file it was saved to. Distinct from AssistantMessage because a
     // picture belongs on a canvas, not in the middle of a chat transcript.
     Diagram,
-    // One round of an iterative investigation: the questions being checked now.
-    //
-    // A distinct kind rather than a SelfInquiry with a different phase, because the shell
-    // must be able to render "checking" and "findings" as alternating blocks without
-    // matching on a speaker name or parsing a string. `message` is a short work summary,
-    // `detail` the expandable evidence behind it, and `turnId` ties the round to the task
-    // that raised it so a stale round cannot appear under a later question.
+    // Typed investigation-round summary and expandable evidence; turnId binds it to the originating task.
+    // Shells render checking/findings directly from the kind rather than speaker names.
     InvestigationChecking,
     // The observations that round produced, and what remains uncertain.
     InvestigationFindings,
@@ -82,11 +77,7 @@ enum class RuntimeEventKind
 struct RuntimeEvent
 {
     RuntimeEvent() = default;
-    RuntimeEvent(
-        RuntimeEventKind inputKind,
-        RuntimeState inputState,
-        std::string inputMessage,
-        std::uint64_t inputTurnId = 0)
+    RuntimeEvent(RuntimeEventKind inputKind, RuntimeState inputState, std::string inputMessage, std::uint64_t inputTurnId = 0)
         : kind(inputKind), state(inputState), message(std::move(inputMessage)), turnId(inputTurnId)
     {
     }

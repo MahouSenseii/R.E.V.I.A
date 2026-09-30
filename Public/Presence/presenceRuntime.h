@@ -1,6 +1,6 @@
 #pragma once
 
-#include "Library/structLibrary.h"
+#include "Presence/presenceSettings.h"
 #include "Runtime/runtimeEvents.h"
 
 #include <chrono>
@@ -71,19 +71,11 @@ public:
     PresenceRuntime(const PresenceRuntime&) = delete;
     PresenceRuntime& operator=(const PresenceRuntime&) = delete;
 
-    bool Start(
-        const presenceSettings& settings,
-        NoticeHandler noticeHandler,
-        AdapterHandler adapterHandler);
+    bool Start(const presenceSettings& settings, NoticeHandler noticeHandler, AdapterHandler adapterHandler);
     void Observe(const runtime::RuntimeEvent& event);
     void RecordUserInput(const std::string& sourceLabel);
-    void PublishAdapterReply(
-        const ExternalAdapterEvent& request,
-        const std::string& text,
-        bool succeeded,
-        const std::string& reason = {},
-        const std::vector<std::uint8_t>& audio = {},
-        const std::string& audioError = {});
+    void PublishAdapterReply(const ExternalAdapterEvent& request, const std::string& text, bool succeeded, const std::string& reason = {},
+        const std::vector<std::uint8_t>& audio = {}, const std::string& audioError = {});
     [[nodiscard]] PresenceSnapshot Snapshot() const;
     void Shutdown();
 
@@ -95,20 +87,13 @@ private:
     // separately so a burst of rejects cannot evict the successful envelopes someone is
     // comparing them against.
     void PruneAdapterArchive(const std::filesystem::path& directory);
-    bool ParseAdapterFile(
-        const std::filesystem::path& path,
-        ExternalAdapterEvent& outEvent,
-        std::string& outError) const;
+    bool ParseAdapterFile(const std::filesystem::path& path, ExternalAdapterEvent& outEvent, std::string& outError) const;
     bool RateLimitAllows(std::chrono::steady_clock::time_point now);
     bool RememberAdapterEvent(const ExternalAdapterEvent& event);
-    bool StreamPolicyAllows(
-        const ExternalAdapterEvent& event,
-        std::chrono::steady_clock::time_point now,
-        std::string& outReason);
+    bool StreamPolicyAllows(const ExternalAdapterEvent& event, std::chrono::steady_clock::time_point now, std::string& outReason);
     // False when a rotation was due and failed. Reports nothing itself: it runs under
     // writerMutex, and a notice sent from there can come back and wait on that lock.
-    [[nodiscard]] static bool RotateAvatarEventsIfNeeded(
-        const std::filesystem::path& path, int maximumBytes);
+    [[nodiscard]] static bool RotateAvatarEventsIfNeeded(const std::filesystem::path& path, int maximumBytes);
     void UpdatePhase(std::string phase, std::string attention = {});
     void WriteAvatarState(bool appendEvent);
     void Notify(PresenceNotice notice) const;

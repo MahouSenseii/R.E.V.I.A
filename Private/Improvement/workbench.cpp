@@ -153,8 +153,7 @@ bool Workbench::IsMirrored(const std::string& relativePath)
     return false;
 }
 
-Workbench::Workbench(
-    std::filesystem::path sourceRoot, std::filesystem::path workbenchRoot, BuildRunner buildRunner)
+Workbench::Workbench(std::filesystem::path sourceRoot, std::filesystem::path workbenchRoot, BuildRunner buildRunner)
     : source(std::move(sourceRoot)), root(std::move(workbenchRoot)), runner(std::move(buildRunner))
 {
     LoadManifest();
@@ -171,8 +170,7 @@ bool Workbench::Inside(const std::filesystem::path& path) const
     return !relative.empty() && relative.native().rfind(std::filesystem::path("..").native(), 0) != 0;
 }
 
-bool Workbench::WriteMirrorFile(
-    const std::string& relativePath, const std::string& content, std::string& outError) const
+bool Workbench::WriteMirrorFile(const std::string& relativePath, const std::string& content, std::string& outError) const
 {
     const std::filesystem::path target = MirrorRoot() / actions::Utf8ToPath(relativePath);
     // The one property this class exists to keep: nothing it writes lands outside it.
@@ -448,12 +446,8 @@ VerificationResult Workbench::Verify(const CodeChange& change, const std::stop_t
     return finish(result);
 }
 
-BuildRunner MakeScriptRunner(
-    std::filesystem::path scriptPath,
-    std::filesystem::path dependencyRoot,
-    std::filesystem::path logDirectory,
-    const int parallelJobs,
-    const int timeoutMinutes)
+BuildRunner MakeScriptRunner(std::filesystem::path scriptPath, std::filesystem::path dependencyRoot, std::filesystem::path logDirectory,
+    const int parallelJobs, const int timeoutMinutes)
 {
     return [scriptPath, dependencyRoot, logDirectory, parallelJobs, timeoutMinutes](
         const std::filesystem::path& sourceRoot,

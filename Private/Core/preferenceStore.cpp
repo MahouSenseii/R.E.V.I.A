@@ -1,8 +1,11 @@
+#include "Core/appSettings.h"
 #include "Core/preferenceStore.h"
 
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <fstream>
+#include <mutex>
 #include <nlohmann/json.hpp>
 #include <sstream>
 #include <system_error>
@@ -13,6 +16,10 @@ namespace revia::core
 
 namespace
 {
+
+// UI controls and foreground commands can save through different store instances.
+// Keep the complete read-modify-write operation together without changing store moves.
+std::mutex preferenceWriteMutex;
 
 std::string Lower(std::string value)
 {
@@ -46,7 +53,7 @@ bool ParseNumber(const std::string& value, double& out)
     {
         std::size_t consumed = 0;
         out = std::stod(value, &consumed);
-        return consumed == value.size();
+        return consumed == value.size() && std::isfinite(out);
     }
     catch (const std::exception&)
     {
@@ -64,6 +71,38 @@ std::string TypeName(const PreferenceType type)
         case PreferenceType::Text: return "text";
     }
     return "value";
+}
+
+bool IsVoiceDevice(const std::string& value)
+{
+    return value == "auto" || value == "auto-secondary" || Lower(value) == "cpu" ||
+        (value.size() > 4 && value.rfind("CUDA", 0) == 0 &&
+            std::all_of(value.begin() + 4, value.end(),
+                [](const unsigned char character) { return std::isdigit(character); }));
+}
+
+bool IsValidValue(const PreferenceKey& key, const std::string& value)
+{
+    switch (key.type)
+    {
+        case PreferenceType::Boolean:
+        {
+            bool parsed = false;
+            return ParseBoolean(value, parsed);
+        }
+        case PreferenceType::Integer:
+        case PreferenceType::Decimal:
+        {
+            double parsed = 0.0;
+            return ParseNumber(value, parsed) && parsed >= key.minimum && parsed <= key.maximum &&
+                (key.type != PreferenceType::Integer || std::trunc(parsed) == parsed);
+        }
+        case PreferenceType::Text:
+            return !value.empty() &&
+                (key.allowed.empty() || std::find(key.allowed.begin(), key.allowed.end(), value) != key.allowed.end()) &&
+                (key.name != "resources.voiceDevice" || IsVoiceDevice(value));
+    }
+    return false;
 }
 
 } // namespace
@@ -178,9 +217,11 @@ std::map<std::string, std::string> PreferenceStore::Load() const
     {
         // Filtered on read as well as on write. A hand-edited file must not be able to
         // introduce a key the writable table does not contain.
-        if (Find(key) != nullptr && value.is_string())
+        const PreferenceKey* definition = Find(key);
+        if (definition != nullptr && value.is_string() &&
+            IsValidValue(*definition, value.get<std::string>()))
         {
-            values.emplace(key, value.get<std::string>());
+            values.emplace(definition->name, value.get<std::string>());
         }
     }
     return values;
@@ -275,6 +316,11 @@ PreferenceResult PreferenceStore::Set(const std::string& name, const std::string
             }
             if (key->type == PreferenceType::Integer)
             {
+                if (std::trunc(parsed) != parsed)
+                {
+                    result.message = key->name + " takes a whole number.";
+                    return result;
+                }
                 stored = std::to_string(static_cast<long long>(parsed));
             }
             else
@@ -303,10 +349,7 @@ PreferenceResult PreferenceStore::Set(const std::string& name, const std::string
             {
                 const bool automatic = value == "auto" || value == "auto-secondary";
                 const bool cpu = Lower(value) == "cpu";
-                const bool cuda = value.size() > 4 && value.rfind("CUDA", 0) == 0 &&
-                    std::all_of(value.begin() + 4, value.end(),
-                        [](const unsigned char character) { return std::isdigit(character); });
-                if (!automatic && !cpu && !cuda)
+                if (!IsVoiceDevice(value))
                 {
                     result.message = key->name +
                         " takes auto-secondary, cpu, or an exact device such as CUDA0.";
@@ -320,6 +363,7 @@ PreferenceResult PreferenceStore::Set(const std::string& name, const std::string
         }
     }
 
+    std::lock_guard writeLock(preferenceWriteMutex);
     std::map<std::string, std::string> values = Load();
     values[key->name] = stored;
     if (!Write(values))
@@ -341,6 +385,7 @@ PreferenceResult PreferenceStore::Clear(const std::string& name)
         result.message = "'" + name + "' is not a settable preference.";
         return result;
     }
+    std::lock_guard writeLock(preferenceWriteMutex);
     std::map<std::string, std::string> values = Load();
     if (values.erase(key->name) == 0)
     {

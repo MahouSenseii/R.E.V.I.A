@@ -110,22 +110,13 @@ class ActivityScheduler
 public:
     explicit ActivityScheduler(SchedulerLimits limits = {});
 
-    [[nodiscard]] ActivityDecision Decide(
-        const DriveState& drives,
-        const AutonomyEvidence& evidence,
-        const AutonomyCost& cost,
-        const emotion::EmotionVector& emotion,
-        const emotion::MoodState& mood,
-        const identity::DevelopmentState& development) const;
+    [[nodiscard]] ActivityDecision Decide(const DriveState& drives, const AutonomyEvidence& evidence, const AutonomyCost& cost,
+        const emotion::EmotionVector& emotion, const emotion::MoodState& mood, const identity::DevelopmentState& development) const;
 
     // Every candidate and its score, for the debug panel. Explains not just what she
     // chose but what she considered and rejected.
-    [[nodiscard]] std::vector<ActivityDecision> ScoreAll(
-        const DriveState& drives,
-        const AutonomyEvidence& evidence,
-        const AutonomyCost& cost,
-        const emotion::EmotionVector& emotion,
-        const emotion::MoodState& mood,
+    [[nodiscard]] std::vector<ActivityDecision> ScoreAll(const DriveState& drives, const AutonomyEvidence& evidence,
+        const AutonomyCost& cost, const emotion::EmotionVector& emotion, const emotion::MoodState& mood,
         const identity::DevelopmentState& development) const;
 
     [[nodiscard]] const SchedulerLimits& Limits() const { return limits; }

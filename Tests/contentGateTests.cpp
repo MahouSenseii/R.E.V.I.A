@@ -28,10 +28,7 @@ using revia::tests::Check;
 
 const std::string Message = "dinner at eight";
 
-ObservedCandidate Field(
-    const std::string& id,
-    const std::string& name,
-    const std::string& container = {})
+ObservedCandidate Field(const std::string& id, const std::string& name, const std::string& container = {})
 {
     ObservedCandidate candidate;
     candidate.id = id;

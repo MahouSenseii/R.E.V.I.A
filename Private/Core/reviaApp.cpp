@@ -180,8 +180,7 @@ std::optional<std::string> reviaApp::NextChatLine()
     return line;
 }
 
-revia::actions::ConfirmationChoice reviaApp::ConfirmAction(
-    const revia::actions::ActionRequest& request,
+revia::actions::ConfirmationChoice reviaApp::ConfirmAction(const revia::actions::ActionRequest& request,
     const revia::actions::PolicyDecision& decision)
 {
     std::lock_guard asking(confirmationMutex);

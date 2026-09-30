@@ -1,3 +1,5 @@
+#include "Core/conversationMessage.h"
+#include "LLM/endpointSettings.h"
 #include "Presence/webGuestRuntime.h"
 #include "Runtime/conversationRuntime.h"
 #include <httplib.h>

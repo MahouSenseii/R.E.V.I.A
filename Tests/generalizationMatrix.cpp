@@ -1,3 +1,4 @@
+#include "Computer/computerSettings.h"
 #include "reviaSessionTestAccess.h"
 
 #include "Computer/taskProgression.h"
@@ -247,15 +248,8 @@ bool AnyConsequentialEffect(const Goal& goal, std::string& outWhat)
     return false;
 }
 
-Outcome RunCase(
-    MatrixSession& matrix,
-    const std::string& application,
-    const std::string& family,
-    const std::string& request,
-    const std::string& requestedTarget,
-    const std::string& mode,
-    const bool expectConsequential = false,
-    const bool cancelFirst = false)
+Outcome RunCase(MatrixSession& matrix, const std::string& application, const std::string& family, const std::string& request,
+    const std::string& requestedTarget, const std::string& mode, const bool expectConsequential = false, const bool cancelFirst = false)
 {
     matrix.UseMode(mode);
     matrix.session.SetConfirmationHandler(

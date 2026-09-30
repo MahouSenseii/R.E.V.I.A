@@ -1,3 +1,4 @@
+#include "Speech/speechSettings.h"
 #include "Speech/qwenTtsServerProcess.h"
 #include "Core/logger.h"
 
@@ -111,10 +112,7 @@ QwenTtsServerProcess::~QwenTtsServerProcess()
     Stop();
 }
 
-bool QwenTtsServerProcess::Start(
-    const speechSettings& settings,
-    const std::string& apiKey,
-    std::string& outError)
+bool QwenTtsServerProcess::Start(const speechSettings& settings, const std::string& apiKey, std::string& outError)
 {
     outError.clear();
 #ifndef _WIN32

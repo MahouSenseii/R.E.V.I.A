@@ -82,12 +82,8 @@ ActivityScheduler::ActivityScheduler(SchedulerLimits inputLimits)
 {
 }
 
-std::vector<ActivityDecision> ActivityScheduler::ScoreAll(
-    const DriveState& drives,
-    const AutonomyEvidence& evidence,
-    const AutonomyCost& cost,
-    const emotion::EmotionVector& emotion,
-    const emotion::MoodState& mood,
+std::vector<ActivityDecision> ActivityScheduler::ScoreAll(const DriveState& drives, const AutonomyEvidence& evidence,
+    const AutonomyCost& cost, const emotion::EmotionVector& emotion, const emotion::MoodState& mood,
     const identity::DevelopmentState& development) const
 {
     std::vector<ActivityDecision> candidates;
@@ -276,13 +272,8 @@ std::vector<ActivityDecision> ActivityScheduler::ScoreAll(
     return candidates;
 }
 
-ActivityDecision ActivityScheduler::Decide(
-    const DriveState& drives,
-    const AutonomyEvidence& evidence,
-    const AutonomyCost& cost,
-    const emotion::EmotionVector& emotion,
-    const emotion::MoodState& mood,
-    const identity::DevelopmentState& development) const
+ActivityDecision ActivityScheduler::Decide(const DriveState& drives, const AutonomyEvidence& evidence, const AutonomyCost& cost,
+    const emotion::EmotionVector& emotion, const emotion::MoodState& mood, const identity::DevelopmentState& development) const
 {
     const std::vector<ActivityDecision> candidates =
         ScoreAll(drives, evidence, cost, emotion, mood, development);

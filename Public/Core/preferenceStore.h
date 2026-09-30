@@ -1,7 +1,7 @@
 #pragma once
 
-#include "Library/structLibrary.h"
 
+#include "Core/appSettings.h"
 #include <filesystem>
 #include <map>
 #include <string>
@@ -36,26 +36,12 @@ struct PreferenceResult
     std::string message;
 };
 
-// Durable, non-authority settings.
-//
-// The load-bearing property is what this **cannot** write. Approved roots, approved
-// applications, control scopes, execution mode, risk ceilings, internet access, screen
-// capture, and ambient perception are all absent from the writable table and are refused
-// by name, because a preference command that could widen authority is an authority
-// escalation wearing a convenient interface. Those live in capabilities.json behind
-// CapabilityEditor, or in settings.json behind a deliberate edit.
-//
-// The table is a fixed allowlist compiled into the binary: an unknown key is refused
-// rather than passed through, so the set of things a preference can reach cannot grow by
-// accident or by a model writing a plausible-looking name.
-//
-// Preferences live under RuntimeData for the same reason capabilities do -- rebuilding
-// the project must not silently restore a value the user deliberately changed.
+// Persists a fixed allowlist of non-authority preferences under RuntimeData; unknown keys are refused.
+// Capability scope, execution/risk, internet, screen capture and ambient perception cannot be changed here.
 class PreferenceStore
 {
 public:
-    explicit PreferenceStore(
-        std::filesystem::path path = "RuntimeData/Preferences/preferences.json");
+    explicit PreferenceStore(std::filesystem::path path = "RuntimeData/Preferences/preferences.json");
 
     // The complete set of writable settings. Anything not here is refused.
     [[nodiscard]] static const std::vector<PreferenceKey>& Writable();

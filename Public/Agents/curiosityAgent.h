@@ -1,6 +1,6 @@
 #pragma once
 
-#include "Library/structLibrary.h"
+#include "Core/conversationMessage.h"
 #include "Runtime/affectTypes.h"
 
 #include <cstddef>
@@ -79,27 +79,19 @@ public:
     static constexpr std::size_t MaximumQueryCharacters = 320;
     static constexpr std::size_t MaximumRationaleCharacters = 400;
 
-    [[nodiscard]] CuriosityDecision Nominate(
-        const messageRouter& router,
-        const std::vector<conversationMessage>& recentConversation,
-        const runtime::AffectSnapshot& affect,
-        const std::string& desktopContext,
-        std::stop_token stopToken = {},
+    [[nodiscard]] CuriosityDecision Nominate(const messageRouter& router, const std::vector<conversationMessage>& recentConversation,
+        const runtime::AffectSnapshot& affect, const std::string& desktopContext, std::stop_token stopToken = {},
         const IdleActivityContext& idle = {}) const;
 
     // The only choices offered to the planner, and enforced by its reply schema. Telling
     // a small model that research is unavailable did not stop it choosing research
     // twelve times in six minutes, each choice discarded after a full planning call.
-    [[nodiscard]] static std::vector<std::string> AvailableActions(
-        const IdleActivityContext& idle);
+    [[nodiscard]] static std::vector<std::string> AvailableActions(const IdleActivityContext& idle);
 
     // Public so parser and prompt contracts can be tested without a running model.
     [[nodiscard]] static CuriosityDecision ParseDecision(const std::string& rawDecision);
-    [[nodiscard]] static std::string BuildContextPrompt(
-        const std::vector<conversationMessage>& recentConversation,
-        const runtime::AffectSnapshot& affect,
-        const std::string& desktopContext = {},
-        const IdleActivityContext& idle = {});
+    [[nodiscard]] static std::string BuildContextPrompt(const std::vector<conversationMessage>& recentConversation,
+        const runtime::AffectSnapshot& affect, const std::string& desktopContext = {}, const IdleActivityContext& idle = {});
 };
 
 } // namespace revia::agents

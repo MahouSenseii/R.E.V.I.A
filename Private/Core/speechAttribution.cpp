@@ -1,3 +1,4 @@
+#include "Core/conversationMessage.h"
 #include "Core/speechAttribution.h"
 
 #include <algorithm>

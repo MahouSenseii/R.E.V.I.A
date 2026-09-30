@@ -15,20 +15,12 @@ class QPlainTextEdit;
 class QPushButton;
 class QSpinBox;
 
-// Who Revia is, and which created voice says it.
-//
-// Profiles are edited here and voices are created in the Voice tab, because the two are
-// different lifetimes: a voice is built once and reused, while a profile picks one. The
-// assignment therefore belongs to the profile, not to the voice studio that made it.
-//
-// The panel edits identity only. Nothing here can reach a capability, a budget, or a
-// policy; those stay behind CapabilityEditor under Permissions.
+// Edits profiles and their reusable voice assignments.
+// Capability, budget and policy changes remain in Permissions.
 class ProfilePanel final : public QWidget
 {
 public:
-    explicit ProfilePanel(
-        revia::runtime::ReviaSession& session,
-        QWidget* parent = nullptr);
+    explicit ProfilePanel(revia::runtime::ReviaSession& session, QWidget* parent = nullptr);
 
     // Re-reads profiles, the active profile, and the created-voice list. Called after
     // startup and whenever the voice studio creates a preset.
@@ -45,8 +37,7 @@ private:
     // A profile that only exists in the form has no voice assignment to edit and no
     // identity to switch to, so those controls wait until it has been saved once.
     void ApplyDraftState();
-    [[nodiscard]] const revia::runtime::ProfileSummary* FindProfile(
-        const std::string& profileId) const;
+    [[nodiscard]] const revia::runtime::ProfileSummary* FindProfile(const std::string& profileId) const;
 
     revia::runtime::ReviaSession& session;
     revia::runtime::ProfileStudioSnapshot snapshot;

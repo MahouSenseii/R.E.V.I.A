@@ -27,9 +27,7 @@ std::string LowerCopy(std::string value)
 }
 
 template <std::size_t Size>
-bool ContainsAny(
-    const std::string& value,
-    const std::array<std::string_view, Size>& signals)
+bool ContainsAny(const std::string& value, const std::array<std::string_view, Size>& signals)
 {
     return std::any_of(signals.begin(), signals.end(),
         [&value](const std::string_view signal)
@@ -109,8 +107,7 @@ std::vector<PreferenceObservation> ReadWorkPreferenceEvidence(const WorkOutcome&
     return observations;
 }
 
-std::vector<PreferenceObservation> ReadCuriosityPreferenceEvidence(
-    const CuriosityOutcome& outcome)
+std::vector<PreferenceObservation> ReadCuriosityPreferenceEvidence(const CuriosityOutcome& outcome)
 {
     std::vector<PreferenceObservation> observations;
     if (!outcome.produced)

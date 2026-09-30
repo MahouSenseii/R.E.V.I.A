@@ -205,10 +205,8 @@ DisposableApplicationFixtures::~DisposableApplicationFixtures()
     Close();
 }
 
-bool DisposableApplicationFixtures::Launch(
-    const std::vector<std::string>& applications,
-    const std::filesystem::path& scratchRoot,
-    std::string& outError)
+bool DisposableApplicationFixtures::Launch(const std::vector<std::string>& applications,
+    const std::filesystem::path& scratchRoot, std::string& outError)
 {
     Close();
 #ifdef _WIN32

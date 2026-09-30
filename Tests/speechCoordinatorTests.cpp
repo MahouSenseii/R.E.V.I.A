@@ -56,10 +56,7 @@ struct Channel
     }
 };
 
-SpeechIntent Intent(
-    const SpeechOwner owner,
-    const SpeechBehavior behavior,
-    const std::string& text = "something")
+SpeechIntent Intent(const SpeechOwner owner, const SpeechBehavior behavior, const std::string& text = "something")
 {
     SpeechIntent intent;
     intent.owner = owner;

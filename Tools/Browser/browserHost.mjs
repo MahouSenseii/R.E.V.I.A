@@ -53,7 +53,7 @@ function ipv4Parts(address) {
 }
 
 export function isPublicIpAddress(input) {
-  const address = input.toLowerCase().replace(/^\[|\]$/g, '');
+  let address = input.toLowerCase().replace(/^\[|\]$/g, '');
   const ipv4 = ipv4Parts(address);
   if (ipv4) {
     const [a, b, c] = ipv4;
@@ -67,7 +67,10 @@ export function isPublicIpAddress(input) {
     if (a === 203 && b === 0 && c === 113) return false;
     return true;
   }
-  if (net.isIP(address) !== 6) return false;
+  if (net.isIP(address) !== 6 || address.includes('%')) return false;
+  // DNS and callers may supply expanded IPv6 addresses. Match the address, not
+  // its spelling, so equivalent loopback and mapped-private forms stay blocked.
+  address = new URL(`http://[${address}]/`).hostname.slice(1, -1);
   if (address === '::' || address === '::1') return false;
   if (address.startsWith('::ffff:')) {
     const mapped = address.slice(7);

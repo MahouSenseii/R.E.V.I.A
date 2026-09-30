@@ -1,3 +1,4 @@
+#include "Speech/bargeInSettings.h"
 #include "Speech/voiceActivityMonitor.h"
 
 #include <array>

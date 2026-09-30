@@ -63,28 +63,8 @@ struct Issue
     [[nodiscard]] std::string Key() const { return component + "/" + code; }
 };
 
-// The ledger of things that went wrong, kept apart from the running commentary in
-// revia.log.
-//
-// Why this is not more logging: a log answers "what happened at 17:55", and answering
-// "what is wrong with Revia right now" from one means reading three files, correlating
-// timestamps across them, and knowing in advance which lines matter. Every failure in
-// this project so far had its symptom in revia.log and its cause in a worker's stderr,
-// with nothing joining them.
-//
-// So the differences from a log are deliberate:
-//   - Records COALESCE. A fault that repeats five hundred times is one issue with a
-//     count and a last-seen, not five hundred lines. Only the first occurrence of a
-//     poisoned CUDA context is diagnostic; the rest are noise that buries it.
-//   - Records RESOLVE. When a capability returns, its issue closes, so the panel shows
-//     what is wrong now rather than everything that was ever wrong.
-//   - Records carry a REMEDY and EVIDENCE. The remedy is required. The evidence is the
-//     worker output that would otherwise sit unreferenced in another file.
-//
-// Persistence is JSON Lines: append-only, greppable with ordinary tools, and a process
-// killed mid-write loses one line instead of corrupting the document -- which matters
-// specifically because the events worth recording here are the ones that precede a
-// crash.
+// Append-only JSONL issue ledger with coalesced repeats, resolution, remedy and evidence.
+// An interrupted write may leave a trailing partial record without corrupting earlier records.
 class IssueLog
 {
 public:
@@ -105,8 +85,7 @@ public:
 
     [[nodiscard]] std::vector<Issue> Open() const;
     [[nodiscard]] std::vector<Issue> All() const;
-    [[nodiscard]] std::optional<Issue> Find(
-        const std::string& component, const std::string& code) const;
+    [[nodiscard]] std::optional<Issue> Find(const std::string& component, const std::string& code) const;
     [[nodiscard]] std::size_t OpenCount() const;
     [[nodiscard]] std::filesystem::path Path() const;
 
@@ -117,8 +96,7 @@ public:
     // Reads the last lines of a worker's stderr for the evidence field. Returns an
     // empty string when the file cannot be read -- missing evidence must never be the
     // reason an issue goes unrecorded.
-    [[nodiscard]] static std::string CaptureTail(
-        const std::filesystem::path& file, std::size_t maximumLines = 20);
+    [[nodiscard]] static std::string CaptureTail(const std::filesystem::path& file, std::size_t maximumLines = 20);
 
     // Bounds. Both exist because this writes on failure paths, and a fault that fires
     // in a loop must not be able to fill a disk.

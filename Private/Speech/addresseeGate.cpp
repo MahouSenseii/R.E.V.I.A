@@ -18,8 +18,7 @@ void AddresseeGate::Configure(AddresseeSettings updated)
     settings = std::move(updated);
 }
 
-bool AddresseeGate::MentionsWakeWord(
-    const std::string& transcript, const std::vector<std::string>& wakeWords)
+bool AddresseeGate::MentionsWakeWord(const std::string& transcript, const std::vector<std::string>& wakeWords)
 {
     std::string word;
     const auto matches = [&wakeWords](const std::string& candidate)
@@ -48,8 +47,7 @@ bool AddresseeGate::MentionsWakeWord(
     return matches(word);
 }
 
-bool AddresseeGate::Accept(
-    const std::string& transcript, const Clock::time_point now, const bool inCall)
+bool AddresseeGate::Accept(const std::string& transcript, const Clock::time_point now, const bool inCall)
 {
     std::lock_guard lock(mutex);
     const bool named = MentionsWakeWord(transcript, settings.wakeWords);

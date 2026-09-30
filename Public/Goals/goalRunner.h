@@ -24,12 +24,8 @@ struct GoalProgress
     std::string message;
 };
 
-// One answer to "what should she do next?", produced fresh from what the machine looks
-// like right now rather than read off a plan written before any of it was seen.
-//
-// Three outcomes, deliberately distinct. A step to take; nothing left to take because
-// the goal is met; or no usable answer at all. Collapsing the last two would make
-// "finished" and "stuck" the same record, and they are opposite outcomes.
+// Distinct results: take a step, report completion, or no usable decision.
+// Undecided must never be recorded as finished.
 struct NextStep
 {
     bool hasStep = false;
@@ -47,12 +43,8 @@ struct NextStep
     bool needsInput = false;
 };
 
-// Bounded plan / act / observe / verify loop over the existing typed actions.
-//
-// The runner adds no execution authority of its own. Every action goes through
-// ActionRuntime::ExecuteScoped, which is the same dispatcher and the same audit
-// logger the interactive path already uses. What it adds is the requirement
-// that a step prove it happened before the goal is allowed to move on.
+// Bounded plan/act/observe/verify loop through ActionRuntime::ExecuteScoped.
+// Grants no authority; each step requires evidence before advancing.
 class GoalRunner
 {
 public:
@@ -76,17 +68,8 @@ public:
     // Drops any standing yes. Called at the start of every run, so an approval can never
     // leak from one goal into the next.
     void ClearStandingApproval();
-    // Answers the per-step question in advance, because the person already answered it.
-    //
-    // A goal is approved up front, as a whole. When that approval was "and stop asking
-    // me for this task", asking again about every routine step inside it is not a second
-    // safeguard -- it is the same question repeated until it stops being read. Driving a
-    // browser is a launch, a focus, a chord, a type and an enter, and five prompts for
-    // one sentence is how a person learns to click Yes without looking.
-    //
-    // Consumed by the next run and forgotten. It is the same standing yes the dialog can
-    // grant mid-run and carries exactly the same limits: this run only, never stored, no
-    // permission raised, nothing above the ceiling, and a deletion still asks.
+    // Consumed by the next run only; never stored or used to widen permissions.
+    // Covers only the shown risk ceiling; escalation and deletion still require confirmation.
     void SeedStandingApproval(actions::RiskLevel ceiling, bool refuseEscalation = false);
     void SetStepProvider(StepProvider provider);
 
@@ -94,18 +77,8 @@ public:
     // that same state has already been written to the store.
     [[nodiscard]] Goal Run(Goal goal, std::stop_token stopToken = {});
 
-    // The iterative form: observe, decide one action, do it, prove it happened, look
-    // again. `goal.steps` starts empty and is appended to as the run discovers what the
-    // work actually turned out to be, so the record afterwards is what she really did
-    // rather than what someone guessed beforehand.
-    //
-    // A separate entry point rather than a mode on Run, because the planned path works
-    // and there is no reason for this to be able to break it. Everything underneath is
-    // shared: the same budgets, the same scoped policy, the same RunStep, the same
-    // audit log, the same store.
-    //
-    // Requires a step provider. Without one it refuses rather than running zero steps
-    // and reporting success.
+    // Observes and appends one verified step at a time using the shared run pipeline.
+    // Refuses without a step provider rather than reporting an empty run as success.
     [[nodiscard]] Goal Operate(Goal goal, std::stop_token stopToken = {});
 
     // Reloads a goal an earlier process left unfinished and continues it.
@@ -120,11 +93,7 @@ public:
     [[nodiscard]] static bool ValidateStep(const GoalStep& step, std::string& outError);
 
 private:
-    bool RunStep(
-        Goal& goal,
-        GoalStep& step,
-        const policy::CapabilityPolicy& scopedPolicy,
-        std::stop_token stopToken);
+    bool RunStep(Goal& goal, GoalStep& step, const policy::CapabilityPolicy& scopedPolicy, std::stop_token stopToken);
     [[nodiscard]] static StopReason CheckBudget(const Goal& goal);
     void Publish(const Goal& goal, const GoalStep& step, const std::string& message) const;
     bool Persist(Goal& goal) const;

@@ -12,23 +12,8 @@
 namespace revia::agents
 {
 
-// One investigation, scoped to one task.
-//
-// This extends the single self-questioning pass into a loop that can learn. The existing
-// SelfInquiryAgent asks a set of questions once and hands them to the answer; what it
-// cannot do is look at what came back and ask a *better* question because of it. That is
-// the whole of the difference, and it is the only thing worth building here: printing
-// more questions before giving the same answer would be a decoration, not an
-// investigation.
-//
-// Two distinctions are load-bearing throughout and are enforced by the types rather than
-// by convention:
-//
-//   - A model's answer to a question is not evidence. `EvidenceKind` separates what a
-//     tool observed from what the model concluded, because a loop that treats its own
-//     output as a finding will confirm anything it starts out believing.
-//   - A question the runtime never checked is Unresolved or Blocked, never Supported.
-//     Running out of budget is a pause, not a result.
+// Task-scoped investigation separates tool observations from model interpretations.
+// Unchecked questions stay Unresolved/Blocked; exhausting a budget pauses without proving a result.
 
 enum class QuestionStatus
 {
@@ -202,11 +187,7 @@ public:
     // `justification` is required to reopen something already settled; without it an
     // equivalent question is refused and the refusal is what the no-progress detector
     // counts. Returns the id, or empty when refused.
-    std::string AddQuestion(
-        const std::string& text,
-        double materiality,
-        std::size_t round,
-        std::vector<std::string> dependsOn = {},
+    std::string AddQuestion(const std::string& text, double materiality, std::size_t round, std::vector<std::string> dependsOn = {},
         const std::string& justification = {});
 
     std::string AddHypothesis(const std::string& text);
@@ -250,8 +231,7 @@ public:
     [[nodiscard]] std::string PromptBlock() const;
 
 private:
-    [[nodiscard]] bool HasEquivalentQuestion(
-        const std::string& normalized, const InvestigationQuestion** outExisting) const;
+    [[nodiscard]] bool HasEquivalentQuestion(const std::string& normalized, const InvestigationQuestion** outExisting) const;
 
     std::uint64_t taskId = 0;
     std::string goal;
@@ -384,11 +364,8 @@ public:
     {
     }
 
-    [[nodiscard]] InvestigationRunReport Run(
-        Investigation& investigation,
-        const RoundRunner& runner,
-        std::stop_token stopToken = {},
-        const RoundObserver& observer = {}) const;
+    [[nodiscard]] InvestigationRunReport Run(Investigation& investigation,
+        const RoundRunner& runner, std::stop_token stopToken = {}, const RoundObserver& observer = {}) const;
 
     [[nodiscard]] const InvestigationBudget& Budget() const { return budget; }
     void SetBudget(InvestigationBudget value) { budget = value; }
@@ -397,8 +374,7 @@ public:
     //
     // Exposed so it can be tested directly: "the model said it was done" is exactly the
     // claim that needs independent verification.
-    [[nodiscard]] static bool MayComplete(
-        const Investigation& investigation, std::string& outRefusal);
+    [[nodiscard]] static bool MayComplete(const Investigation& investigation, std::string& outRefusal);
 
 private:
     InvestigationBudget budget;

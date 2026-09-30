@@ -1,3 +1,4 @@
+#include "LLM/responseTypes.h"
 #include "Computer/legacyLlmPolicy.h"
 #include "Core/utf8.h"
 
@@ -179,8 +180,7 @@ LegacyLlmComputerPolicy::LegacyLlmComputerPolicy(PlannerCall planner)
 {
 }
 
-ComputerDecision LegacyLlmComputerPolicy::Decide(
-    const ComputerTaskContext& context, std::stop_token stopToken)
+ComputerDecision LegacyLlmComputerPolicy::Decide(const ComputerTaskContext& context, std::stop_token stopToken)
 {
     ComputerDecision decision;
     decision.provider = Name();

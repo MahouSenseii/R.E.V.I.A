@@ -27,10 +27,7 @@ using revia::learning::SelfImprovementTask;
 using revia::tests::Check;
 using revia::tests::ScopedTestDirectory;
 
-revia::runtime::RuntimeEvent Component(
-    std::string component,
-    std::string phase,
-    const double elapsedMilliseconds = 0.0)
+revia::runtime::RuntimeEvent Component(std::string component, std::string phase, const double elapsedMilliseconds = 0.0)
 {
     revia::runtime::RuntimeEvent event;
     event.kind = revia::runtime::RuntimeEventKind::ComponentStatus;
@@ -58,9 +55,7 @@ void FeedEveryThreshold(SelfAssessmentEngine& engine)
     }
 }
 
-std::size_t CountByCategory(
-    const SelfAssessmentSnapshot& snapshot,
-    const std::string& category)
+std::size_t CountByCategory(const SelfAssessmentSnapshot& snapshot, const std::string& category)
 {
     return static_cast<std::size_t>(std::count_if(
         snapshot.openTasks.begin(), snapshot.openTasks.end(),

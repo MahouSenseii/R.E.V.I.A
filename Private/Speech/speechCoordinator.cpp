@@ -306,8 +306,7 @@ void SpeechCoordinator::BeginLocked(Pending pending)
     if (channel.speak) channel.speak(intent, id);
 }
 
-void SpeechCoordinator::FinishActiveLocked(
-    const SpeechIntentState state, const std::string& reason)
+void SpeechCoordinator::FinishActiveLocked(const SpeechIntentState state, const std::string& reason)
 {
     if (!active.has_value()) return;
     TrackedIntent finished = active->tracked;
@@ -373,10 +372,8 @@ void SpeechCoordinator::NoteUserSpoke()
         "dropped when the user started speaking");
 }
 
-void SpeechCoordinator::RemoveQueuedLocked(
-    const std::function<bool(const Pending&)>& matches,
-    const SpeechIntentState state,
-    const std::string& reason)
+void SpeechCoordinator::RemoveQueuedLocked(const std::function<bool(const Pending&)>& matches,
+    const SpeechIntentState state, const std::string& reason)
 {
     for (auto it = queue.begin(); it != queue.end();)
     {

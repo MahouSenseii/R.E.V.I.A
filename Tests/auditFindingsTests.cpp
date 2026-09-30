@@ -1,3 +1,9 @@
+#include "Core/profile.h"
+#include "LLM/endpointSettings.h"
+#include "Memory/memoryTypes.h"
+#include "Presence/presenceSettings.h"
+#include "Runtime/channelSettings.h"
+#include "Runtime/outputChannel.h"
 #include "testSupport.h"
 #include "memoryAgentTestAccess.h"
 
@@ -11,6 +17,7 @@
 #include "Presence/adapterArchivePolicy.h"
 #include "Presence/presenceRuntime.h"
 #include "Runtime/outputChannelPolicy.h"
+#include "Runtime/publicContextCache.h"
 #include "Runtime/retainedCounts.h"
 #include "Vision/cameraCaptureService.h"
 

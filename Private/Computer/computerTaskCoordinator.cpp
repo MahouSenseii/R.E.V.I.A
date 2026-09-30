@@ -1,3 +1,6 @@
+#include "Computer/computerSettings.h"
+#include "LLM/responseTypes.h"
+#include "Perception/perceptionSettings.h"
 #include "Computer/computerTaskCoordinator.h"
 
 #include "Computer/learnedPolicy.h"
@@ -12,9 +15,7 @@
 namespace revia::computer
 {
 
-ComputerTaskCoordinator::ComputerTaskCoordinator(
-    actions::windows::DesktopObserver& observer,
-    std::filesystem::path datasetRoot)
+ComputerTaskCoordinator::ComputerTaskCoordinator(actions::windows::DesktopObserver& observer, std::filesystem::path datasetRoot)
     : observations(observer)
     , content(vault)
     , controller(vault)
@@ -103,8 +104,7 @@ PayloadReference ComputerTaskCoordinator::HoldPayload(std::string value, std::st
     return activePayload;
 }
 
-void ComputerTaskCoordinator::BeginTask(
-    const std::string& goalId, const RequestOrigin origin, TaskContent taskContent)
+void ComputerTaskCoordinator::BeginTask(const std::string& goalId, const RequestOrigin origin, TaskContent taskContent)
 {
     activeGoalId = goalId;
     activeOrigin = origin;
@@ -155,10 +155,7 @@ void ComputerTaskCoordinator::EndTask()
     activeOrigin = RequestOrigin::Unknown;
 }
 
-bool ComputerTaskCoordinator::InstallSubgoal(
-    const ComputerSubgoal& proposed,
-    const goals::Goal& goal,
-    const ComputerTaskContext& context)
+bool ComputerTaskCoordinator::InstallSubgoal(const ComputerSubgoal& proposed, const goals::Goal& goal, const ComputerTaskContext& context)
 {
     // One validation path, for a model's proposal and the runtime's alike.
     //
@@ -191,8 +188,7 @@ bool ComputerTaskCoordinator::InstallSubgoal(
     return true;
 }
 
-TaskProgress ComputerTaskCoordinator::Progress(
-    const ComputerTaskContext& context, const goals::Goal& goal) const
+TaskProgress ComputerTaskCoordinator::Progress(const ComputerTaskContext& context, const goals::Goal& goal) const
 {
     TaskProgressInputs inputs;
     inputs.content = &content.Content();
@@ -215,10 +211,7 @@ TaskProgress ComputerTaskCoordinator::Progress(
     return DeriveTaskProgress(inputs);
 }
 
-void ComputerTaskCoordinator::EnsureSubgoal(
-    const ComputerTaskContext& context,
-    const goals::Goal& goal,
-    std::stop_token stopToken)
+void ComputerTaskCoordinator::EnsureSubgoal(const ComputerTaskContext& context, const goals::Goal& goal, std::stop_token stopToken)
 {
     if (controller.HasSubgoal()) return;
     if (stopToken.stop_requested()) return;
@@ -350,11 +343,8 @@ void ComputerTaskCoordinator::FlushPending(const goals::Goal& goal)
     pendingRecord.reset();
 }
 
-goals::NextStep ComputerTaskCoordinator::Decide(
-    const goals::Goal& goal,
-    const std::uint32_t iteration,
-    const perceptionSettings& perception,
-    std::stop_token stopToken)
+goals::NextStep ComputerTaskCoordinator::Decide(const goals::Goal& goal,
+    const std::uint32_t iteration, const perceptionSettings& perception, std::stop_token stopToken)
 {
     // Exactly one look, taken here and shared by everything that reasons about this
     // iteration. A provider observing for itself would bump the process-wide generation

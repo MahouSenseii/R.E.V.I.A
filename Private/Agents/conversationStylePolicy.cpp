@@ -1,6 +1,9 @@
+#include "Agents/answerObligation.h"
+#include "Core/conversationMessage.h"
 #include "Agents/conversationStylePolicy.h"
 #include "Identity/relationshipEvidence.h"
 #include "Core/speechAttribution.h"
+#include "Core/utf8.h"
 
 #include <algorithm>
 #include <cctype>
@@ -102,7 +105,7 @@ namespace
         {
             ++end;
         }
-        return Trim(value.substr(0, end));
+        return Trim(utf8::Prefix(value, end));
     }
 
     std::string LimitSentences(const std::string& value, const int maximum)
@@ -180,10 +183,7 @@ namespace
         return 0;
     }
 
-    bool IsIntentionalShortRepeat(
-        const std::vector<std::string>& sentences,
-        const std::size_t start,
-        const std::size_t length)
+    bool IsIntentionalShortRepeat(const std::vector<std::string>& sentences, const std::size_t start, const std::size_t length)
     {
         const std::string first = NormalizeSentence(sentences[start]);
         if (first.empty() || first.size() > 24 ||
@@ -256,10 +256,7 @@ namespace
         return shared >= 8;
     }
 
-    bool IsSubstantialRepeat(
-        const std::string& normalized,
-        const std::string& normalizedReference,
-        const bool allowSharedOpening)
+    bool IsSubstantialRepeat(const std::string& normalized, const std::string& normalizedReference, const bool allowSharedOpening)
     {
         if (normalized.size() < 40 || normalizedReference.size() < 40)
         {
@@ -273,10 +270,8 @@ namespace
         return allowSharedOpening && SharesLongOpening(normalized, normalizedReference);
     }
 
-    std::string RemoveRedundantSentences(
-        const std::string& value,
-        const std::vector<conversationMessage>& context,
-        const bool removeRecentAssistantReuse)
+    std::string RemoveRedundantSentences(const std::string& value,
+        const std::vector<conversationMessage>& context, const bool removeRecentAssistantReuse)
     {
         if (value.find("```") != std::string::npos)
         {
@@ -594,8 +589,7 @@ bool ConversationStylePolicy::ContainsClaimedPreferenceAction(const std::string&
         });
 }
 
-bool ConversationStylePolicy::HasExplicitReason(
-    const std::vector<conversationMessage>& context)
+bool ConversationStylePolicy::HasExplicitReason(const std::vector<conversationMessage>& context)
 {
     bool skippedLatestUser = false;
     for (auto message = context.rbegin(); message != context.rend(); ++message)
@@ -650,8 +644,7 @@ bool ConversationStylePolicy::SpeculatesAboutMotive(const std::string& reply)
         });
 }
 
-std::string ConversationStylePolicy::BuildAnswerObligationGuidance(
-    const AnswerObligationMode mode)
+std::string ConversationStylePolicy::BuildAnswerObligationGuidance(const AnswerObligationMode mode)
 {
     // This says how much of an answer is owed. It says nothing about attitude.
     //
@@ -710,9 +703,7 @@ std::string ConversationStylePolicy::BuildAnswerObligationGuidance(
         std::string(Delivery) + std::string(RuntimeTruth);
 }
 
-std::string ConversationStylePolicy::BuildTurnGuidance(
-    const std::string& rawInput,
-    const std::vector<conversationMessage>& context) const
+std::string ConversationStylePolicy::BuildTurnGuidance(const std::string& rawInput, const std::vector<conversationMessage>& context) const
 {
     const auto input = conversation::ReadSpeechAttribution(rawInput).userAuthoredText;
     const auto attributionGuidance = conversation::BuildSpeechAttributionGuidance(rawInput, context);
@@ -879,10 +870,8 @@ bool ConversationStylePolicy::IsGenericContinuation(const std::string& sentence)
     return genericActivity && openEndedWhen;
 }
 
-std::string ConversationStylePolicy::RefineReply(
-    const std::string& rawInput,
-    const std::vector<conversationMessage>& context,
-    const std::string& reply) const
+std::string ConversationStylePolicy::RefineReply(const std::string& rawInput,
+    const std::vector<conversationMessage>& context, const std::string& reply) const
 {
     const auto attribution = conversation::ReadSpeechAttribution(rawInput);
     const auto input = attribution.userAuthoredText;
@@ -1058,11 +1047,8 @@ std::string ConversationStylePolicy::RefineReply(
     }
 }
 
-bool ConversationStylePolicy::ShouldSuppressSpokenFragment(
-    const std::string& rawInput,
-    const std::vector<conversationMessage>& context,
-    const std::string& fragment,
-    const bool alreadySpokeFragment) const
+bool ConversationStylePolicy::ShouldSuppressSpokenFragment(const std::string& rawInput, const std::vector<conversationMessage>& context,
+    const std::string& fragment, const bool alreadySpokeFragment) const
 {
     const auto input = conversation::ReadSpeechAttribution(rawInput).userAuthoredText;
     if (IsGenericContinuation(fragment))
@@ -1099,8 +1085,7 @@ bool ConversationStylePolicy::ShouldSuppressSpokenFragment(
         (!ExpressesUncertainty(fragment) || SpeculatesAboutMotive(fragment));
 }
 
-bool ConversationStylePolicy::CanStreamReply(const std::string& rawInput,
-    const std::vector<conversationMessage>& context) const
+bool ConversationStylePolicy::CanStreamReply(const std::string& rawInput, const std::vector<conversationMessage>& context) const
 {
     const auto input = conversation::ReadSpeechAttribution(rawInput).userAuthoredText;
     // These turn types can require whole-reply grounding or one-sentence limiting.

@@ -107,11 +107,7 @@ int PipelinePanel::EnsureRow(const QString& component)
     return row;
 }
 
-void PipelinePanel::SetCell(
-    const int row,
-    const int column,
-    const QString& text,
-    const QColor& color)
+void PipelinePanel::SetCell(const int row, const int column, const QString& text, const QColor& color)
 {
     QTableWidgetItem* item = table->item(row, column);
     if (item == nullptr)

@@ -1,3 +1,6 @@
+#include "Core/profile.h"
+#include "LLM/endpointSettings.h"
+#include "Memory/memoryTypes.h"
 #include "memoryAgentTestAccess.h"
 #include "reviaSessionTestAccess.h"
 
@@ -97,8 +100,14 @@ public:
         { response.set_content(R"({"data":[{"id":"fixture-main"}]})", "application/json"); });
         main.Get("/props", [](const auto&, auto& response)
         { response.set_content(R"({"total_slots":1,"default_generation_settings":{"n_ctx":8192}})", "application/json"); });
-        main.Post("/v1/chat/completions", [this](const auto&, auto& response)
+        main.Post("/v1/chat/completions", [this](const auto& request, auto& response)
         {
+            const auto body = json::parse(request.body);
+            if (body.value("max_tokens", 0) == 1 && !body.value("stream", false))
+            {
+                response.set_content(R"({"choices":[{"message":{"role":"assistant","content":"OK"},"finish_reason":"stop"}]})", "application/json");
+                return;
+            }
             RecordRequest("turn");
             response.set_content(json{{"choices", json::array({{{"message", {
                 {"content", R"({"shouldRemember":false,"reason":"Fixture classification."})"}}}}})}}.dump(),

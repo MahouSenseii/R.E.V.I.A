@@ -54,8 +54,7 @@ bool Is(const std::vector<Word>& words, const std::size_t index, const char* wor
     return index < words.size() && words[index].lower == word;
 }
 
-bool IsAny(const std::vector<Word>& words, const std::size_t index,
-    std::initializer_list<const char*> options)
+bool IsAny(const std::vector<Word>& words, const std::size_t index, std::initializer_list<const char*> options)
 {
     return std::any_of(options.begin(), options.end(),
         [&](const char* option) { return Is(words, index, option); });
@@ -136,8 +135,7 @@ std::optional<double> CompactDuration(const std::string& word)
 
 // A duration from words[start]: "10 minutes", "an hour and a half", "1 hour 20 minutes",
 // "half an hour", "1h30m". `consumed` is how many words it took.
-std::optional<double> ReadDuration(
-    const std::vector<Word>& words, const std::size_t start, std::size_t& consumed)
+std::optional<double> ReadDuration(const std::vector<Word>& words, const std::size_t start, std::size_t& consumed)
 {
     double total = 0;
     double lastUnit = 0;
@@ -203,8 +201,7 @@ struct ClockTime
 };
 
 // "3pm", "3:30 pm", "15:30", "noon", "3 o'clock".
-std::optional<ClockTime> ReadClock(
-    const std::vector<Word>& words, const std::size_t start, std::size_t& consumed)
+std::optional<ClockTime> ReadClock(const std::vector<Word>& words, const std::size_t start, std::size_t& consumed)
 {
     if (start >= words.size()) return std::nullopt;
     const std::string& word = words[start].lower;
@@ -307,8 +304,7 @@ std::tm LocalTime(const WallClock::time_point when)
     return local;
 }
 
-std::optional<WallClock::time_point> AtLocal(
-    const WallClock::time_point now, const int dayOffset, const int hour, const int minute)
+std::optional<WallClock::time_point> AtLocal(const WallClock::time_point now, const int dayOffset, const int hour, const int minute)
 {
     std::tm local = LocalTime(now);
     local.tm_mday += dayOffset;
@@ -323,8 +319,7 @@ std::optional<WallClock::time_point> AtLocal(
 
 // "at 3pm", "at 9 tomorrow", "tomorrow at 9am", "today at noon".
 std::optional<WallClock::time_point> ReadWhen(const std::vector<Word>& words,
-    const std::size_t start, const WallClock::time_point now, std::size_t& consumed,
-    std::string& outError)
+    const std::size_t start, const WallClock::time_point now, std::size_t& consumed, std::string& outError)
 {
     std::size_t index = start;
     int day = -1;
@@ -387,8 +382,7 @@ std::string SpokenLength(const long long totalSeconds)
 }
 
 // The user's words, said back to them: "take my pills" becomes "take your pills".
-std::string AddressedToUser(const std::vector<Word>& words, const std::size_t from,
-    const std::size_t to)
+std::string AddressedToUser(const std::vector<Word>& words, const std::size_t from, const std::size_t to)
 {
     static const std::map<std::string, std::string> swaps = {
         {"my", "your"}, {"me", "you"}, {"mine", "yours"}, {"myself", "yourself"},
@@ -418,8 +412,7 @@ std::string AddressedToUser(const std::vector<Word>& words, const std::size_t fr
     return utf8::Prefix(text, LongestText);
 }
 
-ReminderParse Finish(ReminderRequest& request, const WallClock::time_point now,
-    ReminderRequest& out, std::string& outError)
+ReminderParse Finish(ReminderRequest& request, const WallClock::time_point now, ReminderRequest& out, std::string& outError)
 {
     if (request.due <= now)
     {
@@ -487,8 +480,7 @@ ReminderParse ReadTimer(const std::vector<Word>& words, std::size_t index,
 
 } // namespace
 
-ReminderParse ParseReminderRequest(const std::string& input, const WallClock::time_point now,
-    ReminderRequest& out, std::string& outError)
+ReminderParse ParseReminderRequest(const std::string& input, const WallClock::time_point now, ReminderRequest& out, std::string& outError)
 {
     std::vector<Word> words = Words(input);
     // "... please" and "... thanks" are not part of what to be reminded of.
@@ -666,6 +658,7 @@ std::string Label(const ReminderRequest& request)
 bool ReminderBook::Initialize(const std::filesystem::path& file, std::string& outError)
 {
     std::lock_guard lock(mutex);
+    outError.clear();
     path = file;
     reminders.clear();
     std::ifstream stream(path);
@@ -714,6 +707,7 @@ bool ReminderBook::Initialize(const std::filesystem::path& file, std::string& ou
 std::optional<Reminder> ReminderBook::Add(const ReminderRequest& request, std::string& outError)
 {
     std::lock_guard lock(mutex);
+    outError.clear();
     if (reminders.size() >= MaximumPending)
     {
         outError = "You already have " + std::to_string(MaximumPending) +
@@ -727,22 +721,29 @@ std::optional<Reminder> ReminderBook::Add(const ReminderRequest& request, std::s
             return left.request.due < right.request.due;
         });
     reminders.insert(position, reminder);
-    (void)SaveLocked(outError);
+    if (!SaveLocked(outError))
+        outError += " The reminder is kept for this run, but will not survive a restart.";
     return reminder;
 }
 
-std::vector<Reminder> ReminderBook::TakeDue(const WallClock::time_point now)
+std::vector<Reminder> ReminderBook::TakeDue(const WallClock::time_point now, std::string* outError)
 {
     std::lock_guard lock(mutex);
+    if (outError) outError->clear();
     const auto firstLater = std::find_if(reminders.begin(), reminders.end(),
         [now](const Reminder& reminder) { return reminder.request.due > now; });
-    std::vector<Reminder> due(std::make_move_iterator(reminders.begin()),
-        std::make_move_iterator(firstLater));
+    std::vector<Reminder> due(reminders.begin(), firstLater);
     if (!due.empty())
     {
         reminders.erase(reminders.begin(), firstLater);
-        std::string ignored;
-        (void)SaveLocked(ignored);
+        std::string error;
+        if (!SaveLocked(error))
+        {
+            reminders.insert(reminders.begin(),
+                std::make_move_iterator(due.begin()), std::make_move_iterator(due.end()));
+            if (outError) *outError = error + " Due reminders are kept and delivery will retry.";
+            return {};
+        }
     }
     return due;
 }
@@ -753,29 +754,44 @@ std::vector<Reminder> ReminderBook::Pending() const
     return reminders;
 }
 
-std::optional<Reminder> ReminderBook::Cancel(const std::size_t number)
+std::optional<Reminder> ReminderBook::Cancel(const std::size_t number, std::string* outError)
 {
     std::lock_guard lock(mutex);
+    if (outError) outError->clear();
     if (number == 0 || number > reminders.size()) return std::nullopt;
     Reminder removed = reminders[number - 1];
     reminders.erase(reminders.begin() + static_cast<std::ptrdiff_t>(number - 1));
-    std::string ignored;
-    (void)SaveLocked(ignored);
+    std::string error;
+    if (!SaveLocked(error))
+    {
+        reminders.insert(reminders.begin() + static_cast<std::ptrdiff_t>(number - 1), removed);
+        if (outError) *outError = error + " The reminder is still pending; cancellation was not saved.";
+        return std::nullopt;
+    }
     return removed;
 }
 
-std::size_t ReminderBook::Clear()
+std::size_t ReminderBook::Clear(std::string* outError)
 {
     std::lock_guard lock(mutex);
+    if (outError) outError->clear();
     const std::size_t count = reminders.size();
+    if (count == 0) return 0;
+    std::vector<Reminder> previous = std::move(reminders);
     reminders.clear();
-    std::string ignored;
-    (void)SaveLocked(ignored);
+    std::string error;
+    if (!SaveLocked(error))
+    {
+        reminders = std::move(previous);
+        if (outError) *outError = error + " Reminders are still pending; clearing was not saved.";
+        return 0;
+    }
     return count;
 }
 
 bool ReminderBook::SaveLocked(std::string& outError) const
 {
+    outError.clear();
     if (path.empty()) return true;
     nlohmann::json list = nlohmann::json::array();
     for (const Reminder& reminder : reminders)
@@ -798,7 +814,7 @@ bool ReminderBook::SaveLocked(std::string& outError) const
         stream.flush();
         if (!stream.good())
         {
-            outError = "The reminder could not be saved, so it will not survive a restart.";
+            outError = "The reminders could not be saved.";
             return false;
         }
     }
@@ -806,7 +822,7 @@ bool ReminderBook::SaveLocked(std::string& outError) const
     if (error)
     {
         std::filesystem::remove(temporary, error);
-        outError = "The reminder could not be saved, so it will not survive a restart.";
+        outError = "The reminders could not be saved.";
         return false;
     }
     return true;

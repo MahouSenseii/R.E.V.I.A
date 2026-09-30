@@ -9,13 +9,8 @@
 namespace revia::core
 {
 
-// Asks the user something on the UI thread for a worker, without ever waiting on a UI
-// thread that has stopped listening.
-//
-// A worker that blocks until the UI thread shows its dialog deadlocks as soon as the UI
-// thread waits for that worker instead, and shutdown does exactly that: it joins the
-// workers. Abandon() breaks the cycle. Every question still waiting gets the refusal,
-// and nothing is asked after it.
+// Relays worker questions to the UI without shutdown deadlocks.
+// Abandon refuses pending questions and prevents new ones before workers are joined.
 class QuestionRelay
 {
 public:
@@ -26,8 +21,7 @@ public:
     // On the UI thread itself it asks directly; posting to itself and waiting would never
     // return. `ask` runs after the caller may have given up, so it must own what it uses.
     template <typename Answer>
-    Answer Ask(const Post& post, const bool onUiThread, std::function<Answer()> ask,
-        const Answer refused)
+    Answer Ask(const Post& post, const bool onUiThread, std::function<Answer()> ask, const Answer refused)
     {
         if (onUiThread) return IsAbandoned() ? refused : ask();
 

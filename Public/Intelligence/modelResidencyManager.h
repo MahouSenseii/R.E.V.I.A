@@ -10,15 +10,8 @@
 namespace revia::intelligence
 {
 
-// Where a model role actually stands.
-//
-// Unloaded and Failed are the distinction this enum exists to keep. A model that was
-// put away on purpose and a model that tried to start and could not are both "not
-// available right now", and treating them the same is how a deliberately evicted worker
-// gets reported as broken -- and, worse, how routing stops trying to bring it back.
-//
-// Cold means the process is up and has not been warmed; Unloaded means there is no
-// process. Both are enabled and both are reachable by loading; only one costs memory.
+// Distinguishes intentional Unloaded from startup Failed; Cold is running but unwarmed.
+// Cold and Unloaded remain enabled and loadable; only Cold holds a process.
 enum class ResidencyState
 {
     // Not configured, or its artifacts are absent. Nothing to load.

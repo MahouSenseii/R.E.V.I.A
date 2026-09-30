@@ -67,17 +67,13 @@ bool EndsWithAbbreviation(const std::string& text, const std::size_t terminalInd
 
 } // namespace
 
-ReplyFragmenter::ReplyFragmenter(
-    const std::size_t minimumFragmentCharacters,
-    const std::size_t maximumPhraseCharacters,
-    const std::size_t firstMinimumFragmentCharacters,
-    const std::size_t firstMaximumPhraseCharacters)
+ReplyFragmenter::ReplyFragmenter(const std::size_t minimumFragmentCharacters, const std::size_t maximumPhraseCharacters,
+    const std::size_t firstMinimumFragmentCharacters, const std::size_t firstMaximumPhraseCharacters)
     : followingMinimumCharacters(minimumFragmentCharacters),
       followingMaximumCharacters(maximumPhraseCharacters),
       firstMinimumCharacters(firstMinimumFragmentCharacters == 0
           ? minimumFragmentCharacters : firstMinimumFragmentCharacters),
-      firstMaximumCharacters(firstMaximumPhraseCharacters == 0
-          ? maximumPhraseCharacters : firstMaximumPhraseCharacters)
+      firstMaximumCharacters(firstMaximumPhraseCharacters == 0 ? maximumPhraseCharacters : firstMaximumPhraseCharacters)
 {
 }
 

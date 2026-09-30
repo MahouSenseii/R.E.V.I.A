@@ -1,3 +1,4 @@
+#include "Speech/recognitionSettings.h"
 #include "Speech/whisperServerProcess.h"
 #include "Core/logger.h"
 
@@ -86,9 +87,7 @@ WhisperServerProcess::~WhisperServerProcess()
     Stop();
 }
 
-bool WhisperServerProcess::Start(
-    const speechRecognitionSettings& settings,
-    std::string& outError)
+bool WhisperServerProcess::Start(const speechRecognitionSettings& settings, std::string& outError)
 {
     std::lock_guard lock(processMutex);
     outError.clear();

@@ -1,3 +1,4 @@
+#include "Speech/speechSettings.h"
 #include "Speech/qwenTtsClient.h"
 
 #include "Core/localApiKey.h"
@@ -15,9 +16,7 @@ namespace revia::speech
 namespace
 {
 
-nlohmann::json VoiceRequest(
-    const std::string& text,
-    const VoicePreset& preset)
+nlohmann::json VoiceRequest(const std::string& text, const VoicePreset& preset)
 {
     return {
         {"text", text},
@@ -94,11 +93,8 @@ VoiceOperationResult QwenTtsClient::PrepareVoice(const VoicePreset& preset)
             ? request.dump() : R"({"model":"clone"})");
 }
 
-VoiceOperationResult QwenTtsClient::DesignVoice(
-    const std::string& text,
-    const std::string& description,
-    const std::string& language,
-    const std::string& outputPath)
+VoiceOperationResult QwenTtsClient::DesignVoice(const std::string& text,
+    const std::string& description, const std::string& language, const std::string& outputPath)
 {
     std::lock_guard lock(mutex);
     std::string error;
@@ -115,8 +111,7 @@ VoiceOperationResult QwenTtsClient::DesignVoice(
     return Post("/v1/voice-design", request.dump());
 }
 
-std::vector<QwenTtsClient::VocalizationRequest>
-    QwenTtsClient::DefaultVocalizationBankRequests()
+std::vector<QwenTtsClient::VocalizationRequest> QwenTtsClient::DefaultVocalizationBankRequests()
 {
     return {
         {VocalizationKind::Laugh, 3},
@@ -128,11 +123,8 @@ std::vector<QwenTtsClient::VocalizationRequest>
     };
 }
 
-VoiceOperationResult QwenTtsClient::RenderVocalizations(
-    const std::filesystem::path& presetDirectory,
-    const std::vector<VocalizationRequest>& kinds,
-    const std::string& language,
-    const bool missingOnly)
+VoiceOperationResult QwenTtsClient::RenderVocalizations(const std::filesystem::path& presetDirectory,
+    const std::vector<VocalizationRequest>& kinds, const std::string& language, const bool missingOnly)
 {
     std::lock_guard lock(mutex);
     if (presetDirectory.empty())
@@ -201,10 +193,7 @@ VoiceOperationResult QwenTtsClient::RenderVocalizations(
     return Post("/v1/vocalizations", request.dump());
 }
 
-VoiceOperationResult QwenTtsClient::Synthesize(
-    const std::string& text,
-    const VoicePreset& preset,
-    const std::string& outputPath)
+VoiceOperationResult QwenTtsClient::Synthesize(const std::string& text, const VoicePreset& preset, const std::string& outputPath)
 {
     std::lock_guard lock(mutex);
     std::string error;
@@ -217,9 +206,7 @@ VoiceOperationResult QwenTtsClient::Synthesize(
     return Post("/v1/audio/speech", request.dump());
 }
 
-VoiceOperationResult QwenTtsClient::SynthesizePcm(
-    const std::string& text,
-    const VoicePreset& preset)
+VoiceOperationResult QwenTtsClient::SynthesizePcm(const std::string& text, const VoicePreset& preset)
 {
     std::lock_guard lock(mutex);
     std::string error;
@@ -230,10 +217,8 @@ VoiceOperationResult QwenTtsClient::SynthesizePcm(
     return PostAudio("/v1/audio/pcm", VoiceRequest(text, preset).dump());
 }
 
-std::optional<std::vector<std::size_t>> ParseBatchClipSizes(
-    const std::string& header,
-    const std::size_t payloadBytes,
-    const std::size_t expectedClips)
+std::optional<std::vector<std::size_t>> ParseBatchClipSizes(const std::string& header,
+    const std::size_t payloadBytes, const std::size_t expectedClips)
 {
     if (header.empty() || expectedClips == 0)
     {
@@ -299,9 +284,7 @@ std::optional<std::vector<std::size_t>> ParseBatchClipSizes(
     return sizes;
 }
 
-std::vector<VoiceOperationResult> QwenTtsClient::SynthesizePcmBatch(
-    const std::vector<std::string>& texts,
-    const VoicePreset& preset)
+std::vector<VoiceOperationResult> QwenTtsClient::SynthesizePcmBatch(const std::vector<std::string>& texts, const VoicePreset& preset)
 {
     const auto failed = [&texts](std::string reason)
     {
@@ -521,9 +504,7 @@ bool QwenTtsClient::EnsureAvailable(std::string& outError)
     return false;
 }
 
-VoiceOperationResult QwenTtsClient::Post(
-    const std::string& endpoint,
-    const std::string& body)
+VoiceOperationResult QwenTtsClient::Post(const std::string& endpoint, const std::string& body)
 {
     const auto requestStarted = std::chrono::steady_clock::now();
     httplib::Client client(configuration.qwenHost, configuration.qwenPort);
@@ -583,9 +564,7 @@ VoiceOperationResult QwenTtsClient::Post(
     }
 }
 
-VoiceOperationResult QwenTtsClient::PostAudio(
-    const std::string& endpoint,
-    const std::string& body)
+VoiceOperationResult QwenTtsClient::PostAudio(const std::string& endpoint, const std::string& body)
 {
     const auto requestStarted = std::chrono::steady_clock::now();
     httplib::Client client(configuration.qwenHost, configuration.qwenPort);

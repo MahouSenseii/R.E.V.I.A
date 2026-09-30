@@ -139,8 +139,7 @@ StopReason StopReasonFromString(const std::string& value)
     return StopReason::None;
 }
 
-bool WorthResumingUnprompted(
-    const Goal& goal, const std::chrono::system_clock::time_point now)
+bool WorthResumingUnprompted(const Goal& goal, const std::chrono::system_clock::time_point now)
 {
     return !IsTerminal(goal.status) && !goal.steps.empty() &&
         goal.stopReason != StopReason::PolicyBlocked &&
@@ -352,8 +351,7 @@ std::string CanonicalWindowState(const actions::ActionResult& result)
     return CanonicalWindowStateImpl(result);
 }
 
-VerificationOutcome EvaluatePostcondition(
-    const Postcondition& postcondition, const actions::ActionResult& result)
+VerificationOutcome EvaluatePostcondition(const Postcondition& postcondition, const actions::ActionResult& result)
 {
     // A check that did not run establishes nothing. This is the commonest source of
     // Unknown and the reason the tri-state exists: "the check failed" and "the check
@@ -480,8 +478,7 @@ namespace
 //
 // FileContains is relevant by construction: it is derived *from* the expected text, so
 // the two cannot disagree.
-[[nodiscard]] bool PostconditionDescribes(
-    const Postcondition& postcondition, const std::string& expectedText)
+[[nodiscard]] bool PostconditionDescribes(const Postcondition& postcondition, const std::string& expectedText)
 {
     const std::string described = Lowered(expectedText);
     const auto mentions = [&](const std::string& subject)
@@ -517,10 +514,7 @@ namespace
 
 } // namespace
 
-VerificationJudgement JudgeStep(
-    const std::uint32_t verificationSchema,
-    const Postcondition& postcondition,
-    const std::string& expectedText,
+VerificationJudgement JudgeStep(const std::uint32_t verificationSchema, const Postcondition& postcondition, const std::string& expectedText,
     const actions::ActionResult& result)
 {
     VerificationJudgement judgement;

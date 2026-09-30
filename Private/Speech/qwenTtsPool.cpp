@@ -1,3 +1,4 @@
+#include "Speech/speechSettings.h"
 #include "Speech/qwenTtsPool.h"
 
 #include <algorithm>
@@ -164,11 +165,8 @@ void QwenTtsPool::ReplaceDesignClient()
     designClient = std::move(replacement);
 }
 
-VoiceOperationResult QwenTtsPool::RenderVocalizations(
-    const std::filesystem::path& presetDirectory,
-    const std::vector<QwenTtsClient::VocalizationRequest>& kinds,
-    const std::string& language,
-    const bool missingOnly)
+VoiceOperationResult QwenTtsPool::RenderVocalizations(const std::filesystem::path& presetDirectory,
+    const std::vector<QwenTtsClient::VocalizationRequest>& kinds, const std::string& language, const bool missingOnly)
 {
     std::lock_guard designLock(designMutex);
     const std::shared_ptr<QwenTtsClient> client = DesignClient();
@@ -185,11 +183,8 @@ VoiceOperationResult QwenTtsPool::RenderVocalizations(
     return result;
 }
 
-VoiceOperationResult QwenTtsPool::DesignVoice(
-    const std::string& text,
-    const std::string& description,
-    const std::string& language,
-    const std::string& outputPath)
+VoiceOperationResult QwenTtsPool::DesignVoice(const std::string& text,
+    const std::string& description, const std::string& language, const std::string& outputPath)
 {
     std::lock_guard designLock(designMutex);
     const std::shared_ptr<QwenTtsClient> client = DesignClient();
@@ -205,11 +200,8 @@ VoiceOperationResult QwenTtsPool::DesignVoice(
     return result;
 }
 
-VoiceOperationResult QwenTtsPool::Synthesize(
-    const std::string& text,
-    const VoicePreset& preset,
-    const std::string& outputPath,
-    const bool latencyCritical)
+VoiceOperationResult QwenTtsPool::Synthesize(const std::string& text,
+    const VoicePreset& preset, const std::string& outputPath, const bool latencyCritical)
 {
     double poolWaitMilliseconds = 0.0;
     const std::size_t index =
@@ -248,10 +240,7 @@ VoiceOperationResult QwenTtsPool::Synthesize(
     return result;
 }
 
-VoiceOperationResult QwenTtsPool::SynthesizePcm(
-    const std::string& text,
-    const VoicePreset& preset,
-    const bool latencyCritical)
+VoiceOperationResult QwenTtsPool::SynthesizePcm(const std::string& text, const VoicePreset& preset, const bool latencyCritical)
 {
     double poolWaitMilliseconds = 0.0;
     const std::size_t index =
@@ -288,9 +277,7 @@ VoiceOperationResult QwenTtsPool::SynthesizePcm(
     return result;
 }
 
-std::vector<VoiceOperationResult> QwenTtsPool::SynthesizePcmBatch(
-    const std::vector<std::string>& texts,
-    const VoicePreset& preset)
+std::vector<VoiceOperationResult> QwenTtsPool::SynthesizePcmBatch(const std::vector<std::string>& texts, const VoicePreset& preset)
 {
     std::size_t characters = 0;
     for (const std::string& text : texts) characters += text.size();
@@ -404,10 +391,7 @@ void QwenTtsPool::Shutdown()
     if (design) design->Shutdown();
 }
 
-std::size_t SelectIdleVoiceWorker(
-    const std::vector<VoiceWorkerState>& workers,
-    const std::size_t characters,
-    const bool latencyCritical)
+std::size_t SelectIdleVoiceWorker(const std::vector<VoiceWorkerState>& workers, const std::size_t characters, const bool latencyCritical)
 {
     // A preference, not a pin. Worker 0 is where the resource planner put the phrase
     // the listener is waiting on, so it wins whenever it is free.
@@ -469,10 +453,7 @@ std::size_t SelectIdleVoiceWorker(
     return best;
 }
 
-std::size_t QwenTtsPool::AcquireWorker(
-    const std::size_t characters,
-    const bool latencyCritical,
-    double& outWaitMilliseconds)
+std::size_t QwenTtsPool::AcquireWorker(const std::size_t characters, const bool latencyCritical, double& outWaitMilliseconds)
 {
     const auto waitStarted = std::chrono::steady_clock::now();
     const auto waited = [&waitStarted]
@@ -509,10 +490,7 @@ std::size_t QwenTtsPool::AcquireWorker(
     return workers.size();
 }
 
-void QwenTtsPool::ReleaseWorker(
-    const std::size_t index,
-    const std::size_t characters,
-    const double milliseconds)
+void QwenTtsPool::ReleaseWorker(const std::size_t index, const std::size_t characters, const double milliseconds)
 {
     {
         std::lock_guard lock(mutex);

@@ -20,9 +20,7 @@ std::string Trim(std::string value)
     return value;
 }
 
-bool PointerButtonFromString(
-    const std::string& value,
-    actions::ActionRequest::DesktopInput::PointerButton& outButton)
+bool PointerButtonFromString(const std::string& value, actions::ActionRequest::DesktopInput::PointerButton& outButton)
 {
     using Button = actions::ActionRequest::DesktopInput::PointerButton;
     if (value.empty() || value == "left") { outButton = Button::Left; return true; }
@@ -74,13 +72,7 @@ namespace
 {
 // Reads one rectangle, and says whether there was one. Absent is ordinary rather than an
 // error: most actions name no region at all.
-bool ReadRegion(
-    const nlohmann::json& data,
-    const char* field,
-    int& left,
-    int& top,
-    int& right,
-    int& bottom)
+bool ReadRegion(const nlohmann::json& data, const char* field, int& left, int& top, int& right, int& bottom)
 {
     if (!data.contains(field) || !data[field].is_object())
     {

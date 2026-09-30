@@ -46,11 +46,7 @@ bool IsVisionProposable(const actions::ActionType action)
     }
 }
 
-bool ReadRegion(
-    const nlohmann::json& data,
-    const char* field,
-    ScreenRegion& region,
-    std::string& reason)
+bool ReadRegion(const nlohmann::json& data, const char* field, ScreenRegion& region, std::string& reason)
 {
     if (!data.contains(field) || !data[field].is_object())
     {

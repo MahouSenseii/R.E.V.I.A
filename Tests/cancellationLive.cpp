@@ -1,3 +1,8 @@
+#include "Core/appSettings.h"
+#include "Core/conversationMessage.h"
+#include "Core/profile.h"
+#include "LLM/endpointSettings.h"
+#include "LLM/responseTypes.h"
 #include "testSupport.h"
 
 #include "Core/configManager.h"

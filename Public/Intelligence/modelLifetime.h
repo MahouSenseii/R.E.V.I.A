@@ -15,13 +15,7 @@
 namespace revia::intelligence
 {
 
-// How long a role may sit unused before it is put away, and how long it is safe from
-// being put away after it arrives.
-//
-// The minimum exists because a load is expensive and an idle sweep is cheap. Without
-// it, a role loaded for one question and then left alone for a moment gets evicted
-// immediately and reloaded by the next question, which costs more than never unloading
-// at all. Together the two turn "unload when idle" into "unload when actually idle".
+// Idle eviction grace and minimum residency prevent repeated unload/reload churn.
 struct ModelLifetimePolicy
 {
     // Off by default, everywhere. On-demand residency changes when a model is present,
@@ -32,16 +26,8 @@ struct ModelLifetimePolicy
     std::uint64_t minimumResidencyMs = 60000;
 };
 
-// Owns when a model role is resident, and nothing else.
-//
-// It does not own the process. ReviaSession does, and this is handed two callables that
-// reach into that ownership: one that makes the role available and one that puts it
-// away. That is the whole reason it is not a second manager -- it decides *when*, and
-// the existing owner still decides *how*, keeps the handle, and remains the only thing
-// that can terminate a server it started.
-//
-// It is also not a scheduler. Nothing here runs on its own; `SweepIdle` is called by
-// whatever already ticks, and a call that finds nothing to do returns immediately.
+// Decides model residency through session-owned load/unload callbacks; owns no process.
+// SweepIdle runs on an existing tick; this class starts no scheduler.
 class ModelLifetimeCoordinator
 {
 public:
@@ -83,25 +69,13 @@ public:
 
     // Installed once by the session that owns the process. A role with no activator is
     // not managed here and is never swept.
-    void Manage(
-        IntelligenceTier tier,
-        Activator activate,
-        Deactivator deactivate,
-        ModelLifetimePolicy policy);
+    void Manage(IntelligenceTier tier, Activator activate, Deactivator deactivate, ModelLifetimePolicy policy);
 
     [[nodiscard]] bool IsManaged(IntelligenceTier tier) const;
     [[nodiscard]] ModelLifetimePolicy Policy(IntelligenceTier tier) const;
 
-    // Acquire the role for the duration of the returned lease.
-    //
-    // Concurrent calls for a role that is loading wait for that one load rather than
-    // starting a second: a duplicate llama.cpp process would fit in memory exactly once
-    // and the second would fail in a way the first would be blamed for. A caller whose
-    // token is stopped while waiting gets an empty lease and loads nothing.
-    //
-    // An empty lease is a real answer and never a reason to proceed anyway. Cold and
-    // unavailable are different, and this is where the difference is decided: it tries,
-    // and only a failure to bring the role up is unavailability.
+    // Returns a role lease; concurrent acquisitions share one load.
+    // Cancellation while waiting returns an empty lease, which callers must not use to proceed.
     [[nodiscard]] Lease Acquire(IntelligenceTier tier, std::stop_token stopToken = {});
 
     // Puts away every managed role that is resident, unused, past its idle grace and

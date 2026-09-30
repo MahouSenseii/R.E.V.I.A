@@ -21,8 +21,7 @@ using revia::tests::Check;
 // from demonstrations somebody opened a session for, never from whatever happened to be
 // on screen.
 
-CaptureConsent Consent(
-    const ExperienceProvenance provenance = ExperienceProvenance::HumanDemonstration,
+CaptureConsent Consent(const ExperienceProvenance provenance = ExperienceProvenance::HumanDemonstration,
     const CaptureDepth depth = CaptureDepth::Structure)
 {
     CaptureConsent consent;
@@ -49,8 +48,7 @@ ExperienceRecord Row(const std::string& application = "notepad.exe")
     return record;
 }
 
-ExperienceRecord::Candidate Candidate(
-    const std::string& name, const std::string& value = {})
+ExperienceRecord::Candidate Candidate(const std::string& name, const std::string& value = {})
 {
     ExperienceRecord::Candidate candidate;
     candidate.name = name;

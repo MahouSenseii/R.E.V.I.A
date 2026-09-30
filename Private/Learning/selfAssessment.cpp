@@ -45,8 +45,7 @@ std::string CanonicalCategory(std::string stored)
 }
 
 template<typename T, typename Predicate>
-bool ReadHistoryField(const json& record, const char* name, T& destination,
-    Predicate accepts, const bool required = false)
+bool ReadHistoryField(const json& record, const char* name, T& destination, Predicate accepts, const bool required = false)
 {
     const auto value = record.find(name);
     if (value == record.end()) return !required;
@@ -93,9 +92,7 @@ bool DecodeHistoryRecord(const json& record, SelfImprovementTask& task, bool& re
 }
 }
 
-bool SelfAssessmentEngine::Initialize(
-    const std::filesystem::path& historyPath,
-    std::string& outError)
+bool SelfAssessmentEngine::Initialize(const std::filesystem::path& historyPath, std::string& outError)
 {
     std::lock_guard lock(mutex);
     if (historyPath.empty())
@@ -425,9 +422,7 @@ bool SelfAssessmentEngine::AppendRecord(const json& record, std::string& outErro
     return true;
 }
 
-bool SelfAssessmentEngine::PersistTask(
-    const SelfImprovementTask& task,
-    std::string& outError)
+bool SelfAssessmentEngine::PersistTask(const SelfImprovementTask& task, std::string& outError)
 {
     const json record = {
         {"id", task.id}, {"category", task.category},
@@ -445,9 +440,7 @@ bool SelfAssessmentEngine::PersistTask(
     return false;
 }
 
-bool SelfAssessmentEngine::PersistResolution(
-    const SelfImprovementTask& task,
-    std::string& outError)
+bool SelfAssessmentEngine::PersistResolution(const SelfImprovementTask& task, std::string& outError)
 {
     const json record = {
         {"id", task.id}, {"category", task.category}, {"resolved", true}};

@@ -160,9 +160,7 @@ bool MatchesAny(const std::string& value, const std::vector<std::string>& phrase
 
 } // namespace
 
-ConsequenceClass ClassifyControlConsequence(
-    const std::string& controlName,
-    const bool isPasswordField)
+ConsequenceClass ClassifyControlConsequence(const std::string& controlName, const bool isPasswordField)
 {
     // The one signal here that is measured rather than guessed.
     if (isPasswordField)

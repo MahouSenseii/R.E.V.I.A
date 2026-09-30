@@ -1,3 +1,4 @@
+#include "Initiative/initiativeSettings.h"
 #include "Initiative/conversationStarter.h"
 
 #include <algorithm>
@@ -172,10 +173,8 @@ void ConversationStarter::Observe(const perception::WindowObservation& observati
     RememberCue(std::move(cue));
 }
 
-bool ConversationStarter::ObserveVisualIssue(
-    const std::string& issue,
-    const float confidence,
-    const std::chrono::system_clock::time_point occurredAt)
+bool ConversationStarter::ObserveVisualIssue(const std::string& issue,
+    const float confidence, const std::chrono::system_clock::time_point occurredAt)
 {
     if (issue.empty()) return false;
     std::lock_guard lock(mutex);
@@ -217,8 +216,7 @@ void ConversationStarter::ClearVisualIssue()
     }), cues.end());
 }
 
-std::vector<StarterCue> ConversationStarter::RecentCues(
-    const std::chrono::system_clock::time_point now)
+std::vector<StarterCue> ConversationStarter::RecentCues(const std::chrono::system_clock::time_point now)
 {
     std::lock_guard lock(mutex);
     const auto maxAge = std::chrono::minutes(configuration.cueMaxAgeMinutes);

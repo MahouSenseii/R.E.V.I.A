@@ -176,8 +176,7 @@ std::string GoalPlanner::NextStepPrompt()
         "One step only. Never emit shell commands, scripts, or explanations.";
 }
 
-std::string GoalPlanner::ComputerSubgoalSchema(
-    const std::vector<std::string>& candidateNames,
+std::string GoalPlanner::ComputerSubgoalSchema(const std::vector<std::string>& candidateNames,
     const std::vector<std::string>& containerNames)
 {
     using nlohmann::json;

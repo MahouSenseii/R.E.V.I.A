@@ -1,3 +1,5 @@
+#include "Core/appSettings.h"
+#include "Resources/resourceSettings.h"
 #include "Resources/resourcePlanner.h"
 
 #include <algorithm>
@@ -283,9 +285,7 @@ namespace
     // An unmatched device keeps an empty LUID and is reported as unmeasured. On a machine
     // with two cards, crediting one card's usage to the other would be worse than saying
     // nothing -- it would look precise and be wrong.
-    void AttachAdapterLuids(
-        std::vector<GpuDevice>& devices,
-        const std::vector<GpuDevice>& adapters)
+    void AttachAdapterLuids(std::vector<GpuDevice>& devices, const std::vector<GpuDevice>& adapters)
     {
         constexpr std::uint64_t MemoryToleranceMiB = 384;
         std::vector<bool> claimed(adapters.size(), false);
@@ -397,9 +397,7 @@ namespace
         return stream.str();
     }
 
-    int AutoRamCacheMiB(
-        const HardwareInventory& hardware,
-        const resourceSettings& policy)
+    int AutoRamCacheMiB(const HardwareInventory& hardware, const resourceSettings& policy)
     {
         const std::uint64_t reserve = static_cast<std::uint64_t>(
             std::max(0, policy.minimumFreeRamMiB));
@@ -439,10 +437,7 @@ namespace
         return std::min(totalAfterReserve, freeAfterReserve);
     }
 
-    const GpuDevice* FindDevice(
-        const std::vector<GpuDevice>& ranked,
-        const std::string& requested,
-        const std::size_t automaticIndex)
+    const GpuDevice* FindDevice(const std::vector<GpuDevice>& ranked, const std::string& requested, const std::size_t automaticIndex)
     {
         if (ranked.empty())
         {
@@ -578,9 +573,7 @@ HardwareInventory DetectHardwareInventory(const std::string& llamaServerExecutab
     return inventory;
 }
 
-ResourceRequirements EstimateResourceRequirements(
-    const appSettings& settings,
-    const bool voiceExpected)
+ResourceRequirements EstimateResourceRequirements(const appSettings& settings, const bool voiceExpected)
 {
     ResourceRequirements requirements;
     // GGUF size is the most reliable portable floor. The extra GiB covers graph/KV and
@@ -606,10 +599,7 @@ ResourceRequirements EstimateResourceRequirements(
     return requirements;
 }
 
-ResourcePlan PlanResources(
-    const HardwareInventory& hardware,
-    const resourceSettings& policy,
-    const ResourceRequirements& requirements)
+ResourcePlan PlanResources(const HardwareInventory& hardware, const resourceSettings& policy, const ResourceRequirements& requirements)
 {
     ResourcePlan plan;
     plan.hardware = hardware;

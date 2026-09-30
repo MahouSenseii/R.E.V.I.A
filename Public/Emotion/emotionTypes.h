@@ -8,16 +8,7 @@
 namespace revia::emotion
 {
 
-// What Revia can feel, and can feel several of at once.
-//
-// The single AffectState enum this replaces could hold exactly one value, so being
-// curious about something while still annoyed about something else was not
-// representable: the newer feeling simply overwrote the older one. Emotions are not
-// mutually exclusive, and a companion whose interest cancels her irritation reads as
-// forgetful rather than emotionally simple.
-//
-// Ordering is not meaning. Persistence writes names, never indices, so inserting an
-// emotion here cannot silently reinterpret a stored file.
+// Independent simultaneous emotion axes; persistence uses names rather than enum indices.
 enum class Emotion : std::size_t
 {
     Joy,

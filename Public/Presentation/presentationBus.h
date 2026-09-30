@@ -58,16 +58,8 @@ private:
     std::uint64_t sequence = 0;
 };
 
-// Turns the runtime's own events into presentation events.
-//
-// A translator rather than a second event system: RuntimeEventBus already exists, is
-// already published to from everywhere, and already carries the state changes a renderer
-// cares about. What it also carries is material that must never reach a screen -- the
-// SelfInquiry kind is Revia's private reasoning, and `detail` holds evidence text -- so
-// the translation is a deliberate narrowing rather than a copy.
-//
-// Returns nothing for runtime events that have no visible meaning, which is most of them.
-[[nodiscard]] std::optional<PresentationEvent> TranslateRuntimeEvent(
-    const runtime::RuntimeEvent& event);
+// Narrows runtime events to visible presentation meaning; unrelated events return nothing.
+// Private SelfInquiry reasoning and evidence detail must not cross this boundary.
+[[nodiscard]] std::optional<PresentationEvent> TranslateRuntimeEvent(const runtime::RuntimeEvent& event);
 
 } // namespace revia::presentation

@@ -195,9 +195,7 @@ std::string Truncate(const std::string& content, const std::size_t limit)
 }
 }
 
-RecallRequest ConversationRecallPolicy::Evaluate(
-    const std::string& input,
-    const std::int64_t nowEpoch)
+RecallRequest ConversationRecallPolicy::Evaluate(const std::string& input, const std::int64_t nowEpoch)
 {
     RecallRequest request;
     if (input.empty() || nowEpoch <= 0)
@@ -257,12 +255,8 @@ RecallRequest ConversationRecallPolicy::Evaluate(
     return request;
 }
 
-std::string RenderRecallBlock(
-    const RecallRequest& request,
-    const std::vector<ArchivedTurn>& turns,
-    const std::string& assistantName,
-    const std::int64_t nowEpoch,
-    const std::size_t maxCharacters)
+std::string RenderRecallBlock(const RecallRequest& request, const std::vector<ArchivedTurn>& turns, const std::string& assistantName,
+    const std::int64_t nowEpoch, const std::size_t maxCharacters)
 {
     if (!request.Wanted() || turns.empty())
     {

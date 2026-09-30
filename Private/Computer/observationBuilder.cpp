@@ -1,3 +1,4 @@
+#include "Perception/perceptionSettings.h"
 #include "Computer/observationBuilder.h"
 #include "Core/utf8.h"
 
@@ -35,10 +36,8 @@ std::string Bounded(std::string text, const std::size_t limit)
 
 } // namespace
 
-std::vector<ObservedCandidate> BuildCandidates(
-    const actions::windows::DesktopObservation& screen,
-    const actions::CapabilitySettings& scope,
-    const std::size_t maximumListedControls)
+std::vector<ObservedCandidate> BuildCandidates(const actions::windows::DesktopObservation& screen,
+    const actions::CapabilitySettings& scope, const std::size_t maximumListedControls)
 {
     std::vector<ObservedCandidate> candidates;
     const policy::CapabilityPolicy capability(scope);
@@ -102,8 +101,7 @@ std::vector<ObservedCandidate> BuildCandidates(
     return candidates;
 }
 
-ComputerObservationBuilder::ComputerObservationBuilder(
-    actions::windows::DesktopObserver& desktopObserver)
+ComputerObservationBuilder::ComputerObservationBuilder(actions::windows::DesktopObserver& desktopObserver)
     : observer(&desktopObserver)
 {
 }
@@ -114,10 +112,8 @@ void ComputerObservationBuilder::Reset()
     lastObservedScreen.clear();
 }
 
-ComputerTaskContext ComputerObservationBuilder::Build(
-    const goals::Goal& goal,
-    const std::uint32_t iteration,
-    const perceptionSettings& perception)
+ComputerTaskContext ComputerObservationBuilder::Build(const goals::Goal& goal,
+    const std::uint32_t iteration, const perceptionSettings& perception)
 {
     ComputerTaskContext context;
     context.subgoal = goal.title;

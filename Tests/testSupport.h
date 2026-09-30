@@ -63,8 +63,7 @@ public:
 // Fixtures used to write the four bytes "RIFF", or a header with an empty data
 // chunk, because a clip only had to exist. It has to play now, so a bank cannot
 // count a failed render as a rendered sound.
-inline void WriteMinimalWav(const std::filesystem::path& path,
-    const std::uint32_t sampleBytes = 4)
+inline void WriteMinimalWav(const std::filesystem::path& path, const std::uint32_t sampleBytes = 4)
 {
     std::filesystem::create_directories(path.parent_path());
     std::ofstream file(path, std::ios::binary | std::ios::trunc);
@@ -95,6 +94,9 @@ inline void WriteMinimalWav(const std::filesystem::path& path,
 // Entry points for the split suites, called from the single test main.
 void RunEmotionTests();
 void RunEmotionOwnershipTests();
+void RunStartupWarmupTests();
+void RunPersistenceRecoveryTests();
+void RunPreferenceResetTests();
 void RunEmotionOwnershipLive(const std::string& runtimeDirectory, const std::string& reportPath);
 void RunIdentityTests();
 void RunAppraisalTests();
@@ -150,8 +152,7 @@ void RunLearnedCompare(const std::string& artifactPath);
 void RunComputerSessionTests();
 void RunComputerDemonstration();
 void RunComputerCollection(const std::string& outputDirectory);
-void RunComputerParity(const std::string& casesPath,
-    const std::string& expectedPath);
+void RunComputerParity(const std::string& casesPath, const std::string& expectedPath);
 void RunResidencyTests();
 void RunOperatorSessionTests();
 void RunApplicationLocatorTests();

@@ -135,6 +135,60 @@ test('connector shutdown cancels active native work, ends guest contexts and lea
   await until(async () => (await api('/v1/status')).body.state === 'offline');
 });
 
+test('connector shutdown refuses a late relay turn while native session cleanup is pending', { timeout: 5000 }, async t => {
+  const firstSession = randomUUID(), lateSession = randomUUID(), epoch = randomUUID();
+  const firstRequest = randomUUID(), lateRequest = randomUUID();
+  let releaseEnd, endStarted, firstCompleted, lateTurnStarted;
+  const ending = new Promise(resolve => { endStarted = resolve; });
+  const endGate = new Promise(resolve => { releaseEnd = resolve; });
+  const completed = new Promise(resolve => { firstCompleted = resolve; });
+  const lateTurn = new Promise(resolve => { lateTurnStarted = resolve; });
+  const native = http.createServer(async (req, res) => {
+    let raw = ''; for await (const chunk of req) raw += chunk;
+    const body = raw ? JSON.parse(raw) : undefined;
+    res.setHeader('Content-Type', 'application/json');
+    if (req.url === '/web/v1/status') return res.end(JSON.stringify({ state: 'online' }));
+    if (req.url === '/web/v1/end') {
+      endStarted(); await endGate;
+      return res.end(JSON.stringify({ state: 'ended' }));
+    }
+    assert.equal(req.url, '/web/v1/turn');
+    if (body.requestId === lateRequest) lateTurnStarted();
+    res.end(JSON.stringify({ requestId: body.requestId, state: 'completed', text: 'Complete' }));
+  });
+  native.listen(0, '127.0.0.1'); await once(native, 'listening');
+  const relay = new WebSocketServer({ port: 0, host: '127.0.0.1' }); await once(relay, 'listening');
+  let connection;
+  relay.on('connection', ws => {
+    connection = ws; let sent = false;
+    ws.on('message', data => {
+      const message = JSON.parse(data);
+      if (message.type === 'result' && message.requestId === firstRequest) firstCompleted();
+      if (message.type !== 'ready' || sent) return;
+      sent = true;
+      ws.send(JSON.stringify({ version: 1, epoch, type: 'turn', sessionId: firstSession,
+        requestId: firstRequest, text: 'Initial turn', deadline: Date.now() + 10000 }));
+    });
+    ws.send(JSON.stringify({ version: 1, epoch, type: 'welcome' }));
+  });
+  const bridge = createBridge({ mode: 'development', relayUrl: `ws://127.0.0.1:${relay.address().port}/v1/host`,
+    localUrl: `http://127.0.0.1:${native.address().port}`, hostId: 'demo', hostToken, localToken });
+  t.after(async () => {
+    releaseEnd(); await bridge.stop();
+    for (const ws of relay.clients) ws.terminate(); await new Promise(resolve => relay.close(resolve));
+    native.closeAllConnections(); await new Promise(resolve => native.close(resolve));
+  });
+  bridge.start(); await completed;
+  const stopped = bridge.stop(); await ending;
+  try {
+    connection.send(JSON.stringify({ version: 1, epoch, type: 'turn', sessionId: lateSession,
+      requestId: lateRequest, text: 'Arrived after shutdown', deadline: Date.now() + 10000 }));
+    const pong = once(connection, 'pong'); connection.ping(); await pong;
+    assert.equal(await Promise.race([lateTurn.then(() => true), wait(100).then(() => false)]), false,
+      'Shutdown must reject new native inference while ending previously accepted sessions');
+  } finally { releaseEnd(); await stopped; }
+});
+
 test('relay restart reconnects with a fresh epoch and never replays the previous native turn', async t => {
   const { relay, api, session, submit, calls } = await setup(t, { hold: true });
   const s = await session(), one = await submit(s);

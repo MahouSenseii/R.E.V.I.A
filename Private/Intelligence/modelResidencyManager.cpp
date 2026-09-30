@@ -44,10 +44,7 @@ void ModelResidencyManager::MarkLoading(const IntelligenceTier tier)
     }
 }
 
-void ModelResidencyManager::MarkReady(
-    const IntelligenceTier tier,
-    const double loadMilliseconds,
-    const bool warm)
+void ModelResidencyManager::MarkReady(const IntelligenceTier tier, const double loadMilliseconds, const bool warm)
 {
     std::lock_guard lock(mutex);
     if (ModelResidency* model = FindUnlocked(tier))
@@ -58,9 +55,7 @@ void ModelResidencyManager::MarkReady(
     }
 }
 
-void ModelResidencyManager::MarkFailed(
-    const IntelligenceTier tier,
-    std::string reason)
+void ModelResidencyManager::MarkFailed(const IntelligenceTier tier, std::string reason)
 {
     std::lock_guard lock(mutex);
     if (ModelResidency* model = FindUnlocked(tier))
@@ -71,9 +66,7 @@ void ModelResidencyManager::MarkFailed(
     }
 }
 
-void ModelResidencyManager::MarkUnloaded(
-    const IntelligenceTier tier,
-    std::string reason)
+void ModelResidencyManager::MarkUnloaded(const IntelligenceTier tier, std::string reason)
 {
     std::lock_guard lock(mutex);
     if (ModelResidency* model = FindUnlocked(tier))
@@ -111,9 +104,7 @@ bool ModelResidencyManager::IsInferenceActive(const IntelligenceTier tier) const
     return found != models.end() && found->inferenceActive;
 }
 
-void ModelResidencyManager::BeginInference(
-    const IntelligenceTier tier,
-    std::string priority)
+void ModelResidencyManager::BeginInference(const IntelligenceTier tier, std::string priority)
 {
     std::lock_guard lock(mutex);
     if (ModelResidency* model = FindUnlocked(tier))

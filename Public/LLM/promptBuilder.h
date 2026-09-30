@@ -1,6 +1,8 @@
 #pragma once
 
-#include "Library/structLibrary.h"
+#include "Core/conversationMessage.h"
+#include "Core/profile.h"
+#include "LLM/responseTypes.h"
 #include "Memory/longTermMemory.h"
 #include "LLM/privateMemoryAccess.h"
 
@@ -43,11 +45,8 @@ public:
     std::string BuildMemoryBlock(const std::string& query = "") const;
     // The saved memories closest to `query`, for a caller deciding whether something is
     // already known. Ranked by the embedding when one is given, by text otherwise.
-    std::string BuildRelatedMemoryBlock(
-        const std::string& query,
-        const std::vector<float>& queryEmbedding,
-        const std::string& embeddingModel,
-        std::size_t maxEntries) const;
+    std::string BuildRelatedMemoryBlock(const std::string& query, const std::vector<float>& queryEmbedding,
+        const std::string& embeddingModel, std::size_t maxEntries) const;
 
 private:
 

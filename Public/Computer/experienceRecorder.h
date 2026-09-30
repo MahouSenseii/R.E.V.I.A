@@ -16,14 +16,8 @@
 namespace revia::computer
 {
 
-// What a recorded decision is evidence *of*.
-//
-// The single most important field in a record, and the one a training pipeline is most
-// tempted to lose. A model's proposal is not a demonstration of the right answer; an
-// action that ran without error is not an action that achieved anything; and a step
-// that only worked because a person fixed it afterwards is a negative example wearing a
-// positive outcome. Conflating these is how a policy learns to repeat the mistakes that
-// happened to get corrected.
+// Distinguishes proposals, executed actions, verified success, and human corrections.
+// Execution alone or later correction must not become a positive training label.
 enum class ExperienceProvenance
 {
     Unknown,
@@ -44,12 +38,7 @@ enum class ExperienceProvenance
 [[nodiscard]] std::string ToString(ExperienceProvenance value);
 [[nodiscard]] ExperienceProvenance ExperienceProvenanceFromString(const std::string& value);
 
-// How sensitive the content of a record is, and therefore what consent it needs.
-//
-// Structural metadata -- that there is a button named "Send" in a window belonging to
-// an approved application -- is a different kind of thing from the words a person typed
-// into the box beside it. They are separated here so the second can require stronger
-// opt-in than the first, rather than one switch enabling both.
+// Structural metadata and content have separate consent requirements.
 enum class CaptureDepth
 {
     // Which controls existed, what they afford, which one was chosen. No values, no
@@ -91,13 +80,7 @@ struct CaptureConsent
     }
 };
 
-// One decision, as evidence.
-//
-// Deliberately not the ComputerDecision and deliberately not the audit record. The
-// audit log answers "what was done, by whose authority" and must never be traded away
-// for a training convenience; this answers "what was seen, what was chosen, and did it
-// work", which is a different question with a different retention policy and a
-// different consent basis.
+// Training evidence has separate consent and retention from the mandatory action audit.
 struct ExperienceRecord
 {
     // Versioned separately, because the observation features and the action vocabulary
@@ -132,17 +115,7 @@ struct ExperienceRecord
     {
         std::string name;
         std::string role;
-        // What UI Automation infers labels this control, and the nearest named ancestor.
-        //
-        // Both were missing, and their absence is why the first trained ranker learned
-        // position and nothing else: every admissible row was an unnamed field, so
-        // `name` was empty on every candidate and the only column that varied across
-        // them was where they sat in the list. These are the evidence a person actually
-        // uses to tell one unlabelled box from the next.
-        //
-        // Neither is an identifier. An automation id is this machine's temporary handle
-        // and never appears in a row; a container name is what the application calls a
-        // panel, which is the same fact on any machine that runs it.
+        // Published label and named container are portable evidence, not automation IDs.
         std::string inferredLabel;
         std::string container;
         bool nameless = false;
@@ -166,26 +139,11 @@ struct ExperienceRecord
     ComputerDecisionKind decision = ComputerDecisionKind::CannotHandle;
     ComputerReasonCode reason = ComputerReasonCode::None;
     actions::ActionType action = actions::ActionType::Unknown;
-    // The control the action aimed at, by name. Never an automation id or a runtime id:
-    // those are this machine's temporary handles, and a policy that learned one learned
-    // the machine rather than the task.
-    //
-    // This is the *answer*. Everything about the chosen candidate belongs on this side
-    // of the line and nothing on this side may reach a feature -- see below.
+    // Chosen control name is the answer, never an input feature or machine-specific ID.
     std::string target;
 
-    // What the subgoal asked for: the question, recorded separately from the answer.
-    //
-    // This was the defect that explains the first trained ranker. The dataset builder
-    // had no descriptor to read, so it reconstructed one from the chosen candidate --
-    // `target_name` was the chosen control's name and `target_role` was the chosen
-    // control's role. Every name and role feature was therefore 1 for the chosen
-    // candidate by construction, on every named row: the label was inside the features.
-    // On the unnamed rows there was no name to leak, so the only column left that
-    // varied was position, and position is what the model learned.
-    //
-    // A ranker is only meaningful when the question and the answer are separate objects.
-    // These three are the question. `target` and `candidates[i].chosen` are the answer.
+    // Requested descriptor is the question; target and chosen flags are the answer.
+    // Keep them separate to prevent label leakage into features.
     std::string requestedName;
     std::string requestedRole;
     std::string requestedContainer;
@@ -203,13 +161,8 @@ struct ExperienceRecord
     // What this replaced, when it is a correction.
     std::string correctedRecordId;
 
-    // What this row was collected under, when a harness said.
-    //
-    // Protocol metadata, not a label and not a feature: it says which task and which
-    // arrangement of the window produced the row, so a split can hold out whole
-    // variants instead of whole sessions. Holding out sessions was not enough -- every
-    // session ran every task, so the same task shape appeared on both sides of the
-    // split and the held-out score was measuring recall of a task it had already seen.
+    // Protocol metadata for holding out complete task and layout variants;
+    // never an input feature or training label.
     std::string taskVariant;
     std::string layoutVariant;
 
@@ -217,11 +170,7 @@ struct ExperienceRecord
     std::uint64_t executionMicroseconds = 0;
     std::uint64_t recordedAtMs = 0;
 
-    // Whether the row is admissible as a positive training label.
-    //
-    // Computed rather than asserted. An unverified effect is the case this exists for:
-    // it means "it may have worked", and admitting it as a verified positive is how a
-    // policy learns that an action nobody could confirm is a good action.
+    // Computed from verified evidence; an unconfirmed effect is not a positive label.
     [[nodiscard]] bool QualifiesAsPositiveLabel() const;
 };
 
@@ -264,19 +213,8 @@ struct CaptureStatus
     std::uintmax_t bytesWritten = 0;
 };
 
-// The opt-in record of what was decided and whether it worked.
-//
-// Separate from memory, from identity storage and from the action audit, and separate
-// on purpose. The audit log is mandatory and must never be dropped; this is optional
-// and must be dropped the moment keeping it would delay anything that matters. Memory
-// is Revia's; this is a dataset. Running them through one mechanism would mean one
-// retention policy, one consent basis and one deletion story for three things that
-// need three.
-//
-// It is off. Not off-by-default-in-the-config: off, with no capture session open, and
-// nothing is written until one is explicitly opened for a named application. Enabling
-// it does not reach backwards -- there is no buffer of earlier activity to flush,
-// because nothing was kept.
+// Optional recording starts only with explicit consent for a named application;
+// no earlier activity is buffered. It must never delay required work or replace audit.
 class ComputerExperienceRecorder
 {
 public:
@@ -294,24 +232,12 @@ public:
     [[nodiscard]] bool Capturing() const;
     [[nodiscard]] CaptureStatus Status() const;
 
-    // What the harness driving this collection says the current rows are about.
-    //
-    // Protocol metadata and nothing else: which task shape and which arrangement of the
-    // window is being exercised right now. It exists so a split can hold out complete
-    // variants rather than complete sessions, which is the difference between measuring
-    // generalisation and measuring recall.
-    //
-    // Only a collection harness sets this. Ordinary use leaves it empty, and an empty
-    // variant is simply a row no variant-based split can place -- which those splits
-    // then say, rather than guessing.
+    // Collection harness supplies task/layout variants for dataset splits.
+    // Ordinary use leaves them empty; splits must report unplaceable rows.
     void SetProtocol(std::string taskVariant, std::string layoutVariant);
 
-    // Offer one decision for recording.
-    //
-    // Returns whether it was written. A false is ordinary and not an error: outside a
-    // capture session, outside the consented window, or past a quota, the right
-    // behaviour is to drop the row. Optional recording must never be the reason
-    // something else waits.
+    // Returns false outside consent, outside the approved window, or beyond quotas.
+    // Optional recording must never delay execution.
     [[nodiscard]] bool Record(ExperienceRecord record);
 
     // Everything this session has written, for the export tooling. Reads from disk so
@@ -319,12 +245,8 @@ public:
     // exists only in memory.
     [[nodiscard]] std::vector<ExperienceRecord> Read(const std::string& sessionId) const;
 
-    // Forget a session's records.
-    //
-    // Returns the sessions whose exports and trained artifacts are now downstream of
-    // deleted data. Deleting a row does not unlearn it: an artifact trained on it has
-    // already absorbed whatever it taught, and the honest response is to mark that
-    // artifact for retirement rather than to claim the data is gone from it.
+    // Reports downstream exports and artifacts affected by deletion.
+    // Deleting records does not unlearn them; affected artifacts require retirement.
     struct Deletion
     {
         bool deleted = false;
@@ -372,15 +294,8 @@ private:
     CaptureRefusal lastRefusal = CaptureRefusal::None;
 };
 
-// Build a record from what the controller and the runner already know.
-//
-// Redaction happens here, on the way in. A password field never becomes a value that is
-// written and then cleaned up: it arrives at the record as withheld, and the only thing
-// stored is that there was a control there and it was refused.
-[[nodiscard]] ExperienceRecord BuildExperienceRecord(
-    const ComputerTaskContext& context,
-    const ComputerSubgoal& subgoal,
-    const ComputerDecisionRecord& decision,
-    CaptureDepth depth);
+// Redacts before recording: password controls are withheld, never written then cleaned.
+[[nodiscard]] ExperienceRecord BuildExperienceRecord(const ComputerTaskContext& context,
+    const ComputerSubgoal& subgoal, const ComputerDecisionRecord& decision, CaptureDepth depth);
 
 } // namespace revia::computer

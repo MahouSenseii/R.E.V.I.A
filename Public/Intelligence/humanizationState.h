@@ -29,16 +29,7 @@ struct HumanizationState
     }
 };
 
-// Holds one social state for all model tiers, and renders none of it.
-//
-// This deliberately has no prompt output. It used to write a numeric row of curiosity,
-// confidence, playfulness, talkativeness, social energy, familiarity, and irritation
-// straight into the system prompt, alongside the state packet's prose description of the
-// same traits from DevelopmentState, RelationshipState, and the emotion vector. Two
-// descriptions of one personality, moving independently, one of them telemetry.
-//
-// The old numeric social reading remains only for evaluator comparison. Current interest
-// and the generic unresolved outcome reach the model through ReviaStatePacket.
+// Shares conversational state across tiers. Legacy social metrics are used only by comparison evaluators.
 class HumanizationController
 {
 public:

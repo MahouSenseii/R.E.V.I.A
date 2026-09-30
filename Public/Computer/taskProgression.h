@@ -9,29 +9,8 @@
 namespace revia::computer
 {
 
-// Where a content task has got to, decided by the runtime from evidence it already has.
-//
-// The defect this exists to close: Main could produce valid, well-formed subgoals and
-// still choose the wrong *operation* for the state the task was in. Asked to place a
-// message it proposed `resolve_target` twice and `interact_with_control` on "Send" once,
-// and on a later run it aimed at a bare edit field instead of the named panel. Every one
-// of those was a decision the runtime did not need to ask about: the content was in the
-// vault, the destination was on screen, and what had to happen next followed from both.
-//
-// The division of labour this introduces:
-//
-//   the runtime decides *what kind of operation* comes next, because task state
-//   determines it and the runtime owns task state;
-//
-//   the model resolves *which thing on screen is meant*, but only when deterministic
-//   evidence cannot -- when a description matches nothing, or matches two things.
-//
-// That is not a smaller role for the model. It is the role it is actually good at. A
-// model asked "is the Compose box the one labelled Compose or the one in the Compose
-// panel?" is being asked a question about meaning. A model asked "the content is held,
-// the field is identified, what now?" is being asked to rediscover a fact the runtime
-// wrote down, and it will sometimes get it wrong -- which is not a prompt problem, it is
-// a design problem, and no wording fixes it.
+// Runtime evidence determines the next operation. The model resolves targets
+// only when deterministic matching is absent or ambiguous.
 enum class TaskPhase
 {
     // The runtime cannot derive the next operation. Either the task carries no
@@ -65,11 +44,7 @@ struct TaskProgress
     // call. False for `Undetermined` and `ResolveDestination`, which are precisely the
     // states where a model has something to contribute.
     bool derivable = false;
-    // Proposed, and therefore still validated. This is deliberately not a validated
-    // subgoal: it goes through the same `ValidateSubgoal` a model's proposal does, so
-    // there is exactly one path by which a subgoal acquires authority and the runtime
-    // does not get a private one. A derived subgoal that fails validation is refused for
-    // the same reasons and with the same record.
+    // Derived proposals use the same ValidateSubgoal path and refusal record as model output.
     ComputerSubgoal proposed;
     // For the activity feed and the record. Never parsed.
     std::string detail;
@@ -95,13 +70,8 @@ struct TaskProgressInputs
     bool submissionReady = false;
     // This iteration's single observation.
     const ComputerTaskContext* context = nullptr;
-    // Whether a submission has already been *executed* for this task.
-    //
-    // Executed, deliberately, and not verified. A send that ran and could not be
-    // confirmed is exactly the case where repeating it sends twice -- so for deciding
-    // whether the submission phase is over, "it happened" is the safe reading and
-    // "it was confirmed" is the dangerous one. Verification still decides what the run
-    // *reports*; it does not decide whether to do it again.
+    // Execution ends the submission phase even when verification is uncertain,
+    // to prevent duplicate sends. Verification still controls the reported outcome.
     bool submissionDone = false;
     // The reference to the held content, for a payload subgoal.
     PayloadReference payload;
@@ -111,11 +81,7 @@ struct TaskProgressInputs
     std::string goalId;
 };
 
-// Work out the phase, and derive the subgoal when the phase determines one.
-//
-// Pure with respect to everything but its inputs, so the whole progression is testable
-// without a desktop, a model or a session -- which matters, because the states this has
-// to get right are exactly the ones that are expensive to reach by hand.
+// Derives phase and proposed subgoal solely from supplied task evidence.
 [[nodiscard]] TaskProgress DeriveTaskProgress(const TaskProgressInputs& inputs);
 
 } // namespace revia::computer

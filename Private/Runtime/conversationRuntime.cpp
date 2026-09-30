@@ -1,3 +1,7 @@
+#include "Agents/responseFilterSettings.h"
+#include "Core/conversationMessage.h"
+#include "Core/profile.h"
+#include "LLM/responseTypes.h"
 #include "Core/utf8.h"
 #include "Runtime/conversationRuntime.h"
 
@@ -128,10 +132,7 @@ std::string JoinSources(const std::vector<std::string>& sources)
     return joined.str();
 }
 
-std::string InternetActivityDetail(
-    const std::vector<std::string>& sources,
-    const std::string& grounding,
-    const std::string& backendResult)
+std::string InternetActivityDetail(const std::vector<std::string>& sources, const std::string& grounding, const std::string& backendResult)
 {
     constexpr std::size_t MaximumPreviewCharacters = 16000;
     std::string preview = grounding;
@@ -186,29 +187,14 @@ intelligence::RoutingContext BuildRoutingContext(const RoutingInputs& inputs)
     return context;
 }
 
-ConversationRuntime::ConversationRuntime(
-    messageRouter& inputRouter,
-    conversationContext& inputContext,
-    agents::TurnCoordinator& inputCoordinator,
-    speech::SpeechService& inputSpeech,
-    AffectController& inputAffect,
-    emotion::EmotionRuntime& inputEmotions,
-    RuntimeEventBus& inputEvents,
-    logger& inputLog,
-    StateHandler inputStateHandler,
-    AffectHandler inputAffectHandler,
-    InternetSettingsProvider inputInternetSettings,
-    DesktopSettingsProvider inputDesktopSettings,
-    InternetLookupHandler inputInternetLookup,
-    ResponseFilterSettingsProvider inputResponseFilterSettings,
-    ScreenContextProvider inputScreenContext,
-    RelationshipProvider inputRelationship,
-    DevelopmentProvider inputDevelopment,
-    StimulusObserver inputStimulusObserver,
-    ScreenCaptureRequest inputScreenCaptureRequest,
-    PreferenceProvider inputPreferenceProvider,
-    SelfInquirySettingsProvider inputSelfInquirySettings,
-    ConversationRecallHandler inputConversationRecall,
+ConversationRuntime::ConversationRuntime(messageRouter& inputRouter, conversationContext& inputContext,
+    agents::TurnCoordinator& inputCoordinator, speech::SpeechService& inputSpeech, AffectController& inputAffect,
+    emotion::EmotionRuntime& inputEmotions, RuntimeEventBus& inputEvents, logger& inputLog, StateHandler inputStateHandler,
+    AffectHandler inputAffectHandler, InternetSettingsProvider inputInternetSettings, DesktopSettingsProvider inputDesktopSettings,
+    InternetLookupHandler inputInternetLookup, ResponseFilterSettingsProvider inputResponseFilterSettings,
+    ScreenContextProvider inputScreenContext, RelationshipProvider inputRelationship, DevelopmentProvider inputDevelopment,
+    StimulusObserver inputStimulusObserver, ScreenCaptureRequest inputScreenCaptureRequest, PreferenceProvider inputPreferenceProvider,
+    SelfInquirySettingsProvider inputSelfInquirySettings, ConversationRecallHandler inputConversationRecall,
     AutonomyContextProvider inputAutonomyContext)
     : router(inputRouter),
       context(inputContext),
@@ -236,13 +222,8 @@ ConversationRuntime::ConversationRuntime(
 {
 }
 
-SessionResult ConversationRuntime::Reply(
-    const std::string& input,
-    const aiProfile& profile,
-    const bool llmAvailable,
-    const bool shouldSpeak,
-    const std::stop_token stopToken,
-    const std::string& turnReference)
+SessionResult ConversationRuntime::Reply(const std::string& input, const aiProfile& profile, const bool llmAvailable,
+    const bool shouldSpeak, const std::stop_token stopToken, const std::string& turnReference)
 {
     context.AddMessage("user", input);
     TurnPolicy policy;
@@ -261,15 +242,9 @@ SessionResult ConversationRuntime::Reply(
         policy);
 }
 
-SessionResult ConversationRuntime::ReplyPublic(
-    const std::string& input,
-    const std::vector<conversationMessage>& channelHistory,
-    const std::string& publicInstruction,
-    const identity::RelationshipState& relationship,
-    const aiProfile& profile,
-    const bool llmAvailable,
-    const bool shouldSpeak,
-    const std::stop_token stopToken)
+SessionResult ConversationRuntime::ReplyPublic(const std::string& input, const std::vector<conversationMessage>& channelHistory,
+    const std::string& publicInstruction, const identity::RelationshipState& relationship, const aiProfile& profile,
+    const bool llmAvailable, const bool shouldSpeak, const std::stop_token stopToken)
 {
     std::vector<conversationMessage> promptContext = channelHistory;
     promptContext.push_back({"user", input});
@@ -320,11 +295,8 @@ aiProfile ConversationRuntime::PublicGuestProfile()
     return value;
 }
 
-SessionResult ConversationRuntime::ReplyPublic(
-    messageRouter& isolatedRouter,
-    const std::string& input,
-    const std::vector<conversationMessage>& guestHistory,
-    const std::stop_token stopToken)
+SessionResult ConversationRuntime::ReplyPublic(messageRouter& isolatedRouter, const std::string& input,
+    const std::vector<conversationMessage>& guestHistory, const std::stop_token stopToken)
 {
     SessionResult result;
     result.succeeded = false;
@@ -351,13 +323,8 @@ SessionResult ConversationRuntime::ReplyPublic(
     return result;
 }
 
-SessionResult ConversationRuntime::StartConversation(
-    const std::string& cue,
-    const std::string& evidence,
-    const aiProfile& profile,
-    const bool llmAvailable,
-    const bool shouldSpeak,
-    const std::stop_token stopToken)
+SessionResult ConversationRuntime::StartConversation(const std::string& cue, const std::string& evidence, const aiProfile& profile,
+    const bool llmAvailable, const bool shouldSpeak, const std::stop_token stopToken)
 {
     std::vector<conversationMessage> promptContext = context.GetRecentMessages();
     // The local event is represented as a transient turn so the chat template ends with
@@ -391,13 +358,8 @@ SessionResult ConversationRuntime::StartConversation(
         {});
 }
 
-SessionResult ConversationRuntime::StartCuriosityConversation(
-    const std::string& topic,
-    const std::string& rationale,
-    const std::string& researchGrounding,
-    const aiProfile& profile,
-    const bool llmAvailable,
-    const bool shouldSpeak,
+SessionResult ConversationRuntime::StartCuriosityConversation(const std::string& topic, const std::string& rationale,
+    const std::string& researchGrounding, const aiProfile& profile, const bool llmAvailable, const bool shouldSpeak,
     const std::stop_token stopToken)
 {
     // One short line needs a finding, not every page the browser read. Unbounded, the
@@ -474,12 +436,8 @@ void ConversationRuntime::SetSongListProvider(SongListProvider provider)
     songListProvider = std::move(provider);
 }
 
-std::string ConversationRuntime::BuildTurnPosture(
-    const std::string& policyInput,
-    const std::vector<conversationMessage>& promptContext,
-    const aiProfile& profile,
-    const bool llmAvailable,
-    const TurnPolicy& turnPolicy) const
+std::string ConversationRuntime::BuildTurnPosture(const std::string& policyInput, const std::vector<conversationMessage>& promptContext,
+    const aiProfile& profile, const bool llmAvailable, const TurnPolicy& turnPolicy) const
 {
     const agents::ConversationStylePolicy conversationStyle;
     const emotion::EmotionSnapshot current = emotions.Current();
@@ -620,12 +578,8 @@ std::string ConversationRuntime::BuildTurnPosture(
     return postureLine.str();
 }
 
-ConversationRuntime::InvestigationSummary ConversationRuntime::RunInvestigation(
-    const agents::SelfInquiryResult& seed,
-    const std::string& policyInput,
-    const std::string& basePosture,
-    const std::uint64_t turnId,
-    const std::stop_token stopToken)
+ConversationRuntime::InvestigationSummary ConversationRuntime::RunInvestigation(const agents::SelfInquiryResult& seed,
+    const std::string& policyInput, const std::string& basePosture, const std::uint64_t turnId, const std::stop_token stopToken)
 {
     InvestigationSummary summary;
     if (!seed.HasQuestions()) return summary;
@@ -709,13 +663,9 @@ ConversationRuntime::InvestigationSummary ConversationRuntime::RunInvestigation(
     return summary;
 }
 
-agents::SelfInquiryResult ConversationRuntime::RunSelfInquiry(
-    const std::string& policyInput,
-    const std::vector<conversationMessage>& promptContext,
-    const std::string& basePosture,
-    const intelligence::IntelligenceDecision& routing,
-    const bool modelAvailable,
-    const std::uint64_t turnId,
+agents::SelfInquiryResult ConversationRuntime::RunSelfInquiry(const std::string& policyInput,
+    const std::vector<conversationMessage>& promptContext, const std::string& basePosture,
+    const intelligence::IntelligenceDecision& routing, const bool modelAvailable, const std::uint64_t turnId,
     const std::stop_token stopToken)
 {
     agents::SelfInquiryResult inquiry;
@@ -790,8 +740,7 @@ agents::SelfInquiryResult ConversationRuntime::RunSelfInquiry(
     return inquiry;
 }
 
-agents::ResponseFilterContext ConversationRuntime::BuildResponseFilterContext(
-    const std::string& policyInput,
+agents::ResponseFilterContext ConversationRuntime::BuildResponseFilterContext(const std::string& policyInput,
     const std::vector<conversationMessage>& promptContext) const
 {
     agents::ResponseFilterContext contextFacts;
@@ -830,12 +779,8 @@ agents::ResponseFilterContext ConversationRuntime::BuildResponseFilterContext(
     return contextFacts;
 }
 
-evaluation::EvaluationReply ConversationRuntime::EvaluateTurn(
-    const std::string& input,
-    const std::vector<conversationMessage>& priorTurns,
-    const aiProfile& profile,
-    const bool llmAvailable,
-    const std::stop_token stopToken)
+evaluation::EvaluationReply ConversationRuntime::EvaluateTurn(const std::string& input, const std::vector<conversationMessage>& priorTurns,
+    const aiProfile& profile, const bool llmAvailable, const std::stop_token stopToken)
 {
     // The case supplies its own history rather than reading the live one, so a suite run
     // measures the corpus and not whatever the user happened to say beforehand.
@@ -884,17 +829,9 @@ evaluation::EvaluationReply ConversationRuntime::EvaluateTurn(
     return reply;
 }
 
-SessionResult ConversationRuntime::Generate(
-    const std::string& policyInput,
-    const std::vector<conversationMessage>& promptContext,
-    const aiProfile& profile,
-    const bool llmAvailable,
-    const bool shouldSpeak,
-    const bool evaluateMemory,
-    const bool proactive,
-    const std::string& proactiveInstruction,
-    const std::string& precomputedInternetGrounding,
-    const std::stop_token stopToken,
+SessionResult ConversationRuntime::Generate(const std::string& policyInput, const std::vector<conversationMessage>& promptContext,
+    const aiProfile& profile, const bool llmAvailable, const bool shouldSpeak, const bool evaluateMemory, const bool proactive,
+    const std::string& proactiveInstruction, const std::string& precomputedInternetGrounding, const std::stop_token stopToken,
     const TurnPolicy& turnPolicy)
 {
     SessionResult result;
@@ -1851,13 +1788,8 @@ agents::ConversationQualitySnapshot ConversationRuntime::QualitySnapshot() const
     return qualityMonitor.Snapshot();
 }
 
-void ConversationRuntime::PublishComponent(
-    const std::string& component,
-    const std::string& phase,
-    const std::string& message,
-    const double elapsedMilliseconds,
-    const int queueDepth,
-    const std::uint64_t turnId) const
+void ConversationRuntime::PublishComponent(const std::string& component, const std::string& phase, const std::string& message,
+    const double elapsedMilliseconds, const int queueDepth, const std::uint64_t turnId) const
 {
     RuntimeEvent event;
     event.kind = RuntimeEventKind::ComponentStatus;
@@ -1871,14 +1803,8 @@ void ConversationRuntime::PublishComponent(
     events.Publish(std::move(event));
 }
 
-void ConversationRuntime::PublishInternetActivity(
-    const std::string& phase,
-    const std::string& query,
-    const std::string& provider,
-    const std::string& detail,
-    const double elapsedMilliseconds,
-    const int sourceCount,
-    const std::uint64_t turnId) const
+void ConversationRuntime::PublishInternetActivity(const std::string& phase, const std::string& query, const std::string& provider,
+    const std::string& detail, const double elapsedMilliseconds, const int sourceCount, const std::uint64_t turnId) const
 {
     RuntimeEvent event;
     event.kind = RuntimeEventKind::ComponentStatus;

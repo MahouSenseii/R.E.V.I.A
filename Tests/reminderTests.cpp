@@ -204,13 +204,100 @@ void TestSheSetsAndDeliversThem()
     session.Events().Unsubscribe(id);
 }
 
+void TestReminderRemovalsRetainDurableStateOnSaveFailure(const int operation)
+{
+    revia::tests::ScopedTestDirectory directory;
+    const auto file = directory.root / "reminders.json";
+    const auto temporary = std::filesystem::path(file.string() + ".tmp");
+    const auto now = JuneMorning();
+    ReminderRequest request;
+    request.text = "persistent removal fixture";
+    request.due = now + 1min;
+    ReminderBook book;
+    std::string error;
+    Check(book.Initialize(file, error) && book.Add(request, error) && error.empty(),
+        "Could not seed the reminder removal fixture.");
+    // A directory at the temporary filename deterministically prevents replacement,
+    // without changing permissions or touching the actual saved reminder.
+    std::filesystem::create_directory(temporary);
+    error = "stale caller error";
+    if (operation == 0)
+        Check(!book.Cancel(1, &error), "A failed durable cancellation reported success.");
+    else if (operation == 1)
+        Check(book.Clear(&error) == 0, "A failed durable clear reported success.");
+    else
+        Check(book.TakeDue(now + 2min, &error).empty(),
+            "An unsaved reminder removal was handed off for delivery.");
+    Check(error != "stale caller error" &&
+        (Contains(error, "kept") || Contains(error, "still pending")),
+        "A failed reminder mutation did not explain that its pending records were retained.");
+    Check(book.Pending().size() == 1,
+        "A failed reminder removal changed the live list despite unchanged durable state.");
+    ReminderBook reopened;
+    Check(reopened.Initialize(file, error) && reopened.Pending().size() == 1,
+        "The reminder save failure damaged its previously durable record.");
+    std::filesystem::remove(temporary);
+    error = "stale caller error";
+    if (operation == 0) Check(book.Cancel(1, &error).has_value(), "Cancellation could not retry after recovery.");
+    else if (operation == 1) Check(book.Clear(&error) == 1, "Clear could not retry after recovery.");
+    else Check(book.TakeDue(now + 2min, &error).size() == 1, "Due delivery could not retry after recovery.");
+    Check(error.empty(), "A recovered reminder operation retained an old error.");
+    ReminderBook afterRecovery;
+    Check(book.Pending().empty() && afterRecovery.Initialize(file, error) &&
+        afterRecovery.Pending().empty(), "A completed reminder removal resurrected after restart.");
+    error = "stale caller error";
+    Check(!book.Cancel(1, &error) && error.empty(), "A missing reminder was confused with a save failure.");
+    error = "stale caller error";
+    Check(book.Clear(&error) == 0 && error.empty(), "An empty clear was confused with a save failure.");
+    error = "stale caller error";
+    Check(book.TakeDue(now + 2min, &error).empty() && error.empty(),
+        "An empty due list retained an old save error.");
+}
+
+void TestReminderRemovalFailuresAreReportedAndNotDelivered()
+{
+    revia::tests::ScopedTestDirectory directory;
+    const auto file = directory.root / "reminders.json";
+    ReviaSession session;
+    std::string error;
+    Check(Access::InitializeReminders(session, file, error), "Could not initialize the session reminder fixture.");
+    const auto now = WallClock::now();
+    (void)Access::SubmitOperator(session, "/remind 1m persistent session fixture");
+    const auto temporary = std::filesystem::path(file.string() + ".tmp");
+    std::filesystem::create_directory(temporary);
+    for (const char* command : {"/reminders cancel 1", "/reminders clear"})
+    {
+        const auto result = Access::SubmitOperator(session, command);
+        Check(!result.succeeded && Contains(result.text, "still pending") &&
+            !Contains(result.text, "There is no reminder") && !result.reason.empty(),
+            "A failed saved-reminder removal gave a false confirmation: " + result.text);
+    }
+    std::size_t delivered = 0;
+    const auto subscription = session.Events().Subscribe([&](const RuntimeEvent& event)
+    {
+        if (event.kind == RuntimeEventKind::AssistantMessage && event.component == "Reminder") ++delivered;
+    });
+    Access::DeliverReminders(session, now + 2min);
+    Check(delivered == 0 && Contains(Access::Reminders(session), "persistent session fixture"),
+        "The session delivered a reminder before its removal became durable.");
+    std::filesystem::remove(temporary);
+    Access::DeliverReminders(session, now + 2min);
+    Access::DeliverReminders(session, now + 3min);
+    Check(delivered == 1, "Reminder delivery did not recover exactly once after a save failure.");
+    session.Events().Unsubscribe(subscription);
+}
+
 } // namespace
 
 void RunReminderTests()
 {
     TestRemindersAreReadWithoutTheModel();
     TestTheBookKeepsThemAcrossRestarts();
+    TestReminderRemovalsRetainDurableStateOnSaveFailure(0);
+    TestReminderRemovalsRetainDurableStateOnSaveFailure(1);
+    TestReminderRemovalsRetainDurableStateOnSaveFailure(2);
     TestSheSetsAndDeliversThem();
+    TestReminderRemovalFailuresAreReportedAndNotDelivered();
     std::cout << "Reminders and timers are read without the model, survive restarts and "
         "arrive on time.\n";
 }

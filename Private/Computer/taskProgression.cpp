@@ -41,10 +41,8 @@ bool SameApplication(const std::string& left, const std::string& right)
 // have would be preferring the weaker evidence. Ambiguity in the first attempt stops
 // there rather than falling through, because "two things are called Compose" is already
 // the question, and looking somewhere else for a third is not an answer to it.
-TargetMatch ResolveDestination(
-    const std::vector<ObservedCandidate>& candidates,
-    const std::string& destination,
-    TargetDescriptor& outDescriptor)
+TargetMatch ResolveDestination(const std::vector<ObservedCandidate>& candidates,
+    const std::string& destination, TargetDescriptor& outDescriptor)
 {
     TargetDescriptor byName;
     byName.name = destination;

@@ -20,19 +20,15 @@ ActionRuntime::ActionRuntime()
 {
 }
 
-bool ActionRuntime::Initialize(
-    const std::filesystem::path& capabilityConfig,
-    const std::filesystem::path& inputAuditPath,
-    std::string& outError)
+bool ActionRuntime::Initialize(const std::filesystem::path& capabilityConfig,
+    const std::filesystem::path& inputAuditPath, std::string& outError)
 {
     std::lock_guard lock(mutex);
     return InitializeUnlocked(capabilityConfig, inputAuditPath, outError);
 }
 
-bool ActionRuntime::InitializeUnlocked(
-    const std::filesystem::path& capabilityConfig,
-    const std::filesystem::path& inputAuditPath,
-    std::string& outError)
+bool ActionRuntime::InitializeUnlocked(const std::filesystem::path& capabilityConfig,
+    const std::filesystem::path& inputAuditPath, std::string& outError)
 {
     CapabilitySettings settings;
     if (!permissionStore.Load(capabilityConfig, settings, outError))
@@ -80,6 +76,10 @@ bool ActionRuntime::InitializeUnlocked(
     auditLogger = std::make_unique<audit::ActionAuditLogger>(inputAuditPath);
     capabilityConfigPath = capabilityConfig;
     auditPath = inputAuditPath;
+    {
+        std::lock_guard settingsLock(settingsMutex);
+        settingsSnapshot = std::move(settings);
+    }
     outError.clear();
     return true;
 }
@@ -112,20 +112,14 @@ void ActionRuntime::SetDispatchObserver(DispatchObserver observer)
     dispatchObserver = std::move(observer);
 }
 
-ActionOutcome ActionRuntime::Execute(
-    const ActionRequest& request,
-    bool confirmationGranted,
-    const std::stop_token stopToken)
+ActionOutcome ActionRuntime::Execute(const ActionRequest& request, bool confirmationGranted, const std::stop_token stopToken)
 {
     std::lock_guard lock(mutex);
     return ExecuteWithPolicy(request, nullptr, confirmationGranted, stopToken);
 }
 
-ActionOutcome ActionRuntime::ExecuteWithPolicy(
-    const ActionRequest& request,
-    const policy::CapabilityPolicy* scopedPolicy,
-    const bool confirmationGranted,
-    const std::stop_token stopToken)
+ActionOutcome ActionRuntime::ExecuteWithPolicy(const ActionRequest& request, const policy::CapabilityPolicy* scopedPolicy,
+    const bool confirmationGranted, const std::stop_token stopToken)
 {
     const auto executionStarted = std::chrono::steady_clock::now();
     ActionOutcome outcome;
@@ -215,9 +209,7 @@ PolicyDecision MoreRestrictive(const PolicyDecision& first, const PolicyDecision
 
 } // namespace
 
-PolicyDecision ActionRuntime::EvaluateScoped(
-    const ActionRequest& request,
-    const policy::CapabilityPolicy& scopedPolicy) const
+PolicyDecision ActionRuntime::EvaluateScoped(const ActionRequest& request, const policy::CapabilityPolicy& scopedPolicy) const
 {
     std::lock_guard lock(mutex);
     const PolicyDecision globalDecision = Evaluate(request);
@@ -228,11 +220,8 @@ PolicyDecision ActionRuntime::EvaluateScoped(
     return MoreRestrictive(globalDecision, scopedPolicy.Evaluate(request));
 }
 
-ActionOutcome ActionRuntime::ExecuteScoped(
-    const ActionRequest& request,
-    const policy::CapabilityPolicy& scopedPolicy,
-    bool confirmationGranted,
-    const std::stop_token stopToken)
+ActionOutcome ActionRuntime::ExecuteScoped(const ActionRequest& request,
+    const policy::CapabilityPolicy& scopedPolicy, bool confirmationGranted, const std::stop_token stopToken)
 {
     std::lock_guard lock(mutex);
     return ExecuteWithPolicy(request, &scopedPolicy, confirmationGranted, stopToken);
@@ -306,8 +295,8 @@ bool ActionRuntime::IsInitialized() const
 
 CapabilitySettings ActionRuntime::Settings() const
 {
-    std::lock_guard lock(mutex);
-    return policy != nullptr ? policy->Settings() : CapabilitySettings{};
+    std::lock_guard lock(settingsMutex);
+    return settingsSnapshot;
 }
 
 bool ActionRuntime::ReloadUnlocked(std::string& outError)
@@ -320,28 +309,21 @@ bool ActionRuntime::ReloadUnlocked(std::string& outError)
     return InitializeUnlocked(capabilityConfigPath, auditPath, outError);
 }
 
-bool ActionRuntime::AddApprovedApplication(
-    const std::string& executable,
-    std::string& outError)
+bool ActionRuntime::AddApprovedApplication(const std::string& executable, std::string& outError)
 {
     std::lock_guard lock(mutex);
     return capabilityEditor.AddApplication(capabilityConfigPath, executable, outError) &&
         ReloadUnlocked(outError);
 }
 
-bool ActionRuntime::RemoveApprovedApplication(
-    const std::string& executable,
-    std::string& outError)
+bool ActionRuntime::RemoveApprovedApplication(const std::string& executable, std::string& outError)
 {
     std::lock_guard lock(mutex);
     return capabilityEditor.RemoveApplication(capabilityConfigPath, executable, outError) &&
         ReloadUnlocked(outError);
 }
 
-bool ActionRuntime::AddApprovedControl(
-    const std::string& executable,
-    const std::string& control,
-    std::string& outError)
+bool ActionRuntime::AddApprovedControl(const std::string& executable, const std::string& control, std::string& outError)
 {
     std::lock_guard lock(mutex);
     return capabilityEditor.AddControl(
@@ -349,10 +331,7 @@ bool ActionRuntime::AddApprovedControl(
         ReloadUnlocked(outError);
 }
 
-bool ActionRuntime::RemoveApprovedControl(
-    const std::string& executable,
-    const std::string& control,
-    std::string& outError)
+bool ActionRuntime::RemoveApprovedControl(const std::string& executable, const std::string& control, std::string& outError)
 {
     std::lock_guard lock(mutex);
     return capabilityEditor.RemoveControl(
@@ -360,10 +339,7 @@ bool ActionRuntime::RemoveApprovedControl(
         ReloadUnlocked(outError);
 }
 
-bool ActionRuntime::SetInternetAccess(
-    const bool enabled,
-    const bool automaticLookup,
-    std::string& outError)
+bool ActionRuntime::SetInternetAccess(const bool enabled, const bool automaticLookup, std::string& outError)
 {
     std::lock_guard lock(mutex);
     return capabilityEditor.SetInternetAccess(
@@ -371,10 +347,7 @@ bool ActionRuntime::SetInternetAccess(
         ReloadUnlocked(outError);
 }
 
-bool ActionRuntime::SetInternetBrowser(
-    const bool visibleBrowser,
-    const bool autonomousResearch,
-    std::string& outError)
+bool ActionRuntime::SetInternetBrowser(const bool visibleBrowser, const bool autonomousResearch, std::string& outError)
 {
     std::lock_guard lock(mutex);
     return capabilityEditor.SetInternetBrowser(
@@ -382,24 +355,19 @@ bool ActionRuntime::SetInternetBrowser(
         ReloadUnlocked(outError);
 }
 
-void ActionRuntime::SetDesktopApprovalHandler(
-    policy::DesktopApprovalGate::Handler handler)
+void ActionRuntime::SetDesktopApprovalHandler(policy::DesktopApprovalGate::Handler handler)
 {
     // Not under `mutex`: the gate owns its own, and a reload must not be able to
     // block behind a dialog that is waiting on a person.
     desktopApprovals->SetHandler(std::move(handler));
 }
 
-policy::DesktopApprovalGate::TaskApproval ActionRuntime::ApproveDesktopTask(
-    const std::string& goalId, const bool messaging)
+policy::DesktopApprovalGate::TaskApproval ActionRuntime::ApproveDesktopTask(const std::string& goalId, const bool messaging)
 {
     return desktopApprovals->ApproveTask(goalId, messaging);
 }
 
-bool ActionRuntime::SetCameraAccess(
-    const bool enabled,
-    const bool autonomousCapture,
-    std::string& outError)
+bool ActionRuntime::SetCameraAccess(const bool enabled, const bool autonomousCapture, std::string& outError)
 {
     std::lock_guard lock(mutex);
     return capabilityEditor.SetCameraAccess(
@@ -407,16 +375,9 @@ bool ActionRuntime::SetCameraAccess(
         ReloadUnlocked(outError);
 }
 
-bool ActionRuntime::SetDesktopControl(
-    const bool pointer,
-    const bool keyboard,
-    const bool applicationLaunch,
-    const bool rawCoordinates,
-    const bool visualTargeting,
-    const bool autonomous,
-    const CapabilitySettings::DesktopControl::InputScope scope,
-    const bool allowCommandSurfaces,
-    std::string& outError)
+bool ActionRuntime::SetDesktopControl(const bool pointer, const bool keyboard, const bool applicationLaunch, const bool rawCoordinates,
+    const bool visualTargeting, const bool autonomous, const CapabilitySettings::DesktopControl::InputScope scope,
+    const bool allowCommandSurfaces, std::string& outError)
 {
     std::lock_guard lock(mutex);
     return capabilityEditor.SetDesktopControl(
@@ -455,11 +416,11 @@ std::string ActionRuntime::DesktopControlStopReason() const
     return desktopInputGuard ? desktopInputGuard->Reason() : std::string{};
 }
 
-void ActionRuntime::CancelActiveInternet()
+void ActionRuntime::CancelActiveInternet(const bool preserveTaskOwned)
 {
     // Deliberately do not acquire `mutex`: Execute() owns it for the full synchronous
     // request, and cancellation exists specifically to interrupt that wait.
-    if (internetCancellation) internetCancellation->CancelActive();
+    if (internetCancellation) internetCancellation->CancelActive(preserveTaskOwned);
 }
 
 } // namespace revia::actions

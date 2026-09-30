@@ -1,4 +1,5 @@
 #pragma once
+#include "Memory/memoryTypes.h"
 #include "Agents/memoryAgent.h"
 
 namespace revia::agents
@@ -14,8 +15,7 @@ struct MemoryAgentTestAccess
         agent.backfillMaximumRetry = std::chrono::milliseconds(320);
     }
 
-    static void SetEvaluator(MemoryAgent& agent,
-        std::function<memoryDecision(const std::string&, const std::string&)> evaluator)
+    static void SetEvaluator(MemoryAgent& agent, std::function<memoryDecision(const std::string&, const std::string&)> evaluator)
     {
         std::lock_guard lock(agent.mutex);
         agent.evaluateOverride = std::move(evaluator);

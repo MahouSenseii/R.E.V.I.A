@@ -28,17 +28,9 @@ struct ReconciliationSettings
     float relatedSimilarity = 0.80F;
 };
 
-// Exact nonempty text is Duplicate regardless of the embedding. All nonidentical
-// summaries are retained: token overlap and embeddings cannot prove entity identity,
-// argument order, modality, quantification or negation scope. Save separately supports
-// its established case/whitespace formatting normalization without semantic merging.
-// Paraphrase accumulation and contradiction supersession remain unresolved; see
-// ISSUE-REVIA-0079 and ISSUE-REVIA-0080. Neither older nor incoming claims are discarded
-// on an uncertain semantic judgment.
-[[nodiscard]] MemoryRelation ClassifyRelation(
-    const std::string& existingSummary,
-    const std::string& candidateSummary,
-    float similarity,
-    const ReconciliationSettings& settings = {});
+// Exact nonempty text is Duplicate; nonidentical summaries are retained regardless of vector/token overlap.
+// Save normalizes case/whitespace only; uncertain paraphrases and contradictions never discard claims.
+[[nodiscard]] MemoryRelation ClassifyRelation(const std::string& existingSummary,
+    const std::string& candidateSummary, float similarity, const ReconciliationSettings& settings = {});
 
 } // namespace revia::memory

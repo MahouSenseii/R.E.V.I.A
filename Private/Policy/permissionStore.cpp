@@ -59,10 +59,7 @@ T BoundedInteger(const json& data, const char* key, T fallback, T minimum, T max
 
 } // namespace
 
-bool PermissionStore::Load(
-    const std::filesystem::path& path,
-    actions::CapabilitySettings& outSettings,
-    std::string& outError) const
+bool PermissionStore::Load(const std::filesystem::path& path, actions::CapabilitySettings& outSettings, std::string& outError) const
 {
     std::ifstream file(path);
     if (!file.is_open())

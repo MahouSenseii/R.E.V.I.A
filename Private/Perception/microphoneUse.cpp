@@ -115,9 +115,7 @@ std::vector<MicrophoneUse> ReadMicrophoneUse()
     return uses;
 }
 
-bool OtherAppUsingMicrophone(
-    const std::vector<MicrophoneUse>& uses,
-    const std::vector<std::string>& ownApplications)
+bool OtherAppUsingMicrophone(const std::vector<MicrophoneUse>& uses, const std::vector<std::string>& ownApplications)
 {
     return std::any_of(uses.begin(), uses.end(), [&ownApplications](const MicrophoneUse& use)
     {

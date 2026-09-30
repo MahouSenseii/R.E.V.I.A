@@ -13,11 +13,7 @@ using revia::tests::Check;
 using revia::tests::ScopedTestDirectory;
 using namespace revia::identity;
 
-void ApplyTurn(
-    RelationshipRegistry& registry,
-    const std::string& entityId,
-    const std::string& input,
-    const bool succeeded = true)
+void ApplyTurn(RelationshipRegistry& registry, const std::string& entityId, const std::string& input, const bool succeeded = true)
 {
     const ConversationSignals signals =
         ReadConversationSignals(input, "an answer of some kind", succeeded);

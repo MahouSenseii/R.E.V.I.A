@@ -30,10 +30,7 @@ UsageSnapshot Snapshot(const double usedFraction, const bool measured = true)
 
 // A card whose budget and physical ceiling are different numbers, which is the only
 // shape in which the two can disagree -- and the shape every real GPU has.
-UsageSnapshot GpuSnapshot(
-    const double usedMiB,
-    const double budgetMiB,
-    const double capacityMiB)
+UsageSnapshot GpuSnapshot(const double usedMiB, const double budgetMiB, const double capacityMiB)
 {
     UsageSnapshot snapshot;
     snapshot.measured = true;

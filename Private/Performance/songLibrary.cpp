@@ -64,10 +64,7 @@ double BoundedGain(const json& data, const char* key, const double fallback)
 
 // The named files first, then any single .wav in the folder. The second rule is what
 // makes "drop a file in and sing it" work.
-void FindTracks(
-    const std::filesystem::path& directory,
-    std::filesystem::path& outInstrumental,
-    std::filesystem::path& outVocal)
+void FindTracks(const std::filesystem::path& directory, std::filesystem::path& outInstrumental, std::filesystem::path& outVocal)
 {
     std::error_code error;
     const auto named = [&](const char* name)
@@ -319,10 +316,7 @@ std::vector<SongSummary> SongLibrary::List() const
     return songs;
 }
 
-bool SongLibrary::Load(
-    const std::string& songId,
-    SongAsset& outAsset,
-    std::string& outError) const
+bool SongLibrary::Load(const std::string& songId, SongAsset& outAsset, std::string& outError) const
 {
     outAsset = {};
     if (!IsSafeSongId(songId))
@@ -418,10 +412,7 @@ bool SongLibrary::Load(
     return true;
 }
 
-bool SongLibrary::Resolve(
-    const std::string& query,
-    std::string& outSongId,
-    std::string& outError) const
+bool SongLibrary::Resolve(const std::string& query, std::string& outSongId, std::string& outError) const
 {
     const std::string wanted = Lower(query);
     if (wanted.empty())

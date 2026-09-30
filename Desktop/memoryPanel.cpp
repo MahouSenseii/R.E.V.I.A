@@ -1,3 +1,4 @@
+#include "Memory/memoryTypes.h"
 #include "memoryPanel.h"
 
 #include <QAbstractItemView>
@@ -42,9 +43,7 @@ namespace
     }
 }
 
-MemoryPanel::MemoryPanel(
-    revia::runtime::ReviaSession& inputSession,
-    QWidget* parent)
+MemoryPanel::MemoryPanel(revia::runtime::ReviaSession& inputSession, QWidget* parent)
     : QWidget(parent),
       session(inputSession)
 {

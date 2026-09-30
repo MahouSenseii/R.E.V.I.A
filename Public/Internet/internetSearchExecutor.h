@@ -16,23 +16,16 @@ namespace revia::actions::internet
 class InternetSearchExecutor final : public IActionExecutor
 {
 public:
-    explicit InternetSearchExecutor(
-        CapabilitySettings::InternetAccess settings,
+    explicit InternetSearchExecutor(CapabilitySettings::InternetAccess settings,
         std::shared_ptr<VisibleBrowserCancellation> cancellation = {});
 
     [[nodiscard]] bool Handles(ActionType type) const override;
-    [[nodiscard]] ActionResult Execute(
-        const ActionRequest& request,
-        const PolicyDecision& decision) override;
+    [[nodiscard]] ActionResult Execute(const ActionRequest& request, const PolicyDecision& decision) override;
     void CancelActive();
 
     // Kept public for deterministic parser tests; it performs no network access.
-    [[nodiscard]] static ActionResult ParseDuckDuckGoResponse(
-        const std::string& body,
-        int maxResults);
-    [[nodiscard]] static ActionResult ParseWikipediaResponse(
-        const std::string& body,
-        int maxResults);
+    [[nodiscard]] static ActionResult ParseDuckDuckGoResponse(const std::string& body, int maxResults);
+    [[nodiscard]] static ActionResult ParseWikipediaResponse(const std::string& body, int maxResults);
 
 private:
     [[nodiscard]] bool Admit(std::string& outReason);

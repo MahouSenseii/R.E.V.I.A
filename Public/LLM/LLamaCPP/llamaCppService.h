@@ -1,7 +1,13 @@
 #pragma once
 
+#include "Core/conversationMessage.h"
+#include "Core/profile.h"
+#include "LLM/backendTypes.h"
+#include "LLM/embeddingTypes.h"
+#include "LLM/endpointSettings.h"
+#include "LLM/responseTypes.h"
+#include "Memory/memoryTypes.h"
 #include "Agents/responseProvenance.h"
-#include "Library/structLibrary.h"
 #include "LLM/inferenceScheduler.h"
 #include <atomic>
 #include <functional>
@@ -21,10 +27,7 @@ public:
     llamaCppService();
     ~llamaCppService();
 
-    void ApplySettings(
-        const llmSettings& settings,
-        const embeddingSettings& embeddingSettings,
-        const aiProfile& profile);
+    void ApplySettings(const llmSettings& settings, const embeddingSettings& embeddingSettings, const aiProfile& profile);
     void ApplyProfile(const llmSettings& settings, const aiProfile& profile);
     bool IsServerAvailable(std::stop_token stopToken = {}) const;
     // Runs one real chat-template request so CUDA graph/JIT setup is paid during
@@ -40,90 +43,46 @@ public:
     // onDelta receives visible text as it is generated, so a caller can begin speaking
     // the first sentence while the rest is still being produced.
     using DeltaHandler = std::function<void(const std::string&)>;
-    responseOutput GenerateResponse(
-        const std::vector<conversationMessage>& context,
-        std::stop_token stopToken = {},
-        DeltaHandler onDelta = {},
-        bool deepReasoning = false,
+    responseOutput GenerateResponse(const std::vector<conversationMessage>& context, std::stop_token stopToken = {},
+        DeltaHandler onDelta = {}, bool deepReasoning = false,
         revia::llm::PrivateMemoryAccess memoryAccess = revia::llm::PrivateMemoryAccess::ProfileSetting) const;
     responseOutput GenerateActionProposal(const std::string& userRequest) const;
-    responseOutput ReviewConversationReply(
-        const std::string& userInput,
-        const std::string& candidateReply,
-        const std::string& runtimeGroundTruth,
-        int maxReviewTokens,
-        std::stop_token stopToken = {}) const;
-    responseOutput GenerateActivityDraft(const std::string& topic,
-        const std::string& context, std::stop_token stopToken = {}) const;
-    responseOutput GenerateCuriosityPlan(
-        const std::string& boundedContextPrompt,
-        const std::vector<std::string>& availableActions,
-        std::stop_token stopToken = {}) const;
+    responseOutput ReviewConversationReply(const std::string& userInput, const std::string& candidateReply,
+        const std::string& runtimeGroundTruth, int maxReviewTokens, std::stop_token stopToken = {}) const;
+    responseOutput GenerateActivityDraft(const std::string& topic, const std::string& context, std::stop_token stopToken = {}) const;
+    responseOutput GenerateCuriosityPlan(const std::string& boundedContextPrompt,
+        const std::vector<std::string>& availableActions, std::stop_token stopToken = {}) const;
     // Returns the questions Revia is putting to herself about a hard turn. It never
     // produces the visible reply; the conversational model still generates that.
-    responseOutput Deliberate(
-        const std::string& boundedInquiryPrompt,
-        std::stop_token stopToken = {}) const;
+    responseOutput Deliberate(const std::string& boundedInquiryPrompt, std::stop_token stopToken = {}) const;
     responseOutput GenerateGoalPlan(const std::string& userRequest) const;
-    // One step of an iterative run, decided from the attempts so far.
-    // One bounded subgoal, under its own grammar.
-    //
-    // The whole instruction is the system prompt here, not a user message wrapped in
-    // the next-step planner's prompt. Routing it through that one meant the step
-    // grammar decided the answer's shape and the subgoal instructions were ignored --
-    // which no scripted test could see, because a scripted test supplies the answer.
-    // One structured review of her own code. Background priority: a conversation turn
-    // preempts it.
-    responseOutput GenerateCodeReview(
-        const std::string& instructions,
-        const std::string& material,
-        const std::string& schema,
-        std::stop_token stopToken = {}) const;
-    responseOutput GenerateComputerSubgoal(
-        const std::string& instruction,
-        const std::string& situation,
-        const std::string& schema,
-        std::stop_token stopToken = {}) const;
+    // Structured source review uses background priority and yields to conversation.
+    responseOutput GenerateCodeReview(const std::string& instructions,
+        const std::string& material, const std::string& schema, std::stop_token stopToken = {}) const;
+    // Bounded subgoal grammar uses the whole instruction as its system prompt.
+    responseOutput GenerateComputerSubgoal(const std::string& instruction,
+        const std::string& situation, const std::string& schema, std::stop_token stopToken = {}) const;
 
-    responseOutput GenerateNextGoalStep(
-        const std::string& goalContext,
-        std::stop_token stopToken = {}) const;
+    // One iterative step decided from prior attempts.
+    responseOutput GenerateNextGoalStep(const std::string& goalContext, std::stop_token stopToken = {}) const;
     responseOutput GenerateDiagram(const std::string& userRequest) const;
-    responseOutput ComposeContent(
-        const std::string& request,
-        const std::string& context) const;
-    responseOutput ReviseBlock(
-        const std::string& instruction,
-        const std::string& neighbourhood,
-        const std::string& target) const;
-    responseOutput AnalyzeImage(
-        const std::filesystem::path& imagePath,
-        const std::string& prompt,
-        int maxResponseTokens,
-        std::stop_token stopToken = {},
-        bool backgroundAwareness = false) const;
+    responseOutput ComposeContent(const std::string& request, const std::string& context) const;
+    responseOutput ReviseBlock(const std::string& instruction, const std::string& neighbourhood, const std::string& target) const;
+    responseOutput AnalyzeImage(const std::filesystem::path& imagePath, const std::string& prompt, int maxResponseTokens,
+        std::stop_token stopToken = {}, bool backgroundAwareness = false) const;
     // `provenance` says whether the assistant text is Revia speaking for herself. It
     // has no default on purpose: a caller that does not know must decide, because the
     // safe answer and the convenient answer are not the same one.
-    memoryDecision EvaluateMemory(
-        const std::string& userMessage,
-        const std::string& assistantMessage,
-        revia::agents::ResponseProvenance provenance,
-        std::stop_token stopToken = {}) const;
+    memoryDecision EvaluateMemory(const std::string& userMessage, const std::string& assistantMessage,
+        revia::agents::ResponseProvenance provenance, std::stop_token stopToken = {}) const;
     healthOutput CheckEmbeddingHealth(std::stop_token stopToken = {}) const;
     // The saved memories nearest `query`, as the prompt block the reply would carry.
     // Empty when the profile has memory switched off.
-    std::string RelatedMemories(
-        const std::string& query,
-        std::stop_token stopToken = {}) const;
-    embeddingOutput EmbedMemory(
-        const std::string& summary,
-        std::stop_token stopToken = {}) const;
+    std::string RelatedMemories(const std::string& query, std::stop_token stopToken = {}) const;
+    embeddingOutput EmbedMemory(const std::string& summary, std::stop_token stopToken = {}) const;
 
 private:
-    static std::string ParseStreamChunk(
-        const std::string& line,
-        std::string* outFinishReason = nullptr);
+    static std::string ParseStreamChunk(const std::string& line, std::string* outFinishReason = nullptr);
     int ResponseTokenLimit() const;
     // Shared by both planners: same low temperature, same JSON-object response format,
     // different contract and token ceiling.
@@ -131,16 +90,10 @@ private:
     // payload is SVG, and making a small local model escape a whole document into a JSON
     // string burns most of the token budget on backslashes and fails on the first one it
     // gets wrong.
-    responseOutput GeneratePlannerResponse(
-        const std::string& systemPrompt,
-        const std::string& userRequest,
-        int maxTokens,
-        bool structuredJson = true,
-        std::stop_token stopToken = {},
-        revia::llm::InferencePriority priority = revia::llm::InferencePriority::Interactive,
-        float requestTemperature = 0.1F,
-        const std::string& operation = "structured planning",
-        const std::string& responseSchema = {}) const;
+    responseOutput GeneratePlannerResponse(const std::string& systemPrompt, const std::string& userRequest, int maxTokens,
+        bool structuredJson = true, std::stop_token stopToken = {},
+        revia::llm::InferencePriority priority = revia::llm::InferencePriority::Interactive, float requestTemperature = 0.1F,
+        const std::string& operation = "structured planning", const std::string& responseSchema = {}) const;
 
     std::string host = "127.0.0.1";
     int port = 8080;

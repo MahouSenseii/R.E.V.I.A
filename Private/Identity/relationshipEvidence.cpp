@@ -23,9 +23,7 @@ namespace
         return value;
     }
 
-    bool ContainsAny(
-        const std::string& haystack,
-        const std::initializer_list<std::string_view> needles)
+    bool ContainsAny(const std::string& haystack, const std::initializer_list<std::string_view> needles)
     {
         return std::any_of(needles.begin(), needles.end(),
             [&haystack](const std::string_view needle)
@@ -35,10 +33,7 @@ namespace
     }
 }
 
-ConversationSignals ReadConversationSignals(
-    const std::string& userInput,
-    const std::string& reply,
-    const bool succeeded)
+ConversationSignals ReadConversationSignals(const std::string& userInput, const std::string& reply, const bool succeeded)
 {
     ConversationSignals signals;
     signals.userInput = userInput;
@@ -200,9 +195,7 @@ std::string ReadStatedName(const std::string& userInput)
     return {};
 }
 
-RelationshipEvent BuildRelationshipEvent(
-    const std::string& entityId,
-    const ConversationSignals& signals)
+RelationshipEvent BuildRelationshipEvent(const std::string& entityId, const ConversationSignals& signals)
 {
     RelationshipEvent event;
     event.entityId = entityId;

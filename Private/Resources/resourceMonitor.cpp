@@ -321,14 +321,9 @@ std::uint64_t ResourceMonitor::TotalCpuMilliseconds(const std::vector<ProcessUsa
     return total;
 }
 
-UsageSnapshot ResourceMonitor::Compose(
-    const ResourcePlan& plan,
-    const SystemMemoryReading& memory,
-    const std::vector<ProcessUsage>& processes,
-    const std::vector<GpuAdapterReading>& gpuReadings,
-    const bool gpuCountersAvailable,
-    const std::uint64_t previousOwnedCpuMilliseconds,
-    const double elapsedSeconds)
+UsageSnapshot ResourceMonitor::Compose(const ResourcePlan& plan, const SystemMemoryReading& memory,
+    const std::vector<ProcessUsage>& processes, const std::vector<GpuAdapterReading>& gpuReadings, const bool gpuCountersAvailable,
+    const std::uint64_t previousOwnedCpuMilliseconds, const double elapsedSeconds)
 {
     UsageSnapshot snapshot;
     snapshot.processes = processes;
@@ -555,10 +550,7 @@ ResourceMonitor::~ResourceMonitor()
     Stop();
 }
 
-void ResourceMonitor::Start(
-    const ResourcePlan& inputPlan,
-    const std::chrono::milliseconds interval,
-    Handler inputHandler)
+void ResourceMonitor::Start(const ResourcePlan& inputPlan, const std::chrono::milliseconds interval, Handler inputHandler)
 {
     Stop();
     {

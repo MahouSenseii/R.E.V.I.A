@@ -8,12 +8,11 @@ param(
 $ErrorActionPreference = 'Stop'
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $failures = [System.Collections.Generic.List[string]]::new()
-$warnings = [System.Collections.Generic.List[string]]::new()
 
 function Write-ReviaCheck {
     param([string]$Name, [bool]$Passed, [string]$Detail)
     $marker = if ($Passed) { '[PASS]' } else { '[FAIL]' }
-    Write-Host "$marker $Name — $Detail"
+    Write-Host "$marker $Name - $Detail"
     if (-not $Passed) { $failures.Add("$Name`: $Detail") }
 }
 
@@ -25,7 +24,7 @@ function Resolve-ReviaPath {
 
 Push-Location $repoRoot
 try {
-    Write-Host "R.E.V.I.A health check — $Profile profile"
+    Write-Host "R.E.V.I.A health check - $Profile profile"
 
     $settingsPath = Join-Path $repoRoot 'Config\settings.json'
     try {

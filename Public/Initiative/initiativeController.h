@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Initiative/initiativeSettings.h"
 #include "Goals/goalTypes.h"
 #include "Initiative/attentionPolicy.h"
 #include "Initiative/conversationStarter.h"
@@ -91,9 +92,7 @@ public:
         std::vector<StarterCue> conversationCues;
     };
 
-    [[nodiscard]] Consideration Consider(
-        const Evidence& evidence,
-        const AttentionContext& context);
+    [[nodiscard]] Consideration Consider(const Evidence& evidence, const AttentionContext& context);
 
     // Whether anything at all could be said now, before there is anything to say: the
     // same gates Consider() applies, for a proposal of full confidence. A keystroke in
@@ -104,15 +103,11 @@ public:
     // Commits a proposal only after its output or private research actually succeeded.
     // Consider() merely reserves admission, so cancellation and generation failures do
     // not consume cooldown or the hourly budget.
-    [[nodiscard]] bool Commit(
-        const std::string& proposalId,
-        std::chrono::system_clock::time_point when);
+    [[nodiscard]] bool Commit(const std::string& proposalId, std::chrono::system_clock::time_point when);
     void Accept(const std::string& proposalId);
     // A normal reply accepts a conversational opening; a natural refusal such as "not
     // now" dismisses it. Neither path requires a slash command.
-    void RecordConversationResponse(
-        const std::string& response,
-        std::chrono::system_clock::time_point when);
+    void RecordConversationResponse(const std::string& response, std::chrono::system_clock::time_point when);
     void Dismiss(const std::string& proposalId, std::chrono::system_clock::time_point when);
     void Expire(const std::string& proposalId);
 
@@ -125,18 +120,10 @@ public:
     // Exposed so the same wording can be asserted in tests without a live desktop.
     // Picks the strongest available proposal, or none. Static so the choice between
     // evidence sources can be tested without a live desktop or a running session.
-    [[nodiscard]] static bool BuildProposal(
-        const Evidence& evidence,
-        Proposal& outProposal);
-    [[nodiscard]] static bool BuildActivityProposal(
-        const std::vector<perception::ActivitySpan>& recent,
-        Proposal& outProposal);
-    [[nodiscard]] static bool BuildUnfinishedGoalProposal(
-        const std::vector<goals::Goal>& unfinishedGoals,
-        Proposal& outProposal);
-    [[nodiscard]] static bool BuildConversationProposal(
-        const std::vector<StarterCue>& cues,
-        Proposal& outProposal);
+    [[nodiscard]] static bool BuildProposal(const Evidence& evidence, Proposal& outProposal);
+    [[nodiscard]] static bool BuildActivityProposal(const std::vector<perception::ActivitySpan>& recent, Proposal& outProposal);
+    [[nodiscard]] static bool BuildUnfinishedGoalProposal(const std::vector<goals::Goal>& unfinishedGoals, Proposal& outProposal);
+    [[nodiscard]] static bool BuildConversationProposal(const std::vector<StarterCue>& cues, Proposal& outProposal);
 
 private:
     mutable std::mutex mutex;

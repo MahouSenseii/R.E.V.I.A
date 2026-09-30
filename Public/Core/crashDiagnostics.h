@@ -6,16 +6,7 @@
 namespace revia::core
 {
 
-// Makes a dying process say why.
-//
-// A WIN32 GUI application has no console, so an uncaught exception, a std::terminate, a
-// Qt fatal, or a stack overflow all end the same way: the window vanishes and nothing is
-// written anywhere. That is indistinguishable from the user closing it, which makes the
-// difference between "it crashed" and "I closed it" unanswerable -- and a bug that cannot
-// be told from normal behaviour cannot be fixed.
-//
-// Everything here is best-effort by nature: the process is already failing. It is still
-// worth far more than silence.
+// Best-effort diagnostics for uncaught exceptions, termination and fatal process faults.
 class CrashDiagnostics
 {
 public:

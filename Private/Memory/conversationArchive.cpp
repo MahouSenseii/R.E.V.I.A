@@ -55,6 +55,55 @@ bool Execute(sqlite3* database, const char* sql)
     return result == SQLITE_OK;
 }
 
+class ArchiveTransaction
+{
+public:
+    explicit ArchiveTransaction(sqlite3* database)
+        : database(database), active(Execute(database, "BEGIN IMMEDIATE;")) {}
+    ~ArchiveTransaction()
+    {
+        if (active) Execute(database, "ROLLBACK;");
+    }
+    [[nodiscard]] bool IsActive() const { return active; }
+    bool Commit()
+    {
+        if (!active || !Execute(database, "COMMIT;")) return false;
+        active = false;
+        return true;
+    }
+private:
+    sqlite3* database;
+    bool active;
+};
+
+bool DeleteSession(sqlite3* database, const std::string& sessionId, std::size_t& outRemoved)
+{
+    outRemoved = 0;
+    ArchiveTransaction transaction(database);
+    if (!transaction.IsActive()) return false;
+    std::size_t removed = 0;
+    bool firstStatement = true;
+    for (const char* sql : {
+            "DELETE FROM conversation_turns WHERE session_id = ?;",
+            "DELETE FROM conversation_sessions WHERE session_id = ?;"})
+    {
+        Statement statement;
+        sqlite3_stmt* raw = nullptr;
+        if (sqlite3_prepare_v2(database, sql, -1, &raw, nullptr) != SQLITE_OK) return false;
+        statement.reset(raw);
+        if (sqlite3_bind_text(statement.get(), 1, sessionId.c_str(), -1, SQLITE_TRANSIENT) != SQLITE_OK ||
+            sqlite3_step(statement.get()) != SQLITE_DONE) return false;
+        if (firstStatement)
+        {
+            removed = static_cast<std::size_t>(sqlite3_changes64(database));
+            firstStatement = false;
+        }
+    }
+    if (!transaction.Commit()) return false;
+    outRemoved = removed;
+    return true;
+}
+
 std::string CurrentEpochSeconds()
 {
     const auto now = std::chrono::system_clock::now().time_since_epoch();
@@ -269,6 +318,7 @@ bool ConversationArchive::BeginSession(const std::string& sessionId, std::string
         outError = "The conversation archive could not be opened.";
         return false;
     }
+    std::lock_guard writeLock(connectionMutex);
 
     {
         Statement statement;
@@ -314,17 +364,18 @@ bool ConversationArchive::BeginSession(const std::string& sessionId, std::string
 
     for (const std::string& id : expired)
     {
-        ForgetSession(id);
+        std::size_t removed = 0;
+        if (!DeleteSession(database, id, removed))
+        {
+            outError = "The conversation archive could not prune an old session.";
+            return false;
+        }
         ++counters.prunedSessions;
     }
     return true;
 }
 
-bool ConversationArchive::Record(
-    const std::string& sessionId,
-    const std::string& role,
-    const std::string& content,
-    std::string& outReason)
+bool ConversationArchive::Record(const std::string& sessionId, const std::string& role, const std::string& content, std::string& outReason)
 {
     if (content.empty() || role.empty() || sessionId.empty())
     {
@@ -362,6 +413,7 @@ bool ConversationArchive::Record(
         outReason = "The conversation archive could not be opened.";
         return false;
     }
+    std::lock_guard writeLock(connectionMutex);
 
     int nextIndex = 0;
     {
@@ -423,6 +475,7 @@ bool ConversationArchive::EndSession(const std::string& sessionId)
     {
         return false;
     }
+    std::lock_guard writeLock(connectionMutex);
     Statement statement;
     sqlite3_stmt* raw = nullptr;
     if (sqlite3_prepare_v2(database,
@@ -438,9 +491,7 @@ bool ConversationArchive::EndSession(const std::string& sessionId)
     return sqlite3_step(statement.get()) == SQLITE_DONE;
 }
 
-std::vector<ArchivedTurn> ConversationArchive::LoadSession(
-    const std::string& sessionId,
-    const std::size_t maxTurns) const
+std::vector<ArchivedTurn> ConversationArchive::LoadSession(const std::string& sessionId, const std::size_t maxTurns) const
 {
     std::vector<ArchivedTurn> turns;
     sqlite3* const database = Acquire();
@@ -466,8 +517,7 @@ std::vector<ArchivedTurn> ConversationArchive::LoadSession(
     return turns;
 }
 
-std::vector<ArchivedTurn> ConversationArchive::LoadPreviousSessionTail(
-    const std::string& currentSessionId,
+std::vector<ArchivedTurn> ConversationArchive::LoadPreviousSessionTail(const std::string& currentSessionId,
     const std::size_t maxTurns) const
 {
     std::vector<ArchivedTurn> turns;
@@ -525,8 +575,7 @@ std::vector<ArchivedTurn> ConversationArchive::LoadPreviousSessionTail(
     return turns;
 }
 
-std::vector<ArchivedSession> ConversationArchive::RecentSessions(
-    const std::size_t maxSessions) const
+std::vector<ArchivedSession> ConversationArchive::RecentSessions(const std::size_t maxSessions) const
 {
     std::vector<ArchivedSession> sessions;
     sqlite3* const database = Acquire();
@@ -563,9 +612,7 @@ std::vector<ArchivedSession> ConversationArchive::RecentSessions(
     return sessions;
 }
 
-std::vector<ArchivedTurn> ConversationArchive::Search(
-    const std::string& query,
-    const std::size_t maxTurns) const
+std::vector<ArchivedTurn> ConversationArchive::Search(const std::string& query, const std::size_t maxTurns) const
 {
     std::vector<ArchivedTurn> turns;
     if (query.empty())
@@ -600,10 +647,8 @@ std::vector<ArchivedTurn> ConversationArchive::Search(
     return turns;
 }
 
-std::vector<ArchivedTurn> ConversationArchive::LoadRange(
-    const std::int64_t startEpoch,
-    const std::int64_t endEpoch,
-    const std::size_t maxTurns) const
+std::vector<ArchivedTurn> ConversationArchive::LoadRange(const std::int64_t startEpoch,
+    const std::int64_t endEpoch, const std::size_t maxTurns) const
 {
     std::vector<ArchivedTurn> turns;
     if (endEpoch <= startEpoch || maxTurns == 0)
@@ -639,11 +684,8 @@ std::vector<ArchivedTurn> ConversationArchive::LoadRange(
     return turns;
 }
 
-std::vector<ArchivedTurn> ConversationArchive::SearchRange(
-    const std::vector<std::string>& terms,
-    const std::int64_t startEpoch,
-    const std::int64_t endEpoch,
-    const std::size_t maxTurns) const
+std::vector<ArchivedTurn> ConversationArchive::SearchRange(const std::vector<std::string>& terms,
+    const std::int64_t startEpoch, const std::int64_t endEpoch, const std::size_t maxTurns) const
 {
     std::vector<ArchivedTurn> turns;
     const std::string match = BuildTermMatch(terms);
@@ -681,9 +723,7 @@ std::vector<ArchivedTurn> ConversationArchive::SearchRange(
     return turns;
 }
 
-std::vector<ArchivedTurn> ConversationArchive::SearchEarliest(
-    const std::vector<std::string>& terms,
-    const std::size_t maxTurns) const
+std::vector<ArchivedTurn> ConversationArchive::SearchEarliest(const std::vector<std::string>& terms, const std::size_t maxTurns) const
 {
     std::vector<ArchivedTurn> turns;
     const std::string match = BuildTermMatch(terms);
@@ -721,23 +761,25 @@ std::vector<ArchivedTurn> ConversationArchive::SearchEarliest(
 std::size_t ConversationArchive::Forget()
 {
     sqlite3* const database = Acquire();
-    const std::size_t before = TotalTurns();
     if (database == nullptr)
     {
         return 0;
     }
-    if (!Execute(database,
-            "DELETE FROM conversation_turns;"
-            "DELETE FROM conversation_sessions;"))
+    std::lock_guard writeLock(connectionMutex);
+    ArchiveTransaction transaction(database);
+    if (!transaction.IsActive() || !Execute(database, "DELETE FROM conversation_turns;"))
     {
         return 0;
     }
+    const auto removed = static_cast<std::size_t>(sqlite3_changes64(database));
+    if (!Execute(database, "DELETE FROM conversation_sessions;")) return 0;
     // The search index is not emptied by the deletes above. Each one only appends a
     // tombstone, and every forgotten word -- with its position, which is enough to put
     // the sentence back together -- stays in the index segments until a merge happens to
     // reach them. With the content table now empty, clearing the index outright is exact.
-    Execute(database,
-        "INSERT INTO conversation_search(conversation_search) VALUES('delete-all');");
+    if (!Execute(database,
+            "INSERT INTO conversation_search(conversation_search) VALUES('delete-all');") ||
+        !transaction.Commit()) return 0;
     // Reclaims the pages rather than leaving the text sitting in free space where a
     // forget the user asked for would still be recoverable from the file.
     Execute(database, "VACUUM;");
@@ -746,7 +788,7 @@ std::size_t ConversationArchive::Forget()
     // the vacuumed pages back without shrinking the log. Truncating it is what makes the
     // forget reach the disk rather than just the tables.
     Execute(database, "PRAGMA wal_checkpoint(TRUNCATE);");
-    return before;
+    return removed;
 }
 
 std::size_t ConversationArchive::ForgetSession(const std::string& sessionId)
@@ -756,39 +798,9 @@ std::size_t ConversationArchive::ForgetSession(const std::string& sessionId)
     {
         return 0;
     }
+    std::lock_guard writeLock(connectionMutex);
     std::size_t removed = 0;
-    {
-        Statement statement;
-        sqlite3_stmt* raw = nullptr;
-        if (sqlite3_prepare_v2(database,
-                "SELECT COUNT(*) FROM conversation_turns WHERE session_id = ?;",
-                -1, &raw, nullptr) == SQLITE_OK)
-        {
-            statement.reset(raw);
-            sqlite3_bind_text(statement.get(), 1, sessionId.c_str(), -1, SQLITE_TRANSIENT);
-            if (sqlite3_step(statement.get()) == SQLITE_ROW)
-            {
-                removed = static_cast<std::size_t>(
-                    sqlite3_column_int64(statement.get(), 0));
-            }
-        }
-    }
-
-    for (const char* sql : {
-            "DELETE FROM conversation_turns WHERE session_id = ?;",
-            "DELETE FROM conversation_sessions WHERE session_id = ?;"})
-    {
-        Statement statement;
-        sqlite3_stmt* raw = nullptr;
-        if (sqlite3_prepare_v2(database, sql, -1, &raw, nullptr) != SQLITE_OK)
-        {
-            return removed;
-        }
-        statement.reset(raw);
-        sqlite3_bind_text(statement.get(), 1, sessionId.c_str(), -1, SQLITE_TRANSIENT);
-        sqlite3_step(statement.get());
-    }
-    return removed;
+    return DeleteSession(database, sessionId, removed) ? removed : 0;
 }
 
 std::size_t ConversationArchive::TotalTurns() const

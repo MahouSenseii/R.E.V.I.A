@@ -46,10 +46,7 @@ std::int16_t Saturate(const double value)
 }
 
 // One decoded sample from whatever the file actually stores, normalized to 16-bit.
-std::int16_t DecodeSample(
-    const unsigned char* data,
-    const std::uint16_t format,
-    const std::uint16_t bitsPerSample)
+std::int16_t DecodeSample(const unsigned char* data, const std::uint16_t format, const std::uint16_t bitsPerSample)
 {
     if (format == FormatFloat)
     {
@@ -106,11 +103,7 @@ std::int64_t PcmAudio::DurationMs() const
     return sampleRate > 0 ? (FrameCount() * 1000) / sampleRate : 0;
 }
 
-bool ReadWavFile(
-    const std::filesystem::path& path,
-    PcmAudio& outAudio,
-    std::string& outError,
-    const std::int64_t maximumDurationMs)
+bool ReadWavFile(const std::filesystem::path& path, PcmAudio& outAudio, std::string& outError, const std::int64_t maximumDurationMs)
 {
     outAudio = {};
     std::error_code error;
@@ -328,11 +321,8 @@ void ApplyGain(std::vector<std::int16_t>& samples, const double gain)
     }
 }
 
-std::size_t MixInto(
-    std::vector<std::int16_t>& base,
-    const std::vector<std::int16_t>& overlay,
-    const double baseGain,
-    const double overlayGain)
+std::size_t MixInto(std::vector<std::int16_t>& base,
+    const std::vector<std::int16_t>& overlay, const double baseGain, const double overlayGain)
 {
     if (overlay.size() > base.size())
     {
@@ -353,11 +343,8 @@ std::size_t MixInto(
     return clipped;
 }
 
-std::vector<VocalSpan> DetectVocalSpans(
-    const PcmAudio& audio,
-    const double thresholdRatio,
-    const std::int64_t windowMs,
-    const std::int64_t mergeGapMs)
+std::vector<VocalSpan> DetectVocalSpans(const PcmAudio& audio,
+    const double thresholdRatio, const std::int64_t windowMs, const std::int64_t mergeGapMs)
 {
     std::vector<VocalSpan> spans;
     if (audio.sampleRate <= 0 || audio.channels <= 0 || audio.samples.empty())

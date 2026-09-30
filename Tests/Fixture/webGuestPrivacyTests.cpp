@@ -1,3 +1,7 @@
+#include "Agents/responseFilterSettings.h"
+#include "Core/profile.h"
+#include "LLM/endpointSettings.h"
+#include "Memory/memoryTypes.h"
 #include "testSupport.h"
 #include "Presence/webGuestRuntime.h"
 #include "Runtime/conversationRuntime.h"

@@ -1,6 +1,6 @@
 #pragma once
 
-#include "Library/structLibrary.h"
+#include "Speech/recognitionSettings.h"
 #include "Speech/whisperServerProcess.h"
 
 #include <atomic>
@@ -25,11 +25,7 @@ struct RecognitionEvent
           elapsedMilliseconds(inputElapsed)
     {
     }
-    RecognitionEvent(
-        std::string inputPhase,
-        std::string inputDetail,
-        std::string inputTranscript,
-        double inputElapsed = -1.0)
+    RecognitionEvent(std::string inputPhase, std::string inputDetail, std::string inputTranscript, double inputElapsed = -1.0)
         : phase(std::move(inputPhase)), detail(std::move(inputDetail)),
           transcript(std::move(inputTranscript)), elapsedMilliseconds(inputElapsed)
     {
@@ -71,9 +67,7 @@ struct MicrophoneSelection
 // by name rather than by ordinal on purpose: waveIn ordinals renumber when any device
 // is added or removed, so a saved index silently becomes a different microphone, which
 // is the one failure the user asked never to happen quietly.
-[[nodiscard]] MicrophoneSelection SelectMicrophone(
-    const std::vector<MicrophoneDevice>& devices,
-    const std::string& configuredName);
+[[nodiscard]] MicrophoneSelection SelectMicrophone(const std::vector<MicrophoneDevice>& devices, const std::string& configuredName);
 
 // Why a Listen press did or did not become a recording.
 //
@@ -151,8 +145,7 @@ public:
     // optionally transcribes it. Synchronous and self-contained: it refuses while a
     // real recording or transcription is in flight rather than competing for the
     // device, and its transcript is never submitted as conversation.
-    [[nodiscard]] MicrophoneTestResult TestMicrophone(
-        int seconds = 3, bool transcribe = true);
+    [[nodiscard]] MicrophoneTestResult TestMicrophone(int seconds = 3, bool transcribe = true);
     // Changes the capture device for subsequent recordings. Takes effect on the next
     // Listen press; an in-flight capture keeps the device it opened.
     void SetMicrophoneDevice(const std::string& deviceName);
@@ -173,15 +166,10 @@ private:
     void Capture(std::stop_token stopToken, std::filesystem::path outputPath);
     bool CaptureHandsFree(std::stop_token stopToken, std::filesystem::path outputPath);
     void RunHandsFree(std::stop_token stopToken);
-    void Transcribe(
-        std::stop_token stopToken,
-        std::filesystem::path wavePath,
-        bool automatic = false);
+    void Transcribe(std::stop_token stopToken, std::filesystem::path wavePath, bool automatic = false);
     bool EnsureServerReady(std::stop_token stopToken, std::string& outError);
-    std::optional<std::string> TranscribeWithServer(
-        const std::filesystem::path& wavePath,
-        std::stop_token stopToken,
-        std::string& outError);
+    std::optional<std::string> TranscribeWithServer(const std::filesystem::path& wavePath,
+        std::stop_token stopToken, std::string& outError);
     void Notify(RecognitionEvent event) const;
 
     mutable std::mutex mutex;

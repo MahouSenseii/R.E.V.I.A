@@ -1,5 +1,10 @@
 #pragma once
 
+#include "Computer/computerSettings.h"
+#include "Core/profile.h"
+#include "LLM/endpointSettings.h"
+#include "LLM/responseTypes.h"
+#include "Memory/memoryTypes.h"
 #include "testSupport.h"
 #include "Runtime/reviaSession.h"
 
@@ -17,6 +22,42 @@ namespace revia::runtime
 struct ReviaSessionTestAccess
 {
     static speech::SpeechService& Speech(ReviaSession& session) { return session.speechService; }
+    static actions::ActionRuntime& Actions(ReviaSession& session) { return session.actionRuntime; }
+    static void ConfigureStartupBrains(ReviaSession& session, int port, bool fastWarm = true, bool expertWarm = true)
+    {
+        session.settings.llm.backend = "LLamaCpp";
+        session.settings.llm.host = "127.0.0.1";
+        session.settings.llm.port = port;
+        session.settings.llm.modelName = "fixture-main";
+        session.settings.llm.bAutoStartServer = false;
+        session.settings.llm.bVisionEnabled = false;
+        session.fastLlmSettings = session.expertLlmSettings = session.settings.llm;
+        session.settings.intelligence.fast.bWarmAtStartup = fastWarm;
+        session.settings.intelligence.expert.bWarmAtStartup = expertWarm;
+        session.router.ApplyLLMSettings(session.settings.llm, session.fastLlmSettings,
+            session.expertLlmSettings, embeddingSettings{}, aiProfile{}, true, true);
+    }
+    static bool EnsureBrain(ReviaSession& session, intelligence::IntelligenceTier tier, std::stop_token token = {})
+    {
+        if (tier == intelligence::IntelligenceTier::Fast) return session.EnsureFastBrainAvailable(token);
+        if (tier == intelligence::IntelligenceTier::Expert) return session.EnsureExpertBrainAvailable(token);
+        return session.EnsureLLMAvailable(token);
+    }
+    static intelligence::ResidencyState BrainState(const ReviaSession& session, intelligence::IntelligenceTier tier)
+    {
+        for (const auto& model : session.router.ModelResidencySnapshot())
+            if (model.tier == tier) return model.state;
+        throw std::runtime_error("Missing brain residency fixture.");
+    }
+    static void ApplyBrainProfile(ReviaSession& session) { session.router.ApplyProfile(aiProfile{}); }
+    static void VirtuallyUnloadBrain(ReviaSession& session, intelligence::IntelligenceTier tier)
+    { session.router.Residency().MarkUnloaded(tier, "External endpoint retained by fixture."); }
+    static bool InitiativeWorkersRunning(const ReviaSession& session)
+    { return session.initiativeWorker.joinable() && session.curiosityWorker.joinable(); }
+    static void PlannedMainDevice(ReviaSession& session, const std::string& device)
+    { session.settings.llm.device = device; }
+    static std::string PlannedMainDevice(const ReviaSession& session)
+    { return session.settings.llm.device; }
 
     static SessionResult GuardTurn(ReviaSession& session, const std::function<SessionResult()>& turn)
     { return session.GuardTurn(turn); }
@@ -37,9 +78,9 @@ struct ReviaSessionTestAccess
     static std::string FinishedTask(const ReviaSession& session) { return session.DescribeFinishedTask(); }
     static void DeliverReminders(ReviaSession& session, planning::WallClock::time_point now)
     { session.DeliverDueReminders(now); }
+    static bool InitializeReminders(ReviaSession& session, const std::filesystem::path& path, std::string& error) { return session.reminders.Initialize(path, error); }
     static std::string Reminders(const ReviaSession& session) { return session.DescribeReminders(); }
-    static void SetClipboard(ReviaSession& session,
-        std::function<std::optional<perception::ClipboardText>()> reader)
+    static void SetClipboard(ReviaSession& session, std::function<std::optional<perception::ClipboardText>()> reader)
     { session.clipboardReader = std::move(reader); }
     static std::string ClipboardReference(ReviaSession& session, const std::string& input)
     { return session.ClipboardReference(input); }
@@ -47,8 +88,7 @@ struct ReviaSessionTestAccess
     { session.OnRecognitionEvent(event); }
     static std::string TakeOfferedInput(ReviaSession& session) { return session.inputArbiter.Take(); }
     static bool IsBusy(const ReviaSession& session) { return session.busy.load(); }
-    static void RunBackgroundLoop(ReviaSession& session, std::stop_token stopToken,
-        const std::function<void()>& loop)
+    static void RunBackgroundLoop(ReviaSession& session, std::stop_token stopToken, const std::function<void()>& loop)
     { session.RunBackgroundLoop("Test worker", stopToken, loop); }
     static emotion::EmotionRuntime& Emotions(ReviaSession& session) { return session.emotionRuntime; }
     static AffectController& LegacyAffect(ReviaSession& session) { return session.affectController; }
@@ -69,6 +109,9 @@ struct ReviaSessionTestAccess
         session.settings.initiative.autonomousQuietSeconds = 0;
         session.StartCuriosityLoop();
     }
+
+    static void UsePreferences(ReviaSession& session, const std::filesystem::path& root)
+    { session.preferenceStore = core::PreferenceStore(root / "preferences.json"); }
 
     static void StopIdleReviewFixture(ReviaSession& session) { session.StopCuriosityLoop(); }
     static void RunIdleActivity(ReviaSession& session, const autonomy::ActivityDecision& decision)
@@ -109,8 +152,7 @@ struct ReviaSessionTestAccess
     static agents::LearnedFindingResult SubmitLearning(ReviaSession& session, memoryDecision decision)
     { return session.turnCoordinator.SubmitLearnedFinding(session.router, std::move(decision)); }
 
-    static agents::LearnedFindingResult SubmitLearning(ReviaSession& session,
-        const messageRouter& router, memoryDecision decision)
+    static agents::LearnedFindingResult SubmitLearning(ReviaSession& session, const messageRouter& router, memoryDecision decision)
     {
         return session.turnCoordinator.SubmitLearnedFinding(router, std::move(decision), 47);
     }
@@ -157,8 +199,7 @@ struct ReviaSessionTestAccess
         return session.ExecuteAction(std::move(request));
     }
 
-    static void PrepareOperator(ReviaSession& session, const std::filesystem::path& root,
-        goals::GoalRunner::StepProvider provider = {})
+    static void PrepareOperator(ReviaSession& session, const std::filesystem::path& root, goals::GoalRunner::StepProvider provider = {})
     {
         PrepareActions(session, root);
         session.goalStore = goals::GoalStore((root / "goals.db").string());
@@ -199,8 +240,7 @@ struct ReviaSessionTestAccess
     // This goes through the same OperateGoal the other cancellation tests use, which
     // requests the stop *after* the operation exists, and opens the task boundary with
     // the content the request carried so the run is otherwise identical.
-    static goals::Goal OperateRequestCancelled(
-        ReviaSession& session, const std::string& request)
+    static goals::Goal OperateRequestCancelled(ReviaSession& session, const std::string& request)
     {
         goals::Goal goal;
         goal.id = goals::NewGoalId();
@@ -256,8 +296,7 @@ struct ReviaSessionTestAccess
     // that supplies the answer has no use for the instruction or the schema, and
     // threading them through every scripted lambda would obscure what each test is
     // actually saying.
-    static void ScriptComputerProviders(
-        ReviaSession& session,
+    static void ScriptComputerProviders(ReviaSession& session,
         std::function<responseOutput(const std::string&, std::stop_token)> subgoalPlanner,
         std::function<responseOutput(const std::string&, std::stop_token)> stepPlanner)
     {
@@ -291,8 +330,7 @@ struct ReviaSessionTestAccess
     };
 
     // Route both decision calls through the real router, recording each one.
-    static void InstrumentComputerProviders(
-        ReviaSession& session, std::vector<ModelCall>& log)
+    static void InstrumentComputerProviders(ReviaSession& session, std::vector<ModelCall>& log)
     {
         const auto record = [&log](
             std::string kind,
@@ -339,8 +377,7 @@ struct ReviaSessionTestAccess
                 }));
     }
 
-    static void SetComputerSettings(
-        ReviaSession& session, const computerControlSettings& settings)
+    static void SetComputerSettings(ReviaSession& session, const computerControlSettings& settings)
     {
         session.settings.computerControl = settings;
         session.computerTasks.ApplySettings(settings);
@@ -373,8 +410,7 @@ struct ReviaSessionTestAccess
     // decision path. The approval prompt and the command parsing above it have their own
     // tests; what this reaches is the runner, the provider the constructor installed,
     // and everything the provider calls.
-    static goals::Goal OperateGoal(
-        ReviaSession& session, goals::Goal goal, const bool cancelBeforeRun = false)
+    static goals::Goal OperateGoal(ReviaSession& session, goals::Goal goal, const bool cancelBeforeRun = false)
     {
         std::lock_guard lock(session.operationMutex);
         (void)session.BeginOperation();
@@ -391,8 +427,7 @@ struct ReviaSessionTestAccess
             std::move(goal), session.CurrentOperationToken());
     }
 
-    static void BeginComputerTask(ReviaSession& session, const std::string& goalId,
-        computer::TaskContent content = {})
+    static void BeginComputerTask(ReviaSession& session, const std::string& goalId, computer::TaskContent content = {})
     {
         session.computerTasks.BeginTask(
             goalId, computer::RequestOrigin::UserDirected, std::move(content));
@@ -401,8 +436,7 @@ struct ReviaSessionTestAccess
     static void EndComputerTask(ReviaSession& session)
     { session.computerTasks.EndTask(); }
 
-    static void UseDatasetRoot(
-        ReviaSession& session, const std::filesystem::path& datasetRoot)
+    static void UseDatasetRoot(ReviaSession& session, const std::filesystem::path& datasetRoot)
     {
         tests::Check(session.computerTasks.Recorder().SetRoot(datasetRoot),
             "The dataset root could not be set; a capture session is already open.");

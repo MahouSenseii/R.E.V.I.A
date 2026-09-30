@@ -1,3 +1,4 @@
+#include "Visual/imageSettings.h"
 #include "Visual/imageGenerator.h"
 #include "Core/localApiKey.h"
 #include "Core/logger.h"
@@ -138,10 +139,7 @@ ImageServerProcess::~ImageServerProcess()
     }
 }
 
-bool ImageServerProcess::Start(
-    const imageSettings& settings,
-    const std::string& apiKey,
-    std::string& outError)
+bool ImageServerProcess::Start(const imageSettings& settings, const std::string& apiKey, std::string& outError)
 {
     bShutdownOnExit = settings.bShutdownOnExit;
 #ifndef _WIN32
@@ -387,9 +385,7 @@ bool ImageGenerator::EnsureRunning(std::string& outError)
     return false;
 }
 
-ImageResult ImageGenerator::Generate(
-    const std::string& prompt,
-    const std::string& negativePrompt)
+ImageResult ImageGenerator::Generate(const std::string& prompt, const std::string& negativePrompt)
 {
     ImageResult result;
     std::lock_guard lock(mutex);

@@ -43,12 +43,8 @@ TargetEvidence Control(const std::string& name, const std::string& window = {})
     return evidence;
 }
 
-AuthorizationDecision Decide(
-    const DesktopOperation operation,
-    const TargetEvidence& evidence,
-    const ConsequenceClass ceiling,
-    const bool autonomous = true,
-    const bool scratch = false)
+AuthorizationDecision Decide(const DesktopOperation operation, const TargetEvidence& evidence, const ConsequenceClass ceiling,
+    const bool autonomous = true, const bool scratch = false)
 {
     AuthorizationRequest request;
     request.operation = operation;

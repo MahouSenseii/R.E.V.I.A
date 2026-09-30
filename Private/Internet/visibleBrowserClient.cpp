@@ -14,9 +14,7 @@
 namespace revia::actions::internet
 {
 
-std::uint64_t VisibleBrowserCancellation::BeginRequest(
-    const int port,
-    const std::string& token)
+std::uint64_t VisibleBrowserCancellation::BeginRequest(const int port, const std::string& token, const std::string& requestedBy)
 {
     std::lock_guard lock(mutex);
     if (nextRequestId == 0) nextRequestId = 1;
@@ -24,6 +22,11 @@ std::uint64_t VisibleBrowserCancellation::BeginRequest(
     cancelledRequestId = 0;
     activePort = port;
     activeToken = token;
+    // GoalRunner stamps these labels on its actions, baseline reads and checks.
+    // Ordinary conversation and autonomous research have separate runtime labels.
+    activeTaskOwned = requestedBy.rfind("goal:", 0) == 0 ||
+        requestedBy.rfind("goal-baseline:", 0) == 0 ||
+        requestedBy.rfind("goal-check:", 0) == 0;
     return activeRequestId;
 }
 
@@ -35,6 +38,7 @@ void VisibleBrowserCancellation::EndRequest(const std::uint64_t requestId)
     cancelledRequestId = 0;
     activePort = 0;
     activeToken.clear();
+    activeTaskOwned = false;
 }
 
 bool VisibleBrowserCancellation::IsCancelled(const std::uint64_t requestId) const
@@ -43,13 +47,13 @@ bool VisibleBrowserCancellation::IsCancelled(const std::uint64_t requestId) cons
     return requestId != 0 && cancelledRequestId == requestId;
 }
 
-void VisibleBrowserCancellation::CancelActive()
+void VisibleBrowserCancellation::CancelActive(const bool preserveTaskOwned)
 {
     int port = 0;
     std::string token;
     {
         std::lock_guard lock(mutex);
-        if (activeRequestId == 0) return;
+        if (activeRequestId == 0 || (preserveTaskOwned && activeTaskOwned)) return;
         cancelledRequestId = activeRequestId;
         port = activePort;
         token = activeToken;
@@ -65,10 +69,7 @@ VisibleBrowserClient::VisibleBrowserClient(const int inputPort, std::string inpu
 {
 }
 
-bool VisibleBrowserClient::WaitUntilReady(
-    const int timeoutMs,
-    std::string& outError,
-    const std::function<bool()>& cancelled) const
+bool VisibleBrowserClient::WaitUntilReady(const int timeoutMs, std::string& outError, const std::function<bool()>& cancelled) const
 {
     const auto deadline = std::chrono::steady_clock::now() +
         std::chrono::milliseconds(std::max(1, timeoutMs));
@@ -115,12 +116,8 @@ bool VisibleBrowserClient::WaitUntilReady(
     return false;
 }
 
-ActionResult VisibleBrowserClient::Search(
-    const std::string& query,
-    const int maxResults,
-    const std::size_t maxResponseBytes,
-    const int timeoutMs,
-    const int stepDelayMs) const
+ActionResult VisibleBrowserClient::Search(const std::string& query,
+    const int maxResults, const std::size_t maxResponseBytes, const int timeoutMs, const int stepDelayMs) const
 {
     const nlohmann::json request = {
         {"query", query},
@@ -154,11 +151,8 @@ void VisibleBrowserClient::RequestShutdown() const
     static_cast<void>(Request("POST", "/shutdown", "{}", 1000, 4096, status, body, error));
 }
 
-ActionResult VisibleBrowserClient::ParseSearchResponse(
-    const std::string& body,
-    const int statusCode,
-    const std::size_t maxResponseBytes,
-    const int maxResults)
+ActionResult VisibleBrowserClient::ParseSearchResponse(const std::string& body,
+    const int statusCode, const std::size_t maxResponseBytes, const int maxResults)
 {
     ActionResult result;
     result.attempted = true;
@@ -201,15 +195,8 @@ ActionResult VisibleBrowserClient::ParseSearchResponse(
     }
 }
 
-bool VisibleBrowserClient::Request(
-    const std::string& method,
-    const std::string& path,
-    const std::string& body,
-    const int timeoutMs,
-    const std::size_t maxBytes,
-    int& outStatus,
-    std::string& outBody,
-    std::string& outError) const
+bool VisibleBrowserClient::Request(const std::string& method, const std::string& path, const std::string& body, const int timeoutMs,
+    const std::size_t maxBytes, int& outStatus, std::string& outBody, std::string& outError) const
 {
     outStatus = 0;
     outBody.clear();

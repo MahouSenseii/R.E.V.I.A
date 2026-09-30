@@ -99,6 +99,7 @@ class QwenRuntime:
         self.backend = "standard"
         self.cuda_graph = False
         self.low_latency_detail = ""
+        self.low_latency_direct = None
         self.clone_prompts: dict[tuple[str, int, int, str], Any] = {}
         self.reflex_audio_cache: dict[tuple[Any, ...], tuple[bytes, int, float]] = {}
 
@@ -207,6 +208,12 @@ class QwenRuntime:
         self.model = None
         self.model_kind = ""
         self.model_name = ""
+        # The direct decoder owns predictor/talker modules and captured buffers.
+        # Drop that owner before collecting, or release retains model memory.
+        self.low_latency_direct = None
+        self.backend = "standard"
+        self.cuda_graph = False
+        self.low_latency_detail = ""
         self.clone_prompts.clear()
         self.reflex_audio_cache.clear()
         gc.collect()

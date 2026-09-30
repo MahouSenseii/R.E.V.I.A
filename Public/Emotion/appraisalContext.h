@@ -25,13 +25,8 @@ struct RelevantMemory
     float pastValence = 0.0F;
 };
 
-// Everything appraisal is allowed to consider, gathered before any emotion is computed.
-//
-// The point of a context is that the same event does not produce the same feeling twice.
-// A failure matters more when the goal mattered; a sharp remark lands differently from
-// someone she trusts; a surprise is only a surprise relative to what was expected. All
-// of that has to be assembled first, because the model that reads it must not be able to
-// go looking for more.
+// Inputs assembled before appraisal: goal importance, relationship, mood and expectations.
+// Emotion models cannot retrieve additional context.
 struct AppraisalContext
 {
     identity::DevelopmentState development;
@@ -73,12 +68,8 @@ struct AppraisalContext
 // Deliberately a free function over explicit inputs rather than a class with references
 // to half the runtime: appraisal features must be reproducible from what was recorded,
 // or the training data generated from them describes a situation nobody can reconstruct.
-[[nodiscard]] AppraisalContext BuildAppraisalContext(
-    const Stimulus& stimulus,
-    const identity::DevelopmentState& development,
-    const MoodState& mood,
-    const EmotionVector& currentEmotion,
-    const identity::RelationshipState* relationship = nullptr,
+[[nodiscard]] AppraisalContext BuildAppraisalContext(const Stimulus& stimulus, const identity::DevelopmentState& development,
+    const MoodState& mood, const EmotionVector& currentEmotion, const identity::RelationshipState* relationship = nullptr,
     std::vector<RelevantMemory> memories = {});
 
 } // namespace revia::emotion

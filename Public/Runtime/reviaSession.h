@@ -1,5 +1,12 @@
 #pragma once
 
+#include "Agents/answerObligation.h"
+#include "Core/appSettings.h"
+#include "Core/conversationMessage.h"
+#include "Core/profile.h"
+#include "LLM/endpointSettings.h"
+#include "Memory/memoryTypes.h"
+#include "Runtime/outputChannel.h"
 #include "Actions/actionRuntime.h"
 #include "Agents/curiosityAgent.h"
 #include "Agents/turnCoordinator.h"
@@ -91,9 +98,7 @@ struct CapabilityUpdateResult
     std::string message;
 };
 
-// One profile as the desktop profile editor sees it: what it makes Revia say, and which
-// created voice speaks it. Voice assignment lives beside the profile because that is what
-// it is -- a property of who is talking, not of the speech engine.
+// Profile settings and assigned voice exposed to the desktop editor.
 struct ProfileSummary
 {
     std::string id;
@@ -105,9 +110,6 @@ struct ProfileSummary
     float temperature = 0.7f;
     bool hasMaxTokensOverride = false;
     int maxTokens = 512;
-    // How much of an answer this profile owes. The enum crosses the boundary as
-    // itself rather than as a string, so the desktop and the runtime cannot drift
-    // into disagreeing about what a mode is called.
     AnswerObligationMode answerObligation = AnswerObligationMode::Balanced;
     // Empty means this profile falls back to the Windows voice.
     std::string voicePresetId;
@@ -117,12 +119,9 @@ struct ProfileSummary
 struct ProfileStudioSnapshot
 {
     std::vector<ProfileSummary> profiles;
-    // The profile Revia is running right now, which is the only honest answer to "which
-    // profile is in use". It is read from the loaded profile, not from settings.
+    // Read from the loaded profile.
     std::string activeProfileId;
     std::string activeDisplayName;
-    // The created voices a profile can be assigned, so the editor does not need a second
-    // trip through the voice studio to render its picker.
     std::vector<speech::VoicePreset> voices;
 };
 
@@ -132,8 +131,7 @@ struct ProfileOperationResult
     std::string message;
 };
 
-// Small read-only view for desktop controls. It contains comfort/diagnostic preferences
-// only; capability authority continues to live behind CapabilityEditor.
+// Comfort and diagnostic preferences; capability authority stays with CapabilityEditor.
 struct UserPreferenceSnapshot
 {
     bool speechEnabled = true;
@@ -161,16 +159,8 @@ public:
         const actions::ActionRequest&,
         const actions::PolicyDecision&)>;
 
-    // How a typed action result becomes the text the user reads.
-    //
-    // Public because it is the runtime-truth boundary and that boundary is worth being
-    // able to prove. Pure and static: the only input is the outcome, so the profile,
-    // its answer obligation, the emotion vector, and the conversation are all
-    // structurally incapable of reaching it. Character can style a result everywhere
-    // else in the reply; it cannot restate one here, because there is nothing to
-    // restate through.
-    [[nodiscard]] static std::string FormatActionOutcome(
-        const actions::ActionOutcome& outcome);
+    // Formats confirmed execution and audit results independently of personality.
+    [[nodiscard]] static std::string FormatActionOutcome(const actions::ActionOutcome& outcome);
 
     ReviaSession();
     ~ReviaSession();
@@ -179,28 +169,22 @@ public:
     ReviaSession& operator=(const ReviaSession&) = delete;
 
     bool Start();
-    SessionResult Submit(
-        const std::string& input,
-        agents::InputSource source = agents::InputSource::Typed);
+    SessionResult Submit(const std::string& input, agents::InputSource source = agents::InputSource::Typed);
 
-    // Voice arrives as a stream, not as questions. Offering it here lets several bursts
-    // merge into one turn and lets room noise be dropped before it becomes a reply. The
-    // answer arrives as an AssistantMessage event rather than a return value, because the
-    // turn starts when the merge window closes rather than when the caller asks.
+    // Merges input bursts; the completed turn arrives as an AssistantMessage event.
     agents::InputVerdict OfferInput(const std::string& text, agents::InputSource source);
     void PollBackgroundEvents();
     void RequestStop();
     void Stop();
 
     void SetConfirmationHandler(ConfirmationHandler handler);
-    // Answers a desktop RequireApproval -- the specific human yes that a control like
-    // Send needs. Without one installed such a step is refused, as it always was.
-    void SetDesktopApprovalHandler(
-        revia::policy::DesktopApprovalGate::Handler handler);
+    // An absent handler refuses steps requiring desktop approval.
+    void SetDesktopApprovalHandler(revia::policy::DesktopApprovalGate::Handler handler);
     RuntimeEventBus& Events();
     RuntimeState State() const;
     bool IsStarted() const;
     bool IsBusy() const;
+    [[nodiscard]] bool HasRunningTask() const;
     bool IsSpeechEnabled() const;
     void SetSpeechEnabled(bool enabled);
     void SetBargeInEnabled(bool enabled);
@@ -210,10 +194,8 @@ public:
     [[nodiscard]] presence::PresenceSnapshot Presence() const;
     bool BeginListening();
     bool EndListening();
-    // The Windows recording devices present right now, for the shell's picker.
     [[nodiscard]] std::vector<speech::MicrophoneDevice> AvailableMicrophones() const;
-    // What the configured device name resolves to, including whether it has gone
-    // missing and capture would fall back to the Windows default.
+    // Reports a missing selection and any fallback to the Windows default.
     [[nodiscard]] speech::MicrophoneSelection ResolvedMicrophone() const;
     void SetMicrophoneDevice(const std::string& deviceName);
     // Opens the selected device, records briefly, measures the signal, and optionally
@@ -222,37 +204,15 @@ public:
     speech::MicrophoneTestResult TestMicrophone(int seconds = 3, bool transcribe = true);
     [[nodiscard]] bool IsVisionAvailable() const;
 
-    // Camera. Off unless the capability file says otherwise, and rate limited even then.
-    //
-    // Listing devices is separate from using one so a settings screen can show what is
-    // attached without lighting a lens, and CaptureCameraFrame refuses rather than
-    // silently succeeding when the capability is absent -- a camera that quietly works
-    // when the user believes it is off is the worst possible failure here.
+    // Camera capture requires capability approval and remains rate-limited.
     [[nodiscard]] bool IsCameraAvailable() const;
-    // Display topology, read without capturing anything, so a settings screen can show
-    // what is attached without needing screen-capture permission first.
-    // Captures and describes the screen right now, for a turn that explicitly asked
-    // about it.
-    //
-    // Continuous awareness is off by default and deliberately so, which meant "what is
-    // on my screen?" had no way to actually look: the cached observation it reads was
-    // only ever populated by the awareness loop. Being asked is the consent here, the
-    // same way it is for the camera -- answering a question about the screen is not the
-    // same as watching it.
+    // Captures current screen context for an explicit request, without enabling continuous awareness.
     [[nodiscard]] std::string CaptureScreenContextNow();
+    // Device enumeration does not capture pixels or activate a camera.
     [[nodiscard]] std::vector<vision::MonitorDescriptor> Monitors() const;
     [[nodiscard]] std::vector<vision::CameraDescriptor> Cameras() const;
-    // autonomous is true when Revia chose to look rather than being asked. It requires
-    // the separate autonomousCapture authority on top of camera access.
-    // Captures one frame from a specific camera.
-    //
-    // The selection is carried through rather than re-derived: a shell that offered the
-    // user a list of cameras has to be able to say which one it meant, and an explicit
-    // choice is never satisfied by a different physical device. An empty selection
-    // means "the configured preference", which is what autonomous capture uses.
-    vision::CameraFrame CaptureCameraFrame(
-        bool autonomous = false,
-        const vision::CameraSelection& requested = {});
+    // Autonomous capture needs additional authority. An explicit selection never falls back to another camera.
+    vision::CameraFrame CaptureCameraFrame(bool autonomous = false, const vision::CameraSelection& requested = {});
     // The model may locate a target, but it cannot click it. A successful request must
     // resolve to an exact UIA runtime id and then pass through ordinary action policy,
     // confirmation, dispatch, and audit.
@@ -271,31 +231,19 @@ public:
     [[nodiscard]] std::string SongStatusText() const;
 
     [[nodiscard]] actions::CapabilitySettings Capabilities() const;
-    [[nodiscard]] actions::windows::ApplicationControlInventory
-        DiscoverForegroundApplicationControls() const;
+    [[nodiscard]] actions::windows::ApplicationControlInventory DiscoverForegroundApplicationControls() const;
     CapabilityUpdateResult AddApprovedApplication(const std::string& executable);
     CapabilityUpdateResult RemoveApprovedApplication(const std::string& executable);
-    CapabilityUpdateResult AddApprovedControl(
-        const std::string& executable,
-        const std::string& control);
-    CapabilityUpdateResult RemoveApprovedControl(
-        const std::string& executable,
-        const std::string& control);
+    CapabilityUpdateResult AddApprovedControl(const std::string& executable, const std::string& control);
+    CapabilityUpdateResult RemoveApprovedControl(const std::string& executable, const std::string& control);
     CapabilityUpdateResult SetInternetAccess(bool enabled, bool automaticLookup);
     CapabilityUpdateResult SetInternetBrowser(bool visibleBrowser, bool autonomousResearch);
     CapabilityUpdateResult SetCameraAccess(bool enabled, bool autonomousCapture);
     // Revia's hands: pointer, keyboard, and starting an approved application. Each is
     // off until the owner turns it on; rawCoordinates and autonomous are narrower
     // authorities that are dropped when the one they sit inside is withdrawn.
-    CapabilityUpdateResult SetDesktopControl(
-        bool pointer,
-        bool keyboard,
-        bool applicationLaunch,
-        bool rawCoordinates,
-        bool visualTargeting,
-        bool autonomous,
-        actions::CapabilitySettings::DesktopControl::InputScope scope,
-        bool allowCommandSurfaces);
+    CapabilityUpdateResult SetDesktopControl(bool pointer, bool keyboard, bool applicationLaunch, bool rawCoordinates, bool visualTargeting,
+        bool autonomous, actions::CapabilitySettings::DesktopControl::InputScope scope, bool allowCommandSurfaces);
     // How much of Revia's in-scope work stops to ask. It never widens which roots,
     // applications, or controls are in scope.
     CapabilityUpdateResult SetExecutionMode(actions::ExecutionMode mode);
@@ -324,11 +272,7 @@ public:
     // attempted, never where a model lives.
     [[nodiscard]] resources::LoadAdjustment CurrentLoad() const;
 
-    // Curated long-term memory, read-only. What Revia actually kept, so a user can see
-    // it rather than infer it from what she happens to bring up. Reading cannot write:
-    // memory is added through the reviewed memory path, never from a viewer.
-    // Who Revia is talking to, and how she stands with them. Read-only from outside:
-    // relationships move only through recorded evidence, never by assignment.
+    // Read-only; relationships change through evidence.
     [[nodiscard]] std::vector<identity::RelationshipState> Relationships() const;
     [[nodiscard]] identity::RelationshipState CurrentRelationship() const;
     [[nodiscard]] emotion::EmotionVector CurrentEmotion() const;
@@ -346,29 +290,22 @@ public:
     [[nodiscard]] std::vector<identity::DevelopmentChange> DevelopmentHistory() const;
 
     [[nodiscard]] std::vector<memoryEntry> Memories() const;
-    [[nodiscard]] std::vector<memoryEntry> SearchMemories(
-        const std::string& query, std::size_t maxEntries = 50) const;
+    [[nodiscard]] std::vector<memoryEntry> SearchMemories(const std::string& query, std::size_t maxEntries = 50) const;
     [[nodiscard]] std::string MemoryStatus() const;
 
     // Durable conversation history. Separate from longTermMemory, which keeps curated
     // facts: this keeps what was actually said, bounded and forgettable.
     [[nodiscard]] std::string ConversationHistoryStatus() const;
-    [[nodiscard]] std::vector<memory::ArchivedTurn> SearchConversations(
-        const std::string& query, std::size_t maxTurns = 12) const;
+    [[nodiscard]] std::vector<memory::ArchivedTurn> SearchConversations(const std::string& query, std::size_t maxTurns = 12) const;
     // Everything said in a window of epoch seconds, oldest first. Backs /history with a
     // date or a phrase like "yesterday" instead of words to match.
-    [[nodiscard]] std::vector<memory::ArchivedTurn> ConversationsInRange(
-        std::int64_t startEpoch,
-        std::int64_t endEpoch,
-        std::size_t maxTurns = 40) const;
+    [[nodiscard]] std::vector<memory::ArchivedTurn> ConversationsInRange(std::int64_t startEpoch,
+        std::int64_t endEpoch, std::size_t maxTurns = 40) const;
     // Answers one typed recall request from the conversational path and renders the
     // bounded block that grounds the reply. Returns empty when archiving is off, when
     // nothing matches, or when the only match was the question being asked.
-    [[nodiscard]] std::string RecallConversation(
-        const memory::RecallRequest& request,
-        const std::string& currentInput) const;
-    [[nodiscard]] std::vector<memory::ArchivedSession> RecentConversations(
-        std::size_t maxSessions = 20) const;
+    [[nodiscard]] std::string RecallConversation(const memory::RecallRequest& request, const std::string& currentInput) const;
+    [[nodiscard]] std::vector<memory::ArchivedSession> RecentConversations(std::size_t maxSessions = 20) const;
     std::size_t ForgetConversations();
 
     // Durable non-authority settings. The store cannot reach a capability, so nothing
@@ -381,8 +318,7 @@ public:
     // Draws an explanatory diagram or interface mockup. The model produces SVG, the
     // sanitizer refuses anything that would run or fetch, and the result is a file.
     SessionResult DrawDiagram(const std::string& request);
-    [[nodiscard]] std::vector<visual::Diagram> RecentDiagrams(
-        std::size_t maxDiagrams = 20) const;
+    [[nodiscard]] std::vector<visual::Diagram> RecentDiagrams(std::size_t maxDiagrams = 20) const;
     // Puts an existing picture on the canvas. Read-only and bounded by the same approved
     // roots that govern reading a file, because displaying one is reading one.
     SessionResult ShowPicture(const std::string& path);
@@ -394,9 +330,7 @@ public:
     // The working document. Generation is wholesale and says so; an edit reaches exactly
     // one block, because ReplaceBlock is the only mutation the edit path can express.
     SessionResult ComposeDocument(const std::string& request);
-    SessionResult ReviseDocumentBlock(
-        const std::string& reference,
-        const std::string& instruction);
+    SessionResult ReviseDocumentBlock(const std::string& reference, const std::string& instruction);
     [[nodiscard]] const content::WorkingDocument& Document() const;
 
     // Stage 6. Tier 0 window/focus events optionally wake a bounded local visual summary;
@@ -424,42 +358,25 @@ public:
     [[nodiscard]] std::vector<initiative::Proposal> PendingProposals() const;
     SessionResult AcceptProposal(const std::string& proposalId);
 
-    // Runs the conversation contract corpus against the active local model.
-    //
-    // Deterministic tests prove the assembly around a reply is correct; they cannot prove
-    // that this model, at this temperature, still honours the contract. This does, at the
-    // cost of real inference time, and it is honest about its ceiling: it detects
-    // known-bad replies and cannot certify a good one.
-    [[nodiscard]] evaluation::EvaluationReport RunConversationEvaluation(
-        const std::vector<evaluation::EvaluationCase>& cases,
+    // Runs real inference against the conversation contract corpus.
+    [[nodiscard]] evaluation::EvaluationReport RunConversationEvaluation(const std::vector<evaluation::EvaluationCase>& cases,
         std::stop_token stopToken = {});
     [[nodiscard]] evaluation::EvaluationReport LastConversationEvaluation() const;
 
-    // Stage 4's reviewed learning. Lessons are drawn from recorded outcomes and offered;
-    // approving one writes an ordinary memory entry. Nothing here changes a capability, a
-    // budget, or a policy, and nothing is stored without being approved.
+    // Lessons require approval before being saved as memory.
     [[nodiscard]] std::vector<learning::Lesson> DrawLessons() const;
     bool ApproveLesson(const std::string& lessonId, std::string& outSummary);
     void DismissProposal(const std::string& proposalId);
     std::string DisplayName() const;
     std::string Greeting() const;
     speech::VoiceStudioSnapshot VoiceStudio() const;
-    speech::VoiceOperationResult CreateVoicePreset(
-        const std::string& name,
-        const std::string& description,
-        const std::string& referenceText,
-        const std::string& language);
+    speech::VoiceOperationResult CreateVoicePreset(const std::string& name,
+        const std::string& description, const std::string& referenceText, const std::string& language);
     speech::VoiceOperationResult RenderVoiceBank(const std::string& presetId);
-    speech::VoiceOperationResult PreviewVoice(
-        const std::string& presetId,
-        const std::string& text);
-    speech::VoiceOperationResult AssignVoice(
-        const std::string& profileId,
-        const std::string& presetId);
+    speech::VoiceOperationResult PreviewVoice(const std::string& presetId, const std::string& text);
+    speech::VoiceOperationResult AssignVoice(const std::string& profileId, const std::string& presetId);
 
-    // Profiles. Creating and editing one is a file write; making one current swaps the
-    // system prompt, sampling, and assigned voice in place. Neither can reach a
-    // capability: a profile decides who Revia is, never what she is permitted to do.
+    // Profile edits cannot change capabilities.
     [[nodiscard]] ProfileStudioSnapshot ProfileStudio() const;
     ProfileOperationResult SaveProfile(const ProfileSummary& definition);
     ProfileOperationResult ActivateProfile(const std::string& profileId);
@@ -469,150 +386,88 @@ private:
     // UI and CLI selection additionally require the preference write to succeed first.
     void ApplyProfileLocked(const std::string& profileId, aiProfile loaded);
     ProfileOperationResult ActivateProfileLocked(const std::string& profileId);
-    // The profile owns where she starts: trait baseline and declared opinions. What
-    // experience has earned -- trait drift, and any preference she already holds --
-    // survives, or editing a profile would quietly delete her development.
-    //
-    // Applied at startup and whenever the active profile changes, so an edit takes effect
-    // without a restart. Private: re-seating who she started as is a consequence of
-    // loading a profile, not something a caller may ask for on its own.
+    // Apply authored baselines while preserving earned trait drift and learned preferences.
     void ApplyProfilePersonality();
+    core::PreferenceResult ClearPreference(const std::string& name);
+    core::PreferenceResult ApplyPreferenceUpdate(const std::string& name, appSettings updated, core::PreferenceResult result);
     bool EnsureLLMAvailable(std::stop_token stopToken);
     bool EnsureFastBrainAvailable(std::stop_token stopToken);
     bool EnsureExpertBrainAvailable(std::stop_token stopToken);
+    void PrepareBrain(intelligence::IntelligenceTier tier, std::stop_token stopToken, bool enabled);
     bool EnsureEmbeddingAvailable(std::stop_token stopToken);
     bool TryHandleActionInput(const std::string& input, SessionResult& result);
     SessionResult ExecuteAction(actions::ActionRequest request);
-    // Whether an action writes into another application's window, which is the only
-    // thing that moves the output channel. Foreground application is deliberately not
-    // part of this: what Revia is doing decides, not what the user is looking at.
-    // Drops the least recently used public channel context when the map is at its
-    // bound. The channel passed in is the one being processed and is never evicted.
+    // Evicts the least recently used public context, preserving the current key.
     void EvictStalePublicContexts(const std::string& keepKey);
     [[nodiscard]] bool IsCompositionAction(const actions::ActionRequest& request) const;
     void BeginExternalComposition(const std::string& application);
     void EndExternalComposition();
-    // Submit already holds operationMutex when a /goals command arrives, and that mutex is
-    // not recursive, so the command path uses these and the public entry points lock.
+    // Command callers already hold operationMutex.
     goals::Goal RunGoalUnlocked(goals::Goal goal);
     goals::Goal ResumeGoalUnlocked(const std::string& goalId);
-    // The goal work itself, on whatever thread runs it. `reportState` is false for a
-    // background task, which must not overwrite the state of a conversation turn.
+    // Background tasks use reportState=false to preserve foreground conversation state.
     goals::Goal ExecuteGoal(goals::Goal goal, std::stop_token stopToken, bool reportState);
     goals::Goal ExecuteResume(const std::string& goalId, std::stop_token stopToken, bool reportState);
-    goals::Goal ExecuteOperate(goals::Goal goal, const std::string& request, bool messaging,
-        std::stop_token stopToken, bool reportState);
-    goals::Goal FinishGoalRun(goals::Goal finished, std::chrono::steady_clock::time_point startedAt,
-        bool reportState = true);
+    goals::Goal ExecuteOperate(goals::Goal goal, const std::string& request, bool messaging, std::stop_token stopToken, bool reportState);
+    goals::Goal FinishGoalRun(goals::Goal finished, std::chrono::steady_clock::time_point startedAt, bool reportState = true);
     void PublishGoalProgress(const goals::GoalProgress& progress);
     static std::string FormatGoalSummary(const goals::Goal& goal);
     static std::string FormatGoalList(const std::vector<goals::Goal>& goalList);
     static std::string FormatGoalPlan(const goals::Goal& goal);
-    // Runs the plan against a throwaway copy first, so the plan is approved on observed
-    // evidence rather than on how reasonable its text looked.
+    // Rehearses against a disposable copy before approval.
     goals::Goal RehearseGoal(const goals::Goal& goal, std::string& outSummary);
-    // Narrowed from the configured policy, never read from the plan. A goal that chose
-    // its own scope could widen its own authority, which is the one thing the scoped
-    // execution path exists to prevent.
+    // Narrow scope from configured policy; the plan cannot grant itself authority.
     [[nodiscard]] actions::CapabilitySettings DeriveGoalScope() const;
-    // Turns a region a model pointed at into a target with evidence behind it.
-    //
-    // This is where the strongest available route is chosen, and the order is the point:
-    // the UI Automation resolver is tried first, and only a genuine failure to find an
-    // element -- not an ambiguous match, and not skipping the attempt -- permits falling
-    // back to the region itself. An ambiguous match is left as no target at all rather
-    // than downgraded into a claim that UI Automation succeeded.
-    //
-    // The runtime stamps every piece of evidence from `observation`. Nothing here is
-    // read out of model output, because evidence a model could write would be an
-    // authorization it granted itself.
-    void ResolveVisualTarget(
-        actions::ActionRequest& request,
-        const actions::windows::DesktopObservation& observation);
+    // Try UIA first; ambiguous matches forbid fallback. Stamp evidence from runtime observations.
+    void ResolveVisualTarget(actions::ActionRequest& request, const actions::windows::DesktopObservation& observation);
     bool TryHandleGoalInput(const std::string& input, SessionResult& result);
     bool TryHandleOperateInput(const std::string& input, SessionResult& result);
-    // Shared by /operate and by an ordinary sentence that asked for the same thing, so
-    // the two routes cannot drift into different rules.
     bool RunOperateGoal(const std::string& request, SessionResult& result);
-    // Every archived turn goes through here, so the sensitive-content refusal and the
-    // enabled check live in one place rather than at each call site.
+    // Centralizes archive enablement and sensitive-content refusal.
     void ArchiveTurn(const std::string& role, const std::string& content);
-    // Reads observable signals out of a finished turn and applies them as bounded
-    // relationship evidence. Deterministic: no model is consulted about how Revia should
-    // feel toward someone, because a model that could set those numbers would let anyone
-    // talk their way into being trusted.
-    // Applies bounded preference evidence and reports only the opinions that actually
-    // moved. Separate from RecordRelationshipEvidence because what she thinks of a
-    // person and what she thinks of a subject are different things that must not be
-    // able to overwrite one another (design §8, §10).
-    void RecordPreferenceEvidence(
-        const std::vector<identity::PreferenceObservation>& observations);
+    // Applies bounded subject evidence and reports changed preferences.
+    void RecordPreferenceEvidence(const std::vector<identity::PreferenceObservation>& observations);
     std::string ResolveLocalSpeaker(const std::string& input);
-    void RecordRelationshipEvidence(
-        const std::string& entityId,
-        const std::string& userInput,
-        const std::string& reply,
-        bool succeeded);
+    void RecordRelationshipEvidence(const std::string& entityId, const std::string& userInput, const std::string& reply, bool succeeded);
     void PersistIdentity();
     void StartStateMaintenance();
     void StopStateMaintenance();
     void RefreshMemoryBackfill();
-    // Records what a finished turn says about who she is becoming. Bounded and slow:
-    // several consistent observations are needed before anything moves at all.
+    // Requires consistent evidence before changing development.
     void RecordDevelopmentEvidence(const identity::TurnObservation& observation);
-    // Moves drives from a confirmed event, alongside the emotional appraisal of it, so
-    // wanting and feeling never disagree about what happened.
+    // Feeds drives the same confirmed stimulus used by appraisal.
     void ObserveDrives(const emotion::Stimulus& stimulus);
     // Asks whether there is any reason to act. Called from the initiative loop rather
     // than from a timer of its own: a timer may permit an activity, never motivate one.
     void ConsiderAutonomousActivity(const std::string& triggerReason);
     void RunAutonomousActivity(const autonomy::ActivityDecision& decision,
         const std::string& triggerReason, std::stop_token stopToken = {});
-    [[nodiscard]] autonomy::ActivityOutcome ExecuteComputer(
-        const autonomy::Activity& activity, const autonomy::ActivityDecision& decision,
-        std::stop_token stopToken);
+    [[nodiscard]] autonomy::ActivityOutcome ExecuteComputer(const autonomy::Activity& activity,
+        const autonomy::ActivityDecision& decision, std::stop_token stopToken);
     [[nodiscard]] autonomy::AutonomyEvidence GatherAutonomyEvidence() const;
     [[nodiscard]] autonomy::AutonomyCost GatherAutonomyCost() const;
-    // Waits, briefly, for the user to stop typing or moving the mouse before something
-    // unprompted is said, the way a person waits for a gap instead of giving up on the
-    // thought. Returns the desktop as it stands when the gap came, the wait ran out, or
-    // the user spoke to her first.
-    // The desktop as the attention policy should see it: the raw sample, plus whether the
-    // input clock can be trusted to mean someone is typing.
+    // Samples attention and input-clock reliability.
     [[nodiscard]] initiative::AttentionContext SampleAttention() const;
-    [[nodiscard]] initiative::AttentionContext AwaitInputPause(
-        std::stop_token stopToken, std::uint64_t inputGeneration) const;
+    // Waits for an input pause, timeout, or a new user interaction.
+    [[nodiscard]] initiative::AttentionContext AwaitInputPause(std::stop_token stopToken, std::uint64_t inputGeneration) const;
     // Interrupts whatever she chose to do because the user needs attention. Interrupted
     // is not cancelled: what was cut off stays resumable.
     void PreemptAutonomousActivity(const std::string& because);
     // Carries out one decided activity. The scheduler decides; this is the only place
     // that acts, and every externally meaningful step inside it still goes through the
     // ordinary capability, policy, and initiative systems.
-    [[nodiscard]] autonomy::ActivityOutcome ExecuteActivity(
-        const autonomy::Activity& activity,
-        const autonomy::ActivityDecision& decision,
-        std::stop_token stopToken = {});
-    [[nodiscard]] autonomy::ActivityOutcome ExecuteThink(
-        const autonomy::Activity& activity,
-        const autonomy::ActivityDecision& decision,
-        std::stop_token stopToken = {});
-    [[nodiscard]] autonomy::ActivityOutcome ExecuteObserve(
-        const autonomy::Activity& activity,
-        const autonomy::ActivityDecision& decision,
-        std::stop_token stopToken = {});
-    [[nodiscard]] autonomy::ActivityOutcome ExecuteResearch(
-        const autonomy::Activity& activity,
+    [[nodiscard]] autonomy::ActivityOutcome ExecuteActivity(const autonomy::Activity& activity,
+        const autonomy::ActivityDecision& decision, std::stop_token stopToken = {});
+    [[nodiscard]] autonomy::ActivityOutcome ExecuteThink(const autonomy::Activity& activity,
+        const autonomy::ActivityDecision& decision, std::stop_token stopToken = {});
+    [[nodiscard]] autonomy::ActivityOutcome ExecuteObserve(const autonomy::Activity& activity,
+        const autonomy::ActivityDecision& decision, std::stop_token stopToken = {});
+    [[nodiscard]] autonomy::ActivityOutcome ExecuteResearch(const autonomy::Activity& activity, const autonomy::ActivityDecision& decision);
+    [[nodiscard]] autonomy::ActivityOutcome ExecuteOrganizeMemory(const autonomy::Activity& activity,
         const autonomy::ActivityDecision& decision);
-    [[nodiscard]] autonomy::ActivityOutcome ExecuteOrganizeMemory(
-        const autonomy::Activity& activity,
-        const autonomy::ActivityDecision& decision);
-    [[nodiscard]] autonomy::ActivityOutcome ExecuteCreate(
-        const autonomy::Activity& activity,
-        const autonomy::ActivityDecision& decision,
-        std::stop_token stopToken = {});
-    [[nodiscard]] autonomy::ActivityOutcome ExecuteSpeak(
-        const autonomy::Activity& activity,
-        const autonomy::ActivityDecision& decision);
+    [[nodiscard]] autonomy::ActivityOutcome ExecuteCreate(const autonomy::Activity& activity,
+        const autonomy::ActivityDecision& decision, std::stop_token stopToken = {});
+    [[nodiscard]] autonomy::ActivityOutcome ExecuteSpeak(const autonomy::Activity& activity, const autonomy::ActivityDecision& decision);
     // Whether the activity this worker is running is still the current one. Polled
     // between steps so a long activity yields to the user promptly rather than only at
     // its own boundaries.
@@ -621,13 +476,11 @@ private:
     // conversation rather than starting one that has forgotten yesterday.
     void RestoreConversationContext();
     // Submit already holds operationMutex when /eval arrives; the public entry point locks.
-    evaluation::EvaluationReport RunConversationEvaluationUnlocked(
-        const std::vector<evaluation::EvaluationCase>& cases,
+    evaluation::EvaluationReport RunConversationEvaluationUnlocked(const std::vector<evaluation::EvaluationCase>& cases,
         std::stop_token stopToken);
     // The checked-in corpus unless RuntimeData supplies one, so cases can be added
     // without a rebuild and an edited corpus cannot be silently restored by one.
-    [[nodiscard]] std::vector<evaluation::EvaluationCase> LoadEvaluationCorpus(
-        std::string& outSource);
+    [[nodiscard]] std::vector<evaluation::EvaluationCase> LoadEvaluationCorpus(std::string& outSource);
     void StartVoiceWarmup();
     void StopVoiceWarmup();
     // Logs which inference path the voice actually loaded on, once the clone model is
@@ -647,10 +500,7 @@ private:
     // Runs a background worker's loop until stop is requested. Nothing thrown may leave
     // a worker thread -- an exception escaping a std::jthread ends the process -- so a
     // loop that throws is logged and started again after a short pause.
-    void RunBackgroundLoop(
-        const char* worker,
-        std::stop_token stopToken,
-        const std::function<void()>& loop);
+    void RunBackgroundLoop(const char* worker, std::stop_token stopToken, const std::function<void()>& loop);
     // Runs merged voice turns once their window closes. Its own thread rather than the
     // shell's timer, so listening does not depend on a debug window being open.
     void StartInputDrain();
@@ -683,8 +533,7 @@ private:
 
     // Background tasks. One runs at a time on its own thread with its own stop source,
     // so she can keep talking while she works and a new message never cancels it.
-    bool LaunchTask(const std::string& title,
-        std::function<goals::Goal(std::stop_token)> execute, std::string& outMessage);
+    bool LaunchTask(const std::string& title, std::function<goals::Goal(std::stop_token)> execute, std::string& outMessage);
     void FinishTask(const goals::Goal& finished);
     // Returns false when no task was running.
     bool CancelTask(const std::string& because);
@@ -710,24 +559,14 @@ private:
     // "Working on X (latest: ...)" or a recent result, for the state packet. Empty if none.
     [[nodiscard]] std::string DescribeRunningTask() const;
     [[nodiscard]] std::string DescribeFinishedTask() const;
-    // Turn one subsystem's account of what it did into what the session actually does.
-    //
-    // The only place a TurnEvent becomes a session effect. A subsystem returns events; it
-    // does not set state, publish components or reach the event bus, and this is the
-    // function that makes that true rather than merely intended.
+    // Applies returned turn events; subsystems cannot mutate session state directly.
     SessionResult ApplyTurn(TurnOutcome outcome);
 
     void SetState(RuntimeState newState, const std::string& activity = "");
     void PublishAffect();
     void Publish(RuntimeEventKind kind, const std::string& message, std::uint64_t turnId = 0) const;
-    void PublishComponent(
-        const std::string& component,
-        const std::string& phase,
-        const std::string& message,
-        double elapsedMilliseconds = -1.0,
-        int queueDepth = 0,
-        std::uint64_t turnId = 0,
-        const std::string& resource = {}) const;
+    void PublishComponent(const std::string& component, const std::string& phase, const std::string& message,
+        double elapsedMilliseconds = -1.0, int queueDepth = 0, std::uint64_t turnId = 0, const std::string& resource = {}) const;
     void PublishResourcePlan() const;
     void PublishResourceUsage(const resources::UsageSnapshot& snapshot) const;
     void StartResourceMonitor();
@@ -763,12 +602,7 @@ private:
     std::string lastLoggedAutonomy;
     mutable std::mutex loadMutex;
     resources::LoadAdjustment currentLoad;
-    // Hysteresis lives here rather than in the governor, which is pure. Without it a
-    // reading hovering on a threshold flips the machine between states every sample.
-    // A new state has to hold for several consecutive samples before it is adopted.
-    // VRAM readings swing hard while models load and free memory -- 111%, then 11%, then
-    // 88% within seconds -- and acting on each swing made what Revia would attempt
-    // change from one moment to the next for no reason a person could see.
+    // Require several consistent samples before adopting a changed load policy.
     resources::LoadAdjustment candidateLoad;
     int candidateLoadSamples = 0;
     static constexpr int loadSamplesBeforeAdopting = 3;
@@ -780,13 +614,7 @@ private:
     std::deque<std::chrono::steady_clock::time_point> recentActivities;
     std::chrono::steady_clock::time_point lastActivityAt{};
     speech::SpeechService speechService;
-    // Who owns the audio channel right now.
-    //
-    // Every part of Revia that wants to be heard -- a reply, a proposal, a greeting, a
-    // song, and later a skill or a game -- goes through this rather than calling
-    // SpeechService directly. It does not synthesise anything: the Qwen3-TTS pool below
-    // is still the only voice and PerformanceRuntime is still the only thing that plays
-    // a song. What this decides is which of them is allowed to make a sound.
+    // Arbitrates audio ownership; synthesis and song playback keep their own owners.
     speech::SpeechCoordinator speechCoordinator;
     // Which coordinated intent currently owns the speech backend, so the floor is
     // released by the utterance that actually held it rather than by whatever happens to
@@ -827,28 +655,12 @@ private:
     // sees still reaches the machine only as a typed action through the same policy,
     // confirmation and audit path as everything else.
     actions::windows::DesktopObserver desktopObserver;
-    // Everything about deciding what to do next on the machine, in one owner that is
-    // not this class.
-    //
-    // It holds the observation preparation, the decision providers, the payloads the
-    // user's words live in, the subgoal lifecycle and the opt-in recorder -- five
-    // responsibilities that were spread through this file and share nothing with
-    // session lifecycle. This class composes it and asks it questions; it holds no
-    // reference back here, starts nothing and executes nothing.
-    //
-    // Declared after `desktopObserver` because it borrows it, and member initialisation
-    // follows declaration order.
+    // Borrows desktopObserver, so it must be declared after it.
     computer::ComputerTaskCoordinator computerTasks{
         desktopObserver,
         core::ResolveRuntimeWritePath(
             std::filesystem::path("RuntimeData") / "ComputerExperience")};
-    // Decides when a model role is resident. Declared after `router` because it holds a
-    // reference to that router's inventory, and member initialisation follows
-    // declaration order.
-    //
-    // It owns no process. The activator and deactivator installed on it reach back into
-    // the server processes this session already owns, so there is still exactly one
-    // owner of a llama.cpp child and it is still this class.
+    // Borrows router residency; model processes remain session-owned.
     intelligence::ModelLifetimeCoordinator modelLifetime{router.Residency()};
     actions::windows::ApplicationControlDiscovery applicationControlDiscovery;
     llamaCppServerProcess llamaServerProcess;
@@ -859,6 +671,17 @@ private:
     llmSettings expertLlmSettings;
     bool fastBrainConfigured = false;
     bool expertBrainConfigured = false;
+    struct BrainPreparation
+    {
+        std::atomic<bool> attempted{false};
+        std::atomic<bool> succeeded{false};
+        void Reset() { succeeded.store(false); attempted.store(false); }
+    };
+    // Optional graph preparation is attempted once per observed backend lifetime.
+    // Cancellation leaves the attempt retryable; ordinary failure keeps it Cold.
+    BrainPreparation mainPreparation;
+    BrainPreparation fastPreparation;
+    BrainPreparation expertPreparation;
     agents::TurnCoordinator turnCoordinator;
     ConversationRuntime conversationRuntime;
     agents::InputArbiter inputArbiter;
@@ -875,26 +698,27 @@ private:
     std::chrono::milliseconds relationshipQuietInterval = std::chrono::minutes(5);
     std::chrono::milliseconds quietConversationInterval = std::chrono::minutes(20);
     std::jthread stateMaintenanceWorker;
-    // The entity whose turn is being handled. Set before a turn runs and read when the
-    // state packet is assembled, so relationship state follows whoever is speaking
-    // rather than being global.
+    // Protects attribution for the turn currently being handled.
     mutable std::mutex speakerMutex;
     // Local session attribution only. Adapter authors never replace this selection.
     std::string currentSpeakerId = identity::LocalUserEntityId();
     learning::SelfAssessmentEngine selfAssessment;
-    // Declared after the router, bus, logger, and assessment its callbacks use, so it is
-    // destroyed -- and its thread joined -- before any of them.
+    // Workers must be destroyed before the router, bus, logger, and assessment they borrow.
     std::shared_ptr<improvement::ProposalStore> improvementStore =
         std::make_shared<improvement::ProposalStore>();
     improvement::ImprovementAgent improvementAgent;
     visual::DiagramStore diagramStore;
     visual::ImageGenerator imageGenerator;
-    // The working document lives in here now, with the five operations that touch it.
-    // Declared after every collaborator it borrows, so it is destroyed before them.
+    // Declared after borrowed collaborators so it is destroyed first.
     DocumentWorkshop documentWorkshop;
     std::string conversationSessionId;
 
     mutable std::mutex operationMutex;
+    // Preference commands already run under operationMutex, while UI setters do not.
+    // Synchronous status observers may read preferences during a live update.
+    mutable std::recursive_mutex preferenceUpdateMutex;
+    // Held only for preference snapshots and assignments, never worker joins/events.
+    mutable std::mutex preferenceSnapshotMutex;
     mutable std::mutex cancellationMutex;
     mutable std::mutex confirmationMutex;
     mutable std::mutex voiceStudioMutex;
@@ -908,8 +732,7 @@ private:
     // the local user's conversationContext or durable conversation archive.
     std::unordered_map<std::string, std::deque<conversationMessage>>
         publicConversationContexts;
-    // Last-used ordinal per channel, for LRU eviction. A monotonic counter rather than a
-    // clock: ordering is all this needs, and a counter cannot go backwards.
+    // Monotonic ordinals keep LRU ordering independent of the clock.
     std::unordered_map<std::string, std::uint64_t> publicContextLastUsed;
     std::uint64_t publicContextClock = 0;
     std::condition_variable_any initiativeCondition;
@@ -920,9 +743,7 @@ private:
     std::string curiositySignalReason;
     std::stop_source curiosityAttemptStopSource;
     outputChannel outputTarget = outputChannel::LocalVoice;
-    // What to go back to when a composition ends. Depth-counted because one act of
-    // composing is often two actions -- set the text, then click send -- and restoring
-    // after the first would put Revia back on local voice halfway through.
+    // Restore output only after nested composition actions finish.
     outputChannel previousOutputTarget = outputChannel::LocalVoice;
     std::string previousOutputApplication;
     int compositionDepth = 0;
@@ -932,14 +753,9 @@ private:
     // Loads the assigned Qwen3-TTS voice alongside the remaining startup stages.
     std::jthread voiceWarmupWorker;
     std::atomic<bool> voiceWarmupFinished = true;
-    // Whether the load is still wanted. Separate from `started`, because the warmup now
-    // begins while startup is still running and `started` is deliberately false until
-    // every stage has finished -- reading it there would abandon the load immediately.
+    // Warmup starts before started=true; this flag tracks whether loading is still wanted.
     std::atomic<bool> voiceWarmupWanted = false;
-    // When background awareness should look, and what it last saw. The thread
-    // below stays here because the capture needs the foreground lock, the busy
-    // flag and the backend; the scheduling state does not, and was six members of
-    // this class that nothing else touched.
+    // The session owns the worker; this object owns its schedule and last observation.
     perception::ScreenAwarenessSchedule screenAwareness;
     std::jthread screenAwarenessWorker;
     std::jthread initiativeWorker;

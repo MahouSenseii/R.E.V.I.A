@@ -19,21 +19,14 @@ struct VisionResolverSettings
 class VisionUiaResolver
 {
 public:
-    [[nodiscard]] vision::UiaResolutionResult Resolve(
-        const std::string& application,
-        const std::string& windowTitle,
-        const vision::VisionActionIntent& intent,
-        const VisionResolverSettings& settings) const;
+    [[nodiscard]] vision::UiaResolutionResult Resolve(const std::string& application, const std::string& windowTitle,
+        const vision::VisionActionIntent& intent, const VisionResolverSettings& settings) const;
 
-    [[nodiscard]] static vision::CandidateScore ScoreCandidate(
-        const vision::VisionActionIntent& intent,
+    [[nodiscard]] static vision::CandidateScore ScoreCandidate(const vision::VisionActionIntent& intent,
         const vision::UiaCandidate& candidate);
 
-    [[nodiscard]] static vision::UiaResolutionResult SelectBest(
-        const std::string& application,
-        const std::string& windowTitle,
-        const vision::VisionActionIntent& intent,
-        const std::vector<vision::UiaCandidate>& candidates,
+    [[nodiscard]] static vision::UiaResolutionResult SelectBest(const std::string& application, const std::string& windowTitle,
+        const vision::VisionActionIntent& intent, const std::vector<vision::UiaCandidate>& candidates,
         const VisionResolverSettings& settings);
 };
 

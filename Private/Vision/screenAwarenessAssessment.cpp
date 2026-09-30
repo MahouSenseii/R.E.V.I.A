@@ -96,8 +96,7 @@ std::string ExtractJsonObject(const std::string& raw)
 }
 }
 
-ScreenAwarenessAssessment ScreenAwarenessAssessmentParser::Parse(
-    const std::string& response)
+ScreenAwarenessAssessment ScreenAwarenessAssessmentParser::Parse(const std::string& response)
 {
     ScreenAwarenessAssessment assessment;
     assessment.summary = BoundedText(response, MaximumSummaryCharacters);

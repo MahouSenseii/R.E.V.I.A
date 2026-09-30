@@ -1,7 +1,7 @@
 #pragma once
 
-#include "Library/structLibrary.h"
 
+#include "Visual/imageSettings.h"
 #include <atomic>
 #include <filesystem>
 #include <mutex>
@@ -33,10 +33,7 @@ public:
     ImageServerProcess(const ImageServerProcess&) = delete;
     ImageServerProcess& operator=(const ImageServerProcess&) = delete;
 
-    bool Start(
-        const imageSettings& settings,
-        const std::string& apiKey,
-        std::string& outError);
+    bool Start(const imageSettings& settings, const std::string& apiKey, std::string& outError);
     [[nodiscard]] bool IsRunning() const;
     [[nodiscard]] bool WasStartedByRevia() const;
     void Stop();

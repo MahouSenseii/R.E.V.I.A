@@ -10,17 +10,8 @@
 namespace revia::goals
 {
 
-// Durable goal state.
-//
-// The runner writes here after every transition, so an interrupted goal is
-// resumed from its own record rather than replayed from the action audit log.
-// The audit log is append-only and has no read-back API by design; it answers
-// "what did Revia do", not "where was this goal up to".
-//
-// Steps and attempts are stored relationally so a single step's evidence can
-// be read without loading every goal, while the variable-shaped payloads
-// (ActionRequest, budget, spend, capability scope) are stored as JSON columns
-// for the same reason the rest of the project uses nlohmann::json for them.
+// Persists every goal transition for resumption. Action audit remains append-only
+// and separate; steps/attempts are relational, variable payloads JSON.
 class GoalStore
 {
 public:

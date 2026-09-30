@@ -22,10 +22,8 @@ void ScreenAwarenessSchedule::CancelAttempt()
     attemptStopSource.request_stop();
 }
 
-std::optional<ScreenAwarenessSchedule::Work> ScreenAwarenessSchedule::WaitForWork(
-    std::stop_token workerStop,
-    const std::chrono::milliseconds refreshInterval,
-    const std::uint64_t handledVersion)
+std::optional<ScreenAwarenessSchedule::Work> ScreenAwarenessSchedule::WaitForWork(std::stop_token workerStop,
+    const std::chrono::milliseconds refreshInterval, const std::uint64_t handledVersion)
 {
     std::unique_lock lock(mutex);
     const bool eventDriven = condition.wait_for(
@@ -40,11 +38,8 @@ std::optional<ScreenAwarenessSchedule::Work> ScreenAwarenessSchedule::WaitForWor
     return work;
 }
 
-std::uint64_t ScreenAwarenessSchedule::Settle(
-    std::stop_token workerStop,
-    const std::chrono::milliseconds debounce,
-    const std::chrono::milliseconds ceiling,
-    std::uint64_t targetVersion)
+std::uint64_t ScreenAwarenessSchedule::Settle(std::stop_token workerStop, const std::chrono::milliseconds debounce,
+    const std::chrono::milliseconds ceiling, std::uint64_t targetVersion)
 {
     std::unique_lock lock(mutex);
     const auto limit = std::chrono::steady_clock::now() + ceiling;
@@ -70,8 +65,7 @@ std::uint64_t ScreenAwarenessSchedule::Settle(
     return targetVersion;
 }
 
-ScreenAwarenessSchedule::Attempt ScreenAwarenessSchedule::BeginAttempt(
-    std::string trigger, std::uint64_t targetVersion)
+ScreenAwarenessSchedule::Attempt ScreenAwarenessSchedule::BeginAttempt(std::string trigger, std::uint64_t targetVersion)
 {
     std::lock_guard lock(mutex);
     // A fresh source per attempt. Reusing one that has already been stopped would make
@@ -92,8 +86,7 @@ ScreenAwarenessSchedule::Attempt ScreenAwarenessSchedule::BeginAttempt(
     return attempt;
 }
 
-bool ScreenAwarenessSchedule::WaitUntil(
-    std::stop_token workerStop, const std::chrono::steady_clock::time_point until)
+bool ScreenAwarenessSchedule::WaitUntil(std::stop_token workerStop, const std::chrono::steady_clock::time_point until)
 {
     std::unique_lock lock(mutex);
     condition.wait_until(lock, workerStop, until, [] { return false; });

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Memory/memoryTypes.h"
 #include "Agents/responseProvenance.h"
 #include "Core/memoryManager.h"
 #include "Core/messageRouter.h"
@@ -111,23 +112,14 @@ public:
     // `provenance` travels with the reply because the classifier runs long after the
     // turn that produced it, on a worker that has no way to look back and ask how the
     // words were arrived at.
-    void Submit(
-        const messageRouter& router,
-        std::string input,
-        std::string assistantResponse,
-        ResponseProvenance provenance,
+    void Submit(const messageRouter& router, std::string input, std::string assistantResponse, ResponseProvenance provenance,
         std::uint64_t turnId = 0);
     // Commits already-approved semantic content before accepting optional embedding
     // work. A successful disposition guarantees the content is in the existing store;
     // cancellation/queue pressure can defer vectors, never the accepted content.
     // Unclassified candidates still use Submit and are not persisted by this path.
-    [[nodiscard]] LearnedFindingResult SubmitLearnedFinding(
-        const messageRouter& router,
-        memoryDecision decision,
-        std::uint64_t turnId = 0);
-    void SubmitEmbeddingBackfill(
-        const messageRouter& router,
-        const std::string& embeddingModel);
+    [[nodiscard]] LearnedFindingResult SubmitLearnedFinding(const messageRouter& router, memoryDecision decision, std::uint64_t turnId = 0);
+    void SubmitEmbeddingBackfill(const messageRouter& router, const std::string& embeddingModel);
     // The session owns this subscription's lifetime; all scans and requests run on
     // the existing worker. The router must remain alive until Stop has joined the
     // worker; StopEmbeddingBackfill cancels its subscription without joining it.
@@ -150,25 +142,14 @@ public:
     };
     [[nodiscard]] QueueDepths Depths() const;
 
-    // The scheduling order, exposed so fairness can be tested without a router, a
-    // model, or a database. Given how many tasks of each class are waiting, returns the
-    // class the worker takes next and advances the round.
-    //
-    // A weighted round robin over a fixed round of seven slots -- four interactive, two
-    // learning, one backfill. Every class is reached in every round, so none can starve
-    // however busy the others are, while fresh conversation still gets most of the
-    // worker. An empty slot falls through to whichever class has work, so the weights
-    // never idle the worker.
-    [[nodiscard]] static MemoryTaskClass NextClass(
-        const QueueDepths& depths,
-        int& roundPosition,
-        bool& outHasWork);
+    // Seven-slot weighted round robin: four interactive, two learning, one backfill.
+    // Empty slots select available work, preserving progress without idling the worker.
+    [[nodiscard]] static MemoryTaskClass NextClass(const QueueDepths& depths, int& roundPosition, bool& outHasWork);
 
     // What the event queue's bounded eviction would do with this event, exposed so the
     // policy can be tested directly: Critical events are never coalesced away, Low ones
     // are the first to go, and Important sits between the two.
-    [[nodiscard]] static MemoryEventPriority ClassifyEventPriority(
-        const MemoryAgentEvent& event);
+    [[nodiscard]] static MemoryEventPriority ClassifyEventPriority(const MemoryAgentEvent& event);
 
     // How many Low-priority (or, failing that, Important) events have been coalesced
     // or evicted to keep the event queue bounded under pressure, and how many times

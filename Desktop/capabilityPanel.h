@@ -21,14 +21,10 @@ class CapabilityPanel final : public QWidget
 public:
     using DiscoveryRequest = std::function<void()>;
 
-    CapabilityPanel(
-        revia::runtime::ReviaSession& session,
-        DiscoveryRequest discoveryRequest,
-        QWidget* parent = nullptr);
+    CapabilityPanel(revia::runtime::ReviaSession& session, DiscoveryRequest discoveryRequest, QWidget* parent = nullptr);
 
     void Refresh();
-    void ShowDiscovery(
-        const revia::actions::windows::ApplicationControlInventory& inventory);
+    void ShowDiscovery(const revia::actions::windows::ApplicationControlInventory& inventory);
     void SetStatus(const QString& text, bool error = false);
 
 protected:

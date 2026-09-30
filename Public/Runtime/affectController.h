@@ -22,21 +22,10 @@ public:
     AffectSnapshot Reset();
     // Input observation happens before generation, so this turn's emotion can actually
     // shape this turn's words. ObserveTurn then incorporates the outcome.
-    AffectSnapshot ObserveInput(
-        const std::string& userInput,
-        const SocialContext& social = {});
-    AffectSnapshot ObserveTurn(
-        const std::string& userInput,
-        const std::string& response,
-        bool succeeded,
-        const SocialContext& social = {});
-    // Something that happened to Revia rather than something said to her, entering the
-    // same state machine conversation already uses. Returns no snapshot when the event
-    // was not worth feeling, which is the common outcome and not a missed case.
-    //
-    // Deliberately does not count as an interaction: succeeding at a background task
-    // must not make her less lonely, because loneliness is about the user being gone
-    // and she cannot keep herself company by finishing a job.
+    AffectSnapshot ObserveInput(const std::string& userInput, const SocialContext& social = {});
+    AffectSnapshot ObserveTurn(const std::string& userInput, const std::string& response, bool succeeded, const SocialContext& social = {});
+    // Applies runtime-confirmed internal events; returns no snapshot when none merits affect.
+    // Background success does not count as user interaction or reduce loneliness.
     std::optional<AffectSnapshot> ObserveInternalEvent(const InternalStimulus& stimulus);
     std::optional<AffectSnapshot> Tick();
     AffectSnapshot Current() const;
@@ -55,21 +44,13 @@ private:
     // What was said. Unchanged and still text-only on purpose: separating the reading of
     // the words from what they mean coming from this person keeps both testable, and
     // keeps one keyword list from having to know about relationships.
-    static Candidate Classify(
-        const std::string& userInput,
-        const std::string& response,
-        bool succeeded);
+    static Candidate Classify(const std::string& userInput, const std::string& response, bool succeeded);
     // What it means, said by this person, today. Pure, and inert for a default context.
-    static Candidate ModulateForRelationship(
-        Candidate candidate,
-        const SocialContext& social);
+    static Candidate ModulateForRelationship(Candidate candidate, const SocialContext& social);
     // Deterministic and model-free, per the tiering rule: a feeling about an outcome the
     // runtime already knows the shape of does not need a language model to name it.
     static Candidate ClassifyInternal(const InternalStimulus& stimulus);
-    AffectSnapshot Apply(
-        Candidate candidate,
-        std::chrono::steady_clock::time_point now,
-        bool countsAsInteraction = true);
+    AffectSnapshot Apply(Candidate candidate, std::chrono::steady_clock::time_point now, bool countsAsInteraction = true);
 
     mutable std::mutex mutex;
     AffectSnapshot snapshot;

@@ -1,7 +1,7 @@
 #pragma once
 
-#include "Library/structLibrary.h"
 
+#include "Speech/speechSettings.h"
 #include <string>
 
 namespace revia::speech

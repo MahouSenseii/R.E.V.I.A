@@ -80,11 +80,8 @@ nlohmann::json GoodArtifact()
 
 // Writes an artifact with a correct behaviour hash for whatever it now contains, unless
 // the caller asked for a broken one.
-std::filesystem::path Write(
-    const revia::tests::ScopedTestDirectory& directory,
-    nlohmann::json artifact,
-    const std::string& name = "artifact.json",
-    const bool fixHash = true)
+std::filesystem::path Write(const revia::tests::ScopedTestDirectory& directory, nlohmann::json artifact,
+    const std::string& name = "artifact.json", const bool fixHash = true)
 {
     if (fixHash)
     {
@@ -122,11 +119,7 @@ ObservedCandidate Button(const std::string& name)
     return candidate;
 }
 
-ComputerSubgoal Validated(
-    const std::string& application,
-    const std::string& name,
-    const SubgoalIntent intent,
-    const PayloadVault& vault)
+ComputerSubgoal Validated(const std::string& application, const std::string& name, const SubgoalIntent intent, const PayloadVault& vault)
 {
     ComputerSubgoal proposed;
     proposed.id = NewSubgoalId();

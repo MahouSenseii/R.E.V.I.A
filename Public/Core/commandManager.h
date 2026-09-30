@@ -1,6 +1,9 @@
 #pragma once
 
-#include "Library/structLibrary.h"
+#include "Core/appSettings.h"
+#include "Core/commandOutput.h"
+#include "Core/profile.h"
+#include "LLM/backendTypes.h"
 #include <functional>
 #include <string>
 
@@ -13,17 +16,13 @@ public:
     ~commandManager();
 
     using ProfileActivator = std::function<commandOutput(const std::string&)>;
-    commandOutput HandleCommand(const std::string& input, const appSettings& settings,
-        const aiProfile& profile, messageRouter& router,
+    commandOutput HandleCommand(const std::string& input, const appSettings& settings, const aiProfile& profile, messageRouter& router,
         const ProfileActivator& activateProfile) const;
 private:
 
     bool IsCommand(const std::string& input) const;
     static std::string StatusToString(systemStatus status);
     commandOutput BuildHelpOutput() const;
-    commandOutput BuildStatusOutput(
-        const appSettings& settings,
-        const aiProfile& profile,
-        const healthOutput& llmHealth,
-        const healthOutput& embeddingHealth) const;
+    commandOutput BuildStatusOutput(const appSettings& settings,
+        const aiProfile& profile, const healthOutput& llmHealth, const healthOutput& embeddingHealth) const;
 };

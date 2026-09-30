@@ -29,9 +29,7 @@ std::filesystem::path ExecutableDirectory()
     return std::filesystem::current_path(error);
 }
 
-std::filesystem::path ExistingFromAncestors(
-    std::filesystem::path root,
-    const std::filesystem::path& relative)
+std::filesystem::path ExistingFromAncestors(std::filesystem::path root, const std::filesystem::path& relative)
 {
     for (int depth = 0; depth < 6 && !root.empty(); ++depth)
     {
@@ -99,8 +97,7 @@ std::filesystem::path RuntimeRoot()
     return executable;
 }
 
-std::filesystem::path ResolveRuntimeWritePath(
-    const std::filesystem::path& configuredPath)
+std::filesystem::path ResolveRuntimeWritePath(const std::filesystem::path& configuredPath)
 {
     if (configuredPath.empty() || configuredPath.is_absolute())
     {
@@ -140,8 +137,7 @@ std::filesystem::path ProgramDirectory(const char* const argumentZero)
 #endif
 }
 
-std::filesystem::path ResolveRuntimePath(
-    const std::filesystem::path& configuredPath)
+std::filesystem::path ResolveRuntimePath(const std::filesystem::path& configuredPath)
 {
     if (configuredPath.empty() || configuredPath.is_absolute())
     {

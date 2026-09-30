@@ -18,12 +18,7 @@ struct SandboxRehearsal
     bool prepared = false;
     Goal goal;
     std::filesystem::path root;
-    // A rehearsal needs its own ActionRuntime, not the session's. Scoped execution takes
-    // the more restrictive of the global policy and the goal's, and the scratch directory
-    // is outside every configured approved root, so the real runtime would block every
-    // step of a plan that is perfectly fine. These two files give the rehearsal a policy
-    // that approves the scratch directory and nothing else, plus an audit log that is
-    // discarded with it rather than mixed into the real trail.
+    // Rehearsal uses a separate runtime restricted to scratch paths and a disposable audit log.
     std::filesystem::path capabilityConfig;
     std::filesystem::path auditLog;
     // Desktop goals use disposable application windows created after the scratch tree is
@@ -32,14 +27,8 @@ struct SandboxRehearsal
     std::string reason;
 };
 
-// Builds a throwaway copy of just the paths a plan touches, so the plan can be proven
-// before it is aimed at real folders.
-//
-// The whole approved root is deliberately not mirrored. A goal's root can be an entire
-// documents folder, and copying it to rehearse a two-step plan would cost more than the
-// plan does. Only the sources the plan names are staged, and the rehearsal scope is
-// narrowed to the scratch directory, so a step that reaches outside what it declared
-// fails here instead of succeeding here and surprising someone later.
+// Stages only named sources, never entire approved roots.
+// Rehearsal scope is restricted to the scratch directory.
 class GoalSandbox
 {
 public:

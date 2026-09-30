@@ -1,7 +1,8 @@
 #pragma once
 
-#include "Library/structLibrary.h"
 
+#include "Runtime/channelSettings.h"
+#include "Runtime/outputChannel.h"
 #include <string>
 
 namespace revia::runtime
@@ -47,9 +48,7 @@ struct ChannelPolicy
 // Precedence is deliberate: an explicit voice opt-in beats a text-only listing, because
 // the opt-in is the more specific statement and a user who put an application in both
 // lists most recently meant to hear it.
-[[nodiscard]] ChannelPolicy ResolveOutputChannel(
-    outputChannel channel,
-    const std::string& application,
-    const conversationChannelSettings& settings);
+[[nodiscard]] ChannelPolicy ResolveOutputChannel(outputChannel channel,
+    const std::string& application, const conversationChannelSettings& settings);
 
 } // namespace revia::runtime

@@ -1,3 +1,5 @@
+#include "Improvement/improvementSettings.h"
+#include "LLM/responseTypes.h"
 #include "testSupport.h"
 
 #include "Improvement/codeProposal.h"

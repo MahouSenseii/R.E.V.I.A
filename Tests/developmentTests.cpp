@@ -12,11 +12,7 @@ namespace
 using revia::tests::Check;
 using namespace revia::identity;
 
-std::size_t ApplyMany(
-    DevelopmentEngine& engine,
-    DevelopmentState& development,
-    const DevelopmentEvidence& evidence,
-    const int times)
+std::size_t ApplyMany(DevelopmentEngine& engine, DevelopmentState& development, const DevelopmentEvidence& evidence, const int times)
 {
     std::size_t applied = 0;
     for (int index = 0; index < times; ++index)

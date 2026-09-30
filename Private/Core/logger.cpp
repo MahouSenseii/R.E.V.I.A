@@ -1,3 +1,5 @@
+#include "Core/logSeverity.h"
+#include "LLM/responseTypes.h"
 #include "Core/logger.h"
 #include <chrono>
 #include <cstdlib>
@@ -9,7 +11,6 @@
 #include <mutex>
 #include <sstream>
 #include <utility>
-#include "Library/enumLibrary.h"
 using namespace std;
 
 namespace
@@ -104,9 +105,7 @@ void logger::Timing(const std::string& scope, const std::vector<latencySample>& 
     Write("Timing", message.str(), false);
 }
 
-void logger::PromptBreakdown(
-    const std::string& scope,
-    const std::vector<promptSection>& sections)
+void logger::PromptBreakdown(const std::string& scope, const std::vector<promptSection>& sections)
 {
     if (sections.empty())
     {
@@ -159,10 +158,7 @@ void logger::PromptBreakdown(
     Write("Prompt", message.str(), false);
 }
 
-void logger::Write(
-    const std::string& severity,
-    const std::string& message,
-    const bool bUseErrorStream)
+void logger::Write(const std::string& severity, const std::string& message, const bool bUseErrorStream)
 {
     const std::string line = '[' + Timestamp() + "] [" + severity + "] " + message;
     {

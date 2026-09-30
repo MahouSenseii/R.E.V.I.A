@@ -164,13 +164,13 @@ endif()
 
 function(revia_link_foundation targetName)
     # ReviaFoundation has intentional cross-subsystem references (the session
-    # coordinator reaches speech, vision, actions, and visuals). GNU ld only
-    # scans an archive from left to right, so an object referenced by a later
-    # archive member can otherwise be skipped and reported as undefined. Keep
-    # all foundation members for MinGW; other linkers already rescan the archive.
+    # coordinator reaches speech, vision, actions, and visuals). Let GNU ld
+    # rescan the foundation for those references without forcing every unrelated
+    # member into each executable. The native web host, for example, does not
+    # need the desktop-control and voice implementations.
     if(MINGW)
         target_link_libraries(${targetName} PRIVATE
-                -Wl,--whole-archive ReviaFoundation -Wl,--no-whole-archive)
+                -Wl,--start-group ReviaFoundation -Wl,--end-group)
     else()
         target_link_libraries(${targetName} PRIVATE ReviaFoundation)
     endif()
@@ -304,6 +304,20 @@ if(BUILD_TESTING)
     # into the test binary.
     list(FILTER REVIA_TEST_SOURCES EXCLUDE REGEX "/Tests/Fixture/")
     add_executable(ReviaTests ${REVIA_TEST_SOURCES})
+    if(MINGW)
+        # Link wrappers coordinate real SQLite calls without a production test seam.
+        add_executable(ReviaArchiveWriterTests
+                Tests/Fixture/archiveWriterTests.cpp
+                Private/Memory/conversationArchive.cpp
+                Private/Memory/sensitiveContent.cpp)
+        target_include_directories(ReviaArchiveWriterTests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/Public")
+        target_link_libraries(ReviaArchiveWriterTests PRIVATE sqlite3)
+        target_compile_options(ReviaArchiveWriterTests PRIVATE -Wall -Wextra -Wpedantic)
+        target_link_options(ReviaArchiveWriterTests PRIVATE -static
+                -Wl,--wrap=sqlite3_prepare_v2 -Wl,--wrap=sqlite3_step)
+        add_test(NAME Revia.ArchiveWriter COMMAND ReviaArchiveWriterTests)
+        set_tests_properties(Revia.ArchiveWriter PROPERTIES TIMEOUT 20)
+    endif()
     add_executable(ReviaWebGuestTests Tests/Fixture/webGuestTests.cpp)
     target_include_directories(ReviaWebGuestTests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/Tests")
     revia_link_foundation(ReviaWebGuestTests)
@@ -356,6 +370,19 @@ if(BUILD_TESTING)
     endif()
 
     add_test(NAME Revia.Foundation COMMAND ReviaTests)
+    add_executable(ReviaOutputBoundaryTests
+            Tests/Fixture/outputBoundaryTests.cpp
+            Tests/reviewDeliveryTests.cpp
+            Tests/utf8GuidanceTests.cpp
+            Tests/utf8PersistenceTests.cpp)
+    target_include_directories(ReviaOutputBoundaryTests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/Tests")
+    revia_link_foundation(ReviaOutputBoundaryTests)
+    if(MINGW)
+        target_compile_options(ReviaOutputBoundaryTests PRIVATE -Wa,-mbig-obj)
+        target_link_options(ReviaOutputBoundaryTests PRIVATE -static)
+    endif()
+    add_test(NAME Revia.OutputBoundaries COMMAND ReviaOutputBoundaryTests)
+    set_tests_properties(Revia.OutputBoundaries PROPERTIES TIMEOUT 90)
     # The only deterministic owner suite the default run does not reach. It
     # disables periodic saving, so it must own its process to prove the final
     # save alone persists identity. RunNativeDesktopTests stays unregistered on
@@ -371,6 +398,13 @@ if(BUILD_TESTING)
     endif()
     find_program(REVIA_NODE_EXECUTABLE NAMES node node.exe)
     if(REVIA_NODE_EXECUTABLE)
+        if(WIN32)
+            add_test(
+                    NAME Revia.SetupScriptPolicy
+                    COMMAND "${REVIA_NODE_EXECUTABLE}" --test
+                            "${CMAKE_CURRENT_SOURCE_DIR}/Tests/setupScripts.test.mjs"
+            )
+        endif()
         add_test(
                 NAME Revia.BrowserWorkerPolicy
                 COMMAND "${REVIA_NODE_EXECUTABLE}" --test
@@ -396,6 +430,24 @@ if(BUILD_TESTING)
         )
     endif()
     if(TARGET ReviaDesktop)
+        get_target_property(REVIA_DESKTOP_TEST_SOURCES ReviaDesktop SOURCES)
+        list(FILTER REVIA_DESKTOP_TEST_SOURCES EXCLUDE REGEX "/Desktop/main\\.cpp$")
+        add_executable(ReviaDesktopStopTests
+                Tests/Fixture/desktopStopTests.cpp
+                ${REVIA_DESKTOP_TEST_SOURCES})
+        set_target_properties(ReviaDesktopStopTests PROPERTIES AUTOUIC ON AUTORCC ON)
+        target_include_directories(ReviaDesktopStopTests PRIVATE
+                "${CMAKE_CURRENT_SOURCE_DIR}/Desktop" "${CMAKE_CURRENT_SOURCE_DIR}/Tests")
+        revia_link_foundation(ReviaDesktopStopTests)
+        target_link_libraries(ReviaDesktopStopTests PRIVATE
+                Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Svg Qt6::SvgWidgets)
+        if(MINGW)
+            target_link_options(ReviaDesktopStopTests PRIVATE -static-libgcc -static-libstdc++)
+        endif()
+        add_test(NAME Revia.DesktopStopPolicy COMMAND ReviaDesktopStopTests)
+        set_tests_properties(Revia.DesktopStopPolicy PROPERTIES
+                ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QPA_PLATFORM_PLUGIN_PATH=$<TARGET_FILE_DIR:Qt6::QOffscreenIntegrationPlugin>;REVIA_LOG_DIR=${CMAKE_CURRENT_BINARY_DIR}/TestLogs"
+                TIMEOUT 15)
         add_executable(ReviaSvgRendererTests
                 Tests/Fixture/svgRendererTests.cpp
                 Private/Visual/svgCanvas.cpp

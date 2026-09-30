@@ -6,15 +6,8 @@
 namespace revia::identity
 {
 
-// How Revia stands with one specific person.
-//
-// Per entity, and genuinely independent. Nothing here assumes she likes the primary
-// user: affinity starts neutral and is earned or lost like everything else, because a
-// companion who is fond of you by construction is not fond of you at all.
-//
-// These are long-lived. They are not emotions, and the difference is load-bearing: she
-// can be furious with someone she trusts completely, and amused by someone she does not
-// like. Collapsing the two would make every argument a betrayal.
+// Independent persistent relationship with one person; affinity starts neutral and is earned.
+// Relationship state is separate from momentary emotion.
 struct RelationshipState
 {
     std::string entityId;
@@ -107,17 +100,12 @@ struct RelationshipLimits
 // nowEpochSeconds records when this contact happened, and is the caller's clock
 // rather than one read here, so this stays pure and a test can pin the time. Zero
 // means do not stamp, which is how every existing caller keeps its behaviour.
-[[nodiscard]] RelationshipState ApplyRelationshipEvent(
-    RelationshipState state,
-    const RelationshipEvent& event,
-    const RelationshipLimits& limits = {},
-    std::int64_t nowEpochSeconds = 0);
+[[nodiscard]] RelationshipState ApplyRelationshipEvent(RelationshipState state,
+    const RelationshipEvent& event, const RelationshipLimits& limits = {}, std::int64_t nowEpochSeconds = 0);
 
 // Time passing with no contact. Friction cools; grievance mostly does not; familiarity
 // is never lost, because forgetting someone you know is a memory problem, not a
 // relationship one.
-[[nodiscard]] RelationshipState SettleRelationship(
-    RelationshipState state,
-    const RelationshipLimits& limits = {});
+[[nodiscard]] RelationshipState SettleRelationship(RelationshipState state, const RelationshipLimits& limits = {});
 
 } // namespace revia::identity

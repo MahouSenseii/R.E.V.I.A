@@ -10,16 +10,7 @@
 namespace revia::skills
 {
 
-// The worked example: a skill that watches one folder and notices when it changes.
-//
-// Chosen because it is genuinely useful and completely boring. It reads a directory
-// listing and nothing else -- no network, no credentials, no window it can click. What it
-// demonstrates is the shape every later integration has to fit: it observes, it reports
-// what it noticed, and when it wants something done it proposes an action and waits for
-// the same policy every other action faces.
-//
-// It deliberately proposes a ReadFile rather than anything consequential, so the example
-// cannot become the thing that quietly widened what skills may do.
+// Watches directory listings and proposes ReadFile through the shared policy pipeline.
 class WorkspaceStatusSkill : public IReviaSkill
 {
 public:

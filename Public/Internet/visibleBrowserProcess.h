@@ -19,9 +19,7 @@ public:
     VisibleBrowserProcess(const VisibleBrowserProcess&) = delete;
     VisibleBrowserProcess& operator=(const VisibleBrowserProcess&) = delete;
 
-    [[nodiscard]] bool Start(
-        const CapabilitySettings::InternetAccess& settings,
-        std::string& outError);
+    [[nodiscard]] bool Start(const CapabilitySettings::InternetAccess& settings, std::string& outError);
     [[nodiscard]] bool IsRunning() const;
     void Stop();
 

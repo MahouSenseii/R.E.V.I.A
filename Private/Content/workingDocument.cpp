@@ -1,4 +1,5 @@
 #include "Content/workingDocument.h"
+#include "Core/utf8.h"
 
 #include <algorithm>
 #include <cctype>
@@ -34,11 +35,8 @@ std::string Lower(std::string value)
 
 std::string Clamp(std::string text)
 {
-    text = Trim(std::move(text));
-    if (text.size() > WorkingDocument::MaximumBlockCharacters)
-    {
-        text.resize(WorkingDocument::MaximumBlockCharacters);
-    }
+    text = Trim(revia::utf8::Sanitize(text));
+    revia::utf8::Truncate(text, WorkingDocument::MaximumBlockCharacters);
     return text;
 }
 
@@ -46,7 +44,7 @@ std::string Clamp(std::string text)
 
 void WorkingDocument::SetTitle(std::string value)
 {
-    title = Trim(std::move(value));
+    title = Trim(revia::utf8::Sanitize(value));
 }
 
 const std::string& WorkingDocument::Title() const
@@ -143,7 +141,7 @@ const Block* WorkingDocument::Find(const std::string& reference) const
 void WorkingDocument::Compose(std::string newTitle, std::vector<std::string> newBlocks)
 {
     Snapshot();
-    title = Trim(std::move(newTitle));
+    SetTitle(std::move(newTitle));
     blocks.clear();
     for (std::string& text : newBlocks)
     {
@@ -323,9 +321,7 @@ std::string WorkingDocument::RenderNumbered() const
     return stream.str();
 }
 
-std::string WorkingDocument::RenderNeighbourhood(
-    const std::string& reference,
-    const std::size_t radius) const
+std::string WorkingDocument::RenderNeighbourhood(const std::string& reference, const std::size_t radius) const
 {
     const Block* target = Find(reference);
     if (target == nullptr)
@@ -349,10 +345,7 @@ std::string WorkingDocument::RenderNeighbourhood(
     return stream.str();
 }
 
-bool PreciseEditGuard::LooksLikeWholeDocument(
-    const std::string& replacement,
-    const std::vector<Block>& others,
-    const std::string& targetId)
+bool PreciseEditGuard::LooksLikeWholeDocument(const std::string& replacement, const std::vector<Block>& others, const std::string& targetId)
 {
     const std::string lowered = Lower(replacement);
     std::size_t swallowed = 0;

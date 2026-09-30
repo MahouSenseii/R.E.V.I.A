@@ -93,9 +93,7 @@ std::string ToString(const AffectState state)
     }
 }
 
-AffectController::AffectController(
-    const std::chrono::milliseconds inputMinimumHold,
-    const std::chrono::milliseconds inputDecayAfter,
+AffectController::AffectController(const std::chrono::milliseconds inputMinimumHold, const std::chrono::milliseconds inputDecayAfter,
     const std::chrono::milliseconds inputLonelyAfter)
     : minimumHold(inputMinimumHold),
       decayAfter(inputDecayAfter),
@@ -113,29 +111,22 @@ AffectSnapshot AffectController::Reset()
     return snapshot;
 }
 
-AffectSnapshot AffectController::ObserveInput(
-    const std::string& userInput,
-    const SocialContext& social)
+AffectSnapshot AffectController::ObserveInput(const std::string& userInput, const SocialContext& social)
 {
     return Apply(
         ModulateForRelationship(Classify(userInput, {}, true), social),
         std::chrono::steady_clock::now());
 }
 
-AffectSnapshot AffectController::ObserveTurn(
-    const std::string& userInput,
-    const std::string& response,
-    const bool succeeded,
-    const SocialContext& social)
+AffectSnapshot AffectController::ObserveTurn(const std::string& userInput,
+    const std::string& response, const bool succeeded, const SocialContext& social)
 {
     return Apply(
         ModulateForRelationship(Classify(userInput, response, succeeded), social),
         std::chrono::steady_clock::now());
 }
 
-AffectController::Candidate AffectController::ModulateForRelationship(
-    Candidate candidate,
-    const SocialContext& social)
+AffectController::Candidate AffectController::ModulateForRelationship(Candidate candidate, const SocialContext& social)
 {
     // Thresholds sit outside the defaults on purpose, so a caller that passes no context
     // gets the unmodulated reading and nothing that worked before changes.
@@ -230,8 +221,7 @@ AffectController::Candidate AffectController::ModulateForRelationship(
     return candidate;
 }
 
-AffectController::Candidate AffectController::ClassifyInternal(
-    const InternalStimulus& stimulus)
+AffectController::Candidate AffectController::ClassifyInternal(const InternalStimulus& stimulus)
 {
     Candidate candidate;
     const float importance = std::clamp(stimulus.importance, 0.0F, 1.0F);
@@ -310,8 +300,7 @@ AffectController::Candidate AffectController::ClassifyInternal(
     return candidate;
 }
 
-std::optional<AffectSnapshot> AffectController::ObserveInternalEvent(
-    const InternalStimulus& stimulus)
+std::optional<AffectSnapshot> AffectController::ObserveInternalEvent(const InternalStimulus& stimulus)
 {
     // Most of what happens to her is not worth a change of expression. Returning nothing
     // here is the same decision the initiative controller makes when it stays quiet, and
@@ -376,10 +365,7 @@ AffectSnapshot AffectController::Current() const
     return snapshot;
 }
 
-AffectController::Candidate AffectController::Classify(
-    const std::string& userInput,
-    const std::string& response,
-    const bool succeeded)
+AffectController::Candidate AffectController::Classify(const std::string& userInput, const std::string& response, const bool succeeded)
 {
     const std::string input = Lower(userInput);
     const std::string reply = Lower(response);
@@ -479,10 +465,7 @@ AffectController::Candidate AffectController::Classify(
     return {AffectState::Neutral, 0.3F, "The conversation is calm and direct."};
 }
 
-AffectSnapshot AffectController::Apply(
-    Candidate candidate,
-    const std::chrono::steady_clock::time_point now,
-    const bool countsAsInteraction)
+AffectSnapshot AffectController::Apply(Candidate candidate, const std::chrono::steady_clock::time_point now, const bool countsAsInteraction)
 {
     std::lock_guard lock(mutex);
     candidate.intensity = std::clamp(candidate.intensity, 0.0F, 1.0F);

@@ -1,11 +1,12 @@
 #pragma once
 
+#include "Improvement/improvementSettings.h"
+#include "LLM/responseTypes.h"
 #include "Improvement/codeProposal.h"
 #include "Improvement/proposalStore.h"
 #include "Improvement/sourceCatalog.h"
 #include "Improvement/workbench.h"
 #include "Learning/selfAssessment.h"
-#include "Library/structLibrary.h"
 
 #include <chrono>
 #include <condition_variable>
@@ -118,8 +119,7 @@ public:
     [[nodiscard]] ReviewOutcome Run(const ReviewJob& job, std::stop_token stopToken);
 
     // The prompt pieces, exposed so their content can be tested without a model.
-    [[nodiscard]] static std::string Instructions(
-        const ReviewJob& job, const std::vector<std::string>& lessons);
+    [[nodiscard]] static std::string Instructions(const ReviewJob& job, const std::vector<std::string>& lessons);
     [[nodiscard]] static std::string Material(const CodeWindow& window);
     [[nodiscard]] static std::string Schema();
 
@@ -127,8 +127,7 @@ private:
     [[nodiscard]] std::optional<ReviewJob> NextJob();
     void Loop(std::stop_token stopToken);
     // Proves a recorded proposal, with one repair attempt when it does not build.
-    void Prove(CodeProposal& proposal, const ReviewJob& job, const std::string& original,
-        std::stop_token stopToken);
+    void Prove(CodeProposal& proposal, const ReviewJob& job, const std::string& original, std::stop_token stopToken);
     void Log(const std::string& line) const;
 
     mutable std::mutex mutex;

@@ -218,8 +218,7 @@ QuotedSpan ContentSpan(const std::string& request, const revia::planning::Parsed
     return parsed.spans.empty() ? QuotedSpan{} : parsed.spans.front();
 }
 
-std::string QuotedDestination(const std::string& request,
-    const revia::planning::ParsedQuotation& parsed, const QuotedSpan& content)
+std::string QuotedDestination(const std::string& request, const revia::planning::ParsedQuotation& parsed, const QuotedSpan& content)
 {
     std::size_t previous = 0;
     for (const auto& span : parsed.spans)

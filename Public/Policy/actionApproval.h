@@ -10,16 +10,8 @@
 namespace revia::policy
 {
 
-// "Allow this one thing, once" instead of "raise every permission until it works".
-//
-// Without this, the only way past a refusal is a standing policy change: turn up
-// maxUnconfirmedConsequence, or switch on owner_full_access, and leave it that way long
-// after the one message that needed it. A permission raised to get through a moment
-// tends to stay raised, which is how a careful system becomes a permissive one without
-// anyone deciding to.
-//
-// Everything an approval is bound to is a parameter of the consequence, so an approval
-// to send *this* message to *this* recipient cannot be spent on a different one.
+// One-use approval is bound to the exact consequence, content, and recipient.
+// It never raises standing permissions.
 
 // What an approval is for. Every field participates in matching: if any of them differs
 // at the moment of use, the approval does not apply.
@@ -53,29 +45,20 @@ struct ActionApproval
 // a dialog and act; short enough that walking away closes the window.
 inline constexpr std::chrono::milliseconds DefaultApprovalLifetime{45000};
 
-// Runtime-owned, and deliberately not reachable from parsed model output.
-//
-// The trust boundary is the call site of Grant: only a path that has actually asked a
-// person may call it. Nothing in ActionRequest carries an approval id, and the parser
-// has no field that would populate one, so a plan cannot arrive carrying its own
-// permission slip.
+// Only a trusted path that asked the user may call Grant.
+// Parsed ActionRequest data carries no approval ID and cannot mint authority.
 class ApprovalRegistry
 {
 public:
     // Called only by a trusted user-approval path.
-    [[nodiscard]] std::string Grant(
-        ApprovalScope scope,
-        std::chrono::steady_clock::time_point now,
-        std::chrono::milliseconds lifetime = DefaultApprovalLifetime);
+    [[nodiscard]] std::string Grant(ApprovalScope scope,
+        std::chrono::steady_clock::time_point now, std::chrono::milliseconds lifetime = DefaultApprovalLifetime);
 
     // Spends the approval if -- and only if -- it exists, is unspent, is unexpired, and
     // every bound parameter still matches. Success marks it consumed; a second attempt
     // finds nothing to spend.
-    [[nodiscard]] bool Consume(
-        const std::string& approvalId,
-        const ApprovalScope& against,
-        std::chrono::steady_clock::time_point now,
-        std::string& outReason);
+    [[nodiscard]] bool Consume(const std::string& approvalId,
+        const ApprovalScope& against, std::chrono::steady_clock::time_point now, std::string& outReason);
 
     // Cancellation, emergency stop and task completion all end anything outstanding for
     // that task: an approval given for work that is no longer happening is a loose end.

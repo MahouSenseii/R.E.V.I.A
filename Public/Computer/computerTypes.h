@@ -13,16 +13,8 @@
 namespace revia::computer
 {
 
-// One candidate on screen, as a decision sees it.
-//
-// A typed view over an ObservedControl, already filtered to the operations the goal's
-// own scope would not refuse outright. It exists so that filtering is done once, from
-// the same CapabilityPolicy the executor uses, rather than re-implemented per provider
-// -- and so a provider that is not a language model has something to rank.
-//
-// `id` is a selection reference valid for one observation and nothing else. It is not
-// a feature, it is not stable across looks, and it must never be trained on: a policy
-// that learned an automation id learned this machine rather than the task.
+// Candidate operations are filtered once using the executor's capability policy.
+// IDs are valid only for this observation and must never be training features.
 struct ObservedCandidate
 {
     std::string id;
@@ -61,26 +53,11 @@ struct ObservedCandidate
     }
 };
 
-// The role name for a UI Automation control type id.
-//
-// Lives here rather than in Windows because it is the vocabulary decisions are written
-// in, and because a test needs to be able to build a candidate without a desktop. An id
-// this table does not know becomes an empty role, which a descriptor can then only
-// match by leaving the role unconstrained -- not by accident.
+// Returns an empty role for an unknown UI Automation control type.
 [[nodiscard]] std::string ControlRoleName(int controlType);
 
-// The one look at the machine taken for an iteration, shared by every provider.
-//
-// It carries the raw DesktopObservation as well as the typed candidates, because the
-// legacy prompt is built from DesktopObservation::Describe and must keep being built
-// from it. Re-deriving that text from the typed view would be a behaviour change
-// wearing a refactor's clothes.
-//
-// Taking a second look is what this type exists to prevent. `observationGeneration` is
-// a process-wide counter bumped by every Observe(), claimed before the look can fail,
-// and CompareVisualTarget refuses a target that is not the newest -- so a provider
-// observing for itself would invalidate a target another provider had already chosen
-// correctly, and the executor would refuse a click that was right when it was decided.
+// One observation shared by all providers; the legacy prompt uses the raw screen.
+// A second Observe() advances the process generation and invalidates earlier targets.
 struct ComputerObservation
 {
     actions::windows::DesktopObservation screen;
@@ -111,11 +88,7 @@ struct ComputerAttempt
     std::string failure;
 };
 
-// Everything a decision provider is given, and nothing it is not.
-//
-// Deliberately not the Goal. A provider has no business holding the goal's capability
-// scope object, its store id or its budget struct; it gets the subgoal, what is on
-// screen, what has been tried, and what is left.
+// A provider receives the subgoal, observation, attempts, and remaining limits.
 struct ComputerTaskContext
 {
     std::string subgoal;
@@ -130,12 +103,8 @@ struct ComputerTaskContext
     // policy keeps this data: there is nothing here to evaluate against, only to read.
     actions::CapabilitySettings scope;
 
-    // What the runtime is holding for this task, described and never revealed.
-    //
-    // A provider is told that content of this kind and this length exists so that it
-    // can choose a destination for it. It is not told the content, and the grammar the
-    // legacy path is asked under constrains the value field to a fixed token, so the
-    // only thing any planner can put where the words go is a request for them.
+    // Describes held content by kind and length without revealing it.
+    // Planners request the fixed payload token instead of supplying replacement text.
     struct PreparedContent
     {
         bool held = false;
@@ -147,13 +116,8 @@ struct ComputerTaskContext
     } preparedContent;
 };
 
-// What a provider decided. One of these per iteration, never two.
-//
-// The four the legacy provider can produce are ProposeAction, ProposeCompletion,
-// CannotHandle and NeedReasoning-as-itself. The rest are the vocabulary the bounded
-// providers in later stages need, and the runtime already maps them honestly: anything
-// it cannot act on becomes "no usable answer", which is a real outcome and not a
-// failure.
+// One decision per iteration. Unsupported outcomes become Undecided,
+// not failure or completion.
 enum class ComputerDecisionKind
 {
     // A typed action proposal, referencing a candidate from this observation.
@@ -174,12 +138,8 @@ enum class ComputerDecisionKind
     CannotHandle
 };
 
-// Structured, so telemetry can be counted rather than read.
-//
-// Free-form explanation is deliberately absent. It would be a second unreviewed
-// channel out of a model, it cannot be aggregated, and it must never become a training
-// label. `detail` below carries text for the activity feed and the record; nothing
-// parses it.
+// Structured telemetry reasons. Human-readable detail is never parsed,
+// used as authority, or treated as a training label.
 enum class ComputerReasonCode
 {
     None,
@@ -198,13 +158,8 @@ struct ComputerDecision
     // Populated only for ProposeAction. Ordinal, requested-by and visual target
     // resolution are the runtime's to stamp, never the provider's.
     goals::GoalStep step;
-    // Which runtime-held value belongs in this step's action, when one does.
-    //
-    // The policy names the slot and the controller fills it from the vault. That
-    // ordering is the whole point of a payload reference: a decision carrying the user's
-    // exact words is a decision that has been given them, and the design is that it
-    // never is. An unredeemable reference refuses the decision rather than executing it
-    // with an empty value.
+    // The controller redeems the policy's reference from the vault.
+    // An invalid reference refuses the decision rather than entering empty text.
     PayloadReference payload;
     // Human-readable, for the activity feed and the goal record. Never parsed, never a
     // label, never authority.

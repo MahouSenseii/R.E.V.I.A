@@ -51,9 +51,7 @@ SubgoalValidation Refuse(const SubgoalRejection rejection, std::string detail)
 // something adjacent to what it was asked to do -- "the window is open" is not evidence
 // that the conversation with the named recipient is the one open -- so a condition has
 // to be about the target that was described, or about the payload that was referenced.
-bool PostconditionIsRelevant(
-    const SubgoalPostcondition& condition,
-    const ComputerSubgoal& subgoal)
+bool PostconditionIsRelevant(const SubgoalPostcondition& condition, const ComputerSubgoal& subgoal)
 {
     using goals::PostconditionKind;
     const std::string subject = Lowered(condition.subject);
@@ -103,8 +101,7 @@ bool PostconditionIsRelevant(
 
 } // namespace
 
-bool ScopeApprovesApplication(
-    const actions::CapabilitySettings& scope, const std::string& application)
+bool ScopeApprovesApplication(const actions::CapabilitySettings& scope, const std::string& application)
 {
     if (application.empty()) return false;
     // Matched the same way CapabilityPolicy matches it, by the same rule, because two
@@ -125,10 +122,7 @@ bool NamesASubmission(const std::string& control)
     });
 }
 
-SubgoalValidation ValidateSubgoal(
-    const ComputerSubgoal& proposed,
-    const SubgoalContext& context,
-    const PayloadVault& vault)
+SubgoalValidation ValidateSubgoal(const ComputerSubgoal& proposed, const SubgoalContext& context, const PayloadVault& vault)
 {
     if (proposed.schemaVersion != CurrentSubgoalSchema)
     {

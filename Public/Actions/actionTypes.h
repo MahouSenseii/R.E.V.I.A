@@ -40,26 +40,9 @@ enum class ActionType
     WebSearch
 };
 
-// How much is actually known about what a pointer action is aimed at.
-//
-// Three different amounts of evidence, not three spellings of one thing. Collapsing them
-// is how a click ends up somewhere nobody authorized.
-//
-// UiaElement is the strongest and the oldest: vision picked a region, the resolver
-// matched it to one UI Automation element, and the executor re-finds that exact runtime
-// identity and uses its current bounds. The coordinate captured when the decision was
-// made is never the coordinate clicked.
-//
-// VisualRegion is for the interfaces UI Automation cannot describe -- a game, an Unreal
-// or UMG surface, a canvas, a custom HUD, an Electron window with a bare tree. There is
-// no element to re-find, so what gets verified instead is the *observation*: the same
-// window, still the same size and place, still the newest thing looked at, with the point
-// derived from the region at the last possible moment. Weaker than UiaElement, and
-// deliberately stronger than a bare coordinate -- a region bound to one observation of
-// one window is a claim that can be checked, and an arbitrary point is not.
-//
-// RawCoordinate is a point with no verified visual binding behind it. It keeps its own
-// switch and is not either of the other two.
+// UiaElement is re-found by runtime identity and current bounds. VisualRegion requires
+// the newest observation and unchanged window geometry; RawCoordinate has no verified
+// visual binding and requires separate permission.
 enum class TargetResolutionKind
 {
     None,
@@ -75,14 +58,7 @@ enum class RiskLevel
     Destructive = 2
 };
 
-// What an action would actually cause, as opposed to how it is performed.
-//
-// RiskLevel describes the mechanism: every click is a click, so every click is the same
-// reversible write. That is true and useless. Clicking a tab and clicking "Confirm
-// purchase" are the same keystroke-level event and nothing alike in consequence, and the
-// difference lives in what is being clicked, not in the clicking.
-//
-// Ordered by severity, because the ceiling below is a comparison.
+// Ordered target-effect severity, separate from the action mechanism's RiskLevel.
 enum class ConsequenceClass
 {
     Observation = 0,
@@ -108,20 +84,8 @@ enum class PolicyVerdict
     Blocked
 };
 
-// What a person said when they were asked.
-//
-// Three answers rather than two, because "yes" and "yes, and stop asking me for this
-// task" are different consents and only the person can tell them apart. Driving a
-// browser takes a focus, a chord, a type and an enter, and being asked four times for
-// one sentence is how a safety prompt turns into a thing people click through without
-// reading -- which is worse than not asking.
-//
-// AllowForThisTask is bounded by construction and the bounds are not negotiable: it
-// lives for one goal run, is never written anywhere, raises no permission, and covers
-// only work at or below the risk level that was actually shown. Anything above it asks
-// again. It also has no effect on the consequence ceiling, which is a separate gate
-// inside the executor -- a send, a purchase or a delete still stops for its own explicit
-// yes, as DECISION-REVIA-0007 requires.
+// AllowForThisTask lasts one run, is never stored, and covers only the shown risk.
+// It raises no permission or consequence ceiling; consequential effects still ask separately.
 enum class ConfirmationChoice
 {
     Decline,
@@ -139,11 +103,8 @@ enum class ExecutionMode
     Disabled,
     Supervised,
     ApprovedScope,
-    // The owner has delegated broad operation of this machine. It raises the automatic
-    // approval ceiling to reversible work; it does not widen approved roots, approved
-    // applications, approved controls, or any capability switch, and destructive work
-    // still stops for confirmation. Environment is not authority: this is chosen, never
-    // inferred from running in a virtual machine.
+    // Explicit owner grant raises automatic approval to reversible work only.
+    // Roots, applications, controls, switches, and destructive confirmation remain unchanged.
     OwnerFullAccess
 };
 
@@ -174,14 +135,8 @@ struct ActionRequest
         double nameAgreement = 0.0;
         double matchConfidence = 0.0;
 
-        // Which observation a VisualRegion target belongs to, and what the machine
-        // looked like when it was taken. Unused by the other kinds.
-        //
-        // Every field below is stamped by the runtime from its own observation. None of
-        // it is ever read out of model output, for the reason TargetBinding gives about
-        // its own id: evidence that could be supplied from outside would be an
-        // authorization the model wrote for itself. The model says where to look; the
-        // runtime says what was there.
+        // VisualRegion observation evidence is runtime-stamped, never parsed from model output.
+        // Other resolution kinds do not use these fields.
         std::string observationId;
         // Strictly increasing across the process. An older generation means something
         // has been observed since, so the region describes a screen that has been
@@ -387,13 +342,8 @@ struct CapabilitySettings
         int visibleBrowserStepDelayMs = 250;
     };
 
-    // The camera is the most physically invasive thing this application can reach, so it
-    // is off until explicitly asked for and it lives behind the same capability file as
-    // everything else rather than behind a comfort preference.
-    //
-    // Observation is not authority. Being allowed to take a frame grants nothing else:
-    // anything Revia does because of what a frame contained still goes through the
-    // ordinary typed action, policy, confirmation, and audit path.
+    // Camera capture requires explicit capability permission and grants no action authority.
+    // Actions based on frames retain normal policy, confirmation, and audit checks.
     struct CameraAccess
     {
         bool enabled = false;
@@ -406,12 +356,7 @@ struct CapabilitySettings
         // separate from ordinary lookup: consenting to answer "what am I holding?" is
         // not consenting to be watched.
         bool autonomousCapture = false;
-        // Frames discarded while auto-exposure and auto-white-balance settle.
-        //
-        // Measured rather than guessed: on a USB 2.0 webcam the first frame is visibly
-        // noisier than the tenth, and most of a capture's ~1.3s cost is opening the
-        // device, so each extra frame is around 27ms. Ten buys a settled image for
-        // roughly 200ms, which is a better trade than a fast picture of nothing.
+        // Discard initial frames while exposure and white balance settle.
         int warmupFrames = 10;
         // A floor between captures. Without one, a loop that captures per turn becomes
         // a recording with extra steps.
@@ -425,19 +370,9 @@ struct CapabilitySettings
     // that belong to an approved application.
     struct DesktopControl
     {
-        // Where the hands may reach.
-        //
-        // ApprovedApplications is the narrow original: every action names an approved
-        // executable, and input is confined to that executable's window. It is safe
-        // because it is small, and small is also why it cannot learn anything general.
-        //
-        // WholeDesktop is the owner deciding that a general skill is the point: the
-        // pointer goes anywhere on the virtual desktop and the keyboard goes to whatever
-        // has focus, the way it does for the person sitting there. Containment stops
-        // being categorical at that moment. What remains is the owner's explicit grant,
-        // the command-surface refusal below, the input budget, the audit trail, and the
-        // latched emergency stop -- and none of those is a proof that a general input
-        // capability cannot eventually reach something it should not.
+        // ApprovedApplications confines input to approved windows; WholeDesktop explicitly
+        // grants virtual-desktop pointer and focused-window keyboard access. Command refusal,
+        // budgets, audit, and emergency stop remain; they do not guarantee containment.
         enum class InputScope
         {
             ApprovedApplications,
@@ -451,30 +386,15 @@ struct CapabilitySettings
         // vision-to-UIA resolver re-verified. The point must still land inside the
         // target application's own window.
         bool rawCoordinates = false;
-        // Permission to act on a target grounded in a fresh screen observation when UI
-        // Automation cannot provide an exact element.
-        //
-        // This is the narrower of the two and is not a weaker spelling of the one above.
-        // rawCoordinates means "aim wherever you decided"; this means "aim at the thing
-        // you just looked at, in the window you just looked at, while it is still the
-        // newest thing looked at and has not moved or resized". A target that fails any
-        // of those is refused rather than clicked, which is what makes it a different
-        // permission and not a euphemism for the same one.
-        //
-        // It exists because a game, an Unreal or UMG surface, a canvas and a bare
-        // Electron tree expose nothing for the resolver to match, and the alternative to
-        // this is granting arbitrary coordinates to reach them -- strictly more
-        // authority for strictly less evidence.
+        // Allows observation-bound visual targets when UIA cannot identify an element.
+        // Requires the newest observation and unchanged window position/size; separate from rawCoordinates.
         bool visualTargeting = false;
         // Separate authority, for the same reason autonomous research is separate from
         // ordinary lookup: delegating a task is not standing consent to drive the
         // machine whenever she feels like it.
         bool autonomous = false;
-        // The most consequential thing she may commit without being stopped. It is a
-        // ceiling on the *target*, evaluated at the moment of injection, and it only
-        // ever adds refusals: an action still has to pass the mode, the scope, the
-        // capability switches and the risk ceiling first. Raising it is a deliberate
-        // act, and OwnerFullAccess does not raise it.
+        // Target-effect ceiling checked at injection after all other permissions.
+        // Only adds refusals; OwnerFullAccess does not raise it.
         ConsequenceClass maxUnconfirmedConsequence = ConsequenceClass::Routine;
         InputScope scope = InputScope::ApprovedApplications;
         // A shell reached by keystroke is still model text reaching a shell. Command
@@ -520,36 +440,16 @@ struct CapabilitySettings
 [[nodiscard]] std::string ToString(TargetResolutionKind value);
 [[nodiscard]] ConsequenceClass ConsequenceClassFromString(const std::string& value);
 
-// What a named control would do if it were activated.
-//
-// Read honestly: this is a tripwire, not a boundary. It matches English words in an
-// accessible name, so it catches "Send", "Delete account" and "Confirm purchase", and it
-// will miss an unlabelled icon, another language, and any wording nobody thought of.
-// A control it does not recognize classifies as Routine.
-//
-// That is why it may only ever *raise* the required authority and never lower it. It is
-// worth having because the cases it does catch are the expensive ones, and it is worth
-// being plain about because a check that is trusted for more than it does is worse than
-// no check at all.
-//
-// isPasswordField comes from UI Automation rather than from the name, and is the one
-// signal here that is not a guess.
-[[nodiscard]] ConsequenceClass ClassifyControlConsequence(
-    const std::string& controlName,
-    bool isPasswordField = false);
+// English label heuristic; unlabeled or unrecognized controls classify as Routine.
+// It may only raise required authority. Password status comes from UIA, not label guessing.
+[[nodiscard]] ConsequenceClass ClassifyControlConsequence(const std::string& controlName, bool isPasswordField = false);
 
 [[nodiscard]] std::string ToString(CapabilitySettings::DesktopControl::InputScope value);
-[[nodiscard]] CapabilitySettings::DesktopControl::InputScope InputScopeFromString(
-    const std::string& value);
+[[nodiscard]] CapabilitySettings::DesktopControl::InputScope InputScopeFromString(const std::string& value);
 [[nodiscard]] ActionType ActionTypeFromString(const std::string& value);
 [[nodiscard]] RiskLevel RiskLevelFromString(const std::string& value);
 [[nodiscard]] ExecutionMode ExecutionModeFromString(const std::string& value);
-// One authoritative list of what the system can actually do.
-//
-// The planner prompt and the parser used to keep separate lists, and they drifted: seven
-// action types existed and could be executed while the planner had never been told they
-// were there, so a goal could not reach them. Anything that needs to name the vocabulary
-// derives it from here, and a test asserts the two agree.
+// Shared action vocabulary for prompts and parsers.
 [[nodiscard]] const std::vector<ActionType>& AllActionTypes();
 // Comma-separated canonical names, for a prompt. `readOnlyOnly` narrows it to the
 // actions that observe without changing anything, which is what a verification step is
@@ -557,41 +457,17 @@ struct CapabilitySettings
 [[nodiscard]] std::string ActionVocabulary(bool readOnlyOnly = false);
 
 [[nodiscard]] RiskLevel RiskForAction(ActionType value);
-// Actions that must be agreed to one at a time, whatever else has been agreed to.
-//
-// A standing yes is bounded by risk level, and risk level alone is not enough here.
-// MoveToRecycleBin is classified ReversibleWrite -- correctly, because the recycle bin
-// can be emptied back out -- so a yes given for creating a folder would otherwise cover
-// deleting one, which is not what anybody means by "don't ask again". FormatGoalPlan
-// already marks this action specially for the same reason, noting that recycling is
-// reversible_write and so "nothing else in the pipeline makes it stand out".
-//
-// This is a floor under a convenience, not a security boundary: capability policy, the
-// consequence ceiling, the rate limiter and the audit trail all still apply as before.
+// Requires individual confirmation even with standing approval, including recycling.
+// All capability, consequence, rate, and audit checks still apply.
 [[nodiscard]] bool AlwaysNeedsItsOwnConfirmation(ActionType value);
 // UI Automation and desktop operation both drive an application, but only the second
 // synthesizes input or starts a process, so they are gated separately.
 [[nodiscard]] bool IsUiAutomationAction(ActionType value);
 [[nodiscard]] bool IsDesktopControlAction(ActionType value);
 [[nodiscard]] bool IsSynthesizedInputAction(ActionType value);
-// Whether doing this action a second time could happen a second time.
-//
-// The question is asked at one moment only: the action reported success and the check
-// that was supposed to prove it did not. The outcome is then *unknown* -- not failed --
-// and the two readings of it are opposite. If nothing landed, repeating is the obvious
-// recovery. If something did land and only the evidence went missing, repeating sends
-// the message twice, types the address twice, or presses Confirm twice.
-//
-// Nothing here can tell those apart, so the classification is about the cost of being
-// wrong. An action that would only re-reach a state it is already in -- focusing a
-// window that has focus, creating a directory that exists, moving the pointer where it
-// already is -- costs nothing to repeat and says false. An action that commits
-// something says true, and the run stops for a person instead of guessing.
-//
-// This is not a risk level and not a consequence class. A click on a harmless tab and a
-// click on "Send" are the same action type and both answer true, because the type is
-// all that is known here; what the click would actually do is ClassifyControlConsequence's
-// question, asked earlier and for a different purpose.
+// Classifies duplicate-effect risk when execution succeeded but verification is unknown.
+// Repeat-safe state changes return false; potentially duplicate commits require user review.
+// Classification uses action type, independently of risk and target consequence.
 [[nodiscard]] bool RepeatingCouldDuplicateAnEffect(ActionType value);
 // True for a request Revia raised on her own rather than one a user turn asked for.
 // The prefix convention is shared with internet research.
@@ -611,8 +487,7 @@ struct KeyChord
 // win+ctrl+alt+shift and key aliases collapse to one spelling, so a chord cannot be
 // spelled around a predicate below. Rejects unknown names and anything that is not
 // modifiers plus one key.
-[[nodiscard]] bool ParseKeyChord(
-    const std::string& value, KeyChord& outChord, std::string& outError);
+[[nodiscard]] bool ParseKeyChord(const std::string& value, KeyChord& outChord, std::string& outError);
 
 // Moves focus to a different application. Refused while input is confined to one
 // approved application, because leaving it is exactly what confinement means; allowed

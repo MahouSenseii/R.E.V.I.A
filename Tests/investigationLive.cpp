@@ -1,9 +1,12 @@
+#include "Core/profile.h"
+#include "LLM/backendTypes.h"
+#include "LLM/endpointSettings.h"
+#include "LLM/responseTypes.h"
 #include "testSupport.h"
 
 #include "Agents/investigation.h"
 #include "Agents/investigationAgent.h"
 #include "Core/messageRouter.h"
-#include "Library/structLibrary.h"
 
 #include <chrono>
 #include <cctype>

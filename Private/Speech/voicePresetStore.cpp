@@ -148,10 +148,7 @@ bool VoicePresetStore::Save(const VoicePreset& preset, std::string& outError)
     return SaveDocument(document, outError);
 }
 
-bool VoicePresetStore::Assign(
-    const std::string& profileId,
-    const std::string& presetId,
-    std::string& outError)
+bool VoicePresetStore::Assign(const std::string& profileId, const std::string& presetId, std::string& outError)
 {
     std::lock_guard lock(mutex);
     if (!IsSafeId(profileId) || (!presetId.empty() && !IsSafeId(presetId)))
@@ -210,9 +207,7 @@ bool VoicePresetStore::IsSafeId(const std::string& value)
         });
 }
 
-bool VoicePresetStore::LoadDocument(
-    nlohmann::json& outDocument,
-    std::string& outError) const
+bool VoicePresetStore::LoadDocument(nlohmann::json& outDocument, std::string& outError) const
 {
     outError.clear();
     outDocument = {
@@ -252,9 +247,7 @@ bool VoicePresetStore::LoadDocument(
     return true;
 }
 
-bool VoicePresetStore::SaveDocument(
-    const nlohmann::json& document,
-    std::string& outError) const
+bool VoicePresetStore::SaveDocument(const nlohmann::json& document, std::string& outError) const
 {
     std::error_code error;
     std::filesystem::create_directories(rootDirectory, error);

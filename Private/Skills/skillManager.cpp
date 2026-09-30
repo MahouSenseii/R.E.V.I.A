@@ -6,8 +6,7 @@
 namespace revia::skills
 {
 
-actions::ActionRequest SanitizeProposedRequest(
-    const actions::ActionRequest& request, const std::string& skillId)
+actions::ActionRequest SanitizeProposedRequest(const actions::ActionRequest& request, const std::string& skillId)
 {
     actions::ActionRequest cleaned = request;
 

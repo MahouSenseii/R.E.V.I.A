@@ -1,7 +1,8 @@
 #pragma once
 
-#include "Library/structLibrary.h"
 
+#include "Core/appSettings.h"
+#include "Resources/resourceSettings.h"
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -82,18 +83,13 @@ struct ResourcePlan
 // Uses the exact backend executable rather than guessing CUDA ordinals from display
 // adapters. A DXGI fallback still reports capacity when --list-devices is unavailable,
 // but the planner will leave backend selection on auto rather than emit an invalid ID.
-[[nodiscard]] HardwareInventory DetectHardwareInventory(
-    const std::string& llamaServerExecutable);
+[[nodiscard]] HardwareInventory DetectHardwareInventory(const std::string& llamaServerExecutable);
 
-[[nodiscard]] ResourceRequirements EstimateResourceRequirements(
-    const appSettings& settings,
-    bool voiceExpected);
+[[nodiscard]] ResourceRequirements EstimateResourceRequirements(const appSettings& settings, bool voiceExpected);
 
 // Pure policy entry point used with synthetic inventories in tests.
-[[nodiscard]] ResourcePlan PlanResources(
-    const HardwareInventory& hardware,
-    const resourceSettings& policy,
-    const ResourceRequirements& requirements);
+[[nodiscard]] ResourcePlan PlanResources(const HardwareInventory& hardware,
+    const resourceSettings& policy, const ResourceRequirements& requirements);
 
 // Applies the immutable plan to service-specific launch settings. It starts no process.
 void ApplyResourcePlan(const ResourcePlan& plan, appSettings& settings);

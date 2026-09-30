@@ -30,13 +30,8 @@ enum class VocalizationKind
 [[nodiscard]] std::string StyleInstruction(VocalizationKind kind);
 [[nodiscard]] std::vector<VocalizationKind> AllVocalizationKinds();
 
-// Whether a file is a WAV that actually carries audio.
-//
-// A clip that exists is not a clip that plays. An interrupted or failed render
-// leaves a correctly named file that is empty, header-only, or truncated, and a bank
-// that counts it as present will ask for silence and never repair itself. Checks the
-// RIFF/WAVE header and requires a data chunk whose declared samples are really in the
-// file. This is a completeness check, not a decoder: it does not validate the format.
+// Checks RIFF/WAVE and a present complete data chunk, rejecting empty or truncated clips.
+// Completeness check only; does not validate or decode the audio format.
 [[nodiscard]] bool IsPlayableWavFile(const std::filesystem::path& path);
 
 // Maps one written form to a kind. Accepts the synonyms a small local model actually
@@ -71,27 +66,12 @@ struct SpokenScript
     [[nodiscard]] bool HasVocalization() const;
 };
 
-// Reads inline tags out of a reply.
-//
-// Liberal in what it accepts, because the thing writing these tags is a small local
-// model that will not be consistent: [laugh], <laugh>, and *laughs* all parse, as do
-// the obvious inflections. Strict in one place -- the asterisk form is accepted ONLY
-// for known vocalization words, so ordinary markdown emphasis survives untouched.
-//
-// Anything unrecognised is left exactly where it was found. A bracketed word Revia
-// meant literally must not silently disappear from her own sentence.
+// Recognizes known cues in bracket, angle and inflected asterisk forms.
+// Unknown text remains unchanged; asterisks require known cue words so markdown survives.
 [[nodiscard]] SpokenScript ParseVocalizations(const std::string& reply);
 
-// The single spelling shown in chat, and the one the parser canonicalises every
-// accepted synonym to.
-//
-// It is NOT handed to a synthesiser. An earlier version of this comment claimed
-// Qwen3-TTS performs a nonverbal cue written inline in its input; live listening
-// disproved that outright -- it reads the word "chuckles" aloud. The real division of
-// labour is: the model chooses the cue and where it belongs, the runtime parses it out,
-// and the runtime plays a pre-rendered clip from the voice's own bank in that position.
-// Ordinary TTS never receives a recognised cue. If the model turns out to want a
-// different delimiter, this is the one place that has to change.
+// Canonical chat spelling for cues; recognized tags are removed before ordinary TTS.
+// The runtime plays pre-rendered voice-bank clips at the model-selected positions.
 [[nodiscard]] std::string InlineTag(VocalizationKind kind);
 
 struct VocalizationShaping
@@ -105,20 +85,9 @@ struct VocalizationShaping
     bool changed = false;
 };
 
-// Keeps the sound effects and removes the theatre.
-//
-// A vocalization is a SOUND the voice can actually make, and the six kinds above are
-// the whole list. Anything else an asterisk pair contains is prose the model wrote
-// about itself, which the TTS would read aloud word by word and which nobody asked
-// for. So: recognised cues are canonicalised and capped, multi-word asterisk spans are
-// deleted, and single-word emphasis such as *really* is left alone because that is
-// ordinary markdown and not a stage direction.
-//
-// Bracket and angle forms are deliberately NOT stripped when unrecognised: "[section 4]"
-// is something Revia meant literally, and deleting it would edit her own sentence.
-[[nodiscard]] VocalizationShaping ShapeVocalizations(
-    const std::string& reply,
-    int maximumKept);
+// Canonicalizes/caps six recognized sound cues, removes multiword asterisk theatre, and keeps single-word emphasis.
+// Unknown bracket/angle forms remain literal text.
+[[nodiscard]] VocalizationShaping ShapeVocalizations(const std::string& reply, int maximumKept);
 
 enum class VocalizationVerdict
 {
@@ -158,11 +127,8 @@ public:
 
     // 'now' is passed in rather than read from the clock so the decision is a pure
     // function of its inputs and can be tested without sleeping.
-    VocalizationVerdict Evaluate(
-        VocalizationKind kind,
-        const revia::runtime::AffectSnapshot& affect,
-        std::chrono::steady_clock::time_point now,
-        bool bClipAvailable);
+    VocalizationVerdict Evaluate(VocalizationKind kind, const revia::runtime::AffectSnapshot& affect,
+        std::chrono::steady_clock::time_point now, bool bClipAvailable);
 
     // Call between replies. Resets the per-reply count without forgetting the interval,
     // so a laugh at the end of one reply still blocks one at the start of the next.
@@ -170,8 +136,7 @@ public:
     void Reset();
 
     [[nodiscard]] int SpokenThisReply() const;
-    [[nodiscard]] static bool AffectPermits(
-        VocalizationKind kind, const revia::runtime::AffectSnapshot& affect);
+    [[nodiscard]] static bool AffectPermits(VocalizationKind kind, const revia::runtime::AffectSnapshot& affect);
 
 private:
     VocalizationLimits configuration;

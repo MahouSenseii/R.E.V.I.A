@@ -1,3 +1,4 @@
+#include "Agents/answerObligation.h"
 #include "profilePanel.h"
 
 #include <QCheckBox>
@@ -37,9 +38,7 @@ namespace
     }
 }
 
-ProfilePanel::ProfilePanel(
-    revia::runtime::ReviaSession& inputSession,
-    QWidget* parent)
+ProfilePanel::ProfilePanel(revia::runtime::ReviaSession& inputSession, QWidget* parent)
     : QWidget(parent),
       session(inputSession)
 {
@@ -222,8 +221,7 @@ ProfilePanel::ProfilePanel(
     SetStatus("Profiles are ready.");
 }
 
-const revia::runtime::ProfileSummary* ProfilePanel::FindProfile(
-    const std::string& profileId) const
+const revia::runtime::ProfileSummary* ProfilePanel::FindProfile(const std::string& profileId) const
 {
     for (const revia::runtime::ProfileSummary& candidate : snapshot.profiles)
     {

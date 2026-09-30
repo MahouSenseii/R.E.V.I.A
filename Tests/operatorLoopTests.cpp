@@ -638,6 +638,101 @@ void TestARestartDoesNotReplayAnUncertainEffect()
         "A restart refused to continue work that could safely be repeated.");
 }
 
+// Read the record at the real boundary after a filesystem effect, then unwind as
+// though the process ended. Manually seeding Acting misses a Pending record that
+// the production runner never advanced before dispatch.
+void TestInFlightActionIsDurableBeforeVerification(const bool iterative)
+{
+    using revia::actions::ActionType;
+    LoopFixture fixture;
+    std::ofstream(fixture.approved / "source.txt") << "restart fixture";
+    GoalStep step;
+    step.description = "Copy the restart fixture";
+    step.action.type = ActionType::CopyFile;
+    step.action.source = fixture.approved / "source.txt";
+    step.action.destination = fixture.approved / "copied.txt";
+    step.check.type = ActionType::ListDirectory;
+    step.check.source = fixture.approved;
+    step.expected = "copied.txt";
+    Goal goal = fixture.NewGoal("An interrupted copy");
+    goal.id = NewGoalId();
+    if (!iterative) goal.steps.push_back(step);
+    else fixture.runner.SetStepProvider([&](const Goal&, std::uint32_t) { return Take(step); });
+    struct Interrupted {};
+    std::optional<Goal> checkpoint;
+    fixture.runner.SetProgressHandler([&](const GoalProgress& progress)
+    {
+        if (progress.stepStatus != StepStatus::Verifying) return;
+        checkpoint = fixture.store.Load(progress.goalId);
+        throw Interrupted{};
+    });
+    bool interrupted = false;
+    try
+    {
+        if (iterative) (void)fixture.runner.Operate(goal);
+        else (void)fixture.runner.Run(goal);
+    }
+    catch (const Interrupted&) { interrupted = true; }
+    fixture.runner.SetProgressHandler({});
+    Check(interrupted && std::filesystem::exists(fixture.approved / "copied.txt"),
+        "The restart fixture did not reach the boundary after its real side effect.");
+    Check(checkpoint && checkpoint->steps.size() == 1 &&
+        checkpoint->steps.front().status == StepStatus::Verifying,
+        "The real in-flight action was not durably marked before verification.");
+    Check(checkpoint->steps.front().attempts.size() == 1 &&
+        checkpoint->steps.front().attempts.front().executed,
+        "The in-flight checkpoint lost the evidence that its action executed.");
+    const Goal resumed = fixture.runner.Resume(goal.id);
+    Check(resumed.stopReason == StopReason::UnverifiedEffect && IsTerminal(resumed.status),
+        "A restart replayed an effect whose production checkpoint was in flight.");
+    Check(resumed.steps.front().attempts.size() == 1,
+        "Recovery duplicated the in-flight attempt.");
+}
+
+void TestAnUnwritableInFlightCheckpointPreventsDispatch(const bool iterative, const bool afterAction = false)
+{
+    using revia::actions::ActionType;
+    LoopFixture fixture;
+    std::ofstream(fixture.approved / "source.txt") << "checkpoint failure fixture";
+    GoalStep step;
+    step.action.type = ActionType::CopyFile;
+    step.action.source = fixture.approved / "source.txt";
+    step.action.destination = fixture.approved / "copied.txt";
+    step.check.type = ActionType::ListDirectory;
+    step.check.source = fixture.approved;
+    step.expected = "copied.txt";
+    Goal goal = fixture.NewGoal("An unwritable checkpoint");
+    goal.id = NewGoalId();
+    if (!iterative) goal.steps.push_back(step);
+    else fixture.runner.SetStepProvider([&](const Goal&, std::uint32_t) { return Take(step); });
+    // Create the schema before installing a fault in the actual persistence API.
+    Check(fixture.store.Save(goal), "Could not seed the checkpoint fault fixture.");
+    sqlite3* database = nullptr;
+    Check(sqlite3_open(fixture.store.Path().c_str(), &database) == SQLITE_OK,
+        "Could not open the checkpoint fault fixture.");
+    const int fault = sqlite3_exec(database, afterAction
+        ? "CREATE TRIGGER reject_checkpoint BEFORE INSERT ON goal_steps "
+          "WHEN new.status = 'verifying' BEGIN SELECT RAISE(FAIL, 'checkpoint fault'); END;"
+        : "CREATE TRIGGER reject_checkpoint BEFORE INSERT ON goal_steps "
+          "WHEN new.status = 'acting' BEGIN SELECT RAISE(FAIL, 'checkpoint fault'); END;",
+        nullptr, nullptr, nullptr);
+    sqlite3_close(database);
+    Check(fault == SQLITE_OK, "Could not install the checkpoint write fault.");
+    int dispatched = 0;
+    fixture.runtime.SetDispatchObserver([&](const auto&, const bool beginning)
+    { if (beginning) ++dispatched; });
+    const Goal finished = iterative ? fixture.runner.Operate(goal) : fixture.runner.Run(goal);
+    Check(finished.status == GoalStatus::Failed && finished.stopReason == StopReason::StoreError,
+        "An unwritable in-flight checkpoint did not stop the goal as a storage failure.");
+    Check(dispatched == (afterAction ? 1 : 0),
+        "The runner dispatched an action after its durable checkpoint failed.");
+    Check(std::filesystem::exists(fixture.approved / "copied.txt") == afterAction,
+        "The checkpoint failure misreported whether its side effect happened.");
+    Check(finished.steps.front().attempts.size() == 1 &&
+        finished.steps.front().attempts.front().executed == afterAction,
+        "The checkpoint failure lost or duplicated its attempt evidence.");
+}
+
 void TestTheLoopCannotWidenItsScope()
 {
     LoopFixture fixture;
@@ -714,8 +809,7 @@ void TestPlannedRunsAreUnchanged()
 // to tell acting from achieving, and the bounding that stops a hostile window from
 // eating the decision budget.
 
-revia::actions::windows::ObservedControl MakeControl(
-    const std::string& name, const int x, const int y)
+revia::actions::windows::ObservedControl MakeControl(const std::string& name, const int x, const int y)
 {
     revia::actions::windows::ObservedControl control;
     control.name = name;
@@ -867,10 +961,7 @@ revia::actions::ActionResult Listing(const std::vector<std::string>& names)
     return result;
 }
 
-revia::actions::ActionResult Window(
-    const std::string& application,
-    const std::string& foreground,
-    const std::vector<std::string>& controls)
+revia::actions::ActionResult Window(const std::string& application, const std::string& foreground, const std::vector<std::string>& controls)
 {
     revia::actions::ActionResult result;
     result.attempted = true;
@@ -1630,6 +1721,11 @@ void RunOperatorLoopTests()
     TestAnUncertainEffectIsNotRepeated();
     TestAFailedActionStillRetries();
     TestARestartDoesNotReplayAnUncertainEffect();
+    TestInFlightActionIsDurableBeforeVerification(false);
+    TestInFlightActionIsDurableBeforeVerification(true);
+    TestAnUnwritableInFlightCheckpointPreventsDispatch(false);
+    TestAnUnwritableInFlightCheckpointPreventsDispatch(true);
+    TestAnUnwritableInFlightCheckpointPreventsDispatch(false, true);
     TestTheLoopCannotWidenItsScope();
     TestBudgetsAndCancellationStillApply();
     TestPlannedRunsAreUnchanged();

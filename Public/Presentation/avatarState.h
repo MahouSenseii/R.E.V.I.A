@@ -70,14 +70,7 @@ struct AvatarState
     std::string activity;
 };
 
-// Turns presentation events into visible state, deterministically.
-//
-// Deterministic on purpose, and runtime-owned. A model may later be allowed to offer
-// high-level style hints, but the mapping from "she is curious" to "attentive gaze"
-// stays here, where it can be tested and cannot be talked out of by generated text.
-//
-// It is itself a sink, so it hangs off the same bus a renderer does and sees exactly
-// what a renderer would see.
+// Deterministic presentation-event sink mapping confirmed runtime state to visible avatar state.
 class PresentationController : public IPresentationSink
 {
 public:

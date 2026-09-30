@@ -1,6 +1,6 @@
 #pragma once
 
-#include "Library/structLibrary.h"
+#include "LLM/endpointSettings.h"
 #include <functional>
 #include <memory>
 #include <string>

@@ -1,3 +1,4 @@
+#include "LLM/responseTypes.h"
 #include "testSupport.h"
 
 #include "Computer/computerController.h"
@@ -103,8 +104,7 @@ public:
     [[nodiscard]] std::string Name() const override { return "scripted"; }
     [[nodiscard]] bool IsAvailable() const override { return available; }
 
-    [[nodiscard]] ComputerDecision Decide(
-        const ComputerTaskContext& context, std::stop_token) override
+    [[nodiscard]] ComputerDecision Decide(const ComputerTaskContext& context, std::stop_token) override
     {
         ++calls;
         seenGeneration = context.observation.screen.generation;

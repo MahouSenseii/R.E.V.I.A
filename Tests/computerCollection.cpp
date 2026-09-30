@@ -1,3 +1,5 @@
+#include "Computer/computerSettings.h"
+#include "LLM/responseTypes.h"
 #include "reviaSessionTestAccess.h"
 
 #include <chrono>
@@ -168,12 +170,8 @@ responseOutput Refused(const std::string& reason)
     return output;
 }
 
-std::string Subgoal(
-    const std::string& intent,
-    const std::string& name = {},
-    const std::string& role = {},
-    const std::string& payloadId = {},
-    const std::string& container = {})
+std::string Subgoal(const std::string& intent, const std::string& name = {}, const std::string& role = {},
+    const std::string& payloadId = {}, const std::string& container = {})
 {
     nlohmann::json target = {{"application", FixtureApplication}};
     if (!name.empty()) target["name"] = name;

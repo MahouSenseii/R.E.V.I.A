@@ -1,5 +1,8 @@
 #pragma once
 
+#include "Agents/responseFilterSettings.h"
+#include "Core/conversationMessage.h"
+#include "Core/profile.h"
 #include "Actions/actionTypes.h"
 #include "Agents/investigation.h"
 #include "Agents/investigationAgent.h"
@@ -32,45 +35,26 @@
 namespace revia::runtime
 {
 
-// Everything a routing decision is allowed to be made from, gathered where the turn
-// knows it.
-//
-// This exists so there is one answer to "where does the router's input come from".
-// Before it, a context was assembled inline in two places and the two disagreed about
-// which fields they set, which is how three routing inputs came to have no producer at
-// all while the router still branched on them. The turn fills this; BuildRoutingContext
-// turns it into what the router sees; nothing else constructs a RoutingContext for a
-// real request.
+// Runtime evidence used to route an admitted conversation turn.
 struct RoutingInputs
 {
-    // The user's words, already chosen by the caller: the policy input for a live turn,
-    // the case input for an evaluation run.
     std::string input;
-    // A proactive opening is not routed at all -- Revia chose to speak, so there is no
-    // request to classify -- but the flag is carried here so the one place that decides
-    // that is this one.
+    // Proactive openings bypass request routing.
     bool proactive = false;
     bool allowScreenContext = true;
     bool allowInternetLookup = true;
-    // A public-audience turn answers a different conversation, so it neither reads nor
-    // writes this conversation's continuity.
+    // Public turns keep separate continuity.
     bool publicAudience = false;
-    // Research grounding the runtime already fetched for this turn. Evidence that the
-    // turn is a research turn, independent of how the request was worded.
+    // The runtime already fetched research for this turn.
     bool groundingAlreadyRetrieved = false;
     std::size_t recentContextCharacters = 0;
     std::optional<intelligence::IntelligenceTier> previousDeliveredTier;
     bool previousTurnWasUnreliable = false;
 };
 
-[[nodiscard]] intelligence::RoutingContext BuildRoutingContext(
-    const RoutingInputs& inputs);
+[[nodiscard]] intelligence::RoutingContext BuildRoutingContext(const RoutingInputs& inputs);
 
-// Owns conversational turns and nothing else.
-//
-// ReviaSession decides lifecycle, commands, permissions, and whether an initiative cue
-// is allowed to interrupt. Once a turn is approved, this component owns context,
-// dialogue posture, generation, reply grounding, streaming speech, and turn telemetry.
+// Owns admitted conversational turns; lifecycle and permissions stay with the session.
 class ConversationRuntime
 {
 public:
@@ -78,24 +62,18 @@ public:
     using AffectHandler = std::function<void(const AffectSnapshot&)>;
     using InternetSettingsProvider =
         std::function<actions::CapabilitySettings::InternetAccess()>;
-    // The live desktop permissions, read per turn rather than cached, so a switch the
-    // owner flips mid-conversation is reflected in what she says she can do.
+    // Reads current desktop permissions per turn.
     using DesktopSettingsProvider =
         std::function<actions::CapabilitySettings::DesktopControl()>;
     using InternetLookupHandler =
         std::function<actions::ActionOutcome(const std::string&, const std::string&)>;
     using ResponseFilterSettingsProvider = std::function<responseFilterSettings()>;
-    // Supplies the live bounds on how often Revia may stop and think out loud. A provider
-    // rather than a constructor value so a settings change takes effect on the next turn
-    // instead of on the next restart.
+    // Reads live self-inquiry limits on the next turn.
     using SelfInquirySettingsProvider = std::function<agents::SelfInquiryLimits()>;
     using ScreenContextProvider = std::function<std::string()>;
-    // Supplies the relationship with whoever is currently speaking. A provider rather
-    // than a parameter because every call site would otherwise have to thread a speaker
-    // through, and the session already owns who that is.
+    // Reads the relationship for the current speaker.
     using RelationshipProvider = std::function<identity::RelationshipState()>;
-    // Supplies who Revia currently is. Appraisal scales by personality, so whatever
-    // decides how an event feels needs the same development state the prompt shows.
+    // Keeps appraisal and prompts aligned with current development.
     using DevelopmentProvider = std::function<identity::DevelopmentState()>;
     // Supplies the opinions worth showing this turn, already ranked and bounded. A
     // provider rather than stored state: what she likes changes between turns, and a
@@ -139,29 +117,14 @@ public:
     // while a folder of songs sat ready to play.
     using SongListProvider = std::function<std::string()>;
 
-    ConversationRuntime(
-        messageRouter& router,
-        conversationContext& context,
-        agents::TurnCoordinator& coordinator,
-        speech::SpeechService& speech,
-        AffectController& affect,
-        emotion::EmotionRuntime& emotions,
-        RuntimeEventBus& events,
-        logger& log,
-        StateHandler stateHandler,
-        AffectHandler affectHandler,
-        InternetSettingsProvider internetSettingsProvider,
-        DesktopSettingsProvider desktopSettingsProvider,
-        InternetLookupHandler internetLookupHandler,
-        ResponseFilterSettingsProvider responseFilterSettingsProvider,
-        ScreenContextProvider screenContextProvider,
-        RelationshipProvider relationshipProvider = {},
-        DevelopmentProvider developmentProvider = {},
-        StimulusObserver stimulusObserver = {},
-        ScreenCaptureRequest screenCaptureRequest = {},
-        PreferenceProvider preferenceProvider = {},
-        SelfInquirySettingsProvider selfInquirySettingsProvider = {},
-        ConversationRecallHandler conversationRecallHandler = {},
+    ConversationRuntime(messageRouter& router, conversationContext& context, agents::TurnCoordinator& coordinator,
+        speech::SpeechService& speech, AffectController& affect, emotion::EmotionRuntime& emotions, RuntimeEventBus& events, logger& log,
+        StateHandler stateHandler, AffectHandler affectHandler, InternetSettingsProvider internetSettingsProvider,
+        DesktopSettingsProvider desktopSettingsProvider, InternetLookupHandler internetLookupHandler,
+        ResponseFilterSettingsProvider responseFilterSettingsProvider, ScreenContextProvider screenContextProvider,
+        RelationshipProvider relationshipProvider = {}, DevelopmentProvider developmentProvider = {},
+        StimulusObserver stimulusObserver = {}, ScreenCaptureRequest screenCaptureRequest = {}, PreferenceProvider preferenceProvider = {},
+        SelfInquirySettingsProvider selfInquirySettingsProvider = {}, ConversationRecallHandler conversationRecallHandler = {},
         AutonomyContextProvider autonomyContextProvider = {});
 
     // Set once at startup, before the first turn.
@@ -169,57 +132,32 @@ public:
 
     // `turnReference` is added to this turn's context only, never to its history: text
     // the runtime fetched for the question, such as what the user copied.
-    SessionResult Reply(
-        const std::string& input,
-        const aiProfile& profile,
-        bool llmAvailable,
-        bool shouldSpeak,
-        std::stop_token stopToken = {},
-        const std::string& turnReference = {});
+    SessionResult Reply(const std::string& input, const aiProfile& profile, bool llmAvailable, bool shouldSpeak,
+        std::stop_token stopToken = {}, const std::string& turnReference = {});
 
     // Public integrations get Revia's identity and the supplied channel history, but
     // never inherit the local user's dialogue, compressed history, durable memories,
     // screen/camera observations, or automatic web lookup. The caller supplies the
     // already-resolved viewer relationship so speaker identity cannot lag by one turn.
-    SessionResult ReplyPublic(
-        const std::string& input,
-        const std::vector<conversationMessage>& channelHistory,
-        const std::string& publicInstruction,
-        const identity::RelationshipState& relationship,
-        const aiProfile& profile,
-        bool llmAvailable,
-        bool shouldSpeak,
-        std::stop_token stopToken = {});
+    SessionResult ReplyPublic(const std::string& input, const std::vector<conversationMessage>& channelHistory,
+        const std::string& publicInstruction, const identity::RelationshipState& relationship, const aiProfile& profile, bool llmAvailable,
+        bool shouldSpeak, std::stop_token stopToken = {});
 
     // Guest overload: the caller owns an isolated router with PublicGuestProfile(),
     // never the desktop router. No instance state, provider, logger or event bus is
     // read or mutated. Returns final filtered text only, without model diagnostics.
     [[nodiscard]] static aiProfile PublicGuestProfile();
-    [[nodiscard]] static SessionResult ReplyPublic(
-        messageRouter& isolatedRouter,
-        const std::string& input,
-        const std::vector<conversationMessage>& guestHistory,
-        std::stop_token stopToken);
+    [[nodiscard]] static SessionResult ReplyPublic(messageRouter& isolatedRouter, const std::string& input,
+        const std::vector<conversationMessage>& guestHistory, std::stop_token stopToken);
 
     // Generates an unprompted but evidence-grounded opening. The cue is never stored as
     // a user message and never enters automatic memory classification; only Revia's
     // visible line joins conversation history so a natural user reply has context.
-    SessionResult StartConversation(
-        const std::string& cue,
-        const std::string& evidence,
-        const aiProfile& profile,
-        bool llmAvailable,
-        bool shouldSpeak,
-        std::stop_token stopToken = {});
+    SessionResult StartConversation(const std::string& cue, const std::string& evidence, const aiProfile& profile, bool llmAvailable,
+        bool shouldSpeak, std::stop_token stopToken = {});
 
-    SessionResult StartCuriosityConversation(
-        const std::string& topic,
-        const std::string& rationale,
-        const std::string& researchGrounding,
-        const aiProfile& profile,
-        bool llmAvailable,
-        bool shouldSpeak,
-        std::stop_token stopToken = {});
+    SessionResult StartCuriosityConversation(const std::string& topic, const std::string& rationale, const std::string& researchGrounding,
+        const aiProfile& profile, bool llmAvailable, bool shouldSpeak, std::stop_token stopToken = {});
 
     // Runs one conversation-contract evaluation turn against the active model.
     //
@@ -229,12 +167,8 @@ public:
     // never speaks, and is scored by the caller rather than by the live quality counters.
     // A regression suite that shifted Revia's mood and filled her memory with test
     // prompts would be measuring a runtime it had already changed.
-    [[nodiscard]] evaluation::EvaluationReply EvaluateTurn(
-        const std::string& input,
-        const std::vector<conversationMessage>& priorTurns,
-        const aiProfile& profile,
-        bool llmAvailable,
-        std::stop_token stopToken = {});
+    [[nodiscard]] evaluation::EvaluationReply EvaluateTurn(const std::string& input, const std::vector<conversationMessage>& priorTurns,
+        const aiProfile& profile, bool llmAvailable, std::stop_token stopToken = {});
 
     [[nodiscard]] agents::ConversationQualitySnapshot QualitySnapshot() const;
 
@@ -256,12 +190,8 @@ private:
     // the live speech state. Shared by the turn posture and the self-inquiry so the two
     // cannot describe her body differently.
     [[nodiscard]] std::string DescribeBody() const;
-    [[nodiscard]] std::string BuildTurnPosture(
-        const std::string& policyInput,
-        const std::vector<conversationMessage>& promptContext,
-        const aiProfile& profile,
-        bool llmAvailable,
-        const TurnPolicy& turnPolicy) const;
+    [[nodiscard]] std::string BuildTurnPosture(const std::string& policyInput, const std::vector<conversationMessage>& promptContext,
+        const aiProfile& profile, bool llmAvailable, const TurnPolicy& turnPolicy) const;
     // Runs one bounded deliberation when the router already judged this turn hard,
     // publishes the questions so they are visible in chat, and returns what she worked
     // out. Returns an empty result whenever the gate stays shut, and a failed pass is
@@ -285,51 +215,21 @@ private:
     // investigation from the questions it produced and lets later rounds choose their
     // questions from what earlier rounds actually found -- which is the whole of what the
     // single pass could not do.
-    [[nodiscard]] InvestigationSummary RunInvestigation(
-        const agents::SelfInquiryResult& seed,
-        const std::string& policyInput,
-        const std::string& basePosture,
-        std::uint64_t turnId,
-        std::stop_token stopToken);
+    [[nodiscard]] InvestigationSummary RunInvestigation(const agents::SelfInquiryResult& seed, const std::string& policyInput,
+        const std::string& basePosture, std::uint64_t turnId, std::stop_token stopToken);
 
-    [[nodiscard]] agents::SelfInquiryResult RunSelfInquiry(
-        const std::string& policyInput,
-        const std::vector<conversationMessage>& promptContext,
-        const std::string& basePosture,
-        const intelligence::IntelligenceDecision& routing,
-        bool modelAvailable,
-        std::uint64_t turnId,
-        std::stop_token stopToken);
-    [[nodiscard]] agents::ResponseFilterContext BuildResponseFilterContext(
-        const std::string& policyInput,
+    [[nodiscard]] agents::SelfInquiryResult RunSelfInquiry(const std::string& policyInput,
+        const std::vector<conversationMessage>& promptContext, const std::string& basePosture,
+        const intelligence::IntelligenceDecision& routing, bool modelAvailable, std::uint64_t turnId, std::stop_token stopToken);
+    [[nodiscard]] agents::ResponseFilterContext BuildResponseFilterContext(const std::string& policyInput,
         const std::vector<conversationMessage>& promptContext) const;
-    SessionResult Generate(
-        const std::string& policyInput,
-        const std::vector<conversationMessage>& promptContext,
-        const aiProfile& profile,
-        bool llmAvailable,
-        bool shouldSpeak,
-        bool evaluateMemory,
-        bool proactive,
-        const std::string& proactiveInstruction,
-        const std::string& precomputedInternetGrounding,
-        std::stop_token stopToken,
-        const TurnPolicy& turnPolicy);
-    void PublishComponent(
-        const std::string& component,
-        const std::string& phase,
-        const std::string& message,
-        double elapsedMilliseconds,
-        int queueDepth,
-        std::uint64_t turnId) const;
-    void PublishInternetActivity(
-        const std::string& phase,
-        const std::string& query,
-        const std::string& provider,
-        const std::string& detail,
-        double elapsedMilliseconds,
-        int sourceCount,
-        std::uint64_t turnId) const;
+    SessionResult Generate(const std::string& policyInput, const std::vector<conversationMessage>& promptContext, const aiProfile& profile,
+        bool llmAvailable, bool shouldSpeak, bool evaluateMemory, bool proactive, const std::string& proactiveInstruction,
+        const std::string& precomputedInternetGrounding, std::stop_token stopToken, const TurnPolicy& turnPolicy);
+    void PublishComponent(const std::string& component, const std::string& phase, const std::string& message, double elapsedMilliseconds,
+        int queueDepth, std::uint64_t turnId) const;
+    void PublishInternetActivity(const std::string& phase, const std::string& query, const std::string& provider, const std::string& detail,
+        double elapsedMilliseconds, int sourceCount, std::uint64_t turnId) const;
 
     messageRouter& router;
     conversationContext& context;

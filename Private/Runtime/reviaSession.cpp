@@ -1,6 +1,18 @@
+#include "Agents/responseFilterSettings.h"
+#include "Core/appSettings.h"
+#include "Core/commandOutput.h"
+#include "Core/conversationMessage.h"
+#include "Core/profile.h"
+#include "Initiative/initiativeSettings.h"
+#include "Intelligence/intelligenceSettings.h"
+#include "LLM/backendTypes.h"
+#include "LLM/endpointSettings.h"
+#include "LLM/responseTypes.h"
+#include "Memory/memoryTypes.h"
+#include "Runtime/outputChannel.h"
 #include "Core/utf8.h"
 #include "Identity/promptMarkers.h"
-#include "Runtime/retainedCounts.h"
+#include "Runtime/publicContextCache.h"
 #include "Runtime/reviaSession.h"
 #include "Runtime/runtimeDataBootstrap.h"
 #include "Computer/legacyLlmPolicy.h"
@@ -65,10 +77,7 @@ namespace
         return std::find(phrases.begin(), phrases.end(), words) != phrases.end();
     }
 
-    bool EnsureCapabilityConfig(
-        const std::filesystem::path& runtimePath,
-        const std::filesystem::path& templatePath,
-        std::string& outError)
+    bool EnsureCapabilityConfig(const std::filesystem::path& runtimePath, const std::filesystem::path& templatePath, std::string& outError)
     {
         std::error_code error;
         if (std::filesystem::exists(runtimePath, error) && !error)
@@ -170,11 +179,7 @@ namespace
         return aggregate == timings.rend() ? -1.0 : aggregate->milliseconds;
     }
 
-    llmSettings BuildTierSettings(
-        const llmSettings& base,
-        const modelTierSettings& tier,
-        const std::string& device,
-        const int fitTargetMiB)
+    llmSettings BuildTierSettings(const llmSettings& base, const modelTierSettings& tier, const std::string& device, const int fitTargetMiB)
     {
         llmSettings output = base;
         output.host = tier.host;
@@ -214,10 +219,7 @@ namespace
             revia::core::ResolveRuntimePath(tier.multimodalProjectorPath), error);
     }
 
-    std::string BuildLearnedResearchSummary(
-        const std::string& topic,
-        const std::string& finding,
-        const std::vector<std::string>& sources)
+    std::string BuildLearnedResearchSummary(const std::string& topic, const std::string& finding, const std::vector<std::string>& sources)
     {
         constexpr std::size_t MaximumFindingCharacters = 1400;
         constexpr std::size_t MaximumSummaryCharacters = 2600;
@@ -409,26 +411,8 @@ ReviaSession::ReviaSession()
         }
         return choice;
     });
-    // The iterative loop's one decision point. Observing the machine is this side's job
-    // by design, which is what keeps Goals from depending on Windows: the runner asks
-    // what to do next and never looks at a screen itself.
-    //
-    // This adds no authority. Every step it proposes is checked by
-    // GoalRunner::ValidateStep, executed through the same scoped policy, the same
-    // per-action confirmation and the same audit log a planned step uses, and stopped by
-    // the same budgets. What it adds is that the next action is chosen after seeing what
-    // the last one actually did.
-    // The existing decision path, now reached through the policy interface rather than
-    // written inline. The prompt it builds and the answer it parses are the same; what
-    // moved is where the observation is taken, so that every provider in a later
-    // comparison reasons about one snapshot instead of taking its own look.
-    //
-    // The token is the one Operate was handed, because this is the same operation.
-    // Without it a Stop was only noticed after the decision came back: the run stopped,
-    // but the request it was waiting on ran to completion first, so the visible stop was
-    // as slow as the model (ISSUE-REVIA-0061). Checking afterwards still matters and
-    // still happens -- a late answer must not dispatch -- but a check is not a
-    // cancellation.
+    // Computer decisions share one observation and the operation's cancellation token.
+    // Proposals still pass goal validation, scoped policy, confirmation, budgets, and audit.
     computerTasks.SetLegacyPolicy(std::make_unique<computer::LegacyLlmComputerPolicy>(
         [this](const std::string& context, std::stop_token stopToken)
         {
@@ -1137,6 +1121,9 @@ bool ReviaSession::Start()
         profile,
         fastBrainConfigured,
         expertBrainConfigured);
+    mainPreparation.Reset();
+    fastPreparation.Reset();
+    expertPreparation.Reset();
     if (settings.llm.bAutoTune)
     {
         appLogger.Log(
@@ -1157,9 +1144,9 @@ bool ReviaSession::Start()
     router.SetTierResidency(
         intelligence::IntelligenceTier::Main,
         llmAvailable,
-        llmAvailable,
+        llmAvailable && mainPreparation.succeeded.load(),
         startupTimings.back().milliseconds,
-        llmAvailable ? "Main endpoint is warm." : "Main endpoint is unavailable.");
+        llmAvailable ? "Main endpoint is available." : "Main endpoint is unavailable.");
     PublishComponent(
         "Language model",
         llmAvailable ? "Ready" : "Unavailable",
@@ -1170,15 +1157,8 @@ bool ReviaSession::Start()
         0,
         resourcePlan.ChatLabel());
 
-    // The voice starts loading here rather than at the end of startup. Qwen3-TTS is a
-    // separate Python worker on the device the plan assigned it, and nothing it does
-    // needs the tiers or the embedding server below -- so waiting for them was time the
-    // voice spent idle for no reason. The remaining stages are what it may safely
-    // overlap: Fast is CPU-resident, Expert is placed on the chat device, and the
-    // embedding server is the memory side, which is the whole point of doing both at
-    // once. What it deliberately does NOT overlap is the stage above: llama.cpp fits
-    // chat layers against the card at launch, and a voice model allocating underneath
-    // that measurement is how a plan that reserved room for both stops holding.
+    // Load voice after chat layer fitting, then overlap the remaining startup stages.
+    // Earlier voice allocation would invalidate the GPU fit measurement.
     if (deferredVoiceLoad)
     {
         StartVoiceWarmup();
@@ -1201,7 +1181,7 @@ bool ReviaSession::Start()
     router.SetTierResidency(
         intelligence::IntelligenceTier::Fast,
         fastAvailable,
-        fastAvailable && settings.intelligence.fast.bWarmAtStartup,
+        fastAvailable && fastPreparation.succeeded.load(),
         startupTimings.back().milliseconds,
         !fastBrainConfigured
             ? "Fast tier is disabled because its local artifact is unavailable."
@@ -1212,7 +1192,9 @@ bool ReviaSession::Start()
         "Fast brain",
         fastAvailable ? "Ready" : fastBrainConfigured ? "Fallback" : "Disabled",
         fastAvailable
-            ? "Qwen3.5 0.8B is warm on CPU for low-latency social turns."
+            ? fastPreparation.succeeded.load()
+                ? "Qwen3.5 0.8B is warm on CPU for low-latency social turns."
+                : "Qwen3.5 0.8B is available on CPU; graph preparation has not succeeded."
             : fastWouldIdle
                 ? "Not started: Main on the GPU answers short turns sooner than the CPU "
                   "model would."
@@ -1249,6 +1231,7 @@ bool ReviaSession::Start()
                 if (expertServerProcess.WasStartedByRevia())
                 {
                     expertServerProcess.Stop();
+                    expertPreparation.Reset();
                     appLogger.Log("Expert brain put away to free its memory.");
                 }
             },
@@ -1266,7 +1249,7 @@ bool ReviaSession::Start()
     router.SetTierResidency(
         intelligence::IntelligenceTier::Expert,
         expertAvailable,
-        expertAvailable && settings.intelligence.expert.bWarmAtStartup,
+        expertAvailable && expertPreparation.succeeded.load(),
         startupTimings.back().milliseconds,
         expertBrainConfigured
             ? "Expert endpoint did not become ready; Main Deep fallback is active."
@@ -1275,7 +1258,9 @@ bool ReviaSession::Start()
         "Expert brain",
         expertAvailable ? "Ready" : expertBrainConfigured ? "Fallback" : "Standby",
         expertAvailable
-            ? "Qwen3-VL 8B is warm for difficult text and visual reasoning."
+            ? expertPreparation.succeeded.load()
+                ? "Qwen3-VL 8B is warm for difficult text and visual reasoning."
+                : "Qwen3-VL 8B is available; graph preparation has not succeeded."
             : "Expert routes will use Main Deep; the preferred Expert model was not safely resident.",
         startupTimings.back().milliseconds,
         0,
@@ -1383,10 +1368,7 @@ bool ReviaSession::Start()
     return true;
 }
 
-void ReviaSession::RunBackgroundLoop(
-    const char* worker,
-    const std::stop_token stopToken,
-    const std::function<void()>& loop)
+void ReviaSession::RunBackgroundLoop(const char* worker, const std::stop_token stopToken, const std::function<void()>& loop)
 {
     while (!stopToken.stop_requested())
     {
@@ -1940,9 +1922,7 @@ void ReviaSession::QueueExternalAdapterEvent(const presence::ExternalAdapterEven
     externalAdapterCondition.notify_one();
 }
 
-agents::InputVerdict ReviaSession::OfferInput(
-    const std::string& text,
-    const agents::InputSource source)
+agents::InputVerdict ReviaSession::OfferInput(const std::string& text, const agents::InputSource source)
 {
     const agents::InputVerdict verdict =
         inputArbiter.Offer(text, source, std::chrono::system_clock::now());
@@ -1979,7 +1959,7 @@ agents::InputVerdict ReviaSession::OfferInput(
             activeOperation = activeStopSource;
         }
         activeOperation.request_stop();
-        actionRuntime.CancelActiveInternet();
+        actionRuntime.CancelActiveInternet(HasRunningTask());
         speechService.StopSpeaking();
         curiosityCondition.notify_all();
         if (conversational)
@@ -3032,7 +3012,7 @@ void ReviaSession::StopCuriosityLoop()
         std::lock_guard signalLock(curiositySignalMutex);
         curiosityAttemptStopSource.request_stop();
     }
-    actionRuntime.CancelActiveInternet();
+    actionRuntime.CancelActiveInternet(HasRunningTask());
     curiosityWorker.request_stop();
     curiosityCondition.notify_all();
     curiosityWorker.join();
@@ -3336,24 +3316,18 @@ std::string ReviaSession::ConversationHistoryStatus() const
     return conversationArchive.Status();
 }
 
-std::vector<memory::ArchivedTurn> ReviaSession::SearchConversations(
-    const std::string& query,
-    const std::size_t maxTurns) const
+std::vector<memory::ArchivedTurn> ReviaSession::SearchConversations(const std::string& query, const std::size_t maxTurns) const
 {
     return conversationArchive.Search(query, maxTurns);
 }
 
-std::vector<memory::ArchivedTurn> ReviaSession::ConversationsInRange(
-    const std::int64_t startEpoch,
-    const std::int64_t endEpoch,
-    const std::size_t maxTurns) const
+std::vector<memory::ArchivedTurn> ReviaSession::ConversationsInRange(const std::int64_t startEpoch,
+    const std::int64_t endEpoch, const std::size_t maxTurns) const
 {
     return conversationArchive.LoadRange(startEpoch, endEpoch, maxTurns);
 }
 
-std::string ReviaSession::RecallConversation(
-    const memory::RecallRequest& request,
-    const std::string& currentInput) const
+std::string ReviaSession::RecallConversation(const memory::RecallRequest& request, const std::string& currentInput) const
 {
     if (!request.Wanted() || !settings.conversation.bArchiveEnabled)
     {
@@ -3401,8 +3375,7 @@ std::string ReviaSession::RecallConversation(
     return memory::RenderRecallBlock(request, turns, DisplayName(), now);
 }
 
-std::vector<memory::ArchivedSession> ReviaSession::RecentConversations(
-    const std::size_t maxSessions) const
+std::vector<memory::ArchivedSession> ReviaSession::RecentConversations(const std::size_t maxSessions) const
 {
     return conversationArchive.RecentSessions(maxSessions);
 }
@@ -3423,21 +3396,80 @@ std::size_t ReviaSession::ForgetConversations()
     return removed;
 }
 
-core::PreferenceResult ReviaSession::SetPreference(
-    const std::string& name,
-    const std::string& value)
+core::PreferenceResult ReviaSession::SetPreference(const std::string& name, const std::string& value)
 {
+    std::lock_guard preferenceLock(preferenceUpdateMutex);
     core::PreferenceResult result = preferenceStore.Set(name, value);
     if (!result.succeeded)
     {
         return result;
     }
 
-    // Applied to the running session where that is safe to do live, so a preference is
-    // not a promise about the next start. Anything that belongs to a worker's startup
-    // configuration says so rather than pretending to have taken effect.
-    appSettings updated = settings;
+    appSettings updated;
+    {
+        std::lock_guard snapshotLock(preferenceSnapshotMutex);
+        updated = settings;
+    }
     preferenceStore.Apply(updated);
+    return ApplyPreferenceUpdate(name, std::move(updated), std::move(result));
+}
+
+core::PreferenceResult ReviaSession::ClearPreference(const std::string& name)
+{
+    std::lock_guard preferenceLock(preferenceUpdateMutex);
+    if (!core::PreferenceStore::Find(name)) return preferenceStore.Clear(name);
+    appSettings defaults;
+    if (!config.LoadSettings(defaults))
+        return {false, "The configured defaults could not be loaded; the preference was kept."};
+    core::PreferenceResult result = preferenceStore.Clear(name);
+    if (!result.succeeded) return result;
+    preferenceStore.Apply(defaults);
+    appSettings updated;
+    {
+        std::lock_guard snapshotLock(preferenceSnapshotMutex);
+        updated = settings;
+    }
+    const std::string lowered = ToLowerCopy(Trim(name));
+    // Restore only the requested comfort setting. Runtime hardware placement and
+    // the currently activated profile must not be replaced by fresh configuration.
+    if (lowered == "speech.enabled") updated.speech.bEnabled = defaults.speech.bEnabled;
+    else if (lowered == "speech.volume") updated.speech.volume = defaults.speech.volume;
+    else if (lowered == "speech.rate") updated.speech.rate = defaults.speech.rate;
+    else if (lowered == "speech.speakgreeting") updated.speech.bSpeakGreeting = defaults.speech.bSpeakGreeting;
+    else if (lowered == "speechrecognition.enabled") updated.speechRecognition.bEnabled = defaults.speechRecognition.bEnabled;
+    else if (lowered == "speechrecognition.handsfree") updated.speechRecognition.bHandsFree = defaults.speechRecognition.bHandsFree;
+    else if (lowered == "bargein.enabled") updated.bargeIn.bEnabled = defaults.bargeIn.bEnabled;
+    else if (lowered == "initiative.enabled") updated.initiative.bEnabled = defaults.initiative.bEnabled;
+    else if (lowered == "initiative.curiosityenabled") updated.initiative.bCuriosityEnabled = defaults.initiative.bCuriosityEnabled;
+    else if (lowered == "initiative.spontaneousspeechenabled") updated.initiative.bSpontaneousSpeechEnabled = defaults.initiative.bSpontaneousSpeechEnabled;
+    else if (lowered == "initiative.speakwhenuseraway") updated.initiative.bSpeakWhenUserAway = defaults.initiative.bSpeakWhenUserAway;
+    else if (lowered == "initiative.autonomouslearningenabled") updated.initiative.bAutonomousLearningEnabled = defaults.initiative.bAutonomousLearningEnabled;
+    else if (lowered == "initiative.maxperhour") updated.initiative.maxUtterancesPerHour = defaults.initiative.maxUtterancesPerHour;
+    else if (lowered == "presence.avatarbridgeenabled") updated.presence.bAvatarBridgeEnabled = defaults.presence.bAvatarBridgeEnabled;
+    else if (lowered == "presence.externaladaptersenabled") updated.presence.bExternalAdaptersEnabled = defaults.presence.bExternalAdaptersEnabled;
+    else if (lowered == "llm.temperature") updated.llm.temperature = defaults.llm.temperature;
+    else if (lowered == "resources.usagesampleseconds") updated.resources.usageSampleSeconds = defaults.resources.usageSampleSeconds;
+    else if (lowered == "resources.voicedevice") updated.resources.voice = defaults.resources.voice;
+    else if (lowered == "conversation.archiveenabled") updated.conversation.bArchiveEnabled = defaults.conversation.bArchiveEnabled;
+    else if (lowered == "responsefilter.aireviewenabled") updated.responseFilter.bAiReviewEnabled = defaults.responseFilter.bAiReviewEnabled;
+    else if (lowered == "activeprofile") updated.activeProfile = defaults.activeProfile;
+    return ApplyPreferenceUpdate(name, std::move(updated), std::move(result));
+}
+
+core::PreferenceResult ReviaSession::ApplyPreferenceUpdate(const std::string& name, appSettings updated, core::PreferenceResult result)
+{
+    initiativeSettings previousInitiative;
+    {
+        std::lock_guard snapshotLock(preferenceSnapshotMutex);
+        previousInitiative = settings.initiative;
+        // Commit before synchronous status events. An observer can perform another
+        // preference update, whose newer settings must survive this update's return.
+        // Profile selection remains owned by the canonical activation operation.
+        updated.activeProfile = settings.activeProfile;
+        settings = updated;
+    }
+    // Applied to the running session where that is safe to do live, so a preference is
+    // not a promise about the next start. Worker startup settings remain next-start.
     const std::string lowered = ToLowerCopy(Trim(name));
     if (lowered == "speech.enabled")
     {
@@ -3457,16 +3489,15 @@ core::PreferenceResult ReviaSession::SetPreference(
         lowered == "initiative.speakwhenuseraway" ||
         lowered == "initiative.autonomouslearningenabled")
     {
-        const bool enabledChanged = settings.initiative.bEnabled != updated.initiative.bEnabled;
-        const bool curiosityWasRunning = settings.initiative.bEnabled &&
-            settings.initiative.bCuriosityEnabled;
+        const bool enabledChanged = previousInitiative.bEnabled != updated.initiative.bEnabled;
+        const bool curiosityWasRunning = previousInitiative.bEnabled &&
+            previousInitiative.bCuriosityEnabled;
         const bool curiosityShouldRun = updated.initiative.bEnabled &&
             updated.initiative.bCuriosityEnabled;
         if (started.load() && curiosityWasRunning)
         {
             StopCuriosityLoop();
         }
-        settings.initiative = updated.initiative;
         initiativeController.UpdateSettings(settings.initiative);
         conversationStarter.UpdateSettings(settings.initiative);
         if (enabledChanged && started.load())
@@ -3487,7 +3518,6 @@ core::PreferenceResult ReviaSession::SetPreference(
     }
     else if (lowered == "resources.usagesampleseconds")
     {
-        settings.resources.usageSampleSeconds = updated.resources.usageSampleSeconds;
         if (started.load())
         {
             resourceMonitor.Stop();
@@ -3496,7 +3526,6 @@ core::PreferenceResult ReviaSession::SetPreference(
     }
     else if (lowered == "responsefilter.aireviewenabled")
     {
-        settings.responseFilter = updated.responseFilter;
         responseAiReviewEnabled.store(updated.responseFilter.bAiReviewEnabled);
         PublishComponent(
             "Response filters",
@@ -3509,7 +3538,6 @@ core::PreferenceResult ReviaSession::SetPreference(
         lowered == "presence.externaladaptersenabled")
     {
         StopExternalAdapterLoop();
-        settings.presence = updated.presence;
         presenceRuntime.Start(
             settings.presence,
             [this](const presence::PresenceNotice& notice)
@@ -3527,20 +3555,18 @@ core::PreferenceResult ReviaSession::SetPreference(
     {
         result.message += " It takes effect the next time Revia starts.";
     }
-    // activeProfile in the preference store is a next-start selection. Only the
-    // canonical activation operation can change the running profile and its owners.
-    updated.activeProfile = settings.activeProfile;
-    settings = updated;
     return result;
 }
 
 std::string ReviaSession::VoiceDevicePreference() const
 {
+    std::lock_guard snapshotLock(preferenceSnapshotMutex);
     return settings.resources.voice;
 }
 
 UserPreferenceSnapshot ReviaSession::UserPreferences() const
 {
+    std::lock_guard snapshotLock(preferenceSnapshotMutex);
     UserPreferenceSnapshot snapshot;
     snapshot.speechEnabled = settings.speech.bEnabled;
     snapshot.bargeInEnabled = settings.bargeIn.bEnabled;
@@ -3572,16 +3598,7 @@ const content::WorkingDocument& ReviaSession::Document() const
     return documentWorkshop.Document();
 }
 
-// The five entry points below now compose rather than implement.
-//
-// Each one hands the workshop the request and applies whatever came back. The session
-// keeps what is genuinely its own -- whether the runtime state actually moves, what the
-// activity panel is told, what reaches the event bus -- and no longer knows how a draft
-// is written or how a diagram is validated.
-//
-// `ApplyTurn` is the seam. It is the only place a workshop event becomes a session
-// effect, which means the rule "a subsystem describes, the session decides" is enforced
-// in one readable function instead of by every caller remembering it.
+// Applies turn outcomes to session state and publishes confirmed events.
 SessionResult ReviaSession::ApplyTurn(TurnOutcome outcome)
 {
     for (const TurnEvent& event : outcome.events)
@@ -3608,9 +3625,7 @@ SessionResult ReviaSession::ComposeDocument(const std::string& request)
     return ApplyTurn(documentWorkshop.ComposeDocument(request));
 }
 
-SessionResult ReviaSession::ReviseDocumentBlock(
-    const std::string& reference,
-    const std::string& instruction)
+SessionResult ReviaSession::ReviseDocumentBlock(const std::string& reference, const std::string& instruction)
 {
     return ApplyTurn(documentWorkshop.ReviseDocumentBlock(reference, instruction));
 }
@@ -3635,8 +3650,7 @@ SessionResult ReviaSession::DrawDiagram(const std::string& request)
     return ApplyTurn(documentWorkshop.DrawDiagram(request));
 }
 
-std::vector<evaluation::EvaluationCase> ReviaSession::LoadEvaluationCorpus(
-    std::string& outSource)
+std::vector<evaluation::EvaluationCase> ReviaSession::LoadEvaluationCorpus(std::string& outSource)
 {
     const std::filesystem::path corpusPath = "RuntimeData/Evaluations/corpus.json";
     std::vector<evaluation::EvaluationCase> cases;
@@ -3663,8 +3677,7 @@ std::vector<evaluation::EvaluationCase> ReviaSession::LoadEvaluationCorpus(
     return evaluation::ConversationEvaluator::DefaultCorpus();
 }
 
-evaluation::EvaluationReport ReviaSession::RunConversationEvaluation(
-    const std::vector<evaluation::EvaluationCase>& cases,
+evaluation::EvaluationReport ReviaSession::RunConversationEvaluation(const std::vector<evaluation::EvaluationCase>& cases,
     std::stop_token stopToken)
 {
     std::lock_guard operationLock(operationMutex);
@@ -3678,8 +3691,7 @@ evaluation::EvaluationReport ReviaSession::LastConversationEvaluation() const
     return lastEvaluation;
 }
 
-evaluation::EvaluationReport ReviaSession::RunConversationEvaluationUnlocked(
-    const std::vector<evaluation::EvaluationCase>& cases,
+evaluation::EvaluationReport ReviaSession::RunConversationEvaluationUnlocked(const std::vector<evaluation::EvaluationCase>& cases,
     std::stop_token stopToken)
 {
     if (!llmAvailable ||
@@ -3799,14 +3811,7 @@ void ReviaSession::ReportVoiceBackend(const speech::VoiceOperationResult& prepar
         requestedPredictorGraph && settings.speech.bQwenTalkerGraph;
     const bool installed = prepared.lowLatencyInstalled;
 
-    // What is being reported is the resolved state, and the honest version of it has
-    // two parts. Whether the module installed is known now, because loading the clone
-    // model is what installs it. Whether a graph is replaying is NOT known now: capture
-    // is deferred to the first eligible phrase and can still fail there. So this line
-    // says what was asked for and what loaded, and SpeechService checks the first real
-    // phrase against it. A single line claiming an active graph at startup would be a
-    // claim about something that has not happened yet -- which is precisely how the
-    // 2026-09-02 session ran 116 requests on stock generation without ever saying so.
+    // Graph capture is deferred to an eligible phrase. Startup reports requested options and loaded modules.
     const auto yesNo = [](const bool value) { return value ? "yes" : "no"; };
     const std::string resolved =
         std::string("[Voice] low_latency_phrase=") + yesNo(requestedLowLatency && installed) +
@@ -3928,9 +3933,7 @@ void ReviaSession::StopVoiceWarmup()
     voiceWarmupWorker.join();
 }
 
-SessionResult ReviaSession::Submit(
-    const std::string& input,
-    const agents::InputSource source)
+SessionResult ReviaSession::Submit(const std::string& input, const agents::InputSource source)
 {
     if (auto guest = webGuestRuntime.load()) guest->Preempt();
     SessionResult result;
@@ -4002,7 +4005,7 @@ SessionResult ReviaSession::Submit(
         activeOperation = activeStopSource;
     }
     activeOperation.request_stop();
-    actionRuntime.CancelActiveInternet();
+    actionRuntime.CancelActiveInternet(HasRunningTask());
     speechService.StopSpeaking();
     curiosityCondition.notify_all();
     if (conversational)
@@ -4065,14 +4068,7 @@ void ReviaSession::OnRecognitionEvent(const speech::RecognitionEvent& recognitio
     event.detail = recognitionEvent.automatic ? "hands-free" : "manual";
     eventBus.Publish(std::move(event));
 
-    // The stages of one capture, in the log, where a failure is still readable
-    // tomorrow. Events on the bus reach the shell and are gone; a microphone
-    // that could not open left nothing behind at all, which is most of why
-    // "Listen does nothing" was so hard to pin down.
-    //
-    // The transcript's LENGTH, never its text. What was said belongs in the
-    // conversation, not in a diagnostic log, and the length is what answers
-    // "did whisper.cpp produce anything".
+    // Log capture stages and transcript length for diagnostics; never log transcript text.
     const std::string mode =
         recognitionEvent.automatic ? "hands-free" : "manual";
     if (recognitionEvent.phase == "Error" ||
@@ -4623,8 +4619,7 @@ void ReviaSession::SetConfirmationHandler(ConfirmationHandler handler)
     confirmationHandler = std::move(handler);
 }
 
-void ReviaSession::SetDesktopApprovalHandler(
-    revia::policy::DesktopApprovalGate::Handler handler)
+void ReviaSession::SetDesktopApprovalHandler(revia::policy::DesktopApprovalGate::Handler handler)
 {
     actionRuntime.SetDesktopApprovalHandler(std::move(handler));
 }
@@ -4647,6 +4642,12 @@ bool ReviaSession::IsStarted() const
 bool ReviaSession::IsBusy() const
 {
     return busy.load();
+}
+
+bool ReviaSession::HasRunningTask() const
+{
+    std::lock_guard lock(taskMutex);
+    return activeTask.has_value();
 }
 
 bool ReviaSession::IsSpeechEnabled() const
@@ -4742,9 +4743,7 @@ bool ReviaSession::ShouldSpeakOnCurrentChannel() const
     return CurrentChannelPolicy().speak;
 }
 
-void ReviaSession::SetOutputChannel(
-    const outputChannel channel,
-    const std::string& applicationName)
+void ReviaSession::SetOutputChannel(const outputChannel channel, const std::string& applicationName)
 {
     {
         std::lock_guard lock(channelMutex);
@@ -4864,7 +4863,10 @@ bool ReviaSession::IsBargeInEnabled() const
 
 void ReviaSession::SetHandsFreeEnabled(const bool enabled)
 {
-    settings.speechRecognition.bHandsFree = enabled;
+    {
+        std::lock_guard snapshotLock(preferenceSnapshotMutex);
+        settings.speechRecognition.bHandsFree = enabled;
+    }
     speechRecognitionService.SetHandsFreeEnabled(enabled);
     PublishComponent(
         "Microphone", enabled ? "HandsFree" : "Ready",
@@ -4922,9 +4924,7 @@ void ReviaSession::SetMicrophoneDevice(const std::string& deviceName)
         (deviceName.empty() ? std::string("Default") : deviceName));
 }
 
-speech::MicrophoneTestResult ReviaSession::TestMicrophone(
-    const int seconds,
-    const bool transcribe)
+speech::MicrophoneTestResult ReviaSession::TestMicrophone(const int seconds, const bool transcribe)
 {
     // Speaking would be captured by the test, and a test that records Revia's own
     // voice answers a different question than the one asked.
@@ -5038,9 +5038,7 @@ std::vector<vision::CameraDescriptor> ReviaSession::Cameras() const
     return cameraCaptureService.EnumerateCameras();
 }
 
-vision::CameraFrame ReviaSession::CaptureCameraFrame(
-    const bool autonomous,
-    const vision::CameraSelection& requested)
+vision::CameraFrame ReviaSession::CaptureCameraFrame(const bool autonomous, const vision::CameraSelection& requested)
 {
     vision::CameraFrame refused;
     const actions::CapabilitySettings capabilities = actionRuntime.Settings();
@@ -5551,8 +5549,7 @@ actions::CapabilitySettings ReviaSession::Capabilities() const
     return actionRuntime.Settings();
 }
 
-actions::windows::ApplicationControlInventory
-ReviaSession::DiscoverForegroundApplicationControls() const
+actions::windows::ApplicationControlInventory ReviaSession::DiscoverForegroundApplicationControls() const
 {
     return applicationControlDiscovery.InspectForeground();
 }
@@ -5583,9 +5580,7 @@ CapabilityUpdateResult ReviaSession::RemoveApprovedApplication(const std::string
     return result;
 }
 
-CapabilityUpdateResult ReviaSession::AddApprovedControl(
-    const std::string& executable,
-    const std::string& control)
+CapabilityUpdateResult ReviaSession::AddApprovedControl(const std::string& executable, const std::string& control)
 {
     std::string error;
     CapabilityUpdateResult result;
@@ -5598,9 +5593,7 @@ CapabilityUpdateResult ReviaSession::AddApprovedControl(
     return result;
 }
 
-CapabilityUpdateResult ReviaSession::RemoveApprovedControl(
-    const std::string& executable,
-    const std::string& control)
+CapabilityUpdateResult ReviaSession::RemoveApprovedControl(const std::string& executable, const std::string& control)
 {
     std::string error;
     CapabilityUpdateResult result;
@@ -5613,9 +5606,7 @@ CapabilityUpdateResult ReviaSession::RemoveApprovedControl(
     return result;
 }
 
-CapabilityUpdateResult ReviaSession::SetInternetAccess(
-    const bool enabled,
-    const bool automaticLookup)
+CapabilityUpdateResult ReviaSession::SetInternetAccess(const bool enabled, const bool automaticLookup)
 {
     std::string error;
     CapabilityUpdateResult result;
@@ -5633,9 +5624,7 @@ CapabilityUpdateResult ReviaSession::SetInternetAccess(
     return result;
 }
 
-CapabilityUpdateResult ReviaSession::SetCameraAccess(
-    const bool enabled,
-    const bool autonomousCapture)
+CapabilityUpdateResult ReviaSession::SetCameraAccess(const bool enabled, const bool autonomousCapture)
 {
     CapabilityUpdateResult result;
     std::string error;
@@ -5654,15 +5643,9 @@ CapabilityUpdateResult ReviaSession::SetCameraAccess(
     return result;
 }
 
-CapabilityUpdateResult ReviaSession::SetDesktopControl(
-    const bool pointer,
-    const bool keyboard,
-    const bool applicationLaunch,
-    const bool rawCoordinates,
-    const bool visualTargeting,
-    const bool autonomous,
-    const actions::CapabilitySettings::DesktopControl::InputScope scope,
-    const bool allowCommandSurfaces)
+CapabilityUpdateResult ReviaSession::SetDesktopControl(const bool pointer, const bool keyboard, const bool applicationLaunch,
+    const bool rawCoordinates, const bool visualTargeting, const bool autonomous,
+    const actions::CapabilitySettings::DesktopControl::InputScope scope, const bool allowCommandSurfaces)
 {
     CapabilityUpdateResult result;
     std::string error;
@@ -5788,9 +5771,7 @@ std::string ReviaSession::DesktopControlStatus() const
     return stream.str();
 }
 
-CapabilityUpdateResult ReviaSession::SetInternetBrowser(
-    const bool visibleBrowser,
-    const bool autonomousResearch)
+CapabilityUpdateResult ReviaSession::SetInternetBrowser(const bool visibleBrowser, const bool autonomousResearch)
 {
     CapabilityUpdateResult result;
     std::string error;
@@ -5830,11 +5811,8 @@ speech::VoiceStudioSnapshot ReviaSession::VoiceStudio() const
     return speechService.VoiceStudio();
 }
 
-speech::VoiceOperationResult ReviaSession::CreateVoicePreset(
-    const std::string& name,
-    const std::string& description,
-    const std::string& referenceText,
-    const std::string& language)
+speech::VoiceOperationResult ReviaSession::CreateVoicePreset(const std::string& name,
+    const std::string& description, const std::string& referenceText, const std::string& language)
 {
     std::lock_guard lock(voiceStudioMutex);
     const auto startedAt = std::chrono::steady_clock::now();
@@ -5853,8 +5831,7 @@ speech::VoiceOperationResult ReviaSession::CreateVoicePreset(
     return result;
 }
 
-speech::VoiceOperationResult ReviaSession::RenderVoiceBank(
-    const std::string& presetId)
+speech::VoiceOperationResult ReviaSession::RenderVoiceBank(const std::string& presetId)
 {
     std::lock_guard lock(voiceStudioMutex);
     const auto startedAt = std::chrono::steady_clock::now();
@@ -5870,9 +5847,7 @@ speech::VoiceOperationResult ReviaSession::RenderVoiceBank(
     return result;
 }
 
-speech::VoiceOperationResult ReviaSession::PreviewVoice(
-    const std::string& presetId,
-    const std::string& text)
+speech::VoiceOperationResult ReviaSession::PreviewVoice(const std::string& presetId, const std::string& text)
 {
     std::lock_guard lock(voiceStudioMutex);
     const auto startedAt = std::chrono::steady_clock::now();
@@ -5888,9 +5863,7 @@ speech::VoiceOperationResult ReviaSession::PreviewVoice(
     return result;
 }
 
-speech::VoiceOperationResult ReviaSession::AssignVoice(
-    const std::string& profileId,
-    const std::string& presetId)
+speech::VoiceOperationResult ReviaSession::AssignVoice(const std::string& profileId, const std::string& presetId)
 {
     std::lock_guard lock(voiceStudioMutex);
     speech::VoiceOperationResult result = speechService.AssignVoice(profileId, presetId);
@@ -5925,11 +5898,8 @@ std::string ReviaSession::ResolveLocalSpeaker(const std::string& input)
     return resolved;
 }
 
-void ReviaSession::RecordRelationshipEvidence(
-    const std::string& entityId,
-    const std::string& userInput,
-    const std::string& reply,
-    const bool succeeded)
+void ReviaSession::RecordRelationshipEvidence(const std::string& entityId,
+    const std::string& userInput, const std::string& reply, const bool succeeded)
 {
     if (entityId.empty() || userInput.empty())
     {
@@ -6174,8 +6144,7 @@ initiative::AttentionContext ReviaSession::SampleAttention() const
     return desktop;
 }
 
-initiative::AttentionContext ReviaSession::AwaitInputPause(
-    const std::stop_token stopToken, const std::uint64_t inputGeneration) const
+initiative::AttentionContext ReviaSession::AwaitInputPause(const std::stop_token stopToken, const std::uint64_t inputGeneration) const
 {
     constexpr auto LongestWait = std::chrono::seconds{30};
     const auto gap = std::chrono::seconds(std::max(1, settings.initiative.quietInputSeconds));
@@ -6226,10 +6195,8 @@ bool ReviaSession::ActivityWasInterrupted(const std::string& activityId) const
         runningActivity->status == autonomy::ActivityStatus::Interrupted;
 }
 
-autonomy::ActivityOutcome ReviaSession::ExecuteThink(
-    const autonomy::Activity& activity,
-    const autonomy::ActivityDecision& decision,
-    const std::stop_token stopToken)
+autonomy::ActivityOutcome ReviaSession::ExecuteThink(const autonomy::Activity& activity,
+    const autonomy::ActivityDecision& decision, const std::stop_token stopToken)
 {
     autonomy::ActivityOutcome outcome;
     if (!llmAvailable)
@@ -6342,10 +6309,8 @@ autonomy::ActivityOutcome ReviaSession::ExecuteThink(
     return outcome;
 }
 
-autonomy::ActivityOutcome ReviaSession::ExecuteObserve(
-    const autonomy::Activity& activity,
-    const autonomy::ActivityDecision& decision,
-    const std::stop_token stopToken)
+autonomy::ActivityOutcome ReviaSession::ExecuteObserve(const autonomy::Activity& activity,
+    const autonomy::ActivityDecision& decision, const std::stop_token stopToken)
 {
     autonomy::ActivityOutcome outcome;
     if (!settings.perception.bEnabled)
@@ -6408,9 +6373,7 @@ autonomy::ActivityOutcome ReviaSession::ExecuteObserve(
     return outcome;
 }
 
-autonomy::ActivityOutcome ReviaSession::ExecuteResearch(
-    const autonomy::Activity& activity,
-    const autonomy::ActivityDecision& decision)
+autonomy::ActivityOutcome ReviaSession::ExecuteResearch(const autonomy::Activity& activity, const autonomy::ActivityDecision& decision)
 {
     autonomy::ActivityOutcome outcome;
     const actions::CapabilitySettings::InternetAccess internet =
@@ -6549,8 +6512,7 @@ autonomy::ActivityOutcome ReviaSession::ExecuteResearch(
     return outcome;
 }
 
-autonomy::ActivityOutcome ReviaSession::ExecuteOrganizeMemory(
-    const autonomy::Activity& activity,
+autonomy::ActivityOutcome ReviaSession::ExecuteOrganizeMemory(const autonomy::Activity& activity,
     const autonomy::ActivityDecision& decision)
 {
     autonomy::ActivityOutcome outcome;
@@ -6570,14 +6532,7 @@ autonomy::ActivityOutcome ReviaSession::ExecuteOrganizeMemory(
         return outcome;
     }
 
-    // Bounded housekeeping, and deliberately additive.
-    //
-    // Nothing here deletes or rewrites a durable memory. The store has no update or
-    // delete API by design, and conversation history is a separate system with its own
-    // retention rules -- a background activity that could quietly remove things Revia
-    // was told is a much worse failure than one that occasionally records a link that
-    // turns out not to matter. What this does is find memories that keep landing near
-    // each other and record the connection, which is the part that makes recall better.
+    // Housekeeping adds links between memories without deleting or rewriting them.
     std::size_t examined = 0;
     std::size_t connectionsFound = 0;
     std::string strongestPair;
@@ -6642,10 +6597,8 @@ autonomy::ActivityOutcome ReviaSession::ExecuteOrganizeMemory(
     return outcome;
 }
 
-autonomy::ActivityOutcome ReviaSession::ExecuteCreate(
-    const autonomy::Activity& activity,
-    const autonomy::ActivityDecision& decision,
-    const std::stop_token stopToken)
+autonomy::ActivityOutcome ReviaSession::ExecuteCreate(const autonomy::Activity& activity,
+    const autonomy::ActivityDecision& decision, const std::stop_token stopToken)
 {
     autonomy::ActivityOutcome outcome;
     if (!llmAvailable)
@@ -6743,9 +6696,7 @@ autonomy::ActivityOutcome ReviaSession::ExecuteCreate(
     return outcome;
 }
 
-autonomy::ActivityOutcome ReviaSession::ExecuteSpeak(
-    const autonomy::Activity& activity,
-    const autonomy::ActivityDecision& decision)
+autonomy::ActivityOutcome ReviaSession::ExecuteSpeak(const autonomy::Activity& activity, const autonomy::ActivityDecision& decision)
 {
     autonomy::ActivityOutcome outcome;
     if (!settings.initiative.bSpontaneousSpeechEnabled)
@@ -6865,10 +6816,8 @@ autonomy::ActivityOutcome ReviaSession::ExecuteSpeak(
     return outcome;
 }
 
-autonomy::ActivityOutcome ReviaSession::ExecuteActivity(
-    const autonomy::Activity& activity,
-    const autonomy::ActivityDecision& decision,
-    const std::stop_token stopToken)
+autonomy::ActivityOutcome ReviaSession::ExecuteActivity(const autonomy::Activity& activity,
+    const autonomy::ActivityDecision& decision, const std::stop_token stopToken)
 {
     switch (decision.type)
     {
@@ -6983,9 +6932,8 @@ void ReviaSession::ConsiderAutonomousActivity(const std::string& triggerReason)
     RunAutonomousActivity(decision, triggerReason);
 }
 
-void ReviaSession::RunAutonomousActivity(
-    const autonomy::ActivityDecision& decision, const std::string& triggerReason,
-    const std::stop_token stopToken)
+void ReviaSession::RunAutonomousActivity(const autonomy::ActivityDecision& decision,
+    const std::string& triggerReason, const std::stop_token stopToken)
 {
     if (!started.load() || busy.load() || stopToken.stop_requested() ||
         !CurrentLoad().allowOptionalBackgroundWork ||
@@ -7134,8 +7082,7 @@ std::vector<identity::DevelopmentChange> ReviaSession::DevelopmentHistory() cons
     return relationships.DevelopmentHistory();
 }
 
-void ReviaSession::RecordPreferenceEvidence(
-    const std::vector<identity::PreferenceObservation>& observations)
+void ReviaSession::RecordPreferenceEvidence(const std::vector<identity::PreferenceObservation>& observations)
 {
     for (const identity::PreferenceObservation& observation : observations)
     {
@@ -7248,9 +7195,7 @@ std::vector<memoryEntry> ReviaSession::Memories() const
     return store.Load();
 }
 
-std::vector<memoryEntry> ReviaSession::SearchMemories(
-    const std::string& query,
-    const std::size_t maxEntries) const
+std::vector<memoryEntry> ReviaSession::SearchMemories(const std::string& query, const std::size_t maxEntries) const
 {
     const longTermMemory store;
     if (query.empty())
@@ -7444,14 +7389,45 @@ void ReviaSession::RefreshMemoryBackfill()
         turnCoordinator.Memory().StopEmbeddingBackfill();
 }
 
+void ReviaSession::PrepareBrain(const intelligence::IntelligenceTier tier, const std::stop_token stopToken, const bool enabled)
+{
+    BrainPreparation& preparation = tier == intelligence::IntelligenceTier::Fast
+        ? fastPreparation : tier == intelligence::IntelligenceTier::Expert
+        ? expertPreparation : mainPreparation;
+    const auto preparationStarted = std::chrono::steady_clock::now();
+    if (enabled && !stopToken.stop_requested() && !preparation.attempted.exchange(true))
+    {
+        std::string error;
+        const bool succeeded = tier == intelligence::IntelligenceTier::Fast
+            ? router.WarmUpFast(stopToken, error)
+            : tier == intelligence::IntelligenceTier::Expert
+                ? router.WarmUpExpert(stopToken, error)
+                : router.WarmUpLLM(stopToken, error);
+        // Cancellation must not certify a graph or consume the lifetime's attempt.
+        preparation.succeeded.store(succeeded && !stopToken.stop_requested());
+        if (stopToken.stop_requested()) preparation.attempted.store(false);
+        else if (succeeded)
+            appLogger.Timing("language model warmup", {{
+                intelligence::ToString(tier) + "_graph_warmup",
+                ElapsedMilliseconds(preparationStarted), true}});
+        else appLogger.Warning(error);
+    }
+    router.SetTierResidency(tier, true, preparation.succeeded.load(),
+        ElapsedMilliseconds(preparationStarted), "Endpoint is available.");
+}
+
 bool ReviaSession::EnsureLLMAvailable(const std::stop_token stopToken)
 {
     const healthOutput initialHealth = router.CheckLLMHealth();
     if (initialHealth.bIsAvailable)
     {
         appLogger.Log("LLM backend is available." + BackendCapacity(initialHealth));
+        PrepareBrain(intelligence::IntelligenceTier::Main, stopToken, true);
         return true;
     }
+    mainPreparation.Reset();
+    router.SetTierResidency(intelligence::IntelligenceTier::Main, false, false, 0,
+        initialHealth.reason);
     if (initialHealth.status == systemStatus::Yellow)
     {
         appLogger.Warning(initialHealth.reason);
@@ -7487,23 +7463,9 @@ bool ReviaSession::EnsureLLMAvailable(const std::stop_token stopToken)
             appLogger.Log(
                 "llama.cpp started with automatic hardware fitting." +
                 BackendCapacity(readyHealth));
-            const auto warmupStarted = std::chrono::steady_clock::now();
             appLogger.Log(
                 "Preparing the first-response graph before the language model is marked ready...");
-            std::string warmupError;
-            if (router.WarmUpLLM(stopToken, warmupError))
-            {
-                appLogger.Timing("language model warmup", {{
-                    "llama_chat_graph_warmup",
-                    ElapsedMilliseconds(warmupStarted),
-                    true}});
-            }
-            else if (!stopToken.stop_requested())
-            {
-                // A healthy backend is still usable. Warmup is an optimization, so a
-                // transient failure must not turn it into an availability failure.
-                appLogger.Warning(warmupError);
-            }
+            PrepareBrain(intelligence::IntelligenceTier::Main, stopToken, true);
             return true;
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
@@ -7519,7 +7481,14 @@ bool ReviaSession::EnsureLLMAvailable(const std::stop_token stopToken)
 bool ReviaSession::EnsureFastBrainAvailable(const std::stop_token stopToken)
 {
     healthOutput health = router.CheckFastHealth();
-    if (health.bIsAvailable) return true;
+    if (health.bIsAvailable)
+    {
+        PrepareBrain(intelligence::IntelligenceTier::Fast, stopToken,
+            settings.intelligence.fast.bWarmAtStartup);
+        return true;
+    }
+    fastPreparation.Reset();
+    router.SetTierResidency(intelligence::IntelligenceTier::Fast, false, false, 0, health.reason);
 
     std::string launchError;
     appLogger.Log("Fast brain is offline. Starting Qwen3.5 0.8B on CPU...");
@@ -7542,15 +7511,8 @@ bool ReviaSession::EnsureFastBrainAvailable(const std::stop_token stopToken)
         health = router.CheckFastHealth();
         if (health.bIsAvailable)
         {
-            if (settings.intelligence.fast.bWarmAtStartup)
-            {
-                std::string warmupError;
-                const auto startedAt = std::chrono::steady_clock::now();
-                if (router.WarmUpFast(stopToken, warmupError))
-                    appLogger.Timing("fast brain warmup", {{
-                        "qwen_0_8b_warmup", ElapsedMilliseconds(startedAt), true}});
-                else if (!stopToken.stop_requested()) appLogger.Warning(warmupError);
-            }
+            PrepareBrain(intelligence::IntelligenceTier::Fast, stopToken,
+                settings.intelligence.fast.bWarmAtStartup);
             return true;
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(250));
@@ -7563,7 +7525,14 @@ bool ReviaSession::EnsureFastBrainAvailable(const std::stop_token stopToken)
 bool ReviaSession::EnsureExpertBrainAvailable(const std::stop_token stopToken)
 {
     healthOutput health = router.CheckExpertHealth();
-    if (health.bIsAvailable) return true;
+    if (health.bIsAvailable)
+    {
+        PrepareBrain(intelligence::IntelligenceTier::Expert, stopToken,
+            settings.intelligence.expert.bWarmAtStartup);
+        return true;
+    }
+    expertPreparation.Reset();
+    router.SetTierResidency(intelligence::IntelligenceTier::Expert, false, false, 0, health.reason);
 
     std::string launchError;
     appLogger.Log("Expert brain is offline. Starting Qwen3-VL 8B with safe fitting...");
@@ -7586,15 +7555,8 @@ bool ReviaSession::EnsureExpertBrainAvailable(const std::stop_token stopToken)
         health = router.CheckExpertHealth();
         if (health.bIsAvailable)
         {
-            if (settings.intelligence.expert.bWarmAtStartup)
-            {
-                std::string warmupError;
-                const auto startedAt = std::chrono::steady_clock::now();
-                if (router.WarmUpExpert(stopToken, warmupError))
-                    appLogger.Timing("expert brain warmup", {{
-                        "qwen_vl_8b_warmup", ElapsedMilliseconds(startedAt), true}});
-                else if (!stopToken.stop_requested()) appLogger.Warning(warmupError);
-            }
+            PrepareBrain(intelligence::IntelligenceTier::Expert, stopToken,
+                settings.intelligence.expert.bWarmAtStartup);
             return true;
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
@@ -7698,8 +7660,7 @@ goals::Goal ReviaSession::RunGoalUnlocked(goals::Goal goal)
     return finished;
 }
 
-goals::Goal ReviaSession::ExecuteGoal(
-    goals::Goal goal, const std::stop_token stopToken, const bool reportState)
+goals::Goal ReviaSession::ExecuteGoal(goals::Goal goal, const std::stop_token stopToken, const bool reportState)
 {
     if (!actionRuntime.IsInitialized())
     {
@@ -7858,14 +7819,8 @@ goals::Goal ReviaSession::ExecuteOperate(goals::Goal goal, const std::string& re
     const auto startedAt = std::chrono::steady_clock::now();
     if (reportState) SetState(RuntimeState::Acting, "Working on: " + goal.title);
 
-    // The task boundary. Providers, the subgoal and the payload vault all belong to one
-    // run: starting here means a mode change cannot take effect mid-goal, and ending
-    // below means the user's words are dropped whatever the outcome, including a
-    // cancellation or a throw.
-    // Read out of the request itself, by a plain parse, before a model is asked
-    // anything at all. A model asked to extract the user's exact words is a model that
-    // has been shown them and may hand back an approximation -- which is the failure
-    // this whole arrangement exists to prevent, reintroduced one layer earlier.
+    // Freeze provider mode for the run; task cleanup discards captured content on every exit.
+    // Extract exact user text before involving the model.
     computerTasks.BeginTask(goal.id,
         computer::RequestOrigin::UserDirected,
         computer::ExtractTaskContent(request));
@@ -7902,8 +7857,7 @@ goals::Goal ReviaSession::ResumeGoalUnlocked(const std::string& goalId)
     return finished;
 }
 
-goals::Goal ReviaSession::ExecuteResume(
-    const std::string& goalId, const std::stop_token stopToken, const bool reportState)
+goals::Goal ReviaSession::ExecuteResume(const std::string& goalId, const std::stop_token stopToken, const bool reportState)
 {
     goals::Goal goal;
     goal.id = goalId;
@@ -7921,10 +7875,7 @@ goals::Goal ReviaSession::ExecuteResume(
     return FinishGoalRun(goalRunner.Resume(goalId, stopToken), startedAt, reportState);
 }
 
-goals::Goal ReviaSession::FinishGoalRun(
-    goals::Goal finished,
-    const std::chrono::steady_clock::time_point startedAt,
-    const bool reportState)
+goals::Goal ReviaSession::FinishGoalRun(goals::Goal finished, const std::chrono::steady_clock::time_point startedAt, const bool reportState)
 {
     appLogger.Timing("goal", {
         {"goal_actions", static_cast<double>(finished.spend.actions)},
@@ -8035,8 +7986,7 @@ std::stop_token ReviaSession::GoalToken() const
     return CurrentOperationToken();
 }
 
-bool ReviaSession::LaunchTask(const std::string& title,
-    std::function<goals::Goal(std::stop_token)> execute, std::string& outMessage)
+bool ReviaSession::LaunchTask(const std::string& title, std::function<goals::Goal(std::stop_token)> execute, std::string& outMessage)
 {
     std::lock_guard launching(taskLaunchMutex);
     std::jthread previous;
@@ -8148,6 +8098,9 @@ bool ReviaSession::CancelTask(const std::string& because)
         title = activeTask->title;
     }
     source.request_stop();
+    // The synchronous browser wait has its own cancellation bridge. Requesting the
+    // task token alone would leave that lookup running until its HTTP timeout.
+    actionRuntime.CancelActiveInternet();
     appLogger.Log("Background task '" + title + "' cancelled: " + because);
     return true;
 }
@@ -8212,24 +8165,29 @@ bool ReviaSession::TryHandleReminderInput(const std::string& input, SessionResul
         }
         else if (argument == "clear")
         {
-            const std::size_t cleared = reminders.Clear();
-            result.text = cleared == 0 ? "No reminders to clear."
+            std::string saveError;
+            const std::size_t cleared = reminders.Clear(&saveError);
+            result.succeeded = saveError.empty();
+            result.text = !saveError.empty() ? saveError : cleared == 0 ? "No reminders to clear."
                 : "Cleared " + std::to_string(cleared) + (cleared == 1 ? " reminder." : " reminders.");
+            if (!saveError.empty()) result.reason = saveError;
         }
         else if (argument.rfind("cancel ", 0) == 0)
         {
             const std::string number = Trim(argument.substr(7));
             std::optional<planning::Reminder> removed;
+            std::string saveError;
             if (!number.empty() && number.size() < 4 &&
                 std::all_of(number.begin(), number.end(),
                     [](const unsigned char digit) { return std::isdigit(digit) != 0; }))
             {
-                removed = reminders.Cancel(static_cast<std::size_t>(std::stoul(number)));
+                removed = reminders.Cancel(static_cast<std::size_t>(std::stoul(number)), &saveError);
             }
             result.succeeded = removed.has_value();
-            result.text = removed
+            result.text = !saveError.empty() ? saveError : removed
                 ? "Cancelled: " + planning::Label(removed->request) + "."
                 : "There is no reminder " + number + ". /reminders lists them.";
+            if (!saveError.empty()) result.reason = saveError;
         }
         else
         {
@@ -8284,7 +8242,10 @@ bool ReviaSession::TryHandleReminderInput(const std::string& input, SessionResul
 
 void ReviaSession::DeliverDueReminders(const planning::WallClock::time_point now)
 {
-    for (const planning::Reminder& due : reminders.TakeDue(now))
+    std::string saveError;
+    const auto ready = reminders.TakeDue(now, &saveError);
+    if (!saveError.empty()) appLogger.Warning(saveError);
+    for (const planning::Reminder& due : ready)
     {
         std::string text = planning::Announcement(due.request);
         // Missed while she was closed: still said, and said to be late.
@@ -8685,9 +8646,7 @@ goals::Goal ReviaSession::RehearseGoal(const goals::Goal& goal, std::string& out
     return rehearsed;
 }
 
-void ReviaSession::ResolveVisualTarget(
-    actions::ActionRequest& request,
-    const actions::windows::DesktopObservation& observation)
+void ReviaSession::ResolveVisualTarget(actions::ActionRequest& request, const actions::windows::DesktopObservation& observation)
 {
     // Only pointer actions aim at anything. A keystroke goes wherever focus is, and
     // giving it visual evidence would be claiming an authority it does not use.
@@ -9063,7 +9022,7 @@ bool ReviaSession::TryHandleActionInput(const std::string& input, SessionResult&
     if (input.rfind("/unset ", 0) == 0)
     {
         const core::PreferenceResult update =
-            preferenceStore.Clear(Trim(input.substr(7)));
+            ClearPreference(Trim(input.substr(7)));
         result.succeeded = update.succeeded;
         result.text = update.message;
         result.reason = update.succeeded ? std::string() : update.message;
@@ -10072,22 +10031,13 @@ void ReviaSession::PublishAffect()
     eventBus.Publish(std::move(event));
 }
 
-void ReviaSession::Publish(
-    const RuntimeEventKind kind,
-    const std::string& message,
-    const std::uint64_t turnId) const
+void ReviaSession::Publish(const RuntimeEventKind kind, const std::string& message, const std::uint64_t turnId) const
 {
     eventBus.Publish(RuntimeEvent{kind, state.load(), message, turnId});
 }
 
-void ReviaSession::PublishComponent(
-    const std::string& component,
-    const std::string& phase,
-    const std::string& message,
-    const double elapsedMilliseconds,
-    const int queueDepth,
-    const std::uint64_t turnId,
-    const std::string& resource) const
+void ReviaSession::PublishComponent(const std::string& component, const std::string& phase, const std::string& message,
+    const double elapsedMilliseconds, const int queueDepth, const std::uint64_t turnId, const std::string& resource) const
 {
     RuntimeEvent event;
     event.kind = RuntimeEventKind::ComponentStatus;
@@ -10100,219 +10050,6 @@ void ReviaSession::PublishComponent(
     event.turnId = turnId;
     event.resource = resource;
     eventBus.Publish(std::move(event));
-}
-
-void ReviaSession::PublishResourcePlan() const
-{
-    std::size_t gpuIndex = 0;
-    for (const resources::GpuDevice& gpu : resourcePlan.hardware.gpus)
-    {
-        RuntimeEvent event;
-        event.kind = RuntimeEventKind::ResourceStatus;
-        event.state = state.load();
-        event.component = gpu.backendId.empty()
-            ? "Display GPU " + std::to_string(gpuIndex)
-            : gpu.backendId;
-        event.phase = "GPU";
-        event.resource = gpu.name;
-        event.message = gpu.backendId.empty()
-            ? "Capacity detected through DXGI; backend identity is unavailable."
-            : "Addressable compute device reported by llama.cpp.";
-        event.totalMemoryMiB = gpu.totalMemoryMiB;
-        event.availableMemoryMiB = gpu.freeMemoryMiB;
-        eventBus.Publish(std::move(event));
-        ++gpuIndex;
-    }
-
-    RuntimeEvent cpu;
-    cpu.kind = RuntimeEventKind::ResourceStatus;
-    cpu.state = state.load();
-    cpu.component = "CPU";
-    cpu.phase = "Hardware";
-    cpu.resource = std::to_string(resourcePlan.hardware.logicalProcessors) +
-        " logical processors";
-    cpu.message = std::to_string(settings.resources.reserveLogicalCores) +
-        " processors reserved for Windows/UI; chat/background/STT/voice caps are " +
-        std::to_string(resourcePlan.chatCpuThreads) + "/" +
-        std::to_string(resourcePlan.embeddingCpuThreads) + "/" +
-        std::to_string(resourcePlan.speechRecognitionThreads) + "/" +
-        std::to_string(resourcePlan.voiceCpuThreads) + ".";
-    eventBus.Publish(std::move(cpu));
-
-    RuntimeEvent ram;
-    ram.kind = RuntimeEventKind::ResourceStatus;
-    ram.state = state.load();
-    ram.component = "System RAM";
-    ram.phase = "Hardware";
-    ram.resource = "Windows mmap + bounded llama cache";
-    ram.message = std::to_string(resourcePlan.llamaPromptCacheMiB) +
-        " MiB maximum prompt cache plus " +
-        std::to_string(resourcePlan.sqliteCacheMiB) +
-        " MiB combined SQLite page/mmap ceiling per connection; " +
-        std::to_string(resourcePlan.reservedSystemMemoryMiB) +
-        " MiB kept free for Windows and other applications.";
-    ram.totalMemoryMiB = resourcePlan.hardware.totalSystemMemoryMiB;
-    ram.availableMemoryMiB = resourcePlan.hardware.availableSystemMemoryMiB;
-    ram.allocatedMemoryMiB = static_cast<std::uint64_t>(
-        std::max(0, resourcePlan.llamaPromptCacheMiB + resourcePlan.sqliteCacheMiB));
-    eventBus.Publish(std::move(ram));
-
-    const auto assignment = [this](
-        const std::string& workload,
-        const std::string& resource,
-        const std::string& detail)
-    {
-        RuntimeEvent event;
-        event.kind = RuntimeEventKind::ResourceStatus;
-        event.state = state.load();
-        event.component = workload;
-        event.phase = "Assignment";
-        event.resource = resource;
-        event.message = detail;
-        eventBus.Publish(std::move(event));
-    };
-    assignment(
-        "Chat + vision",
-        resourcePlan.ChatLabel(),
-        resourcePlan.chatSplitMode == "none"
-            ? "Latency-first single-device placement."
-            : "Model capacity fallback using layer split " +
-                resourcePlan.chatTensorSplit + ".");
-    assignment(
-        "Voice generation",
-        resourcePlan.VoiceLabel(),
-        resourcePlan.voiceDevices.size() > 1
-            ? "Independent Qwen3-TTS workers generate sentence fragments ahead; playback remains ordered."
-            : "Long-lived Qwen3-TTS worker generates ahead while playback remains ordered.");
-    assignment(
-        "Speech recognition",
-        resourcePlan.speechRecognitionDevice,
-        "Short whisper.cpp bursts use the secondary device when one is available.");
-    assignment(
-        "Semantic embeddings",
-        resourcePlan.embeddingDevice == "none" ? "CPU" : resourcePlan.embeddingDevice,
-        "Independent retrieval server; CPU is preferred to protect interactive GPU latency.");
-}
-
-void ReviaSession::StartResourceMonitor()
-{
-    if (settings.resources.usageSampleSeconds <= 0)
-    {
-        appLogger.Log("Live resource sampling is disabled; the Resources tab will show "
-            "the startup plan only.");
-        return;
-    }
-    resourceMonitor.Start(
-        resourcePlan,
-        std::chrono::seconds(settings.resources.usageSampleSeconds),
-        [this](const resources::UsageSnapshot& snapshot)
-        {
-            PublishResourceUsage(snapshot);
-            UpdateResourceLoad(snapshot);
-        });
-}
-
-void ReviaSession::UpdateResourceLoad(const resources::UsageSnapshot& snapshot)
-{
-    const resources::LoadAdjustment assessed = resources::AssessLoad(snapshot);
-    const auto samePolicy = [](const auto& left, const auto& right)
-    {
-        return left.state == right.state &&
-            left.allowOptionalBackgroundWork == right.allowOptionalBackgroundWork &&
-            left.allowOpportunisticVision == right.allowOpportunisticVision;
-    };
-    bool announce = false;
-    bool backgroundRecovered = false;
-    {
-        std::lock_guard loadLock(loadMutex);
-        // Occupancy can stay at 93% while engines become idle. Stabilize admission
-        // changes as well as the capacity label, rather than silently overwriting them.
-        if (samePolicy(assessed, candidateLoad))
-            candidateLoadSamples = std::min(loadSamplesBeforeAdopting, candidateLoadSamples + 1);
-        else
-        {
-            candidateLoad = assessed;
-            candidateLoadSamples = 1;
-        }
-        if (samePolicy(assessed, currentLoad))
-            currentLoad = assessed;
-        else if (candidateLoadSamples >= loadSamplesBeforeAdopting)
-        {
-            backgroundRecovered = !currentLoad.allowOptionalBackgroundWork &&
-                assessed.allowOptionalBackgroundWork;
-            currentLoad = assessed;
-            announce = true;
-        }
-    }
-    if (announce)
-    {
-        PublishComponent("Load", resources::ToString(assessed.state), assessed.reason);
-        const std::string detail = "Load " + resources::ToString(assessed.state) + ": " + assessed.reason;
-        // Admission control is an expected status, not a runtime fault. Actual model
-        // allocation/request failures have their own error events and diagnostics.
-        appLogger.Log(detail);
-    }
-    if (backgroundRecovered && started.load())
-    {
-        // Re-evaluate existing evidence after a deferral. This signal grants no new
-        // evidence, authority, or entitlement to speak; normal attention gates remain.
-        SignalInitiative("resources became available for deferred background work");
-        SignalCuriosity("resources became available for deferred self-directed review");
-    }
-}
-
-void ReviaSession::PublishResourceUsage(const resources::UsageSnapshot& snapshot) const
-{
-    for (const resources::UsageMeter& meter : snapshot.meters)
-    {
-        RuntimeEvent event;
-        event.kind = RuntimeEventKind::ResourceStatus;
-        event.state = state.load();
-        event.component = meter.label;
-        event.phase = "Usage";
-        event.resource = meter.id;
-        event.message = meter.detail;
-        event.usedAmount = meter.used;
-        event.budgetAmount = meter.budget;
-        event.capacityAmount = meter.capacity;
-        switch (meter.unit)
-        {
-            case resources::MeterUnit::Threads: event.usageUnit = "threads"; break;
-            case resources::MeterUnit::Percent: event.usageUnit = "percent"; break;
-            case resources::MeterUnit::Mebibytes: event.usageUnit = "MiB"; break;
-        }
-        event.usageBasis =
-            meter.basis == resources::MeterBasis::Capacity ? "capacity" : "budget";
-        event.usageStatus = meter.Status();
-        event.usageMeasured = meter.measured;
-        eventBus.Publish(std::move(event));
-    }
-}
-
-resources::UsageSnapshot ReviaSession::ResourceUsage() const
-{
-    return resourceMonitor.Latest();
-}
-
-resources::LoadAdjustment ReviaSession::CurrentLoad() const
-{
-    std::lock_guard lock(loadMutex);
-    return currentLoad;
-}
-
-std::string ReviaSession::ResourceUsageStatus() const
-{
-    if (settings.resources.usageSampleSeconds <= 0)
-    {
-        return "Live resource sampling is off (resources.usageSampleSeconds is 0).\n\n" +
-            resourcePlan.Summary();
-    }
-    const resources::UsageSnapshot snapshot = resourceMonitor.Latest();
-    if (!snapshot.measured)
-    {
-        return "No live reading has been taken yet.\n\n" + resourcePlan.Summary();
-    }
-    return snapshot.Detail() + "\n\nPlan: " + resourcePlan.Summary();
 }
 
 } // namespace revia::runtime

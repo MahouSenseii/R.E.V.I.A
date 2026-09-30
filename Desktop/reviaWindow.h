@@ -56,13 +56,9 @@ public:
         Transcribing
     };
 
-    explicit ReviaWindow(
-        bool startRuntime = true,
-        bool buildSystemTray = true,
-        QWidget* parent = nullptr);
+    explicit ReviaWindow(bool startRuntime = true, bool buildSystemTray = true, QWidget* parent = nullptr);
     ~ReviaWindow() override;
-    void RequestShutdown(
-        revia::core::ExitReason reason = revia::core::ExitReason::SmokeTest);
+    void RequestShutdown(revia::core::ExitReason reason = revia::core::ExitReason::SmokeTest);
     bool IsRuntimeStarted() const;
 
 protected:
@@ -72,6 +68,7 @@ protected:
     void resizeEvent(QResizeEvent* event) override;
 
 private:
+    friend struct ReviaWindowStopTests;
     void BuildInterface();
     // Keeps the readable measure fixed as the window grows. Without this every row,
     // field, and table column stretches to the full width of the monitor, which is why
@@ -116,14 +113,8 @@ private:
         const QString& message,
         bool userMessage = false,
         const QString& reasoning = QString());
-    // QTextBrowser supports only a subset of HTML and has no <details>, so collapsing is
-    // done by re-rendering the whole transcript from this model when a link is clicked.
-    // What a transcript entry *is*, carried explicitly.
-    //
-    // Rendering branches on this rather than on the speaker string. Matching a name to
-    // decide how to draw something breaks the moment the assistant is renamed, and it
-    // cannot distinguish two kinds of entry that happen to share a speaker -- which is
-    // exactly the case for the alternating checking/findings blocks below.
+    // Transcript entry kinds drive rendering independently of speaker names.
+    // QTextBrowser collapses sections by rebuilding the transcript when a link is clicked.
     enum class EntryKind
     {
         Message,
@@ -148,12 +139,7 @@ private:
 
     // Appends one of Revia's working entries. `detail` is the supporting evidence, shown
     // only when the user expands it.
-    void AppendWorkEntry(
-        EntryKind kind,
-        const QString& body,
-        const QString& detail,
-        quint64 taskId,
-        int round);
+    void AppendWorkEntry(EntryKind kind, const QString& body, const QString& detail, quint64 taskId, int round);
     // Display only. Turning this off hides the blocks and changes nothing about whether
     // the investigation runs -- enablement lives in the runtime settings, not here.
     bool showWorkSummaries = true;
@@ -171,9 +157,7 @@ private:
         QString message;
         ActivitySeverity severity = ActivitySeverity::Information;
     };
-    void AppendActivity(
-        const QString& message,
-        ActivitySeverity severity = ActivitySeverity::Automatic);
+    void AppendActivity(const QString& message, ActivitySeverity severity = ActivitySeverity::Automatic);
     void AppendComponentActivity(const revia::runtime::RuntimeEvent& event, const QString& message);
     void RenderActivity();
     void UpdateActivitySummary();
@@ -184,8 +168,7 @@ private:
     // one confirms a typed action before policy runs, this one answers an
     // authorization that stopped on the consequence of a control.
     bool ApproveDesktopEffect(const revia::policy::ApprovalPrompt& prompt);
-    revia::actions::ConfirmationChoice ConfirmAction(
-        const revia::actions::ActionRequest& request,
+    revia::actions::ConfirmationChoice ConfirmAction(const revia::actions::ActionRequest& request,
         const revia::actions::PolicyDecision& decision);
     revia::core::QuestionRelay::Post PostToWindow();
     // Refuses every pending approval and closes the one on screen. UI thread only.

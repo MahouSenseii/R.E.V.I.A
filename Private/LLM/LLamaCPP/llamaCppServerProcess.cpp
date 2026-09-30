@@ -1,3 +1,4 @@
+#include "LLM/endpointSettings.h"
 #include "LLM/LLamaCPP/llamaCppServerProcess.h"
 #include "Core/logger.h"
 
@@ -171,9 +172,7 @@ std::uint64_t SystemMemoryMiB()
         : 0;
 }
 
-int AutomaticContextSize(
-    const std::uint64_t videoMemory,
-    const std::uint64_t systemMemory)
+int AutomaticContextSize(const std::uint64_t videoMemory, const std::uint64_t systemMemory)
 {
     int gpuLimit = 4096;
     if (videoMemory >= 23500)
@@ -220,10 +219,8 @@ llamaHardwareMemory DetectLlamaHardwareMemory()
 #endif
 }
 
-llamaHardwarePlan PlanLlamaHardware(
-    const std::uint64_t dedicatedVideoMemoryMiB,
-    const std::uint64_t systemMemoryMiB,
-    const int reservedVramMiB)
+llamaHardwarePlan PlanLlamaHardware(const std::uint64_t dedicatedVideoMemoryMiB,
+    const std::uint64_t systemMemoryMiB, const int reservedVramMiB)
 {
     llamaHardwarePlan plan;
 #ifdef _WIN32
@@ -282,9 +279,7 @@ bool llamaCppServerProcess::Start(const llmSettings& settings, std::string& outE
     return StartInternal(settings, false, "", "", outError);
 }
 
-bool llamaCppServerProcess::StartEmbedding(
-    const embeddingSettings& settings,
-    std::string& outError)
+bool llamaCppServerProcess::StartEmbedding(const embeddingSettings& settings, std::string& outError)
 {
     llmSettings launchSettings;
     launchSettings.host = settings.host;
@@ -309,12 +304,8 @@ bool llamaCppServerProcess::StartEmbedding(
         outError);
 }
 
-bool llamaCppServerProcess::StartInternal(
-    const llmSettings& settings,
-    const bool embeddingMode,
-    const std::string& pooling,
-    const std::string& device,
-    std::string& outError)
+bool llamaCppServerProcess::StartInternal(const llmSettings& settings,
+    const bool embeddingMode, const std::string& pooling, const std::string& device, std::string& outError)
 {
     outError.clear();
 

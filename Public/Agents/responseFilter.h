@@ -25,14 +25,7 @@ struct ResponseFilterContext
     bool screenObservationAvailable = false;
     std::string screenObservation;
 
-    // Whether she has hands at all this turn.
-    //
-    // These exist because the screen rules above were one-directional. There was a rule
-    // for denying sight she has, and none for claiming sight she does not -- so nothing
-    // in the pipeline could contradict "I am looking at the Facebook tab right now" when
-    // no observation had been taken and no action had been dispatched. A model with no
-    // runtime truth about its own eyes and hands will fill that gap with something
-    // plausible, and then defend it, because nothing ever tells it otherwise.
+    // Runtime-confirmed sight and action availability for this turn; model claims grant neither.
     bool desktopStateKnown = false;
     bool desktopPointer = false;
     bool desktopKeyboard = false;
@@ -84,11 +77,8 @@ struct AiFilterDecision
 class ResponseFilter
 {
 public:
-    [[nodiscard]] HardFilterResult ApplyHard(
-        const std::string& userInput,
-        const std::string& candidate,
-        const ResponseFilterContext& context,
-        int maxCharacters) const;
+    [[nodiscard]] HardFilterResult ApplyHard(const std::string& userInput,
+        const std::string& candidate, const ResponseFilterContext& context, int maxCharacters) const;
     [[nodiscard]] AiFilterDecision ParseAiDecision(const std::string& jsonText) const;
 };
 

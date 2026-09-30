@@ -91,9 +91,7 @@ double Area(const vision::ScreenRegion& region)
         : 0.0;
 }
 
-double SpatialAgreement(
-    const vision::ScreenRegion& wanted,
-    const vision::ScreenRegion& candidate)
+double SpatialAgreement(const vision::ScreenRegion& wanted, const vision::ScreenRegion& candidate)
 {
     const vision::ScreenRegion overlap{
         std::max(wanted.left, candidate.left),
@@ -251,10 +249,7 @@ bool SupportsPattern(IUIAutomationElement* element, const PATTERNID patternId)
     return supported;
 }
 
-IUIAutomationElement* FindApplicationWindow(
-    IUIAutomation* automation,
-    const std::string& application,
-    const std::string& windowTitle)
+IUIAutomationElement* FindApplicationWindow(IUIAutomation* automation, const std::string& application, const std::string& windowTitle)
 {
     IUIAutomationElement* root = nullptr;
     IUIAutomationCondition* condition = nullptr;
@@ -302,9 +297,7 @@ IUIAutomationElement* FindApplicationWindow(
 #endif
 }
 
-vision::CandidateScore VisionUiaResolver::ScoreCandidate(
-    const vision::VisionActionIntent& intent,
-    const vision::UiaCandidate& candidate)
+vision::CandidateScore VisionUiaResolver::ScoreCandidate(const vision::VisionActionIntent& intent, const vision::UiaCandidate& candidate)
 {
     vision::CandidateScore score;
     score.spatial = SpatialAgreement(intent.region, candidate.bounds);
@@ -316,12 +309,8 @@ vision::CandidateScore VisionUiaResolver::ScoreCandidate(
     return score;
 }
 
-vision::UiaResolutionResult VisionUiaResolver::SelectBest(
-    const std::string& application,
-    const std::string& windowTitle,
-    const vision::VisionActionIntent& intent,
-    const std::vector<vision::UiaCandidate>& candidates,
-    const VisionResolverSettings& settings)
+vision::UiaResolutionResult VisionUiaResolver::SelectBest(const std::string& application, const std::string& windowTitle,
+    const vision::VisionActionIntent& intent, const std::vector<vision::UiaCandidate>& candidates, const VisionResolverSettings& settings)
 {
     vision::UiaResolutionResult result;
     result.candidatesInspected = static_cast<int>(candidates.size());
@@ -390,11 +379,8 @@ vision::UiaResolutionResult VisionUiaResolver::SelectBest(
     return result;
 }
 
-vision::UiaResolutionResult VisionUiaResolver::Resolve(
-    const std::string& application,
-    const std::string& windowTitle,
-    const vision::VisionActionIntent& intent,
-    const VisionResolverSettings& settings) const
+vision::UiaResolutionResult VisionUiaResolver::Resolve(const std::string& application, const std::string& windowTitle,
+    const vision::VisionActionIntent& intent, const VisionResolverSettings& settings) const
 {
     vision::UiaResolutionResult result;
 #ifdef _WIN32

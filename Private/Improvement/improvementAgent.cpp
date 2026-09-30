@@ -1,3 +1,5 @@
+#include "Improvement/improvementSettings.h"
+#include "LLM/responseTypes.h"
 #include "Improvement/improvementAgent.h"
 #include "Core/utf8.h"
 
@@ -185,8 +187,7 @@ std::string ImprovementAgent::Schema()
         R"("risks","benefit","risk","file","find","replace"]})";
 }
 
-std::string ImprovementAgent::Instructions(
-    const ReviewJob& job, const std::vector<std::string>& lessons)
+std::string ImprovementAgent::Instructions(const ReviewJob& job, const std::vector<std::string>& lessons)
 {
     std::ostringstream text;
     text << "You are Revia, reviewing your own source code: C++20 on Windows, and the Python "
@@ -445,9 +446,7 @@ ReviewOutcome ImprovementAgent::Run(const ReviewJob& job, const std::stop_token 
     return outcome;
 }
 
-void ImprovementAgent::Prove(
-    CodeProposal& proposal, const ReviewJob& job, const std::string& original,
-    const std::stop_token stopToken)
+void ImprovementAgent::Prove(CodeProposal& proposal, const ReviewJob& job, const std::string& original, const std::stop_token stopToken)
 {
     improvementSettings current;
     Dependencies use;

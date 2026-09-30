@@ -21,9 +21,7 @@ std::string Normalize(std::string value)
 }
 }
 
-ReflexResult ReflexRouter::Route(
-    const std::string& input,
-    const ReflexContext& context) const
+ReflexResult ReflexRouter::Route(const std::string& input, const ReflexContext& context) const
 {
     const std::string text = Normalize(input);
     ReflexResult result;

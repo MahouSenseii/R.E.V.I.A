@@ -15,13 +15,7 @@
 namespace revia::identity
 {
 
-// The parts of Revia that must survive a restart.
-//
-// Deliberately not everything. A momentary emotion is not saved, because restoring one
-// would mean she resumes being annoyed about something she can no longer remember. Mood
-// is saved, because a bad afternoon reasonably outlasts a process, and development and
-// relationships are saved because losing them would make every launch a new person with
-// a familiar voice.
+// Persistent mood, development and relationships; momentary emotion is excluded.
 struct IdentitySnapshot
 {
     DevelopmentState development;
@@ -36,19 +30,11 @@ struct IdentitySnapshot
 // dropping them would delete opinions on the next save.
 inline constexpr int IdentitySchemaVersion = 2;
 
-// Loads and saves identity as one versioned JSON document.
-//
-// Atomic on write: a half-written identity file would be worse than an absent one,
-// because the absent one is obviously a first run while the truncated one silently
-// resets whichever traits happened to be past the cut.
-//
-// Everything is keyed by name rather than by position, so reordering an enum or adding
-// a trait cannot reinterpret an existing file as a different personality.
+// Atomic, versioned identity JSON keyed by names; enum reordering cannot reinterpret saved state.
 class IdentityStore
 {
 public:
-    explicit IdentityStore(
-        std::filesystem::path path = "RuntimeData/Identity/identity.json");
+    explicit IdentityStore(std::filesystem::path path = "RuntimeData/Identity/identity.json");
 
     // A missing file is a first run, not a failure: it yields the childlike baseline
     // and reports success, because refusing to start without a prior life would be

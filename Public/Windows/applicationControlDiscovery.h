@@ -31,8 +31,7 @@ struct ApplicationControlInventory
 class ApplicationControlDiscovery
 {
 public:
-    [[nodiscard]] ApplicationControlInventory InspectForeground(
-        int maxControls = 500) const;
+    [[nodiscard]] ApplicationControlInventory InspectForeground(int maxControls = 500) const;
 };
 
 } // namespace revia::actions::windows

@@ -11,22 +11,8 @@
 namespace revia::perception
 {
 
-// When background screen awareness should look, and what it last saw.
-//
-// Extracted from ReviaSession, which owned six members and three methods of this and
-// nothing else in the file touched them. What stayed behind is the *capture*: that work
-// is interleaved with session lifecycle -- it takes the foreground operation lock,
-// yields to a user turn, and restarts the vision backend -- and pulling it out behind a
-// set of callbacks would be a forwarding layer wearing an owner's name.
-//
-// What moved is the part that is genuinely its own: a signal with a version, a debounce
-// with a ceiling, a cancellable attempt, and the cached result with its age. That state
-// machine had no test, because reaching it meant starting a thread and a vision model.
-// It has one now.
-//
-// Thread-safe. The signal arrives on whatever noticed the window change, the wait
-// happens on the awareness worker, and the cached context is read by whichever turn is
-// building a prompt.
+// Thread-safe awareness signal/version, bounded debounce, cancellation and aged context cache.
+// ReviaSession retains capture, foreground-lock admission and vision-backend lifecycle.
 class ScreenAwarenessSchedule
 {
 public:
@@ -52,24 +38,13 @@ public:
     //
     // Returns nothing when the worker was asked to stop, which is the one case a caller
     // must not treat as "time to capture".
-    [[nodiscard]] std::optional<Work> WaitForWork(
-        std::stop_token workerStop,
-        std::chrono::milliseconds refreshInterval,
-        std::uint64_t handledVersion);
+    [[nodiscard]] std::optional<Work> WaitForWork(std::stop_token workerStop,
+        std::chrono::milliseconds refreshInterval, std::uint64_t handledVersion);
 
-    // Wait for the screen to settle after an event, up to a ceiling.
-    //
-    // The ceiling is the point. Editors and terminals change their title continuously,
-    // and a debounce that only waited for quiet would postpone awareness for as long as
-    // somebody kept typing -- which is exactly when it is most wanted.
-    //
-    // Returns the version to treat as handled: a signal arriving during the wait
-    // supersedes the one being settled rather than scheduling a second capture.
-    [[nodiscard]] std::uint64_t Settle(
-        std::stop_token workerStop,
-        std::chrono::milliseconds debounce,
-        std::chrono::milliseconds ceiling,
-        std::uint64_t targetVersion);
+    // Waits for event settling up to a ceiling; returns the newest signal version handled.
+    // Signals during the wait supersede earlier ones rather than scheduling duplicate captures.
+    [[nodiscard]] std::uint64_t Settle(std::stop_token workerStop,
+        std::chrono::milliseconds debounce, std::chrono::milliseconds ceiling, std::uint64_t targetVersion);
 
     // Begin one cancellable attempt, and take the newest signal with it.
     struct Attempt
@@ -105,9 +80,7 @@ public:
     // which is a wait about the clock rather than about a signal.
     //
     // Returns false when the worker was asked to stop.
-    [[nodiscard]] bool WaitUntil(
-        std::stop_token workerStop,
-        std::chrono::steady_clock::time_point until);
+    [[nodiscard]] bool WaitUntil(std::stop_token workerStop, std::chrono::steady_clock::time_point until);
 
     // Whether anything has been observed yet.
     [[nodiscard]] bool HasContext() const;

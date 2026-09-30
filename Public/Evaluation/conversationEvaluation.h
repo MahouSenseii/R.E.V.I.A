@@ -1,7 +1,8 @@
 #pragma once
 
-#include "Library/structLibrary.h"
 
+#include "Agents/answerObligation.h"
+#include "Core/conversationMessage.h"
 #include <cstddef>
 #include <filesystem>
 #include <functional>
@@ -80,13 +81,7 @@ struct EvaluationReply
     // supply it. Equal to text when nothing was repaired.
     std::string rawText;
     std::string reason;
-    // The answer obligation the profile was carrying when this reply was produced.
-    //
-    // Recorded, not yet acted on. A short reply under CharacterFirst may be Revia
-    // deciding not to answer, while the same reply under Reliable is more likely a
-    // truncation or a failure -- but telling those apart is evaluation logic that does
-    // not exist yet, so this only makes the distinction possible for the unit that
-    // builds it. Nothing currently reads it.
+    // Records the producing profile's answer obligation for future evaluation; currently unused.
     AnswerObligationMode answerObligation = AnswerObligationMode::Balanced;
 };
 
@@ -161,30 +156,18 @@ public:
     [[nodiscard]] static std::vector<EvaluationCase> DefaultCorpus();
 
     // An optional on-disk corpus, so cases can be added without a rebuild.
-    [[nodiscard]] static bool LoadCorpus(
-        const std::filesystem::path& path,
-        std::vector<EvaluationCase>& outCases,
-        std::string& outError);
+    [[nodiscard]] static bool LoadCorpus(const std::filesystem::path& path, std::vector<EvaluationCase>& outCases, std::string& outError);
 
-    [[nodiscard]] static EvaluationReport Run(
-        const std::vector<EvaluationCase>& cases,
-        const TurnRunner& runner,
-        const std::string& modelName = {},
-        std::stop_token stopToken = {});
+    [[nodiscard]] static EvaluationReport Run(const std::vector<EvaluationCase>& cases, const TurnRunner& runner,
+        const std::string& modelName = {}, std::stop_token stopToken = {});
 
     // Returns the failure descriptions for one check, empty when it holds.
-    [[nodiscard]] static std::vector<std::string> Apply(
-        const EvaluationCheck& check,
-        const std::string& input,
-        const std::string& reply,
-        const std::vector<std::string>& earlierReplies);
+    [[nodiscard]] static std::vector<std::string> Apply(const EvaluationCheck& check,
+        const std::string& input, const std::string& reply, const std::vector<std::string>& earlierReplies);
 
     // Appends the report to a dated JSONL file and returns the path it was written to.
-    [[nodiscard]] static bool WriteReport(
-        const std::filesystem::path& directory,
-        const EvaluationReport& report,
-        std::filesystem::path& outPath,
-        std::string& outError);
+    [[nodiscard]] static bool WriteReport(const std::filesystem::path& directory,
+        const EvaluationReport& report, std::filesystem::path& outPath, std::string& outError);
 
     [[nodiscard]] static std::size_t CountSentences(const std::string& reply);
 };

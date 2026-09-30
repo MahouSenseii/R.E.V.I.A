@@ -85,28 +85,13 @@ public:
 
 private:
     [[nodiscard]] bool AppendRecord(const nlohmann::json& record, std::string& outError);
-    [[nodiscard]] bool PersistTask(
-        const SelfImprovementTask& task,
-        std::string& outError);
-    [[nodiscard]] bool PersistResolution(
-        const SelfImprovementTask& task,
-        std::string& outError);
+    [[nodiscard]] bool PersistTask(const SelfImprovementTask& task, std::string& outError);
+    [[nodiscard]] bool PersistResolution(const SelfImprovementTask& task, std::string& outError);
     mutable std::mutex mutex;
     std::filesystem::path path;
     SelfAssessmentSnapshot snapshot;
-    // Guards against raising a second task for a problem already recorded. Restored
-    // from the history on Initialize rather than reset with the process.
-    //
-    // The category strings themselves, not a boolean per problem kind. Three booleans
-    // meant the writer named a category and the loader translated one back, and the two
-    // vocabularies drifted: tasks were created as conversation_latency/
-    // first_audio_latency/runtime_reliability while the loader looked for performance/
-    // voice/reliability, so every restart forgot an open task and raised a duplicate
-    // the next time the same threshold was crossed. Holding what the writer wrote
-    // removes the translation, and with it the chance of another disagreement.
-    //
-    // A category is inserted when a task is decided and removed again if its write
-    // failed, so a guard never outlives the record that justifies it.
+    // Restores exact open-task categories from history to suppress duplicate tasks after restart.
+    // Failed writes remove their category guard so it cannot outlive the record.
     std::unordered_set<std::string> openCategories;
     std::size_t malformedHistoryRecords = 0;
     std::string lastPersistenceError;

@@ -117,9 +117,7 @@ VisibleBrowserProcess::~VisibleBrowserProcess()
     Stop();
 }
 
-bool VisibleBrowserProcess::Start(
-    const CapabilitySettings::InternetAccess& settings,
-    std::string& outError)
+bool VisibleBrowserProcess::Start(const CapabilitySettings::InternetAccess& settings, std::string& outError)
 {
     outError.clear();
 #ifndef _WIN32

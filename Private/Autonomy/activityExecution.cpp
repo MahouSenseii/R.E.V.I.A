@@ -255,8 +255,7 @@ ResearchTopicVerdict ResolveResearchTopic(const std::string& candidate)
     return verdict;
 }
 
-ResearchTopicVerdict ChooseResearchTopic(
-    const std::vector<std::string>& candidatesInPriorityOrder)
+ResearchTopicVerdict ChooseResearchTopic(const std::vector<std::string>& candidatesInPriorityOrder)
 {
     ResearchTopicVerdict lastRefusal;
     lastRefusal.refusal = "Nothing Revia is currently curious about names a subject.";
@@ -269,9 +268,7 @@ ResearchTopicVerdict ChooseResearchTopic(
     return lastRefusal;
 }
 
-std::string WorkspaceArtifactName(
-    const std::string& title,
-    const std::string& extension)
+std::string WorkspaceArtifactName(const std::string& title, const std::string& extension)
 {
     std::string name;
     bool separator = false;
@@ -299,9 +296,7 @@ std::string WorkspaceArtifactName(
     return name + extension;
 }
 
-std::string DescribeLearnedFindingArtifact(
-    const agents::LearnedFindingResult result,
-    const std::string& kept)
+std::string DescribeLearnedFindingArtifact(const agents::LearnedFindingResult result, const std::string& kept)
 {
     switch (result)
     {

@@ -81,8 +81,7 @@ PreferenceDirection Preference::Direction(const float neutralBand) const
     return PreferenceDirection::Neutral;
 }
 
-bool Preference::WorthStating(
-    const float minimumConfidence, const float neutralBand) const
+bool Preference::WorthStating(const float minimumConfidence, const float neutralBand) const
 {
     return confidence >= minimumConfidence &&
         Direction(neutralBand) != PreferenceDirection::Neutral;
@@ -110,12 +109,8 @@ std::string PreferenceSet::NormaliseSubject(const std::string& subject)
     return result;
 }
 
-Preference PreferenceSet::Reinforce(
-    const std::string& subject,
-    const bool positive,
-    const PreferenceSource source,
-    const std::string& timestamp,
-    const PreferenceLimits& limits)
+Preference PreferenceSet::Reinforce(const std::string& subject, const bool positive, const PreferenceSource source,
+    const std::string& timestamp, const PreferenceLimits& limits)
 {
     const std::string key = NormaliseSubject(subject);
     const auto existing = std::find_if(preferences.begin(), preferences.end(),

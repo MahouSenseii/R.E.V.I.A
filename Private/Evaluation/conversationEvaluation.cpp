@@ -1,3 +1,4 @@
+#include "Core/conversationMessage.h"
 #include "Evaluation/conversationEvaluation.h"
 
 #include "Agents/conversationQualityMonitor.h"
@@ -220,11 +221,8 @@ std::size_t ConversationEvaluator::CountSentences(const std::string& reply)
     return sentences;
 }
 
-std::vector<std::string> ConversationEvaluator::Apply(
-    const EvaluationCheck& check,
-    const std::string& input,
-    const std::string& reply,
-    const std::vector<std::string>& earlierReplies)
+std::vector<std::string> ConversationEvaluator::Apply(const EvaluationCheck& check,
+    const std::string& input, const std::string& reply, const std::vector<std::string>& earlierReplies)
 {
     std::vector<std::string> failures;
     const std::string lowered = Lower(reply);
@@ -468,10 +466,7 @@ std::vector<EvaluationCase> ConversationEvaluator::DefaultCorpus()
     return cases;
 }
 
-bool ConversationEvaluator::LoadCorpus(
-    const std::filesystem::path& path,
-    std::vector<EvaluationCase>& outCases,
-    std::string& outError)
+bool ConversationEvaluator::LoadCorpus(const std::filesystem::path& path, std::vector<EvaluationCase>& outCases, std::string& outError)
 {
     std::ifstream file(path);
     if (!file.is_open())
@@ -570,11 +565,8 @@ bool ConversationEvaluator::LoadCorpus(
     return true;
 }
 
-EvaluationReport ConversationEvaluator::Run(
-    const std::vector<EvaluationCase>& cases,
-    const TurnRunner& runner,
-    const std::string& modelName,
-    const std::stop_token stopToken)
+EvaluationReport ConversationEvaluator::Run(const std::vector<EvaluationCase>& cases,
+    const TurnRunner& runner, const std::string& modelName, const std::stop_token stopToken)
 {
     EvaluationReport report;
     report.startedAt = UtcTimestamp();
@@ -793,11 +785,8 @@ std::string EvaluationReport::ToJsonLines() const
     return stream.str();
 }
 
-bool ConversationEvaluator::WriteReport(
-    const std::filesystem::path& directory,
-    const EvaluationReport& report,
-    std::filesystem::path& outPath,
-    std::string& outError)
+bool ConversationEvaluator::WriteReport(const std::filesystem::path& directory,
+    const EvaluationReport& report, std::filesystem::path& outPath, std::string& outError)
 {
     std::error_code error;
     std::filesystem::create_directories(directory, error);

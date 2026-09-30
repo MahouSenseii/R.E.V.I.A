@@ -66,8 +66,7 @@ constexpr int OpenRetryMilliseconds = 20;
 // `recoveryRecord`, which names it incomplete and its outcome unknown. That is the same
 // thing an orphan intent already means, said out loud: no byte of the torn record is
 // altered, and nothing about it becomes safe to retry.
-bool AppendDurably(const std::filesystem::path& path, const std::string& bytes,
-    const std::string& recoveryRecord)
+bool AppendDurably(const std::filesystem::path& path, const std::string& bytes, const std::string& recoveryRecord)
 {
 #ifdef _WIN32
     HANDLE file = INVALID_HANDLE_VALUE;
@@ -145,20 +144,14 @@ ActionAuditLogger::ActionAuditLogger(std::filesystem::path inputPath)
 {
 }
 
-bool ActionAuditLogger::Record(
-    const actions::ActionRequest& request,
-    const actions::PolicyDecision& decision,
-    const actions::ActionResult& result,
-    const double elapsedMilliseconds,
-    const std::string& transactionId)
+bool ActionAuditLogger::Record(const actions::ActionRequest& request, const actions::PolicyDecision& decision,
+    const actions::ActionResult& result, const double elapsedMilliseconds, const std::string& transactionId)
 {
     return WriteRecord(request, decision, result, elapsedMilliseconds, "result", transactionId);
 }
 
-bool ActionAuditLogger::RecordIntent(
-    const actions::ActionRequest& request,
-    const actions::PolicyDecision& decision,
-    const std::string& transactionId)
+bool ActionAuditLogger::RecordIntent(const actions::ActionRequest& request,
+    const actions::PolicyDecision& decision, const std::string& transactionId)
 {
     actions::ActionResult pending;
     pending.dryRun = request.dryRun;
@@ -166,13 +159,8 @@ bool ActionAuditLogger::RecordIntent(
     return WriteRecord(request, decision, pending, -1.0, "intent", transactionId);
 }
 
-bool ActionAuditLogger::WriteRecord(
-    const actions::ActionRequest& request,
-    const actions::PolicyDecision& decision,
-    const actions::ActionResult& result,
-    const double elapsedMilliseconds,
-    const char* recordType,
-    const std::string& transactionId)
+bool ActionAuditLogger::WriteRecord(const actions::ActionRequest& request, const actions::PolicyDecision& decision,
+    const actions::ActionResult& result, const double elapsedMilliseconds, const char* recordType, const std::string& transactionId)
 {
     std::lock_guard lock(mutex);
     try

@@ -207,9 +207,7 @@ std::vector<std::string> Words(const std::string& value)
 // Longest first so "find out about" is not shortened to "find out" and left holding a
 // dangling "about". Returns whether anything was removed.
 template <std::size_t Size>
-bool StripLeading(
-    std::string& value,
-    const std::array<std::string_view, Size>& phrases)
+bool StripLeading(std::string& value, const std::array<std::string_view, Size>& phrases)
 {
     std::vector<std::string_view> ordered(phrases.begin(), phrases.end());
     std::sort(ordered.begin(), ordered.end(),
@@ -230,9 +228,7 @@ bool StripLeading(
 }
 
 template <std::size_t Size>
-bool StripTrailing(
-    std::string& value,
-    const std::array<std::string_view, Size>& phrases)
+bool StripTrailing(std::string& value, const std::array<std::string_view, Size>& phrases)
 {
     std::vector<std::string_view> ordered(phrases.begin(), phrases.end());
     std::sort(ordered.begin(), ordered.end(),

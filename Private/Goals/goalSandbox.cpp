@@ -46,10 +46,7 @@ bool IsUnder(const std::filesystem::path& candidate, const std::filesystem::path
 
 // Maps a real path onto its scratch equivalent, preserving the position under the root so
 // a plan's relative structure survives.
-bool Rewrite(
-    std::filesystem::path& value,
-    const std::vector<std::filesystem::path>& realRoots,
-    const std::filesystem::path& sandboxRoot,
+bool Rewrite(std::filesystem::path& value, const std::vector<std::filesystem::path>& realRoots, const std::filesystem::path& sandboxRoot,
     std::string& outError)
 {
     if (value.empty())
@@ -79,9 +76,7 @@ bool Rewrite(
 // Stages the file or directory a step reads from, so a rehearsal observes real content
 // rather than an empty tree. A missing source is left missing on purpose: the rehearsal
 // should fail exactly where the real run would.
-void StageSource(
-    const std::filesystem::path& realPath,
-    const std::filesystem::path& sandboxPath)
+void StageSource(const std::filesystem::path& realPath, const std::filesystem::path& sandboxPath)
 {
     std::error_code error;
     if (!std::filesystem::exists(realPath, error))

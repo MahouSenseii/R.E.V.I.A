@@ -1,8 +1,10 @@
+#include "Core/profile.h"
+#include "LLM/endpointSettings.h"
+#include "Memory/memoryTypes.h"
 #include "testSupport.h"
 
 #include "Agents/responseProvenance.h"
 #include "LLM/LLamaCPP/llamaCppService.h"
-#include "Library/structLibrary.h"
 #include "Memory/memoryAttribution.h"
 
 #include <chrono>

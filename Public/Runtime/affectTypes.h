@@ -33,19 +33,8 @@ struct AffectSnapshot
 
 std::string ToString(AffectState state);
 
-// Who is speaking, and how the day has gone so far.
-//
-// The same sentence is not the same event. A jab from someone Revia has talked to for
-// months is teasing; the identical words from a stranger are an attack. A mild
-// annoyance lands hard on a day that has already gone badly and slides off one that
-// has not. Without this, hostility from a friend of 500 turns classified exactly like
-// hostility from someone she met a minute ago, which is the least human thing the
-// emotion system did.
-//
-// Carried as plain numbers rather than a reference to the controller that owns them, so
-// classification stays a pure function of its inputs and can be tested without building
-// a social history first. The defaults are deliberately inert: a caller that supplies no
-// context gets exactly the unmodulated reading.
+// Value-only social/history context keeps classification pure.
+// Inert defaults preserve the unmodulated reading when no context is supplied.
 struct SocialContext
 {
     // 0 stranger .. 1 long shared history.

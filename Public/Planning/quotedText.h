@@ -25,13 +25,10 @@ struct ParsedQuotation
     std::string instruction;
 };
 
-// One left-to-right interpretation for content extraction and authority decisions.
-// Supports straight/curly single and double quotes, mixed nesting, and escaped
-// delimiters inside quotes. Apostrophes inside words are not opening quotes;
-// trailing possessives/dangling closers are ambiguous and conservatively refused.
-// Spans are outer quotations, in source order; nested quotations remain payload.
-// An unmatched delimiter or excessive nesting returns complete=false with no spans
-// or instruction. A partial/unprocessed parse must never become authority.
+// Parses straight/curly single and double quotes, mixed nesting, and escaped delimiters;
+// Outer spans preserve source order; nested quotes remain payload and word apostrophes are not openings.
+// Ambiguous possessives, unmatched delimiters, or excessive nesting return incomplete with no spans/instruction.
+// Partial parses never supply authority.
 [[nodiscard]] ParsedQuotation ParseQuotation(const std::string& request);
 
 // First complete outer span in source order. No span if the whole parse is invalid.

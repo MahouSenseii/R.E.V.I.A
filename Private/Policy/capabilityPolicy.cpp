@@ -94,9 +94,7 @@ std::string Lower(std::string value)
 
 // Approved-application matching is shared by UI Automation and desktop operation:
 // both are "drive this executable", and neither may reach an unapproved one.
-bool ApplicationIsApproved(
-    const actions::CapabilitySettings& settings,
-    const std::string& application)
+bool ApplicationIsApproved(const actions::CapabilitySettings& settings, const std::string& application)
 {
     const std::string wanted = Lower(application);
     return std::any_of(
@@ -129,8 +127,7 @@ CapabilityPolicy::CapabilityPolicy(actions::CapabilitySettings inputSettings)
     }
 }
 
-actions::PolicyDecision CapabilityPolicy::Evaluate(
-    const actions::ActionRequest& request) const
+actions::PolicyDecision CapabilityPolicy::Evaluate(const actions::ActionRequest& request) const
 {
     actions::PolicyDecision decision;
     decision.risk = actions::RiskForAction(request.type);
@@ -602,8 +599,7 @@ const actions::CapabilitySettings& CapabilityPolicy::Settings() const
     return settings;
 }
 
-std::filesystem::path CapabilityPolicy::ResolveForPolicy(
-    const std::filesystem::path& value) const
+std::filesystem::path CapabilityPolicy::ResolveForPolicy(const std::filesystem::path& value) const
 {
     if (value.empty())
     {
@@ -637,9 +633,7 @@ std::filesystem::path CapabilityPolicy::ResolveForPolicy(
     return resolved.lexically_normal();
 }
 
-bool CapabilityPolicy::IsWithinApprovedRoot(
-    const std::filesystem::path& lexicalPath,
-    const std::filesystem::path& canonicalPath) const
+bool CapabilityPolicy::IsWithinApprovedRoot(const std::filesystem::path& lexicalPath, const std::filesystem::path& canonicalPath) const
 {
     for (std::size_t index = 0; index < lexicalRoots.size(); ++index)
     {
@@ -652,8 +646,7 @@ bool CapabilityPolicy::IsWithinApprovedRoot(
     return false;
 }
 
-std::optional<std::filesystem::path> CapabilityPolicy::FindLexicalRoot(
-    const std::filesystem::path& lexicalPath) const
+std::optional<std::filesystem::path> CapabilityPolicy::FindLexicalRoot(const std::filesystem::path& lexicalPath) const
 {
     for (const auto& root : lexicalRoots)
     {
@@ -665,8 +658,7 @@ std::optional<std::filesystem::path> CapabilityPolicy::FindLexicalRoot(
     return std::nullopt;
 }
 
-bool CapabilityPolicy::HasReparsePointBelowApprovedRoot(
-    const std::filesystem::path& lexicalPath) const
+bool CapabilityPolicy::HasReparsePointBelowApprovedRoot(const std::filesystem::path& lexicalPath) const
 {
     const auto root = FindLexicalRoot(lexicalPath);
     if (!root.has_value())

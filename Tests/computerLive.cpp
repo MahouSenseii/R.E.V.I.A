@@ -1,3 +1,8 @@
+#include "Computer/computerSettings.h"
+#include "Core/appSettings.h"
+#include "Core/profile.h"
+#include "LLM/backendTypes.h"
+#include "LLM/endpointSettings.h"
 #include "reviaSessionTestAccess.h"
 
 #include "Core/configManager.h"
@@ -499,8 +504,7 @@ struct ComparisonRow
     std::uint32_t contentInvented = 0;
 };
 
-ComparisonRow RunOneControlledTask(
-    Fixture& fixture, const int port, const std::string& mode, const std::string& request)
+ComparisonRow RunOneControlledTask(Fixture& fixture, const int port, const std::string& mode, const std::string& request)
 {
     fixture.Reset();
     fixture.Front();

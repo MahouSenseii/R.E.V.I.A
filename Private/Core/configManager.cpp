@@ -1,3 +1,8 @@
+#include "Agents/answerObligation.h"
+#include "Core/appSettings.h"
+#include "Core/profile.h"
+#include "Improvement/improvementSettings.h"
+#include "Intelligence/intelligenceSettings.h"
 #include "Core/configManager.h"
 
 #include <algorithm>
@@ -7,7 +12,6 @@
 #include <nlohmann/json.hpp>
 #include <regex>
 
-#include "Library/structLibrary.h"
 
 using json = nlohmann::json;
 

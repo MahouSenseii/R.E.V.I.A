@@ -8,6 +8,7 @@
 
 #include <chrono>
 #include <fstream>
+#include <future>
 #include <iostream>
 #include <nlohmann/json.hpp>
 #include <sqlite3.h>
@@ -112,6 +113,37 @@ void TestCancellationDoesNotRewriteACompletedAction()
     Check(stop.stop_requested() && outcome.result.attempted && outcome.result.succeeded &&
         std::filesystem::is_directory(request.source),
         "Cancellation misreported an action that had already completed.");
+}
+
+void TestSettingsRemainReadableWhileAnActionIsRunning()
+{
+    Fixture fixture;
+    std::promise<void> atDispatch;
+    std::promise<void> releaseDispatch;
+    const auto release = releaseDispatch.get_future().share();
+    fixture.runtime.SetDispatchObserver([&](const ActionRequest&, const bool beginning)
+    {
+        if (!beginning) return;
+        atDispatch.set_value();
+        // Deliberately hold the real Execute lock at the dispatch boundary, standing
+        // in for a synchronous executor that is still waiting on its browser worker.
+        release.wait();
+    });
+    auto action = std::async(std::launch::async, [&]
+    { return fixture.runtime.Execute(fixture.MakeDirectory(), true); });
+    const bool executing = atDispatch.get_future().wait_for(std::chrono::seconds(5)) ==
+        std::future_status::ready;
+    auto settings = std::async(std::launch::async, [&] { return fixture.runtime.Settings(); });
+    const bool responsive = settings.wait_for(std::chrono::seconds(1)) == std::future_status::ready;
+    // Release and join both operations before checking so a failure cannot hang the
+    // process in an async future's destructor.
+    releaseDispatch.set_value();
+    const auto outcome = action.get();
+    const auto observed = settings.get();
+    Check(executing && outcome.Succeeded(), "The settings fixture never executed its real action.");
+    Check(responsive && observed.mode == ExecutionMode::Supervised &&
+            observed.approvedRoots == std::vector<std::filesystem::path>{fixture.directory.root},
+        "Reading capabilities for conversation waited behind a running background action.");
 }
 
 void TestSessionConfirmation(const bool cancel, const bool approve)
@@ -346,6 +378,7 @@ void TestGuardObligationSurvivesGoalResume()
 
 void RunActionCancellationTests()
 {
+    TestSettingsRemainReadableWhileAnActionIsRunning();
     TestAThrowingTurnFailsWithoutWedgingTheSession();
     for (const bool scoped : {false, true})
         for (const bool fromObserver : {false, true})

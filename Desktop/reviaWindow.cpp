@@ -133,10 +133,7 @@ namespace
     }
 }
 
-ReviaWindow::ReviaWindow(
-    const bool startRuntime,
-    const bool buildSystemTray,
-    QWidget* parent)
+ReviaWindow::ReviaWindow(const bool startRuntime, const bool buildSystemTray, QWidget* parent)
     : QMainWindow(parent), ui(std::make_unique<Ui::ReviaWindow>())
 {
     setWindowTitle("Revia");
@@ -756,7 +753,6 @@ void ReviaWindow::StartRuntime()
         {
             sendButton->setEnabled(started);
             screenActionButton->setEnabled(session.IsVisionAvailable());
-            stopButton->setEnabled(false);
             // Re-evaluate the microphone now that IsStarted() is finally true; the last
             // recognition phase event arrived while startup was still in flight.
             ApplyMicrophoneUi(microphoneUiState);
@@ -909,7 +905,7 @@ void ReviaWindow::SendMessage(const bool voiceInput)
                 AppendActivity("Request stopped: " + QString::fromStdString(result.reason));
             }
             sendButton->setEnabled(!result.shouldExit && session.IsStarted());
-            stopButton->setEnabled(false);
+            RefreshStateBadge();
             if (result.shouldExit)
             {
                 BeginShutdown(revia::core::ExitReason::UserCommand,
@@ -1128,12 +1124,10 @@ void ReviaWindow::ApplyMicrophoneUi(const MicrophoneUi microphoneUi)
     microphoneButton->style()->unpolish(microphoneButton);
     microphoneButton->style()->polish(microphoneButton);
 
-    stopButton->setEnabled(microphoneActive || speechActive || session.IsBusy());
+    RefreshStateBadge();
 }
 
-void ReviaWindow::BeginShutdown(
-    const revia::core::ExitReason reason,
-    const std::string& detail)
+void ReviaWindow::BeginShutdown(const revia::core::ExitReason reason, const std::string& detail)
 {
     if (shuttingDown.exchange(true))
     {
@@ -1230,7 +1224,7 @@ void ReviaWindow::UseVisibleScreen()
             }
             sendButton->setEnabled(session.IsStarted());
             screenActionButton->setEnabled(session.IsVisionAvailable());
-            stopButton->setEnabled(false);
+            RefreshStateBadge();
             messageInput->setFocus();
         }, Qt::QueuedConnection);
     });
@@ -1650,7 +1644,6 @@ void ReviaWindow::HandleRuntimeEvent(const revia::runtime::RuntimeEvent& event)
                 detail += QStringLiteral(" queue=") + QString::number(event.queueDepth);
             }
             AppendActivity(detail);
-            stopButton->setEnabled(speechActive || session.IsBusy());
         }
         else if (event.component == "Microphone")
         {
@@ -1858,9 +1851,7 @@ void ReviaWindow::HandleRuntimeEvent(const revia::runtime::RuntimeEvent& event)
                 : ActivitySeverity::Automatic));
 }
 
-void ReviaWindow::UpdateState(
-    const revia::runtime::RuntimeState newState,
-    const QString& detail)
+void ReviaWindow::UpdateState(const revia::runtime::RuntimeState newState, const QString& detail)
 {
     lastRuntimeState = newState;
     lastRuntimeDetail = detail;
@@ -1898,25 +1889,19 @@ void ReviaWindow::RefreshStateBadge()
         newState == revia::runtime::RuntimeState::Thinking ||
         newState == revia::runtime::RuntimeState::Responding ||
         newState == revia::runtime::RuntimeState::Acting;
-    stopButton->setEnabled(cancellable || speechActive || microphoneActive);
+    // Foreground commands can change the badge while a background task continues.
+    // That task remains cancellable regardless of the foreground state.
+    stopButton->setEnabled(cancellable || session.HasRunningTask() ||
+        speechActive || microphoneActive);
 }
 
-void ReviaWindow::AppendChat(
-    const QString& speaker,
-    const QString& message,
-    const bool userMessage,
-    const QString& reasoning)
+void ReviaWindow::AppendChat(const QString& speaker, const QString& message, const bool userMessage, const QString& reasoning)
 {
     chatEntries.push_back({speaker, message, reasoning, userMessage, false});
     RenderChat();
 }
 
-void ReviaWindow::AppendWorkEntry(
-    const EntryKind kind,
-    const QString& body,
-    const QString& detail,
-    const quint64 taskId,
-    const int round)
+void ReviaWindow::AppendWorkEntry(const EntryKind kind, const QString& body, const QString& detail, const quint64 taskId, const int round)
 {
     // Recorded whether or not it is displayed. Hiding the panel must not become a way of
     // losing the record, and it must not touch whether the work happened.
@@ -2051,8 +2036,7 @@ void ReviaWindow::RenderChat()
     chatHistory->verticalScrollBar()->setValue(chatHistory->verticalScrollBar()->maximum());
 }
 
-void ReviaWindow::AppendComponentActivity(
-    const revia::runtime::RuntimeEvent& event, const QString& message)
+void ReviaWindow::AppendComponentActivity(const revia::runtime::RuntimeEvent& event, const QString& message)
 {
     const bool error = event.phase == "Error" || event.phase == "Failed";
     const bool warning = event.phase == "Unavailable" || event.phase == "Partial" ||
@@ -2084,9 +2068,7 @@ void ReviaWindow::AppendComponentActivity(
         background ? ActivitySeverity::Information : ActivitySeverity::Automatic);
 }
 
-void ReviaWindow::AppendActivity(
-    const QString& inputMessage,
-    ActivitySeverity severity)
+void ReviaWindow::AppendActivity(const QString& inputMessage, ActivitySeverity severity)
 {
     QString message = inputMessage.trimmed();
     if (message.isEmpty())
@@ -2369,8 +2351,7 @@ bool ReviaWindow::ApproveDesktopEffect(const revia::policy::ApprovalPrompt& prom
         std::move(ask), false);
 }
 
-revia::actions::ConfirmationChoice ReviaWindow::ConfirmAction(
-    const revia::actions::ActionRequest& request,
+revia::actions::ConfirmationChoice ReviaWindow::ConfirmAction(const revia::actions::ActionRequest& request,
     const revia::actions::PolicyDecision& decision)
 {
     using revia::actions::ConfirmationChoice;

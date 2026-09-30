@@ -1,3 +1,17 @@
+#include "Agents/answerObligation.h"
+#include "Agents/inputArbiterSettings.h"
+#include "Core/appSettings.h"
+#include "Core/conversationMessage.h"
+#include "Core/profile.h"
+#include "Initiative/initiativeSettings.h"
+#include "Intelligence/intelligenceSettings.h"
+#include "LLM/endpointSettings.h"
+#include "Memory/memoryTypes.h"
+#include "Perception/perceptionSettings.h"
+#include "Presence/presenceSettings.h"
+#include "Resources/resourceSettings.h"
+#include "Speech/bargeInSettings.h"
+#include "Speech/speechSettings.h"
 #include "testSupport.h"
 
 #include "Actions/IActionExecutor.h"
@@ -170,10 +184,7 @@ CapabilitySettings SupervisedSettings(const std::filesystem::path& root)
     return settings;
 }
 
-ActionRequest Request(
-    ActionType type,
-    const std::filesystem::path& source,
-    const std::filesystem::path& destination = {})
+ActionRequest Request(ActionType type, const std::filesystem::path& source, const std::filesystem::path& destination = {})
 {
     ActionRequest request;
     request.id = revia::actions::NewActionId();
@@ -1234,9 +1245,7 @@ public:
         return true;
     }
 
-    revia::actions::ActionResult Execute(
-        const ActionRequest&,
-        const revia::actions::PolicyDecision&) override
+    revia::actions::ActionResult Execute(const ActionRequest&, const revia::actions::PolicyDecision&) override
     {
         ++calls;
         revia::actions::ActionResult result;
@@ -1532,11 +1541,7 @@ void TestVisionResolverRequiresGeometryNameAndIdentity()
 #ifdef _WIN32
 std::atomic<int>* UiaFixtureInvocations = nullptr;
 
-LRESULT CALLBACK UiaFixtureWindowProcedure(
-    const HWND window,
-    const UINT message,
-    const WPARAM word,
-    const LPARAM parameter)
+LRESULT CALLBACK UiaFixtureWindowProcedure(const HWND window, const UINT message, const WPARAM word, const LPARAM parameter)
 {
     if (message == WM_COMMAND && HIWORD(word) == BN_CLICKED && UiaFixtureInvocations != nullptr)
     {
@@ -2904,10 +2909,7 @@ void TestLocalApiKeys()
 }
 
 
-nlohmann::json CapabilityConfigJson(
-    const std::string& mode,
-    const std::filesystem::path& approvedRoot,
-    const std::string& riskCeiling)
+nlohmann::json CapabilityConfigJson(const std::string& mode, const std::filesystem::path& approvedRoot, const std::string& riskCeiling)
 {
     return nlohmann::json{
         {"mode", mode},
@@ -2985,9 +2987,7 @@ CapabilitySettings GoalScope(const std::filesystem::path& approvedRoot)
     return scope;
 }
 
-revia::goals::GoalStep MakeDirectoryStep(
-    const std::filesystem::path& parent,
-    const std::string& folderName)
+revia::goals::GoalStep MakeDirectoryStep(const std::filesystem::path& parent, const std::string& folderName)
 {
     revia::goals::GoalStep step;
     step.description = "Create " + folderName;
@@ -3780,9 +3780,7 @@ void TestDerivedGoalScopeCannotWiden()
         "Narrowing raised a read-only profile's auto-approval ceiling.");
 }
 
-revia::perception::WindowObservation Seen(
-    const std::string& application,
-    const std::string& title)
+revia::perception::WindowObservation Seen(const std::string& application, const std::string& title)
 {
     revia::perception::WindowObservation observation;
     observation.kind = revia::perception::ObservationKind::ForegroundChanged;
@@ -3959,11 +3957,8 @@ void TestPerceptionMonitorStaysSilentWhenDisabled()
     monitor.Shutdown();
 }
 
-revia::perception::WindowObservation SeenAt(
-    const std::string& application,
-    const std::string& title,
-    const std::chrono::system_clock::time_point when,
-    const int monitorIndex = 0)
+revia::perception::WindowObservation SeenAt(const std::string& application,
+    const std::string& title, const std::chrono::system_clock::time_point when, const int monitorIndex = 0)
 {
     revia::perception::WindowObservation observation = Seen(application, title);
     observation.occurredAt = when;
@@ -4415,8 +4410,7 @@ initiativeSettings TalkativeSettings()
     return settings;
 }
 
-revia::initiative::AttentionContext QuietDesktop(
-    const std::chrono::system_clock::time_point now)
+revia::initiative::AttentionContext QuietDesktop(const std::chrono::system_clock::time_point now)
 {
     revia::initiative::AttentionContext context;
     context.now = now;
@@ -4730,9 +4724,7 @@ void TestSheKnowsWhenSpeakingIsPossible()
         "She repeated an observation because its minute count had changed.");
 }
 
-revia::goals::Goal FinishedGoal(
-    const revia::goals::GoalStatus status,
-    const revia::goals::StopReason stopReason)
+revia::goals::Goal FinishedGoal(const revia::goals::GoalStatus status, const revia::goals::StopReason stopReason)
 {
     revia::goals::Goal goal;
     goal.id = revia::goals::NewGoalId();
@@ -8314,9 +8306,7 @@ revia::resources::ResourcePlan TwoCardPlan()
     return revia::resources::PlanResources(hardware, policy, requirements);
 }
 
-revia::resources::UsageMeter MeterById(
-    const revia::resources::UsageSnapshot& snapshot,
-    const std::string& id)
+revia::resources::UsageMeter MeterById(const revia::resources::UsageSnapshot& snapshot, const std::string& id)
 {
     for (const revia::resources::UsageMeter& meter : snapshot.meters)
     {
@@ -9353,6 +9343,16 @@ int main(const int argc, char** argv)
             RunEmotionOwnershipTests();
             return 0;
         }
+        if (argc > 1 && std::string(argv[1]) == "--startup-warmup")
+        {
+            RunStartupWarmupTests();
+            return 0;
+        }
+        if (argc > 1 && std::string(argv[1]) == "--preference-reset")
+        {
+            RunPreferenceResetTests();
+            return 0;
+        }
         if (argc > 1 && std::string(argv[1]) == "--emotion-live")
         {
             Check(argc == 4, "Usage: --emotion-live <isolated-runtime-directory> <new-report.jsonl>");
@@ -9827,6 +9827,9 @@ int main(const int argc, char** argv)
         RunBoundedFileReadTests();
         RunEmotionTests();
         RunEmotionOwnershipTests();
+        RunStartupWarmupTests();
+        RunPersistenceRecoveryTests();
+        RunPreferenceResetTests();
         RunIdentityTests();
         RunAppraisalTests();
         RunStatePacketTests();

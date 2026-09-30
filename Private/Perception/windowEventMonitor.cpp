@@ -1,3 +1,4 @@
+#include "Perception/perceptionSettings.h"
 #include "Perception/windowEventMonitor.h"
 
 #include <algorithm>
@@ -118,11 +119,7 @@ struct MonitorLookup
     int foundIndex = 0;
 };
 
-BOOL CALLBACK FindMonitorIndex(
-    const HMONITOR monitor,
-    HDC,
-    LPRECT,
-    const LPARAM data)
+BOOL CALLBACK FindMonitorIndex(const HMONITOR monitor, HDC, LPRECT, const LPARAM data)
 {
     auto* lookup = reinterpret_cast<MonitorLookup*>(data);
     ++lookup->currentIndex;
@@ -167,14 +164,7 @@ void ReadWindowPlacement(const HWND window, WindowObservation& observation)
     observation.monitorIndex = lookup.foundIndex;
 }
 
-void CALLBACK EventProc(
-    HWINEVENTHOOK,
-    const DWORD event,
-    const HWND window,
-    const LONG objectId,
-    const LONG childId,
-    DWORD,
-    DWORD)
+void CALLBACK EventProc(HWINEVENTHOOK, const DWORD event, const HWND window, const LONG objectId, const LONG childId, DWORD, DWORD)
 {
     // OBJID_WINDOW/CHILDID_SELF only: object-level events fire for controls inside a
     // window, which is a different and far more invasive kind of observation.
@@ -196,8 +186,7 @@ void CALLBACK EventProc(
 
 } // namespace
 
-std::vector<std::string> VisibleWindowTitles(
-    const perceptionSettings& settings, const std::size_t maximum)
+std::vector<std::string> VisibleWindowTitles(const perceptionSettings& settings, const std::size_t maximum)
 {
     std::vector<std::string> titles;
 #ifdef _WIN32
@@ -266,9 +255,7 @@ PerceptionFilter::PerceptionFilter(perceptionSettings settings)
 {
 }
 
-bool PerceptionFilter::IsExcludedApplication(
-    const perceptionSettings& settings,
-    const std::string& application)
+bool PerceptionFilter::IsExcludedApplication(const perceptionSettings& settings, const std::string& application)
 {
     if (application.empty())
     {
@@ -286,9 +273,7 @@ bool PerceptionFilter::IsExcludedApplication(
         });
 }
 
-bool PerceptionFilter::IsExcludedTitle(
-    const perceptionSettings& settings,
-    const std::string& windowTitle)
+bool PerceptionFilter::IsExcludedTitle(const perceptionSettings& settings, const std::string& windowTitle)
 {
     const std::string lowered = ToLower(windowTitle);
     return std::any_of(
@@ -300,18 +285,13 @@ bool PerceptionFilter::IsExcludedTitle(
         });
 }
 
-bool PerceptionFilter::IsExcludedWindow(
-    const perceptionSettings& settings,
-    const std::string& application,
-    const std::string& windowTitle)
+bool PerceptionFilter::IsExcludedWindow(const perceptionSettings& settings, const std::string& application, const std::string& windowTitle)
 {
     return IsExcludedApplication(settings, application) ||
         IsExcludedTitle(settings, windowTitle);
 }
 
-Suppression PerceptionFilter::Admit(
-    const WindowObservation& candidate,
-    const std::chrono::steady_clock::time_point now)
+Suppression PerceptionFilter::Admit(const WindowObservation& candidate, const std::chrono::steady_clock::time_point now)
 {
     if (IsExcludedApplication(configuration, candidate.application))
     {
@@ -357,10 +337,7 @@ WindowEventMonitor::~WindowEventMonitor()
     Shutdown();
 }
 
-bool WindowEventMonitor::Start(
-    const perceptionSettings& settings,
-    ObservationHandler newObservationHandler,
-    StatusHandler newStatusHandler)
+bool WindowEventMonitor::Start(const perceptionSettings& settings, ObservationHandler newObservationHandler, StatusHandler newStatusHandler)
 {
     Shutdown();
     {
@@ -446,9 +423,7 @@ void WindowEventMonitor::Run()
 #endif
 }
 
-void WindowEventMonitor::HandleRawEvent(
-    const std::uint32_t event,
-    void* windowHandle)
+void WindowEventMonitor::HandleRawEvent(const std::uint32_t event, void* windowHandle)
 {
 #ifdef _WIN32
     HWND window = static_cast<HWND>(windowHandle);

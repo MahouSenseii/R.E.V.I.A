@@ -1,8 +1,8 @@
 #pragma once
 
+#include "Core/conversationMessage.h"
 #include "Core/messageRouter.h"
 #include "Intelligence/intelligenceTypes.h"
-#include "Library/structLibrary.h"
 
 #include <chrono>
 #include <cstddef>
@@ -102,17 +102,13 @@ public:
     SelfInquiryPolicy() = default;
     explicit SelfInquiryPolicy(SelfInquiryLimits inputLimits) : limits(inputLimits) {}
 
-    [[nodiscard]] SelfInquiryDecision Consider(
-        const std::string& input,
-        const intelligence::IntelligenceDecision& routing,
-        bool proactive,
-        std::uint64_t turnId) const;
+    [[nodiscard]] SelfInquiryDecision Consider(const std::string& input,
+        const intelligence::IntelligenceDecision& routing, bool proactive, std::uint64_t turnId) const;
 
     // A completed inquiry is the deep-reasoning pass for this turn. The final model
     // still uses the originally selected tier, but it must spend its output allowance
     // on the visible answer instead of opening a second hidden thinking block.
-    [[nodiscard]] static intelligence::IntelligenceDecision FinalAnswerRouting(
-        const intelligence::IntelligenceDecision& routing,
+    [[nodiscard]] static intelligence::IntelligenceDecision FinalAnswerRouting(const intelligence::IntelligenceDecision& routing,
         bool inquiryCompleted);
 
     // Recorded only when an inquiry actually produced questions. A failed or empty pass
@@ -150,20 +146,15 @@ public:
         const std::string& remembered = {}) const;
 
     // The parse, exposed so the schema can be tested without a model or a socket.
-    [[nodiscard]] static SelfInquiryResult Parse(
-        const std::string& rawInquiry,
-        std::size_t maximumQuestions);
+    [[nodiscard]] static SelfInquiryResult Parse(const std::string& rawInquiry, std::size_t maximumQuestions);
 
     // Whether a message asks her to work something out, rather than chat. Deterministic
     // for the same reason the policy is: deciding to think must not cost a model call.
     [[nodiscard]] static bool AsksForThought(const std::string& input);
 
     // The bounded envelope handed to the model, exposed for the same reason.
-    [[nodiscard]] static std::string BuildEnvelope(
-        const std::string& input,
-        const std::string& identityPosture,
-        const std::vector<conversationMessage>& context,
-        const std::string& remembered = {});
+    [[nodiscard]] static std::string BuildEnvelope(const std::string& input, const std::string& identityPosture,
+        const std::vector<conversationMessage>& context, const std::string& remembered = {});
 };
 
 } // namespace revia::agents

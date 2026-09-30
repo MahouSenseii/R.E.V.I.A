@@ -28,6 +28,17 @@ test('URL policy exposes only ordinary public web targets', () => {
   assert.equal(basicPublicUrlPolicy('https://example.com/path')?.href, 'https://example.com/path');
 });
 
+test('public-address policy rejects alternate spellings of private IPv6 addresses', () => {
+  for (const address of [
+    '0:0:0:0:0:0:0:0', '0:0:0:0:0:0:0:1',
+    '0000:0000:0000:0000:0000:ffff:7f00:0001',
+    '0:0:0:0:0:ffff:192.168.1.1',
+    '2001:0db8:0000:0000:0000:0000:0000:0001',
+    'fe80::1%12', '::1%1',
+  ]) assert.equal(isPublicIpAddress(address), false, address);
+  assert.equal(isPublicIpAddress('2606:4700:4700:0000:0000:0000:0000:1111'), true);
+});
+
 test('DuckDuckGo redirect links unwrap without evaluating page-provided code', () => {
   assert.equal(
     unwrapDuckDuckGoUrl('https://duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2Fstory'),

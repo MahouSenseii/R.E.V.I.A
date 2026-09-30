@@ -94,11 +94,7 @@ std::filesystem::path DiagramStore::Root() const
     return root;
 }
 
-bool DiagramStore::Save(
-    const std::string& title,
-    const std::string& markup,
-    Diagram& outDiagram,
-    std::string& outError) const
+bool DiagramStore::Save(const std::string& title, const std::string& markup, Diagram& outDiagram, std::string& outError) const
 {
     std::error_code error;
     std::filesystem::create_directories(root, error);

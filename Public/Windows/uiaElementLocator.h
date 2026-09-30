@@ -12,15 +12,8 @@ struct IUIAutomationElement;
 namespace revia::actions::windows
 {
 
-// One owner for "which window, and which element, does this typed request mean".
-//
-// UI Automation lookup used to live inside WindowsAutomationExecutor. Desktop operation
-// needs exactly the same lookup -- a click has to re-find the element it was authorized
-// against before it is allowed to aim at anything -- and a second copy of a security
-// check is a second place for it to drift.
-//
-// Every returned element is an owning reference: the caller releases it. The functions
-// expect the caller to have already created the IUIAutomation instance.
+// Shared UIA lookup requires a caller-created IUIAutomation instance.
+// Returned element references are owned and must be released by the caller.
 
 struct ElementBounds
 {
@@ -42,31 +35,19 @@ struct ElementBounds
 
 // The top-level window of the requested executable, matched by process image name and,
 // when one is given, by a case-insensitive window-title substring.
-[[nodiscard]] IUIAutomationElement* FindApplicationWindow(
-    IUIAutomation* automation,
-    const ActionRequest& request);
+[[nodiscard]] IUIAutomationElement* FindApplicationWindow(IUIAutomation* automation, const ActionRequest& request);
 
 // The exact element a vision resolution referred to. Deliberately has no fallback: if
 // the runtime id, name, automation id, or control type no longer agree, the element the
 // user confirmed is gone and refusing is the safe answer.
-[[nodiscard]] IUIAutomationElement* FindResolvedControl(
-    IUIAutomation* automation,
-    IUIAutomationElement* window,
-    const ActionRequest& request);
+[[nodiscard]] IUIAutomationElement* FindResolvedControl(IUIAutomation* automation,
+    IUIAutomationElement* window, const ActionRequest& request);
 
 // A resolved element when the request carries one, otherwise a control matched by
 // accessible name or automation id.
-[[nodiscard]] IUIAutomationElement* FindControl(
-    IUIAutomation* automation,
-    IUIAutomationElement* window,
-    const ActionRequest& request);
+[[nodiscard]] IUIAutomationElement* FindControl(IUIAutomation* automation, IUIAutomationElement* window, const ActionRequest& request);
 
-// What is under a screen point: the executable that owns it, and the accessible name
-// and control type of the element there.
-//
-// This is how a pointer skill becomes something other than clicking in the dark. It is
-// read-only and grants nothing -- describing a control is not permission to press it,
-// and the text it returns is treated as untrusted the same way screen text is.
+// Read-only point description grants no permission; returned application text is untrusted.
 struct PointDescription
 {
     std::string executable;

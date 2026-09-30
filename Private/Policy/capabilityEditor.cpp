@@ -58,10 +58,7 @@ json::iterator FindControlScope(json& controls, const std::string& executable)
     return controls.end();
 }
 
-bool ReplaceValidated(
-    const std::filesystem::path& path,
-    const json& data,
-    std::string& outError)
+bool ReplaceValidated(const std::filesystem::path& path, const json& data, std::string& outError)
 {
     std::filesystem::path temporary = path;
     temporary += ".pending";
@@ -115,75 +112,49 @@ bool ReplaceValidated(
 }
 }
 
-bool CapabilityEditor::AddApplication(
-    const std::filesystem::path& path,
-    const std::string& executable,
-    std::string& outError) const
+bool CapabilityEditor::AddApplication(const std::filesystem::path& path, const std::string& executable, std::string& outError) const
 {
     return Apply(path, Mutation::AddApplication, executable, {}, false, false,
         outError, {}, actions::ExecutionMode::Supervised);
 }
 
-bool CapabilityEditor::RemoveApplication(
-    const std::filesystem::path& path,
-    const std::string& executable,
-    std::string& outError) const
+bool CapabilityEditor::RemoveApplication(const std::filesystem::path& path, const std::string& executable, std::string& outError) const
 {
     return Apply(path, Mutation::RemoveApplication, executable, {}, false, false,
         outError, {}, actions::ExecutionMode::Supervised);
 }
 
-bool CapabilityEditor::AddControl(
-    const std::filesystem::path& path,
-    const std::string& executable,
-    const std::string& control,
-    std::string& outError) const
+bool CapabilityEditor::AddControl(const std::filesystem::path& path,
+    const std::string& executable, const std::string& control, std::string& outError) const
 {
     return Apply(path, Mutation::AddControl, executable, control, false, false,
         outError, {}, actions::ExecutionMode::Supervised);
 }
 
-bool CapabilityEditor::RemoveControl(
-    const std::filesystem::path& path,
-    const std::string& executable,
-    const std::string& control,
-    std::string& outError) const
+bool CapabilityEditor::RemoveControl(const std::filesystem::path& path,
+    const std::string& executable, const std::string& control, std::string& outError) const
 {
     return Apply(path, Mutation::RemoveControl, executable, control, false, false,
         outError, {}, actions::ExecutionMode::Supervised);
 }
 
-bool CapabilityEditor::SetInternetAccess(
-    const std::filesystem::path& path,
-    const bool enabled,
-    const bool automaticLookup,
-    std::string& outError) const
+bool CapabilityEditor::SetInternetAccess(const std::filesystem::path& path,
+    const bool enabled, const bool automaticLookup, std::string& outError) const
 {
     return Apply(path, Mutation::Internet, {}, {}, enabled, automaticLookup,
         outError, {}, actions::ExecutionMode::Supervised);
 }
 
-bool CapabilityEditor::SetCameraAccess(
-    const std::filesystem::path& path,
-    const bool enabled,
-    const bool autonomousCapture,
-    std::string& outError) const
+bool CapabilityEditor::SetCameraAccess(const std::filesystem::path& path,
+    const bool enabled, const bool autonomousCapture, std::string& outError) const
 {
     return Apply(path, Mutation::Camera, {}, {}, enabled, autonomousCapture,
         outError, {}, actions::ExecutionMode::Supervised);
 }
 
-bool CapabilityEditor::SetDesktopControl(
-    const std::filesystem::path& path,
-    const bool pointer,
-    const bool keyboard,
-    const bool applicationLaunch,
-    const bool rawCoordinates,
-    const bool visualTargeting,
-    const bool autonomous,
-    const actions::CapabilitySettings::DesktopControl::InputScope scope,
-    const bool allowCommandSurfaces,
-    std::string& outError) const
+bool CapabilityEditor::SetDesktopControl(const std::filesystem::path& path, const bool pointer, const bool keyboard,
+    const bool applicationLaunch, const bool rawCoordinates, const bool visualTargeting, const bool autonomous,
+    const actions::CapabilitySettings::DesktopControl::InputScope scope, const bool allowCommandSurfaces, std::string& outError) const
 {
     DesktopControlChange change;
     change.pointer = pointer;
@@ -198,34 +169,21 @@ bool CapabilityEditor::SetDesktopControl(
         change, actions::ExecutionMode::Supervised);
 }
 
-bool CapabilityEditor::SetExecutionMode(
-    const std::filesystem::path& path,
-    const actions::ExecutionMode mode,
-    std::string& outError) const
+bool CapabilityEditor::SetExecutionMode(const std::filesystem::path& path, const actions::ExecutionMode mode, std::string& outError) const
 {
     return Apply(path, Mutation::Mode, {}, {}, false, false, outError, {}, mode);
 }
 
-bool CapabilityEditor::SetInternetBrowser(
-    const std::filesystem::path& path,
-    const bool visibleBrowser,
-    const bool autonomousResearch,
-    std::string& outError) const
+bool CapabilityEditor::SetInternetBrowser(const std::filesystem::path& path,
+    const bool visibleBrowser, const bool autonomousResearch, std::string& outError) const
 {
     return Apply(
         path, Mutation::Browser, {}, {}, visibleBrowser, autonomousResearch, outError, {},
         actions::ExecutionMode::Supervised);
 }
 
-bool CapabilityEditor::Apply(
-    const std::filesystem::path& path,
-    const Mutation mutation,
-    const std::string& executable,
-    const std::string& control,
-    const bool enabled,
-    const bool automaticLookup,
-    std::string& outError,
-    const DesktopControlChange& desktop,
+bool CapabilityEditor::Apply(const std::filesystem::path& path, const Mutation mutation, const std::string& executable,
+    const std::string& control, const bool enabled, const bool automaticLookup, std::string& outError, const DesktopControlChange& desktop,
     const actions::ExecutionMode mode) const
 {
     const bool applicationMutation = mutation == Mutation::AddApplication ||

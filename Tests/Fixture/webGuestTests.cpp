@@ -1,3 +1,5 @@
+#include "Core/profile.h"
+#include "LLM/endpointSettings.h"
 #include "testSupport.h"
 #include "Presence/webGuestRuntime.h"
 #include "Core/messageRouter.h"

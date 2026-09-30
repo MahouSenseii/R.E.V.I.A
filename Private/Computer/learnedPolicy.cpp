@@ -76,8 +76,7 @@ ArtifactLoad Refuse(const ArtifactRejection rejection, std::string detail)
     return load;
 }
 
-ComputerDecision Answer(
-    const ComputerDecisionKind kind, const ComputerReasonCode code, std::string detail)
+ComputerDecision Answer(const ComputerDecisionKind kind, const ComputerReasonCode code, std::string detail)
 {
     ComputerDecision decision;
     decision.kind = kind;
@@ -129,11 +128,8 @@ std::string ToString(const ArtifactRejection value)
     return "none";
 }
 
-std::vector<double> CandidateFeatures(
-    const ComputerSubgoal& subgoal,
-    const ObservedCandidate& candidate,
-    const std::size_t index,
-    const std::size_t candidateCount)
+std::vector<double> CandidateFeatures(const ComputerSubgoal& subgoal,
+    const ObservedCandidate& candidate, const std::size_t index, const std::size_t candidateCount)
 {
     // Mirrors Tools/Computer/features.py::candidate_features exactly, including the
     // order. See that file for why each feature is what it is -- this is the deployment
@@ -211,12 +207,8 @@ std::vector<double> CandidateFeatures(
     };
 }
 
-std::string BehaviourDigestForTest(
-    const std::uint32_t featureVersion,
-    const std::vector<std::string>& featureNames,
-    const std::vector<double>& weights,
-    const double abstainBelow,
-    const std::vector<std::string>& applications,
+std::string BehaviourDigestForTest(const std::uint32_t featureVersion, const std::vector<std::string>& featureNames,
+    const std::vector<double>& weights, const double abstainBelow, const std::vector<std::string>& applications,
     const std::vector<std::string>& intents)
 {
     return Sha256Hex(BehaviourDigestInput(
@@ -493,8 +485,7 @@ bool LearnedComputerPolicy::WithinQualifiedScope(const ComputerSubgoal& subgoal)
     return applicationQualified && intentQualified;
 }
 
-ComputerDecision LearnedComputerPolicy::Decide(
-    const ComputerTaskContext& context, std::stop_token stopToken)
+ComputerDecision LearnedComputerPolicy::Decide(const ComputerTaskContext& context, std::stop_token stopToken)
 {
     if (stopToken.stop_requested())
     {

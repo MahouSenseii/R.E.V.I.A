@@ -55,23 +55,11 @@ enum class StopReason
     // The loop asked what to do next and got no usable answer. Also distinct from
     // failure: nothing went wrong, she just could not see a next move.
     Undecided,
-    // The action reported success and the check did not confirm it, for an action whose
-    // second attempt could happen a second time.
-    //
-    // Deliberately not VerificationFailed, which says "it did not work". This says "it
-    // is not known whether it worked", and the two want opposite responses: the first
-    // invites another attempt, the second forbids one. Retrying here is how a message
-    // gets sent twice because a receipt went missing.
+    // The action succeeded but its effect is unknown; retry could duplicate it.
+    // Stop for user review rather than treating missing evidence as failure.
     UnverifiedEffect,
-    // The task needs something from the person before it can go on -- most often exact
-    // content it was never given.
-    //
-    // A fourth distinct outcome, and it has to be. It is not Undecided: nothing is
-    // stuck and nothing was ambiguous. It is not Failed: nothing went wrong. It is not
-    // Blocked-by-policy: no boundary was reached. It is the runtime declining to
-    // supply, from a model, a value that was supposed to come from the user -- which is
-    // the alternative to typing a plausible substitute into a field somebody is about
-    // to submit.
+    // Requires user input, such as missing exact content; never invents a substitute.
+    // Distinct from ambiguity, execution failure, and policy refusal.
     NeedsInput
 };
 
@@ -83,13 +71,7 @@ struct GoalBudget
     std::uint32_t maxRetriesPerStep = 2;
     std::uint32_t maxTotalRetries = 6;
     std::uint32_t maxTokens = 8192;
-    // A ceiling that works when the backend reports nothing.
-    //
-    // maxTokens can only bound what is measured, and a backend that returns no usage
-    // makes every decision free as far as it is concerned. Counting the requests
-    // themselves needs no cooperation from anyone, so the run is bounded either way.
-    // Set high enough that it is a backstop rather than the thing that normally stops a
-    // run -- the action and no-progress bounds are meant to do that first.
+    // Request-count backstop remains enforceable when the backend omits token usage.
     std::uint32_t maxPlannerRequests = 60;
     std::uint64_t maxDurationMs = 120000;
     // How many times in a row the loop may choose the identical action before it is
@@ -115,18 +97,8 @@ struct GoalSpend
     std::uint64_t elapsedMs = 0;
 };
 
-// What a check actually established. Three values, because two cannot carry the
-// difference that matters.
-//
-// Verified and Failed are both answers: the evidence was there and it said yes, or the
-// evidence was there and it said no. Unknown is the absence of an answer -- the check
-// could not run, or it ran and the thing it needed to look at was not in what came
-// back. A password field has no readable value; a truncated listing is not a statement
-// about what is missing from it.
-//
-// Collapsing Unknown into Failed is what makes a loop retry an action that already
-// happened, and collapsing it into Verified is what makes a goal report success it
-// never observed. Both are worse than saying "I could not tell".
+// Verified and Failed reflect observed evidence; Unknown means insufficient evidence.
+// Unknown must not be treated as failure for retry or as proof of success.
 enum class VerificationOutcome
 {
     Unknown,
@@ -134,19 +106,8 @@ enum class VerificationOutcome
     Failed
 };
 
-// What success actually looks like, as something that can be checked rather than
-// searched for.
-//
-// TextObserved is what every step had before this existed: the check's output is
-// searched for `GoalStep::expected` as a substring. It is retained for compatibility
-// and for the steps no derivation covers, and it is weak in ways that matter -- it
-// matches text that was already there, it matches a sentence saying the opposite, and
-// it matches "Notes-old" when the step created "Notes". A TextObserved result must
-// never qualify a training label or newly approved consequential autonomy.
-//
-// The rest ask a question the evidence can actually answer. They are derived by the
-// runtime from the step's own action and check, never read from model output, because
-// a postcondition a model wrote for itself is a mark it awards itself.
+// Runtime derives typed conditions from action/check pairs, never model output.
+// Legacy TextObserved cannot qualify training labels or consequential autonomy.
 enum class PostconditionKind
 {
     TextObserved,
@@ -161,30 +122,10 @@ enum class PostconditionKind
     // The window inspected belongs to this executable AND is the one in front. Being
     // able to find a window is not the same as it having focus.
     ForegroundApplicationIs,
-    // A named control's current value is exactly this.
-    //
-    // Note what this does and does not prove. It proves text reached a box. It does not
-    // prove the box was sent, posted or submitted -- those are different effects with
-    // no evidence here, and a step that performs one of them gets no typed
-    // postcondition rather than a flattering one.
+    // Proves text reached the control, not that it was sent, posted, or submitted.
     ControlValueIs,
-    // The window responded to being pressed.
-    //
-    // The narrowest honest thing that can be said about a button. A window inspection
-    // cannot prove that "Zoom in" zoomed in -- there is no evidence of that anywhere in
-    // an accessibility tree -- and that left every press permanently Unknown, which
-    // meant no press could ever support a label about anything at all.
-    //
-    // This asks a smaller question the evidence can actually answer: did the control
-    // that was pressed change the state of the window it is in? The runtime takes the
-    // same read-only check before the action and after it and compares what came back.
-    // Both observations are its own, so nothing grades itself, and the cost is one
-    // extra read-only inspection on the steps that use it.
-    //
-    // What it establishes is that the target was real, reachable, and did something --
-    // which is a fact about *target selection*. It says nothing about whether what it
-    // did was what was wanted: pressing Delete and pressing Save both change a window.
-    // Anything built on this has to keep those two apart.
+    // Compares runtime observations before/after a press to prove window change.
+    // Supports target-selection evidence only, not that the intended effect occurred.
     ControlStateChanged
 };
 
@@ -222,13 +163,7 @@ struct StepAttempt
     // boolean.
     VerificationOutcome outcome = VerificationOutcome::Unknown;
     PostconditionKind checkedBy = PostconditionKind::TextObserved;
-    // What the step's descriptive `expected` text would have concluded on its own.
-    //
-    // Under the typed contract it is a diagnostic and not a gate: a deletion's evidence
-    // is a listing the deleted name is absent from, so demanding the name be found
-    // there contradicts the very thing being proved. Recorded anyway, because a typed
-    // pass whose description disagrees is worth seeing in the record even when it is
-    // not worth failing the step over.
+    // Descriptive substring result is diagnostic under typed verification, not a gate.
     VerificationOutcome expectedTextSeen = VerificationOutcome::Unknown;
     std::string observation;
     std::string failure;
@@ -254,27 +189,9 @@ struct GoalStep
     std::vector<StepAttempt> attempts;
 };
 
-// Which verification contract a goal's steps are judged under.
-//
-// Versioned because the rule changed and a goal persisted by an older build must keep
-// being read the way it was written. A resumed goal carries its own schema; it is never
-// upgraded underneath a run.
-//
-// 0 -- LegacyCombined. A typed postcondition AND the step's descriptive `expected`
-//      substring both had to hold. Correct for the positive shapes and self-
-//      contradictory for the negative one: proving a file is gone meant finding its
-//      name in a listing it is gone from, so a deletion that worked was recorded as an
-//      effect that could not be verified (ISSUE-REVIA-0069).
-// 1 -- TypedContract. Where the runtime derived a typed postcondition, that condition
-//      is the contract and is evaluated alone. The descriptive text is kept for display
-//      and diagnosis. Where no typed condition was derived, the legacy substring rule
-//      is still the whole rule, so every shape the derivation does not recognise is
-//      judged exactly as it was before.
-//
-// What this does not do is let anything outside the runtime choose the question. The
-// postcondition is still derived from the step's own validated action by
-// DerivePostcondition and never parsed from a model's output, so making it the contract
-// hands no grading authority to the thing being graded.
+// Persisted goals retain their schema during resumption.
+// Schema 0 requires typed condition plus expected substring; schema 1 uses the typed
+// condition alone when derived, otherwise the legacy substring. Models choose neither.
 inline constexpr std::uint32_t LegacyCombinedVerification = 0;
 inline constexpr std::uint32_t TypedContractVerification = 1;
 inline constexpr std::uint32_t CurrentVerificationSchema = TypedContractVerification;
@@ -306,44 +223,16 @@ struct Goal
     std::chrono::system_clock::time_point updatedAt = std::chrono::system_clock::now();
 };
 
-// What the step's own action and check make it possible to prove.
-//
-// Derived, never parsed. A postcondition supplied from outside would be the step
-// grading itself, and the whole point of a check is that it is not the actor's word.
-// The derivation is deterministic and knows only a handful of shapes; anything it does
-// not recognise falls back to TextObserved with `expected`, which is exactly the
-// behaviour every step had before.
-//
-// The shapes it knows are the ones where the action says precisely what the check
-// should find: a directory that must now contain what was created or moved into it, a
-// directory that must no longer contain what was recycled, a window that must belong
-// to the application that was launched, an edit control that must hold the text that
-// was typed into it.
-//
-// Sending, posting and submitting are deliberately absent. There is no evidence in a
-// window inspection that a message left the machine, so a step that sends one gets no
-// typed postcondition -- which leaves it Unknown rather than giving it a check it
-// would pass for the wrong reason.
+// Derives supported conditions from validated action/check pairs. Unsupported
+// shapes use TextObserved; window inspection cannot prove sends, posts, or submissions.
 [[nodiscard]] Postcondition DerivePostcondition(const GoalStep& step);
 
-// Whether the check actually established the postcondition, from what the check
-// returned. Pure, so the question "would this evidence have proved it?" is answerable
-// in a test with no desktop and no filesystem.
-// The window's readable state, as one comparable string.
-//
-// Used by the runner to take a baseline before a press and by the evaluation to compare
-// against it afterwards. One function, deliberately, because two spellings of "the
-// state" is how a comparison starts reporting changes that are really formatting.
+// Canonical readable window state shared by pre-action baselines and post-action checks.
 [[nodiscard]] std::string CanonicalWindowState(const actions::ActionResult& result);
 
-[[nodiscard]] VerificationOutcome EvaluatePostcondition(
-    const Postcondition& postcondition, const actions::ActionResult& result);
+[[nodiscard]] VerificationOutcome EvaluatePostcondition(const Postcondition& postcondition, const actions::ActionResult& result);
 
-// What a step's evidence established, under the goal's own verification contract.
-//
-// Pure, so "would this evidence have proved it?" stays answerable in a test with no
-// desktop and no filesystem -- including the question this type exists for, which is
-// whether the two contracts disagree about the same evidence.
+// Evaluates supplied evidence under the goal's persisted verification contract.
 struct VerificationJudgement
 {
     VerificationOutcome outcome = VerificationOutcome::Unknown;
@@ -362,11 +251,8 @@ struct VerificationJudgement
 //
 // `verificationSchema` is the goal's, not the build's: a goal written under the legacy
 // contract is judged under the legacy contract however new the code reading it is.
-[[nodiscard]] VerificationJudgement JudgeStep(
-    std::uint32_t verificationSchema,
-    const Postcondition& postcondition,
-    const std::string& expectedText,
-    const actions::ActionResult& result);
+[[nodiscard]] VerificationJudgement JudgeStep(std::uint32_t verificationSchema, const Postcondition& postcondition,
+    const std::string& expectedText, const actions::ActionResult& result);
 
 [[nodiscard]] std::string ToString(VerificationOutcome value);
 [[nodiscard]] VerificationOutcome VerificationOutcomeFromString(const std::string& value);
@@ -383,18 +269,12 @@ struct VerificationJudgement
 // when policy stopped it: only the user can change what stopped it. Not when it has sat
 // untouched for a day: by then it has been left, not interrupted. Both stay listed under
 // /goals and can be resumed on request.
-[[nodiscard]] bool WorthResumingUnprompted(
-    const Goal& goal, std::chrono::system_clock::time_point now);
+[[nodiscard]] bool WorthResumingUnprompted(const Goal& goal, std::chrono::system_clock::time_point now);
 [[nodiscard]] std::string NewGoalId();
 [[nodiscard]] std::string NewStepId();
 
-// Derives a goal's capability scope from the configured profile settings. The result is
-// never wider than the input: approved roots and applications are carried across
-// unchanged, mode is forced to ApprovedScope, root creation is refused, and the
-// auto-approval ceiling is capped at ReversibleWrite. A goal must not be able to grant
-// itself authority the interactive path does not already have, and a plan the model
-// authored must not be able to name its own scope at all.
-[[nodiscard]] actions::CapabilitySettings NarrowScopeForGoal(
-    actions::CapabilitySettings configured);
+// Preserves approved roots/applications, forces ApprovedScope, refuses root creation,
+// and caps automatic approval at ReversibleWrite. Never widens configured authority.
+[[nodiscard]] actions::CapabilitySettings NarrowScopeForGoal(actions::CapabilitySettings configured);
 
 } // namespace revia::goals

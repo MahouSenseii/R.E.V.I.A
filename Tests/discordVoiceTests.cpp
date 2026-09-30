@@ -1,3 +1,5 @@
+#include "Presence/presenceSettings.h"
+#include "Speech/speechSettings.h"
 #include "testSupport.h"
 #include "speechServiceTestAccess.h"
 #include "Presence/presenceRuntime.h"

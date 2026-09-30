@@ -49,10 +49,7 @@ std::size_t EstimateTokens(const std::string& text)
     return text.size();
 }
 
-std::string CompactToTokenBudget(
-    const std::string& text,
-    const std::size_t tokenBudget,
-    const std::string& marker)
+std::string CompactToTokenBudget(const std::string& text, const std::size_t tokenBudget, const std::string& marker)
 {
     if (text.size() <= tokenBudget) return text;
     if (tokenBudget == 0) return {};

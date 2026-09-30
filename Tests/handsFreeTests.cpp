@@ -1,3 +1,4 @@
+#include "Initiative/initiativeSettings.h"
 #include "reviaSessionTestAccess.h"
 #include "Initiative/attentionPolicy.h"
 #include "Perception/microphoneUse.h"
