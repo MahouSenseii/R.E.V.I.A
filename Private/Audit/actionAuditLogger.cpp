@@ -175,30 +175,20 @@ bool ActionAuditLogger::WriteRecord(const actions::ActionRequest& request, const
             }
         }
 
-        nlohmann::json entry = {
-            {"record_type", recordType},
-            {"audit_transaction", transactionId},
-            {"timestamp", UtcTimestamp()},
-            {"action_id", request.id},
-            {"requested_by", request.requestedBy},
-            {"action", actions::ToString(request.type)},
-            {"source", actions::PathToUtf8(request.source)},
-            {"destination", actions::PathToUtf8(request.destination)},
-            {"application", request.application},
-            {"window_title", request.windowTitle},
-            {"control", request.control},
-            {"value_length", request.value.size()},
+        nlohmann::json entry = {{"record_type", recordType}, {"audit_transaction", transactionId}, {"timestamp", UtcTimestamp()},
+            {"action_id", request.id}, {"requested_by", request.requestedBy},
+            {"runtime_subject",
+                {{"companion_id", request.authorityStamp.companionId}, {"session_id", request.authorityStamp.sessionId},
+                    {"generation", request.authorityStamp.generation}, {"task_id", request.authorityStamp.taskId},
+                    {"attempt_id", request.authorityStamp.attemptId}, {"policy_version", request.authorityStamp.policyVersion}}},
+            {"action", actions::ToString(request.type)}, {"source", actions::PathToUtf8(request.source)},
+            {"destination", actions::PathToUtf8(request.destination)}, {"application", request.application},
+            {"window_title", request.windowTitle}, {"control", request.control}, {"value_length", request.value.size()},
             {"canonical_source", actions::PathToUtf8(decision.canonicalSource)},
-            {"canonical_destination", actions::PathToUtf8(decision.canonicalDestination)},
-            {"dry_run", request.dryRun},
-            {"risk", actions::ToString(decision.risk)},
-            {"policy_verdict", actions::ToString(decision.verdict)},
-            {"policy_reason", decision.reason},
-            {"attempted", result.attempted},
-            {"succeeded", result.succeeded},
-            {"result", result.message},
-            {"backend", result.backend}
-        };
+            {"canonical_destination", actions::PathToUtf8(decision.canonicalDestination)}, {"dry_run", request.dryRun},
+            {"risk", actions::ToString(decision.risk)}, {"policy_verdict", actions::ToString(decision.verdict)},
+            {"policy_reason", decision.reason}, {"attempted", result.attempted}, {"succeeded", result.succeeded},
+            {"result", result.message}, {"backend", result.backend}};
         if (std::string_view(recordType) == "intent")
         {
             // An orphan intent after a crash means unknown execution, not a

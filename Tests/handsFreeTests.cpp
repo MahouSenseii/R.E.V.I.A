@@ -2,6 +2,7 @@
 #include "reviaSessionTestAccess.h"
 #include "Initiative/attentionPolicy.h"
 #include "Perception/microphoneUse.h"
+#include "Runtime/companion.h"
 #include "Speech/addresseeGate.h"
 
 #include <iostream>
@@ -67,9 +68,14 @@ revia::speech::RecognitionEvent Heard(const std::string& phase, const std::strin
 void TestVoicesInTheRoomNeitherInterruptNorReachHer()
 {
     revia::tests::ScopedTestDirectory directory;
-    ReviaSession session;
+    ReviaSession session(revia::runtime::CompanionPaths(directory.root,
+        {"hands-free-fixture", "Hands-free fixture", "assistant", false}));
     const std::stop_token operation = Access::OperationToken(session);
 
+    Access::Hear(session, Heard("Transcript", "Revia, how is it going?"));
+    Check(Access::TakeOfferedInput(session).empty() && !operation.stop_requested(),
+        "A session that was not started admitted speech or cancelled work.");
+    Access::MarkStudioStarted(session, true);
     Access::Hear(session, Heard("SpeechDetected"));
     Check(!operation.stop_requested(), "Detected speech cancelled the operation in progress.");
     Access::Hear(session, Heard("Transcript", "no I said the blue one"));
@@ -77,9 +83,9 @@ void TestVoicesInTheRoomNeitherInterruptNorReachHer()
         "Speech not addressed to her cancelled work or became a message.");
 
     Access::Hear(session, Heard("Transcript", "Revia, how is it going?"));
-    Check(Access::TakeOfferedInput(session) == "Revia, how is it going?" &&
-        operation.stop_requested(),
+    Check(Access::TakeOfferedInput(session) == "Revia, how is it going?" && operation.stop_requested(),
         "Speech addressed to her did not reach her or supersede the reply in progress.");
+    Access::MarkStudioStarted(session, false);
 }
 
 void TestACallKeepsHerQuiet()

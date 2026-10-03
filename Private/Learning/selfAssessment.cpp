@@ -5,6 +5,7 @@
 #include "Learning/selfAssessment.h"
 
 #include "Actions/actionTypes.h"
+#include "Memory/sensitiveContent.h"
 
 #include <fstream>
 #include <cmath>
@@ -32,6 +33,78 @@ std::string Percentage(const std::uint64_t part, const std::uint64_t whole)
 constexpr const char* ConversationLatencyCategory = "conversation_latency";
 constexpr const char* FirstAudioLatencyCategory = "first_audio_latency";
 constexpr const char* RuntimeReliabilityCategory = "runtime_reliability";
+
+json GapJson(const CapabilityGapObservation& value)
+{
+    return {{"goal", value.goal}, {"attempts", value.attempts}, {"successes", value.successes}, {"failures", value.failures},
+        {"reason", static_cast<int>(value.reason)}, {"cause", value.cause}, {"causeProven", value.causeProven},
+        {"missingCapability", value.missingCapability}, {"evidence", value.evidence}, {"partialEffects", value.partialEffects},
+        {"nextStep", value.nextStep}, {"implementationHints", value.implementationHints}, {"retestConditions", value.retestConditions},
+        {"owner", value.owner}, {"priority", value.priority}, {"dependencies", value.dependencies}};
+}
+
+bool ValidGap(const CapabilityGapObservation& value)
+{
+    const auto bounded = [](const std::vector<std::string>& values)
+    {
+        return values.size() <= 16 && std::all_of(values.begin(), values.end(),
+            [](const auto& text) { return !text.empty() && text.size() <= 1024; });
+    };
+    if (value.goal.empty() || value.goal.size() > 1024 || value.attempts.empty() || value.failures.empty() || !bounded(value.attempts) ||
+        !bounded(value.successes) || !bounded(value.failures) || static_cast<int>(value.reason) < 0 || static_cast<int>(value.reason) > 5 ||
+        value.cause.size() > 1024 || value.missingCapability.size() > 1024 ||
+        (value.reason == CapabilityGapReason::MissingCapability && value.missingCapability.empty()) || value.evidence.empty() ||
+        value.evidence.size() > 4096 || value.partialEffects.size() > 1024 || value.nextStep.empty() || value.nextStep.size() > 1024 ||
+        value.implementationHints.size() > 1024 || value.retestConditions.empty() || value.retestConditions.size() > 1024 ||
+        value.owner.empty() || value.owner.size() > 128 || value.priority > 10 || value.dependencies.empty() || value.dependencies.size() > 16)
+        return false;
+    for (const auto& [name, version] : value.dependencies)
+        if (name.empty() || name.size() > 128 || version.empty() || version.size() > 256) return false;
+    return !memory::ContainsSensitiveContent(GapJson(value).dump());
+}
+
+CapabilityGapObservation DecodeGap(const json& value)
+{
+    CapabilityGapObservation result;
+    result.goal = value.at("goal").get<std::string>();
+    result.attempts = value.at("attempts").get<std::vector<std::string>>();
+    result.successes = value.at("successes").get<std::vector<std::string>>();
+    result.failures = value.at("failures").get<std::vector<std::string>>();
+    result.reason = static_cast<CapabilityGapReason>(value.at("reason").get<int>());
+    result.cause = value.at("cause").get<std::string>();
+    result.causeProven = value.at("causeProven").get<bool>();
+    result.missingCapability = value.at("missingCapability").get<std::string>();
+    result.evidence = value.at("evidence").get<std::string>();
+    result.partialEffects = value.at("partialEffects").get<std::string>();
+    result.nextStep = value.at("nextStep").get<std::string>();
+    result.implementationHints = value.at("implementationHints").get<std::string>();
+    result.retestConditions = value.at("retestConditions").get<std::string>();
+    result.owner = value.at("owner").get<std::string>();
+    result.priority = value.at("priority").get<std::uint32_t>();
+    result.dependencies = value.at("dependencies").get<std::map<std::string, std::string>>();
+    if (!ValidGap(result)) throw std::runtime_error("Invalid bounded capability gap.");
+    return result;
+}
+
+std::optional<std::map<std::string, std::string>> RelevantDependencies(const CapabilityGapObservation& gap,
+    const std::map<std::string, std::string>& current)
+{
+    std::map<std::string, std::string> relevant;
+    for (const auto& [name, ignored] : gap.dependencies)
+    {
+        const auto found = current.find(name);
+        if (found == current.end() || found->second.empty() || found->second.size() > 256) return std::nullopt;
+        relevant[name] = found->second;
+    }
+    return relevant;
+}
+
+bool RetestEligible(const SelfImprovementTask& task, const std::map<std::string, std::string>& current, const bool ownerRequested)
+{
+    if (!task.gap || task.gapAttempts.empty() || task.gapAttempts.size() >= 3 || task.gapAttempts.back().verifiedAcceptance) return false;
+    const auto relevant = RelevantDependencies(*task.gap, current);
+    return relevant && (ownerRequested || *relevant != task.gapAttempts.back().dependencies);
+}
 
 // Histories written before these categories were named this way. Translated on load so
 // an older record still guards the problem it describes rather than being restored as
@@ -88,6 +161,23 @@ bool DecodeHistoryRecord(const json& record, SelfImprovementTask& task, bool& re
         !ReadHistoryField(record, "researchAllowed", task.researchAllowed, isBool) ||
         !ReadHistoryField(record, "researchCompleted", task.researchCompleted, isBool)) return false;
     task.category = CanonicalCategory(std::move(task.category));
+    if (record.contains("gap"))
+    {
+        task.gap = DecodeGap(record.at("gap"));
+        const auto& attempts = record.at("gapAttempts");
+        if (!attempts.is_array() || attempts.empty() || attempts.size() > 3) return false;
+        for (const auto& attempt : attempts)
+        {
+            CapabilityGapAttempt decoded{attempt.at("dependencies").get<std::map<std::string, std::string>>(),
+                attempt.at("verifiedAcceptance").get<bool>(), attempt.at("evidence").get<std::string>()};
+            const auto relevant = RelevantDependencies(*task.gap, decoded.dependencies);
+            if (!relevant || *relevant != decoded.dependencies || decoded.evidence.empty() || decoded.evidence.size() > 4096)
+                return false;
+            task.gapAttempts.push_back(std::move(decoded));
+        }
+        if (resolved != task.gapAttempts.back().verifiedAcceptance) return false;
+    }
+    else if (record.contains("gapAttempts")) return false;
     return true;
 }
 }
@@ -219,6 +309,11 @@ bool SelfAssessmentEngine::ResolveTask(const std::string& taskId, std::string& o
             return false;
         }
         retired = *found;
+        if (retired.gap)
+        {
+            outError = "A capability gap closes only after its recorded acceptance check.";
+            return false;
+        }
     }
 
     // Written first, and only then forgotten.
@@ -391,6 +486,7 @@ SelfAssessmentSnapshot SelfAssessmentEngine::Snapshot() const
 
 bool SelfAssessmentEngine::AppendRecord(const json& record, std::string& outError)
 {
+    const std::lock_guard persistenceLock(persistenceMutex);
     std::filesystem::path destination;
     {
         std::lock_guard lock(mutex);
@@ -413,6 +509,7 @@ bool SelfAssessmentEngine::AppendRecord(const json& record, std::string& outErro
     // so a full disk or a revoked permission produced a task the panel listed as
     // durable and the next start had never heard of.
     file.flush();
+    file.close();
     if (!file.good())
     {
         outError = "The self-improvement history could not be written: " +
@@ -422,9 +519,9 @@ bool SelfAssessmentEngine::AppendRecord(const json& record, std::string& outErro
     return true;
 }
 
-bool SelfAssessmentEngine::PersistTask(const SelfImprovementTask& task, std::string& outError)
+bool SelfAssessmentEngine::PersistTask(const SelfImprovementTask& task, std::string& outError, const bool resolved)
 {
-    const json record = {
+    json record = {
         {"id", task.id}, {"category", task.category},
         {"observedProblem", task.observedProblem}, {"evidence", task.evidence},
         {"confidence", task.confidence}, {"expectedBenefit", task.expectedBenefit},
@@ -432,12 +529,85 @@ bool SelfAssessmentEngine::PersistTask(const SelfImprovementTask& task, std::str
         {"relatedComponents", task.relatedComponents},
         {"researchAllowed", task.researchAllowed},
         {"researchCompleted", task.researchCompleted},
-        {"resolved", false}
+        {"resolved", resolved}
     };
+    if (task.gap)
+    {
+        record["gap"] = GapJson(*task.gap);
+        record["gapAttempts"] = json::array();
+        for (const auto& attempt : task.gapAttempts)
+            record["gapAttempts"].push_back({{"dependencies", attempt.dependencies}, {"verifiedAcceptance", attempt.verifiedAcceptance},
+                {"evidence", attempt.evidence}});
+    }
     if (AppendRecord(record, outError)) return true;
     std::lock_guard lock(mutex);
     lastPersistenceError = outError;
     return false;
+}
+
+bool SelfAssessmentEngine::RecordGap(const CapabilityGapObservation& observation, std::string& id, std::string& error)
+{
+    const std::lock_guard operationLock(gapMutex);
+    if (!ValidGap(observation)) { error = "Capability gap lacks bounded observed evidence or dependencies."; return false; }
+    {
+        const std::lock_guard lock(mutex);
+        if (snapshot.openTasks.size() >= 256) { error = "Self-assessment task capacity is exhausted."; return false; }
+        for (const auto& task : snapshot.openTasks)
+            if (task.gap && task.gap->goal == observation.goal && task.gap->missingCapability == observation.missingCapability &&
+                task.gap->reason == observation.reason) { id = task.id; error.clear(); return true; }
+    }
+    SelfImprovementTask task;
+    task.id = actions::NewActionId();
+    task.category = "capability_gap:" + task.id;
+    task.observedProblem = observation.reason == CapabilityGapReason::MissingCapability ? observation.missingCapability : observation.failures.front();
+    task.evidence = observation.evidence;
+    task.relatedComponents = {"Skills"};
+    task.gap = observation;
+    task.gapAttempts.push_back({observation.dependencies, false, observation.evidence});
+    if (!PersistTask(task, error)) return false;
+    const std::lock_guard lock(mutex);
+    openCategories.insert(task.category);
+    snapshot.openTasks.push_back(task);
+    id = task.id;
+    error.clear();
+    return true;
+}
+
+bool SelfAssessmentEngine::CanRetest(const std::string& id, const std::map<std::string, std::string>& dependencies,
+    const bool ownerRequested) const
+{
+    const std::lock_guard lock(mutex);
+    for (const auto& task : snapshot.openTasks) if (task.id == id) return RetestEligible(task, dependencies, ownerRequested);
+    return false;
+}
+
+bool SelfAssessmentEngine::RecordGapAttempt(const std::string& id, const std::map<std::string, std::string>& dependencies,
+    const bool ownerRequested, const bool verified, const std::string& evidence, std::string& error)
+{
+    const std::lock_guard operationLock(gapMutex);
+    SelfImprovementTask updated;
+    {
+        const std::lock_guard lock(mutex);
+        const auto found = std::find_if(snapshot.openTasks.begin(), snapshot.openTasks.end(), [&](const auto& task) { return task.id == id; });
+        if (found == snapshot.openTasks.end() || !RetestEligible(*found, dependencies, ownerRequested) || evidence.empty() ||
+            evidence.size() > 4096 || memory::ContainsSensitiveContent(evidence))
+        {
+            error = "Gap retest lacks relevant change, bounded request or acceptance evidence.";
+            return false;
+        }
+        updated = *found;
+    }
+    updated.gapAttempts.push_back({*RelevantDependencies(*updated.gap, dependencies), verified, evidence});
+    if (!PersistTask(updated, error, verified)) return false;
+    const std::lock_guard lock(mutex);
+    const auto found = std::find_if(snapshot.openTasks.begin(), snapshot.openTasks.end(), [&](const auto& task) { return task.id == id; });
+    if (found != snapshot.openTasks.end())
+    {
+        if (verified) { openCategories.erase(found->category); snapshot.openTasks.erase(found); }
+        else *found = std::move(updated);
+    }
+    error.clear();
+    return true;
 }
 
 bool SelfAssessmentEngine::PersistResolution(const SelfImprovementTask& task, std::string& outError)

@@ -5,6 +5,7 @@
 #include "LLM/responseTypes.h"
 #include <cstdint>
 #include <filesystem>
+#include <fstream>
 #include <string>
 #include <source_location>
 #include <functional>
@@ -28,6 +29,7 @@ class logger
 {
 public:
     logger();
+    explicit logger(std::filesystem::path directory);
     ~logger();
 
 
@@ -44,6 +46,10 @@ public:
 
 private:
     void Write(const std::string& severity, const std::string& message, bool bUseErrorStream);
+    std::filesystem::path capturedDirectory;
+    std::ofstream privateLogFile;
+    std::filesystem::path privateLogFilePath;
+    std::uintmax_t privateLogFileBytes = 0;
     std::mutex sinkMutex;
     std::function<void(const std::string&)> sink;
 };

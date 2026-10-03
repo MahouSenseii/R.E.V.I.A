@@ -109,8 +109,10 @@ bool ToAbsolute(const int x, const int y, LONG& outX, LONG& outY)
     return true;
 }
 
-bool Send(std::vector<INPUT> events)
+bool Send(std::vector<INPUT> events, const ActionRequest* admission = nullptr)
 {
+    if (admission && admission->beforeEffect && !admission->beforeEffect({}).empty())
+        return false;
     if (events.empty())
     {
         return false;
@@ -383,6 +385,11 @@ ActionResult LaunchApplication(const ActionRequest& request, const PolicyDecisio
     PROCESS_INFORMATION process{};
     std::vector<wchar_t> mutableCommandLine(commandLine.begin(), commandLine.end());
     mutableCommandLine.push_back(L'\0');
+    if (request.beforeEffect && !(result.message = request.beforeEffect({})).empty())
+    {
+        result.attempted = false;
+        return result;
+    }
     if (CreateProcessW(
             executable.c_str(), mutableCommandLine.data(), nullptr, nullptr, FALSE,
             CREATE_NEW_PROCESS_GROUP, nullptr, nullptr, &startup, &process) == FALSE)
@@ -587,7 +594,7 @@ PointerTarget ResolveInsideWindow(IUIAutomation* automation, IUIAutomationElemen
     return target;
 }
 
-bool MoveTo(const int x, const int y)
+bool MoveTo(const int x, const int y, const ActionRequest* admission = nullptr)
 {
     LONG absoluteX = 0;
     LONG absoluteY = 0;
@@ -595,9 +602,7 @@ bool MoveTo(const int x, const int y)
     {
         return false;
     }
-    return Send({MouseEvent(
-        MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK,
-        absoluteX, absoluteY)});
+    return Send({MouseEvent(MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK, absoluteX, absoluteY)}, admission);
 }
 
 DWORD ButtonDownFlag(const ActionRequest::DesktopInput::PointerButton button)
@@ -636,7 +641,7 @@ ActionResult Drag(const ActionRequest& request, const PointerTarget& target, pol
     ActionResult result;
     result.attempted = true;
     result.backend = "windows_send_input";
-    if (!MoveTo(target.x, target.y))
+    if (!MoveTo(target.x, target.y, &request))
     {
         result.message = "The drag start point is not on any attached display.";
         return result;
@@ -650,7 +655,7 @@ ActionResult Drag(const ActionRequest& request, const PointerTarget& target, pol
     const DWORD down = ButtonDownFlag(request.input.button);
     const DWORD up = ButtonUpFlag(request.input.button);
     if (request.onCommitStarted) request.onCommitStarted(destination.controlName);
-    if (!Send({MouseEvent(down)}))
+    if (!Send({MouseEvent(down)}, &request))
     {
         result.message = "Windows rejected the synthesized button press.";
         return result;
@@ -670,7 +675,7 @@ ActionResult Drag(const ActionRequest& request, const PointerTarget& target, pol
         }
         const int x = target.x + ((target.endX - target.x) * step) / Steps;
         const int y = target.y + ((target.endY - target.y) * step) / Steps;
-        delivered = MoveTo(x, y);
+        delivered = MoveTo(x, y, &request);
         std::this_thread::sleep_for(std::chrono::milliseconds(8));
     }
 
@@ -820,7 +825,7 @@ ActionResult TypeTextInput(const ActionRequest& request, const CapabilitySetting
         if (scalar == L"\n" || scalar == L"\t")
         {
             const WORD key = scalar == L"\n" ? VK_RETURN : VK_TAB;
-            if (!Send({KeyEvent(key, true), KeyEvent(key, false)}))
+            if (!Send({KeyEvent(key, true), KeyEvent(key, false)}, &request))
             {
                 result.message = "Windows rejected synthesized keyboard input after " +
                     std::to_string(sent) + " characters.";
@@ -864,7 +869,7 @@ ActionResult TypeTextInput(const ActionRequest& request, const CapabilitySetting
         {
             continue;
         }
-        if (!Send(std::move(batch)))
+        if (!Send(std::move(batch), &request))
         {
             result.message = "Windows rejected synthesized keyboard input after " +
                 std::to_string(sent) + " characters.";
@@ -955,7 +960,7 @@ ActionResult PressKeyChord(const ActionRequest& request, policy::DesktopInputGua
         }
     }
     if (request.onCommitStarted) request.onCommitStarted(control.controlName);
-    result.succeeded = Send(std::move(events));
+    result.succeeded = Send(std::move(events), &request);
     result.message = result.succeeded
         ? "Pressed " + chord.normalized + "."
         : "Windows rejected the synthesized key chord.";
@@ -1411,7 +1416,7 @@ ActionResult DesktopControlExecutor::Execute(const ActionRequest& request, const
             static_cast<LONG>(target.x), static_cast<LONG>(target.y)}))
         : WindowIdentity{};
 
-    if (target.aimed && !MoveTo(target.x, target.y))
+    if (target.aimed && !MoveTo(target.x, target.y, &request))
     {
         result.message = "The point is not on any attached display.";
         return finish();
@@ -1462,7 +1467,8 @@ ActionResult DesktopControlExecutor::Execute(const ActionRequest& request, const
         effect.evidence = ToEvidence(current);
         if (policy::AssessEffects(effect) != approvedEffects)
             return "the approved consequence changed";
-        if (!MoveTo(target.x, target.y)) return "the approved point left the display";
+        if (!MoveTo(target.x, target.y, &request))
+            return "the approved point left the display or admission was withdrawn";
         // Moving can open a hover surface. Re-observe after the cursor arrives too.
         return CompareBindings(approvedPointer, BindPoint(automation, target.x, target.y,
             request.requestedBy, policy::PolicyVersion(settings)));
@@ -1542,7 +1548,7 @@ ActionResult DesktopControlExecutor::Execute(const ActionRequest& request, const
             ? MOUSEEVENTF_HWHEEL : MOUSEEVENTF_WHEEL;
         const DWORD amount = static_cast<DWORD>(
             static_cast<int>(WHEEL_DELTA) * request.input.scrollClicks);
-        result.succeeded = Send({MouseEvent(flags, 0, 0, amount)});
+        result.succeeded = Send({MouseEvent(flags, 0, 0, amount)}, &request);
         result.message = result.succeeded
             ? "Scrolled " + std::to_string(request.input.scrollClicks) + " detents." + where
             : "Windows rejected the synthesized scroll.";
@@ -1581,7 +1587,7 @@ ActionResult DesktopControlExecutor::Execute(const ActionRequest& request, const
             }
             if (guard->IsTripped()) break;
             if (request.onCommitStarted) request.onCommitStarted(approvedPointer.controlName);
-            delivered = Send({MouseEvent(down), MouseEvent(up)});
+            delivered = Send({MouseEvent(down), MouseEvent(up)}, &request);
             if (delivered) ++completed;
         }
         result.succeeded = delivered && !targetChanged &&

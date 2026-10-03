@@ -152,8 +152,8 @@ bool VisibleBrowserProcess::Start(const CapabilitySettings::InternetAccess& sett
     }
 
     std::error_code error;
-    const std::filesystem::path profile =
-        std::filesystem::absolute("RuntimeData/Browser/Profile", error);
+    const std::filesystem::path profile = std::filesystem::absolute(
+        settings.profileDirectory.empty() ? std::filesystem::path("RuntimeData/Browser/Profile") : settings.profileDirectory, error);
     if (error || profile.empty())
     {
         outError = "The dedicated visible browser profile path could not be resolved.";
@@ -161,8 +161,10 @@ bool VisibleBrowserProcess::Start(const CapabilitySettings::InternetAccess& sett
         port = 0;
         return false;
     }
+    const auto logDirectory = settings.logDirectory.empty() ? std::filesystem::path(ReviaLogDirectory()) : settings.logDirectory;
     std::filesystem::create_directories(profile, error);
-    std::filesystem::create_directories(ReviaLogDirectory(), error);
+    if (!error)
+        std::filesystem::create_directories(logDirectory, error);
     if (error)
     {
         outError = "The visible browser runtime directories could not be created: " + error.message();
@@ -184,14 +186,10 @@ bool VisibleBrowserProcess::Start(const CapabilitySettings::InternetAccess& sett
     SECURITY_ATTRIBUTES attributes{};
     attributes.nLength = sizeof(attributes);
     attributes.bInheritHandle = TRUE;
-    const HANDLE output = CreateFileW(
-        (std::filesystem::path(ReviaLogDirectory()) / L"visible-browser.stdout.log").wstring().c_str(), FILE_APPEND_DATA,
-        FILE_SHARE_READ | FILE_SHARE_WRITE, &attributes, OPEN_ALWAYS,
-        FILE_ATTRIBUTE_NORMAL, nullptr);
-    const HANDLE errors = CreateFileW(
-        (std::filesystem::path(ReviaLogDirectory()) / L"visible-browser.stderr.log").wstring().c_str(), FILE_APPEND_DATA,
-        FILE_SHARE_READ | FILE_SHARE_WRITE, &attributes, OPEN_ALWAYS,
-        FILE_ATTRIBUTE_NORMAL, nullptr);
+    const HANDLE output = CreateFileW((logDirectory / L"visible-browser.stdout.log").wstring().c_str(), FILE_APPEND_DATA,
+        FILE_SHARE_READ | FILE_SHARE_WRITE, &attributes, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    const HANDLE errors = CreateFileW((logDirectory / L"visible-browser.stderr.log").wstring().c_str(), FILE_APPEND_DATA,
+        FILE_SHARE_READ | FILE_SHARE_WRITE, &attributes, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
     const HANDLE input = CreateFileW(
         L"NUL", GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
         &attributes, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);

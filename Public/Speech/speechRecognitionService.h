@@ -2,6 +2,7 @@
 
 #include "Speech/recognitionSettings.h"
 #include "Speech/whisperServerProcess.h"
+#include "Identity/socialIdentity.h"
 
 #include <atomic>
 #include <filesystem>
@@ -21,13 +22,12 @@ struct RecognitionEvent
 {
     RecognitionEvent() = default;
     RecognitionEvent(std::string inputPhase, std::string inputDetail, double inputElapsed = -1.0)
-        : phase(std::move(inputPhase)), detail(std::move(inputDetail)),
-          elapsedMilliseconds(inputElapsed)
+        : phase(std::move(inputPhase)), detail(std::move(inputDetail)), elapsedMilliseconds(inputElapsed)
     {
     }
     RecognitionEvent(std::string inputPhase, std::string inputDetail, std::string inputTranscript, double inputElapsed = -1.0)
-        : phase(std::move(inputPhase)), detail(std::move(inputDetail)),
-          transcript(std::move(inputTranscript)), elapsedMilliseconds(inputElapsed)
+        : phase(std::move(inputPhase)), detail(std::move(inputDetail)), transcript(std::move(inputTranscript)),
+          elapsedMilliseconds(inputElapsed)
     {
     }
 
@@ -36,6 +36,7 @@ struct RecognitionEvent
     std::string transcript;
     double elapsedMilliseconds = -1.0;
     bool automatic = false;
+    identity::SpeakerObservation speaker;
 };
 
 // One Windows recording device, as the operating system reports it.
@@ -122,8 +123,10 @@ class SpeechRecognitionService
     // directly instead of contriving a real transcription to collide with.
     friend struct MicrophoneTestAccess;
 
-public:
+  public:
     using EventHandler = std::function<void(const RecognitionEvent&)>;
+    using SpeakerResolver = std::function<identity::SpeakerObservation(const std::filesystem::path&, std::stop_token)>;
+    void SetSpeakerResolver(SpeakerResolver resolver);
 
     // The recording devices Windows currently reports, default first. Empty on a
     // machine with no capture hardware, which is a valid answer and not an error.
@@ -162,19 +165,22 @@ public:
 
     static std::filesystem::path ResolveRuntimePath(const std::string& configuredPath);
 
-private:
+  private:
+    friend struct SpeakerRecognitionTestAccess;
+    [[nodiscard]] identity::SpeakerObservation ResolveSpeaker(const std::filesystem::path& wavePath, std::stop_token stopToken) const;
     void Capture(std::stop_token stopToken, std::filesystem::path outputPath);
     bool CaptureHandsFree(std::stop_token stopToken, std::filesystem::path outputPath);
     void RunHandsFree(std::stop_token stopToken);
     void Transcribe(std::stop_token stopToken, std::filesystem::path wavePath, bool automatic = false);
     bool EnsureServerReady(std::stop_token stopToken, std::string& outError);
-    std::optional<std::string> TranscribeWithServer(const std::filesystem::path& wavePath,
-        std::stop_token stopToken, std::string& outError);
+    std::optional<std::string> TranscribeWithServer(
+        const std::filesystem::path& wavePath, std::stop_token stopToken, std::string& outError);
     void Notify(RecognitionEvent event) const;
 
     mutable std::mutex mutex;
     speechRecognitionSettings configuration;
     EventHandler eventHandler;
+    SpeakerResolver speakerResolver;
     std::filesystem::path executablePath;
     std::filesystem::path modelPath;
     std::filesystem::path activeWavePath;

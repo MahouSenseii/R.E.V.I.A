@@ -191,7 +191,7 @@ bool ImageServerProcess::Start(const imageSettings& settings, const std::string&
     mutableCommandLine.push_back(L'\0');
 
     std::error_code directoryError;
-    std::filesystem::create_directories(ReviaLogDirectory(), directoryError);
+    std::filesystem::create_directories((settings.logDirectory.empty() ? ReviaLogDirectory() : settings.logDirectory), directoryError);
     const auto openLog = [](const wchar_t* path)
     {
         SECURITY_ATTRIBUTES attributes{};
@@ -201,8 +201,8 @@ bool ImageServerProcess::Start(const imageSettings& settings, const std::string&
             path, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE,
             &attributes, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
     };
-    const HANDLE output = openLog((std::filesystem::path(ReviaLogDirectory()) / L"revia-image.stdout.log").wstring().c_str());
-    const HANDLE errors = openLog((std::filesystem::path(ReviaLogDirectory()) / L"revia-image.stderr.log").wstring().c_str());
+    const HANDLE output = openLog((std::filesystem::path((settings.logDirectory.empty() ? ReviaLogDirectory() : settings.logDirectory)) / L"revia-image.stdout.log").wstring().c_str());
+    const HANDLE errors = openLog((std::filesystem::path((settings.logDirectory.empty() ? ReviaLogDirectory() : settings.logDirectory)) / L"revia-image.stderr.log").wstring().c_str());
 
     STARTUPINFOW startup{};
     startup.cb = sizeof(startup);

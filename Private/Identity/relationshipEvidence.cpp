@@ -31,68 +31,81 @@ namespace
                 return haystack.find(needle) != std::string::npos;
             });
     }
-}
 
-ConversationSignals ReadConversationSignals(const std::string& userInput, const std::string& reply, const bool succeeded)
-{
-    ConversationSignals signals;
-    signals.userInput = userInput;
-    signals.reply = reply;
-    signals.succeeded = succeeded;
-
-    const std::string input = Lower(conversation::ReadSpeechAttribution(userInput).userAuthoredText);
-    signals.explicitlyPlayful = ContainsAny(input, {
-        "just kidding", "only kidding", "i'm joking", "i am joking", "just teasing"});
-
-    // Aimed at Revia, not at the problem. The distinction matters: "this is broken" is
-    // not evidence about the relationship, and treating it as such would make her resent
-    // anyone doing difficult work with her.
-    signals.hostileTowardRevia = ContainsAny(input, {
-        "i hate you", "you're useless", "you are useless", "you're stupid",
-        "you are stupid", "shut up", "nobody likes you", "you suck",
-        "you're worthless", "you are worthless"});
-
-    // A direct put-down is different from the user discussing their own care, or
-    // quoting somebody else's words. Keep this narrow: the word therapy by itself
-    // carries no hostility, and a concerned question is not a taunt.
-    const auto start = input.find_first_not_of(" \t\r\n");
-    const std::string direct = start == std::string::npos ? "" : input.substr(start);
-    for (const std::string_view opener : {"you need therapy", "revia, you need therapy",
-        "you need an exorcism", "revia, you need an exorcism"})
+    bool ContainsAnyWholePhrase(const std::string& haystack, const std::initializer_list<std::string_view> needles)
     {
-        if (direct.starts_with(opener) &&
-            (direct.size() == opener.size() ||
-             std::string_view(".! ,").find(direct[opener.size()]) != std::string_view::npos) &&
-            direct.find('?') == std::string::npos &&
-            !ContainsAny(direct, {"i'm worried", "i am worried", "i care about", "because i'm concerned"}))
+        const auto isWordCharacter = [](const unsigned char character) { return std::isalnum(character) != 0 || character == '_'; };
+        return std::any_of(needles.begin(), needles.end(),
+            [&haystack, &isWordCharacter](const std::string_view needle)
+            {
+                std::size_t at = haystack.find(needle);
+                while (at != std::string::npos)
+                {
+                    const std::size_t end = at + needle.size();
+                    if ((at == 0 || !isWordCharacter(static_cast<unsigned char>(haystack[at - 1]))) &&
+                        (end == haystack.size() || !isWordCharacter(static_cast<unsigned char>(haystack[end]))))
+                        return true;
+                    at = haystack.find(needle, at + 1);
+                }
+                return false;
+            });
+    }
+    }
+
+    ConversationSignals ReadConversationSignals(const std::string& userInput, const std::string& reply, const bool succeeded)
+    {
+        ConversationSignals signals;
+        signals.userInput = userInput;
+        signals.reply = reply;
+        signals.succeeded = succeeded;
+
+        const std::string input = Lower(conversation::ReadSpeechAttribution(userInput).userAuthoredText);
+        signals.explicitlyPlayful = ContainsAny(input, {"just kidding", "only kidding", "i'm joking", "i am joking", "just teasing"});
+
+        // Aimed at Revia, not at the problem. The distinction matters: "this is broken" is
+        // not evidence about the relationship, and treating it as such would make her resent
+        // anyone doing difficult work with her.
+        signals.hostileTowardRevia =
+            ContainsAny(input, {"i hate you", "you're useless", "you are useless", "you're stupid", "you are stupid", "shut up",
+                                   "nobody likes you", "you suck", "you're worthless", "you are worthless"});
+
+        // A direct put-down is different from the user discussing their own care, or
+        // quoting somebody else's words. Keep this narrow: the word therapy by itself
+        // carries no hostility, and a concerned question is not a taunt.
+        const auto start = input.find_first_not_of(" \t\r\n");
+        const std::string direct = start == std::string::npos ? "" : input.substr(start);
+        for (const std::string_view opener :
+            {"you need therapy", "revia, you need therapy", "you need an exorcism", "revia, you need an exorcism"})
         {
-            signals.hostileTowardRevia = true;
+            if (direct.starts_with(opener) &&
+                (direct.size() == opener.size() || std::string_view(".! ,").find(direct[opener.size()]) != std::string_view::npos) &&
+                direct.find('?') == std::string::npos &&
+                !ContainsAny(direct, {"i'm worried", "i am worried", "i care about", "because i'm concerned"}))
+            {
+                signals.hostileTowardRevia = true;
+            }
         }
+
+        signals.expressedAppreciation = ContainsAny(
+            input, {"thank", "thanks", "appreciate", "well done", "good job", "nice work", "that helped", "perfect", "exactly right"});
+
+        signals.repeatedCorrection = ContainsAnyWholePhrase(input,
+            {"you keep", "i already said", "i just said", "again", "still not", "that's not what", "that is not what", "no, i meant"});
+
+        signals.collaborative =
+            succeeded && ContainsAny(input, {"let's", "lets ", "we should", "can you help", "work on", "together", "figure out", "let us"});
+
+        // A short acknowledgement is not a relationship event. Weighting every "ok" the same
+        // as a real exchange would let idle chatter accumulate into closeness.
+        const bool substantial = userInput.size() > 24;
+        signals.importance = substantial ? 0.45F : 0.2F;
+        if (signals.hostileTowardRevia || signals.expressedAppreciation)
+        {
+            // Something was said about her specifically, which counts for more either way.
+            signals.importance = 0.7F;
+        }
+        return signals;
     }
-
-    signals.expressedAppreciation = ContainsAny(input, {
-        "thank", "thanks", "appreciate", "well done", "good job", "nice work",
-        "that helped", "perfect", "exactly right"});
-
-    signals.repeatedCorrection = ContainsAny(input, {
-        "you keep", "i already said", "i just said", "again", "still not",
-        "that's not what", "that is not what", "no, i meant"});
-
-    signals.collaborative = succeeded && ContainsAny(input, {
-        "let's", "lets ", "we should", "can you help", "work on", "together",
-        "figure out", "let us"});
-
-    // A short acknowledgement is not a relationship event. Weighting every "ok" the same
-    // as a real exchange would let idle chatter accumulate into closeness.
-    const bool substantial = userInput.size() > 24;
-    signals.importance = substantial ? 0.45F : 0.2F;
-    if (signals.hostileTowardRevia || signals.expressedAppreciation)
-    {
-        // Something was said about her specifically, which counts for more either way.
-        signals.importance = 0.7F;
-    }
-    return signals;
-}
 
 namespace
 {

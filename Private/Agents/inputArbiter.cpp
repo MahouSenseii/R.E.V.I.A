@@ -8,6 +8,17 @@
 
 namespace revia::agents
 {
+namespace
+{
+bool SameContext(const InputContext& left, const InputContext& right)
+{
+    return left.stamp.SameSession(right.stamp) && left.stamp.policyVersion == right.stamp.policyVersion &&
+        left.audience.kind == right.audience.kind && left.audience.audienceId == right.audience.audienceId &&
+        left.audience.revision == right.audience.revision && left.audience.recipientEntityIds == right.audience.recipientEntityIds &&
+        left.participantId == right.participantId && left.participantSource == right.participantSource &&
+        left.consentRevision == right.consentRevision;
+}
+}
 
 std::string ToString(const InputVerdict value)
 {
@@ -134,6 +145,12 @@ bool InputArbiter::IsNoise(const inputArbiterSettings& settings, const std::stri
 
 InputVerdict InputArbiter::Offer(const std::string& text, const InputSource source, const std::chrono::system_clock::time_point now)
 {
+    return Offer(text, source, now, {});
+}
+
+InputVerdict InputArbiter::Offer(const std::string& text, const InputSource source,
+    const std::chrono::system_clock::time_point now, InputContext context)
+{
     std::lock_guard lock(mutex);
     const std::string normalized = Normalize(text);
     if (normalized.empty())
@@ -149,7 +166,7 @@ InputVerdict InputArbiter::Offer(const std::string& text, const InputSource sour
     }
 
     // Recognisers commonly emit the same phrase twice from one utterance.
-    if (source != InputSource::Typed && normalized == lastAccepted &&
+    if (source != InputSource::Typed && normalized == lastAccepted && SameContext(context, lastAcceptedContext) &&
         now - lastAcceptedAt < std::chrono::seconds(8))
     {
         return InputVerdict::IgnoredDuplicate;
@@ -157,9 +174,9 @@ InputVerdict InputArbiter::Offer(const std::string& text, const InputSource sour
     const auto duplicateInQueue = std::find_if(
         queued.begin(),
         queued.end(),
-        [&normalized](const PendingInput& pending)
+        [&normalized, &context](const PendingInput& pending)
         {
-            return Normalize(pending.text) == normalized;
+            return SameContext(context, pending.context) && Normalize(pending.text) == normalized;
         });
     if (duplicateInQueue != queued.end())
     {
@@ -171,9 +188,10 @@ InputVerdict InputArbiter::Offer(const std::string& text, const InputSource sour
         return InputVerdict::DroppedOverflow;
     }
 
-    queued.push_back({text, source, now});
+    queued.push_back({text, source, now, context});
     lastAccepted = normalized;
     lastAcceptedAt = now;
+    lastAcceptedContext = std::move(context);
     return InputVerdict::Queued;
 }
 
@@ -202,7 +220,20 @@ bool InputArbiter::IsReady(const std::chrono::system_clock::time_point now) cons
 
 std::string InputArbiter::Take()
 {
+    return TakeBatch().text;
+}
+
+InputBatch InputArbiter::TakeBatch()
+{
     std::lock_guard lock(mutex);
+    InputBatch batch;
+    if (!queued.empty())
+    {
+        batch.context = queued.front().context;
+        batch.source = queued.front().source;
+        batch.contextMatched = std::all_of(queued.begin(), queued.end(),
+            [&](const PendingInput& input) { return SameContext(batch.context, input.context); });
+    }
     std::ostringstream stream;
     for (std::size_t index = 0; index < queued.size(); ++index)
     {
@@ -225,7 +256,8 @@ std::string InputArbiter::Take()
         stream << text;
     }
     queued.clear();
-    return stream.str();
+    batch.text = batch.contextMatched ? stream.str() : std::string{};
+    return batch;
 }
 
 std::size_t InputArbiter::Size() const

@@ -9,6 +9,45 @@
 namespace revia::speech
 {
 
+enum class SynthesisHealth
+{
+    Unverified,
+    Available,
+    Degraded
+};
+
+struct VoiceSelection
+{
+    std::string profileId;
+    std::string presetId;
+    std::uint64_t epoch = 0;
+};
+
+struct VoiceHealthSnapshot
+{
+    VoiceSelection selection;
+    SynthesisHealth state = SynthesisHealth::Unverified;
+    bool enabled = false;
+    bool configured = false;
+    bool restoredFailure = false;
+    std::uint64_t failureWatermark = 0;
+};
+
+struct SynthesisObservation
+{
+    VoiceSelection selection;
+    std::uint64_t generation = 0;
+    std::uint64_t utteranceId = 0;
+    std::uint64_t sequence = 0;
+    std::uint64_t attemptId = 0;
+    std::uint64_t observationId = 0;
+    std::uint64_t failureWatermark = 0;
+    SynthesisHealth state = SynthesisHealth::Unverified;
+    bool succeeded = false;
+    bool fresh = false;
+    bool stateChanged = false;
+};
+
 struct VoicePreset
 {
     std::string id;
@@ -60,6 +99,7 @@ struct VoiceOperationResult
     int sampleRate = 0;
     bool clonePromptCached = false;
     bool audioCacheHit = false;
+    bool batchDeclined = false;
     // What the card was doing while this request ran, reported by the worker that ran
     // it. Per request rather than per session: a slow utterance is explained by the
     // state at the time it was synthesised, not by the state at startup.

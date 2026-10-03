@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <utility>
 
 namespace
 {
@@ -30,6 +31,11 @@ std::uint64_t ArtifactMiB(const std::string& modelPath, const std::string& proje
 }
 }
 messageRouter::messageRouter() = default;
+
+messageRouter::messageRouter(std::string memoryDatabasePath)
+    : llm(memoryDatabasePath), fastLlm(memoryDatabasePath), expertLlm(std::move(memoryDatabasePath))
+{
+}
 
 messageRouter::~messageRouter() = default;
 
@@ -165,11 +171,7 @@ responseOutput messageRouter::RouteMessage(const std::string& message, const std
     }
     routed.requestedTier = revia::intelligence::ToString(decision.requestedTier);
     routed.selectedTier = selectedTier;
-    routed.selectedModel = selected == &fastLlm
-        ? "Qwen3.5-0.8B-Q4_K_M.gguf"
-        : selected == &expertLlm
-            ? "Qwen3-VL-8B-Instruct-Unredacted-MAX.Q4_K_M.gguf"
-            : "Qwen3.5-4B-Q4_K_M.gguf";
+    routed.selectedModel = ConfiguredModelName(*selected);
     routed.routingReason = decision.reason + routingNote;
     routed.routingConfidence = decision.confidence;
     routed.bRoutingFallback = !fallbackReason.empty();
@@ -214,10 +216,21 @@ responseOutput messageRouter::ReviewCode(const std::string& instructions,
         (void)lifetime->ReleaseNow(revia::intelligence::IntelligenceTier::Expert);
     }
     output.selectedTier = revia::intelligence::ToString(tier);
-    output.selectedModel = selected == &expertLlm
-        ? "Qwen3-VL-8B-Instruct-Unredacted-MAX.Q4_K_M.gguf"
-        : "Qwen3.5-4B-Q4_K_M.gguf";
+    output.selectedModel = ConfiguredModelName(*selected);
     return output;
+}
+
+const std::string& messageRouter::ConfiguredModelName(const llmService& service) const
+{
+    if (&service == &fastLlm)
+    {
+        return fastConfiguration.modelName;
+    }
+    if (&service == &expertLlm)
+    {
+        return expertConfiguration.modelName;
+    }
+    return mainConfiguration.modelName;
 }
 
 bool messageRouter::FastIsSlowerThanMain() const
@@ -297,7 +310,7 @@ responseOutput messageRouter::GenerateCuriosityPlan(const std::string& boundedCo
         responseOutput output = llm.GenerateCuriosityPlan(boundedContextPrompt, availableActions, stopToken);
         residency.EndInference(revia::intelligence::IntelligenceTier::Main);
         output.requestedTier = output.selectedTier = "Main";
-        output.selectedModel = "Qwen3.5-4B-Q4_K_M.gguf";
+        output.selectedModel = ConfiguredModelName(llm);
         output.routingReason = "Bounded self-directed topic selection uses the resident Main model.";
         return output;
     }
@@ -310,7 +323,7 @@ responseOutput messageRouter::GenerateCuriosityPlan(const std::string& boundedCo
         residency.EndInference(revia::intelligence::IntelligenceTier::Fast);
         output.requestedTier = "Main";
         output.selectedTier = "Fast";
-        output.selectedModel = "Qwen3.5-0.8B-Q4_K_M.gguf";
+        output.selectedModel = ConfiguredModelName(fastLlm);
         output.bRoutingFallback = true;
         output.routingFallbackReason = "Main was unavailable; Fast can still nominate a bounded topic.";
         return output;
@@ -318,7 +331,7 @@ responseOutput messageRouter::GenerateCuriosityPlan(const std::string& boundedCo
     responseOutput output = llm.GenerateCuriosityPlan(boundedContextPrompt, availableActions, stopToken);
     output.requestedTier = "Main";
     output.selectedTier = "Main";
-    output.selectedModel = "Qwen3.5-4B-Q4_K_M.gguf";
+    output.selectedModel = ConfiguredModelName(llm);
     output.routingReason = "No alternate background brain was available.";
     return output;
 }
@@ -344,7 +357,7 @@ responseOutput messageRouter::Deliberate(const std::string& boundedInquiryPrompt
         residency.EndInference(revia::intelligence::IntelligenceTier::Main);
         output.requestedTier = "Main";
         output.selectedTier = "Main";
-        output.selectedModel = "Qwen3.5-4B-Q4_K_M.gguf";
+        output.selectedModel = ConfiguredModelName(llm);
         output.routingReason = "One bounded self-inquiry runs on the balanced Main brain.";
         return output;
     }
@@ -356,7 +369,7 @@ responseOutput messageRouter::Deliberate(const std::string& boundedInquiryPrompt
         residency.EndInference(revia::intelligence::IntelligenceTier::Fast);
         output.requestedTier = "Main";
         output.selectedTier = "Fast";
-        output.selectedModel = "Qwen3.5-0.8B-Q4_K_M.gguf";
+        output.selectedModel = ConfiguredModelName(fastLlm);
         output.bRoutingFallback = true;
         output.routingFallbackReason = "The Main brain was unavailable for self-inquiry.";
         return output;
@@ -453,9 +466,7 @@ responseOutput messageRouter::AnalyzeImage(const std::filesystem::path& imagePat
         imagePath, prompt, maxResponseTokens, stopToken, backgroundAwareness);
     output.requestedTier = expertRequested ? "ExpertVision" : "Vision";
     output.selectedTier = expertAvailable ? "ExpertVision" : "Vision";
-    output.selectedModel = expertAvailable
-        ? "Qwen3-VL-8B-Instruct-Unredacted-MAX.Q4_K_M.gguf"
-        : "Qwen3.5-4B-Q4_K_M.gguf";
+    output.selectedModel = ConfiguredModelName(expertAvailable ? expertLlm : llm);
     output.reasoningMode = expertRequested ? "Deep" : "Fast";
     output.routingReason = expertRequested
         ? "The visual prompt contains difficult architecture or Blueprint signals."

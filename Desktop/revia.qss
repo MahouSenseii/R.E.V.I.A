@@ -1,8 +1,30 @@
-/* One readable base for every tab. Without it each widget fell back to the platform
-   default and the explicit sizes below were all smaller again, which is why body text
-   read as fine print at window size. Font only: a QWidget background or border here
-   would repaint every child. */
-QWidget { font-size: 13px; }
+/* Shared readable type and foreground without repainting nested widget surfaces. */
+QWidget { font-size: 13px; color: #cbd9ec; }
+
+QFrame#chatVoiceHealthCard, QFrame#voiceHealthCard {
+    background: rgba(25, 36, 55, 180);
+    border: 1px solid #2f465f;
+    border-radius: 12px;
+}
+QLabel#chatVoiceHealthBadge, QLabel#voiceHealthBadge {
+    color: #a9bad2;
+    background: rgba(35, 48, 67, 190);
+    border: 1px solid #3a5069;
+    border-radius: 7px;
+    padding: 5px 9px;
+    font-size: 11px;
+    font-weight: 600;
+}
+QLabel#chatVoiceHealthBadge[tone="warning"], QLabel#voiceHealthBadge[tone="warning"] {
+    color: #f1d493; background: rgba(77, 58, 30, 160); border-color: #80663c;
+}
+QLabel#chatVoiceHealthBadge[tone="available"], QLabel#voiceHealthBadge[tone="available"] {
+    color: #85e0cf; background: rgba(24, 66, 66, 160); border-color: #38756b;
+}
+QLabel#voiceHealthTitle { color: #dce9f7; font-size: 15px; font-weight: 600; }
+QLabel#chatVoiceHealthDetail, QLabel#voiceHealthDetail { color: #b5c6de; font-size: 12px; }
+QLabel#voiceCueStatus, QLabel#voiceHealthUpdated { color: #93a4bd; font-size: 11px; }
+QPushButton#voiceHealthDetailsButton { padding: 5px 10px; font-size: 11px; }
 
 QWidget#rootPanel {
     background: rgba(14, 20, 34, 242);
@@ -465,6 +487,16 @@ QScrollBar::handle:horizontal {
 QScrollBar::handle:horizontal:hover { background: #3C547D; }
 QScrollBar::add-line, QScrollBar::sub-line { width: 0; height: 0; }
 QScrollBar::add-page, QScrollBar::sub-page { background: transparent; }
+
+QTabBar QToolButton {
+    background: rgba(26, 39, 60, 235);
+    border: 1px solid #304661;
+    border-radius: 4px;
+    color: #b7e8ed;
+    min-width: 22px;
+}
+QTabBar QToolButton:hover { background: #294058; }
+QTabBar QToolButton:disabled { color: #667994; }
 
 /* The id-styled buttons set only a background, and an id beats a type selector, so
    without this they would keep their own fill while inheriting the cyan border and text

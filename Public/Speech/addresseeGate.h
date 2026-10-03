@@ -1,6 +1,7 @@
 #pragma once
 
 #include <chrono>
+#include <cstdint>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -27,7 +28,7 @@ struct AddresseeSettings
 // it names her, or continues a conversation she is already in.
 class AddresseeGate
 {
-public:
+  public:
     using Clock = std::chrono::steady_clock;
 
     explicit AddresseeGate(AddresseeSettings settings = {});
@@ -40,14 +41,22 @@ public:
     // True when speech heard at `now` is for her. During a call only her name counts,
     // because follow-up speech is then most likely meant for the other people.
     bool Accept(const std::string& transcript, Clock::time_point now, bool inCall);
+    bool Accept(const std::string& transcript, Clock::time_point now, bool inCall, const std::string& participantId,
+        const std::string& audienceId, std::uint64_t audienceRevision, bool foreground);
 
     // Marks a moment she and the user were talking; follow-up speech is hers after it.
     void NoteExchange(Clock::time_point now);
+    void NoteExchange(
+        Clock::time_point now, const std::string& participantId, const std::string& audienceId, std::uint64_t audienceRevision);
+    void Reset();
 
-private:
+  private:
     mutable std::mutex mutex;
     AddresseeSettings settings;
     std::optional<Clock::time_point> lastExchange;
+    std::string followUpParticipant;
+    std::string followUpAudience;
+    std::uint64_t followUpRevision = 0;
 };
 
 } // namespace revia::speech

@@ -14,6 +14,8 @@ struct speechRecognitionSettings
     int serverStartupTimeoutSeconds = 60;
     int requestTimeoutSeconds = 180;
     std::string modelPath = "Models/ggml-small.en.bin";
+    std::string dataDirectory;
+    std::string logDirectory;
     std::string language = "en";
     int sampleRate = 16000;
     int threads = 6;

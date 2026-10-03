@@ -8,8 +8,10 @@
 #include <QPointer>
 
 #include <atomic>
+#include <functional>
 #include <map>
 #include <memory>
+#include <set>
 #include <thread>
 #include <vector>
 
@@ -40,11 +42,19 @@ class ProfilePanel;
 class MemoryPanel;
 class MindPanel;
 class VisionPanel;
-namespace Ui { class ReviaWindow; }
+class VoiceHealthPanel;
+class AgentStudioPanel;
+class LearningStudioPanel;
+class DevelopmentStudioPanel;
+class AudienceStudioPanel;
+namespace Ui
+{
+class ReviaWindow;
+}
 
 class ReviaWindow final : public QMainWindow
 {
-public:
+  public:
     // Authoritative microphone presentation state. Phase events from the recognition
     // service drive it; the toggle only ever requests a transition.
     enum class MicrophoneUi
@@ -61,19 +71,30 @@ public:
     void RequestShutdown(revia::core::ExitReason reason = revia::core::ExitReason::SmokeTest);
     bool IsRuntimeStarted() const;
 
-protected:
+  protected:
     bool eventFilter(QObject* watched, QEvent* event) override;
     void closeEvent(QCloseEvent* event) override;
     void changeEvent(QEvent* event) override;
     void resizeEvent(QResizeEvent* event) override;
 
-private:
+  private:
     friend struct ReviaWindowStopTests;
     void BuildInterface();
-    // Keeps the readable measure fixed as the window grows. Without this every row,
-    // field, and table column stretches to the full width of the monitor, which is why
-    // the same screen looks like a different application maximised.
+    revia::runtime::ReviaSession& Session();
+    const revia::runtime::ReviaSession& Session() const;
+    void BindSession();
+    void BuildCompanionControls();
+    void BuildAdditionalStudioPanels();
+    void RefreshStudioPanels();
+    void RunStudioOperation(std::function<bool(revia::runtime::ReviaSession&, std::stop_token, std::string&)> operation,
+        std::function<void(bool, const std::string&)> completed);
+    void RefreshCompanions();
+    void SwitchCompanion(const std::string& id);
+    void CreateCompanion();
+    void RebuildSessionPanels();
+    // Keep a readable measure while allowing wide windows to use their extra space.
     void ApplyContentWidthCap();
+    void ApplyResponsiveLayout();
     void BuildTray();
     void StartRuntime();
     void SendMessage(bool voiceInput = false);
@@ -108,11 +129,7 @@ private:
     QString speechPhase;
     // reasoning, when present, is rendered as a collapsed "Thought process" line that the
     // user can expand. It is kept out of the message body because it is not an answer.
-    void AppendChat(
-        const QString& speaker,
-        const QString& message,
-        bool userMessage = false,
-        const QString& reasoning = QString());
+    void AppendChat(const QString& speaker, const QString& message, bool userMessage = false, const QString& reasoning = QString());
     // Transcript entry kinds drive rendering independently of speaker names.
     // QTextBrowser collapses sections by rebuilding the transcript when a link is clicked.
     enum class EntryKind
@@ -168,8 +185,8 @@ private:
     // one confirms a typed action before policy runs, this one answers an
     // authorization that stopped on the consequence of a control.
     bool ApproveDesktopEffect(const revia::policy::ApprovalPrompt& prompt);
-    revia::actions::ConfirmationChoice ConfirmAction(const revia::actions::ActionRequest& request,
-        const revia::actions::PolicyDecision& decision);
+    revia::actions::ConfirmationChoice ConfirmAction(
+        const revia::actions::ActionRequest& request, const revia::actions::PolicyDecision& decision);
     revia::core::QuestionRelay::Post PostToWindow();
     // Refuses every pending approval and closes the one on screen. UI thread only.
     void AbandonQuestions();
@@ -179,6 +196,21 @@ private:
     revia::core::QuestionRelay questions;
     QPointer<QMessageBox> openQuestion;
     revia::runtime::ReviaSession session;
+    std::unique_ptr<revia::runtime::ReviaSession> selectedSession;
+    std::unique_ptr<revia::runtime::CompanionRegistry> companions;
+    std::set<std::string> initializedCompanionAuthority{"legacy"};
+    std::atomic<std::uint64_t> sessionUiEpoch{1};
+    std::jthread companionSwitchWorker;
+    bool switchingCompanion = false;
+    QComboBox* companionCombo = nullptr;
+    QLabel* companionStatus = nullptr;
+    QPushButton* createCompanionButton = nullptr;
+    AgentStudioPanel* agentStudioPanel = nullptr;
+    LearningStudioPanel* learningStudioPanel = nullptr;
+    DevelopmentStudioPanel* developmentStudioPanel = nullptr;
+    AudienceStudioPanel* audienceStudioPanel = nullptr;
+    std::jthread studioWorker;
+    std::atomic<bool> studioOperationRunning = false;
     revia::runtime::RuntimeEventBus::SubscriptionId subscriptionId = 0;
     std::unique_ptr<Ui::ReviaWindow> ui;
 
@@ -213,6 +245,8 @@ private:
     MemoryPanel* memoryPanel = nullptr;
     MindPanel* mindPanel = nullptr;
     VisionPanel* visionPanel = nullptr;
+    VoiceHealthPanel* chatVoiceHealth = nullptr;
+    VoiceHealthPanel* voiceHealth = nullptr;
     QTabWidget* tabs = nullptr;
     QPushButton* sendButton = nullptr;
     QPushButton* stopButton = nullptr;

@@ -2,6 +2,8 @@
 #include "Core/profile.h"
 #include "LLM/responseTypes.h"
 #include "LLM/promptBuilder.h"
+#include <filesystem>
+#include <utility>
 #include "Core/utf8.h"
 #include "Agents/conversationStylePolicy.h"
 #include "Core/speechAttribution.h"
@@ -30,6 +32,11 @@ namespace
 }
 
 promptBuilder::promptBuilder() = default;
+
+promptBuilder::promptBuilder(std::string memoryDatabasePath)
+    : memory(std::filesystem::absolute(memoryDatabasePath).lexically_normal().string())
+{
+}
 
 promptBuilder::~promptBuilder() = default;
 

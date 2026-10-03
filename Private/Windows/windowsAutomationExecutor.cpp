@@ -219,8 +219,11 @@ ActionResult WindowsAutomationExecutor::Execute(const ActionRequest& request, co
     else if (request.type == ActionType::FocusWindow)
     {
         result.attempted = true;
-        result.succeeded = SUCCEEDED(window->SetFocus());
-        result.message = result.succeeded ? "The window received focus." : "The window could not be focused.";
+        const auto refusal = request.beforeEffect ? request.beforeEffect({}) : std::string{};
+        result.succeeded = refusal.empty() && SUCCEEDED(window->SetFocus());
+        result.message = !refusal.empty()   ? "Action admission refused: " + refusal
+                         : result.succeeded ? "The window received focus."
+                                            : "The window could not be focused.";
     }
     else
     {
@@ -272,12 +275,13 @@ ActionResult WindowsAutomationExecutor::Execute(const ActionRequest& request, co
             }
             const std::wstring value = Utf8ToWide(request.value);
             BSTR valueText = SysAllocStringLen(value.data(), static_cast<UINT>(value.size()));
-            result.succeeded = valuePattern != nullptr && valueText != nullptr &&
-                SUCCEEDED(valuePattern->SetValue(valueText));
+            const auto refusal = request.beforeEffect ? request.beforeEffect({}) : std::string{};
+            result.succeeded =
+                refusal.empty() && valuePattern != nullptr && valueText != nullptr && SUCCEEDED(valuePattern->SetValue(valueText));
             SysFreeString(valueText);
-            result.message = result.succeeded
-                ? "The control text was updated."
-                : "The control does not expose a writable Value pattern.";
+            result.message = !refusal.empty()   ? "Action admission refused: " + refusal
+                             : result.succeeded ? "The control text was updated."
+                                                : "The control does not expose a writable Value pattern.";
             Release(valuePattern);
             Release(pattern);
         }
@@ -299,12 +303,19 @@ ActionResult WindowsAutomationExecutor::Execute(const ActionRequest& request, co
             }
             else
             {
-                if (invokePattern != nullptr && request.onCommitStarted)
-                    request.onCommitStarted(approved.controlName);
-                result.succeeded = invokePattern != nullptr && SUCCEEDED(invokePattern->Invoke());
-                result.message = result.succeeded
-                    ? "The control was invoked."
-                    : "The control does not expose an Invoke pattern.";
+                const auto admission = request.beforeEffect ? request.beforeEffect({}) : std::string{};
+                if (!admission.empty())
+                    result.message = "Action admission refused: " + admission;
+                else
+                {
+                    if (invokePattern != nullptr && request.onCommitStarted)
+                        request.onCommitStarted(approved.controlName);
+                    const auto finalAdmission = request.beforeEffect ? request.beforeEffect({}) : std::string{};
+                    result.succeeded = finalAdmission.empty() && invokePattern != nullptr && SUCCEEDED(invokePattern->Invoke());
+                    result.message = !finalAdmission.empty() ? "Action admission refused: " + finalAdmission
+                                     : result.succeeded      ? "The control was invoked."
+                                                             : "The control does not expose an Invoke pattern.";
+                }
             }
             Release(invokePattern);
             Release(pattern);

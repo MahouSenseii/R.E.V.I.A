@@ -9,6 +9,7 @@
 #include <chrono>
 #include <cstdint>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <unordered_set>
 #include <vector>
@@ -64,7 +65,7 @@ enum class ProposalOutcome
 // not choose its own capability scope.
 class InitiativeController
 {
-public:
+  public:
     InitiativeController() = default;
 
     void Configure(initiativeSettings settings);
@@ -108,6 +109,11 @@ public:
     // A normal reply accepts a conversational opening; a natural refusal such as "not
     // now" dismisses it. Neither path requires a slash command.
     void RecordConversationResponse(const std::string& response, std::chrono::system_clock::time_point when);
+    using QuietClock = std::chrono::steady_clock;
+    bool RequestQuiet(const std::string& input, QuietClock::time_point now = QuietClock::now());
+    [[nodiscard]] bool IsQuiet(QuietClock::time_point now = QuietClock::now()) const;
+    [[nodiscard]] std::optional<QuietClock::time_point> QuietUntil() const;
+    void ResumeConversation();
     void Dismiss(const std::string& proposalId, std::chrono::system_clock::time_point when);
     void Expire(const std::string& proposalId);
 
@@ -125,7 +131,7 @@ public:
     [[nodiscard]] static bool BuildUnfinishedGoalProposal(const std::vector<goals::Goal>& unfinishedGoals, Proposal& outProposal);
     [[nodiscard]] static bool BuildConversationProposal(const std::vector<StarterCue>& cues, Proposal& outProposal);
 
-private:
+  private:
     mutable std::mutex mutex;
     initiativeSettings configuration;
     AttentionPolicy policy;
@@ -133,6 +139,7 @@ private:
     std::unordered_set<std::string> committedProposals;
     std::string lastSubject;
     std::uint64_t nextId = 1;
+    std::optional<QuietClock::time_point> quietUntil;
 };
 
 } // namespace revia::initiative

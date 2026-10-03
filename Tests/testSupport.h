@@ -1,4 +1,7 @@
 #pragma once
+void RunCompanionTests();
+void RunCompanionAuthorityTests();
+void RunAgentWorkflowTests();
 
 void RunDiscordVoiceTests();
 
@@ -124,6 +127,9 @@ void RunSpeechInterruptionTests();
 void RunInvestigationTests();
 void RunInvestigationLive(const std::string& host, int port);
 void RunSpeechCoordinatorTests();
+void RunSpeechHealthTests();
+void RunSpeechFaultIntegrationTests();
+void RunSystemCueTests();
 void RunPresentationTests();
 void RunSkillTests();
 void RunCoordinationOverheadTests();

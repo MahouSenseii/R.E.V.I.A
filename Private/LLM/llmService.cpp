@@ -6,8 +6,13 @@
 #include "LLM/responseTypes.h"
 #include "Memory/memoryTypes.h"
 #include "LLM/llmService.h"
+#include <utility>
 
 llmService::llmService() = default;
+
+llmService::llmService(std::string memoryDatabasePath) : llamaCpp(std::move(memoryDatabasePath))
+{
+}
 
 llmService::~llmService() = default;
 

@@ -229,6 +229,7 @@ CapabilityPanel::CapabilityPanel(revia::runtime::ReviaSession& inputSession, Dis
     });
 
     auto* cards = new QGridLayout();
+    cards->setObjectName("permissionCards");
     cards->setHorizontalSpacing(18);
     cards->setVerticalSpacing(18);
     cards->setColumnStretch(0, 1);
@@ -390,6 +391,7 @@ CapabilityPanel::CapabilityPanel(revia::runtime::ReviaSession& inputSession, Dis
 
     // ------------------------------------------------------------ approved + discovery
     auto* body = new QHBoxLayout();
+    body->setObjectName("permissionApplications");
     body->setSpacing(18);
 
     auto* approvedCard = MakeCard("permCard");

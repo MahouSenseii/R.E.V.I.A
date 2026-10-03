@@ -51,9 +51,9 @@ ProfilePanel::ProfilePanel(revia::runtime::ReviaSession& inputSession, QWidget* 
     layout->addWidget(title);
 
     auto* explanation = new QLabel(
-        "A profile is who Revia is: her name, her personality, whether she remembers what "
-        "you say, and which created voice speaks for her. Build voices in the Voice tab, "
-        "then assign one here. Only profile files that parse are listed.", this);
+        "Profiles edit the selected companion's authored name, personality, memory setting "
+        "and assigned voice. Her earned development and private history stay with the companion. "
+        "Create voices in the Voice tab, then assign them here.", this);
     explanation->setWordWrap(true);
     explanation->setObjectName("secondaryText");
     layout->addWidget(explanation);

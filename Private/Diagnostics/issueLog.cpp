@@ -8,6 +8,9 @@
 #include <iomanip>
 #include <nlohmann/json.hpp>
 #include <sstream>
+#ifdef _WIN32
+#include <windows.h>
+#endif
 
 namespace revia::diagnostics
 {
@@ -31,9 +34,7 @@ std::string Timestamp()
 
 std::string StringValue(const nlohmann::json& value, const char* key)
 {
-    return value.contains(key) && value[key].is_string()
-        ? value[key].get<std::string>()
-        : std::string();
+    return value.contains(key) && value[key].is_string() ? value[key].get<std::string>() : std::string();
 }
 
 // Evidence is worker output, so it can be enormous -- a progress bar alone can emit
@@ -48,6 +49,22 @@ std::string ClampEvidence(std::string value)
     const std::size_t start = value.size() - IssueLog::maximumEvidenceBytes;
     return "...(truncated)...\n" + value.substr(start);
 }
+
+nlohmann::json IssueRecord(const Issue& issue)
+{
+    return {{"component", issue.component}, {"code", issue.code}, {"profileId", issue.profileId}, {"voiceId", issue.voiceId},
+        {"correlationId", issue.correlationId}, {"severity", ToString(issue.severity)}, {"status", ToString(issue.status)},
+        {"summary", issue.summary}, {"detail", issue.detail}, {"remedy", issue.remedy}, {"evidence", issue.evidence},
+        {"firstSeen", issue.firstSeen}, {"lastSeen", issue.lastSeen}, {"occurrences", issue.occurrences}};
+}
+}
+
+std::string Issue::Key() const
+{
+    const std::string legacy = component + "/" + code;
+    if (profileId.empty() && voiceId.empty())
+        return legacy;
+    return legacy + '\x1f' + std::to_string(profileId.size()) + ':' + profileId + std::to_string(voiceId.size()) + ':' + voiceId;
 }
 
 std::string ToString(const IssueSeverity value)
@@ -74,8 +91,7 @@ IssueStatus StatusFromString(const std::string& value)
     return value == "Resolved" ? IssueStatus::Resolved : IssueStatus::Open;
 }
 
-IssueLog::IssueLog(std::filesystem::path path)
-    : filePath(std::move(path))
+IssueLog::IssueLog(std::filesystem::path path) : filePath(std::move(path))
 {
 }
 
@@ -104,9 +120,10 @@ bool IssueLog::Record(const Issue& issue, std::string& outError)
         return false;
     }
 
-    Issue stored;
+    try
     {
         std::lock_guard lock(mutex);
+        Issue stored;
         const std::string key = issue.Key();
         const auto existing = issues.find(key);
         if (existing == issues.end() && issues.size() >= maximumTrackedIssues)
@@ -132,6 +149,7 @@ bool IssueLog::Record(const Issue& issue, std::string& outError)
             stored.summary = issue.summary;
             stored.detail = issue.detail;
             stored.remedy = issue.remedy;
+            stored.correlationId = issue.correlationId;
             if (!issue.evidence.empty())
             {
                 stored.evidence = issue.evidence;
@@ -143,35 +161,55 @@ bool IssueLog::Record(const Issue& issue, std::string& outError)
         stored.evidence = ClampEvidence(stored.evidence);
         stored.lastSeen = Timestamp();
         issues[key] = stored;
+        // State and journal transitions share one order, including resolution.
+        if (!Append(stored))
+        {
+            outError = "The issue was recorded in memory but its history could not be saved.";
+            return false;
+        }
+        return true;
     }
-
-    // Written outside the lock: a slow or failing disk must not hold up the failure
-    // path that is reporting into it.
-    if (!Append(stored))
+    catch (const std::exception&)
     {
-        outError = "The issue was recorded in memory but could not be written to " +
-            filePath.string();
+        outError = "The issue history could not be saved.";
         return false;
     }
-    return true;
 }
 
-bool IssueLog::Resolve(const std::string& component, const std::string& code)
+bool IssueLog::Resolve(
+    const std::string& component, const std::string& code, const std::string& profileId, const std::string& voiceId, std::string* outError)
 {
-    Issue stored;
+    if (outError)
+        outError->clear();
+    try
     {
         std::lock_guard lock(mutex);
-        const auto existing = issues.find(component + "/" + code);
+        Issue identity;
+        identity.component = component;
+        identity.code = code;
+        identity.profileId = profileId;
+        identity.voiceId = voiceId;
+        const auto existing = issues.find(identity.Key());
         if (existing == issues.end() || existing->second.status == IssueStatus::Resolved)
         {
             return false;
         }
         existing->second.status = IssueStatus::Resolved;
         existing->second.lastSeen = Timestamp();
-        stored = existing->second;
+        if (!Append(existing->second))
+        {
+            if (outError)
+                *outError = "The issue was resolved in memory but its history could not be saved.";
+            return false;
+        }
+        return true;
     }
-    Append(stored);
-    return true;
+    catch (const std::exception&)
+    {
+        if (outError)
+            *outError = "The issue history could not be saved.";
+        return false;
+    }
 }
 
 std::vector<Issue> IssueLog::Open() const
@@ -189,14 +227,15 @@ std::vector<Issue> IssueLog::Open() const
     }
     // Failures above degradations, then most recent first, so the panel's top line is
     // the thing most worth acting on.
-    std::sort(result.begin(), result.end(), [](const Issue& left, const Issue& right)
-    {
-        if (left.severity != right.severity)
+    std::sort(result.begin(), result.end(),
+        [](const Issue& left, const Issue& right)
         {
-            return left.severity == IssueSeverity::Failed;
-        }
-        return left.lastSeen > right.lastSeen;
-    });
+            if (left.severity != right.severity)
+            {
+                return left.severity == IssueSeverity::Failed;
+            }
+            return left.lastSeen > right.lastSeen;
+        });
     return result;
 }
 
@@ -212,21 +251,24 @@ std::vector<Issue> IssueLog::All() const
     return result;
 }
 
-std::optional<Issue> IssueLog::Find(const std::string& component, const std::string& code) const
+std::optional<Issue> IssueLog::Find(
+    const std::string& component, const std::string& code, const std::string& profileId, const std::string& voiceId) const
 {
     std::lock_guard lock(mutex);
-    const auto existing = issues.find(component + "/" + code);
+    Issue identity;
+    identity.component = component;
+    identity.code = code;
+    identity.profileId = profileId;
+    identity.voiceId = voiceId;
+    const auto existing = issues.find(identity.Key());
     return existing == issues.end() ? std::nullopt : std::optional<Issue>(existing->second);
 }
 
 std::size_t IssueLog::OpenCount() const
 {
     std::lock_guard lock(mutex);
-    return static_cast<std::size_t>(std::count_if(
-        issues.begin(), issues.end(), [](const auto& entry)
-        {
-            return entry.second.status == IssueStatus::Open;
-        }));
+    return static_cast<std::size_t>(
+        std::count_if(issues.begin(), issues.end(), [](const auto& entry) { return entry.second.status == IssueStatus::Open; }));
 }
 
 bool IssueLog::Load(std::string& outError)
@@ -277,6 +319,9 @@ bool IssueLog::Load(std::string& outError)
         Issue issue;
         issue.component = StringValue(value, "component");
         issue.code = StringValue(value, "code");
+        issue.profileId = StringValue(value, "profileId");
+        issue.voiceId = StringValue(value, "voiceId");
+        issue.correlationId = StringValue(value, "correlationId");
         if (issue.component.empty() || issue.code.empty())
         {
             ++skipped;
@@ -287,22 +332,24 @@ bool IssueLog::Load(std::string& outError)
         issue.summary = StringValue(value, "summary");
         issue.detail = StringValue(value, "detail");
         issue.remedy = StringValue(value, "remedy");
-        issue.evidence = StringValue(value, "evidence");
+        issue.evidence = ClampEvidence(StringValue(value, "evidence"));
         issue.firstSeen = StringValue(value, "firstSeen");
         issue.lastSeen = StringValue(value, "lastSeen");
-        issue.occurrences = value.contains("occurrences") &&
-                value["occurrences"].is_number_integer()
-            ? value["occurrences"].get<int>()
-            : 1;
+        issue.occurrences = value.contains("occurrences") && value["occurrences"].is_number_integer() ? value["occurrences"].get<int>() : 1;
         // Later lines for the same key supersede earlier ones; the file is a journal,
         // and the last word about a key is its current state.
-        issues[issue.Key()] = issue;
+        const std::string key = issue.Key();
+        if (!issues.contains(key) && issues.size() >= maximumTrackedIssues)
+        {
+            ++skipped;
+            continue;
+        }
+        issues[key] = issue;
     }
 
     if (skipped > 0)
     {
-        outError = "Skipped " + std::to_string(skipped) +
-            " unreadable record(s) in " + filePath.string();
+        outError = "Skipped " + std::to_string(skipped) + " unreadable record(s) in " + filePath.string();
     }
     return true;
 }
@@ -352,26 +399,17 @@ std::string IssueLog::CaptureTail(const std::filesystem::path& file, const std::
 
 bool IssueLog::Append(const Issue& issue) const
 {
-    const nlohmann::json record = {
-        {"component", issue.component},
-        {"code", issue.code},
-        {"severity", ToString(issue.severity)},
-        {"status", ToString(issue.status)},
-        {"summary", issue.summary},
-        {"detail", issue.detail},
-        {"remedy", issue.remedy},
-        {"evidence", issue.evidence},
-        {"firstSeen", issue.firstSeen},
-        {"lastSeen", issue.lastSeen},
-        {"occurrences", issue.occurrences}
-    };
-
     std::error_code error;
     const std::filesystem::path parent = filePath.parent_path();
     if (!parent.empty())
     {
         std::filesystem::create_directories(parent, error);
+        if (error)
+            return false;
     }
+    const auto bytes = std::filesystem::file_size(filePath, error);
+    if (!error && bytes >= maximumJournalBytes)
+        return Compact();
     std::ofstream file(filePath, std::ios::app);
     if (!file.is_open())
     {
@@ -379,9 +417,34 @@ bool IssueLog::Append(const Issue& issue) const
     }
     // dump() with no indent keeps one record on one line, which is what makes the file
     // greppable and what makes a partial write cost exactly one record.
-    file << record.dump() << '\n';
+    file << IssueRecord(issue).dump() << '\n';
     file.flush();
     return file.good();
+}
+
+bool IssueLog::Compact() const
+{
+    // Keep every current scope when bounding the journal, including unresolved faults.
+    std::filesystem::path temporary = filePath;
+    temporary += ".tmp";
+    std::ofstream file(temporary, std::ios::trunc);
+    if (!file.is_open())
+        return false;
+    for (const auto& [key, issue] : issues)
+        file << IssueRecord(issue).dump() << '\n';
+    file.flush();
+    if (!file.good())
+        return false;
+    file.close();
+    if (file.fail())
+        return false;
+#ifdef _WIN32
+    return MoveFileExW(temporary.c_str(), filePath.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != 0;
+#else
+    std::error_code error;
+    std::filesystem::rename(temporary, filePath, error);
+    return !error;
+#endif
 }
 
 } // namespace revia::diagnostics

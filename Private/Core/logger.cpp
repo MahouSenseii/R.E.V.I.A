@@ -50,9 +50,13 @@ namespace
 
 logger::logger() = default;
 
+logger::logger(std::filesystem::path directory)
+    : capturedDirectory(std::filesystem::absolute(std::move(directory)).lexically_normal()) {}
+
 logger::~logger() = default;
 
-void logger::Log(const std::string &message) {
+void logger::Log(const std::string& message)
+{
     Write("Log", message, false);
 }
 
@@ -166,14 +170,19 @@ void logger::Write(const std::string& severity, const std::string& message, cons
         std::ostream& output = bUseErrorStream ? std::cerr : std::cout;
         output << line << std::endl;
 
+        auto& LogFile = capturedDirectory.empty() ? ::LogFile : privateLogFile;
+        auto& LogFilePath = capturedDirectory.empty() ? ::LogFilePath : privateLogFilePath;
+        auto& LogFileBytes = capturedDirectory.empty() ? ::LogFileBytes : privateLogFileBytes;
         std::error_code error;
         std::filesystem::path wanted =
-            std::filesystem::absolute(std::filesystem::path(ReviaLogDirectory()), error) /
+            std::filesystem::absolute(capturedDirectory.empty() ? std::filesystem::path(ReviaLogDirectory()) : capturedDirectory, error) /
             "revia.log";
-        if (error) wanted = std::filesystem::path("Logs") / "revia.log";
+        if (error)
+            wanted = std::filesystem::path("Logs") / "revia.log";
         if (!LogFile.is_open() || wanted != LogFilePath)
         {
-            if (LogFile.is_open()) LogFile.close();
+            if (LogFile.is_open())
+                LogFile.close();
             LogFile.clear();
             std::filesystem::create_directories(wanted.parent_path(), error);
             LogFile.open(wanted, std::ios::app);

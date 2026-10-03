@@ -23,6 +23,7 @@
 #include "Runtime/affectController.h"
 #include "Runtime/runtimeEvents.h"
 #include "Runtime/sessionResult.h"
+#include "Identity/socialIdentity.h"
 #include "Speech/speechService.h"
 
 #include <cstdint>
@@ -129,6 +130,7 @@ public:
 
     // Set once at startup, before the first turn.
     void SetSongListProvider(SongListProvider provider);
+    void SetPrivateAdmissionFactory(std::function<std::function<bool()>()> factory);
 
     // `turnReference` is added to this turn's context only, never to its history: text
     // the runtime fetched for the question, such as what the user copied.
@@ -142,6 +144,10 @@ public:
     SessionResult ReplyPublic(const std::string& input, const std::vector<conversationMessage>& channelHistory,
         const std::string& publicInstruction, const identity::RelationshipState& relationship, const aiProfile& profile, bool llmAvailable,
         bool shouldSpeak, std::stop_token stopToken = {});
+    SessionResult ReplyForAudience(const std::string& input, const std::vector<conversationMessage>& channelHistory,
+        const identity::AudienceContext& audience, const identity::RelationshipState& relationship, const aiProfile& profile,
+        bool llmAvailable, bool shouldSpeak, std::stop_token stopToken = {}, std::function<bool()> admission = {},
+        const std::string& turnReference = {});
 
     // Guest overload: the caller owns an isolated router with PublicGuestProfile(),
     // never the desktop router. No instance state, provider, logger or event bus is
@@ -182,6 +188,7 @@ private:
         bool includePrivateHistory = true;
         std::optional<identity::RelationshipState> relationship;
         std::string instruction;
+        std::function<bool()> deliveryAdmission;
     };
 
     // Canonical state and posture for replies, proactive openings and evaluation.
@@ -241,6 +248,7 @@ private:
     RuntimeEventBus& events;
     logger& log;
     StateHandler setState;
+    std::function<std::function<bool()>()> privateAdmissionFactory;
     AffectHandler publishAffect;
     InternetSettingsProvider internetSettings;
     DesktopSettingsProvider desktopSettings;

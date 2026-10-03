@@ -10,6 +10,7 @@ struct imageSettings
     std::string serviceScript = "Tools/revia_image_service.py";
     std::string cacheDirectory = "ThirdParty/ImageGen/cache";
     std::string outputPath = "RuntimeData/Images";
+    std::string logDirectory;
     std::string host = "127.0.0.1";
     int port = 8093;
     std::string model = "stabilityai/sd-turbo";

@@ -29,202 +29,202 @@ namespace revia::speech
 
 namespace
 {
-    double ElapsedMilliseconds(const std::chrono::steady_clock::time_point start)
-    {
-        return std::chrono::duration<double, std::milli>(
-            std::chrono::steady_clock::now() - start).count();
-    }
+std::filesystem::path CaptureDirectory(const speechRecognitionSettings& settings, std::error_code& error)
+{
+    if (!settings.dataDirectory.empty())
+        return std::filesystem::path(settings.dataDirectory);
+    return std::filesystem::temp_directory_path(error) / "Revia" / "Speech";
+}
 
-    // The waveIn result codes worth telling a person apart, in their words rather than
-    // as a number. "Allocated" and "bad device id" call for completely different
-    // actions, and both used to arrive as the same sentence.
-    std::string DescribeWaveInResult(const unsigned int result)
-    {
+double ElapsedMilliseconds(const std::chrono::steady_clock::time_point start)
+{
+    return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+}
+
+// The waveIn result codes worth telling a person apart, in their words rather than
+// as a number. "Allocated" and "bad device id" call for completely different
+// actions, and both used to arrive as the same sentence.
+std::string DescribeWaveInResult(const unsigned int result)
+{
 #ifdef _WIN32
-        switch (result)
-        {
-            case MMSYSERR_NOERROR: return "opened";
-            case MMSYSERR_BADDEVICEID:
-                return "no such recording device";
-            case MMSYSERR_ALLOCATED:
-                return "the device is already in use by another application";
-            case MMSYSERR_NODRIVER:
-                return "no driver is present for the device";
-            case MMSYSERR_NOMEM:
-                return "the driver could not allocate memory";
-            case WAVERR_BADFORMAT:
-                return "the device does not support 16-bit mono at this sample rate";
-            case MMSYSERR_INVALHANDLE:
-                return "invalid device handle";
-            default: break;
-        }
+    switch (result)
+    {
+    case MMSYSERR_NOERROR:
+        return "opened";
+    case MMSYSERR_BADDEVICEID:
+        return "no such recording device";
+    case MMSYSERR_ALLOCATED:
+        return "the device is already in use by another application";
+    case MMSYSERR_NODRIVER:
+        return "no driver is present for the device";
+    case MMSYSERR_NOMEM:
+        return "the driver could not allocate memory";
+    case WAVERR_BADFORMAT:
+        return "the device does not support 16-bit mono at this sample rate";
+    case MMSYSERR_INVALHANDLE:
+        return "invalid device handle";
+    default:
+        break;
+    }
 #endif
-        return "MMSYSERR " + std::to_string(result);
-    }
+    return "MMSYSERR " + std::to_string(result);
+}
 
-    // Signal strength of a 16-bit mono PCM buffer, as RMS and peak in 0..1.
-    //
-    // Both, because they disagree in the informative case: a muted input reads zero on
-    // each, while a microphone picking up only room tone has a small RMS and a peak
-    // that never approaches full scale. One number could not tell those apart.
-    struct SignalLevel
-    {
-        double rms = 0.0;
-        double peak = 0.0;
-    };
+// Signal strength of a 16-bit mono PCM buffer, as RMS and peak in 0..1.
+//
+// Both, because they disagree in the informative case: a muted input reads zero on
+// each, while a microphone picking up only room tone has a small RMS and a peak
+// that never approaches full scale. One number could not tell those apart.
+struct SignalLevel
+{
+    double rms = 0.0;
+    double peak = 0.0;
+};
 
-    SignalLevel MeasureSignal(const std::vector<std::uint8_t>& pcm)
-    {
-        SignalLevel level;
-        const std::size_t samples = pcm.size() / 2;
-        if (samples == 0) return level;
-        double sumOfSquares = 0.0;
-        for (std::size_t index = 0; index < samples; ++index)
-        {
-            const auto low = static_cast<std::uint16_t>(pcm[index * 2]);
-            const auto high = static_cast<std::uint16_t>(pcm[index * 2 + 1]);
-            const auto sample = static_cast<std::int16_t>(
-                static_cast<std::uint16_t>(low | (high << 8U)));
-            const double normalized = static_cast<double>(sample) / 32768.0;
-            sumOfSquares += normalized * normalized;
-            level.peak = std::max(level.peak, std::abs(normalized));
-        }
-        level.rms = std::sqrt(sumOfSquares / static_cast<double>(samples));
+SignalLevel MeasureSignal(const std::vector<std::uint8_t>& pcm)
+{
+    SignalLevel level;
+    const std::size_t samples = pcm.size() / 2;
+    if (samples == 0)
         return level;
-    }
-
-    // Below this RMS the capture is indistinguishable from a disconnected or muted
-    // input. Chosen to sit under room tone on a normal desktop microphone rather than
-    // at zero, because a device that is capturing nothing usually still returns
-    // buffers -- it returns buffers of silence, which looks like success.
-    constexpr double NoSignalRmsThreshold = 0.0015;
-
-    // Three decimals. A level is read to judge "is anything arriving", and the full
-    // double is noise in a sentence a person is meant to act on.
-    std::string FormatLevel(const double value)
+    double sumOfSquares = 0.0;
+    for (std::size_t index = 0; index < samples; ++index)
     {
-        std::ostringstream formatted;
-        formatted << std::fixed << std::setprecision(3) << value;
-        return formatted.str();
+        const auto low = static_cast<std::uint16_t>(pcm[index * 2]);
+        const auto high = static_cast<std::uint16_t>(pcm[index * 2 + 1]);
+        const auto sample = static_cast<std::int16_t>(static_cast<std::uint16_t>(low | (high << 8U)));
+        const double normalized = static_cast<double>(sample) / 32768.0;
+        sumOfSquares += normalized * normalized;
+        level.peak = std::max(level.peak, std::abs(normalized));
     }
+    level.rms = std::sqrt(sumOfSquares / static_cast<double>(samples));
+    return level;
+}
 
-    void WriteLittleEndian(std::ofstream& stream, const std::uint32_t value, const int bytes)
-    {
-        for (int index = 0; index < bytes; ++index)
-        {
-            stream.put(static_cast<char>((value >> (index * 8)) & 0xff));
-        }
-    }
+// Below this RMS the capture is indistinguishable from a disconnected or muted
+// input. Chosen to sit under room tone on a normal desktop microphone rather than
+// at zero, because a device that is capturing nothing usually still returns
+// buffers -- it returns buffers of silence, which looks like success.
+constexpr double NoSignalRmsThreshold = 0.0015;
 
-    bool WriteWaveFile(const std::filesystem::path& path, const std::vector<std::uint8_t>& pcm, const int sampleRate)
-    {
-        std::ofstream stream(path, std::ios::binary | std::ios::trunc);
-        if (!stream)
-        {
-            return false;
-        }
-        const std::uint32_t dataSize = static_cast<std::uint32_t>(pcm.size());
-        stream.write("RIFF", 4);
-        WriteLittleEndian(stream, 36U + dataSize, 4);
-        stream.write("WAVEfmt ", 8);
-        WriteLittleEndian(stream, 16, 4);
-        WriteLittleEndian(stream, 1, 2);
-        WriteLittleEndian(stream, 1, 2);
-        WriteLittleEndian(stream, static_cast<std::uint32_t>(sampleRate), 4);
-        WriteLittleEndian(stream, static_cast<std::uint32_t>(sampleRate * 2), 4);
-        WriteLittleEndian(stream, 2, 2);
-        WriteLittleEndian(stream, 16, 2);
-        stream.write("data", 4);
-        WriteLittleEndian(stream, dataSize, 4);
-        stream.write(reinterpret_cast<const char*>(pcm.data()), static_cast<std::streamsize>(pcm.size()));
-        return stream.good();
-    }
+// Three decimals. A level is read to judge "is anything arriving", and the full
+// double is noise in a sentence a person is meant to act on.
+std::string FormatLevel(const double value)
+{
+    std::ostringstream formatted;
+    formatted << std::fixed << std::setprecision(3) << value;
+    return formatted.str();
+}
 
-    std::string Trim(std::string value)
+void WriteLittleEndian(std::ofstream& stream, const std::uint32_t value, const int bytes)
+{
+    for (int index = 0; index < bytes; ++index)
     {
-        const std::size_t first = value.find_first_not_of(" \t\r\n");
-        if (first == std::string::npos)
-        {
-            return {};
-        }
-        const std::size_t last = value.find_last_not_of(" \t\r\n");
-        return value.substr(first, last - first + 1);
+        stream.put(static_cast<char>((value >> (index * 8)) & 0xff));
     }
+}
 
-    std::optional<int> CudaOrdinal(const std::string& device)
+bool WriteWaveFile(const std::filesystem::path& path, const std::vector<std::uint8_t>& pcm, const int sampleRate)
+{
+    std::ofstream stream(path, std::ios::binary | std::ios::trunc);
+    if (!stream)
     {
-        std::string normalized = device;
-        std::transform(normalized.begin(), normalized.end(), normalized.begin(),
-            [](const unsigned char character)
-            {
-                return static_cast<char>(std::tolower(character));
-            });
-        if (!normalized.starts_with("cuda:") || normalized.size() <= 5)
-        {
-            return std::nullopt;
-        }
-        try
-        {
-            std::size_t consumed = 0;
-            const std::string digits = normalized.substr(5);
-            const int ordinal = std::stoi(digits, &consumed);
-            return ordinal >= 0 && consumed == digits.size()
-                ? std::optional<int>(ordinal)
-                : std::nullopt;
-        }
-        catch (...)
-        {
-            return std::nullopt;
-        }
+        return false;
     }
+    const std::uint32_t dataSize = static_cast<std::uint32_t>(pcm.size());
+    stream.write("RIFF", 4);
+    WriteLittleEndian(stream, 36U + dataSize, 4);
+    stream.write("WAVEfmt ", 8);
+    WriteLittleEndian(stream, 16, 4);
+    WriteLittleEndian(stream, 1, 2);
+    WriteLittleEndian(stream, 1, 2);
+    WriteLittleEndian(stream, static_cast<std::uint32_t>(sampleRate), 4);
+    WriteLittleEndian(stream, static_cast<std::uint32_t>(sampleRate * 2), 4);
+    WriteLittleEndian(stream, 2, 2);
+    WriteLittleEndian(stream, 16, 2);
+    stream.write("data", 4);
+    WriteLittleEndian(stream, dataSize, 4);
+    stream.write(reinterpret_cast<const char*>(pcm.data()), static_cast<std::streamsize>(pcm.size()));
+    return stream.good();
+}
+
+std::string Trim(std::string value)
+{
+    const std::size_t first = value.find_first_not_of(" \t\r\n");
+    if (first == std::string::npos)
+    {
+        return {};
+    }
+    const std::size_t last = value.find_last_not_of(" \t\r\n");
+    return value.substr(first, last - first + 1);
+}
+
+std::optional<int> CudaOrdinal(const std::string& device)
+{
+    std::string normalized = device;
+    std::transform(normalized.begin(), normalized.end(), normalized.begin(),
+        [](const unsigned char character) { return static_cast<char>(std::tolower(character)); });
+    if (!normalized.starts_with("cuda:") || normalized.size() <= 5)
+    {
+        return std::nullopt;
+    }
+    try
+    {
+        std::size_t consumed = 0;
+        const std::string digits = normalized.substr(5);
+        const int ordinal = std::stoi(digits, &consumed);
+        return ordinal >= 0 && consumed == digits.size() ? std::optional<int>(ordinal) : std::nullopt;
+    }
+    catch (...)
+    {
+        return std::nullopt;
+    }
+}
 
 #ifdef _WIN32
-    std::wstring Quote(const std::filesystem::path& path)
+std::wstring Quote(const std::filesystem::path& path)
+{
+    std::wstring value = path.wstring();
+    std::wstring quoted = L"\"";
+    std::size_t backslashes = 0;
+    for (const wchar_t character : value)
     {
-        std::wstring value = path.wstring();
-        std::wstring quoted = L"\"";
-        std::size_t backslashes = 0;
-        for (const wchar_t character : value)
+        if (character == L'\\')
         {
-            if (character == L'\\')
-            {
-                ++backslashes;
-                continue;
-            }
-            if (character == L'\"')
-            {
-                quoted.append(backslashes * 2 + 1, L'\\');
-                quoted.push_back(L'\"');
-                backslashes = 0;
-                continue;
-            }
-            quoted.append(backslashes, L'\\');
+            ++backslashes;
+            continue;
+        }
+        if (character == L'\"')
+        {
+            quoted.append(backslashes * 2 + 1, L'\\');
+            quoted.push_back(L'\"');
             backslashes = 0;
-            quoted.push_back(character);
+            continue;
         }
-        quoted.append(backslashes * 2, L'\\');
-        quoted.push_back(L'\"');
-        return quoted;
+        quoted.append(backslashes, L'\\');
+        backslashes = 0;
+        quoted.push_back(character);
     }
+    quoted.append(backslashes * 2, L'\\');
+    quoted.push_back(L'\"');
+    return quoted;
+}
 
-    std::wstring Utf8ToWide(const std::string& value)
+std::wstring Utf8ToWide(const std::string& value)
+{
+    if (value.empty())
     {
-        if (value.empty())
-        {
-            return {};
-        }
-        const int count = MultiByteToWideChar(
-            CP_UTF8, MB_ERR_INVALID_CHARS, value.data(), static_cast<int>(value.size()), nullptr, 0);
-        if (count <= 0)
-        {
-            return {};
-        }
-        std::wstring output(static_cast<std::size_t>(count), L'\0');
-        MultiByteToWideChar(
-            CP_UTF8, MB_ERR_INVALID_CHARS, value.data(), static_cast<int>(value.size()),
-            output.data(), count);
-        return output;
+        return {};
     }
+    const int count = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, value.data(), static_cast<int>(value.size()), nullptr, 0);
+    if (count <= 0)
+    {
+        return {};
+    }
+    std::wstring output(static_cast<std::size_t>(count), L'\0');
+    MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, value.data(), static_cast<int>(value.size()), output.data(), count);
+    return output;
+}
 #endif
 }
 
@@ -249,8 +249,7 @@ bool SpeechRecognitionService::Start(const speechRecognitionSettings& settings, 
 
     executablePath = ResolveRuntimePath(settings.executable);
     modelPath = ResolveRuntimePath(settings.modelPath);
-    if (!std::filesystem::is_regular_file(executablePath) ||
-        !std::filesystem::is_regular_file(modelPath))
+    if (!std::filesystem::is_regular_file(executablePath) || !std::filesystem::is_regular_file(modelPath))
     {
         available.store(false);
         Notify({"Missing", "whisper.cpp or its speech model is not installed. Run Tools/InstallWhisper.ps1."});
@@ -263,15 +262,15 @@ bool SpeechRecognitionService::Start(const speechRecognitionSettings& settings, 
         if (serverProcess.Start(settings, serverError))
         {
             Notify({"Starting", "The persistent whisper.cpp service is loading its model."});
-            serverWarmupWorker = std::jthread([this](const std::stop_token stopToken)
-            {
-                std::string error;
-                if (!EnsureServerReady(stopToken, error) && !stopToken.stop_requested())
+            serverWarmupWorker = std::jthread(
+                [this](const std::stop_token stopToken)
                 {
-                    Notify({"Fallback", error +
-                        " Speech recognition will use the command-line fallback."});
-                }
-            });
+                    std::string error;
+                    if (!EnsureServerReady(stopToken, error) && !stopToken.stop_requested())
+                    {
+                        Notify({"Fallback", error + " Speech recognition will use the command-line fallback."});
+                    }
+                });
         }
         else
         {
@@ -280,8 +279,7 @@ bool SpeechRecognitionService::Start(const speechRecognitionSettings& settings, 
     }
     else
     {
-        Notify({"Ready", "Speech recognition is ready on " +
-            (settings.device == "cpu" ? std::string("CPU") : settings.device) + "."});
+        Notify({"Ready", "Speech recognition is ready on " + (settings.device == "cpu" ? std::string("CPU") : settings.device) + "."});
     }
     SetHandsFreeEnabled(settings.bHandsFree);
     return true;
@@ -293,18 +291,19 @@ MicrophoneSelection SelectMicrophone(const std::vector<MicrophoneDevice>& device
     const auto trimmed = [](std::string value)
     {
         const auto first = value.find_first_not_of(" \t\r\n");
-        if (first == std::string::npos) return std::string();
+        if (first == std::string::npos)
+            return std::string();
         const auto last = value.find_last_not_of(" \t\r\n");
         return value.substr(first, last - first + 1);
     };
     const std::string wanted = trimmed(configuredName);
     const auto equalsIgnoringCase = [](const std::string& left, const std::string& right)
     {
-        if (left.size() != right.size()) return false;
+        if (left.size() != right.size())
+            return false;
         for (std::size_t index = 0; index < left.size(); ++index)
         {
-            if (std::tolower(static_cast<unsigned char>(left[index])) !=
-                std::tolower(static_cast<unsigned char>(right[index])))
+            if (std::tolower(static_cast<unsigned char>(left[index])) != std::tolower(static_cast<unsigned char>(right[index])))
             {
                 return false;
             }
@@ -335,8 +334,7 @@ MicrophoneSelection SelectMicrophone(const std::vector<MicrophoneDevice>& device
     selection.deviceId = -1;
     selection.name = "Default";
     selection.fellBackToDefault = true;
-    selection.report = "The selected microphone \"" + wanted +
-        "\" is not connected. Using the Windows default instead.";
+    selection.report = "The selected microphone \"" + wanted + "\" is not connected. Using the Windows default instead.";
     return selection;
 }
 
@@ -349,17 +347,15 @@ std::vector<MicrophoneDevice> SpeechRecognitionService::EnumerateMicrophones()
     for (UINT index = 0; index < count; ++index)
     {
         WAVEINCAPSW capabilities{};
-        if (waveInGetDevCapsW(index, &capabilities, sizeof(capabilities)) !=
-            MMSYSERR_NOERROR)
+        if (waveInGetDevCapsW(index, &capabilities, sizeof(capabilities)) != MMSYSERR_NOERROR)
         {
             continue;
         }
-        const int length = WideCharToMultiByte(
-            CP_UTF8, 0, capabilities.szPname, -1, nullptr, 0, nullptr, nullptr);
-        if (length <= 1) continue;
+        const int length = WideCharToMultiByte(CP_UTF8, 0, capabilities.szPname, -1, nullptr, 0, nullptr, nullptr);
+        if (length <= 1)
+            continue;
         std::string name(static_cast<std::size_t>(length - 1), '\0');
-        WideCharToMultiByte(
-            CP_UTF8, 0, capabilities.szPname, -1, name.data(), length, nullptr, nullptr);
+        WideCharToMultiByte(CP_UTF8, 0, capabilities.szPname, -1, name.data(), length, nullptr, nullptr);
         devices.push_back({static_cast<int>(index), name});
     }
 #endif
@@ -384,9 +380,7 @@ void SpeechRecognitionService::SetMicrophoneDevice(const std::string& deviceName
     }
     const MicrophoneSelection selection = ResolveMicrophone();
     Notify({selection.fellBackToDefault ? "Error" : "Ready",
-        selection.fellBackToDefault
-            ? "Microphone error: " + selection.report
-            : selection.report});
+        selection.fellBackToDefault ? "Microphone error: " + selection.report : selection.report});
 }
 
 std::string SpeechRecognitionService::MicrophoneDeviceSetting() const
@@ -398,13 +392,9 @@ std::string SpeechRecognitionService::MicrophoneDeviceSetting() const
 std::string MicrophoneAttempt::Summary() const
 {
     const auto yesNo = [](const bool value) { return value ? "yes" : "no"; };
-    return std::string("requested=yes started=") + yesNo(started) +
-        " recognizer_available=" + yesNo(recognizerAvailable) +
-        " hands_free=" + yesNo(handsFree) +
-        " already_recording=" + yesNo(alreadyRecording) +
-        " transcribing=" + yesNo(transcribing) +
-        " device=" + device +
-        (reason.empty() ? std::string() : " reason=" + reason);
+    return std::string("requested=yes started=") + yesNo(started) + " recognizer_available=" + yesNo(recognizerAvailable) +
+           " hands_free=" + yesNo(handsFree) + " already_recording=" + yesNo(alreadyRecording) + " transcribing=" + yesNo(transcribing) +
+           " device=" + device + (reason.empty() ? std::string() : " reason=" + reason);
 }
 
 bool SpeechRecognitionService::BeginRecording()
@@ -435,13 +425,13 @@ MicrophoneAttempt SpeechRecognitionService::BeginRecordingDiagnosed()
     if (!attempt.recognizerAvailable)
     {
         attempt.reason = "Speech recognition is not available. "
-            "whisper.cpp or its model may not be installed.";
+                         "whisper.cpp or its model may not be installed.";
         return attempt;
     }
     if (attempt.handsFree)
     {
         attempt.reason = "Hands-free mode owns the microphone. "
-            "Turn hands-free off to use the Listen button.";
+                         "Turn hands-free off to use the Listen button.";
         return attempt;
     }
     if (testing.load())
@@ -471,8 +461,7 @@ MicrophoneAttempt SpeechRecognitionService::BeginRecordingDiagnosed()
     discarding.store(false);
 
     std::error_code error;
-    const std::filesystem::path captureDirectory =
-        std::filesystem::temp_directory_path(error) / "Revia" / "Speech";
+    const std::filesystem::path captureDirectory = CaptureDirectory(configuration, error);
     std::filesystem::create_directories(captureDirectory, error);
     if (error)
     {
@@ -483,10 +472,7 @@ MicrophoneAttempt SpeechRecognitionService::BeginRecordingDiagnosed()
     }
     const auto stamp = std::chrono::steady_clock::now().time_since_epoch().count();
     activeWavePath = captureDirectory / ("capture-" + std::to_string(stamp) + ".wav");
-    recordingWorker = std::jthread([this, path = activeWavePath](const std::stop_token stopToken)
-    {
-        Capture(stopToken, path);
-    });
+    recordingWorker = std::jthread([this, path = activeWavePath](const std::stop_token stopToken) { Capture(stopToken, path); });
     attempt.started = true;
     attempt.reason = selection.fellBackToDefault ? selection.report : "";
     return attempt;
@@ -514,11 +500,7 @@ bool SpeechRecognitionService::EndRecording()
     }
     transcriptionCancelled.store(false);
     transcribing.store(true);
-    transcriptionWorker = std::jthread(
-        [this, path = activeWavePath](const std::stop_token stopToken)
-        {
-            Transcribe(stopToken, path);
-        });
+    transcriptionWorker = std::jthread([this, path = activeWavePath](const std::stop_token stopToken) { Transcribe(stopToken, path); });
     return true;
 }
 
@@ -532,9 +514,8 @@ MicrophoneTestResult SpeechRecognitionService::TestMicrophone(const int seconds,
     if (recording.load() || transcribing.load() || handsFreeEnabled.load())
     {
         result.status = "device unavailable";
-        result.message = handsFreeEnabled.load()
-            ? "Hands-free mode is using the microphone. Turn it off to run a test."
-            : "Revia is already recording or transcribing. Try again in a moment.";
+        result.message = handsFreeEnabled.load() ? "Hands-free mode is using the microphone. Turn it off to run a test."
+                                                 : "Revia is already recording or transcribing. Try again in a moment.";
         Notify({"TestFailed", result.message});
         return result;
     }
@@ -549,7 +530,10 @@ MicrophoneTestResult SpeechRecognitionService::TestMicrophone(const int seconds,
     struct TestingGuard
     {
         std::atomic<bool>& flag;
-        ~TestingGuard() { flag.store(false); }
+        ~TestingGuard()
+        {
+            flag.store(false);
+        }
     } testingGuard{testing};
 
     if (selection.fellBackToDefault)
@@ -566,17 +550,13 @@ MicrophoneTestResult SpeechRecognitionService::TestMicrophone(const int seconds,
     format.nBlockAlign = 2;
     format.nAvgBytesPerSec = format.nSamplesPerSec * format.nBlockAlign;
 
-    const UINT deviceId = selection.deviceId < 0
-        ? static_cast<UINT>(WAVE_MAPPER)
-        : static_cast<UINT>(selection.deviceId);
+    const UINT deviceId = selection.deviceId < 0 ? static_cast<UINT>(WAVE_MAPPER) : static_cast<UINT>(selection.deviceId);
     HWAVEIN input = nullptr;
-    const MMRESULT opened = waveInOpen(
-        &input, deviceId, &format, 0, 0, CALLBACK_NULL);
+    const MMRESULT opened = waveInOpen(&input, deviceId, &format, 0, 0, CALLBACK_NULL);
     if (opened != MMSYSERR_NOERROR)
     {
         result.status = "device unavailable";
-        result.message = selection.name + " could not be opened (" +
-            DescribeWaveInResult(opened) + ").";
+        result.message = selection.name + " could not be opened (" + DescribeWaveInResult(opened) + ").";
         Notify({"TestFailed", "Microphone test: " + result.message});
         return result;
     }
@@ -599,9 +579,7 @@ MicrophoneTestResult SpeechRecognitionService::TestMicrophone(const int seconds,
     const auto duration = std::chrono::seconds(std::clamp(seconds, 1, 15));
     std::vector<std::uint8_t> pcm;
     waveInStart(input);
-    Notify({"TestRecording",
-        "Microphone test: recording for " +
-        std::to_string(duration.count()) + "s. Say something."});
+    Notify({"TestRecording", "Microphone test: recording for " + std::to_string(duration.count()) + "s. Say something."});
     while (std::chrono::steady_clock::now() - startedAt < duration)
     {
         for (WAVEHDR& header : headers)
@@ -641,50 +619,45 @@ MicrophoneTestResult SpeechRecognitionService::TestMicrophone(const int seconds,
     if (!result.audioReceived)
     {
         result.status = "no signal";
-        result.message = selection.name +
-            " opened but delivered no audio at all. It may be muted or held by "
-            "another application.";
+        result.message = selection.name + " opened but delivered no audio at all. It may be muted or held by "
+                                          "another application.";
         Notify({"TestFailed", "Microphone test: " + result.message});
         return result;
     }
     if (!result.signalPresent)
     {
         result.status = "no signal";
-        result.message = selection.name + " is recording silence (RMS " +
-            FormatLevel(level.rms) + "). Check that it is unmuted and its input level "
-            "is up.";
+        result.message = selection.name + " is recording silence (RMS " + FormatLevel(level.rms) +
+                         "). Check that it is unmuted and its input level "
+                         "is up.";
         Notify({"TestFailed", "Microphone test: " + result.message});
         return result;
     }
 
     result.status = "audio received";
-    Notify({"TestProgress", "Microphone test: audio received (RMS " +
-        FormatLevel(level.rms) + ", peak " + FormatLevel(level.peak) + ")."});
+    Notify({"TestProgress", "Microphone test: audio received (RMS " + FormatLevel(level.rms) + ", peak " + FormatLevel(level.peak) + ")."});
 
     if (!transcribe)
     {
         result.succeeded = true;
-        result.message = selection.name + " is working. Captured " +
-            std::to_string(pcm.size()) + " bytes at RMS " + FormatLevel(level.rms) + ".";
+        result.message =
+            selection.name + " is working. Captured " + std::to_string(pcm.size()) + " bytes at RMS " + FormatLevel(level.rms) + ".";
         Notify({"TestPassed", "Microphone test: " + result.message});
         return result;
     }
 
     std::error_code error;
-    const std::filesystem::path directory =
-        std::filesystem::temp_directory_path(error) / "Revia" / "Speech";
+    const std::filesystem::path directory = CaptureDirectory(configuration, error);
     std::filesystem::create_directories(directory, error);
     const auto stamp = std::chrono::steady_clock::now().time_since_epoch().count();
-    const std::filesystem::path testPath =
-        directory / ("microphone-test-" + std::to_string(stamp) + ".wav");
+    const std::filesystem::path testPath = directory / ("microphone-test-" + std::to_string(stamp) + ".wav");
     if (error || !WriteWaveFile(testPath, pcm, configuration.sampleRate))
     {
         // The audio was good; only the optional half failed. Reporting success on the
         // device is the accurate answer, because that is what the test was asked.
         result.succeeded = true;
         result.status = "audio received";
-        result.message = selection.name +
-            " is working, but the test clip could not be saved for transcription.";
+        result.message = selection.name + " is working, but the test clip could not be saved for transcription.";
         Notify({"TestPassed", "Microphone test: " + result.message});
         return result;
     }
@@ -699,8 +672,7 @@ MicrophoneTestResult SpeechRecognitionService::TestMicrophone(const int seconds,
     }
     else
     {
-        transcriptionError =
-            "the persistent whisper.cpp service is disabled for this profile";
+        transcriptionError = "the persistent whisper.cpp service is disabled for this profile";
     }
     std::filesystem::remove(testPath, error);
 
@@ -708,8 +680,10 @@ MicrophoneTestResult SpeechRecognitionService::TestMicrophone(const int seconds,
     if (!transcript.has_value())
     {
         result.status = "audio received";
-        result.message = selection.name + " is working. Transcription was not "
-            "available for the test clip: " + transcriptionError;
+        result.message = selection.name +
+                         " is working. Transcription was not "
+                         "available for the test clip: " +
+                         transcriptionError;
         Notify({"TestPassed", "Microphone test: " + result.message});
         return result;
     }
@@ -718,9 +692,8 @@ MicrophoneTestResult SpeechRecognitionService::TestMicrophone(const int seconds,
     // test must never become something Revia was told.
     result.transcript = *transcript == "[BLANK_AUDIO]" ? std::string() : *transcript;
     result.status = "success";
-    result.message = result.transcript.empty()
-        ? selection.name + " is working, but no clear speech was recognised."
-        : selection.name + " is working. Heard: \"" + result.transcript + "\"";
+    result.message = result.transcript.empty() ? selection.name + " is working, but no clear speech was recognised."
+                                               : selection.name + " is working. Heard: \"" + result.transcript + "\"";
     Notify({"TestPassed", "Microphone test: " + result.message});
     return result;
 #else
@@ -770,8 +743,7 @@ void SpeechRecognitionService::SetHandsFreeEnabled(const bool enabled)
     }
     if (!handsFreeWorker.joinable())
     {
-        handsFreeWorker = std::jthread(
-            [this](const std::stop_token stopToken) { RunHandsFree(stopToken); });
+        handsFreeWorker = std::jthread([this](const std::stop_token stopToken) { RunHandsFree(stopToken); });
     }
     Notify({"HandsFree", "Hands-free listening is waiting for speech."});
 }
@@ -839,24 +811,19 @@ std::filesystem::path SpeechRecognitionService::ResolveRuntimePath(const std::st
         return configured.lexically_normal();
     }
     std::error_code error;
-    const std::filesystem::path currentCandidate =
-        std::filesystem::absolute(configured, error).lexically_normal();
+    const std::filesystem::path currentCandidate = std::filesystem::absolute(configured, error).lexically_normal();
     if (!error && std::filesystem::exists(currentCandidate))
     {
         return currentCandidate;
     }
 #ifdef _WIN32
     std::array<wchar_t, 32768> modulePath{};
-    const DWORD length = GetModuleFileNameW(
-        nullptr, modulePath.data(), static_cast<DWORD>(modulePath.size()));
+    const DWORD length = GetModuleFileNameW(nullptr, modulePath.data(), static_cast<DWORD>(modulePath.size()));
     if (length > 0 && length < modulePath.size())
     {
-        const std::filesystem::path executableDirectory =
-            std::filesystem::path(std::wstring(modulePath.data(), length)).parent_path();
-        for (const std::filesystem::path& root : {
-            executableDirectory,
-            executableDirectory.parent_path(),
-            executableDirectory.parent_path().parent_path()})
+        const std::filesystem::path executableDirectory = std::filesystem::path(std::wstring(modulePath.data(), length)).parent_path();
+        for (const std::filesystem::path& root :
+            {executableDirectory, executableDirectory.parent_path(), executableDirectory.parent_path().parent_path()})
         {
             const std::filesystem::path candidate = (root / configured).lexically_normal();
             if (std::filesystem::exists(candidate))
@@ -881,9 +848,7 @@ void SpeechRecognitionService::Capture(const std::stop_token stopToken, const st
     format.nAvgBytesPerSec = format.nSamplesPerSec * format.nBlockAlign;
 
     const MicrophoneSelection selection = ResolveMicrophone();
-    const UINT deviceId = selection.deviceId < 0
-        ? static_cast<UINT>(WAVE_MAPPER)
-        : static_cast<UINT>(selection.deviceId);
+    const UINT deviceId = selection.deviceId < 0 ? static_cast<UINT>(WAVE_MAPPER) : static_cast<UINT>(selection.deviceId);
     if (selection.fellBackToDefault)
     {
         Notify({"Error", "Microphone error: " + selection.report});
@@ -897,8 +862,7 @@ void SpeechRecognitionService::Capture(const std::stop_token stopToken, const st
         // The result code is in the message on purpose. "Could not be opened" is the
         // same sentence whether the device is in use by another application, muted at
         // the OS level, or absent, and those need different things done about them.
-        Notify({"Error", "Microphone error: " + selection.name +
-            " could not be opened (" + DescribeWaveInResult(opened) + ")."});
+        Notify({"Error", "Microphone error: " + selection.name + " could not be opened (" + DescribeWaveInResult(opened) + ")."});
         return;
     }
 
@@ -955,32 +919,28 @@ void SpeechRecognitionService::Capture(const std::stop_token stopToken, const st
     // what separate "the device gave us nothing" from "the device gave us silence",
     // and neither was previously recoverable from the log.
     Notify({"Diagnostics",
-        "capture device=" + selection.name +
-        " open=" + DescribeWaveInResult(opened) +
-        " bytes=" + std::to_string(pcm.size()) +
-        " duration_ms=" + std::to_string(static_cast<long long>(captureMilliseconds)) +
-        " rms=" + std::to_string(level.rms) +
-        " peak=" + std::to_string(level.peak) +
-        " wav=" + outputPath.string(),
+        "capture device=" + selection.name + " open=" + DescribeWaveInResult(opened) + " bytes=" + std::to_string(pcm.size()) +
+            " duration_ms=" + std::to_string(static_cast<long long>(captureMilliseconds)) + " rms=" + std::to_string(level.rms) +
+            " peak=" + std::to_string(level.peak) + " wav=" + outputPath.string(),
         captureMilliseconds});
 
     if (discarding.load())
     {
-        Notify({"Ready", "Listening was cancelled; the audio was discarded.",
-            captureMilliseconds});
+        Notify({"Ready", "Listening was cancelled; the audio was discarded.", captureMilliseconds});
         return;
     }
     if (pcm.empty())
     {
-        Notify({"Error", "Microphone error: " + selection.name +
-            " opened but delivered no audio. Check that the device is not muted or "
-            "in use by another application.", captureMilliseconds});
+        Notify({"Error",
+            "Microphone error: " + selection.name +
+                " opened but delivered no audio. Check that the device is not muted or "
+                "in use by another application.",
+            captureMilliseconds});
         return;
     }
     if (pcm.size() < static_cast<std::size_t>(configuration.sampleRate / 2))
     {
-        Notify({"Ready", "That was too short to transcribe; speak, then stop listening.",
-            captureMilliseconds});
+        Notify({"Ready", "That was too short to transcribe; speak, then stop listening.", captureMilliseconds});
         return;
     }
     if (level.rms < NoSignalRmsThreshold)
@@ -988,19 +948,17 @@ void SpeechRecognitionService::Capture(const std::stop_token stopToken, const st
         // Not an error: the recording is real and the user may simply not have spoken.
         // But saying so beats handing whisper.cpp silence and reporting an empty
         // transcript, which reads as the microphone having failed.
-        Notify({"Ready", "That recording was silent (" + selection.name +
-            "). Check the microphone is unmuted and its level is up, then try again.",
+        Notify({"Ready",
+            "That recording was silent (" + selection.name + "). Check the microphone is unmuted and its level is up, then try again.",
             captureMilliseconds});
         return;
     }
     if (!WriteWaveFile(outputPath, pcm, configuration.sampleRate))
     {
-        Notify({"Error", "Microphone error: the recording could not be saved to " +
-            outputPath.string() + "."});
+        Notify({"Error", "Microphone error: the recording could not be saved to " + outputPath.string() + "."});
         return;
     }
-    Notify({"Captured", "Audio captured; preparing transcription.",
-        captureMilliseconds});
+    Notify({"Captured", "Audio captured; preparing transcription.", captureMilliseconds});
 #else
     (void)stopToken;
     (void)outputPath;
@@ -1026,9 +984,7 @@ bool SpeechRecognitionService::CaptureHandsFree(const std::stop_token stopToken,
 
     HWAVEIN input = nullptr;
     const MicrophoneSelection selection = ResolveMicrophone();
-    const UINT deviceId = selection.deviceId < 0
-        ? static_cast<UINT>(WAVE_MAPPER)
-        : static_cast<UINT>(selection.deviceId);
+    const UINT deviceId = selection.deviceId < 0 ? static_cast<UINT>(WAVE_MAPPER) : static_cast<UINT>(selection.deviceId);
     if (selection.fellBackToDefault)
     {
         Notify({"Error", "Microphone error: " + selection.report});
@@ -1036,9 +992,8 @@ bool SpeechRecognitionService::CaptureHandsFree(const std::stop_token stopToken,
     const MMRESULT opened = waveInOpen(&input, deviceId, &format, 0, 0, CALLBACK_NULL);
     if (opened != MMSYSERR_NOERROR)
     {
-        Notify({"Error", "Microphone error: " + selection.name +
-            " could not be opened for hands-free listening (" +
-            DescribeWaveInResult(opened) + ")."});
+        Notify({"Error", "Microphone error: " + selection.name + " could not be opened for hands-free listening (" +
+                             DescribeWaveInResult(opened) + ")."});
         return false;
     }
     constexpr std::size_t BufferCount = 8;
@@ -1086,10 +1041,8 @@ bool SpeechRecognitionService::CaptureHandsFree(const std::stop_token stopToken,
                 const double sample = static_cast<double>(samples[index]);
                 squareSum += sample * sample;
             }
-            const double rms = sampleCount == 0 ? 0.0 :
-                std::sqrt(squareSum / static_cast<double>(sampleCount));
-            const double threshold = std::max<double>(
-                configuration.vadEnergyThreshold, noiseFloor * 2.2);
+            const double rms = sampleCount == 0 ? 0.0 : std::sqrt(squareSum / static_cast<double>(sampleCount));
+            const double threshold = std::max<double>(configuration.vadEnergyThreshold, noiseFloor * 2.2);
             const bool voiced = rms >= threshold;
             if (!speechStarted)
             {
@@ -1109,8 +1062,7 @@ bool SpeechRecognitionService::CaptureHandsFree(const std::stop_token stopToken,
                         pcm.insert(pcm.end(), frame.begin(), frame.end());
                     }
                     preRoll.clear();
-                    RecognitionEvent detected{
-                        "SpeechDetected", "Speech detected; listening until the thought ends."};
+                    RecognitionEvent detected{"SpeechDetected", "Speech detected; listening until the thought ends."};
                     detected.automatic = true;
                     Notify(std::move(detected));
                 }
@@ -1124,14 +1076,14 @@ bool SpeechRecognitionService::CaptureHandsFree(const std::stop_token stopToken,
             header.dwBytesRecorded = 0;
             header.dwFlags &= ~WHDR_DONE;
             waveInAddBuffer(input, &header, sizeof(WAVEHDR));
-            if (speechStarted && (silentMilliseconds >= configuration.vadSilenceMs ||
-                capturedMilliseconds >= configuration.maximumUtteranceSeconds * 1000))
+            if (speechStarted &&
+                (silentMilliseconds >= configuration.vadSilenceMs || capturedMilliseconds >= configuration.maximumUtteranceSeconds * 1000))
             {
                 break;
             }
         }
-        if (speechStarted && (silentMilliseconds >= configuration.vadSilenceMs ||
-            capturedMilliseconds >= configuration.maximumUtteranceSeconds * 1000))
+        if (speechStarted &&
+            (silentMilliseconds >= configuration.vadSilenceMs || capturedMilliseconds >= configuration.maximumUtteranceSeconds * 1000))
         {
             break;
         }
@@ -1149,8 +1101,8 @@ bool SpeechRecognitionService::CaptureHandsFree(const std::stop_token stopToken,
     }
     waveInClose(input);
     recording.store(false);
-    const std::size_t minimumBytes = static_cast<std::size_t>(configuration.sampleRate * 2) *
-        static_cast<std::size_t>(configuration.minimumUtteranceMs) / 1000U;
+    const std::size_t minimumBytes =
+        static_cast<std::size_t>(configuration.sampleRate * 2) * static_cast<std::size_t>(configuration.minimumUtteranceMs) / 1000U;
     if (stopToken.stop_requested() || outputActive.load() || pcm.size() < minimumBytes)
     {
         return false;
@@ -1160,8 +1112,7 @@ bool SpeechRecognitionService::CaptureHandsFree(const std::stop_token stopToken,
         Notify({"Error", "A hands-free speech segment could not be saved."});
         return false;
     }
-    RecognitionEvent captured{
-        "Captured", "Hands-free speech captured; preparing transcription."};
+    RecognitionEvent captured{"Captured", "Hands-free speech captured; preparing transcription."};
     captured.automatic = true;
     Notify(std::move(captured));
     return true;
@@ -1178,8 +1129,7 @@ void SpeechRecognitionService::RunHandsFree(const std::stop_token stopToken)
             continue;
         }
         std::error_code error;
-        const std::filesystem::path directory =
-            std::filesystem::temp_directory_path(error) / "Revia" / "Speech";
+        const std::filesystem::path directory = CaptureDirectory(configuration, error);
         std::filesystem::create_directories(directory, error);
         if (error)
         {
@@ -1187,8 +1137,7 @@ void SpeechRecognitionService::RunHandsFree(const std::stop_token stopToken)
             return;
         }
         const auto stamp = std::chrono::steady_clock::now().time_since_epoch().count();
-        const std::filesystem::path wavePath =
-            directory / ("hands-free-" + std::to_string(stamp) + ".wav");
+        const std::filesystem::path wavePath = directory / ("hands-free-" + std::to_string(stamp) + ".wav");
         if (!CaptureHandsFree(stopToken, wavePath))
         {
             continue;
@@ -1198,8 +1147,7 @@ void SpeechRecognitionService::RunHandsFree(const std::stop_token stopToken)
         Transcribe(stopToken, wavePath, true);
         if (!stopToken.stop_requested() && handsFreeEnabled.load())
         {
-            RecognitionEvent waiting{
-                "HandsFree", "Hands-free listening is waiting for speech."};
+            RecognitionEvent waiting{"HandsFree", "Hands-free listening is waiting for speech."};
             waiting.automatic = true;
             Notify(std::move(waiting));
         }
@@ -1223,10 +1171,8 @@ bool SpeechRecognitionService::EnsureServerReady(const std::stop_token stopToken
         Notify({"Starting", "The persistent whisper.cpp service is loading its model."});
     }
 
-    const auto deadline = std::chrono::steady_clock::now() +
-        std::chrono::seconds(configuration.serverStartupTimeoutSeconds);
-    while (!stopToken.stop_requested() && !transcriptionCancelled.load() &&
-        std::chrono::steady_clock::now() < deadline)
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(configuration.serverStartupTimeoutSeconds);
+    while (!stopToken.stop_requested() && !transcriptionCancelled.load() && std::chrono::steady_clock::now() < deadline)
     {
         httplib::Client client(configuration.serverHost, configuration.serverPort);
         client.set_connection_timeout(1);
@@ -1248,17 +1194,16 @@ bool SpeechRecognitionService::EnsureServerReady(const std::stop_token stopToken
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
     outError = stopToken.stop_requested() || transcriptionCancelled.load()
-        ? "Speech transcription was stopped."
-        : "The persistent whisper.cpp service did not become ready before its startup timeout.";
+                   ? "Speech transcription was stopped."
+                   : "The persistent whisper.cpp service did not become ready before its startup timeout.";
     serverReady.store(false);
     return false;
 }
 
-std::optional<std::string> SpeechRecognitionService::TranscribeWithServer(const std::filesystem::path& wavePath,
-    const std::stop_token stopToken, std::string& outError)
+std::optional<std::string> SpeechRecognitionService::TranscribeWithServer(
+    const std::filesystem::path& wavePath, const std::stop_token stopToken, std::string& outError)
 {
-    if (!EnsureServerReady(stopToken, outError) || stopToken.stop_requested() ||
-        transcriptionCancelled.load())
+    if (!EnsureServerReady(stopToken, outError) || stopToken.stop_requested() || transcriptionCancelled.load())
     {
         return std::nullopt;
     }
@@ -1268,8 +1213,7 @@ std::optional<std::string> SpeechRecognitionService::TranscribeWithServer(const 
         outError = "The captured audio could not be opened for transcription.";
         return std::nullopt;
     }
-    const std::string wave(
-        (std::istreambuf_iterator<char>(stream)), std::istreambuf_iterator<char>());
+    const std::string wave((std::istreambuf_iterator<char>(stream)), std::istreambuf_iterator<char>());
     if (wave.empty())
     {
         outError = "The captured audio was empty.";
@@ -1280,10 +1224,8 @@ std::optional<std::string> SpeechRecognitionService::TranscribeWithServer(const 
     client.set_connection_timeout(2);
     client.set_read_timeout(configuration.requestTimeoutSeconds);
     client.set_write_timeout(10);
-    const httplib::MultipartFormDataItems items{
-        {"file", wave, wavePath.filename().string(), "audio/wav"},
-        {"response_format", "json", {}, {}},
-        {"language", configuration.language, {}, {}}};
+    const httplib::MultipartFormDataItems items{{"file", wave, wavePath.filename().string(), "audio/wav"},
+        {"response_format", "json", {}, {}}, {"language", configuration.language, {}, {}}};
     const auto response = client.Post("/inference", items);
     if (stopToken.stop_requested() || transcriptionCancelled.load())
     {
@@ -1299,8 +1241,7 @@ std::optional<std::string> SpeechRecognitionService::TranscribeWithServer(const 
     if (response->status < 200 || response->status >= 300)
     {
         serverReady.store(false);
-        outError = "The persistent whisper.cpp service returned HTTP " +
-            std::to_string(response->status) + ".";
+        outError = "The persistent whisper.cpp service returned HTTP " + std::to_string(response->status) + ".";
         return std::nullopt;
     }
     try
@@ -1315,54 +1256,55 @@ std::optional<std::string> SpeechRecognitionService::TranscribeWithServer(const 
     }
     catch (const std::exception& exception)
     {
-        outError = std::string("The persistent whisper.cpp response was invalid: ") +
-            exception.what();
+        outError = std::string("The persistent whisper.cpp response was invalid: ") + exception.what();
         return std::nullopt;
     }
 }
 
 void SpeechRecognitionService::Transcribe(const std::stop_token stopToken, const std::filesystem::path wavePath, const bool automatic)
 {
+    struct CapturedAudioCleanup
+    {
+        std::filesystem::path path;
+        ~CapturedAudioCleanup()
+        {
+            std::error_code ignored;
+            std::filesystem::remove(path, ignored);
+        }
+    } cleanup{wavePath};
     const auto startedAt = std::chrono::steady_clock::now();
-    RecognitionEvent transcribingEvent{
-        "Transcribing", "whisper.cpp is transcribing the captured audio."};
+    RecognitionEvent transcribingEvent{"Transcribing", "whisper.cpp is transcribing the captured audio."};
     transcribingEvent.automatic = automatic;
     Notify(std::move(transcribingEvent));
 
     if (configuration.bUseServer)
     {
         std::string serverError;
-        if (const std::optional<std::string> transcript =
-                TranscribeWithServer(wavePath, stopToken, serverError);
-            transcript.has_value())
+        if (const std::optional<std::string> transcript = TranscribeWithServer(wavePath, stopToken, serverError); transcript.has_value())
         {
-            std::error_code ignored;
-            std::filesystem::remove(wavePath, ignored);
             transcribing.store(false);
             if (transcript->empty() || *transcript == "[BLANK_AUDIO]")
             {
-                RecognitionEvent empty{
-                    "Ready", "No clear speech was detected.", ElapsedMilliseconds(startedAt)};
+                RecognitionEvent empty{"Ready", "No clear speech was detected.", ElapsedMilliseconds(startedAt)};
                 empty.automatic = automatic;
                 Notify(std::move(empty));
                 return;
             }
-            RecognitionEvent completed{
-                "Transcript", "Speech transcription completed.", *transcript,
-                ElapsedMilliseconds(startedAt)};
+            RecognitionEvent completed{"Transcript", "Speech transcription completed.", *transcript, ElapsedMilliseconds(startedAt)};
             completed.automatic = automatic;
+            completed.speaker = ResolveSpeaker(wavePath, stopToken);
+            if (stopToken.stop_requested() || transcriptionCancelled.load())
+                return;
             Notify(std::move(completed));
             return;
         }
         if (stopToken.stop_requested() || transcriptionCancelled.load())
         {
             transcribing.store(false);
-            Notify({"Stopped", "Speech transcription was stopped.",
-                ElapsedMilliseconds(startedAt)});
+            Notify({"Stopped", "Speech transcription was stopped.", ElapsedMilliseconds(startedAt)});
             return;
         }
-        RecognitionEvent fallback{
-            "Fallback", serverError + " Retrying this segment with whisper.cpp CLI."};
+        RecognitionEvent fallback{"Fallback", serverError + " Retrying this segment with whisper.cpp CLI."};
         fallback.automatic = automatic;
         Notify(std::move(fallback));
     }
@@ -1372,10 +1314,9 @@ void SpeechRecognitionService::Transcribe(const std::stop_token stopToken, const
     const std::filesystem::path transcriptPath = outputBase.string() + ".txt";
 
 #ifdef _WIN32
-    std::wstring command = Quote(executablePath) + L" -m " + Quote(modelPath) +
-        L" -f " + Quote(wavePath) + L" -l " + Utf8ToWide(configuration.language) +
-        L" -otxt -of " + Quote(outputBase) + L" --no-timestamps -t " +
-        std::to_wstring(configuration.threads);
+    std::wstring command = Quote(executablePath) + L" -m " + Quote(modelPath) + L" -f " + Quote(wavePath) + L" -l " +
+                           Utf8ToWide(configuration.language) + L" -otxt -of " + Quote(outputBase) + L" --no-timestamps -t " +
+                           std::to_wstring(configuration.threads);
     const std::optional<int> deviceOrdinal = CudaOrdinal(configuration.device);
     if (!configuration.bUseGpu || configuration.device == "cpu")
     {
@@ -1392,9 +1333,8 @@ void SpeechRecognitionService::Transcribe(const std::stop_token stopToken, const
     startup.cb = sizeof(startup);
     PROCESS_INFORMATION process{};
     const std::wstring workingDirectory = executablePath.parent_path().wstring();
-    const BOOL created = CreateProcessW(
-        executablePath.c_str(), mutableCommand.data(), nullptr, nullptr, FALSE,
-        CREATE_NO_WINDOW, nullptr, workingDirectory.c_str(), &startup, &process);
+    const BOOL created = CreateProcessW(executablePath.c_str(), mutableCommand.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr,
+        workingDirectory.c_str(), &startup, &process);
     if (!created)
     {
         transcribing.store(false);
@@ -1402,8 +1342,7 @@ void SpeechRecognitionService::Transcribe(const std::stop_token stopToken, const
         return;
     }
     CloseHandle(process.hThread);
-    while (!stopToken.stop_requested() && !transcriptionCancelled.load() &&
-        WaitForSingleObject(process.hProcess, 50) == WAIT_TIMEOUT)
+    while (!stopToken.stop_requested() && !transcriptionCancelled.load() && WaitForSingleObject(process.hProcess, 50) == WAIT_TIMEOUT)
     {
     }
     if (stopToken.stop_requested() || transcriptionCancelled.load())
@@ -1421,8 +1360,7 @@ void SpeechRecognitionService::Transcribe(const std::stop_token stopToken, const
     if (exitCode != 0)
     {
         transcribing.store(false);
-        Notify({"Error", "whisper.cpp exited before producing a transcript.",
-            ElapsedMilliseconds(startedAt)});
+        Notify({"Error", "whisper.cpp exited before producing a transcript.", ElapsedMilliseconds(startedAt)});
         return;
     }
 #else
@@ -1434,7 +1372,6 @@ void SpeechRecognitionService::Transcribe(const std::stop_token stopToken, const
     transcriptBuffer << transcriptFile.rdbuf();
     std::string transcript = Trim(transcriptBuffer.str());
     std::error_code ignored;
-    std::filesystem::remove(wavePath, ignored);
     std::filesystem::remove(transcriptPath, ignored);
     transcribing.store(false);
     if (transcript.empty() || transcript == "[BLANK_AUDIO]")
@@ -1442,11 +1379,39 @@ void SpeechRecognitionService::Transcribe(const std::stop_token stopToken, const
         Notify({"Ready", "No clear speech was detected.", ElapsedMilliseconds(startedAt)});
         return;
     }
-    RecognitionEvent completed{
-        "Transcript", "Speech transcription completed.", transcript,
-        ElapsedMilliseconds(startedAt)};
+    RecognitionEvent completed{"Transcript", "Speech transcription completed.", transcript, ElapsedMilliseconds(startedAt)};
     completed.automatic = automatic;
+    completed.speaker = ResolveSpeaker(wavePath, stopToken);
+    if (stopToken.stop_requested() || transcriptionCancelled.load())
+        return;
     Notify(std::move(completed));
+}
+
+void SpeechRecognitionService::SetSpeakerResolver(SpeakerResolver resolver)
+{
+    std::lock_guard lock(mutex);
+    speakerResolver = std::move(resolver);
+}
+
+identity::SpeakerObservation SpeechRecognitionService::ResolveSpeaker(
+    const std::filesystem::path& wave, const std::stop_token stopToken) const
+{
+    SpeakerResolver resolver;
+    {
+        std::lock_guard lock(mutex);
+        resolver = speakerResolver;
+    }
+    if (!resolver || stopToken.stop_requested() || transcriptionCancelled.load())
+        return {};
+    try
+    {
+        auto observation = resolver(wave, stopToken);
+        return !stopToken.stop_requested() && !transcriptionCancelled.load() ? observation : identity::SpeakerObservation{};
+    }
+    catch (...)
+    {
+        return {};
+    }
 }
 
 void SpeechRecognitionService::Notify(RecognitionEvent event) const

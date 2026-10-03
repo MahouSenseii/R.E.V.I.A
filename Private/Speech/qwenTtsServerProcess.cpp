@@ -184,7 +184,7 @@ bool QwenTtsServerProcess::Start(const speechSettings& settings, const std::stri
     std::vector<wchar_t> mutableCommandLine(commandLine.begin(), commandLine.end());
     mutableCommandLine.push_back(L'\0');
 
-    std::filesystem::create_directories(ReviaLogDirectory(), error);
+    std::filesystem::create_directories((settings.logDirectory.empty() ? ReviaLogDirectory() : settings.logDirectory), error);
     if (error)
     {
         outError = "Could not create the Qwen3-TTS log directory: " + error.message();
@@ -194,8 +194,8 @@ bool QwenTtsServerProcess::Start(const speechSettings& settings, const std::stri
     attributes.nLength = sizeof(attributes);
     attributes.bInheritHandle = TRUE;
     const std::wstring logSuffix = L"-" + std::to_wstring(settings.qwenPort);
-    const std::wstring stdoutPath = (std::filesystem::path(ReviaLogDirectory()) / L"qwen-tts").wstring() + logSuffix + L".stdout.log";
-    const std::wstring stderrPath = (std::filesystem::path(ReviaLogDirectory()) / L"qwen-tts").wstring() + logSuffix + L".stderr.log";
+    const std::wstring stdoutPath = (std::filesystem::path((settings.logDirectory.empty() ? ReviaLogDirectory() : settings.logDirectory)) / L"qwen-tts").wstring() + logSuffix + L".stdout.log";
+    const std::wstring stderrPath = (std::filesystem::path((settings.logDirectory.empty() ? ReviaLogDirectory() : settings.logDirectory)) / L"qwen-tts").wstring() + logSuffix + L".stderr.log";
     const HANDLE output = CreateFileW(
         stdoutPath.c_str(), FILE_APPEND_DATA,
         FILE_SHARE_READ | FILE_SHARE_WRITE, &attributes, OPEN_ALWAYS,

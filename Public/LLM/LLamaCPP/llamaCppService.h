@@ -25,6 +25,7 @@ class llamaCppService
 {
 public:
     llamaCppService();
+    explicit llamaCppService(std::string memoryDatabasePath);
     ~llamaCppService();
 
     void ApplySettings(const llmSettings& settings, const embeddingSettings& embeddingSettings, const aiProfile& profile);
@@ -102,6 +103,7 @@ private:
     float temperature = 0.7f;
     bool bAutoMaxTokens = true;
     bool bStablePromptPrefix = true;
+    bool bAllowPromptCache = true;
     int maxTokens = 4096;
     bool bVisionExpected = false;
     int configuredContextTokens = 4096;

@@ -2,8 +2,11 @@
 
 #include "Speech/speechCoordinator.h"
 
+#include <algorithm>
+#include <functional>
 #include <iostream>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace
@@ -406,6 +409,119 @@ void TestTracingCarriesNoSpeechContent()
     }
 }
 
+void TestQueuedPrivateContextCannotBeRestamped()
+{
+    Channel channel;
+    SpeechCoordinator coordinator;
+    coordinator.SetChannel(channel.Wire());
+    std::uint64_t audienceEpoch = 1;
+    bool privateAudience = true;
+    int captures = 0;
+    coordinator.SetAdmissionFactory(
+        [&]() -> std::function<bool()>
+        {
+            ++captures;
+            const auto captured = audienceEpoch;
+            return [&, captured] { return privateAudience && audienceEpoch == captured; };
+        });
+    const auto holding = coordinator.Submit(Intent(SpeechOwner::Conversation, SpeechBehavior::Queue, "holding"));
+    const auto old = coordinator.Submit(Intent(SpeechOwner::Research, SpeechBehavior::Queue, "private epoch A"));
+    Check(old.state == SpeechIntentState::Queued, "The private epoch fixture did not actually queue behind its holder.");
+    privateAudience = false;
+    ++audienceEpoch;
+    privateAudience = true;
+    ++audienceEpoch;
+    coordinator.SetAdmissionFactory([]() -> std::function<bool()> { return [] { return true; }; });
+    const auto fresh = coordinator.Submit(Intent(SpeechOwner::Research, SpeechBehavior::Queue, "fresh epoch B"));
+    channel.Finished(coordinator, holding.id);
+    Check(std::find(channel.started.begin(), channel.started.end(), old.id) == channel.started.end(),
+        "Private epoch A was spoken after an audience change and return to Private.");
+    Check(channel.started == std::vector<std::uint64_t>{holding.id, fresh.id} && captures == 2,
+        "The queued old guard was recaptured or the fresh admitted report did not start.");
+}
+
+void TestExplicitAdmissionOverridesFactoryAndCannotPreemptWhenStale()
+{
+    Channel channel;
+    SpeechCoordinator coordinator;
+    coordinator.SetChannel(channel.Wire());
+    coordinator.SetAdmissionFactory([]() -> std::function<bool()> { return [] { return false; }; });
+    auto holding = Intent(SpeechOwner::Conversation, SpeechBehavior::Queue);
+    holding.admission = [] { return true; };
+    const auto holder = coordinator.Submit(std::move(holding));
+    Check(holder.accepted, "An explicit admitted intent was replaced by the refusing default factory.");
+    auto stale = Intent(SpeechOwner::System, SpeechBehavior::Interrupt);
+    stale.admission = [] { return false; };
+    const auto denied = coordinator.Submit(std::move(stale));
+    Check(!denied.accepted && channel.stopSpeechCalls == 0 && coordinator.Status().activeId == holder.id,
+        "A stale explicit intent interrupted an admitted active reply.");
+    auto fresh = Intent(SpeechOwner::Research, SpeechBehavior::Queue);
+    fresh.admission = [] { return true; };
+    const auto next = coordinator.Submit(std::move(fresh));
+    channel.Finished(coordinator, holder.id);
+    Check(next.accepted && channel.started == std::vector<std::uint64_t>{holder.id, next.id},
+        "Explicit current admission did not remain usable after a denied interrupt.");
+}
+
+void TestAdmissionExceptionsAndEmptyFactoryFailClosed()
+{
+    Channel channel;
+    SpeechCoordinator coordinator;
+    coordinator.SetChannel(channel.Wire());
+    std::vector<SpeechTrace> traces;
+    coordinator.SetTraceHandler([&](const SpeechTrace& trace) { traces.push_back(trace); });
+    coordinator.NotePerformanceStarted("synthetic-song");
+    coordinator.SetAdmissionFactory([]() -> std::function<bool()> { throw std::runtime_error("PRIVATE_FACTORY_PAYLOAD"); });
+    Check(!coordinator.Submit(Intent(SpeechOwner::System, SpeechBehavior::Interrupt)).accepted,
+        "An exception while capturing admission allowed speech.");
+    coordinator.SetAdmissionFactory([]() -> std::function<bool()> { return {}; });
+    Check(!coordinator.Submit(Intent(SpeechOwner::System, SpeechBehavior::Interrupt)).accepted,
+        "An installed factory's missing captured guard allowed speech.");
+    auto throwing = Intent(SpeechOwner::System, SpeechBehavior::Interrupt);
+    throwing.admission = []() -> bool { throw std::runtime_error("PRIVATE_GUARD_PAYLOAD"); };
+    Check(!coordinator.Submit(std::move(throwing)).accepted && channel.started.empty() && channel.stoppedSongs.empty(),
+        "A denied admission started speech or interrupted song playback.");
+    for (const auto& trace : traces)
+    {
+        Check(trace.reason.find("PRIVATE_") == std::string::npos, "Admission diagnostics exposed a private exception payload.");
+    }
+}
+
+void TestStartObserverRevocationPreventsActualChannelCall()
+{
+    Channel channel;
+    SpeechCoordinator coordinator;
+    coordinator.SetChannel(channel.Wire());
+    bool current = true;
+    coordinator.SetTraceHandler(
+        [&](const SpeechTrace& trace)
+        {
+            if (trace.state == SpeechIntentState::Speaking)
+                current = false;
+        });
+    auto intent = Intent(SpeechOwner::Conversation, SpeechBehavior::Queue);
+    intent.admission = [&] { return current; };
+    const auto denied = coordinator.Submit(std::move(intent));
+    Check(!denied.accepted && denied.state == SpeechIntentState::Canceled && channel.started.empty() && !coordinator.Status().speaking &&
+              coordinator.Status().queueDepth == 0,
+        "An observer revoked admission before the channel call, but speech still started or was reported accepted.");
+}
+
+void TestLateProducerCannotBorrowNewDefaultContext()
+{
+    Channel channel;
+    SpeechCoordinator coordinator;
+    coordinator.SetChannel(channel.Wire());
+    std::uint64_t epoch = 1;
+    const auto launched = epoch;
+    auto late = Intent(SpeechOwner::Research, SpeechBehavior::Queue, "old private report");
+    late.admission = [&, launched] { return epoch == launched; };
+    ++epoch;
+    coordinator.SetAdmissionFactory([]() -> std::function<bool()> { return [] { return true; }; });
+    const auto denied = coordinator.Submit(std::move(late));
+    Check(!denied.accepted && channel.started.empty(), "A late old producer borrowed a fresh default audience context.");
+}
+
 } // namespace
 
 void RunSpeechCoordinatorTests()
@@ -422,5 +538,10 @@ void RunSpeechCoordinatorTests()
     TestOwnersDoNotOverlap();
     TestSpeechTheCoordinatorDidNotStartStillHoldsTheFloor();
     TestTracingCarriesNoSpeechContent();
-    std::cout << "Speech coordinator tests passed: one throat, and it is arbitrated.\n";
+    TestQueuedPrivateContextCannotBeRestamped();
+    TestExplicitAdmissionOverridesFactoryAndCannotPreemptWhenStale();
+    TestAdmissionExceptionsAndEmptyFactoryFailClosed();
+    TestStartObserverRevocationPreventsActualChannelCall();
+    TestLateProducerCannotBorrowNewDefaultContext();
+    std::cout << "Speech coordinator tests passed: 12 retained arbitration and 5 captured-context fixtures; no physical playback.\n";
 }

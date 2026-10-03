@@ -114,11 +114,15 @@ public:
     // words were arrived at.
     void Submit(const messageRouter& router, std::string input, std::string assistantResponse, ResponseProvenance provenance,
         std::uint64_t turnId = 0);
+    void Submit(const messageRouter& router, std::string input, std::string assistantResponse, ResponseProvenance provenance,
+        std::uint64_t turnId, std::function<bool()> contextAdmission);
     // Commits already-approved semantic content before accepting optional embedding
     // work. A successful disposition guarantees the content is in the existing store;
     // cancellation/queue pressure can defer vectors, never the accepted content.
     // Unclassified candidates still use Submit and are not persisted by this path.
     [[nodiscard]] LearnedFindingResult SubmitLearnedFinding(const messageRouter& router, memoryDecision decision, std::uint64_t turnId = 0);
+    [[nodiscard]] LearnedFindingResult SubmitLearnedFinding(const messageRouter& router, memoryDecision decision,
+        std::uint64_t turnId, std::string* outMemoryId);
     void SubmitEmbeddingBackfill(const messageRouter& router, const std::string& embeddingModel);
     // The session owns this subscription's lifetime; all scans and requests run on
     // the existing worker. The router must remain alive until Stop has joined the
@@ -131,6 +135,8 @@ public:
     // Plain diagnostic lines: queue depth, delay, overflow. Never task content.
     using DiagnosticSink = std::function<void(const std::string&)>;
     void SetDiagnosticSink(DiagnosticSink sink);
+    // Side-effect-free session admission; each task retains its submission guard.
+    void SetAdmissionGuard(std::function<bool()> guard);
     void SetQueueLimits(MemoryQueueLimits limits);
 
     // Queue depth per class, for tests and for the resources panel.
@@ -164,6 +170,7 @@ private:
     friend struct MemoryAgentTestAccess;
     struct Task
     {
+        std::function<bool()> admission;
         const messageRouter* router = nullptr;
         std::string input;
         std::string assistantResponse;
@@ -191,6 +198,8 @@ private:
     // MemoryAgentTestAccess is the only writer, and it is read under `mutex`.
     std::function<memoryDecision(const std::string&, const std::string&)> evaluateOverride;
 
+    std::function<bool()> CaptureAdmission() const;
+    static bool Admitted(const std::function<bool()>& guard);
     void Run(std::stop_token stopToken);
     void ScanBackfill(std::stop_token stopToken);
     void FinishEmbeddingTask(const Task& task, bool failed);
@@ -203,7 +212,7 @@ private:
     // queue is already at its bound. Requires `mutex`; returns a diagnostic line to
     // report once the caller has released it, or an empty string when nothing
     // noteworthy happened.
-    std::string AdmitEventLocked(MemoryAgentEvent event);
+    std::string AdmitEventLocked(MemoryAgentEvent event, std::function<bool()> guard = {});
 
     memoryManager memory;
     mutable std::mutex mutex;
@@ -215,6 +224,7 @@ private:
     std::set<std::pair<std::string, std::string>> pendingEmbeddingIds;
     struct BackfillSubscription
     {
+        std::function<bool()> admission;
         const messageRouter* router = nullptr;
         std::string model;
         std::int64_t afterRowId = 0;
@@ -231,7 +241,12 @@ private:
     std::chrono::milliseconds backfillRetryInterval{5000};
     std::chrono::milliseconds backfillMaximumRetry{60000};
     int roundPosition = 0;
-    std::vector<MemoryAgentEvent> events;
+    struct PendingEvent : MemoryAgentEvent
+    {
+        std::function<bool()> admission;
+    };
+    std::vector<PendingEvent> events;
+    std::function<bool()> admissionGuard;
     MemoryQueueLimits limits;
     DiagnosticSink diagnostics;
     // Guarded by `mutex`, same as `events`.

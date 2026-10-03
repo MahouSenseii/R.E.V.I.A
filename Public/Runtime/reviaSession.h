@@ -7,6 +7,11 @@
 #include "LLM/endpointSettings.h"
 #include "Memory/memoryTypes.h"
 #include "Runtime/outputChannel.h"
+#include "Runtime/companion.h"
+#include "Runtime/sessionIdentity.h"
+#include "Runtime/learningStudio.h"
+#include "Policy/companionAuthority.h"
+#include "Agents/agentWorkflow.h"
 #include "Actions/actionRuntime.h"
 #include "Agents/curiosityAgent.h"
 #include "Agents/turnCoordinator.h"
@@ -19,6 +24,7 @@
 #include "Runtime/turnContext.h"
 #include "Core/preferenceStore.h"
 #include "Core/logger.h"
+#include "Diagnostics/issueLog.h"
 #include "Core/messageRouter.h"
 #include "Evaluation/conversationEvaluation.h"
 #include "Memory/conversationArchive.h"
@@ -40,6 +46,7 @@
 #include "Initiative/curiosityJournal.h"
 #include "Learning/learningReview.h"
 #include "Improvement/improvementAgent.h"
+#include "Improvement/selfDevelopment.h"
 #include "Learning/selfAssessment.h"
 #include "Perception/activityHistory.h"
 #include "Perception/screenAwarenessSchedule.h"
@@ -62,6 +69,7 @@
 #include "Resources/loadGovernor.h"
 #include "Resources/resourceMonitor.h"
 #include "Resources/resourcePlanner.h"
+#include "Resources/runtimeLease.h"
 #include "Speech/speechService.h"
 #include "Speech/speechRecognitionService.h"
 #include "Speech/addresseeGate.h"
@@ -88,6 +96,12 @@
 #include <thread>
 #include <unordered_map>
 #include <vector>
+
+namespace revia::speech
+{
+class SpeakerEnrollmentDialogue;
+struct SpeakerEnrollmentContext;
+}
 
 namespace revia::runtime
 {
@@ -154,25 +168,52 @@ class ReviaSession
 {
     friend struct ReviaSessionTestAccess;
 
-public:
-    using ConfirmationHandler = std::function<actions::ConfirmationChoice(
-        const actions::ActionRequest&,
-        const actions::PolicyDecision&)>;
+  public:
+    using ConfirmationHandler = std::function<actions::ConfirmationChoice(const actions::ActionRequest&, const actions::PolicyDecision&)>;
 
     // Formats confirmed execution and audit results independently of personality.
     [[nodiscard]] static std::string FormatActionOutcome(const actions::ActionOutcome& outcome);
 
     ReviaSession();
+    explicit ReviaSession(CompanionPaths paths, std::shared_ptr<policy::CompanionAuthority> authority = {});
     ~ReviaSession();
 
     ReviaSession(const ReviaSession&) = delete;
     ReviaSession& operator=(const ReviaSession&) = delete;
 
     bool Start();
+    [[nodiscard]] const CompanionPaths& Paths() const;
+    [[nodiscard]] RuntimeStamp Stamp() const;
+    [[nodiscard]] std::shared_ptr<policy::CompanionAuthority> Authority() const;
+    [[nodiscard]] bool Admits(const RuntimeStamp& stamp) const;
+    bool StartAgentWorkflow(const std::string& objective, bool demonstration, std::string& outError);
+    bool ResumeAgentWorkflow(std::string& outError);
+    bool RetryAgentNode(const std::string& nodeId, const std::string& changedInput, const std::string& evidence, std::string& outError);
+    bool DecideAgentWorkflow(agents::ParentDecision decision, std::string& outError);
+    void CancelAgentWorkflow();
+    [[nodiscard]] agents::WorkflowSnapshot AgentWorkflowSnapshot() const;
+    [[nodiscard]] std::string AgentWorkflowResult() const;
+    [[nodiscard]] LearningStudioSnapshot LearningStudio();
+    SessionResult RunInventorySkill(const std::filesystem::path& directory, std::stop_token stopToken = {});
+    bool UpdateInventorySkill(std::string& outError);
+    bool RollbackInventorySkill(std::string& outError);
+    bool ExportInventorySkill(std::filesystem::path& outDirectory, std::string& outError);
+    bool ReviewLearning(const std::string& recordId, learning::LearningDecision decision,
+        const std::string& feedback, std::string& outSummary);
+    bool ProposePresentationChange(std::string& outId, std::string& outError, std::stop_token stopToken = {});
+    bool ReviewPresentationChange(bool validate, std::string& outError, std::stop_token stopToken = {});
+    [[nodiscard]] std::optional<improvement::DevelopmentSnapshot> DevelopmentStudio() const;
     SessionResult Submit(const std::string& input, agents::InputSource source = agents::InputSource::Typed);
 
     // Merges input bursts; the completed turn arrives as an AssistantMessage event.
     agents::InputVerdict OfferInput(const std::string& text, agents::InputSource source);
+    [[nodiscard]] identity::AudienceContext Audience() const;
+    bool SetAudience(identity::AudienceContext audience, std::string& outError);
+    bool EnrollSpeaker(const std::string& entityId, const std::filesystem::path& wave, bool explicitConsent, std::string& outError);
+    bool ForgetSpeaker(const std::string& entityId, std::string& outError);
+    bool CorrectSpeakerEvidence(const std::string& evidenceId, const std::string& entityId, std::string& outError);
+    [[nodiscard]] std::vector<identity::RelationshipEvidenceRecord> RelationshipEvidence() const;
+    bool SetAudienceAlias(const std::string& entityId, const std::string& alias, std::string& outError);
     void PollBackgroundEvents();
     void RequestStop();
     void Stop();
@@ -299,8 +340,8 @@ public:
     [[nodiscard]] std::vector<memory::ArchivedTurn> SearchConversations(const std::string& query, std::size_t maxTurns = 12) const;
     // Everything said in a window of epoch seconds, oldest first. Backs /history with a
     // date or a phrase like "yesterday" instead of words to match.
-    [[nodiscard]] std::vector<memory::ArchivedTurn> ConversationsInRange(std::int64_t startEpoch,
-        std::int64_t endEpoch, std::size_t maxTurns = 40) const;
+    [[nodiscard]] std::vector<memory::ArchivedTurn> ConversationsInRange(
+        std::int64_t startEpoch, std::int64_t endEpoch, std::size_t maxTurns = 40) const;
     // Answers one typed recall request from the conversational path and renders the
     // bounded block that grounds the reply. Returns empty when archiving is off, when
     // nothing matches, or when the only match was the question being asked.
@@ -359,8 +400,8 @@ public:
     SessionResult AcceptProposal(const std::string& proposalId);
 
     // Runs real inference against the conversation contract corpus.
-    [[nodiscard]] evaluation::EvaluationReport RunConversationEvaluation(const std::vector<evaluation::EvaluationCase>& cases,
-        std::stop_token stopToken = {});
+    [[nodiscard]] evaluation::EvaluationReport RunConversationEvaluation(
+        const std::vector<evaluation::EvaluationCase>& cases, std::stop_token stopToken = {});
     [[nodiscard]] evaluation::EvaluationReport LastConversationEvaluation() const;
 
     // Lessons require approval before being saved as memory.
@@ -370,8 +411,8 @@ public:
     std::string DisplayName() const;
     std::string Greeting() const;
     speech::VoiceStudioSnapshot VoiceStudio() const;
-    speech::VoiceOperationResult CreateVoicePreset(const std::string& name,
-        const std::string& description, const std::string& referenceText, const std::string& language);
+    speech::VoiceOperationResult CreateVoicePreset(
+        const std::string& name, const std::string& description, const std::string& referenceText, const std::string& language);
     speech::VoiceOperationResult RenderVoiceBank(const std::string& presetId);
     speech::VoiceOperationResult PreviewVoice(const std::string& presetId, const std::string& text);
     speech::VoiceOperationResult AssignVoice(const std::string& profileId, const std::string& presetId);
@@ -381,7 +422,11 @@ public:
     ProfileOperationResult SaveProfile(const ProfileSummary& definition);
     ProfileOperationResult ActivateProfile(const std::string& profileId);
 
-private:
+  private:
+    bool InitializeLearningStudio(std::string& outError);
+    bool InitializeDevelopmentStudio(std::string& outError);
+    bool CollectLearningCandidates(std::string& outError);
+    bool HandleSkillCommand(const std::string& input, SessionResult& result);
     // Callers hold operationMutex. Startup and active-file edits share application;
     // UI and CLI selection additionally require the preference write to succeed first.
     void ApplyProfileLocked(const std::string& profileId, aiProfile loaded);
@@ -440,10 +485,10 @@ private:
     // Asks whether there is any reason to act. Called from the initiative loop rather
     // than from a timer of its own: a timer may permit an activity, never motivate one.
     void ConsiderAutonomousActivity(const std::string& triggerReason);
-    void RunAutonomousActivity(const autonomy::ActivityDecision& decision,
-        const std::string& triggerReason, std::stop_token stopToken = {});
-    [[nodiscard]] autonomy::ActivityOutcome ExecuteComputer(const autonomy::Activity& activity,
-        const autonomy::ActivityDecision& decision, std::stop_token stopToken);
+    void RunAutonomousActivity(
+        const autonomy::ActivityDecision& decision, const std::string& triggerReason, std::stop_token stopToken = {});
+    [[nodiscard]] autonomy::ActivityOutcome ExecuteComputer(
+        const autonomy::Activity& activity, const autonomy::ActivityDecision& decision, std::stop_token stopToken);
     [[nodiscard]] autonomy::AutonomyEvidence GatherAutonomyEvidence() const;
     [[nodiscard]] autonomy::AutonomyCost GatherAutonomyCost() const;
     // Samples attention and input-clock reliability.
@@ -456,17 +501,17 @@ private:
     // Carries out one decided activity. The scheduler decides; this is the only place
     // that acts, and every externally meaningful step inside it still goes through the
     // ordinary capability, policy, and initiative systems.
-    [[nodiscard]] autonomy::ActivityOutcome ExecuteActivity(const autonomy::Activity& activity,
-        const autonomy::ActivityDecision& decision, std::stop_token stopToken = {});
-    [[nodiscard]] autonomy::ActivityOutcome ExecuteThink(const autonomy::Activity& activity,
-        const autonomy::ActivityDecision& decision, std::stop_token stopToken = {});
-    [[nodiscard]] autonomy::ActivityOutcome ExecuteObserve(const autonomy::Activity& activity,
-        const autonomy::ActivityDecision& decision, std::stop_token stopToken = {});
+    [[nodiscard]] autonomy::ActivityOutcome ExecuteActivity(
+        const autonomy::Activity& activity, const autonomy::ActivityDecision& decision, std::stop_token stopToken = {});
+    [[nodiscard]] autonomy::ActivityOutcome ExecuteThink(
+        const autonomy::Activity& activity, const autonomy::ActivityDecision& decision, std::stop_token stopToken = {});
+    [[nodiscard]] autonomy::ActivityOutcome ExecuteObserve(
+        const autonomy::Activity& activity, const autonomy::ActivityDecision& decision, std::stop_token stopToken = {});
     [[nodiscard]] autonomy::ActivityOutcome ExecuteResearch(const autonomy::Activity& activity, const autonomy::ActivityDecision& decision);
-    [[nodiscard]] autonomy::ActivityOutcome ExecuteOrganizeMemory(const autonomy::Activity& activity,
-        const autonomy::ActivityDecision& decision);
-    [[nodiscard]] autonomy::ActivityOutcome ExecuteCreate(const autonomy::Activity& activity,
-        const autonomy::ActivityDecision& decision, std::stop_token stopToken = {});
+    [[nodiscard]] autonomy::ActivityOutcome ExecuteOrganizeMemory(
+        const autonomy::Activity& activity, const autonomy::ActivityDecision& decision);
+    [[nodiscard]] autonomy::ActivityOutcome ExecuteCreate(
+        const autonomy::Activity& activity, const autonomy::ActivityDecision& decision, std::stop_token stopToken = {});
     [[nodiscard]] autonomy::ActivityOutcome ExecuteSpeak(const autonomy::Activity& activity, const autonomy::ActivityDecision& decision);
     // Whether the activity this worker is running is still the current one. Polled
     // between steps so a long activity yields to the user promptly rather than only at
@@ -476,8 +521,8 @@ private:
     // conversation rather than starting one that has forgotten yesterday.
     void RestoreConversationContext();
     // Submit already holds operationMutex when /eval arrives; the public entry point locks.
-    evaluation::EvaluationReport RunConversationEvaluationUnlocked(const std::vector<evaluation::EvaluationCase>& cases,
-        std::stop_token stopToken);
+    evaluation::EvaluationReport RunConversationEvaluationUnlocked(
+        const std::vector<evaluation::EvaluationCase>& cases, std::stop_token stopToken);
     // The checked-in corpus unless RuntimeData supplies one, so cases can be added
     // without a rebuild and an edited corpus cannot be silently restored by one.
     [[nodiscard]] std::vector<evaluation::EvaluationCase> LoadEvaluationCorpus(std::string& outSource);
@@ -488,14 +533,24 @@ private:
     void ReportVoiceBackend(const speech::VoiceOperationResult& prepared);
     // Shared by the immediate typed path and the merged voice path. Callers hold
     // operationMutex; the arbiter has already decided what the turn's text is.
-    SessionResult RunTurnLocked(const std::string& acceptedInput);
+    SessionResult RunTurnLocked(const agents::InputBatch& batch);
+    agents::InputContext CaptureInputContext(agents::InputSource source, const identity::SpeakerObservation& speaker = {});
+    [[nodiscard]] bool InputContextCurrent(const agents::InputContext& captured) const;
+    void InitializeSpeakerEnrollment();
+    void ConfigureSpeakerResolver();
+    void CancelSpeakerEnrollment();
+    [[nodiscard]] bool SpeakerEnrollmentAdmitted(const speech::SpeakerEnrollmentContext& context) const;
+    bool TryHandleSpeakerEnrollment(const agents::InputBatch& input, SessionResult& result);
+    bool CaptureSpeakerEnrollmentSample(const std::filesystem::path& wave, std::stop_token stopToken, std::string& outMessage);
+    void InvalidateAudience();
+    [[nodiscard]] std::function<bool()> CaptureSpeechAdmission(const identity::AudienceContext& audience, const RuntimeStamp& origin) const;
     // What the microphone reports: status, and hands-free transcripts meant for her.
     void OnRecognitionEvent(const speech::RecognitionEvent& recognitionEvent);
     // Runs one turn so that a throw is a failed turn rather than a lost session: the
     // voice drain and adapter loops have no one above them to catch it, and every caller
     // would otherwise be left with busy set and nothing ever clearing it.
     SessionResult GuardTurn(const std::function<SessionResult()>& turn);
-    SessionResult RunTurnUnguarded(const std::string& acceptedInput);
+    SessionResult RunTurnUnguarded(const agents::InputBatch& batch);
     SessionResult ActOnScreenLocked(const std::string& instruction);
     // Runs a background worker's loop until stop is requested. Nothing thrown may leave
     // a worker thread -- an exception escaping a std::jthread ends the process -- so a
@@ -534,7 +589,7 @@ private:
     // Background tasks. One runs at a time on its own thread with its own stop source,
     // so she can keep talking while she works and a new message never cancels it.
     bool LaunchTask(const std::string& title, std::function<goals::Goal(std::stop_token)> execute, std::string& outMessage);
-    void FinishTask(const goals::Goal& finished);
+    void FinishTask(const goals::Goal& finished, const RuntimeStamp& origin, const identity::AudienceContext& audience);
     // Returns false when no task was running.
     bool CancelTask(const std::string& because);
     void StopTaskWorker();
@@ -562,6 +617,12 @@ private:
     // Applies returned turn events; subsystems cannot mutate session state directly.
     SessionResult ApplyTurn(TurnOutcome outcome);
 
+    void HandleSpeechEvent(const speech::SpeechEvent& speechEvent);
+    void HandleSynthesisObservation(const speech::SynthesisObservation& observation);
+    void LoadSpeechFaultHistory();
+    void RestoreSelectedSpeechFault();
+    void PublishVoiceHealth() const;
+    void ReportSpeechHistoryFailure();
     void SetState(RuntimeState newState, const std::string& activity = "");
     void PublishAffect();
     void Publish(RuntimeEventKind kind, const std::string& message, std::uint64_t turnId = 0) const;
@@ -572,6 +633,16 @@ private:
     void StartResourceMonitor();
     void UpdateResourceLoad(const resources::UsageSnapshot& snapshot);
 
+    CompanionPaths companionPaths;
+    SessionIdentity sessionIdentity;
+    resources::RuntimeLease foregroundLease;
+    std::shared_ptr<policy::CompanionAuthority> companionAuthority;
+    agents::AgentWorkflow agentWorkflow;
+    std::atomic<bool> workflowDemonstration = false;
+    mutable std::mutex workflowPersistenceMutex;
+    agents::AgentWorkflow::Provider AgentProvider(bool demonstration);
+    void ObserveAgentWorkflow(const agents::WorkflowSnapshot& snapshot, bool demonstration);
+    void AdvanceAgentWorkflow();
     RuntimeEventBus eventBus;
     logger appLogger;
     messageRouter router;
@@ -614,6 +685,11 @@ private:
     std::deque<std::chrono::steady_clock::time_point> recentActivities;
     std::chrono::steady_clock::time_point lastActivityAt{};
     speech::SpeechService speechService;
+    diagnostics::IssueLog speechIssues;
+    std::mutex speechObservationMutex;
+    std::uint64_t lastSpeechObservationId = 0;
+    bool speechIssuesLoaded = false;
+    std::atomic<bool> speechHistoryWarningReported{false};
     // Arbitrates audio ownership; synthesis and song playback keep their own owners.
     speech::SpeechCoordinator speechCoordinator;
     // Which coordinated intent currently owns the speech backend, so the floor is
@@ -621,6 +697,15 @@ private:
     // be active when a late event arrives. Zero when the coordinator started nothing.
     std::atomic<std::uint64_t> speakingIntentId{0};
     speech::SpeechRecognitionService speechRecognitionService;
+    std::unique_ptr<speech::SpeakerEnrollmentDialogue> speakerEnrollment;
+    mutable std::mutex speakerEnrollmentMutationMutex;
+    std::atomic<std::uint64_t> speakerEnrollmentEpoch{1};
+    mutable std::mutex audienceMutex;
+    identity::AudienceContext configuredAudience{identity::AudienceKind::Private, "local-desktop", 1, {}};
+    bool audienceExplicit = false;
+    identity::AudienceKind lastInputAudience = identity::AudienceKind::Private;
+    std::string lastInputParticipant;
+    std::vector<conversationMessage> audienceHistory;
     // Whether hands-free speech was meant for her: her name, or a follow-up in time.
     speech::AddresseeGate addresseeGate;
     // A separate audio owner with its own device and its own thread. Nothing in here
@@ -637,6 +722,12 @@ private:
     // Integrations. They observe and propose; they never execute and never hold
     // authority of their own.
     skills::SkillManager skillManager;
+    std::mutex learningStudioMutex;
+    std::unique_ptr<skills::SkillPackageStore> skillPackages;
+    std::unique_ptr<learning::LearningRecordStore> learningRecords;
+    mutable std::mutex developmentStudioMutex;
+    std::shared_ptr<improvement::SelfDevelopment> selfDevelopment;
+    std::string presentationCandidateId;
     perception::WindowEventMonitor windowEventMonitor;
     perception::ActivityHistory activityHistory;
     initiative::InitiativeController initiativeController;
@@ -656,10 +747,7 @@ private:
     // confirmation and audit path as everything else.
     actions::windows::DesktopObserver desktopObserver;
     // Borrows desktopObserver, so it must be declared after it.
-    computer::ComputerTaskCoordinator computerTasks{
-        desktopObserver,
-        core::ResolveRuntimeWritePath(
-            std::filesystem::path("RuntimeData") / "ComputerExperience")};
+    computer::ComputerTaskCoordinator computerTasks;
     // Borrows router residency; model processes remain session-owned.
     intelligence::ModelLifetimeCoordinator modelLifetime{router.Residency()};
     actions::windows::ApplicationControlDiscovery applicationControlDiscovery;
@@ -675,7 +763,11 @@ private:
     {
         std::atomic<bool> attempted{false};
         std::atomic<bool> succeeded{false};
-        void Reset() { succeeded.store(false); attempted.store(false); }
+        void Reset()
+        {
+            succeeded.store(false);
+            attempted.store(false);
+        }
     };
     // Optional graph preparation is attempted once per observed backend lifetime.
     // Cancellation leaves the attempt retryable; ordinary failure keeps it Cold.
@@ -704,8 +796,7 @@ private:
     std::string currentSpeakerId = identity::LocalUserEntityId();
     learning::SelfAssessmentEngine selfAssessment;
     // Workers must be destroyed before the router, bus, logger, and assessment they borrow.
-    std::shared_ptr<improvement::ProposalStore> improvementStore =
-        std::make_shared<improvement::ProposalStore>();
+    std::shared_ptr<improvement::ProposalStore> improvementStore = std::make_shared<improvement::ProposalStore>();
     improvement::ImprovementAgent improvementAgent;
     visual::DiagramStore diagramStore;
     visual::ImageGenerator imageGenerator;
@@ -730,8 +821,7 @@ private:
     std::deque<presence::ExternalAdapterEvent> externalAdapterQueue;
     // Public history is deliberately channel-scoped and memory-only. It never enters
     // the local user's conversationContext or durable conversation archive.
-    std::unordered_map<std::string, std::deque<conversationMessage>>
-        publicConversationContexts;
+    std::unordered_map<std::string, std::deque<conversationMessage>> publicConversationContexts;
     // Monotonic ordinals keep LRU ordering independent of the clock.
     std::unordered_map<std::string, std::uint64_t> publicContextLastUsed;
     std::uint64_t publicContextClock = 0;
@@ -772,16 +862,17 @@ private:
         std::string title;
         std::chrono::steady_clock::time_point startedAt;
         std::string progress;
+        RuntimeStamp stamp;
     };
     struct TaskReport
     {
         std::string summary;
         goals::GoalStatus status = goals::GoalStatus::Planned;
         std::chrono::steady_clock::time_point finishedAt;
+        RuntimeStamp stamp;
     };
     planning::ReminderBook reminders;
-    std::function<std::optional<perception::ClipboardText>()> clipboardReader =
-        [] { return perception::ReadClipboardText(6000); };
+    std::function<std::optional<perception::ClipboardText>()> clipboardReader = [] { return perception::ReadClipboardText(6000); };
     // Serialises launching against launching and stopping. The worker never takes it.
     std::mutex taskLaunchMutex;
     mutable std::mutex taskMutex;
@@ -800,6 +891,8 @@ private:
         GoalTokenScope(const GoalTokenScope&) = delete;
         GoalTokenScope& operator=(const GoalTokenScope&) = delete;
         ReviaSession& session;
+        RuntimeStamp stamp;
+        bool admitted = false;
     };
     std::atomic<bool> llmAvailable = false;
     std::atomic<std::uint64_t> userInteractionGeneration = 0;

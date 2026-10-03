@@ -23,6 +23,7 @@ class messageRouter
 {
 public:
     messageRouter();
+    explicit messageRouter(std::string memoryDatabasePath);
     ~messageRouter();
 
     using DeltaHandler = std::function<void(const std::string&)>;
@@ -105,6 +106,8 @@ public:
     bool IsExitCommand(const std::string &input) const;
 
 private:
+    [[nodiscard]] const std::string& ConfiguredModelName(const llmService& service) const;
+
     // True when the Fast brain is pinned to the CPU while Main has a GPU. Then Main is
     // quicker for everything, including the short turns Fast exists for. With no GPU
     // named for Main (automatic or CPU placement) the small model keeps its turns.

@@ -9,8 +9,10 @@
 #include <algorithm>
 #include <chrono>
 #include <fstream>
+#include <limits>
 #include <regex>
 #include <sstream>
+#include <stdexcept>
 #include <system_error>
 #include <thread>
 
@@ -97,20 +99,130 @@ std::string StripRoot(std::string text, const std::filesystem::path& root)
     return text;
 }
 
+struct TestEvidence
+{
+    std::map<int, std::string> suites;
+    std::set<std::string> failures;
+};
+
+bool ValidateTestEvidence(const BuildOutcome& run, TestEvidence& evidence)
+{
+    evidence = {};
+    if (!run.completed || !run.built || !run.testsRan || run.scriptExitCode != 0 || run.discoveryExitCode != 0)
+    {
+        return false;
+    }
+    try
+    {
+        const json discovery = json::parse(run.discoveryOutput);
+        if (discovery.at("kind") != "ctestInfo" || discovery.at("version").at("major") != 1 || discovery.at("version").at("minor") != 0 ||
+            !discovery.at("tests").is_array())
+        {
+            return false;
+        }
+        std::set<std::string> names;
+        int id = 0;
+        for (const auto& test : discovery.at("tests"))
+        {
+            const std::string name = test.at("name").get<std::string>();
+            if (name.empty() || !names.insert(name).second)
+                return false;
+            evidence.suites.emplace(++id, name);
+        }
+    }
+    catch (const std::exception&)
+    {
+        return false;
+    }
+    if (evidence.suites.empty())
+        return false;
+    const auto tests = ParseCtestOutput(run.testOutput);
+    if (tests.size() != evidence.suites.size())
+        return false;
+    std::set<int> seenIds;
+    std::set<int> seenFinished;
+    for (const TestOutcome& test : tests)
+    {
+        const auto suite = evidence.suites.find(test.id);
+        if (!test.executed || test.total != static_cast<int>(evidence.suites.size()) || test.finished < 1 || test.finished > test.total ||
+            suite == evidence.suites.end() || suite->second != test.name || !seenIds.insert(test.id).second ||
+            !seenFinished.insert(test.finished).second)
+        {
+            return false;
+        }
+        if (!test.passed)
+            evidence.failures.insert(test.name);
+    }
+    // CTest returns 8 for complete runs containing failed tests; other nonzero exits
+    // cannot prove that the discovered registry finished executing.
+    return run.testExitCode == (evidence.failures.empty() ? 0 : 8);
+}
+
+json EncodeEvidence(const BuildOutcome& run)
+{
+    return {{"completed", run.completed}, {"built", run.built}, {"testsRan", run.testsRan}, {"scriptExitCode", run.scriptExitCode},
+        {"discoveryExitCode", run.discoveryExitCode}, {"testExitCode", run.testExitCode}, {"discoveryOutput", run.discoveryOutput},
+        {"testOutput", run.testOutput}};
+}
+
+BuildOutcome DecodeEvidence(const json& data)
+{
+    for (const char* field : {"scriptExitCode", "discoveryExitCode", "testExitCode"})
+    {
+        const auto& value = data.at(field);
+        if (!value.is_number_integer() || value < -1 || value > std::numeric_limits<int>::max())
+            throw std::invalid_argument("Invalid workbench exit status.");
+    }
+    BuildOutcome run;
+    run.completed = data.at("completed").get<bool>();
+    run.built = data.at("built").get<bool>();
+    run.testsRan = data.at("testsRan").get<bool>();
+    run.scriptExitCode = data.at("scriptExitCode").get<int>();
+    run.discoveryExitCode = data.at("discoveryExitCode").get<int>();
+    run.testExitCode = data.at("testExitCode").get<int>();
+    run.discoveryOutput = data.at("discoveryOutput").get<std::string>();
+    run.testOutput = data.at("testOutput").get<std::string>();
+    return run;
+}
+
 } // namespace
 
 std::vector<TestOutcome> ParseCtestOutput(const std::string& output)
 {
-    static const std::regex line(
-        R"(^\s*\d+/\d+\s+Test\s+#\d+:\s+(\S+)\s+\.*\s*(\*+)?\s*(Passed|Failed|Not Run|Timeout|Exception|SEGFAULT|Subprocess aborted|Child aborted|Exit code \S+))");
+    static const std::regex line(R"(^\s*(\d+)/(\d+)\s+Test\s+#(\d+):\s+(.+?)\s+\.{2,}\s*(.*)$)");
+    static const std::regex terminal(
+        R"(^\**\s*(Passed|Failed|Timeout|Exception:\s*.+?|SEGFAULT|Subprocess aborted|Child aborted|Exit code \S+)\s+\d+(?:\.\d+)?\s+sec\s*$)");
     std::vector<TestOutcome> outcomes;
     std::istringstream stream(output);
     for (std::string text; std::getline(stream, text);)
     {
         if (!text.empty() && text.back() == '\r') text.pop_back();
         std::smatch match;
-        if (std::regex_search(text, match, line))
-            outcomes.push_back({match[1].str(), match[3].str() == "Passed"});
+        if (!std::regex_match(text, match, line))
+        {
+            static const std::regex rowPrefix(R"(^\s*\d+/\d+\s+Test\b.*)");
+            if (std::regex_match(text, rowPrefix))
+                outcomes.emplace_back();
+            continue;
+        }
+        TestOutcome outcome;
+        outcome.name = match[4].str();
+        try
+        {
+            outcome.finished = std::stoi(match[1].str());
+            outcome.total = std::stoi(match[2].str());
+            outcome.id = std::stoi(match[3].str());
+        }
+        catch (const std::exception&)
+        {
+            outcomes.push_back(outcome);
+            continue;
+        }
+        std::smatch status;
+        const std::string tail = match[5].str();
+        outcome.executed = std::regex_match(tail, status, terminal);
+        outcome.passed = outcome.executed && status[1].str() == "Passed";
+        outcomes.push_back(outcome);
     }
     return outcomes;
 }
@@ -153,8 +265,20 @@ bool Workbench::IsMirrored(const std::string& relativePath)
     return false;
 }
 
-Workbench::Workbench(std::filesystem::path sourceRoot, std::filesystem::path workbenchRoot, BuildRunner buildRunner)
-    : source(std::move(sourceRoot)), root(std::move(workbenchRoot)), runner(std::move(buildRunner))
+bool CompletePassingBuild(const BuildOutcome& outcome)
+{
+    TestEvidence evidence;
+    return ValidateTestEvidence(outcome, evidence) && evidence.failures.empty();
+}
+
+bool CompleteBuildExecution(const BuildOutcome& outcome)
+{
+    TestEvidence evidence;
+    return ValidateTestEvidence(outcome, evidence);
+}
+
+Workbench::Workbench(std::filesystem::path sourceRoot, std::filesystem::path workbenchRoot, BuildRunner buildRunner, CandidateAdmission inputAdmission)
+    : source(std::move(sourceRoot)), root(std::move(workbenchRoot)), runner(std::move(buildRunner)), admission(std::move(inputAdmission))
 {
     LoadManifest();
 }
@@ -194,6 +318,9 @@ bool Workbench::WriteMirrorFile(const std::string& relativePath, const std::stri
 void Workbench::LoadManifest()
 {
     manifest.clear();
+    baselineStamp.clear();
+    baselineFailures.clear();
+    baselineEvidence = {};
     std::error_code error;
     const std::filesystem::path path = root / "manifest.json";
     if (!std::filesystem::is_regular_file(path, error)) return;
@@ -203,14 +330,25 @@ void Workbench::LoadManifest()
         const json files = data.value("files", json::object());
         for (const auto& [file, stamp] : files.items())
             if (stamp.is_string()) manifest[file] = stamp.get<std::string>();
-        baselineStamp = data.value("baselineStamp", std::string{});
-        for (const auto& failure : data.value("baselineFailures", json::array()))
-            if (failure.is_string()) baselineFailures.insert(failure.get<std::string>());
+        if (data.value("baselineEvidenceVersion", 0) == 1 && data.contains("baselineEvidence"))
+        {
+            const BuildOutcome saved = DecodeEvidence(data.at("baselineEvidence"));
+            TestEvidence evidence;
+            if (ValidateTestEvidence(saved, evidence))
+            {
+                baselineEvidence = saved;
+                baselineFailures = evidence.failures;
+                baselineStamp = data.at("baselineStamp").get<std::string>();
+            }
+        }
     }
     catch (const std::exception&)
     {
         // A lost manifest only means copying everything again.
         manifest.clear();
+        baselineStamp.clear();
+        baselineFailures.clear();
+        baselineEvidence = {};
     }
 }
 
@@ -220,6 +358,11 @@ void Workbench::SaveManifest() const
         {"baselineFailures", json::array()}};
     for (const auto& [file, stamp] : manifest) data["files"][file] = stamp;
     for (const std::string& failure : baselineFailures) data["baselineFailures"].push_back(failure);
+    if (!baselineStamp.empty())
+    {
+        data["baselineEvidenceVersion"] = 1;
+        data["baselineEvidence"] = EncodeEvidence(baselineEvidence);
+    }
     std::error_code error;
     std::filesystem::create_directories(root, error);
     std::ofstream file(root / "manifest.json", std::ios::binary | std::ios::trunc);
@@ -348,12 +491,39 @@ VerificationResult Workbench::Verify(const CodeChange& change, const std::stop_t
         result.summary = "The change no longer applies to the current source.";
         return finish(result);
     }
+    if (!admission)
+    {
+        result.summary = "Candidate execution is unavailable without trusted host admission.";
+        return finish(result);
+    }
+    try
+    {
+        const auto refusal = admission(change, original, *patched);
+        if (!refusal.empty())
+        {
+            result.summary = "Candidate execution refused: " + refusal;
+            return finish(result);
+        }
+    }
+    catch (...)
+    {
+        result.summary = "Candidate execution admission failed.";
+        return finish(result);
+    }
     if (!WriteMirrorFile(change.path, *patched, error))
     {
         result.summary = error;
         return finish(result);
     }
-    const BuildOutcome run = runner(MirrorRoot(), BuildRoot(), stopToken);
+    BuildOutcome run;
+    try
+    {
+        run = runner(MirrorRoot(), BuildRoot(), stopToken);
+    }
+    catch (...)
+    {
+        run.failure = "The trusted workbench runner failed.";
+    }
     // Reverted before anything else, whatever happened, so the copy never carries one
     // proposal into the next.
     std::string restoreError;
@@ -378,17 +548,15 @@ VerificationResult Workbench::Verify(const CodeChange& change, const std::stop_t
             : ": " + result.buildErrors.substr(0, result.buildErrors.find('\n')));
         return finish(result);
     }
-    const std::vector<TestOutcome> tests = ParseCtestOutput(run.testOutput);
-    if (!run.testsRan || tests.empty())
+    TestEvidence candidateEvidence;
+    if (!ValidateTestEvidence(run, candidateEvidence))
     {
         result.concluded = true;
-        result.summary = "Built, but the test suites did not run, so it is not proven.";
+        result.summary = "Built, but complete discovered test-suite execution is not proven.";
         return finish(result);
     }
-    std::vector<std::string> failed;
-    for (const TestOutcome& test : tests)
-        if (!test.passed) failed.push_back(test.name);
-    const std::size_t total = tests.size();
+    const auto& failed = candidateEvidence.failures;
+    const std::size_t total = candidateEvidence.suites.size();
     if (failed.empty())
     {
         result.concluded = true;
@@ -400,8 +568,15 @@ VerificationResult Workbench::Verify(const CodeChange& change, const std::stop_t
 
     // Something failed. Whether the change caused it is a question for the same copy
     // without the change -- measured once per source state, and only when needed.
-    if (baselineStamp != ManifestStamp())
+    TestEvidence cachedEvidence;
+    const bool compatibleCache = baselineStamp == ManifestStamp() && ValidateTestEvidence(baselineEvidence, cachedEvidence) &&
+                                 cachedEvidence.suites == candidateEvidence.suites;
+    if (!compatibleCache)
     {
+        baselineStamp.clear();
+        baselineFailures.clear();
+        baselineEvidence = {};
+        SaveManifest();
         // Still patched, the comparison would fail the same way and excuse the change.
         if (!restored)
         {
@@ -422,9 +597,16 @@ VerificationResult Workbench::Verify(const CodeChange& change, const std::stop_t
                 "nothing can be proven until it does.";
             return finish(result);
         }
-        baselineFailures.clear();
-        for (const TestOutcome& test : ParseCtestOutput(baseline.testOutput))
-            if (!test.passed) baselineFailures.insert(test.name);
+        TestEvidence comparisonEvidence;
+        if (!ValidateTestEvidence(baseline, comparisonEvidence) || comparisonEvidence.suites != candidateEvidence.suites)
+        {
+            result.concluded = true;
+            result.summary = "The unchanged source has incomplete or incompatible test-suite evidence, "
+                             "so no failures can be excused.";
+            return finish(result);
+        }
+        baselineFailures = comparisonEvidence.failures;
+        baselineEvidence = baseline;
         baselineStamp = ManifestStamp();
         SaveManifest();
     }
@@ -464,6 +646,7 @@ BuildRunner MakeScriptRunner(std::filesystem::path scriptPath, std::filesystem::
         const std::filesystem::path logPath = logDirectory / ("build-" + stamp + ".log");
         const std::filesystem::path testPath = logDirectory / ("ctest-" + stamp + ".txt");
         const std::filesystem::path resultPath = logDirectory / ("result-" + stamp + ".json");
+        const std::filesystem::path discoveryPath = logDirectory / ("discovery-" + stamp + ".json");
         if (!std::filesystem::is_regular_file(scriptPath, error))
         {
             outcome.failure = "The workbench build script is missing: " +
@@ -481,7 +664,7 @@ BuildRunner MakeScriptRunner(std::filesystem::path scriptPath, std::filesystem::
             L" -BuildRoot " + quote(buildRoot.wstring()) +
             L" -DepsRoot " + quote(dependencyRoot.wstring()) +
             L" -TestOutput " + quote(testPath.wstring()) +
-            L" -ResultPath " + quote(resultPath.wstring()) +
+            L" -ResultPath " + quote(resultPath.wstring()) + L" -DiscoveryOutput " + quote(discoveryPath.wstring()) +
             L" -Jobs " + std::to_wstring(std::max(1, parallelJobs));
 
         SECURITY_ATTRIBUTES inherit{};
@@ -549,7 +732,7 @@ BuildRunner MakeScriptRunner(std::filesystem::path scriptPath, std::filesystem::
             }
         }
         DWORD exitCode = 1;
-        GetExitCodeProcess(process.hProcess, &exitCode);
+        const bool exitKnown = GetExitCodeProcess(process.hProcess, &exitCode) != FALSE && exitCode != STILL_ACTIVE;
         CloseHandle(process.hProcess);
         if (job != nullptr) CloseHandle(job);
 
@@ -563,13 +746,34 @@ BuildRunner MakeScriptRunner(std::filesystem::path scriptPath, std::filesystem::
                 : "The workbench build ran past its time limit.";
             return outcome;
         }
+        if (!exitKnown)
+        {
+            outcome.failure = "The workbench script exit status could not be obtained.";
+            return outcome;
+        }
+        outcome.scriptExitCode = static_cast<int>(exitCode);
         try
         {
             const json result = json::parse(ReadScriptText(resultPath));
-            outcome.completed = true;
-            outcome.built = result.value("built", false);
-            outcome.testsRan = result.value("testsRan", false);
+            for (const char* field : {"discoveryExitCode", "testExitCode"})
+            {
+                const auto& value = result.at(field);
+                if (!value.is_number_integer() || value < -1 || value > std::numeric_limits<int>::max())
+                    throw std::invalid_argument("Invalid workbench exit status.");
+            }
+            outcome.built = result.at("built").get<bool>();
+            outcome.testsRan = result.at("testsRan").get<bool>();
+            outcome.discoveryExitCode = result.at("discoveryExitCode").get<int>();
+            outcome.testExitCode = result.at("testExitCode").get<int>();
+            outcome.discoveryOutput = ReadScriptText(discoveryPath);
             outcome.testOutput = ReadScriptText(testPath);
+            if (outcome.built && outcome.scriptExitCode != 0)
+            {
+                outcome.failure =
+                    "The workbench build script failed (exit " + std::to_string(exitCode) + ") despite reporting a successful build.";
+                return outcome;
+            }
+            outcome.completed = true;
         }
         catch (const std::exception&)
         {

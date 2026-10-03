@@ -1,5 +1,6 @@
 #include "Initiative/initiativeSettings.h"
 #include "Initiative/initiativeController.h"
+#include "Core/speechAttribution.h"
 
 #include <algorithm>
 #include <cctype>
@@ -39,6 +40,79 @@ void InitiativeController::Configure(initiativeSettings settings)
     committedProposals.clear();
     lastSubject.clear();
     nextId = 1;
+    quietUntil.reset();
+}
+
+bool InitiativeController::RequestQuiet(const std::string& input, const QuietClock::time_point now)
+{
+    if (input.size() > 256)
+        return false;
+    const auto attribution = conversation::ReadSpeechAttribution(input);
+    std::string normalized;
+    for (const unsigned char character : attribution.userAuthoredText)
+    {
+        if (std::isalnum(character))
+            normalized += static_cast<char>(std::tolower(character));
+        else if (std::isspace(character) && !normalized.empty() && normalized.back() != ' ')
+            normalized += ' ';
+    }
+    while (!normalized.empty() && normalized.back() == ' ')
+        normalized.pop_back();
+    if (normalized.starts_with("revia "))
+        normalized.erase(0, 6);
+    if (normalized == "you can talk now" || normalized == "resume speaking" || normalized == "dont be quiet")
+    {
+        ResumeConversation();
+        return true;
+    }
+    std::chrono::seconds duration = std::chrono::minutes{5};
+    if (normalized == "mute for a bit")
+        normalized = "stay quiet";
+    const auto suffix = normalized.rfind(" for ");
+    if (suffix != std::string::npos)
+    {
+        std::istringstream specification(normalized.substr(suffix + 5));
+        int count = 0;
+        std::string unit, extra;
+        if (!(specification >> count >> unit) || (specification >> extra) || count <= 0 || count > 28800)
+            return false;
+        int multiplier = 0;
+        if (unit == "second" || unit == "seconds")
+            multiplier = 1;
+        else if (unit == "minute" || unit == "minutes")
+            multiplier = 60;
+        else if (unit == "hour" || unit == "hours")
+            multiplier = 3600;
+        if (multiplier == 0 || count > 28800 / multiplier)
+            return false;
+        duration = std::chrono::seconds{count * multiplier};
+        normalized.resize(suffix);
+    }
+    constexpr std::string_view requests[] = {"quiet please", "be quiet", "please be quiet", "leave me alone", "dont interrupt me",
+        "do not interrupt me", "stop interrupting", "stop talking", "stop speaking", "stay quiet", "mute for a bit"};
+    if (std::none_of(std::begin(requests), std::end(requests), [&](const auto phrase) { return normalized == phrase; }))
+        return false;
+    std::lock_guard lock(mutex);
+    quietUntil = now + duration;
+    return true;
+}
+
+bool InitiativeController::IsQuiet(const QuietClock::time_point now) const
+{
+    std::lock_guard lock(mutex);
+    return quietUntil && now < *quietUntil;
+}
+
+std::optional<InitiativeController::QuietClock::time_point> InitiativeController::QuietUntil() const
+{
+    std::lock_guard lock(mutex);
+    return quietUntil;
+}
+
+void InitiativeController::ResumeConversation()
+{
+    std::lock_guard lock(mutex);
+    quietUntil.reset();
 }
 
 bool InitiativeController::BuildActivityProposal(const std::vector<perception::ActivitySpan>& recent, Proposal& outProposal)
@@ -55,10 +129,8 @@ bool InitiativeController::BuildActivityProposal(const std::vector<perception::A
     for (const perception::ActivitySpan& span : recent)
     {
         overall += span.Duration();
-        const auto existing = std::find_if(
-            totals.begin(),
-            totals.end(),
-            [&span](const auto& entry) { return entry.first == span.application; });
+        const auto existing =
+            std::find_if(totals.begin(), totals.end(), [&span](const auto& entry) { return entry.first == span.application; });
         if (existing != totals.end())
         {
             existing->second += span.Duration();
@@ -73,10 +145,7 @@ bool InitiativeController::BuildActivityProposal(const std::vector<perception::A
         return false;
     }
 
-    std::sort(totals.begin(), totals.end(), [](const auto& left, const auto& right)
-    {
-        return left.second > right.second;
-    });
+    std::sort(totals.begin(), totals.end(), [](const auto& left, const auto& right) { return left.second > right.second; });
     const auto& dominant = totals.front();
     if (dominant.second < std::chrono::minutes{20})
     {
@@ -86,8 +155,7 @@ bool InitiativeController::BuildActivityProposal(const std::vector<perception::A
     // Confidence comes from how concentrated the session is, not from a model's opinion
     // of its own interestingness. A session split across six applications is not evidence
     // of anything worth interrupting for.
-    const float share = static_cast<float>(dominant.second.count()) /
-        static_cast<float>(std::max<std::int64_t>(1, overall.count()));
+    const float share = static_cast<float>(dominant.second.count()) / static_cast<float>(std::max<std::int64_t>(1, overall.count()));
     outProposal.confidence = std::clamp(share, 0.0f, 1.0f);
 
     std::vector<std::string> subjects;
@@ -99,8 +167,7 @@ bool InitiativeController::BuildActivityProposal(const std::vector<perception::A
         }
         for (const std::string& title : span.titles)
         {
-            if (subjects.size() < 3 &&
-                std::find(subjects.begin(), subjects.end(), title) == subjects.end())
+            if (subjects.size() < 3 && std::find(subjects.begin(), subjects.end(), title) == subjects.end())
             {
                 subjects.push_back(title);
             }
@@ -123,8 +190,7 @@ bool InitiativeController::BuildActivityProposal(const std::vector<perception::A
     outProposal.subject = "time spent in " + dominant.first;
 
     std::ostringstream message;
-    message << "You have been in " << dominant.first << " for "
-        << FormatMinutes(dominant.second);
+    message << "You have been in " << dominant.first << " for " << FormatMinutes(dominant.second);
     if (!subjects.empty())
     {
         message << ", mostly " << subjects.front();
@@ -163,19 +229,16 @@ bool InitiativeController::BuildUnfinishedGoalProposal(const std::vector<goals::
     outProposal.resumeGoalId = best->id;
 
     std::ostringstream evidence;
-    evidence << "goal '" << best->title << "' stopped at step " << best->currentStep
-        << " of " << best->steps.size();
-    if (best->stopReason != goals::StopReason::None &&
-        best->stopReason != goals::StopReason::Completed)
+    evidence << "goal '" << best->title << "' stopped at step " << best->currentStep << " of " << best->steps.size();
+    if (best->stopReason != goals::StopReason::None && best->stopReason != goals::StopReason::Completed)
     {
         evidence << " (" << goals::ToString(best->stopReason) << ")";
     }
     outProposal.evidence = evidence.str();
 
     std::ostringstream message;
-    message << "You left '" << best->title << "' unfinished at step "
-        << best->currentStep << " of " << best->steps.size()
-        << ". Want me to pick it up?";
+    message << "You left '" << best->title << "' unfinished at step " << best->currentStep << " of " << best->steps.size()
+            << ". Want me to pick it up?";
     outProposal.message = message.str();
     return true;
 }
@@ -193,9 +256,7 @@ bool InitiativeController::BuildConversationProposal(const std::vector<StarterCu
     {
         return false;
     }
-    const auto strongest = std::max_element(
-        cues.begin(),
-        cues.end(),
+    const auto strongest = std::max_element(cues.begin(), cues.end(),
         [](const StarterCue& left, const StarterCue& right)
         {
             if (left.confidence != right.confidence)
@@ -231,13 +292,15 @@ InitiativeController::Consideration InitiativeController::Consider(const Evidenc
 {
     std::lock_guard lock(mutex);
     Consideration consideration;
+    if (quietUntil && QuietClock::now() < *quietUntil)
+    {
+        consideration.verdict = AttentionVerdict::DismissalCooldown;
+        policy.RecordSuppressed();
+        return consideration;
+    }
 
-    const bool hasUncommittedReservation = std::any_of(
-        proposals.begin(), proposals.end(), [this](const auto& entry)
-        {
-            return entry.second == ProposalOutcome::Pending &&
-                !committedProposals.contains(entry.first.id);
-        });
+    const bool hasUncommittedReservation = std::any_of(proposals.begin(), proposals.end(),
+        [this](const auto& entry) { return entry.second == ProposalOutcome::Pending && !committedProposals.contains(entry.first.id); });
     if (hasUncommittedReservation)
     {
         consideration.verdict = AttentionVerdict::Cooldown;
@@ -281,12 +344,10 @@ InitiativeController::Consideration InitiativeController::Consider(const Evidenc
 AttentionVerdict InitiativeController::SpeakingVerdict(AttentionContext context) const
 {
     std::lock_guard lock(mutex);
-    const bool hasUncommittedReservation = std::any_of(
-        proposals.begin(), proposals.end(), [this](const auto& entry)
-        {
-            return entry.second == ProposalOutcome::Pending &&
-                !committedProposals.contains(entry.first.id);
-        });
+    if (quietUntil && QuietClock::now() < *quietUntil)
+        return AttentionVerdict::DismissalCooldown;
+    const bool hasUncommittedReservation = std::any_of(proposals.begin(), proposals.end(),
+        [this](const auto& entry) { return entry.second == ProposalOutcome::Pending && !committedProposals.contains(entry.first.id); });
     if (hasUncommittedReservation)
     {
         return AttentionVerdict::Cooldown;
@@ -318,8 +379,7 @@ void InitiativeController::Accept(const std::string& proposalId)
     std::lock_guard lock(mutex);
     for (auto& entry : proposals)
     {
-        if (entry.first.id == proposalId && entry.second == ProposalOutcome::Pending &&
-            committedProposals.contains(proposalId))
+        if (entry.first.id == proposalId && entry.second == ProposalOutcome::Pending && committedProposals.contains(proposalId))
         {
             entry.second = ProposalOutcome::Accepted;
             committedProposals.erase(proposalId);
@@ -341,20 +401,14 @@ void InitiativeController::RecordConversationResponse(const std::string& respons
         }
     }
     constexpr std::string_view Dismissals[] = {
-        "not now", "no thanks", "maybe later", "leave me alone", "dont interrupt",
-        "do not interrupt", "stop interrupting", "quiet please"
-    };
+        "not now", "no thanks", "maybe later", "leave me alone", "dont interrupt", "do not interrupt", "stop interrupting", "quiet please"};
     const bool dismissed = std::any_of(std::begin(Dismissals), std::end(Dismissals),
-        [&normalized](const std::string_view phrase)
-        {
-            return normalized.find(phrase) != std::string::npos;
-        });
+        [&normalized](const std::string_view phrase) { return normalized.find(phrase) != std::string::npos; });
 
     std::lock_guard lock(mutex);
     for (auto& entry : proposals)
     {
-        if (entry.second == ProposalOutcome::Pending &&
-            committedProposals.contains(entry.first.id) &&
+        if (entry.second == ProposalOutcome::Pending && committedProposals.contains(entry.first.id) &&
             entry.first.kind == Proposal::Kind::ConversationStarter)
         {
             if (dismissed)
@@ -377,8 +431,7 @@ void InitiativeController::Dismiss(const std::string& proposalId, const std::chr
     std::lock_guard lock(mutex);
     for (auto& entry : proposals)
     {
-        if (entry.first.id == proposalId && entry.second == ProposalOutcome::Pending &&
-            committedProposals.contains(proposalId))
+        if (entry.first.id == proposalId && entry.second == ProposalOutcome::Pending && committedProposals.contains(proposalId))
         {
             entry.second = ProposalOutcome::Dismissed;
             committedProposals.erase(proposalId);
@@ -412,8 +465,7 @@ std::vector<Proposal> InitiativeController::Pending() const
     std::vector<Proposal> pending;
     for (const auto& entry : proposals)
     {
-        if (entry.second == ProposalOutcome::Pending &&
-            committedProposals.contains(entry.first.id))
+        if (entry.second == ProposalOutcome::Pending && committedProposals.contains(entry.first.id))
         {
             pending.push_back(entry.first);
         }
@@ -449,15 +501,13 @@ std::string InitiativeController::Status() const
         stream << "Revia never speaks first. Enable \"initiative\" in Config/settings.json.";
         return stream.str();
     }
-    stream << "Revia may speak first, at most " << policy.EffectiveHourlyBudget()
-        << " times an hour";
+    stream << "Revia may speak first, at most " << policy.EffectiveHourlyBudget() << " times an hour";
     if (policy.IsRateReduced())
     {
         stream << " (reduced automatically: too many proposals were dismissed)";
     }
-    stream << ".\nSpoken " << counters.spoken << ", accepted " << counters.accepted
-        << ", dismissed " << counters.dismissed << ", suppressed " << counters.suppressed
-        << ".";
+    stream << ".\nSpoken " << counters.spoken << ", accepted " << counters.accepted << ", dismissed " << counters.dismissed
+           << ", suppressed " << counters.suppressed << ".";
     const std::uint32_t judged = counters.accepted + counters.dismissed;
     if (judged >= static_cast<std::uint32_t>(std::max(1, configuration.precisionSampleFloor)))
     {

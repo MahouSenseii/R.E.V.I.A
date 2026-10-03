@@ -40,12 +40,14 @@ private:
 class Backend
 {
 public:
-    Backend()
+    explicit Backend(std::vector<std::string> models = {"proactive-fixture"})
     {
         server.Get("/health", [](const auto&, auto& response)
         { response.set_content(R"({"status":"ok","slots_idle":1})", "application/json"); });
-        server.Get("/v1/models", [](const auto&, auto& response)
-        { response.set_content(R"({"data":[{"id":"proactive-fixture"}]})", "application/json"); });
+        json inventory = {{"data", json::array()}};
+        for (const auto& model : models) inventory["data"].push_back({{"id", model}});
+        server.Get("/v1/models", [body = inventory.dump()](const auto&, auto& response)
+        { response.set_content(body, "application/json"); });
         server.Post("/v1/chat/completions", [this](const auto& request, auto& response)
         {
             const auto body = json::parse(request.body);
@@ -73,6 +75,11 @@ public:
             {
                 response.status = 400;
                 response.set_content(R"({"error":"fixture context rejection"})", "application/json");
+                return;
+            }
+            if (!body.value("stream", false))
+            {
+                response.set_content(R"({"choices":[{"message":{"content":"A metadata fixture response."},"finish_reason":"stop"}]})", "application/json");
                 return;
             }
             const json chunk = {{"choices", json::array({{
@@ -121,6 +128,30 @@ private:
     std::vector<json> requests;
     std::jthread thread;
 };
+
+llmSettings MetadataSettings(const int port, std::string modelName)
+{
+    llmSettings settings;
+    settings.host = "127.0.0.1";
+    settings.port = port;
+    settings.modelName = std::move(modelName);
+    settings.bAutoStartServer = false;
+    settings.bVisionEnabled = true;
+    settings.bAutoMaxTokens = false;
+    settings.maxTokens = 256;
+    return settings;
+}
+
+embeddingSettings MetadataEmbeddings(const int port, const bool enabled = false)
+{
+    embeddingSettings settings;
+    settings.host = "127.0.0.1";
+    settings.port = port;
+    settings.modelName = "fixture-embedding";
+    settings.bEnabled = enabled;
+    settings.bAutoStartServer = false;
+    return settings;
+}
 
 std::string SystemText(const json& request)
 {
@@ -248,7 +279,7 @@ void TestProactiveGenerationAndPublicBoundary()
 {
     tests::ScopedTestDirectory directory;
     WorkingDirectory cwd(directory.root);
-    Backend backend;
+    Backend backend({"proactive-fixture", "metadata-main", "metadata-fast", "metadata-expert"});
     memoryDecision privateMemory;
     privateMemory.bSuccess = privateMemory.bShouldRemember = true;
     privateMemory.category = "project";
@@ -323,15 +354,25 @@ void TestProactiveGenerationAndPublicBoundary()
         "Public generation changed private history or used private context/query embedding.");
 
     // The restriction must survive every configured tier and an actual 400 fallback.
+    const auto main = MetadataSettings(backend.port, "metadata-main");
+    const auto fast = MetadataSettings(backend.port, "metadata-fast");
+    const auto expert = MetadataSettings(backend.port, "metadata-expert");
+    fixture.router.ApplyLLMSettings(main, fast, expert, MetadataEmbeddings(backend.port, true), fixture.profile, true, true);
     const std::vector<conversationMessage> question{{"user", "Describe a maple leaf."}};
-    for (const auto tier : {intelligence::IntelligenceTier::Main,
-        intelligence::IntelligenceTier::Fast, intelligence::IntelligenceTier::Expert})
+    struct ExpectedRoute
+    {
+        intelligence::IntelligenceTier tier;
+        std::string model;
+    };
+    for (const auto& expected : std::vector<ExpectedRoute>{{intelligence::IntelligenceTier::Main, "metadata-main"},
+        {intelligence::IntelligenceTier::Fast, "metadata-fast"}, {intelligence::IntelligenceTier::Expert, "metadata-expert"}})
     {
         intelligence::IntelligenceDecision decision;
-        decision.requestedTier = decision.selectedTier = tier;
+        decision.requestedTier = decision.selectedTier = expected.tier;
         const auto denied = fixture.router.RouteMessage(question.front().content, question, {}, {}, decision,
             llm::PrivateMemoryAccess::Denied);
-        Check(denied.bSuccess && denied.selectedTier == intelligence::ToString(tier) &&
+        Check(denied.bSuccess && denied.selectedTier == intelligence::ToString(expected.tier) &&
+            denied.selectedModel == expected.model && backend.Last().value("model", "") == expected.model &&
             SystemText(backend.Last()).find("PRIVATE_MEMORY_SENTINEL") == std::string::npos &&
             backend.embeddingRequests == embeddingsBeforePublic,
             "A configured model tier dropped the private-memory restriction.");
@@ -343,11 +384,16 @@ void TestProactiveGenerationAndPublicBoundary()
     const auto retried = fixture.router.RouteMessage(question.front().content, question, {}, {}, fallback,
         llm::PrivateMemoryAccess::Denied);
     Check(retried.bSuccess && retried.bRoutingFallback && retried.selectedTier == "Main" &&
+        retried.selectedModel == "metadata-main" && retried.routingFallbackReason.find("Fast") != std::string::npos &&
         backend.Count() == beforeFallback + 2 && backend.embeddingRequests == embeddingsBeforePublic,
         "The privacy fixture did not exercise a bounded Fast-to-Main fallback without embedding.");
     for (const auto& request : backend.RequestsSince(beforeFallback))
         Check(SystemText(request).find("PRIVATE_MEMORY_SENTINEL") == std::string::npos,
             "A rejected or fallback request exposed private curated memory.");
+    const auto fallbackRequests = backend.RequestsSince(beforeFallback);
+    Check(fallbackRequests.front().value("model", "") == "metadata-fast" &&
+        fallbackRequests.back().value("model", "") == "metadata-main",
+        "Fast rejection changed the configured model request order.");
 
     // Denial must not mutate the shared profile or disable later private retrieval.
     const auto privateReply = fixture.router.RouteMessage(question.front().content, question);
@@ -397,13 +443,14 @@ void TestCpuFastBrainDefersToGpuMain()
 {
     tests::ScopedTestDirectory directory;
     WorkingDirectory cwd(directory.root);
-    Backend backend;
+    Backend backend({"metadata-main", "metadata-fast"});
     messageRouter router;
     llmSettings main;
-    main.host = "127.0.0.1"; main.port = backend.port; main.modelName = "proactive-fixture";
+    main.host = "127.0.0.1"; main.port = backend.port; main.modelName = "metadata-main";
     main.bAutoStartServer = false; main.bVisionEnabled = false;
     main.bAutoMaxTokens = false; main.maxTokens = 64;
     llmSettings fast = main;
+    fast.modelName = "metadata-fast";
     fast.device = "none";
     main.device = "CUDA0";
     aiProfile profile;
@@ -417,7 +464,7 @@ void TestCpuFastBrainDefersToGpuMain()
     // A small model on the CPU reads the ~2,500-token prompt of every reply at a few
     // hundred tokens a second; Main on a GPU starts answering first, every time.
     const auto routed = router.RouteMessage(greeting.front().content, greeting, {}, {}, decision);
-    Check(routed.bSuccess && routed.selectedTier == "Main" && !routed.bRoutingFallback &&
+    Check(routed.bSuccess && routed.selectedTier == "Main" && routed.selectedModel == "metadata-main" && !routed.bRoutingFallback &&
         routed.routingReason.find("CPU") != std::string::npos,
         "A short turn went to the CPU brain while Main sat on a GPU: " + routed.selectedTier);
 
@@ -426,8 +473,171 @@ void TestCpuFastBrainDefersToGpuMain()
     main.device.clear();
     router.ApplyLLMSettings(main, fast, main, embeddingSettings{}, profile, true, false);
     const auto kept = router.RouteMessage(greeting.front().content, greeting, {}, {}, decision);
-    Check(kept.bSuccess && kept.selectedTier == "Fast",
+    Check(kept.bSuccess && kept.selectedTier == "Fast" && kept.selectedModel == "metadata-fast",
         "The Fast brain lost its turn without a GPU-placed Main to hand it to.");
+}
+
+void TestMainResponseReportsItsConfiguredModel()
+{
+    tests::ScopedTestDirectory directory;
+    WorkingDirectory cwd(directory.root);
+    messageRouter router;
+    llmSettings main;
+    main.backend = "Placeholder";
+    main.modelName = "metadata-main";
+    aiProfile profile;
+    profile.bMemoryEnabled = false;
+    router.ApplyLLMSettings(main, embeddingSettings{}, profile);
+
+    const std::vector<conversationMessage> question{{"user", "Describe a leaf."}};
+    const auto output = router.RouteMessage(question.front().content, question);
+    Check(output.bSuccess && output.selectedTier == "Main" && output.selectedModel == "metadata-main",
+        "Main reported a model that differs from its configured transport: " + output.selectedModel);
+}
+
+void TestConfiguredModelMetadataFollowsAvailabilityFallbacks()
+{
+    tests::ScopedTestDirectory directory;
+    WorkingDirectory cwd(directory.root);
+    Backend backend({"metadata-main", "metadata-fast", "metadata-expert"});
+    messageRouter router;
+    const auto main = MetadataSettings(backend.port, "metadata-main");
+    const auto fast = MetadataSettings(backend.port, "metadata-fast");
+    const auto expert = MetadataSettings(backend.port, "metadata-expert");
+    const auto embedding = MetadataEmbeddings(backend.port);
+    aiProfile profile;
+    profile.bMemoryEnabled = false;
+    router.ApplyLLMSettings(main, fast, expert, embedding, profile, true, true);
+    const std::vector<conversationMessage> question{{"user", "Describe a leaf."}};
+    struct ExpectedRoute
+    {
+        intelligence::IntelligenceTier tier;
+        std::string selectedTier;
+        std::string model;
+    };
+    for (const auto& expected : std::vector<ExpectedRoute>{{intelligence::IntelligenceTier::Main, "Main", "metadata-main"},
+             {intelligence::IntelligenceTier::Fast, "Fast", "metadata-fast"},
+             {intelligence::IntelligenceTier::Expert, "Expert", "metadata-expert"},
+             {intelligence::IntelligenceTier::Vision, "Vision", "metadata-main"},
+             {intelligence::IntelligenceTier::ExpertVision, "ExpertVision", "metadata-expert"}})
+    {
+        intelligence::IntelligenceDecision decision;
+        decision.requestedTier = decision.selectedTier = expected.tier;
+        const auto output = router.RouteMessage(question.front().content, question, {}, {}, decision);
+        Check(output.bSuccess && output.selectedTier == expected.selectedTier && output.selectedModel == expected.model &&
+                  backend.Last().value("model", "") == expected.model,
+            "Foreground model metadata disagreed with the final serving tier: " + output.selectedTier + "/" + output.selectedModel);
+    }
+
+    auto unavailableFast = fast;
+    auto unavailableExpert = expert;
+    unavailableFast.backend = unavailableExpert.backend = "None";
+    router.ApplyLLMSettings(main, unavailableFast, unavailableExpert, embedding, profile, true, true);
+    for (const auto tier : {intelligence::IntelligenceTier::Fast, intelligence::IntelligenceTier::Expert})
+    {
+        intelligence::IntelligenceDecision decision;
+        decision.requestedTier = decision.selectedTier = tier;
+        const auto output = router.RouteMessage(question.front().content, question, {}, {}, decision);
+        Check(output.bSuccess && output.bRoutingFallback && output.selectedTier == "Main" && output.selectedModel == "metadata-main" &&
+                  backend.Last().value("model", "") == "metadata-main",
+            "An unavailable preferred tier retained its model metadata after falling back to Main.");
+    }
+
+    auto unavailableMain = main;
+    unavailableMain.backend = "None";
+    router.ApplyLLMSettings(unavailableMain, fast, unavailableExpert, embedding, profile, true, true);
+    const auto output = router.RouteMessage(question.front().content, question);
+    Check(output.bSuccess && output.bRoutingFallback && output.selectedTier == "Fast" && output.selectedModel == "metadata-fast" &&
+              backend.Last().value("model", "") == "metadata-fast",
+        "Main unavailability did not report the configured Fast model that served the response.");
+}
+
+void TestConfiguredModelMetadataForReviewCuriosityAndDeliberation()
+{
+    tests::ScopedTestDirectory directory;
+    WorkingDirectory cwd(directory.root);
+    Backend backend({"metadata-main", "metadata-fast", "metadata-expert"});
+    messageRouter router;
+    const auto main = MetadataSettings(backend.port, "metadata-main");
+    const auto fast = MetadataSettings(backend.port, "metadata-fast");
+    const auto expert = MetadataSettings(backend.port, "metadata-expert");
+    const auto embedding = MetadataEmbeddings(backend.port);
+    aiProfile profile;
+    profile.bMemoryEnabled = false;
+    const auto assertModel = [&](const responseOutput& output, const std::string& tier, const std::string& model)
+    {
+        Check(output.bSuccess && output.selectedTier == tier && output.selectedModel == model && backend.Last().value("model", "") == model,
+            "A bounded response reported a different serving model: " + output.selectedTier + "/" + output.selectedModel);
+    };
+    router.ApplyLLMSettings(main, fast, expert, embedding, profile, true, true);
+    assertModel(router.ReviewCode("Review this material.", "int value = 1;", R"({"type":"object"})"), "Expert", "metadata-expert");
+    assertModel(router.GenerateCuriosityPlan("{}", {"silence"}), "Main", "metadata-main");
+    assertModel(router.Deliberate("{}"), "Main", "metadata-main");
+
+    auto unavailableExpert = expert;
+    unavailableExpert.backend = "None";
+    router.ApplyLLMSettings(main, fast, unavailableExpert, embedding, profile, true, true);
+    assertModel(router.ReviewCode("Review this material.", "int value = 1;", R"({"type":"object"})"), "Main", "metadata-main");
+
+    auto unavailableMain = main;
+    unavailableMain.backend = "None";
+    router.ApplyLLMSettings(unavailableMain, fast, unavailableExpert, embedding, profile, true, true);
+    const auto curiosity = router.GenerateCuriosityPlan("{}", {"silence"});
+    assertModel(curiosity, "Fast", "metadata-fast");
+    Check(curiosity.bRoutingFallback, "Curiosity fallback evidence was lost.");
+    const auto deliberation = router.Deliberate("{}");
+    assertModel(deliberation, "Fast", "metadata-fast");
+    Check(deliberation.bRoutingFallback, "Deliberation fallback evidence was lost.");
+}
+
+void TestConfiguredModelMetadataForVisionAndSettingsUpdates()
+{
+    tests::ScopedTestDirectory directory;
+    WorkingDirectory cwd(directory.root);
+    Backend backend({"metadata-main", "metadata-fast", "metadata-expert", "metadata-main-updated"});
+    messageRouter router;
+    auto main = MetadataSettings(backend.port, "metadata-main");
+    const auto fast = MetadataSettings(backend.port, "metadata-fast");
+    auto expert = MetadataSettings(backend.port, "metadata-expert");
+    const auto embedding = MetadataEmbeddings(backend.port);
+    aiProfile profile;
+    profile.bMemoryEnabled = false;
+    router.ApplyLLMSettings(main, fast, expert, embedding, profile, true, true);
+    const auto imagePath = directory.root / "metadata-transport.png";
+    {
+        std::ofstream output(imagePath, std::ios::binary);
+        output << "image transport fixture";
+    }
+    const auto normal = router.AnalyzeImage(imagePath, "Describe this image.", 160);
+    Check(normal.bSuccess && normal.selectedTier == "Vision" && normal.selectedModel == "metadata-main" &&
+              backend.Last().value("model", "") == "metadata-main",
+        "Vision did not report configured Main metadata.");
+    const auto difficult = router.AnalyzeImage(imagePath, "Inspect this architecture.", 160);
+    Check(difficult.bSuccess && difficult.selectedTier == "ExpertVision" && difficult.selectedModel == "metadata-expert" &&
+              backend.Last().value("model", "") == "metadata-expert",
+        "ExpertVision did not report configured Expert metadata.");
+    expert.backend = "None";
+    router.ApplyLLMSettings(main, fast, expert, embedding, profile, true, true);
+    const auto fallback = router.AnalyzeImage(imagePath, "Inspect this architecture.", 160);
+    Check(fallback.bSuccess && fallback.bRoutingFallback && fallback.selectedTier == "Vision" &&
+              fallback.selectedModel == "metadata-main" && backend.Last().value("model", "") == "metadata-main",
+        "Unavailable ExpertVision did not report the configured Main fallback model.");
+
+    main.modelName = "metadata-main-updated";
+    router.ApplyLLMSettings(main, fast, expert, embedding, profile, true, true);
+    const std::vector<conversationMessage> question{{"user", "Describe a leaf."}};
+    const auto updated = router.RouteMessage(question.front().content, question);
+    Check(updated.bSuccess && updated.selectedModel == "metadata-main-updated" &&
+              backend.Last().value("model", "") == "metadata-main-updated",
+        "Reapplied transport settings left stale model metadata.");
+    profile.id = "updated-profile";
+    profile.bHasMaxTokensOverride = true;
+    profile.maxTokens = 96;
+    router.ApplyProfile(profile);
+    const auto profileOnly = router.RouteMessage(question.front().content, question);
+    Check(profileOnly.bSuccess && profileOnly.selectedModel == "metadata-main-updated" &&
+              backend.Last().value("model", "") == "metadata-main-updated",
+        "Profile application changed captured transport model metadata.");
 }
 
 void TestBackgroundVisionContractAndPreemption()
@@ -501,6 +711,10 @@ void TestTurnReferenceStaysInItsTurn()
 
 void RunProactiveStateTests()
 {
+    TestMainResponseReportsItsConfiguredModel();
+    TestConfiguredModelMetadataFollowsAvailabilityFallbacks();
+    TestConfiguredModelMetadataForReviewCuriosityAndDeliberation();
+    TestConfiguredModelMetadataForVisionAndSettingsUpdates();
     TestTurnReferenceStaysInItsTurn();
     TestProactiveGenerationAndPublicBoundary();
     TestCancelledProactiveCommit();

@@ -3,6 +3,7 @@
 #include "Actions/actionRuntime.h"
 #include "Goals/goalStore.h"
 #include "Goals/goalTypes.h"
+#include "Runtime/runtimeStamp.h"
 
 #include <cstdint>
 #include <functional>
@@ -47,11 +48,9 @@ struct NextStep
 // Grants no authority; each step requires evidence before advancing.
 class GoalRunner
 {
-public:
+  public:
     using ProgressHandler = std::function<void(const GoalProgress&)>;
-    using ConfirmationHandler = std::function<actions::ConfirmationChoice(
-        const actions::ActionRequest&,
-        const actions::PolicyDecision&)>;
+    using ConfirmationHandler = std::function<actions::ConfirmationChoice(const actions::ActionRequest&, const actions::PolicyDecision&)>;
     // Consulted once per iteration by Operate. It receives the goal with every
     // attempt so far already recorded on it, which is the whole history the decision
     // gets. Observing the machine is the provider's job, not the runner's: keeping the
@@ -72,6 +71,7 @@ public:
     // Covers only the shown risk ceiling; escalation and deletion still require confirmation.
     void SeedStandingApproval(actions::RiskLevel ceiling, bool refuseEscalation = false);
     void SetStepProvider(StepProvider provider);
+    void SetExecutionStamp(runtime::RuntimeStamp stamp);
 
     // Validates the plan, then runs it. Returns the goal in its final state;
     // that same state has already been written to the store.
@@ -92,7 +92,9 @@ public:
     // this, so a step invented mid-run faces exactly the checks a planned one does.
     [[nodiscard]] static bool ValidateStep(const GoalStep& step, std::string& outError);
 
-private:
+  private:
+    actions::ActionOutcome DispatchScoped(
+        const actions::ActionRequest& request, const policy::CapabilityPolicy& policy, bool confirmed, std::stop_token stopToken);
     bool RunStep(Goal& goal, GoalStep& step, const policy::CapabilityPolicy& scopedPolicy, std::stop_token stopToken);
     [[nodiscard]] static StopReason CheckBudget(const Goal& goal);
     void Publish(const Goal& goal, const GoalStep& step, const std::string& message) const;
@@ -113,6 +115,7 @@ private:
     bool seededRefuseEscalation = false;
     actions::RiskLevel seededCeiling = actions::RiskLevel::ReadOnly;
     StepProvider stepProvider;
+    runtime::RuntimeStamp executionStamp;
 };
 
 } // namespace revia::goals

@@ -171,6 +171,12 @@ bool FileSystemExecutor::Handles(actions::ActionType type) const
 
 actions::ActionResult FileSystemExecutor::Execute(const actions::ActionRequest& request, const actions::PolicyDecision& decision)
 {
+    if (request.beforeEffect)
+    {
+        const auto refusal = request.beforeEffect({});
+        if (!refusal.empty())
+            return Failure("Action admission refused: " + refusal);
+    }
     switch (request.type)
     {
         case actions::ActionType::ListDirectory:
@@ -365,6 +371,12 @@ actions::ActionResult FileSystemExecutor::CreateDirectory(const actions::ActionR
     actions::ActionResult result;
     result.attempted = true;
     std::error_code error;
+    if (request.beforeEffect)
+    {
+        const auto refusal = request.beforeEffect({});
+        if (!refusal.empty())
+            return Failure("Action admission refused: " + refusal);
+    }
     const bool created = std::filesystem::create_directories(path, error);
     if (error)
     {
@@ -406,6 +418,12 @@ actions::ActionResult FileSystemExecutor::CopyFile(const actions::ActionRequest&
 
     actions::ActionResult result;
     result.attempted = true;
+    if (request.beforeEffect)
+    {
+        const auto refusal = request.beforeEffect({});
+        if (!refusal.empty())
+            return Failure("Action admission refused: " + refusal);
+    }
     const bool copied = std::filesystem::copy_file(
         source,
         destination,
@@ -447,6 +465,12 @@ actions::ActionResult FileSystemExecutor::MovePath(const actions::ActionRequest&
 
     actions::ActionResult result;
     result.attempted = true;
+    if (request.beforeEffect)
+    {
+        const auto refusal = request.beforeEffect({});
+        if (!refusal.empty())
+            return Failure("Action admission refused: " + refusal);
+    }
     std::filesystem::rename(source, destination, error);
     result.succeeded = !error;
     result.message = result.succeeded
@@ -488,6 +512,12 @@ actions::ActionResult FileSystemExecutor::MoveToRecycleBin(const actions::Action
     operation.wFunc = FO_DELETE;
     operation.pFrom = sourceList.c_str();
     operation.fFlags = FOF_ALLOWUNDO | FOF_NOCONFIRMATION | FOF_SILENT | FOF_NOERRORUI;
+    if (request.beforeEffect)
+    {
+        const auto refusal = request.beforeEffect({});
+        if (!refusal.empty())
+            return Failure("Action admission refused: " + refusal);
+    }
     const int status = SHFileOperationW(&operation);
     result.succeeded = status == 0 && !operation.fAnyOperationsAborted;
     result.message = result.succeeded

@@ -1,0 +1,4 @@
+[
+    {"id": "synthetic-training-file", "entries": ["[FILE]  sample.txt"], "expectedSummary": "1 entries: 1 files, 0 directories, 0 links, 0 other."},
+    {"id": "synthetic-training-bound", "entries": ["[FILE]  sample.txt", "[LIMIT] Additional entries were omitted."], "expectedSummary": "1 entries: 1 files, 0 directories, 0 links, 0 other. Listing incomplete; additional entries were omitted."}
+]

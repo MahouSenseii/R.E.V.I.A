@@ -37,12 +37,14 @@ struct llmSettings
     std::string multimodalProjectorPath =
         "Models/Qwen3-VL-8B-Instruct-Unredacted-MAX.mmproj-q8_0.gguf";
     std::string mediaPath = "RuntimeData/Vision";
+    std::string logDirectory;
 
     float temperature = 0.7f;
     bool bAutoMaxTokens = true;
     int maxTokens = 4096;
     // Places per-turn state in the newest user message to preserve the cached system prefix.
     bool bStablePromptPrefix = true;
+    bool bAllowPromptCache = true;
 };
 
 struct embeddingSettings
@@ -68,4 +70,5 @@ struct embeddingSettings
     std::string modelLoadMode = "mmap";
     std::string queryPrefix = "search_query: ";
     std::string documentPrefix = "search_document: ";
+    std::string logDirectory;
 };

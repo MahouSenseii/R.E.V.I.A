@@ -6,6 +6,7 @@
 #include "Speech/voiceTypes.h"
 
 #include <filesystem>
+#include <chrono>
 #include <mutex>
 #include <atomic>
 #include <optional>
@@ -15,6 +16,8 @@
 namespace revia::speech
 {
 
+struct SystemCueTestAccess;
+
 // Accepts batch clip lengths only when well formed, matching clip count and every payload byte.
 // Any disagreement aborts the batch; positional phrase/audio mappings are never repaired.
 [[nodiscard]] std::optional<std::vector<std::size_t>> ParseBatchClipSizes(const std::string& header,
@@ -22,6 +25,7 @@ namespace revia::speech
 
 class QwenTtsClient
 {
+    friend struct SystemCueTestAccess;
 public:
     QwenTtsClient() = default;
     ~QwenTtsClient();
@@ -52,6 +56,9 @@ public:
     // laugh is the one that gives the trick away.
     [[nodiscard]] static std::vector<VocalizationRequest> DefaultVocalizationBankRequests();
     VoiceOperationResult Synthesize(const std::string& text, const VoicePreset& preset, const std::string& outputPath);
+    // Optional preparation never starts a worker or waits for another client operation.
+    VoiceOperationResult TrySynthesizeSystemCue(const std::string& text, const VoicePreset& preset,
+        const std::string& outputPath, std::chrono::steady_clock::time_point deadline);
     VoiceOperationResult SynthesizePcm(const std::string& text, const VoicePreset& preset);
     // Synthesizes complete phrases into ordered results, one per input, or one failed result.
     // Never returns a short/reordered success vector that could mismatch playback slots.

@@ -345,8 +345,7 @@ void TestSeveralPeopleAtOneKeyboard()
             ReadConversationSignals("thanks, that helped a lot", "sure", true)));
     }
 
-    // The first person to give a name inherits it: they are almost certainly whoever
-    // has been talking all along.
+    // The first explicit introduction adopts the anonymous local history.
     const std::string first = registry.ResolveNamedLocalSpeaker("Quentin");
     Check(first != LocalUserEntityId(), "A named speaker kept the anonymous id.");
     const RelationshipState quentin = registry.Get(first);
@@ -371,7 +370,7 @@ void TestSeveralPeopleAtOneKeyboard()
     Check(registry.Count() == 2, "Returning created a duplicate relationship.");
 }
 
-void TestAKnownPersonIsNotAStrangerAfterARestart()
+void TestExplicitIdentitySurvivesWithoutDefaultGuess()
 {
     using namespace revia::identity;
     revia::tests::ScopedTestDirectory directory;
@@ -380,26 +379,26 @@ void TestAKnownPersonIsNotAStrangerAfterARestart()
     {
         RelationshipRegistry registry(path);
         Check(registry.Load(error), error);
-        Check(registry.DefaultLocalSpeaker() == LocalUserEntityId(),
-            "Nobody has been named yet, so the speaker should be anonymous.");
+        Check(registry.DefaultLocalSpeaker() == LocalUserEntityId(), "Nobody has been named yet, so the speaker should be anonymous.");
         const std::string quentin = registry.ResolveNamedLocalSpeaker("Quentin");
+        registry.Apply(BuildRelationshipEvent(quentin, ReadConversationSignals("thanks, that helped a lot", "sure", true)));
         Check(registry.Save(error), error);
-        Check(registry.DefaultLocalSpeaker() == quentin,
-            "The one named person was not taken as the speaker.");
+        Check(registry.DefaultLocalSpeaker() == LocalUserEntityId(), "An unknown speaker was guessed from the one saved person.");
+        Check(registry.Get(quentin).interactionCount == 1, "The explicitly identified person lost their interaction history.");
     }
-    // A restart. Before, every session began as the anonymous speaker, so a person who
-    // had introduced themselves was a stranger again and a nameless second relationship
-    // grew beside theirs.
     RelationshipRegistry restarted(path);
     Check(restarted.Load(error), error);
-    Check(restarted.DefaultLocalSpeaker() == RelationshipRegistry::NamedLocalEntityId("Quentin"),
-        "A known person was not recognised after a restart.");
+    Check(restarted.DefaultLocalSpeaker() == LocalUserEntityId(), "A restart attributed an unknown speaker to the one saved person.");
+    const auto quentin = restarted.Find(RelationshipRegistry::NamedLocalEntityId("Quentin"));
+    Check(quentin && quentin->displayName == "Quentin" && quentin->interactionCount == 1,
+        "A restart discarded the named person's identity or history.");
+    Check(restarted.ResolveNamedLocalSpeaker("quentin") == quentin->entityId && restarted.Count() == 1,
+        "An explicit returning introduction did not restore the existing person.");
+    Check(restarted.Get(restarted.DefaultLocalSpeaker()).interactionCount == 0 && restarted.Get(quentin->entityId).interactionCount == 1,
+        "An unknown speaker inherited the saved person's history.");
 
-    // Two people have used this keyboard: whoever came last says nothing about who is
-    // here now, so there is no default until someone gives a name.
     (void)restarted.ResolveNamedLocalSpeaker("Sam");
-    Check(restarted.DefaultLocalSpeaker() == LocalUserEntityId(),
-        "The speaker was guessed between two people who share the keyboard.");
+    Check(restarted.DefaultLocalSpeaker() == LocalUserEntityId(), "The speaker was guessed between two people who share the keyboard.");
 }
 
 void RunLoadAndNameTests()
@@ -414,7 +413,7 @@ void RunLoadAndNameTests()
     TestNamesAreReadOnlyFromRealIntroductions();
     TestLearningANameKeepsEverythingEarned();
     TestSeveralPeopleAtOneKeyboard();
-    TestAKnownPersonIsNotAStrangerAfterARestart();
+    TestExplicitIdentitySurvivesWithoutDefaultGuess();
     std::cout << "Load sheds optional work on how full a device is rather than on a "
                  "budget, batched voice clips are refused unless their framing is\n"
                  "exact, and a learned name keeps everything already earned.\n";

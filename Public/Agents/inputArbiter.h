@@ -2,6 +2,8 @@
 
 
 #include "Agents/inputArbiterSettings.h"
+#include "Identity/socialIdentity.h"
+#include "Runtime/runtimeStamp.h"
 #include <chrono>
 #include <mutex>
 #include <string>
@@ -17,11 +19,29 @@ enum class InputSource
     Proposal
 };
 
+struct InputContext
+{
+    runtime::RuntimeStamp stamp;
+    identity::AudienceContext audience;
+    std::string participantId;
+    identity::SpeakerSource participantSource = identity::SpeakerSource::Unknown;
+    std::uint64_t consentRevision = 0;
+};
+
+struct InputBatch
+{
+    std::string text;
+    InputContext context;
+    InputSource source = InputSource::Typed;
+    bool contextMatched = true;
+};
+
 struct PendingInput
 {
     std::string text;
     InputSource source = InputSource::Typed;
     std::chrono::system_clock::time_point receivedAt;
+    InputContext context;
 };
 
 enum class InputVerdict
@@ -46,11 +66,14 @@ public:
     void Configure(inputArbiterSettings settings);
 
     [[nodiscard]] InputVerdict Offer(const std::string& text, InputSource source, std::chrono::system_clock::time_point now);
+    [[nodiscard]] InputVerdict Offer(const std::string& text, InputSource source, std::chrono::system_clock::time_point now,
+        InputContext context);
 
     // True once the merge window has closed on what is queued.
     [[nodiscard]] bool IsReady(std::chrono::system_clock::time_point now) const;
     // Everything queued, joined into one turn, and the queue emptied.
     [[nodiscard]] std::string Take();
+    [[nodiscard]] InputBatch TakeBatch();
     [[nodiscard]] std::size_t Size() const;
     void Clear();
 
@@ -63,6 +86,7 @@ private:
     std::vector<PendingInput> queued;
     std::string lastAccepted;
     std::chrono::system_clock::time_point lastAcceptedAt{};
+    InputContext lastAcceptedContext;
 };
 
 } // namespace revia::agents
