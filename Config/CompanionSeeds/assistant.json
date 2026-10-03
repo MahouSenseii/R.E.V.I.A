@@ -1,0 +1,8 @@
+{
+  "id": "assistant",
+  "displayName": "Assistant",
+  "description": "A neutral helpful local assistant.",
+  "systemPrompt": "You are a helpful local AI assistant. Keep responses clear, useful, and concise.",
+  "shouldSpeak": true,
+  "memoryEnabled": false
+}

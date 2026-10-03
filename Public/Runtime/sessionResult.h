@@ -1,5 +1,7 @@
 #pragma once
 
+#include "Runtime/runtimeStamp.h"
+
 #include <cstdint>
 #include <string>
 
@@ -27,11 +29,10 @@ struct SessionResult
     bool fromAssistant = false;
     std::string text;
     std::string reason;
-    // Set when this reply was handed to the speech worker. The shell holds the text until
-    // the matching Speaking event so the words appear with the voice rather than well
-    // ahead of it. A reply that will not be spoken leaves this false and is shown at once.
+    // Reports submission to the speech worker. Shells can display approved text immediately.
     bool speechPending = false;
     std::uint64_t utteranceId = 0;
+    RuntimeStamp stamp;
 };
 
 } // namespace revia::runtime

@@ -8,13 +8,52 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <map>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <unordered_set>
 #include <vector>
 
 namespace revia::learning
 {
+
+enum class CapabilityGapReason
+{
+    MissingCapability,
+    Outage,
+    InvalidInput,
+    RevokedAuthority,
+    BudgetExhausted,
+    Unknown
+};
+
+struct CapabilityGapObservation
+{
+    std::string goal;
+    std::vector<std::string> attempts;
+    std::vector<std::string> successes;
+    std::vector<std::string> failures;
+    CapabilityGapReason reason = CapabilityGapReason::Unknown;
+    std::string cause;
+    bool causeProven = false;
+    std::string missingCapability;
+    std::string evidence;
+    std::string partialEffects;
+    std::string nextStep;
+    std::string implementationHints;
+    std::string retestConditions;
+    std::string owner;
+    std::uint32_t priority = 0;
+    std::map<std::string, std::string> dependencies;
+};
+
+struct CapabilityGapAttempt
+{
+    std::map<std::string, std::string> dependencies;
+    bool verifiedAcceptance = false;
+    std::string evidence;
+};
 
 struct SelfImprovementTask
 {
@@ -29,6 +68,8 @@ struct SelfImprovementTask
     std::vector<std::string> relatedComponents;
     bool researchAllowed = false;
     bool researchCompleted = false;
+    std::optional<CapabilityGapObservation> gap;
+    std::vector<CapabilityGapAttempt> gapAttempts;
 };
 
 struct ImprovementProposal
@@ -76,6 +117,11 @@ public:
     // Retires an open task. Appended to the history as a resolution record, so the
     // next start does not raise it again -- and does not resurrect it either.
     bool ResolveTask(const std::string& taskId, std::string& outError);
+    bool RecordGap(const CapabilityGapObservation& observation, std::string& outTaskId, std::string& outError);
+    [[nodiscard]] bool CanRetest(const std::string& taskId, const std::map<std::string, std::string>& currentDependencies,
+        bool ownerRequested = false) const;
+    bool RecordGapAttempt(const std::string& taskId, const std::map<std::string, std::string>& currentDependencies,
+        bool ownerRequested, bool verifiedAcceptance, const std::string& evidence, std::string& outError);
     // History lines that could not be parsed or decoded on load. A partial final record
     // is expected after a crash; a rising count is not.
     [[nodiscard]] std::size_t MalformedHistoryRecords() const;
@@ -85,9 +131,11 @@ public:
 
 private:
     [[nodiscard]] bool AppendRecord(const nlohmann::json& record, std::string& outError);
-    [[nodiscard]] bool PersistTask(const SelfImprovementTask& task, std::string& outError);
+    [[nodiscard]] bool PersistTask(const SelfImprovementTask& task, std::string& outError, bool resolved = false);
     [[nodiscard]] bool PersistResolution(const SelfImprovementTask& task, std::string& outError);
     mutable std::mutex mutex;
+    mutable std::mutex gapMutex;
+    std::mutex persistenceMutex;
     std::filesystem::path path;
     SelfAssessmentSnapshot snapshot;
     // Restores exact open-task categories from history to suppress duplicate tasks after restart.

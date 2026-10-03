@@ -3,23 +3,27 @@
 # under -BuildRoot, -TestOutput and -ResultPath.
 #
 # The result file is the contract with the app:
-#   { "built": true|false, "testsRan": true|false, "seconds": <number> }
+#   built/testsRan, discoveryExitCode/testExitCode, seconds; discovery is separate JSON.
 # Everything else goes to standard output, which the app keeps as the build log.
 param(
     [Parameter(Mandatory = $true)][string]$SourceRoot,
     [Parameter(Mandatory = $true)][string]$BuildRoot,
     [Parameter(Mandatory = $true)][string]$TestOutput,
     [Parameter(Mandatory = $true)][string]$ResultPath,
+    [Parameter(Mandatory = $true)][string]$DiscoveryOutput,
     [string]$DepsRoot = '',
     [int]$Jobs = 4
 )
 
-$ErrorActionPreference = 'Continue'
+$ErrorActionPreference = 'Stop'
 $started = Get-Date
+$discoveryExitCode = -1
+$testExitCode = -1
 
 function Write-Result([bool]$built, [bool]$testsRan) {
     $seconds = [math]::Round(((Get-Date) - $started).TotalSeconds, 1)
-    $json = @{ built = $built; testsRan = $testsRan; seconds = $seconds } | ConvertTo-Json -Compress
+    $json = @{ built = $built; testsRan = $testsRan; seconds = $seconds;
+        discoveryExitCode = $discoveryExitCode; testExitCode = $testExitCode } | ConvertTo-Json -Compress
     Set-Content -LiteralPath $ResultPath -Value $json -Encoding UTF8
 }
 
@@ -27,7 +31,7 @@ function Write-Result([bool]$built, [bool]$testsRan) {
 # then CLion's bundled copies. Kept in step with Build.ps1 by hand; it is short.
 function Find-Tool([string]$name, [string[]]$candidates) {
     $command = Get-Command -Name $name -CommandType Application -ErrorAction SilentlyContinue
-    if ($null -ne $command) { return $command.Source }
+    if ($null -ne $command) { return @($command)[0].Source }
     foreach ($candidate in $candidates) {
         if (Test-Path -LiteralPath $candidate -PathType Leaf) { return $candidate }
     }
@@ -83,24 +87,60 @@ if ($DepsRoot -and (Test-Path -LiteralPath $DepsRoot -PathType Container)) {
     if ($allPresent) { $configure += '-DFETCHCONTENT_FULLY_DISCONNECTED=ON' }
 }
 
+$ErrorActionPreference = 'Continue'
 & $cmake @configure
-if ($LASTEXITCODE -ne 0) {
-    Write-Output "Configuration failed with exit code $LASTEXITCODE."
+$configureExitCode = $LASTEXITCODE
+$ErrorActionPreference = 'Stop'
+if ($configureExitCode -ne 0) {
+    Write-Output "Configuration failed with exit code $configureExitCode."
     Write-Result $false $false
     exit 1
 }
 
+$ErrorActionPreference = 'Continue'
 & $cmake --build $BuildRoot --parallel $Jobs
-if ($LASTEXITCODE -ne 0) {
-    Write-Output "The build failed with exit code $LASTEXITCODE."
+$buildExitCode = $LASTEXITCODE
+$ErrorActionPreference = 'Stop'
+if ($buildExitCode -ne 0) {
+    Write-Output "The build failed with exit code $buildExitCode."
     Write-Result $false $false
+    exit 1
+}
+
+$ErrorActionPreference = 'Continue'
+$discoveryLines = @(& $ctest --test-dir $BuildRoot --show-only=json-v1)
+$discoveryExitCode = $LASTEXITCODE
+$ErrorActionPreference = 'Stop'
+$discoveryText = $discoveryLines -join "`n"
+[System.IO.File]::WriteAllText($DiscoveryOutput, $discoveryText)
+if ($discoveryExitCode -ne 0) {
+    Write-Output "CTest discovery failed with exit code $discoveryExitCode."
+    Write-Result $true $false
+    exit 1
+}
+try {
+    $discovered = ConvertFrom-Json -InputObject $discoveryText -ErrorAction Stop
+    if ($discovered.kind -ne 'ctestInfo' -or $discovered.version.major -ne 1 -or
+        $discovered.version.minor -ne 0 -or $discovered.tests -isnot [array] -or
+        $discovered.tests.Count -eq 0) {
+        throw 'CTest discovery did not report a nonempty registry.'
+    }
+} catch {
+    Write-Output "CTest discovery was invalid: $_"
+    Write-Result $true $false
     exit 1
 }
 
 # CTest's summary lines are what the app reads, so they go to their own file as well as
 # the log. Written as UTF-8 by .NET directly: Windows PowerShell's Tee-Object and
 # Out-File write UTF-16, which the app would read as noise.
-$testLines = @(& $ctest --test-dir $BuildRoot --output-on-failure --timeout 900 2>&1 | ForEach-Object { "$_" })
+# Windows PowerShell treats native stderr as error records. It must not interrupt a
+# complete failing test run before its native exit code and terminal rows are saved.
+$ErrorActionPreference = 'Continue'
+$testLines = @(& $ctest --test-dir $BuildRoot --output-on-failure --timeout 900 2>&1)
+$testExitCode = $LASTEXITCODE
+$ErrorActionPreference = 'Stop'
+$testLines = @($testLines | ForEach-Object { "$_" })
 $testLines | ForEach-Object { Write-Output $_ }
 [System.IO.File]::WriteAllLines($TestOutput, [string[]]$testLines)
 Write-Result $true $true

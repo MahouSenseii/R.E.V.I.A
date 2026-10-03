@@ -11,6 +11,18 @@ namespace
 
 constexpr std::size_t HistoryLimit = 256;
 
+bool AdmissionCurrent(const SpeechIntent& intent)
+{
+    try
+    {
+        return !intent.admission || intent.admission();
+    }
+    catch (...)
+    {
+        return false;
+    }
+}
+
 } // namespace
 
 std::string ToString(const SpeechOwner owner)
@@ -100,6 +112,12 @@ void SpeechCoordinator::SetTraceHandler(TraceHandler handler)
     trace = std::move(handler);
 }
 
+void SpeechCoordinator::SetAdmissionFactory(AdmissionFactory factory)
+{
+    const std::lock_guard<std::mutex> lock(mutex);
+    admissionFactory = std::move(factory);
+}
+
 int SpeechCoordinator::PriorityOfLocked(const SpeechIntent& intent) const
 {
     return intent.priority.has_value() ? *intent.priority : priorities.For(intent.owner);
@@ -146,6 +164,19 @@ SpeechSubmission SpeechCoordinator::Submit(SpeechIntent intent)
 {
     const std::lock_guard<std::mutex> lock(mutex);
 
+    if (!intent.admission && admissionFactory)
+    {
+        try
+        {
+            intent.admission = admissionFactory();
+        }
+        catch (...)
+        {
+        }
+        if (!intent.admission)
+            intent.admission = [] { return false; };
+    }
+
     Pending pending;
     pending.tracked.id = nextId++;
     pending.tracked.owner = intent.owner;
@@ -162,6 +193,15 @@ SpeechSubmission SpeechCoordinator::Submit(SpeechIntent intent)
     SpeechSubmission submission;
     submission.id = pending.tracked.id;
     RecordLocked(pending.tracked, "submitted");
+
+    if (!AdmissionCurrent(pending.intent))
+    {
+        pending.tracked.state = SpeechIntentState::Canceled;
+        RecordLocked(pending.tracked, "speech context is no longer current");
+        submission.state = pending.tracked.state;
+        submission.reason = "The speech context is no longer current.";
+        return submission;
+    }
 
     if (pending.intent.text.empty() && pending.intent.owner != SpeechOwner::Performance)
     {
@@ -220,10 +260,9 @@ SpeechSubmission SpeechCoordinator::Submit(SpeechIntent intent)
 
     if (!ChannelBusyLocked())
     {
-        BeginLocked(std::move(pending));
-        submission.accepted = true;
-        submission.state = SpeechIntentState::Speaking;
-        submission.reason = "Speaking now.";
+        submission.accepted = BeginLocked(std::move(pending));
+        submission.state = submission.accepted ? SpeechIntentState::Speaking : SpeechIntentState::Canceled;
+        submission.reason = submission.accepted ? "Speaking now." : "The speech context is no longer current.";
         return submission;
     }
 
@@ -257,10 +296,11 @@ SpeechSubmission SpeechCoordinator::Submit(SpeechIntent intent)
                 FinishActiveLocked(
                     SpeechIntentState::Interrupted,
                     "outranked by " + ToString(pending.tracked.owner));
-                BeginLocked(std::move(pending));
-                submission.accepted = true;
-                submission.state = SpeechIntentState::Speaking;
-                submission.reason = "Interrupted what was being said.";
+                submission.accepted = BeginLocked(std::move(pending));
+                submission.state = submission.accepted ? SpeechIntentState::Speaking : SpeechIntentState::Canceled;
+                submission.reason = submission.accepted ? "Interrupted what was being said." : "The speech context is no longer current.";
+                if (!submission.accepted)
+                    StartNextLocked();
                 return submission;
             }
             break;
@@ -287,23 +327,30 @@ SpeechSubmission SpeechCoordinator::Submit(SpeechIntent intent)
     return submission;
 }
 
-void SpeechCoordinator::BeginLocked(Pending pending)
+bool SpeechCoordinator::BeginLocked(Pending pending)
 {
     // Checked here rather than only at cancellation, because an intent can be withdrawn
     // while it sits in the queue and this is the single door it must pass through to
     // make a sound.
-    if (canceled.contains(pending.tracked.id))
+    if (canceled.contains(pending.tracked.id) || !AdmissionCurrent(pending.intent))
     {
         pending.tracked.state = SpeechIntentState::Canceled;
-        RecordLocked(pending.tracked, "was canceled before it could start");
-        return;
+        RecordLocked(pending.tracked, "was canceled or its context changed before it could start");
+        return false;
     }
     pending.tracked.state = SpeechIntentState::Speaking;
     RecordLocked(pending.tracked, "started");
+    if (!AdmissionCurrent(pending.intent))
+    {
+        pending.tracked.state = SpeechIntentState::Canceled;
+        RecordLocked(pending.tracked, "speech context changed before the channel call");
+        return false;
+    }
     const SpeechIntent intent = pending.intent;
     const std::uint64_t id = pending.tracked.id;
     active = std::move(pending);
     if (channel.speak) channel.speak(intent, id);
+    return true;
 }
 
 void SpeechCoordinator::FinishActiveLocked(const SpeechIntentState state, const std::string& reason)

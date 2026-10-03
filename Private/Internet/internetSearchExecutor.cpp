@@ -98,7 +98,7 @@ void Close(T*& handle)
 }
 
 bool GetHttps(const std::wstring& host, const std::wstring& path, const int timeoutMs, const std::size_t maxBytes, std::string& outBody,
-    std::string& outError)
+    std::string& outError, const ActionRequest& admission)
 {
     HINTERNET session = WinHttpOpen(
         L"Revia/0.2 bounded-internet-lookup",
@@ -119,6 +119,17 @@ bool GetHttps(const std::wstring& host, const std::wstring& path, const int time
             WINHTTP_DEFAULT_ACCEPT_TYPES, WINHTTP_FLAG_SECURE)
         : nullptr;
     const wchar_t* headers = L"Accept: application/json\r\n";
+    if (admission.beforeEffect)
+    {
+        outError = admission.beforeEffect(std::string(host.begin(), host.end()));
+        if (!outError.empty())
+        {
+            Close(request);
+            Close(connection);
+            Close(session);
+            return false;
+        }
+    }
     const bool sent = request != nullptr &&
         WinHttpSendRequest(
             request, headers, static_cast<DWORD>(-1L), WINHTTP_NO_REQUEST_DATA, 0, 0, 0) &&
@@ -153,6 +164,8 @@ bool GetHttps(const std::wstring& host, const std::wstring& path, const int time
     outBody.clear();
     while (outBody.size() < maxBytes)
     {
+        if (admission.beforeEffect && !(outError = admission.beforeEffect(std::string(host.begin(), host.end()))).empty())
+            break;
         DWORD available = 0;
         if (!WinHttpQueryDataAvailable(request, &available))
         {
@@ -294,6 +307,11 @@ ActionResult InternetSearchExecutor::Execute(const ActionRequest& request, const
         std::unique_ptr<ActiveBrowserRequest> activeRequest;
         if (!browserProcess.IsRunning())
         {
+            if (request.beforeEffect && !(browserStartupFailure = request.beforeEffect("visible_browser")).empty())
+            {
+                result.message = "Visible browser admission refused: " + browserStartupFailure;
+                return result;
+            }
             if (!browserProcess.Start(settings, browserStartupFailure))
             {
                 // A missing worker, Node runtime, browser, or occupied service port is a
@@ -321,6 +339,8 @@ ActionResult InternetSearchExecutor::Execute(const ActionRequest& request, const
                     cancellation, browserProcess.Port(), browserProcess.Token(), request.requestedBy);
             }
             VisibleBrowserClient client(browserProcess.Port(), browserProcess.Token());
+            if (request.beforeEffect && !(result.message = request.beforeEffect("visible_browser")).empty())
+                return result;
             // Once the visible service has started, request/navigation/extraction errors
             // are returned as-is. Silently switching to a hidden API after the visible
             // window failed mid-task would make the activity impossible to understand.
@@ -385,13 +405,7 @@ ActionResult InternetSearchExecutor::Execute(const ActionRequest& request, const
     std::wstring wideTarget(target.begin(), target.end());
     std::string body;
     std::string error;
-    if (!GetHttps(
-            L"api.duckduckgo.com",
-            wideTarget,
-            settings.requestTimeoutMs,
-            settings.maxResponseBytes,
-            body,
-            error))
+    if (!GetHttps(L"api.duckduckgo.com", wideTarget, settings.requestTimeoutMs, settings.maxResponseBytes, body, error, request))
     {
         result.message = error;
         return apiResult(std::move(result));
@@ -425,13 +439,7 @@ ActionResult InternetSearchExecutor::Execute(const ActionRequest& request, const
     body.clear();
     error.clear();
     result.backend = std::string(WikipediaApiBackend);
-    if (!GetHttps(
-            L"en.wikipedia.org",
-            wideWikipediaTarget,
-            settings.requestTimeoutMs,
-            settings.maxResponseBytes,
-            body,
-            error))
+    if (!GetHttps(L"en.wikipedia.org", wideWikipediaTarget, settings.requestTimeoutMs, settings.maxResponseBytes, body, error, request))
     {
         result.message += " Wikipedia fallback failed: " + error;
         return apiResult(std::move(result));

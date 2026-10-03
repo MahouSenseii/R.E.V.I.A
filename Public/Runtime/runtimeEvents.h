@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Runtime/affectTypes.h"
+#include "Runtime/runtimeStamp.h"
 
 #include <chrono>
 #include <cstdint>
@@ -71,6 +72,7 @@ enum class RuntimeEventKind
     // `detail` the karaoke line when the song marks one. Distinct from AssistantMessage
     // because a performance is a timeline a shell can follow, not a line of dialogue.
     Performance,
+    AgentWorkflow,
     Error
 };
 
@@ -83,6 +85,7 @@ struct RuntimeEvent
     }
 
     RuntimeEventKind kind = RuntimeEventKind::Activity;
+    RuntimeStamp stamp;
     RuntimeState state = RuntimeState::Offline;
     std::string message;
     std::uint64_t turnId = 0;
@@ -129,18 +132,21 @@ std::string ToString(RuntimeState state);
 
 class RuntimeEventBus
 {
-public:
+  public:
     using Handler = std::function<void(const RuntimeEvent&)>;
     using SubscriptionId = std::uint64_t;
 
     SubscriptionId Subscribe(Handler handler);
+    void BindOrigin(RuntimeStamp origin, std::function<bool(const RuntimeStamp&)> admission);
     void Unsubscribe(SubscriptionId id);
     void Publish(RuntimeEvent event) const;
 
-private:
+  private:
     mutable std::mutex mutex;
     mutable std::unordered_map<SubscriptionId, Handler> handlers;
     SubscriptionId nextId = 1;
+    RuntimeStamp origin;
+    std::function<bool(const RuntimeStamp&)> admission;
 };
 
 } // namespace revia::runtime

@@ -13,6 +13,7 @@ class promptBuilder
 {
 public:
     promptBuilder();
+    explicit promptBuilder(std::string memoryDatabasePath);
     ~promptBuilder();
 
     // posture is Revia's own current response posture, already formatted. It is her

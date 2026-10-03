@@ -3,8 +3,11 @@
 #include "Identity/identityStore.h"
 #include "Identity/preferenceState.h"
 #include "Identity/relationshipState.h"
+#include "Identity/socialIdentity.h"
+#include "Speech/speakerRecognition.h"
 
 #include <filesystem>
+#include <functional>
 #include <chrono>
 #include <map>
 #include <mutex>
@@ -24,7 +27,7 @@ namespace revia::identity
 // Does not infer evidence, appraise emotion or call a model.
 class RelationshipRegistry
 {
-public:
+  public:
     // Takes a path rather than a store: IdentityStore owns a mutex and so cannot be
     // moved, and constructing it in place keeps that detail out of every caller.
     explicit RelationshipRegistry(std::filesystem::path path = "RuntimeData/Identity/identity.json");
@@ -40,14 +43,34 @@ public:
     [[nodiscard]] RelationshipState Get(const std::string& entityId);
     [[nodiscard]] std::optional<RelationshipState> Find(const std::string& entityId) const;
     [[nodiscard]] std::vector<RelationshipState> All() const;
+    [[nodiscard]] std::vector<RelationshipEvidenceRecord> RetainedEvidence() const;
 
     // Applies evidence and returns the updated relationship.
     RelationshipState Apply(const RelationshipEvent& event);
 
+    // Only retained evidence can be corrected; replay preserves unrelated later history.
+    bool CorrectEvidence(const std::string& evidenceId, const std::string& correctEntityId, std::string& outError);
+
+    bool SetAudienceAlias(const std::string& entityId, const std::string& audienceId, const std::string& recipientEntityId,
+        const std::string& alias, std::string& outError);
+    [[nodiscard]] std::optional<std::string> DisplayNameForAudience(const std::string& entityId, const AudienceContext& audience) const;
+
+    bool GrantRecognitionConsent(const std::string& entityId, std::string& outError);
+    bool RevokeRecognitionConsent(const std::string& entityId, std::string& outError);
+    [[nodiscard]] std::optional<std::uint64_t> RecognitionConsentRevision(const std::string& entityId) const;
+    [[nodiscard]] std::map<std::string, std::uint64_t> RecognitionConsentRevisions() const;
+    bool SetSpeakerTemplate(
+        const std::string& entityId, std::uint64_t consentRevision, const speech::SpeakerFeatures& features, std::string& outError);
+    // Admission runs under the registry lock and must not reenter it. Live consent
+    // and the sample change together only after the existing store saves both.
+    bool SaveConsentedSpeakerSample(const std::string& entityId, const speech::SpeakerFeatures& features,
+        const std::function<bool()>& admission, std::string& outError);
+    void DeleteSpeakerTemplate(const std::string& entityId);
+    [[nodiscard]] std::vector<speech::SpeakerTemplate> SpeakerTemplates() const;
+
     // One bounded cooling step per person after a quiet interval. Clock metadata
     // stays in memory; a restart does not invent time spent apart.
-    void SettleAll(
-        std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now(),
+    void SettleAll(std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now(),
         std::chrono::milliseconds quietInterval = std::chrono::minutes(5));
 
     void SetDisplayName(const std::string& entityId, const std::string& displayName);
@@ -59,12 +82,7 @@ public:
     // Later introductions keep distinct neutral-start relationships.
     std::string ResolveNamedLocalSpeaker(const std::string& name);
 
-    // Who is at the keyboard when a session starts, before anyone has said a name: the
-    // one named local person, when only one has ever used it; otherwise nobody in
-    // particular, until someone introduces themselves. Starting every session as the
-    // anonymous entity meant a person who had introduced themselves once was a stranger
-    // again after each restart, and their later conversations built up a second,
-    // nameless relationship beside their real one.
+    // Historical familiarity does not establish who is present in a fresh session.
     [[nodiscard]] std::string DefaultLocalSpeaker() const;
 
     // Development and mood live in the same file, so the registry carries them through
@@ -93,7 +111,7 @@ public:
 
     [[nodiscard]] std::size_t Count() const;
 
-private:
+  private:
     mutable std::mutex mutex;
     IdentityStore store;
     IdentitySnapshot snapshot;
@@ -101,6 +119,8 @@ private:
     // Kept alongside the snapshot rather than inside it: the set owns the bounded update
     // rules, and the snapshot is the plain data those rules produce.
     PreferenceSet preferences;
+    void ReplayEvidenceLocked();
+    void CompactEvidenceLocked();
 };
 
 } // namespace revia::identity

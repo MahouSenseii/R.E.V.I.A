@@ -1,4 +1,5 @@
 #pragma once
+#include "Runtime/runtimeStamp.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -277,6 +278,10 @@ struct ActionRequest
         std::string controlName;
         std::string windowTitle;
     } navigationConstraint;
+    // Runtime-owned admission, rechecked for each effect. Network passes its actual host.
+    std::function<std::string(const std::string&)> beforeEffect;
+    // Stamped by ActionRuntime from its bound subject, never decoded or serialized as a command.
+    runtime::RuntimeStamp authorityStamp;
 };
 
 struct PolicyDecision
@@ -340,6 +345,9 @@ struct CapabilitySettings
         int visibleBrowserRequestTimeoutMs = 30000;
         int visibleBrowserMaxPages = 3;
         int visibleBrowserStepDelayMs = 250;
+        // Private runtime overrides; never read from capability or model JSON.
+        std::filesystem::path profileDirectory;
+        std::filesystem::path logDirectory;
     };
 
     // Camera capture requires explicit capability permission and grants no action authority.

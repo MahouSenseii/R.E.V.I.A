@@ -2,6 +2,7 @@
 #include "Speech/qwenTtsClient.h"
 
 #include "Core/localApiKey.h"
+#include "Speech/systemCue.h"
 
 #include <algorithm>
 #include <chrono>
@@ -52,6 +53,97 @@ int HeaderInt(const httplib::Response& response, const char* name)
         return 0;
     }
 }
+
+class CueDeadlineStream final : public httplib::Stream
+{
+  public:
+    CueDeadlineStream(const socket_t socket, const std::chrono::steady_clock::time_point deadline) : connection(socket), deadline(deadline)
+    {
+    }
+    bool is_readable() const override
+    {
+        return Wait(false);
+    }
+    bool is_writable() const override
+    {
+        return Wait(true);
+    }
+    ssize_t read(char* data, const std::size_t size) override
+    {
+        return Transfer(data, size, false);
+    }
+    ssize_t write(const char* data, const std::size_t size) override
+    {
+        return Transfer(const_cast<char*>(data), size, true);
+    }
+    void get_remote_ip_and_port(std::string& ip, int& port) const override
+    {
+        httplib::detail::get_remote_ip_and_port(connection, ip, port);
+    }
+    void get_local_ip_and_port(std::string& ip, int& port) const override
+    {
+        httplib::detail::get_local_ip_and_port(connection, ip, port);
+    }
+    socket_t socket() const override
+    {
+        return connection;
+    }
+
+  private:
+    bool Wait(const bool writing) const
+    {
+        const auto remaining = std::chrono::duration_cast<std::chrono::microseconds>(deadline - std::chrono::steady_clock::now());
+        if (remaining.count() <= 0)
+            return false;
+        const auto seconds = static_cast<time_t>(remaining.count() / 1000000);
+        const auto micros = static_cast<time_t>(remaining.count() % 1000000);
+        return (writing ? httplib::detail::select_write(connection, seconds, micros)
+                        : httplib::detail::select_read(connection, seconds, micros)) > 0;
+    }
+    ssize_t Transfer(char* data, const std::size_t size, const bool writing)
+    {
+        while (Wait(writing))
+        {
+            const auto count = writing ? httplib::detail::send_socket(connection, data, size, CPPHTTPLIB_SEND_FLAGS)
+                                       : httplib::detail::read_socket(connection, data, size, CPPHTTPLIB_RECV_FLAGS);
+            if (count >= 0)
+                return count;
+#ifdef _WIN32
+            const auto error = WSAGetLastError();
+            if (error != WSAEWOULDBLOCK && error != WSAEINTR)
+                return -1;
+#else
+            if (errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR)
+                return -1;
+#endif
+        }
+        return -1;
+    }
+    socket_t connection;
+    std::chrono::steady_clock::time_point deadline;
+};
+
+class CueDeadlineClient final : public httplib::ClientImpl
+{
+  public:
+    CueDeadlineClient(const std::string& host, const int port, const std::chrono::steady_clock::time_point deadline)
+        : httplib::ClientImpl(host, port), deadline(deadline)
+    {
+        const auto remaining = deadline - std::chrono::steady_clock::now();
+        set_connection_timeout(remaining);
+        set_read_timeout(remaining);
+        set_write_timeout(remaining);
+    }
+
+  private:
+    bool process_socket(const Socket& socket, std::function<bool(httplib::Stream&)> operation) override
+    {
+        httplib::detail::set_nonblocking(socket.sock, true);
+        CueDeadlineStream stream(socket.sock, deadline);
+        return operation(stream);
+    }
+    std::chrono::steady_clock::time_point deadline;
+};
 
 } // namespace
 
@@ -206,6 +298,55 @@ VoiceOperationResult QwenTtsClient::Synthesize(const std::string& text, const Vo
     return Post("/v1/audio/speech", request.dump());
 }
 
+VoiceOperationResult QwenTtsClient::TrySynthesizeSystemCue(
+    const std::string& text, const VoicePreset& preset, const std::string& outputPath, const std::chrono::steady_clock::time_point deadline)
+{
+    const auto failure = [] { return VoiceOperationResult{false, "System cue preparation did not complete.", {}, -1.0}; };
+    std::unique_lock lock(mutex, std::try_to_lock);
+    if (!lock.owns_lock() || closed.load() || cancelling.load() || std::chrono::steady_clock::now() >= deadline)
+        return failure();
+    const auto& catalog = ApprovedSystemCues();
+    if (std::none_of(catalog.begin(), catalog.end(), [&](const auto& cue) { return cue.phrase == text; }) ||
+        preset.referenceText.size() > 1000 || preset.referenceAudioPath.size() > 2048 || preset.language.size() > 40)
+        return failure();
+    const std::string host = configuration.qwenHost == "localhost" ? "127.0.0.1" : configuration.qwenHost;
+    in_addr ipv4{};
+    in6_addr ipv6{};
+    if (inet_pton(AF_INET, host.c_str(), &ipv4) != 1 && inet_pton(AF_INET6, host.c_str(), &ipv6) != 1)
+        return failure();
+    nlohmann::json body = VoiceRequest(text, preset);
+    body["output_path"] = outputPath;
+    httplib::Request request;
+    request.method = "POST";
+    request.path = "/v1/audio/speech";
+    request.body = body.dump();
+    if (request.body.size() > 8192 || std::chrono::steady_clock::now() >= deadline)
+        return failure();
+    CueDeadlineClient client(host, configuration.qwenPort, deadline);
+    request.headers = {{"Authorization", "Bearer " + apiKey}, {"Content-Type", "application/json"}};
+    std::string received;
+    request.content_receiver = [&](const char* data, const std::size_t bytes, std::uint64_t, std::uint64_t)
+    {
+        if (std::chrono::steady_clock::now() >= deadline || received.size() + bytes > 16384)
+            return false;
+        received.append(data, bytes);
+        return true;
+    };
+    httplib::Response response;
+    httplib::Error error;
+    if (!client.send(request, response, error) || response.status != 200 || std::chrono::steady_clock::now() >= deadline)
+        return failure();
+    try
+    {
+        const auto result = nlohmann::json::parse(received);
+        return {result.value("succeeded", false), "System cue preparation completed.", outputPath, result.value("elapsed_ms", -1.0)};
+    }
+    catch (...)
+    {
+        return failure();
+    }
+}
+
 VoiceOperationResult QwenTtsClient::SynthesizePcm(const std::string& text, const VoicePreset& preset)
 {
     std::lock_guard lock(mutex);
@@ -333,15 +474,9 @@ std::vector<VoiceOperationResult> QwenTtsClient::SynthesizePcmBatch(const std::v
     if (response->get_header_value("Content-Type").find("application/json") !=
         std::string::npos)
     {
-        try
-        {
-            const auto declined = nlohmann::json::parse(response->body);
-            return failed(declined.value("message", "The batch was declined."));
-        }
-        catch (...)
-        {
-            return failed("The batch was declined without a readable reason.");
-        }
+        auto result = failed("The batch was declined; individual phrases remain available.");
+        result.front().batchDeclined = true;
+        return result;
     }
 
     // Clip lengths arrive in a header rather than inline, so the body stays one
@@ -397,6 +532,7 @@ std::vector<VoiceOperationResult> QwenTtsClient::SynthesizePcmBatch(const std::v
             : -1.0;
         result.sampleRate = HeaderInt(*response, "X-Revia-Sample-Rate");
         result.clonePromptCached = HeaderInt(*response, "X-Revia-Prompt-Cached") != 0;
+        result.audioCacheHit = HeaderInt(*response, "X-Revia-Audio-Cache-Hit") != 0;
         result.device = response->get_header_value("X-Revia-Device");
         result.deviceName = response->get_header_value("X-Revia-Device-Name");
         result.dtype = response->get_header_value("X-Revia-Dtype");

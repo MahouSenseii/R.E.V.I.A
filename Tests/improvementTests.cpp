@@ -90,6 +90,11 @@ struct SourceTree
     }
 };
 
+// Disposable fixture runners cannot execute product code or reach saved runtime data.
+std::string TrustedFixtureAdmission(const CodeChange&, const std::string&, const std::string&)
+{
+    return {};
+}
 void TestSuggestionsAreParsedAndCheckedBeforeAnythingCompiles()
 {
     std::string note;
@@ -232,8 +237,8 @@ void TestTheChangeAppliesAndTheDiffIsOneGitAccepts()
 
 void TestOnlyProductCodeIsReviewable()
 {
-    for (const char* path : {"Private/Speech/speechService.cpp", "Public/Core/logger.h",
-             "Desktop/reviaWindow.cpp", "Tools/qwen_tts_service.py"})
+    for (const char* path : {"Private/Speech/speechService.cpp", "Public/Speech/speechService.h",
+             "Desktop/studioDuration.h", "Tools/qwen_tts_service.py"})
     {
         Check(SourceCatalog::IsReviewable(path), std::string("Product code was not reviewable: ") + path);
     }
@@ -266,8 +271,8 @@ void TestOnlyProductCodeIsReviewable()
     Check(!catalog.Read("Tests/fixtureTests.cpp", content, error), "A test file was readable for review.");
     // A file saved in a legacy code page cannot be sent to a model as JSON; it is refused
     // by name rather than failing the request that carries it.
-    Write(tree.root / "Private/Core/legacy.cpp", "// caf\xE9 in Windows-1252\nint x = 1;\n");
-    const bool legacyRead = catalog.Read("Private/Core/legacy.cpp", content, error);
+    Write(tree.root / "Private/Speech/legacy.cpp", "// caf\xE9 in Windows-1252\nint x = 1;\n");
+    const bool legacyRead = catalog.Read("Private/Speech/legacy.cpp", content, error);
     Check(!legacyRead && error.find("UTF-8") != std::string::npos,
         "A source file that is not UTF-8 was offered for review: " + error);
 
@@ -338,6 +343,209 @@ void TestProposalsAndVerdictsPersist()
         "Exploration did not move on to the file looked at longest ago.");
 }
 
+std::string Discovery(const std::vector<std::string>& names)
+{
+    json tests = json::array();
+    for (const std::string& name : names)
+        tests.push_back({{"name", name}});
+    return json{{"kind", "ctestInfo"}, {"version", {{"major", 1}, {"minor", 0}}}, {"tests", tests}}.dump();
+}
+
+BuildOutcome TestRun(const std::string& transcript, const int testExitCode = 0, const std::vector<std::string>& names = {"A", "B"})
+{
+    BuildOutcome outcome;
+    outcome.completed = true;
+    outcome.built = true;
+    outcome.testsRan = true;
+    outcome.scriptExitCode = 0;
+    outcome.discoveryExitCode = 0;
+    outcome.testExitCode = testExitCode;
+    outcome.discoveryOutput = Discovery(names);
+    outcome.testOutput = transcript;
+    return outcome;
+}
+
+const CodeChange WorkbenchChange{"Private/Speech/qwenTtsPool.cpp", "    return a < b ? b : a;\n", "    return a < b ? a : b;\n"};
+const std::string BothPass = "1/2 Test #1: A ........ Passed 0.01 sec\r\n"
+                             "2/2 Test #2: B ........ Passed 0.01 sec\r\n";
+const std::string BFailed = "1/2 Test #1: A ........ Passed 0.01 sec\n"
+                            "2/2 Test #2: B ........***Failed 0.01 sec\n";
+
+void TestPartialCtestTranscriptIsNotProof()
+{
+    SourceTree tree;
+    Workbench workbench(tree.root, tree.directory.root / "partial-bench",
+        [](const std::filesystem::path&, const std::filesystem::path&, std::stop_token)
+        {
+            return TestRun("  1/2 Test #1: A ........ Passed 0.01 sec\n");
+        }, TrustedFixtureAdmission);
+    const VerificationResult result =
+        workbench.Verify({"Private/Speech/qwenTtsPool.cpp", "    return a < b ? b : a;\n", "    return a < b ? a : b;\n"}, {});
+    Check(!result.verified, "A passing subset of two suites was accepted as proof: " + result.summary);
+}
+
+void TestOnlyCompleteDiscoveredExecutionIsProof()
+{
+    const auto verify = [](const BuildOutcome& outcome)
+    {
+        SourceTree tree;
+        Workbench workbench(tree.root, tree.directory.root / "bench",
+            [&](const std::filesystem::path&, const std::filesystem::path&, std::stop_token)
+            {
+                return outcome;
+            }, TrustedFixtureAdmission);
+        return workbench.Verify(WorkbenchChange, {});
+    };
+    Check(verify(TestRun(BothPass)).verified, "Complete CRLF execution did not verify.");
+    Check(verify(TestRun("1/2 Test #2: B ........ Passed 0.01 sec\n"
+                         "2/2 Test #1: A ........ Passed 0.01 sec\n"))
+              .verified,
+        "Parallel completion order was rejected.");
+    std::vector<BuildOutcome> invalid = {TestRun("", 0, {}), TestRun(""), TestRun("1/2 Test #1: A ........ Passed 0.01 sec\n"),
+        TestRun(BothPass + "3/2 Test #3: C ........ Passed 0.01 sec\n"),
+        TestRun("1/2 Test #1: A ........ Passed 0.01 sec\n2/2 Test #2: B ........***Mystery 0.01 sec\n"),
+        TestRun("1/2 Test #1: A ........ Passed 0.01 sec\n2/2 Test #1: A ........ Passed 0.01 sec\n"),
+        TestRun("1/2 Test #1: A ........ Passed 0.01 sec\n2/2 Test #2: C ........ Passed 0.01 sec\n"),
+        TestRun("1/2 Test #1: A ........ Passed 0.01 sec\n2/2 Test #3: B ........ Passed 0.01 sec\n"),
+        TestRun("1/3 Test #1: A ........ Passed 0.01 sec\n2/2 Test #2: B ........ Passed 0.01 sec\n"),
+        TestRun("1/2 Test #1: A ........ Passed 0.01 sec\n1/2 Test #2: B ........ Passed 0.01 sec\n"),
+        TestRun("1/2 Test #1: A ........ Passed 0.01 sec\n2/2 Test #2: B ........***Not Run 0.00 sec\n", 8),
+        TestRun("1/2 Test #1: A ........ Passed 0.01 sec\n2/2 Test #2: B ........***Skipped 0.00 sec\n"),
+        TestRun("1/2 Test #1: A ........ Passed 0.01 sec\n2/2 Test #2: B ........***Disabled 0.00 sec\n"), TestRun(BothPass, 8),
+        TestRun(BFailed, 0), TestRun(BFailed, 1), TestRun(BothPass + "3/2 Test #3: Broken row\n")};
+    BuildOutcome malformed = TestRun(BothPass);
+    malformed.discoveryOutput = "{malformed";
+    invalid.push_back(malformed);
+    malformed.discoveryOutput = Discovery({"A", "A"});
+    invalid.push_back(malformed);
+    malformed = TestRun(BothPass);
+    malformed.discoveryExitCode = 1;
+    invalid.push_back(malformed);
+    malformed = TestRun(BothPass);
+    malformed.scriptExitCode = 1;
+    invalid.push_back(malformed);
+    malformed = TestRun(BothPass);
+    malformed.testsRan = false;
+    invalid.push_back(malformed);
+    for (std::size_t index = 0; index < invalid.size(); ++index)
+        Check(!verify(invalid[index]).verified, "Invalid execution verified at case " + std::to_string(index));
+
+    const auto parsed = ParseCtestOutput("1/3 Test #3: C ........***Exception: SegFault 0.02 sec\r\n"
+                                         "2/3 Test #1: A ........***Timeout 900.00 sec\r\n"
+                                         "3/3 Test #2: B ........***Subprocess aborted 0.03 sec\r\n");
+    Check(parsed.size() == 3 && parsed[0].executed && parsed[1].executed && parsed[2].executed && !parsed[0].passed && parsed[0].id == 3 &&
+              parsed[2].finished == 3,
+        "Production exception/timeout/abort rows lost accounting or execution state.");
+}
+
+void TestBaselineRequiresCompleteCompatibleEvidence()
+{
+    SourceTree tree;
+    const auto bench = tree.directory.root / "baseline-bench";
+    BuildOutcome candidate = TestRun(BFailed, 8);
+    BuildOutcome baseline = TestRun("1/2 Test #2: B ........***Failed 0.01 sec\n", 8);
+    int candidateRuns = 0;
+    int baselineRuns = 0;
+    const BuildRunner runner = [&](const std::filesystem::path& source, const std::filesystem::path&, std::stop_token)
+    {
+        if (ReadAll(source / WorkbenchChange.path).find("a < b ? a : b") != std::string::npos)
+        {
+            ++candidateRuns;
+            return candidate;
+        }
+        ++baselineRuns;
+        return baseline;
+    };
+    Workbench workbench(tree.root, bench, runner, TrustedFixtureAdmission);
+    Check(!workbench.Verify(WorkbenchChange, {}).verified && baselineRuns == 1, "An incomplete baseline excused a failure.");
+    Check(json::parse(ReadAll(bench / "manifest.json")).value("baselineStamp", std::string{}).empty(),
+        "An incomplete baseline entered the reusable cache.");
+    baseline = TestRun("1/2 Test #1: A ........ Passed 0.01 sec\n"
+                       "2/2 Test #2: B ........***Mystery 0.01 sec\n",
+        8);
+    Check(!workbench.Verify(WorkbenchChange, {}).verified && baselineRuns == 2, "Unknown baseline was cached.");
+    baseline = TestRun("1/2 Test #1: A ........ Passed 0.01 sec\n"
+                       "2/2 Test #2: B ........***Not Run 0.01 sec\n",
+        8);
+    Check(!workbench.Verify(WorkbenchChange, {}).verified && baselineRuns == 3, "Not Run baseline was cached.");
+    baseline = TestRun(BFailed, 8);
+    const auto known = workbench.Verify(WorkbenchChange, {});
+    Check(known.verified && known.summary.find("already fail") != std::string::npos && baselineRuns == 4,
+        "Complete recognized failed-test exit did not allow explicit known-failure comparison.");
+    Workbench reopened(tree.root, bench, runner, TrustedFixtureAdmission);
+    Check(reopened.Verify(WorkbenchChange, {}).verified && baselineRuns == 4, "A complete compatible cached baseline was not reused.");
+    auto cache = json::parse(ReadAll(bench / "manifest.json"));
+    cache.erase("baselineEvidenceVersion");
+    cache.erase("baselineEvidence");
+    Write(bench / "manifest.json", cache.dump());
+    Workbench legacy(tree.root, bench, runner, TrustedFixtureAdmission);
+    Check(legacy.Verify(WorkbenchChange, {}).verified && baselineRuns == 5, "Legacy cache was trusted without a fresh complete baseline.");
+    cache = json::parse(ReadAll(bench / "manifest.json"));
+    cache["baselineEvidence"]["testOutput"] = "1/2 Test #2: B ........***Failed 0.01 sec\n";
+    Write(bench / "manifest.json", cache.dump());
+    Workbench incomplete(tree.root, bench, runner, TrustedFixtureAdmission);
+    Check(incomplete.Verify(WorkbenchChange, {}).verified && baselineRuns == 6, "Reopened incomplete evidence was trusted.");
+    candidate = TestRun("1/2 Test #1: A ........ Passed 0.01 sec\n"
+                        "2/2 Test #2: C ........***Failed 0.01 sec\n",
+        8, {"A", "C"});
+    Check(!incomplete.Verify(WorkbenchChange, {}).verified && baselineRuns == 7,
+        "Different candidate/baseline identities were compared or stale cache was reused.");
+    candidate = TestRun(BFailed, 8);
+    baseline = TestRun(BothPass);
+    Check(!incomplete.Verify(WorkbenchChange, {}).verified && baselineRuns == 8, "Newly failing B was excused.");
+    baseline = TestRun(BFailed, 8);
+    Write(tree.root / "Private/Resources/resourcePlanner.cpp", "int Plan() { return 22; }\n");
+    Check(incomplete.Verify(WorkbenchChange, {}).verified && baselineRuns == 9, "Source-stamp change did not invalidate the baseline.");
+    Write(tree.root / "Private/Resources/resourcePlanner.cpp", "int Plan() { return 333; }\n");
+    baseline = TestRun("1/2 Test #1: A ........ Passed 0.01 sec\n"
+        "2/2 Test #2: B ........***Skipped 0.01 sec\n", 8);
+    Check(!incomplete.Verify(WorkbenchChange, {}).verified && baselineRuns == 10,
+        "Skipped baseline was used to excuse a candidate failure.");
+    baseline = TestRun(BFailed, 8);
+    Check(incomplete.Verify(WorkbenchChange, {}).verified && baselineRuns == 11,
+        "Skipped baseline entered the cache instead of rerunning a complete comparison.");
+}
+
+void TestScriptFailureCannotClaimGreenEvidence()
+{
+#ifdef _WIN32
+    SourceTree tree;
+    const auto script = tree.directory.root / "fake.ps1";
+    const std::string fake = "param($SourceRoot,$BuildRoot,$TestOutput,$ResultPath,$DiscoveryOutput,$DepsRoot,$Jobs)\n"
+                             "[IO.File]::WriteAllText($TestOutput, '" +
+                             BothPass +
+                             "')\n"
+                             "[IO.File]::WriteAllText($DiscoveryOutput, '" +
+                             Discovery({"A", "B"}) +
+                             "')\n"
+                             "[IO.File]::WriteAllText($ResultPath, '{\"built\":true,\"testsRan\":true,"
+                             "\"discoveryExitCode\":0,\"testExitCode\":0}')\nexit 7\n";
+    Write(script, fake);
+    const auto runner = MakeScriptRunner(script, {}, tree.directory.root / "logs", 1, 5);
+    const auto outcome = runner(tree.root, tree.directory.root / "build", {});
+    Check(!outcome.completed && outcome.scriptExitCode == 7 && !outcome.failure.empty(),
+        "A nonzero fake PowerShell runner claimed completed green evidence.");
+    Workbench workbench(tree.root, tree.directory.root / "script-bench", runner, TrustedFixtureAdmission);
+    Check(!workbench.Verify(WorkbenchChange, {}).verified, "Failed script green files verified a proposal.");
+    Write(script, "param($SourceRoot,$BuildRoot,$TestOutput,$ResultPath,$DiscoveryOutput,$DepsRoot,$Jobs)\n"
+                  "[IO.File]::WriteAllText($ResultPath, '{\"built\":true,\"testsRan\":true}')\nexit 0\n");
+    Check(
+        !runner(tree.root, tree.directory.root / "build", {}).completed, "Missing script exit evidence was treated as a completed result.");
+    Write(script, "param($SourceRoot,$BuildRoot,$TestOutput,$ResultPath,$DiscoveryOutput,$DepsRoot,$Jobs)\n"
+        "[IO.File]::WriteAllText($ResultPath, '{\"built\":true,\"testsRan\":true,"
+        "\"discoveryExitCode\":0.5,\"testExitCode\":0}')\nexit 0\n");
+    Check(!runner(tree.root, tree.directory.root / "build", {}).completed,
+        "Invalid fractional exit evidence was treated as completed.");
+    Write(script, "param($SourceRoot,$BuildRoot,$TestOutput,$ResultPath,$DiscoveryOutput,$DepsRoot,$Jobs)\n"
+        "Start-Sleep -Seconds 5\nexit 0\n");
+    std::stop_source stop;
+    stop.request_stop();
+    const auto cancelled = runner(tree.root, tree.directory.root / "build", stop.get_token());
+    Check(!cancelled.completed && cancelled.failure.find("stopped") != std::string::npos,
+        "Cancelled fake runner supplied proof.");
+#endif
+}
+
 void TestTheWorkbenchProvesWithoutTouchingTheSource()
 {
     SourceTree tree;
@@ -373,13 +581,17 @@ void TestTheWorkbenchProvesWithoutTouchingTheSource()
         outcome.built = true;
         outcome.testsRan = true;
         const bool fail = (breakWhenPatched && patched) || alwaysFailing;
+        outcome.scriptExitCode = 0;
+        outcome.discoveryExitCode = 0;
+        outcome.testExitCode = fail ? 8 : 0;
+        outcome.discoveryOutput = Discovery({"Revia.Foundation", "Revia.OperatorSession"});
         outcome.testOutput =
             "  1/2 Test  #1: Revia.Foundation .................   Passed   74.90 sec\n"
             + std::string(fail ? "  2/2 Test  #2: Revia.OperatorSession ......***Failed    1.67 sec\n"
                                : "  2/2 Test  #2: Revia.OperatorSession ........   Passed    1.67 sec\n");
         return outcome;
     };
-    Workbench workbench(tree.root, bench, runner);
+    Workbench workbench(tree.root, bench, runner, TrustedFixtureAdmission);
 
     std::string error;
     const std::size_t copied = workbench.Sync(error);
@@ -419,7 +631,7 @@ void TestTheWorkbenchProvesWithoutTouchingTheSource()
     breakWhenPatched = false;
     alwaysFailing = true;
     std::filesystem::remove(bench / "manifest.json");
-    Workbench fresh(tree.root, bench, runner);
+    Workbench fresh(tree.root, bench, runner, TrustedFixtureAdmission);
     result = fresh.Verify(change, {});
     Check(result.concluded && result.verified && result.summary.find("already fail") != std::string::npos,
         "A suite that fails without the change blocked the proof: " + result.summary);
@@ -490,9 +702,14 @@ struct AgentFixture
                 }
                 outcome.built = true;
                 outcome.testsRan = true;
+                outcome.scriptExitCode = 0;
+                outcome.discoveryExitCode = 0;
+                outcome.testExitCode = 0;
+                outcome.discoveryOutput = Discovery({"Revia.Foundation"});
                 outcome.testOutput = "  1/1 Test  #1: Revia.Foundation ......   Passed   1.0 sec\n";
                 return outcome;
-            });
+            },
+            TrustedFixtureAdmission);
         dependencies.review = [this](const std::string& instructions, const std::string&,
             const std::string&, std::stop_token)
         {
@@ -755,6 +972,10 @@ void RunImprovementTests()
     TestABlockMissingItsSharedIndentStillLands();
     TestOnlyProductCodeIsReviewable();
     TestProposalsAndVerdictsPersist();
+    TestPartialCtestTranscriptIsNotProof();
+    TestOnlyCompleteDiscoveredExecutionIsProof();
+    TestBaselineRequiresCompleteCompatibleEvidence();
+    TestScriptFailureCannotClaimGreenEvidence();
     TestTheWorkbenchProvesWithoutTouchingTheSource();
     TestSheProposesProvesAndReports();
     TestTheBarDependsOnWhySheWasLooking();

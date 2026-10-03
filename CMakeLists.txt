@@ -186,6 +186,15 @@ if(REVIA_BUILD_DESKTOP)
     if(Qt6_FOUND)
         add_executable(ReviaDesktop WIN32
                 "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/canvasPanel.cpp"
+                "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/agentStudioPanel.cpp"
+                "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/agentStudioPanel.h"
+                "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/companionStudio.cpp"
+                "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/learningStudioPanel.cpp"
+                "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/learningStudioPanel.h"
+                "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/developmentStudioPanel.cpp"
+                "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/developmentStudioPanel.h"
+                "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/audienceStudioPanel.cpp"
+                "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/audienceStudioPanel.h"
                 "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/canvasPanel.h"
                 "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/capabilityPanel.cpp"
                 "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/capabilityPanel.h"
@@ -196,6 +205,9 @@ if(REVIA_BUILD_DESKTOP)
                 "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/mindPanel.cpp"
                 "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/visionPanel.cpp"
                 "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/visionPanel.h"
+                "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/voiceHealthPanel.cpp"
+                "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/voiceHealthPanel.h"
+                "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/windowLayout.cpp"
                 "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/mindPanel.h"
                 "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/memoryPanel.h"
                 "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/pipelinePanel.cpp"
@@ -296,6 +308,48 @@ add_custom_command(TARGET R_E_V_I_A POST_BUILD
 
 include(CTest)
 if(BUILD_TESTING)
+    add_executable(ReviaSessionIdentityTests Tests/sessionIdentityTests.cpp
+            Private/Runtime/sessionIdentity.cpp Private/Runtime/runtimeEvents.cpp)
+    target_include_directories(ReviaSessionIdentityTests PRIVATE Public)
+    add_test(NAME Revia.SessionIdentity COMMAND ReviaSessionIdentityTests)
+    add_executable(ReviaCompanionTests Tests/companionTests.cpp Tests/Fixture/studioPackageTests.cpp)
+    target_compile_definitions(ReviaCompanionTests PRIVATE REVIA_STUDIO_TEST_SUITE=RunCompanionTests)
+    revia_link_foundation(ReviaCompanionTests)
+    add_test(NAME Revia.CompanionIsolationMigration COMMAND ReviaCompanionTests)
+    add_executable(ReviaCompanionAuthorityTests Tests/companionAuthorityTests.cpp Tests/Fixture/studioPackageTests.cpp)
+    target_compile_definitions(ReviaCompanionAuthorityTests PRIVATE REVIA_STUDIO_TEST_SUITE=RunCompanionAuthorityTests)
+    revia_link_foundation(ReviaCompanionAuthorityTests)
+    add_test(NAME Revia.CompanionAuthority COMMAND ReviaCompanionAuthorityTests)
+    add_executable(ReviaAgentWorkflowTests Tests/agentWorkflowTests.cpp Tests/Fixture/studioPackageTests.cpp)
+    target_compile_definitions(ReviaAgentWorkflowTests PRIVATE REVIA_STUDIO_TEST_SUITE=RunAgentWorkflowTests)
+    revia_link_foundation(ReviaAgentWorkflowTests)
+    add_test(NAME Revia.AgentWorkflow COMMAND ReviaAgentWorkflowTests)
+    function(revia_add_studio_check target source suite)
+        add_executable(${target} ${source} Tests/Fixture/studioPackageTests.cpp)
+        target_compile_definitions(${target} PRIVATE REVIA_STUDIO_TEST_SUITE=${suite})
+        revia_link_foundation(${target})
+        if(MINGW)
+            target_compile_options(${target} PRIVATE -Wa,-mbig-obj)
+        endif()
+        add_test(NAME ${target} COMMAND ${target})
+        set_tests_properties(${target} PROPERTIES TIMEOUT 120)
+    endfunction()
+    revia_add_studio_check(ReviaSkillPackageTests Tests/skillPackageTests.cpp RunSkillPackageTests)
+    revia_add_studio_check(ReviaLearningReviewTests Tests/learningReviewTests.cpp RunLearningReviewTests)
+    revia_add_studio_check(ReviaCapabilityGapTests Tests/capabilityGapTests.cpp RunCapabilityGapTests)
+    revia_add_studio_check(ReviaAudiencePrivacyTests Tests/audiencePrivacyTests.cpp RunAudiencePrivacyTests)
+    revia_add_studio_check(ReviaAudienceInputTests Tests/audienceInputTests.cpp RunAudienceInputTests)
+    revia_add_studio_check(ReviaSocialIdentityTests Tests/socialIdentityTests.cpp RunSocialIdentityTests)
+    revia_add_studio_check(ReviaSpeakerRecognitionTests Tests/speakerRecognitionTests.cpp RunSpeakerRecognitionTests)
+    revia_add_studio_check(ReviaSpeakerEnrollmentDialogueTests Tests/speakerEnrollmentDialogueTests.cpp RunSpeakerEnrollmentDialogueTests)
+    revia_add_studio_check(ReviaSpeakerEnrollmentStoreTests Tests/speakerEnrollmentStoreTests.cpp RunSpeakerEnrollmentStoreTests)
+    revia_add_studio_check(ReviaSpeakerEnrollmentRuntimeTests Tests/speakerEnrollmentRuntimeTests.cpp RunSpeakerEnrollmentRuntimeTests)
+    revia_add_studio_check(ReviaRelationshipEvidenceTests Tests/relationshipEvidenceTests.cpp RunRelationshipEvidenceTests)
+    revia_add_studio_check(ReviaConversationGuidanceTests Tests/conversationGuidanceTests.cpp RunConversationGuidanceTests)
+    revia_add_studio_check(ReviaSpeechAdmissionTests Tests/speechAdmissionTests.cpp RunSpeechAdmissionTests)
+    revia_add_studio_check(ReviaSelfDevelopmentTests Tests/selfDevelopmentTests.cpp RunSelfDevelopmentTests)
+    revia_add_studio_check(ReviaStudioRuntimeTests Tests/studioRuntimeTests.cpp RunStudioRuntimeTests)
+    revia_add_studio_check(ReviaContentDigestTests Tests/contentDigestTests.cpp RunContentDigestTests)
     file(GLOB_RECURSE REVIA_TEST_SOURCES CONFIGURE_DEPENDS
             "${CMAKE_CURRENT_SOURCE_DIR}/Tests/*.cpp"
     )
@@ -303,7 +357,29 @@ if(BUILD_TESTING)
     # It lives under Tests/ because that is what it is for, but it must not be linked
     # into the test binary.
     list(FILTER REVIA_TEST_SOURCES EXCLUDE REGEX "/Tests/Fixture/")
+    list(FILTER REVIA_TEST_SOURCES EXCLUDE REGEX "/Tests/(sessionIdentityTests|companionRuntimeTests)\\.cpp$")
+    list(FILTER REVIA_TEST_SOURCES EXCLUDE REGEX "/Tests/studioPanelTests\\.cpp$")
+    list(FILTER REVIA_TEST_SOURCES EXCLUDE REGEX "/Tests/developmentStudioLiveTests\\.cpp$")
+    add_executable(ReviaCompanionRuntimeTests Tests/companionRuntimeTests.cpp)
+    revia_link_foundation(ReviaCompanionRuntimeTests)
+    add_test(NAME Revia.CompanionRuntime COMMAND ReviaCompanionRuntimeTests)
     add_executable(ReviaTests ${REVIA_TEST_SOURCES})
+    add_executable(ReviaStudioLive Tests/studioLive.cpp Tests/Fixture/studioLiveMain.cpp)
+    target_include_directories(ReviaStudioLive PRIVATE Tests)
+    revia_link_foundation(ReviaStudioLive)
+    if(MINGW)
+        target_compile_options(ReviaStudioLive PRIVATE -Wa,-mbig-obj)
+        target_link_options(ReviaStudioLive PRIVATE -static)
+    endif()
+    add_executable(ReviaDevelopmentStudioTests Tests/developmentStudioLiveTests.cpp)
+    target_include_directories(ReviaDevelopmentStudioTests PRIVATE Tests)
+    revia_link_foundation(ReviaDevelopmentStudioTests)
+    if(MINGW)
+        target_compile_options(ReviaDevelopmentStudioTests PRIVATE -Wa,-mbig-obj)
+        target_link_options(ReviaDevelopmentStudioTests PRIVATE -static)
+    endif()
+    add_test(NAME Revia.DevelopmentStudioAdmission COMMAND ReviaDevelopmentStudioTests)
+    set_tests_properties(Revia.DevelopmentStudioAdmission PROPERTIES TIMEOUT 30)
     if(MINGW)
         # Link wrappers coordinate real SQLite calls without a production test seam.
         add_executable(ReviaArchiveWriterTests
@@ -430,6 +506,17 @@ if(BUILD_TESTING)
         )
     endif()
     if(TARGET ReviaDesktop)
+        add_executable(ReviaStudioPanelTests Tests/studioPanelTests.cpp
+                Desktop/learningStudioPanel.cpp Desktop/developmentStudioPanel.cpp Desktop/audienceStudioPanel.cpp)
+        target_compile_definitions(ReviaStudioPanelTests PRIVATE REVIA_STUDIO_PANEL_STANDALONE)
+        target_include_directories(ReviaStudioPanelTests PRIVATE Desktop Tests)
+        revia_link_foundation(ReviaStudioPanelTests)
+        target_link_libraries(ReviaStudioPanelTests PRIVATE Qt6::Core Qt6::Gui Qt6::Widgets)
+        if(MINGW)
+            target_link_options(ReviaStudioPanelTests PRIVATE -static-libgcc -static-libstdc++)
+        endif()
+        add_test(NAME Revia.StudioPanels COMMAND ReviaStudioPanelTests)
+        set_tests_properties(Revia.StudioPanels PROPERTIES TIMEOUT 30 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
         get_target_property(REVIA_DESKTOP_TEST_SOURCES ReviaDesktop SOURCES)
         list(FILTER REVIA_DESKTOP_TEST_SOURCES EXCLUDE REGEX "/Desktop/main\\.cpp$")
         add_executable(ReviaDesktopStopTests

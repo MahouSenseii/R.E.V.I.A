@@ -19,7 +19,53 @@ namespace revia::speech
 // its lifetime; the test does not manufacture a persistent prepared utterance.
 struct SpeechServiceTestAccess
 {
-    static QwenTtsPool& VoicePool(SpeechService& service) { return service.qwenPool; }
+    static bool CanLockState(SpeechService& service)
+    {
+        std::unique_lock lock(service.mutex, std::try_to_lock);
+        return lock.owns_lock();
+    }
+    static QwenTtsPool& VoicePool(SpeechService& service)
+    {
+        return service.qwenPool;
+    }
+    static std::jthread StartGenerationWithoutPlayback(SpeechService& service)
+    {
+        return std::jthread([&service](const std::stop_token token) { service.Generate(token); });
+    }
+    static void ConsumePreparedWithoutPlayback(SpeechService& service)
+    {
+        std::lock_guard lock(service.mutex);
+        while (const auto sequence = service.playbackOrder.PopFrontReady())
+        {
+            const auto found = service.prepared.find(*sequence);
+            if (found == service.prepared.end())
+                continue;
+            service.bufferedAudioBytes -= found->second.bufferedBytes;
+            SpeechService::ReleaseAudio(found->second.audioPath, found->second.lifetime);
+            service.prepared.erase(found);
+        }
+        service.condition.notify_all();
+    }
+    static std::function<void(const std::function<bool(const std::filesystem::path&)>&)> TakeCuePlayback(SpeechService& service)
+    {
+        SpeechService::PreparedUtterance item;
+        {
+            std::lock_guard lock(service.mutex);
+            const auto sequence = service.playbackOrder.PopFrontReady();
+            tests::Check(sequence.has_value(), "No real prepared cue to play.");
+            item = std::move(service.prepared.at(*sequence));
+            service.prepared.erase(*sequence);
+            tests::Check(item.utterance.systemCue.has_value(), "The prepared item was not a system cue.");
+            service.playingAudio = true;
+        }
+        return [&service, item = std::move(item)](const auto& player)
+        {
+            service.PlayBankClip(item, player);
+            std::lock_guard lock(service.mutex);
+            service.playingAudio = false;
+            service.condition.notify_all();
+        };
+    }
     static void AssignAdapterTestVoice(SpeechService& service, VoicePreset preset = {})
     {
         service.configuration.bEnabled = true;
@@ -40,7 +86,18 @@ struct SpeechServiceTestAccess
         service.configuration.backend = "WindowsSapi";
         service.configuration.voiceDataPath = root.string();
         service.presetStore.SetRoot(root);
+        service.voiceShutdown = false;
         service.enabled.store(true);
+    }
+
+    static void ConfigureSynthesisWithoutWorkers(
+        SpeechService& service, const speechSettings& settings, VoicePreset preset, SpeechService::EventHandler handler)
+    {
+        ConfigureWithoutWorkers(service, settings.voiceDataPath);
+        service.configuration = settings;
+        service.eventHandler = std::move(handler);
+        service.qwenPool.Configure(settings);
+        service.UseVoice(std::move(preset));
     }
 
     // How many queued phrases would join a batch led by a follow-on phrase, with the
@@ -116,6 +173,114 @@ struct SpeechServiceTestAccess
         return [&service, utterance = std::move(utterance)]() mutable
         {
             service.SynthesizeOne(std::move(utterance), 0);
+        };
+    }
+
+    static std::function<void(VoiceOperationResult)> StartNextSynthesis(SpeechService& service)
+    {
+        SpeechService::Utterance utterance;
+        {
+            std::lock_guard lock(service.mutex);
+            tests::Check(!service.queue.empty(), "No queued phrase for controlled completion.");
+            utterance = std::move(service.queue.front());
+            service.queue.pop_front();
+            ++service.generatingCount;
+        }
+        tests::Check(service.BeginSynthesis(utterance), "The controlled attempt did not start.");
+        return [&service, utterance = std::move(utterance)](VoiceOperationResult result)
+        {
+            SpeechService::PreparedUtterance item;
+            item.utterance = utterance;
+            item.qwenAttempted = true;
+            item.result = std::move(result);
+            service.PublishGenerated(utterance, std::move(item), 0);
+        };
+    }
+
+    static void SynthesizeQueuedBatch(SpeechService& service)
+    {
+        std::vector<SpeechService::Utterance> group;
+        {
+            std::lock_guard lock(service.mutex);
+            while (!service.queue.empty())
+            {
+                group.push_back(std::move(service.queue.front()));
+                service.queue.pop_front();
+                ++service.generatingCount;
+            }
+        }
+        tests::Check(group.size() >= 2, "The batch fixture needs at least two phrases.");
+        if (!service.SynthesizeBatch(group, 0))
+            for (auto& utterance : group)
+                service.SynthesizeOne(std::move(utterance), 0);
+    }
+
+    static VoiceOperationResult SynthesisException()
+    {
+        return SpeechService::TrySynthesis([]() -> VoiceOperationResult { throw std::runtime_error("PRIVATE_SYNTHESIS_SENTINEL"); });
+    }
+
+    static std::size_t HealthScopeCount(SpeechService& service)
+    {
+        std::lock_guard lock(service.mutex);
+        return service.synthesisStates.size();
+    }
+
+    static std::size_t HealthNotificationCount(SpeechService& service)
+    {
+        std::lock_guard lock(service.mutex);
+        return service.synthesisNotifications.size() + (service.pendingSynthesisStatus ? 1 : 0);
+    }
+
+    static void NotifyReady(SpeechService& service)
+    {
+        service.Notify({"Ready", "A preparation fixture completed."});
+    }
+
+    static void SetPlayingTurn(SpeechService& service, const std::uint64_t turn)
+    {
+        service.activeUtteranceId.store(turn);
+    }
+
+    static void RestartHealthWithoutWorkers(SpeechService& service)
+    {
+        service.Shutdown();
+        {
+            std::lock_guard lock(service.mutex);
+            service.voiceShutdown = false;
+            service.enabled.store(true);
+            service.ResetVerifiedSynthesisLocked();
+            service.QueueSynthesisStatusLocked();
+        }
+        service.DrainSynthesisNotifications();
+    }
+
+    static void SetNextSequence(SpeechService& service, const std::uint64_t sequence)
+    {
+        service.nextSequence.store(sequence);
+    }
+
+    static std::function<void()> TakeNextAndCollectBatch(SpeechService& service, std::size_t& companionCount)
+    {
+        std::vector<SpeechService::Utterance> group;
+        {
+            std::lock_guard lock(service.mutex);
+            tests::Check(!service.queue.empty(), "No queued batch leader.");
+            group.push_back(std::move(service.queue.front()));
+            service.queue.pop_front();
+            ++service.generatingCount;
+            auto companions = service.CollectBatchCompanions(group.front());
+            companionCount = companions.size();
+            service.generatingCount += companionCount;
+            for (auto& companion : companions)
+                group.push_back(std::move(companion));
+        }
+        return [&service, group = std::move(group)]() mutable
+        {
+            if (group.size() > 1 && service.SynthesizeBatch(group, 0))
+                return;
+            for (auto& utterance : group)
+                service.SynthesizeOne(std::move(utterance), 0);
         };
     }
 

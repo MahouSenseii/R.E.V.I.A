@@ -105,6 +105,16 @@ bool SourceCatalog::IsReviewable(const std::string& relativePath)
     {
         if (std::iscntrl(character) != 0) return false;
     }
+    const auto lowered = Lower(relativePath);
+    for (const auto* domain : {"policy", "audit", "actions", "windows", "filesystem", "runtime", "core", "improvement", "agents", "goals",
+             "llm", "memory", "identity", "safety", "planning", "computer"})
+    {
+        if (lowered.rfind("private/" + std::string(domain) + "/", 0) == 0 || lowered.rfind("public/" + std::string(domain) + "/", 0) == 0)
+            return false;
+    }
+    // Desktop control surfaces are privileged; only the closed presentation helper is exposed.
+    if (lowered.rfind("desktop/", 0) == 0 && relativePath != "Desktop/studioDuration.h")
+        return false;
     const bool code = EndsWith(relativePath, ".cpp") || EndsWith(relativePath, ".h");
     if (code && (relativePath.rfind("Private/", 0) == 0 ||
             relativePath.rfind("Public/", 0) == 0 || relativePath.rfind("Desktop/", 0) == 0))
@@ -151,6 +161,13 @@ bool SourceCatalog::Read(const std::string& relativePath, std::string& outConten
     }
     const std::filesystem::path path = root / actions::Utf8ToPath(relativePath);
     std::error_code error;
+    const auto canonicalRoot = std::filesystem::weakly_canonical(root, error);
+    const auto canonicalPath = std::filesystem::weakly_canonical(path, error);
+    if (error || canonicalPath.lexically_relative(canonicalRoot).generic_string() != relativePath)
+    {
+        outError = "The source identity changed or aliases another path.";
+        return false;
+    }
     const std::uintmax_t size = std::filesystem::file_size(path, error);
     if (error)
     {

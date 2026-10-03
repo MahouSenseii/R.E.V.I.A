@@ -285,6 +285,7 @@ bool llamaCppServerProcess::StartEmbedding(const embeddingSettings& settings, st
     launchSettings.host = settings.host;
     launchSettings.port = settings.port;
     launchSettings.modelName = settings.modelName;
+    launchSettings.logDirectory = settings.logDirectory;
     launchSettings.apiKey = settings.apiKey;
     launchSettings.serverExecutable = settings.serverExecutable;
     launchSettings.modelPath = settings.modelPath;
@@ -479,7 +480,7 @@ bool llamaCppServerProcess::StartInternal(const llmSettings& settings,
     std::vector<wchar_t> mutableCommandLine(commandLine.begin(), commandLine.end());
     mutableCommandLine.push_back(L'\0');
 
-    std::filesystem::create_directories(ReviaLogDirectory(), pathError);
+    std::filesystem::create_directories((settings.logDirectory.empty() ? ReviaLogDirectory() : settings.logDirectory), pathError);
     if (pathError)
     {
         outError = "Could not create the llama.cpp log directory: " + pathError.message();
@@ -495,8 +496,8 @@ bool llamaCppServerProcess::StartInternal(const llmSettings& settings,
     // read on its own. The port is the worker's identity (8080 Main, 8082 Fast, 8083
     // Expert by default), matching the qwen-tts-<port> convention.
     const std::wstring logStem = embeddingMode
-        ? (std::filesystem::path(ReviaLogDirectory()) / L"embedding-server").wstring()
-        : (std::filesystem::path(ReviaLogDirectory()) / L"llama-server-").wstring() + std::to_wstring(settings.port);
+        ? (std::filesystem::path((settings.logDirectory.empty() ? ReviaLogDirectory() : settings.logDirectory)) / L"embedding-server").wstring()
+        : (std::filesystem::path((settings.logDirectory.empty() ? ReviaLogDirectory() : settings.logDirectory)) / L"llama-server-").wstring() + std::to_wstring(settings.port);
     const std::wstring stdoutPath = logStem + L".stdout.log";
     const std::wstring stderrPath = logStem + L".stderr.log";
 

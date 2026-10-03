@@ -56,8 +56,8 @@ struct TurnEvent
         return event;
     }
 
-    [[nodiscard]] static TurnEvent Progress(std::string component,
-        std::string phase, std::string message, const double elapsedMilliseconds = -1.0, std::string resource = {})
+    [[nodiscard]] static TurnEvent Progress(
+        std::string component, std::string phase, std::string message, const double elapsedMilliseconds = -1.0, std::string resource = {})
     {
         TurnEvent event;
         event.kind = Kind::Component;
@@ -95,6 +95,7 @@ struct TurnContext
     // Whether the current output channel speaks. Read-only: a subsystem may shape its
     // reply for a voice, and may not change where it goes.
     const bool speaking = false;
+    const RuntimeStamp stamp;
 
     [[nodiscard]] bool Cancelled() const
     {

@@ -65,72 +65,180 @@ namespace
 
     constexpr std::size_t MaximumPromptBytes = 256 * 1024;
 
+    std::size_t TrustedRuntimeAllowance(const std::size_t contextBytes, const std::size_t userBytes, const std::size_t available)
+    {
+        if (userBytes <= available)
+            return available - userBytes;
+        // An overlong user turn still needs its captured current state. Reserve only
+        // a small share before compacting the user's own head and tail.
+        return std::min({contextBytes, available / 4, std::size_t{256}});
+    }
+
+    bool ContainsReferenceHeader(const std::string_view paragraph)
+    {
+        namespace markers = revia::identity::markers;
+        constexpr std::string_view headers[] = {markers::RetrievedMemoryBlock, markers::RetrievedConversationBlock,
+            markers::LivePageGrounding, markers::VisibleBrowserGrounding, markers::ClipboardGrounding};
+        return std::any_of(std::begin(headers), std::end(headers), [paragraph](const std::string_view header)
+            { return paragraph.starts_with(header) || paragraph.find("\n" + std::string(header)) != std::string_view::npos; });
+    }
+
+    std::vector<std::string> CaptureTurnPriorityParagraphs(const std::string& posture)
+    {
+        std::optional<std::pair<std::size_t, std::size_t>> purpose;
+        std::optional<std::pair<std::size_t, std::size_t>> answer;
+        for (std::size_t begin = 0; begin < posture.size();)
+        {
+            const std::size_t separator = posture.find("\n\n", begin);
+            const std::size_t end = separator == std::string::npos ? posture.size() : separator;
+            const std::string_view paragraph(posture.data() + begin, end - begin);
+            if (ContainsReferenceHeader(paragraph))
+                break;
+            // The composer appends the current guidance after captured state. Earlier
+            // label-like text inside that state cannot replace its final paragraphs.
+            if (paragraph.starts_with("Turn-local conversation guidance:"))
+                purpose = std::pair{begin, end};
+            if (paragraph.starts_with("Answer posture:"))
+                answer = std::pair{begin, end};
+            if (separator == std::string::npos)
+                break;
+            begin = separator + 2;
+        }
+
+        std::vector<std::string> paragraphs;
+        for (const auto& selected : {purpose, answer})
+        {
+            if (!selected)
+                continue;
+            paragraphs.push_back(posture.substr(selected->first, selected->second - selected->first));
+        }
+        return paragraphs;
+    }
+
+    std::string CompactTrustedRuntimeBlock(const std::string& block, const std::size_t budget, const std::vector<std::string>& paragraphs)
+    {
+        const std::string marker = "\n[Runtime context compacted.]\n";
+        if (block.size() <= budget)
+            return block;
+        std::string priority;
+        for (const auto& paragraph : paragraphs)
+        {
+            if (!priority.empty())
+                priority += "\n\n";
+            priority += paragraph;
+        }
+        if (priority.empty() || priority.size() > budget)
+            return revia::llm::CompactToTokenBudget(block, budget, marker);
+
+        std::string state = block;
+        for (const auto& paragraph : paragraphs)
+        {
+            const auto begin = state.find(paragraph);
+            if (begin == std::string::npos)
+                continue;
+            const auto end = begin + paragraph.size();
+            state.erase(begin, paragraph.size() + (state.compare(end, 2, "\n\n") == 0 ? 2 : 0));
+        }
+        const std::size_t remaining = budget - priority.size();
+        if (state.empty() || remaining <= 2)
+            return priority;
+        state = revia::llm::CompactToTokenBudget(state, remaining - 2, marker);
+        return state.empty() ? priority : state + "\n\n" + priority;
+    }
+
     // Compacts the newest message without cutting the runtime block's markers, so the
-    // model can still tell the runtime's words from the user's. The user's words get at
-    // least half the budget; the block keeps whatever they do not need.
-    std::string CompactNewestMessage(const std::string& content, const std::size_t budget)
+    // model can still tell the runtime's words from the user's. The current user's
+    // words take priority over the runtime block when the remaining context is small.
+    std::string CompactNewestMessage(
+        const std::string& content, const std::size_t budget, const std::vector<std::string>& priorityParagraphs)
     {
         namespace markers = revia::identity::markers;
         const std::string turnMarker = "\n[Earlier part of this turn compacted.]\n";
         const std::string open = std::string(markers::RuntimeTurnContext) + "\n";
         const std::string close = "\n" + std::string(markers::RuntimeTurnContextEnd) + "\n\n";
-        const std::size_t closeAt = content.rfind(open, 0) == 0
-            ? content.find(close, open.size()) : std::string::npos;
+        const std::size_t closeAt = content.rfind(open, 0) == 0 ? content.find(close, open.size()) : std::string::npos;
         if (closeAt == std::string::npos)
         {
             return revia::llm::CompactToTokenBudget(content, budget, turnMarker);
         }
         const std::string block = content.substr(open.size(), closeAt - open.size());
         const std::string user = content.substr(closeAt + close.size());
-        if (budget <= open.size() + close.size())
+        if (budget <= open.size() + close.size() || (user.size() <= budget && budget - user.size() < open.size() + close.size()))
         {
             return revia::llm::CompactToTokenBudget(user, budget, turnMarker);
         }
         const std::size_t available = budget - open.size() - close.size();
-        const std::size_t userShare = std::min(user.size(),
-            std::max(available / 2, available > block.size() ? available - block.size() : 0));
-        return open + revia::llm::CompactToTokenBudget(
-                block, available - userShare, "\n[Runtime context compacted.]\n") +
-            close + revia::llm::CompactToTokenBudget(user, userShare, turnMarker);
+        const std::size_t contextShare = TrustedRuntimeAllowance(block.size(), user.size(), available);
+        const std::size_t userShare = std::min(user.size(), available - contextShare);
+        return open + CompactTrustedRuntimeBlock(block, contextShare, priorityParagraphs) + close +
+               revia::llm::CompactToTokenBudget(user, userShare, turnMarker);
     }
     constexpr int ContextReserveTokens = 384;
+    constexpr std::size_t RecentDialogueMessages = 2;
+
+    std::size_t NewestTurnAllowance(const std::string& content, const std::size_t remaining)
+    {
+        namespace markers = revia::identity::markers;
+        const std::string open = std::string(markers::RuntimeTurnContext) + "\n";
+        const std::string close = "\n" + std::string(markers::RuntimeTurnContextEnd) + "\n\n";
+        const std::size_t closeAt = content.rfind(open, 0) == 0 ? content.find(close, open.size()) : std::string::npos;
+        const std::size_t currentTurn = closeAt == std::string::npos ? content.size() : content.size() - closeAt - close.size();
+        const std::size_t attribution = closeAt == std::string::npos ? 0 : open.size() + close.size();
+        return std::min(remaining, currentTurn + attribution + revia::llm::ChatTemplateTokensPerMessage);
+    }
+
+    std::size_t RecentDialogueAllowance(const json& messages, const std::size_t firstDialogue, const std::size_t perMessageAllowance)
+    {
+        if (perMessageAllowance <= revia::llm::ChatTemplateTokensPerMessage)
+            return 0;
+        std::size_t allowance = 0;
+        std::size_t retained = 0;
+        for (std::size_t index = messages.size() - 1; index > firstDialogue && retained < RecentDialogueMessages; --index)
+        {
+            const auto& content = messages[index - 1]["content"].get_ref<const std::string&>();
+            if (content.empty())
+                continue;
+            allowance += std::min(content.size(), perMessageAllowance - revia::llm::ChatTemplateTokensPerMessage) +
+                         revia::llm::ChatTemplateTokensPerMessage;
+            ++retained;
+        }
+        return allowance;
+    }
 
     // Content uses a byte-conservative allowance, including whitespace, with both
     // per-message framing and a request-wide reserve. Custom templates may still
     // exceed that reserve, so GenerateResponse has one context-specific recovery.
-    json BoundMessagesForContext(const json& messages,
-        const int contextTokens, const int responseTokens, const std::size_t maximumPromptTokens = MaximumPromptBytes)
+    json BoundMessagesForContext(const json& messages, const int contextTokens, const int responseTokens,
+        const std::vector<std::string>& priorityParagraphs, const std::size_t maximumPromptTokens = MaximumPromptBytes)
     {
         if (!messages.is_array() || messages.empty())
         {
             return messages;
         }
-        const auto usableTokens = static_cast<long long>(contextTokens) -
-            responseTokens - ContextReserveTokens;
-        if (usableTokens <= 0) return json::array();
-        const std::size_t tokenBudget = std::min({
-            static_cast<std::size_t>(usableTokens), maximumPromptTokens, MaximumPromptBytes});
+        const auto usableTokens = static_cast<long long>(contextTokens) - responseTokens - ContextReserveTokens;
+        if (usableTokens <= 0)
+            return json::array();
+        const std::size_t tokenBudget = std::min({static_cast<std::size_t>(usableTokens), maximumPromptTokens, MaximumPromptBytes});
         if (tokenBudget <= 2 * revia::llm::ChatTemplateTokensPerMessage)
             return json::array();
         // This is the text-only conversation path. An unexpected structured or
         // multimodal message must not receive a zero content cost and slip through.
         for (const auto& message : messages)
-            if (!message.is_object() || !message.contains("content") ||
-                !message["content"].is_string() || !message.contains("role") ||
-                !message["role"].is_string()) return json::array();
+            if (!message.is_object() || !message.contains("content") || !message["content"].is_string() || !message.contains("role") ||
+                !message["role"].is_string())
+                return json::array();
 
         const auto messageCost = [](const json& message)
         {
-            const std::size_t content =
-                message.contains("content") && message["content"].is_string()
-                    ? revia::llm::EstimateTokens(
-                        message["content"].get_ref<const std::string&>())
-                    : 0;
+            const std::size_t content = message.contains("content") && message["content"].is_string()
+                                            ? revia::llm::EstimateTokens(message["content"].get_ref<const std::string&>())
+                                            : 0;
             return content + revia::llm::ChatTemplateTokensPerMessage;
         };
 
         std::size_t total = 0;
-        for (const auto& message : messages) total += messageCost(message);
+        for (const auto& message : messages)
+            total += messageCost(message);
         if (total <= tokenBudget)
         {
             return messages;
@@ -143,17 +251,21 @@ namespace
         {
             json system = messages.front();
             const std::string content = system.value("content", "");
-            const std::size_t systemBudget =
-                (tokenBudget - 2 * revia::llm::ChatTemplateTokensPerMessage) * 7 / 10;
-            system["content"] = revia::llm::CompactToTokenBudget(
-                content,
-                systemBudget,
-                "\n\n[Older runtime context compacted to fit this model.]\n\n");
+            const std::size_t systemBudget = (tokenBudget - 2 * revia::llm::ChatTemplateTokensPerMessage) * 7 / 10;
+            system["content"] =
+                revia::llm::CompactToTokenBudget(content, systemBudget, "\n\n[Older runtime context compacted to fit this model.]\n\n");
             used = messageCost(system);
             bounded.push_back(std::move(system));
             firstDialogue = 1;
         }
 
+        // Reserve the last existing exchange before the newest runtime posture fills
+        // the remaining space. Each earlier message has its own bounded share.
+        const std::size_t historyMessageAllowance = tokenBudget / 4 / RecentDialogueMessages;
+        const std::size_t remainingForDialogue = tokenBudget > used ? tokenBudget - used : 0;
+        const std::size_t newestAllowance = NewestTurnAllowance(messages.back()["content"].get_ref<const std::string&>(), remainingForDialogue);
+        const std::size_t historyAllowance = std::min(RecentDialogueAllowance(messages, firstDialogue, historyMessageAllowance),
+            remainingForDialogue - newestAllowance);
         std::vector<json> recent;
         for (std::size_t index = messages.size(); index > firstDialogue; --index)
         {
@@ -168,20 +280,27 @@ namespace
             {
                 break;
             }
+            const bool newest = recent.empty();
+            const bool reservedHistory = !newest && historyAllowance > 0 && recent.size() <= RecentDialogueMessages;
+            const std::size_t available = newest            ? remaining - std::min(remaining, historyAllowance)
+                                          : reservedHistory ? std::min(remaining, historyMessageAllowance)
+                                                            : remaining;
             const std::size_t cost = messageCost(message);
-            if (cost > remaining)
+            if (cost > available)
             {
                 // The newest turn is the one being answered. If it alone does not fit,
                 // it is compacted rather than dropped, because a request with no
                 // current turn in it is not a smaller request -- it is a different one.
-                if (recent.empty() &&
-                    remaining > revia::llm::ChatTemplateTokensPerMessage)
+                if ((newest || reservedHistory) && available > revia::llm::ChatTemplateTokensPerMessage)
                 {
-                    message["content"] = CompactNewestMessage(
-                        content,
-                        remaining - revia::llm::ChatTemplateTokensPerMessage);
+                    const std::size_t contentAllowance = available - revia::llm::ChatTemplateTokensPerMessage;
+                    message["content"] =
+                        newest ? CompactNewestMessage(content, contentAllowance, priorityParagraphs)
+                               : revia::llm::CompactToTokenBudget(content, contentAllowance, "\n[Earlier dialogue compacted.]\n");
                     used += messageCost(message);
                     recent.push_back(std::move(message));
+                    if (historyAllowance > 0 && recent.size() <= RecentDialogueMessages)
+                        continue;
                 }
                 break;
             }
@@ -198,13 +317,12 @@ namespace
 
     bool IsContextOverflow(const int status, std::string body)
     {
-        if (status != 400 && status != 413 && status != 422) return false;
-        std::transform(body.begin(), body.end(), body.begin(),
-            [](const unsigned char c) { return static_cast<char>(std::tolower(c)); });
-        return body.find("exceed_context_size") != std::string::npos ||
-            body.find("maximum context length") != std::string::npos ||
-            (body.find("context") != std::string::npos &&
-                (body.find("exceed") != std::string::npos || body.find("too large") != std::string::npos));
+        if (status != 400 && status != 413 && status != 422)
+            return false;
+        std::transform(body.begin(), body.end(), body.begin(), [](const unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        return body.find("exceed_context_size") != std::string::npos || body.find("maximum context length") != std::string::npos ||
+               (body.find("context") != std::string::npos &&
+                   (body.find("exceed") != std::string::npos || body.find("too large") != std::string::npos));
     }
 
     size_t FindFirstStopMarker(const std::string& text)
@@ -783,6 +901,10 @@ namespace
 
 llamaCppService::llamaCppService() = default;
 
+llamaCppService::llamaCppService(std::string memoryDatabasePath) : builder(std::move(memoryDatabasePath))
+{
+}
+
 llamaCppService::~llamaCppService() = default;
 
 void llamaCppService::ApplySettings(const llmSettings& settings, const embeddingSettings& embeddingSettings, const aiProfile& profile)
@@ -793,6 +915,7 @@ void llamaCppService::ApplySettings(const llmSettings& settings, const embedding
     apiKey = settings.apiKey;
     bVisionExpected = settings.bVisionEnabled;
     bStablePromptPrefix = settings.bStablePromptPrefix;
+    bAllowPromptCache = settings.bAllowPromptCache;
     configuredContextTokens = std::max(1, settings.contextSize);
 
     ApplyProfile(settings, profile);
@@ -929,6 +1052,7 @@ responseOutput llamaCppService::GenerateResponse(const std::vector<conversationM
         replyNote = activeReplyNote;
     }
 
+    const auto priorityParagraphs = CaptureTurnPriorityParagraphs(posture);
     json requestBody;
     json messages = builder.BuildMessages(
         activeProfile,
@@ -950,10 +1074,7 @@ responseOutput llamaCppService::GenerateResponse(const std::vector<conversationM
     const int contextTokens = activeContextTokens > 0 ? activeContextTokens : configuredContextTokens;
     const int requestedResponse = briefSocial ? std::min(128, ResponseTokenLimit()) : ResponseTokenLimit();
     const int responseTokens = std::clamp(requestedResponse, 1, std::max(1, contextTokens / 4));
-    messages = BoundMessagesForContext(
-        messages,
-        contextTokens,
-        responseTokens);
+    messages = BoundMessagesForContext(messages, contextTokens, responseTokens, priorityParagraphs);
     if (messages.empty())
     {
         output.response = "The model context is too small for this request.";
@@ -965,7 +1086,7 @@ responseOutput llamaCppService::GenerateResponse(const std::vector<conversationM
     requestBody["temperature"] = temperature;
     requestBody["max_tokens"]  = responseTokens;
     requestBody["stream"]      = true;
-    requestBody["cache_prompt"] = true;
+    requestBody["cache_prompt"] = bAllowPromptCache;
     // Qwen3.5 thinks by default. Ordinary companion conversation should begin speaking
     // immediately; explicit/complex technical turns may opt into the same model's deep
     // mode without loading a second brain.
@@ -1108,8 +1229,8 @@ responseOutput llamaCppService::GenerateResponse(const std::vector<conversationM
         for (const auto& message : requestBody["messages"])
             promptCost += message["content"].get_ref<const std::string&>().size() +
                 revia::llm::ChatTemplateTokensPerMessage;
-        auto retryMessages = BoundMessagesForContext(
-            requestBody["messages"], contextTokens, responseTokens, promptCost / 2);
+        auto retryMessages =
+            BoundMessagesForContext(requestBody["messages"], contextTokens, responseTokens, priorityParagraphs, promptCost / 2);
         if (!retryMessages.empty())
         {
             requestBody["messages"] = std::move(retryMessages);

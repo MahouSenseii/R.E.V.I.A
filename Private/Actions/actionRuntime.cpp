@@ -10,6 +10,7 @@
 #include <chrono>
 #include <nlohmann/json.hpp>
 #include <system_error>
+#include <utility>
 
 namespace revia::actions
 {
@@ -51,6 +52,8 @@ bool ActionRuntime::InitializeUnlocked(const std::filesystem::path& capabilityCo
         }
     }
 
+    settings.internet.profileDirectory = browserProfileDirectory;
+    settings.internet.logDirectory = browserLogDirectory;
     policy = std::make_unique<policy::CapabilityPolicy>(settings);
     dispatcher.Clear();
     desktopRateLimiter.Configure(
@@ -80,6 +83,7 @@ bool ActionRuntime::InitializeUnlocked(const std::filesystem::path& capabilityCo
         std::lock_guard settingsLock(settingsMutex);
         settingsSnapshot = std::move(settings);
     }
+
     outError.clear();
     return true;
 }
@@ -103,7 +107,7 @@ PolicyDecision ActionRuntime::Evaluate(const ActionRequest& request) const
         decision.reason = "Action runtime is not initialized.";
         return decision;
     }
-    return policy->Evaluate(request);
+    return policy::CapabilityPolicy(Settings()).Evaluate(request);
 }
 
 void ActionRuntime::SetDispatchObserver(DispatchObserver observer)
@@ -118,12 +122,75 @@ ActionOutcome ActionRuntime::Execute(const ActionRequest& request, bool confirma
     return ExecuteWithPolicy(request, nullptr, confirmationGranted, stopToken);
 }
 
-ActionOutcome ActionRuntime::ExecuteWithPolicy(const ActionRequest& request, const policy::CapabilityPolicy* scopedPolicy,
-    const bool confirmationGranted, const std::stop_token stopToken)
+void ActionRuntime::BindAuthority(std::shared_ptr<policy::CompanionAuthority> inputAuthority, runtime::RuntimeStamp inputStamp)
+{
+    std::lock_guard lock(mutex);
+    authority = std::move(inputAuthority);
+    sessionStamp = std::move(inputStamp);
+}
+
+void ActionRuntime::ClearAuthorityBinding()
+{
+    std::lock_guard lock(mutex);
+    authority.reset();
+    sessionStamp = {};
+}
+
+ActionOutcome ActionRuntime::ExecuteFor(
+    const runtime::RuntimeStamp& stamp, const ActionRequest& request, const bool confirmationGranted, const std::stop_token stopToken)
+{
+    std::lock_guard lock(mutex);
+    return ExecuteWithPolicy(request, nullptr, confirmationGranted, stopToken, &stamp);
+}
+
+ActionOutcome ActionRuntime::ExecuteScopedFor(const runtime::RuntimeStamp& stamp, const ActionRequest& request,
+    const policy::CapabilityPolicy& scopedPolicy, const bool confirmationGranted, const std::stop_token stopToken)
+{
+    std::lock_guard lock(mutex);
+    return ExecuteWithPolicy(request, &scopedPolicy, confirmationGranted, stopToken, &stamp);
+}
+
+void ActionRuntime::SetPrivateRuntimePaths(std::filesystem::path profileDirectory, std::filesystem::path logDirectory)
+{
+    std::lock_guard lock(mutex);
+    browserProfileDirectory = std::move(profileDirectory);
+    browserLogDirectory = std::move(logDirectory);
+}
+
+ActionOutcome ActionRuntime::ExecuteWithPolicy(const ActionRequest& inputRequest, const policy::CapabilityPolicy* scopedPolicy,
+    const bool confirmationGranted, const std::stop_token stopToken, const runtime::RuntimeStamp* subject)
 {
     const auto executionStarted = std::chrono::steady_clock::now();
+    ActionRequest request = inputRequest;
+    request.authorityStamp = {};
     ActionOutcome outcome;
     outcome.policy = scopedPolicy ? EvaluateScoped(request, *scopedPolicy) : Evaluate(request);
+    const auto capturedAuthority = authority;
+    const auto capturedStamp = subject ? *subject : sessionStamp;
+    if (capturedAuthority)
+    {
+        request.authorityStamp = capturedStamp;
+        request.authorityStamp.policyVersion = capturedAuthority->Revision();
+    }
+    const auto applyAuthority = [&](PolicyDecision decision)
+    {
+        if (subject && (!capturedAuthority || !capturedStamp.SameSession(sessionStamp)))
+        {
+            decision.verdict = PolicyVerdict::Blocked;
+            decision.reason = "The action subject does not match the runtime authority binding.";
+        }
+        else if (capturedAuthority && decision.verdict != PolicyVerdict::Blocked)
+        {
+            const auto refusal = capturedAuthority->Evaluate(capturedStamp, request, decision);
+            if (!refusal.empty())
+            {
+                decision.verdict = PolicyVerdict::Blocked;
+                decision.reason = refusal;
+            }
+        }
+        return decision;
+    };
+    outcome.policy = applyAuthority(std::move(outcome.policy));
     const bool otherwiseExecutable =
         outcome.policy.verdict == PolicyVerdict::Allowed ||
         (outcome.policy.verdict == PolicyVerdict::RequiresConfirmation && confirmationGranted);
@@ -142,6 +209,8 @@ ActionOutcome ActionRuntime::ExecuteWithPolicy(const ActionRequest& request, con
     // blocked and refused ones -- a scope that only closes on success is how a session
     // gets stuck in a state an aborted action put it in.
     if (dispatchObserver) dispatchObserver(request, true);
+    if (outcome.policy.verdict != PolicyVerdict::Blocked)
+        outcome.policy = applyAuthority(scopedPolicy ? EvaluateScoped(request, *scopedPolicy) : Evaluate(request));
     const std::string transactionId = NewActionId();
     const bool executable = outcome.policy.verdict == PolicyVerdict::Allowed ||
         (outcome.policy.verdict == PolicyVerdict::RequiresConfirmation && confirmationGranted);
@@ -165,7 +234,47 @@ ActionOutcome ActionRuntime::ExecuteWithPolicy(const ActionRequest& request, con
     }
     else
     {
-        outcome.result = dispatcher.Dispatch(request, outcome.policy, confirmationGranted);
+        if (outcome.policy.verdict != PolicyVerdict::Blocked)
+            outcome.policy = applyAuthority(scopedPolicy ? EvaluateScoped(request, *scopedPolicy) : Evaluate(request));
+        ActionRequest guardedRequest = request;
+        const auto priorEffect = request.beforeEffect;
+        const auto canonicalDecision = outcome.policy;
+        guardedRequest.beforeEffect = [this, request, priorEffect, capturedAuthority, capturedStamp, stopToken, canonicalDecision,
+                                          scopedPolicy, confirmationGranted](const std::string& resource)
+        {
+            if (stopToken.stop_requested())
+                return std::string("Action cancellation was requested.");
+            if (priorEffect)
+            {
+                const auto refusal = priorEffect(resource);
+                if (!refusal.empty())
+                    return refusal;
+            }
+            if (stopToken.stop_requested())
+                return std::string("Action cancellation was requested.");
+            const auto current = scopedPolicy ? EvaluateScoped(request, *scopedPolicy) : Evaluate(request);
+            if (current.verdict == PolicyVerdict::Blocked ||
+                (current.verdict == PolicyVerdict::RequiresConfirmation && !confirmationGranted))
+                return current.reason;
+            if (current.canonicalSource != canonicalDecision.canonicalSource ||
+                current.canonicalDestination != canonicalDecision.canonicalDestination)
+                return std::string("The canonical action resource changed before its effect.");
+            if (capturedAuthority && (authority != capturedAuthority || !sessionStamp.SameSession(capturedStamp)))
+                return std::string("The runtime authority binding changed before its effect.");
+            if (request.type == ActionType::WebSearch && !resource.empty())
+            {
+                const auto currentInternet = Settings().internet;
+                if (resource == "visible_browser" && !currentInternet.visibleBrowser)
+                    return std::string("The visible browser authority was withdrawn.");
+                if (resource != "visible_browser" && std::find(currentInternet.approvedHosts.begin(), currentInternet.approvedHosts.end(),
+                                                         resource) == currentInternet.approvedHosts.end())
+                    return std::string("The network host is outside the current machine ceiling.");
+            }
+            if (stopToken.stop_requested())
+                return std::string("Action cancellation was requested.");
+            return capturedAuthority ? capturedAuthority->Evaluate(capturedStamp, request, current, resource) : std::string{};
+        };
+        outcome.result = dispatcher.Dispatch(guardedRequest, outcome.policy, confirmationGranted);
     }
     if (dispatchObserver) dispatchObserver(request, false);
     if (auditLogger)
@@ -291,107 +400,6 @@ bool ActionRuntime::IsInitialized() const
 {
     std::lock_guard lock(mutex);
     return policy != nullptr;
-}
-
-CapabilitySettings ActionRuntime::Settings() const
-{
-    std::lock_guard lock(settingsMutex);
-    return settingsSnapshot;
-}
-
-bool ActionRuntime::ReloadUnlocked(std::string& outError)
-{
-    if (capabilityConfigPath.empty() || auditPath.empty())
-    {
-        outError = "Action runtime has no capability configuration to reload.";
-        return false;
-    }
-    return InitializeUnlocked(capabilityConfigPath, auditPath, outError);
-}
-
-bool ActionRuntime::AddApprovedApplication(const std::string& executable, std::string& outError)
-{
-    std::lock_guard lock(mutex);
-    return capabilityEditor.AddApplication(capabilityConfigPath, executable, outError) &&
-        ReloadUnlocked(outError);
-}
-
-bool ActionRuntime::RemoveApprovedApplication(const std::string& executable, std::string& outError)
-{
-    std::lock_guard lock(mutex);
-    return capabilityEditor.RemoveApplication(capabilityConfigPath, executable, outError) &&
-        ReloadUnlocked(outError);
-}
-
-bool ActionRuntime::AddApprovedControl(const std::string& executable, const std::string& control, std::string& outError)
-{
-    std::lock_guard lock(mutex);
-    return capabilityEditor.AddControl(
-            capabilityConfigPath, executable, control, outError) &&
-        ReloadUnlocked(outError);
-}
-
-bool ActionRuntime::RemoveApprovedControl(const std::string& executable, const std::string& control, std::string& outError)
-{
-    std::lock_guard lock(mutex);
-    return capabilityEditor.RemoveControl(
-            capabilityConfigPath, executable, control, outError) &&
-        ReloadUnlocked(outError);
-}
-
-bool ActionRuntime::SetInternetAccess(const bool enabled, const bool automaticLookup, std::string& outError)
-{
-    std::lock_guard lock(mutex);
-    return capabilityEditor.SetInternetAccess(
-            capabilityConfigPath, enabled, automaticLookup, outError) &&
-        ReloadUnlocked(outError);
-}
-
-bool ActionRuntime::SetInternetBrowser(const bool visibleBrowser, const bool autonomousResearch, std::string& outError)
-{
-    std::lock_guard lock(mutex);
-    return capabilityEditor.SetInternetBrowser(
-            capabilityConfigPath, visibleBrowser, autonomousResearch, outError) &&
-        ReloadUnlocked(outError);
-}
-
-void ActionRuntime::SetDesktopApprovalHandler(policy::DesktopApprovalGate::Handler handler)
-{
-    // Not under `mutex`: the gate owns its own, and a reload must not be able to
-    // block behind a dialog that is waiting on a person.
-    desktopApprovals->SetHandler(std::move(handler));
-}
-
-policy::DesktopApprovalGate::TaskApproval ActionRuntime::ApproveDesktopTask(const std::string& goalId, const bool messaging)
-{
-    return desktopApprovals->ApproveTask(goalId, messaging);
-}
-
-bool ActionRuntime::SetCameraAccess(const bool enabled, const bool autonomousCapture, std::string& outError)
-{
-    std::lock_guard lock(mutex);
-    return capabilityEditor.SetCameraAccess(
-            capabilityConfigPath, enabled, autonomousCapture, outError) &&
-        ReloadUnlocked(outError);
-}
-
-bool ActionRuntime::SetDesktopControl(const bool pointer, const bool keyboard, const bool applicationLaunch, const bool rawCoordinates,
-    const bool visualTargeting, const bool autonomous, const CapabilitySettings::DesktopControl::InputScope scope,
-    const bool allowCommandSurfaces, std::string& outError)
-{
-    std::lock_guard lock(mutex);
-    return capabilityEditor.SetDesktopControl(
-            capabilityConfigPath, pointer, keyboard, applicationLaunch, rawCoordinates,
-            visualTargeting,
-            autonomous, scope, allowCommandSurfaces, outError) &&
-        ReloadUnlocked(outError);
-}
-
-bool ActionRuntime::SetExecutionMode(const ExecutionMode mode, std::string& outError)
-{
-    std::lock_guard lock(mutex);
-    return capabilityEditor.SetExecutionMode(capabilityConfigPath, mode, outError) &&
-        ReloadUnlocked(outError);
 }
 
 void ActionRuntime::StopDesktopControl(const std::string& reason)

@@ -6,6 +6,7 @@
 #include "Speech/vocalization.h"
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cctype>
 #include <filesystem>
@@ -33,6 +34,47 @@ namespace
     }
 
     constexpr const char* WindowsSapiResource = "CPU / Windows SAPI";
+
+    VoiceOperationResult ManualVoiceOperation(
+        const std::function<VoiceOperationResult()>& operation, const char* failureMessage, const char* successMessage)
+    {
+        VoiceOperationResult result;
+        try
+        {
+            result = operation();
+        }
+        catch (...)
+        {
+            return {false, failureMessage, {}, -1.0};
+        }
+        if (!result.succeeded)
+            return {false, failureMessage, {}, result.elapsedMilliseconds};
+        result.message = successMessage;
+        result.outputPath.clear();
+        result.deviceName.clear();
+        if (result.device != "cpu" && !std::regex_match(result.device, std::regex("cuda:[0-9]{1,2}")))
+            result.device.clear();
+        if (result.dtype != "float16" && result.dtype != "bfloat16" && result.dtype != "float32")
+            result.dtype.clear();
+        if (result.backend != "standard" && result.backend != "low_latency")
+            result.backend.clear();
+        if (result.attentionBackend != "sdpa" && result.attentionBackend != "eager" && result.attentionBackend != "flash_attention_2" &&
+            result.attentionBackend != "adaptive" && result.attentionBackend != "auto")
+            result.attentionBackend.clear();
+        if (result.inputMode != "complete" && result.inputMode != "simulated-stream")
+            result.inputMode.clear();
+        if (!result.backendDetail.empty())
+            result.backendDetail = "The voice worker supplied backend status.";
+        return result;
+    }
+
+    const char* CuePhaseName(const SystemCuePhase phase)
+    {
+        constexpr std::array names = {"CueUnavailable", "CuePreparing", "CuePrepared", "CuePreparationFailed", "CueQueued", "CuePlaying",
+            "CuePlayed", "CueCancelled", "CuePlaybackFailed"};
+        const auto index = static_cast<std::size_t>(phase);
+        return index < names.size() ? names[index] : names.front();
+    }
 
     std::string PlannedQwenResource(const speechSettings& settings)
     {
@@ -249,15 +291,24 @@ bool SpeechService::Start(const speechSettings& settings, EventHandler handler)
         const std::string assigned = presetStore.AssignedPresetId(activeProfile);
         SetActiveVoiceLocked(assigned.empty() ? std::nullopt : presetStore.Find(assigned));
         eventHandler = std::move(handler);
+        voiceShutdown = false;
+        enabled.store(settings.bEnabled);
+        generation.fetch_add(1);
+        ResetVerifiedSynthesisLocked();
+        QueueSynthesisStatusLocked();
         queue.clear();
         playbackOrder.Clear();
         prepared.clear();
         generatingCount = 0;
         bufferedAudioBytes = 0;
+        attemptedCueKeys.clear();
+        cuePreparation.reset();
+        generatingCue = false;
+        playingAudio = false;
     }
-    enabled.store(settings.bEnabled);
     ready.store(false);
-    generation.fetch_add(1);
+    DrainSynthesisNotifications();
+    RefreshSystemCueBank();
     const std::size_t generatorCount = std::max<std::size_t>(
         1, std::min<std::size_t>(qwenPool.WorkerCount(),
             static_cast<std::size_t>(settings.qwenPrefetchFragments)));
@@ -274,10 +325,15 @@ bool SpeechService::Start(const speechSettings& settings, EventHandler handler)
 
 void SpeechService::SetActiveProfile(std::string profileId)
 {
-    std::lock_guard lock(mutex);
-    activeProfile = std::move(profileId);
-    const std::string assigned = presetStore.AssignedPresetId(activeProfile);
-    SetActiveVoiceLocked(assigned.empty() ? std::nullopt : presetStore.Find(assigned));
+    {
+        std::lock_guard lock(mutex);
+        activeProfile = std::move(profileId);
+        const std::string assigned = presetStore.AssignedPresetId(activeProfile);
+        SetActiveVoiceLocked(assigned.empty() ? std::nullopt : presetStore.Find(assigned));
+        QueueSynthesisStatusLocked();
+    }
+    DrainSynthesisNotifications();
+    RefreshSystemCueBank();
 }
 
 VoiceStudioSnapshot SpeechService::VoiceStudio() const
@@ -324,35 +380,382 @@ bool SpeechService::HasActiveQwenVoice() const
     return configuration.backend != "WindowsSapi" && activePreset.has_value();
 }
 
+VoiceSelection SpeechService::SelectionLocked() const
+{
+    return {activeProfile, activePreset ? activePreset->id : std::string{}, selectionEpoch};
+}
+
+SpeechService::SynthesisState& SpeechService::SynthesisStateLocked(const VoiceSelection& selection)
+{
+    const auto scope = std::make_pair(selection.profileId, selection.presetId);
+    auto found = synthesisStates.find(scope);
+    if (found == synthesisStates.end())
+    {
+        constexpr std::size_t maximumScopes = 64;
+        if (synthesisStates.size() >= maximumScopes)
+        {
+            const auto oldest = std::min_element(synthesisStates.begin(), synthesisStates.end(),
+                [](const auto& left, const auto& right) { return left.second.lastUsed < right.second.lastUsed; });
+            synthesisStates.erase(oldest);
+        }
+        found = synthesisStates.emplace(scope, SynthesisState{}).first;
+    }
+    found->second.lastUsed = ++synthesisStateUse;
+    return found->second;
+}
+
+VoiceHealthSnapshot SpeechService::SynthesisHealthSnapshot() const
+{
+    std::lock_guard lock(mutex);
+    VoiceHealthSnapshot snapshot;
+    snapshot.selection = SelectionLocked();
+    snapshot.enabled = enabled.load() && !voiceShutdown;
+    snapshot.configured = configuration.backend != "WindowsSapi" && activePreset.has_value();
+    const auto found = synthesisStates.find({snapshot.selection.profileId, snapshot.selection.presetId});
+    if (found != synthesisStates.end())
+    {
+        snapshot.state = found->second.state;
+        snapshot.restoredFailure = found->second.restoredFailure;
+        snapshot.failureWatermark = found->second.failureWatermark;
+    }
+    return snapshot;
+}
+
+VoiceHealthSnapshot SpeechService::SynthesisHealthSnapshot(const std::string& profileId, const std::string& presetId) const
+{
+    std::lock_guard lock(mutex);
+    VoiceHealthSnapshot snapshot;
+    snapshot.selection = {profileId, presetId, selectionEpoch};
+    snapshot.enabled = enabled.load() && !voiceShutdown;
+    snapshot.configured =
+        configuration.backend != "WindowsSapi" && activePreset && activeProfile == profileId && activePreset->id == presetId;
+    const auto found = synthesisStates.find({profileId, presetId});
+    if (found != synthesisStates.end())
+    {
+        snapshot.state = found->second.state;
+        snapshot.restoredFailure = found->second.restoredFailure;
+        snapshot.failureWatermark = found->second.failureWatermark;
+    }
+    return snapshot;
+}
+
+void SpeechService::ResetVerifiedSynthesisLocked()
+{
+    for (auto& [scope, state] : synthesisStates)
+    {
+        (void)scope;
+        if (state.state == SynthesisHealth::Available)
+            state.state = SynthesisHealth::Unverified;
+    }
+}
+
+void SpeechService::QueueSynthesisStatusLocked()
+{
+    const VoiceSelection selection = SelectionLocked();
+    const auto& state = SynthesisStateLocked(selection);
+    SpeechEvent event{"SynthesisHealth", "Voice synthesis health was refreshed."};
+    event.synthesis = SynthesisObservation{
+        selection, generation.load(), 0, 0, 0, ++nextSynthesisObservation, state.failureWatermark, state.state, false, false, false};
+    // A status callback reads the current snapshot. Superseded refreshes therefore
+    // share one slot; terminal observations retain their ordered positions.
+    pendingSynthesisStatus = std::move(event);
+}
+
+void SpeechService::RestoreSynthesisFault(const std::string& profileId, const std::string& presetId)
+{
+    {
+        std::lock_guard lock(mutex);
+        const VoiceSelection selection{profileId, presetId, selectionEpoch};
+        auto& state = SynthesisStateLocked(selection);
+        const bool changed = state.state != SynthesisHealth::Degraded || !state.restoredFailure;
+        state.state = SynthesisHealth::Degraded;
+        state.restoredFailure = true;
+        state.failureWatermark = startedSynthesisAttempts;
+        const auto current = SelectionLocked();
+        if (changed && current.profileId == selection.profileId && current.presetId == selection.presetId)
+            QueueSynthesisStatusLocked();
+    }
+    DrainSynthesisNotifications();
+}
+
+bool SpeechService::BeginSynthesis(Utterance& utterance)
+{
+    if (!AdmissionCurrent(utterance))
+        return false;
+    std::lock_guard lock(mutex);
+    if (!enabled.load() || voiceShutdown || utterance.generation != generation.load())
+        return false;
+    // Health listeners may restore/select/read state, but cannot synchronously start
+    // another synthesis: that would defeat bounded notification backpressure.
+    if (drainingSynthesisNotifications && synthesisNotificationOwner == std::this_thread::get_id())
+        return false;
+    utterance.attemptId = ++startedSynthesisAttempts;
+    return true;
+}
+
+VoiceOperationResult SpeechService::TrySynthesis(const std::function<VoiceOperationResult()>& operation)
+{
+    VoiceOperationResult result;
+    try
+    {
+        result = operation();
+    }
+    catch (...)
+    {
+        result.succeeded = false;
+    }
+    if (result.succeeded && result.audioBytes.empty())
+    {
+        std::error_code error;
+        const auto bytes = result.outputPath.empty() ? 0 : std::filesystem::file_size(result.outputPath, error);
+        if (error || bytes == 0)
+            result.succeeded = false;
+    }
+    if (!result.succeeded)
+        result.message = "Voice synthesis failed for this reply. The text remains available. The cause is unknown.";
+    return result;
+}
+
+void SpeechService::ObserveSynthesisLocked(
+    const Utterance& utterance, const VoiceOperationResult& result, const int depth, std::unique_lock<std::mutex>& lock)
+{
+    const auto current = [&]
+    {
+        const auto selection = SelectionLocked();
+        return utterance.attemptId != 0 && !voiceShutdown && enabled.load() && utterance.generation == generation.load() &&
+               utterance.selection.epoch == selection.epoch && utterance.selection.profileId == selection.profileId &&
+               utterance.selection.presetId == selection.presetId;
+    };
+    constexpr std::size_t maximumPendingObservations = 128;
+    while (synthesisNotifications.size() >= maximumPendingObservations && current())
+    {
+        lock.unlock();
+        const bool admitted = AdmissionCurrent(utterance);
+        lock.lock();
+        if (!admitted || !current())
+            return;
+        condition.wait_for(lock, std::chrono::milliseconds(20));
+    }
+    lock.unlock();
+    const bool admitted = AdmissionCurrent(utterance);
+    lock.lock();
+    if (!admitted || !current())
+        return;
+    auto& state = SynthesisStateLocked(utterance.selection);
+    const auto previous = state.state;
+    const bool fresh = !result.audioCacheHit;
+    if (!result.succeeded)
+    {
+        state.state = SynthesisHealth::Degraded;
+        state.restoredFailure = false;
+        state.failureWatermark = startedSynthesisAttempts;
+    }
+    else if (fresh && utterance.attemptId > state.failureWatermark)
+    {
+        state.state = SynthesisHealth::Available;
+        state.restoredFailure = false;
+    }
+    SpeechEvent event{result.succeeded ? "SynthesisAvailable" : "SynthesisFailed",
+        result.succeeded ? "Voice synthesis completed for this reply."
+                         : "Voice synthesis failed for this reply. The text remains available. The cause is unknown.",
+        result.elapsedMilliseconds, depth, utterance.utteranceId};
+    event.synthesis =
+        SynthesisObservation{utterance.selection, utterance.generation, utterance.utteranceId, utterance.sequence, utterance.attemptId,
+            ++nextSynthesisObservation, state.failureWatermark, state.state, result.succeeded, fresh, previous != state.state};
+    synthesisNotifications.push_back(std::move(event));
+}
+
+void SpeechService::DrainSynthesisNotifications()
+{
+    {
+        std::lock_guard lock(mutex);
+        if (drainingSynthesisNotifications)
+            return;
+        drainingSynthesisNotifications = true;
+        synthesisNotificationOwner = std::this_thread::get_id();
+    }
+    try
+    {
+        while (true)
+        {
+            SpeechEvent event;
+            EventHandler handler;
+            {
+                std::lock_guard lock(mutex);
+                if (synthesisNotifications.empty() && !pendingSynthesisStatus)
+                {
+                    drainingSynthesisNotifications = false;
+                    synthesisNotificationOwner = {};
+                    return;
+                }
+                if (pendingSynthesisStatus &&
+                    (synthesisNotifications.empty() ||
+                        pendingSynthesisStatus->synthesis->observationId < synthesisNotifications.front().synthesis->observationId))
+                {
+                    event = std::move(*pendingSynthesisStatus);
+                    pendingSynthesisStatus.reset();
+                }
+                else
+                {
+                    event = std::move(synthesisNotifications.front());
+                    synthesisNotifications.pop_front();
+                }
+                condition.notify_all();
+                handler = eventHandler;
+            }
+            if (handler)
+                handler(event);
+        }
+    }
+    catch (...)
+    {
+        std::lock_guard lock(mutex);
+        drainingSynthesisNotifications = false;
+        synthesisNotificationOwner = {};
+        throw;
+    }
+}
+
 VoiceOperationResult SpeechService::RenderAdapterSpeech(const std::string& text)
 {
     std::optional<VoicePreset> preset;
+    Utterance utterance;
     std::size_t maximumCharacters = 0;
     {
         std::lock_guard lock(mutex);
-        if (!enabled.load() || configuration.backend == "WindowsSapi" || !activePreset)
+        if (!enabled.load() || voiceShutdown || configuration.backend == "WindowsSapi" || !activePreset)
         {
             return {false, "Discord voice requires speech enabled and an assigned Qwen voice.", {}, 0.0};
         }
         preset = activePreset;
+        utterance.selection = SelectionLocked();
+        utterance.generation = generation.load();
         maximumCharacters = static_cast<std::size_t>(std::clamp(configuration.maxCharacters, 1, 5000));
     }
     const std::string spoken = NormalizeForSpeech(text, maximumCharacters);
     if (spoken.empty()) return {false, "The public reply contained no speakable text.", {}, 0.0};
-    auto result = qwenPool.SynthesizePcm(spoken, *preset, false);
-    if (!enabled.load())
+    if (!BeginSynthesis(utterance))
         return {false, "Discord voice rendering was muted or stopped.", {}, 0.0};
+    auto result = TrySynthesis([&] { return qwenPool.SynthesizePcm(spoken, *preset, false); });
+    {
+        std::unique_lock lock(mutex);
+        ObserveSynthesisLocked(utterance, result, 0, lock);
+        if (!enabled.load() || voiceShutdown || utterance.generation != generation.load())
+            result = {false, "Discord voice rendering was muted or stopped.", {}, 0.0};
+    }
+    DrainSynthesisNotifications();
     return result;
+}
+
+bool SpeechService::CueSelectionCurrentLocked(const Utterance& utterance) const
+{
+    const auto selection = SelectionLocked();
+    return enabled.load() && !voiceShutdown && utterance.generation == generation.load() &&
+           utterance.selection.profileId == selection.profileId && utterance.selection.presetId == selection.presetId &&
+           utterance.selection.epoch == selection.epoch &&
+           (!utterance.systemCue || (systemCueBank && utterance.clipPath.parent_path() == systemCueBank->Directory()));
+}
+
+SystemCueSnapshot SpeechService::SystemCueStatusSnapshot() const
+{
+    std::lock_guard lock(mutex);
+    auto snapshot = systemCueSnapshot;
+    if (systemCueBank)
+        snapshot.readyClips = ApprovedSystemCues().size() - systemCueBank->MissingKinds().size();
+    return snapshot;
+}
+
+bool SpeechService::IsAudioPlaying() const
+{
+    std::lock_guard lock(mutex);
+    return playingAudio;
+}
+
+void SpeechService::NotifyCue(const SystemCuePhase phase, const char* detail)
+{
+    Notify({CuePhaseName(phase), detail});
+}
+
+void SpeechService::RefreshSystemCueBank()
+{
+    Utterance origin;
+    std::filesystem::path root;
+    {
+        std::lock_guard lock(mutex);
+        origin.selection = SelectionLocked();
+        origin.generation = generation.load();
+        origin.preset = activePreset;
+        root = presetStore.Root();
+    }
+    const auto bank = origin.preset ? SystemCueBank::ForVoice(root, origin.selection.profileId, *origin.preset) : std::nullopt;
+    const auto missing = bank ? bank->MissingKinds().size() : ApprovedSystemCues().size();
+    SystemCuePhase phase = SystemCuePhase::Unavailable;
+    {
+        std::lock_guard lock(mutex);
+        const auto selection = SelectionLocked();
+        if (voiceShutdown || origin.generation != generation.load() || origin.selection.epoch != selection.epoch ||
+            origin.selection.profileId != selection.profileId || origin.selection.presetId != selection.presetId)
+            return;
+        const bool changedKey = !systemCueBank || !bank || systemCueBank->Key() != bank->Key();
+        if (changedKey)
+            cuePreparation.reset();
+        systemCueBank = bank;
+        systemCueSnapshot.readyClips = ApprovedSystemCues().size() - missing;
+        if (missing == 0)
+            phase = SystemCuePhase::Prepared;
+        if (changedKey || (!cuePreparation && !generatingCue && systemCueSnapshot.phase != SystemCuePhase::Playing))
+            systemCueSnapshot.phase = phase;
+    }
+    NotifyCue(phase, missing == 0 ? "Approved system cues are cached." : "Some approved system cues are not cached.");
+}
+
+bool SpeechService::QueueSystemCue(const SystemCueKind kind)
+{
+    Utterance origin;
+    {
+        std::lock_guard lock(mutex);
+        origin.admission = admissionGuard;
+    }
+    if (!AdmissionCurrent(origin))
+        return false;
+    bool queued = false;
+    {
+        std::lock_guard lock(mutex);
+        if (!enabled.load() || voiceShutdown || !systemCueBank || !activePreset ||
+            queue.size() + prepared.size() + generatingCount >= static_cast<std::size_t>(configuration.maxQueuedUtterances))
+            return false;
+        const auto clip = systemCueBank->Clip(kind);
+        if (!clip.empty())
+        {
+            Utterance utterance;
+            utterance.admission = origin.admission;
+            utterance.generation = generation.load();
+            utterance.selection = SelectionLocked();
+            utterance.sequence = nextSequence.fetch_add(1);
+            utterance.systemCue = kind;
+            utterance.clipPath = clip;
+            utterance.latencyCritical = false;
+            playbackOrder.Reserve(utterance.sequence);
+            queue.push_back(std::move(utterance));
+            queued = true;
+        }
+        if (systemCueSnapshot.phase != SystemCuePhase::Playing)
+            systemCueSnapshot.phase = queued ? SystemCuePhase::Queued : SystemCuePhase::Unavailable;
+    }
+    NotifyCue(queued ? SystemCuePhase::Queued : SystemCuePhase::Unavailable,
+        queued ? "A cached system cue was queued." : "The requested system cue is not cached.");
+    condition.notify_all();
+    return queued;
 }
 
 VoiceOperationResult SpeechService::PrepareActiveVoice()
 {
     if (!HasActiveQwenVoice())
     {
-        return {true, "No Qwen3-TTS profile voice is assigned; Windows SAPI is ready.", {}, 0.0};
+        return {true, "No assigned Qwen3-TTS voice needs preparation.", {}, 0.0};
     }
-    Notify({"Loading", "Loading the assigned Qwen3-TTS voice on the selected device.",
-        -1.0, 0, 0, PlannedQwenResource(configuration)});
+    Notify(
+        {"ManualLoading", "Loading the assigned Qwen3-TTS voice on the selected device.", -1.0, 0, 0, PlannedQwenResource(configuration)});
     std::optional<VoicePreset> preset;
     {
         std::lock_guard lock(mutex);
@@ -362,11 +765,10 @@ VoiceOperationResult SpeechService::PrepareActiveVoice()
     {
         return {true, "No Qwen3-TTS voice needs preparation.", {}, 0.0};
     }
-    VoiceOperationResult result = qwenPool.PrepareVoice(*preset);
-    SpeechEvent prepared{result.succeeded ? "Ready" : "Fallback",
-        result.succeeded
-            ? result.message
-            : result.message + " Windows SAPI remains available.",
+    VoiceOperationResult result = ManualVoiceOperation([&] { return qwenPool.PrepareVoice(*preset); },
+        "Voice preparation did not complete. The cause is unknown.", "The assigned voice was prepared.");
+    SpeechEvent prepared{result.succeeded ? "ManualReady" : "ManualFallback",
+        result.succeeded ? "The assigned voice was prepared." : "Voice preparation did not complete. Windows SAPI remains available.",
         result.elapsedMilliseconds};
     prepared.device = ActualQwenResource(result);
     Notify(std::move(prepared));
@@ -381,12 +783,33 @@ VoiceOperationResult SpeechService::CreateVoicePreset(const std::string& name,
     {
         return {false, "A preset name, voice description, and reference line are required.", {}, -1.0};
     }
+    bool replacingSelected = false;
+    {
+        std::lock_guard lock(mutex);
+        if (activePreset && activePreset->id == id)
+        {
+            replacingSelected = true;
+            ++selectionEpoch;
+            systemCueBank.reset();
+            cuePreparation.reset();
+            systemCueSnapshot = {};
+            auto& state = SynthesisStateLocked(SelectionLocked());
+            if (state.state == SynthesisHealth::Available)
+                state.state = SynthesisHealth::Unverified;
+            QueueSynthesisStatusLocked();
+        }
+    }
+    if (replacingSelected)
+    {
+        DrainSynthesisNotifications();
+        NotifyCue(SystemCuePhase::Unavailable, "The selected voice revision is awaiting verification.");
+    }
     const std::filesystem::path directory = presetStore.Root() / id;
     std::error_code error;
     std::filesystem::create_directories(directory, error);
     if (error)
     {
-        return {false, "Could not create the voice preset directory: " + error.message(), {}, -1.0};
+        return {false, "Could not create the voice preset directory.", {}, -1.0};
     }
     const std::filesystem::path referencePath =
         std::filesystem::absolute(directory / "reference.wav", error).lexically_normal();
@@ -394,15 +817,16 @@ VoiceOperationResult SpeechService::CreateVoicePreset(const std::string& name,
     {
         return {false, "Could not resolve the voice reference path.", {}, -1.0};
     }
-    Notify({"Designing", "Creating a reusable Qwen3-TTS voice reference. First use downloads the model.",
-        -1.0, 0, 0, PlannedQwenResource(configuration)});
-    VoiceOperationResult result = qwenPool.DesignVoice(
-        referenceText, description, language.empty() ? "English" : language,
-        referencePath.string());
+    Notify({"ManualDesigning", "Creating a reusable Qwen3-TTS voice reference. First use downloads the model.", -1.0, 0, 0,
+        PlannedQwenResource(configuration)});
+    VoiceOperationResult result = ManualVoiceOperation([&]
+        { return qwenPool.DesignVoice(referenceText, description, language.empty() ? "English" : language, referencePath.string()); },
+        "Voice creation did not complete. The cause is unknown.", "The voice reference was created.");
+    if (result.succeeded && !IsPlayableWavFile(referencePath))
+        result = {false, "Voice creation did not complete. The cause is unknown.", {}, result.elapsedMilliseconds};
     if (!result.succeeded)
     {
-        Notify({"Error", result.message, result.elapsedMilliseconds, 0, 0,
-            ActualQwenResource(result)});
+        Notify({"ManualError", result.message, result.elapsedMilliseconds, 0, 0, ActualQwenResource(result)});
         return result;
     }
     VoicePreset preset;
@@ -428,14 +852,29 @@ VoiceOperationResult SpeechService::CreateVoicePreset(const std::string& name,
     {
         return finished;
     }
+    const auto savedPreset = presetStore.Find(id);
+    bool refreshSelected = false;
+    {
+        std::lock_guard lock(mutex);
+        if (savedPreset && activePreset && activePreset->id == id)
+        {
+            SetActiveVoiceLocked(savedPreset);
+            QueueSynthesisStatusLocked();
+            refreshSelected = true;
+        }
+    }
+    if (refreshSelected)
+    {
+        DrainSynthesisNotifications();
+        RefreshSystemCueBank();
+    }
     if (!finished.message.empty())
     {
-        Notify({"Warning", finished.message, -1.0, 0, 0, {}});
+        Notify({"ManualWarning", finished.message, -1.0, 0, 0, {}});
     }
-    result.message = "Created voice preset '" + name + "'.";
+    result.message = "The voice preset was created.";
     result.outputPath = referencePath.string();
-    Notify({"Ready", result.message, result.elapsedMilliseconds, 0, 0,
-        ActualQwenResource(result)});
+    Notify({"ManualReady", result.message, result.elapsedMilliseconds, 0, 0, ActualQwenResource(result)});
     return result;
 }
 
@@ -443,17 +882,26 @@ VoiceOperationResult SpeechService::FinishVoicePreset(VoicePresetStore& store,
     const VoicePreset& preset, const VocalizationRenderer& render)
 {
     std::string saveError;
-    if (!store.Save(preset, saveError))
+    bool saved = false;
+    try
     {
-        return {false, saveError, {}, -1.0};
+        saved = store.Save(preset, saveError);
+    }
+    catch (...)
+    {
+    }
+    if (!saved)
+    {
+        return {false, "The voice preset could not be saved.", {}, -1.0};
     }
     if (!render)
     {
         return {true, {}, {}, -1.0};
     }
     const std::filesystem::path directory = store.Root() / preset.id;
-    const VoiceOperationResult rendered = render(
-        directory, QwenTtsClient::DefaultVocalizationBankRequests(), preset.language);
+    const VoiceOperationResult rendered =
+        ManualVoiceOperation([&] { return render(directory, QwenTtsClient::DefaultVocalizationBankRequests(), preset.language); },
+            "The voice was created, but its nonverbal clips could not be rendered.", "The nonverbal clips were rendered.");
     if (rendered.succeeded)
     {
         return {true, {}, {}, rendered.elapsedMilliseconds};
@@ -461,10 +909,7 @@ VoiceOperationResult SpeechService::FinishVoicePreset(VoicePresetStore& store,
     // Non-fatal, deliberately. A voice that cannot laugh is still a voice, and losing
     // a preset the user just waited on because its chuckle failed would be a worse
     // trade than a quiet one. The reason is carried back so the caller can say so.
-    return {true,
-        "The voice was created, but its nonverbal clips could not be rendered: " +
-            rendered.message,
-        {}, rendered.elapsedMilliseconds};
+    return {true, "The voice was created, but its nonverbal clips could not be rendered.", {}, rendered.elapsedMilliseconds};
 }
 
 VoiceOperationResult SpeechService::RenderVoiceBank(const std::string& presetId)
@@ -474,17 +919,17 @@ VoiceOperationResult SpeechService::RenderVoiceBank(const std::string& presetId)
     {
         return {false, "The selected voice preset does not exist.", {}, -1.0};
     }
-    Notify({"Designing",
+    Notify({"ManualDesigning",
         "Rendering this voice's nonverbal sounds. The VoiceDesign model downloads on "
-        "first use.", -1.0, 0, 0, PlannedQwenResource(configuration)});
+        "first use.",
+        -1.0, 0, 0, PlannedQwenResource(configuration)});
     const std::filesystem::path directory = presetStore.Root() / preset->id;
-    VoiceOperationResult result = qwenPool.RenderVocalizations(
-        directory, QwenTtsClient::DefaultVocalizationBankRequests(),
-        preset->language, true);
+    VoiceOperationResult result = ManualVoiceOperation([&]
+        { return qwenPool.RenderVocalizations(directory, QwenTtsClient::DefaultVocalizationBankRequests(), preset->language, true); },
+        "Nonverbal clip preparation did not complete. The cause is unknown.", "The nonverbal clips were prepared.");
     if (!result.succeeded)
     {
-        Notify({"Error", result.message, result.elapsedMilliseconds, 0, 0,
-            ActualQwenResource(result)});
+        Notify({"ManualError", result.message, result.elapsedMilliseconds, 0, 0, ActualQwenResource(result)});
         return result;
     }
     // What actually landed, rather than what was asked for. A partial bank is a real
@@ -493,10 +938,8 @@ VoiceOperationResult SpeechService::RenderVoiceBank(const std::string& presetId)
     VocalizationBank bank(directory);
     bank.Refresh();
     const std::size_t missing = bank.MissingKinds().size();
-    result.message = missing == 0
-        ? "Rendered every nonverbal sound for '" + preset->name + "'."
-        : "Rendered nonverbal sounds for '" + preset->name + "', but " +
-            std::to_string(missing) + " kind(s) are still missing.";
+    result.message = missing == 0 ? "Every nonverbal sound was rendered."
+                                  : "Nonverbal sounds were rendered, but " + std::to_string(missing) + " kind(s) are still missing.";
     {
         std::lock_guard lock(mutex);
         // Clips that did not exist when the voice was selected are usable now. Without
@@ -506,8 +949,7 @@ VoiceOperationResult SpeechService::RenderVoiceBank(const std::string& presetId)
             vocalizationBank.Refresh();
         }
     }
-    Notify({"Ready", result.message, result.elapsedMilliseconds, 0, 0,
-        ActualQwenResource(result)});
+    Notify({"ManualReady", result.message, result.elapsedMilliseconds, 0, 0, ActualQwenResource(result)});
     return result;
 }
 
@@ -530,17 +972,21 @@ VoiceOperationResult SpeechService::PreviewVoice(const std::string& presetId, co
         return {false, "Could not resolve the preview path.", {}, -1.0};
     }
     std::filesystem::create_directories(output.parent_path(), error);
-    Notify({"Generating", "Generating a Qwen3-TTS voice preview.", -1.0, 0, 0,
-        PlannedQwenResource(configuration)});
-    VoiceOperationResult result = qwenPool.Synthesize(text, *preset, output.string());
+    Notify({"ManualGenerating", "Generating a Qwen3-TTS voice preview.", -1.0, 0, 0, PlannedQwenResource(configuration)});
+    VoiceOperationResult result = ManualVoiceOperation([&] { return qwenPool.Synthesize(text, *preset, output.string()); },
+        "Voice preview did not complete. The cause is unknown.", "The voice preview was prepared.");
+    if (result.succeeded && !IsPlayableWavFile(output))
+        result = {false, "Voice preview did not complete. The cause is unknown.", {}, result.elapsedMilliseconds};
+    if (result.succeeded)
+        result.outputPath = output.string();
 #ifdef _WIN32
     if (result.succeeded)
     {
         PlaySoundW(output.wstring().c_str(), nullptr, SND_FILENAME | SND_ASYNC | SND_NODEFAULT);
     }
 #endif
-    Notify({result.succeeded ? "Ready" : "Error", result.message,
-        result.elapsedMilliseconds, 0, 0, ActualQwenResource(result)});
+    Notify(
+        {result.succeeded ? "ManualReady" : "ManualError", result.message, result.elapsedMilliseconds, 0, 0, ActualQwenResource(result)});
     return result;
 }
 
@@ -569,12 +1015,25 @@ VoiceOperationResult SpeechService::AssignVoice(const std::string& profileId, co
             "and fit both models to the GPU.";
     }
     Notify({"Ready", message});
+    if (assignedActiveProfile)
+    {
+        {
+            std::lock_guard lock(mutex);
+            QueueSynthesisStatusLocked();
+        }
+        DrainSynthesisNotifications();
+        RefreshSystemCueBank();
+    }
     return {true, message, {}, 0.0};
 }
 
 void SpeechService::SetEnabled(const bool value)
 {
-    enabled.store(value);
+    {
+        std::lock_guard lock(mutex);
+        enabled.store(value && !voiceShutdown);
+        QueueSynthesisStatusLocked();
+    }
     if (!value)
     {
         StopSpeaking();
@@ -586,6 +1045,9 @@ void SpeechService::SetEnabled(const bool value)
         Notify({ready.load() ? "Ready" : "Starting",
             ready.load() ? "Voice output is ready." : "Voice output is starting."});
     }
+    DrainSynthesisNotifications();
+    if (value)
+        RefreshSystemCueBank();
 }
 
 bool SpeechService::IsEnabled() const
@@ -614,13 +1076,35 @@ std::size_t SpeechService::FirstFragmentCharacters() const
         : 0;
 }
 
-void SpeechService::Speak(std::string text,
-    const runtime::AffectSnapshot affect, const std::uint64_t utteranceId, const bool latencyCritical)
+void SpeechService::Speak(
+    std::string text, const runtime::AffectSnapshot affect, const std::uint64_t utteranceId, const bool latencyCritical)
 {
     if (!enabled.load())
     {
         return;
     }
+    AdmissionHandle admission;
+    {
+        std::lock_guard lock(mutex);
+        admission = admissionGuard;
+    }
+    if (!admission)
+    {
+        static const AdmissionHandle passthrough = std::make_shared<const std::function<bool()>>([] { return true; });
+        admission = passthrough;
+    }
+    Speak(std::move(text), affect, utteranceId, latencyCritical, std::move(admission));
+}
+
+void SpeechService::Speak(std::string text, const runtime::AffectSnapshot affect, const std::uint64_t utteranceId,
+    const bool latencyCritical, AdmissionHandle admission)
+{
+    if (!enabled.load() || !admission)
+        return;
+    Utterance origin;
+    origin.admission = std::move(admission);
+    if (!AdmissionCurrent(origin))
+        return;
 
     // A reply becomes an ordered plan before anything is queued, so a cue keeps its
     // position between the phrases it was written between. Flattening first and adding
@@ -629,6 +1113,8 @@ void SpeechService::Speak(std::string text,
     int depth = 0;
     {
         std::lock_guard lock(mutex);
+        if (!enabled.load() || voiceShutdown)
+            return;
         // The reply boundary the policy needs, taken from the signal that already marks
         // one: only the first fragment of a reply is latency critical.
         if (latencyCritical)
@@ -637,21 +1123,17 @@ void SpeechService::Speak(std::string text,
             // A bank may have been installed after the preset was selected.
             // Refresh only at reply boundaries, keeping variant rotation intact
             // unless previously missing clips have appeared.
-            if (!vocalizationBank.MissingKinds().empty()) vocalizationBank.Refresh();
+            if (!vocalizationBank.MissingKinds().empty())
+                vocalizationBank.Refresh();
         }
         const auto now = std::chrono::steady_clock::now();
         const std::vector<PlannedSegment> plan = PlanSpeech(text, configuration,
-            [&](const VocalizationKind kind)
-            {
-                return vocalizationPolicy.Evaluate(
-                    kind, affect, now, vocalizationBank.Has(kind));
-            });
+            [&](const VocalizationKind kind) { return vocalizationPolicy.Evaluate(kind, affect, now, vocalizationBank.Has(kind)); });
         if (plan.empty())
         {
             return;
         }
-        while (!queue.empty() && queue.size() + plan.size() >
-            static_cast<std::size_t>(configuration.maxQueuedUtterances))
+        while (!queue.empty() && queue.size() + plan.size() > static_cast<std::size_t>(configuration.maxQueuedUtterances))
         {
             const std::uint64_t dropped = queue.front().sequence;
             queue.pop_front();
@@ -661,10 +1143,12 @@ void SpeechService::Speak(std::string text,
         for (const PlannedSegment& segment : plan)
         {
             Utterance utterance;
+            utterance.admission = origin.admission;
             utterance.affect = affect;
             utterance.generation = generation.load();
             utterance.utteranceId = utteranceId;
             utterance.sequence = nextSequence.fetch_add(1);
+            utterance.selection = SelectionLocked();
             utterance.queuedAt = now;
             if (segment.kind == SegmentKind::Vocalization)
             {
@@ -696,11 +1180,41 @@ void SpeechService::Speak(std::string text,
     condition.notify_all();
 }
 
-void SpeechService::StopSpeaking()
+void SpeechService::SetAdmissionGuard(std::function<bool()> guard)
 {
-    generation.fetch_add(1);
     {
         std::lock_guard lock(mutex);
+        admissionGuard = guard ? std::make_shared<const std::function<bool()>>(std::move(guard)) : nullptr;
+    }
+    condition.notify_all();
+}
+
+bool SpeechService::AdmissionCurrent(const Utterance& utterance)
+{
+    try
+    {
+        return !utterance.admission || (*utterance.admission)();
+    }
+    catch (...)
+    {
+        return false;
+    }
+}
+
+void SpeechService::StopSpeaking()
+{
+    bool cancelledCue = false;
+    {
+        std::lock_guard lock(mutex);
+        cancelledCue = cuePreparation.has_value() || generatingCue || systemCueSnapshot.phase == SystemCuePhase::Playing ||
+                       systemCueSnapshot.phase == SystemCuePhase::Queued;
+        cancelledCue =
+            cancelledCue || std::any_of(queue.begin(), queue.end(), [](const auto& item) { return item.systemCue.has_value(); }) ||
+            std::any_of(prepared.begin(), prepared.end(), [](const auto& entry) { return entry.second.utterance.systemCue.has_value(); });
+        cuePreparation.reset();
+        if (cancelledCue)
+            systemCueSnapshot.phase = SystemCuePhase::Cancelled;
+        generation.fetch_add(1);
         queue.clear();
         playbackOrder.Clear();
         for (const auto& [sequence, item] : prepared)
@@ -714,6 +1228,8 @@ void SpeechService::StopSpeaking()
         bufferedAudioBytes = 0;
     }
     condition.notify_all();
+    if (cancelledCue)
+        NotifyCue(SystemCuePhase::Cancelled, "System cue work was cancelled.");
 #ifdef _WIN32
     PlaySoundW(nullptr, nullptr, 0);
 #endif
@@ -783,13 +1299,24 @@ void SpeechService::CancelVoiceOperationsForShutdown()
 
 void SpeechService::RequestVoiceShutdown()
 {
-    enabled.store(false);
+    {
+        std::lock_guard lock(mutex);
+        enabled.store(false);
+        voiceShutdown = true;
+        QueueSynthesisStatusLocked();
+    }
+    DrainSynthesisNotifications();
     qwenPool.RequestShutdown();
+    condition.notify_all();
 }
 
 void SpeechService::Shutdown()
 {
-    enabled.store(false);
+    {
+        std::lock_guard lock(mutex);
+        enabled.store(false);
+        voiceShutdown = true;
+    }
     StopSpeaking();
     if (worker.joinable())
     {
@@ -996,38 +1523,30 @@ void SpeechService::Run(const std::stop_token stopToken)
     const HRESULT initialized = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
     if (FAILED(initialized))
     {
-        Notify({"Error", "Windows speech could not initialize.", -1.0, 0, 0,
-            WindowsSapiResource});
+        Notify({"Error", "Windows speech could not initialize.", -1.0, 0, 0, WindowsSapiResource});
         return;
     }
 
     ISpVoice* voice = nullptr;
-    const HRESULT created = CoCreateInstance(
-        CLSID_SpVoice, nullptr, CLSCTX_ALL, IID_ISpVoice,
-        reinterpret_cast<void**>(&voice));
+    const HRESULT created = CoCreateInstance(CLSID_SpVoice, nullptr, CLSCTX_ALL, IID_ISpVoice, reinterpret_cast<void**>(&voice));
     if (FAILED(created) || voice == nullptr)
     {
-        Notify({"Error", "No Windows SAPI voice is available.", -1.0, 0, 0,
-            WindowsSapiResource});
+        Notify({"Error", "No Windows SAPI voice is available.", -1.0, 0, 0, WindowsSapiResource});
         CoUninitialize();
         return;
     }
 
     voice->SetVolume(static_cast<USHORT>(configuration.volume));
     ready.store(true);
-    Notify({enabled.load() ? "Ready" : "Disabled",
-        enabled.load() ? "Windows SAPI voice is ready." : "Voice output is off.",
-        -1.0, 0, 0, WindowsSapiResource});
+    Notify({enabled.load() ? "Ready" : "Disabled", enabled.load() ? "Windows SAPI voice is ready." : "Voice output is off.", -1.0, 0, 0,
+        WindowsSapiResource});
 
     while (!stopToken.stop_requested())
     {
         PreparedUtterance preparedUtterance;
         {
             std::unique_lock lock(mutex);
-            condition.wait(lock, stopToken, [this]
-            {
-                return playbackOrder.FrontReady().has_value();
-            });
+            condition.wait(lock, stopToken, [this] { return playbackOrder.FrontReady().has_value(); });
             if (stopToken.stop_requested())
             {
                 break;
@@ -1037,19 +1556,35 @@ void SpeechService::Run(const std::stop_token stopToken)
                 continue;
             }
             const std::optional<std::uint64_t> next = playbackOrder.PopFrontReady();
-            if (!next.has_value()) continue;
+            if (!next.has_value())
+                continue;
             const std::uint64_t sequence = *next;
             auto found = prepared.find(sequence);
-            if (found == prepared.end()) continue;
+            if (found == prepared.end())
+                continue;
             preparedUtterance = std::move(found->second);
             prepared.erase(found);
-            bufferedAudioBytes = preparedUtterance.bufferedBytes >= bufferedAudioBytes
-                ? 0
-                : bufferedAudioBytes - preparedUtterance.bufferedBytes;
+            bufferedAudioBytes =
+                preparedUtterance.bufferedBytes >= bufferedAudioBytes ? 0 : bufferedAudioBytes - preparedUtterance.bufferedBytes;
+            playingAudio = true;
         }
+        struct PlaybackGuard
+        {
+            std::mutex& mutex;
+            bool& playing;
+            std::condition_variable_any& condition;
+            ~PlaybackGuard()
+            {
+                {
+                    std::lock_guard lock(mutex);
+                    playing = false;
+                }
+                condition.notify_all();
+            }
+        } playbackGuard{mutex, playingAudio, condition};
         condition.notify_all();
         const Utterance& utterance = preparedUtterance.utterance;
-        if (!StillCurrent(utterance.generation, generation.load(), true))
+        if (!AdmissionCurrent(utterance) || !StillCurrent(utterance.generation, generation.load(), enabled.load()))
         {
             ReleaseAudio(preparedUtterance.audioPath, preparedUtterance.lifetime);
             continue;
@@ -1060,10 +1595,13 @@ void SpeechService::Run(const std::stop_token stopToken)
         struct ActiveGuard
         {
             std::atomic<std::uint64_t>& id;
-            ~ActiveGuard() { id.store(0); }
+            ~ActiveGuard()
+            {
+                id.store(0);
+            }
         } activeGuard{activeUtteranceId};
 
-        if (utterance.vocalization.has_value())
+        if (utterance.vocalization.has_value() || utterance.systemCue.has_value())
         {
             // No SAPI fallback below this. A cue has no words, and a cue that cannot
             // play is silence -- which is the correct outcome, and the one thing this
@@ -1071,51 +1609,48 @@ void SpeechService::Run(const std::stop_token stopToken)
             PlayVocalizationClip(preparedUtterance);
             continue;
         }
-        if (preparedUtterance.qwenAttempted && preparedUtterance.result.succeeded &&
-            PlayPreparedQwen(preparedUtterance))
+        if (preparedUtterance.qwenAttempted && preparedUtterance.result.succeeded && PlayPreparedQwen(preparedUtterance))
         {
             continue;
         }
         if (preparedUtterance.qwenAttempted && !preparedUtterance.result.succeeded)
         {
-            Notify({"Fallback", preparedUtterance.result.message +
-                " Using Windows voice for this phrase.",
-                preparedUtterance.result.elapsedMilliseconds, 0, utterance.utteranceId,
-                ActualQwenResource(preparedUtterance.result)});
+            Notify({"Fallback", "Voice synthesis failed for this reply. The text remains available. The cause is unknown.",
+                preparedUtterance.result.elapsedMilliseconds, 0, utterance.utteranceId, WindowsSapiResource});
         }
 
         const std::uint64_t activeGeneration = utterance.generation;
         const std::wstring speechText = Utf8ToWide(utterance.text);
         if (speechText.empty())
         {
-            Notify({"Error", "The reply could not be converted for speech.", -1.0, 0, 0,
-                WindowsSapiResource});
+            Notify({"Error", "The reply could not be converted for speech.", -1.0, 0, 0, WindowsSapiResource});
             continue;
         }
-        voice->SetRate(std::clamp<long>(
-            static_cast<long>(configuration.rate) + AffectRateAdjustment(utterance.affect.state),
-            -10L, 10L));
+        voice->SetRate(std::clamp<long>(static_cast<long>(configuration.rate) + AffectRateAdjustment(utterance.affect.state), -10L, 10L));
         const auto startedAt = std::chrono::steady_clock::now();
-        Notify({"FirstAudioPlayed", "Windows SAPI began playing the phrase.",
-            ElapsedMilliseconds(utterance.queuedAt), 0, utterance.utteranceId,
-            WindowsSapiResource});
-        Notify({"Speaking", "Reading the assistant reply aloud.", -1.0, 0,
-            utterance.utteranceId,
-            WindowsSapiResource});
-        const HRESULT spoke = voice->Speak(
-            speechText.c_str(), static_cast<DWORD>(SPF_ASYNC | SPF_IS_NOT_XML), nullptr);
+        if (!AdmissionCurrent(utterance))
+            continue;
+        const HRESULT spoke = voice->Speak(speechText.c_str(), static_cast<DWORD>(SPF_ASYNC | SPF_IS_NOT_XML), nullptr);
         if (FAILED(spoke))
         {
-            Notify({"Error", "Windows SAPI could not start the utterance.", -1.0, 0, 0,
-                WindowsSapiResource});
+            Notify({"Error", "Windows SAPI could not start the utterance.", -1.0, 0, 0, WindowsSapiResource});
             continue;
         }
         ArmBargeIn();
 
         bool cancelled = false;
+        bool playbackReported = false;
         while (!stopToken.stop_requested())
         {
-            if (generation.load() != activeGeneration || !enabled.load())
+            SPVOICESTATUS status{};
+            if (!playbackReported && SUCCEEDED(voice->GetStatus(&status, nullptr)) && status.dwRunningState == SPRS_IS_SPEAKING)
+            {
+                Notify({"FirstAudioPlayed", "Windows SAPI began playing the phrase.", ElapsedMilliseconds(utterance.queuedAt), 0,
+                    utterance.utteranceId, WindowsSapiResource});
+                Notify({"Speaking", "Reading the assistant reply aloud.", -1.0, 0, utterance.utteranceId, WindowsSapiResource});
+                playbackReported = true;
+            }
+            if (generation.load() != activeGeneration || !enabled.load() || !AdmissionCurrent(utterance))
             {
                 voice->Speak(nullptr, SPF_PURGEBEFORESPEAK, nullptr);
                 cancelled = true;
@@ -1134,11 +1669,11 @@ void SpeechService::Run(const std::stop_token stopToken)
             break;
         }
         const double elapsed = ElapsedMilliseconds(startedAt);
+        if (!AdmissionCurrent(utterance))
+            continue;
         Notify({interrupted ? "Interrupted" : (cancelled ? "Stopped" : "Ready"),
-            interrupted
-                ? "You started speaking, so I stopped."
-                : (cancelled ? "Speech was stopped." : "Speech completed."),
-            elapsed, 0, 0, WindowsSapiResource});
+            interrupted ? "You started speaking, so I stopped." : (cancelled ? "Speech was stopped." : "Speech completed."), elapsed, 0, 0,
+            WindowsSapiResource});
     }
 
     voice->Speak(nullptr, SPF_PURGEBEFORESPEAK, nullptr);
@@ -1164,7 +1699,7 @@ std::vector<SpeechService::Utterance> SpeechService::CollectBatchCompanions(cons
     // A cue is an ordering boundary, never a member of a synthesis batch. The batch
     // maps generated clips onto playback slots by position, and a bank clip was never
     // generated -- counting it would shift every phrase after it onto the wrong audio.
-    if (leader.vocalization.has_value())
+    if (leader.vocalization.has_value() || leader.systemCue.has_value())
     {
         return companions;
     }
@@ -1194,26 +1729,24 @@ std::vector<SpeechService::Utterance> SpeechService::CollectBatchCompanions(cons
     const int maxPhrases = std::max(2, configuration.qwenMaxBatchPhrases);
     const int maxCharacters = std::max(64, configuration.qwenMaxBatchCharacters);
     std::size_t characters = leader.text.size();
-    while (!queue.empty() &&
-        static_cast<int>(companions.size()) + 1 < maxPhrases)
+    while (!queue.empty() && static_cast<int>(companions.size()) + 1 < maxPhrases)
     {
         const Utterance& candidate = queue.front();
         // A phrase from a superseded reply, a different voice, or the start of the next
         // reply does not belong in this call. Mixing generations would let a cancelled
         // reply's text reach the card inside a batch that survives the cancellation.
-        if (candidate.vocalization.has_value())
+        if (candidate.vocalization.has_value() || candidate.systemCue.has_value())
         {
             break;
         }
-        if (candidate.generation != leader.generation ||
-            candidate.latencyCritical ||
-            !candidate.preset.has_value() ||
+        if (candidate.generation != leader.generation || candidate.selection.profileId != leader.selection.profileId ||
+            candidate.admission != leader.admission || candidate.selection.presetId != leader.selection.presetId ||
+            candidate.selection.epoch != leader.selection.epoch || candidate.latencyCritical || !candidate.preset.has_value() ||
             candidate.preset->id != leader.preset->id)
         {
             break;
         }
-        if (characters + candidate.text.size() >
-            static_cast<std::size_t>(maxCharacters))
+        if (characters + candidate.text.size() > static_cast<std::size_t>(maxCharacters))
         {
             break;
         }
@@ -1272,16 +1805,36 @@ void SpeechService::VerifyInferenceBackend(const VoiceOperationResult& result, c
 
 void SpeechService::PublishGenerated(const Utterance& utterance, PreparedUtterance item, const int depth)
 {
-    const bool stale = utterance.generation != generation.load() || !enabled.load();
+    bool stale = false;
+    bool prepareCues = false;
+    bool cancelledCue = false;
     const VoiceOperationResult completedResult = item.result;
+    bool admitted = AdmissionCurrent(utterance);
     {
-        std::lock_guard lock(mutex);
-        if (generatingCount > 0) --generatingCount;
-        if (completedResult.succeeded && !completedResult.audioCacheHit &&
-            completedResult.realTimeFactor > 0.0)
+        std::unique_lock lock(mutex);
+        stale = utterance.generation != generation.load() || !enabled.load() || voiceShutdown;
+        if (utterance.systemCue && !CueSelectionCurrentLocked(utterance))
+            stale = true;
+        if (item.qwenAttempted && admitted)
+            ObserveSynthesisLocked(utterance, completedResult, depth, lock);
+        lock.unlock();
+        admitted = AdmissionCurrent(utterance);
+        lock.lock();
+        stale = !admitted || utterance.generation != generation.load() || !enabled.load() || voiceShutdown;
+        if (utterance.systemCue && !CueSelectionCurrentLocked(utterance))
+            stale = true;
+        if (!stale && item.qwenAttempted && completedResult.succeeded && !completedResult.audioCacheHit &&
+            CueSelectionCurrentLocked(utterance) && utterance.preset)
         {
-            const std::string& device = completedResult.deviceName.empty()
-                ? completedResult.device : completedResult.deviceName;
+            const auto found = synthesisStates.find({utterance.selection.profileId, utterance.selection.presetId});
+            prepareCues = found != synthesisStates.end() && found->second.state == SynthesisHealth::Available &&
+                          utterance.attemptId > found->second.failureWatermark;
+        }
+        if (generatingCount > 0)
+            --generatingCount;
+        if (completedResult.succeeded && !completedResult.audioCacheHit && completedResult.realTimeFactor > 0.0)
+        {
+            const std::string& device = completedResult.deviceName.empty() ? completedResult.device : completedResult.deviceName;
             measuredRealTimeFactor[device] = completedResult.realTimeFactor;
         }
         if (!stale)
@@ -1290,10 +1843,22 @@ void SpeechService::PublishGenerated(const Utterance& utterance, PreparedUtteran
             prepared.emplace(utterance.sequence, std::move(item));
             playbackOrder.MarkReady(utterance.sequence);
         }
+        else
+        {
+            playbackOrder.Remove(utterance.sequence);
+            if (utterance.systemCue && CueSelectionCurrentLocked(utterance))
+            {
+                systemCueSnapshot.phase = SystemCuePhase::Cancelled;
+                cancelledCue = true;
+            }
+        }
     }
+    DrainSynthesisNotifications();
     if (stale)
     {
         ReleaseAudio(item.audioPath, item.lifetime);
+        if (cancelledCue)
+            NotifyCue(SystemCuePhase::Cancelled, "System cue work was cancelled.");
     }
     else if (utterance.preset.has_value() && completedResult.succeeded)
     {
@@ -1304,58 +1869,64 @@ void SpeechService::PublishGenerated(const Utterance& utterance, PreparedUtteran
         // or slow queueing, and none of them can be recovered afterwards.
         std::ostringstream conditions;
         conditions << (completedResult.audioCacheHit ? "Reflex audio cache hit. " : "")
-            << "device=" << (completedResult.deviceName.empty()
-                ? completedResult.device : completedResult.deviceName)
-            << " dtype=" << completedResult.dtype
-            << " attention=" << completedResult.attentionBackend
-            << " resident=" << (completedResult.modelResident ? "yes" : "no")
-            << " prompt_cached=" << (completedResult.clonePromptCached ? "yes" : "no")
-            << " queue_depth=" << depth
-            << " vram=" << completedResult.vramUsedMiB
-            << '/' << completedResult.vramTotalMiB << "MiB"
-            << " gpu_util=" << completedResult.gpuUtilizationPercent << '%'
-            << " audio=" << completedResult.audioDurationMilliseconds << "ms"
-            << " rtf=" << completedResult.realTimeFactor
-                << " backend=" << (completedResult.backend.empty()
-                    ? std::string("standard") : completedResult.backend)
-                << " cuda_graph=" << (completedResult.cudaGraph ? "yes" : "no")
-                << " talker_graph=" << (completedResult.talkerGraph ? "yes" : "no");
-        SpeechEvent profile{"Profile", conditions.str(),
-            completedResult.elapsedMilliseconds, depth,
-            utterance.utteranceId, ActualQwenResource(completedResult)};
-        profile.timings = {
-            // The wait that actually happened, ahead of the worker's own lock wait.
+                   << "device=" << (completedResult.deviceName.empty() ? completedResult.device : completedResult.deviceName)
+                   << " dtype=" << completedResult.dtype << " attention=" << completedResult.attentionBackend
+                   << " resident=" << (completedResult.modelResident ? "yes" : "no")
+                   << " prompt_cached=" << (completedResult.clonePromptCached ? "yes" : "no") << " queue_depth=" << depth
+                   << " vram=" << completedResult.vramUsedMiB << '/' << completedResult.vramTotalMiB << "MiB"
+                   << " gpu_util=" << completedResult.gpuUtilizationPercent << '%' << " audio=" << completedResult.audioDurationMilliseconds
+                   << "ms"
+                   << " rtf=" << completedResult.realTimeFactor
+                   << " backend=" << (completedResult.backend.empty() ? std::string("standard") : completedResult.backend)
+                   << " cuda_graph=" << (completedResult.cudaGraph ? "yes" : "no")
+                   << " talker_graph=" << (completedResult.talkerGraph ? "yes" : "no");
+        SpeechEvent profile{"Profile", conditions.str(), completedResult.elapsedMilliseconds, depth, utterance.utteranceId,
+            ActualQwenResource(completedResult)};
+        profile.timings = {// The wait that actually happened, ahead of the worker's own lock wait.
             // The two are not interchangeable: the pool chooses a worker before the
             // worker ever sees the request, so the worker-side number is near zero by
             // construction and reading it as queue time hid a queue eight phrases deep
             // for the whole 2026-09-02 session.
-            {"worker_pool_wait", completedResult.workerPoolWaitMilliseconds},
-            {"python_lock_wait", completedResult.workerQueueMilliseconds},
-            {"model_ready", completedResult.modelReadyMilliseconds},
-            {"clone_prompt_ready", completedResult.clonePromptMilliseconds},
-            {"generation", completedResult.generationMilliseconds},
-            {"wav_memory_encode", completedResult.wavWriteMilliseconds},
-            {"cpp_response_received", completedResult.cppResponseMilliseconds, true}
-        };
+            {"worker_pool_wait", completedResult.workerPoolWaitMilliseconds}, {"python_lock_wait", completedResult.workerQueueMilliseconds},
+            {"model_ready", completedResult.modelReadyMilliseconds}, {"clone_prompt_ready", completedResult.clonePromptMilliseconds},
+            {"generation", completedResult.generationMilliseconds}, {"wav_memory_encode", completedResult.wavWriteMilliseconds},
+            {"cpp_response_received", completedResult.cppResponseMilliseconds, true}};
         Notify(std::move(profile));
         VerifyInferenceBackend(completedResult, utterance.utteranceId);
-        Notify({"FirstAudioReady", "The phrase's first playable audio is ready.",
-            ElapsedMilliseconds(utterance.queuedAt), depth, utterance.utteranceId,
-            ActualQwenResource(completedResult)});
-        Notify({"Generated", "Qwen3-TTS phrase audio is ready for ordered playback.",
-            completedResult.elapsedMilliseconds, depth, utterance.utteranceId,
-            ActualQwenResource(completedResult)});
+        Notify({"FirstAudioReady", "The phrase's first playable audio is ready.", ElapsedMilliseconds(utterance.queuedAt), depth,
+            utterance.utteranceId, ActualQwenResource(completedResult)});
+        Notify({"Generated", "Qwen3-TTS phrase audio is ready for ordered playback.", completedResult.elapsedMilliseconds, depth,
+            utterance.utteranceId, ActualQwenResource(completedResult)});
     }
     condition.notify_all();
+    if (prepareCues && AdmissionCurrent(utterance))
+    {
+        RefreshSystemCueBank();
+        std::lock_guard lock(mutex);
+        const auto found = synthesisStates.find({utterance.selection.profileId, utterance.selection.presetId});
+        if (CueSelectionCurrentLocked(utterance) && found != synthesisStates.end() && found->second.state == SynthesisHealth::Available &&
+            utterance.attemptId > found->second.failureWatermark && systemCueBank && !cuePreparation && attemptedCueKeys.size() < 64 &&
+            !attemptedCueKeys.contains(systemCueBank->Key()))
+        {
+            attemptedCueKeys.insert(systemCueBank->Key());
+            auto missing = systemCueBank->MissingKinds();
+            if (!missing.empty())
+                cuePreparation = CuePreparation{utterance, *systemCueBank, std::move(missing), 0};
+            condition.notify_all();
+        }
+    }
 }
 
 void SpeechService::DiscardBatch(const std::vector<Utterance>& group, const double wallMilliseconds, const int depth)
 {
-    if (group.empty()) return;
+    if (group.empty())
+        return;
     {
         std::lock_guard lock(mutex);
-        if (generatingCount >= group.size()) generatingCount -= group.size();
-        else generatingCount = 0;
+        if (generatingCount >= group.size())
+            generatingCount -= group.size();
+        else
+            generatingCount = 0;
         for (const Utterance& utterance : group)
         {
             playbackOrder.Remove(utterance.sequence);
@@ -1366,9 +1937,9 @@ void SpeechService::DiscardBatch(const std::vector<Utterance>& group, const doub
     // call it while still holding it: a batch that finished after its reply was
     // interrupted deadlocked this thread on itself, and every later Speak, Submit, and
     // shutdown then waited on the same mutex forever.
-    Notify({"Stopped",
-        "A batch of " + std::to_string(group.size()) +
-            " phrases was discarded after the reply was cancelled.",
+    if (!AdmissionCurrent(group.front()))
+        return;
+    Notify({"Stopped", "A batch of " + std::to_string(group.size()) + " phrases was discarded after the reply was cancelled.",
         wallMilliseconds, depth, group.front().utteranceId});
 }
 
@@ -1389,10 +1960,15 @@ bool SpeechService::SynthesizeBatch(std::vector<Utterance>& group, const int dep
     }
 
     const std::uint64_t batchGeneration = group.front().generation;
-    Notify({"Generating",
-        "Synthesizing " + std::to_string(group.size()) +
-            " queued phrases in one batched call.",
-        -1.0, depth, group.front().utteranceId, PlannedQwenResource(configuration)});
+    if (!BeginSynthesis(group.front()))
+    {
+        DiscardBatch(group, -1.0, depth);
+        return true;
+    }
+    for (Utterance& utterance : group)
+        utterance.attemptId = group.front().attemptId;
+    Notify({"Generating", "Synthesizing " + std::to_string(group.size()) + " queued phrases in one batched call.", -1.0, depth,
+        group.front().utteranceId, PlannedQwenResource(configuration)});
 
     const auto startedAt = std::chrono::steady_clock::now();
     std::vector<VoiceOperationResult> results;
@@ -1400,21 +1976,27 @@ bool SpeechService::SynthesizeBatch(std::vector<Utterance>& group, const int dep
     {
         results = qwenPool.SynthesizePcmBatch(texts, preset);
     }
-    catch (const std::exception& exception)
+    catch (...)
     {
-        Notify({"BatchFallback",
-            std::string("Batched synthesis threw; using the per-phrase path: ") +
-                exception.what(), -1.0, depth, group.front().utteranceId});
-        return false;
+        results = {{false, "Voice synthesis failed for this reply. The text remains available. The cause is unknown.", {}, -1.0}};
     }
-    const double wallMilliseconds = std::chrono::duration<double, std::milli>(
-        std::chrono::steady_clock::now() - startedAt).count();
+    const double wallMilliseconds = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - startedAt).count();
 
     // Anything other than one successful clip per phrase, in order, is a fallback. The
     // mapping from result to playback slot is positional, so a short or failed vector
     // cannot be partially used without risking audio played against the wrong text.
     if (results.size() != group.size())
     {
+        const bool declined = !results.empty() && results.front().batchDeclined;
+        if (!declined)
+        {
+            const VoiceOperationResult failed{false, {}, {}, wallMilliseconds};
+            {
+                std::unique_lock lock(mutex);
+                ObserveSynthesisLocked(group.front(), failed, depth, lock);
+            }
+            DrainSynthesisNotifications();
+        }
         if (!results.empty())
         {
             // A decline is the worker saying the card has no room for a batch right now
@@ -1422,24 +2004,23 @@ bool SpeechService::SynthesizeBatch(std::vector<Utterance>& group, const int dep
             // Asking again on the very next phrase costs a round trip to hear the same
             // answer, so batching rests for a minute and per-phrase carries on.
             std::lock_guard lock(mutex);
-            batchingSuspendedUntil =
-                std::chrono::steady_clock::now() + std::chrono::seconds(60);
+            batchingSuspendedUntil = std::chrono::steady_clock::now() + std::chrono::seconds(60);
         }
-        Notify({"BatchFallback",
-            results.empty()
-                ? std::string("The batch returned nothing; using the per-phrase path.")
-                : "The batch was declined; using the per-phrase path: " +
-                    results.front().message,
-            wallMilliseconds, depth, group.front().utteranceId});
+        Notify({"BatchFallback", "Batched synthesis did not complete; using the per-phrase path.", wallMilliseconds, depth,
+            group.front().utteranceId});
         return false;
     }
     for (const VoiceOperationResult& result : results)
     {
         if (!result.succeeded)
         {
-            Notify({"BatchFallback",
-                "A batched phrase failed; using the per-phrase path: " + result.message,
-                wallMilliseconds, depth, group.front().utteranceId});
+            {
+                std::unique_lock lock(mutex);
+                ObserveSynthesisLocked(group.front(), result, depth, lock);
+            }
+            DrainSynthesisNotifications();
+            Notify({"BatchFallback", "Batched synthesis did not complete; using the per-phrase path.", wallMilliseconds, depth,
+                group.front().utteranceId});
             return false;
         }
     }
@@ -1448,7 +2029,7 @@ bool SpeechService::SynthesizeBatch(std::vector<Utterance>& group, const int dep
     // dropped rather than published: a batch is slow enough that a user who interrupted
     // during it has certainly moved on, and stale audio arriving afterwards is exactly
     // what ordered playback would otherwise let through.
-    if (batchGeneration != generation.load() || !enabled.load())
+    if (batchGeneration != generation.load() || !enabled.load() || !AdmissionCurrent(group.front()))
     {
         DiscardBatch(group, wallMilliseconds, depth);
         return true;
@@ -1463,43 +2044,30 @@ bool SpeechService::SynthesizeBatch(std::vector<Utterance>& group, const int dep
         }
     }
     const double generationMilliseconds = results.front().generationMilliseconds;
-    const double batchFactor = audioMilliseconds > 0.0
-        ? generationMilliseconds / audioMilliseconds
-        : -1.0;
+    const double batchFactor = audioMilliseconds > 0.0 ? generationMilliseconds / audioMilliseconds : -1.0;
 
     {
         // What the batch actually bought, in the terms the decision was made in. A
         // real-time factor at or above one means the queue still cannot drain and the
         // ceilings need revisiting; below one it can.
         std::ostringstream summary;
-        summary << "phrases=" << group.size()
-            << " characters=" << characters
-            << " generation_ms=" << generationMilliseconds
-            << " audio_ms=" << audioMilliseconds
-            << " batch_rtf=" << batchFactor
-            << " peak_vram_mib=" << results.front().peakVramMiB
-            << " device=" << (results.front().deviceName.empty()
-                ? results.front().device : results.front().deviceName)
-            << " queue_depth_before=" << depth;
+        summary << "phrases=" << group.size() << " characters=" << characters << " generation_ms=" << generationMilliseconds
+                << " audio_ms=" << audioMilliseconds << " batch_rtf=" << batchFactor << " peak_vram_mib=" << results.front().peakVramMiB
+                << " device=" << (results.front().deviceName.empty() ? results.front().device : results.front().deviceName)
+                << " queue_depth_before=" << depth;
         std::size_t remaining = 0;
         {
             std::lock_guard lock(mutex);
             remaining = queue.size();
         }
         summary << " queue_depth_after=" << remaining
-            << " backend=" << (results.front().backend.empty()
-                ? std::string("standard") : results.front().backend)
-            << " cuda_graph=" << (results.front().cudaGraph ? "yes" : "no")
-            << " talker_graph=" << (results.front().talkerGraph ? "yes" : "no")
-            << " fallback=no";
-        SpeechEvent batch{"Batch", summary.str(), generationMilliseconds,
-            static_cast<int>(remaining), group.front().utteranceId,
+                << " backend=" << (results.front().backend.empty() ? std::string("standard") : results.front().backend)
+                << " cuda_graph=" << (results.front().cudaGraph ? "yes" : "no")
+                << " talker_graph=" << (results.front().talkerGraph ? "yes" : "no") << " fallback=no";
+        SpeechEvent batch{"Batch", summary.str(), generationMilliseconds, static_cast<int>(remaining), group.front().utteranceId,
             ActualQwenResource(results.front())};
-        batch.timings = {
-            {"batch_generation", generationMilliseconds},
-            {"batch_audio_duration", audioMilliseconds},
-            {"batch_wall_clock", wallMilliseconds, true}
-        };
+        batch.timings = {{"batch_generation", generationMilliseconds}, {"batch_audio_duration", audioMilliseconds},
+            {"batch_wall_clock", wallMilliseconds, true}};
         Notify(std::move(batch));
     }
 
@@ -1510,14 +2078,11 @@ bool SpeechService::SynthesizeBatch(std::vector<Utterance>& group, const int dep
         item.qwenAttempted = true;
         item.result = std::move(results[index]);
         item.bufferedBytes = item.result.audioBytes.size();
-        const std::uintmax_t maximumBytes =
-            static_cast<std::uintmax_t>(configuration.qwenMaxBufferedAudioMiB) *
-            1024U * 1024U;
+        const std::uintmax_t maximumBytes = static_cast<std::uintmax_t>(configuration.qwenMaxBufferedAudioMiB) * 1024U * 1024U;
         if (item.bufferedBytes > maximumBytes)
         {
             item.result.succeeded = false;
-            item.result.message =
-                "Generated audio exceeded the configured memory buffer limit.";
+            item.result.message = "Generated audio exceeded the configured memory buffer limit.";
             item.result.audioBytes.clear();
             item.bufferedBytes = 0;
         }
@@ -1530,7 +2095,12 @@ void SpeechService::SynthesizeOne(Utterance utterance, const int depth)
 {
     PreparedUtterance item;
     item.utterance = utterance;
-    if (utterance.vocalization.has_value())
+    if (!AdmissionCurrent(utterance))
+    {
+        PublishGenerated(utterance, std::move(item), depth);
+        return;
+    }
+    if (utterance.vocalization.has_value() || utterance.systemCue.has_value())
     {
         // Already rendered, months ago, when the voice was made. That is the whole
         // point of a bank: a laugh that has to be generated first arrives after the
@@ -1548,49 +2118,55 @@ void SpeechService::SynthesizeOne(Utterance utterance, const int depth)
         std::error_code error;
         if (configuration.bQwenDirectPcm)
         {
-            Notify({"Generating", "Synthesizing the phrase into bounded memory.",
-                -1.0, depth, utterance.utteranceId,
+            Notify({"Generating", "Synthesizing the phrase into bounded memory.", -1.0, depth, utterance.utteranceId,
                 PlannedQwenResource(configuration)});
-            item.result = qwenPool.SynthesizePcm(
-                utterance.text, *utterance.preset, utterance.latencyCritical);
+            if (BeginSynthesis(utterance))
+                item.result =
+                    TrySynthesis([&] { return qwenPool.SynthesizePcm(utterance.text, *utterance.preset, utterance.latencyCritical); });
         }
         else
         {
             item.audioPath = std::filesystem::absolute(
                 presetStore.Root() / "Playback" /
-                    (utterance.preset->id + "-" +
-                     std::to_string(utterance.generation) + "-" +
-                     std::to_string(utterance.sequence) + ".wav"), error).lexically_normal();
+                    (utterance.preset->id + "-" + std::to_string(utterance.generation) + "-" + std::to_string(utterance.sequence) + ".wav"),
+                error)
+                                 .lexically_normal();
             if (error)
             {
-                item.result = {false, "The Qwen playback path could not be resolved.",
-                    {}, -1.0};
+                item.result = {false, "The Qwen playback path could not be resolved.", {}, -1.0};
             }
             else
             {
                 std::filesystem::create_directories(item.audioPath.parent_path(), error);
-                Notify({"Generating", "Synthesizing a phrase ahead with Qwen3-TTS.",
-                    -1.0, depth, utterance.utteranceId,
+                Notify({"Generating", "Synthesizing a phrase ahead with Qwen3-TTS.", -1.0, depth, utterance.utteranceId,
                     PlannedQwenResource(configuration)});
-                item.result = qwenPool.Synthesize(
-                    utterance.text, *utterance.preset, item.audioPath.string(),
-                    utterance.latencyCritical);
+                if (BeginSynthesis(utterance))
+                    item.result = TrySynthesis(
+                        [&]
+                        {
+                            return qwenPool.Synthesize(
+                                utterance.text, *utterance.preset, item.audioPath.string(), utterance.latencyCritical);
+                        });
             }
         }
+        item.utterance = utterance;
+        if (!item.result.succeeded)
+            item.result.message = "Voice synthesis failed for this reply. The text remains available. The cause is unknown.";
         if (item.result.succeeded)
         {
-            item.bufferedBytes = configuration.bQwenDirectPcm
-                ? item.result.audioBytes.size()
-                : std::filesystem::file_size(item.audioPath, error);
-            if (error) item.bufferedBytes = 0;
-            const std::uintmax_t maximumBytes =
-                static_cast<std::uintmax_t>(configuration.qwenMaxBufferedAudioMiB) *
-                1024U * 1024U;
+            item.bufferedBytes =
+                configuration.bQwenDirectPcm ? item.result.audioBytes.size() : std::filesystem::file_size(item.audioPath, error);
+            if (error || item.bufferedBytes == 0)
+            {
+                item.result.succeeded = false;
+                item.result.message = "Voice synthesis failed for this reply. The text remains available. The cause is unknown.";
+                item.bufferedBytes = 0;
+            }
+            const std::uintmax_t maximumBytes = static_cast<std::uintmax_t>(configuration.qwenMaxBufferedAudioMiB) * 1024U * 1024U;
             if (item.bufferedBytes > maximumBytes)
             {
                 item.result.succeeded = false;
-                item.result.message =
-                    "Generated audio exceeded the configured memory buffer limit.";
+                item.result.message = "Generated audio exceeded the configured memory buffer limit.";
                 item.result.audioBytes.clear();
                 item.bufferedBytes = 0;
             }
@@ -1600,6 +2176,94 @@ void SpeechService::SynthesizeOne(Utterance utterance, const int depth)
     PublishGenerated(utterance, std::move(item), depth);
 }
 
+void SpeechService::PrepareSystemCue()
+{
+    CuePreparation work;
+    {
+        std::lock_guard lock(mutex);
+        if (!cuePreparation || !CueSelectionCurrentLocked(cuePreparation->origin))
+        {
+            cuePreparation.reset();
+            generatingCue = false;
+            condition.notify_all();
+            return;
+        }
+        work = *cuePreparation;
+        systemCueSnapshot.phase = SystemCuePhase::Preparing;
+    }
+    NotifyCue(SystemCuePhase::Preparing, "Preparing a missing approved system cue.");
+    if (!AdmissionCurrent(work.origin))
+    {
+        bool cancelled = false;
+        {
+            std::lock_guard lock(mutex);
+            if (cuePreparation && cuePreparation->origin.selection.epoch == work.origin.selection.epoch &&
+                cuePreparation->bank.Key() == work.bank.Key() && cuePreparation->origin.admission == work.origin.admission)
+            {
+                cuePreparation.reset();
+                if (CueSelectionCurrentLocked(work.origin))
+                {
+                    systemCueSnapshot.phase = SystemCuePhase::Cancelled;
+                    cancelled = true;
+                }
+            }
+            generatingCue = false;
+        }
+        condition.notify_all();
+        if (cancelled)
+            NotifyCue(SystemCuePhase::Cancelled, "System cue work was cancelled.");
+        return;
+    }
+    {
+        std::lock_guard lock(mutex);
+        if (!CueSelectionCurrentLocked(work.origin))
+        {
+            generatingCue = false;
+            condition.notify_all();
+            return;
+        }
+    }
+    const auto kind = work.missing[work.next];
+    const auto& catalog = ApprovedSystemCues();
+    const auto definition = std::find_if(catalog.begin(), catalog.end(), [kind](const auto& cue) { return cue.kind == kind; });
+    const auto scratch = work.bank.ScratchPath(kind);
+    std::error_code error;
+    std::filesystem::create_directories(work.bank.Directory(), error);
+    VoiceOperationResult result;
+    if (!error && definition != catalog.end() && work.origin.preset && AdmissionCurrent(work.origin))
+        result = qwenPool.TrySynthesizeSystemCue(std::string(definition->phrase), *work.origin.preset, scratch.string());
+    const auto verifiedBank = work.origin.preset
+                                  ? SystemCueBank::ForVoice(presetStore.Root(), work.origin.selection.profileId, *work.origin.preset)
+                                  : std::nullopt;
+    SystemCuePhase phase = SystemCuePhase::Cancelled;
+    bool publishEvent = false;
+    const bool admitted = AdmissionCurrent(work.origin);
+    {
+        std::lock_guard lock(mutex);
+        if (cuePreparation && cuePreparation->bank.Key() == work.bank.Key() &&
+            cuePreparation->origin.selection.epoch == work.origin.selection.epoch && CueSelectionCurrentLocked(work.origin))
+        {
+            const bool sameContent = verifiedBank && verifiedBank->Key() == work.bank.Key();
+            const bool published = admitted && result.succeeded && sameContent && work.bank.Publish(kind, scratch);
+            phase = !admitted ? SystemCuePhase::Cancelled : published ? SystemCuePhase::Prepared : SystemCuePhase::PreparationFailed;
+            if (!sameContent)
+                systemCueBank.reset();
+            systemCueSnapshot.readyClips = sameContent ? ApprovedSystemCues().size() - work.bank.MissingKinds().size() : 0;
+            systemCueSnapshot.phase = phase;
+            if (!published || ++cuePreparation->next >= cuePreparation->missing.size())
+                cuePreparation.reset();
+            publishEvent = true;
+        }
+        generatingCue = false;
+    }
+    std::filesystem::remove(scratch, error);
+    if (publishEvent)
+        NotifyCue(phase, phase == SystemCuePhase::Prepared
+                             ? "An approved system cue was cached."
+                             : "System cue preparation did not complete. Existing valid clips remain available.");
+    condition.notify_all();
+}
+
 void SpeechService::Generate(const std::stop_token stopToken)
 {
     while (!stopToken.stop_requested())
@@ -1607,28 +2271,45 @@ void SpeechService::Generate(const std::stop_token stopToken)
         Utterance utterance;
         std::vector<Utterance> companions;
         int depth = 0;
+        bool prepareCue = false;
         {
             std::unique_lock lock(mutex);
-            condition.wait(lock, stopToken, [this]
+            condition.wait(lock, stopToken,
+                [this]
+                {
+                    const std::uintmax_t maximumBytes = static_cast<std::uintmax_t>(configuration.qwenMaxBufferedAudioMiB) * 1024U * 1024U;
+                    const bool ordinary =
+                        !queue.empty() &&
+                        generatingCount + prepared.size() < static_cast<std::size_t>(configuration.qwenPrefetchFragments) &&
+                        bufferedAudioBytes < maximumBytes;
+                    const bool cue = queue.empty() && generatingCount == 0 && prepared.empty() && playbackOrder.Empty() && !playingAudio &&
+                                     cuePreparation && !generatingCue && enabled.load() && !voiceShutdown;
+                    return ordinary || cue;
+                });
+            if (stopToken.stop_requested())
+                return;
+            if (queue.empty())
             {
-                const std::uintmax_t maximumBytes =
-                    static_cast<std::uintmax_t>(configuration.qwenMaxBufferedAudioMiB) *
-                    1024U * 1024U;
-                return !queue.empty() &&
-                    generatingCount + prepared.size() <
-                        static_cast<std::size_t>(configuration.qwenPrefetchFragments) &&
-                    bufferedAudioBytes < maximumBytes;
-            });
-            if (stopToken.stop_requested()) return;
-            if (queue.empty()) continue;
-            utterance = std::move(queue.front());
-            queue.pop_front();
-            ++generatingCount;
-            // Taken under the same lock that took the leader, so no other generator can
-            // claim a phrase that is about to be batched with this one.
-            companions = CollectBatchCompanions(utterance);
-            generatingCount += companions.size();
-            depth = static_cast<int>(queue.size());
+                generatingCue = true;
+                prepareCue = true;
+            }
+            else
+            {
+                utterance = std::move(queue.front());
+                queue.pop_front();
+                ++generatingCount;
+                // Taken under the same lock that took the leader, so no other generator can
+                // claim a phrase that is about to be batched with this one.
+                companions = CollectBatchCompanions(utterance);
+                generatingCount += companions.size();
+                depth = static_cast<int>(queue.size());
+            }
+        }
+
+        if (prepareCue)
+        {
+            PrepareSystemCue();
+            continue;
         }
 
         if (!companions.empty())
@@ -1661,8 +2342,13 @@ void SpeechService::Generate(const std::stop_token stopToken)
 
 void SpeechService::UseVoice(std::optional<VoicePreset> preset)
 {
-    std::lock_guard lock(mutex);
-    SetActiveVoiceLocked(std::move(preset));
+    {
+        std::lock_guard lock(mutex);
+        SetActiveVoiceLocked(std::move(preset));
+        QueueSynthesisStatusLocked();
+    }
+    DrainSynthesisNotifications();
+    RefreshSystemCueBank();
 }
 
 std::filesystem::path SpeechService::ActiveVocalizationDirectory() const
@@ -1673,6 +2359,10 @@ std::filesystem::path SpeechService::ActiveVocalizationDirectory() const
 
 void SpeechService::SetActiveVoiceLocked(std::optional<VoicePreset> preset)
 {
+    ++selectionEpoch;
+    systemCueBank.reset();
+    cuePreparation.reset();
+    systemCueSnapshot = {};
     activePreset = std::move(preset);
     // Same directory convention the producer writes into, derived from the preset
     // rather than remembered.
@@ -1687,64 +2377,110 @@ void SpeechService::SetActiveVoiceLocked(std::optional<VoicePreset> preset)
 
 void SpeechService::PlayVocalizationClip(const PreparedUtterance& preparedUtterance)
 {
+    PlayBankClip(preparedUtterance);
+}
+
+void SpeechService::PlayBankClip(
+    const PreparedUtterance& preparedUtterance, const std::function<bool(const std::filesystem::path&)>& player)
+{
 #ifndef _WIN32
     (void)preparedUtterance;
+    (void)player;
 #else
     const Utterance& utterance = preparedUtterance.utterance;
     const std::filesystem::path& clip = preparedUtterance.audioPath;
-    const std::string label = utterance.vocalization.has_value()
-        ? DisplayLabel(*utterance.vocalization) : std::string("sound");
-    std::error_code error;
-    if (clip.empty() || !std::filesystem::is_regular_file(clip, error))
+    const bool systemCue = utterance.systemCue.has_value();
+    const auto current = [&]
     {
-        Notify({"VocalizationSuppressed",
-            "No rendered clip for the " + label + ", so it was skipped.", -1.0, 0,
-            utterance.utteranceId});
+        if (!AdmissionCurrent(utterance))
+            return false;
+        std::lock_guard lock(mutex);
+        return systemCue ? CueSelectionCurrentLocked(utterance) : StillCurrent(utterance.generation, generation.load(), enabled.load());
+    };
+    const auto notify = [&](const SystemCuePhase phase, const char* cueDetail, SpeechEvent legacy)
+    {
+        if (!systemCue)
+        {
+            Notify(std::move(legacy));
+            return;
+        }
+        {
+            std::lock_guard lock(mutex);
+            if (phase != SystemCuePhase::Playing)
+                playingAudio = false;
+            if (CueSelectionCurrentLocked(utterance))
+                systemCueSnapshot.phase = phase;
+        }
+        NotifyCue(phase, cueDetail);
+    };
+    const std::string label = utterance.vocalization.has_value() ? DisplayLabel(*utterance.vocalization) : std::string("sound");
+    std::error_code error;
+    if (clip.empty() || !std::filesystem::is_regular_file(clip, error) || (systemCue && !IsPlayableWavFile(clip)))
+    {
+        notify(SystemCuePhase::Unavailable, "The cached system cue is unavailable.",
+            {"VocalizationSuppressed", "No rendered clip for the " + label + ", so it was skipped.", -1.0, 0, utterance.utteranceId});
         return;
     }
-    if (!StillCurrent(utterance.generation, generation.load(), enabled.load()))
+    if (!current())
     {
-        Notify({"VocalizationCancelled",
-            "The " + label + " was cancelled before it played.", -1.0, 0,
-            utterance.utteranceId});
+        notify(SystemCuePhase::Cancelled, "The system cue was cancelled.",
+            {"VocalizationCancelled", "The " + label + " was cancelled before it played.", -1.0, 0, utterance.utteranceId});
         return;
     }
     const auto startedAt = std::chrono::steady_clock::now();
-    Notify({"Vocalization", "Playing the " + label + ".", -1.0, 0,
-        utterance.utteranceId});
-    const std::wstring path = clip.wstring();
-    if (!PlaySoundW(path.c_str(), nullptr, SND_FILENAME | SND_ASYNC | SND_NODEFAULT))
+    if (!systemCue)
+        Notify({"Vocalization", "Playing the " + label + ".", -1.0, 0, utterance.utteranceId});
+    if (!current())
     {
-        Notify({"VocalizationFailed",
-            "Windows could not play the " + label + ".", -1.0, 0,
-            utterance.utteranceId});
+        notify(SystemCuePhase::Cancelled, "The system cue was cancelled.",
+            {"VocalizationCancelled", "The cue was cancelled before playback.", -1.0, 0, utterance.utteranceId});
         return;
     }
-    ArmBargeIn();
+    const std::wstring path = clip.wstring();
+    if (!(player ? player(clip) : PlaySoundW(path.c_str(), nullptr, SND_FILENAME | SND_ASYNC | SND_NODEFAULT) != 0))
+    {
+        notify(SystemCuePhase::PlaybackFailed, "Windows could not play the cached system cue.",
+            {"VocalizationFailed", "Windows could not play the " + label + ".", -1.0, 0, utterance.utteranceId});
+        return;
+    }
+    if (!current())
+    {
+        if (!player)
+            PlaySoundW(nullptr, nullptr, 0);
+        notify(SystemCuePhase::Cancelled, "The system cue was cancelled.",
+            {"VocalizationCancelled", "The cue was cancelled after playback began.", -1.0, 0, utterance.utteranceId});
+        return;
+    }
+    if (systemCue)
+        notify(SystemCuePhase::Playing, "Playing a cached system cue.", {});
+    if (!systemCue)
+        ArmBargeIn();
     // Held for the clip's own length, like a phrase, so the sentence after it does not
     // start on top of it. These are short by construction; the floor is for a header
     // that cannot be parsed rather than for a real clip.
     const double duration = std::max(200.0, WavDurationMilliseconds(clip));
-    const auto deadline = std::chrono::steady_clock::now() +
-        std::chrono::milliseconds(static_cast<long long>(duration + 120.0));
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(static_cast<long long>(duration + 120.0));
     bool cancelled = false;
     while (std::chrono::steady_clock::now() < deadline)
     {
-        if (!StillCurrent(utterance.generation, generation.load(), enabled.load()))
+        if (!current())
         {
-            PlaySoundW(nullptr, nullptr, 0);
+            if (!player)
+                PlaySoundW(nullptr, nullptr, 0);
             cancelled = true;
             break;
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(20));
     }
-    DisarmBargeIn();
+    if (!systemCue)
+        DisarmBargeIn();
     // Deliberately no removal. The clip is an asset the voice owns and every later
     // reply reuses it.
-    Notify({cancelled ? "VocalizationCancelled" : "VocalizationPlayed",
-        cancelled ? "The " + label + " was cut short."
-                  : "Played the " + label + ".",
-        ElapsedMilliseconds(startedAt), 0, utterance.utteranceId});
+    notify(cancelled ? SystemCuePhase::Cancelled : SystemCuePhase::Played,
+        cancelled ? "The system cue was cut short." : "The cached system cue finished playing.",
+        {cancelled ? "VocalizationCancelled" : "VocalizationPlayed",
+            cancelled ? "The " + label + " was cut short." : "Played the " + label + ".", ElapsedMilliseconds(startedAt), 0,
+            utterance.utteranceId});
 #endif
 }
 
@@ -1759,50 +2495,51 @@ bool SpeechService::PlayPreparedQwen(const PreparedUtterance& preparedUtterance)
     const std::filesystem::path& output = preparedUtterance.audioPath;
     std::error_code error;
     const auto startedAt = std::chrono::steady_clock::now();
+    if (!AdmissionCurrent(utterance))
+    {
+        ReleaseAudio(output, preparedUtterance.lifetime);
+        return true;
+    }
     if (generation.load() != utterance.generation || !enabled.load())
     {
         std::filesystem::remove(output, error);
-        Notify({"Stopped", "Generated speech was cancelled before playback.",
-            ElapsedMilliseconds(startedAt), 0, 0, ActualQwenResource(generated)});
+        Notify({"Stopped", "Generated speech was cancelled before playback.", ElapsedMilliseconds(startedAt), 0, 0,
+            ActualQwenResource(generated)});
         return true;
     }
     SpeechEvent playing{"Speaking", "Playing the profile's Qwen3-TTS voice."};
     playing.utteranceId = utterance.utteranceId;
     playing.device = ActualQwenResource(generated);
-    Notify({"FirstAudioPlayed", "Ordered Qwen3-TTS playback began.",
-        ElapsedMilliseconds(utterance.queuedAt), 0, utterance.utteranceId,
-        ActualQwenResource(generated)});
-    Notify(std::move(playing));
     const bool inMemory = !generated.audioBytes.empty();
     const std::wstring diskPath = inMemory ? std::wstring{} : output.wstring();
-    const wchar_t* sound = inMemory
-        ? reinterpret_cast<const wchar_t*>(generated.audioBytes.data())
-        : diskPath.c_str();
-    const DWORD flags = (inMemory ? SND_MEMORY : SND_FILENAME) |
-        SND_ASYNC | SND_NODEFAULT;
+    const wchar_t* sound = inMemory ? reinterpret_cast<const wchar_t*>(generated.audioBytes.data()) : diskPath.c_str();
+    const DWORD flags = (inMemory ? SND_MEMORY : SND_FILENAME) | SND_ASYNC | SND_NODEFAULT;
+    if (!AdmissionCurrent(utterance))
+    {
+        ReleaseAudio(output, preparedUtterance.lifetime);
+        return true;
+    }
     if (!PlaySoundW(sound, nullptr, flags))
     {
-        Notify({"Fallback", "Windows could not play the Qwen3-TTS WAV; using SAPI.",
-            -1.0, 0, utterance.utteranceId, WindowsSapiResource});
+        Notify({"Fallback", "Windows could not play the Qwen3-TTS WAV; using SAPI.", -1.0, 0, utterance.utteranceId, WindowsSapiResource});
         return false;
     }
+    Notify({"FirstAudioPlayed", "Ordered Qwen3-TTS playback began.", ElapsedMilliseconds(utterance.queuedAt), 0, utterance.utteranceId,
+        ActualQwenResource(generated)});
+    Notify(std::move(playing));
     ArmBargeIn();
-    const double parsedDuration = inMemory
-        ? WavDurationMilliseconds(generated.audioBytes)
-        : WavDurationMilliseconds(output);
-    const double duration = std::max(250.0,
-        generated.audioDurationMilliseconds > 0.0
-            ? generated.audioDurationMilliseconds
-            : parsedDuration);
+    const double parsedDuration = inMemory ? WavDurationMilliseconds(generated.audioBytes) : WavDurationMilliseconds(output);
+    const double duration =
+        std::max(250.0, generated.audioDurationMilliseconds > 0.0 ? generated.audioDurationMilliseconds : parsedDuration);
     const auto deadline = std::chrono::steady_clock::now() +
-        // PlaySound is asynchronous. Leave a small tail before the next ordered phrase
-        // starts, otherwise timer granularity or a non-canonical WAV header can make the
-        // next phrase cut the last word off the current one.
-        std::chrono::milliseconds(static_cast<long long>(duration + 350.0));
+                          // PlaySound is asynchronous. Leave a small tail before the next ordered phrase
+                          // starts, otherwise timer granularity or a non-canonical WAV header can make the
+                          // next phrase cut the last word off the current one.
+                          std::chrono::milliseconds(static_cast<long long>(duration + 350.0));
     bool cancelled = false;
     while (std::chrono::steady_clock::now() < deadline)
     {
-        if (generation.load() != utterance.generation || !enabled.load())
+        if (generation.load() != utterance.generation || !enabled.load() || !AdmissionCurrent(utterance))
         {
             PlaySoundW(nullptr, nullptr, 0);
             cancelled = true;
@@ -1812,20 +2549,20 @@ bool SpeechService::PlayPreparedQwen(const PreparedUtterance& preparedUtterance)
     }
     const bool interrupted = bargeInMonitor.Triggered();
     DisarmBargeIn();
-    if (!inMemory) std::filesystem::remove(output, error);
+    if (!inMemory)
+        std::filesystem::remove(output, error);
+    if (!AdmissionCurrent(utterance))
+        return true;
     Notify({interrupted ? "Interrupted" : (cancelled ? "Stopped" : "Ready"),
-        interrupted
-            ? "You started speaking, so I stopped."
-            : (cancelled ? "Speech was stopped." : "Qwen3-TTS speech completed."),
-        ElapsedMilliseconds(startedAt), 0, utterance.utteranceId,
-        ActualQwenResource(generated)});
+        interrupted ? "You started speaking, so I stopped." : (cancelled ? "Speech was stopped." : "Qwen3-TTS speech completed."),
+        ElapsedMilliseconds(startedAt), 0, utterance.utteranceId, ActualQwenResource(generated)});
     return true;
 #endif
 }
 
 void SpeechService::Notify(SpeechEvent event) const
 {
-    if (event.utteranceId == 0)
+    if (event.utteranceId == 0 && !event.synthesis && !event.phase.starts_with("Cue") && !event.phase.starts_with("Manual"))
     {
         event.utteranceId = activeUtteranceId.load();
     }

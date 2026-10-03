@@ -122,16 +122,16 @@ bool WhisperServerProcess::Start(const speechRecognitionSettings& settings, std:
     mutableCommand.push_back(L'\0');
 
     std::error_code error;
-    std::filesystem::create_directories(ReviaLogDirectory(), error);
+    std::filesystem::create_directories((settings.logDirectory.empty() ? ReviaLogDirectory() : settings.logDirectory), error);
     SECURITY_ATTRIBUTES attributes{};
     attributes.nLength = sizeof(attributes);
     attributes.bInheritHandle = TRUE;
     const HANDLE output = CreateFileW(
-        (std::filesystem::path(ReviaLogDirectory()) / L"whisper-server.stdout.log").wstring().c_str(), FILE_APPEND_DATA,
+        (std::filesystem::path((settings.logDirectory.empty() ? ReviaLogDirectory() : settings.logDirectory)) / L"whisper-server.stdout.log").wstring().c_str(), FILE_APPEND_DATA,
         FILE_SHARE_READ | FILE_SHARE_WRITE, &attributes, OPEN_ALWAYS,
         FILE_ATTRIBUTE_NORMAL, nullptr);
     const HANDLE errors = CreateFileW(
-        (std::filesystem::path(ReviaLogDirectory()) / L"whisper-server.stderr.log").wstring().c_str(), FILE_APPEND_DATA,
+        (std::filesystem::path((settings.logDirectory.empty() ? ReviaLogDirectory() : settings.logDirectory)) / L"whisper-server.stderr.log").wstring().c_str(), FILE_APPEND_DATA,
         FILE_SHARE_READ | FILE_SHARE_WRITE, &attributes, OPEN_ALWAYS,
         FILE_ATTRIBUTE_NORMAL, nullptr);
     const HANDLE input = CreateFileW(

@@ -2,7 +2,7 @@
 
 This roadmap turns the project’s larger development specification into a practical sequence. It separates what works today from what is partially built, what comes next, and what still needs real-world verification.
 
-The north star is **one Revia**: fast when a task is easy, thoughtful when it is difficult, quiet when nothing is worth saying, and recognizably the same person regardless of which model or device is doing the work.
+The north star is a coherent companion: fast when a task is easy, thoughtful when it is difficult, quiet when nothing is worth saying, and recognizably the same person regardless of which model or device is doing the work. One foreground companion remains the default. Independent companions now have captured private stores and selection; simultaneous real model/device hosts remain future work.
 
 ## Status key
 
@@ -30,9 +30,56 @@ The north star is **one Revia**: fast when a task is easy, thoughtful when it is
 | Multi-step goals | 🟡 | Rehearsal, budgets, verification, confirmation, and resume exist; unattended delivery remains deliberately narrow. |
 | Hardware adaptation | 🟡 | Startup planning supports CPU, one GPU, and multiple GPUs; physical single-GPU/CPU test coverage is incomplete. |
 | One-command clean setup | 🧪 | `setup.bat` implements profile selection, pinned manifests, install/build/test/health orchestration, and reuse; a genuinely fresh physical PC run remains unverified. |
-| Self-improvement | ✅ | Revia records repeated latency/failure evidence, reviews the code behind it (and her own source while idle), and proposes one change at a time with its reasons, proven in a private copy (builds, no test suite newly failing). She cannot apply code, model, setting, or permission changes by herself; a person applies the patch. |
+| Self-improvement | 🟡 | Existing evidence and proposals remain connected. One closed duration-formatting change has separate model proposal, native validation, exact review and later lifecycle gates. General candidate execution is disabled until real containment exists; a proposal alone does not prove a build, source integration or deployment. |
 | Remote PCs and camera | ⬜ | Safety model is designed; runtime support is not built. |
 | Animated avatar | 🟡 | Canonical character/palette and a bounded presence bridge exist; a real Live2D/VRM renderer and model are not selected or live-verified. |
+
+## Approved Studio delivery order
+
+The Continuous Improvement Studio v3 sets the next dependency order. External
+engineering agents can investigate and edit this repository now; their work is
+not evidence that Revia's product agent scheduler or self-deployment exists.
+The existing milestones below remain the implementation history.
+
+| Studio milestone | Acceptance target and current evidence |
+| --- | --- |
+| M0 — foundation and truthful verification | Foundation build/test pass accepted: focused ownership cleanup, full discovered-test accounting, selected-provider metadata and isolated workbench evidence. |
+| M1 — one fault-awareness slice | Profile-associated fault health, immediate text, checked recovery, approved first-use cue caching, safe manual diagnostics and reactive glass UI are implemented. The Studio campaign records exact controlled audio/Qt/build/test acceptance; physical hearing and live model performance remain separate checks. |
+| M2 — independent companions and scoped authority | Accepted local foundation: captured private owners, explicit resumable migration, live scoped authority and generation-aware selection. Native isolation, interrupted/corrupt/injected disk-full migration, A → B → A and live-denial checks pass. One foreground model/device host remains the supported mode; durable grants and an authenticated owner UI remain future work. |
+| M3 — product Agent Studio | Accepted bounded analytical workflow: two workers, reviewer, separate parent review/acceptance, private checkpoints and reactive glass hierarchy with evidence versions, timings and observation freshness. Native recovery, overlap, cancellation, restart and budget checks pass. The M4–M6 campaign also exercised the actual local provider and four-node parent acceptance; outputs remain analytical plans, with autonomous OS agents outside this capability. |
+| M4 — neutral skills and evidence learning | Accepted objective slice: immutable inventory skill pins, declared capabilities, reviewed private candidates, durable MemoryAgent receipts, neutral export and independent companion import, update/rollback and dependency-based gap retesting. Fresh actual tools and connected lifecycle pass; the final shipping build and all 39 registered suites pass. |
+| M5 — natural social/voice behavior | Implemented captured audience/privacy admission, explicit and conversational recognition-only consent, atomic confirmed template replacement, corrected repeat appraisal, recent continuity and responsive controls. The captured prompt-budget defect is repaired and independently reviewed. Owner acceptance remains open: fresh actual replies still have factual, current-turn and deliverable-completeness failures; physical speech/microphone robustness is unmeasured. |
+| M6 — gated self-development | Accepted bounded proof: genuine model proposal and digest-bound review, exact native validation, separate disposable integration/package/activation, injected native-failure recovery without private-state loss, and one-literal real duration-helper integration. Fifty-eight independent receipt checks and the final shipping/native build pass. The original approved baseline refuses another proposal after the change; a new reviewed contract is required. General source editing/deployment and reliable semantic model review are not established by this closed trial. |
+
+See [M4–M6 implementation and verification](STUDIO_M4_M6_ACCEPTANCE.md) for the
+current objective evidence and remaining owner/physical acceptance conditions.
+
+The [M2/M3 acceptance record](STUDIO_M2_M3_ACCEPTANCE.md) describes the exact
+controlled evidence and remaining limits. The full native registry passed all
+21 suites. A final capture-only fixture amendment rebuilt and reran its affected
+suite while every other native executable stayed byte-identical. Native Qt
+acceptance includes 94 captures over twelve pages, three sizes and two scales.
+
+M1's fault-health candidate replaces configuration-only voice claims with safe
+unverified, degraded and fresh-synthesis states. Typed completion observations
+connect the existing SpeechService, session events, scoped IssueLog and private/public
+conversation grounding. Generic Ready and cached or older successes cannot clear
+a fault; a queued success invalidated by restoration cannot resolve its history.
+Approved reply text remains immediately deliverable, and fault summaries omit
+private scope and worker payloads. First-use cue preparation shares the existing
+speech worker and provider, yields to ordinary speech and preserves validated
+partial assets. Cached playback is optional and cannot prove synthesis recovery.
+Manual voice-studio and preparation diagnostics are sanitized and have separate
+status, so their completion cannot release an active conversational reply.
+The glass Qt shell shows current health in Chat and Voice, keeps generic pipeline
+views safe, and reflows dense controls at narrow sizes. Controlled fixtures, actual
+Qt rendering, independent exact-source review and complete build/test accounting
+are the acceptance gates. Physical hearing, microphone use and cold model/device
+performance are recorded separately; no successful generation or API call implies
+speaker quality has been verified.
+Explicit companion migration and the bounded analytical product workflow are
+accepted in M2/M3. Biometric recognition, reviewed skill export and autonomous
+deployment remain deferred to their own acceptance gates.
 
 ## Immediate priority: make the current Revia feel fast and reliable
 

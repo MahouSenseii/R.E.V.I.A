@@ -30,7 +30,227 @@ structs for values and small functions for stateless operations. See
 Within `Runtime`, `conversationRuntime` owns admitted turns and `documentWorkshop`
 owns documents and visuals. `sessionResources.cpp` holds the session's resource
 reporting and load-monitor methods; `idleComputerActivity.cpp` holds its idle
-computer activity methods. Both implement the existing `ReviaSession` class.
+computer activity methods. `sessionSpeech.cpp` adapts speech events to session
+coordination, diagnostics, and runtime events. All three implement the existing
+`ReviaSession` class; startup only wires the speech callback.
+
+## Companion ownership
+
+`CompanionRegistry` owns persisted opaque companion IDs and selection. An authored
+profile is a blueprint; it is not the identity of a companion's earned mind.
+`CompanionPaths` captures an absolute installation root and private storage root.
+The original `legacy` companion retains the historical layout. New companions use
+`RuntimeData/Companions/<id>/v1`, neutral profile seeds, and private memory, identity,
+goals, archives, preferences, logs, voice data, presence, evaluations and artifacts.
+Model weights and executable tools remain installation resources.
+
+New-companion profile fallbacks use immutable `Config/CompanionSeeds`, separate
+from the original companion's authored `Config/Profiles`. Saving a new companion's
+profile writes its captured private root. Legacy configured paths remain anchored
+to the installation root, including relative log-directory overrides.
+
+Constructors pass captured paths to existing owners, including every router tier
+and asynchronous memory evaluation. Private companions disable provider prompt
+cache reuse. `RuntimeLease` arbitrates one foreground model/device owner in this
+process. Concurrent disposable sessions establish private storage and origin
+isolation without running two real model/device hosts.
+
+`SessionIdentity` generates session IDs and generations. `RuntimeStamp` carries
+companion, session, generation, task, attempt and policy revision. The existing
+event bus admits only the captured current session. Memory work captures its
+admission guard when queued and checks it again before durable mutation or
+publication. Session retirement invalidates admission before workers are joined.
+The Qt selection epoch also refuses queued results from an outgoing session.
+Selection does not change process working directory.
+
+Migration is explicit. Inventory identifies standard private data roots; SQLite
+backup includes committed WAL state and preserves stable IDs. Resumable staging
+uses a versioned manifest, hashes and final source/staged revalidation before
+atomic publication. Interrupted, corrupt, newer or changed-source bundles do not
+activate. Source files remain intact. Callers must quiesce writers; configured
+external legacy paths require explicit handling. Machine capability policy and
+owner authentication evidence are excluded from private-bundle migration.
+
+## Agent Studio
+
+`AgentWorkflow` owns a typed dependency graph, injected providers, immutable
+attempt history, evidence references, cumulative budgets, cancellation and atomic
+checkpoints. The first product graph has one parent companion, two independent
+workers and a reviewer. Workers may overlap; the reviewer waits for verified
+prerequisite artifacts. The parent performs a separately charged review, followed
+by a separate acceptance decision. Process success, verified evidence and accepted
+work remain distinct states.
+
+The deterministic provider includes an expected incomplete verification attempt.
+Recovery requires changed input or evidence and retains the failed attempt; an
+identical retry is refused. Checkpoints pin prerequisite versions and hashes,
+retain spend, and mark interrupted in-flight attempts before explicit resume.
+Visible paused recovery waits for completed scheduler teardown without admitting
+another provider call from a lifecycle callback.
+
+`agentStudioRuntime` connects this owner to the existing router and event bus.
+Local providers receive bounded analytical material and prerequisite artifacts;
+they have no OS executors or permission tools. Their JSON contract checks bounded
+deliverables supported by supplied evidence; it does not claim external tests ran.
+Provider selection is saved atomically with its workflow ID and must match on
+recovery. `AgentStudioPanel` projects actual hierarchy, dependencies, states,
+attempts, timings, evidence and the accepted deliverable through the existing
+glass theme. Token/model usage is shown only when the provider reports it. Provider
+intervals include internal router/model waits; model queue timing is unavailable.
+
+The engineering Director/Supervisor/Worker status artifact tracks repository work
+separately from these product workflow nodes.
+
+## Skills, private learning and bounded development
+
+`SkillPackageStore` owns immutable neutral package versions, validation, selection
+history and rollback. A task copies its selected package reference before running.
+Manifest requirements describe needed capabilities; they never grant them.
+Export contains only the reviewed manifest, instructions and bounded examples.
+`Config/Skills` contains shipped defaults; selections and imported versions belong
+to the companion's `RuntimeData/Skills` owner.
+
+`learningStudio.cpp` connects the inventory skill to the existing `ActionRuntime`.
+An observed result creates a private candidate with exact source and evidence.
+`LearningReviewStore` records parent decisions and native checks in
+`RuntimeData/Learning`. Acceptance uses the existing `TurnCoordinator`,
+`MemoryAgent` and memory store, returning the actual saved row ID. Rejected or
+unchecked candidates do not become trusted memory. Capability gaps retain observed
+causes, dependency fingerprints and bounded retest history in the existing learning
+owners. Legacy migration includes both private Skills and Learning roots.
+
+`SelfDevelopment` owns distinct immutable proposal, native validation, companion
+review, integration, package, activation and recovery receipts. Its first admitted
+source transformation changes only the fractional precision of `StudioDuration`.
+The host owns the baseline, allowed grammar and `VerifyStudioCandidate.ps1` build
+and test rules. Candidate instructions cannot supply executable build rules.
+`developmentStudio.cpp` obtains genuine proposals and exact reviews from the
+configured router and projects their evidence into the existing `ProposalStore`.
+The ordinary runtime and desktop expose proposal, validation and review only;
+later effects require separate stage authority. General candidate execution and
+protected-kernel changes fail closed. Recovery checks drift, retains failure
+diagnostics and never restores private data or permissions from a source snapshot.
+
+Portable content SHA256 belongs to `Audit/contentDigest`; the computer artifact
+digest delegates to it. Duration formatting belongs to the desktop presentation
+helper. These shared functions introduce no new runtime scheduler or memory store.
+
+## Captured audience and speaker continuity
+
+`audienceStudio.cpp` owns the session's disclosure audience and generation.
+`InputArbiter` retains audience, participant, recognition-consent revision and
+session provenance with each offered input; incompatible contexts never merge.
+Unknown voices receive temporary observation IDs. A saved name or the only known
+person never establishes who spoke. Consented voice matching remains shared or
+unknown and cannot unlock private owner context.
+
+The existing Identity owners retain recognition consent, bounded local templates,
+contextual aliases and selectively correctable social evidence. The replaceable
+wave-feature provider reads a transient transcription sample; it does not retain
+raw recordings or train on guesses. Similarity is not an authentication result or
+an accuracy claim. Recognition and deletion remain explicit owner controls.
+
+`SpeakerEnrollmentDialogue` owns a bounded consent/sample/confirmation state
+machine. `speakerEnrollmentRuntime.cpp` connects it to typed conversation and the
+existing speech resolver before that resolver releases its transient WAV. A private
+typed request identifies the current local participant; explicit recognition-only
+consent arms the next sample, and a separate confirmation permits durable saving.
+Voice requests receive instructions, while cancellation always clears the pending
+sample. The flow expires after two minutes, allows two sample attempts, and clears
+on Stop, profile, audience or companion changes. It never starts a microphone.
+
+`RelationshipRegistry::SaveConsentedSpeakerSample` commits consent and a bounded
+replacement template together through the existing atomic identity store. Both
+conversational and selected-WAV enrollment use it. Failed extraction, stale
+admission or failed persistence preserves the previous template and consent.
+The admission callback runs under the registry mutex and must not reenter it.
+Recognition consent is separate from voice-cloning consent and machine authority.
+
+Audience projection happens before prompt assembly and model transmission.
+Conversation and queued memory retain their originating admission checks. Each
+speech producer passes an immutable admission handle directly into `SpeechService`;
+`SpeechCoordinator` also captures and rechecks admission before starting a queued
+intent. Changing another producer's default cannot authorize the old content.
+Audience changes cancel old turns and queued speech. Background task completion
+retains its launch audience, keeps a private receipt and publishes only neutral
+lifecycle state when that audience is no longer current.
+
+The Skills and Learning, Self Development, and Audience and Recognition desktop
+panels project these existing owners. One bounded studio worker handles their
+operations; Stop, companion selection and shutdown cancel or join it. Selection
+clears private candidates, drafts, feedback, selected recordings and consent.
+Native fixture checks and actual model samples are separate evidence from owner
+judgment of naturalness and physical microphone or recognition accuracy.
+
+## Speech synthesis health
+
+`SpeechService` owns a bounded live synthesis-health projection beside its existing
+queue. Each ordinary Qwen attempt carries the profile file-stem, selected voice,
+selection epoch, cancellation generation, turn, sequence and attempt-start identity.
+Cancellation, mute, shutdown and selection changes are checked at the mutation
+boundary. Typed synthesis observations are distinct from playback completion and
+are delivered in order outside the speech state mutex.
+Batch companions must match the captured profile, preset and selection epoch,
+so reassigned or edited selections cannot hide a current phrase's batch failure.
+
+Failure captures the highest already-started attempt as a recovery watermark.
+Recovery requires fresh matching synthesis that started after that watermark;
+cached audio, previews, preparation, SAPI and generic Ready cannot clear it.
+Restoration also captures a watermark, and the session checks the current scoped
+state before accepting a queued recovery that may have since been invalidated.
+Success verifies generated audio, with empty or missing output rejected; it does
+not certify speaker playback or physical audio quality.
+
+`sessionSpeech` records transitions in the existing `IssueLog`, scoped by profile
+and voice. Correlation counters remain metadata. IssueLog serializes state and
+journal transitions, preserves legacy unscoped keys, and compacts its journal
+while retaining every tracked current scope. A selected scope evicted from the
+64-scope live projection is restored from any open issue before its health is
+published. Verified availability resets on service restart.
+
+Qt and CLI consume a separate `Voice health` component through the existing event
+bus. `ConversationRuntime` reads the same safe snapshot for private and public
+grounding. Summaries use fixed text and omit private IDs, utterances, paths and
+worker error bodies. Repeated failures and duplicate observations do not repeat
+the issue or notice; storage failure produces one safe warning per session and
+does not trigger speech or another issue. Approved reply text remains immediately
+displayable, independently of synthesis and playback.
+
+The speech notification queue bounds terminal observations and coalesces status
+refreshes. Producers wait with the state mutex released; callbacks may read,
+restore or select a voice. Synchronous synthesis from a health callback is refused
+before transport so recursive notification cannot defeat that bound. This fault-health
+slice covers ordinary queued, batched and adapter synthesis.
+
+`SystemCueBank` owns seven approved status assets beside the existing voice banks.
+Its hashed key includes the profile, voice revision and reference audio contents,
+language and phrase version. Validated scratch WAVs publish atomically; valid partial
+assets survive a failed sweep. A qualifying fresh ordinary synthesis can schedule
+missing clips on the existing generation worker after ordinary queued, generating,
+prepared and playing work drains. A sweep tries at most seven clips, stops at the
+first operational failure, and runs once per key with a 64-key session limit.
+The existing Qwen provider refuses occupied pool/client owners for this optional
+work. Its cue request has a five-second total transport deadline, bounded response,
+numeric host handling and no worker startup. This bounds the client wait; it does
+not preempt inference already running in the provider.
+
+Cached-only cue admission reuses the existing speech ordering, persistent asset
+lifetime, mute, selection and shutdown gates. Runtime retains audience and notice
+policy; a synthesis fault never automatically queues a spoken notice. Cache success
+does not establish ordinary synthesis health. Reference replacement invalidates
+queued cue selection and verified availability while preserving an existing fault.
+`System cues` projects the current selected cache rather than a notification's old
+selection. Actual audio activity comes from the speech owner's playback state,
+independently of that cache, and cue completion does not release a reply intent.
+
+Manual creation, bank rendering, preview and preparation return fixed public
+diagnostics and allowlisted backend metadata. Their `Manual*` observations become
+`Voice studio` status through the same session adapter; they do not borrow a reply
+turn or finish ordinary playback. Qt projects allowlisted health/cue phases before
+generic observers, so Chat, Voice, Activity and the pipeline table share safe text.
+`VoiceHealthPanel` owns presentation only; `windowLayout` owns responsive placement.
+Controlled audio fixtures and actual Qt renders are separate evidence from physical
+speaker quality, microphone capture and cold model performance.
 
 ## Trust boundary
 
@@ -60,6 +280,28 @@ successful mutation whose completion audit failed. Callers use `Succeeded()` to
 decide whether dependent work may continue and `Message()` to report both execution
 and audit errors. Goals stop without verification or retry on an audit storage error.
 
+`CompanionAuthority` is a separately locked live ledger composed with the existing
+machine policy. It owns companion defaults, trusted expiring grants, explicit
+denials, emergency stop and task ancestry. Children can narrow their parent's
+authority. Denial, revocation, expiry and retirement are checked again before
+actual effects, including committing subeffects. Machine permission reductions
+publish before waiting for a running executor, so its next effect sees the change.
+Failed persistence of a reduction retains the restrictive live ceiling until an
+explicit successful retry.
+
+The selection host retains one ledger across A→B→A and initializes defaults only
+for a new companion. Session/task grants expire with their owner; companion-wide
+denials survive session replacement. `ExecuteFor` and `ExecuteScopedFor` transport
+runtime-owned origins; model/request text cannot supply an authoritative stamp.
+The existing goal runner uses this boundary, registers its task and fresh action
+attempts, and ends the scope on completion. The minimum ledger is live process
+state, with no durable grant restoration or authenticated owner UI.
+`GrantAuthenticated` requires an installed trusted verifier; default construction
+refuses owner grants. Ordinary approval dialogs cannot mint authentication proof.
+`QuestionRelay` retires pending approval generations and reopens only after outgoing
+workers quiesce, so stale questions remain refused while the next companion can
+ask fresh questions.
+
 Executed actions normally produce two JSONL records joined by `audit_transaction`:
 `record_type: intent` and `record_type: result`. Intent records omit `attempted` and
 `succeeded`; an intent without a result means the outcome is unknown and is not
@@ -68,10 +310,29 @@ No repository component replays actions from this journal. Competing writers and
 an incomplete trailing line cause admission to fail; the logger does not truncate
 or silently repair an existing audit file.
 
+## Isolated proposal verification
+
+`Workbench` owns the source mirror, temporary patch, restoration, and comparison
+with unchanged source. `VerifyWorkbench.ps1` runs the existing toolchain and
+collects CTest discovery plus terminal output; `BuildOutcome` transports that
+evidence and the script, discovery, and test exit codes back to the same owner.
+
+Verification requires a nonempty discovered registry and exactly one executed,
+recognized result per suite, with matching names, IDs, totals, and completion
+counts. Missing, duplicate, skipped, unknown, or incompatible results are unproven.
+A complete failing run remains eligible for comparison with unchanged source;
+it is not reported as an all-pass run.
+
+The baseline cache holds its validated discovery and execution evidence beside
+the existing source stamp. Legacy, incomplete, or incompatible evidence cannot
+excuse candidate failures. A comparison must account for the same suite identities
+before its known failures can be reused. Native script failure and missing result
+files cannot certify a successful build or tests.
+
 ## Identity persistence
 
 `ReviaSession` owns the save lifecycle; `RelationshipRegistry` continues to own
-the single identity snapshot and `IdentityStore` its schema version 2 file. After
+the single identity snapshot and `IdentityStore` its schema version 3 file. After
 a successful identity load, the session saves every 30 seconds. A long foreground
 inference does not block that timer. The cadence bounds ordinary unsaved work;
 scheduling delays and storage failures can extend it, and failures are logged.
@@ -256,6 +517,12 @@ flowchart LR
 
 The visible reply runs first and owns inference priority. Only after a successful reply is ready does the coordinator queue automatic memory evaluation on its worker. A shared-server inference scheduler admits no more requests than llama.cpp reports as slots and always admits waiting interactive work before waiting background memory work. Before services start, `ResourcePlanner` inventories the exact devices exposed by the configured llama.cpp executable and resolves service-specific GPU IDs, CPU thread shares, VRAM reservations, and bounded RAM caches. It keeps chat/vision on the highest-capacity device whenever the model fits and uses llama.cpp layer splitting only when combined GPU capacity is required. If an owned llama.cpp child crashes, its stale process handle is released and the next conversation turn restarts it. The dedicated embedding server is outside the chat scheduler and remains parallel on every machine. Startup reflects the same separation: the assigned Qwen3-TTS voice begins loading as soon as the chat model has fit its layers, so it warms concurrently with the Fast tier, the Expert tier, the embedding server and the memory backfill subscription rather than after them. It is held until chat has fit because llama.cpp sizes its layers against the card at launch, and a voice model allocating underneath that measurement would invalidate the reservation the plan made for both.
 
+`messageRouter` reports the configured model name for the service that handles the
+final request, including an existing fallback. Main, Fast, and Expert names come
+from the transport settings captured by `ApplyLLMSettings`; profile application
+does not replace those settings. This metadata describes the configured provider,
+not an independent measurement of the model loaded by an external server.
+
 TTS consumes complete-sentence jobs on its own cancellable generation pool and explicit ordered playback gate; microphone capture and the persistent loopback whisper service have a separate lifecycle; presence, perception, and initiative keep their own bounded workers; Qt has its own operation workers. These are parallel, observable pipelines, not one sequential prompt chain. The `Pipelines` tab shows their state and effective compute assignment, while the `Resources` tab shows the startup hardware/budget map; neither panel owns a worker. Parallelism does not add authority: every side effect still passes through capability policy and audit.
 
 Qwen3-TTS runs as authenticated loopback workers because the model runtime is Python/PyTorch, while lifecycle, persistence, scheduling, fallback, and UI remain C++ owned. VoiceDesign creates one reference WAV as an atomic primary-worker job. Base-model workers reuse that reference through cached clone prompts. Each selected device owns one complete resident model; complete-sentence jobs may finish out of order, but `OrderedSpeechQueue` releases them strictly by sequence and `SpeechService` bounds look-ahead by job count and bytes. Background visual analysis yields to real user input but may refresh while already-generated voice plays, preventing long speech queues from freezing screen context. Windows SAPI is the failure fallback. This is data-parallel sentence generation, not model parallelism inside one utterance.
@@ -276,6 +543,21 @@ conversation openings enter `ConversationRuntime` and the next natural user repl
 continues them; action-backed proposals retain explicit accept/dismiss handling.
 
 ## Single-purpose construction rule
+
+ConversationStylePolicy emits the current turn purpose before lower-priority
+presentation advice. Correction guidance permits disagreement when evidence
+conflicts, carries forward unchanged facts and speaker ownership, and permits
+error attribution only when evidence establishes a mistake. Its compact purpose
+fits the captured long technical reply without changing the authored answer modes.
+This directs the provider; it does not establish model factual correctness.
+llamaCppService
+captures these priority paragraphs from the per-call posture before prompt
+assembly merges retrieved memory. Its private context fitter preserves them when
+they fit alongside the newest question and recent dialogue. Capture stops at the
+existing canonical reference headers appended by the conversation composer, so
+reference paragraphs with matching labels cannot replace current guidance. Tiny
+budgets retain the existing bounded fallback; this is not a general provenance
+parser for arbitrary prompt text.
 
 New behavior is split by reason to change:
 

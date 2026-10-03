@@ -6586,7 +6586,7 @@ void TestCreatingAVoicePresetActuallyRendersItsBank()
         "A failed clip render threw away the voice preset the user just waited for.");
     Check(store.Find(second.id).has_value(),
         "A failed clip render left the preset unsaved.");
-    Check(degraded.message.find("unreachable") != std::string::npos,
+    Check(degraded.message == "The voice was created, but its nonverbal clips could not be rendered.",
         "A failed clip render was reported as a complete success, so a silent voice "
         "would look intentional.");
 
@@ -9513,6 +9513,13 @@ int main(const int argc, char** argv)
             RunSpeechInterruptionTests();
             return 0;
         }
+        if (argc > 1 && std::string(argv[1]) == "--speech-fault-health")
+        {
+            RunSpeechHealthTests();
+            RunSpeechFaultIntegrationTests();
+            RunSystemCueTests();
+            return 0;
+        }
         if (argc > 1 && std::string(argv[1]) == "--speech-interruption-live")
         {
             Check(argc == 3, "Usage: --speech-interruption-live <existing-bank-clip.wav>");
@@ -9690,6 +9697,9 @@ int main(const int argc, char** argv)
         RunActionApprovalTests();
         RunInvestigationTests();
         RunSpeechCoordinatorTests();
+        RunSpeechHealthTests();
+        RunSpeechFaultIntegrationTests();
+        RunSystemCueTests();
         RunPresentationTests();
         RunSkillTests();
         RunCoordinationOverheadTests();
@@ -9844,6 +9854,9 @@ int main(const int argc, char** argv)
         RunAuditFindingsTests();
         RunHandsFreeTests();
         RunBackgroundTaskTests();
+        RunCompanionTests();
+        RunCompanionAuthorityTests();
+        RunAgentWorkflowTests();
         RunReminderTests();
         RunClipboardTests();
         RunQuestionRelayTests();

@@ -49,6 +49,7 @@ struct speechSettings
     std::string qwenVoiceDesignModel = "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign";
     std::string qwenCloneModel = "Qwen/Qwen3-TTS-12Hz-0.6B-Base";
     std::string voiceDataPath = "RuntimeData/Voices";
+    std::string logDirectory;
     int volume = 90;
     int rate = 1;
     int maxCharacters = 1400;

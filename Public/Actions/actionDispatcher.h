@@ -17,7 +17,7 @@ public:
     [[nodiscard]] ActionResult Dispatch(const ActionRequest& request,const PolicyDecision& decision,bool confirmationGranted = false);
 
 private:
-    std::vector<std::unique_ptr<IActionExecutor>> executors;
+  std::vector<std::shared_ptr<IActionExecutor>> executors;
 };
 
 } // namespace revia::actions

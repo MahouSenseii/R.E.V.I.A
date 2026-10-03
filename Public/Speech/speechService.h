@@ -3,12 +3,15 @@
 #include "LLM/responseTypes.h"
 #include "Speech/bargeInSettings.h"
 #include "Speech/speechSettings.h"
+#include "Speech/systemCue.h"
+#include "Speech/systemCueBank.h"
 #include "Runtime/affectTypes.h"
 #include "Speech/qwenTtsPool.h"
 #include "Speech/orderedSpeechQueue.h"
 #include "Speech/voiceActivityMonitor.h"
 #include "Speech/vocalization.h"
 #include "Speech/voicePresetStore.h"
+#include "Speech/voiceTypes.h"
 
 #include <atomic>
 #include <chrono>
@@ -18,8 +21,10 @@
 #include <functional>
 #include <filesystem>
 #include <map>
+#include <memory>
 #include <mutex>
 #include <optional>
+#include <set>
 #include <string>
 #include <thread>
 #include <utility>
@@ -51,6 +56,7 @@ struct SpeechEvent
     std::uint64_t utteranceId = 0;
     std::string device;
     std::vector<latencySample> timings;
+    std::optional<SynthesisObservation> synthesis;
 };
 
 struct SpeechServiceTestAccess;
@@ -61,6 +67,7 @@ class SpeechService
 
 public:
     using EventHandler = std::function<void(const SpeechEvent&)>;
+    using AdmissionHandle = std::shared_ptr<const std::function<bool()>>;
 
     SpeechService() = default;
     ~SpeechService();
@@ -72,7 +79,14 @@ public:
     void SetActiveProfile(std::string profileId);
     VoiceStudioSnapshot VoiceStudio() const;
     bool HasActiveQwenVoice() const;
+    VoiceHealthSnapshot SynthesisHealthSnapshot() const;
+    VoiceHealthSnapshot SynthesisHealthSnapshot(const std::string& profileId, const std::string& presetId) const;
+    void RestoreSynthesisFault(const std::string& profileId, const std::string& presetId);
     VoiceOperationResult PrepareActiveVoice();
+    SystemCueSnapshot SystemCueStatusSnapshot() const;
+    bool IsAudioPlaying() const;
+    // Queues only a validated cached clip. Runtime owns audience and notice policy.
+    bool QueueSystemCue(SystemCueKind kind);
     // Render a final public reply with this session's active voice. No local playback,
     // SAPI fallback, microphone capture, or separate conversation identity.
     VoiceOperationResult RenderAdapterSpeech(const std::string& text);
@@ -117,6 +131,10 @@ public:
     // utteranceId correlates the resulting Speaking event back to the reply, so the shell
     // can reveal text in step with the audio instead of well before it.
     void Speak(std::string text, runtime::AffectSnapshot affect, std::uint64_t utteranceId = 0, bool latencyCritical = true);
+    // Explicit context admission is captured by the producer. A null handle denies work.
+    void Speak(std::string text, runtime::AffectSnapshot affect, std::uint64_t utteranceId, bool latencyCritical, AdmissionHandle admission);
+    // Each queued item captures its context guard; changing this default cannot admit an older reply.
+    void SetAdmissionGuard(std::function<bool()> guard);
     void StopSpeaking();
 
     // Barge-in. Arms a microphone energy monitor only for the duration of each utterance,
@@ -196,6 +214,9 @@ private:
         std::uint64_t generation = 0;
         std::uint64_t utteranceId = 0;
         std::uint64_t sequence = 0;
+        VoiceSelection selection;
+        std::shared_ptr<const std::function<bool()>> admission;
+        std::uint64_t attemptId = 0;
         bool latencyCritical = true;
         std::chrono::steady_clock::time_point queuedAt =
             std::chrono::steady_clock::now();
@@ -204,6 +225,7 @@ private:
         // sequence slot like any other item, which is what keeps it between the two
         // phrases it was written between.
         std::optional<VocalizationKind> vocalization;
+        std::optional<SystemCueKind> systemCue;
         // The bank clip chosen for that cue. Resolved when the reply is planned, so a
         // reply uses its variants in the order it was written.
         std::filesystem::path clipPath;
@@ -227,6 +249,7 @@ private:
     // batch that could not run, so the two paths cannot drift apart in what they
     // publish or in how they account for a phrase still being generated.
     void SynthesizeOne(Utterance utterance, int depth);
+    [[nodiscard]] static bool AdmissionCurrent(const Utterance& utterance);
     // Attempts one generation call covering the whole group, in order.
     //
     // False means nothing was published and the caller must fall back to synthesizing
@@ -250,8 +273,29 @@ private:
     bool PlayPreparedQwen(const PreparedUtterance& prepared);
     // Plays one bank clip in its place in the reply, and never deletes it.
     void PlayVocalizationClip(const PreparedUtterance& prepared);
+    void PrepareSystemCue();
+    void RefreshSystemCueBank();
+    void PlayBankClip(const PreparedUtterance& prepared, const std::function<bool(const std::filesystem::path&)>& player = {});
+    bool CueSelectionCurrentLocked(const Utterance& utterance) const;
+    void NotifyCue(SystemCuePhase phase, const char* detail);
     // UseVoice implementation for callers holding the mutex; switches active voice and clip bank together.
     void SetActiveVoiceLocked(std::optional<VoicePreset> preset);
+    VoiceSelection SelectionLocked() const;
+    struct SynthesisState
+    {
+        SynthesisHealth state = SynthesisHealth::Unverified;
+        bool restoredFailure = false;
+        std::uint64_t failureWatermark = 0;
+        std::uint64_t lastUsed = 0;
+    };
+    SynthesisState& SynthesisStateLocked(const VoiceSelection& selection);
+    void ResetVerifiedSynthesisLocked();
+    void QueueSynthesisStatusLocked();
+    bool BeginSynthesis(Utterance& utterance);
+    static VoiceOperationResult TrySynthesis(const std::function<VoiceOperationResult()>& operation);
+    void ObserveSynthesisLocked(const Utterance& utterance, const VoiceOperationResult& result, int depth,
+        std::unique_lock<std::mutex>& lock);
+    void DrainSynthesisNotifications();
     void Notify(SpeechEvent event) const;
     void ArmBargeIn();
     void DisarmBargeIn();
@@ -271,11 +315,35 @@ private:
     speechSettings configuration;
     std::string activeProfile;
     std::optional<VoicePreset> activePreset;
+    std::uint64_t selectionEpoch = 1;
+    std::uint64_t startedSynthesisAttempts = 0;
+    std::uint64_t nextSynthesisObservation = 0;
+    std::uint64_t synthesisStateUse = 0;
+    bool voiceShutdown = false;
+    std::map<std::pair<std::string, std::string>, SynthesisState> synthesisStates;
+    std::deque<SpeechEvent> synthesisNotifications;
+    std::optional<SpeechEvent> pendingSynthesisStatus;
+    bool drainingSynthesisNotifications = false;
+    std::thread::id synthesisNotificationOwner;
     EventHandler eventHandler;
+    std::shared_ptr<const std::function<bool()>> admissionGuard;
     VoicePresetStore presetStore;
     // Whose laugh it is. Follows the active preset, because a voice playing another
     // voice's clips is worse than a voice with none.
     VocalizationBank vocalizationBank;
+    struct CuePreparation
+    {
+        Utterance origin;
+        SystemCueBank bank;
+        std::vector<SystemCueKind> missing;
+        std::size_t next = 0;
+    };
+    std::optional<SystemCueBank> systemCueBank;
+    std::optional<CuePreparation> cuePreparation;
+    std::set<std::string> attemptedCueKeys;
+    SystemCueSnapshot systemCueSnapshot;
+    bool generatingCue = false;
+    bool playingAudio = false;
     // How often she is allowed to. The model chooses where a cue belongs; this decides
     // whether it is heard, and it is deliberately not the model's to overrule.
     VocalizationPolicy vocalizationPolicy;

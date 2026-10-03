@@ -20,6 +20,7 @@ class llmService
 {
 public:
     llmService();
+    explicit llmService(std::string memoryDatabasePath);
     ~llmService();
 
     void ApplySettings(const llmSettings& settings, const embeddingSettings& embeddingSettings, const aiProfile& profile);

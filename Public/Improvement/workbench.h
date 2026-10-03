@@ -14,11 +14,15 @@
 namespace revia::improvement
 {
 
-// One CTest suite and whether it passed.
+// One terminal CTest row, including its registry identity and execution accounting.
 struct TestOutcome
 {
     std::string name;
     bool passed = false;
+    int id = 0;
+    int finished = 0;
+    int total = 0;
+    bool executed = false;
 };
 
 // CTest's own summary lines ("1/10 Test #1: Revia.Foundation ... Passed 74.9 sec").
@@ -36,6 +40,10 @@ struct BuildOutcome
     bool completed = false;
     bool built = false;
     bool testsRan = false;
+    int scriptExitCode = -1;
+    int discoveryExitCode = -1;
+    int testExitCode = -1;
+    std::string discoveryOutput;
     std::string testOutput;
     std::string buildLog;
     std::string failure;
@@ -46,6 +54,11 @@ using BuildRunner = std::function<BuildOutcome(
     const std::filesystem::path& sourceRoot,
     const std::filesystem::path& buildRoot,
     std::stop_token stopToken)>;
+
+// Installed by trusted host construction, never a setting or model-provided approval.
+using CandidateAdmission = std::function<std::string(const CodeChange&, const std::string&, const std::string&)>;
+[[nodiscard]] bool CompletePassingBuild(const BuildOutcome& outcome);
+[[nodiscard]] bool CompleteBuildExecution(const BuildOutcome& outcome);
 
 struct VerificationResult
 {
@@ -64,7 +77,7 @@ struct VerificationResult
 class Workbench
 {
 public:
-    Workbench(std::filesystem::path sourceRoot, std::filesystem::path workbenchRoot, BuildRunner runner);
+    Workbench(std::filesystem::path sourceRoot, std::filesystem::path workbenchRoot, BuildRunner runner, CandidateAdmission admission = {});
 
     [[nodiscard]] const std::filesystem::path& Root() const { return root; }
     [[nodiscard]] std::filesystem::path MirrorRoot() const { return root / "src"; }
@@ -89,10 +102,12 @@ private:
     std::filesystem::path source;
     std::filesystem::path root;
     BuildRunner runner;
+    CandidateAdmission admission;
     // Source file -> "size:mtime" when it was last copied.
     std::map<std::string, std::string> manifest;
     // Suites failing in the unchanged copy, and the source state they were measured on.
     std::set<std::string> baselineFailures;
+    BuildOutcome baselineEvidence;
     std::string baselineStamp;
 };
 

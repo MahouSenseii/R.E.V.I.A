@@ -1,4 +1,6 @@
 #pragma once
+#include "speakerRecognitionTestAccess.h"
+#include "Speech/speakerEnrollmentDialogue.h"
 
 #include "Computer/computerSettings.h"
 #include "Core/profile.h"
@@ -21,8 +23,24 @@ namespace revia::runtime
 
 struct ReviaSessionTestAccess
 {
+    static void MarkStudioStarted(ReviaSession& session, bool value) { session.started.store(value); }
+    static agents::InputContext StudioInput(ReviaSession& session, agents::InputSource source, identity::SpeakerObservation speaker = {})
+    { return session.CaptureInputContext(source, speaker); }
+    static bool StudioInputCurrent(const ReviaSession& session, const agents::InputContext& context)
+    { return session.InputContextCurrent(context); }
+    static bool RegisterStudioTask(ReviaSession& session, RuntimeStamp stamp)
+    { return session.companionAuthority->RegisterTask(stamp, {}); }
     static speech::SpeechService& Speech(ReviaSession& session) { return session.speechService; }
+    static diagnostics::IssueLog& SpeechIssues(ReviaSession& session) { return session.speechIssues; }
+    static void SpeechEvent(ReviaSession& session, const speech::SpeechEvent& event) { session.HandleSpeechEvent(event); }
+    static void LoadSpeechFaultHistory(ReviaSession& session) { session.LoadSpeechFaultHistory(); }
+    static void SetSpeakingIntent(ReviaSession& session, std::uint64_t id) { session.speakingIntentId.store(id); }
+    static std::uint64_t SpeakingIntent(const ReviaSession& session) { return session.speakingIntentId.load(); }
     static actions::ActionRuntime& Actions(ReviaSession& session) { return session.actionRuntime; }
+    static void JoinWorkflow(ReviaSession& session) { session.agentWorkflow.Join(); }
+    static void Log(ReviaSession& session, const std::string& text) { session.appLogger.Log(text); }
+    static bool LoadConfiguredProfile(const ReviaSession& session, const std::string& id, aiProfile& profile)
+    { return session.config.LoadProfile(id, profile); }
     static void ConfigureStartupBrains(ReviaSession& session, int port, bool fastWarm = true, bool expertWarm = true)
     {
         session.settings.llm.backend = "LLamaCpp";
@@ -93,6 +111,15 @@ struct ReviaSessionTestAccess
     static emotion::EmotionRuntime& Emotions(ReviaSession& session) { return session.emotionRuntime; }
     static AffectController& LegacyAffect(ReviaSession& session) { return session.affectController; }
     static identity::RelationshipRegistry& People(ReviaSession& session) { return session.relationships; }
+    static bool CaptureEnrollmentSample(ReviaSession& session, const std::filesystem::path& wave, std::string& message)
+    { return session.CaptureSpeakerEnrollmentSample(wave, {}, message); }
+    static void BindStudioSpeakerResolver(ReviaSession& session) { session.ConfigureSpeakerResolver(); }
+    static identity::SpeakerObservation ResolveStudioVoice(ReviaSession& session, const std::filesystem::path& wave)
+    { return speech::SpeakerRecognitionTestAccess::Resolve(session.speechRecognitionService, wave); }
+    static bool HandleStudioEnrollment(ReviaSession& session, const agents::InputBatch& input, SessionResult& result)
+    { return session.TryHandleSpeakerEnrollment(input, result); }
+    static bool StudioEnrollmentPending(ReviaSession& session)
+    { return session.speakerEnrollment && session.speakerEnrollment->Snapshot().phase != speech::SpeakerEnrollmentPhase::Idle; }
 
     static float PendingDevelopment(ReviaSession& session, identity::Trait trait)
     { return session.developmentEngine.PendingEvidence(trait); }

@@ -4,6 +4,8 @@
 #include "Identity/developmentState.h"
 #include "Identity/preferenceState.h"
 #include "Identity/relationshipState.h"
+#include "Identity/socialIdentity.h"
+#include "Speech/speakerRecognition.h"
 
 #include <filesystem>
 #include <map>
@@ -23,17 +25,21 @@ struct IdentitySnapshot
     std::map<std::string, RelationshipState> relationships;
     std::vector<DevelopmentChange> developmentHistory;
     std::vector<Preference> preferences;
+    std::map<std::string, RelationshipState> relationshipEvidenceBase;
+    std::vector<RelationshipEvidenceRecord> relationshipEvidence;
+    std::vector<AudienceAlias> audienceAliases;
+    std::map<std::string, RecognitionConsent> recognitionConsents;
+    std::map<std::string, speech::SpeakerTemplate> speakerTemplates;
 };
 
-// 2 added preferences. Bumped rather than added silently: an older build refuses a file
-// from a newer schema instead of loading it and dropping the keys it does not know, and
-// dropping them would delete opinions on the next save.
-inline constexpr int IdentitySchemaVersion = 2;
+// 3 adds private aliases, consented voice templates and retained correctable social evidence.
+// Older documents load without inventing consent; older builds refuse this newer schema.
+inline constexpr int IdentitySchemaVersion = 3;
 
 // Atomic, versioned identity JSON keyed by names; enum reordering cannot reinterpret saved state.
 class IdentityStore
 {
-public:
+  public:
     explicit IdentityStore(std::filesystem::path path = "RuntimeData/Identity/identity.json");
 
     // A missing file is a first run, not a failure: it yields the childlike baseline
@@ -43,13 +49,16 @@ public:
     [[nodiscard]] bool Load(IdentitySnapshot& outSnapshot, std::string& outError) const;
     [[nodiscard]] bool Save(const IdentitySnapshot& snapshot, std::string& outError) const;
 
-    [[nodiscard]] std::filesystem::path Path() const { return storePath; }
+    [[nodiscard]] std::filesystem::path Path() const
+    {
+        return storePath;
+    }
 
     // Version of the file currently on disk, or nullopt when there is none. Exposed so a
     // migration can be decided without a full load.
     [[nodiscard]] std::optional<int> StoredVersion() const;
 
-private:
+  private:
     std::filesystem::path storePath;
     mutable std::mutex mutex;
 };

@@ -1,0 +1,14 @@
+{
+    "schemaVersion": 1,
+    "id": "workspace-inventory",
+    "version": "1.1.0",
+    "supportedTasks": ["workspace-inventory"],
+    "inputSchema": {"type": "object", "properties": {"folder": {"type": "string"}}, "required": ["folder"], "additionalProperties": false},
+    "outputSchema": {"type": "object", "properties": {"entries": {"type": "integer"}, "files": {"type": "integer"}, "directories": {"type": "integer"}, "links": {"type": "integer"}, "other": {"type": "integer"}, "complete": {"type": "boolean"}}, "required": ["entries", "files", "directories", "links", "other", "complete"], "additionalProperties": false},
+    "requiredCapabilities": ["list_directory"],
+    "optionalCapabilities": [],
+    "sideEffects": ["none"],
+    "supportedToolVersions": {"revia-filesystem": "listing-v1"},
+    "verificationEntry": "cases.json",
+    "outputFormat": "typed-counts"
+}

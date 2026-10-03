@@ -457,27 +457,41 @@ bool ConversationStylePolicy::IsBriefSocialTurn(const std::string& input)
 bool ConversationStylePolicy::LooksLikeCorrection(const std::string& input)
 {
     const std::string lowered = LowerCopy(Trim(input));
-    constexpr std::string_view CorrectionSignals[] = {
-        "no,", "no ", "that's not", "that is not", "i'm not", "i am not",
-        "wait what", "you misunderstood", "you misread", "i didn't say",
-        "i did not say", "not what i", "that's wrong", "that is wrong",
-        "you repeated", "you just repeated", "don't repeat", "do not repeat",
-        "no need to repeat", "you reepated", "you just reepated"
-    };
+    constexpr std::string_view NonCorrectionMentions[] = {"no correction", "this is not a correction", "i'm not making a correction",
+        "i am not making a correction", "do not treat this as a correction", "don't treat this as a correction"};
+    if (std::any_of(std::begin(NonCorrectionMentions), std::end(NonCorrectionMentions),
+            [&lowered](const std::string_view mention) { return lowered.starts_with(mention); }))
+        return false;
+    if (lowered.starts_with("correction:"))
+    {
+        const std::string body = Trim(lowered.substr(11));
+        constexpr std::string_view MetalinguisticBodies[] = {"is a label", "is a word", "is a quoted example", "is a quotation example"};
+        return !body.empty() && !std::any_of(std::begin(MetalinguisticBodies), std::end(MetalinguisticBodies),
+                                    [&body](const std::string_view mention) { return body.starts_with(mention); });
+    }
+    if (lowered.starts_with("check your explanation against"))
+    {
+        const auto sentences = SplitSentences(lowered);
+        if (std::any_of(sentences.begin(), sentences.end(),
+                [](const std::string& sentence)
+                {
+                    const auto normalized = NormalizeSentence(sentence);
+                    return normalized == "correct any earlier error" || normalized.starts_with("correct any earlier error in ");
+                }))
+            return true;
+    }
+    constexpr std::string_view CorrectionSignals[] = {"no,", "no ", "that's not", "that is not", "i'm not", "i am not", "wait what",
+        "you misunderstood", "you misread", "i didn't say", "i did not say", "not what i", "that's wrong", "that is wrong", "you repeated",
+        "you just repeated", "don't repeat", "do not repeat", "no need to repeat", "you reepated", "you just reepated"};
     return std::any_of(std::begin(CorrectionSignals), std::end(CorrectionSignals),
-        [&lowered](const std::string_view signal)
-        {
-            return lowered.starts_with(signal) || lowered.find(signal) != std::string::npos;
-        });
+        [&lowered](const std::string_view signal) { return lowered.starts_with(signal) || lowered.find(signal) != std::string::npos; });
 }
 
 bool ConversationStylePolicy::LooksLikeBriefAcknowledgement(const std::string& input)
 {
     const std::string normalized = NormalizeSentence(input);
     constexpr std::string_view Acknowledgements[] = {
-        "good", "great", "nice", "okay", "ok", "cool", "fine", "not bad",
-        "im good", "im okay", "doing well", "that works", "sounds good"
-    };
+        "good", "great", "nice", "okay", "ok", "cool", "fine", "not bad", "im good", "im okay", "doing well", "that works", "sounds good"};
     return std::any_of(std::begin(Acknowledgements), std::end(Acknowledgements),
         [&normalized](const std::string_view acknowledgement)
         {
@@ -664,16 +678,14 @@ std::string ConversationStylePolicy::BuildAnswerObligationGuidance(const AnswerO
     // The truth sentence is identical in all three modes on purpose. It is the one
     // thing no posture is allowed to soften, so it must not read as more negotiable in
     // the mode that grants the most freedom.
-    constexpr std::string_view Delivery =
-        " How you say it is not this instruction's business: your personality, your "
-        "current mood, and how you actually feel about the person you are talking to "
-        "decide that, exactly as they would have anyway.";
-    constexpr std::string_view RuntimeTruth =
-        " Whatever you choose, results the runtime actually confirmed -- a build, a "
-        "command, a file or process operation, a lookup, anything you were told the "
-        "outcome of -- are reported as they happened. You may say them in your own "
-        "voice, complain about them, or find them funny. You may not change what they "
-        "say, and you may not invent one you were not given.";
+    constexpr std::string_view Delivery = "\n\nHow you say it is not this instruction's business: your personality, your "
+                                          "current mood, and how you actually feel about the person you are talking to "
+                                          "decide that, exactly as they would have anyway.";
+    constexpr std::string_view RuntimeTruth = " Whatever you choose, results the runtime actually confirmed -- a build, a "
+                                              "command, a file or process operation, a lookup, anything you were told the "
+                                              "outcome of -- are reported as they happened. You may say them in your own "
+                                              "voice, complain about them, or find them funny. You may not change what they "
+                                              "say, and you may not invent one you were not given.";
 
     switch (mode)
     {
@@ -707,22 +719,23 @@ std::string ConversationStylePolicy::BuildTurnGuidance(const std::string& rawInp
 {
     const auto input = conversation::ReadSpeechAttribution(rawInput).userAuthoredText;
     const auto attributionGuidance = conversation::BuildSpeechAttributionGuidance(rawInput, context);
+    const bool correction = LooksLikeCorrection(input);
     std::ostringstream guidance;
-    guidance << "Turn-local conversation guidance: answer the latest message as a continuation "
-        "of the exchange, not as a new support ticket. Do not repeat the user's wording and do "
-        "not add a generic invitation or follow-up question after the answer. Never repeat a "
-        "sentence or block to create emphasis. Avoid reassurance-check loops such as 'You okay "
-        "with that?', 'I'm not complaining', and 'Just curious'.";
-    if (!attributionGuidance.empty()) guidance << '\n' << attributionGuidance;
-
-    if (LooksLikeCorrection(input))
+    if (correction)
     {
-        guidance << " The latest message appears to correct a mistaken assumption. Briefly accept "
-            "the correction, replace the mistaken interpretation, and continue from the corrected "
-            "fact. Do not defend, restate, or preserve the earlier assumption. Keep relationship "
-            "roles and possessives pointed in the direction the user stated; do not swap who is "
-            "whose parent, child, creator, partner, friend, or favorite.";
+        guidance << "Turn-local conversation guidance: The latest message appears to correct a mistaken assumption. "
+                    "Check evidence; preserve disagreement and uncertainty. Carry forward unchanged details in a user-supplied scenario "
+                    "or preference. Preserve subjects, roles and possessives. Repair a speaker’s mistake only when evidence establishes "
+                    "it; do not invent errors, motives or blame. Use facts already given instead of asking again.";
+        guidance << "\n\nAnswer the latest message as a continuation of the exchange, not as a new support ticket.";
     }
+    else
+    {
+        guidance << "Turn-local conversation guidance: answer the latest message as a continuation "
+                    "of the exchange, not as a new support ticket.";
+    }
+    if (!attributionGuidance.empty())
+        guidance << '\n' << attributionGuidance;
     const auto socialSignals = revia::identity::ReadConversationSignals(input, {}, true);
     if (IsBriefSocialTurn(input))
         guidance << " This is a brief reaction: finish your thought in one to three short sentences.";
@@ -769,6 +782,10 @@ std::string ConversationStylePolicy::BuildTurnGuidance(const std::string& rawInp
             "not know yet.";
     }
 
+    guidance << "\n\nDo not repeat the user's wording and do not add a generic invitation or "
+                "follow-up question after the answer. Never repeat a sentence or block to create emphasis. "
+                "Avoid reassurance-check loops such as 'You okay with that?', 'I'm not complaining', and 'Just curious'.";
+
     // A mistaken earlier response can itself be a copy of somebody else's words.
     // Do not prime another role inversion by replaying those openings as Revia's voice.
     if (!attributionGuidance.empty()) return guidance.str();
@@ -789,8 +806,8 @@ std::string ConversationStylePolicy::BuildTurnGuidance(const std::string& rawInp
     }
     if (!recentOpenings.empty())
     {
-        guidance << " Do not reuse a complete sentence from a recent reply. Avoid these "
-            "recent Revia openings:";
+        guidance << "\n\nDo not reuse a complete sentence from a recent reply. Avoid these "
+                    "recent Revia openings:";
         for (const std::string& opening : recentOpenings)
         {
             guidance << " [" << opening << ']';
@@ -987,7 +1004,9 @@ std::string ConversationStylePolicy::RefineReply(const std::string& rawInput,
     // These are narrow grounding gates, not canned conversation. They activate only
     // when a reply contradicts a fact we can establish from the current turn. This is
     // also the last boundary before text reaches durable context and the user.
-    if (LooksLikeCorrection(input) && LooksLikeWellbeingQuestion(input))
+    const auto normalizedInput = NormalizeSentence(input);
+    if (LooksLikeCorrection(input) && LooksLikeWellbeingQuestion(input) &&
+        (normalizedInput.find("im not down") != std::string::npos || normalizedInput.find("i am not down") != std::string::npos))
     {
         return "Got it—you weren't saying you were down. I'm doing well.";
     }

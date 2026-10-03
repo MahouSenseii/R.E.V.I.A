@@ -9,6 +9,7 @@ class configManager
 {
 public:
     configManager();
+    configManager(std::string settingsFile, std::string profileDirectory, std::string neutralProfileDirectory = {});
     ~configManager();
 
     bool LoadSettings(appSettings& outSettings) const;
@@ -29,4 +30,5 @@ private:
 
     std::string settingsPath = "Config/settings.json";
     std::string profilePath = "Config/Profiles";
+    std::string neutralProfilePath;
 };

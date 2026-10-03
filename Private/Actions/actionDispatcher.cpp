@@ -36,8 +36,10 @@ ActionResult ActionDispatcher::Dispatch(const ActionRequest& request,const Polic
         return result;
     }
 
-    for (const auto& executor : executors)
+    for (const auto& registered : executors)
     {
+        // A live capability update can rebuild the registry from an effect callback.
+        const auto executor = registered;
         if (executor->Handles(request.type))
         {
             try

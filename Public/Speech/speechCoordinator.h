@@ -110,6 +110,8 @@ struct SpeechIntent
     // express -- an unusually urgent skill message -- and absent almost always.
     std::optional<int> priority;
     bool latencyCritical = true;
+    // Captured by the producer or trusted factory; queued speech never adopts a newer context.
+    std::function<bool()> admission;
 };
 
 // An intent the coordinator has accepted and given an identity.
@@ -197,12 +199,17 @@ class SpeechCoordinator
 public:
     using TraceHandler = std::function<void(const SpeechTrace&)>;
 
+    using AdmissionGuard = std::function<bool()>;
+    using AdmissionFactory = std::function<AdmissionGuard()>;
+
     SpeechCoordinator();
 
     void SetChannel(SpeechChannel channel);
     void SetPriorities(SpeechPriorities priorities);
     void SetSongPolicy(SongPolicy policy);
     void SetTraceHandler(TraceHandler handler);
+    // Captures a guard at submission. Callbacks run under the lock and must not reenter this owner.
+    void SetAdmissionFactory(AdmissionFactory factory);
 
     // Probes externally started speech so autonomous remarks cannot overlap streamed replies.
     // Called under the coordinator lock; the probe must not call back into the coordinator.
@@ -244,7 +251,7 @@ private:
 
     // Everything below runs with `mutex` already held.
     void StartNextLocked();
-    void BeginLocked(Pending pending);
+    bool BeginLocked(Pending pending);
     void FinishActiveLocked(SpeechIntentState state, const std::string& reason);
     void RecordLocked(const TrackedIntent& tracked, const std::string& reason);
     void RemoveQueuedLocked(const std::function<bool(const Pending&)>& matches, SpeechIntentState state, const std::string& reason);
@@ -257,6 +264,8 @@ private:
     SongPolicy songPolicy;
     TraceHandler trace;
     BusyProbe busyProbe;
+
+    AdmissionFactory admissionFactory;
 
     std::chrono::steady_clock::time_point startedAt;
     std::uint64_t nextId = 1;

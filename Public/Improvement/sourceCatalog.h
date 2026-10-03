@@ -9,8 +9,8 @@
 namespace revia::improvement
 {
 
-// Reviewable product source: Public, Private, Desktop and the Python voice worker.
-// Tests, build files, scripts and configuration cannot be changed by a proposal.
+// Ordinary review excludes kernel/control owners; native execution requires separate host admission.
+// Tests, build files and configuration remain outside model-selected source.
 class SourceCatalog
 {
 public:

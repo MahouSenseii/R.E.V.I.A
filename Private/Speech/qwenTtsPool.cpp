@@ -172,8 +172,15 @@ VoiceOperationResult QwenTtsPool::RenderVocalizations(const std::filesystem::pat
     const std::shared_ptr<QwenTtsClient> client = DesignClient();
     if (client == nullptr)
         return {false, "No Qwen3-TTS worker is configured.", {}, -1.0};
-    VoiceOperationResult result = client->RenderVocalizations(
-        presetDirectory, kinds, language, missingOnly);
+    VoiceOperationResult result;
+    try
+    {
+        result = client->RenderVocalizations(presetDirectory, kinds, language, missingOnly);
+    }
+    catch (...)
+    {
+        result = {false, "Nonverbal clip preparation did not complete.", {}, -1.0};
+    }
     result.workerId = "voice-design-worker";
     // Released exactly as DesignVoice releases it. Rendering a bank is a one-off cost
     // at preset creation, and holding the design model resident afterwards would take
@@ -190,8 +197,15 @@ VoiceOperationResult QwenTtsPool::DesignVoice(const std::string& text,
     const std::shared_ptr<QwenTtsClient> client = DesignClient();
     if (client == nullptr)
         return {false, "No Qwen3-TTS worker is configured.", {}, -1.0};
-    VoiceOperationResult result = client->DesignVoice(
-        text, description, language, outputPath);
+    VoiceOperationResult result;
+    try
+    {
+        result = client->DesignVoice(text, description, language, outputPath);
+    }
+    catch (...)
+    {
+        result = {false, "Voice creation did not complete.", {}, -1.0};
+    }
     result.workerId = "voice-design-worker";
     // VoiceDesign is deliberately isolated and on-demand. Releasing it cannot evict
     // either persistent conversational clone worker.
@@ -231,12 +245,56 @@ VoiceOperationResult QwenTtsPool::Synthesize(const std::string& text,
         return shuttingDownResult;
     }
     const auto startedAt = std::chrono::steady_clock::now();
-    VoiceOperationResult result = client->Synthesize(text, preset, outputPath);
+    VoiceOperationResult result;
+    try
+    {
+        result = client->Synthesize(text, preset, outputPath);
+    }
+    catch (...)
+    {
+        result = {false, "Voice synthesis failed for this reply. The text remains available. The cause is unknown.", {}, -1.0};
+    }
     const double wallMilliseconds = std::chrono::duration<double, std::milli>(
         std::chrono::steady_clock::now() - startedAt).count();
     result.workerId = id;
     result.workerPoolWaitMilliseconds = poolWaitMilliseconds;
     ReleaseWorker(index, text.size(), wallMilliseconds);
+    return result;
+}
+
+VoiceOperationResult QwenTtsPool::TrySynthesizeSystemCue(const std::string& text, const VoicePreset& preset, const std::string& outputPath)
+{
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    QwenTtsClient* client = nullptr;
+    std::size_t index = 0;
+    {
+        std::unique_lock lock(mutex, std::try_to_lock);
+        if (!lock.owns_lock() || shuttingDown)
+            return {false, "System cue preparation did not complete.", {}, -1.0};
+        std::vector<VoiceWorkerState> states;
+        for (const auto& worker : workers)
+            states.push_back({worker.busy, worker.fixedOverheadMilliseconds, worker.millisecondsPerCharacter, worker.completed});
+        index = SelectIdleVoiceWorker(states, text.size(), false);
+        if (index >= workers.size())
+            return {false, "System cue preparation did not complete.", {}, -1.0};
+        workers[index].busy = true;
+        client = workers[index].client.get();
+    }
+    VoiceOperationResult result;
+    try
+    {
+        result = client->TrySynthesizeSystemCue(text, preset, outputPath, deadline);
+    }
+    catch (...)
+    {
+        result = {false, "System cue preparation did not complete.", {}, -1.0};
+    }
+    {
+        std::lock_guard lock(mutex);
+        if (index < workers.size())
+            workers[index].busy = false;
+    }
+    condition.notify_all();
     return result;
 }
 
@@ -268,7 +326,15 @@ VoiceOperationResult QwenTtsPool::SynthesizePcm(const std::string& text, const V
         return shuttingDownResult;
     }
     const auto startedAt = std::chrono::steady_clock::now();
-    VoiceOperationResult result = client->SynthesizePcm(text, preset);
+    VoiceOperationResult result;
+    try
+    {
+        result = client->SynthesizePcm(text, preset);
+    }
+    catch (...)
+    {
+        result = {false, "Voice synthesis failed for this reply. The text remains available. The cause is unknown.", {}, -1.0};
+    }
     const double wallMilliseconds = std::chrono::duration<double, std::milli>(
         std::chrono::steady_clock::now() - startedAt).count();
     result.workerId = id;
@@ -310,8 +376,15 @@ std::vector<VoiceOperationResult> QwenTtsPool::SynthesizePcmBatch(const std::vec
     }
 
     const auto startedAt = std::chrono::steady_clock::now();
-    std::vector<VoiceOperationResult> results =
-        client->SynthesizePcmBatch(texts, preset);
+    std::vector<VoiceOperationResult> results;
+    try
+    {
+        results = client->SynthesizePcmBatch(texts, preset);
+    }
+    catch (...)
+    {
+        results = {{false, "Voice synthesis failed for this reply. The text remains available. The cause is unknown.", {}, -1.0}};
+    }
     const double wallMilliseconds = std::chrono::duration<double, std::milli>(
         std::chrono::steady_clock::now() - startedAt).count();
     for (VoiceOperationResult& result : results)

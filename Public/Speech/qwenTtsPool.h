@@ -34,6 +34,7 @@ struct VoiceWorkerState
 [[nodiscard]] std::size_t SelectIdleVoiceWorker(const std::vector<VoiceWorkerState>& workers, std::size_t characters, bool latencyCritical);
 
 struct VoicePoolTestAccess;
+struct SystemCueTestAccess;
 
 // Data-parallel Qwen workers. Each process owns one complete model on one device; a
 // heterogeneous pair is useful for independent bounded phrases, not for splitting one
@@ -45,6 +46,7 @@ class QwenTtsPool
     // The tests reach the scheduler directly rather than standing up two model servers
     // to observe a comparison that never needed one.
     friend struct VoicePoolTestAccess;
+    friend struct SystemCueTestAccess;
 
 public:
     QwenTtsPool() = default;
@@ -65,6 +67,7 @@ public:
         const std::string& description, const std::string& language, const std::string& outputPath);
     VoiceOperationResult Synthesize(const std::string& text,
         const VoicePreset& preset, const std::string& outputPath, bool latencyCritical = false);
+    VoiceOperationResult TrySynthesizeSystemCue(const std::string& text, const VoicePreset& preset, const std::string& outputPath);
     VoiceOperationResult SynthesizePcm(const std::string& text, const VoicePreset& preset, bool latencyCritical = false);
     // One generation call covering several complete phrases, on a single worker.
     //

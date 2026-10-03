@@ -61,6 +61,7 @@ struct RelationshipState
 struct RelationshipEvent
 {
     std::string entityId;
+    std::string evidenceId;
 
     float positiveInteraction = 0.0F;
     float negativeInteraction = 0.0F;
@@ -78,6 +79,21 @@ struct RelationshipEvent
     float confidence = 1.0F;
 
     std::string description;
+};
+
+enum class RelationshipEvidenceKind
+{
+    Interaction,
+    Settling
+};
+
+struct RelationshipEvidenceRecord
+{
+    RelationshipEvent event;
+    RelationshipEvidenceKind kind = RelationshipEvidenceKind::Interaction;
+    std::string originalEntityId;
+    std::int64_t observedAt = 0;
+    bool corrected = false;
 };
 
 // Bounds on how fast a relationship may move.
@@ -100,8 +116,8 @@ struct RelationshipLimits
 // nowEpochSeconds records when this contact happened, and is the caller's clock
 // rather than one read here, so this stays pure and a test can pin the time. Zero
 // means do not stamp, which is how every existing caller keeps its behaviour.
-[[nodiscard]] RelationshipState ApplyRelationshipEvent(RelationshipState state,
-    const RelationshipEvent& event, const RelationshipLimits& limits = {}, std::int64_t nowEpochSeconds = 0);
+[[nodiscard]] RelationshipState ApplyRelationshipEvent(
+    RelationshipState state, const RelationshipEvent& event, const RelationshipLimits& limits = {}, std::int64_t nowEpochSeconds = 0);
 
 // Time passing with no contact. Friction cools; grievance mostly does not; familiarity
 // is never lost, because forgetting someone you know is a memory problem, not a

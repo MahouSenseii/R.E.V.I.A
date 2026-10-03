@@ -7,17 +7,21 @@
 
 #include <QApplication>
 #include <QPixmap>
+#include <QSettings>
 #include <QTabWidget>
+#include <QTemporaryDir>
 #include <QTimer>
 
 #include <exception>
 #include <filesystem>
+#include <memory>
 #include <string>
 #include <system_error>
 
 int main(int argc, char** argv)
 {
     bool smokeTest = false;
+    bool isolatedUiSmokeTest = false;
     bool runtimeSmokeTest = false;
     bool runtimeReadySmokeTest = false;
     std::string screenshotPath;
@@ -35,6 +39,7 @@ int main(int argc, char** argv)
     for (int index = 1; index < argc; ++index)
     {
         smokeTest = smokeTest || std::string(argv[index]) == "--ui-smoke-test";
+        isolatedUiSmokeTest = isolatedUiSmokeTest || std::string(argv[index]) == "--ui-smoke-test";
         runtimeSmokeTest = runtimeSmokeTest ||
             std::string(argv[index]) == "--runtime-smoke-test";
         runtimeReadySmokeTest = runtimeReadySmokeTest ||
@@ -89,6 +94,32 @@ int main(int argc, char** argv)
         // its normal error state.
         std::error_code error;
         std::filesystem::current_path(directory, error);
+    }
+
+    std::unique_ptr<QTemporaryDir> smokeDirectory;
+    const auto runtimeDirectory = std::filesystem::current_path();
+    struct RestoreDirectory
+    {
+        std::filesystem::path previous;
+        ~RestoreDirectory()
+        {
+            std::error_code error;
+            std::filesystem::current_path(previous, error);
+        }
+    } restore{runtimeDirectory};
+    if (isolatedUiSmokeTest && !runtimeSmokeTest)
+    {
+        smokeDirectory = std::make_unique<QTemporaryDir>();
+        if (!smokeDirectory->isValid()) return 2;
+        const std::filesystem::path temporaryRoot(smokeDirectory->path().toStdWString());
+        std::error_code error;
+        std::filesystem::copy(runtimeDirectory / "Config", temporaryRoot / "Config",
+            std::filesystem::copy_options::recursive, error);
+        if (error) return 2;
+        std::filesystem::current_path(temporaryRoot, error);
+        if (error || revia::core::RuntimeRoot() != temporaryRoot) return 2;
+        QSettings::setDefaultFormat(QSettings::IniFormat);
+        QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, smokeDirectory->path());
     }
 
     // Installed before the first window exists, so a failure during construction is

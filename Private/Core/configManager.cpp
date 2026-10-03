@@ -93,6 +93,14 @@ namespace
 
 configManager::configManager() = default;
 
+configManager::configManager(std::string settingsFile, std::string profileDirectory, std::string neutralProfileDirectory)
+    : settingsPath(std::filesystem::absolute(settingsFile).lexically_normal().string()),
+      profilePath(std::filesystem::absolute(profileDirectory).lexically_normal().string()),
+      neutralProfilePath(
+          neutralProfileDirectory.empty() ? std::string{} : std::filesystem::absolute(neutralProfileDirectory).lexically_normal().string())
+{
+}
+
 configManager::~configManager() = default;
 
 bool configManager::LoadSettings(appSettings& outSettings) const
@@ -1558,7 +1566,12 @@ bool configManager::LoadProfile(const std::string& profileId, aiProfile& outProf
 
     if (!file.is_open())
     {
-        return false;
+        std::error_code error;
+        if (neutralProfilePath.empty() || std::filesystem::exists(profileFile, error) || error)
+            return false;
+        file.open(std::filesystem::path(neutralProfilePath) / (profileId + ".json"));
+        if (!file.is_open())
+            return false;
     }
 
     // H1: Guard against malformed JSON / wrongly-typed values.
@@ -1694,24 +1707,23 @@ bool configManager::LoadProfile(const std::string& profileId, aiProfile& outProf
 std::vector<std::string> configManager::ListProfiles() const
 {
     std::vector<std::string> profiles;
-    std::error_code error;
-    const std::filesystem::path root(profilePath);
-    if (!std::filesystem::is_directory(root, error))
+    for (const std::string& directory : {profilePath, neutralProfilePath})
     {
-        return profiles;
-    }
-    for (const auto& entry : std::filesystem::directory_iterator(root, error))
-    {
-        if (entry.is_regular_file(error) && entry.path().extension() == ".json")
+        std::error_code error;
+        if (directory.empty() || !std::filesystem::is_directory(directory, error))
+            continue;
+        for (const auto& entry : std::filesystem::directory_iterator(directory, error))
         {
-            const std::string id = entry.path().stem().string();
-            if (IsSafeProfileId(id))
+            if (entry.is_regular_file(error) && entry.path().extension() == ".json")
             {
-                profiles.push_back(id);
+                const std::string id = entry.path().stem().string();
+                if (IsSafeProfileId(id))
+                    profiles.push_back(id);
             }
         }
     }
     std::sort(profiles.begin(), profiles.end());
+    profiles.erase(std::unique(profiles.begin(), profiles.end()), profiles.end());
     return profiles;
 }
 

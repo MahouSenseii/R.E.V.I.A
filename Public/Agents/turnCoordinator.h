@@ -23,13 +23,19 @@ struct TurnAgentResult
 class TurnCoordinator
 {
 public:
+    TurnCoordinator();
+    explicit TurnCoordinator(std::string memoryDatabasePath);
+    void SetAdmissionGuard(std::function<bool()> guard);
     TurnAgentResult Execute(const messageRouter& router, const std::string& input, const std::vector<conversationMessage>& context,
         const responseFilterSettings& filterSettings, const ResponseFilterContext& filterContext, bool evaluateMemory,
         ResponseProvenance provenance, std::uint64_t turnId = 0, std::stop_token stopToken = {}, messageRouter::DeltaHandler onDelta = {},
         const revia::intelligence::IntelligenceDecision& decision = {},
-        llm::PrivateMemoryAccess memoryAccess = llm::PrivateMemoryAccess::ProfileSetting) const;
+        llm::PrivateMemoryAccess memoryAccess = llm::PrivateMemoryAccess::ProfileSetting,
+        std::function<bool()> contextAdmission = {}) const;
     std::vector<MemoryAgentEvent> DrainMemoryEvents();
     [[nodiscard]] LearnedFindingResult SubmitLearnedFinding(const messageRouter& router, memoryDecision decision, std::uint64_t turnId = 0);
+    [[nodiscard]] LearnedFindingResult SubmitLearnedFinding(const messageRouter& router, memoryDecision decision,
+        std::uint64_t turnId, std::string* outMemoryId);
     void BackfillMemoryEmbeddings(const messageRouter& router, const std::string& embeddingModel);
     void Stop();
 

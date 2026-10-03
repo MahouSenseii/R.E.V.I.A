@@ -9,10 +9,14 @@
 #include "Policy/desktopAuthorization.h"
 #include "Policy/desktopInputGuard.h"
 #include "Policy/permissionStore.h"
+#include "Runtime/runtimeStamp.h"
+#include "Policy/companionAuthority.h"
 
 #include <filesystem>
+#include <cstdint>
 #include <functional>
 #include <memory>
+#include <map>
 #include <mutex>
 #include <stop_token>
 #include <string>
@@ -29,16 +33,23 @@ class ActionRuntime
 {
     friend struct ActionRuntimeTestAccess;
 
-public:
+  public:
     ActionRuntime();
 
-    [[nodiscard]] bool Initialize(const std::filesystem::path& capabilityConfig,
-        const std::filesystem::path& auditPath, std::string& outError);
+    [[nodiscard]] bool Initialize(
+        const std::filesystem::path& capabilityConfig, const std::filesystem::path& auditPath, std::string& outError);
 
     [[nodiscard]] planning::ParsedAction ParseCommand(const std::string& input) const;
     [[nodiscard]] planning::ParsedAction ParseJson(const std::string& input) const;
     [[nodiscard]] PolicyDecision Evaluate(const ActionRequest& request) const;
     [[nodiscard]] ActionOutcome Execute(const ActionRequest& request, bool confirmationGranted = false, std::stop_token stopToken = {});
+    void BindAuthority(std::shared_ptr<policy::CompanionAuthority> authority, runtime::RuntimeStamp sessionStamp);
+    void ClearAuthorityBinding();
+    [[nodiscard]] ActionOutcome ExecuteFor(
+        const runtime::RuntimeStamp& stamp, const ActionRequest& request, bool confirmationGranted = false, std::stop_token stopToken = {});
+    [[nodiscard]] ActionOutcome ExecuteScopedFor(const runtime::RuntimeStamp& stamp, const ActionRequest& request,
+        const policy::CapabilityPolicy& scopedPolicy, bool confirmationGranted = false, std::stop_token stopToken = {});
+    void SetPrivateRuntimePaths(std::filesystem::path profileDirectory, std::filesystem::path logDirectory);
 
     // Scoped evaluation for the goal runner. A goal carries its own, narrower
     // CapabilitySettings; the result is the more restrictive of the global
@@ -92,21 +103,31 @@ public:
     // Conversation input may preserve a goal's lookup while interrupting its own.
     void CancelActiveInternet(bool preserveTaskOwned = false);
 
-private:
+  private:
     // Called under mutex. Cancellation is checked after the observer callback,
     // immediately before dispatch; completed executor results are never rewritten.
-    [[nodiscard]] ActionOutcome ExecuteWithPolicy(const ActionRequest& request,
-        const policy::CapabilityPolicy* scopedPolicy, bool confirmationGranted, std::stop_token stopToken);
+    [[nodiscard]] ActionOutcome ExecuteWithPolicy(const ActionRequest& request, const policy::CapabilityPolicy* scopedPolicy,
+        bool confirmationGranted, std::stop_token stopToken, const runtime::RuntimeStamp* subject = nullptr);
 
-    [[nodiscard]] bool InitializeUnlocked(const std::filesystem::path& capabilityConfig,
-        const std::filesystem::path& auditPath, std::string& outError);
+    [[nodiscard]] bool InitializeUnlocked(
+        const std::filesystem::path& capabilityConfig, const std::filesystem::path& auditPath, std::string& outError);
     [[nodiscard]] bool ReloadUnlocked(std::string& outError);
+    [[nodiscard]] bool EditCapabilities(const std::function<bool(std::string&)>& edit, std::function<void(CapabilitySettings&)> reduction,
+        const std::string& reductionKey, std::string& outError);
 
     mutable std::recursive_mutex mutex;
     // Conversation reads must not wait behind a synchronous action. Published only
     // after initialization or a capability reload has completed successfully.
     mutable std::mutex settingsMutex;
     CapabilitySettings settingsSnapshot;
+    std::uint64_t nextReductionId = 0;
+    struct TemporaryReduction
+    {
+        std::function<void(CapabilitySettings&)> apply;
+        std::string key;
+        bool failed = false;
+    };
+    std::map<std::uint64_t, TemporaryReduction> pendingReductions;
     policy::PermissionStore permissionStore;
     policy::CapabilityEditor capabilityEditor;
     std::unique_ptr<policy::CapabilityPolicy> policy;
@@ -118,10 +139,13 @@ private:
     policy::DesktopActionRateLimiter desktopRateLimiter;
     policy::DesktopActionRateLimiter desktopControlRateLimiter;
     std::shared_ptr<policy::DesktopInputGuard> desktopInputGuard;
-    std::shared_ptr<policy::DesktopApprovalGate> desktopApprovals =
-        std::make_shared<policy::DesktopApprovalGate>();
+    std::shared_ptr<policy::DesktopApprovalGate> desktopApprovals = std::make_shared<policy::DesktopApprovalGate>();
     std::filesystem::path capabilityConfigPath;
     std::filesystem::path auditPath;
+    std::shared_ptr<policy::CompanionAuthority> authority;
+    runtime::RuntimeStamp sessionStamp;
+    std::filesystem::path browserProfileDirectory;
+    std::filesystem::path browserLogDirectory;
 };
 
 } // namespace revia::actions
