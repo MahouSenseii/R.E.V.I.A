@@ -1,0 +1,549 @@
+{
+  "version": 2,
+  "width": 1024,
+  "height": 1536,
+  "headTransform": {
+    "scale": 0.78,
+    "anchor": [
+      512,
+      432
+    ],
+    "translate": [
+      0,
+      20
+    ]
+  },
+  "layerOrder": "back-to-front",
+  "alphaBoundsThreshold": 240,
+  "layers": [
+    {
+      "name": "Hair_Back",
+      "atlas": "head",
+      "sourceRectangle": [
+        248,
+        0,
+        272,
+        365
+      ],
+      "opaqueBounds": {
+        "left": 8,
+        "top": 40,
+        "width": 260,
+        "height": 302
+      },
+      "placement": [
+        397,
+        158,
+        234,
+        277
+      ],
+      "hidden": false
+    },
+    {
+      "name": "Neck",
+      "atlas": "head",
+      "sourceRectangle": [
+        535,
+        1325,
+        250,
+        165
+      ],
+      "opaqueBounds": {
+        "left": 18,
+        "top": 0,
+        "width": 177,
+        "height": 124
+      },
+      "placement": [
+        466,
+        392,
+        95,
+        88
+      ],
+      "hidden": false
+    },
+    {
+      "name": "Arm_ViewerLeft",
+      "atlas": "body",
+      "sourceRectangle": [
+        1024,
+        0,
+        512,
+        1024
+      ],
+      "opaqueBounds": {
+        "left": 78,
+        "top": 93,
+        "width": 257,
+        "height": 755
+      },
+      "placement": [
+        280,
+        410,
+        166,
+        514
+      ],
+      "hidden": false
+    },
+    {
+      "name": "Arm_ViewerRight",
+      "atlas": "body",
+      "sourceRectangle": [
+        512,
+        0,
+        512,
+        1024
+      ],
+      "opaqueBounds": {
+        "left": 196,
+        "top": 94,
+        "width": 258,
+        "height": 754
+      },
+      "placement": [
+        578,
+        410,
+        166,
+        514
+      ],
+      "hidden": false
+    },
+    {
+      "name": "Body",
+      "atlas": "body",
+      "sourceRectangle": [
+        0,
+        0,
+        512,
+        1024
+      ],
+      "opaqueBounds": {
+        "left": 139,
+        "top": 9,
+        "width": 358,
+        "height": 1001
+      },
+      "placement": [
+        322,
+        406,
+        380,
+        1050
+      ],
+      "hidden": false
+    },
+    {
+      "name": "Face",
+      "atlas": "head",
+      "sourceRectangle": [
+        0,
+        0,
+        248,
+        305
+      ],
+      "opaqueBounds": {
+        "left": 29,
+        "top": 59,
+        "width": 208,
+        "height": 246
+      },
+      "placement": [
+        425,
+        205,
+        173,
+        208
+      ],
+      "hidden": false
+    },
+    {
+      "name": "Eye_ViewerLeft_White",
+      "atlas": "head",
+      "sourceRectangle": [
+        250,
+        465,
+        250,
+        125
+      ],
+      "opaqueBounds": {
+        "left": 36,
+        "top": 30,
+        "width": 174,
+        "height": 81
+      },
+      "placement": [
+        454,
+        299,
+        50,
+        23
+      ],
+      "hidden": false
+    },
+    {
+      "name": "Eye_ViewerRight_White",
+      "atlas": "head",
+      "sourceRectangle": [
+        520,
+        465,
+        230,
+        125
+      ],
+      "opaqueBounds": {
+        "left": 42,
+        "top": 30,
+        "width": 177,
+        "height": 81
+      },
+      "placement": [
+        521,
+        299,
+        50,
+        23
+      ],
+      "hidden": false
+    },
+    {
+      "name": "Eye_ViewerLeft_Iris",
+      "atlas": "head",
+      "sourceRectangle": [
+        815,
+        440,
+        185,
+        220
+      ],
+      "opaqueBounds": {
+        "left": 17,
+        "top": 41,
+        "width": 140,
+        "height": 131
+      },
+      "placement": [
+        467,
+        298,
+        23,
+        23
+      ],
+      "hidden": false
+    },
+    {
+      "name": "Eye_ViewerRight_Iris",
+      "atlas": "head",
+      "sourceRectangle": [
+        35,
+        735,
+        195,
+        200
+      ],
+      "opaqueBounds": {
+        "left": 23,
+        "top": 21,
+        "width": 139,
+        "height": 133
+      },
+      "placement": [
+        534,
+        298,
+        23,
+        23
+      ],
+      "hidden": false
+    },
+    {
+      "name": "Eye_ViewerLeft_Lower",
+      "atlas": "head",
+      "sourceRectangle": [
+        265,
+        1040,
+        225,
+        120
+      ],
+      "opaqueBounds": {
+        "left": 39,
+        "top": 35,
+        "width": 63,
+        "height": 28
+      },
+      "placement": [
+        456,
+        320,
+        46,
+        2
+      ],
+      "hidden": true
+    },
+    {
+      "name": "Eye_ViewerRight_Lower",
+      "atlas": "head",
+      "sourceRectangle": [
+        530,
+        1035,
+        240,
+        125
+      ],
+      "opaqueBounds": {
+        "left": 131,
+        "top": 48,
+        "width": 53,
+        "height": 21
+      },
+      "placement": [
+        523,
+        320,
+        46,
+        2
+      ],
+      "hidden": true
+    },
+    {
+      "name": "Eye_ViewerLeft_Upper",
+      "atlas": "head",
+      "sourceRectangle": [
+        250,
+        775,
+        235,
+        115
+      ],
+      "opaqueBounds": {
+        "left": 13,
+        "top": 27,
+        "width": 192,
+        "height": 55
+      },
+      "placement": [
+        450,
+        296,
+        55,
+        16
+      ],
+      "hidden": false
+    },
+    {
+      "name": "Eye_ViewerRight_Upper",
+      "atlas": "head",
+      "sourceRectangle": [
+        535,
+        770,
+        230,
+        130
+      ],
+      "opaqueBounds": {
+        "left": 32,
+        "top": 31,
+        "width": 189,
+        "height": 59
+      },
+      "placement": [
+        519,
+        296,
+        55,
+        16
+      ],
+      "hidden": false
+    },
+    {
+      "name": "Brow_ViewerLeft",
+      "atlas": "head",
+      "sourceRectangle": [
+        785,
+        765,
+        225,
+        80
+      ],
+      "opaqueBounds": {
+        "left": 30,
+        "top": 29,
+        "width": 165,
+        "height": 25
+      },
+      "placement": [
+        454,
+        280,
+        45,
+        9
+      ],
+      "hidden": false
+    },
+    {
+      "name": "Brow_ViewerRight",
+      "atlas": "head",
+      "sourceRectangle": [
+        0,
+        1030,
+        235,
+        100
+      ],
+      "opaqueBounds": {
+        "left": 50,
+        "top": 30,
+        "width": 173,
+        "height": 30
+      },
+      "placement": [
+        524,
+        280,
+        45,
+        9
+      ],
+      "hidden": false
+    },
+    {
+      "name": "Mouth_Inside",
+      "atlas": "head",
+      "sourceRectangle": [
+        815,
+        1000,
+        180,
+        180
+      ],
+      "opaqueBounds": {
+        "left": 6,
+        "top": 18,
+        "width": 155,
+        "height": 135
+      },
+      "placement": [
+        493,
+        353,
+        37,
+        37
+      ],
+      "hidden": true
+    },
+    {
+      "name": "Mouth_Upper",
+      "atlas": "head",
+      "sourceRectangle": [
+        0,
+        1280,
+        235,
+        110
+      ],
+      "opaqueBounds": {
+        "left": 48,
+        "top": 50,
+        "width": 172,
+        "height": 28
+      },
+      "placement": [
+        492,
+        370,
+        42,
+        8
+      ],
+      "hidden": false
+    },
+    {
+      "name": "Mouth_Lower",
+      "atlas": "head",
+      "sourceRectangle": [
+        295,
+        1280,
+        165,
+        110
+      ],
+      "opaqueBounds": {
+        "left": 43,
+        "top": 71,
+        "width": 85,
+        "height": 16
+      },
+      "placement": [
+        501,
+        377,
+        23,
+        4
+      ],
+      "hidden": true
+    },
+    {
+      "name": "Hair_ViewerLeft",
+      "atlas": "head",
+      "sourceRectangle": [
+        0,
+        360,
+        218,
+        340
+      ],
+      "opaqueBounds": {
+        "left": 29,
+        "top": 16,
+        "width": 141,
+        "height": 300
+      },
+      "placement": [
+        400,
+        202,
+        79,
+        240
+      ],
+      "hidden": false
+    },
+    {
+      "name": "Hair_ViewerRight",
+      "atlas": "head",
+      "sourceRectangle": [
+        835,
+        0,
+        189,
+        365
+      ],
+      "opaqueBounds": {
+        "left": 50,
+        "top": 54,
+        "width": 120,
+        "height": 295
+      },
+      "placement": [
+        548,
+        202,
+        79,
+        240
+      ],
+      "hidden": false
+    },
+    {
+      "name": "Hair_Front",
+      "atlas": "head",
+      "sourceRectangle": [
+        520,
+        0,
+        315,
+        365
+      ],
+      "opaqueBounds": {
+        "left": 8,
+        "top": 52,
+        "width": 276,
+        "height": 303
+      },
+      "placement": [
+        393,
+        160,
+        237,
+        236
+      ],
+      "hidden": false
+    },
+    {
+      "name": "Hair_SignalClip",
+      "atlas": "head",
+      "sourceRectangle": [
+        805,
+        1290,
+        205,
+        170
+      ],
+      "opaqueBounds": {
+        "left": 29,
+        "top": 19,
+        "width": 136,
+        "height": 116
+      },
+      "placement": [
+        563,
+        230,
+        37,
+        27
+      ],
+      "hidden": false
+    }
+  ]
+}

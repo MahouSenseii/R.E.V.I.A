@@ -8,12 +8,17 @@ The exact generation prompt is in `generation-prompt.txt`; generation used the
 built-in image tool. This is a single flattened image, not a layered PSD or an
 exported Live2D model. No third-party character or sample rig was substituted.
 
+The editable 23-layer PSD and registered component PNGs are now in
+[Live2D](Live2D/README.md). Its corrected head was imported and saved in Cubism
+5.3.04 FREE. The animation rig and VTube Studio runtime verification remain open.
+
 ## Layer preparation
 
-Create an editable layered PSD at the same canvas registration, retaining a
-locked reference group. Draw the hidden surfaces behind moving pieces: cropped
-visible fragments alone leave holes during rotation. Use separate, plainly named
-layers for:
+Extend the current layered PSD for the full rig below. The current body is one
+piece and each arm is one piece; independent clothing, finger and leg movement
+still needs further separation. Draw hidden surfaces behind moving pieces:
+cropped visible fragments alone leave holes during rotation. The expanded rig
+should use separate, plainly named layers for:
 
 | Group | Independently drawable parts |
 | --- | --- |
@@ -61,9 +66,11 @@ sync, replace that mapping with measured Revia output audio, not the user's mic.
 
 ## Required production deliverables
 
-The layered `.psd`, editable `.cmo3` and actual exported `.moc3` do not exist in this
-package. Export a real `Revia.model3.json`, its referenced `.moc3` and texture atlas
-files, plus configured `.physics3.json` and any authored expressions/motions.
+The layered `.psd` is checked in. A corrected, unrigged `.cmo3` was saved locally
+under `Models/Live2D/Revia/Source/Revia-head-corrected.cmo3`. No `.moc3` has been
+exported. Complete the rig, then export a real `Revia.model3.json`, its referenced
+`.moc3` and texture atlas files, plus configured `.physics3.json` and any authored
+expressions/motions.
 Keep editable source files with the artist/rigging project and deploy runtime files
 as local user data under `Models/Live2D/Revia` or VTube Studio's model folder.
 

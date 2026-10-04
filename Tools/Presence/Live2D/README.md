@@ -9,8 +9,9 @@ memory or submits actions. Closing the renderer leaves Revia running.
 
 Original reference artwork is saved in
 [Assets/Avatar/Revia](../../../Assets/Avatar/Revia/README.md).
-The adapter has automated contract checks. A layered PSD, Cubism rig/export,
-imported model and live VTube Studio acceptance test are still required. The
+The adapter has automated contract checks. A 23-layer PSD and a locally saved,
+head-corrected Cubism source project are available. The animation rig, runtime
+export, VTube Studio import and live acceptance test are still required. The
 checked-in renderer target remains `unselected`; the adapter does not change it.
 
 ## Setup
