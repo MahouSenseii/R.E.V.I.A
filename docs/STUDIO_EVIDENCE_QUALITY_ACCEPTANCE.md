@@ -34,7 +34,7 @@ developer evidence and cannot become trusted lessons or personality changes.
 | Director / held-out review | Complete. Eight-turn packet, snapshot, criteria, digests and unreviewed verdicts verified against actual output. Semantic failures remain open. |
 | Foundation Supervisor / independent source review | No blocking correctness or authority regression found. Corpus snapshot follow-up reviewed; no new issue. |
 | Foundation Supervisor / retained model evidence | Complete. Independently confirmed exact references and retained semantic failures; personality acceptance remains open. |
-| Director / shipping | Build and complete registry passed; Git delivery receipt is populated after main and remote verification. |
+| Director / shipping | Complete. Tested implementation merged to main, pushed, remote SHA verified and the merged package branch removed. |
 
 ## Retained baseline and review
 
@@ -121,3 +121,15 @@ leaving 17% at that check. It is shared account usage and may lag active work;
 these observations are not an exact token-cost measurement. No reset or credits
 were used. Broader recursive development, semantic verification and larger-scale
 orchestration remain follow-on work.
+
+## Delivery
+
+Implementation commit `8cdd028ca4c2a97c35892a6cf6d48bb25bc64e3f` was
+fast-forwarded into main and pushed to GitHub. Local main, origin/main and the
+GitHub main ref matched before deleting `codex/revia-evidence-quality`. Unrelated
+branches were retained. The final no-work build confirmed the tested source was
+current before delivery. The verification-only local model host was stopped after
+checking its exact PID, executable, model and port; its exit was verified.
+
+The delivery, source and process-cleanup receipts are retained in the local
+campaign directory. This documentation closure changes no implementation.
