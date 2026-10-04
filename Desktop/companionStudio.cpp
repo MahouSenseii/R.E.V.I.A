@@ -348,6 +348,7 @@ void ReviaWindow::SwitchCompanion(const std::string& id)
     if (companionSwitchWorker.joinable())
         companionSwitchWorker.join();
     switchingCompanion = true;
+    ResetConversationPresentation();
     const bool restart = Session().IsStarted();
     const auto epoch = sessionUiEpoch.fetch_add(1) + 1;
     Session().Events().Unsubscribe(subscriptionId);
@@ -395,6 +396,7 @@ void ReviaWindow::SwitchCompanion(const std::string& id)
                         auto retiring = std::move(selectedSession);
                         selectedSession = std::move(incoming);
                         chatEntries.clear();
+                        ResetConversationPresentation();
                         activityEntries.clear();
                         lastComponentIssues.clear();
                         activityWarningCount = 0;
@@ -458,6 +460,7 @@ void ReviaWindow::RebuildSessionPanels()
     delete memoryPanel;
     memoryPanel = new MemoryPanel(Session(), ui->memoryTab);
     ui->memoryHostLayout->addWidget(memoryPanel);
+    ConfigureMemoryRevisionControls();
     delete mindPanel;
     mindPanel = new MindPanel(Session(), ui->mindTab);
     ui->mindHostLayout->addWidget(mindPanel);

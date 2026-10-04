@@ -24,6 +24,8 @@ enum class CheckKind
     NotEmpty,
     // Small talk that runs long is the most common regression after a prompt change.
     MaxSentences,
+    // Explicit authored exact counts, ceilings and ranges, read by the live monitor too.
+    RequestedSentenceFormat,
     MustNotContain,
     MustContainAny,
     // The three signals the live quality counters use, evaluated identically.
@@ -36,7 +38,12 @@ enum class CheckKind
     // Contract clause 8: say when a fact is unknown rather than inventing one.
     MustAdmitUnknown,
     // Contract clause: a stated preference is information, not proof Revia changed a setting.
-    NoClaimedSettingChange
+    NoClaimedSettingChange,
+    // Shared warning detectors; an absent signal does not establish semantic correctness.
+    NoCurrentRequestDenial,
+    NoInventedCorrectionError,
+    // The case explicitly establishes that earlier private history is unavailable.
+    NoUnavailableHistoryDenial
 };
 
 [[nodiscard]] std::string ToString(CheckKind value);

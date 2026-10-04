@@ -89,6 +89,10 @@ struct RuntimeEvent
     RuntimeState state = RuntimeState::Offline;
     std::string message;
     std::uint64_t turnId = 0;
+    // Explicit speech correlation; legacy Voice turnId remains its utterance ID.
+    std::uint64_t utteranceId = 0;
+    std::uint64_t audienceRevision = 0;
+    std::uint64_t conversationTurnId = 0;
     AffectState affect = AffectState::Neutral;
     float affectIntensity = 0.0F;
     std::string component;

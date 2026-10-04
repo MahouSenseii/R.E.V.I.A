@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Runtime/runtimeEvents.h"
+#include "Learning/qualityFeedback.h"
 
 #include <nlohmann/json_fwd.hpp>
 
@@ -8,6 +9,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <map>
 #include <mutex>
 #include <optional>
@@ -117,11 +119,16 @@ public:
     // Retires an open task. Appended to the history as a resolution record, so the
     // next start does not raise it again -- and does not resurrect it either.
     bool ResolveTask(const std::string& taskId, std::string& outError);
-    bool RecordGap(const CapabilityGapObservation& observation, std::string& outTaskId, std::string& outError);
+    bool RecordGap(
+        const CapabilityGapObservation& observation, std::string& outTaskId, std::string& outError, std::function<bool()> admission = {});
     [[nodiscard]] bool CanRetest(const std::string& taskId, const std::map<std::string, std::string>& currentDependencies,
         bool ownerRequested = false) const;
-    bool RecordGapAttempt(const std::string& taskId, const std::map<std::string, std::string>& currentDependencies,
-        bool ownerRequested, bool verifiedAcceptance, const std::string& evidence, std::string& outError);
+    bool RecordGapAttempt(const std::string& taskId, const std::map<std::string, std::string>& currentDependencies, bool ownerRequested,
+        bool verifiedAcceptance, const std::string& evidence, std::string& outError, std::function<bool()> admission = {});
+    bool RecordJudgedQualityFailure(
+        const QualityFeedback& feedback, std::string& outTaskId, std::string& outError, std::function<bool()> admission = {});
+    bool RecordJudgedQualityRetest(const std::string& taskId, const QualityFeedback& feedback, std::string& outError,
+        bool ownerRequested = false, std::function<bool()> admission = {});
     // History lines that could not be parsed or decoded on load. A partial final record
     // is expected after a crash; a rising count is not.
     [[nodiscard]] std::size_t MalformedHistoryRecords() const;
@@ -130,19 +137,23 @@ public:
     [[nodiscard]] std::string LastPersistenceError() const;
 
 private:
-    [[nodiscard]] bool AppendRecord(const nlohmann::json& record, std::string& outError);
-    [[nodiscard]] bool PersistTask(const SelfImprovementTask& task, std::string& outError, bool resolved = false);
-    [[nodiscard]] bool PersistResolution(const SelfImprovementTask& task, std::string& outError);
-    mutable std::mutex mutex;
-    mutable std::mutex gapMutex;
-    std::mutex persistenceMutex;
-    std::filesystem::path path;
-    SelfAssessmentSnapshot snapshot;
-    // Restores exact open-task categories from history to suppress duplicate tasks after restart.
-    // Failed writes remove their category guard so it cannot outlive the record.
-    std::unordered_set<std::string> openCategories;
-    std::size_t malformedHistoryRecords = 0;
-    std::string lastPersistenceError;
+  // The caller holds gapMutex from eligibility checks through the attempt write.
+  bool RecordGapAttemptLocked(const std::string& taskId, const std::map<std::string, std::string>& dependencies, bool ownerRequested,
+      bool verifiedAcceptance, const std::string& evidence, std::string& outError, std::function<bool()> admission);
+  [[nodiscard]] bool AppendRecord(const nlohmann::json& record, std::string& outError, const std::function<bool()>& admission = {});
+  [[nodiscard]] bool PersistTask(
+      const SelfImprovementTask& task, std::string& outError, bool resolved = false, const std::function<bool()>& admission = {});
+  [[nodiscard]] bool PersistResolution(const SelfImprovementTask& task, std::string& outError);
+  mutable std::mutex mutex;
+  mutable std::mutex gapMutex;
+  std::mutex persistenceMutex;
+  std::filesystem::path path;
+  SelfAssessmentSnapshot snapshot;
+  // Restores exact open-task categories from history to suppress duplicate tasks after restart.
+  // Failed writes remove their category guard so it cannot outlive the record.
+  std::unordered_set<std::string> openCategories;
+  std::size_t malformedHistoryRecords = 0;
+  std::string lastPersistenceError;
 };
 
 } // namespace revia::learning

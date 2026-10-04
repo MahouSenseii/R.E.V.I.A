@@ -18,6 +18,10 @@ struct memoryEntry
     std::string summary;
     std::string source;
     std::string createdAt;
+    std::string revisionChainId;
+    std::string revisionReceiptId;
+    std::string revisesMemoryId;
+    std::string currentRevisionId;
 
     memoryImportance importance = memoryImportance::Medium;
 };

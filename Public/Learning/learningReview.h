@@ -15,7 +15,9 @@ enum class LessonKind
     // Something about how plans are being written, drawn from goal outcomes.
     Planning,
     // Something about whether speaking first is landing, drawn from proposal outcomes.
-    Initiative
+    Initiative,
+    // One explicit criterion judgment with exact source and target evidence.
+    Quality
 };
 
 // A candidate conclusion, and the evidence it was drawn from.

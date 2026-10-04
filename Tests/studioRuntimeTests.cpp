@@ -1,5 +1,7 @@
 #include "Agents/memoryAgent.h"
+#include "Actions/actionRuntime.h"
 #include "Memory/longTermMemory.h"
+#include "Runtime/runtimeEvents.h"
 #include "testSupport.h"
 #include "reviaSessionTestAccess.h"
 
@@ -10,16 +12,288 @@
 #include <httplib.h>
 #include <nlohmann/json.hpp>
 #include <thread>
+#include <utility>
+#include <vector>
+
+#ifdef CreateDirectory
+#undef CreateDirectory
+#endif
 
 namespace
 {
 using revia::tests::Check;
 using revia::tests::ScopedTestDirectory;
 
+struct NativeActionFixture
+{
+    ScopedTestDirectory temporary;
+    revia::runtime::ReviaSession session;
+    std::filesystem::path approved = temporary.root / "approved";
+    std::filesystem::path marker = approved / "marker.txt";
+
+    explicit NativeActionFixture(const char* mode = "approved_scope")
+        : session(revia::runtime::CompanionPaths(temporary.root, {"native-action", "Native action fixture", "assistant", false}))
+    {
+        std::filesystem::create_directories(approved);
+        {
+            std::ofstream output(marker);
+            output << "PRIVATE_NATIVE_ACTION_SENTINEL_5F9A";
+        }
+        {
+            std::ofstream output(temporary.root / "capabilities.json");
+            output << nlohmann::json{{"mode", mode}, {"approvedRoots", {revia::actions::PathToUtf8(approved)}},
+                {"autoApproveRiskThrough", "read_only"}, {"createMissingApprovedRoots", false}}
+                          .dump();
+        }
+        std::string error;
+        Check(revia::runtime::ReviaSessionTestAccess::Actions(session).Initialize(
+                  temporary.root / "capabilities.json", temporary.root / "action-audit.jsonl", error),
+            error);
+        revia::runtime::ReviaSessionTestAccess::MarkStudioStarted(session, true);
+    }
+
+    ~NativeActionFixture()
+    {
+        revia::runtime::ReviaSessionTestAccess::Actions(session).SetDispatchObserver({});
+        revia::runtime::ReviaSessionTestAccess::MarkStudioStarted(session, false);
+    }
+
+    revia::actions::ActionRequest Request(const revia::actions::ActionType type) const
+    {
+        revia::actions::ActionRequest request;
+        request.id = revia::actions::NewActionId();
+        request.type = type;
+        request.source = type == revia::actions::ActionType::ReadTextFile ? marker : approved;
+        return request;
+    }
+};
+
+struct ScopedRuntimeSubscription
+{
+    revia::runtime::RuntimeEventBus& events;
+    revia::runtime::RuntimeEventBus::SubscriptionId id;
+    ~ScopedRuntimeSubscription()
+    {
+        events.Unsubscribe(id);
+    }
+};
+
+void TestNativeActionEventsRetainCapturedAudience()
+{
+    using namespace revia::runtime;
+    NativeActionFixture fixture;
+    const auto origin = fixture.session.Stamp();
+    const auto audience = fixture.session.Audience();
+    std::vector<RuntimeEvent> observed;
+    ScopedRuntimeSubscription subscription{
+        fixture.session.Events(), fixture.session.Events().Subscribe(
+                                      [&](const RuntimeEvent& event)
+                                      {
+                                          if (event.component == "Automation" || event.kind == RuntimeEventKind::StateChanged)
+                                              observed.push_back(event);
+                                      })};
+    const auto read = ReviaSessionTestAccess::RunStudioAction(fixture.session, fixture.Request(revia::actions::ActionType::ReadTextFile));
+    const auto listed =
+        ReviaSessionTestAccess::RunStudioAction(fixture.session, fixture.Request(revia::actions::ActionType::ListDirectory));
+    Check(read.succeeded && read.text.find("PRIVATE_NATIVE_ACTION_SENTINEL_5F9A") != std::string::npos && listed.succeeded &&
+              listed.text.find("marker.txt") != std::string::npos,
+        "The approved native read/list fixture did not return its actual file evidence.");
+    Check(read.audienceRevision == audience.revision && listed.audienceRevision == audience.revision && read.stamp.SameSession(origin) &&
+              listed.stamp.SameSession(origin),
+        "Native command results lost their captured audience or session stamp.");
+    unsigned running = 0, completed = 0, states = 0;
+    for (const auto& event : observed)
+    {
+        Check(event.stamp.SameSession(origin) && event.stamp.policyVersion == origin.policyVersion &&
+                  event.audienceRevision == audience.revision,
+            "A native Automation or State event lacked its captured audience revision and policy stamp.");
+        if (event.component == "Automation")
+        {
+            running += event.phase == "Running";
+            completed += event.phase == "Ready";
+        }
+        states += event.kind == RuntimeEventKind::StateChanged;
+    }
+    Check(running == 2 && completed == 2 && states >= 2, "Native action metadata checks never observed actual producer events.");
+}
+
+void TestNativeActionStartedSubscriberCannotRecaptureAudience()
+{
+    using namespace revia::runtime;
+    NativeActionFixture fixture;
+    const auto origin = fixture.session.Stamp();
+    const auto audience = fixture.session.Audience();
+    bool flipped = false;
+    unsigned running = 0, lateCompletions = 0, lateStates = 0, dispatched = 0;
+    std::string error;
+    ReviaSessionTestAccess::Actions(fixture.session)
+        .SetDispatchObserver([&](const auto&, const bool beginning) { dispatched += beginning; });
+    ScopedRuntimeSubscription subscription{fixture.session.Events(),
+        fixture.session.Events().Subscribe(
+            [&](const RuntimeEvent& event)
+            {
+                if (event.component == "Automation" && event.phase == "Running")
+                {
+                    ++running;
+                    Check(event.stamp.SameSession(origin) && event.audienceRevision == audience.revision,
+                        "The native Running event was stamped after its admission boundary.");
+                    flipped =
+                        fixture.session.SetAudience({revia::identity::AudienceKind::Public, "action-observer", 0, {"visitor"}}, error);
+                    return;
+                }
+                if (flipped)
+                {
+                    lateCompletions += event.component == "Automation";
+                    lateStates += event.kind == RuntimeEventKind::StateChanged;
+                }
+            })};
+    const auto result = ReviaSessionTestAccess::RunStudioAction(fixture.session, fixture.Request(revia::actions::ActionType::ReadTextFile));
+    Check(flipped && running == 1 && fixture.session.Audience().revision != audience.revision,
+        "The native producer boundary did not change audience.");
+    Check(!result.succeeded && result.text.empty() && !result.reason.empty() && dispatched == 0,
+        "A native read executed or disclosed its result after a Running subscriber revoked its captured audience.");
+    Check(lateCompletions == 0 && lateStates == 0, "A revoked native action published a completion or state into a new audience.");
+}
+
+void TestNativeActionConfirmationCannotRecaptureAudience(const bool cancel)
+{
+    using namespace revia::runtime;
+    NativeActionFixture fixture("supervised");
+    const auto destination = fixture.approved / "not-created-after-revocation";
+    revia::actions::ActionRequest request;
+    request.id = revia::actions::NewActionId();
+    request.type = revia::actions::ActionType::CreateDirectory;
+    request.source = destination;
+    const auto policy = ReviaSessionTestAccess::Actions(fixture.session).Evaluate(request);
+    Check(policy.verdict == revia::actions::PolicyVerdict::RequiresConfirmation,
+        "The native confirmation fixture did not enter the existing policy approval path: " + policy.reason);
+    bool flipped = false;
+    unsigned running = 0;
+    std::string error;
+    fixture.session.SetConfirmationHandler(
+        [&](const auto&, const auto&)
+        {
+            flipped = fixture.session.SetAudience({revia::identity::AudienceKind::Public, "confirmation-observer", 0, {"visitor"}}, error);
+            if (cancel)
+                fixture.session.RequestStop();
+            return revia::actions::ConfirmationChoice::Allow;
+        });
+    ScopedRuntimeSubscription subscription{fixture.session.Events(),
+        fixture.session.Events().Subscribe(
+            [&](const RuntimeEvent& event) { running += event.component == "Automation" && event.phase == "Running"; })};
+    const auto result = ReviaSessionTestAccess::RunStudioAction(fixture.session, std::move(request));
+    Check(flipped && !result.succeeded && result.text.empty() && running == 0 && !std::filesystem::exists(destination),
+        "Confirmation approval recaptured a new audience and executed a revoked native action.");
+}
+
+void TestNativeActionCancellationNoticeCannotChangeAudience()
+{
+    using namespace revia::runtime;
+    NativeActionFixture fixture("supervised");
+    auto request = fixture.Request(revia::actions::ActionType::CreateDirectory);
+    request.source = fixture.approved / "not-created-after-stop";
+    const auto destination = request.source;
+    bool prompted = false, flipped = false;
+    unsigned running = 0;
+    std::string error;
+    fixture.session.SetConfirmationHandler(
+        [&](const auto&, const auto&)
+        {
+            prompted = true;
+            fixture.session.RequestStop();
+            return revia::actions::ConfirmationChoice::Allow;
+        });
+    ScopedRuntimeSubscription subscription{fixture.session.Events(),
+        fixture.session.Events().Subscribe(
+            [&](const RuntimeEvent& event)
+            {
+                running += event.component == "Automation" && event.phase == "Running";
+                if (event.kind == RuntimeEventKind::StateChanged && event.state == RuntimeState::Idle)
+                    flipped =
+                        fixture.session.SetAudience({revia::identity::AudienceKind::Public, "cancel-observer", 0, {"visitor"}}, error);
+            })};
+    const auto result = ReviaSessionTestAccess::RunStudioAction(fixture.session, std::move(request));
+    Check(prompted && flipped && !result.succeeded && result.text.empty() && running == 0 && !std::filesystem::exists(destination),
+        "A cancellation notice delivered action text after its state subscriber changed the audience.");
+}
+
+void TestNativeActionWaitingSubscriberCannotPrompt()
+{
+    using namespace revia::runtime;
+    for (const bool cancel : {false, true})
+    {
+        NativeActionFixture fixture("supervised");
+        auto request = fixture.Request(revia::actions::ActionType::CreateDirectory);
+        request.source = fixture.approved / "not-created-from-retired-prompt";
+        const auto destination = request.source;
+        bool waiting = false, prompted = false;
+        std::string error;
+        fixture.session.SetConfirmationHandler(
+            [&](const auto&, const auto&)
+            {
+                prompted = true;
+                return revia::actions::ConfirmationChoice::Allow;
+            });
+        ScopedRuntimeSubscription subscription{fixture.session.Events(),
+            fixture.session.Events().Subscribe(
+                [&](const RuntimeEvent& event)
+                {
+                    if (event.kind != RuntimeEventKind::StateChanged || event.state != RuntimeState::WaitingForConfirmation)
+                        return;
+                    waiting = true;
+                    if (cancel)
+                        fixture.session.RequestStop();
+                    else
+                        Check(
+                            fixture.session.SetAudience({revia::identity::AudienceKind::Public, "waiting-observer", 0, {"visitor"}}, error),
+                            error);
+                })};
+        const auto result = ReviaSessionTestAccess::RunStudioAction(fixture.session, std::move(request));
+        Check(waiting && !prompted && !result.succeeded && !std::filesystem::exists(destination),
+            "A waiting-state observer retired admission, but the session still invoked a private approval prompt.");
+        Check(cancel ? result.text.find("cancelled before execution") != std::string::npos : result.text.empty(),
+            "Pre-prompt retirement lost same-context cancellation or disclosed text into a new audience.");
+    }
+}
+
+void TestNativeActionCompletionSubscriberCannotDeliverRevokedResult()
+{
+    using namespace revia::runtime;
+    for (const bool revokeAtState : {false, true})
+    {
+        NativeActionFixture fixture;
+        bool flipped = false;
+        unsigned dispatched = 0, lateStates = 0;
+        std::string error;
+        ReviaSessionTestAccess::Actions(fixture.session)
+            .SetDispatchObserver([&](const auto&, const bool beginning) { dispatched += beginning; });
+        ScopedRuntimeSubscription subscription{fixture.session.Events(),
+            fixture.session.Events().Subscribe(
+                [&](const RuntimeEvent& event)
+                {
+                    const bool target = revokeAtState ? event.kind == RuntimeEventKind::StateChanged && event.state == RuntimeState::Idle
+                                                      : event.component == "Automation" && event.phase == "Ready";
+                    if (!flipped && target)
+                    {
+                        flipped = fixture.session.SetAudience(
+                            {revia::identity::AudienceKind::Public, "completion-observer", 0, {"visitor"}}, error);
+                        return;
+                    }
+                    if (flipped && event.kind == RuntimeEventKind::StateChanged)
+                        ++lateStates;
+                })};
+        const auto result =
+            ReviaSessionTestAccess::RunStudioAction(fixture.session, fixture.Request(revia::actions::ActionType::ReadTextFile));
+        Check(flipped && dispatched == 1, "The post-execution native callback did not revoke an actual successful read.");
+        Check(!result.succeeded && result.text.empty() && !result.reason.empty() && lateStates == 0,
+            "A native completion or final-state subscriber revoked admission, but private file text or later state was still delivered.");
+    }
+}
+
 class HeldMemoryBackend
 {
   public:
-    HeldMemoryBackend()
+    explicit HeldMemoryBackend(std::string supplied = {}) : suppliedResponse(std::move(supplied))
     {
         server.Get("/health", [](const auto&, auto& response) { response.set_content(R"({"status":"ok"})", "application/json"); });
         server.Get("/v1/models", [](const auto&, auto& response) { response.set_content(R"({"data":[{"id":"held-memory"}]})", "application/json"); });
@@ -28,8 +302,11 @@ class HeldMemoryBackend
             ++requests;
             const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(5);
             while (!release.load() && std::chrono::steady_clock::now() < until) std::this_thread::sleep_for(std::chrono::milliseconds(2));
-            const auto answer = nlohmann::json{{"choices", nlohmann::json::array({{
-                {"message", {{"content", R"({"shouldRemember":false,"reason":"Synthetic fixture."})"}}}, {"finish_reason", "stop"}}})}};
+            const auto answer = nlohmann::json{{"choices",
+                nlohmann::json::array(
+                    {{{"message", {{"content", suppliedResponse.empty() ? R"({"shouldRemember":false,"reason":"Synthetic fixture."})"
+                                                                        : suppliedResponse}}},
+                        {"finish_reason", "stop"}}})}};
             response.set_content(answer.dump(), "application/json");
         });
         port = server.bind_to_any_port("127.0.0.1");
@@ -47,6 +324,7 @@ class HeldMemoryBackend
   private:
     httplib::Server server;
     std::jthread worker;
+    std::string suppliedResponse;
 };
 
 void TestQueuedMemoryRetainsAdmission()
@@ -235,11 +513,64 @@ void TestReviewedMemoryReceipt()
     Check(memory.SubmitLearnedFinding(router, decision, 0, &receipt) == revia::agents::LearnedFindingResult::Failed && receipt.empty(),
         "Denied memory admission returned a stale success receipt.");
 }
+
+void TestLocalStudioIncompleteVerificationCannotAdvance()
+{
+    using namespace revia::runtime;
+    ScopedTestDirectory temporary;
+    HeldMemoryBackend backend(
+        R"({"summary":"A complete three-step plan is provided.","evidence":"The supplied objective supports the plan.","verified":true})");
+    backend.release.store(true);
+    ReviaSession session(CompanionPaths(temporary.root, {"studio-contract", "Studio contract fixture", "assistant", false}));
+    ReviaSessionTestAccess::ConfigureStartupBrains(session, backend.port);
+    ReviaSessionTestAccess::MarkStudioStarted(session, true);
+    std::string error;
+    Check(session.StartAgentWorkflow("Propose read-only steps for the explicitly supplied marker file.", false, error), error);
+    ReviaSessionTestAccess::JoinWorkflow(session);
+    const auto snapshot = session.AgentWorkflowSnapshot();
+    unsigned failedWorkers = 0;
+    for (const auto& node : snapshot.nodes)
+    {
+        if (node.role == revia::agents::WorkflowRole::Worker && node.state == revia::agents::WorkflowState::Failed)
+            ++failedWorkers;
+        if (node.role == revia::agents::WorkflowRole::Reviewer || node.role == revia::agents::WorkflowRole::Parent)
+            Check(node.attempts.empty(), "An incomplete local worker artifact reached review or parent acceptance.");
+    }
+    Check(backend.requests.load() == 2 && failedWorkers == 2 && session.AgentWorkflowResult().empty(),
+        "Local provider verified:true bypassed task-owned deliverable completeness.");
+    ReviaSessionTestAccess::MarkStudioStarted(session, false);
+}
+
+void TestStudioDiagnosticRetainsChangedEvidenceRecovery()
+{
+    using namespace revia::runtime;
+    ScopedTestDirectory temporary;
+    ReviaSession session(CompanionPaths(temporary.root, {"studio-diagnostic", "Studio diagnostic fixture", "assistant", false}));
+    std::string error;
+    Check(session.StartAgentWorkflow("Bounded synthetic diagnostic objective.", true, error), error);
+    ReviaSessionTestAccess::JoinWorkflow(session);
+    Check(!session.DecideAgentWorkflow(revia::agents::ParentDecision::Accept, error), "Incomplete diagnostic evidence was accepted.");
+    Check(session.RetryAgentNode("verification", "Changed diagnostic input", "changed-diagnostic-evidence", error), error);
+    ReviaSessionTestAccess::JoinWorkflow(session);
+    Check(session.DecideAgentWorkflow(revia::agents::ParentDecision::Accept, error), "Separate parent diagnostic evaluation was refused.");
+    ReviaSessionTestAccess::JoinWorkflow(session);
+    Check(session.DecideAgentWorkflow(revia::agents::ParentDecision::Accept, error) && !session.AgentWorkflowResult().empty(),
+        "Complete diagnostic evidence did not reach separate parent acceptance.");
+}
 }
 
 void RunStudioRuntimeTests()
 {
+    TestNativeActionEventsRetainCapturedAudience();
+    TestNativeActionStartedSubscriberCannotRecaptureAudience();
+    TestNativeActionConfirmationCannotRecaptureAudience(false);
+    TestNativeActionConfirmationCannotRecaptureAudience(true);
+    TestNativeActionCancellationNoticeCannotChangeAudience();
+    TestNativeActionWaitingSubscriberCannotPrompt();
+    TestNativeActionCompletionSubscriberCannotDeliverRevokedResult();
     TestReviewedMemoryReceipt();
+    TestLocalStudioIncompleteVerificationCannotAdvance();
+    TestStudioDiagnosticRetainsChangedEvidenceRecovery();
     TestQueuedMemoryRetainsAdmission();
     TestAudienceContextAndTaskRegistration();
     TestLateTaskKeepsItsLaunchAudience();

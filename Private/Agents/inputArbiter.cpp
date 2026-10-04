@@ -188,7 +188,7 @@ InputVerdict InputArbiter::Offer(const std::string& text, const InputSource sour
         return InputVerdict::DroppedOverflow;
     }
 
-    queued.push_back({text, source, now, context});
+    queued.push_back({text, source, now, context, std::chrono::steady_clock::now()});
     lastAccepted = normalized;
     lastAcceptedAt = now;
     lastAcceptedContext = std::move(context);
@@ -231,6 +231,7 @@ InputBatch InputArbiter::TakeBatch()
     {
         batch.context = queued.front().context;
         batch.source = queued.front().source;
+        batch.acceptedAt = queued.front().acceptedAt;
         batch.contextMatched = std::all_of(queued.begin(), queued.end(),
             [&](const PendingInput& input) { return SameContext(batch.context, input.context); });
     }

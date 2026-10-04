@@ -2,7 +2,9 @@
 
 #include "Memory/memoryTypes.h"
 #include "Memory/longTermMemory.h"
+#include "Memory/memoryRevision.h"
 
+#include <functional>
 #include <string>
 
 class memoryManager
@@ -16,6 +18,8 @@ public:
     ~memoryManager();
 
     bool SaveAutomaticMemory(const memoryDecision& decision, bool& outWasAdded, std::string* outMemoryId = nullptr) const;
+    bool SaveOwnerRevision(const revia::memory::MemoryRevisionRequest& request, revia::memory::MemoryRevisionReceipt& outReceipt,
+        std::string& outError, std::function<bool()> admission = {}) const;
     std::vector<memoryEntry> LoadMemories() const;
     std::vector<memoryEntry> LoadMissingEmbeddings(const std::string& embeddingModel, std::size_t maxEntries = 25) const;
     EmbeddingBackfillPage ScanMissingEmbeddings(const std::string& embeddingModel,

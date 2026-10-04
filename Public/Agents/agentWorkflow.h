@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Runtime/runtimeStamp.h"
+#include "Agents/agentDeliverable.h"
 
 #include <cstdint>
 #include <filesystem>
@@ -70,6 +71,7 @@ struct WorkflowNode
     std::string evidenceKey;
     std::vector<std::string> dependsOn;
     bool readOnly = true;
+    DeliverableContract deliverableContract;
 };
 
 struct WorkflowSpec
@@ -101,6 +103,7 @@ struct NodeRequest
     runtime::RuntimeStamp stamp;
     std::uint32_t attempt = 0;
     std::vector<WorkflowArtifact> prerequisites;
+    std::vector<ArtifactReference> prerequisiteReferences;
 };
 
 struct NodeResult

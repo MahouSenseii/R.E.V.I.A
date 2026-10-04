@@ -54,6 +54,16 @@ The existing milestones below remain the implementation history.
 See [M4–M6 implementation and verification](STUDIO_M4_M6_ACCEPTANCE.md) for the
 current objective evidence and remaining owner/physical acceptance conditions.
 
+The subsequent [answer-quality and continuity package](STUDIO_ANSWER_QUALITY_ACCEPTANCE.md)
+adds current-task guidance and shared format diagnostics, contextual optional
+review, typed analytical deliverables, native investigation read/list checks,
+exact owner memory revisions, judged quality feedback through reviewed learning,
+correlated response timing, and compact glass controls. Authored personality,
+answer modes, and earned identity remain with their existing owners. This extends
+the accepted foundation; M5 owner acceptance stays open. The installed model still
+invents facts, omits requested substance, and sometimes treats neutral input with
+unnecessary hostility. Fresh model samples have not established an accuracy gain.
+
 The [M2/M3 acceptance record](STUDIO_M2_M3_ACCEPTANCE.md) describes the exact
 controlled evidence and remaining limits. The full native registry passed all
 21 suites. A final capture-only fixture amendment rebuilt and reran its affected

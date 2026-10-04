@@ -247,7 +247,8 @@ responseOutput llmService::GenerateActionProposal(const std::string& userRequest
 }
 
 responseOutput llmService::ReviewConversationReply(const std::string& userInput, const std::string& candidateReply,
-    const std::string& runtimeGroundTruth, const int maxReviewTokens, const std::stop_token stopToken) const
+    const std::string& runtimeGroundTruth, const int maxReviewTokens, const std::stop_token stopToken,
+    const std::string& conversationEvidence) const
 {
     if (!bIsReady || backendType != llmBackendType::LLamaCpp)
     {
@@ -256,7 +257,7 @@ responseOutput llmService::ReviewConversationReply(const std::string& userInput,
         return output;
     }
     return llamaCpp.ReviewConversationReply(
-        userInput, candidateReply, runtimeGroundTruth, maxReviewTokens, stopToken);
+        userInput, candidateReply, runtimeGroundTruth, maxReviewTokens, stopToken, conversationEvidence);
 }
 
 responseOutput llmService::GenerateActivityDraft(

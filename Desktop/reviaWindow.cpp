@@ -1,6 +1,9 @@
 #include "reviaWindow.h"
 
 #include "Core/logger.h"
+#include "Audit/contentDigest.h"
+#include "answerFeedbackDialog.h"
+#include "conversationStatusPanel.h"
 #include "Runtime/retainedCounts.h"
 #include "Speech/transcriptRouting.h"
 #include "capabilityPanel.h"
@@ -60,6 +63,7 @@
 #include <QToolButton>
 #include <QUrl>
 #include <QWindow>
+#include <QUuid>
 
 #include <algorithm>
 #include <chrono>
@@ -69,6 +73,8 @@
 
 namespace
 {
+constexpr const char* ExpiredAnswerReviewOutcome = "This displayed reply belongs to an earlier audience. Review a fresh reply.";
+
 // Nothing thrown on a worker may leave it. An exception escaping a std::jthread body
 // calls std::terminate and takes the window, and the conversation, with it -- which is
 // why the typed turn's worker catches, and every other worker has to as well. The
@@ -364,7 +370,7 @@ void ApplyTabPageBottomMargin(QWidget* root, const int bottom)
 // child below its minimum, so labels land on top of one another. Profiles and Voice
 // already scroll and never had the problem. Content this tall has to be scrollable
 // rather than squeezable.
-void MakePageScrollable(QWidget* page)
+void MakePageScrollable(QWidget* page, const char* scrollName = nullptr)
 {
     if (page == nullptr)
         return;
@@ -378,6 +384,8 @@ void MakePageScrollable(QWidget* page)
     inner->setLayout(existing);
 
     auto* scroll = new QScrollArea(page);
+    if (scrollName)
+        scroll->setObjectName(scrollName);
     scroll->setFrameShape(QFrame::NoFrame);
     scroll->setWidgetResizable(true);
     scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
@@ -454,6 +462,9 @@ void ReviaWindow::BuildInterface()
 
     chatVoiceHealth = new VoiceHealthPanel(true, ui->chatPage);
     ui->chatLayout->insertWidget(1, chatVoiceHealth);
+    conversationStatus = new ConversationStatusPanel(ui->chatPage);
+    ui->chatLayout->insertWidget(0, conversationStatus);
+    connect(conversationStatus->ReviewButton(), &QPushButton::clicked, this, [this]() { ReviewDisplayedAnswer(); });
     voiceHealth = new VoiceHealthPanel(false, ui->voicePage);
     ui->voiceLayout->insertWidget(0, voiceHealth);
     connect(chatVoiceHealth->DetailsButton(), &QPushButton::clicked, this,
@@ -492,6 +503,7 @@ void ReviaWindow::BuildInterface()
     ui->profilesHostLayout->addWidget(profilePanel);
     memoryPanel = new MemoryPanel(Session(), ui->memoryTab);
     ui->memoryHostLayout->addWidget(memoryPanel);
+    ConfigureMemoryRevisionControls();
     mindPanel = new MindPanel(Session(), ui->mindTab);
     ui->mindHostLayout->addWidget(mindPanel);
     visionPanel = new VisionPanel(Session(), ui->visionTab);
@@ -657,6 +669,10 @@ void ReviaWindow::BuildInterface()
 
     MakePageScrollable(ui->settingsPage);
     MakePageScrollable(ui->presencePage);
+    chatHistory->setMinimumHeight(120);
+    ui->chatLayout->setStretchFactor(chatHistory, 1);
+    MakePageScrollable(ui->chatPage, "conversationPageScroll");
+    MakePageScrollable(ui->memoryTab, "memoryPageScroll");
     // After the scroll areas exist, so the outer layouts they introduce get it too.
     ApplyTabPageBottomMargin(this, 14);
     ApplyMicrophoneUi(MicrophoneUi::Unavailable);
@@ -814,7 +830,8 @@ void ReviaWindow::SendMessage(const bool voiceInput)
         operationWorker.join();
     }
     operationWorker = std::jthread(
-        [this, epoch = sessionUiEpoch.load(), input = text.toStdString(), voiceInput]()
+        [this, epoch = sessionUiEpoch.load(), input = text.toStdString(), voiceInput, origin = Session().Stamp(),
+            audienceRevision = Session().Audience().revision]()
         {
             // Nothing thrown here may leave this thread.
             //
@@ -825,6 +842,8 @@ void ReviaWindow::SendMessage(const bool voiceInput)
             // from inside Submit. The cut is fixed at its source, but a turn failing is a
             // normal outcome and must read as one wherever it comes from.
             revia::runtime::SessionResult result;
+            result.stamp = origin;
+            result.audienceRevision = audienceRevision;
             try
             {
                 result = Session().Submit(input, voiceInput ? revia::agents::InputSource::Voice : revia::agents::InputSource::Typed);
@@ -850,28 +869,7 @@ void ReviaWindow::SendMessage(const bool voiceInput)
                 {
                     if (epoch != sessionUiEpoch.load() || shuttingDown.load())
                         return;
-                    const QString reasoning = QString::fromStdString(result.reasoning);
-                    // Already shown sentence by sentence while it was being spoken.
-                    if (!result.text.empty() && !result.spokenAsFragments)
-                    {
-                        const QString speaker =
-                            result.fromAssistant ? QString::fromStdString(Session().DisplayName()) : QStringLiteral("System");
-                        const QString body = QString::fromStdString(result.text);
-                        // Text is already ready. Qwen synthesis and queued playback must not
-                        // hold the visible answer behind seconds of audio preparation.
-                        AppendChat(speaker, body, false, reasoning);
-                    }
-                    else if (result.spokenAsFragments && !reasoning.isEmpty())
-                    {
-                        // The reply was shown a sentence at a time, so the trace for the turn as a
-                        // whole gets its own collapsed line rather than being attached to whichever
-                        // fragment happened to be last.
-                        AppendChat(QString(), QString(), false, reasoning);
-                    }
-                    if (!result.succeeded && !result.reason.empty())
-                    {
-                        AppendActivity("Request stopped: " + QString::fromStdString(result.reason));
-                    }
+                    PresentSessionResult(result);
                     sendButton->setEnabled(!result.shouldExit && Session().IsStarted());
                     RefreshStateBadge();
                     if (result.shouldExit)
@@ -885,6 +883,29 @@ void ReviaWindow::SendMessage(const bool voiceInput)
                 },
                 Qt::QueuedConnection);
         });
+}
+
+void ReviaWindow::PresentSessionResult(const revia::runtime::SessionResult& result)
+{
+    if ((!result.stamp.companionId.empty() && !result.stamp.SameSession(Session().Stamp())) ||
+        (result.audienceRevision != 0 && result.audienceRevision != Session().Audience().revision) ||
+        (result.fromAssistant && result.audienceRevision == 0))
+        return;
+    const QString reasoning = QString::fromStdString(result.reasoning);
+    if (!result.text.empty() && !result.spokenAsFragments)
+    {
+        const QString speaker = result.fromAssistant ? QString::fromStdString(Session().DisplayName()) : QStringLiteral("System");
+        const QString body = QString::fromStdString(result.text);
+        AppendChat(speaker, body, false, reasoning);
+        if (result.fromAssistant)
+            CaptureDisplayedAnswer(body, result.stamp, result.audienceRevision);
+    }
+    else if (result.spokenAsFragments && !reasoning.isEmpty())
+    {
+        AppendChat(QString(), QString(), false, reasoning);
+    }
+    if (!result.succeeded && !result.reason.empty())
+        AppendActivity("Request stopped: " + QString::fromStdString(result.reason));
 }
 
 void ReviaWindow::ReleasePendingSpeechText(const std::uint64_t utteranceId)
@@ -1472,6 +1493,17 @@ void ReviaWindow::HandleRuntimeEvent(const revia::runtime::RuntimeEvent& event)
 {
     if (!event.stamp.companionId.empty() && !event.stamp.SameSession(Session().Stamp()))
         return;
+    const auto currentAudienceRevision = Session().Audience().revision;
+    if (event.audienceRevision != 0 && event.audienceRevision != currentAudienceRevision)
+        return;
+    if ((event.kind == revia::runtime::RuntimeEventKind::AssistantMessage ||
+            event.kind == revia::runtime::RuntimeEventKind::ReplyFragment ||
+            event.kind == revia::runtime::RuntimeEventKind::InvestigationChecking ||
+            event.kind == revia::runtime::RuntimeEventKind::InvestigationFindings) &&
+        event.audienceRevision == 0)
+        return;
+    if (conversationStatus)
+        conversationStatus->Observe(event);
     if (event.kind == revia::runtime::RuntimeEventKind::AgentWorkflow)
     {
         if (agentStudioPanel)
@@ -1533,6 +1565,7 @@ void ReviaWindow::HandleRuntimeEvent(const revia::runtime::RuntimeEvent& event)
         const QString speaker = QString::fromStdString(Session().DisplayName());
         const QString body = QString::fromStdString(event.message);
         AppendChat(speaker, body);
+        CaptureDisplayedAnswer(body, event.stamp, event.audienceRevision, event.conversationTurnId, true);
         return;
     }
     if (event.kind == revia::runtime::RuntimeEventKind::Proposal)
@@ -1803,6 +1836,7 @@ void ReviaWindow::HandleRuntimeEvent(const revia::runtime::RuntimeEvent& event)
         const QString body = QString::fromStdString(event.message);
         const QString reasoning = QString::fromStdString(event.detail);
         AppendChat(speaker, body, false, reasoning);
+        CaptureDisplayedAnswer(body, event.stamp, event.audienceRevision, event.turnId);
         return;
     }
 
@@ -1812,6 +1846,139 @@ void ReviaWindow::HandleRuntimeEvent(const revia::runtime::RuntimeEvent& event)
         event.kind == revia::runtime::RuntimeEventKind::Error
             ? ActivitySeverity::Error
             : (event.kind == revia::runtime::RuntimeEventKind::Warning ? ActivitySeverity::Warning : ActivitySeverity::Automatic));
+}
+
+void ReviaWindow::CaptureDisplayedAnswer(const QString& text, const revia::runtime::RuntimeStamp& origin,
+    const std::uint64_t audienceRevision, const std::uint64_t turnId, const bool fragment)
+{
+    if (text.isEmpty())
+        return;
+    const auto stamp = origin.companionId.empty() ? Session().Stamp() : origin;
+    if (!stamp.SameSession(Session().Stamp()) || audienceRevision == 0 || audienceRevision != Session().Audience().revision)
+        return;
+    if (fragment && turnId != 0 && turnId == displayedAnswerTurnId && displayedAnswerTarget.origin.SameSession(stamp) &&
+        displayedAnswerTarget.audienceRevision == audienceRevision)
+        latestDisplayedAnswer += "\n\n" + text;
+    else
+        latestDisplayedAnswer = text;
+    displayedAnswerTurnId = turnId;
+    displayedAnswerTarget = {};
+    displayedAnswerTarget.origin = stamp;
+    displayedAnswerTarget.audienceRevision = audienceRevision;
+    displayedAnswerTarget.targetId = "displayed-reply:" + QUuid::createUuid().toString(QUuid::WithoutBraces).toStdString();
+    displayedAnswerTarget.targetDigest = revia::audit::ContentDigest(latestDisplayedAnswer.toStdString());
+    displayedAnswerTarget.dependencies = {
+        {"displayed-result", displayedAnswerTarget.targetDigest}, {"answer-contract", "authored-answer-obligation-v1"}};
+    conversationStatus->ClearOwnerOutcomeIfMatching(ExpiredAnswerReviewOutcome);
+    conversationStatus->SetReviewAvailable(true);
+}
+
+void ReviaWindow::ReviewDisplayedAnswer()
+{
+    if (switchingCompanion || shuttingDown.load() || latestDisplayedAnswer.isEmpty())
+        return;
+    if (!displayedAnswerTarget.origin.SameSession(Session().Stamp()) || displayedAnswerTarget.audienceRevision == 0 ||
+        displayedAnswerTarget.audienceRevision != Session().Audience().revision)
+    {
+        conversationStatus->SetReviewAvailable(false);
+        conversationStatus->SetOwnerOutcome(ExpiredAnswerReviewOutcome);
+        return;
+    }
+    if (answerFeedbackDialog)
+    {
+        answerFeedbackDialog->raise();
+        answerFeedbackDialog->activateWindow();
+        return;
+    }
+    answerFeedbackDialog = new AnswerFeedbackDialog(displayedAnswerTarget, latestDisplayedAnswer, this);
+    const QPointer<AnswerFeedbackDialog> dialog = answerFeedbackDialog;
+    connect(dialog->RecordButton(), &QPushButton::clicked, this,
+        [this, dialog]
+        {
+            if (!dialog)
+                return;
+            if (switchingCompanion || shuttingDown.load() || studioOperationRunning.load())
+            {
+                dialog->SetOutcome(false, "Another companion operation is active. Record the judgment after it finishes.");
+                return;
+            }
+            revia::learning::QualityFeedback feedback;
+            std::string error;
+            if (!dialog->CaptureFeedback(feedback, error))
+            {
+                dialog->SetOutcome(false, error);
+                return;
+            }
+            dialog->SetBusy(true);
+            RunStudioOperation(
+                [feedback](revia::runtime::ReviaSession& current, const std::stop_token stopToken, std::string& message)
+                {
+                    std::string taskId, recordId;
+                    if (!current.RecordQualityFeedback(feedback, taskId, recordId, message, stopToken))
+                        return false;
+                    message = "Pending quality task " + taskId + "; private lesson " + recordId +
+                              ". Review the candidate in Skills & Learning. No lesson has been accepted.";
+                    return true;
+                },
+                [this, dialog](const bool success, const std::string& message)
+                {
+                    if (dialog)
+                    {
+                        dialog->SetBusy(false);
+                        dialog->SetOutcome(success, message);
+                    }
+                    conversationStatus->SetOwnerOutcome(QString::fromStdString(message));
+                });
+        });
+    dialog->show();
+}
+
+void ReviaWindow::ResetConversationPresentation()
+{
+    if (answerFeedbackDialog)
+        delete answerFeedbackDialog.data();
+    latestDisplayedAnswer.clear();
+    displayedAnswerTarget = {};
+    displayedAnswerTurnId = 0;
+    conversationStatus->ResetForCompanion();
+    for (const char* name : {"conversationPageScroll", "memoryPageScroll"})
+    {
+        if (auto* scroll = findChild<QScrollArea*>(name))
+            scroll->verticalScrollBar()->setValue(0);
+    }
+}
+
+void ReviaWindow::ConfigureMemoryRevisionControls()
+{
+    const QPointer<MemoryPanel> panel = memoryPanel;
+    memoryPanel->SetRevisionSubmitter(
+        [this, panel](const revia::memory::MemoryRevisionRequest& request)
+        {
+            if (switchingCompanion || shuttingDown.load() || studioOperationRunning.load())
+                return false;
+            if (panel)
+                panel->SetRevisionBusy(true);
+            RunStudioOperation(
+                [request](revia::runtime::ReviaSession& current, const std::stop_token stopToken, std::string& message)
+                {
+                    revia::memory::MemoryRevisionReceipt receipt;
+                    if (!current.ReviseMemoryOwnerRequested(request, receipt, message, stopToken))
+                        return false;
+                    message = "Revision receipt " + receipt.requestId + ": original " + receipt.originalId + "; replacement " +
+                              receipt.revisedId + ". The original record remains in history.";
+                    return true;
+                },
+                [panel](const bool success, const std::string& message)
+                {
+                    if (panel)
+                    {
+                        panel->SetRevisionBusy(false);
+                        panel->SetRevisionOutcome(success, message);
+                        panel->Refresh();
+                    }
+                });
+            return true;
+        });
 }
 
 void ReviaWindow::UpdateState(const revia::runtime::RuntimeState newState, const QString& detail)
@@ -2226,11 +2393,50 @@ void ReviaWindow::ShowPreferenceResult(const revia::core::PreferenceResult& resu
     AppendActivity(QStringLiteral("Setting: ") + message, result.succeeded ? ActivitySeverity::Information : ActivitySeverity::Warning);
 }
 
+std::function<bool()> ReviaWindow::CaptureQuestionAdmission()
+{
+    const auto origin = Session().Stamp();
+    const auto audience = Session().Audience();
+    const auto epoch = sessionUiEpoch.load();
+    return [this, origin, audience, epoch]()
+    {
+        if (epoch != sessionUiEpoch.load() || shuttingDown.load())
+            return false;
+        const auto currentOrigin = Session().Stamp();
+        const auto currentAudience = Session().Audience();
+        return origin.SameSession(currentOrigin) && origin.policyVersion == currentOrigin.policyVersion &&
+               audience.kind == revia::identity::AudienceKind::Private && audience.revision != 0 && currentAudience.kind == audience.kind &&
+               currentAudience.revision == audience.revision;
+    };
+}
+
+bool ReviaWindow::RunAdmittedQuestion(QMessageBox& question, const std::function<bool()>& admitted)
+{
+    if (!admitted())
+        return false;
+    QTimer admissionTimer;
+    connect(&admissionTimer, &QTimer::timeout, &question,
+        [&question, admitted]()
+        {
+            if (!admitted())
+                question.reject();
+        });
+    admissionTimer.start(25);
+    if (!admitted())
+        return false;
+    openQuestion = &question;
+    question.exec();
+    return admitted();
+}
+
 bool ReviaWindow::ApproveDesktopEffect(const revia::policy::ApprovalPrompt& prompt)
 {
+    const auto admitted = CaptureQuestionAdmission();
     // A copy: the question can outlive the caller's wait during shutdown.
-    std::function<bool()> ask = [this, prompt]()
+    std::function<bool()> ask = [this, prompt, admitted]()
     {
+        if (!admitted())
+            return false;
         // Same reason ConfirmAction does this: a question owned by a minimized window is
         // invisible, and the worker would wait on an answer nobody can see.
         if (isMinimized())
@@ -2256,8 +2462,7 @@ bool ReviaWindow::ApproveDesktopEffect(const revia::policy::ApprovalPrompt& prom
                        "any permission and does not apply to the next one.";
         QMessageBox question(QMessageBox::Question, "Approve this action", description, QMessageBox::Yes | QMessageBox::No, this);
         question.setDefaultButton(QMessageBox::No);
-        openQuestion = &question;
-        return question.exec() == QMessageBox::Yes;
+        return RunAdmittedQuestion(question, admitted) && question.result() == QMessageBox::Yes;
     };
     return questions.Ask<bool>(PostToWindow(), QThread::currentThread() == thread(), std::move(ask), false);
 }
@@ -2266,9 +2471,12 @@ revia::actions::ConfirmationChoice ReviaWindow::ConfirmAction(
     const revia::actions::ActionRequest& request, const revia::actions::PolicyDecision& decision)
 {
     using revia::actions::ConfirmationChoice;
+    const auto admitted = CaptureQuestionAdmission();
     // Copies: the question can outlive the caller's wait during shutdown.
-    std::function<ConfirmationChoice()> showConfirmation = [this, request, decision]()
+    std::function<ConfirmationChoice()> showConfirmation = [this, request, decision, admitted]()
     {
+        if (!admitted())
+            return ConfirmationChoice::Decline;
         // A screen action hides Revia before capture so it cannot obscure the target.
         // Restore the shell before asking; a confirmation owned by a minimized window is
         // effectively invisible and would leave the worker waiting forever.
@@ -2314,8 +2522,8 @@ revia::actions::ConfirmationChoice ReviaWindow::ConfirmAction(
                                            "deletes. It is forgotten when the task ends and changes no permission.");
         prompt.setDefaultButton(refuse);
         prompt.setEscapeButton(refuse);
-        openQuestion = &prompt;
-        prompt.exec();
+        if (!RunAdmittedQuestion(prompt, admitted))
+            return ConfirmationChoice::Decline;
         if (prompt.clickedButton() == everything)
         {
             return ConfirmationChoice::AllowForThisTask;

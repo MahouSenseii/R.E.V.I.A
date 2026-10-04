@@ -3,6 +3,7 @@
 
 #include "Identity/promptMarkers.h"
 #include "Memory/sensitiveContent.h"
+#include "Audit/contentDigest.h"
 
 #include <atomic>
 
@@ -392,59 +393,68 @@ Database OpenDatabase(const std::string& memoryPath)
     {
         return {};
     }
-    constexpr const char* Schema =
-        "PRAGMA journal_mode=WAL;"
-        // NORMAL rather than the default FULL. Under a write-ahead log this still
-        // survives a process crash -- only a power loss can cost the most recent commit
-        // -- and it removes an fsync from every single write. That fsync was most of
-        // what made archiving a turn cost ten milliseconds.
-        "PRAGMA synchronous=NORMAL;"
-        "PRAGMA foreign_keys=ON;"
-        "CREATE TABLE IF NOT EXISTS memories ("
-        "  id TEXT NOT NULL UNIQUE,"
-        "  category TEXT NOT NULL,"
-        "  summary TEXT NOT NULL,"
-        "  normalized_summary TEXT NOT NULL UNIQUE,"
-        "  source TEXT NOT NULL,"
-        "  created_at TEXT NOT NULL,"
-        "  active INTEGER NOT NULL DEFAULT 1"
-        ");"
-        // Recall by time reads this index instead of scanning and casting every
-        // row. The expression is the one the time-window query uses verbatim,
-        // which is what makes the index usable rather than merely present.
-        "CREATE INDEX IF NOT EXISTS memories_created_at ON memories("
-        "  CAST(created_at AS INTEGER)"
-        ");"
-        "CREATE VIRTUAL TABLE IF NOT EXISTS memory_search USING fts5("
-        "  summary, category, content='memories', content_rowid='rowid',"
-        "  tokenize='unicode61 remove_diacritics 2'"
-        ");"
-        "CREATE TRIGGER IF NOT EXISTS memories_after_insert AFTER INSERT ON memories BEGIN "
-        "  INSERT INTO memory_search(rowid, summary, category) "
-        "  VALUES (new.rowid, new.summary, new.category);"
-        "END;"
-        "CREATE TRIGGER IF NOT EXISTS memories_after_delete AFTER DELETE ON memories BEGIN "
-        "  INSERT INTO memory_search(memory_search, rowid, summary, category) "
-        "  VALUES ('delete', old.rowid, old.summary, old.category);"
-        "END;"
-        "CREATE TRIGGER IF NOT EXISTS memories_after_update AFTER UPDATE ON memories BEGIN "
-        "  INSERT INTO memory_search(memory_search, rowid, summary, category) "
-        "  VALUES ('delete', old.rowid, old.summary, old.category);"
-        "  INSERT INTO memory_search(rowid, summary, category) "
-        "  VALUES (new.rowid, new.summary, new.category);"
-        "END;"
-        "CREATE TABLE IF NOT EXISTS memory_metadata ("
-        "  key TEXT PRIMARY KEY, value TEXT NOT NULL"
-        ");"
-        "CREATE TABLE IF NOT EXISTS memory_embeddings ("
-        "  memory_id TEXT NOT NULL,"
-        "  model TEXT NOT NULL,"
-        "  dimensions INTEGER NOT NULL,"
-        "  vector BLOB NOT NULL,"
-        "  created_at TEXT NOT NULL,"
-        "  PRIMARY KEY(memory_id, model),"
-        "  FOREIGN KEY(memory_id) REFERENCES memories(id) ON DELETE CASCADE"
-        ");";
+    constexpr const char* Schema = "PRAGMA journal_mode=WAL;"
+                                   // NORMAL rather than the default FULL. Under a write-ahead log this still
+                                   // survives a process crash -- only a power loss can cost the most recent commit
+                                   // -- and it removes an fsync from every single write. That fsync was most of
+                                   // what made archiving a turn cost ten milliseconds.
+                                   "PRAGMA synchronous=NORMAL;"
+                                   "PRAGMA foreign_keys=ON;"
+                                   "CREATE TABLE IF NOT EXISTS memories ("
+                                   "  id TEXT NOT NULL UNIQUE,"
+                                   "  category TEXT NOT NULL,"
+                                   "  summary TEXT NOT NULL,"
+                                   "  normalized_summary TEXT NOT NULL UNIQUE,"
+                                   "  source TEXT NOT NULL,"
+                                   "  created_at TEXT NOT NULL,"
+                                   "  active INTEGER NOT NULL DEFAULT 1"
+                                   ");"
+                                   // Recall by time reads this index instead of scanning and casting every
+                                   // row. The expression is the one the time-window query uses verbatim,
+                                   // which is what makes the index usable rather than merely present.
+                                   "CREATE INDEX IF NOT EXISTS memories_created_at ON memories("
+                                   "  CAST(created_at AS INTEGER)"
+                                   ");"
+                                   "CREATE VIRTUAL TABLE IF NOT EXISTS memory_search USING fts5("
+                                   "  summary, category, content='memories', content_rowid='rowid',"
+                                   "  tokenize='unicode61 remove_diacritics 2'"
+                                   ");"
+                                   "CREATE TRIGGER IF NOT EXISTS memories_after_insert AFTER INSERT ON memories BEGIN "
+                                   "  INSERT INTO memory_search(rowid, summary, category) "
+                                   "  VALUES (new.rowid, new.summary, new.category);"
+                                   "END;"
+                                   "CREATE TRIGGER IF NOT EXISTS memories_after_delete AFTER DELETE ON memories BEGIN "
+                                   "  INSERT INTO memory_search(memory_search, rowid, summary, category) "
+                                   "  VALUES ('delete', old.rowid, old.summary, old.category);"
+                                   "END;"
+                                   "CREATE TRIGGER IF NOT EXISTS memories_after_update AFTER UPDATE ON memories BEGIN "
+                                   "  INSERT INTO memory_search(memory_search, rowid, summary, category) "
+                                   "  VALUES ('delete', old.rowid, old.summary, old.category);"
+                                   "  INSERT INTO memory_search(rowid, summary, category) "
+                                   "  VALUES (new.rowid, new.summary, new.category);"
+                                   "END;"
+                                   "CREATE TABLE IF NOT EXISTS memory_metadata ("
+                                   "  key TEXT PRIMARY KEY, value TEXT NOT NULL"
+                                   ");"
+                                   "CREATE TABLE IF NOT EXISTS memory_embeddings ("
+                                   "  memory_id TEXT NOT NULL,"
+                                   "  model TEXT NOT NULL,"
+                                   "  dimensions INTEGER NOT NULL,"
+                                   "  vector BLOB NOT NULL,"
+                                   "  created_at TEXT NOT NULL,"
+                                   "  PRIMARY KEY(memory_id, model),"
+                                   "  FOREIGN KEY(memory_id) REFERENCES memories(id) ON DELETE CASCADE"
+                                   ");"
+                                   "CREATE TABLE IF NOT EXISTS memory_revisions ("
+                                   "  request_id TEXT PRIMARY KEY,"
+                                   "  request_digest TEXT NOT NULL,"
+                                   "  original_id TEXT NOT NULL REFERENCES memories(id),"
+                                   "  revised_id TEXT NOT NULL REFERENCES memories(id),"
+                                   "  chain_id TEXT NOT NULL REFERENCES memories(id),"
+                                   "  prior_receipt_id TEXT NOT NULL,"
+                                   "  receipt_json TEXT NOT NULL,"
+                                   "  UNIQUE(chain_id, prior_receipt_id)"
+                                   ");";
     if (!Execute(database.get(), Schema) || !ImportLegacyJsonl(database.get(), path))
     {
         return {};
@@ -515,6 +525,150 @@ std::string BuildFtsQuery(const std::string& query)
     return expression.str();
 }
 
+using RevisionRequest = revia::memory::MemoryRevisionRequest;
+using RevisionReceipt = revia::memory::MemoryRevisionReceipt;
+using Json = nlohmann::json;
+
+Json OriginJson(const revia::runtime::RuntimeStamp& value)
+{
+    return {{"companionId", value.companionId}, {"sessionId", value.sessionId}, {"generation", value.generation}, {"taskId", value.taskId},
+        {"attemptId", value.attemptId}, {"policyVersion", value.policyVersion}};
+}
+
+Json RevisionRequestJson(const RevisionRequest& value)
+{
+    return {{"ownerRequestId", value.ownerRequestId}, {"originalId", value.originalId},
+        {"expectedSummaryDigest", value.expectedSummaryDigest}, {"priorReceiptId", value.priorReceiptId},
+        {"origin", OriginJson(value.origin)}, {"audienceRevision", value.audienceRevision}, {"category", value.corrected.category},
+        {"summary", value.corrected.summary}, {"reason", value.reason}, {"evidence", value.evidence}};
+}
+
+bool ValidRevisionRequest(const RevisionRequest& value)
+{
+    const auto bounded = [](const std::string& text, const std::size_t limit)
+    { return !text.empty() && text.size() <= limit && text.find('\0') == std::string::npos; };
+    return bounded(value.ownerRequestId, 128) && bounded(value.originalId, 128) && value.expectedSummaryDigest.size() == 64 &&
+           std::all_of(value.expectedSummaryDigest.begin(), value.expectedSummaryDigest.end(),
+               [](const char character) { return (character >= '0' && character <= '9') || (character >= 'a' && character <= 'f'); }) &&
+           value.priorReceiptId.size() <= 128 && bounded(value.origin.companionId, 128) && bounded(value.origin.sessionId, 128) &&
+           value.origin.generation != 0 && value.audienceRevision != 0 && value.origin.taskId.size() <= 128 &&
+           value.origin.attemptId.size() <= 128 && value.corrected.bSuccess && value.corrected.bShouldRemember &&
+           !value.corrected.bPreempted && bounded(value.corrected.summary, 4096) && bounded(value.corrected.category, 64) &&
+           value.corrected.embedding.empty() && value.corrected.embeddingModel.empty() && bounded(value.reason, 1024) &&
+           bounded(value.evidence, 2048) && !revia::memory::ContainsSensitiveContent(RevisionRequestJson(value).dump());
+}
+
+Json RevisionReceiptJson(const RevisionReceipt& value)
+{
+    return {{"requestId", value.requestId}, {"digest", value.digest}, {"originalId", value.originalId}, {"revisedId", value.revisedId},
+        {"chainId", value.chainId}, {"priorReceiptId", value.priorReceiptId}, {"origin", OriginJson(value.origin)},
+        {"audienceRevision", value.audienceRevision}, {"reason", value.reason}, {"evidence", value.evidence},
+        {"createdAt", value.createdAt}, {"wasAdded", value.wasAdded}};
+}
+
+RevisionReceipt DecodeRevisionReceipt(const std::string& text)
+{
+    const auto value = Json::parse(text);
+    RevisionReceipt result;
+    result.requestId = value.at("requestId").get<std::string>();
+    result.digest = value.at("digest").get<std::string>();
+    result.originalId = value.at("originalId").get<std::string>();
+    result.revisedId = value.at("revisedId").get<std::string>();
+    result.chainId = value.at("chainId").get<std::string>();
+    result.priorReceiptId = value.at("priorReceiptId").get<std::string>();
+    const auto& origin = value.at("origin");
+    result.origin = {origin.at("companionId").get<std::string>(), origin.at("sessionId").get<std::string>(),
+        origin.at("generation").get<std::uint64_t>(), origin.at("taskId").get<std::string>(), origin.at("attemptId").get<std::string>(),
+        origin.at("policyVersion").get<std::uint64_t>()};
+    result.audienceRevision = value.at("audienceRevision").get<std::uint64_t>();
+    result.reason = value.at("reason").get<std::string>();
+    result.evidence = value.at("evidence").get<std::string>();
+    result.createdAt = value.at("createdAt").get<std::string>();
+    result.wasAdded = value.at("wasAdded").get<bool>();
+    return result;
+}
+
+std::string ColumnText(sqlite3_stmt* statement, const int column)
+{
+    const unsigned char* value = sqlite3_column_text(statement, column);
+    return value ? std::string(reinterpret_cast<const char*>(value)) : std::string();
+}
+
+Statement RequiredStatement(sqlite3* database, const char* text)
+{
+    auto statement = Prepare(database, text);
+    if (!statement)
+        throw std::runtime_error("Revision query unavailable.");
+    return statement;
+}
+
+std::optional<RevisionReceipt> FindRevision(sqlite3* database, const std::string& id, const bool byChain)
+{
+    auto query =
+        RequiredStatement(database, byChain ? "SELECT receipt_json FROM memory_revisions WHERE chain_id = ? ORDER BY rowid DESC LIMIT 1;"
+                                            : "SELECT receipt_json FROM memory_revisions WHERE request_id = ?;");
+    BindText(query.get(), 1, id);
+    const int status = sqlite3_step(query.get());
+    if (status == SQLITE_DONE)
+        return std::nullopt;
+    if (status != SQLITE_ROW)
+        throw std::runtime_error("Revision query failed.");
+    return DecodeRevisionReceipt(ColumnText(query.get(), 0));
+}
+
+std::string FindRevisionChain(sqlite3* database, const std::string& id)
+{
+    auto query = RequiredStatement(
+        database, "SELECT chain_id FROM memory_revisions WHERE original_id = ? OR revised_id = ? ORDER BY rowid DESC LIMIT 1;");
+    BindText(query.get(), 1, id);
+    BindText(query.get(), 2, id);
+    const int status = sqlite3_step(query.get());
+    if (status == SQLITE_DONE)
+        return {};
+    if (status != SQLITE_ROW)
+        throw std::runtime_error("Revision membership query failed.");
+    return ColumnText(query.get(), 0);
+}
+
+bool ProjectRevisions(sqlite3* database, std::vector<memoryEntry>& entries)
+{
+    auto query = Prepare(database, "SELECT request_id, original_id, revised_id, chain_id FROM memory_revisions ORDER BY rowid;");
+    if (!query)
+        return false;
+    struct Projection
+    {
+        std::string receipt;
+        std::string original;
+        std::string current;
+    };
+    std::unordered_map<std::string, Projection> latest;
+    std::unordered_map<std::string, std::string> membership;
+    int status;
+    while ((status = sqlite3_step(query.get())) == SQLITE_ROW)
+    {
+        const std::string chain = ColumnText(query.get(), 3);
+        const std::string original = ColumnText(query.get(), 1);
+        const std::string current = ColumnText(query.get(), 2);
+        latest[chain] = {ColumnText(query.get(), 0), original, current};
+        membership[original] = membership[current] = chain;
+    }
+    if (status != SQLITE_DONE)
+        return false;
+    for (auto& entry : entries)
+    {
+        const auto chain = membership.find(entry.id);
+        if (chain == membership.end())
+            continue;
+        const auto& revision = latest.at(chain->second);
+        entry.revisionChainId = chain->second;
+        entry.revisionReceiptId = revision.receipt;
+        entry.currentRevisionId = revision.current;
+        if (entry.id == revision.current)
+            entry.revisesMemoryId = revision.original;
+    }
+    return true;
+}
+
 } // namespace
 
 struct longTermMemory::Connection
@@ -551,6 +705,7 @@ void longTermMemory::ConfigureCache(const int cacheMiB, const int mmapMiB)
 
 std::vector<memoryEntry> longTermMemory::Load() const
 {
+    const std::lock_guard operationLock(databaseMutex);
     sqlite3* const database = Acquire();
     if (!database)
     {
@@ -571,11 +726,12 @@ std::vector<memoryEntry> longTermMemory::Load() const
     {
         entries.push_back(ReadEntry(query.get()));
     }
-    return entries;
+    return ProjectRevisions(database, entries) ? entries : std::vector<memoryEntry>{};
 }
 
 bool longTermMemory::Save(const memoryDecision& decision, bool& outWasAdded, std::string* outMemoryId) const
 {
+    const std::lock_guard operationLock(databaseMutex);
     outWasAdded = false;
     if (outMemoryId) outMemoryId->clear();
     if (!decision.bSuccess || !decision.bShouldRemember || decision.summary.empty())
@@ -662,8 +818,131 @@ bool longTermMemory::Save(const memoryDecision& decision, bool& outWasAdded, std
     return true;
 }
 
+bool longTermMemory::SaveOwnerRevision(
+    const RevisionRequest& request, RevisionReceipt& receipt, std::string& error, std::function<bool()> admission) const
+{
+    receipt = {};
+    error.clear();
+    if (!ValidRevisionRequest(request))
+    {
+        error = "Owner revision requires exact safe content, expected target digest and captured provenance.";
+        return false;
+    }
+    const std::lock_guard operationLock(databaseMutex);
+    sqlite3* const database = Acquire();
+    if (!database || (admission && !admission()) || !Execute(database, "BEGIN IMMEDIATE;"))
+    {
+        error = "Owner revision storage or origin admission is unavailable.";
+        return false;
+    }
+    struct Transaction
+    {
+        sqlite3* database;
+        bool committed = false;
+        ~Transaction()
+        {
+            if (!committed)
+                Execute(database, "ROLLBACK;");
+        }
+    } transaction{database};
+    try
+    {
+        const std::string digest = revia::audit::ContentDigest(RevisionRequestJson(request).dump());
+        if (const auto priorRequest = FindRevision(database, request.ownerRequestId, false))
+        {
+            if (priorRequest->digest != digest)
+                throw std::runtime_error("Authorization replay changed.");
+            if ((admission && !admission()) || !Execute(database, "COMMIT;"))
+                throw std::runtime_error("Revision replay failed.");
+            transaction.committed = true;
+            receipt = *priorRequest;
+            return true;
+        }
+        auto capacity = RequiredStatement(database, "SELECT COUNT(*) FROM memory_revisions;");
+        if (sqlite3_step(capacity.get()) != SQLITE_ROW || sqlite3_column_int64(capacity.get(), 0) >= 4096)
+            throw std::runtime_error("Revision history capacity exhausted.");
+        capacity.reset();
+        auto original = RequiredStatement(database, "SELECT summary FROM memories WHERE id = ? AND active = 1;");
+        BindText(original.get(), 1, request.originalId);
+        if (sqlite3_step(original.get()) != SQLITE_ROW ||
+            revia::audit::ContentDigest(ColumnText(original.get(), 0)) != request.expectedSummaryDigest)
+            throw std::runtime_error("Revision exact target changed or is absent.");
+        original.reset();
+        std::string chain = request.originalId;
+        if (request.priorReceiptId.empty())
+        {
+            if (!FindRevisionChain(database, request.originalId).empty())
+                throw std::runtime_error("Revision requires latest receipt.");
+        }
+        else
+        {
+            const auto previous = FindRevision(database, request.priorReceiptId, false);
+            if (!previous || previous->revisedId != request.originalId || previous->origin.companionId != request.origin.companionId)
+                throw std::runtime_error("Revision predecessor does not identify this exact record.");
+            chain = previous->chainId;
+            const auto latest = FindRevision(database, chain, true);
+            if (!latest || latest->requestId != request.priorReceiptId)
+                throw std::runtime_error("Revision predecessor is stale.");
+        }
+        memoryDecision corrected = request.corrected;
+        corrected.source = "owner_revision:" + request.ownerRequestId;
+        bool added = false;
+        std::string memoryId;
+        if (!Save(corrected, added, &memoryId) || memoryId.empty() || memoryId == request.originalId)
+            throw std::runtime_error("Revision content was not replaced.");
+        const std::string otherChain = FindRevisionChain(database, memoryId);
+        if (!otherChain.empty() && otherChain != chain)
+            throw std::runtime_error("Replacement belongs to a different revision chain.");
+        RevisionReceipt saved{request.ownerRequestId, digest, request.originalId, memoryId, chain, request.priorReceiptId, request.origin,
+            request.audienceRevision, request.reason, request.evidence, CurrentEpochSeconds(), added};
+        auto insert = RequiredStatement(database,
+            "INSERT INTO memory_revisions(request_id, request_digest, original_id, revised_id, chain_id, prior_receipt_id, receipt_json) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?);");
+        BindText(insert.get(), 1, saved.requestId);
+        BindText(insert.get(), 2, saved.digest);
+        BindText(insert.get(), 3, saved.originalId);
+        BindText(insert.get(), 4, saved.revisedId);
+        BindText(insert.get(), 5, saved.chainId);
+        BindText(insert.get(), 6, saved.priorReceiptId);
+        BindText(insert.get(), 7, RevisionReceiptJson(saved).dump());
+        if (sqlite3_step(insert.get()) != SQLITE_DONE || sqlite3_finalize(insert.release()) != SQLITE_OK || (admission && !admission()) ||
+            !Execute(database, "COMMIT;"))
+            throw std::runtime_error("Revision receipt could not commit.");
+        transaction.committed = true;
+        receipt = std::move(saved);
+        return true;
+    }
+    catch (...)
+    {
+        error = "Owner revision was rejected or could not be persisted atomically; no correction was committed.";
+        return false;
+    }
+}
+
+std::vector<RevisionReceipt> longTermMemory::RevisionHistory() const
+{
+    const std::lock_guard operationLock(databaseMutex);
+    try
+    {
+        sqlite3* const database = Acquire();
+        if (!database)
+            return {};
+        auto query = RequiredStatement(database, "SELECT receipt_json FROM memory_revisions ORDER BY rowid;");
+        std::vector<RevisionReceipt> history;
+        int status;
+        while ((status = sqlite3_step(query.get())) == SQLITE_ROW)
+            history.push_back(DecodeRevisionReceipt(ColumnText(query.get(), 0)));
+        return status == SQLITE_DONE ? history : std::vector<RevisionReceipt>{};
+    }
+    catch (...)
+    {
+        return {};
+    }
+}
+
 bool longTermMemory::HasMemories() const
 {
+    const std::lock_guard operationLock(databaseMutex);
     sqlite3* const database = Acquire();
     if (!database)
     {
@@ -678,6 +957,7 @@ bool longTermMemory::HasMemories() const
 std::vector<memoryEntry> longTermMemory::Search(const std::string& queryText, const std::size_t maxEntries,
     const std::vector<float>& queryEmbedding, const std::string& embeddingModel, const std::int64_t nowEpoch) const
 {
+    const std::lock_guard operationLock(databaseMutex);
     if (maxEntries == 0 || (queryText.empty() && queryEmbedding.empty()))
     {
         return {};
@@ -886,12 +1166,13 @@ std::vector<memoryEntry> longTermMemory::Search(const std::string& queryText, co
     {
         results.push_back(std::move(candidate.entry));
     }
-    return results;
+    return ProjectRevisions(database, results) ? results : std::vector<memoryEntry>{};
 }
 
 std::string longTermMemory::BuildPromptBlock(const std::string& query, const std::size_t maxEntries,
     const std::vector<float>& queryEmbedding, const std::string& embeddingModel, const std::int64_t nowEpoch) const
 {
+    const std::lock_guard operationLock(databaseMutex);
     if (maxEntries == 0)
     {
         return "";
@@ -909,6 +1190,30 @@ std::string longTermMemory::BuildPromptBlock(const std::string& query, const std
     {
         entries.erase(entries.begin(), entries.end() - static_cast<std::ptrdiff_t>(maxEntries));
     }
+    // At most one exact current replacement accompanies each retrieved historical row.
+    // This is receipt-linked context, never a similarity-based overwrite or ranking rule.
+    std::unordered_set<std::string> shown;
+    for (const auto& entry : entries)
+        shown.insert(entry.id);
+    const std::size_t retrieved = entries.size();
+    sqlite3* const database = Acquire();
+    for (std::size_t index = 0; index < retrieved; ++index)
+    {
+        const auto& entry = entries[index];
+        if (entry.currentRevisionId.empty() || shown.contains(entry.currentRevisionId))
+            continue;
+        auto current = Prepare(database, "SELECT id, category, summary, source, created_at FROM memories WHERE id = ? AND active = 1;");
+        if (!current)
+            return {};
+        BindText(current.get(), 1, entry.currentRevisionId);
+        if (sqlite3_step(current.get()) != SQLITE_ROW)
+            return {};
+        auto replacement = ReadEntry(current.get());
+        shown.insert(replacement.id);
+        entries.push_back(std::move(replacement));
+    }
+    if (!ProjectRevisions(database, entries))
+        return {};
 
     std::ostringstream stream;
     // The clock is stated before the memories because every stamp below is relative to
@@ -926,7 +1231,12 @@ std::string longTermMemory::BuildPromptBlock(const std::string& query, const std
               "conflicts:\n";
     for (const memoryEntry& entry : entries)
     {
-        stream << "- [" << entry.category << "] ";
+        stream << "- [" << entry.category << "] [source: " << entry.source << "; id: " << entry.id << "] ";
+        if (!entry.currentRevisionId.empty())
+        {
+            stream << (entry.currentRevisionId == entry.id ? "[current owner revision" : "[historical owner-revised record")
+                   << "; receipt: " << entry.revisionReceiptId << "; current id: " << entry.currentRevisionId << "] ";
+        }
         // Absent or unparseable on a legacy row. Omitted rather than filled in, because
         // an invented timestamp is worse than a missing one.
         const std::string when = revia::memory::DescribeMoment(
@@ -942,11 +1252,13 @@ std::string longTermMemory::BuildPromptBlock(const std::string& query, const std
 
 std::vector<memoryEntry> longTermMemory::LoadMissingEmbeddings(const std::string& embeddingModel, const std::size_t maxEntries) const
 {
+    const std::lock_guard operationLock(databaseMutex);
     return ReadMissingEmbeddings(embeddingModel, maxEntries, std::nullopt).entries;
 }
 
 EmbeddingBackfillPage longTermMemory::ScanMissingEmbeddings(const std::string& model, std::int64_t afterRowId, std::size_t maxEntries) const
 {
+    const std::lock_guard operationLock(databaseMutex);
     return ReadMissingEmbeddings(model, maxEntries, std::max<std::int64_t>(0, afterRowId));
 }
 
@@ -1005,6 +1317,7 @@ EmbeddingBackfillPage longTermMemory::ReadMissingEmbeddings(const std::string& e
 
 bool longTermMemory::NeedsEmbedding(const std::string& id, const std::string& model) const
 {
+    const std::lock_guard operationLock(databaseMutex);
     sqlite3* const database = Acquire();
     if (!database || id.empty() || model.empty()) return false;
     Statement query = Prepare(database,
@@ -1019,6 +1332,7 @@ bool longTermMemory::NeedsEmbedding(const std::string& id, const std::string& mo
 bool longTermMemory::SaveEmbedding(const std::string& memoryId,
     const std::string& embeddingModel, const std::vector<float>& embedding) const
 {
+    const std::lock_guard operationLock(databaseMutex);
     sqlite3* const database = Acquire();
     return database && UpsertEmbedding(
         database,

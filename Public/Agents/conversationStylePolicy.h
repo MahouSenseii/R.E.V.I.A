@@ -26,6 +26,8 @@ public:
     // Pure per-turn answer-obligation guidance; every mode preserves runtime-confirmed outcomes.
     // Action result formatting remains deterministic in ReviaSession.
     [[nodiscard]] static std::string BuildAnswerObligationGuidance(AnswerObligationMode mode);
+    [[nodiscard]] static std::string BuildReviewEvidence(
+        const std::string& input, const std::vector<conversationMessage>& context, AnswerObligationMode mode, bool privateHistoryExcluded);
 
     [[nodiscard]] std::string RefineReply(const std::string& input,
         const std::vector<conversationMessage>& context, const std::string& reply) const;

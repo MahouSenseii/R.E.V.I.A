@@ -10,8 +10,8 @@ using revia::tests::Check;
 
 bool HasCorrectionPurpose(const std::string& input)
 {
-    return revia::agents::ConversationStylePolicy{}.BuildTurnGuidance(input, {}).find(
-               "The latest message appears to correct a mistaken assumption.") != std::string::npos;
+    return revia::agents::ConversationStylePolicy{}.BuildTurnGuidance(input, {}).find("Check corrections against evidence;") !=
+           std::string::npos;
 }
 
 void TestDirectCorrectionLabelsActivateCurrentPurpose()
@@ -25,6 +25,8 @@ void TestDirectCorrectionLabelsActivateCurrentPurpose()
              "error in three sentences.",
              "Check your explanation against these supplied facts: a compiler can produce \"object files\" for linking. Correct any "
              "earlier error in three sentences.",
+             "Check your explanation against these supplied facts: a compiler produces object files. Give the corrected explanation in "
+             "exactly three sentences.",
              "Check your explanation against my earlier words. You misunderstood: the rover is Amber."})
         Check(HasCorrectionPurpose(input), "The actual direct Correction: wording did not activate current correction guidance.");
     Check(HasCorrectionPurpose("No, Amber has eight wheels."), "An existing direct correction signal stopped working.");
@@ -57,9 +59,10 @@ void TestCorrectionMentionsDoNotBecomeCurrentCorrection()
 void TestCorrectionGuidancePreservesEvidenceAndDisagreement()
 {
     const auto guidance = revia::agents::ConversationStylePolicy{}.BuildTurnGuidance("No, two plus two is five.", {});
-    Check(guidance.find("Check evidence; preserve disagreement and uncertainty.") != std::string::npos,
+    Check(guidance.find("Check corrections against evidence; preserve disagreement and uncertainty.") != std::string::npos,
         "Correction guidance did not preserve evidence-based disagreement or uncertainty.");
-    Check(guidance.find("do not invent errors, motives or blame.") != std::string::npos,
+    Check(guidance.find("attribute errors only when supported.") != std::string::npos &&
+              guidance.find("Do not invent motives or blame.") != std::string::npos,
         "Correction guidance did not forbid invented blame or motives.");
     Check(guidance.find("Briefly accept the correction") == std::string::npos &&
               guidance.find("Do not defend, restate, or preserve the earlier assumption") == std::string::npos,
@@ -69,17 +72,17 @@ void TestCorrectionGuidancePreservesEvidenceAndDisagreement()
     const auto revisedDetail = revia::agents::ConversationStylePolicy{}.BuildTurnGuidance(
         "Correction: the rover has eight wheels, not six. What is its name and wheel count now?", exchange);
     const std::string expectedPurpose =
-        "Turn-local conversation guidance: The latest message appears to correct a mistaken assumption. "
-        "Check evidence; preserve disagreement and uncertainty. Carry forward unchanged details in a user-supplied scenario or preference. "
-        "Preserve subjects, roles and possessives. Repair a speaker’s mistake only when evidence establishes it; do not invent errors, "
-        "motives or blame. Use facts already given instead of asking again.";
+        "Turn-local conversation guidance: The latest message is the reply task. "
+        "Check corrections against evidence; preserve disagreement and uncertainty. "
+        "Keep unchanged facts and speaker ownership. A scenario revision is not evidence of your mistake. "
+        "Preserve supplied relationships; attribute errors only when supported. Do not invent motives or blame.";
     Check(revisedDetail.substr(0, revisedDetail.find("\n\n")) == expectedPurpose && expectedPurpose.size() <= 450,
         "The correction purpose is not the complete compact first paragraph with evidence-conditional speaker repair.");
-    Check(revisedDetail.find("Carry forward unchanged details in a user-supplied scenario or preference.") != std::string::npos &&
-              revisedDetail.find("Use facts already given instead of asking again.") != std::string::npos,
+    Check(revisedDetail.find("Keep unchanged facts and speaker ownership.") != std::string::npos &&
+              revisedDetail.find("Preserve supplied relationships;") != std::string::npos,
         "The native correction guidance omitted partial-revision continuity and supplied-fact reuse.");
-    Check(revisedDetail.find("Repair a speaker’s mistake only when evidence establishes it; do not invent errors, motives or blame.") !=
-                  std::string::npos &&
+    Check(revisedDetail.find("A scenario revision is not evidence of your mistake.") != std::string::npos &&
+              revisedDetail.find("attribute errors only when supported.") != std::string::npos &&
               revisedDetail.find("repair your own error") == std::string::npos,
         "The native correction guidance inferred an assistant error from an ordinary user scenario revision.");
     Check(revisedDetail.find("Turn-local conversation guidance:", expectedPurpose.size()) == std::string::npos,

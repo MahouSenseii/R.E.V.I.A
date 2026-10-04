@@ -366,11 +366,18 @@ std::string GroundedInternetReply(const ResponseFilterContext& context)
 
 std::string ResponseFilterContext::Describe() const
 {
+    std::string description = "Answer posture is ";
+    description += answerObligation == AnswerObligationMode::Reliable         ? "reliable"
+                   : answerObligation == AnswerObligationMode::CharacterFirst ? "character first"
+                                                                              : "balanced";
+    description += ". ";
+    if (privateHistoryExcluded)
+        description += "Earlier private history is excluded. No access does not establish that it never existed. ";
     if (!internetStateKnown)
     {
-        return "Internet permission state is unavailable; do not claim that it is on or off.";
+        return description + "Internet permission state is unavailable; do not claim that it is on or off.";
     }
-    std::string description = "Internet access is ";
+    description += "Internet access is ";
     description += internetEnabled ? "enabled" : "disabled";
     description += ". ";
     if (internetEnabled)

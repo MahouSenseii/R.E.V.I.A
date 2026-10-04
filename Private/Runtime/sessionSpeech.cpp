@@ -284,6 +284,7 @@ void ReviaSession::HandleSpeechEvent(const speech::SpeechEvent& speechEvent)
     event.queueDepth = speechEvent.queueDepth;
     // Use the existing turn correlation for text and audio.
     event.turnId = speechEvent.utteranceId;
+    event.utteranceId = speechEvent.utteranceId;
     const std::size_t workerMarker = speechEvent.device.find("voice-worker-");
     if (workerMarker != std::string::npos)
     {

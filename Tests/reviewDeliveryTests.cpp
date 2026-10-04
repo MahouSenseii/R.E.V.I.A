@@ -13,8 +13,11 @@
 #include <chrono>
 #include <httplib.h>
 #include <iostream>
+#include <mutex>
 #include <nlohmann/json.hpp>
 #include <thread>
+#include <utility>
+#include <vector>
 
 namespace
 {
@@ -38,7 +41,7 @@ public:
                 response.set_content(answer, "text/plain");
                 return;
             }
-            const auto body = json::parse(request.body);
+            const json body = json::parse(request.body);
             if (!body.value("stream", false))
             {
                 response.set_content(json{{"choices", json::array({{
@@ -76,6 +79,142 @@ private:
     httplib::Server server;
     std::jthread thread;
 };
+
+class AnswerReviewBackend
+{
+  public:
+    AnswerReviewBackend(std::string candidate, std::string verdict)
+    {
+        server.Get(
+            "/health", [](const auto&, auto& response) { response.set_content(R"({"status":"ok","slots_idle":1})", "application/json"); });
+        server.Get("/v1/models",
+            [](const auto&, auto& response) { response.set_content(R"({"data":[{"id":"answer-review-fixture"}]})", "application/json"); });
+        server.Post("/v1/chat/completions",
+            [this, candidate = std::move(candidate), verdict = std::move(verdict)](const auto& request, auto& response)
+            {
+                const json body = json::parse(request.body);
+                {
+                    std::lock_guard lock(mutex);
+                    requests.push_back(body);
+                }
+                const bool reviewing =
+                    body["messages"][0]["content"].get<std::string>().find("post-generation response reviewer") != std::string::npos;
+                if (body.value("stream", false))
+                {
+                    const json chunk = {{"choices", json::array({{{"delta", {{"content", candidate}}}, {"finish_reason", "stop"}}})}};
+                    const std::string data = "data: " + chunk.dump() + "\n\ndata: [DONE]\n\n";
+                    response.set_chunked_content_provider("text/event-stream",
+                        [data](const std::size_t, httplib::DataSink& sink)
+                        {
+                            sink.write(data.data(), data.size());
+                            sink.done();
+                            return true;
+                        });
+                    return;
+                }
+                response.set_content(
+                    json{{"choices",
+                             json::array({{{"message", {{"content", reviewing ? verdict : candidate}}}, {"finish_reason", "stop"}}})}}
+                        .dump(),
+                    "application/json");
+            });
+        server.new_task_queue = [] { return new httplib::ThreadPool(1); };
+        port = server.bind_to_any_port("127.0.0.1");
+        Check(port > 0, "Could not bind answer review backend.");
+        thread = std::jthread([this] { server.listen_after_bind(); });
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+        while (!server.is_running() && std::chrono::steady_clock::now() < deadline)
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        Check(server.is_running(), "Answer review backend did not start.");
+    }
+    ~AnswerReviewBackend()
+    {
+        server.stop();
+        thread.join();
+    }
+    std::vector<json> Requests() const
+    {
+        std::lock_guard lock(mutex);
+        return requests;
+    }
+    int port = 0;
+
+  private:
+    mutable std::mutex mutex;
+    std::vector<json> requests;
+    httplib::Server server;
+    std::jthread thread;
+};
+}
+
+void TestOptionalAnswerReviewPreservesEvidenceAndVoice()
+{
+    using namespace revia::agents;
+    const std::string candidate = "Kite is silver and still has three wings. Blue was apparently too mainstream.";
+    for (const bool reviewEnabled : {false, true})
+        for (const std::string verdict :
+            {R"({"verdict":"allow","reason":"Grounded expressive answer."})",
+                R"({"verdict":"replace","replacement":"Kite is silver and still has three wings. I clicked the button for you.","reason":"Repair factual delivery."})",
+                "malformed review"})
+        {
+            AnswerReviewBackend backend(candidate, verdict);
+            messageRouter router;
+            llmSettings settings;
+            settings.host = "127.0.0.1";
+            settings.port = backend.port;
+            settings.modelName = "answer-review-fixture";
+            settings.bAutoStartServer = false;
+            settings.bVisionEnabled = false;
+            settings.bAutoMaxTokens = false;
+            settings.maxTokens = 256;
+            embeddingSettings embeddings;
+            embeddings.bEnabled = false;
+            aiProfile profile;
+            profile.bMemoryEnabled = false;
+            router.ApplyLLMSettings(settings, embeddings, profile);
+            ResponseFilterContext facts;
+            facts.answerObligation = AnswerObligationMode::CharacterFirst;
+            facts.privateHistoryExcluded = true;
+            facts.desktopStateKnown = true;
+            responseFilterSettings filters;
+            filters.bAiReviewEnabled = reviewEnabled;
+            const std::string input = "Correction: the glider is silver now, not blue. What is its name and wing count?";
+            const std::vector<conversationMessage> context = {{"system", "EXCLUDED_REVIEW_SYSTEM_SECRET"},
+                {"memory", "EXCLUDED_REVIEW_MEMORY_SECRET"}, {"user", "The glider is Kite, blue, and has three wings."},
+                {"assistant", "Kite is blue and has three wings."}, {"user", input}};
+            std::string delivered;
+            const auto output =
+                ConversationAgent{}.Execute(router, input, context, filters, facts, {}, [&](const auto& text) { delivered += text; });
+            const auto requests = backend.Requests();
+            Check(output.bSuccess && delivered == output.response && output.rawResponse == candidate,
+                "Optional review lost raw evidence or delivered text before final approval.");
+            Check(requests.size() == (reviewEnabled ? 2 : 1),
+                "Optional review overrode the off preference or performed more than one review.");
+            if (!reviewEnabled || verdict.find("allow") != std::string::npos || verdict == "malformed review")
+                Check(output.response == candidate, "An allowed expressive answer or degraded review was unnecessarily replaced.");
+            else
+                Check(output.bAiFilterChanged && output.bHardFilterBlocked && output.response.find("I clicked") == std::string::npos,
+                    "An AI replacement bypassed the final deterministic output boundary.");
+            if (reviewEnabled)
+            {
+                const auto& request = requests.back();
+                const std::string system = request["messages"][0]["content"];
+                const std::string evidence = request["messages"][1]["content"];
+                Check(system.find("Answer posture is character first") != std::string::npos &&
+                          system.find("Earlier private history is excluded") != std::string::npos,
+                    "The review did not receive authoritative captured answer posture and exclusion.");
+                Check(system.find("Kite is blue") == std::string::npos && evidence.find("Kite is blue") != std::string::npos &&
+                          evidence.find("Role: assistant") != std::string::npos && evidence.find(input) != std::string::npos,
+                    "Admitted dialogue entered authoritative system facts or the complete current task was lost.");
+                const auto priorEvidence = evidence.substr(evidence.find("Prior conversation evidence"));
+                Check(priorEvidence.find("EXCLUDED_REVIEW_SYSTEM_SECRET") == std::string::npos &&
+                          priorEvidence.find("EXCLUDED_REVIEW_MEMORY_SECRET") == std::string::npos,
+                    "Review evidence copied excluded arbitrary context roles.");
+                Check(system.find("A sharp or negative tone is not by itself a reason to replace") != std::string::npos &&
+                          system.find("Do not manufacture a full answer to replace a legitimate character choice") != std::string::npos,
+                    "The richer answer review flattened personality or authored answer freedom.");
+            }
+        }
 }
 
 void TestReviewDeliveryFiltering()
@@ -235,6 +374,7 @@ void TestReviewSvgRepresentation()
 
 void RunReviewDeliveryTests()
 {
+    TestOptionalAnswerReviewPreservesEvidenceAndVoice();
     TestReviewDeliveryFiltering();
     TestReviewUtf8Output();
     TestReviewSvgRepresentation();

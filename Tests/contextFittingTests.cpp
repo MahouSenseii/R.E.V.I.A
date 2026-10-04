@@ -542,10 +542,10 @@ void TestActualWireRetainsCurrentPurposeAndConfiguredAnswerPosture()
         "replies are text only.";
     revia::agents::ConversationStylePolicy policy;
     const std::string correctionPurpose =
-        "Turn-local conversation guidance: The latest message appears to correct a mistaken assumption. "
-        "Check evidence; preserve disagreement and uncertainty. Carry forward unchanged details in a user-supplied scenario or preference. "
-        "Preserve subjects, roles and possessives. Repair a speaker’s mistake only when evidence establishes it; do not invent errors, "
-        "motives or blame. Use facts already given instead of asking again.";
+        "Turn-local conversation guidance: The latest message is the reply task. "
+        "Check corrections against evidence; preserve disagreement and uncertainty. "
+        "Keep unchanged facts and speaker ownership. A scenario revision is not evidence of your mistake. "
+        "Preserve supplied relationships; attribute errors only when supported. Do not invent motives or blame.";
     const std::vector<std::pair<AnswerObligationMode, std::string>> modes = {
         {AnswerObligationMode::Reliable, "Answer posture: reliable. When the substance of an answer exists and you can give it, give it: "
                                          "do not stop short of the useful part or leave a joke standing in its place. Answering "
@@ -594,9 +594,8 @@ void TestActualWireRetainsCurrentPurposeAndConfiguredAnswerPosture()
                     "Preserving purpose discarded the existing prior dialogue pair.");
                 const auto latest = messages.back().at("content").get<std::string>();
                 Check(latest.find(question) != std::string::npos, "Preserving purpose discarded the complete newest question.");
-                Check(latest.find("Turn-local conversation guidance: The latest message appears to correct a mistaken assumption.") !=
-                              std::string::npos &&
-                          latest.find("The latest message appears to correct a mistaken assumption.") != std::string::npos,
+                Check(latest.find("Turn-local conversation guidance: The latest message is the reply task.") != std::string::npos &&
+                          latest.find("Check corrections against evidence;") != std::string::npos,
                     "Actual trusted-posture fitting discarded the recognized current correction purpose.");
                 Check(latest.find(correctionPurpose) != std::string::npos, "The actual wire omitted the complete correction purpose with "
                                                                            "supplied-fact continuity and speaker attribution guidance.");

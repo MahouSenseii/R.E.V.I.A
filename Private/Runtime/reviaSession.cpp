@@ -14,6 +14,8 @@
 #include "Identity/promptMarkers.h"
 #include "Runtime/publicContextCache.h"
 #include "Runtime/reviaSession.h"
+#include "Audit/contentDigest.h"
+#include "Runtime/investigationChecks.h"
 #include "Speech/speakerEnrollmentDialogue.h"
 #include "Runtime/runtimeDataBootstrap.h"
 #include "Runtime/companionSettings.h"
@@ -344,6 +346,17 @@ ReviaSession::ReviaSession(CompanionPaths paths, std::shared_ptr<policy::Compani
     InitializeSpeakerEnrollment();
     actionRuntime.SetPrivateRuntimePaths(companionPaths.Resolve("RuntimeData/Browser/Profile"), CompanionLogDirectory(companionPaths));
     eventBus.BindOrigin(origin, [this](const RuntimeStamp& stamp) { return sessionIdentity.IsCurrent(stamp); });
+    conversationRuntime.ResetResponseLatency(origin);
+    conversationRuntime.SetInvestigationExecutorFactory(
+        [this](std::function<bool()> admission, const std::stop_token stopToken)
+        {
+            RuntimeStamp captured = Stamp();
+            captured.attemptId = "conversation-investigation-" +
+                                 audit::ContentDigest(std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+            return [this, captured, admission = std::move(admission), stopToken](
+                       const agents::CheckKind kind, const std::string& proposal, const std::string&)
+            { return ExecuteInvestigationCheck(actionRuntime, captured, kind, proposal, stopToken, admission); };
+        });
     turnCoordinator.SetAdmissionGuard([this, origin]() { return sessionIdentity.IsCurrent(origin); });
     appLogger.SetSink(
         [this](const std::string& line)
@@ -446,6 +459,7 @@ bool ReviaSession::Start()
         (void)companionAuthority->RegisterSession(origin);
         actionRuntime.BindAuthority(companionAuthority, origin);
         eventBus.BindOrigin(origin, [this](const RuntimeStamp& stamp) { return sessionIdentity.IsCurrent(stamp); });
+        conversationRuntime.ResetResponseLatency(origin);
         turnCoordinator.SetAdmissionGuard([this, origin]() { return sessionIdentity.IsCurrent(origin); });
     }
     if (!foregroundLease.TryAcquire(sessionIdentity.Stamp()))
@@ -1225,6 +1239,7 @@ void ReviaSession::StartInputDrain()
                     RuntimeEvent event;
                     event.stamp = result.stamp;
                     event.kind = RuntimeEventKind::AssistantMessage;
+                    event.audienceRevision = result.audienceRevision;
                     event.state = state.load();
                     event.message = result.text;
                     event.detail = result.reasoning;
@@ -1636,6 +1651,7 @@ void ReviaSession::StartExternalAdapterLoop()
                         {
                             RuntimeEvent replyEvent;
                             replyEvent.kind = RuntimeEventKind::AssistantMessage;
+                            replyEvent.audienceRevision = result.audienceRevision;
                             replyEvent.state = state.load();
                             replyEvent.component = "Adapters";
                             replyEvent.phase = request.source;
@@ -1806,6 +1822,8 @@ void ReviaSession::StartInitiativeLoop()
                             continue;
                         }
 
+                        const auto proposalAudience = Audience();
+                        const auto proposalOrigin = Stamp();
                         initiative::AttentionContext context = SampleAttention();
                         initiative::InitiativeController::Evidence evidence;
                         evidence.recentActivity = activityHistory.Spans(std::chrono::minutes{90});
@@ -1846,6 +1864,12 @@ void ReviaSession::StartInitiativeLoop()
                         {
                             continue;
                         }
+                        if (!Admits(proposalOrigin) || proposalAudience.kind != identity::AudienceKind::Private ||
+                            Audience().revision != proposalAudience.revision)
+                        {
+                            initiativeController.Expire(consideration.proposal.id);
+                            continue;
+                        }
 
                         if (consideration.proposal.kind == initiative::Proposal::Kind::ConversationStarter)
                         {
@@ -1865,7 +1889,8 @@ void ReviaSession::StartInitiativeLoop()
                                 {
                                     continue;
                                 }
-                                if (!started.load() || busy.load() || stopToken.stop_requested())
+                                if (!started.load() || busy.load() || stopToken.stop_requested() || !Admits(proposalOrigin) ||
+                                    Audience().revision != proposalAudience.revision)
                                 {
                                     PublishComponent(
                                         "Initiative", "Suppressed", "The opportunity passed before the conversation could start.");
@@ -1886,7 +1911,8 @@ void ReviaSession::StartInitiativeLoop()
                                         }
                                         opening = conversationRuntime.StartConversation(consideration.proposal.message,
                                             consideration.proposal.evidence, profile, llmAvailable, ShouldSpeakOnCurrentChannel(),
-                                            operationToken);
+                                            operationToken, proposalAudience.revision,
+                                            CaptureSpeechAdmission(proposalAudience, proposalOrigin));
                                         if (opening.succeeded && !opening.text.empty())
                                         {
                                             (void)initiativeController.Commit(consideration.proposal.id, context.now);
@@ -1898,7 +1924,8 @@ void ReviaSession::StartInitiativeLoop()
                             }
 
                             PublishComponent("Initiative", opening.succeeded ? "Started" : "Error",
-                                opening.succeeded ? consideration.proposal.evidence : opening.reason);
+                                opening.succeeded ? consideration.proposal.evidence : opening.reason, -1.0, 0, 0, {},
+                                proposalAudience.revision, proposalOrigin);
                             if (!opening.succeeded)
                             {
                                 initiativeController.Expire(consideration.proposal.id);
@@ -1907,6 +1934,7 @@ void ReviaSession::StartInitiativeLoop()
                             {
                                 RuntimeEvent event;
                                 event.kind = RuntimeEventKind::AssistantMessage;
+                                event.audienceRevision = opening.audienceRevision;
                                 event.state = state.load();
                                 event.component = "Initiative";
                                 event.phase = consideration.proposal.id;
@@ -1923,6 +1951,8 @@ void ReviaSession::StartInitiativeLoop()
                         RuntimeEvent event;
                         (void)initiativeController.Commit(consideration.proposal.id, context.now);
                         event.kind = RuntimeEventKind::Proposal;
+                        event.stamp = proposalOrigin;
+                        event.audienceRevision = proposalAudience.revision;
                         event.state = state.load();
                         event.component = "Initiative";
                         event.phase = consideration.proposal.id;
@@ -1942,6 +1972,7 @@ void ReviaSession::StartInitiativeLoop()
                             offer.text = consideration.proposal.message;
                             offer.affect = emotionRuntime.ToAffectSnapshot();
                             offer.activityId = consideration.proposal.id;
+                            offer.admission = CaptureSpeechAdmission(proposalAudience, proposalOrigin);
                             const speech::SpeechSubmission spoken = speechCoordinator.Submit(std::move(offer));
                             if (!spoken.accepted)
                             {
@@ -2111,13 +2142,25 @@ void ReviaSession::StartCuriosityLoop()
                             continue;
                         }
 
+                        const auto curiosityAudience = Audience();
+                        const auto curiosityOrigin = Stamp();
+                        if (curiosityAudience.kind != identity::AudienceKind::Private)
+                            continue;
+                        const auto publishCuriosity = [this, curiosityAudience, curiosityOrigin](const std::string& phase,
+                                                          const std::string& message, const double elapsed = -1.0, const int depth = 0,
+                                                          const std::uint64_t turnId = 0, const std::string& resource = {})
+                        {
+                            PublishComponent(
+                                "Curiosity", phase, message, elapsed, depth, turnId, resource, curiosityAudience.revision, curiosityOrigin);
+                        };
                         std::vector<conversationMessage> recentConversation;
                         std::vector<perception::ActivitySpan> recentActivity;
                         std::string desktopContext;
                         std::uint64_t inputGeneration = 0;
                         {
                             std::lock_guard operationLock(operationMutex);
-                            if (!started.load() || busy.load())
+                            if (!started.load() || busy.load() || !Admits(curiosityOrigin) ||
+                                Audience().revision != curiosityAudience.revision)
                                 continue;
                             recentConversation = context.GetRecentMessages();
                             recentActivity = activityHistory.Spans(std::chrono::minutes{90});
@@ -2135,6 +2178,8 @@ void ReviaSession::StartCuriosityLoop()
                         const auto planningStarted = std::chrono::steady_clock::now();
                         RuntimeEvent considering;
                         considering.kind = RuntimeEventKind::ComponentStatus;
+                        considering.stamp = curiosityOrigin;
+                        considering.audienceRevision = curiosityAudience.revision;
                         considering.state = RuntimeState::Thinking;
                         considering.component = "Curiosity";
                         considering.phase = "Considering";
@@ -2212,29 +2257,30 @@ void ReviaSession::StartCuriosityLoop()
                         const double planningMilliseconds = ElapsedMilliseconds(planningStarted);
                         if (workerStop.stop_requested())
                             return;
-                        if (attemptToken.stop_requested() || inputGeneration != userInteractionGeneration.load())
+                        if (attemptToken.stop_requested() || inputGeneration != userInteractionGeneration.load() ||
+                            !Admits(curiosityOrigin) || Audience().revision != curiosityAudience.revision)
                         {
-                            PublishComponent("Curiosity", "Cancelled", "A newer user action replaced the thought before it could continue.",
+                            publishCuriosity("Cancelled", "A newer user action replaced the thought before it could continue.",
                                 planningMilliseconds, 0, runId);
                             continue;
                         }
                         if (!decision.valid)
                         {
                             appLogger.Log("Curiosity nomination unavailable: " + decision.error);
-                            PublishComponent("Curiosity", "Error", decision.error, planningMilliseconds, 0, runId);
+                            publishCuriosity("Error", decision.error, planningMilliseconds, 0, runId);
                             continue;
                         }
                         appLogger.Log("Curiosity decision: " + agents::ToString(decision.action) +
                                       (decision.topic.empty() ? std::string{} : " - " + decision.topic));
                         if (decision.action == agents::CuriosityAction::Silence)
                         {
-                            PublishComponent("Curiosity", "Kept private", decision.rationale, planningMilliseconds, 0, runId);
+                            publishCuriosity("Kept private", decision.rationale, planningMilliseconds, 0, runId);
                             continue;
                         }
                         if (decision.action == agents::CuriosityAction::Speak && !settings.initiative.bSpontaneousSpeechEnabled)
                         {
-                            PublishComponent("Curiosity", "Kept private",
-                                "A valid thought was nominated, but spontaneous speech is disabled.", planningMilliseconds, 0, runId);
+                            publishCuriosity("Kept private", "A valid thought was nominated, but spontaneous speech is disabled.",
+                                planningMilliseconds, 0, runId);
                             setAsideTopic(decision.topic, "spontaneous speech is off");
                             continue;
                         }
@@ -2243,7 +2289,7 @@ void ReviaSession::StartCuriosityLoop()
                         if (curiosityJournal.WasRecentlyConsidered(
                                 decision.topic, std::chrono::minutes(settings.initiative.curiosityTopicCooldownMinutes), now))
                         {
-                            PublishComponent("Curiosity", "Duplicate", "This topic was already considered recently: " + decision.topic,
+                            publishCuriosity("Duplicate", "This topic was already considered recently: " + decision.topic,
                                 planningMilliseconds, 0, runId);
                             setAsideTopic(decision.topic, "already considered today");
                             continue;
@@ -2271,8 +2317,7 @@ void ReviaSession::StartCuriosityLoop()
                         if (decision.action == agents::CuriosityAction::Speak && idle.unansweredOpenings > 0 &&
                             idle.quietSeconds < unansweredRestSeconds)
                         {
-                            PublishComponent(
-                                "Curiosity", "Kept private", "Letting the last opening breathe; private work is still available.");
+                            publishCuriosity("Kept private", "Letting the last opening breathe; private work is still available.");
                             setAsideTopic(decision.topic, "the last opening is still unanswered");
                             continue;
                         }
@@ -2285,16 +2330,16 @@ void ReviaSession::StartCuriosityLoop()
                         const bool microphoneIsRecording = speechRecognitionService.IsRecording();
                         if (decision.action == agents::CuriosityAction::Speak && microphoneIsRecording)
                         {
-                            PublishComponent("Curiosity", "Suppressed", "Revia kept the thought private while listening.",
-                                planningMilliseconds, 0, runId);
+                            publishCuriosity(
+                                "Suppressed", "Revia kept the thought private while listening.", planningMilliseconds, 0, runId);
                             setAsideTopic(decision.topic, "the microphone was listening");
                             continue;
                         }
                         const bool userIsAway = attention.sinceLastInput >= std::chrono::minutes(5);
                         if (decision.action == agents::CuriosityAction::Speak && !settings.initiative.bSpeakWhenUserAway && userIsAway)
                         {
-                            PublishComponent("Curiosity", "Kept private",
-                                "The thought was valid, but spontaneous speech while away is disabled.", planningMilliseconds, 0, runId);
+                            publishCuriosity("Kept private", "The thought was valid, but spontaneous speech while away is disabled.",
+                                planningMilliseconds, 0, runId);
                             setAsideTopic(decision.topic, "the user is away");
                             continue;
                         }
@@ -2304,7 +2349,7 @@ void ReviaSession::StartCuriosityLoop()
                             const auto internet = actionRuntime.Settings().internet;
                             if (!internet.enabled || !internet.visibleBrowser || !internet.autonomousResearch)
                             {
-                                PublishComponent("Curiosity", "Permission required",
+                                publishCuriosity("Permission required",
                                     "A research topic was nominated, but autonomous visible browsing "
                                     "has not been approved.",
                                     planningMilliseconds, 0, runId);
@@ -2314,7 +2359,7 @@ void ReviaSession::StartCuriosityLoop()
                             if (curiosityJournal.WasResearchRecentlyAttempted(
                                     std::chrono::seconds(std::max(1, settings.initiative.cooldownSeconds)), now))
                             {
-                                PublishComponent("Curiosity", "Research pacing",
+                                publishCuriosity("Research pacing",
                                     "Revia may keep thinking, but another autonomous network lookup "
                                     "will wait for the configured cooldown.",
                                     planningMilliseconds, 0, runId);
@@ -2331,14 +2376,14 @@ void ReviaSession::StartCuriosityLoop()
                             const actions::CapabilitySettings::InternetAccess internet = actionRuntime.Settings().internet;
                             if (!internet.enabled || !internet.visibleBrowser || !internet.autonomousResearch)
                             {
-                                PublishComponent("Curiosity", "Permission required",
+                                publishCuriosity("Permission required",
                                     "A research topic was nominated, but autonomous visible browsing "
                                     "has not been approved.",
                                     planningMilliseconds, 0, runId);
                                 continue;
                             }
 
-                            PublishComponent("Curiosity", "Researching", decision.query, planningMilliseconds, 0, runId, "Visible browser");
+                            publishCuriosity("Researching", decision.query, planningMilliseconds, 0, runId, "Visible browser");
                             actions::ActionRequest request;
                             request.id = actions::NewActionId();
                             request.type = actions::ActionType::WebSearch;
@@ -2346,12 +2391,14 @@ void ReviaSession::StartCuriosityLoop()
                             request.value = decision.query;
                             request.requestedBy = "autonomous_curiosity/" + std::to_string(runId);
                             const auto researchStarted = std::chrono::steady_clock::now();
-                            const actions::ActionOutcome lookup = actionRuntime.Execute(request);
+                            const actions::ActionOutcome lookup = actionRuntime.ExecuteFor(curiosityOrigin, request, false, attemptToken);
                             researchMilliseconds = ElapsedMilliseconds(researchStarted);
                             researchSources = lookup.result.entries;
 
                             RuntimeEvent internetEvent;
                             internetEvent.kind = RuntimeEventKind::ComponentStatus;
+                            internetEvent.stamp = curiosityOrigin;
+                            internetEvent.audienceRevision = curiosityAudience.revision;
                             internetEvent.state = RuntimeState::Thinking;
                             internetEvent.component = "Internet activity";
                             internetEvent.phase = lookup.Succeeded() ? "Ready" : "Unavailable";
@@ -2378,14 +2425,14 @@ void ReviaSession::StartCuriosityLoop()
 
                             if (attemptToken.stop_requested() || inputGeneration != userInteractionGeneration.load())
                             {
-                                PublishComponent("Curiosity", "Cancelled", "Research finished, but a newer user action made it stale.",
+                                publishCuriosity("Cancelled", "Research finished, but a newer user action made it stale.",
                                     researchMilliseconds, 0, runId);
                                 continue;
                             }
                             if (!lookup.Succeeded() || lookup.result.content.empty())
                             {
-                                PublishComponent("Curiosity", "Research failed",
-                                    lookup.Message().empty() ? lookup.policy.reason : lookup.Message(), researchMilliseconds, 0, runId);
+                                publishCuriosity("Research failed", lookup.Message().empty() ? lookup.policy.reason : lookup.Message(),
+                                    researchMilliseconds, 0, runId);
                                 std::string journalError;
                                 curiosityJournal.Append(
                                     {decision.topic, decision.query, researchSources, "research_failed", now}, journalError);
@@ -2425,7 +2472,7 @@ void ReviaSession::StartCuriosityLoop()
                         const bool privateResearch = decision.action == agents::CuriosityAction::Research && !consideration.hasProposal;
                         if (!consideration.hasProposal && !privateResearch)
                         {
-                            PublishComponent("Curiosity", "Suppressed",
+                            publishCuriosity("Suppressed",
                                 speechPermitted
                                     ? "Attention policy: " + initiative::ToString(consideration.verdict) + ". Topic: " + decision.topic
                                     : "Spontaneous speech is unavailable on the current channel.",
@@ -2437,7 +2484,7 @@ void ReviaSession::StartCuriosityLoop()
                         }
                         if (privateResearch)
                         {
-                            PublishComponent("Curiosity", "Reflecting privately",
+                            publishCuriosity("Reflecting privately",
                                 speechPermitted ? "Research completed; attention policy kept it out of the conversation."
                                                 : "Research completed while speaking was unavailable.",
                                 planningMilliseconds + std::max(0.0, researchMilliseconds), static_cast<int>(researchSources.size()), runId,
@@ -2465,18 +2512,18 @@ void ReviaSession::StartCuriosityLoop()
                                 {
                                     initiativeController.Expire(consideration.proposal.id);
                                 }
-                                PublishComponent("Curiosity", "Cancelled",
+                                publishCuriosity("Cancelled",
                                     "Newer user input cancelled the thought before it acquired the conversation lane.", -1.0, 0, runId);
                                 continue;
                             }
-                            if (!started.load() || busy.load() || attemptToken.stop_requested() ||
-                                inputGeneration != userInteractionGeneration.load())
+                            if (!started.load() || busy.load() || attemptToken.stop_requested() || !Admits(curiosityOrigin) ||
+                                Audience().revision != curiosityAudience.revision || inputGeneration != userInteractionGeneration.load())
                             {
                                 if (consideration.hasProposal)
                                 {
                                     initiativeController.Expire(consideration.proposal.id);
                                 }
-                                PublishComponent("Curiosity", "Cancelled",
+                                publishCuriosity("Cancelled",
                                     privateResearch ? "The private reflection was preempted by a conversation."
                                                     : "The conversational moment passed before Revia could speak.",
                                     -1.0, 0, runId);
@@ -2494,7 +2541,8 @@ void ReviaSession::StartCuriosityLoop()
                                     }
                                     opening = conversationRuntime.StartCuriosityConversation(decision.topic, decision.rationale,
                                         researchGrounding, profile, llmAvailable, !privateResearch && ShouldSpeakOnCurrentChannel(),
-                                        attemptToken);
+                                        attemptToken, curiosityAudience.revision,
+                                        CaptureSpeechAdmission(curiosityAudience, curiosityOrigin));
                                     cancelledBeforeCommit =
                                         attemptToken.stop_requested() || inputGeneration != userInteractionGeneration.load();
                                     if (cancelledBeforeCommit)
@@ -2528,8 +2576,7 @@ void ReviaSession::StartCuriosityLoop()
                             {
                                 initiativeController.Expire(consideration.proposal.id);
                             }
-                            PublishComponent("Curiosity", "Cancelled",
-                                "A newer user message replaced the autonomous response before commit.",
+                            publishCuriosity("Cancelled", "A newer user message replaced the autonomous response before commit.",
                                 planningMilliseconds + std::max(0.0, researchMilliseconds), 0, runId);
                             continue;
                         }
@@ -2555,34 +2602,33 @@ void ReviaSession::StartCuriosityLoop()
                             switch (learnedResult)
                             {
                             case agents::LearnedFindingResult::SavedEmbeddingQueued:
-                                PublishComponent("Curiosity", "Learning saved",
+                                publishCuriosity("Learning saved",
                                     "A bounded finding and its source URLs were saved; "
                                     "search indexing is queued.",
                                     -1.0, sourceCount, runId);
                                 break;
 
                             case agents::LearnedFindingResult::SavedWithoutEmbedding:
-                                PublishComponent("Curiosity", "Learning saved",
+                                publishCuriosity("Learning saved",
                                     "A bounded finding and its source URLs were saved to "
                                     "memory; search indexing is pending.",
                                     -1.0, sourceCount, runId);
                                 break;
 
                             case agents::LearnedFindingResult::AlreadyExists:
-                                PublishComponent("Curiosity", "Already known", "The finding was already represented in memory.", -1.0,
-                                    sourceCount, runId);
+                                publishCuriosity(
+                                    "Already known", "The finding was already represented in memory.", -1.0, sourceCount, runId);
                                 break;
 
                             case agents::LearnedFindingResult::Failed:
-                                PublishComponent(
-                                    "Curiosity", "Learning failed", "The finding could not be saved to memory.", -1.0, sourceCount, runId);
+                                publishCuriosity("Learning failed", "The finding could not be saved to memory.", -1.0, sourceCount, runId);
                                 break;
                             }
                         }
 
-                        PublishComponent("Curiosity",
-                            opening.succeeded ? privateResearch ? learningSaved ? "Learned privately" : "Reflected privately" : "Spoke"
-                                              : "Error",
+                        publishCuriosity(opening.succeeded
+                                             ? privateResearch ? learningSaved ? "Learned privately" : "Reflected privately" : "Spoke"
+                                             : "Error",
                             opening.succeeded ? decision.topic : opening.reason, planningMilliseconds + std::max(0.0, researchMilliseconds),
                             0, runId);
                         if (!opening.succeeded)
@@ -2601,6 +2647,7 @@ void ReviaSession::StartCuriosityLoop()
                         {
                             RuntimeEvent event;
                             event.kind = RuntimeEventKind::AssistantMessage;
+                            event.audienceRevision = opening.audienceRevision;
                             event.state = state.load();
                             event.component = "Curiosity";
                             event.phase = consideration.hasProposal ? consideration.proposal.id : "self-directed";
@@ -2704,17 +2751,26 @@ void ReviaSession::StartSelfImprovement()
         }
         return !requireSpareResources || CurrentLoad().allowOptionalBackgroundWork;
     };
-    dependencies.report = [this](const improvement::CodeProposal& proposal, const std::string& message)
+    dependencies.captureReporter = [this]() -> improvement::ImprovementAgent::Reporter
     {
-        // A proposal the person answers, not a line of chat: /improve accept or reject.
-        RuntimeEvent event;
-        event.kind = RuntimeEventKind::Proposal;
-        event.state = state.load();
-        event.component = "Improvement";
-        event.phase = proposal.id;
-        event.message = message;
-        event.detail = proposal.verificationSummary;
-        eventBus.Publish(std::move(event));
+        const auto capturedAudience = Audience();
+        const auto capturedOrigin = Stamp();
+        return [this, capturedAudience, capturedOrigin](const improvement::CodeProposal& proposal, const std::string& message)
+        {
+            if (!Admits(capturedOrigin) || capturedOrigin.policyVersion != companionAuthority->Revision() ||
+                capturedAudience.kind != identity::AudienceKind::Private || Audience().revision != capturedAudience.revision)
+                return;
+            RuntimeEvent event;
+            event.kind = RuntimeEventKind::Proposal;
+            event.stamp = capturedOrigin;
+            event.audienceRevision = capturedAudience.revision;
+            event.state = state.load();
+            event.component = "Improvement";
+            event.phase = proposal.id;
+            event.message = message;
+            event.detail = proposal.verificationSummary;
+            eventBus.Publish(std::move(event));
+        };
     };
     dependencies.log = [this](const std::string& line) { appLogger.Log(line); };
     improvementAgent.Configure(settings.improvement, std::move(dependencies));
@@ -3727,6 +3783,7 @@ SessionResult ReviaSession::RunTurnLocked(const agents::InputBatch& batch)
         return denied;
     }
     SessionResult result = GuardTurn([this, &batch]() { return RunTurnUnguarded(batch); });
+    result.audienceRevision = batch.context.audience.revision;
     if (!InputContextCurrent(batch.context))
     {
         result.succeeded = false;
@@ -3743,13 +3800,15 @@ SessionResult ReviaSession::RunTurnLocked(const agents::InputBatch& batch)
 SessionResult ReviaSession::GuardTurn(const std::function<SessionResult()>& turn)
 {
     const RuntimeStamp origin = sessionIdentity.Stamp();
-    const auto failed = [this, origin](const std::string& why)
+    const auto capturedAudience = Audience();
+    const auto failed = [this, origin, capturedAudience](const std::string& why)
     {
         // The turn set busy and never reached the code that clears it. Left set, every
         // later voice turn, adapter reply and idle activity would wait on it for good.
         busy.store(false);
         SessionResult result;
         result.stamp = origin;
+        result.audienceRevision = capturedAudience.revision;
         result.succeeded = false;
         result.fromAssistant = false;
         if (!sessionIdentity.IsCurrent(origin))
@@ -3757,11 +3816,16 @@ SessionResult ReviaSession::GuardTurn(const std::function<SessionResult()>& turn
             result.reason = "The originating companion session ended.";
             return result;
         }
+        if (Audience().revision != capturedAudience.revision)
+        {
+            result.reason = "The captured conversation context is no longer current.";
+            return result;
+        }
         result.text =
             why.empty() ? "That turn could not be completed, and the failure did not say why." : "That turn could not be completed: " + why;
         result.reason = result.text;
         appLogger.Error(result.reason);
-        SetState(RuntimeState::Idle, result.reason);
+        SetState(RuntimeState::Idle, result.reason, capturedAudience.revision, origin);
         return result;
     };
     try
@@ -3821,8 +3885,8 @@ SessionResult ReviaSession::RunTurnUnguarded(const agents::InputBatch& batch)
         identity::RelationshipState presentation;
         if (const auto alias = relationships.DisplayNameForAudience(captured.participantId, captured.audience))
             presentation.displayName = *alias;
-        result = conversationRuntime.ReplyForAudience(acceptedInput, history, captured.audience, presentation,
-            profile, llmAvailable, ShouldSpeakOnCurrentChannel(), stopToken, admission);
+        result = conversationRuntime.ReplyForAudience(acceptedInput, history, captured.audience, presentation, profile, llmAvailable,
+            ShouldSpeakOnCurrentChannel(), stopToken, admission, {}, batch.acceptedAt);
         if (result.succeeded && admission())
         {
             if (captured.participantSource == identity::SpeakerSource::ConsentedVoice)
@@ -3918,8 +3982,8 @@ SessionResult ReviaSession::RunTurnUnguarded(const agents::InputBatch& batch)
         return finish(std::move(drawn));
     }
     const std::string speakerForTurn = ResolveLocalSpeaker(acceptedInput);
-    result = conversationRuntime.ReplyForAudience(acceptedInput, {}, captured.audience, CurrentRelationship(),
-        profile, llmAvailable, ShouldSpeakOnCurrentChannel(), stopToken, admission, ClipboardReference(acceptedInput));
+    result = conversationRuntime.ReplyForAudience(acceptedInput, {}, captured.audience, CurrentRelationship(), profile, llmAvailable,
+        ShouldSpeakOnCurrentChannel(), stopToken, admission, ClipboardReference(acceptedInput), batch.acceptedAt);
     if (!admission())
     {
         result = {};
@@ -6177,6 +6241,10 @@ autonomy::ActivityOutcome ReviaSession::ExecuteCreate(
 autonomy::ActivityOutcome ReviaSession::ExecuteSpeak(const autonomy::Activity& activity, const autonomy::ActivityDecision& decision)
 {
     autonomy::ActivityOutcome outcome;
+    const auto speakingAudience = Audience();
+    const auto speakingOrigin = Stamp();
+    const auto admission = [this, speechAdmission = CaptureSpeechAdmission(speakingAudience, speakingOrigin), activityId = activity.id]
+    { return speechAdmission() && !ActivityWasInterrupted(activityId); };
     if (!settings.initiative.bSpontaneousSpeechEnabled)
     {
         outcome.status = autonomy::ActivityStatus::Cancelled;
@@ -6246,7 +6314,7 @@ autonomy::ActivityOutcome ReviaSession::ExecuteSpeak(const autonomy::Activity& a
             outcome.summary = "A conversation took the lane first.";
             return outcome;
         }
-        if (!started.load() || busy.load())
+        if (!started.load() || busy.load() || !admission())
         {
             initiativeController.Expire(consideration.proposal.id);
             outcome.status = autonomy::ActivityStatus::Interrupted;
@@ -6259,8 +6327,8 @@ autonomy::ActivityOutcome ReviaSession::ExecuteSpeak(const autonomy::Activity& a
             [&]() -> SessionResult
             {
                 busy.store(true);
-                opening = conversationRuntime.StartCuriosityConversation(
-                    decision.subject, decision.reason, {}, profile, llmAvailable, ShouldSpeakOnCurrentChannel(), {});
+                opening = conversationRuntime.StartCuriosityConversation(decision.subject, decision.reason, {}, profile, llmAvailable,
+                    ShouldSpeakOnCurrentChannel(), {}, speakingAudience.revision, admission);
                 if (opening.succeeded && !opening.text.empty())
                 {
                     (void)initiativeController.Commit(consideration.proposal.id, std::chrono::system_clock::now());
@@ -7497,7 +7565,7 @@ bool ReviaSession::LaunchTask(const std::string& title, std::function<goals::Goa
                 FinishTask(finished, origin, taskAudience);
             });
     }
-    PublishComponent("Task", "Started", "Working on '" + title + "' in the background.");
+    PublishComponent("Task", "Started", "Working on '" + title + "' in the background.", -1.0, 0, 0, {}, taskAudience.revision);
     outMessage = "On it: '" + title +
                  "'. I'll work on it in the background and tell you "
                  "when it's done. You can keep talking to me meanwhile.";
@@ -7531,7 +7599,7 @@ void ReviaSession::FinishTask(const goals::Goal& finished, const RuntimeStamp& o
         title = finished.title;
     const bool succeeded = finished.status == goals::GoalStatus::Succeeded;
     const bool cancelled = finished.status == goals::GoalStatus::Cancelled;
-    PublishComponent("Task", goals::ToString(finished.status), summary);
+    PublishComponent("Task", goals::ToString(finished.status), summary, -1.0, 0, 0, {}, audience.revision, origin);
     if (!admission())
     {
         settleWithoutReport();
@@ -7548,7 +7616,7 @@ void ReviaSession::FinishTask(const goals::Goal& finished, const RuntimeStamp& o
     // A conversation turn in progress owns the state; otherwise the task sets it back.
     if (!busy.load())
     {
-        SetState(succeeded || cancelled ? RuntimeState::Idle : RuntimeState::Blocked, report);
+        SetState(succeeded || cancelled ? RuntimeState::Idle : RuntimeState::Blocked, report, audience.revision, origin);
     }
     if (!admission())
     {
@@ -7558,6 +7626,7 @@ void ReviaSession::FinishTask(const goals::Goal& finished, const RuntimeStamp& o
     RuntimeEvent message;
     message.kind = RuntimeEventKind::AssistantMessage;
     message.stamp = origin;
+    message.audienceRevision = audience.revision;
     message.state = state.load();
     message.component = "Task";
     message.message = report;
@@ -7734,22 +7803,29 @@ bool ReviaSession::TryHandleReminderInput(const std::string& input, SessionResul
 
 void ReviaSession::DeliverDueReminders(const planning::WallClock::time_point now)
 {
-    if (Audience().kind != identity::AudienceKind::Private || initiativeController.IsQuiet()) return;
+    const auto reminderAudience = Audience();
+    const auto reminderOrigin = Stamp();
+    if (reminderAudience.kind != identity::AudienceKind::Private || initiativeController.IsQuiet())
+        return;
     std::string saveError;
     const auto ready = reminders.TakeDue(now, &saveError);
     if (!saveError.empty())
         appLogger.Warning(saveError);
     for (const planning::Reminder& due : ready)
     {
+        if (!Admits(reminderOrigin) || Audience().revision != reminderAudience.revision)
+            break;
         std::string text = planning::Announcement(due.request);
         // Missed while she was closed: still said, and said to be late.
         if (now - due.request.due > std::chrono::minutes{2})
         {
             text += " It was due at " + planning::DescribeWhen(due.request.due, now) + ", while I was offline.";
         }
-        PublishComponent("Reminder", "Due", text);
+        PublishComponent("Reminder", "Due", text, -1.0, 0, 0, {}, reminderAudience.revision, reminderOrigin);
         RuntimeEvent message;
         message.kind = RuntimeEventKind::AssistantMessage;
+        message.stamp = reminderOrigin;
+        message.audienceRevision = reminderAudience.revision;
         message.state = state.load();
         message.component = "Reminder";
         message.message = text;
@@ -7762,6 +7838,7 @@ void ReviaSession::DeliverDueReminders(const planning::WallClock::time_point now
             spoken.owner = speech::SpeechOwner::Research;
             spoken.behavior = speech::SpeechBehavior::Queue;
             spoken.text = text;
+            spoken.admission = CaptureSpeechAdmission(reminderAudience, reminderOrigin);
             spoken.affect = emotionRuntime.ToAffectSnapshot();
             const speech::SpeechSubmission submitted = speechCoordinator.Submit(std::move(spoken));
             if (!submitted.accepted)
@@ -9311,12 +9388,43 @@ bool ReviaSession::TryHandleActionInput(const std::string& input, SessionResult&
 SessionResult ReviaSession::ExecuteAction(actions::ActionRequest request)
 {
     const std::stop_token stopToken = CurrentOperationToken();
+    const auto capturedAudience = Audience();
+    const auto origin = sessionIdentity.Stamp({}, {}, companionAuthority->Revision());
+    const auto contextCurrent = [this, capturedAudience, origin]()
+    {
+        const auto audience = Audience();
+        return sessionIdentity.IsCurrent(origin) && origin.policyVersion == companionAuthority->Revision() &&
+               capturedAudience.kind == identity::AudienceKind::Private && audience.kind == capturedAudience.kind &&
+               audience.revision == capturedAudience.revision;
+    };
+    const auto admitted = [contextCurrent, stopToken]() { return !stopToken.stop_requested() && contextCurrent(); };
     SessionResult result;
+    result.stamp = origin;
+    result.audienceRevision = capturedAudience.revision;
+    bool dispatched = false;
+    const auto retired = [&]()
+    {
+        result.succeeded = false;
+        result.text.clear();
+        result.reason = "The captured action context is no longer current.";
+        if (!dispatched && stopToken.stop_requested() && contextCurrent())
+        {
+            result.reason = "Action was cancelled before execution.";
+            SetState(RuntimeState::Idle, result.reason, capturedAudience.revision, origin);
+            if (contextCurrent())
+                result.text = "Action stopped: " + result.reason + '\n';
+            else
+                result.reason = "The captured action context is no longer current.";
+        }
+        return result;
+    };
+    if (!admitted())
+        return retired();
     if (!actionRuntime.IsInitialized())
     {
         result.succeeded = false;
         result.text = "Action runtime is not initialized.";
-        SetState(RuntimeState::Blocked, result.text);
+        SetState(RuntimeState::Blocked, result.text, capturedAudience.revision, origin);
         return result;
     }
 
@@ -9324,28 +9432,46 @@ SessionResult ReviaSession::ExecuteAction(actions::ActionRequest request)
     bool confirmed = false;
     if (decision.verdict == actions::PolicyVerdict::RequiresConfirmation)
     {
-        SetState(RuntimeState::WaitingForConfirmation, decision.reason);
+        SetState(RuntimeState::WaitingForConfirmation, decision.reason, capturedAudience.revision, origin);
+        if (!admitted())
+            return retired();
         ConfirmationHandler handler;
         {
             std::lock_guard lock(confirmationMutex);
             handler = confirmationHandler;
         }
+        if (!admitted())
+            return retired();
         // A single interactive action has no run to stand over, so "don't ask again"
         // collapses to plain consent for this one thing.
         confirmed = handler && actions::Granted(handler(request, decision));
     }
 
+    if (!admitted())
+        return retired();
+
     const auto actionStarted = std::chrono::steady_clock::now();
     RuntimeEvent startedEvent;
+    startedEvent.stamp = origin;
+    startedEvent.audienceRevision = capturedAudience.revision;
     startedEvent.kind = RuntimeEventKind::ComponentStatus;
     startedEvent.state = RuntimeState::Acting;
     startedEvent.message = "Executing " + actions::ToString(request.type) + ".";
     startedEvent.component = "Automation";
     startedEvent.phase = "Running";
     eventBus.Publish(std::move(startedEvent));
-    SetState(RuntimeState::Acting, "Executing " + actions::ToString(request.type) + ".");
-    const actions::ActionOutcome outcome = actionRuntime.Execute(request, confirmed, stopToken);
+    if (!admitted())
+        return retired();
+    SetState(RuntimeState::Acting, "Executing " + actions::ToString(request.type) + ".", capturedAudience.revision, origin);
+    if (!admitted())
+        return retired();
+    dispatched = true;
+    const actions::ActionOutcome outcome = actionRuntime.ExecuteFor(origin, request, confirmed, stopToken);
+    if (!admitted())
+        return retired();
     RuntimeEvent completedEvent;
+    completedEvent.stamp = origin;
+    completedEvent.audienceRevision = capturedAudience.revision;
     completedEvent.kind = RuntimeEventKind::ComponentStatus;
     completedEvent.state = RuntimeState::Acting;
     completedEvent.message = outcome.Message();
@@ -9353,6 +9479,8 @@ SessionResult ReviaSession::ExecuteAction(actions::ActionRequest request)
     completedEvent.phase = outcome.Succeeded() ? "Ready" : "Blocked";
     completedEvent.elapsedMilliseconds = ElapsedMilliseconds(actionStarted);
     eventBus.Publish(std::move(completedEvent));
+    if (!admitted())
+        return retired();
     result.succeeded = outcome.Succeeded();
     result.text = FormatActionOutcome(outcome);
     if (!result.succeeded)
@@ -9363,12 +9491,14 @@ SessionResult ReviaSession::ExecuteAction(actions::ActionRequest request)
     if (!outcome.auditError.empty() || outcome.policy.verdict == actions::PolicyVerdict::Blocked ||
         (outcome.policy.verdict == actions::PolicyVerdict::RequiresConfirmation && !confirmed))
     {
-        SetState(RuntimeState::Blocked, outcome.Message());
+        SetState(RuntimeState::Blocked, outcome.Message(), capturedAudience.revision, origin);
     }
     else
     {
-        SetState(RuntimeState::Idle, outcome.Message());
+        SetState(RuntimeState::Idle, outcome.Message(), capturedAudience.revision, origin);
     }
+    if (!admitted())
+        return retired();
     return result;
 }
 
@@ -9402,7 +9532,8 @@ std::stop_token ReviaSession::CurrentOperationToken() const
     return activeStopSource.get_token();
 }
 
-void ReviaSession::SetState(RuntimeState newState, const std::string& activity)
+void ReviaSession::SetState(
+    RuntimeState newState, const std::string& activity, const std::uint64_t audienceRevision, const RuntimeStamp& origin)
 {
     std::string shown = activity.empty() ? ToString(newState) : activity;
     // Idle means nothing is happening. With a task running she is still at work, and the
@@ -9417,7 +9548,7 @@ void ReviaSession::SetState(RuntimeState newState, const std::string& activity)
         }
     }
     state.store(newState);
-    Publish(RuntimeEventKind::StateChanged, shown);
+    Publish(RuntimeEventKind::StateChanged, shown, 0, audienceRevision, origin);
 }
 
 void ReviaSession::PublishAffect()
@@ -9432,16 +9563,23 @@ void ReviaSession::PublishAffect()
     eventBus.Publish(std::move(event));
 }
 
-void ReviaSession::Publish(const RuntimeEventKind kind, const std::string& message, const std::uint64_t turnId) const
+void ReviaSession::Publish(const RuntimeEventKind kind, const std::string& message, const std::uint64_t turnId,
+    const std::uint64_t audienceRevision, const RuntimeStamp& origin) const
 {
-    eventBus.Publish(RuntimeEvent{kind, state.load(), message, turnId});
+    RuntimeEvent event{kind, state.load(), message, turnId};
+    event.audienceRevision = audienceRevision;
+    event.stamp = origin;
+    eventBus.Publish(std::move(event));
 }
 
 void ReviaSession::PublishComponent(const std::string& component, const std::string& phase, const std::string& message,
-    const double elapsedMilliseconds, const int queueDepth, const std::uint64_t turnId, const std::string& resource) const
+    const double elapsedMilliseconds, const int queueDepth, const std::uint64_t turnId, const std::string& resource,
+    const std::uint64_t audienceRevision, const RuntimeStamp& origin) const
 {
     RuntimeEvent event;
     event.kind = RuntimeEventKind::ComponentStatus;
+    event.stamp = origin;
+    event.audienceRevision = audienceRevision;
     event.state = state.load();
     event.component = component;
     event.phase = phase;

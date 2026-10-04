@@ -85,6 +85,7 @@ public:
     using IdleProbe = std::function<bool(int minimumQuietSeconds, bool requireSpareResources)>;
     // A proven proposal, and the sentence to tell the person.
     using Reporter = std::function<void(const CodeProposal&, const std::string& message)>;
+    using ReporterFactory = std::function<Reporter()>;
     using LogSink = std::function<void(const std::string&)>;
 
     struct Dependencies
@@ -97,6 +98,8 @@ public:
         TaskSource tasks;
         IdleProbe idle;
         Reporter report;
+        // Captures disclosure admission before each attempt reads evidence or runs work.
+        ReporterFactory captureReporter;
         LogSink log;
     };
 
@@ -127,7 +130,8 @@ private:
     [[nodiscard]] std::optional<ReviewJob> NextJob();
     void Loop(std::stop_token stopToken);
     // Proves a recorded proposal, with one repair attempt when it does not build.
-    void Prove(CodeProposal& proposal, const ReviewJob& job, const std::string& original, std::stop_token stopToken);
+    void Prove(CodeProposal& proposal, const ReviewJob& job, const std::string& original, const improvementSettings& current,
+        const Dependencies& use, std::stop_token stopToken);
     void Log(const std::string& line) const;
 
     mutable std::mutex mutex;

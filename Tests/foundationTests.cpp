@@ -5454,7 +5454,9 @@ void TestConversationStyleRepairsAndVaries()
     };
 
     const std::string guidance = policy.BuildTurnGuidance(context.back().content, context);
-    Check(guidance.find("correct a mistaken assumption") != std::string::npos,
+    Check(guidance.find("Check corrections against evidence;") != std::string::npos &&
+              guidance.find("Keep unchanged facts and speaker ownership.") != std::string::npos &&
+              guidance.find("attribute errors only when supported.") != std::string::npos,
         "A direct user correction did not produce repair guidance.");
     Check(guidance.find("I'm running smoothly.") != std::string::npos,
         "Recent assistant phrasing was not supplied to the variation policy.");
@@ -5756,6 +5758,26 @@ void TestContractCorpusRunsWithoutTouchingTheRuntime()
                 reply.text = "I don't know -- you haven't said why.";
             else if (input.find("Zorbulan") != std::string::npos)
                 reply.text = "You haven't told me anything about that.";
+            else if (input.starts_with("In this fictional chat the glider"))
+                reply.text = "Kite is blue and has three wings.";
+            else if (input.starts_with("Correction: the glider"))
+                reply.text = "Kite is silver and still has three wings. Apparently blue was yesterday's fashion.";
+            else if (input.starts_with("Explain static libraries and DLLs"))
+                reply.text = "The linker combines object files into an executable; a DLL remains separate.";
+            else if (input.starts_with("Check your explanation against these supplied facts: the compiler produces object files;"))
+                reply.text =
+                    "The compiler produces object files, and the static linker extracts needed objects from an archive into the "
+                    "executable. "
+                    "A DLL stays separate, while its import library helps resolve symbols at link time. The runtime loader loads the DLL.";
+            else if (input.starts_with("For this chat call me Rowan"))
+                reply.text = "Rain softens the background noise. I like the slower pace.";
+            else if (input == "What name did I ask you to use for me?")
+                reply.text = "You asked me to use Rowan.";
+            else if (input.starts_with("Switch topics: for this synthetic chat"))
+                reply.text = "FOX_17 is the temporary emblem for this chat only.";
+            else if (input.starts_with("Earlier private chat history is excluded"))
+                reply.text = "I cannot access the earlier private conversation here. "
+                             "An object file contains compiled code and symbols that the linker uses to assemble a program.";
             // The greeting case repeats its input, so a fake that answered by input alone
             // would repeat its opening and fail the variation clause it is standing in for.
             else if (input.rfind("Hey", 0) == 0)

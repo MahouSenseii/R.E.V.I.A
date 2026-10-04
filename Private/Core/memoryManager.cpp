@@ -19,6 +19,12 @@ std::vector<memoryEntry> memoryManager::LoadMemories() const
     return store.Load();
 }
 
+bool memoryManager::SaveOwnerRevision(const revia::memory::MemoryRevisionRequest& request, revia::memory::MemoryRevisionReceipt& receipt,
+    std::string& error, std::function<bool()> admission) const
+{
+    return store.SaveOwnerRevision(request, receipt, error, std::move(admission));
+}
+
 std::vector<memoryEntry> memoryManager::LoadMissingEmbeddings(const std::string& embeddingModel, const std::size_t maxEntries) const
 {
     return store.LoadMissingEmbeddings(embeddingModel, maxEntries);

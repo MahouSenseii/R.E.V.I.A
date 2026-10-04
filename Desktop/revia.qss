@@ -1,6 +1,22 @@
 /* Shared readable type and foreground without repainting nested widget surfaces. */
 QWidget { font-size: 13px; color: #cbd9ec; }
 
+QFrame#conversationStatusCard {
+    background: rgba(25, 36, 55, 180);
+    border: 1px solid #2f465f;
+    border-radius: 12px;
+}
+QLabel#conversationCurrentStatus { color: #dce9f7; font-size: 12px; font-weight: 600; }
+QLabel#conversationOwnerOutcome { color: #85d7c8; font-size: 11px; }
+QLabel#conversationResponseTiming, QLabel#conversationResultEvidence { color: #a9bad2; font-size: 11px; }
+QLabel#conversationQualityDiagnostic { color: #e8c56d; font-size: 11px; }
+QPushButton#conversationDetailsButton, QPushButton#reviewAnswerButton,
+QPushButton#memoryReviseSelected { padding: 5px 10px; font-size: 11px; }
+QLabel#memoryRevisionProvenance { color: #a9bad2; font-size: 11px; }
+QLabel#memoryRevisionOutcome, QLabel#answerFeedbackOutcome { color: #85d7c8; }
+QLabel#memoryRevisionOutcome[error="true"], QLabel#answerFeedbackOutcome[error="true"] { color: #ff7b88; }
+QDialog#answerFeedbackDialog, QDialog#memoryRevisionDialog { background: #111b2d; }
+
 QFrame#chatVoiceHealthCard, QFrame#voiceHealthCard {
     background: rgba(25, 36, 55, 180);
     border: 1px solid #2f465f;

@@ -44,7 +44,8 @@ void ValidateCandidate(const LearningCandidate& value)
         value.evidence.sources.empty() || value.evidence.conditions.empty() || value.evidence.supporting.empty() ||
         !bounded(value.evidence.sources) || !bounded(value.evidence.conditions) || !bounded(value.evidence.supporting) ||
         !bounded(value.evidence.contradicting) ||
-        (value.lesson.kind != LessonKind::Planning && value.lesson.kind != LessonKind::Initiative) ||
+        (value.lesson.kind != LessonKind::Planning && value.lesson.kind != LessonKind::Initiative &&
+            value.lesson.kind != LessonKind::Quality) ||
         memory::ContainsSensitiveContent(CandidateJson(value).dump()))
         throw std::runtime_error("Learning candidate lacks bounded safe evidence or captured identity.");
 }

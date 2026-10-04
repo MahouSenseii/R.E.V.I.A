@@ -33,6 +33,7 @@ struct SessionResult
     bool speechPending = false;
     std::uint64_t utteranceId = 0;
     RuntimeStamp stamp;
+    std::uint64_t audienceRevision = 0;
 };
 
 } // namespace revia::runtime

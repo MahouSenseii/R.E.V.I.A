@@ -34,6 +34,7 @@ struct InputBatch
     InputContext context;
     InputSource source = InputSource::Typed;
     bool contextMatched = true;
+    std::chrono::steady_clock::time_point acceptedAt{};
 };
 
 struct PendingInput
@@ -42,6 +43,7 @@ struct PendingInput
     InputSource source = InputSource::Typed;
     std::chrono::system_clock::time_point receivedAt;
     InputContext context;
+    std::chrono::steady_clock::time_point acceptedAt{};
 };
 
 enum class InputVerdict

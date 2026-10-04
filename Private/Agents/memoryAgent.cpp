@@ -454,6 +454,26 @@ LearnedFindingResult MemoryAgent::SubmitLearnedFinding(const messageRouter& rout
     return LearnedFindingResult::SavedWithoutEmbedding;
 }
 
+LearnedFindingResult MemoryAgent::SubmitOwnerMemoryRevision(const messageRouter& router, const memory::MemoryRevisionRequest& request,
+    memory::MemoryRevisionReceipt& receipt, std::string& error, const std::stop_token stopToken)
+{
+    receipt = {};
+    const auto guard = [this, origin = CaptureAdmission(), stopToken]
+    { return !worker.get_stop_token().stop_requested() && !stopToken.stop_requested() && Admitted(origin); };
+    if (worker.get_stop_token().stop_requested() || !Admitted(guard))
+    {
+        error = "Owner memory revision belongs to an inactive memory worker.";
+        return LearnedFindingResult::Failed;
+    }
+    if (!memory.SaveOwnerRevision(request, receipt, error, guard))
+        return LearnedFindingResult::Failed;
+    // The semantic revision and its receipt already committed. Backfill on the
+    // existing worker recovers any optional vector work after queue pressure or Stop.
+    if (!stopToken.stop_requested() && !router.EmbeddingModelName().empty())
+        SubmitEmbeddingBackfill(router, router.EmbeddingModelName());
+    return receipt.wasAdded ? LearnedFindingResult::SavedWithoutEmbedding : LearnedFindingResult::AlreadyExists;
+}
+
 void MemoryAgent::SubmitEmbeddingBackfill(const messageRouter& router, const std::string& embeddingModel)
 {
     if (embeddingModel.empty() || worker.get_stop_token().stop_requested())

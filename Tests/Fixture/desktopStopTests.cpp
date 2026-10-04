@@ -3,7 +3,10 @@
 #include "audienceStudioPanel.h"
 #include "developmentStudioPanel.h"
 #include "learningStudioPanel.h"
+#include "answerFeedbackDialog.h"
+#include "memoryPanel.h"
 #include "Memory/longTermMemory.h"
+#include "Policy/desktopAuthorization.h"
 #include "reviaSessionTestAccess.h"
 #include "Core/runtimePath.h"
 
@@ -17,20 +20,24 @@
 #include <QFontDatabase>
 #include <QLabel>
 #include <QLineEdit>
+#include <QMessageBox>
 #include <QPixmap>
 #include <QPlainTextEdit>
 #include <QPushButton>
+#include <QRegion>
 #include <QScrollArea>
 #include <QScrollBar>
 #include <QSettings>
 #include <QTabWidget>
 #include <QTableWidget>
+#include <QTextBrowser>
 #include <QTemporaryDir>
 #include <QTimer>
 #include <QTreeWidget>
 #include <QTreeWidgetItemIterator>
 
 #include <algorithm>
+#include <atomic>
 #include <iostream>
 #include <fstream>
 #include <nlohmann/json.hpp>
@@ -177,8 +184,15 @@ struct ReviaWindowStopTests
                        QString::fromStdString(evidence.event.evidenceId) &&
                    window.findChild<QCheckBox*>("recognitionConsent")->isChecked(),
             "new Studio private-selection fixtures were not populated before the actual companion switch");
-        window.Session().Events().Publish(
-            RuntimeEvent{RuntimeEventKind::AssistantMessage, RuntimeState::Idle, "late-original-ui-sentinel"});
+        RuntimeEvent lateReply{RuntimeEventKind::AssistantMessage, RuntimeState::Idle, "late-original-ui-sentinel"};
+        lateReply.audienceRevision = window.Session().Audience().revision;
+        window.Session().Events().Publish(lateReply);
+        if (auto* review = window.findChild<QPushButton*>("reviewAnswerButton"); review && review->isEnabled())
+        {
+            review->click();
+            if (auto* criterion = window.findChild<QLineEdit*>("answerFeedbackCriterion"))
+                criterion->setText("Private outgoing answer criterion A");
+        }
         std::atomic<bool> releaseSwitch = false;
         window.operationWorker = std::jthread(
             [&]()
@@ -200,6 +214,13 @@ struct ReviaWindowStopTests
         releaseSwitch.store(true);
         wait([&]() { return !window.switchingCompanion; });
         expect(window.Session().Stamp().companionId == second.id && window.chatEntries.empty(), "queued A result reached selected B UI");
+        if (auto* review = window.findChild<QPushButton*>("reviewAnswerButton"))
+        {
+            expect(!review->isEnabled() && !window.findChild<QPlainTextEdit*>("answerFeedbackTarget"),
+                "B conversation retained A's displayed answer or private review draft");
+            expect(window.findChild<QLabel*>("conversationQualityDiagnostic")->text().isEmpty(),
+                "B conversation retained A's quality diagnostic");
+        }
         expect(window.Session().SearchMemories("orbit", 20).empty(), "B UI recall borrowed A memory");
         expect(window.findChild<QPlainTextEdit*>("agentObjective")->toPlainText().isEmpty() &&
                    window.findChild<QPlainTextEdit*>("agentRevisedInput")->toPlainText().isEmpty() &&
@@ -489,6 +510,540 @@ struct ReviaWindowStopTests
         }
     }
 
+    static void RunConversationQualityUi(ReviaWindow& window, int& failures)
+    {
+        using namespace revia::runtime;
+        const auto expect = [&](const bool condition, const char* message)
+        {
+            if (!condition)
+            {
+                std::cerr << "FAIL: " << message << '\n';
+                ++failures;
+            }
+        };
+        auto* status = window.findChild<QLabel*>("conversationCurrentStatus");
+        auto* details = window.findChild<QWidget*>("conversationStatusDetails");
+        auto* timing = window.findChild<QLabel*>("conversationResponseTiming");
+        auto* quality = window.findChild<QLabel*>("conversationQualityDiagnostic");
+        auto* review = window.findChild<QPushButton*>("reviewAnswerButton");
+        expect(status && details && timing && quality && review,
+            "Chat must project current work, timing, diagnostic quality and explicit answer review");
+        if (!status || !details || !timing || !quality || !review)
+            return;
+        expect(details->isHidden(), "conversation advanced details must start collapsed");
+        RuntimeEvent event{RuntimeEventKind::StateChanged, RuntimeState::Thinking, "Working on the current request"};
+        window.HandleRuntimeEvent(event);
+        expect(status->text().contains("Thinking"), "current conversation card must consume admitted runtime state");
+        event.kind = RuntimeEventKind::ComponentStatus;
+        event.component = "Response timing";
+        event.message = "Accepted input to admitted text: 1.4 s; first audio unavailable";
+        window.HandleRuntimeEvent(event);
+        expect(timing->text().contains("1.4 s") && timing->text().contains("unavailable"),
+            "response timing must retain measured stages and unavailable stages");
+        event.component = "Conversation quality";
+        event.phase = "Flagged";
+        event.message = "Possible coverage issue";
+        window.HandleRuntimeEvent(event);
+        expect(quality->text().contains("Diagnostic") && quality->text().contains("coverage"),
+            "monitor flags must remain explicitly diagnostic in Chat");
+        event.kind = RuntimeEventKind::AssistantMessage;
+        event.audienceRevision = window.Session().Audience().revision;
+        event.message = "Actual answer for review.";
+        event.component.clear();
+        event.turnId = 940;
+        window.HandleRuntimeEvent(event);
+        expect(review->isEnabled(), "a displayed assistant answer must enable deliberate review");
+        event.kind = RuntimeEventKind::Memory;
+        event.message = "Memory summary must never replace the review target.";
+        window.HandleRuntimeEvent(event);
+        review->click();
+        auto* captured = window.findChild<QPlainTextEdit*>("answerFeedbackTarget");
+        expect(captured && captured->toPlainText() == "Actual answer for review.",
+            "answer review must capture the actual displayed assistant answer, excluding memory entries");
+        if (window.answerFeedbackDialog)
+        {
+            revia::learning::QualityFeedback feedback;
+            std::string error;
+            expect(!window.answerFeedbackDialog->CaptureFeedback(feedback, error),
+                "a diagnostic flag must not supply an owner criterion or judgment");
+            window.findChild<QLineEdit*>("answerFeedbackCriterion")->setText("Answer the requested fact.");
+            window.findChild<QPlainTextEdit*>("answerFeedbackEvidence")->setPlainText("The reply omitted the requested fact.");
+            expect(window.answerFeedbackDialog->CaptureFeedback(feedback, error) && feedback.criterion == "Answer the requested fact." &&
+                       feedback.evidence == "The reply omitted the requested fact." && !feedback.criterionSatisfied &&
+                       feedback.source == revia::learning::QualityEvidenceSource::OwnerJudgment &&
+                       feedback.origin.SameSession(window.Session().Stamp()) &&
+                       feedback.audienceRevision == window.Session().Audience().revision,
+                "explicit answer judgment must retain the owner's criterion, evidence and captured origin");
+            const auto renderDirectory = qEnvironmentVariable("REVIA_UI_RENDER_DIR");
+            if (!renderDirectory.isEmpty())
+            {
+                SettleLayouts();
+                expect(window.answerFeedbackDialog->grab().save(QDir(renderDirectory).filePath("answer-feedback-dialog.png")),
+                    "the explicit owner answer judgment dialog must have a fresh Qt capture");
+            }
+        }
+        if (auto* dialog = captured ? captured->window() : nullptr)
+            dialog->close();
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+        RuntimeEvent firstFragment{RuntimeEventKind::ReplyFragment, RuntimeState::Thinking, "First displayed sentence."};
+        firstFragment.stamp = window.Session().Stamp();
+        firstFragment.audienceRevision = window.Session().Audience().revision;
+        firstFragment.conversationTurnId = 941;
+        firstFragment.turnId = 9411;
+        window.HandleRuntimeEvent(firstFragment);
+        auto secondFragment = firstFragment;
+        secondFragment.message = "Second displayed sentence.";
+        secondFragment.turnId = 9412;
+        window.HandleRuntimeEvent(secondFragment);
+        expect(window.latestDisplayedAnswer == "First displayed sentence.\n\nSecond displayed sentence.",
+            "distinct speech utterances from one conversation turn must retain the complete displayed answer");
+        event.stamp = window.Session().Stamp();
+        event.stamp.generation += 1;
+        event.kind = RuntimeEventKind::StateChanged;
+        event.message = "stale-status-sentinel";
+        window.HandleRuntimeEvent(event);
+        expect(!status->text().contains("stale-status-sentinel"), "retired-origin events must not reach the card");
+        const auto beforeAudienceQueue = window.chatEntries.size();
+        const auto beforeQueuedState = window.lastRuntimeState;
+        const auto beforeQueuedStateDetail = window.lastRuntimeDetail;
+        const auto beforeQueuedStatus = status->text();
+        RuntimeEvent missingAudience{RuntimeEventKind::AssistantMessage, RuntimeState::Idle, "missing-audience-answer-sentinel"};
+        missingAudience.stamp = window.Session().Stamp();
+        window.HandleRuntimeEvent(missingAudience);
+        expect(window.chatEntries.size() == beforeAudienceQueue,
+            "an assistant reply without captured audience metadata must not become a review target");
+        RuntimeEvent delayed{RuntimeEventKind::AssistantMessage, RuntimeState::Idle, "queued-private-answer-sentinel"};
+        delayed.stamp = window.Session().Stamp();
+        delayed.audienceRevision = window.Session().Audience().revision;
+        window.Session().Events().Publish(delayed);
+        RuntimeEvent delayedFindings{
+            RuntimeEventKind::InvestigationFindings, RuntimeState::Thinking, "Native file check read queued-private-findings-sentinel"};
+        delayedFindings.stamp = window.Session().Stamp();
+        delayedFindings.audienceRevision = window.Session().Audience().revision;
+        delayedFindings.detail = "Private native file contents: queued-private-findings-sentinel";
+        window.Session().Events().Publish(delayedFindings);
+        RuntimeEvent delayedProposal{RuntimeEventKind::Proposal, RuntimeState::Idle, "queued-private-proposal-sentinel"};
+        delayedProposal.stamp = window.Session().Stamp();
+        delayedProposal.audienceRevision = window.Session().Audience().revision;
+        delayedProposal.detail = "Private proposal evidence: queued-private-proposal-sentinel";
+        window.Session().Events().Publish(delayedProposal);
+        RuntimeEvent delayedComponent{
+            RuntimeEventKind::ComponentStatus, RuntimeState::Thinking, "Private background task detail: queued-private-component-sentinel"};
+        delayedComponent.stamp = window.Session().Stamp();
+        delayedComponent.audienceRevision = window.Session().Audience().revision;
+        delayedComponent.component = "Conversation quality";
+        delayedComponent.phase = "Flagged";
+        delayedComponent.detail = "Private task evidence: queued-private-component-sentinel";
+        window.Session().Events().Publish(delayedComponent);
+        RuntimeEvent delayedState{
+            RuntimeEventKind::StateChanged, RuntimeState::WaitingForConfirmation, "Private task summary: queued-private-state-sentinel"};
+        delayedState.stamp = window.Session().Stamp();
+        delayedState.audienceRevision = window.Session().Audience().revision;
+        window.Session().Events().Publish(delayedState);
+        SessionResult delayedSystem;
+        delayedSystem.stamp = window.Session().Stamp();
+        delayedSystem.audienceRevision = window.Session().Audience().revision;
+        delayedSystem.succeeded = true;
+        delayedSystem.fromAssistant = false;
+        delayedSystem.text = "queued-private-system-result-sentinel";
+        QMetaObject::invokeMethod(
+            &window, [&window, delayedSystem]() { window.PresentSessionResult(delayedSystem); }, Qt::QueuedConnection);
+        auto delayedSystemFailure = delayedSystem;
+        delayedSystemFailure.succeeded = false;
+        delayedSystemFailure.text = "queued-private-system-failure-sentinel";
+        delayedSystemFailure.reason = "Private action failure: queued-private-system-failure-sentinel";
+        QMetaObject::invokeMethod(
+            &window, [&window, delayedSystemFailure]() { window.PresentSessionResult(delayedSystemFailure); }, Qt::QueuedConnection);
+        std::string audienceError;
+        expect(window.Session().SetAudience({revia::identity::AudienceKind::Public, "ui-public", 0, {}}, audienceError) &&
+                   window.Session().SetAudience({revia::identity::AudienceKind::Private, "ui-private", 0, {}}, audienceError),
+            "the queued audience regression must complete its public-to-private transition");
+        QCoreApplication::sendPostedEvents(&window, QEvent::MetaCall);
+        expect(window.chatEntries.size() == beforeAudienceQueue && !window.latestDisplayedAnswer.contains("queued-private-answer-sentinel"),
+            "queued reply text must not adopt the newer audience or become a displayed review target");
+        auto* resultEvidence = window.findChild<QLabel*>("conversationResultEvidence");
+        expect(resultEvidence && !resultEvidence->text().contains("queued-private-findings-sentinel"),
+            "queued private native findings must not reach the transcript or conversation evidence under a newer audience");
+        expect(resultEvidence && !resultEvidence->text().contains("queued-private-proposal-sentinel"),
+            "all events with captured stale audience metadata must be refused before any projection");
+        expect(!quality->text().contains("queued-private-component-sentinel") && window.lastRuntimeState == beforeQueuedState &&
+                   window.lastRuntimeDetail == beforeQueuedStateDetail && status->text() == beforeQueuedStatus,
+            "queued private component detail and task state must not change conversation or status projection after an audience epoch");
+        expect(std::none_of(window.activityEntries.begin(), window.activityEntries.end(),
+                   [](const auto& entry)
+                   {
+                       return entry.message.contains("queued-private-component-sentinel") ||
+                              entry.message.contains("queued-private-state-sentinel") ||
+                              entry.message.contains("queued-private-system-failure-sentinel");
+                   }),
+            "queued private component detail and task summary must not enter the activity projection after an audience epoch");
+        auto currentSystem = delayedSystem;
+        currentSystem.audienceRevision = window.Session().Audience().revision;
+        currentSystem.text = "Current admitted system result positive control.";
+        window.PresentSessionResult(currentSystem);
+        expect(window.chatEntries.size() == beforeAudienceQueue + 1 && window.chatEntries.back().speaker == "System" &&
+                   window.chatEntries.back().body == "Current admitted system result positive control.",
+            "a system action result with current captured audience metadata must remain visible");
+        auto currentSystemFailure = currentSystem;
+        currentSystemFailure.succeeded = false;
+        currentSystemFailure.text = "Current admitted system failure positive control.";
+        currentSystemFailure.reason = "Current admitted action failure evidence.";
+        window.PresentSessionResult(currentSystemFailure);
+        expect(window.chatEntries.size() == beforeAudienceQueue + 2 &&
+                   window.chatEntries.back().body == currentSystemFailure.text.c_str() &&
+                   std::any_of(window.activityEntries.begin(), window.activityEntries.end(),
+                       [](const auto& entry) { return entry.message.contains("Current admitted action failure evidence."); }),
+            "a current system failure must retain its displayed text and admitted activity evidence");
+        review->click();
+        expect(!review->isEnabled() && !window.answerFeedbackDialog,
+            "an older displayed reply must not be reviewed under a newer audience revision");
+        auto* ownerOutcome = window.findChild<QLabel*>("conversationOwnerOutcome");
+        expect(ownerOutcome && ownerOutcome->text().contains("earlier audience"),
+            "refusing an older answer target must explain which displayed selection is stale");
+        RuntimeEvent fresh{RuntimeEventKind::AssistantMessage, RuntimeState::Idle, "Fresh admitted reply for the next fixture."};
+        fresh.stamp = window.Session().Stamp();
+        fresh.audienceRevision = window.Session().Audience().revision;
+        window.HandleRuntimeEvent(fresh);
+        expect(review->isEnabled(), "fresh captured audience metadata must restore deliberate answer review");
+        expect(ownerOutcome && ownerOutcome->text().isEmpty(),
+            "a fresh admitted answer must clear the obsolete earlier-audience review warning");
+        RuntimeEvent pending{RuntimeEventKind::StateChanged, RuntimeState::WaitingForConfirmation, "An action awaits its owner."};
+        pending.stamp = window.Session().Stamp();
+        pending.audienceRevision = window.Session().Audience().revision;
+        window.HandleRuntimeEvent(pending);
+        fresh.message = "A fresh answer while the owner action remains pending.";
+        window.HandleRuntimeEvent(fresh);
+        expect(ownerOutcome && ownerOutcome->text() == "An action is waiting for your decision.",
+            "fresh answer capture must preserve a separate pending owner action");
+        pending.state = RuntimeState::Thinking;
+        pending.message = "Working on the current request";
+        window.HandleRuntimeEvent(pending);
+        const QString renderDirectory = qEnvironmentVariable("REVIA_UI_RENDER_DIR");
+        if (!renderDirectory.isEmpty())
+        {
+            window.show();
+            window.tabs->setCurrentIndex(0);
+            for (const auto size : {QSize(760, 540), QSize(1040, 720), QSize(1600, 1000)})
+            {
+                window.resize(size);
+                auto* expand = window.findChild<QPushButton*>("conversationDetailsButton");
+                expand->setChecked(false);
+                SettleLayouts();
+                expect(window.grab().save(
+                           QDir(renderDirectory).filePath(QString("conversation-status-%1x%2.png").arg(size.width()).arg(size.height()))),
+                    "compact conversation status must have a fresh Qt capture");
+                expand->setChecked(true);
+                SettleLayouts();
+                expect(window.size() == size, "expanded conversation details must preserve the requested window size");
+                auto* detailScroll = window.findChild<QScrollArea*>("conversationDetailsScroll");
+                expect(detailScroll && detailScroll->viewport()->height() >= timing->fontMetrics().lineSpacing() * 3,
+                    "expanded conversation diagnostics must retain a readable scroll viewport");
+                expect(
+                    status->height() >= status->fontMetrics().lineSpacing() &&
+                        window.chatHistory->visibleRegion().boundingRect().height() >= window.chatHistory->fontMetrics().lineSpacing() * 3,
+                    "expanded conversation status must retain readable status and visible transcript lines");
+                expect(window.grab().save(
+                           QDir(renderDirectory).filePath(QString("conversation-details-%1x%2.png").arg(size.width()).arg(size.height()))),
+                    "expanded conversation evidence must have a fresh Qt capture");
+                expand->setChecked(false);
+            }
+        }
+    }
+
+    static void RunMemoryRevisionUi(ReviaWindow& window, int& failures)
+    {
+        const auto expect = [&](const bool condition, const char* message)
+        {
+            if (!condition)
+            {
+                std::cerr << "FAIL: " << message << '\n';
+                ++failures;
+            }
+        };
+        memoryDecision original;
+        original.bSuccess = true;
+        original.bShouldRemember = true;
+        original.category = "fact";
+        original.summary = "UI exact revision original sentinel";
+        longTermMemory store(window.Session().Paths().Resolve("Memory/revia_memory.db").string());
+        bool added = false;
+        expect(store.Save(original, added), "UI revision fixture must persist a selected original record");
+        window.memoryPanel->Refresh();
+        auto* table = window.findChild<QTableWidget*>("memoryRecords");
+        auto* revise = window.findChild<QPushButton*>("memoryReviseSelected");
+        expect(table && revise, "Memory must expose a deliberate selected-record revision action");
+        if (!table || !revise)
+            return;
+        const auto entries = window.Session().Memories();
+        const auto found = std::find_if(entries.begin(), entries.end(),
+            [](const memoryEntry& entry) { return entry.summary == "UI exact revision original sentinel"; });
+        expect(found != entries.end(), "the selected revision target must come from the actual memory store");
+        if (found == entries.end())
+            return;
+        revia::memory::MemoryRevisionRequest captured;
+        bool requested = false;
+        window.memoryPanel->SetRevisionSubmitter(
+            [&](const revia::memory::MemoryRevisionRequest& request)
+            {
+                captured = request;
+                requested = true;
+                return true;
+            });
+        for (int row = 0; row < table->rowCount(); ++row)
+        {
+            if (table->item(row, 0)->text() == "UI exact revision original sentinel")
+                table->selectRow(row);
+        }
+        expect(revise->isEnabled(), "a current durable record must permit deliberate correction");
+        revise->click();
+        auto* corrected = window.findChild<QPlainTextEdit*>("memoryRevisionCorrected");
+        auto* record = window.findChild<QPushButton*>("memoryRevisionRecord");
+        expect(corrected && record, "the correction dialog must require explicit owner text");
+        if (corrected && record)
+        {
+            record->click();
+            expect(!requested, "empty owner correction must never reach the session boundary");
+            corrected->setPlainText("UI exact corrected fact");
+            window.findChild<QLineEdit*>("memoryRevisionReason")->setText("I explicitly correct the selected fact.");
+            window.findChild<QPlainTextEdit*>("memoryRevisionEvidence")->setPlainText("Selected record has the outdated value.");
+            const auto renderDirectory = qEnvironmentVariable("REVIA_UI_RENDER_DIR");
+            if (!renderDirectory.isEmpty())
+            {
+                SettleLayouts();
+                expect(corrected->window()->grab().save(QDir(renderDirectory).filePath("memory-revision-dialog.png")),
+                    "the explicit owner memory correction dialog must have a fresh Qt capture");
+            }
+            record->click();
+            expect(requested && captured.originalId == found->id &&
+                       captured.expectedSummaryDigest == "3b5e413b7bfb3cda01061a92e1cb3cb47c220abfceb4983dcffde5bb6cfbfc86" &&
+                       captured.corrected.summary == "UI exact corrected fact" && captured.corrected.category == "fact" &&
+                       captured.priorReceiptId.empty() && !captured.ownerRequestId.empty() && captured.corrected.embedding.empty() &&
+                       captured.origin.SameSession(window.Session().Stamp()) &&
+                       captured.audienceRevision == window.Session().Audience().revision,
+                "owner correction must carry the exact selected durable ID, prior digest, category and captured origin");
+            expect(store.Load().size() == entries.size(), "capturing a correction request must not rewrite the selected row");
+            revia::memory::MemoryRevisionReceipt receipt;
+            std::string error;
+            expect(store.SaveOwnerRevision(captured, receipt, error), "the controlled native owner revision must persist");
+            window.memoryPanel->Refresh();
+            bool historicalVisible = false;
+            for (int row = 0; row < table->rowCount(); ++row)
+            {
+                if (table->item(row, 0)->text() == "UI exact revision original sentinel")
+                {
+                    table->selectRow(row);
+                    historicalVisible = table->item(row, 5)->text() == "Historical";
+                }
+            }
+            expect(historicalVisible && !revise->isEnabled(),
+                "a replaced record must remain visible while refusing another correction to its historical row");
+            auto* provenance = window.findChild<QLabel*>("memoryRevisionProvenance");
+            expect(provenance && provenance->text().contains(QString::fromStdString(receipt.revisedId)),
+                "the original row must expose its exact current replacement");
+            if (provenance)
+                QMetaObject::invokeMethod(provenance, "linkActivated", Q_ARG(QString, QString("current")));
+            expect(
+                revise->isEnabled() && table->currentRow() >= 0 && table->item(table->currentRow(), 0)->text() == "UI exact corrected fact",
+                "the current-replacement link must select the actual revised row");
+            corrected->window()->close();
+            if (!renderDirectory.isEmpty())
+            {
+                for (int index = 0; index < window.tabs->count(); ++index)
+                {
+                    if (window.tabs->tabText(index) == "Memory")
+                        window.tabs->setCurrentIndex(index);
+                }
+                for (const auto size : {QSize(760, 540), QSize(1040, 720), QSize(1600, 1000)})
+                {
+                    window.resize(size);
+                    SettleLayouts();
+                    expect(window.size() == size, "memory revision provenance must fit the requested window size");
+                    expect(table->viewport()->visibleRegion().boundingRect().height() >= table->rowHeight(0) + table->rowHeight(1),
+                        "memory revision history must retain space for the original and current rows");
+                    expect(window.grab().save(
+                               QDir(renderDirectory).filePath(QString("memory-revision-%1x%2.png").arg(size.width()).arg(size.height()))),
+                        "actual historical and current memory rows must have fresh Qt captures");
+                }
+            }
+        }
+        window.ConfigureMemoryRevisionControls();
+    }
+
+    static void RunConfirmationAudienceUi(ReviaWindow& window, int& failures)
+    {
+        using namespace revia::actions;
+        const auto expect = [&](const bool condition, const char* message)
+        {
+            if (!condition)
+            {
+                std::cerr << "FAIL: " << message << '\n';
+                ++failures;
+            }
+        };
+        struct PromptProbe final : QObject
+        {
+            ReviaWindow* owner = nullptr;
+            QString title;
+            std::function<void()> beforeDelivery;
+            std::function<void(QMessageBox&)> onShow;
+            bool eventFilter(QObject* watched, QEvent* event) override
+            {
+                if (watched == owner && event->type() == QEvent::MetaCall && beforeDelivery)
+                {
+                    auto transition = std::move(beforeDelivery);
+                    beforeDelivery = {};
+                    transition();
+                }
+                if (event->type() == QEvent::Show)
+                {
+                    if (auto* prompt = qobject_cast<QMessageBox*>(watched); prompt && prompt->windowTitle() == title && onShow)
+                        onShow(*prompt);
+                }
+                return false;
+            }
+        } probe;
+        probe.owner = &window;
+        QApplication::instance()->installEventFilter(&probe);
+        ActionRequest request;
+        request.type = ActionType::ReadTextFile;
+        request.source = window.Session().Paths().InstallRoot() / "private-confirmation-source-sentinel";
+        const PolicyDecision decision{PolicyVerdict::RequiresConfirmation, RiskLevel::ReadOnly, "Synthetic private prompt fixture."};
+        const revia::policy::ApprovalPrompt effect{"Synthetic fixture control", "synthetic-fixture-application",
+            "private-consequence-window-sentinel", "private-consequence-reason-sentinel"};
+        std::string audienceError;
+        const auto makePrivate = [&]()
+        {
+            expect(window.Session().SetAudience({revia::identity::AudienceKind::Private, "approval-private", 0, {}}, audienceError),
+                "the approval fixture must select an explicit private audience");
+            QCoreApplication::sendPostedEvents(&window, QEvent::MetaCall);
+        };
+        const auto changeAudience = [&](const bool returnToPrivate)
+        {
+            expect(window.Session().SetAudience({revia::identity::AudienceKind::Public, "approval-public", 0, {}}, audienceError),
+                "a synthetic approval must cross its captured private audience");
+            if (returnToPrivate)
+                expect(window.Session().SetAudience({revia::identity::AudienceKind::Private, "approval-private", 0, {}}, audienceError),
+                    "a synthetic approval must retain its original revision after public-to-private");
+        };
+        for (const bool consequence : {false, true})
+        {
+            probe.title = consequence ? "Approve this action" : "Confirm Revia action";
+            const auto ask = [&]()
+            {
+                return consequence ? window.ApproveDesktopEffect(effect)
+                                   : window.ConfirmAction(request, decision) == ConfirmationChoice::Allow;
+            };
+            const auto clickConsent = [&](QMessageBox& prompt)
+            {
+                for (auto* button : prompt.findChildren<QPushButton*>())
+                {
+                    if ((consequence && prompt.standardButton(button) == QMessageBox::Yes) ||
+                        (!consequence && button->text() == "Allow once"))
+                    {
+                        button->click();
+                        return true;
+                    }
+                }
+                prompt.reject();
+                return false;
+            };
+            for (const bool returnToPrivate : {false, true})
+            {
+                makePrivate();
+                int promptsShown = 0;
+                probe.beforeDelivery = [&]() { changeAudience(returnToPrivate); };
+                probe.onShow = [&](QMessageBox& prompt)
+                {
+                    ++promptsShown;
+                    QTimer::singleShot(0, &prompt, [&prompt]() { prompt.reject(); });
+                };
+                std::atomic<bool> finished = false;
+                bool choice = true;
+                std::jthread worker(
+                    [&]()
+                    {
+                        choice = ask();
+                        finished.store(true);
+                    });
+                const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+                while (!finished.load() && std::chrono::steady_clock::now() < deadline)
+                {
+                    QCoreApplication::processEvents();
+                    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                }
+                if (!finished.load())
+                    window.AbandonQuestions();
+                worker.join();
+                expect(!choice && promptsShown == 0 && !probe.beforeDelivery,
+                    consequence
+                        ? "a queued private consequence approval must not display its application/window/reason after an audience epoch"
+                        : "a queued private confirmation must not display its source paths after an audience epoch");
+                probe.beforeDelivery = {};
+                if (window.questions.IsAbandoned())
+                    window.questions.Reopen();
+            }
+            makePrivate();
+            bool currentPromptShown = false;
+            probe.onShow = [&](QMessageBox& prompt)
+            {
+                const bool descriptionMatches = consequence ? prompt.text().contains("synthetic-fixture-application") &&
+                                                                  prompt.text().contains("private-consequence-window-sentinel") &&
+                                                                  prompt.text().contains("private-consequence-reason-sentinel")
+                                                            : prompt.text().contains("private-confirmation-source-sentinel");
+                currentPromptShown = descriptionMatches && prompt.defaultButton() &&
+                                     (consequence ? prompt.standardButton(prompt.defaultButton()) == QMessageBox::No
+                                                  : prompt.defaultButton()->text() == "No");
+                QTimer::singleShot(0, &prompt, [&prompt]() { prompt.reject(); });
+            };
+            expect(!ask() && currentPromptShown,
+                consequence ? "a current private consequence approval must display its exact context with default No"
+                            : "a current private confirmation must display its exact synthetic source with default No");
+            makePrivate();
+            bool currentConsentClicked = false;
+            probe.onShow = [&](QMessageBox& prompt)
+            { QTimer::singleShot(0, &prompt, [&]() { currentConsentClicked = clickConsent(prompt); }); };
+            expect(ask() && currentConsentClicked, consequence ? "a current private synthetic Yes must preserve consequence approval"
+                                                               : "a current private synthetic Allow once must preserve typed confirmation");
+            makePrivate();
+            bool activePromptShown = false;
+            bool fallbackClosed = false;
+            QTimer fallback;
+            fallback.setSingleShot(true);
+            QObject::connect(&fallback, &QTimer::timeout, &window,
+                [&]()
+                {
+                    fallbackClosed = true;
+                    if (window.openQuestion)
+                        window.openQuestion->reject();
+                });
+            probe.onShow = [&](QMessageBox& prompt)
+            {
+                activePromptShown = true;
+                QTimer::singleShot(0, &prompt, [&]() { changeAudience(true); });
+            };
+            fallback.start(1000);
+            expect(!ask() && activePromptShown && !fallbackClosed,
+                consequence ? "an active private consequence approval must close after its audience retires without owner input"
+                            : "an active private confirmation must close after its audience retires without owner input");
+            fallback.stop();
+            makePrivate();
+            bool staleConsentClicked = false;
+            probe.onShow = [&](QMessageBox& prompt)
+            {
+                QTimer::singleShot(0, &prompt,
+                    [&]()
+                    {
+                        changeAudience(true);
+                        staleConsentClicked = clickConsent(prompt);
+                    });
+            };
+            expect(!ask() && staleConsentClicked,
+                consequence ? "a synthetic Yes after an audience epoch must not authorize the retired consequence approval"
+                            : "a synthetic Allow once after an audience epoch must not authorize the retired confirmation");
+            probe.onShow = {};
+        }
+    }
+
     static void Run(ReviaWindow& window, int& failures)
     {
         using revia::runtime::RuntimeEvent;
@@ -557,6 +1112,7 @@ struct ReviaWindowStopTests
         const auto beforeFaultText = window.chatEntries.size();
         RuntimeEvent fragment;
         fragment.kind = RuntimeEventKind::ReplyFragment;
+        fragment.audienceRevision = window.Session().Audience().revision;
         fragment.message = "Approved text before synthesis completes.";
         fragment.turnId = 901;
         window.HandleRuntimeEvent(fragment);
@@ -569,6 +1125,7 @@ struct ReviaWindowStopTests
         expectStop(true, "synthesis health must preserve active playback cancellation");
         RuntimeEvent text;
         text.kind = RuntimeEventKind::AssistantMessage;
+        text.audienceRevision = window.Session().Audience().revision;
         text.message = "Approved text after synthesis failed.";
         text.turnId = 902;
         window.HandleRuntimeEvent(text);
@@ -648,6 +1205,9 @@ int main(int argc, char** argv)
     int failures = 0;
     ReviaWindow window(false, false);
     ReviaWindowStopTests::Run(window, failures);
+    ReviaWindowStopTests::RunConfirmationAudienceUi(window, failures);
+    ReviaWindowStopTests::RunConversationQualityUi(window, failures);
+    ReviaWindowStopTests::RunMemoryRevisionUi(window, failures);
     ReviaWindowStopTests::RunHealthUiAndLayout(window, failures);
     ReviaWindowStopTests::RunCompanionStudio(window, failures);
     if (failures == 0)

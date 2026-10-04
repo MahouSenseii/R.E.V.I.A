@@ -44,7 +44,8 @@ public:
     responseOutput ReviewCode(const std::string& instructions,
         const std::string& material, const std::string& schema, std::stop_token stopToken = {}) const;
     responseOutput ReviewConversationReply(const std::string& userInput, const std::string& candidateReply,
-        const std::string& runtimeGroundTruth, int maxReviewTokens, std::stop_token stopToken = {}) const;
+        const std::string& runtimeGroundTruth, int maxReviewTokens, std::stop_token stopToken = {},
+        const std::string& conversationEvidence = {}) const;
     // Returns one structured curiosity nomination. It never executes the nominated
     // research or decides whether Revia may interrupt.
     responseOutput GenerateActivityDraft(const std::string& topic, const std::string& context, std::stop_token stopToken = {}) const;

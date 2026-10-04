@@ -23,6 +23,28 @@ namespace revia::runtime
 
 struct ReviaSessionTestAccess
 {
+    static SessionResult RunAcceptedTurn(ReviaSession& session, const agents::InputBatch& batch)
+    {
+        std::lock_guard lock(session.operationMutex);
+        session.llmAvailable = session.router.CheckLLMHealth().bIsAvailable;
+        (void)session.BeginOperation();
+        return session.RunTurnLocked(batch);
+    }
+    static ResponseLatencySnapshot ResponseTiming(const ReviaSession& session)
+    {
+        return session.conversationRuntime.ResponseLatencies();
+    }
+    static bool InitializeQualityAssessment(ReviaSession& session, const std::filesystem::path& path, std::string& error)
+    {
+        return session.selfAssessment.Initialize(path, error);
+    }
+    static void DisableQualityFixtureEmbedding(ReviaSession& session)
+    {
+        embeddingSettings embedding;
+        embedding.bEnabled = embedding.bAutoStartServer = false;
+        embedding.modelName.clear();
+        session.router.ApplyLLMSettings(session.settings.llm, embedding, session.profile);
+    }
     static void MarkStudioStarted(ReviaSession& session, bool value) { session.started.store(value); }
     static agents::InputContext StudioInput(ReviaSession& session, agents::InputSource source, identity::SpeakerObservation speaker = {})
     { return session.CaptureInputContext(source, speaker); }
@@ -37,6 +59,12 @@ struct ReviaSessionTestAccess
     static void SetSpeakingIntent(ReviaSession& session, std::uint64_t id) { session.speakingIntentId.store(id); }
     static std::uint64_t SpeakingIntent(const ReviaSession& session) { return session.speakingIntentId.load(); }
     static actions::ActionRuntime& Actions(ReviaSession& session) { return session.actionRuntime; }
+    static SessionResult RunStudioAction(ReviaSession& session, actions::ActionRequest request)
+    {
+        std::lock_guard lock(session.operationMutex);
+        (void)session.BeginOperation();
+        return session.ExecuteAction(std::move(request));
+    }
     static void JoinWorkflow(ReviaSession& session) { session.agentWorkflow.Join(); }
     static void Log(ReviaSession& session, const std::string& text) { session.appLogger.Log(text); }
     static bool LoadConfiguredProfile(const ReviaSession& session, const std::string& id, aiProfile& profile)

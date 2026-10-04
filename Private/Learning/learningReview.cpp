@@ -12,7 +12,9 @@ std::string ToString(const LessonKind value)
     {
         case LessonKind::Planning: return "planning";
         case LessonKind::Initiative: return "initiative";
-    }
+        case LessonKind::Quality:
+            return "quality";
+        }
     return "planning";
 }
 
@@ -134,18 +136,13 @@ std::vector<Lesson> LearningReview::Draw(const std::vector<goals::Goal>& recentG
 
 std::string LearningReview::MemorySummary(const Lesson& lesson)
 {
-    // Written as a durable preference about how to work, which is what the memory store
-    // is for. The evidence travels with it so a stale lesson can be judged later rather
-    // than taken on faith.
+    // Evidence stays with the reviewed statement so later retrieval can judge its scope.
     return lesson.statement + " (learned from " + lesson.evidence + ")";
 }
 
 std::string LearningReview::MemoryCategory(const Lesson& lesson)
 {
-    // Both kinds are standing preferences about how Revia should work, not facts about
-    // the user, so neither is an identity or relationship memory.
-    (void)lesson;
-    return "preference";
+    return lesson.kind == LessonKind::Quality ? "constraint" : "preference";
 }
 
 } // namespace revia::learning

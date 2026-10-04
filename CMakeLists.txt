@@ -185,6 +185,10 @@ if(REVIA_BUILD_DESKTOP)
     find_package(Qt6 6.8 COMPONENTS Core Gui Widgets Svg SvgWidgets)
     if(Qt6_FOUND)
         add_executable(ReviaDesktop WIN32
+                "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/conversationStatusPanel.cpp"
+                "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/conversationStatusPanel.h"
+                "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/answerFeedbackDialog.cpp"
+                "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/answerFeedbackDialog.h"
                 "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/canvasPanel.cpp"
                 "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/agentStudioPanel.cpp"
                 "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/agentStudioPanel.h"
@@ -350,6 +354,14 @@ if(BUILD_TESTING)
     revia_add_studio_check(ReviaSelfDevelopmentTests Tests/selfDevelopmentTests.cpp RunSelfDevelopmentTests)
     revia_add_studio_check(ReviaStudioRuntimeTests Tests/studioRuntimeTests.cpp RunStudioRuntimeTests)
     revia_add_studio_check(ReviaContentDigestTests Tests/contentDigestTests.cpp RunContentDigestTests)
+    revia_add_studio_check(ReviaResponseLatencyTests Tests/responseLatencyTests.cpp RunResponseLatencyTests)
+    revia_add_studio_check(ReviaResponseLatencyRuntimeTests Tests/responseLatencyRuntimeTests.cpp RunResponseLatencyRuntimeTests)
+    revia_add_studio_check(ReviaInvestigationCheckTests Tests/investigationCheckTests.cpp RunInvestigationCheckTests)
+    revia_add_studio_check(ReviaAnswerQualityTests Tests/answerQualityTests.cpp RunAnswerQualityTests)
+    revia_add_studio_check(ReviaQualityFeedbackTests Tests/qualityFeedbackTests.cpp RunQualityFeedbackTests)
+    revia_add_studio_check(ReviaMemoryRevisionTests Tests/memoryRevisionTests.cpp RunMemoryRevisionTests)
+    revia_add_studio_check(ReviaQualityFeedbackRuntimeTests Tests/qualityFeedbackRuntimeTests.cpp RunQualityFeedbackRuntimeTests)
+    revia_add_studio_check(ReviaImprovementAgentTests Tests/improvementAgentTests.cpp RunImprovementAgentTests)
     file(GLOB_RECURSE REVIA_TEST_SOURCES CONFIGURE_DEPENDS
             "${CMAKE_CURRENT_SOURCE_DIR}/Tests/*.cpp"
     )
@@ -365,6 +377,11 @@ if(BUILD_TESTING)
     add_test(NAME Revia.CompanionRuntime COMMAND ReviaCompanionRuntimeTests)
     add_executable(ReviaTests ${REVIA_TEST_SOURCES})
     add_executable(ReviaStudioLive Tests/studioLive.cpp Tests/Fixture/studioLiveMain.cpp)
+    add_executable(ReviaAnswerQualityLive Tools/Quality/answerQualityLive.cpp)
+    revia_link_foundation(ReviaAnswerQualityLive)
+    if(MINGW)
+        target_link_options(ReviaAnswerQualityLive PRIVATE -static)
+    endif()
     target_include_directories(ReviaStudioLive PRIVATE Tests)
     revia_link_foundation(ReviaStudioLive)
     if(MINGW)
@@ -516,7 +533,8 @@ if(BUILD_TESTING)
             target_link_options(ReviaStudioPanelTests PRIVATE -static-libgcc -static-libstdc++)
         endif()
         add_test(NAME Revia.StudioPanels COMMAND ReviaStudioPanelTests)
-        set_tests_properties(Revia.StudioPanels PROPERTIES TIMEOUT 30 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+        set_tests_properties(Revia.StudioPanels PROPERTIES TIMEOUT 30
+                ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QPA_PLATFORM_PLUGIN_PATH=$<TARGET_FILE_DIR:Qt6::QOffscreenIntegrationPlugin>")
         get_target_property(REVIA_DESKTOP_TEST_SOURCES ReviaDesktop SOURCES)
         list(FILTER REVIA_DESKTOP_TEST_SOURCES EXCLUDE REGEX "/Desktop/main\\.cpp$")
         add_executable(ReviaDesktopStopTests

@@ -259,6 +259,8 @@ ReviewOutcome ImprovementAgent::Run(const ReviewJob& job, const std::stop_token 
         current = settings;
         use = dependencies;
     }
+    if (use.captureReporter)
+        use.report = use.captureReporter();
     const auto remember = [this](const std::string& line)
     {
         std::lock_guard lock(mutex);
@@ -290,7 +292,7 @@ ReviewOutcome ImprovementAgent::Run(const ReviewJob& job, const std::stop_token 
         ReviewJob proofJob = job;
         proofJob.trigger = proposal->trigger;
         proofJob.file = proposal->change.path;
-        Prove(*proposal, proofJob, original, stopToken);
+        Prove(*proposal, proofJob, original, current, use, stopToken);
         outcome.kind = ReviewOutcome::Kind::Proposed;
         outcome.proposal = proposal;
         remember("Proof of #" + proposal->id + ": " + proposal->verificationSummary);
@@ -431,7 +433,7 @@ ReviewOutcome ImprovementAgent::Run(const ReviewJob& job, const std::stop_token 
 
     if (current.bVerify && use.workbench)
     {
-        Prove(*proposal, job, content, stopToken);
+        Prove(*proposal, job, content, current, use, stopToken);
     }
     else if (use.report)
     {
@@ -446,15 +448,9 @@ ReviewOutcome ImprovementAgent::Run(const ReviewJob& job, const std::stop_token 
     return outcome;
 }
 
-void ImprovementAgent::Prove(CodeProposal& proposal, const ReviewJob& job, const std::string& original, const std::stop_token stopToken)
+void ImprovementAgent::Prove(CodeProposal& proposal, const ReviewJob& job, const std::string& original, const improvementSettings& current,
+    const Dependencies& use, const std::stop_token stopToken)
 {
-    improvementSettings current;
-    Dependencies use;
-    {
-        std::lock_guard lock(mutex);
-        current = settings;
-        use = dependencies;
-    }
     const auto save = [&]()
     {
         std::string error;

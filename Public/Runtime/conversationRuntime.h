@@ -22,6 +22,7 @@
 #include "Identity/relationshipState.h"
 #include "Runtime/affectController.h"
 #include "Runtime/runtimeEvents.h"
+#include "Runtime/responseLatency.h"
 #include "Runtime/sessionResult.h"
 #include "Identity/socialIdentity.h"
 #include "Speech/speechService.h"
@@ -127,10 +128,15 @@ public:
         StimulusObserver stimulusObserver = {}, ScreenCaptureRequest screenCaptureRequest = {}, PreferenceProvider preferenceProvider = {},
         SelfInquirySettingsProvider selfInquirySettingsProvider = {}, ConversationRecallHandler conversationRecallHandler = {},
         AutonomyContextProvider autonomyContextProvider = {});
+    ~ConversationRuntime();
+    void ResetResponseLatency(const RuntimeStamp& origin);
+    [[nodiscard]] ResponseLatencySnapshot ResponseLatencies() const;
 
     // Set once at startup, before the first turn.
     void SetSongListProvider(SongListProvider provider);
     void SetPrivateAdmissionFactory(std::function<std::function<bool()>()> factory);
+    using InvestigationExecutorFactory = std::function<agents::CheckExecutor(std::function<bool()>, std::stop_token)>;
+    void SetInvestigationExecutorFactory(InvestigationExecutorFactory factory);
 
     // `turnReference` is added to this turn's context only, never to its history: text
     // the runtime fetched for the question, such as what the user copied.
@@ -147,7 +153,7 @@ public:
     SessionResult ReplyForAudience(const std::string& input, const std::vector<conversationMessage>& channelHistory,
         const identity::AudienceContext& audience, const identity::RelationshipState& relationship, const aiProfile& profile,
         bool llmAvailable, bool shouldSpeak, std::stop_token stopToken = {}, std::function<bool()> admission = {},
-        const std::string& turnReference = {});
+        const std::string& turnReference = {}, std::chrono::steady_clock::time_point acceptedAt = {});
 
     // Guest overload: the caller owns an isolated router with PublicGuestProfile(),
     // never the desktop router. No instance state, provider, logger or event bus is
@@ -160,10 +166,11 @@ public:
     // a user message and never enters automatic memory classification; only Revia's
     // visible line joins conversation history so a natural user reply has context.
     SessionResult StartConversation(const std::string& cue, const std::string& evidence, const aiProfile& profile, bool llmAvailable,
-        bool shouldSpeak, std::stop_token stopToken = {});
+        bool shouldSpeak, std::stop_token stopToken = {}, std::uint64_t audienceRevision = 0, std::function<bool()> admission = {});
 
     SessionResult StartCuriosityConversation(const std::string& topic, const std::string& rationale, const std::string& researchGrounding,
-        const aiProfile& profile, bool llmAvailable, bool shouldSpeak, std::stop_token stopToken = {});
+        const aiProfile& profile, bool llmAvailable, bool shouldSpeak, std::stop_token stopToken = {}, std::uint64_t audienceRevision = 0,
+        std::function<bool()> admission = {});
 
     // Runs one conversation-contract evaluation turn against the active model.
     //
@@ -189,6 +196,8 @@ private:
         std::optional<identity::RelationshipState> relationship;
         std::string instruction;
         std::function<bool()> deliveryAdmission;
+        std::chrono::steady_clock::time_point acceptedAt{};
+        std::uint64_t audienceRevision = 0;
     };
 
     // Canonical state and posture for replies, proactive openings and evaluation.
@@ -223,20 +232,22 @@ private:
     // questions from what earlier rounds actually found -- which is the whole of what the
     // single pass could not do.
     [[nodiscard]] InvestigationSummary RunInvestigation(const agents::SelfInquiryResult& seed, const std::string& policyInput,
-        const std::string& basePosture, std::uint64_t turnId, std::stop_token stopToken);
+        const std::string& basePosture, std::uint64_t turnId, std::stop_token stopToken, const agents::CheckExecutor& executor,
+        const std::function<bool()>& admission, std::uint64_t audienceRevision);
 
     [[nodiscard]] agents::SelfInquiryResult RunSelfInquiry(const std::string& policyInput,
         const std::vector<conversationMessage>& promptContext, const std::string& basePosture,
-        const intelligence::IntelligenceDecision& routing, bool modelAvailable, std::uint64_t turnId, std::stop_token stopToken);
+        const intelligence::IntelligenceDecision& routing, bool modelAvailable, std::uint64_t turnId, std::stop_token stopToken,
+        std::uint64_t audienceRevision);
     [[nodiscard]] agents::ResponseFilterContext BuildResponseFilterContext(const std::string& policyInput,
         const std::vector<conversationMessage>& promptContext) const;
     SessionResult Generate(const std::string& policyInput, const std::vector<conversationMessage>& promptContext, const aiProfile& profile,
         bool llmAvailable, bool shouldSpeak, bool evaluateMemory, bool proactive, const std::string& proactiveInstruction,
         const std::string& precomputedInternetGrounding, std::stop_token stopToken, const TurnPolicy& turnPolicy);
     void PublishComponent(const std::string& component, const std::string& phase, const std::string& message, double elapsedMilliseconds,
-        int queueDepth, std::uint64_t turnId) const;
+        int queueDepth, std::uint64_t turnId, std::uint64_t audienceRevision = 0) const;
     void PublishInternetActivity(const std::string& phase, const std::string& query, const std::string& provider, const std::string& detail,
-        double elapsedMilliseconds, int sourceCount, std::uint64_t turnId) const;
+        double elapsedMilliseconds, int sourceCount, std::uint64_t turnId, std::uint64_t audienceRevision = 0) const;
 
     messageRouter& router;
     conversationContext& context;
@@ -249,6 +260,9 @@ private:
     logger& log;
     StateHandler setState;
     std::function<std::function<bool()>()> privateAdmissionFactory;
+    InvestigationExecutorFactory investigationExecutorFactory;
+    ResponseLatency responseLatency;
+    RuntimeEventBus::SubscriptionId latencySubscription = 0;
     AffectHandler publishAffect;
     InternetSettingsProvider internetSettings;
     DesktopSettingsProvider desktopSettings;

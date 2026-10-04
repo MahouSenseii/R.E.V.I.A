@@ -37,7 +37,8 @@ public:
         revia::llm::PrivateMemoryAccess memoryAccess = revia::llm::PrivateMemoryAccess::ProfileSetting) const;
     responseOutput GenerateActionProposal(const std::string& userRequest) const;
     responseOutput ReviewConversationReply(const std::string& userInput, const std::string& candidateReply,
-        const std::string& runtimeGroundTruth, int maxReviewTokens, std::stop_token stopToken = {}) const;
+        const std::string& runtimeGroundTruth, int maxReviewTokens, std::stop_token stopToken = {},
+        const std::string& conversationEvidence = {}) const;
     responseOutput GenerateActivityDraft(const std::string& topic, const std::string& context, std::stop_token stopToken = {}) const;
     responseOutput GenerateCuriosityPlan(const std::string& boundedContextPrompt,
         const std::vector<std::string>& availableActions, std::stop_token stopToken = {}) const;

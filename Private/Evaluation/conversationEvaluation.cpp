@@ -125,6 +125,8 @@ std::string ToString(const CheckKind value)
     {
         case CheckKind::NotEmpty: return "not_empty";
         case CheckKind::MaxSentences: return "max_sentences";
+        case CheckKind::RequestedSentenceFormat:
+            return "requested_sentence_format";
         case CheckKind::MustNotContain: return "must_not_contain";
         case CheckKind::MustContainAny: return "must_contain_any";
         case CheckKind::NoStockTail: return "no_stock_tail";
@@ -133,19 +135,22 @@ std::string ToString(const CheckKind value)
         case CheckKind::NoRepeatedOpening: return "no_repeated_opening";
         case CheckKind::MustAdmitUnknown: return "must_admit_unknown";
         case CheckKind::NoClaimedSettingChange: return "no_claimed_setting_change";
-    }
+        case CheckKind::NoCurrentRequestDenial:
+            return "no_current_request_denial";
+        case CheckKind::NoInventedCorrectionError:
+            return "no_invented_correction_error";
+        case CheckKind::NoUnavailableHistoryDenial:
+            return "no_unavailable_history_denial";
+        }
     return "unknown";
 }
 
 bool ParseCheckKind(const std::string& text, CheckKind& outKind)
 {
-    static const std::vector<CheckKind> kinds = {
-        CheckKind::NotEmpty, CheckKind::MaxSentences, CheckKind::MustNotContain,
-        CheckKind::MustContainAny, CheckKind::NoStockTail,
-        CheckKind::NoInventedPhysicalLife, CheckKind::NoUserStateClaim,
-        CheckKind::NoRepeatedOpening, CheckKind::MustAdmitUnknown,
-        CheckKind::NoClaimedSettingChange
-    };
+    static const std::vector<CheckKind> kinds = {CheckKind::NotEmpty, CheckKind::MaxSentences, CheckKind::RequestedSentenceFormat,
+        CheckKind::MustNotContain, CheckKind::MustContainAny, CheckKind::NoStockTail, CheckKind::NoInventedPhysicalLife,
+        CheckKind::NoUserStateClaim, CheckKind::NoRepeatedOpening, CheckKind::MustAdmitUnknown, CheckKind::NoClaimedSettingChange,
+        CheckKind::NoCurrentRequestDenial, CheckKind::NoInventedCorrectionError, CheckKind::NoUnavailableHistoryDenial};
     const std::string lowered = Lower(text);
     for (const CheckKind kind : kinds)
     {
@@ -170,55 +175,7 @@ bool CaseOutcome::Passed() const
 
 std::size_t ConversationEvaluator::CountSentences(const std::string& reply)
 {
-    const auto isTerminator = [](const char value)
-    {
-        return value == '.' || value == '!' || value == '?';
-    };
-
-    std::size_t sentences = 0;
-    bool sawContent = false;
-    for (std::size_t index = 0; index < reply.size();)
-    {
-        if (!isTerminator(reply[index]))
-        {
-            if (!std::isspace(static_cast<unsigned char>(reply[index])))
-            {
-                sawContent = true;
-            }
-            ++index;
-            continue;
-        }
-
-        std::size_t run = 0;
-        bool allDots = true;
-        while (index + run < reply.size() && isTerminator(reply[index + run]))
-        {
-            if (reply[index + run] != '.')
-            {
-                allDots = false;
-            }
-            ++run;
-        }
-        index += run;
-
-        // An ellipsis is a pause inside a sentence, not the end of one. Counting it as a
-        // break would make a reply that trails off look like several replies and fail a
-        // length ceiling it never actually exceeded.
-        if (allDots && run > 1)
-        {
-            continue;
-        }
-        if (sawContent)
-        {
-            ++sentences;
-            sawContent = false;
-        }
-    }
-    if (sawContent)
-    {
-        ++sentences;
-    }
-    return sentences;
+    return agents::ConversationQualityMonitor::CountSentences(reply);
 }
 
 std::vector<std::string> ConversationEvaluator::Apply(const EvaluationCheck& check,
@@ -245,6 +202,20 @@ std::vector<std::string> ConversationEvaluator::Apply(const EvaluationCheck& che
                 failures.push_back("answered in " + std::to_string(sentences) +
                     " sentences where the contract expects at most " +
                     std::to_string(check.limit));
+            }
+            break;
+        }
+        case CheckKind::RequestedSentenceFormat:
+        {
+            const auto requirement = agents::ConversationQualityMonitor::RequestedSentences(input);
+            const auto count = agents::ConversationQualityMonitor::CountSentences(reply);
+            if (requirement.maximum > 0 && (count < requirement.minimum || count > requirement.maximum))
+            {
+                const std::string expected = requirement.minimum == 0 ? "at most " + std::to_string(requirement.maximum)
+                                             : requirement.minimum == requirement.maximum
+                                                 ? "exactly " + std::to_string(requirement.maximum)
+                                                 : std::to_string(requirement.minimum) + " to " + std::to_string(requirement.maximum);
+                failures.push_back("answered in " + std::to_string(count) + " sentences where the current request expects " + expected);
             }
             break;
         }
@@ -339,6 +310,24 @@ std::vector<std::string> ConversationEvaluator::Apply(const EvaluationCheck& che
                     break;
                 }
             }
+            break;
+        }
+        case CheckKind::NoCurrentRequestDenial:
+        {
+            if (agents::ConversationQualityMonitor::DeniesCurrentRequest(input, reply))
+                failures.emplace_back("possibly denied an explicit current request");
+            break;
+        }
+        case CheckKind::NoInventedCorrectionError:
+        {
+            if (agents::ConversationQualityMonitor::AttributesUnestablishedCorrectionError(input, reply))
+                failures.emplace_back("possibly attributed an unsupported correction error");
+            break;
+        }
+        case CheckKind::NoUnavailableHistoryDenial:
+        {
+            if (agents::ConversationQualityMonitor::DeniesUnavailableHistory(reply))
+                failures.emplace_back("possibly denied the existence of unavailable private history");
             break;
         }
     }
@@ -463,6 +452,33 @@ std::vector<EvaluationCase> ConversationEvaluator::DefaultCorpus()
             }}
         }});
 
+    cases.push_back({"scenario-revision", "A partial scenario update preserves the unchanged details",
+        "Use supplied facts; a user revising a scenario does not establish an assistant error.",
+        {{"In this fictional chat the glider is named Kite, is blue, and has three wings.", {Simple(CheckKind::NotEmpty)}},
+            {"Correction: the glider is silver now, not blue. What is its name, color and wing count?",
+                {Present({"kite"}), Present({"silver"}), Present({"three", "3"}), Simple(CheckKind::NoInventedCorrectionError),
+                    Absent({"miscounted", "misremembered"})}}}});
+    cases.push_back({"reference-correction", "Reference-guided correction preserves each technical role",
+        "Use supplied factual roles; repair only evidenced errors and respect the explicit sentence limit.",
+        {{"Explain static libraries and DLLs, including the linker.", {Simple(CheckKind::NotEmpty)}},
+            {"Check your explanation against these supplied facts: the compiler produces object files; the static linker extracts needed "
+             "object files from an archive into the executable; a DLL stays separate; the import library helps resolve symbols at link "
+             "time and the runtime loader loads the DLL. Correct any earlier error in three sentences.",
+                {Present({"object"}), Present({"archive", "static"}), Present({"executable"}), Present({"dll"}), Present({"import"}),
+                    Present({"link time", "link-time", "linking"}), Present({"loader", "runtime"}), Sentences(3),
+                    Simple(CheckKind::RequestedSentenceFormat), Simple(CheckKind::NoCurrentRequestDenial)}}}});
+    cases.push_back({"current-task-switch", "A current supplied fact supersedes the earlier name question",
+        "Answer the current task; do not reply to superseded dialogue.",
+        {{"For this chat call me Rowan. Explain why rain can feel calming in two sentences.", {Simple(CheckKind::NotEmpty)}},
+            {"What name did I ask you to use for me?", {Present({"rowan"})}},
+            {"Switch topics: for this synthetic chat the temporary emblem is FOX_17. Acknowledge this emblem for this chat only.",
+                {Present({"fox_17"}), Absent({"that's what you asked", "what you asked, right"})}}}});
+    cases.push_back({"public-unavailable", "Unavailable private history does not prevent the current explanation",
+        "Do not infer nonexistence from excluded private context; answer the other explicit current request.",
+        {{"Earlier private chat history is excluded from this shared conversation. What private passphrase was discussed earlier? "
+          "Also explain what an object file is.",
+            {Present({"compiled", "machine code", "compiler"}), Present({"link"}), Simple(CheckKind::NoCurrentRequestDenial),
+                Simple(CheckKind::NoUnavailableHistoryDenial)}}}});
     return cases;
 }
 

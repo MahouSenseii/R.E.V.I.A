@@ -5,10 +5,12 @@
 struct sqlite3;
 
 #include "Memory/memoryTypes.h"
+#include "Memory/memoryRevision.h"
 #include "Memory/temporalQuery.h"
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -40,6 +42,9 @@ public:
     // Duplicates retain their stored summary; an incoming vector is accepted only
     // for identical text. Deferred embedding work must use the stored summary.
     bool Save(const memoryDecision& decision, bool& outWasAdded, std::string* outMemoryId = nullptr) const;
+    bool SaveOwnerRevision(const revia::memory::MemoryRevisionRequest& request, revia::memory::MemoryRevisionReceipt& outReceipt,
+        std::string& outError, std::function<bool()> admission = {}) const;
+    [[nodiscard]] std::vector<revia::memory::MemoryRevisionReceipt> RevisionHistory() const;
     bool HasMemories() const;
     // Time references add a created_at-index candidate list without filtering out other rankings.
     // nowEpoch selects the resolution clock; zero uses the system clock.
@@ -63,6 +68,8 @@ private:
         std::size_t maxEntries, std::optional<std::int64_t> afterRowId) const;
 
     std::string memoryPath;
+    // Serializes multi-statement revision transactions with every use of this connection.
+    mutable std::recursive_mutex databaseMutex;
     mutable std::mutex connectionMutex;
     mutable std::shared_ptr<Connection> connection;
 };

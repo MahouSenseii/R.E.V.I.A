@@ -50,9 +50,30 @@ bool ReportedModel(const std::string& value)
     return !value.empty() && value.size() <= 160 &&
            std::all_of(value.begin(), value.end(), [](const unsigned char ch) { return ch >= 32 && ch != 127; });
 }
-std::string InputFingerprint(const std::string& input, const std::string& evidence)
+Json ContractJson(const DeliverableContract& contract)
 {
-    return AgentWorkflow::ArtifactHash(std::to_string(input.size()) + ":" + input + std::to_string(evidence.size()) + ":" + evidence);
+    Json requirements = Json::array();
+    for (const auto& item : contract.requirements)
+        requirements.push_back(
+            {{"section", item.section}, {"instruction", item.instruction}, {"allowNoneWithReason", item.allowNoneWithReason}});
+    return {{"requirements", requirements}, {"requireAllPrerequisites", contract.requireAllPrerequisites}};
+}
+DeliverableContract ReadContract(const Json& value)
+{
+    DeliverableContract contract;
+    contract.requireAllPrerequisites = value.at("requireAllPrerequisites");
+    for (const auto& item : value.at("requirements"))
+        contract.requirements.push_back(
+            {item.at("section").get<DeliverableSection>(), item.at("instruction"), item.at("allowNoneWithReason")});
+    std::string error;
+    if (!ValidateDeliverableContract(contract, error))
+        throw std::runtime_error("deliverable contract");
+    return contract;
+}
+std::string InputFingerprint(const std::string& input, const std::string& evidence, const DeliverableContract& contract)
+{
+    return AgentWorkflow::ArtifactHash(AgentWorkflow::ArtifactHash(input) + AgentWorkflow::ArtifactHash(evidence) +
+                                       AgentWorkflow::ArtifactHash(ContractJson(contract).dump()));
 }
 std::uint64_t Milliseconds(const Clock::time_point start)
 {
@@ -233,6 +254,8 @@ bool AgentWorkflow::Validate(const WorkflowSpec& spec, std::string& error)
     std::set<std::string> workers;
     for (const auto& node : spec.nodes)
     {
+        if (!ValidateDeliverableContract(node.deliverableContract, error))
+            return false;
         if (!Identifier(node.id) || node.id.size() > 64 || !nodes.emplace(node.id, &node).second || node.label.empty() ||
             node.label.size() > 160 || node.objective.size() > MaximumMaterial || node.inputText.size() > MaximumMaterial ||
             node.evidenceKey.size() > 256 || !node.readOnly)
@@ -474,9 +497,12 @@ struct AgentWorkflow::Impl
             const bool validArtifact = result.artifact.version > 0 && Identifier(result.artifact.id) && !result.artifact.content.empty() &&
                                        result.artifact.content.size() <= MaximumMaterial && Digest(result.artifact.hash) &&
                                        result.artifact.hash == AgentWorkflow::ArtifactHash(result.artifact.content);
+            std::string deliverableError;
+            const bool completeDeliverable = validArtifact && ValidateDeliverable(node.spec.deliverableContract, result.artifact.content,
+                                                                  attempt.view.prerequisites, deliverableError);
             if (!current)
                 state = WorkflowState::Cancelled;
-            else if (result.succeeded && result.verified && validArtifact)
+            else if (result.succeeded && result.verified && completeDeliverable)
             {
                 state = WorkflowState::Succeeded;
                 attempt.view.verified = true;
@@ -538,7 +564,7 @@ struct AgentWorkflow::Impl
                         attempt.view.ordinal = request.attempt;
                         attempt.view.stamp = request.stamp;
                         attempt.view.state = WorkflowState::Running;
-                        attempt.fingerprint = InputFingerprint(node.spec.inputText, node.spec.evidenceKey);
+                        attempt.fingerprint = InputFingerprint(node.spec.inputText, node.spec.evidenceKey, node.spec.deliverableContract);
                         for (const auto& dependency : node.spec.dependsOn)
                         {
                             const auto& source = Find(dependency);
@@ -546,6 +572,7 @@ struct AgentWorkflow::Impl
                             attempt.view.prerequisites.push_back(
                                 {dependency, source.artifact->id, source.artifact->version, source.artifact->hash});
                         }
+                        request.prerequisiteReferences = attempt.view.prerequisites;
                         node.history.push_back(std::move(attempt));
                         Transition(node, WorkflowState::Running);
                         ++active;
@@ -611,7 +638,7 @@ struct AgentWorkflow::Impl
     {
         const auto snapshot = SnapshotLocked();
         const auto& budget = spec.budget;
-        Json value = {{"schema", 1}, {"id", spec.id}, {"stamp", StampJson(snapshot.stamp)}, {"state", snapshot.state},
+        Json value = {{"schema", 2}, {"id", spec.id}, {"stamp", StampJson(snapshot.stamp)}, {"state", snapshot.state},
             {"decision", snapshot.parentDecision}, {"sequence", snapshot.sequence}, {"requests", snapshot.requests},
             {"reportedTokens", snapshot.reportedTokens}, {"unreportedRequests", snapshot.unreportedRequests},
             {"parentEvaluation", parentEvaluation},
@@ -626,7 +653,8 @@ struct AgentWorkflow::Impl
             Json row = {{"id", node.spec.id}, {"parent", node.spec.parentId}, {"role", node.spec.role}, {"level", node.spec.level},
                 {"label", node.spec.label}, {"objective", node.spec.objective}, {"input", node.spec.inputText},
                 {"evidence", node.spec.evidenceKey}, {"dependencies", node.spec.dependsOn}, {"readOnly", node.spec.readOnly},
-                {"state", view.state}, {"activeMilliseconds", view.activeMilliseconds}, {"waitingMilliseconds", view.waitingMilliseconds},
+                {"deliverableContract", ContractJson(node.spec.deliverableContract)}, {"state", view.state},
+                {"activeMilliseconds", view.activeMilliseconds}, {"waitingMilliseconds", view.waitingMilliseconds},
                 {"pausedMilliseconds", view.pausedMilliseconds}, {"attempts", Json::array()}};
             for (std::size_t attemptIndex = 0; attemptIndex < node.history.size(); ++attemptIndex)
             {
@@ -668,6 +696,7 @@ struct AgentWorkflow::Impl
         node.spec = {row.at("id"), row.at("parent"), row.at("role").get<WorkflowRole>(), row.at("level"), row.at("label"),
             row.at("objective"), row.at("input"), row.at("evidence"), row.at("dependencies").get<std::vector<std::string>>(),
             row.at("readOnly")};
+        node.spec.deliverableContract = ReadContract(row.at("deliverableContract"));
         node.view.id = node.spec.id;
         node.view.parentId = node.spec.parentId;
         node.view.role = node.spec.role;
@@ -726,6 +755,10 @@ struct AgentWorkflow::Impl
             if (view.verified != (view.executionSucceeded && view.state == WorkflowState::Succeeded && attempt.artifact.has_value()) ||
                 (attempt.artifact && !view.verified))
                 throw std::runtime_error("verification");
+            std::string validation;
+            if (attempt.artifact &&
+                !ValidateDeliverable(node.spec.deliverableContract, attempt.artifact->content, view.prerequisites, validation))
+                throw std::runtime_error("deliverable");
             if (view.state == WorkflowState::Running)
             {
                 view.state = WorkflowState::Interrupted;
@@ -822,7 +855,8 @@ struct AgentWorkflow::Impl
         const auto& reviewer =
             *std::find_if(nodes.begin(), nodes.end(), [](const auto& node) { return node.spec.role == WorkflowRole::Reviewer; });
         if ((summary.parentDecision == ParentDecision::Accept &&
-                (summary.state != WorkflowState::Accepted || parent.view.state != WorkflowState::Accepted)) ||
+                (summary.state != WorkflowState::Accepted || parent.view.state != WorkflowState::Accepted || !parent.artifact ||
+                    parent.history.empty() || !parent.history.back().view.verified)) ||
             ((summary.state == WorkflowState::Accepted || summary.state == WorkflowState::AwaitingAcceptance) &&
                 reviewer.view.state != WorkflowState::Succeeded))
             throw std::runtime_error("acceptance");
@@ -1006,7 +1040,7 @@ bool AgentWorkflow::Retry(const std::string& nodeId, std::string changedInput, s
             error = "The node cannot be retried in its current state.";
             return false;
         }
-        const auto fingerprint = InputFingerprint(changedInput, changedEvidence);
+        const auto fingerprint = InputFingerprint(changedInput, changedEvidence, found->spec.deliverableContract);
         if (fingerprint.empty() ||
             std::any_of(
                 found->history.begin(), found->history.end(), [&](const auto& attempt) { return attempt.fingerprint == fingerprint; }) ||
@@ -1053,13 +1087,18 @@ bool AgentWorkflow::Decide(const ParentDecision decision, std::string& error)
             error = "Verified reviewer evidence is required before parent acceptance.";
             return false;
         }
+        auto& parent =
+            *std::find_if(impl->nodes.begin(), impl->nodes.end(), [](const auto& node) { return node.spec.role == WorkflowRole::Parent; });
+        if (decision == ParentDecision::Accept && (!parent.artifact || parent.history.empty() || !parent.history.back().view.verified))
+        {
+            error = "A verified parent deliverable is required before acceptance.";
+            return false;
+        }
         const auto state = decision == ParentDecision::Accept   ? WorkflowState::Accepted
                            : decision == ParentDecision::Reject ? WorkflowState::Rejected
                                                                 : WorkflowState::Paused;
         impl->summary.parentDecision = decision;
         impl->summary.state = state;
-        auto& parent =
-            *std::find_if(impl->nodes.begin(), impl->nodes.end(), [](const auto& node) { return node.spec.role == WorkflowRole::Parent; });
         impl->Transition(parent, state);
         impl->ObserveLocked();
     }
@@ -1225,7 +1264,12 @@ bool AgentWorkflow::Load(const std::filesystem::path& path, std::string& error)
         if (!stream.read(bytes.data(), static_cast<std::streamsize>(bytes.size())))
             throw std::runtime_error("read");
         const auto value = Json::parse(bytes);
-        if (value.at("schema") != 1)
+        if (value.at("schema") == 1)
+        {
+            error = "This checkpoint uses the previous weak acceptance format. Its file is preserved; start an explicit new workflow.";
+            return false;
+        }
+        if (value.at("schema") != 2)
             throw std::runtime_error("schema");
         auto decoded = Impl::Decode(value);
         if (impl->runner.joinable())

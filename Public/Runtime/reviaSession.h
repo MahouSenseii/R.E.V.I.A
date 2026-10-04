@@ -10,6 +10,7 @@
 #include "Runtime/companion.h"
 #include "Runtime/sessionIdentity.h"
 #include "Runtime/learningStudio.h"
+#include "Learning/qualityFeedback.h"
 #include "Policy/companionAuthority.h"
 #include "Agents/agentWorkflow.h"
 #include "Actions/actionRuntime.h"
@@ -200,6 +201,12 @@ class ReviaSession
     bool ExportInventorySkill(std::filesystem::path& outDirectory, std::string& outError);
     bool ReviewLearning(const std::string& recordId, learning::LearningDecision decision,
         const std::string& feedback, std::string& outSummary);
+    bool RecordQualityFeedback(const learning::QualityFeedback& feedback, std::string& outTaskId, std::string& outRecordId,
+        std::string& outError, std::stop_token stopToken = {});
+    bool RetestQualityFeedback(const std::string& taskId, const learning::QualityFeedback& feedback, std::string& outError,
+        bool ownerRequested = false, std::stop_token stopToken = {});
+    bool ReviseMemoryOwnerRequested(const memory::MemoryRevisionRequest& request, memory::MemoryRevisionReceipt& outReceipt,
+        std::string& outError, std::stop_token stopToken = {});
     bool ProposePresentationChange(std::string& outId, std::string& outError, std::stop_token stopToken = {});
     bool ReviewPresentationChange(bool validate, std::string& outError, std::stop_token stopToken = {});
     [[nodiscard]] std::optional<improvement::DevelopmentSnapshot> DevelopmentStudio() const;
@@ -623,11 +630,14 @@ class ReviaSession
     void RestoreSelectedSpeechFault();
     void PublishVoiceHealth() const;
     void ReportSpeechHistoryFailure();
-    void SetState(RuntimeState newState, const std::string& activity = "");
+    void SetState(
+        RuntimeState newState, const std::string& activity = "", std::uint64_t audienceRevision = 0, const RuntimeStamp& origin = {});
     void PublishAffect();
-    void Publish(RuntimeEventKind kind, const std::string& message, std::uint64_t turnId = 0) const;
+    void Publish(RuntimeEventKind kind, const std::string& message, std::uint64_t turnId = 0, std::uint64_t audienceRevision = 0,
+        const RuntimeStamp& origin = {}) const;
     void PublishComponent(const std::string& component, const std::string& phase, const std::string& message,
-        double elapsedMilliseconds = -1.0, int queueDepth = 0, std::uint64_t turnId = 0, const std::string& resource = {}) const;
+        double elapsedMilliseconds = -1.0, int queueDepth = 0, std::uint64_t turnId = 0, const std::string& resource = {},
+        std::uint64_t audienceRevision = 0, const RuntimeStamp& origin = {}) const;
     void PublishResourcePlan() const;
     void PublishResourceUsage(const resources::UsageSnapshot& snapshot) const;
     void StartResourceMonitor();

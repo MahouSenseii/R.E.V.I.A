@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Memory/memoryTypes.h"
+#include "Memory/memoryRevision.h"
 #include "Agents/responseProvenance.h"
 #include "Core/memoryManager.h"
 #include "Core/messageRouter.h"
@@ -13,6 +14,7 @@
 #include <set>
 #include <mutex>
 #include <optional>
+#include <stop_token>
 #include <string>
 #include <thread>
 #include <vector>
@@ -123,6 +125,8 @@ public:
     [[nodiscard]] LearnedFindingResult SubmitLearnedFinding(const messageRouter& router, memoryDecision decision, std::uint64_t turnId = 0);
     [[nodiscard]] LearnedFindingResult SubmitLearnedFinding(const messageRouter& router, memoryDecision decision,
         std::uint64_t turnId, std::string* outMemoryId);
+    [[nodiscard]] LearnedFindingResult SubmitOwnerMemoryRevision(const messageRouter& router, const memory::MemoryRevisionRequest& request,
+        memory::MemoryRevisionReceipt& outReceipt, std::string& outError, std::stop_token stopToken = {});
     void SubmitEmbeddingBackfill(const messageRouter& router, const std::string& embeddingModel);
     // The session owns this subscription's lifetime; all scans and requests run on
     // the existing worker. The router must remain alive until Stop has joined the

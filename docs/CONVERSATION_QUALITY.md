@@ -58,6 +58,43 @@ Run these against the active local model after prompt or model changes:
 
 ## Running the corpus
 
+Current-task guidance also preserves unchanged facts through partial scenario
+revisions, distinguishes a supplied revision from proof of an assistant error,
+and treats excluded private history as unavailable rather than nonexistent.
+These rules constrain factual claims and requested format. Authored personality,
+answer modes, earned mood, humor, annoyance, disagreement and personal opinions
+remain the source of delivery style.
+
+Optional answer review receives the captured answer mode and a bounded admitted
+window of user/assistant dialogue as untrusted evidence. The existing off setting
+and one-review limit remain. Review replacements pass through the final hard
+filter before display or speech.
+
+The evaluator's `requested_sentence_format` check shares the runtime reader for
+explicit exact, maximum, and ranged sentence requests. `max_sentences` remains a
+ceiling. These readers handle their tested forms; they are not a general language
+parser or a semantic correctness judge.
+
+The opt-in `ReviaAnswerQualityLive` developer target compares the production
+evaluation path against `Config/Evaluation/answer-quality.json` and an explicit
+authored profile. Pass a loopback model port and output JSONL path; add `review`
+only to measure the optional review configuration. Its corpus supports
+`exactSentences` on a turn in addition to the ordinary evaluator checks. It
+preserves raw and delivered replies, profile/configuration metadata and failures.
+It writes exact request and response sidecars beside the report and uses a fresh
+`<report>.runtime` directory for disposable runtime state. Reusing a nonempty
+runtime directory is refused so earlier evidence stays intact. The arguments are
+`<profile> <corpus> <loopback-port> <report> [review]`.
+It does not queue speech or save synthetic dialogue as memory. Read the replies:
+phrase checks can miss wrong roles, unsupported agreement or omitted facts.
+
+The chat's **Review answer** control records an explicit owner failure criterion
+against the exact displayed reply. It creates a private quality task and a lesson
+candidate in **Skills & Learning**. Ordinary review and a durable memory receipt
+are still required before a lesson becomes trusted. Monitor warnings and HTTP
+success cannot supply this judgment. Retests use captured dependency evidence
+and fresh judged results, retaining earlier failures.
+
 `/eval` runs every case in order, one model reply per turn, and prints which clause broke
 where. `/eval list` shows the corpus without spending inference on it, and `/eval last`
 reprints the most recent run. Each run is appended to `RuntimeData/Evaluations/` as JSONL —

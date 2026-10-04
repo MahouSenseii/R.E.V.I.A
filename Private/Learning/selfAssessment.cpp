@@ -484,7 +484,7 @@ SelfAssessmentSnapshot SelfAssessmentEngine::Snapshot() const
     return snapshot;
 }
 
-bool SelfAssessmentEngine::AppendRecord(const json& record, std::string& outError)
+bool SelfAssessmentEngine::AppendRecord(const json& record, std::string& outError, const std::function<bool()>& admission)
 {
     const std::lock_guard persistenceLock(persistenceMutex);
     std::filesystem::path destination;
@@ -495,6 +495,11 @@ bool SelfAssessmentEngine::AppendRecord(const json& record, std::string& outErro
     if (destination.empty())
     {
         outError = "The self-improvement history has no configured path.";
+        return false;
+    }
+    if (admission && !admission())
+    {
+        outError = "The judged quality origin is no longer admitted.";
         return false;
     }
     std::ofstream file(destination, std::ios::app);
@@ -519,7 +524,8 @@ bool SelfAssessmentEngine::AppendRecord(const json& record, std::string& outErro
     return true;
 }
 
-bool SelfAssessmentEngine::PersistTask(const SelfImprovementTask& task, std::string& outError, const bool resolved)
+bool SelfAssessmentEngine::PersistTask(
+    const SelfImprovementTask& task, std::string& outError, const bool resolved, const std::function<bool()>& admission)
 {
     json record = {
         {"id", task.id}, {"category", task.category},
@@ -539,16 +545,89 @@ bool SelfAssessmentEngine::PersistTask(const SelfImprovementTask& task, std::str
             record["gapAttempts"].push_back({{"dependencies", attempt.dependencies}, {"verifiedAcceptance", attempt.verifiedAcceptance},
                 {"evidence", attempt.evidence}});
     }
-    if (AppendRecord(record, outError)) return true;
+    if (AppendRecord(record, outError, admission))
+        return true;
     std::lock_guard lock(mutex);
     lastPersistenceError = outError;
     return false;
 }
 
-bool SelfAssessmentEngine::RecordGap(const CapabilityGapObservation& observation, std::string& id, std::string& error)
+namespace
+{
+std::map<std::string, std::string> JudgedRetestDependencies(const QualityFeedback& feedback)
+{
+    if (!feedback.dependencies.contains("loaded-profile-sha256") || !feedback.dependencies.contains("effective-llm-config-sha256"))
+        return feedback.dependencies;
+    std::map<std::string, std::string> dependencies;
+    for (const auto* name : {"loaded-profile-sha256", "effective-llm-config-sha256", "native-answer-contract"})
+    {
+        if (const auto found = feedback.dependencies.find(name); found != feedback.dependencies.end())
+            dependencies.emplace(*found);
+    }
+    return dependencies;
+}
+}
+
+bool SelfAssessmentEngine::RecordJudgedQualityFailure(
+    const QualityFeedback& feedback, std::string& id, std::string& error, std::function<bool()> admission)
+{
+    id.clear();
+    if (!ValidateQualityFeedback(feedback, error) || feedback.criterionSatisfied)
+    {
+        if (error.empty())
+            error = "Only an explicit failed criterion creates a quality gap.";
+        return false;
+    }
+    CapabilityGapObservation observation;
+    observation.goal = QualityCriterionKey(feedback);
+    observation.attempts = {"Exact " + ToString(feedback.target) + " judged against a supplied acceptance criterion."};
+    observation.failures = {"The judged " + ToString(feedback.issue) + " criterion was not satisfied."};
+    observation.reason = CapabilityGapReason::Unknown;
+    observation.cause = "The failed criterion is observed; its general cause is not established.";
+    observation.evidence = QualityFeedbackEvidence(feedback);
+    observation.partialEffects = "The cited result was delivered; this judgment changes no output, settings or personality.";
+    observation.nextStep = "Review a changed candidate against the recorded criterion and fresh exact-result evidence.";
+    observation.implementationHints = feedback.criterion;
+    observation.retestConditions = "Relevant dependency change or bounded explicit owner retest, followed by a fresh criterion judgment.";
+    observation.owner = feedback.target == QualityTarget::ConversationTurn ? "Conversation" : "Agent Studio";
+    observation.priority = 1;
+    observation.dependencies = JudgedRetestDependencies(feedback);
+    return RecordGap(observation, id, error, std::move(admission));
+}
+
+bool SelfAssessmentEngine::RecordJudgedQualityRetest(
+    const std::string& id, const QualityFeedback& feedback, std::string& error, const bool ownerRequested, std::function<bool()> admission)
+{
+    if (!ValidateQualityFeedback(feedback, error))
+        return false;
+    const std::lock_guard operationLock(gapMutex);
+    const auto current = Snapshot();
+    const auto task = std::find_if(current.openTasks.begin(), current.openTasks.end(), [&](const auto& value) { return value.id == id; });
+    const std::string evidence = QualityFeedbackEvidence(feedback);
+    if (task == current.openTasks.end() || !task->gap || task->gap->goal != QualityCriterionKey(feedback) ||
+        std::any_of(task->gapAttempts.begin(), task->gapAttempts.end(),
+            [&](const auto& value)
+            {
+                return value.evidence == evidence ||
+                       (feedback.criterionSatisfied && value.evidence.find("target SHA256 " + feedback.targetDigest) != std::string::npos);
+            }))
+    {
+        error = "Quality retest requires the recorded criterion and fresh exact-result judgment.";
+        return false;
+    }
+    return RecordGapAttemptLocked(
+        id, JudgedRetestDependencies(feedback), ownerRequested, feedback.criterionSatisfied, evidence, error, std::move(admission));
+}
+
+bool SelfAssessmentEngine::RecordGap(
+    const CapabilityGapObservation& observation, std::string& id, std::string& error, std::function<bool()> admission)
 {
     const std::lock_guard operationLock(gapMutex);
-    if (!ValidGap(observation)) { error = "Capability gap lacks bounded observed evidence or dependencies."; return false; }
+    if (!ValidGap(observation) || (admission && !admission()))
+    {
+        error = "Capability gap lacks bounded admitted evidence or dependencies.";
+        return false;
+    }
     {
         const std::lock_guard lock(mutex);
         if (snapshot.openTasks.size() >= 256) { error = "Self-assessment task capacity is exhausted."; return false; }
@@ -561,10 +640,11 @@ bool SelfAssessmentEngine::RecordGap(const CapabilityGapObservation& observation
     task.category = "capability_gap:" + task.id;
     task.observedProblem = observation.reason == CapabilityGapReason::MissingCapability ? observation.missingCapability : observation.failures.front();
     task.evidence = observation.evidence;
-    task.relatedComponents = {"Skills"};
+    task.relatedComponents = {observation.owner == "Conversation" || observation.owner == "Agent Studio" ? observation.owner : "Skills"};
     task.gap = observation;
     task.gapAttempts.push_back({observation.dependencies, false, observation.evidence});
-    if (!PersistTask(task, error)) return false;
+    if (!PersistTask(task, error, false, admission))
+        return false;
     const std::lock_guard lock(mutex);
     openCategories.insert(task.category);
     snapshot.openTasks.push_back(task);
@@ -582,9 +662,15 @@ bool SelfAssessmentEngine::CanRetest(const std::string& id, const std::map<std::
 }
 
 bool SelfAssessmentEngine::RecordGapAttempt(const std::string& id, const std::map<std::string, std::string>& dependencies,
-    const bool ownerRequested, const bool verified, const std::string& evidence, std::string& error)
+    const bool ownerRequested, const bool verified, const std::string& evidence, std::string& error, std::function<bool()> admission)
 {
     const std::lock_guard operationLock(gapMutex);
+    return RecordGapAttemptLocked(id, dependencies, ownerRequested, verified, evidence, error, std::move(admission));
+}
+
+bool SelfAssessmentEngine::RecordGapAttemptLocked(const std::string& id, const std::map<std::string, std::string>& dependencies,
+    const bool ownerRequested, const bool verified, const std::string& evidence, std::string& error, std::function<bool()> admission)
+{
     SelfImprovementTask updated;
     {
         const std::lock_guard lock(mutex);
@@ -598,7 +684,8 @@ bool SelfAssessmentEngine::RecordGapAttempt(const std::string& id, const std::ma
         updated = *found;
     }
     updated.gapAttempts.push_back({*RelevantDependencies(*updated.gap, dependencies), verified, evidence});
-    if (!PersistTask(updated, error, verified)) return false;
+    if (!PersistTask(updated, error, verified, admission))
+        return false;
     const std::lock_guard lock(mutex);
     const auto found = std::find_if(snapshot.openTasks.begin(), snapshot.openTasks.end(), [&](const auto& task) { return task.id == id; });
     if (found != snapshot.openTasks.end())

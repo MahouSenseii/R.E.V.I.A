@@ -99,6 +99,152 @@ void TestIndependentWorkersOverlap()
     Check(started && overlapped, "Independent workflow workers did not overlap before gate release.");
 }
 
+void TestAcceptanceRequiresParentArtifact()
+{
+    AgentWorkflow workflow;
+    std::string error;
+    Check(workflow.Start(
+              Spec(), Stamp(), [](const NodeRequest& request, std::stop_token) { return Verified(request); }, error),
+        "The parent acceptance regression did not start.");
+    workflow.Join();
+    Check(!workflow.Decide(ParentDecision::Accept, error) && !workflow.AcceptedArtifact(),
+        "A workflow was accepted without a verified parent deliverable.");
+}
+
+void TestClaimedVerificationRequiresDeliverableSections()
+{
+    auto spec = Spec();
+    spec.nodes[1].deliverableContract.requirements = {{DeliverableSection::Steps, "Give actual ordered steps for this task.", false}};
+    AgentWorkflow workflow;
+    std::string error;
+    std::atomic<int> reviewerCalls{0};
+    Check(workflow.Start(
+              spec, Stamp(),
+              [&](const NodeRequest& request, std::stop_token)
+              {
+                  if (request.node.role == WorkflowRole::Reviewer)
+                      ++reviewerCalls;
+                  auto result = Verified(request);
+                  result.artifact.content = R"({"summary":"A three-step plan is provided.","evidence":"The objective supports the plan."})";
+                  result.artifact.hash = AgentWorkflow::ArtifactHash(result.artifact.content);
+                  return result;
+              },
+              error),
+        "The incomplete deliverable regression did not start.");
+    workflow.Join();
+    Check(Node(workflow.Snapshot(), "first").state == WorkflowState::Failed && reviewerCalls == 0,
+        "A provider's verification assertion admitted a deliverable with no required steps.");
+}
+
+void TestDeliverableBoundsAndExactEvidence()
+{
+    const DeliverableContract contract{{{DeliverableSection::Steps, "List actual steps.", false},
+                                           {DeliverableSection::Risks, "Identify relevant risk or explain why none is known.", true}},
+        true};
+    const std::vector<ArtifactReference> prerequisites{{"first", "first-artifact", 1, std::string(64, 'a')}};
+    nlohmann::json payload = {{"summary", "Read the admitted marker."}, {"evidence", "The first artifact proposes a read."},
+        {"steps", {{"items", {"Read the explicit marker file through the existing policy."}}, {"noneReason", ""}}},
+        {"risks", {{"items", nlohmann::json::array()},
+                      {"noneReason", "Only a bounded read is proposed; no write or external effect is requested."}}},
+        {"prerequisiteEvidence", {{{"nodeId", "first"}, {"id", "first-artifact"}, {"version", 1}, {"hash", std::string(64, 'a')}}}}};
+    std::string error;
+    Check(ValidateDeliverable(contract, payload.dump(), prerequisites, error), "A complete bounded deliverable was rejected.");
+    const auto valid = payload;
+    payload["steps"]["items"] = nlohmann::json::array();
+    payload["steps"]["noneReason"] = "No steps are known.";
+    Check(!ValidateDeliverable(contract, payload.dump(), prerequisites, error), "Required steps were replaced by an absence claim.");
+    payload = valid;
+    payload["risks"]["noneReason"] = " \t\n";
+    Check(!ValidateDeliverable(contract, payload.dump(), prerequisites, error), "A blank no-known-risk rationale was accepted.");
+    payload["risks"]["noneReason"] = "No known risks.";
+    Check(!ValidateDeliverable(contract, payload.dump(), prerequisites, error), "An absence label was accepted without a rationale.");
+    payload = valid;
+    payload["steps"]["items"][0] = std::string(1025, 'x');
+    Check(!ValidateDeliverable(contract, payload.dump(), prerequisites, error), "An oversized section item was accepted.");
+    payload = valid;
+    payload["steps"]["items"] = std::vector<std::string>(9, "A proposed read.");
+    Check(!ValidateDeliverable(contract, payload.dump(), prerequisites, error), "A section exceeded its bounded item count.");
+    for (const auto& field : {"nodeId", "id", "hash"})
+    {
+        payload = valid;
+        payload["prerequisiteEvidence"][0][field] = "not-supplied";
+        Check(!ValidateDeliverable(contract, payload.dump(), prerequisites, error), "A fabricated prerequisite identity was accepted.");
+    }
+    payload = valid;
+    payload["prerequisiteEvidence"][0]["version"] = 2;
+    Check(!ValidateDeliverable(contract, payload.dump(), prerequisites, error), "A stale prerequisite version was accepted.");
+    payload = valid;
+    payload["prerequisiteEvidence"].push_back(payload["prerequisiteEvidence"][0]);
+    Check(!ValidateDeliverable(contract, payload.dump(), prerequisites, error), "A duplicate prerequisite was accepted.");
+    payload = valid;
+    payload["prerequisiteEvidence"] = nlohmann::json::array();
+    Check(!ValidateDeliverable(contract, payload.dump(), prerequisites, error), "Required prerequisite evidence was omitted.");
+}
+
+void TestCompleteDeliverableSurvivesCheckpointValidation()
+{
+    auto spec = Spec();
+    for (auto& node : spec.nodes)
+        node.deliverableContract = {{{DeliverableSection::Steps, "Give actual read-only steps.", false}}, true};
+    AgentWorkflow workflow;
+    std::string error;
+    Check(workflow.Start(
+              spec, Stamp(),
+              [](const NodeRequest& request, std::stop_token)
+              {
+                  auto result = Verified(request);
+                  nlohmann::json payload = {{"summary", "A bounded read-only plan."}, {"evidence", "Only supplied evidence is used."},
+                      {"steps", {{"items", {"Read the approved marker and report its actual contents."}}, {"noneReason", ""}}},
+                      {"prerequisiteEvidence", nlohmann::json::array()}};
+                  for (const auto& reference : request.prerequisiteReferences)
+                      payload["prerequisiteEvidence"].push_back(
+                          {{"nodeId", reference.nodeId}, {"id", reference.id}, {"version", reference.version}, {"hash", reference.hash}});
+                  result.artifact.content = payload.dump();
+                  result.artifact.hash = AgentWorkflow::ArtifactHash(result.artifact.content);
+                  return result;
+              },
+              error),
+        "The complete contract workflow did not start.");
+    workflow.Join();
+    Check(workflow.EvaluateParent(error), "Complete evidence did not reach separate parent review.");
+    workflow.Join();
+    Check(workflow.Decide(ParentDecision::Accept, error) && workflow.AcceptedArtifact(), "Complete reviewed parent work was not accepted.");
+    const auto path = Checkpoint("typed-deliverable");
+    Check(workflow.Save(path, error), "Typed deliverable checkpoint was not saved.");
+    AgentWorkflow restored;
+    Check(restored.Load(path, error) && restored.AcceptedArtifact(), "Typed deliverable did not survive restart.");
+    nlohmann::json checkpoint;
+    {
+        std::ifstream input(path);
+        input >> checkpoint;
+    }
+    auto content = nlohmann::json::parse(checkpoint["nodes"][0]["attempts"][0]["artifact"]["content"].get<std::string>());
+    content["steps"]["items"] = nlohmann::json::array();
+    const auto changed = content.dump();
+    checkpoint["nodes"][0]["attempts"][0]["artifact"]["content"] = changed;
+    checkpoint["nodes"][0]["attempts"][0]["artifact"]["hash"] = AgentWorkflow::ArtifactHash(changed);
+    checkpoint["nodes"][0]["artifact"]["hash"] = AgentWorkflow::ArtifactHash(changed);
+    {
+        std::ofstream output(path);
+        output << checkpoint.dump();
+    }
+    Check(!restored.Load(path, error) && restored.AcceptedArtifact(), "A recomputed hash bypassed checkpoint deliverable completeness.");
+    checkpoint["schema"] = 1;
+    {
+        std::ofstream output(path);
+        output << checkpoint.dump();
+    }
+    const auto bytes = checkpoint.dump();
+    Check(!restored.Load(path, error) && error.find("previous weak acceptance") != std::string::npos,
+        "An old weak checkpoint was silently trusted.");
+    nlohmann::json retained;
+    {
+        std::ifstream input(path);
+        input >> retained;
+    }
+    Check(retained.dump() == bytes, "Refusing an old checkpoint changed its stored file.");
+}
+
 void TestDependencyWaitAndSeparateParentAcceptance()
 {
     std::mutex mutex;
@@ -327,13 +473,15 @@ void TestDurableEvidenceAndInvalidCheckpointRejection()
               Spec(), Stamp(), [](const NodeRequest& request, std::stop_token) { return Verified(request); }, error),
         "Persistence fixture did not start.");
     original.Join();
+    Check(original.EvaluateParent(error), "Persistence fixture parent evaluation was refused.");
+    original.Join();
     Check(original.Save(path, error), "Verified evidence was not durably saved.");
     AgentWorkflow restored;
     Check(restored.Load(path, error), "Verified evidence was not loaded.");
     const auto before = restored.Snapshot();
     const auto expected = Node(original.Snapshot(), "reviewer").attempts.front().prerequisites;
     const auto actual = Node(before, "reviewer").attempts.front().prerequisites;
-    Check(before.requests == 3 && before.state == WorkflowState::AwaitingAcceptance && actual.size() == expected.size() &&
+    Check(before.requests == 4 && before.state == WorkflowState::AwaitingAcceptance && actual.size() == expected.size() &&
               actual[0].nodeId == expected[0].nodeId && actual[0].version == expected[0].version && actual[0].hash == expected[0].hash &&
               actual[1].nodeId == expected[1].nodeId && actual[1].version == expected[1].version && actual[1].hash == expected[1].hash,
         "Artifact versions/hashes or spent usage changed on load.");
@@ -354,13 +502,13 @@ void TestDurableEvidenceAndInvalidCheckpointRejection()
     Check(!restored.Load(path, error) && restored.Snapshot().state == WorkflowState::Accepted,
         "A privileged checkpoint replaced valid owner state.");
     checkpoint["nodes"][1]["readOnly"] = true;
-    checkpoint["schema"] = 2;
+    checkpoint["schema"] = 3;
     {
         std::ofstream stream(path);
         stream << checkpoint.dump();
     }
     Check(!restored.Load(path, error), "A newer checkpoint schema was admitted.");
-    checkpoint["schema"] = 1;
+    checkpoint["schema"] = 2;
     checkpoint["nodes"][1]["attempts"][0]["artifact"]["hash"] = std::string(64, '0');
     {
         std::ofstream stream(path);
@@ -650,6 +798,10 @@ void TestRetryAtVisiblePausedTeardown()
 
 void RunAgentWorkflowTests()
 {
+    TestClaimedVerificationRequiresDeliverableSections();
+    TestAcceptanceRequiresParentArtifact();
+    TestDeliverableBoundsAndExactEvidence();
+    TestCompleteDeliverableSurvivesCheckpointValidation();
     TestIndependentWorkersOverlap();
     TestDependencyWaitAndSeparateParentAcceptance();
     TestExpectedFailureAndChangedEvidenceRecovery();

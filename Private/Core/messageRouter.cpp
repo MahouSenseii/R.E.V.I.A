@@ -277,10 +277,10 @@ responseOutput messageRouter::PlanAction(const std::string& request) const
 }
 
 responseOutput messageRouter::ReviewConversationReply(const std::string& userInput, const std::string& candidateReply,
-    const std::string& runtimeGroundTruth, const int maxReviewTokens, const std::stop_token stopToken) const
+    const std::string& runtimeGroundTruth, const int maxReviewTokens, const std::stop_token stopToken,
+    const std::string& conversationEvidence) const
 {
-    return llm.ReviewConversationReply(
-        userInput, candidateReply, runtimeGroundTruth, maxReviewTokens, stopToken);
+    return llm.ReviewConversationReply(userInput, candidateReply, runtimeGroundTruth, maxReviewTokens, stopToken, conversationEvidence);
 }
 
 responseOutput messageRouter::GenerateActivityDraft(

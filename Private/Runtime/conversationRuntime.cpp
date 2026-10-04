@@ -202,6 +202,39 @@ ConversationRuntime::ConversationRuntime(messageRouter& inputRouter, conversatio
       screenCaptureRequest(std::move(inputScreenCaptureRequest)), selfInquirySettingsProvider(std::move(inputSelfInquirySettings)),
       conversationRecall(std::move(inputConversationRecall)), autonomyContextProvider(std::move(inputAutonomyContext))
 {
+    latencySubscription = events.Subscribe(
+        [this](const RuntimeEvent& event)
+        {
+            if (!responseLatency.Observe(event))
+                return;
+            const auto measured = responseLatency.Snapshot();
+            RuntimeEvent summary;
+            summary.kind = RuntimeEventKind::ComponentStatus;
+            summary.stamp = event.stamp;
+            summary.audienceRevision = event.audienceRevision;
+            summary.state = event.state;
+            summary.component = "Response timing";
+            summary.phase = measured.textMilliseconds >= 0.0 ? "Measured" : "Pending";
+            summary.turnId = measured.turnId;
+            summary.message = measured.Summary();
+            summary.elapsedMilliseconds = measured.textMilliseconds;
+            events.Publish(std::move(summary));
+        });
+}
+
+ConversationRuntime::~ConversationRuntime()
+{
+    events.Unsubscribe(latencySubscription);
+}
+
+void ConversationRuntime::ResetResponseLatency(const RuntimeStamp& origin)
+{
+    responseLatency.Reset(origin);
+}
+
+ResponseLatencySnapshot ConversationRuntime::ResponseLatencies() const
+{
+    return responseLatency.Snapshot();
 }
 
 SessionResult ConversationRuntime::Reply(const std::string& input, const aiProfile& profile, const bool llmAvailable,
@@ -236,7 +269,7 @@ SessionResult ConversationRuntime::ReplyPublic(const std::string& input, const s
 SessionResult ConversationRuntime::ReplyForAudience(const std::string& input, const std::vector<conversationMessage>& channelHistory,
     const identity::AudienceContext& audience, const identity::RelationshipState& relationship, const aiProfile& profile,
     const bool llmAvailable, const bool shouldSpeak, const std::stop_token stopToken, std::function<bool()> admission,
-    const std::string& turnReference)
+    const std::string& turnReference, const std::chrono::steady_clock::time_point acceptedAt)
 {
     const auto denied = []()
     {
@@ -256,6 +289,8 @@ SessionResult ConversationRuntime::ReplyForAudience(const std::string& input, co
     }
     TurnPolicy policy;
     policy.deliveryAdmission = std::move(admission);
+    policy.acceptedAt = acceptedAt;
+    policy.audienceRevision = audience.revision;
     policy.publicAudience = audience.kind != identity::AudienceKind::Private;
     policy.relationship = audience.kind == identity::AudienceKind::Unknown ? identity::RelationshipState{} : relationship;
     aiProfile scopedProfile = profile;
@@ -318,6 +353,7 @@ SessionResult ConversationRuntime::ReplyPublic(messageRouter& isolatedRouter, co
     agents::ResponseFilterContext facts;
     facts.internetStateKnown = true;
     facts.desktopStateKnown = true;
+    facts.privateHistoryExcluded = true;
     responseFilterSettings filters;
     filters.maxReplyCharacters = 8192;
     // This coordinator never receives memory work and is local to the guest turn.
@@ -337,7 +373,8 @@ SessionResult ConversationRuntime::ReplyPublic(messageRouter& isolatedRouter, co
 }
 
 SessionResult ConversationRuntime::StartConversation(const std::string& cue, const std::string& evidence, const aiProfile& profile,
-    const bool llmAvailable, const bool shouldSpeak, const std::stop_token stopToken)
+    const bool llmAvailable, const bool shouldSpeak, const std::stop_token stopToken, const std::uint64_t audienceRevision,
+    std::function<bool()> admission)
 {
     std::vector<conversationMessage> promptContext = context.GetRecentMessages();
     // The local event is represented as a transient turn so the chat template ends with
@@ -355,12 +392,15 @@ SessionResult ConversationRuntime::StartConversation(const std::string& cue, con
                                              "specific, easy-to-answer question grounded only in the cue.\n\nCue: " +
                                              cue + "\nEvidence: " + evidence;
 
-    return Generate(cue, promptContext, profile, llmAvailable, shouldSpeak, false, true, proactiveInstruction, {}, stopToken, {});
+    TurnPolicy policy;
+    policy.audienceRevision = audienceRevision;
+    policy.deliveryAdmission = std::move(admission);
+    return Generate(cue, promptContext, profile, llmAvailable, shouldSpeak, false, true, proactiveInstruction, {}, stopToken, policy);
 }
 
 SessionResult ConversationRuntime::StartCuriosityConversation(const std::string& topic, const std::string& rationale,
     const std::string& researchGrounding, const aiProfile& profile, const bool llmAvailable, const bool shouldSpeak,
-    const std::stop_token stopToken)
+    const std::stop_token stopToken, const std::uint64_t audienceRevision, std::function<bool()> admission)
 {
     // One short line needs a finding, not every page the browser read. Unbounded, the
     // grounding made a 25,000-character system block that the context fitter then
@@ -387,8 +427,11 @@ SessionResult ConversationRuntime::StartCuriosityConversation(const std::string&
                                              "and cite only the supplied URLs.\n\nTopic: " +
                                              topic + "\nDecision rationale: " + rationale;
 
+    TurnPolicy policy;
+    policy.audienceRevision = audienceRevision;
+    policy.deliveryAdmission = std::move(admission);
     return Generate(
-        topic, promptContext, profile, llmAvailable, shouldSpeak, false, true, proactiveInstruction, boundedGrounding, stopToken, {});
+        topic, promptContext, profile, llmAvailable, shouldSpeak, false, true, proactiveInstruction, boundedGrounding, stopToken, policy);
 }
 
 std::string ConversationRuntime::DescribeBody() const
@@ -562,7 +605,8 @@ std::string ConversationRuntime::BuildTurnPosture(const std::string& policyInput
 }
 
 ConversationRuntime::InvestigationSummary ConversationRuntime::RunInvestigation(const agents::SelfInquiryResult& seed,
-    const std::string& policyInput, const std::string& basePosture, const std::uint64_t turnId, const std::stop_token stopToken)
+    const std::string& policyInput, const std::string& basePosture, const std::uint64_t turnId, const std::stop_token stopToken,
+    const agents::CheckExecutor& executor, const std::function<bool()>& admission, const std::uint64_t audienceRevision)
 {
     InvestigationSummary summary;
     if (!seed.HasQuestions())
@@ -588,21 +632,20 @@ ConversationRuntime::InvestigationSummary ConversationRuntime::RunInvestigation(
     budget.maximumQuestionsPerRound = std::max<std::size_t>(1, limits.questionsPerRound);
     budget.wallClock = limits.investigationBudget;
 
-    // No check executor is wired in this pass, so every round is reasoning only and the
-    // agent says so in its envelope. Findings are recorded as interpretation, never as
-    // observation; the seam exists for real checks and is deliberately left empty rather
-    // than filled with something that would let generated text pass as a measurement.
-    const agents::RoundRunner runner = agents::InvestigationAgent::MakeRunner(router, basePosture, {}, stopToken);
+    const agents::RoundRunner runner = agents::InvestigationAgent::MakeRunner(router, basePosture, executor, stopToken);
 
     const auto started = std::chrono::steady_clock::now();
     const agents::InvestigationLoop loop(budget);
-    const agents::RoundObserver observer = [this, turnId](const agents::RoundReport& round)
+    const agents::RoundObserver observer = [this, turnId, admission, audienceRevision](const agents::RoundReport& round)
     {
+        if (admission && !admission())
+            return;
         // Published as it happens, so the shell shows "checking" then "findings" in step
         // with the work rather than after all of it.
         RuntimeEvent event;
         const bool checking = round.phase == agents::RoundPhase::Checking;
         event.kind = checking ? RuntimeEventKind::InvestigationChecking : RuntimeEventKind::InvestigationFindings;
+        event.audienceRevision = audienceRevision;
         event.state = RuntimeState::Thinking;
         event.component = "Investigation";
         event.phase = checking ? "Checking" : "Findings";
@@ -624,7 +667,7 @@ ConversationRuntime::InvestigationSummary ConversationRuntime::RunInvestigation(
     summary.outcome = report.outcome;
     summary.reason = report.reason;
     summary.elapsedMilliseconds = ElapsedMilliseconds(started);
-    if (report.outcome == agents::InvestigationOutcome::Cancelled)
+    if (report.outcome == agents::InvestigationOutcome::Cancelled || (admission && !admission()))
     {
         // Nothing from a cancelled investigation reaches the answer.
         activeInvestigation = agents::Investigation{};
@@ -633,7 +676,7 @@ ConversationRuntime::InvestigationSummary ConversationRuntime::RunInvestigation(
     summary.promptBlock = activeInvestigation.PromptBlock();
 
     PublishComponent("Investigation", ToString(report.outcome) == "completed" ? "Ready" : "Partial", report.reason,
-        summary.elapsedMilliseconds, static_cast<int>(report.rounds), turnId);
+        summary.elapsedMilliseconds, static_cast<int>(report.rounds), turnId, audienceRevision);
     log.Log("Investigation turn #" + std::to_string(turnId) + " | rounds=" + std::to_string(report.rounds) +
             " | outcome=" + ToString(report.outcome) + " | " + report.reason);
     return summary;
@@ -642,7 +685,7 @@ ConversationRuntime::InvestigationSummary ConversationRuntime::RunInvestigation(
 agents::SelfInquiryResult ConversationRuntime::RunSelfInquiry(const std::string& policyInput,
     const std::vector<conversationMessage>& promptContext, const std::string& basePosture,
     const intelligence::IntelligenceDecision& routing, const bool modelAvailable, const std::uint64_t turnId,
-    const std::stop_token stopToken)
+    const std::stop_token stopToken, const std::uint64_t audienceRevision)
 {
     agents::SelfInquiryResult inquiry;
     if (selfInquirySettingsProvider)
@@ -662,7 +705,7 @@ agents::SelfInquiryResult ConversationRuntime::RunSelfInquiry(const std::string&
     }
 
     setState(RuntimeState::Thinking, "Stopping to think about turn #" + std::to_string(turnId) + ".");
-    PublishComponent("Self-inquiry", "Thinking", decision.reason, -1.0, 0, turnId);
+    PublishComponent("Self-inquiry", "Thinking", decision.reason, -1.0, 0, turnId, audienceRevision);
 
     const auto started = std::chrono::steady_clock::now();
     // The facts about her body lead the posture handed to the inquiry. Inside the
@@ -677,7 +720,7 @@ agents::SelfInquiryResult ConversationRuntime::RunSelfInquiry(const std::string&
     {
         // Never fatal. A deliberation that failed, was preempted, or came back unusable
         // leaves the turn exactly as it would have been if the gate had stayed shut.
-        PublishComponent("Self-inquiry", "Unavailable", inquiry.reason, ElapsedMilliseconds(started), 0, turnId);
+        PublishComponent("Self-inquiry", "Unavailable", inquiry.reason, ElapsedMilliseconds(started), 0, turnId, audienceRevision);
         return inquiry;
     }
 
@@ -686,6 +729,7 @@ agents::SelfInquiryResult ConversationRuntime::RunSelfInquiry(const std::string&
     selfInquiryPolicy.RecordInquiry(turnId);
     RuntimeEvent thinking;
     thinking.kind = RuntimeEventKind::SelfInquiry;
+    thinking.audienceRevision = audienceRevision;
     thinking.state = RuntimeState::Thinking;
     thinking.message = inquiry.TranscriptBlock();
     thinking.detail = decision.reason;
@@ -698,7 +742,7 @@ agents::SelfInquiryResult ConversationRuntime::RunSelfInquiry(const std::string&
     PublishComponent("Self-inquiry", "Ready",
         "She asked herself " + std::to_string(inquiry.questions.size()) + (inquiry.questions.size() == 1 ? " question" : " questions") +
             " before answering.",
-        inquiry.elapsedMilliseconds, 0, turnId);
+        inquiry.elapsedMilliseconds, 0, turnId, audienceRevision);
     log.Log("Self-inquiry turn #" + std::to_string(turnId) + " | questions=" + std::to_string(inquiry.questions.size()) + " | " +
             OneLine(inquiry.TranscriptBlock()));
     return inquiry;
@@ -764,14 +808,15 @@ evaluation::EvaluationReply ConversationRuntime::EvaluateTurn(const std::string&
     routingInputs.recentContextCharacters = ContextCharacters(promptContext);
     const intelligence::IntelligenceDecision decision = intelligenceRouter.Route(input, BuildRoutingContext(routingInputs));
 
-    const agents::TurnAgentResult turnResult =
-        coordinator.Execute(router, input, promptContext, filterSettingsProvider ? filterSettingsProvider() : responseFilterSettings{},
-            BuildResponseFilterContext(input, promptContext), false,
-            // The evaluation path does not queue memory at all -- the flag above is false --
-            // so the provenance it passes is never consulted. Stated rather than defaulted,
-            // because a parameter that matters somewhere should not be silently skipped
-            // here.
-            agents::ClassifyRequestedProvenance(input), 0, stopToken, {}, decision);
+    auto filterContext = BuildResponseFilterContext(input, promptContext);
+    filterContext.answerObligation = profile.answerObligation;
+    const agents::TurnAgentResult turnResult = coordinator.Execute(router, input, promptContext,
+        filterSettingsProvider ? filterSettingsProvider() : responseFilterSettings{}, filterContext, false,
+        // The evaluation path does not queue memory at all -- the flag above is false --
+        // so the provenance it passes is never consulted. Stated rather than defaulted,
+        // because a parameter that matters somewhere should not be silently skipped
+        // here.
+        agents::ClassifyRequestedProvenance(input), 0, stopToken, {}, decision);
 
     evaluation::EvaluationReply reply;
     reply.succeeded = turnResult.response.bSuccess;
@@ -785,6 +830,11 @@ evaluation::EvaluationReply ConversationRuntime::EvaluateTurn(const std::string&
 void ConversationRuntime::SetPrivateAdmissionFactory(std::function<std::function<bool()>()> factory)
 {
     privateAdmissionFactory = std::move(factory);
+}
+
+void ConversationRuntime::SetInvestigationExecutorFactory(InvestigationExecutorFactory factory)
+{
+    investigationExecutorFactory = std::move(factory);
 }
 
 SessionResult ConversationRuntime::Generate(const std::string& policyInput, const std::vector<conversationMessage>& promptContext,
@@ -833,12 +883,12 @@ SessionResult ConversationRuntime::Generate(const std::string& policyInput, cons
     const auto publishComponent = [&](const auto&... values)
     {
         if (admitted())
-            PublishComponent(values...);
+            PublishComponent(values..., turnPolicy.audienceRevision);
     };
     const auto publishInternet = [&](const auto&... values)
     {
         if (admitted())
-            PublishInternetActivity(values...);
+            PublishInternetActivity(values..., turnPolicy.audienceRevision);
     };
     const auto updateState = [&](const RuntimeState state, const std::string& detail)
     {
@@ -849,10 +899,63 @@ SessionResult ConversationRuntime::Generate(const std::string& policyInput, cons
     std::uint64_t streamedUtterances = 0;
     const std::uint64_t currentTurn = ++turnCounter;
     const auto turnStarted = std::chrono::steady_clock::now();
+    const RuntimeStamp latencyOrigin = responseLatency.Snapshot().origin;
+    const auto publishLatency = [&](const std::string& phase, const std::uint64_t utteranceId = 0)
+    {
+        RuntimeEvent event;
+        event.stamp = latencyOrigin;
+        event.audienceRevision = turnPolicy.audienceRevision;
+        event.kind = RuntimeEventKind::Timing;
+        event.component = "Response latency";
+        event.phase = phase;
+        event.state = phase == "Started" ? RuntimeState::Thinking : RuntimeState::Responding;
+        event.turnId = currentTurn;
+        event.utteranceId = utteranceId;
+        if (phase == "Started" && turnPolicy.acceptedAt != std::chrono::steady_clock::time_point{})
+            event.elapsedMilliseconds = std::max(0.0, ElapsedMilliseconds(turnPolicy.acceptedAt));
+        if (!admitted())
+        {
+            if (phase == "Cancelled")
+                responseLatency.Observe(event);
+            return;
+        }
+        events.Publish(std::move(event));
+    };
+    publishLatency("Started");
+    bool responseDelivered = false;
+    struct LatencyRetirement
+    {
+        std::function<void()> retire;
+        ~LatencyRetirement()
+        {
+            try
+            {
+                retire();
+            }
+            catch (...)
+            {
+            }
+        }
+    } retirement{[&]
+        {
+            if (!responseDelivered)
+                publishLatency("Cancelled");
+        }};
+    bool textTimingPublished = false;
+    const auto noteTextReady = [&]()
+    {
+        if (!textTimingPublished)
+        {
+            publishLatency("TextReady");
+            textTimingPublished = true;
+        }
+    };
     double internetLookupMilliseconds = -1.0;
     std::string internetGrounding = precomputedInternetGrounding;
     std::string internetTrace;
     agents::ResponseFilterContext filterContext = BuildResponseFilterContext(policyInput, promptContext);
+    filterContext.answerObligation = profile.answerObligation;
+    filterContext.privateHistoryExcluded = turnPolicy.publicAudience;
     if (turnPolicy.publicAudience)
     {
         filterContext.internetEnabled = false;
@@ -1050,6 +1153,7 @@ SessionResult ConversationRuntime::Generate(const std::string& policyInput, cons
     std::string undeliveredOpening;
     const auto finish = [&](SessionResult finished)
     {
+        finished.audienceRevision = turnPolicy.audienceRevision;
         if (!admitted())
             return revoked();
         if (!admitted())
@@ -1110,6 +1214,7 @@ SessionResult ConversationRuntime::Generate(const std::string& policyInput, cons
         publishAffect(observed);
         if (finished.fromAssistant && finished.succeeded && !finished.text.empty())
         {
+            noteTextReady();
             if (streamedUtterances > 0)
             {
                 finished.spokenAsFragments = true;
@@ -1120,9 +1225,16 @@ SessionResult ConversationRuntime::Generate(const std::string& policyInput, cons
                 finished.speechPending = true;
                 if (!admitted())
                     return revoked();
+                publishLatency("SpeechQueued", finished.utteranceId);
                 speech.Speak(finished.text, observed, finished.utteranceId, true, speechAdmission);
             }
         }
+        if (!admitted())
+        {
+            speech.StopSpeaking();
+            return revoked();
+        }
+        responseDelivered = finished.fromAssistant && finished.succeeded && !finished.text.empty();
         return finished;
     };
 
@@ -1138,8 +1250,8 @@ SessionResult ConversationRuntime::Generate(const std::string& policyInput, cons
         const std::string basePosture = BuildTurnPosture(policyInput, promptContext, profile, llmAvailable, turnPolicy);
         if (turnPolicy.allowSelfInquiry)
         {
-            inquiry = RunSelfInquiry(
-                policyInput, promptContext, basePosture, routeDecision, llmAvailable && !reflex.matched, currentTurn, stopToken);
+            inquiry = RunSelfInquiry(policyInput, promptContext, basePosture, routeDecision, llmAvailable && !reflex.matched, currentTurn,
+                stopToken, turnPolicy.audienceRevision);
         }
         if (!admitted())
         {
@@ -1156,7 +1268,11 @@ SessionResult ConversationRuntime::Generate(const std::string& policyInput, cons
         }
         // Further rounds, when they ran. Appended after the opening questions so the
         // answer reads them in the order they were arrived at.
-        const InvestigationSummary investigated = RunInvestigation(inquiry, policyInput, basePosture, currentTurn, stopToken);
+        const agents::CheckExecutor executor = !turnPolicy.publicAudience && investigationExecutorFactory
+                                                   ? investigationExecutorFactory(admitted, stopToken)
+                                                   : agents::CheckExecutor{};
+        const InvestigationSummary investigated =
+            RunInvestigation(inquiry, policyInput, basePosture, currentTurn, stopToken, executor, admitted, turnPolicy.audienceRevision);
         if (!investigated.promptBlock.empty())
         {
             postureLine << "\n\n" << investigated.promptBlock;
@@ -1292,12 +1408,16 @@ SessionResult ConversationRuntime::Generate(const std::string& policyInput, cons
         spokenSoFar += candidate;
         if (!admitted())
             return;
+        publishLatency("SpeechQueued", utteranceId);
         speech.Speak(candidate, emotions.ToAffectSnapshot(), utteranceId, firstSpeechFragment, speechAdmission);
         RuntimeEvent partial;
         partial.kind = RuntimeEventKind::ReplyFragment;
+        partial.audienceRevision = turnPolicy.audienceRevision;
         partial.state = RuntimeState::Responding;
         partial.message = candidate;
         partial.turnId = utteranceId;
+        partial.utteranceId = utteranceId;
+        partial.conversationTurnId = currentTurn;
         if (admitted())
             events.Publish(std::move(partial));
         // The finished assistant reply is not in promptContext yet. Record each accepted
@@ -1328,6 +1448,7 @@ SessionResult ConversationRuntime::Generate(const std::string& policyInput, cons
         {
             if (!admitted())
                 return;
+            noteTextReady();
             streamedText += delta;
             for (const std::string& fragment : fragmenter.Consume(delta))
             {
@@ -1585,7 +1706,8 @@ SessionResult ConversationRuntime::Generate(const std::string& policyInput, cons
             result.reason = "The response was cancelled before it could enter history.";
             return finish(std::move(result));
         }
-        const agents::ConversationQualitySnapshot quality = qualityMonitor.Observe(policyInput, output.response);
+        const agents::ConversationQualitySnapshot quality =
+            qualityMonitor.Observe(policyInput, output.response, filterContext.privateHistoryExcluded);
         publishComponent("Conversation quality", quality.lastFlags.empty() ? "Healthy" : "Flagged", quality.Summary(),
             ElapsedMilliseconds(turnStarted), static_cast<int>(quality.lastFlags.size()), currentTurn);
         updateState(RuntimeState::Responding,
@@ -1644,7 +1766,7 @@ agents::ConversationQualitySnapshot ConversationRuntime::QualitySnapshot() const
 }
 
 void ConversationRuntime::PublishComponent(const std::string& component, const std::string& phase, const std::string& message,
-    const double elapsedMilliseconds, const int queueDepth, const std::uint64_t turnId) const
+    const double elapsedMilliseconds, const int queueDepth, const std::uint64_t turnId, const std::uint64_t audienceRevision) const
 {
     RuntimeEvent event;
     event.kind = RuntimeEventKind::ComponentStatus;
@@ -1652,6 +1774,7 @@ void ConversationRuntime::PublishComponent(const std::string& component, const s
     event.component = component;
     event.phase = phase;
     event.message = message;
+    event.audienceRevision = audienceRevision;
     event.elapsedMilliseconds = elapsedMilliseconds;
     event.queueDepth = queueDepth;
     event.turnId = turnId;
@@ -1659,12 +1782,14 @@ void ConversationRuntime::PublishComponent(const std::string& component, const s
 }
 
 void ConversationRuntime::PublishInternetActivity(const std::string& phase, const std::string& query, const std::string& provider,
-    const std::string& detail, const double elapsedMilliseconds, const int sourceCount, const std::uint64_t turnId) const
+    const std::string& detail, const double elapsedMilliseconds, const int sourceCount, const std::uint64_t turnId,
+    const std::uint64_t audienceRevision) const
 {
     RuntimeEvent event;
     event.kind = RuntimeEventKind::ComponentStatus;
     event.state = RuntimeState::Thinking;
     event.component = "Internet activity";
+    event.audienceRevision = audienceRevision;
     event.phase = phase;
     event.initiator = "Conversation";
     event.message = query;

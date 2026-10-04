@@ -2,6 +2,7 @@
 
 #include "Core/exitReporter.h"
 #include "Core/questionRelay.h"
+#include "Learning/qualityFeedback.h"
 #include "Runtime/reviaSession.h"
 
 #include <QMainWindow>
@@ -47,6 +48,8 @@ class AgentStudioPanel;
 class LearningStudioPanel;
 class DevelopmentStudioPanel;
 class AudienceStudioPanel;
+class ConversationStatusPanel;
+class AnswerFeedbackDialog;
 namespace Ui
 {
 class ReviaWindow;
@@ -119,6 +122,12 @@ class ReviaWindow final : public QMainWindow
     void UpdateMaximizeButton();
     void SetAlwaysOnTop(bool enabled);
     void HandleRuntimeEvent(const revia::runtime::RuntimeEvent& event);
+    void PresentSessionResult(const revia::runtime::SessionResult& result);
+    void CaptureDisplayedAnswer(const QString& text, const revia::runtime::RuntimeStamp& origin, std::uint64_t audienceRevision,
+        std::uint64_t turnId = 0, bool fragment = false);
+    void ReviewDisplayedAnswer();
+    void ResetConversationPresentation();
+    void ConfigureMemoryRevisionControls();
     void UpdateState(revia::runtime::RuntimeState state, const QString& detail);
     // The runtime returns to Idle as soon as a turn finishes, but speech is generated and
     // played afterwards on its own worker. Showing Idle while Revia is audibly about to
@@ -181,6 +190,8 @@ class ReviaWindow final : public QMainWindow
     void ApplyUserPreferences();
     void RefreshPresenceUi();
     void ShowPreferenceResult(const revia::core::PreferenceResult& result);
+    std::function<bool()> CaptureQuestionAdmission();
+    bool RunAdmittedQuestion(QMessageBox& question, const std::function<bool()>& admitted);
     // The specific yes a control like Send needs. Separate from ConfirmAction: that
     // one confirms a typed action before policy runs, this one answers an
     // authorization that stopped on the consequence of a control.
@@ -247,6 +258,11 @@ class ReviaWindow final : public QMainWindow
     VisionPanel* visionPanel = nullptr;
     VoiceHealthPanel* chatVoiceHealth = nullptr;
     VoiceHealthPanel* voiceHealth = nullptr;
+    ConversationStatusPanel* conversationStatus = nullptr;
+    QPointer<AnswerFeedbackDialog> answerFeedbackDialog;
+    QString latestDisplayedAnswer;
+    revia::learning::QualityFeedback displayedAnswerTarget;
+    std::uint64_t displayedAnswerTurnId = 0;
     QTabWidget* tabs = nullptr;
     QPushButton* sendButton = nullptr;
     QPushButton* stopButton = nullptr;

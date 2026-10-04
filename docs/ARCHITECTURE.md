@@ -101,6 +101,22 @@ intervals include internal router/model waits; model queue timing is unavailable
 The engineering Director/Supervisor/Worker status artifact tracks repository work
 separately from these product workflow nodes.
 
+`Agents/agentDeliverable` validates the sections each task requires: steps,
+constraints, risks and acceptance criteria. Permitted absence needs a reason;
+prerequisite references pin node, artifact ID, version and hash. Completion and
+schema-2 checkpoint recovery both apply these native checks. A model's
+`verified:true` cannot replace them. Schema-1 checkpoints remain on disk and are
+refused with an explanation. Structural completeness and exact evidence identity
+still require semantic review before parent acceptance.
+
+`Runtime/investigationChecks` implements the existing investigation executor with
+explicit JSON read/list proposals. Captured session and attempt authority flows
+through `ActionRuntime::ExecuteScopedFor`; cancellation and admission are checked
+before and after the effect. Public turns have no executor. Native I/O retains
+the machine-configured ceiling; observations over 8,192 bytes, lists over 64
+entries and incomplete machine-capped results are refused. Native observations
+start unresolved so the next reasoning pass must interpret them.
+
 ## Skills, private learning and bounded development
 
 `SkillPackageStore` owns immutable neutral package versions, validation, selection
@@ -118,6 +134,21 @@ An observed result creates a private candidate with exact source and evidence.
 unchecked candidates do not become trusted memory. Capability gaps retain observed
 causes, dependency fingerprints and bounded retest history in the existing learning
 owners. Legacy migration includes both private Skills and Learning roots.
+
+`Learning/qualityFeedback` transports an explicit criterion, exact output digest,
+judgment/source IDs and evidence. `Runtime/qualityFeedback.cpp` admits current
+private owner judgments and enriches captured profile/configuration fingerprints.
+It reuses `SelfAssessment` gaps and the checked `LearningReviewStore`; a monitor
+warning or model self-rating cannot create or resolve a judged-quality task.
+Retests retain prior attempts, require a relevant dependency change or explicit
+owner request, and cannot resolve a failed result by relabeling its digest.
+
+`Memory/memoryRevision` transports explicit owner corrections. The existing SQLite
+store atomically retains the original row, corrected row and exact revision
+receipt. Expected summary digests, latest predecessor receipts and captured
+origin/audience revisions prevent stale selection. Exact request replay returns
+the original receipt. Similarity cannot select a revision target. Recall and the
+memory panel identify historical rows and their current replacement.
 
 `SelfDevelopment` owns distinct immutable proposal, native validation, companion
 review, integration, package, activation and recovery receipts. Its first admitted
@@ -301,6 +332,14 @@ refuses owner grants. Ordinary approval dialogs cannot mint authentication proof
 `QuestionRelay` retires pending approval generations and reopens only after outgoing
 workers quiesce, so stale questions remain refused while the next companion can
 ask fresh questions.
+
+The Desktop action and effect approval paths share captured session, policy,
+private-audience revision and UI epoch admission. They check it before showing
+private details and before accepting consent; a scoped modal timer closes a
+question whose context retires. `ReviaSession::ExecuteAction` retains the same
+captured origin through policy, confirmation, execution and publication, checking
+again after callbacks. A current private cancellation before dispatch retains its
+generic notice; an effect already dispatched is never described as unexecuted.
 
 Executed actions normally produce two JSONL records joined by `audit_transaction`:
 `record_type: intent` and `record_type: result`. Intent records omit `attempted` and
@@ -524,6 +563,20 @@ does not replace those settings. This metadata describes the configured provider
 not an independent measurement of the model loaded by an external server.
 
 TTS consumes complete-sentence jobs on its own cancellable generation pool and explicit ordered playback gate; microphone capture and the persistent loopback whisper service have a separate lifecycle; presence, perception, and initiative keep their own bounded workers; Qt has its own operation workers. These are parallel, observable pipelines, not one sequential prompt chain. The `Pipelines` tab shows their state and effective compute assignment, while the `Resources` tab shows the startup hardware/budget map; neither panel owns a worker. Parallelism does not add authority: every side effect still passes through capability policy and audit.
+
+`Runtime/responseLatency` reduces the existing events. `InputArbiter` carries the
+earliest admitted steady-clock input time, including merge/queue and setup delays.
+Conversation turn IDs bind explicitly to speech utterance IDs; numeric equality
+is not a correlation. Text, first playable audio and first playback retain up to
+64 samples with median and nearest-rank p95. Cancellation retires pending turns
+and utterance bindings; session reset clears private measurements. Missing audio
+is unmeasured, never zero. Existing queue-to-audio measurements remain separate.
+
+The compact conversation card consumes runtime activity and timing. Its advanced
+details identify quality warnings as diagnostics. Answer feedback pins the actual
+displayed reply and captured origin/audience revision; a delayed GUI callback
+cannot adopt the audience of a later conversation. Widgets submit explicit
+owner judgments and selected-memory corrections to the existing session owners.
 
 Qwen3-TTS runs as authenticated loopback workers because the model runtime is Python/PyTorch, while lifecycle, persistence, scheduling, fallback, and UI remain C++ owned. VoiceDesign creates one reference WAV as an atomic primary-worker job. Base-model workers reuse that reference through cached clone prompts. Each selected device owns one complete resident model; complete-sentence jobs may finish out of order, but `OrderedSpeechQueue` releases them strictly by sequence and `SpeechService` bounds look-ahead by job count and bytes. Background visual analysis yields to real user input but may refresh while already-generated voice plays, preventing long speech queues from freezing screen context. Windows SAPI is the failure fallback. This is data-parallel sentence generation, not model parallelism inside one utterance.
 

@@ -9,6 +9,12 @@
 namespace revia::agents
 {
 
+struct ConversationSentenceRequirement
+{
+    std::size_t minimum = 0;
+    std::size_t maximum = 0;
+};
+
 struct ConversationQualitySnapshot
 {
     std::size_t turns = 0;
@@ -17,6 +23,10 @@ struct ConversationQualitySnapshot
     std::size_t stockTailFlags = 0;
     std::size_t repetitionFlags = 0;
     std::size_t ownershipFlags = 0;
+    std::size_t currentRequestFlags = 0;
+    std::size_t sentenceLimitFlags = 0;
+    std::size_t correctionAttributionFlags = 0;
+    std::size_t unavailableHistoryFlags = 0;
     std::vector<std::string> lastFlags;
 
     [[nodiscard]] std::string Summary() const;
@@ -27,20 +37,28 @@ struct ConversationQualitySnapshot
 class ConversationQualityMonitor
 {
 public:
-    [[nodiscard]] ConversationQualitySnapshot Observe(const std::string& userInput, const std::string& response);
-    [[nodiscard]] ConversationQualitySnapshot Snapshot() const;
+  [[nodiscard]] ConversationQualitySnapshot Observe(
+      const std::string& userInput, const std::string& response, bool privateHistoryExcluded = false);
+  [[nodiscard]] ConversationQualitySnapshot Snapshot() const;
 
-    // The individual signals behind the counters above, exposed as pure functions.
-    //
-    // The evaluation corpus scores a reply with these rather than keeping its own copy of
-    // the phrase lists. Two lists that are supposed to mean the same thing eventually
-    // disagree, and a suite that disagrees with the live counters is worse than no suite:
-    // it reports a regression the runtime does not see, or misses one it does.
-    [[nodiscard]] static bool ClaimsInventedPhysicalLife(const std::string& response);
-    [[nodiscard]] static bool EndsWithStockTail(const std::string& response);
-    [[nodiscard]] static bool ProjectsStateOntoUser(const std::string& userInput, const std::string& response);
-    // The lowered first clause, which is what "repeated opening" is measured against.
-    [[nodiscard]] static std::string OpeningOf(const std::string& response);
+  // The individual signals behind the counters above, exposed as pure functions.
+  //
+  // The evaluation corpus scores a reply with these rather than keeping its own copy of
+  // the phrase lists. Two lists that are supposed to mean the same thing eventually
+  // disagree, and a suite that disagrees with the live counters is worse than no suite:
+  // it reports a regression the runtime does not see, or misses one it does.
+  [[nodiscard]] static bool ClaimsInventedPhysicalLife(const std::string& response);
+  [[nodiscard]] static bool EndsWithStockTail(const std::string& response);
+  [[nodiscard]] static bool ProjectsStateOntoUser(const std::string& userInput, const std::string& response);
+  // These flag explicit textual conflicts or suspect attribution, not general factual correctness.
+  [[nodiscard]] static bool DeniesCurrentRequest(const std::string& userInput, const std::string& response);
+  [[nodiscard]] static bool AttributesUnestablishedCorrectionError(const std::string& userInput, const std::string& response);
+  [[nodiscard]] static bool DeniesUnavailableHistory(const std::string& response);
+  [[nodiscard]] static std::size_t RequestedSentenceLimit(const std::string& userInput);
+  [[nodiscard]] static ConversationSentenceRequirement RequestedSentences(const std::string& userInput);
+  [[nodiscard]] static std::size_t CountSentences(const std::string& response);
+  // The lowered first clause, which is what "repeated opening" is measured against.
+  [[nodiscard]] static std::string OpeningOf(const std::string& response);
 
 private:
     mutable std::mutex mutex;

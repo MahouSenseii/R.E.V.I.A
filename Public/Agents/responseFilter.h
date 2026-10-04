@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Agents/answerObligation.h"
 #include <string>
 
 namespace revia::agents
@@ -10,6 +11,8 @@ namespace revia::agents
 // claim that merely says a setting changed.
 struct ResponseFilterContext
 {
+    AnswerObligationMode answerObligation = AnswerObligationMode::Balanced;
+    bool privateHistoryExcluded = false;
     bool internetStateKnown = false;
     bool internetEnabled = false;
     bool automaticInternetLookup = false;

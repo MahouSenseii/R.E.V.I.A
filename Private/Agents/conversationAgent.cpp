@@ -45,12 +45,10 @@ responseOutput ConversationAgent::Execute(const messageRouter& router, const std
         if (filterSettings.bAiReviewEnabled && !stopToken.stop_requested())
         {
             const auto reviewStarted = std::chrono::steady_clock::now();
-            const responseOutput review = router.ReviewConversationReply(
-                input,
-                output.response,
-                filterContext.Describe(),
-                filterSettings.aiMaxReviewTokens,
-                stopToken);
+            const responseOutput review = router.ReviewConversationReply(input, output.response, filterContext.Describe(),
+                filterSettings.aiMaxReviewTokens, stopToken,
+                ConversationStylePolicy::BuildReviewEvidence(
+                    input, context, filterContext.answerObligation, filterContext.privateHistoryExcluded));
             output.timings.push_back({
                 "response_filter_ai",
                 std::chrono::duration<double, std::milli>(
