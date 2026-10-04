@@ -33,7 +33,7 @@
 - [x] Add failing checks in Tests/live2dBridge.test.mjs for snapshot admission, mapping, freshness, local endpoints, request correlation, authentication and shutdown.
 - [x] Implement Tools/Presence/Live2D state mapper, API client and command-line runner. Use dependency-free Node APIs; expose inspect mode that never connects or writes credentials.
 - [x] Add documented layer names, rig parameter mapping and the exact missing Cubism export requirements. Update the bridge and architecture owner documentation.
-- [ ] Run the focused Node checks and register them with CTest. Review the whole package, merge to main, push, verify remote identity and remove only this package branch.
+- [x] Run the focused Node checks and register them with CTest. Review the whole package, merge to main, push, verify remote identity and remove only this package branch.
 
 ## Execution record
 
@@ -44,3 +44,5 @@
 - Director `/root` created the art, adapter and handoff. Read-only supervisor `/root/foundation_supervisor_v2/guidance_worker_v2` reviewed API compatibility and the whole package. Review found old-idle tracking loss and uncancelled pending approval; both received failing regression checks and fixes. Recheck reported no remaining necessary finding.
 - Full adapter suite: 13/13 passing. Registered focused CTest checks: Live2DBridge, DiscordVoiceAdapter and SetupScriptPolicy, 3/3 passing. Help/inspect and syntax checks passed. Default live connection reported VTube Studio unavailable; no model/visual acceptance was claimed.
 - The affected ReviaDesktop target built successfully. Final focused CTest run added DesktopSmoke: 4/4 passed in 7.98 seconds. Exported Live2D models and local VTube Studio credentials were verified ignored by Git.
+- Implementation 21d1a73d2fe70d97a8428cb7bfca76ae81b66fc9 was fast-forwarded to main and pushed. The merged main focused run passed 4/4 in 4.92 seconds. GitHub main matched the exact implementation hash; the merged package branch was removed locally and was absent remotely.
+- This bounded art/adapter/handoff package is delivered. The user's complete animated Live2D avatar still requires separately drawn layers, Cubism rigging/export, imported model mappings and actual live visual acceptance. No rig or live-animation completion is claimed.
