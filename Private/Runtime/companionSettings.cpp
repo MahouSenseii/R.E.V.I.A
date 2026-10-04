@@ -1,6 +1,7 @@
 #include "Runtime/companionSettings.h"
 #include "Runtime/companion.h"
 #include "Core/logger.h"
+#include "Core/runtimePath.h"
 
 #include <filesystem>
 #include <string>
@@ -16,7 +17,13 @@ std::string SharedPath(const std::string& configured, const CompanionPaths& path
     const std::filesystem::path value(configured);
     if (executable && !value.has_parent_path())
         return configured;
-    return (value.is_absolute() ? value : paths.InstallRoot() / value).lexically_normal().string();
+    if (value.is_absolute())
+        return value.lexically_normal().string();
+    // Shared artifacts are installed once. A development build output is an install
+    // root with its own Config but no ThirdParty or Models; those stay above it.
+    if (const std::filesystem::path installed = core::FindInstalledArtifact(paths.InstallRoot(), value); !installed.empty())
+        return installed.string();
+    return (paths.InstallRoot() / value).lexically_normal().string();
 }
 
 std::string PrivatePath(const std::string& configured, const std::filesystem::path& fallback, const CompanionPaths& paths)

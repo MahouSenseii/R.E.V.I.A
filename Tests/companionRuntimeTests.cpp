@@ -1,4 +1,5 @@
 #include "reviaSessionTestAccess.h"
+#include "Runtime/companionSettings.h"
 #include "Memory/longTermMemory.h"
 #include "Resources/runtimeLease.h"
 
@@ -92,6 +93,37 @@ int main()
                 "Explicit legacy logger resolved against process cwd rather than its captured root.");
         }
         std::cout << "PASS explicit legacy logs anchor to the captured installation root\n";
+        {
+            // A build output directory is an install root with Config but no ThirdParty
+            // or Models; the repository root above it holds those.
+            const auto buildRoot = fixture.root / "cmake-build-debug";
+            const auto ancestorServer = fixture.root / "ThirdParty/llama.cpp/llama-server.exe";
+            const auto ancestorModel = fixture.root / "Models/fixture-chat.gguf";
+            const auto localModel = buildRoot / "Models/fixture-embed.gguf";
+            for (const auto& file : {ancestorServer, ancestorModel, localModel, fixture.root / "Models/fixture-embed.gguf"})
+            {
+                std::filesystem::create_directories(file.parent_path());
+                std::ofstream(file) << "fixture";
+            }
+            std::filesystem::create_directories(buildRoot / "Config");
+            appSettings bound;
+            bound.llm.serverExecutable = "ThirdParty/llama.cpp/llama-server.exe";
+            bound.llm.modelPath = "Models/fixture-chat.gguf";
+            bound.embedding.modelPath = "Models/fixture-embed.gguf";
+            bound.intelligence.fast.modelPath = "Models/revia-missing-fixture-artifact.gguf";
+            bound.speech.pythonExecutable = "python";
+            BindCompanionSettings(bound, CompanionPaths(buildRoot, {"legacy", "Build fixture", "assistant", true}));
+            Check(std::filesystem::path(bound.llm.serverExecutable) == ancestorServer.lexically_normal() &&
+                      std::filesystem::path(bound.llm.modelPath) == ancestorModel.lexically_normal(),
+                "Shared artifacts above a build output install root were not found; the language model cannot start.");
+            Check(std::filesystem::path(bound.embedding.modelPath) == localModel.lexically_normal(),
+                "An artifact present at the install root lost to an ancestor copy.");
+            Check(std::filesystem::path(bound.intelligence.fast.modelPath) ==
+                      (buildRoot / "Models/revia-missing-fixture-artifact.gguf").lexically_normal(),
+                "A missing shared artifact was not reported against the install root.");
+            Check(bound.speech.pythonExecutable == "python", "A bare executable name stopped resolving through PATH.");
+        }
+        std::cout << "PASS shared artifacts resolve from the install root, then its nearest ancestor\n";
         CompanionPaths pathsA(fixture.root, {"companion-a", "Same name", "assistant", false});
         CompanionPaths pathsB(fixture.root, {"companion-b", "Same name", "assistant", false});
         SaveMemory(pathsA.Resolve("Memory/revia_memory.db"), "A sentinel orbit amber");

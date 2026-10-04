@@ -16,6 +16,12 @@ namespace revia::core
     return ResolveRuntimePath(std::filesystem::path(configuredPath));
 }
 
+// Finds an existing read-only artifact (server binary, model, script) under root or the
+// nearest ancestor of root that holds it. Build output directories hold Config but not
+// ThirdParty or Models, which stay at the repository root above them. Returns empty
+// when no candidate exists or relative is not a relative path.
+[[nodiscard]] std::filesystem::path FindInstalledArtifact(const std::filesystem::path& root, const std::filesystem::path& relative);
+
 // The directory relative runtime paths are anchored to.
 //
 // The launch directory when it looks like a Revia runtime root, otherwise the

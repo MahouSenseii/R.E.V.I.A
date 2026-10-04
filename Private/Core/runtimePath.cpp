@@ -72,6 +72,15 @@ std::filesystem::path NearestRuntimeRoot(std::filesystem::path root)
 
 } // namespace
 
+std::filesystem::path FindInstalledArtifact(const std::filesystem::path& root, const std::filesystem::path& relative)
+{
+    if (root.empty() || relative.empty() || relative.is_absolute() || relative.has_root_name())
+    {
+        return {};
+    }
+    return ExistingFromAncestors(root, relative);
+}
+
 std::filesystem::path RuntimeRoot()
 {
     // The launch directory wins when it is itself a runtime root, so running from the
