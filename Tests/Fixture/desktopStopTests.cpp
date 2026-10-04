@@ -1,4 +1,5 @@
 #include "reviaWindow.h"
+#include "tabNavigation.h"
 #include "agentStudioPanel.h"
 #include "audienceStudioPanel.h"
 #include "developmentStudioPanel.h"
@@ -29,6 +30,7 @@
 #include <QScrollBar>
 #include <QSettings>
 #include <QTabWidget>
+#include <QTabBar>
 #include <QTableWidget>
 #include <QTextBrowser>
 #include <QTemporaryDir>
@@ -61,11 +63,7 @@ struct ReviaWindowStopTests
             ++failures;
             return;
         }
-        for (int index = 0; index < window.tabs->count(); ++index)
-        {
-            if (window.tabs->tabText(index) == "Agent Studio")
-                window.tabs->setCurrentIndex(index);
-        }
+        revia::desktop::SelectNavigationPage(scroll);
         for (const auto size : {QSize(760, 540), QSize(1040, 720), QSize(1600, 1000)})
         {
             window.resize(size);
@@ -214,6 +212,10 @@ struct ReviaWindowStopTests
         releaseSwitch.store(true);
         wait([&]() { return !window.switchingCompanion; });
         expect(window.Session().Stamp().companionId == second.id && window.chatEntries.empty(), "queued A result reached selected B UI");
+        window.findChild<QPushButton*>("voiceHealthDetailsButton")->click();
+        expect(window.findChild<QWidget*>("voiceTab")->isVisible(), "Voice Details must still reach Voice after companion replacement");
+        for (auto* group : window.findChildren<QTabWidget*>())
+            expect(!group->tabBar()->usesScrollButtons(), "rebuilt companion views must preserve arrow-free navigation");
         if (auto* review = window.findChild<QPushButton*>("reviewAnswerButton"))
         {
             expect(!review->isEnabled() && !window.findChild<QPlainTextEdit*>("answerFeedbackTarget"),
@@ -347,11 +349,7 @@ struct ReviaWindowStopTests
                 "a hierarchy without fresh owner observations invented current status");
         }
         const QString renderDirectory = qEnvironmentVariable("REVIA_UI_RENDER_DIR");
-        for (int index = 0; index < window.tabs->count(); ++index)
-        {
-            if (window.tabs->tabText(index) == "Agent Studio")
-                window.tabs->setCurrentIndex(index);
-        }
+        revia::desktop::SelectNavigationPage(window.findChild<QScrollArea*>("agentStudioScroll"));
         for (const auto size : {QSize(760, 540), QSize(1040, 720), QSize(1600, 1000)})
         {
             window.resize(size);
@@ -404,6 +402,7 @@ struct ReviaWindowStopTests
             QCoreApplication::processEvents();
         };
         window.show();
+        expect(window.tabs->count() == 6, "main navigation must group related pages into six readable destinations");
         health("Degraded");
         auto* chatBadge = window.findChild<QLabel*>("chatVoiceHealthBadge");
         auto* voiceBadge = window.findChild<QLabel*>("voiceHealthBadge");
@@ -463,34 +462,68 @@ struct ReviaWindowStopTests
             {
                 details->click();
                 QCoreApplication::processEvents();
-                expect(window.tabs->tabText(window.tabs->currentIndex()) == "Voice", "Details must open the existing Voice view");
+                expect(window.tabs->tabText(window.tabs->currentIndex()) == "Companion" &&
+                           window.findChild<QWidget*>("voiceTab")->isVisible(),
+                    "Details must open Companion and its existing Voice view");
             }
         }
         const QString renderDirectory = qEnvironmentVariable("REVIA_UI_RENDER_DIR");
         if (!renderDirectory.isEmpty())
             expect(QDir().mkpath(renderDirectory), "render directory must be writable");
+        QList<QWidget*> pages;
+        for (auto* group : window.findChildren<QTabWidget*>())
+        {
+            for (int index = 0; index < group->count(); ++index)
+            {
+                QWidget* page = group->widget(index);
+                if (qobject_cast<QTabWidget*>(page) == nullptr && page->findChild<QTabWidget*>() == nullptr)
+                {
+                    page->setProperty("captureTitle", group->tabText(index));
+                    pages.push_back(page);
+                }
+            }
+        }
+        expect(pages.size() == 21, "all existing pages, including Mind's four views, must remain reachable");
         for (const auto size : {QSize(760, 540), QSize(1040, 720), QSize(1600, 1000)})
         {
             window.resize(size);
             SettleLayouts();
             expect(window.size() == size, QString("the full interface must fit %1x%2").arg(size.width()).arg(size.height()));
-            for (int index = 0; index < window.tabs->count(); ++index)
+            for (auto* group : window.findChildren<QTabWidget*>())
             {
-                window.tabs->setCurrentIndex(index);
+                auto* bar = group->tabBar();
+                expect(!bar->usesScrollButtons(), "navigation must not depend on left/right scroll arrows");
+            }
+            for (QWidget* page : pages)
+            {
+                revia::desktop::SelectNavigationPage(page);
                 SettleLayouts();
-                for (auto* scroll : window.tabs->widget(index)->findChildren<QScrollArea*>())
+                expect(page->isVisible(), "each subpage must activate its full navigation route");
+                for (auto* group : window.findChildren<QTabWidget*>())
+                {
+                    auto* bar = group->tabBar();
+                    if (!bar->isVisible())
+                        continue;
+                    for (int index = 0; index < bar->count(); ++index)
+                        expect(bar->rect().contains(bar->tabRect(index)), "every navigation label must fit without clipping");
+                }
+                auto scrolls = page->findChildren<QScrollArea*>();
+                if (auto* scroll = qobject_cast<QScrollArea*>(page))
+                    scrolls.push_back(scroll);
+                for (auto* scroll : scrolls)
                 {
                     if (!scroll->isVisible())
                         continue;
                     expect(
                         scroll->horizontalScrollBar()->maximum() == 0, QString("%1 at %2x%3 must fit horizontally without hidden overflow")
-                                                                           .arg(window.tabs->tabText(index))
+                                                                           .arg(page->objectName())
                                                                            .arg(size.width())
                                                                            .arg(size.height()));
                 }
                 if (!renderDirectory.isEmpty())
                 {
-                    const QString name = window.tabs->tabText(index).toLower().replace(' ', '_');
+                    const QString name = (page->objectName().isEmpty() ? page->property("captureTitle").toString() : page->objectName())
+                                             .toLower();
                     const QString path =
                         QDir(renderDirectory).filePath(QString("%1-%2x%3.png").arg(name).arg(size.width()).arg(size.height()));
                     expect(window.grab().save(path), "actual Qt render must be saved");
@@ -848,16 +881,21 @@ struct ReviaWindowStopTests
             corrected->window()->close();
             if (!renderDirectory.isEmpty())
             {
-                for (int index = 0; index < window.tabs->count(); ++index)
-                {
-                    if (window.tabs->tabText(index) == "Memory")
-                        window.tabs->setCurrentIndex(index);
-                }
+                revia::desktop::SelectNavigationPage(window.findChild<QWidget*>("memoryTab"));
                 for (const auto size : {QSize(760, 540), QSize(1040, 720), QSize(1600, 1000)})
                 {
                     window.resize(size);
                     SettleLayouts();
                     expect(window.size() == size, "memory revision provenance must fit the requested window size");
+                    auto* memoryScroll = window.findChild<QScrollArea*>("memoryPageScroll");
+                    memoryScroll->verticalScrollBar()->setValue(table->mapTo(memoryScroll->widget(), QPoint(0, 0)).y());
+                    SettleLayouts();
+                    if (table->viewport()->visibleRegion().boundingRect().height() < table->rowHeight(0) + table->rowHeight(1))
+                        std::cerr << "Memory viewport: visible=" << table->viewport()->visibleRegion().boundingRect().height()
+                                  << " required=" << table->rowHeight(0) + table->rowHeight(1)
+                                  << " scroll=" << memoryScroll->verticalScrollBar()->value()
+                                  << '/' << memoryScroll->verticalScrollBar()->maximum()
+                                  << " inner=" << memoryScroll->widget()->height() << " table=" << table->height() << '\n';
                     expect(table->viewport()->visibleRegion().boundingRect().height() >= table->rowHeight(0) + table->rowHeight(1),
                         "memory revision history must retain space for the original and current rows");
                     expect(window.grab().save(

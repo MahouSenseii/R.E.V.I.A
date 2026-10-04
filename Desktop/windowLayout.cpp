@@ -78,13 +78,14 @@ void ReviaWindow::ApplyResponsiveLayout()
     stateDetailLabel->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Preferred);
     stateDetailLabel->setMinimumWidth(compact ? 100 : 160);
     stateDetailLabel->setMaximumWidth(compact ? 250 : 450);
-    stateDetailLabel->setMaximumHeight(38);
+    stateDetailLabel->setMaximumHeight(QWIDGETSIZE_MAX);
     for (auto* label : {ui->avatarPathValue, ui->adapterInboxValue, ui->adapterOutboxValue})
     {
         label->setWordWrap(true);
         label->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
     }
     tabs->tabBar()->setDrawBase(false);
-    tabs->tabBar()->setUsesScrollButtons(true);
-    tabs->tabBar()->setStyleSheet(compact ? "QTabBar::tab { padding: 8px 10px; }" : "");
+    tabs->tabBar()->setUsesScrollButtons(false);
+    // Recompute tab metrics after grouping changes the bar's style selector.
+    tabs->tabBar()->setStyleSheet(compact ? "QTabBar::tab { padding: 8px 10px; }" : "QTabBar::tab { padding: 9px 14px; }");
 }

@@ -1,4 +1,5 @@
 #include "reviaWindow.h"
+#include "tabNavigation.h"
 
 #include "Core/crashDiagnostics.h"
 #include "Core/exitReporter.h"
@@ -6,6 +7,8 @@
 #include "Core/runtimePath.h"
 
 #include <QApplication>
+#include <QFont>
+#include <QFontDatabase>
 #include <QPixmap>
 #include <QSettings>
 #include <QTabWidget>
@@ -150,6 +153,12 @@ int main(int argc, char** argv)
     });
 
     QApplication application(argc, argv);
+    if (smokeTest && QGuiApplication::platformName() == "offscreen")
+    {
+        // Offscreen Qt cannot discover Windows fonts for diagnostic captures.
+        QFontDatabase::addApplicationFont(qEnvironmentVariable("WINDIR", "C:/Windows") + "/Fonts/segoeui.ttf");
+        application.setFont(QFont("Segoe UI"));
+    }
     QApplication::setApplicationName("Revia");
     QApplication::setOrganizationName("R.E.V.I.A");
     QApplication::setQuitOnLastWindowClosed(smokeTest || runtimeSmokeTest);
@@ -176,14 +185,15 @@ int main(int argc, char** argv)
     }
     if (!screenshotTab.empty())
     {
-        if (auto* tabs = window.findChild<QTabWidget*>(QStringLiteral("tabs")))
+        const QString wanted = QString::fromStdString(screenshotTab);
+        for (auto* tabs : window.findChildren<QTabWidget*>())
         {
-            const QString wanted = QString::fromStdString(screenshotTab);
             for (int index = 0; index < tabs->count(); ++index)
             {
-                if (tabs->tabText(index).startsWith(wanted, Qt::CaseInsensitive))
+                if (tabs->tabText(index).startsWith(wanted, Qt::CaseInsensitive) ||
+                    tabs->tabToolTip(index).startsWith(wanted, Qt::CaseInsensitive))
                 {
-                    tabs->setCurrentIndex(index);
+                    revia::desktop::SelectNavigationPage(tabs->widget(index));
                     break;
                 }
             }

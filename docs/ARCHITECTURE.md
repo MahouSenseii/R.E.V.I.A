@@ -34,6 +34,15 @@ computer activity methods. `sessionSpeech.cpp` adapts speech events to session
 coordination, diagnostics, and runtime events. All three implement the existing
 `ReviaSession` class; startup only wires the speech callback.
 
+## Desktop navigation
+
+`Desktop/tabNavigation` groups the existing Qt pages and selects their complete
+ancestor route. It owns presentation only; session panels, permission controls
+and runtime owners retain their existing state and lifetime. Grouping runs after
+initial construction and after session panels are rebuilt, preserving selection
+on subsequent calls. See [Desktop navigation](DESKTOP_NAVIGATION.md) for the page
+map and fit checks.
+
 ## Companion ownership
 
 `CompanionRegistry` owns persisted opaque companion IDs and selection. An authored

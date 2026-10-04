@@ -1,4 +1,5 @@
 #include "reviaWindow.h"
+#include "tabNavigation.h"
 #include "Actions/actionTypes.h"
 
 #include "agentStudioPanel.h"
@@ -490,5 +491,8 @@ void ReviaWindow::RebuildSessionPanels()
     delete voiceHealth;
     voiceHealth = new VoiceHealthPanel(false, ui->voicePage);
     ui->voiceLayout->insertWidget(0, voiceHealth);
-    connect(chatVoiceHealth->DetailsButton(), &QPushButton::clicked, this, [this]() { tabs->setCurrentWidget(ui->voiceTab); });
+    connect(chatVoiceHealth->DetailsButton(), &QPushButton::clicked, this,
+        [this]() { revia::desktop::SelectNavigationPage(ui->voiceTab); });
+    revia::desktop::GroupNavigationPages(tabs);
+    ApplyResponsiveLayout();
 }

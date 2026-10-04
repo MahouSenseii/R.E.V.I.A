@@ -1,4 +1,5 @@
 #include "reviaWindow.h"
+#include "tabNavigation.h"
 
 #include "Core/logger.h"
 #include "Audit/contentDigest.h"
@@ -174,6 +175,8 @@ ReviaWindow::ReviaWindow(const bool startRuntime, const bool buildSystemTray, QW
 
     BuildInterface();
     BuildCompanionControls();
+    revia::desktop::GroupNavigationPages(tabs);
+    ApplyResponsiveLayout();
     if (buildSystemTray)
     {
         BuildTray();
@@ -470,7 +473,7 @@ void ReviaWindow::BuildInterface()
     connect(chatVoiceHealth->DetailsButton(), &QPushButton::clicked, this,
         [this]()
         {
-            tabs->setCurrentWidget(ui->voiceTab);
+            revia::desktop::SelectNavigationPage(ui->voiceTab);
             ui->voiceScroll->verticalScrollBar()->setValue(0);
         });
 
@@ -1357,7 +1360,7 @@ void ReviaWindow::CreateVoicePreset()
                     voiceStudioStatus->setText(QString::fromStdString(result.message));
                     if (!result.succeeded)
                     {
-                        tabs->setCurrentIndex(tabs->indexOf(voiceStudioStatus->parentWidget()));
+                        revia::desktop::SelectNavigationPage(ui->voiceTab);
                     }
                 },
                 Qt::QueuedConnection);
