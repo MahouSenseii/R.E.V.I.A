@@ -18,7 +18,9 @@ namespace revia::runtime
 {
 namespace
 {
-nlohmann::json DeliverableSchema(const agents::DeliverableContract& contract)
+nlohmann::json EvidenceReferences(const std::vector<agents::ArtifactReference>& references);
+
+nlohmann::json DeliverableSchema(const agents::DeliverableContract& contract, const std::vector<agents::ArtifactReference>& references)
 {
     nlohmann::json properties = {{"summary", {{"type", "string"}, {"maxLength", 2048}}},
         {"evidence", {{"type", "string"}, {"maxLength", 2048}}}, {"verified", {{"type", "boolean"}}},
@@ -28,14 +30,27 @@ nlohmann::json DeliverableSchema(const agents::DeliverableContract& contract)
                               {"properties", {{"nodeId", {{"type", "string"}}}, {"id", {{"type", "string"}}},
                                                  {"version", {{"type", "integer"}, {"minimum", 1}}}, {"hash", {{"type", "string"}}}}},
                               {"required", {"nodeId", "id", "version", "hash"}}, {"additionalProperties", false}}}}}};
+    if (contract.requireAllPrerequisites || references.empty())
+        properties["prerequisiteEvidence"]["const"] = EvidenceReferences(references);
     nlohmann::json required = {"summary", "evidence", "verified", "prerequisiteEvidence"};
     for (const auto& requirement : contract.requirements)
     {
         const auto name = agents::ToString(requirement.section);
-        properties[name] = {{"type", "object"},
-            {"properties", {{"items", {{"type", "array"}, {"maxItems", 8}, {"items", {{"type", "string"}, {"maxLength", 1024}}}}},
-                               {"noneReason", {{"type", "string"}, {"maxLength", 1024}}}}},
+        nlohmann::json populated = {{"type", "object"},
+            {"properties", {{"items", {{"type", "array"}, {"minItems", 1}, {"maxItems", 8},
+                                          {"items", {{"type", "string"}, {"minLength", 1}, {"maxLength", 1024}}}}},
+                               {"noneReason", {{"type", "string"}, {"const", ""}}}}},
             {"required", {"items", "noneReason"}}, {"additionalProperties", false}};
+        if (requirement.allowNoneWithReason)
+        {
+            nlohmann::json absent = {{"type", "object"},
+                {"properties", {{"items", {{"type", "array"}, {"maxItems", 0}}},
+                                   {"noneReason", {{"type", "string"}, {"minLength", 1}, {"maxLength", 1024}}}}},
+                {"required", {"items", "noneReason"}}, {"additionalProperties", false}};
+            properties[name] = {{"anyOf", {populated, absent}}};
+        }
+        else
+            properties[name] = std::move(populated);
         required.push_back(name);
     }
     return {{"type", "object"}, {"properties", properties}, {"required", required}, {"additionalProperties", false}};
@@ -146,7 +161,7 @@ agents::AgentWorkflow::Provider ReviaSession::AgentProvider(const bool demonstra
             material["prerequisites"].push_back(
                 {{"id", artifact.id}, {"version", artifact.version}, {"hash", artifact.hash}, {"content", artifact.content}});
         }
-        const std::string schema = DeliverableSchema(request.node.deliverableContract).dump();
+        const std::string schema = DeliverableSchema(request.node.deliverableContract, request.prerequisiteReferences).dump();
         const responseOutput response = router.ReviewCode(instructions, material.dump(), schema, stop);
         if (stop.stop_requested() || !Admits(request.stamp))
             return result;

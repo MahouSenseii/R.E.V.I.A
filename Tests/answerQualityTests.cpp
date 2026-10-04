@@ -3,6 +3,7 @@
 #include "Evaluation/conversationEvaluation.h"
 #include "Core/utf8.h"
 #include "testSupport.h"
+#include "../Tools/Quality/semanticReview.h"
 
 #include <algorithm>
 #include <iostream>
@@ -225,6 +226,62 @@ void TestSentenceRequestsIgnoreEarlierClauseNegation()
     Check(later.minimum == 2 && later.maximum == 2, "Skipping a directly negated request also discarded a later independent request.");
 }
 
+void TestSemanticReviewCannotAcceptMechanicalSuccess()
+{
+    using namespace revia::evaluation;
+    using json = nlohmann::json;
+    const json corpus = {{"cases",
+        json::array({{{"id", "relations"}, {"turns", json::array({{{"input", "Explain the supplied relationship."},
+                                                         {"reviewCriteria", {"Identify which stage produces the artifact.",
+                                                                                "Allow humor without changing the facts."}}}})}}})}};
+    EvaluationReport report;
+    CaseOutcome outcome;
+    outcome.id = "relations";
+    TurnOutcome answer;
+    answer.input = "Explain the supplied relationship.";
+    answer.reply = "The assembler makes the source. Apparently.";
+    answer.rawReply = "The assembler makes the source.";
+    answer.modelSucceeded = true;
+    outcome.turns.push_back(answer);
+    report.cases.push_back(outcome);
+    report.passed = 1;
+    const auto review = revia::quality::BuildSemanticReview(corpus, report);
+    const auto& turn = review.at("turns").at(0);
+    Check(turn.at("mechanicalPassed") == true && turn.at("semanticVerdict") == "unreviewed" &&
+              turn.at("personalityVerdict") == "unreviewed" && review.at("semanticAcceptance") == "unreviewed",
+        "A mechanically passing but incorrect reply became an accepted semantic or personality judgment.");
+    Check(turn.at("criteria").size() == 2 && turn.at("rawReply") == answer.rawReply && turn.at("reply") == answer.reply &&
+              turn.at("outputDigest") == revia::audit::ContentDigest(answer.reply),
+        "Review criteria or exact displayed/raw output identity were lost.");
+    auto interrupted = report;
+    interrupted.cases[0].unavailable = true;
+    interrupted.cases[0].turns.clear();
+    const auto incomplete = revia::quality::BuildSemanticReview(corpus, interrupted);
+    Check(incomplete.at("turns").empty() && incomplete.at("unavailableCases").size() == 1 &&
+              incomplete.at("semanticAcceptance") == "unreviewed",
+        "Unavailable model evidence became acceptance or prevented retention of the review packet.");
+    for (int variant = 0; variant < 3; ++variant)
+    {
+        auto mismatched = corpus;
+        if (variant == 0)
+            mismatched["cases"][0]["id"] = "other-case";
+        if (variant == 1)
+            mismatched["cases"][0]["turns"][0]["input"] = "Another question.";
+        if (variant == 2)
+            mismatched["cases"][0]["turns"][0]["reviewCriteria"] = {"   "};
+        bool refused = false;
+        try
+        {
+            (void)revia::quality::BuildSemanticReview(mismatched, report);
+        }
+        catch (const std::exception&)
+        {
+            refused = true;
+        }
+        Check(refused, "A mismatched or empty review criterion was bound to the displayed answer.");
+    }
+}
+
 void TestExpressiveAnswersRetainTheirVoice()
 {
     const revia::agents::ConversationStylePolicy policy;
@@ -247,5 +304,6 @@ void RunAnswerQualityTests()
     TestRequestedSentenceFormatCorpusCheck();
     TestSentenceRequestsIgnoreEarlierClauseNegation();
     TestExpressiveAnswersRetainTheirVoice();
+    TestSemanticReviewCannotAcceptMechanicalSuccess();
     std::cout << "Current-task, supplied-fact, correction, format and expressive-answer checks passed.\n";
 }

@@ -88,6 +88,15 @@ runtime directory is refused so earlier evidence stays intact. The arguments are
 It does not queue speech or save synthetic dialogue as memory. Read the replies:
 phrase checks can miss wrong roles, unsupported agreement or omitted facts.
 
+`Config/Evaluation/answer-quality-holdout.json` is a separate six-case, eight-turn
+set with explicit human review criteria. The live tool captures the corpus once
+in its disposable runtime directory, then uses that snapshot for mechanical
+checks and the `.review.json` packet. Each recorded turn retains the input,
+delivered and raw reply, criteria and a digest of the delivered reply. Mechanical
+success leaves semantic and personality verdicts `unreviewed`; unavailable cases
+remain visible. This packet is developer evidence and does not approve lessons or
+change Revia's personality. See [the evidence continuation acceptance record](STUDIO_EVIDENCE_QUALITY_ACCEPTANCE.md).
+
 The chat's **Review answer** control records an explicit owner failure criterion
 against the exact displayed reply. It creates a private quality task and a lesson
 candidate in **Skills & Learning**. Ordinary review and a durable memory receipt

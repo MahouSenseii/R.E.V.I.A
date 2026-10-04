@@ -11,6 +11,7 @@
 #include <chrono>
 #include <httplib.h>
 #include <nlohmann/json.hpp>
+#include <mutex>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -296,32 +297,54 @@ class HeldMemoryBackend
     explicit HeldMemoryBackend(std::string supplied = {}) : suppliedResponse(std::move(supplied))
     {
         server.Get("/health", [](const auto&, auto& response) { response.set_content(R"({"status":"ok"})", "application/json"); });
-        server.Get("/v1/models", [](const auto&, auto& response) { response.set_content(R"({"data":[{"id":"held-memory"}]})", "application/json"); });
-        server.Post("/v1/chat/completions", [this](const auto&, auto& response)
-        {
-            ++requests;
-            const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(5);
-            while (!release.load() && std::chrono::steady_clock::now() < until) std::this_thread::sleep_for(std::chrono::milliseconds(2));
-            const auto answer = nlohmann::json{{"choices",
-                nlohmann::json::array(
-                    {{{"message", {{"content", suppliedResponse.empty() ? R"({"shouldRemember":false,"reason":"Synthetic fixture."})"
-                                                                        : suppliedResponse}}},
-                        {"finish_reason", "stop"}}})}};
-            response.set_content(answer.dump(), "application/json");
-        });
+        server.Get("/v1/models",
+            [](const auto&, auto& response) { response.set_content(R"({"data":[{"id":"held-memory"}]})", "application/json"); });
+        server.Post("/v1/chat/completions",
+            [this](const auto& request, auto& response)
+            {
+                {
+                    std::lock_guard lock(requestMutex);
+                    latestRequest = nlohmann::json::parse(request.body);
+                }
+                ++requests;
+                const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+                while (!release.load() && std::chrono::steady_clock::now() < until)
+                    std::this_thread::sleep_for(std::chrono::milliseconds(2));
+                const auto answer = nlohmann::json{{"choices",
+                    nlohmann::json::array(
+                        {{{"message", {{"content", suppliedResponse.empty() ? R"({"shouldRemember":false,"reason":"Synthetic fixture."})"
+                                                                            : suppliedResponse}}},
+                            {"finish_reason", "stop"}}})}};
+                response.set_content(answer.dump(), "application/json");
+            });
         port = server.bind_to_any_port("127.0.0.1");
         Check(port > 0, "Held memory backend could not bind.");
         worker = std::jthread([this] { server.listen_after_bind(); });
         const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(5);
-        while (!server.is_running() && std::chrono::steady_clock::now() < until) std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        while (!server.is_running() && std::chrono::steady_clock::now() < until)
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
         Check(server.is_running(), "Held memory backend could not start.");
     }
-    ~HeldMemoryBackend() { release.store(true); server.stop(); if (worker.joinable()) worker.join(); }
+    ~HeldMemoryBackend()
+    {
+        release.store(true);
+        server.stop();
+        if (worker.joinable())
+            worker.join();
+    }
     int port = 0;
     std::atomic<unsigned> requests{0};
     std::atomic<bool> release{false};
 
+    nlohmann::json LatestRequest()
+    {
+        std::lock_guard lock(requestMutex);
+        return latestRequest;
+    }
+
   private:
+    std::mutex requestMutex;
+    nlohmann::json latestRequest;
     httplib::Server server;
     std::jthread worker;
     std::string suppliedResponse;
@@ -345,16 +368,23 @@ void TestQueuedMemoryRetainsAdmission()
     revia::agents::MemoryAgent memory((temporary.root / "memory.db").string());
     memory.Submit(router, "The synthetic fixture prefers amber.", {}, revia::agents::ResponseProvenance::NormalGeneration, 1);
     const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(5);
-    while (backend.requests.load() == 0 && std::chrono::steady_clock::now() < until) std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    while (backend.requests.load() == 0 && std::chrono::steady_clock::now() < until)
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
     Check(backend.requests.load() == 1, "The first real memory classification did not enter the held transport.");
     std::atomic<bool> current{true};
     std::atomic<bool> denied{false};
     memory.Submit(router, "PRIVATE_QUEUED_SENTINEL_9f32", {}, revia::agents::ResponseProvenance::NormalGeneration, 2,
-        [&] { if (!current.load()) denied.store(true); return current.load(); });
+        [&]
+        {
+            if (!current.load())
+                denied.store(true);
+            return current.load();
+        });
     Check(memory.Depths().interactive == 1, "The context-bound second classification was not actually queued.");
     current.store(false);
     backend.release.store(true);
-    while (!denied.load() && std::chrono::steady_clock::now() < until) std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    while (!denied.load() && std::chrono::steady_clock::now() < until)
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
     Check(denied.load() && backend.requests.load() == 1 && longTermMemory((temporary.root / "memory.db").string()).Load().empty(),
         "Revoked queued memory reached transport or durable storage.");
     memory.Stop();
@@ -381,11 +411,11 @@ void TestAudienceContextAndTaskRegistration()
     const auto revision = people.RecognitionConsentRevision("person-b");
     Check(revision.has_value(), "Recognition consent was not established.");
     Check(session.SetAudience({revia::identity::AudienceKind::Private, "explicit-room", 0, {"person-b"}}, error), error);
-    revia::identity::SpeakerObservation observed{"person-b", revia::identity::SpeakerSource::ConsentedVoice,
-        "synthetic-observation", *revision, 0.9F};
+    revia::identity::SpeakerObservation observed{
+        "person-b", revia::identity::SpeakerSource::ConsentedVoice, "synthetic-observation", *revision, 0.9F};
     const auto voice = ReviaSessionTestAccess::StudioInput(session, revia::agents::InputSource::Voice, observed);
     Check(voice.participantId == "person-b" && voice.audience.kind == revia::identity::AudienceKind::Shared &&
-        ReviaSessionTestAccess::StudioInputCurrent(session, voice),
+              ReviaSessionTestAccess::StudioInputCurrent(session, voice),
         "A consented match lost its participant or unlocked private owner context.");
     Check(people.RevokeRecognitionConsent("person-b", error), error);
     Check(!ReviaSessionTestAccess::StudioInputCurrent(session, voice), "A revoked consent still admitted its captured voice context.");
@@ -403,28 +433,33 @@ void TestLateTaskKeepsItsLaunchAudience()
     std::atomic<bool> release{false};
     ReviaSession session(CompanionPaths(temporary.root, {"late-task", "Late task fixture", "assistant", false}));
     ReviaSessionTestAccess::MarkStudioStarted(session, true);
-    const auto subscription = session.Events().Subscribe([&](const RuntimeEvent& event)
-    {
-        if (event.kind == RuntimeEventKind::AssistantMessage && event.component == "Task")
-            delivered.fetch_add(1);
-    });
+    const auto subscription = session.Events().Subscribe(
+        [&](const RuntimeEvent& event)
+        {
+            if (event.kind == RuntimeEventKind::AssistantMessage && event.component == "Task")
+                delivered.fetch_add(1);
+        });
     std::string error;
-    Check(ReviaSessionTestAccess::LaunchTask(session, "PRIVATE_LATE_TASK_SENTINEL", [&](std::stop_token stop)
-    {
-        const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(3);
-        while (!release.load() && !stop.stop_requested() && std::chrono::steady_clock::now() < until)
-            std::this_thread::sleep_for(std::chrono::milliseconds(2));
-        revia::goals::Goal goal;
-        goal.title = "PRIVATE_LATE_TASK_SENTINEL";
-        goal.status = revia::goals::GoalStatus::Succeeded;
-        return goal;
-    }, error), error);
+    Check(ReviaSessionTestAccess::LaunchTask(
+              session, "PRIVATE_LATE_TASK_SENTINEL",
+              [&](std::stop_token stop)
+              {
+                  const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+                  while (!release.load() && !stop.stop_requested() && std::chrono::steady_clock::now() < until)
+                      std::this_thread::sleep_for(std::chrono::milliseconds(2));
+                  revia::goals::Goal goal;
+                  goal.title = "PRIVATE_LATE_TASK_SENTINEL";
+                  goal.status = revia::goals::GoalStatus::Succeeded;
+                  return goal;
+              },
+              error),
+        error);
     Check(session.SetAudience({revia::identity::AudienceKind::Public, "public", 0, {"visitor"}}, error), error);
     Check(session.SetAudience({revia::identity::AudienceKind::Private, "local-desktop", 0, {}}, error), error);
     release.store(true);
     ReviaSessionTestAccess::WaitForTask(session);
     Check(delivered.load() == 0 && !session.HasRunningTask() &&
-        ReviaSessionTestAccess::FinishedTask(session).find("PRIVATE_LATE_TASK_SENTINEL") != std::string::npos,
+              ReviaSessionTestAccess::FinishedTask(session).find("PRIVATE_LATE_TASK_SENTINEL") != std::string::npos,
         "Late task report was republished into a new audience epoch or its private receipt was discarded.");
     session.Events().Unsubscribe(subscription);
     ReviaSessionTestAccess::MarkStudioStarted(session, false);
@@ -506,7 +541,7 @@ void TestReviewedMemoryReceipt()
         "Review receipt does not identify the one saved row with its source provenance.");
     std::string duplicateReceipt;
     Check(memory.SubmitLearnedFinding(router, decision, 0, &duplicateReceipt) != revia::agents::LearnedFindingResult::Failed &&
-        duplicateReceipt == receipt && longTermMemory(database).Load().size() == 1,
+              duplicateReceipt == receipt && longTermMemory(database).Load().size() == 1,
         "Retry after private journal failure duplicated accepted semantic content.");
     memory.SetAdmissionGuard([] { return false; });
     receipt = "old-receipt";
@@ -541,6 +576,53 @@ void TestLocalStudioIncompleteVerificationCannotAdvance()
     ReviaSessionTestAccess::MarkStudioStarted(session, false);
 }
 
+void TestLocalStudioGrammarPinsNativeEvidence()
+{
+    using namespace revia::runtime;
+    using namespace revia::agents;
+    using json = nlohmann::json;
+    const json references = json::array({{{"nodeId", "analysis"}, {"id", "analysis-artifact"}, {"version", 2}, {"hash", "hash-a"}},
+        {{"nodeId", "verification"}, {"id", "verification-artifact"}, {"version", 1}, {"hash", "hash-b"}}});
+    for (int variant = 0; variant < 3; ++variant)
+    {
+        ScopedTestDirectory temporary;
+        const json payload = {{"summary", "A bounded plan."}, {"evidence", "Supplied analytical material only."},
+            {"verified", variant != 2}, {"prerequisiteEvidence", variant == 0 ? json::array() : references},
+            {"steps", {{"items", {"Inspect the supplied marker evidence."}}, {"noneReason", ""}}},
+            {"risks", {{"items", json::array()}, {"noneReason", "This task only analyzes supplied text without effects."}}}};
+        HeldMemoryBackend backend(payload.dump());
+        backend.release.store(true);
+        ReviaSession session(CompanionPaths(temporary.root, {"schema-fixture", "Schema fixture", "assistant", false}));
+        ReviaSessionTestAccess::ConfigureStartupBrains(session, backend.port);
+        NodeRequest request;
+        request.stamp = session.Stamp();
+        request.node.id = "review";
+        request.node.role = WorkflowRole::Reviewer;
+        request.node.objective = "Assess supplied evidence without executing anything.";
+        request.node.deliverableContract = {{{DeliverableSection::Steps, "Give concrete steps.", false},
+                                                {DeliverableSection::Risks, "Identify actual risks or explain their absence.", true}},
+            true};
+        request.prerequisiteReferences = {
+            {"analysis", "analysis-artifact", 2, "hash-a"}, {"verification", "verification-artifact", 1, "hash-b"}};
+        const auto result = ReviaSessionTestAccess::RunAgentProvider(session, request);
+        Check(result.succeeded && result.verified == (variant == 1),
+            "Native provider validation accepted missing evidence or a false verification claim, or rejected a valid control.");
+        const auto wire = backend.LatestRequest();
+        Check(wire.at("response_format").at("type") == "json_schema", "Studio did not transmit a constrained response schema.");
+        const auto& properties = wire.at("response_format").at("json_schema").at("schema").at("properties");
+        Check(properties.at("prerequisiteEvidence").contains("const") && properties.at("prerequisiteEvidence").at("const") == references,
+            "Model grammar permits omitted or fabricated prerequisite identity/version/hash.");
+        const auto& steps = properties.at("steps").at("properties");
+        Check(steps.at("items").value("minItems", 0) == 1 && steps.at("noneReason").at("const") == "",
+            "Model grammar permits empty required steps or a contradictory absence reason.");
+        const auto& alternatives = properties.at("risks").at("anyOf");
+        Check(alternatives.size() == 2 && alternatives.at(0).at("properties").at("items").at("minItems") == 1 &&
+                  alternatives.at(1).at("properties").at("items").at("maxItems") == 0 &&
+                  alternatives.at(1).at("properties").at("noneReason").at("minLength") == 1,
+            "Model grammar lost mutually exclusive optional-section content and absence rationale.");
+    }
+}
+
 void TestStudioDiagnosticRetainsChangedEvidenceRecovery()
 {
     using namespace revia::runtime;
@@ -570,6 +652,7 @@ void RunStudioRuntimeTests()
     TestNativeActionCompletionSubscriberCannotDeliverRevokedResult();
     TestReviewedMemoryReceipt();
     TestLocalStudioIncompleteVerificationCannotAdvance();
+    TestLocalStudioGrammarPinsNativeEvidence();
     TestStudioDiagnosticRetainsChangedEvidenceRecovery();
     TestQueuedMemoryRetainsAdmission();
     TestAudienceContextAndTaskRegistration();

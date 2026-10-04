@@ -2,6 +2,7 @@
 #include "Evaluation/conversationEvaluation.h"
 #include "Runtime/conversationRuntime.h"
 #include "observedLocalModel.h"
+#include "semanticReview.h"
 
 #include <filesystem>
 #include <fstream>
@@ -79,10 +80,6 @@ int main(int argc, char** argv)
             profile.answerObligation = AnswerObligationMode::CharacterFirst;
         else if (mode != "balanced")
             throw std::runtime_error("Unknown authored answer obligation.");
-        std::vector<revia::evaluation::EvaluationCase> cases;
-        std::string error;
-        if (!revia::evaluation::ConversationEvaluator::LoadCorpus(corpusPath, cases, error))
-            throw std::runtime_error(error);
         const int upstreamPort = std::stoi(argv[3]);
         if (upstreamPort <= 0 || upstreamPort > 65535)
             throw std::runtime_error("Invalid loopback port.");
@@ -93,6 +90,14 @@ int main(int argc, char** argv)
             throw std::runtime_error("Retained runtime evidence already exists; choose a fresh report path.");
         }
         std::filesystem::create_directories(runtimeDirectory);
+        std::ifstream corpusFile(corpusPath);
+        const auto corpus = nlohmann::json::parse(corpusFile);
+        const auto capturedCorpusPath = runtimeDirectory / "corpus.json";
+        WriteEvidence(capturedCorpusPath, corpus.dump(2) + '\n');
+        std::vector<revia::evaluation::EvaluationCase> cases;
+        std::string error;
+        if (!revia::evaluation::ConversationEvaluator::LoadCorpus(capturedCorpusPath, cases, error))
+            throw std::runtime_error(error);
         const ScopedWorkingDirectory workingDirectory(runtimeDirectory);
         revia::quality::ObservedLocalModel observed(upstreamPort);
         try
@@ -133,8 +138,6 @@ int main(int argc, char** argv)
             auto report = revia::evaluation::ConversationEvaluator::Run(
                 cases, [&](const std::string& input, const std::vector<conversationMessage>& prior)
                 { return runtime.EvaluateTurn(input, prior, profile, true); }, settings.modelName);
-            std::ifstream corpusFile(corpusPath);
-            const auto corpus = nlohmann::json::parse(corpusFile);
             const auto& authoredCases = corpus.is_array() ? corpus : corpus.at("cases");
             report.passed = 0;
             report.failed = 0;
@@ -159,14 +162,15 @@ int main(int argc, char** argv)
             observed.Close();
             observed.SaveTraffic(output);
             WriteEvidence(output, report.ToJsonLines());
+            WriteEvidence(output.string() + ".review.json", revia::quality::BuildSemanticReview(corpus, report).dump(2) + '\n');
             WriteEvidence(output.string() + ".metadata.json",
                 nlohmann::json{{"provider", settings.modelName}, {"host", "127.0.0.1"}, {"upstreamPort", upstreamPort},
                     {"observedPort", observed.port}, {"routerPort", settings.port}, {"profileId", profile.id},
                     {"profileDigest", revia::audit::ContentDigest(authored.dump())},
                     {"profileTemperatureOverride", profile.bHasTemperatureOverride}, {"temperature", profile.temperature},
                     {"maxTokens", settings.maxTokens}, {"contextSize", settings.contextSize}, {"optionalReview", review},
-                    {"runtimeDirectory", runtimeDirectory.string()}, {"requests", output.string() + ".requests.json"},
-                    {"responses", output.string() + ".responses.json"},
+                    {"runtimeDirectory", runtimeDirectory.string()}, {"capturedCorpus", capturedCorpusPath.string()},
+                    {"requests", output.string() + ".requests.json"}, {"responses", output.string() + ".responses.json"},
                     {"personalityApproval", "Owner review required; phrase checks cannot establish character quality"},
                     {"physicalVoice", "Not exercised; no speech or memory is queued"}}
                         .dump(2) +

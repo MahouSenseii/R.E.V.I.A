@@ -69,6 +69,10 @@ struct ReviaSessionTestAccess
     static void Log(ReviaSession& session, const std::string& text) { session.appLogger.Log(text); }
     static bool LoadConfiguredProfile(const ReviaSession& session, const std::string& id, aiProfile& profile)
     { return session.config.LoadProfile(id, profile); }
+    static agents::NodeResult RunAgentProvider(ReviaSession& session, const agents::NodeRequest& request)
+    {
+        return session.AgentProvider(false)(request, {});
+    }
     static void ConfigureStartupBrains(ReviaSession& session, int port, bool fastWarm = true, bool expertWarm = true)
     {
         session.settings.llm.backend = "LLamaCpp";
