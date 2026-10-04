@@ -512,6 +512,12 @@ if(BUILD_TESTING)
                 COMMAND "${REVIA_NODE_EXECUTABLE}" --test
                         "${CMAKE_CURRENT_SOURCE_DIR}/Tools/Presence/DiscordVoice/adapter.test.mjs"
         )
+        add_test(
+                NAME Revia.Live2DBridge
+                COMMAND "${REVIA_NODE_EXECUTABLE}" --test
+                        "${CMAKE_CURRENT_SOURCE_DIR}/Tests/live2dBridge.test.mjs"
+        )
+        set_tests_properties(Revia.Live2DBridge PROPERTIES TIMEOUT 30)
     endif()
     find_package(Python3 COMPONENTS Interpreter QUIET)
     if(Python3_Interpreter_FOUND)

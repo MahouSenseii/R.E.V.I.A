@@ -1,7 +1,7 @@
 # Avatar bridge contract
 
 `RuntimeData/Presence/avatar_state.json` is an atomic latest-state snapshot for an
-isolated VRM renderer. `avatar_events.jsonl` is the ordered transition stream. Killing or
+isolated avatar renderer. `avatar_events.jsonl` is the ordered transition stream. Killing or
 restarting the renderer does not affect Revia; it can reopen the snapshot and continue at
 the newest sequence.
 
@@ -9,7 +9,7 @@ The version 1 snapshot contains:
 
 - `phase`: `offline`, `idle`, `listening`, `thinking`, `responding`, `speaking`,
   `acting`, `waiting`, `blocked`, or `error`;
-- `expression` and `affect_intensity`: the VRM expression preset and blend weight;
+- `expression` and `affect_intensity`: the expression label and blend weight;
 - `speaking`, `mouth`: the base lip-sync gate and value;
 - `listening`: an animation and gaze cue;
 - `attention` and `gaze_target`: a bounded label for the current target;
@@ -25,3 +25,10 @@ The canonical design, palette, expression mapping, and selected renderer target 
 `Config/avatar.json`. `target` remains `unselected` until a real Live2D/VRM model and its
 renderer are chosen. The transition stream rotates to `avatar_events.jsonl.1` at the
 configured byte ceiling, and repeated shutdown calls do not emit duplicate offline states.
+
+The optional [Live2D adapter](Live2D/README.md) consumes this same snapshot and
+injects custom tracking inputs into VTube Studio. The current `mouth` is a binary
+speaking gate, and snapshots are event-only rather than heartbeats. Its bounded
+mouth timeout and required model mapping are documented explicitly. Original
+[reference art and rigging instructions](../../Assets/Avatar/Revia/README.md)
+do not constitute a Cubism model export.

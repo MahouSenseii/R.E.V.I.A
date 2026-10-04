@@ -14,6 +14,7 @@ and `Private/Memory/longTermMemory.cpp` both belong to memory storage.
 | `Tools` | Setup/build helpers, local Python services, browser worker, and adapters |
 | `Tests` | Behavior checks, live checks, and disposable fixtures |
 | `Config` | Checked-in settings, profiles, model manifest, and first-run defaults |
+| `Assets` | Authored or generated presentation artwork and its production handoff |
 | `docs` | Architecture, operating instructions, and design evidence |
 | `build`, `ThirdParty`, `Models` | Generated builds, installed dependencies, and local models |
 | `Memory`, `Logs`, `RuntimeData` | Local stored state; the running build also keeps these beside its executable |
@@ -44,6 +45,18 @@ and runtime owners retain their existing state and lifetime. Grouping runs after
 initial construction and after session panels are rebuilt, preserving selection
 on subsequent calls. See [Desktop navigation](DESKTOP_NAVIGATION.md) for the page
 map and fit checks.
+
+## Live2D presentation
+
+`Tools/Presence/Live2D` is an optional Node.js presentation consumer. Its state
+mapper reads the existing Presence snapshot; its API client owns loopback
+WebSocket requests and plugin authentication; its runner owns polling and local
+credentials. It creates eight custom VTube Studio tracking inputs and requires
+explicit model mappings. It owns no inference, memory, permission or action state.
+The event-only mouth gate is distinct from future output-audio lip sync. Original
+reference art and the Cubism production handoff live in `Assets/Avatar/Revia`;
+editable rig projects and exported models remain user data. See the
+[Live2D setup](../Tools/Presence/Live2D/README.md) for actual verification limits.
 
 ## Companion ownership
 
