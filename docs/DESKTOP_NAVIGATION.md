@@ -55,7 +55,7 @@ claim a successful model load on the user's laptop.
 | Director / lifecycle connections | Implemented. Existing deep links and companion replacement lock drive the same page stack. |
 | Foundation Supervisor / startup diagnosis and source review | No source blocker found. GitHub source omits installed runtimes and model weights; exact laptop startup cause remains unconfirmed. |
 | Director / viewport verification | Verified. Twenty-one routes at three window sizes, compact Profiles, Memory rows, accessible rail, live count, collapse/expand and error Details; additional 125% display-scaling fixture passed. |
-| Director / repository delivery | Verification complete. Authorized main integration, GitHub push and package branch cleanup are next. |
+| Director / repository delivery | Complete. Verified implementation merged to main and pushed to GitHub; the fully merged package branch was deleted. |
 
 ## Sidebar verification
 
@@ -83,6 +83,14 @@ overflow, both registry negatives, corrected renders and independent source
 review, is retained in `build/studio-20261004-sidebar`, excluded from Git.
 Personality guidance, authored profiles, saved memory, model configuration and
 permission policy are unchanged. Laptop model startup remains unverified.
+
+Implementation commit `48dadc77b141e2cbd1e646d9788ae9d01c1fdebb` was
+fast-forwarded into main and pushed. Local main, origin/main and GitHub main
+matched before `codex/revia-sidebar-startup` was deleted. All four affected
+desktop checks passed on merged main in 8.23 seconds. Checkout converted line
+endings in the ten implementation and test files; normalized fingerprints
+matched the tested source, and both executable fingerprints were unchanged.
+This delivery record adds no implementation changes.
 
 ## Previous main-tab consolidation
 
