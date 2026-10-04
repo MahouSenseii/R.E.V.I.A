@@ -1,82 +1,899 @@
 {
-  "version": 2,
+  "version": 3,
   "width": 1024,
   "height": 1536,
   "headTransform": {
-    "scale": 0.78,
-    "anchor": [
+    "scale": 0.8,
+    "sourceAnchor": [
+      512,
+      250
+    ],
+    "targetAnchor": [
       512,
       432
-    ],
-    "translate": [
-      0,
-      20
     ]
   },
+  "sourceCrop": {
+    "left": 340,
+    "top": 0,
+    "width": 350,
+    "height": 310
+  },
+  "headCanvasPlacement": [
+    374,
+    232,
+    280,
+    248
+  ],
   "layerOrder": "back-to-front",
-  "alphaBoundsThreshold": 240,
+  "polygons": {
+    "Hair_ViewerLeft": [
+      [
+        340,
+        130
+      ],
+      [
+        440,
+        85
+      ],
+      [
+        457,
+        129
+      ],
+      [
+        447,
+        151
+      ],
+      [
+        445,
+        172
+      ],
+      [
+        446,
+        190
+      ],
+      [
+        457,
+        211
+      ],
+      [
+        469,
+        224
+      ],
+      [
+        462,
+        243
+      ],
+      [
+        471,
+        272
+      ],
+      [
+        488,
+        303
+      ],
+      [
+        468,
+        300
+      ],
+      [
+        447,
+        285
+      ],
+      [
+        419,
+        274
+      ],
+      [
+        398,
+        251
+      ],
+      [
+        372,
+        236
+      ],
+      [
+        348,
+        236
+      ]
+    ],
+    "Hair_ViewerRight": [
+      [
+        542,
+        80
+      ],
+      [
+        580,
+        65
+      ],
+      [
+        620,
+        102
+      ],
+      [
+        669,
+        212
+      ],
+      [
+        682,
+        237
+      ],
+      [
+        651,
+        239
+      ],
+      [
+        650,
+        256
+      ],
+      [
+        632,
+        272
+      ],
+      [
+        599,
+        279
+      ],
+      [
+        576,
+        275
+      ],
+      [
+        558,
+        265
+      ],
+      [
+        550,
+        253
+      ],
+      [
+        550,
+        225
+      ],
+      [
+        560,
+        207
+      ],
+      [
+        568,
+        194
+      ],
+      [
+        590,
+        182
+      ],
+      [
+        590,
+        156
+      ],
+      [
+        580,
+        148
+      ],
+      [
+        572,
+        154
+      ],
+      [
+        563,
+        188
+      ],
+      [
+        558,
+        197
+      ],
+      [
+        551,
+        203
+      ],
+      [
+        561,
+        181
+      ],
+      [
+        565,
+        163
+      ],
+      [
+        559,
+        136
+      ]
+    ],
+    "Hair_Front": [
+      [
+        402,
+        100
+      ],
+      [
+        421,
+        54
+      ],
+      [
+        471,
+        16
+      ],
+      [
+        510,
+        16
+      ],
+      [
+        552,
+        30
+      ],
+      [
+        577,
+        66
+      ],
+      [
+        565,
+        105
+      ],
+      [
+        554,
+        134
+      ],
+      [
+        543,
+        117
+      ],
+      [
+        530,
+        95
+      ],
+      [
+        532,
+        150
+      ],
+      [
+        519,
+        177
+      ],
+      [
+        503,
+        172
+      ],
+      [
+        490,
+        165
+      ],
+      [
+        477,
+        151
+      ],
+      [
+        464,
+        132
+      ],
+      [
+        454,
+        111
+      ],
+      [
+        445,
+        142
+      ],
+      [
+        442,
+        153
+      ],
+      [
+        426,
+        154
+      ]
+    ],
+    "Face": [
+      [
+        449,
+        117
+      ],
+      [
+        452,
+        142
+      ],
+      [
+        478,
+        171
+      ],
+      [
+        505,
+        177
+      ],
+      [
+        516,
+        173
+      ],
+      [
+        521,
+        149
+      ],
+      [
+        528,
+        95
+      ],
+      [
+        540,
+        112
+      ],
+      [
+        545,
+        126
+      ],
+      [
+        553,
+        136
+      ],
+      [
+        559,
+        159
+      ],
+      [
+        562,
+        187
+      ],
+      [
+        566,
+        180
+      ],
+      [
+        572,
+        158
+      ],
+      [
+        579,
+        148
+      ],
+      [
+        586,
+        151
+      ],
+      [
+        590,
+        163
+      ],
+      [
+        588,
+        177
+      ],
+      [
+        581,
+        187
+      ],
+      [
+        572,
+        190
+      ],
+      [
+        567,
+        202
+      ],
+      [
+        554,
+        217
+      ],
+      [
+        541,
+        229
+      ],
+      [
+        519,
+        243
+      ],
+      [
+        505,
+        241
+      ],
+      [
+        481,
+        232
+      ],
+      [
+        463,
+        220
+      ],
+      [
+        451,
+        205
+      ],
+      [
+        446,
+        197
+      ],
+      [
+        443,
+        188
+      ],
+      [
+        440,
+        173
+      ],
+      [
+        445,
+        151
+      ]
+    ],
+    "Neck": [
+      [
+        491,
+        231
+      ],
+      [
+        554,
+        219
+      ],
+      [
+        554,
+        253
+      ],
+      [
+        491,
+        253
+      ]
+    ],
+    "Eye_ViewerLeft_White": [
+      [
+        440,
+        172
+      ],
+      [
+        449,
+        165
+      ],
+      [
+        461,
+        163
+      ],
+      [
+        471,
+        165
+      ],
+      [
+        480,
+        171
+      ],
+      [
+        486,
+        179
+      ],
+      [
+        480,
+        187
+      ],
+      [
+        465,
+        190
+      ],
+      [
+        452,
+        186
+      ],
+      [
+        445,
+        179
+      ]
+    ],
+    "Eye_ViewerRight_White": [
+      [
+        521,
+        166
+      ],
+      [
+        529,
+        157
+      ],
+      [
+        540,
+        152
+      ],
+      [
+        549,
+        151
+      ],
+      [
+        558,
+        154
+      ],
+      [
+        562,
+        158
+      ],
+      [
+        555,
+        168
+      ],
+      [
+        547,
+        175
+      ],
+      [
+        536,
+        177
+      ],
+      [
+        526,
+        173
+      ]
+    ],
+    "Eye_ViewerLeft_Upper": [
+      [
+        438,
+        173
+      ],
+      [
+        442,
+        166
+      ],
+      [
+        440,
+        164
+      ],
+      [
+        447,
+        164
+      ],
+      [
+        453,
+        161
+      ],
+      [
+        466,
+        162
+      ],
+      [
+        478,
+        167
+      ],
+      [
+        489,
+        176
+      ],
+      [
+        486,
+        179
+      ],
+      [
+        476,
+        171
+      ],
+      [
+        465,
+        168
+      ],
+      [
+        454,
+        169
+      ],
+      [
+        445,
+        175
+      ]
+    ],
+    "Eye_ViewerRight_Upper": [
+      [
+        520,
+        164
+      ],
+      [
+        528,
+        154
+      ],
+      [
+        540,
+        148
+      ],
+      [
+        549,
+        148
+      ],
+      [
+        558,
+        151
+      ],
+      [
+        565,
+        151
+      ],
+      [
+        563,
+        157
+      ],
+      [
+        558,
+        160
+      ],
+      [
+        548,
+        155
+      ],
+      [
+        539,
+        155
+      ],
+      [
+        530,
+        159
+      ],
+      [
+        522,
+        167
+      ]
+    ],
+    "Eye_ViewerLeft_Lower": [
+      [
+        446,
+        180
+      ],
+      [
+        453,
+        184
+      ],
+      [
+        465,
+        188
+      ],
+      [
+        477,
+        185
+      ],
+      [
+        482,
+        184
+      ],
+      [
+        480,
+        189
+      ],
+      [
+        466,
+        192
+      ],
+      [
+        453,
+        188
+      ]
+    ],
+    "Eye_ViewerRight_Lower": [
+      [
+        525,
+        170
+      ],
+      [
+        535,
+        175
+      ],
+      [
+        546,
+        174
+      ],
+      [
+        555,
+        167
+      ],
+      [
+        557,
+        169
+      ],
+      [
+        548,
+        178
+      ],
+      [
+        536,
+        180
+      ],
+      [
+        526,
+        174
+      ]
+    ],
+    "Brow_ViewerLeft": [
+      [
+        444,
+        149
+      ],
+      [
+        449,
+        146
+      ],
+      [
+        460,
+        145
+      ],
+      [
+        468,
+        146
+      ],
+      [
+        479,
+        151
+      ],
+      [
+        478,
+        153
+      ],
+      [
+        466,
+        149
+      ],
+      [
+        452,
+        149
+      ],
+      [
+        444,
+        152
+      ]
+    ],
+    "Brow_ViewerRight": [
+      [
+        514,
+        143
+      ],
+      [
+        525,
+        136
+      ],
+      [
+        537,
+        133
+      ],
+      [
+        549,
+        132
+      ],
+      [
+        552,
+        134
+      ],
+      [
+        538,
+        136
+      ],
+      [
+        526,
+        139
+      ],
+      [
+        516,
+        146
+      ]
+    ],
+    "Mouth_Upper": [
+      [
+        493,
+        211
+      ],
+      [
+        501,
+        214
+      ],
+      [
+        510,
+        213
+      ],
+      [
+        521,
+        211
+      ],
+      [
+        530,
+        207
+      ],
+      [
+        533,
+        209
+      ],
+      [
+        529,
+        214
+      ],
+      [
+        519,
+        219
+      ],
+      [
+        508,
+        221
+      ],
+      [
+        497,
+        218
+      ],
+      [
+        492,
+        215
+      ]
+    ],
+    "Hair_SignalClip": [
+      [
+        547,
+        82
+      ],
+      [
+        555,
+        77
+      ],
+      [
+        561,
+        77
+      ],
+      [
+        565,
+        82
+      ],
+      [
+        584,
+        79
+      ],
+      [
+        595,
+        108
+      ],
+      [
+        559,
+        118
+      ]
+    ],
+    "Earring_ViewerRight": [
+      [
+        568,
+        187
+      ],
+      [
+        578,
+        189
+      ],
+      [
+        579,
+        202
+      ],
+      [
+        584,
+        211
+      ],
+      [
+        579,
+        226
+      ],
+      [
+        568,
+        218
+      ],
+      [
+        563,
+        212
+      ],
+      [
+        570,
+        201
+      ]
+    ]
+  },
   "layers": [
     {
       "name": "Hair_Back",
-      "atlas": "head",
-      "sourceRectangle": [
-        248,
-        0,
-        272,
-        365
-      ],
-      "opaqueBounds": {
-        "left": 8,
-        "top": 40,
-        "width": 260,
-        "height": 302
-      },
+      "source": "reference",
       "placement": [
-        397,
-        158,
-        234,
-        277
+        405,
+        232,
+        195,
+        244
       ],
       "hidden": false
     },
     {
       "name": "Neck",
-      "atlas": "head",
-      "sourceRectangle": [
-        535,
-        1325,
-        250,
-        165
-      ],
-      "opaqueBounds": {
-        "left": 18,
-        "top": 0,
-        "width": 177,
-        "height": 124
-      },
+      "source": "reference",
       "placement": [
-        466,
-        392,
-        95,
-        88
+        495,
+        407,
+        50,
+        27
       ],
       "hidden": false
     },
     {
       "name": "Arm_ViewerLeft",
-      "atlas": "body",
-      "sourceRectangle": [
-        1024,
-        0,
-        512,
-        1024
-      ],
-      "opaqueBounds": {
-        "left": 78,
-        "top": 93,
-        "width": 257,
-        "height": 755
-      },
+      "source": "body-atlas-unchanged",
       "placement": [
         280,
         410,
@@ -87,19 +904,7 @@
     },
     {
       "name": "Arm_ViewerRight",
-      "atlas": "body",
-      "sourceRectangle": [
-        512,
-        0,
-        512,
-        1024
-      ],
-      "opaqueBounds": {
-        "left": 196,
-        "top": 94,
-        "width": 258,
-        "height": 754
-      },
+      "source": "body-atlas-unchanged",
       "placement": [
         578,
         410,
@@ -110,19 +915,7 @@
     },
     {
       "name": "Body",
-      "atlas": "body",
-      "sourceRectangle": [
-        0,
-        0,
-        512,
-        1024
-      ],
-      "opaqueBounds": {
-        "left": 139,
-        "top": 9,
-        "width": 358,
-        "height": 1001
-      },
+      "source": "body-atlas-unchanged",
       "placement": [
         322,
         406,
@@ -132,418 +925,224 @@
       "hidden": false
     },
     {
-      "name": "Face",
-      "atlas": "head",
-      "sourceRectangle": [
-        0,
-        0,
-        248,
-        305
-      ],
-      "opaqueBounds": {
-        "left": 29,
-        "top": 59,
-        "width": 208,
-        "height": 246
-      },
+      "name": "Face_Underpaint",
+      "source": "generated-concealed-underpaint",
       "placement": [
-        425,
-        205,
-        173,
-        208
+        455,
+        308,
+        116,
+        118
+      ],
+      "hidden": true
+    },
+    {
+      "name": "Face",
+      "source": "reference",
+      "placement": [
+        454,
+        308,
+        120,
+        118
       ],
       "hidden": false
     },
     {
       "name": "Eye_ViewerLeft_White",
-      "atlas": "head",
-      "sourceRectangle": [
-        250,
-        465,
-        250,
-        125
-      ],
-      "opaqueBounds": {
-        "left": 36,
-        "top": 30,
-        "width": 174,
-        "height": 81
-      },
+      "source": "reference",
       "placement": [
-        454,
-        299,
-        50,
-        23
+        455,
+        367,
+        36,
+        15
       ],
       "hidden": false
     },
     {
       "name": "Eye_ViewerRight_White",
-      "atlas": "head",
-      "sourceRectangle": [
-        520,
-        465,
-        230,
-        125
-      ],
-      "opaqueBounds": {
-        "left": 42,
-        "top": 30,
-        "width": 177,
-        "height": 81
-      },
+      "source": "reference",
       "placement": [
-        521,
-        299,
-        50,
-        23
+        519,
+        356,
+        33,
+        15
       ],
       "hidden": false
     },
     {
       "name": "Eye_ViewerLeft_Iris",
-      "atlas": "head",
-      "sourceRectangle": [
-        815,
-        440,
-        185,
-        220
-      ],
-      "opaqueBounds": {
-        "left": 17,
-        "top": 41,
-        "width": 140,
-        "height": 131
-      },
+      "source": "reference",
       "placement": [
-        467,
-        298,
-        23,
-        23
+        468,
+        366,
+        18,
+        16
       ],
       "hidden": false
     },
     {
       "name": "Eye_ViewerRight_Iris",
-      "atlas": "head",
-      "sourceRectangle": [
-        35,
-        735,
-        195,
-        200
-      ],
-      "opaqueBounds": {
-        "left": 23,
-        "top": 21,
-        "width": 139,
-        "height": 133
-      },
+      "source": "reference",
       "placement": [
-        534,
-        298,
-        23,
-        23
+        524,
+        356,
+        17,
+        16
       ],
       "hidden": false
     },
     {
       "name": "Eye_ViewerLeft_Lower",
-      "atlas": "head",
-      "sourceRectangle": [
-        265,
-        1040,
-        225,
-        120
-      ],
-      "opaqueBounds": {
-        "left": 39,
-        "top": 35,
-        "width": 63,
-        "height": 28
-      },
+      "source": "reference",
       "placement": [
-        456,
-        320,
-        46,
-        2
+        459,
+        376,
+        28,
+        10
       ],
-      "hidden": true
+      "hidden": false
     },
     {
       "name": "Eye_ViewerRight_Lower",
-      "atlas": "head",
-      "sourceRectangle": [
-        530,
-        1035,
-        240,
-        125
-      ],
-      "opaqueBounds": {
-        "left": 131,
-        "top": 48,
-        "width": 53,
-        "height": 21
-      },
+      "source": "reference",
       "placement": [
-        523,
-        320,
-        46,
-        2
+        522,
+        366,
+        25,
+        10
       ],
-      "hidden": true
+      "hidden": false
     },
     {
       "name": "Eye_ViewerLeft_Upper",
-      "atlas": "head",
-      "sourceRectangle": [
-        250,
-        775,
-        235,
-        115
-      ],
-      "opaqueBounds": {
-        "left": 13,
-        "top": 27,
-        "width": 192,
-        "height": 55
-      },
+      "source": "reference",
       "placement": [
-        450,
-        296,
-        55,
-        16
+        453,
+        361,
+        40,
+        14
       ],
       "hidden": false
     },
     {
       "name": "Eye_ViewerRight_Upper",
-      "atlas": "head",
-      "sourceRectangle": [
-        535,
-        770,
-        230,
-        130
-      ],
-      "opaqueBounds": {
-        "left": 32,
-        "top": 31,
-        "width": 189,
-        "height": 59
-      },
+      "source": "reference",
       "placement": [
-        519,
-        296,
-        55,
-        16
+        518,
+        350,
+        36,
+        15
       ],
       "hidden": false
     },
     {
       "name": "Brow_ViewerLeft",
-      "atlas": "head",
-      "sourceRectangle": [
-        785,
-        765,
-        225,
-        80
-      ],
-      "opaqueBounds": {
-        "left": 30,
-        "top": 29,
-        "width": 165,
-        "height": 25
-      },
+      "source": "reference",
       "placement": [
-        454,
-        280,
-        45,
-        9
+        457,
+        348,
+        28,
+        6
       ],
       "hidden": false
     },
     {
       "name": "Brow_ViewerRight",
-      "atlas": "head",
-      "sourceRectangle": [
-        0,
-        1030,
-        235,
-        100
-      ],
-      "opaqueBounds": {
-        "left": 50,
-        "top": 30,
-        "width": 173,
-        "height": 30
-      },
+      "source": "reference",
       "placement": [
-        524,
-        280,
-        45,
-        9
+        513,
+        338,
+        30,
+        10
+      ],
+      "hidden": false
+    },
+    {
+      "name": "Mouth_Upper",
+      "source": "reference",
+      "placement": [
+        496,
+        398,
+        32,
+        11
+      ],
+      "hidden": false
+    },
+    {
+      "name": "Hair_ViewerLeft",
+      "source": "reference",
+      "placement": [
+        384,
+        314,
+        106,
+        160
+      ],
+      "hidden": false
+    },
+    {
+      "name": "Hair_ViewerRight",
+      "source": "reference",
+      "placement": [
+        542,
+        284,
+        90,
+        170
+      ],
+      "hidden": false
+    },
+    {
+      "name": "Hair_Front",
+      "source": "reference",
+      "placement": [
+        424,
+        245,
+        139,
+        127
+      ],
+      "hidden": false
+    },
+    {
+      "name": "Hair_SignalClip",
+      "source": "reference",
+      "placement": [
+        540,
+        294,
+        38,
+        32
+      ],
+      "hidden": false
+    },
+    {
+      "name": "Earring_ViewerRight",
+      "source": "reference",
+      "placement": [
+        552,
+        382,
+        17,
+        30
       ],
       "hidden": false
     },
     {
       "name": "Mouth_Inside",
-      "atlas": "head",
-      "sourceRectangle": [
-        815,
-        1000,
-        180,
-        180
-      ],
-      "opaqueBounds": {
-        "left": 6,
-        "top": 18,
-        "width": 155,
-        "height": 135
-      },
+      "source": "legacy-hidden-expression-source",
       "placement": [
-        493,
-        353,
+        503,
+        394,
         37,
         37
       ],
       "hidden": true
     },
     {
-      "name": "Mouth_Upper",
-      "atlas": "head",
-      "sourceRectangle": [
-        0,
-        1280,
-        235,
-        110
-      ],
-      "opaqueBounds": {
-        "left": 48,
-        "top": 50,
-        "width": 172,
-        "height": 28
-      },
-      "placement": [
-        492,
-        370,
-        42,
-        8
-      ],
-      "hidden": false
-    },
-    {
       "name": "Mouth_Lower",
-      "atlas": "head",
-      "sourceRectangle": [
-        295,
-        1280,
-        165,
-        110
-      ],
-      "opaqueBounds": {
-        "left": 43,
-        "top": 71,
-        "width": 85,
-        "height": 16
-      },
+      "source": "legacy-hidden-expression-source",
       "placement": [
-        501,
-        377,
+        507,
+        405,
         23,
         4
       ],
       "hidden": true
-    },
-    {
-      "name": "Hair_ViewerLeft",
-      "atlas": "head",
-      "sourceRectangle": [
-        0,
-        360,
-        218,
-        340
-      ],
-      "opaqueBounds": {
-        "left": 29,
-        "top": 16,
-        "width": 141,
-        "height": 300
-      },
-      "placement": [
-        400,
-        202,
-        79,
-        240
-      ],
-      "hidden": false
-    },
-    {
-      "name": "Hair_ViewerRight",
-      "atlas": "head",
-      "sourceRectangle": [
-        835,
-        0,
-        189,
-        365
-      ],
-      "opaqueBounds": {
-        "left": 50,
-        "top": 54,
-        "width": 120,
-        "height": 295
-      },
-      "placement": [
-        548,
-        202,
-        79,
-        240
-      ],
-      "hidden": false
-    },
-    {
-      "name": "Hair_Front",
-      "atlas": "head",
-      "sourceRectangle": [
-        520,
-        0,
-        315,
-        365
-      ],
-      "opaqueBounds": {
-        "left": 8,
-        "top": 52,
-        "width": 276,
-        "height": 303
-      },
-      "placement": [
-        393,
-        160,
-        237,
-        236
-      ],
-      "hidden": false
-    },
-    {
-      "name": "Hair_SignalClip",
-      "atlas": "head",
-      "sourceRectangle": [
-        805,
-        1290,
-        205,
-        170
-      ],
-      "opaqueBounds": {
-        "left": 29,
-        "top": 19,
-        "width": 136,
-        "height": 116
-      },
-      "placement": [
-        563,
-        230,
-        37,
-        27
-      ],
-      "hidden": false
     }
   ]
 }

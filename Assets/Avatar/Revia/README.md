@@ -8,7 +8,7 @@ The exact generation prompt is in `generation-prompt.txt`; generation used the
 built-in image tool. This is a single flattened image, not a layered PSD or an
 exported Live2D model. No third-party character or sample rig was substituted.
 
-The editable 23-layer PSD and registered component PNGs are now in
+The editable 25-layer PSD and registered component PNGs are now in
 [Live2D](Live2D/README.md). Its corrected head was imported and saved in Cubism
 5.3.04 FREE. The animation rig and VTube Studio runtime verification remain open.
 
@@ -67,7 +67,7 @@ sync, replace that mapping with measured Revia output audio, not the user's mic.
 ## Required production deliverables
 
 The layered `.psd` is checked in. A corrected, unrigged `.cmo3` was saved locally
-under `Models/Live2D/Revia/Source/Revia-head-corrected.cmo3`. No `.moc3` has been
+under `Models/Live2D/Revia/Source/Revia-reference-matched.cmo3`. No `.moc3` has been
 exported. Complete the rig, then export a real `Revia.model3.json`, its referenced
 `.moc3` and texture atlas files, plus configured `.physics3.json` and any authored
 expressions/motions.
