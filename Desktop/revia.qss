@@ -46,6 +46,31 @@ QWidget#rootPanel {
     background: rgba(14, 20, 34, 250);
     border-radius: 16px;
 }
+QWidget#navigationSidebar {
+    background: rgba(20, 29, 45, 205);
+    border: 1px solid #293d56;
+    border-radius: 12px;
+}
+QLabel#sidebarBrand { color: #e8f4ff; font-size: 17px; font-weight: 700; }
+QLabel#sidebarHeading { color: #91a7c4; font-size: 11px; padding: 0 8px; }
+QLabel#reviaTitle { color: #e8f4ff; font-size: 20px; font-weight: 600; }
+QWidget#navigationSidebar QToolButton {
+    color: #b0c1d8;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 8px;
+    padding: 8px;
+    font-size: 13px;
+    text-align: left;
+}
+QWidget#navigationSidebar QToolButton:hover { background: rgba(36, 54, 77, 160); color: #e8f4ff; }
+QWidget#navigationSidebar QToolButton:checked {
+    color: #89efdb;
+    background: rgba(29, 70, 77, 180);
+    border-color: #417e85;
+}
+QWidget#navigationSidebar QToolButton:disabled { color: #667994; }
+QPushButton#runtimeDetailsButton { padding: 5px 10px; font-size: 12px; }
 QWidget#titleBar { background: transparent; }
 QLabel#windowTitle { color: #93a4bd; font-size: 13px; }
 QLabel#affectLabel, QLabel#speechLabel, QLabel#microphoneLabel,

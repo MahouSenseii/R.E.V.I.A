@@ -12,6 +12,7 @@ class QDoubleSpinBox;
 class QLabel;
 class QLineEdit;
 class QPlainTextEdit;
+class QResizeEvent;
 class QPushButton;
 class QSpinBox;
 
@@ -25,6 +26,9 @@ public:
     // Re-reads profiles, the active profile, and the created-voice list. Called after
     // startup and whenever the voice studio creates a preset.
     void Refresh();
+
+protected:
+    void resizeEvent(QResizeEvent* event) override;
 
 private:
     void LoadSelectedProfile();

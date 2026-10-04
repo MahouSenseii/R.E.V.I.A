@@ -49,6 +49,7 @@ class LearningStudioPanel;
 class DevelopmentStudioPanel;
 class AudienceStudioPanel;
 class ConversationStatusPanel;
+class NavigationSidebar;
 class AnswerFeedbackDialog;
 namespace Ui
 {
@@ -98,6 +99,7 @@ class ReviaWindow final : public QMainWindow
     // Keep a readable measure while allowing wide windows to use their extra space.
     void ApplyContentWidthCap();
     void ApplyResponsiveLayout();
+    void BuildNavigationSidebar();
     void BuildTray();
     void StartRuntime();
     void SendMessage(bool voiceInput = false);
@@ -264,6 +266,8 @@ class ReviaWindow final : public QMainWindow
     revia::learning::QualityFeedback displayedAnswerTarget;
     std::uint64_t displayedAnswerTurnId = 0;
     QTabWidget* tabs = nullptr;
+    NavigationSidebar* navigationSidebar = nullptr;
+    QPushButton* runtimeDetailsButton = nullptr;
     QPushButton* sendButton = nullptr;
     QPushButton* stopButton = nullptr;
     QPushButton* microphoneButton = nullptr;

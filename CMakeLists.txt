@@ -214,6 +214,8 @@ if(REVIA_BUILD_DESKTOP)
                 "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/windowLayout.cpp"
                 "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/tabNavigation.cpp"
                 "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/tabNavigation.h"
+                "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/navigationSidebar.cpp"
+                "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/navigationSidebar.h"
                 "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/mindPanel.h"
                 "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/memoryPanel.h"
                 "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/pipelinePanel.cpp"

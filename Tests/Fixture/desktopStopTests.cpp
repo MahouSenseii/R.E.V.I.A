@@ -35,6 +35,7 @@
 #include <QTextBrowser>
 #include <QTemporaryDir>
 #include <QTimer>
+#include <QToolButton>
 #include <QTreeWidget>
 #include <QTreeWidgetItemIterator>
 
@@ -403,6 +404,41 @@ struct ReviaWindowStopTests
         };
         window.show();
         expect(window.tabs->count() == 6, "main navigation must group related pages into six readable destinations");
+        auto* sidebar = window.findChild<QWidget*>("navigationSidebar");
+        expect(sidebar != nullptr && !window.tabs->tabBar()->isVisible(), "main destinations must use the sidebar instead of a top tab row");
+        if (sidebar)
+        {
+            for (int index = 0; index < window.tabs->count(); ++index)
+            {
+                auto* button = sidebar->findChild<QToolButton*>(QString("sidebarPage%1").arg(index));
+                expect(button != nullptr, "every main destination must have a sidebar button");
+                if (button)
+                {
+                    button->click();
+                    expect(window.tabs->currentIndex() == index && button->isChecked(), "sidebar selection must activate the existing page");
+                }
+            }
+            window.tabs->setEnabled(false);
+            expect(!sidebar->isEnabled(), "sidebar must respect the companion replacement navigation lock");
+            window.tabs->setEnabled(true);
+            expect(sidebar->isEnabled(), "sidebar must recover when navigation is admitted again");
+            window.AppendActivity("Sidebar warning count fixture", ReviaWindow::ActivitySeverity::Warning);
+            auto* runtimeButton = sidebar->findChild<QToolButton*>("sidebarPage4");
+            expect(runtimeButton && runtimeButton->text() == window.tabs->tabText(4) && runtimeButton->text().contains('('),
+                "sidebar Runtime count must react to the actual activity summary");
+            window.tabs->setCurrentIndex(0);
+        }
+        window.UpdateState(revia::runtime::RuntimeState::Error, "The language model is unavailable; typed actions remain available.");
+        auto* runtimeDetails = window.findChild<QPushButton*>("runtimeDetailsButton");
+        expect(runtimeDetails != nullptr && !runtimeDetails->isHidden(), "model startup errors must offer an actionable diagnostics route");
+        if (runtimeDetails)
+        {
+            runtimeDetails->click();
+            expect(window.findChild<QWidget*>("activityPage")->isVisible(), "error Details must open the existing Runtime Activity page");
+            window.UpdateState(revia::runtime::RuntimeState::Idle, "Ready");
+            expect(runtimeDetails->isHidden(), "startup Details must leave the header once the error clears");
+            window.tabs->setCurrentIndex(0);
+        }
         health("Degraded");
         auto* chatBadge = window.findChild<QLabel*>("chatVoiceHealthBadge");
         auto* voiceBadge = window.findChild<QLabel*>("voiceHealthBadge");
@@ -489,6 +525,46 @@ struct ReviaWindowStopTests
             window.resize(size);
             SettleLayouts();
             expect(window.size() == size, QString("the full interface must fit %1x%2").arg(size.width()).arg(size.height()));
+            if (sidebar && size.width() == 760)
+            {
+                expect(sidebar->isVisible() && sidebar->width() <= 64, "small windows must retain a compact navigation rail");
+                for (int index = 0; index < window.tabs->count(); ++index)
+                {
+                    auto* button = sidebar->findChild<QToolButton*>(QString("sidebarPage%1").arg(index));
+                    expect(button && !button->accessibleName().isEmpty() && !button->toolTip().isEmpty(),
+                        "icon-only destinations must retain accessible names and readable tooltips");
+                }
+            }
+            if (!renderDirectory.isEmpty())
+            {
+                const auto previousState = window.lastRuntimeState;
+                const auto previousDetail = window.lastRuntimeDetail;
+                window.UpdateState(revia::runtime::RuntimeState::Error, "The language model is unavailable; typed actions remain available.");
+                revia::desktop::SelectNavigationPage(window.findChild<QWidget*>("chatPage"));
+                SettleLayouts();
+                expect(runtimeDetails && runtimeDetails->isVisible() && window.size() == size,
+                    "model error and diagnostics must fit each requested viewport");
+                expect(window.grab().save(QDir(renderDirectory).filePath(QString("startup-error-%1x%2.png").arg(size.width()).arg(size.height()))),
+                    "startup error must have a fresh Qt render");
+                window.UpdateState(previousState, previousDetail);
+            }
+            if (sidebar && size.width() == 1040)
+            {
+                auto* toggle = sidebar->findChild<QToolButton*>("sidebarToggle");
+                expect(toggle != nullptr, "sidebar must offer a collapse control");
+                if (toggle)
+                {
+                    const int expandedWidth = sidebar->width();
+                    const int contentWidth = window.tabs->width();
+                    toggle->click();
+                    SettleLayouts();
+                    expect(sidebar->width() < expandedWidth && window.tabs->width() > contentWidth,
+                        "collapsing the sidebar must give space back to the content");
+                    toggle->click();
+                    SettleLayouts();
+                    expect(sidebar->width() == expandedWidth, "expanding the sidebar must restore its readable labels");
+                }
+            }
             for (auto* group : window.findChildren<QTabWidget*>())
             {
                 auto* bar = group->tabBar();
@@ -499,6 +575,11 @@ struct ReviaWindowStopTests
                 revia::desktop::SelectNavigationPage(page);
                 SettleLayouts();
                 expect(page->isVisible(), "each subpage must activate its full navigation route");
+                if (sidebar)
+                {
+                    auto* button = sidebar->findChild<QToolButton*>(QString("sidebarPage%1").arg(window.tabs->currentIndex()));
+                    expect(button && button->isChecked(), "deep-link page selection must update the sidebar highlight");
+                }
                 for (auto* group : window.findChildren<QTabWidget*>())
                 {
                     auto* bar = group->tabBar();

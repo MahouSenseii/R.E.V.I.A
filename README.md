@@ -126,6 +126,24 @@ Use a path without unusual characters. Paths with spaces work, but keep it short
 
 ### 2. Run the one-command setup
 
+Downloading or cloning from GitHub supplies the source and configuration, but
+does not install the language-model weights or native model runtimes. An opened
+desktop window can therefore report that the language model is unavailable.
+Run setup on each Windows computer so the runtime matches that computer's
+hardware. For a first laptop install, start with:
+
+```powershell
+.\setup.bat -Profile Minimal -SkipVoice
+```
+
+This installs chat, memory and speech-recognition models, disables vision, and
+keeps Windows SAPI as the voice fallback. After setup succeeds, launch
+`build\debug\ReviaDesktop.exe`. For a startup error, use the header's **Details**
+button to open **Runtime → Activity**, then **Open folder** for the actual logs.
+`Logs\setup.log` records installer failures; language-worker stderr logs record
+model loading and runtime failures. Re-running setup does not replace saved
+memory. Optional custom voice and vision can be installed later.
+
 ```powershell
 .\setup.bat -Profile Full
 ```

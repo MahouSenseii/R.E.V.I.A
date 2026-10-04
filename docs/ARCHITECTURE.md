@@ -37,7 +37,9 @@ coordination, diagnostics, and runtime events. All three implement the existing
 ## Desktop navigation
 
 `Desktop/tabNavigation` groups the existing Qt pages and selects their complete
-ancestor route. It owns presentation only; session panels, permission controls
+ancestor route. `Desktop/navigationSidebar` projects that same page stack into
+six sidebar destinations, mirrors its navigation admission state, and offers
+a compact icon rail. It owns presentation only; session panels, permission controls
 and runtime owners retain their existing state and lifetime. Grouping runs after
 initial construction and after session panels are rebuilt, preserving selection
 on subsequent calls. See [Desktop navigation](DESKTOP_NAVIGATION.md) for the page

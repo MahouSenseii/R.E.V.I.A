@@ -1,6 +1,7 @@
 #include "Agents/answerObligation.h"
 #include "profilePanel.h"
 
+#include <QBoxLayout>
 #include <QCheckBox>
 #include <QComboBox>
 #include <QDoubleSpinBox>
@@ -11,6 +12,7 @@
 #include <QLineEdit>
 #include <QPlainTextEdit>
 #include <QPushButton>
+#include <QResizeEvent>
 #include <QSignalBlocker>
 #include <QSpinBox>
 #include <QStyle>
@@ -64,6 +66,7 @@ ProfilePanel::ProfilePanel(revia::runtime::ReviaSession& inputSession, QWidget* 
     layout->addWidget(activeBanner);
 
     auto* selectionRow = new QHBoxLayout();
+    selectionRow->setObjectName("profileSelectionRow");
     selectionRow->addWidget(new QLabel("Profile", this));
     profileCombo = new QComboBox(this);
     profileCombo->setMinimumWidth(220);
@@ -135,6 +138,7 @@ ProfilePanel::ProfilePanel(revia::runtime::ReviaSession& inputSession, QWidget* 
     identityLayout->addLayout(answerStyleRow);
 
     auto* samplingRow = new QHBoxLayout();
+    samplingRow->setObjectName("profileSamplingRow");
     temperatureCheck = new QCheckBox("Override temperature", identityGroup);
     temperatureSpin = new QDoubleSpinBox(identityGroup);
     temperatureSpin->setRange(0.0, 2.0);
@@ -168,6 +172,7 @@ ProfilePanel::ProfilePanel(revia::runtime::ReviaSession& inputSession, QWidget* 
     voiceHint->setObjectName("secondaryText");
     voiceLayout->addWidget(voiceHint);
     auto* voiceRow = new QHBoxLayout();
+    voiceRow->setObjectName("profileVoiceRow");
     voiceCombo = new QComboBox(voiceGroup);
     voiceCombo->setMinimumWidth(220);
     voiceRow->addWidget(voiceCombo);
@@ -231,6 +236,17 @@ const revia::runtime::ProfileSummary* ProfilePanel::FindProfile(const std::strin
         }
     }
     return nullptr;
+}
+
+void ProfilePanel::resizeEvent(QResizeEvent* event)
+{
+    QWidget::resizeEvent(event);
+    const bool compact = width() < 720;
+    for (const auto* name : {"profileSelectionRow", "profileSamplingRow", "profileVoiceRow"})
+    {
+        if (auto* row = findChild<QBoxLayout*>(name))
+            row->setDirection(compact ? QBoxLayout::TopToBottom : QBoxLayout::LeftToRight);
+    }
 }
 
 void ProfilePanel::Refresh()

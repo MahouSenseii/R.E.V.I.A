@@ -1,11 +1,15 @@
 #include "reviaWindow.h"
 #include "ui_reviaWindow.h"
+#include "navigationSidebar.h"
+#include "tabNavigation.h"
 
 #include <QBoxLayout>
 #include <QFormLayout>
 #include <QGridLayout>
 #include <QLabel>
+#include <QPushButton>
 #include <QTabBar>
+#include <QTabWidget>
 
 #include <algorithm>
 #include <vector>
@@ -46,13 +50,17 @@ void ReviaWindow::ApplyResponsiveLayout()
 {
     if (ui == nullptr || ui->statusLayout == nullptr || tabs == nullptr)
         return;
-    const bool compact = width() < 900;
+    if (navigationSidebar)
+        navigationSidebar->SetNarrow(width() < 1000);
+    const int contentWidth = width() - ui->rootLayout->contentsMargins().left() - ui->rootLayout->contentsMargins().right() -
+                             (navigationSidebar ? navigationSidebar->width() + 16 : 0);
+    const bool compact = contentWidth < 850;
     ReflowGrid(ui->statusLayout, compact ? 3 : 6);
     ReflowGrid(ui->activityToolbarLayout, compact ? 2 : 6);
     ReflowGrid(ui->conversationBehaviorControls, compact ? 1 : 2);
     if (auto* cards = ui->permissionsPage->findChild<QGridLayout*>("permissionCards"))
     {
-        ReflowGrid(cards, width() < 1150 ? 1 : 2);
+        ReflowGrid(cards, contentWidth < 1150 ? 1 : 2);
     }
     for (auto* label : {affectLabel, speechLabel, microphoneLabel, automationLabel, visionLabel, perceptionLabel})
     {
@@ -65,7 +73,7 @@ void ReviaWindow::ApplyResponsiveLayout()
         if (auto* layout = findChild<QBoxLayout*>(name))
         {
             const bool settingsRow = layout == ui->preferenceLayout || layout == ui->microphoneDeviceLayout;
-            const bool stack = settingsRow ? compact : width() < 1150;
+            const bool stack = settingsRow ? compact : contentWidth < 1150;
             layout->setDirection(stack ? QBoxLayout::TopToBottom : QBoxLayout::LeftToRight);
         }
     }
@@ -88,4 +96,46 @@ void ReviaWindow::ApplyResponsiveLayout()
     tabs->tabBar()->setUsesScrollButtons(false);
     // Recompute tab metrics after grouping changes the bar's style selector.
     tabs->tabBar()->setStyleSheet(compact ? "QTabBar::tab { padding: 8px 10px; }" : "QTabBar::tab { padding: 9px 14px; }");
+}
+
+void ReviaWindow::BuildNavigationSidebar()
+{
+    auto* body = new QWidget(ui->rootPanel);
+    body->setObjectName("navigationBody");
+    auto* row = new QHBoxLayout(body);
+    row->setContentsMargins(0, 0, 0, 0);
+    row->setSpacing(16);
+    navigationSidebar = new NavigationSidebar(tabs, [this]() { ApplyResponsiveLayout(); }, body);
+    row->addWidget(navigationSidebar);
+    auto* content = new QWidget(body);
+    auto* column = new QVBoxLayout(content);
+    column->setContentsMargins(0, 0, 0, 0);
+    column->setSpacing(12);
+    for (QLayout* layout : {static_cast<QLayout*>(ui->headerLayout), static_cast<QLayout*>(ui->statusLayout)})
+    {
+        ui->rootLayout->removeItem(layout);
+        layout->setParent(nullptr);
+        column->addLayout(layout);
+    }
+    ui->rootLayout->removeWidget(tabs);
+    column->addWidget(tabs, 1);
+    row->addWidget(content, 1);
+    ui->rootLayout->addWidget(body, 1);
+    ui->reviaTitle->setStyleSheet("");
+    const auto titleChanged = [this](const int index)
+    {
+        ui->reviaTitle->setText(tabs->tabText(index).section(" (", 0, 0));
+    };
+    connect(tabs, &QTabWidget::currentChanged, this, titleChanged);
+    titleChanged(tabs->currentIndex());
+    runtimeDetailsButton = new QPushButton("Details", content);
+    runtimeDetailsButton->setObjectName("runtimeDetailsButton");
+    runtimeDetailsButton->setToolTip("Show startup messages and the runtime log folder");
+    runtimeDetailsButton->hide();
+    ui->headerLayout->addWidget(runtimeDetailsButton);
+    connect(runtimeDetailsButton, &QPushButton::clicked, this, [this]()
+        {
+            if (tabs->isEnabled())
+                revia::desktop::SelectNavigationPage(ui->activityPage);
+        });
 }

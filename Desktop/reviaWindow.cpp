@@ -1,5 +1,6 @@
 #include "reviaWindow.h"
 #include "tabNavigation.h"
+#include "navigationSidebar.h"
 
 #include "Core/logger.h"
 #include "Audit/contentDigest.h"
@@ -176,6 +177,7 @@ ReviaWindow::ReviaWindow(const bool startRuntime, const bool buildSystemTray, QW
     BuildInterface();
     BuildCompanionControls();
     revia::desktop::GroupNavigationPages(tabs);
+    BuildNavigationSidebar();
     ApplyResponsiveLayout();
     if (buildSystemTray)
     {
@@ -2009,6 +2011,8 @@ void ReviaWindow::RefreshStateBadge()
     const QString cleanDetail = detail.trimmed().compare(name, Qt::CaseInsensitive) == 0 ? QString() : detail.trimmed();
     stateDetailLabel->setText(cleanDetail);
     stateDetailLabel->setVisible(!cleanDetail.isEmpty());
+    if (runtimeDetailsButton)
+        runtimeDetailsButton->setVisible(newState == revia::runtime::RuntimeState::Error);
     if (trayIcon)
     {
         trayIcon->setToolTip("Revia - " + name);
@@ -2335,6 +2339,8 @@ void ReviaWindow::UpdateActivitySummary()
         tabs->setTabText(runtimeIndex, issueCount == 0 ? QStringLiteral("Runtime") : QStringLiteral("Runtime (%1)").arg(issueCount));
         tabs->setTabToolTip(runtimeIndex,
             issueCount == 0 ? QStringLiteral("No warnings or errors in the retained activity log.") : activityIssueSummary->text());
+        if (navigationSidebar)
+            navigationSidebar->Refresh();
     }
 }
 
