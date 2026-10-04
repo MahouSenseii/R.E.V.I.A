@@ -91,7 +91,7 @@
 - [x] Run affected native tests, full discovered suite, shipping build, fresh UI checks, and actual local-model quality comparisons when available.
 - [x] Independent review checks exact source, personality preservation, privacy/lifecycle, and claims against retained evidence.
 - [x] Update architecture/roadmap with actual capabilities and unresolved limits.
-- [ ] Integrate accepted updates into main, push to GitHub, verify remote state, and clean only this package's merged branch according to the owner's standing workflow.
+- [x] Integrate accepted updates into main, push to GitHub, verify remote state, and clean only this package's merged branch according to the owner's standing workflow.
 
 Campaign status and detailed evidence live under ignored `build/studio-20261003-answer-quality`. Retest only after changed code, configuration, dependencies, or new evidence; limit each repair to three evidence-driven attempts before reassessing its scope.
 
@@ -99,7 +99,7 @@ Campaign status and detailed evidence live under ignored `build/studio-20261003-
 
 | Engineering owner | Status | Current work and evidence |
 | --- | --- | --- |
-| Director | Delivering | All seven slices connect to existing owners. Shipping and post-repair builds pass; the final full suite is 47/47. Captured action/confirmation and UI approval regressions pass. Main integration, push, remote verification and merged-branch cleanup are next. |
+| Director | Delivered | All seven slices connect to existing owners. Shipping and post-repair builds pass; the final full suite is 47/47. Captured action/confirmation and UI approval regressions pass. Implementation `edd72df` was merged into main, pushed and verified on GitHub; the merged package branch was removed. Acceptance reporting retains semantic, subjective and physical limits. |
 | Answer Quality Supervisor | Frozen and reviewed | Current-task/correction purpose, exact/ceiling/range guidance retained under context fitting, contextual opt-in review, shared native diagnostics/evaluation. Isolated RED/GREEN and clause-negation repair pass. |
 | Capability Supervisor | Frozen and reviewed | Typed task deliverables, pinned prerequisites, native investigation read/list execution and attempt-captured improvement reporting. Isolated RED/GREEN pass. |
 | Continuity Supervisor | Frozen and reviewed | Exact owner memory revisions, judged quality gaps, reviewed lessons, bounded dependency retests and canceled-write guards. Isolated and integrated runtime checks pass. |

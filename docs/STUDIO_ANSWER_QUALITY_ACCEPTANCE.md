@@ -9,7 +9,10 @@ answer-quality improvement or owner acceptance of Revia's personality delivery.
 The final shipping/test build is current and all **47/47 registered checks pass**
 in the corrected Windows environment. The final normal and 125% UI checks pass.
 Earlier negative runs remain retained, including a transient cue-fixture port-pair
-allocation failure. Git delivery is the remaining integration step at this revision.
+allocation failure. Implementation commit `edd72df52c0c76f5adbffcbd1c5e1c5b3971944e`
+was fast-forwarded into main and pushed to GitHub. Local main, origin/main and the
+queried GitHub main reference matched that commit before removing this package's
+merged local branch. This documentation closure follows it without code changes.
 
 The approved scope and constraints are in
 [STUDIO_QUALITY_PLAN.md](STUDIO_QUALITY_PLAN.md). Runtime ownership is documented
@@ -172,10 +175,9 @@ values establish correlation and statistics, not physical device performance.
 | Full registered suite | Final `accepted-release-ctest.log` records exit 0, 47/47 and 174.21 seconds. Earlier 45/47 and 46/47 failures are retained. Cancellation, timing, captured native action/confirmation admission and both queued UI approval paths have passing regressions. `accepted-final-ctest.log` is 46/47 because Foundation fails reserving a random base port and base+32; `cue-fixture-repeat.log` then passes 1/1 before the successful full run. The allocation negative remains a known transient fixture limitation; its log does not distinguish a high base port from an occupied offset. Windows PowerShell is included in the corrected environment. |
 | Qt captures | Final `ui/render-evidence.json` records two exit-0 runs, 134 fresh captures, geometry/caption checks and representative pixel review at 760×540, 1040×720 and 1600×1000 at normal and 125%. The exact fixture SHA256 is `C745B017381153CE32B05DB29F0FA35F0550CBDCDB59BE450F698E0777C882E3`. The 402 earlier captures and actual eight-failure approval RED are retained. |
 | Formatting | Focused clang-format evidence retains token equivalence for formatting-only changes. |
-| Git integration | Final main integration, push, remote verification and cleanup of this package's merged branch remain Director-owned and pending in this draft. |
+| Git integration | Implementation `edd72df` is on main and was pushed to `MahouSenseii/R.E.V.I.A`; local, tracking and queried GitHub main matched its full SHA. The merged local `codex/revia-answer-quality` branch was removed. No package remote branch was created. The ignored `delivery-receipt.json` records the exact queried state and subsequent documentation closure. |
 
-Engineering verification passes; exact main integration/remote evidence remains
-the delivery gate at this revision. Model quality acceptance additionally needs
+Engineering verification and implementation delivery pass. Model quality acceptance additionally needs
 new held-out factual/current-request
 judgments and owner review of actual delivery. Physical recognition, microphone
 and noise robustness, first audible speech and speaker quality require consented
