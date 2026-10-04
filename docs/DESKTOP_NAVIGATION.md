@@ -43,7 +43,7 @@ first-launch captions use the new selector's metrics. This follows Qt's
 | Director / lifecycle connections | Complete. Initial, failure and rebuilt Voice routes select nested pages; companion rebuilds restore bar settings. |
 | Foundation Supervisor / independent source review | Complete. Lifecycle and diagnostic-font follow-ups reviewed with no remaining blocker. |
 | Director / viewport verification | Complete. All 21 leaf routes at 760×540, 1040×720 and 1600×1000; compact Memory retains both required rows. The same fixture passed at 125% display scaling. |
-| Director / repository delivery | Authorized for verified integration to main, GitHub push and cleanup of the merged package branch. Delivery receipts remain in the local campaign folder. |
+| Director / repository delivery | Complete. Verified implementation merged to main, pushed to GitHub, remote identity confirmed and the merged package branch removed. |
 
 ## Verification evidence
 
@@ -64,3 +64,11 @@ retained with final evidence in `build/studio-20261004-navigation`, excluded fro
 Git. The package changes desktop presentation and checks only; authored profiles,
 personality guidance, model settings, saved memory and permission policy are
 unchanged. No model inference or usage reset is needed for these UI checks.
+
+Implementation commit `1fcf0198d9463de38498e1e2bf076a011c46b6f5` was
+fast-forwarded into main and pushed. Local main, origin/main and GitHub main
+matched before `codex/revia-clean-navigation` was deleted. The four affected
+desktop checks passed on merged main in 6.84 seconds. Git checkout converted
+line endings; normalized source fingerprints proved all nine implementation
+and test files retained exactly the tested content. This delivery record adds
+no implementation changes.
