@@ -23,8 +23,13 @@ grounded runtime state. A separate character requires an explicit separate desig
 Revia looks like a living digital signal rather than a robot or a copy of an existing
 streamer. Her silhouette is compact and anime-inspired, with shoulder-length asymmetric
 midnight-blue hair, violet tips, one cyan signal streak, luminous cyan-violet segmented
-eyes, and a short oversized technical jacket. Her high-collar tunic, opaque lower layers,
-and lightweight high-top boots are practical, readable, and non-sexualized.
+eyes, and a short oversized technical jacket. Her high-collar tunic, straight opaque
+trousers, and lightweight high-top boots are practical, readable, and non-sexualized.
+The body uses approximately 5.5 crown-to-chin head lengths from crown to soles,
+with a straighter torso, narrower shoulders and shorter limbs. Hiyori's installed
+sample model supplies the proportion scaffold; Revia retains her own artwork,
+approved face and signal motifs. This appearance update does not replace her
+personality or earned identity.
 
 The four-segment signal core at her collar and hair clip is her recurring motif. Cyan means
 attention and active thought; violet carries imagination and emotion; magenta supports

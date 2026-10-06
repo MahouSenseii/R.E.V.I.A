@@ -16,7 +16,8 @@ The reference head now keeps its compact jaw, tilted eyes, iris colors, subtle
 nose and smile, asymmetrical bangs, loose crown strand and hanging earring. Its
 uniform scale is 0.8; reference collar point `(512, 250)` maps to model collar
 point `(512, 432)`, with integer raster rounding recorded in the manifest.
-The body and arms keep their existing artwork and registration.
+The original PSD keeps its original body and arms. The current native rig uses
+the registered [compact body v2](Body-v2/README.md) replacement.
 
 The visible head is partitioned into independent face, neck, eye whites, irises,
 upper/lower lids, brows, smile, hair sections, clip and earring layers. Each
@@ -29,8 +30,10 @@ The first native rig uses the reference-aligned
 [speaking mouth v1](Revia-rig-mouth-v1/README.md). Both replacements were
 registered, remeshed and keyed in the native rig; the original PSD and part PNGs
 remain unchanged. Their package proofs cover source pixels and placement.
-Controlled VTube Studio playback confirmed the mouth and expression controls;
-natural speech and further deformation still need acceptance.
+Controlled VTube Studio playback confirmed the mouth and expression controls.
+An actual Qwen greeting on 2026-10-06 also confirmed changing mouth movement
+from the output WAV loudness track, silence handling and completion cleanup.
+Further deformation still needs acceptance.
 
 The PSD was imported into Live2D Cubism Editor 5.3.04 FREE and saved locally as:
 
@@ -42,7 +45,10 @@ local model data.
 
 ## Production state
 
-The first rig is saved as `Models/Live2D/Revia/Source/Revia-first-rig.cmo3`.
+The current rig is saved as `Models/Live2D/Revia/Source/Revia-body-v2.cmo3`.
+The earlier `Revia-first-rig.cmo3` remains intact. The three-layer
+`Body-v2/body-update.psd` replaces only Body and the two arms; the approved head
+continues to use the original layers and existing backing/mouth sources.
 Its local export under `Models/Live2D/Revia/Runtime` contains the model descriptor,
 MOC3, display metadata and a 2048 x 2048 texture atlas, with populated `EyeBlink`
 and `LipSync` groups. Initial expression, blink, speaking-mouth and lean controls
@@ -59,8 +65,16 @@ blink and breath. The production adapter passed source reset/recovery and
 transient-gate expiry checks against the real renderer using an isolated test
 snapshot. Real conversation/speech worked with the original gate, but the owner
 reported poor lip sync. Renderer restart/reauthentication passed. The corrected
-loudness-track build still needs a fresh actual conversation check. Gaze,
-head X/Y turns, hair physics and independent limb movement remain unrigged. The
+loudness-track build passed a fresh actual conversation check on 2026-10-06:
+two phrases supplied 77 and 80 loudness windows at 50 ms, with 30 and 19 silent
+windows. VTube Studio's mouth output varied from 0 to 0.4853 and returned to
+closed after playback. Device timing remains a playback-submission estimate.
+The compact body was exported, installed and visually checked in VTube Studio
+on the same date. Core comparison found identical IDs, parameter definitions,
+canvas and neutral geometry for all 21 retained head/neck meshes. Live readback
+confirmed mouth, joy, sadness, anger, focus, listening, engagement, blink and
+breath after the replacement. The selected renderer is now `vtube_studio`.
+Gaze, head X/Y turns, hair physics and independent limb movement remain unrigged. The
 handoff's full rig specification remains a production target. The
 [first-rig mapping preset](Revia-first-rig-mappings.json) records the eight bridge
 inputs and automatic blink/breath mappings without changing app permissions.

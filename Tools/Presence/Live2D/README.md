@@ -9,9 +9,10 @@ memory or submits actions. Closing the renderer leaves Revia running.
 
 Original reference artwork is saved in
 [Assets/Avatar/Revia](../../../Assets/Avatar/Revia/README.md).
-The adapter has automated contract checks. A 25-layer PSD and a locally saved,
-reference-matched first rig are available. The rig source is
-`Models/Live2D/Revia/Source/Revia-first-rig.cmo3`; its native export is
+The adapter has automated contract checks. The original 25-layer PSD and a
+registered [three-layer body update](../../../Assets/Avatar/Revia/Live2D/Body-v2/README.md)
+are available. The current compact-body rig source is
+`Models/Live2D/Revia/Source/Revia-body-v2.cmo3`; its native export is
 `Models/Live2D/Revia/Runtime/Revia.model3.json`. Initial expression, blink,
 speaking-mouth and lean controls are authored; gaze, head X/Y turns, hair physics
 and independently animated limbs remain unrigged. Blink uses basic compression
@@ -31,9 +32,16 @@ now supplies a fresh real Presence snapshot. Real replies and speech ran, and
 the owner confirmed the avatar worked but its original gate lip sync was off.
 VTube Studio was restarted: the adapter reconnected with its saved approval,
 and Revia's model/mappings remained loaded. The corrected loudness-track build
-still needs a fresh real conversation check.
-The checked-in renderer target remains
-`unselected`; the adapter does not change it.
+passed a real two-sentence greeting on 2026-10-06. The actual output WAVs produced
+77 and 80 loudness windows at 50 ms, including 30 and 19 silent windows.
+VTube Studio's mouth output varied from 0 to 0.4853, decayed during silence,
+and closed when Presence cleared the playback track. This verifies the live
+control path and cleanup; playback timing still uses the submission estimate.
+The compact body was subsequently exported and reloaded into the same VTube
+Studio model. Live control readback passed, with all 21 preserved head/neck
+meshes unchanged in the Core comparison. The checked-in renderer is now selected
+as `vtube_studio`; the adapter does not alter that authored metadata or install
+the ignored local model files on another computer.
 
 ## Setup
 

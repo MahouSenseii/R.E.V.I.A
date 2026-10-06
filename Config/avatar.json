@@ -4,7 +4,7 @@
     "name": "Revia",
     "concept": "A bright living digital signal: curious, expressive, mischievous, and capable.",
     "presentation": "Youthful but not a literal child; friendly and non-sexualized.",
-    "silhouette": "Compact anime-inspired figure with a short oversized technical jacket and shoulder-length asymmetric hair.",
+    "silhouette": "Compact anime-inspired figure, approximately 5.5 heads tall, with a straight torso, loose technical jacket and shoulder-length asymmetric hair.",
     "hair": {
       "base": "#11182F",
       "tips": "#6547A8",
@@ -18,7 +18,7 @@
     "clothing": {
       "base": "charcoal and midnight-navy high-collar tunic",
       "outer": "short oversized technical jacket with cyan seams and violet lining",
-      "lower": "dark skirt or fitted shorts with opaque tights",
+      "lower": "straight opaque dark trousers beneath a loose high-collar tunic",
       "footwear": "lightweight futuristic high-top boots"
     },
     "motif": "four-segment signal core",
@@ -57,8 +57,8 @@
     "focused": "focused"
   },
   "renderer": {
-    "target": "unselected",
-    "modelPath": "",
+    "target": "vtube_studio",
+    "modelPath": "Models/Live2D/Revia/Runtime/Revia.model3.json",
     "lipSync": "audio_amplitude",
     "visemes": "future",
     "statePath": "RuntimeData/Presence/avatar_state.json",

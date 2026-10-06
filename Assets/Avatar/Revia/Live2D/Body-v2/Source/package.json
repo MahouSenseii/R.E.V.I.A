@@ -1,0 +1,8 @@
+{
+  "private": true,
+  "description": "Reproducible technical packaging for the Revia Body-v2 source artwork",
+  "dependencies": {
+    "sharp": "0.35.4",
+    "ag-psd": "31.0.2"
+  }
+}

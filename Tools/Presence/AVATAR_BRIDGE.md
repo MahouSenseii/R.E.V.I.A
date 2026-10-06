@@ -27,8 +27,10 @@ future work. Rendering remains a consumer: it must
 never call inference or grant an action.
 
 The canonical design, palette, expression mapping, and selected renderer target are in
-`Config/avatar.json`. `target` remains `unselected` until a real Live2D/VRM model and its
-renderer are chosen. The transition stream rotates to `avatar_events.jsonl.1` at the
+`Config/avatar.json`. The accepted local model is selected as `vtube_studio`, with
+`Models/Live2D/Revia/Runtime/Revia.model3.json` as its export path. This metadata
+does not start the adapter or install local model data on another computer.
+The transition stream rotates to `avatar_events.jsonl.1` at the
 configured byte ceiling, and repeated shutdown calls do not emit duplicate offline states.
 
 The optional [Live2D adapter](Live2D/README.md) consumes this same snapshot and
@@ -37,5 +39,5 @@ binary gate; the adapter prefers a valid optional output-audio track. Snapshots
 remain event-only rather than heartbeats. The bounded legacy timeout, track
 limits and required model mappings are documented explicitly. Original
 [reference art and rigging instructions](../../Assets/Avatar/Revia/README.md)
-are accompanied by a local first rig and native export; further motion and
-fresh corrected-build acceptance are recorded separately.
+are accompanied by the local compact-body rig and native export. The handoff
+records live speech acceptance, body replacement checks and remaining motion work.
