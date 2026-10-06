@@ -653,9 +653,9 @@ void TestATaskDoesNotFinishOnContentNobodyHasSeen()
     ReviaSessionTestAccess::EndComputerTask(fixture.session);
 }
 
-// And the converse, because a gate that refuses everything is not a gate. A task with
-// no identifiable content behaves exactly as it did before any of this existed.
-void TestATaskWithNoContentIsUnaffected()
+// Content-free tasks still reach the controller. A completion proposal needs its own
+// supported whole-task criterion before the runner can accept it.
+void TestATaskWithNoContentStillRequiresIndependentAcceptance()
 {
     SessionFixture fixture;
     fixture.UseMode("legacy");
@@ -678,9 +678,12 @@ void TestATaskWithNoContentIsUnaffected()
     const Goal finished = ReviaSessionTestAccess::OperateGoal(fixture.session, goal);
     ReviaSessionTestAccess::EndComputerTask(fixture.session);
 
-    Check(finished.status == GoalStatus::Succeeded,
-        "A task with nothing to type was stopped by the content gate, which would break "
-        "every task that never had a payload.");
+    Check(fixture.stepRequests.size() == 1 && fixture.Tasks().ContentStats().prematureCompletions == 0,
+        "The content gate interfered with a task that had no payload.");
+    Check(finished.status == GoalStatus::Blocked && finished.stopReason == StopReason::VerificationFailed &&
+            !finished.stopDetail.empty(),
+        "A synthetic completion without an independently supported criterion became whole-task success.");
+    Check(!fixture.session.IsStarted(), "The operator fixture did not restore the session's prior stopped state.");
 }
 
 } // namespace
@@ -691,7 +694,7 @@ void RunComputerSessionTests()
     TestTheGrammarOffersNoRoomForAnInventedPayload();
     TestProviderFallbackStillCannotInventThePayload();
     TestATaskDoesNotFinishOnContentNobodyHasSeen();
-    TestATaskWithNoContentIsUnaffected();
+    TestATaskWithNoContentStillRequiresIndependentAcceptance();
     TestTheDefaultSessionStillAsksTheModelForEveryStep();
     TestTheSubgoalPromptReferencesContentWithoutShowingIt();
     TestAnOutOfScopeSubgoalNeverReachesAPolicy();

@@ -1,5 +1,9 @@
 #pragma once
+
+#include "Browser/browserTypes.h"
 #include "Runtime/runtimeStamp.h"
+#include "Process/processTypes.h"
+#include "Visual/imageTypes.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -8,6 +12,7 @@
 #include <atomic>
 #include <memory>
 #include <map>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -38,7 +43,14 @@ enum class ActionType
     ScrollPointer,
     PressKeys,
     TypeText,
-    WebSearch
+    WebSearch,
+    WriteTextFile,
+    ExecuteProcess,
+    GenerateImage,
+    BrowserNavigate,
+    BrowserObserve,
+    BrowserClick,
+    BrowserFill
 };
 
 // UiaElement is re-found by runtime identity and current bounds. VisualRegion requires
@@ -254,6 +266,10 @@ struct ActionRequest
     std::string windowTitle;
     std::string control;
     std::string value;
+    // "missing" permits creation only; an existing file requires its exact SHA256.
+    std::string expectedDigest;
+    process::ProcessRequest process;
+    browser::BrowserRequest browser;
     // Present only after the vision-to-UIA resolver has produced a typed element
     // reference. Execution re-finds this exact runtime id and fails closed if it changed.
     ElementResolutionEvidence resolution;
@@ -291,6 +307,9 @@ struct PolicyDecision
     std::string reason;
     std::filesystem::path canonicalSource;
     std::filesystem::path canonicalDestination;
+    std::filesystem::path canonicalExecutable;
+    std::size_t processOutputLimitBytes = 0;
+    browser::BrowserSettings browser;
 };
 
 struct ActionResult
@@ -304,6 +323,9 @@ struct ActionResult
     // Machine-readable executor provenance. Internet activity uses this to distinguish
     // the dedicated visible browser from an explicitly reported API fallback.
     std::string backend;
+    std::optional<process::ProcessResult> process;
+    std::optional<visual::ImageResult> image;
+    std::optional<browser::BrowserReceipt> browser;
 };
 
 struct ActionOutcome
@@ -320,6 +342,13 @@ struct ActionOutcome
 
 struct CapabilitySettings
 {
+    struct ImageGeneration
+    {
+        bool enabled = false;
+        bool autonomous = false;
+        // Bound by the host to this companion's provider, never loaded from action JSON.
+        std::filesystem::path outputRoot;
+    };
     struct InternetAccess
     {
         // Network access is opt-in. The model never receives a general socket or URL;
@@ -436,6 +465,9 @@ struct CapabilitySettings
     InternetAccess internet;
     CameraAccess camera;
     DesktopControl desktopControl;
+    process::ProcessSettings process;
+    browser::BrowserSettings browser;
+    ImageGeneration image;
 };
 
 [[nodiscard]] std::string ToString(ActionType value);
@@ -465,6 +497,7 @@ struct CapabilitySettings
 [[nodiscard]] std::string ActionVocabulary(bool readOnlyOnly = false);
 
 [[nodiscard]] RiskLevel RiskForAction(ActionType value);
+[[nodiscard]] bool IsBrowserAction(ActionType value);
 // Requires individual confirmation even with standing approval, including recycling.
 // All capability, consequence, rate, and audit checks still apply.
 [[nodiscard]] bool AlwaysNeedsItsOwnConfirmation(ActionType value);

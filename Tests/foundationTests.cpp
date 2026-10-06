@@ -7,6 +7,7 @@
 #include "Intelligence/intelligenceSettings.h"
 #include "LLM/endpointSettings.h"
 #include "Memory/memoryTypes.h"
+#include "Memory/memoryScope.h"
 #include "Perception/perceptionSettings.h"
 #include "Presence/presenceSettings.h"
 #include "Resources/resourceSettings.h"
@@ -5284,12 +5285,19 @@ void TestPostureReachesTheModel()
     privateMemory.bShouldRemember = true;
     privateMemory.category = "project";
     privateMemory.summary = "The user keeps a private lighthouse project.";
+    privateMemory.subject = {revia::memory::MemorySubjectKind::Participant, "local:fixture"};
     bool wasAdded = false;
     longTermMemory memory;
     Check(memory.Save(privateMemory, wasAdded) && wasAdded,
         "The prompt privacy fixture could not save its private memory.");
     context.back().content = "What is the private lighthouse project?";
     profile.bMemoryEnabled = true;
+    Check(builder.BuildMessages(profile, context)[0]["content"].get<std::string>().find("private lighthouse") == std::string::npos,
+        "An unattributed prompt retrieved a participant's private memory.");
+    context.back().participantId = "local:fixture";
+    context.back().memoryScope = revia::memory::MemoryScope{"local:fixture",
+        {revia::identity::AudienceKind::Private, "local:private", 1, {}},
+        revia::identity::SpeakerSource::ExplicitIntroduction, 0, "posture-fixture"};
     const std::string withMemory = builder.BuildMessages(profile, context)[0]["content"]
         .get<std::string>();
     Check(withMemory.find("private lighthouse") != std::string::npos,

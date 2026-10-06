@@ -6,6 +6,8 @@
 #include "reviaSessionTestAccess.h"
 
 #include <fstream>
+#include <functional>
+#include <algorithm>
 #include <iostream>
 #include <atomic>
 #include <chrono>
@@ -15,6 +17,10 @@
 #include <thread>
 #include <utility>
 #include <vector>
+
+#ifdef _WIN32
+#include <windows.h>
+#endif
 
 #ifdef CreateDirectory
 #undef CreateDirectory
@@ -294,7 +300,8 @@ void TestNativeActionCompletionSubscriberCannotDeliverRevokedResult()
 class HeldMemoryBackend
 {
   public:
-    explicit HeldMemoryBackend(std::string supplied = {}) : suppliedResponse(std::move(supplied))
+    explicit HeldMemoryBackend(std::string supplied = {}, std::function<std::string(const nlohmann::json&)> responder = {})
+        : suppliedResponse(std::move(supplied)), responseFactory(std::move(responder))
     {
         server.Get("/health", [](const auto&, auto& response) { response.set_content(R"({"status":"ok"})", "application/json"); });
         server.Get("/v1/models",
@@ -302,19 +309,20 @@ class HeldMemoryBackend
         server.Post("/v1/chat/completions",
             [this](const auto& request, auto& response)
             {
+                const auto wire = nlohmann::json::parse(request.body);
                 {
                     std::lock_guard lock(requestMutex);
-                    latestRequest = nlohmann::json::parse(request.body);
+                    latestRequest = wire;
                 }
                 ++requests;
                 const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(5);
                 while (!release.load() && std::chrono::steady_clock::now() < until)
                     std::this_thread::sleep_for(std::chrono::milliseconds(2));
-                const auto answer = nlohmann::json{{"choices",
-                    nlohmann::json::array(
-                        {{{"message", {{"content", suppliedResponse.empty() ? R"({"shouldRemember":false,"reason":"Synthetic fixture."})"
-                                                                            : suppliedResponse}}},
-                            {"finish_reason", "stop"}}})}};
+                const auto content = responseFactory            ? responseFactory(wire)
+                                     : suppliedResponse.empty() ? R"({"shouldRemember":false,"reason":"Synthetic fixture."})"
+                                                                : suppliedResponse;
+                const auto answer =
+                    nlohmann::json{{"choices", nlohmann::json::array({{{"message", {{"content", content}}}, {"finish_reason", "stop"}}})}};
                 response.set_content(answer.dump(), "application/json");
             });
         port = server.bind_to_any_port("127.0.0.1");
@@ -348,6 +356,7 @@ class HeldMemoryBackend
     httplib::Server server;
     std::jthread worker;
     std::string suppliedResponse;
+    std::function<std::string(const nlohmann::json&)> responseFactory;
 };
 
 void TestQueuedMemoryRetainsAdmission()
@@ -576,41 +585,63 @@ void TestLocalStudioIncompleteVerificationCannotAdvance()
     ReviaSessionTestAccess::MarkStudioStarted(session, false);
 }
 
+nlohmann::json CompleteStudioDeliverable(const nlohmann::json& wire)
+{
+    using json = nlohmann::json;
+    const auto& properties = wire.at("response_format").at("json_schema").at("schema").at("properties");
+    json payload = {{"summary", "A bounded fixture plan."}, {"evidence", "Supplied fixture evidence."}, {"verified", true},
+        {"prerequisiteEvidence", properties.at("prerequisiteEvidence").value("const", json::array())}};
+    for (const auto& field : properties.items())
+        if (!payload.contains(field.key()))
+            payload[field.key()] = {{"items", {"Inspect the supplied marker evidence."}}, {"noneReason", ""}};
+    return payload;
+}
+
 void TestLocalStudioGrammarPinsNativeEvidence()
 {
     using namespace revia::runtime;
     using namespace revia::agents;
     using json = nlohmann::json;
-    const json references = json::array({{{"nodeId", "analysis"}, {"id", "analysis-artifact"}, {"version", 2}, {"hash", "hash-a"}},
-        {{"nodeId", "verification"}, {"id", "verification-artifact"}, {"version", 1}, {"hash", "hash-b"}}});
     for (int variant = 0; variant < 3; ++variant)
     {
         ScopedTestDirectory temporary;
-        const json payload = {{"summary", "A bounded plan."}, {"evidence", "Supplied analytical material only."},
-            {"verified", variant != 2}, {"prerequisiteEvidence", variant == 0 ? json::array() : references},
-            {"steps", {{"items", {"Inspect the supplied marker evidence."}}, {"noneReason", ""}}},
-            {"risks", {{"items", json::array()}, {"noneReason", "This task only analyzes supplied text without effects."}}}};
-        HeldMemoryBackend backend(payload.dump());
+        HeldMemoryBackend backend({},
+            [variant](const json& wire)
+            {
+                auto payload = CompleteStudioDeliverable(wire);
+                if (payload.at("prerequisiteEvidence").size() == 2)
+                {
+                    if (variant == 0)
+                        payload["prerequisiteEvidence"] = json::array();
+                    if (variant == 2)
+                        payload["verified"] = false;
+                }
+                return payload.dump();
+            });
         backend.release.store(true);
         ReviaSession session(CompanionPaths(temporary.root, {"schema-fixture", "Schema fixture", "assistant", false}));
         ReviaSessionTestAccess::ConfigureStartupBrains(session, backend.port);
-        NodeRequest request;
-        request.stamp = session.Stamp();
-        request.node.id = "review";
-        request.node.role = WorkflowRole::Reviewer;
-        request.node.objective = "Assess supplied evidence without executing anything.";
-        request.node.deliverableContract = {{{DeliverableSection::Steps, "Give concrete steps.", false},
-                                                {DeliverableSection::Risks, "Identify actual risks or explain their absence.", true}},
-            true};
-        request.prerequisiteReferences = {
-            {"analysis", "analysis-artifact", 2, "hash-a"}, {"verification", "verification-artifact", 1, "hash-b"}};
-        const auto result = ReviaSessionTestAccess::RunAgentProvider(session, request);
-        Check(result.succeeded && result.verified == (variant == 1),
+        ReviaSessionTestAccess::MarkStudioStarted(session, true);
+        std::string error;
+        Check(session.StartAgentWorkflow("Assess supplied marker evidence without executing anything.", AgentProviderMode::Local, error),
+            error);
+        ReviaSessionTestAccess::JoinWorkflow(session);
+        ReviaSessionTestAccess::MarkStudioStarted(session, false);
+        const auto snapshot = session.AgentWorkflowSnapshot();
+        const auto review =
+            std::find_if(snapshot.nodes.begin(), snapshot.nodes.end(), [](const auto& node) { return node.id == "review"; });
+        Check(review != snapshot.nodes.end() && review->attempts.size() == 1 && review->attempts.back().executionSucceeded &&
+                  review->attempts.back().verified == (variant == 1),
             "Native provider validation accepted missing evidence or a false verification claim, or rejected a valid control.");
+        json references = json::array();
+        for (const auto& reference : review->attempts.back().prerequisites)
+            references.push_back(
+                {{"nodeId", reference.nodeId}, {"id", reference.id}, {"version", reference.version}, {"hash", reference.hash}});
         const auto wire = backend.LatestRequest();
         Check(wire.at("response_format").at("type") == "json_schema", "Studio did not transmit a constrained response schema.");
         const auto& properties = wire.at("response_format").at("json_schema").at("schema").at("properties");
-        Check(properties.at("prerequisiteEvidence").contains("const") && properties.at("prerequisiteEvidence").at("const") == references,
+        Check(references.size() == 2 && properties.at("prerequisiteEvidence").contains("const") &&
+                  properties.at("prerequisiteEvidence").at("const") == references,
             "Model grammar permits omitted or fabricated prerequisite identity/version/hash.");
         const auto& steps = properties.at("steps").at("properties");
         Check(steps.at("items").value("minItems", 0) == 1 && steps.at("noneReason").at("const") == "",
@@ -621,6 +652,69 @@ void TestLocalStudioGrammarPinsNativeEvidence()
                   alternatives.at(1).at("properties").at("noneReason").at("minLength") == 1,
             "Model grammar lost mutually exclusive optional-section content and absence rationale.");
     }
+}
+
+void TestToolStudioRetainsSupervisedScopeThroughPersistence()
+{
+    using namespace revia::runtime;
+    using json = nlohmann::json;
+    NativeActionFixture fixture("supervised");
+    std::filesystem::path executable;
+#ifdef _WIN32
+    wchar_t module[32768]{};
+    GetModuleFileNameW(nullptr, module, 32768);
+    executable = std::filesystem::path(module).parent_path() / "ReviaProcessFixture.exe";
+#endif
+    Check(std::filesystem::exists(executable), "Studio scope regression requires the disposable process fixture.");
+    revia::process::ProcessSettings process;
+    process.enabled = process.allowTaskExecution = true;
+    process.approvedExecutables = {executable};
+    process.maxTimeoutMs = 1000;
+    process.maxOutputBytes = 512;
+    std::string error;
+    Check(ReviaSessionTestAccess::Actions(fixture.session).SetProcessSettings(process, error), error);
+    std::atomic<bool> requestedProcess{false};
+    HeldMemoryBackend backend({},
+        [&](const json& wire)
+        {
+            const auto& properties = wire.at("response_format").at("json_schema").at("schema").at("properties");
+            if (!properties.contains("tool"))
+                return CompleteStudioDeliverable(wire).dump();
+            const auto& choices = properties.at("tool").at("anyOf");
+            const bool canProcess = std::any_of(choices.begin(), choices.end(),
+                [](const auto& choice)
+                {
+                    return choice.contains("properties") &&
+                           choice.at("properties").at("action").value("const", std::string{}) == "execute_process";
+                });
+            if (canProcess && !requestedProcess.exchange(true))
+                return json{{"tool", {{"action", "execute_process"}, {"executable", revia::actions::PathToUtf8(executable)},
+                                         {"working_directory", revia::actions::PathToUtf8(fixture.approved)}, {"arguments", {"cwd"}},
+                                         {"timeout_ms", 1000}}}}
+                    .dump();
+            return std::string(R"({"tool":null})");
+        });
+    backend.release.store(true);
+    ReviaSessionTestAccess::ConfigureStartupBrains(fixture.session, backend.port);
+    Check(fixture.session.StartAgentWorkflow(
+              "Inspect the fixture and verify the admitted process working directory.", AgentProviderMode::LocalWithTools, error),
+        error);
+    ReviaSessionTestAccess::JoinWorkflow(fixture.session);
+    std::ifstream scopeInput(fixture.session.Paths().Resolve("RuntimeData/Agents/tool-scope.json"));
+    const auto persisted = json::parse(scopeInput);
+    Check(persisted.at("mode") == "supervised" && persisted.at("process") == true,
+        "Starting the tool workflow did not persist its captured supervised mode and explicit process delegation.");
+    bool completedProcess = false;
+    std::ifstream audit(fixture.temporary.root / "action-audit.jsonl");
+    std::string line;
+    while (std::getline(audit, line))
+    {
+        const auto row = json::parse(line);
+        if (row.value("record_type", "") == "result" && row.value("action", "") == "execute_process")
+            completedProcess = row.value("succeeded", false) && row.value("attempted", false);
+    }
+    Check(requestedProcess && completedProcess,
+        "The production provider did not restore supervised scope for its explicitly delegated native process.");
 }
 
 void TestStudioDiagnosticRetainsChangedEvidenceRecovery()
@@ -653,6 +747,7 @@ void RunStudioRuntimeTests()
     TestReviewedMemoryReceipt();
     TestLocalStudioIncompleteVerificationCannotAdvance();
     TestLocalStudioGrammarPinsNativeEvidence();
+    TestToolStudioRetainsSupervisedScopeThroughPersistence();
     TestStudioDiagnosticRetainsChangedEvidenceRecovery();
     TestQueuedMemoryRetainsAdmission();
     TestAudienceContextAndTaskRegistration();

@@ -1,4 +1,5 @@
 #include "Policy/capabilityPolicy.h"
+#include "Core/utf8.h"
 
 #include <algorithm>
 #include <cctype>
@@ -148,6 +149,146 @@ actions::PolicyDecision CapabilityPolicy::Evaluate(const actions::ActionRequest&
     if (request.type == actions::ActionType::Unknown)
     {
         decision.reason = "Unknown actions are never executable.";
+        return decision;
+    }
+    if (actions::IsBrowserAction(request.type))
+    {
+        if (!browser::ValidateSettings(settings.browser, decision.reason) || !browser::IsApprovedUrl(request.browser.url, settings.browser))
+        {
+            decision.reason = "The interactive browser capability or exact origin is not admitted.";
+            return decision;
+        }
+        const bool interactive = request.type == actions::ActionType::BrowserClick || request.type == actions::ActionType::BrowserFill;
+        if ((request.type == actions::ActionType::BrowserNavigate && !settings.browser.navigate) ||
+            (interactive && (!settings.browser.interact || request.browser.session.empty() || request.browser.generation == 0 || request.browser.element.empty())) ||
+            request.browser.session.size() > 128 || request.browser.element.size() > 128 ||
+            request.browser.value.size() > settings.browser.maxValueBytes || !utf8::IsValid(request.browser.value) || request.browser.value.find('\0') != std::string::npos)
+        {
+            decision.reason = "The browser operation lacks an admitted current target or bounded input.";
+            return decision;
+        }
+        decision.browser = settings.browser;
+        if (request.dryRun || decision.risk <= automaticCeiling) decision.verdict = actions::PolicyVerdict::Allowed;
+        else if (settings.mode != actions::ExecutionMode::ApprovedScope) decision.verdict = actions::PolicyVerdict::RequiresConfirmation;
+        decision.reason = decision.verdict == actions::PolicyVerdict::Blocked ? "Browser effects exceed this task's unattended risk ceiling."
+            : "The owned browser operation is limited to the admitted exact origins; interaction may have external effects.";
+        return decision;
+    }
+    if (request.type == actions::ActionType::GenerateImage)
+    {
+        if (!settings.image.enabled || !settings.image.outputRoot.is_absolute())
+        {
+            decision.reason = "Image generation has no enabled host-owned provider destination.";
+            return decision;
+        }
+        if (actions::IsAutonomousRequest(request.requestedBy) && !settings.image.autonomous)
+        {
+            decision.reason = "Autonomous image generation is not admitted.";
+            return decision;
+        }
+        if (request.value.find_first_not_of(" \t\r\n") == std::string::npos || request.value.size() > 8192 ||
+            !request.source.empty() || !request.destination.empty() || !request.application.empty())
+        {
+            decision.reason = "Image actions accept a bounded prompt and no caller-selected path or application.";
+            return decision;
+        }
+        decision.canonicalDestination = ResolveForPolicy(settings.image.outputRoot);
+        if (decision.canonicalDestination.empty())
+        {
+            decision.reason = "The owned image output directory could not be resolved.";
+            return decision;
+        }
+        decision.verdict = actions::PolicyVerdict::Allowed;
+        decision.reason = "Image generation is admitted only inside this companion's host-owned artifact directory.";
+        return decision;
+    }
+    if (request.type == actions::ActionType::ExecuteProcess)
+    {
+        const auto& process = request.process;
+        const auto& limits = settings.process;
+        if (!limits.enabled)
+        {
+            decision.reason = "Process execution is disabled.";
+            return decision;
+        }
+        if (!process.executable.is_absolute() || !process.workingDirectory.is_absolute())
+        {
+            decision.reason = "Processes require absolute executable and working-directory paths.";
+            return decision;
+        }
+        const auto cwd = AbsoluteLexical(process.workingDirectory);
+        decision.canonicalSource = ResolveForPolicy(cwd);
+        std::error_code error;
+        if (!IsWithinApprovedRoot(cwd, decision.canonicalSource) || HasReparsePointBelowApprovedRoot(cwd) ||
+            !std::filesystem::is_directory(decision.canonicalSource, error) || error)
+        {
+            decision.reason = "The process working directory must be an existing directory inside an approved root.";
+            return decision;
+        }
+        decision.canonicalExecutable = ResolveForPolicy(process.executable);
+        const bool approved = std::any_of(limits.approvedExecutables.begin(), limits.approvedExecutables.end(), [&](const auto& path)
+        {
+            return path.is_absolute() && Comparable(path) == Comparable(process.executable) &&
+                Comparable(ResolveForPolicy(path)) == Comparable(decision.canonicalExecutable);
+        });
+        if (!approved || !std::filesystem::is_regular_file(decision.canonicalExecutable, error) || error)
+        {
+            decision.reason = "The process executable is outside the explicit executable allowlist or unavailable.";
+            return decision;
+        }
+        const auto name = Lower(actions::PathToUtf8(decision.canonicalExecutable.filename()));
+        if (!limits.allowCommandInterpreters && (actions::IsCommandSurfaceExecutable(name) ||
+            name == "node.exe" || name == "perl.exe" || name == "ruby.exe" || name == "python3.exe"))
+        {
+            decision.reason = "Direct command and script interpreters require separate process permission.";
+            return decision;
+        }
+        if (process.timeoutMs < 1 || limits.maxTimeoutMs < 1 || limits.maxTimeoutMs > 600000 ||
+            process.timeoutMs > limits.maxTimeoutMs || limits.maxOutputBytes == 0 || limits.maxOutputBytes > 1024U * 1024U ||
+            limits.maxEnvironmentBytes > 65536 || process.arguments.size() > 128 || process.environment.size() > 64)
+        {
+            decision.reason = "The process request or configured limits exceed the bounded execution contract.";
+            return decision;
+        }
+        std::size_t argumentBytes = 0;
+        for (const auto& argument : process.arguments)
+        {
+            argumentBytes += argument.size();
+            if (argument.find('\0') != std::string::npos || !utf8::IsValid(argument) || argumentBytes > 24576)
+            {
+                decision.reason = "Process arguments require bounded, valid UTF-8 without embedded NULs.";
+                return decision;
+            }
+        }
+        std::size_t environmentBytes = 0;
+        std::vector<std::string> names;
+        for (const auto& [key, value] : process.environment)
+        {
+            const auto lower = Lower(key);
+            const bool allowed = std::any_of(limits.approvedEnvironmentNames.begin(), limits.approvedEnvironmentNames.end(),
+                [&](const auto& entry) { return Lower(entry) == lower; });
+            environmentBytes += key.size() + value.size() + 2;
+            if (!allowed || key.empty() || key.find_first_of("=\0", 0, 2) != std::string::npos ||
+                value.find('\0') != std::string::npos || !utf8::IsValid(key) || !utf8::IsValid(value) ||
+                environmentBytes > limits.maxEnvironmentBytes || std::find(names.begin(), names.end(), lower) != names.end())
+            {
+                decision.reason = "Process environment names or values are not admitted by the bounded environment policy.";
+                return decision;
+            }
+            names.push_back(lower);
+        }
+        decision.processOutputLimitBytes = limits.maxOutputBytes;
+        if (request.dryRun || static_cast<int>(decision.risk) <= static_cast<int>(automaticCeiling))
+        {
+            decision.verdict = actions::PolicyVerdict::Allowed;
+            decision.reason = "The typed process is inside its explicitly configured authority.";
+        }
+        else if (settings.mode != actions::ExecutionMode::ApprovedScope)
+        {
+            decision.verdict = actions::PolicyVerdict::RequiresConfirmation;
+            decision.reason = "Executing this process requires confirmation; its cwd is not an account sandbox.";
+        }
+        else decision.reason = "Process execution exceeds the unattended risk ceiling.";
         return decision;
     }
     if (request.type == actions::ActionType::WebSearch)
@@ -520,6 +661,18 @@ actions::PolicyDecision CapabilityPolicy::Evaluate(const actions::ActionRequest&
         decision.verdict = actions::PolicyVerdict::RequiresConfirmation;
         decision.reason = "Desktop interaction requires confirmation for the allowed application.";
         return decision;
+    }
+    if (request.type == actions::ActionType::WriteTextFile)
+    {
+        const bool digest = request.expectedDigest.size() == 64 &&
+            std::all_of(request.expectedDigest.begin(), request.expectedDigest.end(), [](const unsigned char ch)
+            { return (ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'f'); });
+        if ((!digest && request.expectedDigest != "missing") || request.value.size() > settings.maxReadBytes ||
+            request.value.size() > 1024U * 1024U || !utf8::IsValid(request.value) || request.value.find('\0') != std::string::npos)
+        {
+            decision.reason = "A text write needs a prior SHA256 or missing-file expectation and bounded UTF-8 contents.";
+            return decision;
+        }
     }
     if (request.source.empty())
     {

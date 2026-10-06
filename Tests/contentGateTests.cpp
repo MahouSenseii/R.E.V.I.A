@@ -624,10 +624,45 @@ void TestEveryProviderShapeEndsAtTheSameValue()
         "nothing of its own and one that proposed a sentence are different events.");
 }
 
+void TestBrowserPreparedContentUsesOriginalFieldAndOrigin()
+{
+    using namespace revia;
+    auto task = Exact(Message, "Compose");
+    task.redacted = "Enter '<the prepared content>' into Compose at https://example.com/form";
+    browser::BrowserReceipt receipt;
+    receipt.session = "owned-session";
+    receipt.generation = 4;
+    receipt.url = "https://example.com/form";
+    receipt.elements.push_back({"node-1", "Compose", "textarea", false, true, task.value, true});
+    computer::PayloadVault vault;
+    computer::ContentGate gate(vault, {});
+    gate.BeginTask(task);
+    computer::ComputerTaskContext context;
+    context.observation.browser = receipt;
+    goals::GoalStep proposed;
+    proposed.action.type = actions::ActionType::BrowserFill;
+    proposed.action.browser = {receipt.url, receipt.session, receipt.generation, "node-1", "a model replacement"};
+    const auto verdict = gate.Apply(proposed, context);
+    tests::Check(verdict.allowed && proposed.action.browser.value == task.value &&
+        proposed.check.type == actions::ActionType::BrowserObserve && proposed.expected.find("node-1") != std::string::npos,
+        "The browser content gate did not replace invented text and bind exact readback.");
+    context.observation.browser->url = "https://different.example/form";
+    tests::Check(!gate.Apply(proposed, context).allowed, "The browser gate placed held content on a different origin.");
+    context.observation.browser = receipt;
+    proposed.action.browser.generation = receipt.generation - 1;
+    tests::Check(!gate.Apply(proposed, context).allowed, "The browser gate injected content into a stale field observation.");
+    proposed.action.browser.generation = receipt.generation;
+    proposed.action.browser.element = "other-field";
+    tests::Check(!gate.Apply(proposed, context).allowed, "The browser gate placed held content in a model-selected other field.");
+    proposed.action.type = actions::ActionType::BrowserClick;
+    tests::Check(!gate.Apply(proposed, context).allowed, "A browser click bypassed content submission safeguards.");
+}
+
 } // namespace
 
 void RunContentGateTests()
 {
+    TestBrowserPreparedContentUsesOriginalFieldAndOrigin();
     TestTheUsersOwnWordsAreLiftedFromTheRequest();
     TestTheDestinationIsReadAfterTheContentAndNotInsideIt();
     TestAnApostropheIsNotAQuotedSpan();

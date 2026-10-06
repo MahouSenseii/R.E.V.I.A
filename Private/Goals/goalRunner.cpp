@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cctype>
 #include <chrono>
+#include <condition_variable>
 #include <cstddef>
 #include <optional>
 #include <string>
@@ -28,6 +29,13 @@ std::string ToLower(std::string value)
 // diagnosable afterwards rather than only visible in its consequences.
 std::string SummarizeResult(const actions::ActionResult& result, const std::string& expected)
 {
+    if (result.process)
+    {
+        const auto& receipt = *result.process;
+        return "Process exit=" + std::to_string(receipt.exitCode) + " timeout=" + (receipt.timedOut ? "true" : "false") +
+            " cancelled=" + (receipt.cancelled ? "true" : "false") + " truncated=" + (receipt.outputTruncated ? "true" : "false") +
+            " stdout=" + utf8::Prefix(receipt.standardOutput, 128) + " stderr=" + utf8::Prefix(receipt.standardError, 128);
+    }
     std::string summary = result.message;
     const auto append = [&summary](const std::string& value)
     {
@@ -86,6 +94,16 @@ void GoalRunner::SetStepProvider(StepProvider provider)
     stepProvider = std::move(provider);
 }
 
+void GoalRunner::SetCompletionVerifier(CompletionVerifier verifier)
+{
+    completionVerifier = std::move(verifier);
+}
+
+void GoalRunner::SetRecoveryHandler(RecoveryHandler handler)
+{
+    recoveryHandler = std::move(handler);
+}
+
 void GoalRunner::SetExecutionStamp(runtime::RuntimeStamp stamp)
 {
     executionStamp = std::move(stamp);
@@ -111,6 +129,16 @@ void GoalRunner::ClearStandingApproval()
     seededApproval = false;
     seededRefuseEscalation = false;
     seededCeiling = actions::RiskLevel::ReadOnly;
+    processDelegation = seededProcessDelegation;
+    browserDelegation = seededBrowserDelegation;
+    seededProcessDelegation = false;
+    seededBrowserDelegation = false;
+}
+
+void GoalRunner::SeedToolDelegation(const bool process, const bool browser)
+{
+    seededProcessDelegation = process;
+    seededBrowserDelegation = browser;
 }
 
 void GoalRunner::SeedStandingApproval(const actions::RiskLevel ceiling, const bool refuseEscalation)
@@ -141,6 +169,10 @@ std::string ActionFingerprint(const actions::ActionRequest& action)
     fingerprint += '|' + action.input.keys;
     fingerprint += '|' + actions::PathToUtf8(action.source);
     fingerprint += '|' + actions::PathToUtf8(action.destination);
+    fingerprint += '|' + actions::PathToUtf8(action.process.executable);
+    fingerprint += '|' + actions::PathToUtf8(action.process.workingDirectory);
+    for (const auto& argument : action.process.arguments)
+        fingerprint += '|' + std::to_string(argument.size()) + ':' + argument;
     if (action.input.hasPoint)
     {
         fingerprint += '|' + std::to_string(action.input.x) + ',' + std::to_string(action.input.y);
@@ -152,6 +184,7 @@ std::string ActionFingerprint(const actions::ActionRequest& action)
 
 Goal GoalRunner::Operate(Goal goal, std::stop_token stopToken)
 {
+    goal.iterative = true;
     ClearStandingApproval();
     goal.stopDetail.clear();
     if (goal.id.empty())
@@ -212,6 +245,13 @@ Goal GoalRunner::Operate(Goal goal, std::stop_token stopToken)
             return goal;
         }
 
+        if (goal.budget.maxPlannerRequests > 0 && goal.spend.plannerRequests >= goal.budget.maxPlannerRequests)
+        {
+            goal.status = GoalStatus::Exhausted;
+            goal.stopReason = StopReason::BudgetTokens;
+            static_cast<void>(Persist(goal));
+            return goal;
+        }
         const NextStep next = stepProvider(goal, iteration);
         // Charged before the answer is used, so a decision costs its budget whether or
         // not it turns out to be usable. Planning that produces nothing is still
@@ -231,12 +271,67 @@ Goal GoalRunner::Operate(Goal goal, std::stop_token stopToken)
             static_cast<void>(Persist(goal));
             return goal;
         }
+        goal.spend.elapsedMs = priorElapsed + ElapsedMilliseconds(startedAt);
+        if (const auto spent = CheckBudget(goal); spent != StopReason::None)
+        {
+            goal.status = GoalStatus::Exhausted;
+            goal.stopReason = spent;
+            static_cast<void>(Persist(goal));
+            return goal;
+        }
         if (!next.hasStep)
         {
-            // Finished, stuck, and waiting on the person are three outcomes, not two.
-            goal.status = next.finished ? GoalStatus::Succeeded : GoalStatus::Blocked;
-            goal.stopReason = next.finished ? StopReason::Completed : next.needsInput ? StopReason::NeedsInput : StopReason::Undecided;
-            goal.stopDetail = revia::utf8::Prefix(next.reason, MaxObservationCharacters);
+            if (next.recovery != NextStep::Recovery::None)
+            {
+                std::string evidence;
+                if (next.recovery == NextStep::Recovery::WaitForState)
+                {
+                    std::mutex waitMutex;
+                    std::unique_lock lock(waitMutex);
+                    std::condition_variable_any delay;
+                    delay.wait_for(lock, stopToken, std::chrono::milliseconds(200), [] { return false; });
+                }
+                const bool recovered = !stopToken.stop_requested() && recoveryHandler &&
+                    recoveryHandler(next.recovery, goal, stopToken, evidence);
+                goal.spend.elapsedMs = priorElapsed + ElapsedMilliseconds(startedAt);
+                goal.stopDetail = revia::utf8::Prefix(evidence.empty() ? "The requested recovery has no admitted observation adapter." : evidence,
+                    MaxObservationCharacters);
+                if (recovered && !stopToken.stop_requested())
+                {
+                    if (!Persist(goal))
+                    {
+                        goal.status = GoalStatus::Failed;
+                        goal.stopReason = StopReason::StoreError;
+                        return goal;
+                    }
+                    continue;
+                }
+                goal.status = stopToken.stop_requested() ? GoalStatus::Cancelled : GoalStatus::Blocked;
+                goal.stopReason = stopToken.stop_requested() ? StopReason::Cancelled : StopReason::Undecided;
+            }
+            else if (next.finished)
+            {
+                const auto evidence = completionVerifier ? completionVerifier(goal, stopToken)
+                    : CompletionEvidence{false, "Completion was proposed, but no independent runtime acceptance check is installed."};
+                goal.spend.elapsedMs = priorElapsed + ElapsedMilliseconds(startedAt);
+                if (const auto spent = CheckBudget(goal); spent != StopReason::None && !stopToken.stop_requested())
+                {
+                    goal.status = GoalStatus::Exhausted;
+                    goal.stopReason = spent;
+                    static_cast<void>(Persist(goal));
+                    return goal;
+                }
+                const bool accepted = evidence.accepted && !evidence.detail.empty() && !stopToken.stop_requested();
+                goal.status = stopToken.stop_requested() ? GoalStatus::Cancelled : accepted ? GoalStatus::Succeeded : GoalStatus::Blocked;
+                goal.stopReason = stopToken.stop_requested() ? StopReason::Cancelled : accepted ? StopReason::Completed : StopReason::VerificationFailed;
+                goal.stopDetail = revia::utf8::Prefix(evidence.detail, MaxObservationCharacters);
+            }
+            else
+            {
+                goal.status = GoalStatus::Blocked;
+                goal.stopReason = next.needsInput ? StopReason::NeedsInput : StopReason::Undecided;
+                goal.stopDetail = revia::utf8::Prefix(next.reason, MaxObservationCharacters);
+            }
             goal.spend.elapsedMs = priorElapsed + ElapsedMilliseconds(startedAt);
             static_cast<void>(Persist(goal));
             return goal;
@@ -559,10 +654,34 @@ bool GoalRunner::RunStep(Goal& goal, GoalStep& step, const policy::CapabilityPol
         record.actionId = action.id;
 
         actions::PolicyDecision decision = actionRuntime.EvaluateScoped(action, scopedPolicy);
-        if (refuseAdditionalApproval && actions::AlwaysNeedsItsOwnConfirmation(action.type))
+        const auto machine = actionRuntime.Settings();
+        const auto& scope = scopedPolicy.Settings();
+        const bool delegatedProcess = action.type == actions::ActionType::ExecuteProcess && processDelegation &&
+            machine.process.enabled && machine.process.allowTaskExecution && scope.process.enabled && scope.process.allowTaskExecution;
+        const bool delegatedBrowser = (action.type == actions::ActionType::BrowserClick || action.type == actions::ActionType::BrowserFill) &&
+            browserDelegation && machine.browser.enabled && machine.browser.interact && machine.browser.allowTaskInteraction &&
+            scope.browser.enabled && scope.browser.interact && scope.browser.allowTaskInteraction;
+        const bool delegated = delegatedProcess || delegatedBrowser;
+        if (delegated)
+        {
+            const auto prior = action.beforeEffect;
+            action.beforeEffect = [this, prior, delegatedProcess](const std::string& resource)
+            {
+                if (prior)
+                {
+                    const auto refusal = prior(resource);
+                    if (!refusal.empty()) return refusal;
+                }
+                const auto current = actionRuntime.Settings();
+                const bool admitted = delegatedProcess ? current.process.enabled && current.process.allowTaskExecution
+                    : current.browser.enabled && current.browser.interact && current.browser.allowTaskInteraction;
+                return admitted ? std::string() : std::string("The explicit task tool delegation was withdrawn.");
+            };
+        }
+        if (refuseAdditionalApproval && actions::AlwaysNeedsItsOwnConfirmation(action.type) && !delegated)
         {
             decision.verdict = actions::PolicyVerdict::Blocked;
-            decision.reason = "Deletion is outside this task's approval.";
+            decision.reason = "This consequential tool requires its own approval or an explicit current task delegation.";
         }
         record.verdict = decision.verdict;
 
@@ -583,7 +702,11 @@ bool GoalRunner::RunStep(Goal& goal, GoalStep& step, const policy::CapabilityPol
             // riskier than the action the person actually saw. A step that escalates
             // asks again, which is the difference between answering once and signing a
             // blank cheque.
-            if (blanketApproval && !actions::AlwaysNeedsItsOwnConfirmation(action.type) &&
+            if (delegated)
+            {
+                confirmationGranted = true;
+            }
+            else if (blanketApproval && !actions::AlwaysNeedsItsOwnConfirmation(action.type) &&
                 static_cast<int>(decision.risk) <= static_cast<int>(blanketRiskCeiling))
             {
                 confirmationGranted = true;
@@ -622,6 +745,7 @@ bool GoalRunner::RunStep(Goal& goal, GoalStep& step, const policy::CapabilityPol
             ++goal.spend.actions;
         record.executed = outcome.result.attempted;
         actionResult = outcome.Message();
+        if (outcome.result.process) record.observation = SummarizeResult(outcome.result, {});
         if (auditFailed(outcome))
             return false;
         if (cancelled())
@@ -642,7 +766,9 @@ bool GoalRunner::RunStep(Goal& goal, GoalStep& step, const policy::CapabilityPol
             const actions::ActionOutcome checkOutcome = DispatchScoped(check, scopedPolicy, false, stopToken);
             if (!stopToken.stop_requested() || checkOutcome.result.attempted)
                 ++goal.spend.actions;
-            record.observation = SummarizeResult(checkOutcome.result, step.expected);
+            const auto checkSummary = SummarizeResult(checkOutcome.result, step.expected);
+            record.observation = record.observation.empty() ? checkSummary
+                : utf8::Prefix(record.observation + " | Check: " + checkSummary, MaxObservationCharacters);
             if (auditFailed(checkOutcome))
                 return false;
             // Judged under the goal's own contract, not the build's. A goal resumed
@@ -692,8 +818,10 @@ bool GoalRunner::RunStep(Goal& goal, GoalStep& step, const policy::CapabilityPol
         // land, so doing it again does it once rather than twice. TextObserved can
         // never reach that branch, because not finding a substring is not a finding,
         // and that is precisely what a typed postcondition buys here.
-        const bool effectMayHaveLanded = outcome.result.succeeded && actions::RepeatingCouldDuplicateAnEffect(action.type) &&
-                                         record.outcome != VerificationOutcome::Failed;
+        const bool processMayHaveMutated = (action.type == actions::ActionType::ExecuteProcess ||
+            (outcome.result.browser && outcome.result.browser->uncertainEffect)) && outcome.result.attempted;
+        const bool effectMayHaveLanded = processMayHaveMutated || (outcome.result.succeeded &&
+            actions::RepeatingCouldDuplicateAnEffect(action.type) && record.outcome != VerificationOutcome::Failed);
 
         const std::string failure = record.failure;
         step.attempts.push_back(std::move(record));
@@ -703,10 +831,13 @@ bool GoalRunner::RunStep(Goal& goal, GoalStep& step, const policy::CapabilityPol
         if (effectMayHaveLanded)
         {
             goal.stopReason = StopReason::UnverifiedEffect;
-            Publish(goal, step,
-                "Stopped without repeating it: " + actions::ToString(action.type) +
+            const auto detail = processMayHaveMutated
+                ? "The process was attempted and may have changed state even though its result was not verified. Reobserve before retrying."
+                : "Stopped without repeating it: " + actions::ToString(action.type) +
                     " reported success but could not be verified, and doing it again could "
-                    "do it twice.");
+                    "do it twice.";
+            goal.stopDetail = detail;
+            Publish(goal, step, detail);
             return false;
         }
 
@@ -897,7 +1028,7 @@ Goal GoalRunner::Resume(const std::string& goalId, std::stop_token stopToken)
         }
         step.status = StepStatus::Pending;
     }
-    return Run(std::move(goal), std::move(stopToken));
+    return goal.iterative ? Operate(std::move(goal), stopToken) : Run(std::move(goal), stopToken);
 }
 
 } // namespace revia::goals

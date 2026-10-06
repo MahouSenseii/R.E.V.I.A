@@ -250,9 +250,10 @@ void messageRouter::SetPosture(std::string posture)
     if (expertConfigured) expertLlm.SetPosture(std::move(posture));
 }
 
-std::string messageRouter::RelatedMemories(const std::string& query, const std::stop_token stopToken) const
+std::string messageRouter::RelatedMemories(
+    const std::string& query, const std::stop_token stopToken, const revia::memory::MemoryScope& scope) const
 {
-    return llm.RelatedMemories(query, stopToken);
+    return llm.RelatedMemories(query, stopToken, scope);
 }
 
 void messageRouter::SetReplyNote(std::string note)
@@ -481,7 +482,7 @@ responseOutput messageRouter::AnalyzeImage(const std::filesystem::path& imagePat
 }
 
 memoryDecision messageRouter::EvaluateMemory(const std::string& userMessage, const std::string& assistantMessage,
-    const revia::agents::ResponseProvenance provenance, const std::stop_token stopToken) const
+    const revia::agents::ResponseProvenance provenance, const std::stop_token stopToken, const revia::memory::MemoryScope& scope) const
 {
     // Main first, like every other judgement that outlives the turn. The CPU-resident
     // 0.8B model took ~10 s of nearly every core per exchange, and what it decided was
@@ -493,8 +494,7 @@ memoryDecision messageRouter::EvaluateMemory(const std::string& userMessage, con
     if (llm.IsBackendAvailable())
     {
         residency.BeginInference(revia::intelligence::IntelligenceTier::Main, "background");
-        memoryDecision decision =
-            llm.EvaluateMemory(userMessage, assistantMessage, provenance, stopToken);
+        memoryDecision decision = llm.EvaluateMemory(userMessage, assistantMessage, provenance, stopToken, scope);
         residency.EndInference(revia::intelligence::IntelligenceTier::Main);
         return decision;
     }
@@ -502,12 +502,11 @@ memoryDecision messageRouter::EvaluateMemory(const std::string& userMessage, con
     {
         residency.BeginInference(
             revia::intelligence::IntelligenceTier::Fast, "background");
-        memoryDecision decision = fastLlm.EvaluateMemory(
-            userMessage, assistantMessage, provenance, stopToken);
+        memoryDecision decision = fastLlm.EvaluateMemory(userMessage, assistantMessage, provenance, stopToken, scope);
         residency.EndInference(revia::intelligence::IntelligenceTier::Fast);
         return decision;
     }
-    return llm.EvaluateMemory(userMessage, assistantMessage, provenance, stopToken);
+    return llm.EvaluateMemory(userMessage, assistantMessage, provenance, stopToken, scope);
 }
 
 bool messageRouter::IsLLMAvailable() const

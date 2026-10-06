@@ -81,6 +81,8 @@ class RelationshipRegistry
     // Returns the named local entity; the first introduction adopts anonymous local history.
     // Later introductions keep distinct neutral-start relationships.
     std::string ResolveNamedLocalSpeaker(const std::string& name);
+    // Admission runs under the registry lock and must not reenter the registry.
+    std::string ResolveNamedLocalSpeaker(const std::string& name, const std::function<bool()>& admission);
 
     // Historical familiarity does not establish who is present in a fresh session.
     [[nodiscard]] std::string DefaultLocalSpeaker() const;

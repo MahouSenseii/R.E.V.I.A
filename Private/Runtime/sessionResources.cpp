@@ -98,6 +98,11 @@ void ReviaSession::PublishResourcePlan() const
         "Semantic embeddings",
         resourcePlan.embeddingDevice == "none" ? "CPU" : resourcePlan.embeddingDevice,
         "Independent retrieval server; CPU is preferred to protect interactive GPU latency.");
+    assignment("Image generation", settings.image.bEnabled ? settings.image.device : "disabled",
+        "Lazy image worker; measured free VRAM must cover the greater of the model budget and " +
+            std::to_string(settings.image.minimumFreeVramMiB) + " MiB, plus the shared " + std::to_string(settings.image.gpuReserveMiB) +
+            " MiB reserve. " +
+            (settings.image.bKeepLoaded ? "Weights remain loaded until explicit unload or shutdown." : "Weights release after each job."));
 }
 
 void ReviaSession::StartResourceMonitor()
@@ -169,6 +174,16 @@ void ReviaSession::UpdateResourceLoad(const resources::UsageSnapshot& snapshot)
 
 void ReviaSession::PublishResourceUsage(const resources::UsageSnapshot& snapshot) const
 {
+    const auto image = imageGenerator.Snapshot();
+    RuntimeEvent imageEvent;
+    imageEvent.kind = RuntimeEventKind::ResourceStatus;
+    imageEvent.state = state.load();
+    imageEvent.component = "Image generation";
+    imageEvent.phase = image.state;
+    imageEvent.resource = image.device.empty() ? "unloaded" : image.device;
+    imageEvent.message = image.model + ": " + std::to_string(image.step) + "/" + std::to_string(image.steps) + " steps; weights " +
+                         (image.loaded ? "loaded" : "released");
+    eventBus.Publish(std::move(imageEvent));
     for (const resources::UsageMeter& meter : snapshot.meters)
     {
         RuntimeEvent event;

@@ -2,23 +2,27 @@
 
 
 #include "Visual/imageSettings.h"
+#include "Visual/imageTypes.h"
 #include <atomic>
 #include <filesystem>
+#include <functional>
 #include <mutex>
 #include <string>
+#include <stop_token>
 
 namespace revia::visual
 {
 
-struct ImageResult
+struct ImageJobSnapshot
 {
-    bool succeeded = false;
-    std::filesystem::path path;
-    std::string message;
-    // What the worker actually did: device, steps, size, elapsed. Reported rather than
-    // assumed, because "auto" resolves inside the worker against real free VRAM.
+    std::string state = "idle";
+    std::string jobId;
+    std::string model;
+    std::string device;
     std::string detail;
-    double elapsedMilliseconds = 0.0;
+    int step = 0;
+    int steps = 0;
+    bool loaded = false;
 };
 
 // Owns the local image worker process. Same shape as QwenTtsServerProcess and for the
@@ -63,20 +67,30 @@ public:
 
     void Configure(imageSettings settings);
     [[nodiscard]] bool IsEnabled() const;
+    [[nodiscard]] std::filesystem::path OutputDirectory();
     // Reports what is missing rather than a bare false, because the usual answer is "the
     // Python runtime was never installed" and that is fixable in one command.
     [[nodiscard]] bool IsAvailable(std::string& outDetail);
-    ImageResult Generate(const std::string& prompt, const std::string& negativePrompt = {});
+    ImageResult Generate(const std::string& prompt, const std::string& negativePrompt = {}, std::stop_token stopToken = {},
+        std::function<bool()> admission = {}, const std::filesystem::path& expectedOutputRoot = {});
+    void Cancel();
+    void Unload();
+    [[nodiscard]] ImageJobSnapshot Snapshot() const;
     void Shutdown();
 
 private:
-    bool EnsureRunning(std::string& outError);
+  bool EnsureRunning(std::string& outError, const std::function<bool()>& cancelled);
+  void SetSnapshot(ImageJobSnapshot value);
 
-    std::mutex mutex;
-    std::atomic<bool> shuttingDown = false;
-    imageSettings configuration;
-    std::string apiKey;
-    ImageServerProcess process;
+  std::mutex mutex;
+  mutable std::mutex statusMutex;
+  ImageJobSnapshot status;
+  std::atomic<bool> enabled = false;
+  std::atomic<unsigned long long> cancellationGeneration = 0;
+  std::atomic<bool> shuttingDown = false;
+  imageSettings configuration;
+  std::string apiKey;
+  ImageServerProcess process;
 };
 
 } // namespace revia::visual

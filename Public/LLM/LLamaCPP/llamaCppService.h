@@ -76,11 +76,12 @@ public:
     // has no default on purpose: a caller that does not know must decide, because the
     // safe answer and the convenient answer are not the same one.
     memoryDecision EvaluateMemory(const std::string& userMessage, const std::string& assistantMessage,
-        revia::agents::ResponseProvenance provenance, std::stop_token stopToken = {}) const;
+        revia::agents::ResponseProvenance provenance, std::stop_token stopToken = {}, const revia::memory::MemoryScope& scope = {}) const;
     healthOutput CheckEmbeddingHealth(std::stop_token stopToken = {}) const;
     // The saved memories nearest `query`, as the prompt block the reply would carry.
     // Empty when the profile has memory switched off.
-    std::string RelatedMemories(const std::string& query, std::stop_token stopToken = {}) const;
+    std::string RelatedMemories(
+        const std::string& query, std::stop_token stopToken = {}, const revia::memory::MemoryScope& scope = {}) const;
     embeddingOutput EmbedMemory(const std::string& summary, std::stop_token stopToken = {}) const;
 
 private:

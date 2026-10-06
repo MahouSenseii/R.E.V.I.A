@@ -63,6 +63,12 @@ void RunWorkspaceDemonstration()
 
     const GoalStore store((directory.root / "goals.db").string());
     GoalRunner runner(runtime, store);
+    runner.SetCompletionVerifier([&](const Goal&, std::stop_token stopToken)
+    {
+        const bool complete = !stopToken.stop_requested() && std::filesystem::is_directory(workspace / "drafts") &&
+            std::filesystem::is_directory(workspace / "archive");
+        return CompletionEvidence{complete, "The two owner-requested workspace directories were checked independently."};
+    });
 
     std::cout << "\n=== Revia, disposable workspace ===\n";
     std::cout << "Workspace: " << revia::actions::PathToUtf8(workspace) << "\n\n";

@@ -1,10 +1,13 @@
 #include "Actions/actionRuntime.h"
 
 #include "Filesystem/fileSystemExecutor.h"
+#include "Process/processExecutor.h"
+#include "Browser/browserExecutor.h"
 #include "Internet/internetSearchExecutor.h"
 #include "Internet/visibleBrowserClient.h"
 #include "Windows/desktopControlExecutor.h"
 #include "Windows/windowsAutomationExecutor.h"
+#include "Visual/imageExecutor.h"
 
 #include <algorithm>
 #include <chrono>
@@ -54,8 +57,13 @@ bool ActionRuntime::InitializeUnlocked(const std::filesystem::path& capabilityCo
 
     settings.internet.profileDirectory = browserProfileDirectory;
     settings.internet.logDirectory = browserLogDirectory;
+    settings.image = imageAccess;
     policy = std::make_unique<policy::CapabilityPolicy>(settings);
     dispatcher.Clear();
+    dispatcher.Register(std::make_unique<process::ProcessExecutor>());
+    dispatcher.Register(std::make_unique<browser::BrowserExecutor>(browserSession));
+    if (imageProvider)
+        dispatcher.Register(std::make_unique<visual::ImageExecutor>(*imageProvider, imageAccess.outputRoot));
     desktopRateLimiter.Configure(
         settings.maxDesktopActionsPerMinute,
         settings.minimumDesktopActionIntervalMs,
@@ -132,6 +140,7 @@ void ActionRuntime::BindAuthority(std::shared_ptr<policy::CompanionAuthority> in
 void ActionRuntime::ClearAuthorityBinding()
 {
     std::lock_guard lock(mutex);
+    if (browserSession) browserSession->Stop();
     authority.reset();
     sessionStamp = {};
 }
@@ -155,6 +164,35 @@ void ActionRuntime::SetPrivateRuntimePaths(std::filesystem::path profileDirector
     std::lock_guard lock(mutex);
     browserProfileDirectory = std::move(profileDirectory);
     browserLogDirectory = std::move(logDirectory);
+}
+
+void ActionRuntime::SetBrowserSession(std::shared_ptr<browser::BrowserSession> session)
+{
+    std::lock_guard lock(mutex);
+    if (browserSession) browserSession->Stop();
+    browserSession = std::move(session);
+    dispatcher.Unregister(ActionType::BrowserNavigate);
+    dispatcher.Register(std::make_unique<browser::BrowserExecutor>(browserSession));
+}
+
+void ActionRuntime::BindImageProvider(visual::ImageGenerator& provider, const std::filesystem::path& ownedOutputRoot,
+    const bool allowAutonomous)
+{
+    std::error_code error;
+    const auto root = std::filesystem::weakly_canonical(ownedOutputRoot, error);
+    const bool valid = !error && ownedOutputRoot.is_absolute() && root ==
+        std::filesystem::weakly_canonical(provider.OutputDirectory(), error) && !error;
+    std::lock_guard lock(mutex);
+    imageProvider = &provider;
+    imageAccess = {valid && provider.IsEnabled(), allowAutonomous, valid ? root : std::filesystem::path{}};
+    dispatcher.Unregister(ActionType::GenerateImage);
+    dispatcher.Register(std::make_unique<visual::ImageExecutor>(provider, imageAccess.outputRoot));
+    {
+        std::lock_guard settingsLock(settingsMutex);
+        settingsSnapshot.image = imageAccess;
+    }
+    if (policy)
+        policy = std::make_unique<policy::CapabilityPolicy>(Settings());
 }
 
 ActionOutcome ActionRuntime::ExecuteWithPolicy(const ActionRequest& inputRequest, const policy::CapabilityPolicy* scopedPolicy,
@@ -257,8 +295,20 @@ ActionOutcome ActionRuntime::ExecuteWithPolicy(const ActionRequest& inputRequest
                 (current.verdict == PolicyVerdict::RequiresConfirmation && !confirmationGranted))
                 return current.reason;
             if (current.canonicalSource != canonicalDecision.canonicalSource ||
-                current.canonicalDestination != canonicalDecision.canonicalDestination)
+                current.canonicalDestination != canonicalDecision.canonicalDestination ||
+                current.canonicalExecutable != canonicalDecision.canonicalExecutable)
                 return std::string("The canonical action resource changed before its effect.");
+            if (request.type == ActionType::ExecuteProcess && current.processOutputLimitBytes < canonicalDecision.processOutputLimitBytes)
+                return std::string("The process output allowance was reduced during execution.");
+            if (IsBrowserAction(request.type))
+            {
+                const auto& previous = canonicalDecision.browser;
+                const auto& now = current.browser;
+                if ((!resource.empty() && !browser::IsApprovedUrl(resource, now)) || previous.approvedOrigins != now.approvedOrigins ||
+                    previous.navigate != now.navigate || previous.interact != now.interact || previous.allowLoopback != now.allowLoopback ||
+                    now.timeoutMs < previous.timeoutMs || now.maxTextBytes < previous.maxTextBytes || now.maxElements < previous.maxElements || now.maxValueBytes < previous.maxValueBytes)
+                    return std::string("The interactive browser authority changed during this operation.");
+            }
             if (capturedAuthority && (authority != capturedAuthority || !sessionStamp.SameSession(capturedStamp)))
                 return std::string("The runtime authority binding changed before its effect.");
             if (request.type == ActionType::WebSearch && !resource.empty())
@@ -313,6 +363,8 @@ PolicyDecision MoreRestrictive(const PolicyDecision& first, const PolicyDecision
     PolicyDecision combined =
         VerdictRank(second.verdict) > VerdictRank(first.verdict) ? second : first;
     combined.risk = std::max(first.risk, second.risk);
+    combined.processOutputLimitBytes = std::min(first.processOutputLimitBytes, second.processOutputLimitBytes);
+    combined.browser = browser::IntersectSettings(first.browser, second.browser);
     return combined;
 }
 
@@ -326,7 +378,16 @@ PolicyDecision ActionRuntime::EvaluateScoped(const ActionRequest& request, const
     {
         return globalDecision;
     }
-    return MoreRestrictive(globalDecision, scopedPolicy.Evaluate(request));
+    const auto scopedDecision = scopedPolicy.Evaluate(request);
+    if (request.type == ActionType::GenerateImage && scopedDecision.verdict != PolicyVerdict::Blocked &&
+        globalDecision.canonicalDestination != scopedDecision.canonicalDestination)
+    {
+        auto refused = globalDecision;
+        refused.verdict = PolicyVerdict::Blocked;
+        refused.reason = "An image scope cannot replace the companion's fixed artifact destination.";
+        return refused;
+    }
+    return MoreRestrictive(globalDecision, scopedDecision);
 }
 
 ActionOutcome ActionRuntime::ExecuteScoped(const ActionRequest& request,

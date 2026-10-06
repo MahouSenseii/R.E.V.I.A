@@ -56,6 +56,15 @@ struct WorkflowBudget
     std::uint32_t maximumRequests = 8;
     std::uint64_t maximumActiveMilliseconds = 120000;
     std::uint64_t maximumReportedTokens = 20000;
+    std::uint32_t maximumProviderCalls = 32;
+    std::uint32_t maximumToolCalls = 16;
+    std::uint64_t maximumToolOutputBytes = 262144;
+};
+
+enum class WorkflowWorkKind
+{
+    Provider,
+    Tool
 };
 
 struct WorkflowNode
@@ -131,6 +140,10 @@ struct WorkflowAttempt
     std::optional<std::uint64_t> reportedTokens;
     std::optional<std::string> reportedModel;
     std::string diagnostic;
+    std::uint32_t providerCalls = 0;
+    std::uint32_t toolCalls = 0;
+    std::uint64_t toolOutputBytes = 0;
+    std::uint64_t chargedTokens = 0;
 };
 
 struct WorkflowNodeSnapshot
@@ -161,10 +174,13 @@ struct WorkflowSnapshot
     std::uint32_t requests = 0;
     std::uint64_t reportedTokens = 0;
     std::uint32_t unreportedRequests = 0;
+    std::uint32_t providerCalls = 0;
+    std::uint32_t toolCalls = 0;
+    std::uint64_t toolOutputBytes = 0;
     std::vector<WorkflowNodeSnapshot> nodes;
 };
 
-// One bounded read-only workflow; Runtime owns its provider, admission and presentation adapter.
+// One bounded workflow; Runtime owns its provider, authority and presentation adapter.
 class AgentWorkflow
 {
   public:
@@ -190,6 +206,10 @@ class AgentWorkflow
     bool Save(const std::filesystem::path& path, std::string& error) const;
     bool Load(const std::filesystem::path& path, std::string& error);
     bool Resume(runtime::RuntimeStamp newStamp, Provider provider, std::string& error, Observer observer = {});
+    [[nodiscard]] bool AttemptCurrent(const runtime::RuntimeStamp& stamp) const;
+    // Reservations remain spent after cancellation/failure. Runtime persists before dispatch.
+    [[nodiscard]] bool ReserveWork(const runtime::RuntimeStamp& stamp, WorkflowWorkKind kind, std::uint64_t outputBytes = 0);
+    [[nodiscard]] bool ChargeReportedTokens(const runtime::RuntimeStamp& stamp, std::uint64_t tokens);
 
   private:
     struct Impl;

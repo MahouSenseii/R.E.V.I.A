@@ -40,6 +40,13 @@ std::string ToString(ActionType value)
     {
         case ActionType::ListDirectory: return "list_directory";
         case ActionType::ReadTextFile: return "read_text_file";
+        case ActionType::WriteTextFile: return "write_text_file";
+        case ActionType::ExecuteProcess: return "execute_process";
+        case ActionType::GenerateImage: return "generate_image";
+        case ActionType::BrowserNavigate: return "browser_navigate";
+        case ActionType::BrowserObserve: return "browser_observe";
+        case ActionType::BrowserClick: return "browser_click";
+        case ActionType::BrowserFill: return "browser_fill";
         case ActionType::CreateDirectory: return "create_directory";
         case ActionType::CopyFile: return "copy_file";
         case ActionType::MoveFile: return "move_file";
@@ -229,6 +236,13 @@ CapabilitySettings::DesktopControl::InputScope InputScopeFromString(const std::s
 ActionType ActionTypeFromString(const std::string& value)
 {
     const std::string normalized = NormalizeName(value);
+    if (normalized == "execute_process") return ActionType::ExecuteProcess;
+    if (normalized == "generate_image") return ActionType::GenerateImage;
+    if (normalized == "browser_navigate") return ActionType::BrowserNavigate;
+    if (normalized == "browser_observe") return ActionType::BrowserObserve;
+    if (normalized == "browser_click") return ActionType::BrowserClick;
+    if (normalized == "browser_fill") return ActionType::BrowserFill;
+    if (normalized == "write_text_file") return ActionType::WriteTextFile;
     if (normalized == "list" || normalized == "list_directory") return ActionType::ListDirectory;
     if (normalized == "read" || normalized == "read_text_file") return ActionType::ReadTextFile;
     if (normalized == "mkdir" || normalized == "create_directory") return ActionType::CreateDirectory;
@@ -291,7 +305,8 @@ const std::vector<ActionType>& AllActionTypes()
         ActionType::SetControlText, ActionType::InvokeControl,
         ActionType::LaunchApplication, ActionType::MoveCursor, ActionType::ClickPointer,
         ActionType::DragPointer, ActionType::ScrollPointer, ActionType::PressKeys,
-        ActionType::TypeText, ActionType::WebSearch};
+        ActionType::TypeText, ActionType::WebSearch, ActionType::WriteTextFile, ActionType::ExecuteProcess, ActionType::GenerateImage,
+        ActionType::BrowserNavigate, ActionType::BrowserObserve, ActionType::BrowserClick, ActionType::BrowserFill};
     return types;
 }
 
@@ -326,11 +341,13 @@ bool AlwaysNeedsItsOwnConfirmation(const ActionType value)
 {
     // Deleting is the case where the mechanism and the consequence disagree, and the
     // consequence is what a person answering a prompt is thinking about.
-    return value == ActionType::MoveToRecycleBin;
+    return value == ActionType::MoveToRecycleBin || value == ActionType::ExecuteProcess || value == ActionType::BrowserClick || value == ActionType::BrowserFill;
 }
 
 RiskLevel RiskForAction(ActionType value)
 {
+    if (value == ActionType::BrowserObserve) return RiskLevel::ReadOnly;
+    if (value == ActionType::BrowserNavigate) return RiskLevel::ReversibleWrite;
     switch (value)
     {
         case ActionType::ListDirectory:
@@ -339,6 +356,8 @@ RiskLevel RiskForAction(ActionType value)
         case ActionType::WebSearch:
             return RiskLevel::ReadOnly;
         case ActionType::CreateDirectory:
+        case ActionType::WriteTextFile:
+        case ActionType::GenerateImage:
         case ActionType::CopyFile:
         case ActionType::MoveFile:
         case ActionType::RenamePath:
@@ -416,6 +435,12 @@ bool RepeatingCouldDuplicateAnEffect(const ActionType value)
         default:
             return true;
     }
+}
+
+bool IsBrowserAction(const ActionType value)
+{
+    return value == ActionType::BrowserNavigate || value == ActionType::BrowserObserve ||
+        value == ActionType::BrowserClick || value == ActionType::BrowserFill;
 }
 
 bool IsAutonomousRequest(const std::string& requestedBy)

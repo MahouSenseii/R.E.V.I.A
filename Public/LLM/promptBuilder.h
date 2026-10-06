@@ -16,6 +16,11 @@ public:
     explicit promptBuilder(std::string memoryDatabasePath);
     ~promptBuilder();
 
+    // Bounded admitted topic evidence disambiguates follow-ups; embedding and lexical recall share it.
+    [[nodiscard]] static std::string BuildRetrievalQuery(const std::vector<conversationMessage>& context);
+
+    [[nodiscard]] static revia::memory::MemoryScope CapturedMemoryScope(const std::vector<conversationMessage>& context);
+
     // posture is Revia's own current response posture, already formatted. It is her
     // state, not a claim about the user's: the affect controller describes how Revia is
     // approaching this turn, and passing it in is what makes that visible to the model
@@ -47,9 +52,9 @@ public:
     // The saved memories closest to `query`, for a caller deciding whether something is
     // already known. Ranked by the embedding when one is given, by text otherwise.
     std::string BuildRelatedMemoryBlock(const std::string& query, const std::vector<float>& queryEmbedding,
-        const std::string& embeddingModel, std::size_t maxEntries) const;
+        const std::string& embeddingModel, std::size_t maxEntries, const revia::memory::MemoryScope* scope = nullptr) const;
 
-private:
+  private:
 
     longTermMemory memory;
 };

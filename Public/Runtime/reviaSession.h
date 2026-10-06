@@ -7,6 +7,7 @@
 #include "LLM/endpointSettings.h"
 #include "Memory/memoryTypes.h"
 #include "Runtime/outputChannel.h"
+#include "Runtime/agentProviderMode.h"
 #include "Runtime/companion.h"
 #include "Runtime/sessionIdentity.h"
 #include "Runtime/learningStudio.h"
@@ -188,6 +189,7 @@ class ReviaSession
     [[nodiscard]] std::shared_ptr<policy::CompanionAuthority> Authority() const;
     [[nodiscard]] bool Admits(const RuntimeStamp& stamp) const;
     bool StartAgentWorkflow(const std::string& objective, bool demonstration, std::string& outError);
+    bool StartAgentWorkflow(const std::string& objective, AgentProviderMode mode, std::string& outError);
     bool ResumeAgentWorkflow(std::string& outError);
     bool RetryAgentNode(const std::string& nodeId, const std::string& changedInput, const std::string& evidence, std::string& outError);
     bool DecideAgentWorkflow(agents::ParentDecision decision, std::string& outError);
@@ -287,6 +289,8 @@ class ReviaSession
     CapabilityUpdateResult SetInternetAccess(bool enabled, bool automaticLookup);
     CapabilityUpdateResult SetInternetBrowser(bool visibleBrowser, bool autonomousResearch);
     CapabilityUpdateResult SetCameraAccess(bool enabled, bool autonomousCapture);
+    CapabilityUpdateResult SetProcessSettings(const process::ProcessSettings& settings);
+    CapabilityUpdateResult SetInteractiveBrowser(const browser::BrowserSettings& settings);
     // Revia's hands: pointer, keyboard, and starting an approved application. Each is
     // off until the owner turns it on; rawCoordinates and autonomous are narrower
     // authorities that are dropped when the one they sit inside is withdrawn.
@@ -352,7 +356,8 @@ class ReviaSession
     // Answers one typed recall request from the conversational path and renders the
     // bounded block that grounds the reply. Returns empty when archiving is off, when
     // nothing matches, or when the only match was the question being asked.
-    [[nodiscard]] std::string RecallConversation(const memory::RecallRequest& request, const std::string& currentInput) const;
+    [[nodiscard]] std::string RecallConversation(
+        const memory::RecallRequest& request, const std::string& currentInput, const memory::MemoryScope& scope) const;
     [[nodiscard]] std::vector<memory::ArchivedSession> RecentConversations(std::size_t maxSessions = 20) const;
     std::size_t ForgetConversations();
 
@@ -373,7 +378,7 @@ class ReviaSession
     // A generated picture, not a diagram. Separate capability because the two cannot
     // substitute for each other: a language model emitting SVG draws boxes and arrows and
     // cannot draw a scene, and an image model draws a scene and cannot lay out a panel.
-    SessionResult GenerateImage(const std::string& prompt);
+    SessionResult GenerateImage(const std::string& prompt, std::stop_token stopToken = {}, std::function<bool()> admission = {});
 
     // The working document. Generation is wholesale and says so; an edit reaches exactly
     // one block, because ReplaceBlock is the only mutation the edit path can express.
@@ -470,16 +475,20 @@ class ReviaSession
     goals::Goal RehearseGoal(const goals::Goal& goal, std::string& outSummary);
     // Narrow scope from configured policy; the plan cannot grant itself authority.
     [[nodiscard]] actions::CapabilitySettings DeriveGoalScope() const;
+    void ConfigureOperatorCallbacks();
+    [[nodiscard]] bool OperatorAdmitted(std::stop_token stopToken) const;
+    void EnrichOperatorObservation(computer::ComputerTaskContext& context, std::stop_token stopToken);
     // Try UIA first; ambiguous matches forbid fallback. Stamp evidence from runtime observations.
     void ResolveVisualTarget(actions::ActionRequest& request, const actions::windows::DesktopObservation& observation);
     bool TryHandleGoalInput(const std::string& input, SessionResult& result);
     bool TryHandleOperateInput(const std::string& input, SessionResult& result);
     bool RunOperateGoal(const std::string& request, SessionResult& result);
     // Centralizes archive enablement and sensitive-content refusal.
-    void ArchiveTurn(const std::string& role, const std::string& content);
+    void ArchiveTurn(
+        const std::string& role, const std::string& content, const memory::MemoryScope& scope = {}, std::function<bool()> admission = {});
     // Applies bounded subject evidence and reports changed preferences.
     void RecordPreferenceEvidence(const std::vector<identity::PreferenceObservation>& observations);
-    std::string ResolveLocalSpeaker(const std::string& input);
+    std::string ResolveLocalSpeaker(const std::string& input, agents::InputContext& captured);
     void RecordRelationshipEvidence(const std::string& entityId, const std::string& userInput, const std::string& reply, bool succeeded);
     void PersistIdentity();
     void StartStateMaintenance();
@@ -526,7 +535,10 @@ class ReviaSession
     [[nodiscard]] bool ActivityWasInterrupted(const std::string& activityId) const;
     // Replays the tail of the previous session into context, so a restart continues a
     // conversation rather than starting one that has forgotten yesterday.
-    void RestoreConversationContext();
+    void RestoreConversationContext(const memory::MemoryScope& scope, const std::function<bool()>& admission);
+    [[nodiscard]] memory::MemoryScope CapturePrivateMemoryScope() const;
+    std::string privateContextParticipant;
+    std::string privateContextAudience;
     // Submit already holds operationMutex when /eval arrives; the public entry point locks.
     evaluation::EvaluationReport RunConversationEvaluationUnlocked(
         const std::vector<evaluation::EvaluationCase>& cases, std::stop_token stopToken);
@@ -648,10 +660,10 @@ class ReviaSession
     resources::RuntimeLease foregroundLease;
     std::shared_ptr<policy::CompanionAuthority> companionAuthority;
     agents::AgentWorkflow agentWorkflow;
-    std::atomic<bool> workflowDemonstration = false;
+    std::atomic<AgentProviderMode> workflowProviderMode = AgentProviderMode::Local;
     mutable std::mutex workflowPersistenceMutex;
-    agents::AgentWorkflow::Provider AgentProvider(bool demonstration);
-    void ObserveAgentWorkflow(const agents::WorkflowSnapshot& snapshot, bool demonstration);
+    agents::AgentWorkflow::Provider AgentProvider(AgentProviderMode mode);
+    void ObserveAgentWorkflow(const agents::WorkflowSnapshot& snapshot, AgentProviderMode mode);
     void AdvanceAgentWorkflow();
     RuntimeEventBus eventBus;
     logger appLogger;
@@ -891,6 +903,10 @@ class ReviaSession
     std::stop_source taskStopSource;
     // Set while a goal executes, so its callbacks honour that goal's stop.
     std::optional<std::stop_token> executingGoalToken;
+    std::optional<RuntimeStamp> executingGoalStamp;
+    identity::AudienceContext executingGoalAudience;
+    bool operatorNeedsVision = false;
+    std::shared_ptr<browser::BrowserSession> interactiveBrowser;
     std::jthread taskWorker;
     // Counts launches, so a caller can tell whether its request started a task.
     std::atomic<std::uint64_t> tasksLaunched{0};

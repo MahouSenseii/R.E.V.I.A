@@ -21,6 +21,7 @@ struct MemoryRevisionRequest
     memoryDecision corrected;
     std::string reason;
     std::string evidence;
+    MemorySubject expectedSubject{};
 };
 
 struct MemoryRevisionReceipt
@@ -37,5 +38,6 @@ struct MemoryRevisionReceipt
     std::string evidence;
     std::string createdAt;
     bool wasAdded = false;
+    MemorySubject subject{};
 };
 } // namespace revia::memory

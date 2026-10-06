@@ -23,7 +23,7 @@ TurnAgentResult TurnCoordinator::Execute(const messageRouter& router, const std:
     const std::vector<conversationMessage>& context, const responseFilterSettings& filterSettings,
     const ResponseFilterContext& filterContext, const bool evaluateMemory, const ResponseProvenance provenance, const std::uint64_t turnId,
     const std::stop_token stopToken, messageRouter::DeltaHandler onDelta, const revia::intelligence::IntelligenceDecision& decision,
-    const llm::PrivateMemoryAccess memoryAccess, std::function<bool()> contextAdmission) const
+    const llm::PrivateMemoryAccess memoryAccess, std::function<bool()> contextAdmission, const memory::MemoryScope& scope) const
 {
     TurnAgentResult result;
     const auto admitted = [&contextAdmission]()
@@ -61,8 +61,7 @@ TurnAgentResult TurnCoordinator::Execute(const messageRouter& router, const std:
     if (memoryAccess == llm::PrivateMemoryAccess::ProfileSetting &&
         evaluateMemory && result.response.bSuccess && !stopToken.stop_requested())
     {
-        memoryAgent.Submit(
-            router, input, result.response.response, provenance, turnId, contextAdmission);
+        memoryAgent.Submit(router, input, result.response.response, provenance, turnId, contextAdmission, scope);
         result.memoryQueued = true;
     }
     return result;
@@ -78,10 +77,10 @@ LearnedFindingResult TurnCoordinator::SubmitLearnedFinding(const messageRouter& 
     return memoryAgent.SubmitLearnedFinding(router, std::move(decision), turnId);
 }
 
-LearnedFindingResult TurnCoordinator::SubmitLearnedFinding(const messageRouter& router, memoryDecision decision,
-    const std::uint64_t turnId, std::string* outMemoryId)
+LearnedFindingResult TurnCoordinator::SubmitLearnedFinding(const messageRouter& router, memoryDecision decision, const std::uint64_t turnId,
+    std::string* outMemoryId, std::function<bool()> contextAdmission)
 {
-    return memoryAgent.SubmitLearnedFinding(router, std::move(decision), turnId, outMemoryId);
+    return memoryAgent.SubmitLearnedFinding(router, std::move(decision), turnId, outMemoryId, std::move(contextAdmission));
 }
 
 void TurnCoordinator::BackfillMemoryEmbeddings(const messageRouter& router, const std::string& embeddingModel)

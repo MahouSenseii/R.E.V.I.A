@@ -198,6 +198,26 @@ void TestAProactiveOpeningIsNotRouted()
         "A proactive opening was classified as if it were a request.");
 }
 
+void TestDeliveredTierUsesGenerationFallbackAndRejectsUnknownOutput()
+{
+    responseOutput delivered;
+    delivered.bSuccess = true;
+    delivered.response = "The fallback model delivered this reply.";
+    delivered.requestedTier = "Expert";
+    delivered.selectedTier = "Main";
+    delivered.bRoutingFallback = true;
+    Check(revia::runtime::DeliveredResponseTier(delivered) == IntelligenceTier::Main,
+        "A follow-up inherited the requested expert tier instead of the delivered fallback.");
+    delivered.selectedTier.clear();
+    Check(!revia::runtime::DeliveredResponseTier(delivered), "Missing provider metadata invented a delivered tier.");
+    delivered.selectedTier = "Expert";
+    delivered.bSuccess = false;
+    Check(!revia::runtime::DeliveredResponseTier(delivered), "A failed generation established a delivered tier.");
+    delivered.bSuccess = true;
+    delivered.response.clear();
+    Check(!revia::runtime::DeliveredResponseTier(delivered), "An empty generation established a delivered tier.");
+}
+
 } // namespace
 
 void RunRoutingProductionTests()
@@ -206,6 +226,7 @@ void RunRoutingProductionTests()
     TestARealRequestReachesTheExpectedTier();
     TestAPublicTurnInheritsNothingFromTheLocalThread();
     TestAProactiveOpeningIsNotRouted();
+    TestDeliveredTierUsesGenerationFallbackAndRejectsUnknownOutput();
     std::cout << "Every routing input is produced by the turn that uses it, a request "
                  "with each condition reaches the tier it should, and a public or "
                  "proactive turn inherits nothing from the local thread.\n";

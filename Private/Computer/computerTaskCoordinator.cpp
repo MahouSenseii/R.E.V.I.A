@@ -7,6 +7,7 @@
 #include "Computer/routinePolicy.h"
 #include "Computer/subgoalValidator.h"
 #include "Computer/taskProgression.h"
+#include "Computer/taskAcceptance.h"
 
 #include <algorithm>
 #include <sstream>
@@ -60,6 +61,31 @@ void ComputerTaskCoordinator::SetLegacyPolicy(std::unique_ptr<IComputerPolicy> p
 void ComputerTaskCoordinator::SetSubgoalPlanner(SubgoalPlannerCall planner)
 {
     subgoalPlanner = std::move(planner);
+}
+
+void ComputerTaskCoordinator::SetScopeResolver(std::function<actions::CapabilitySettings(const goals::Goal&)> resolver)
+{
+    scopeResolver = std::move(resolver);
+}
+
+void ComputerTaskCoordinator::SetObservationEnricher(std::function<void(ComputerTaskContext&, std::stop_token)> enricher)
+{
+    observationEnricher = std::move(enricher);
+}
+
+goals::CompletionEvidence ComputerTaskCoordinator::VerifyCompletion(const goals::Goal& goal,
+    const ComputerObservation& observation, std::stop_token stopToken)
+{
+    if (stopToken.stop_requested()) return {false, "Completion verification was cancelled."};
+    if (activeGoalId != goal.id) return {false, "The original task acceptance context is unavailable."};
+    if (observation.browser)
+        return VerifyExactBrowserPlacement(content.Content(), goal, *observation.browser);
+    if (!observation.Available()) return {false, "A current admitted observation is unavailable for final acceptance."};
+    const auto criterion = VerifyExactContentPlacement(content.Content(), goal, observation, true);
+    if (!criterion.accepted) return criterion;
+    content.ObserveGoal(goal);
+    if (stopToken.stop_requested()) return {false, "Completion verification was cancelled."};
+    return VerifyExactContentPlacement(content.Content(), goal, observation, content.Placed());
 }
 
 void ComputerTaskCoordinator::ApplySettings(const computerControlSettings& settings)
@@ -349,7 +375,10 @@ goals::NextStep ComputerTaskCoordinator::Decide(const goals::Goal& goal,
     // Exactly one look, taken here and shared by everything that reasons about this
     // iteration. A provider observing for itself would bump the process-wide generation
     // and invalidate a target another provider had already chosen correctly.
-    ComputerTaskContext context = observations.Build(goal, iteration, perception);
+    goals::Goal observedGoal = goal;
+    if (scopeResolver) observedGoal.scope = scopeResolver(goal);
+    ComputerTaskContext context = observations.Build(observedGoal, iteration, perception);
+    if (observationEnricher && !stopToken.stop_requested()) observationEnricher(context, stopToken);
 
     // What the runtime is holding, described to every provider and revealed to none.
     // A planner that knows a message of this length exists can choose where it goes;
@@ -377,6 +406,20 @@ goals::NextStep ComputerTaskCoordinator::Decide(const goals::Goal& goal,
     // Only when a cheaper provider could actually use one. In the default mode this
     // never runs, so installing the feature costs nothing until someone asks for it.
     const ComputerProviderMode mode = controller.Mode();
+    if (context.observation.browser)
+    {
+        const auto placement = VerifyExactBrowserPlacement(content.Content(), goal, *context.observation.browser);
+        if (placement.accepted)
+        {
+            goals::NextStep finished;
+            finished.finished = true;
+            finished.reason = placement.detail;
+            FlushPending(goal);
+            pendingStepCount = goal.steps.size();
+            HoldDecision(context);
+            return finished;
+        }
+    }
     if (mode == ComputerProviderMode::Assisted || mode == ComputerProviderMode::Learned ||
         mode == ComputerProviderMode::Shadow)
     {
@@ -481,7 +524,8 @@ goals::NextStep ComputerTaskCoordinator::Decide(const goals::Goal& goal,
                 verdict.attempted + "\".";
         }
     }
-    else if (next.finished && !content.CompletionAllowed())
+    else if (next.finished && !content.CompletionAllowed() &&
+        !(context.observation.browser && VerifyExactBrowserPlacement(content.Content(), goal, *context.observation.browser).accepted))
     {
         // "I typed something and we are done" is the shape of the original defect, and
         // it survives every repair that only looks at what gets typed. The content this

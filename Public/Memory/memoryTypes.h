@@ -1,6 +1,7 @@
 #pragma once
 
 #include "LLM/responseTypes.h"
+#include "Memory/memoryScope.h"
 #include <string>
 #include <vector>
 
@@ -24,6 +25,7 @@ struct memoryEntry
     std::string currentRevisionId;
 
     memoryImportance importance = memoryImportance::Medium;
+    revia::memory::MemorySubject subject{};
 };
 
 struct memoryDecision
@@ -43,4 +45,5 @@ struct memoryDecision
     std::vector<float> embedding;
     std::string embeddingModel;
     std::vector<latencySample> timings;
+    revia::memory::MemorySubject subject{};
 };

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Agents/agentWorkflow.h"
+#include "Runtime/agentProviderMode.h"
 
 #include <QElapsedTimer>
 #include <QString>
@@ -20,7 +21,7 @@ class AgentStudioPanel final : public QWidget
   public:
     struct Controls
     {
-        std::function<bool(const std::string&, bool, std::string&)> start;
+        std::function<bool(const std::string&, revia::runtime::AgentProviderMode, std::string&)> start;
         std::function<void()> cancel;
         std::function<bool(std::string&)> resume;
         std::function<bool(const std::string&, const std::string&, const std::string&, std::string&)> retry;

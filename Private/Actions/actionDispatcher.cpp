@@ -1,6 +1,7 @@
 #include "Actions/actionDispatcher.h"
 
 #include <stdexcept>
+#include <algorithm>
 
 namespace revia::actions
 {
@@ -17,6 +18,11 @@ void ActionDispatcher::Register(std::unique_ptr<IActionExecutor> executor)
 void ActionDispatcher::Clear()
 {
     executors.clear();
+}
+
+void ActionDispatcher::Unregister(const ActionType type)
+{
+    std::erase_if(executors, [type](const auto& executor) { return executor->Handles(type); });
 }
 
 ActionResult ActionDispatcher::Dispatch(const ActionRequest& request,const PolicyDecision& decision,bool confirmationGranted)

@@ -118,6 +118,54 @@ std::string ColumnText(sqlite3_stmt* statement, const int column)
         : std::string(reinterpret_cast<const char*>(value));
 }
 
+bool MigrateScope(sqlite3* database)
+{
+    ArchiveTransaction transaction(database);
+    if (!transaction.IsActive())
+        return false;
+    const std::pair<const char*, const char*> fields[] = {{"participant_id", "TEXT NOT NULL DEFAULT ''"},
+        {"audience_kind", "INTEGER NOT NULL DEFAULT 0"}, {"audience_id", "TEXT NOT NULL DEFAULT ''"},
+        {"audience_revision", "INTEGER NOT NULL DEFAULT 0"}, {"speaker_source", "INTEGER NOT NULL DEFAULT 0"},
+        {"consent_revision", "INTEGER NOT NULL DEFAULT 0"}, {"companion_id", "TEXT NOT NULL DEFAULT ''"}};
+    for (const auto& [name, type] : fields)
+    {
+        sqlite3_stmt* raw = nullptr;
+        if (sqlite3_prepare_v2(database, "PRAGMA table_info(conversation_turns);", -1, &raw, nullptr) != SQLITE_OK)
+            return false;
+        Statement columns(raw);
+        bool found = false;
+        while (sqlite3_step(columns.get()) == SQLITE_ROW)
+            found = found || ColumnText(columns.get(), 1) == name;
+        columns.reset();
+        const std::string sql = std::string("ALTER TABLE conversation_turns ADD COLUMN ") + name + " " + type + ";";
+        if (!found && !Execute(database, sql.c_str()))
+            return false;
+    }
+    return Execute(database, "CREATE INDEX IF NOT EXISTS conversation_scope ON conversation_turns"
+                             "(participant_id, audience_kind, audience_id, session_id, turn_index);") &&
+           transaction.Commit();
+}
+
+// Parameters 10 onward leave the existing query's positional parameters stable.
+std::string ScopePredicate(const MemoryScope* scope, const std::string& alias = "")
+{
+    if (!scope)
+        return {};
+    return " AND " + alias + "participant_id = ?10 AND " + alias + "audience_kind = 1 AND " + alias + "audience_id = ?11 AND " + alias +
+           "speaker_source IN (1, 2, 3) AND (" + alias + "speaker_source <> 3 OR (" + alias + "consent_revision = ?12 AND ?12 <> 0)) AND " +
+           alias + "companion_id = ?13 ";
+}
+
+void BindScope(sqlite3_stmt* statement, const MemoryScope* scope)
+{
+    if (!scope)
+        return;
+    sqlite3_bind_text(statement, 10, scope->participantId.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(statement, 11, scope->audience.audienceId.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_int64(statement, 12, static_cast<sqlite3_int64>(scope->consentRevision));
+    sqlite3_bind_text(statement, 13, scope->companionId.c_str(), -1, SQLITE_TRANSIENT);
+}
+
 Database OpenDatabase(const std::string& archivePath)
 {
     const std::filesystem::path path(archivePath);
@@ -187,7 +235,7 @@ Database OpenDatabase(const std::string& archivePath)
         "  INSERT INTO conversation_search(conversation_search, rowid, content) "
         "  VALUES ('delete', old.rowid, old.content);"
         "END;";
-    if (!Execute(database.get(), Schema))
+    if (!Execute(database.get(), Schema) || !MigrateScope(database.get()))
     {
         return {};
     }
@@ -221,11 +269,18 @@ ArchivedTurn ReadTurn(sqlite3_stmt* statement)
     turn.role = ColumnText(statement, 3);
     turn.content = ColumnText(statement, 4);
     turn.createdAt = ColumnText(statement, 5);
+    turn.scope.participantId = ColumnText(statement, 6);
+    turn.scope.audience.kind = static_cast<identity::AudienceKind>(sqlite3_column_int(statement, 7));
+    turn.scope.audience.audienceId = ColumnText(statement, 8);
+    turn.scope.audience.revision = static_cast<std::uint64_t>(sqlite3_column_int64(statement, 9));
+    turn.scope.participantSource = static_cast<identity::SpeakerSource>(sqlite3_column_int(statement, 10));
+    turn.scope.consentRevision = static_cast<std::uint64_t>(sqlite3_column_int64(statement, 11));
+    turn.scope.companionId = ColumnText(statement, 12);
     return turn;
 }
 
-constexpr const char* TurnColumns =
-    "id, session_id, turn_index, role, content, created_at";
+constexpr const char* TurnColumns = "id, session_id, turn_index, role, content, created_at, participant_id, audience_kind, audience_id, "
+                                    "audience_revision, speaker_source, consent_revision, companion_id";
 
 // Terms matched individually and OR'd, each as a prefix, so "emotion system" finds a turn
 // that said either word. Distinct from QuoteForFts, which builds one exact phrase: a
@@ -375,7 +430,8 @@ bool ConversationArchive::BeginSession(const std::string& sessionId, std::string
     return true;
 }
 
-bool ConversationArchive::Record(const std::string& sessionId, const std::string& role, const std::string& content, std::string& outReason)
+bool ConversationArchive::Record(const std::string& sessionId, const std::string& role, const std::string& content, std::string& outReason,
+    const MemoryScope& scope, std::function<bool()> admission)
 {
     if (content.empty() || role.empty() || sessionId.empty())
     {
@@ -402,8 +458,14 @@ bool ConversationArchive::Record(const std::string& sessionId, const std::string
     std::string stored = content;
     if (stored.size() > limits.maxContentCharacters)
     {
-        revia::utf8::Truncate(stored, limits.maxContentCharacters);
-        stored += " [truncated]";
+        const std::string marker = " [truncated] ";
+        const std::size_t material = limits.maxContentCharacters > marker.size() ? limits.maxContentCharacters - marker.size() : 0;
+        const std::size_t head = material / 2;
+        std::size_t tail = stored.size() - (material - head);
+        while (tail < stored.size() && (static_cast<unsigned char>(stored[tail]) & 0xc0) == 0x80)
+            ++tail;
+        stored = material ? revia::utf8::Prefix(stored, head) + marker + stored.substr(tail)
+                          : revia::utf8::Prefix(marker, limits.maxContentCharacters);
         ++counters.truncated;
     }
 
@@ -414,6 +476,24 @@ bool ConversationArchive::Record(const std::string& sessionId, const std::string
         return false;
     }
     std::lock_guard writeLock(connectionMutex);
+
+    const auto admitted = [&]()
+    {
+        try
+        {
+            return !admission || admission();
+        }
+        catch (...)
+        {
+            return false;
+        }
+    };
+    ArchiveTransaction transaction(database);
+    if (!transaction.IsActive() || !admitted())
+    {
+        outReason = "Archive admission expired.";
+        return false;
+    }
 
     int nextIndex = 0;
     {
@@ -443,8 +523,9 @@ bool ConversationArchive::Record(const std::string& sessionId, const std::string
     sqlite3_stmt* raw = nullptr;
     if (sqlite3_prepare_v2(database,
             "INSERT INTO conversation_turns"
-            "(id, session_id, turn_index, role, content, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?);",
+            "(id, session_id, turn_index, role, content, created_at, participant_id, audience_kind, audience_id, audience_revision, "
+            "speaker_source, consent_revision, companion_id) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);",
             -1, &raw, nullptr) != SQLITE_OK)
     {
         outReason = "The conversation archive rejected the turn.";
@@ -459,9 +540,22 @@ bool ConversationArchive::Record(const std::string& sessionId, const std::string
     sqlite3_bind_text(statement.get(), 4, role.c_str(), -1, SQLITE_TRANSIENT);
     sqlite3_bind_text(statement.get(), 5, stored.c_str(), -1, SQLITE_TRANSIENT);
     sqlite3_bind_text(statement.get(), 6, createdAt.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(statement.get(), 7, scope.participantId.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_int(statement.get(), 8, static_cast<int>(scope.audience.kind));
+    sqlite3_bind_text(statement.get(), 9, scope.audience.audienceId.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_int64(statement.get(), 10, static_cast<sqlite3_int64>(scope.audience.revision));
+    sqlite3_bind_int(statement.get(), 11, static_cast<int>(scope.participantSource));
+    sqlite3_bind_int64(statement.get(), 12, static_cast<sqlite3_int64>(scope.consentRevision));
+    sqlite3_bind_text(statement.get(), 13, scope.companionId.c_str(), -1, SQLITE_TRANSIENT);
     if (sqlite3_step(statement.get()) != SQLITE_DONE)
     {
         outReason = "The conversation archive could not store the turn.";
+        return false;
+    }
+    statement.reset();
+    if (!admitted() || !transaction.Commit())
+    {
+        outReason = "Archive admission expired or storage failed.";
         return false;
     }
     ++counters.recorded;
@@ -517,10 +611,24 @@ std::vector<ArchivedTurn> ConversationArchive::LoadSession(const std::string& se
     return turns;
 }
 
-std::vector<ArchivedTurn> ConversationArchive::LoadPreviousSessionTail(const std::string& currentSessionId,
-    const std::size_t maxTurns) const
+std::vector<ArchivedTurn> ConversationArchive::LoadPreviousSessionTail(
+    const std::string& currentSessionId, const std::size_t maxTurns, const MemoryScope* scope) const
+{
+    return LoadCompatibleTail(currentSessionId, maxTurns, scope, false);
+}
+
+std::vector<ArchivedTurn> ConversationArchive::LoadLatestCompatibleTail(
+    const std::string& currentSessionId, const std::size_t maxTurns, const MemoryScope& scope) const
+{
+    return LoadCompatibleTail(currentSessionId, maxTurns, &scope, true);
+}
+
+std::vector<ArchivedTurn> ConversationArchive::LoadCompatibleTail(
+    const std::string& currentSessionId, const std::size_t maxTurns, const MemoryScope* scope, const bool includeCurrent) const
 {
     std::vector<ArchivedTurn> turns;
+    if (scope && !IsAttributedPrivateScope(*scope))
+        return turns;
     sqlite3* const database = Acquire();
     if (database == nullptr)
     {
@@ -535,18 +643,21 @@ std::vector<ArchivedTurn> ConversationArchive::LoadPreviousSessionTail(const std
         // was closed again before a single turn -- a crash, a quick restart, a test --
         // leaves an empty session, and restoring "the latest session" then restored
         // nothing while the real conversation sat one row further back.
-        if (sqlite3_prepare_v2(database,
-                "SELECT s.session_id FROM conversation_sessions s WHERE s.session_id <> ? "
-                "AND EXISTS (SELECT 1 FROM conversation_turns t "
-                "WHERE t.session_id = s.session_id) "
-                "ORDER BY CAST(s.started_at AS INTEGER) DESC LIMIT 1;",
-                -1, &raw, nullptr) != SQLITE_OK)
+        const std::string previousSql = "SELECT s.session_id FROM conversation_sessions s WHERE (s.session_id <> ?1 OR ?2 = 1) "
+                                        "AND EXISTS (SELECT 1 FROM conversation_turns t "
+                                        "WHERE t.session_id = s.session_id " +
+                                        ScopePredicate(scope, "t.") +
+                                        ") "
+                                        "ORDER BY (s.session_id = ?1) DESC, CAST(s.started_at AS INTEGER) DESC, s.rowid DESC LIMIT 1;";
+        if (sqlite3_prepare_v2(database, previousSql.c_str(), -1, &raw, nullptr) != SQLITE_OK)
         {
             return turns;
         }
         statement.reset(raw);
         sqlite3_bind_text(
             statement.get(), 1, currentSessionId.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_int(statement.get(), 2, includeCurrent ? 1 : 0);
+        BindScope(statement.get(), scope);
         if (sqlite3_step(statement.get()) != SQLITE_ROW)
         {
             return turns;
@@ -556,8 +667,8 @@ std::vector<ArchivedTurn> ConversationArchive::LoadPreviousSessionTail(const std
 
     Statement statement;
     sqlite3_stmt* raw = nullptr;
-    const std::string sql = std::string("SELECT ") + TurnColumns +
-        " FROM conversation_turns WHERE session_id = ? ORDER BY turn_index DESC LIMIT ?;";
+    const std::string sql = std::string("SELECT ") + TurnColumns + " FROM conversation_turns WHERE session_id = ?1 " +
+                            ScopePredicate(scope) + "ORDER BY turn_index DESC LIMIT ?2;";
     if (sqlite3_prepare_v2(database, sql.c_str(), -1, &raw, nullptr) != SQLITE_OK)
     {
         return turns;
@@ -565,6 +676,7 @@ std::vector<ArchivedTurn> ConversationArchive::LoadPreviousSessionTail(const std
     statement.reset(raw);
     sqlite3_bind_text(statement.get(), 1, previous.c_str(), -1, SQLITE_TRANSIENT);
     sqlite3_bind_int64(statement.get(), 2, static_cast<sqlite3_int64>(maxTurns));
+    BindScope(statement.get(), scope);
     while (sqlite3_step(statement.get()) == SQLITE_ROW)
     {
         turns.push_back(ReadTurn(statement.get()));
@@ -627,7 +739,8 @@ std::vector<ArchivedTurn> ConversationArchive::Search(const std::string& query, 
     Statement statement;
     sqlite3_stmt* raw = nullptr;
     const std::string sql =
-        "SELECT t.id, t.session_id, t.turn_index, t.role, t.content, t.created_at "
+        "SELECT t.id, t.session_id, t.turn_index, t.role, t.content, t.created_at, "
+        "t.participant_id, t.audience_kind, t.audience_id, t.audience_revision, t.speaker_source, t.consent_revision, t.companion_id "
         "FROM conversation_search s "
         "JOIN conversation_turns t ON t.rowid = s.rowid "
         "WHERE conversation_search MATCH ? "
@@ -647,10 +760,12 @@ std::vector<ArchivedTurn> ConversationArchive::Search(const std::string& query, 
     return turns;
 }
 
-std::vector<ArchivedTurn> ConversationArchive::LoadRange(const std::int64_t startEpoch,
-    const std::int64_t endEpoch, const std::size_t maxTurns) const
+std::vector<ArchivedTurn> ConversationArchive::LoadRange(
+    const std::int64_t startEpoch, const std::int64_t endEpoch, const std::size_t maxTurns, const MemoryScope* scope) const
 {
     std::vector<ArchivedTurn> turns;
+    if (scope && !IsAttributedPrivateScope(*scope))
+        return turns;
     if (endEpoch <= startEpoch || maxTurns == 0)
     {
         return turns;
@@ -665,9 +780,9 @@ std::vector<ArchivedTurn> ConversationArchive::LoadRange(const std::int64_t star
     // Newest first under the limit, then reversed, so a window holding more than the
     // ceiling keeps the end of the stretch rather than an arbitrary beginning.
     const std::string sql = std::string("SELECT ") + TurnColumns +
-        " FROM conversation_turns "
-        "WHERE CAST(created_at AS INTEGER) >= ? AND CAST(created_at AS INTEGER) < ? "
-        "ORDER BY CAST(created_at AS INTEGER) DESC, turn_index DESC LIMIT ?;";
+                            " FROM conversation_turns "
+                            "WHERE CAST(created_at AS INTEGER) >= ?1 AND CAST(created_at AS INTEGER) < ?2 " +
+                            ScopePredicate(scope) + "ORDER BY CAST(created_at AS INTEGER) DESC, turn_index DESC LIMIT ?3;";
     if (sqlite3_prepare_v2(database, sql.c_str(), -1, &raw, nullptr) != SQLITE_OK)
     {
         return turns;
@@ -676,6 +791,7 @@ std::vector<ArchivedTurn> ConversationArchive::LoadRange(const std::int64_t star
     sqlite3_bind_int64(statement.get(), 1, startEpoch);
     sqlite3_bind_int64(statement.get(), 2, endEpoch);
     sqlite3_bind_int64(statement.get(), 3, static_cast<sqlite3_int64>(maxTurns));
+    BindScope(statement.get(), scope);
     while (sqlite3_step(statement.get()) == SQLITE_ROW)
     {
         turns.push_back(ReadTurn(statement.get()));
@@ -684,10 +800,12 @@ std::vector<ArchivedTurn> ConversationArchive::LoadRange(const std::int64_t star
     return turns;
 }
 
-std::vector<ArchivedTurn> ConversationArchive::SearchRange(const std::vector<std::string>& terms,
-    const std::int64_t startEpoch, const std::int64_t endEpoch, const std::size_t maxTurns) const
+std::vector<ArchivedTurn> ConversationArchive::SearchRange(const std::vector<std::string>& terms, const std::int64_t startEpoch,
+    const std::int64_t endEpoch, const std::size_t maxTurns, const MemoryScope* scope) const
 {
     std::vector<ArchivedTurn> turns;
+    if (scope && !IsAttributedPrivateScope(*scope))
+        return turns;
     const std::string match = BuildTermMatch(terms);
     if (match.empty() || endEpoch <= startEpoch || maxTurns == 0)
     {
@@ -701,12 +819,13 @@ std::vector<ArchivedTurn> ConversationArchive::SearchRange(const std::vector<std
     Statement statement;
     sqlite3_stmt* raw = nullptr;
     const std::string sql =
-        "SELECT t.id, t.session_id, t.turn_index, t.role, t.content, t.created_at "
+        "SELECT t.id, t.session_id, t.turn_index, t.role, t.content, t.created_at, "
+        "t.participant_id, t.audience_kind, t.audience_id, t.audience_revision, t.speaker_source, t.consent_revision, t.companion_id "
         "FROM conversation_search s "
         "JOIN conversation_turns t ON t.rowid = s.rowid "
-        "WHERE conversation_search MATCH ? "
-        "  AND CAST(t.created_at AS INTEGER) >= ? AND CAST(t.created_at AS INTEGER) < ? "
-        "ORDER BY bm25(conversation_search) ASC LIMIT ?;";
+        "WHERE conversation_search MATCH ?1 "
+        "  AND CAST(t.created_at AS INTEGER) >= ?2 AND CAST(t.created_at AS INTEGER) < ?3 " +
+        ScopePredicate(scope, "t.") + "ORDER BY bm25(conversation_search) ASC LIMIT ?4;";
     if (sqlite3_prepare_v2(database, sql.c_str(), -1, &raw, nullptr) != SQLITE_OK)
     {
         return turns;
@@ -716,6 +835,7 @@ std::vector<ArchivedTurn> ConversationArchive::SearchRange(const std::vector<std
     sqlite3_bind_int64(statement.get(), 2, startEpoch);
     sqlite3_bind_int64(statement.get(), 3, endEpoch);
     sqlite3_bind_int64(statement.get(), 4, static_cast<sqlite3_int64>(maxTurns));
+    BindScope(statement.get(), scope);
     while (sqlite3_step(statement.get()) == SQLITE_ROW)
     {
         turns.push_back(ReadTurn(statement.get()));
@@ -723,9 +843,12 @@ std::vector<ArchivedTurn> ConversationArchive::SearchRange(const std::vector<std
     return turns;
 }
 
-std::vector<ArchivedTurn> ConversationArchive::SearchEarliest(const std::vector<std::string>& terms, const std::size_t maxTurns) const
+std::vector<ArchivedTurn> ConversationArchive::SearchEarliest(
+    const std::vector<std::string>& terms, const std::size_t maxTurns, const MemoryScope* scope) const
 {
     std::vector<ArchivedTurn> turns;
+    if (scope && !IsAttributedPrivateScope(*scope))
+        return turns;
     const std::string match = BuildTermMatch(terms);
     if (match.empty() || maxTurns == 0)
     {
@@ -739,11 +862,12 @@ std::vector<ArchivedTurn> ConversationArchive::SearchEarliest(const std::vector<
     Statement statement;
     sqlite3_stmt* raw = nullptr;
     const std::string sql =
-        "SELECT t.id, t.session_id, t.turn_index, t.role, t.content, t.created_at "
+        "SELECT t.id, t.session_id, t.turn_index, t.role, t.content, t.created_at, "
+        "t.participant_id, t.audience_kind, t.audience_id, t.audience_revision, t.speaker_source, t.consent_revision, t.companion_id "
         "FROM conversation_search s "
         "JOIN conversation_turns t ON t.rowid = s.rowid "
-        "WHERE conversation_search MATCH ? "
-        "ORDER BY CAST(t.created_at AS INTEGER) ASC, t.turn_index ASC LIMIT ?;";
+        "WHERE conversation_search MATCH ?1 " +
+        ScopePredicate(scope, "t.") + "ORDER BY CAST(t.created_at AS INTEGER) ASC, t.turn_index ASC LIMIT ?2;";
     if (sqlite3_prepare_v2(database, sql.c_str(), -1, &raw, nullptr) != SQLITE_OK)
     {
         return turns;
@@ -751,6 +875,7 @@ std::vector<ArchivedTurn> ConversationArchive::SearchEarliest(const std::vector<
     statement.reset(raw);
     sqlite3_bind_text(statement.get(), 1, match.c_str(), -1, SQLITE_TRANSIENT);
     sqlite3_bind_int64(statement.get(), 2, static_cast<sqlite3_int64>(maxTurns));
+    BindScope(statement.get(), scope);
     while (sqlite3_step(statement.get()) == SQLITE_ROW)
     {
         turns.push_back(ReadTurn(statement.get()));

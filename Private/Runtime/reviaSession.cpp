@@ -14,6 +14,8 @@
 #include "Identity/promptMarkers.h"
 #include "Runtime/publicContextCache.h"
 #include "Runtime/reviaSession.h"
+#include "Browser/browserSession.h"
+#include "Policy/capabilityProjection.h"
 #include "Audit/contentDigest.h"
 #include "Runtime/investigationChecks.h"
 #include "Speech/speakerEnrollmentDialogue.h"
@@ -306,8 +308,8 @@ ReviaSession::ReviaSession(CompanionPaths paths, std::shared_ptr<policy::Compani
               limits.includeOrdinaryQuestions = settings.conversation.selfInquiryScope == "questions";
               return limits;
           },
-          [this](const memory::RecallRequest& request, const std::string& currentInput)
-          { return RecallConversation(request, currentInput); },
+          [this](const memory::RecallRequest& request, const std::string& currentInput, const memory::MemoryScope& scope)
+          { return RecallConversation(request, currentInput, scope); },
           [this]()
           {
               // Read here because this is where drives and the running activity
@@ -334,7 +336,7 @@ ReviaSession::ReviaSession(CompanionPaths paths, std::shared_ptr<policy::Compani
           }),
       preferenceStore(companionPaths.Resolve("RuntimeData/Preferences/preferences.json")),
       relationships(companionPaths.Resolve("RuntimeData/Identity/identity.json")),
-      diagramStore(companionPaths.Resolve("RuntimeData/Diagrams")), documentWorkshop(router, imageGenerator, diagramStore, appLogger)
+      diagramStore(companionPaths.Resolve("RuntimeData/Diagrams")), documentWorkshop(router, actionRuntime, diagramStore, appLogger)
 {
     const RuntimeStamp origin = sessionIdentity.Stamp();
     if (!authority)
@@ -417,9 +419,20 @@ ReviaSession::ReviaSession(CompanionPaths paths, std::shared_ptr<policy::Compani
         [this](const std::string& instruction, const std::string& situation, const std::string& schema, std::stop_token stopToken)
         { return router.PlanComputerSubgoal(instruction, situation, schema, std::move(stopToken)); });
     computerTasks.ApplySettings(settings.computerControl);
+    interactiveBrowser = std::make_shared<browser::BrowserSession>(
+        companionPaths.InstallRoot() / "Tools/Browser/interactiveHost.mjs", companionPaths.Resolve("RuntimeData/InteractiveBrowser"));
+    actionRuntime.SetBrowserSession(interactiveBrowser);
+    ConfigureOperatorCallbacks();
     goalRunner.SetStepProvider(
         [this](const goals::Goal& goal, const std::uint32_t iteration)
         {
+            if (!OperatorAdmitted(GoalToken()))
+            {
+                goals::NextStep refused;
+                refused.needsInput = true;
+                refused.reason = "The operator's captured conversation or authority changed.";
+                return refused;
+            }
             goals::NextStep next = computerTasks.Decide(goal, iteration, settings.perception, GoalToken());
             if (!next.hasStep)
             {
@@ -542,7 +555,6 @@ bool ReviaSession::Start()
     PublishComponent("Response filters", settings.responseFilter.bAiReviewEnabled ? "Ready" : "Hard only",
         settings.responseFilter.bAiReviewEnabled ? "Hard filtering is on and AI response review is on."
                                                  : "Hard filtering is on; AI response review is off.");
-    imageGenerator.Configure(settings.image);
     inputArbiter.Configure(settings.inputArbiter);
     initiativeController.Configure(settings.initiative);
     conversationStarter.Configure(settings.initiative);
@@ -705,6 +717,8 @@ bool ReviaSession::Start()
     resourcePlan =
         resources::PlanResources(hardware, settings.resources, resources::EstimateResourceRequirements(settings, deferredVoiceLoad));
     resources::ApplyResourcePlan(resourcePlan, settings);
+    imageGenerator.Configure(settings.image);
+    actionRuntime.BindImageProvider(imageGenerator, imageGenerator.OutputDirectory(), settings.initiative.bEnabled);
 
     // Fast remains a small CPU-resident brain on multi- and single-GPU systems, so it
     // never takes VRAM reserved for voice. Where Main has a GPU, Main answers short
@@ -746,7 +760,8 @@ bool ReviaSession::Start()
         }
         else
         {
-            RestoreConversationContext();
+            privateContextParticipant.clear();
+            privateContextAudience.clear();
             appLogger.Log(conversationArchive.Status());
         }
     }
@@ -2594,6 +2609,7 @@ void ReviaSession::StartCuriosityLoop()
                             learned.summary = BuildLearnedResearchSummary(decision.topic, opening.text, researchSources);
                             learned.reason = "A permitted autonomous lookup produced a bounded, cited finding.";
                             learned.source = "autonomous_research";
+                            learned.subject = {memory::MemorySubjectKind::Companion, companionPaths.Descriptor().id};
                             const agents::LearnedFindingResult learnedResult =
                                 turnCoordinator.SubmitLearnedFinding(router, std::move(learned), runId);
                             const int sourceCount = static_cast<int>(researchSources.size());
@@ -2946,7 +2962,8 @@ SessionResult ReviaSession::AcceptProposal(const std::string& proposalId)
     return result;
 }
 
-void ReviaSession::ArchiveTurn(const std::string& role, const std::string& content)
+void ReviaSession::ArchiveTurn(
+    const std::string& role, const std::string& content, const memory::MemoryScope& scope, std::function<bool()> admission)
 {
     if (!sessionIdentity.IsCurrent(sessionIdentity.Stamp()))
         return;
@@ -2955,7 +2972,7 @@ void ReviaSession::ArchiveTurn(const std::string& role, const std::string& conte
         return;
     }
     std::string reason;
-    if (!conversationArchive.Record(conversationSessionId, role, content, reason))
+    if (!conversationArchive.Record(conversationSessionId, role, content, reason, scope, std::move(admission)))
     {
         // Only the refusal is logged, never the turn. Recording why a secret was withheld
         // by writing the secret to the log would defeat the whole point of withholding it.
@@ -2963,28 +2980,27 @@ void ReviaSession::ArchiveTurn(const std::string& role, const std::string& conte
     }
 }
 
-void ReviaSession::RestoreConversationContext()
+void ReviaSession::RestoreConversationContext(const memory::MemoryScope& scope, const std::function<bool()>& admission)
 {
     const int wanted = std::max(0, settings.conversation.restoreTurns);
-    if (wanted == 0)
+    if (wanted == 0 || !memory::IsAttributedPrivateScope(scope) || !admission || !admission())
     {
         return;
     }
-    const std::vector<memory::ArchivedTurn> tail =
-        conversationArchive.LoadPreviousSessionTail(conversationSessionId, static_cast<std::size_t>(wanted));
-    if (tail.empty())
+    const std::vector<memory::ArchivedTurn> tail = conversationArchive.LoadLatestCompatibleTail(
+        conversationSessionId, static_cast<std::size_t>(std::clamp(settings.conversation.maxTurnsPerSession, 1, 500)), scope);
+    if (tail.empty() || !admission())
     {
         return;
     }
-    for (const memory::ArchivedTurn& turn : tail)
-    {
-        context.AddMessage(turn.role, turn.content);
-    }
-    appLogger.Log("Restored " + std::to_string(tail.size()) + " turns from the previous conversation.");
+    std::vector<conversationMessage> restored;
+    for (const auto& turn : tail)
+        restored.push_back({turn.role, turn.content, turn.scope.participantId, turn.scope});
+    context.RestoreMessages(restored, static_cast<std::size_t>(wanted));
+    appLogger.Log("Restored " + std::to_string(tail.size()) + " compatible archived turns into bounded conversation context.");
     PublishComponent("Conversation history", "Restored",
-        "Continuing from the last " + std::to_string(tail.size()) + (tail.size() == 1 ? " turn" : " turns") +
-            " of the previous conversation.",
-        -1.0, static_cast<int>(tail.size()));
+        "Recovered compatible history for this participant, keeping recent exchanges and bounded continuity notes.", -1.0,
+        static_cast<int>(tail.size()));
 }
 
 std::string ReviaSession::ConversationHistoryStatus() const
@@ -3012,9 +3028,11 @@ std::vector<memory::ArchivedTurn> ReviaSession::ConversationsInRange(
     return conversationArchive.LoadRange(startEpoch, endEpoch, maxTurns);
 }
 
-std::string ReviaSession::RecallConversation(const memory::RecallRequest& request, const std::string& currentInput) const
+std::string ReviaSession::RecallConversation(
+    const memory::RecallRequest& request, const std::string& currentInput, const memory::MemoryScope& scope) const
 {
-    if (!request.Wanted() || !settings.conversation.bArchiveEnabled)
+    if (!request.Wanted() || !settings.conversation.bArchiveEnabled || !memory::IsAttributedPrivateScope(scope) ||
+        Audience().revision != scope.audience.revision || Audience().kind != scope.audience.kind)
     {
         return {};
     }
@@ -3026,22 +3044,22 @@ std::string ReviaSession::RecallConversation(const memory::RecallRequest& reques
     case memory::RecallKind::Window:
         if (!request.terms.empty())
         {
-            turns = conversationArchive.SearchRange(request.terms, request.window.startEpoch, request.window.endEpoch);
+            turns = conversationArchive.SearchRange(request.terms, request.window.startEpoch, request.window.endEpoch, 12, &scope);
         }
         if (turns.empty())
         {
             // A named stretch with no usable subject, or a subject that matched
             // nothing inside it. Either way the stretch itself is what was asked for.
-            turns = conversationArchive.LoadRange(request.window.startEpoch, request.window.endEpoch);
+            turns = conversationArchive.LoadRange(request.window.startEpoch, request.window.endEpoch, 40, &scope);
         }
         break;
     case memory::RecallKind::Topic:
         // No window: the whole archive up to now, which the created_at index still
         // bounds because the range is closed at both ends.
-        turns = conversationArchive.SearchRange(request.terms, 0, now + 60);
+        turns = conversationArchive.SearchRange(request.terms, 0, now + 60, 12, &scope);
         break;
     case memory::RecallKind::Earliest:
-        turns = conversationArchive.SearchEarliest(request.terms);
+        turns = conversationArchive.SearchEarliest(request.terms, 4, &scope);
         break;
     case memory::RecallKind::None:
         return {};
@@ -3052,6 +3070,8 @@ std::string ReviaSession::RecallConversation(const memory::RecallRequest& reques
     // block on a turn the model already has.
     std::erase_if(turns, [&](const memory::ArchivedTurn& turn) { return turn.role == "user" && turn.content == currentInput; });
 
+    if (Audience().revision != scope.audience.revision)
+        return {};
     return memory::RenderRecallBlock(request, turns, DisplayName(), now);
 }
 
@@ -3317,9 +3337,36 @@ SessionResult ReviaSession::ReviseDocumentBlock(const std::string& reference, co
     return ApplyTurn(documentWorkshop.ReviseDocumentBlock(reference, instruction));
 }
 
-SessionResult ReviaSession::GenerateImage(const std::string& prompt)
+SessionResult ReviaSession::GenerateImage(const std::string& prompt, const std::stop_token stopToken, std::function<bool()> admission)
 {
-    return ApplyTurn(documentWorkshop.GenerateImage(prompt));
+    if (!admission)
+    {
+        const auto origin = Stamp();
+        const auto audience = Audience();
+        admission = [this, origin, audience]
+        {
+            const auto current = Audience();
+            return started.load() && Admits(origin) && audience.kind == identity::AudienceKind::Private && current.kind == audience.kind &&
+                   current.revision == audience.revision;
+        };
+    }
+    auto outcome = documentWorkshop.GenerateImage(prompt, stopToken, admission, Stamp());
+    bool admitted = false;
+    try
+    {
+        admitted = !stopToken.stop_requested() && admission();
+    }
+    catch (...)
+    {
+    }
+    if (!admitted)
+    {
+        SessionResult result;
+        result.succeeded = false;
+        result.reason = "Image request was cancelled or its conversation changed.";
+        return result;
+    }
+    return ApplyTurn(std::move(outcome));
 }
 
 SessionResult ReviaSession::ShowPicture(const std::string& path)
@@ -3645,6 +3692,7 @@ SessionResult ReviaSession::Submit(const std::string& input, const agents::Input
     }
     activeOperation.request_stop();
     actionRuntime.CancelActiveInternet(HasRunningTask());
+    imageGenerator.Cancel();
     speechService.StopSpeaking();
     curiosityCondition.notify_all();
     if (conversational)
@@ -3782,9 +3830,18 @@ SessionResult ReviaSession::RunTurnLocked(const agents::InputBatch& batch)
         denied.reason = "The queued speaker or audience context changed.";
         return denied;
     }
-    SessionResult result = GuardTurn([this, &batch]() { return RunTurnUnguarded(batch); });
-    result.audienceRevision = batch.context.audience.revision;
-    if (!InputContextCurrent(batch.context))
+    auto admittedBatch = batch;
+    SessionResult result = GuardTurn([this, &admittedBatch]()
+    {
+        if (admittedBatch.source == agents::InputSource::Typed &&
+            admittedBatch.context.audience.kind == identity::AudienceKind::Private && InputContextCurrent(admittedBatch.context))
+        {
+            (void)ResolveLocalSpeaker(admittedBatch.text, admittedBatch.context);
+        }
+        return RunTurnUnguarded(admittedBatch);
+    });
+    result.audienceRevision = admittedBatch.context.audience.revision;
+    if (!InputContextCurrent(admittedBatch.context))
     {
         result.succeeded = false;
         result.fromAssistant = false;
@@ -3792,8 +3849,8 @@ SessionResult ReviaSession::RunTurnLocked(const agents::InputBatch& batch)
         result.reason = "The speaker or audience context changed during the turn.";
         return result;
     }
-    addresseeGate.NoteExchange(speech::AddresseeGate::Clock::now(), batch.context.participantId,
-        batch.context.audience.audienceId, batch.context.audience.revision);
+    addresseeGate.NoteExchange(speech::AddresseeGate::Clock::now(), admittedBatch.context.participantId,
+        admittedBatch.context.audience.audienceId, admittedBatch.context.audience.revision);
     return result;
 }
 
@@ -3858,7 +3915,15 @@ SessionResult ReviaSession::RunTurnUnguarded(const agents::InputBatch& batch)
     const auto admission = [this, captured]()
     { return InputContextCurrent(captured) && captured.stamp.policyVersion == companionAuthority->Revision(); };
     const bool privateAudience = captured.audience.kind == identity::AudienceKind::Private;
+    const memory::MemoryScope memoryScope{
+        captured.participantId, captured.audience, captured.participantSource, captured.consentRevision, captured.stamp.companionId};
     SessionResult result;
+    if (!admission())
+    {
+        result.succeeded = false;
+        result.reason = "The captured input is no longer current.";
+        return result;
+    }
     busy.store(true);
     const std::stop_token stopToken = BeginOperation();
     speechService.SetAdmissionGuard(admission);
@@ -3900,6 +3965,13 @@ SessionResult ReviaSession::RunTurnUnguarded(const agents::InputBatch& batch)
             }
         }
         return finish(std::move(result));
+    }
+    if (privateContextParticipant != captured.participantId || privateContextAudience != captured.audience.audienceId)
+    {
+        conversationRuntime.ResetParticipantContinuity();
+        privateContextParticipant = captured.participantId;
+        privateContextAudience = captured.audience.audienceId;
+        RestoreConversationContext(memoryScope, admission);
     }
     if (router.IsExitCommand(acceptedInput))
     {
@@ -3967,23 +4039,26 @@ SessionResult ReviaSession::RunTurnUnguarded(const agents::InputBatch& batch)
     // Archived before the reply so the user's turn survives a generation that fails,
     // is stopped, or crashes the model. What was asked is worth keeping even when the
     // answer never arrived.
-    ArchiveTurn("user", acceptedInput);
+    ArchiveTurn("user", acceptedInput, memoryScope, admission);
 
     // Asking for a drawing in conversation draws. Requiring /draw would make the
     // capability reachable only by someone who already knew it existed.
-    if (visual::DrawingRequestPolicy::ShouldDraw(acceptedInput))
+    const auto drawingIntent = visual::DrawingRequestPolicy::Classify(acceptedInput);
+    if (drawingIntent != visual::DrawingIntent::None)
     {
-        SessionResult drawn = DrawDiagram(visual::DrawingRequestPolicy::ExtractSubject(acceptedInput));
+        const auto subject = visual::DrawingRequestPolicy::ExtractSubject(acceptedInput);
+        SessionResult drawn =
+            drawingIntent == visual::DrawingIntent::Raster ? GenerateImage(subject, stopToken, admission) : DrawDiagram(subject);
         drawn.fromAssistant = true;
         if (drawn.succeeded)
         {
-            ArchiveTurn("assistant", drawn.text);
+            ArchiveTurn("assistant", drawn.text, memoryScope, admission);
         }
         return finish(std::move(drawn));
     }
-    const std::string speakerForTurn = ResolveLocalSpeaker(acceptedInput);
+    const std::string speakerForTurn = captured.participantId;
     result = conversationRuntime.ReplyForAudience(acceptedInput, {}, captured.audience, CurrentRelationship(), profile, llmAvailable,
-        ShouldSpeakOnCurrentChannel(), stopToken, admission, ClipboardReference(acceptedInput), batch.acceptedAt);
+        ShouldSpeakOnCurrentChannel(), stopToken, admission, ClipboardReference(acceptedInput), batch.acceptedAt, memoryScope);
     if (!admission())
     {
         result = {};
@@ -3994,7 +4069,7 @@ SessionResult ReviaSession::RunTurnUnguarded(const agents::InputBatch& batch)
     RecordRelationshipEvidence(speakerForTurn, acceptedInput, result.text, result.succeeded);
     if (result.succeeded && result.fromAssistant && !result.text.empty())
     {
-        ArchiveTurn("assistant", result.text);
+        ArchiveTurn("assistant", result.text, memoryScope, admission);
     }
     if (!result.succeeded)
     {
@@ -4101,6 +4176,9 @@ void ReviaSession::PollBackgroundEvents()
 
 void ReviaSession::RequestStop()
 {
+    if (interactiveBrowser)
+        interactiveBrowser->Stop();
+    imageGenerator.Cancel();
     CancelSpeakerEnrollment();
     agentWorkflow.RequestCancel();
     PreemptAutonomousActivity("stop was requested");
@@ -4136,6 +4214,8 @@ void ReviaSession::RequestStop()
 
 void ReviaSession::Stop()
 {
+    if (interactiveBrowser)
+        interactiveBrowser->Stop();
     CancelSpeakerEnrollment();
     const RuntimeStamp retiring = sessionIdentity.Stamp();
     sessionIdentity.Invalidate();
@@ -5253,6 +5333,29 @@ CapabilityUpdateResult ReviaSession::SetCameraAccess(const bool enabled, const b
     return result;
 }
 
+CapabilityUpdateResult ReviaSession::SetProcessSettings(const process::ProcessSettings& settings)
+{
+    CapabilityUpdateResult result;
+    std::string error;
+    result.succeeded = actionRuntime.SetProcessSettings(settings, error);
+    result.message = result.succeeded ? settings.enabled ? "Command permissions saved." : "Command execution disabled." : error;
+    PublishComponent("Commands", result.succeeded ? settings.enabled ? "Ready" : "Disabled" : "Error", result.message);
+    return result;
+}
+
+CapabilityUpdateResult ReviaSession::SetInteractiveBrowser(const browser::BrowserSettings& settings)
+{
+    if (interactiveBrowser)
+        interactiveBrowser->Stop();
+    CapabilityUpdateResult result;
+    std::string error;
+    result.succeeded = actionRuntime.SetInteractiveBrowser(settings, error);
+    result.message =
+        result.succeeded ? settings.enabled ? "Interactive browser permissions saved." : "Interactive browsing disabled." : error;
+    PublishComponent("Browser", result.succeeded ? settings.enabled ? "Ready" : "Disabled" : "Error", result.message);
+    return result;
+}
+
 CapabilityUpdateResult ReviaSession::SetDesktopControl(const bool pointer, const bool keyboard, const bool applicationLaunch,
     const bool rawCoordinates, const bool visualTargeting, const bool autonomous,
     const actions::CapabilitySettings::DesktopControl::InputScope scope, const bool allowCommandSurfaces)
@@ -5301,6 +5404,8 @@ CapabilityUpdateResult ReviaSession::SetDesktopControl(const bool pointer, const
 
 CapabilityUpdateResult ReviaSession::SetExecutionMode(const actions::ExecutionMode mode)
 {
+    if (mode == actions::ExecutionMode::Disabled && interactiveBrowser)
+        interactiveBrowser->Stop();
     CapabilityUpdateResult result;
     std::string error;
     result.succeeded = actionRuntime.SetExecutionMode(mode, error);
@@ -5455,20 +5560,48 @@ speech::VoiceOperationResult ReviaSession::AssignVoice(const std::string& profil
     return result;
 }
 
-std::string ReviaSession::ResolveLocalSpeaker(const std::string& input)
+std::string ReviaSession::ResolveLocalSpeaker(const std::string& input, agents::InputContext& captured)
 {
-    const std::string previous = CurrentRelationship().entityId;
+    const std::string previous = captured.participantId;
     const std::string stated = identity::ReadStatedName(input);
     if (stated.empty())
         return previous;
 
-    const std::string resolved = relationships.ResolveNamedLocalSpeaker(stated);
+    if (!InputContextCurrent(captured) || captured.stamp.policyVersion != companionAuthority->Revision())
+        return {};
+    const std::string resolved = relationships.ResolveNamedLocalSpeaker(stated,
+        [this, captured]
+        {
+            if (!started.load() || !sessionIdentity.IsCurrent(captured.stamp) ||
+                captured.stamp.policyVersion != companionAuthority->Revision())
+                return false;
+            std::lock_guard lock(audienceMutex);
+            return captured.audience.kind == identity::AudienceKind::Private && captured.audience.revision == configuredAudience.revision &&
+                   captured.audience.kind == lastInputAudience && captured.participantId == lastInputParticipant;
+        });
+    if (resolved.empty())
+        return {};
     {
-        std::lock_guard speakerLock(speakerMutex);
+        const std::scoped_lock lock(speakerMutex, audienceMutex);
+        if (!sessionIdentity.IsCurrent(captured.stamp) || captured.stamp.policyVersion != companionAuthority->Revision() ||
+            captured.audience.kind != identity::AudienceKind::Private || captured.audience.revision != configuredAudience.revision ||
+            captured.audience.kind != lastInputAudience || captured.participantId != lastInputParticipant)
+            return {};
         currentSpeakerId = resolved;
+        if (resolved != previous)
+        {
+            ++configuredAudience.revision;
+            audienceHistory.clear();
+        }
+        lastInputParticipant = resolved;
+        captured.participantId = resolved;
+        captured.participantSource = identity::SpeakerSource::ExplicitIntroduction;
+        captured.audience.revision = configuredAudience.revision;
     }
     if (resolved != previous)
     {
+        if (interactiveBrowser)
+            interactiveBrowser->Stop();
         appLogger.Log("Local speaker is " + stated + " (" + resolved + ").");
         PublishComponent("Relationship", "Named", "Local conversation turns are now attributed to " + stated + ".");
     }
@@ -5772,6 +5905,8 @@ autonomy::ActivityOutcome ReviaSession::ExecuteThink(
 
     std::vector<conversationMessage> recentConversation;
     std::string situation;
+    memory::MemoryScope scope;
+    const auto origin = Stamp();
     {
         std::lock_guard operationLock(operationMutex);
         if (busy.load())
@@ -5782,8 +5917,23 @@ autonomy::ActivityOutcome ReviaSession::ExecuteThink(
             return outcome;
         }
         recentConversation = context.GetRecentMessages();
+        scope = CapturePrivateMemoryScope();
+        if (!memory::IsAttributedPrivateScope(scope) || privateContextParticipant != scope.participantId ||
+            privateContextAudience != scope.audience.audienceId)
+        {
+            outcome.status = autonomy::ActivityStatus::Interrupted;
+            outcome.summary = "Private conversation context is not current for reflection.";
+            return outcome;
+        }
         situation = activityHistory.Summarize(std::chrono::minutes{90});
     }
+    const auto admission = [this, origin, scope, stopToken, activityId = activity.id]
+    {
+        const auto current = CapturePrivateMemoryScope();
+        return !stopToken.stop_requested() && !ActivityWasInterrupted(activityId) && Admits(origin) &&
+               origin.policyVersion == companionAuthority->Revision() && current.participantId == scope.participantId &&
+               current.audience.kind == scope.audience.kind && current.audience.revision == scope.audience.revision;
+    };
 
     // Her own questions, through the same agent a hard conversational turn uses. The
     // posture describes this moment, so the thinking is hers rather than a generic
@@ -5802,7 +5952,7 @@ autonomy::ActivityOutcome ReviaSession::ExecuteThink(
         decision.subject.empty() ? "What is still unresolved, and what would change my mind about it?" : decision.subject, posture,
         recentConversation, 4, stopToken);
 
-    if (ActivityWasInterrupted(activity.id))
+    if (!admission())
     {
         outcome.status = autonomy::ActivityStatus::Interrupted;
         outcome.summary = "The thought was set aside for the user.";
@@ -5845,7 +5995,9 @@ autonomy::ActivityOutcome ReviaSession::ExecuteThink(
         learned.summary = inquiry.settled;
         learned.reason = "Reached while thinking alone: " + decision.reason;
         learned.source = "autonomous_reflection";
-        const agents::LearnedFindingResult learnedResult = turnCoordinator.SubmitLearnedFinding(router, std::move(learned));
+        learned.subject = memory::ParticipantSubject(scope);
+        const agents::LearnedFindingResult learnedResult =
+            turnCoordinator.SubmitLearnedFinding(router, std::move(learned), {}, nullptr, admission);
         outcome.artifact = autonomy::DescribeLearnedFindingArtifact(learnedResult, "a reflection in memory");
         if (learnedResult == agents::LearnedFindingResult::Failed)
         {
@@ -6033,6 +6185,7 @@ autonomy::ActivityOutcome ReviaSession::ExecuteResearch(const autonomy::Activity
         learned.summary = BuildLearnedResearchSummary(verdict.topic, lookup.result.content, lookup.result.entries);
         learned.reason = "A permitted autonomous lookup produced a cited finding.";
         learned.source = "autonomous_research";
+        learned.subject = {memory::MemorySubjectKind::Companion, companionPaths.Descriptor().id};
         learnedResult = turnCoordinator.SubmitLearnedFinding(router, std::move(learned));
         outcome.artifact = autonomy::DescribeLearnedFindingArtifact(*learnedResult, "a cited finding in memory");
     }
@@ -6061,14 +6214,23 @@ autonomy::ActivityOutcome ReviaSession::ExecuteOrganizeMemory(
 {
     autonomy::ActivityOutcome outcome;
     longTermMemory memory(companionPaths.Resolve("Memory/revia_memory.db").string());
-    const std::vector<memoryEntry> entries = memory.Load();
+    const auto scope = CapturePrivateMemoryScope();
+    const auto origin = Stamp();
+    const auto admission = [this, origin, scope, activityId = activity.id]
+    {
+        const auto current = CapturePrivateMemoryScope();
+        return !ActivityWasInterrupted(activityId) && Admits(origin) && origin.policyVersion == companionAuthority->Revision() &&
+               current.participantId == scope.participantId && current.audience.kind == scope.audience.kind &&
+               current.audience.revision == scope.audience.revision;
+    };
+    const std::vector<memoryEntry> entries = memory.LoadScoped(scope, 12);
     if (entries.size() < 4)
     {
         outcome.status = autonomy::ActivityStatus::Completed;
         outcome.summary = "There is not enough in memory yet to be worth tidying.";
         return outcome;
     }
-    if (ActivityWasInterrupted(activity.id))
+    if (!admission())
     {
         outcome.status = autonomy::ActivityStatus::Interrupted;
         outcome.summary = "Stopped tidying memory for the user.";
@@ -6080,6 +6242,7 @@ autonomy::ActivityOutcome ReviaSession::ExecuteOrganizeMemory(
     std::size_t examined = 0;
     std::size_t connectionsFound = 0;
     std::string strongestPair;
+    memory::MemorySubject strongestSubject;
     for (const memoryEntry& entry : entries)
     {
         if (examined >= 12)
@@ -6087,16 +6250,18 @@ autonomy::ActivityOutcome ReviaSession::ExecuteOrganizeMemory(
         if (entry.summary.size() < 24)
             continue;
         ++examined;
-        if (ActivityWasInterrupted(activity.id))
+        if (!admission())
         {
             outcome.status = autonomy::ActivityStatus::Interrupted;
             outcome.summary = "Stopped tidying memory partway for the user.";
             outcome.resumeToken = "organize";
             return outcome;
         }
-        const std::vector<memoryEntry> neighbours = memory.Search(entry.summary, 3);
+        const std::vector<memoryEntry> neighbours = memory.Search(entry.summary, 3, {}, {}, 0, &scope);
         for (const memoryEntry& neighbour : neighbours)
         {
+            if (neighbour.subject != entry.subject)
+                continue;
             if (neighbour.id == entry.id)
                 continue;
             if (neighbour.category != entry.category)
@@ -6105,6 +6270,7 @@ autonomy::ActivityOutcome ReviaSession::ExecuteOrganizeMemory(
             if (strongestPair.empty())
             {
                 strongestPair = entry.summary + " <-> " + neighbour.summary;
+                strongestSubject = entry.subject;
             }
             break;
         }
@@ -6129,9 +6295,10 @@ autonomy::ActivityOutcome ReviaSession::ExecuteOrganizeMemory(
         connection.summary = "These belong together: " + strongestPair;
         connection.reason = "Found while tidying memory: " + decision.reason;
         connection.source = "autonomous_organization";
+        connection.subject = strongestSubject;
         // Save deduplicates, so re-finding the same pair on a later pass does not
         // accumulate copies of the same observation.
-        learnedResult = turnCoordinator.SubmitLearnedFinding(router, std::move(connection));
+        learnedResult = turnCoordinator.SubmitLearnedFinding(router, std::move(connection), {}, nullptr, admission);
         outcome.artifact = autonomy::DescribeLearnedFindingArtifact(*learnedResult, "a connection between two memories");
     }
     outcome.summary =
@@ -6147,6 +6314,48 @@ autonomy::ActivityOutcome ReviaSession::ExecuteCreate(
     const autonomy::Activity& activity, const autonomy::ActivityDecision& decision, const std::stop_token stopToken)
 {
     autonomy::ActivityOutcome outcome;
+    const std::string subject = decision.subject.empty() ? decision.reason : decision.subject;
+    if (visual::DrawingRequestPolicy::Classify(subject) == visual::DrawingIntent::Raster)
+    {
+        const auto origin = Stamp();
+        const auto audience = Audience();
+        const auto admission = [this, origin, audience, activityId = activity.id, stopToken]
+        {
+            const auto current = Audience();
+            return !stopToken.stop_requested() && started.load() && settings.initiative.bEnabled && Admits(origin) &&
+                   origin.policyVersion == companionAuthority->Revision() && !ActivityWasInterrupted(activityId) &&
+                   audience.kind == identity::AudienceKind::Private && current.kind == audience.kind &&
+                   current.revision == audience.revision;
+        };
+        actions::ActionRequest request;
+        request.id = actions::NewActionId();
+        request.type = actions::ActionType::GenerateImage;
+        request.value = visual::DrawingRequestPolicy::ExtractSubject(subject);
+        request.requestedBy = "autonomous:create";
+        request.beforeCommit = [admission] { return admission() ? std::string() : "Autonomous art was interrupted."; };
+        request.beforeEffect = [admission](const std::string&) { return admission() ? std::string() : "Autonomous art was interrupted."; };
+        const auto generated = actionRuntime.ExecuteFor(origin, request, false, stopToken);
+        if (!admission())
+        {
+            outcome.status = autonomy::ActivityStatus::Interrupted;
+            outcome.summary = "Set the picture aside for the user.";
+            outcome.resumeToken = subject;
+        }
+        else if (generated.Succeeded() && generated.result.image)
+        {
+            outcome.status = autonomy::ActivityStatus::Completed;
+            outcome.satisfiedDrive = outcome.completedIndependentWork = true;
+            outcome.drive = autonomy::Drive::Creativity;
+            outcome.artifact = actions::PathToUtf8(generated.result.image->path);
+            outcome.summary = "Made a picture about " + subject + ".";
+        }
+        else
+        {
+            outcome.status = autonomy::ActivityStatus::Failed;
+            outcome.summary = generated.Message();
+        }
+        return outcome;
+    }
     if (!llmAvailable)
     {
         outcome.status = autonomy::ActivityStatus::Failed;
@@ -6167,7 +6376,6 @@ autonomy::ActivityOutcome ReviaSession::ExecuteCreate(
         recentConversation = context.GetRecentMessages();
     }
 
-    const std::string subject = decision.subject.empty() ? decision.reason : decision.subject;
     const responseOutput draft = router.GenerateActivityDraft(subject, "Private activity: " + decision.reason, stopToken);
     if (stopToken.stop_requested() || ActivityWasInterrupted(activity.id))
     {
@@ -7326,6 +7534,9 @@ goals::Goal ReviaSession::ExecuteOperate(
     goals::Goal goal, const std::string& request, const bool messaging, const std::stop_token stopToken, const bool reportState)
 {
     goalRunner.SeedStandingApproval(actions::RiskLevel::ReversibleWrite, true);
+    const auto tools = policy::ProjectCapabilityScope(goal.scope, actionRuntime.Settings());
+    goalRunner.SeedToolDelegation(
+        tools.process.enabled && tools.process.allowTaskExecution, tools.browser.enabled && tools.browser.allowTaskInteraction);
     const auto desktopApproval = actionRuntime.ApproveDesktopTask(goal.id, messaging);
     const auto startedAt = std::chrono::steady_clock::now();
     if (reportState)
@@ -7481,16 +7692,28 @@ ReviaSession::GoalTokenScope::GoalTokenScope(ReviaSession& owner, std::stop_toke
     {
         std::lock_guard lock(session.taskMutex);
         session.executingGoalToken = std::move(token);
+        session.executingGoalStamp = stamp;
+        session.executingGoalAudience = session.Audience();
+        session.operatorNeedsVision = false;
         if (session.activeTask)
             parentTask = session.activeTask->stamp.taskId;
     }
     admitted = session.companionAuthority->RegisterTask(stamp, parentTask);
     if (admitted)
+    {
+        stamp.policyVersion = session.companionAuthority->Revision();
+        {
+            std::lock_guard lock(session.taskMutex);
+            session.executingGoalStamp = stamp;
+        }
         session.goalRunner.SetExecutionStamp(stamp);
+    }
 }
 
 ReviaSession::GoalTokenScope::~GoalTokenScope()
 {
+    if (session.interactiveBrowser)
+        session.interactiveBrowser->Stop();
     if (admitted)
     {
         session.companionAuthority->EndTask(stamp);
@@ -7498,6 +7721,8 @@ ReviaSession::GoalTokenScope::~GoalTokenScope()
     }
     std::lock_guard lock(session.taskMutex);
     session.executingGoalToken.reset();
+    session.executingGoalStamp.reset();
+    session.operatorNeedsVision = false;
 }
 
 std::stop_token ReviaSession::GoalToken() const
@@ -8571,7 +8796,7 @@ bool ReviaSession::TryHandleActionInput(const std::string& input, SessionResult&
 
     if (input == "/imagine" || input.rfind("/imagine ", 0) == 0)
     {
-        result = GenerateImage(input.size() > 9 ? Trim(input.substr(9)) : std::string());
+        result = GenerateImage(input.size() > 9 ? Trim(input.substr(9)) : std::string(), CurrentOperationToken());
         return true;
     }
 

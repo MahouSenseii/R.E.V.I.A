@@ -1,5 +1,6 @@
 #include "Visual/imageSettings.h"
 #include "Visual/imageGenerator.h"
+#include "Visual/imageArtifact.h"
 #include "Core/localApiKey.h"
 #include "Core/logger.h"
 
@@ -12,6 +13,8 @@
 #include <system_error>
 #include <utility>
 #include <vector>
+#include <thread>
+#include <algorithm>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -152,6 +155,7 @@ bool ImageServerProcess::Start(const imageSettings& settings, const std::string&
     {
         return true;
     }
+    Stop();
 
     const std::filesystem::path python = ResolveRuntimePath(settings.pythonExecutable);
     const std::filesystem::path script = ResolveRuntimePath(settings.serviceScript);
@@ -168,19 +172,19 @@ bool ImageServerProcess::Start(const imageSettings& settings, const std::string&
     }
 
     std::wostringstream command;
-    command << QuoteWindowsArgument(python.wstring())
-        << L' ' << QuoteWindowsArgument(script.wstring())
-        << L" --host " << Utf8ToWide(settings.host)
-        << L" --port " << settings.port
-        << L" --model " << QuoteWindowsArgument(Utf8ToWide(settings.model))
-        << L" --device " << Utf8ToWide(settings.device)
-        << L" --min-free-vram-mib " << settings.minimumFreeVramMiB
-        << L" --steps " << settings.steps
-        << L" --guidance " << settings.guidance
-        << L" --width " << settings.width
-        << L" --height " << settings.height
-        << L" --cache-dir " << QuoteWindowsArgument(
-            ResolveRuntimePath(settings.cacheDirectory).wstring());
+    command << QuoteWindowsArgument(python.wstring()) << L' ' << QuoteWindowsArgument(script.wstring()) << L" --host "
+            << Utf8ToWide(settings.host) << L" --port " << settings.port << L" --model " << QuoteWindowsArgument(Utf8ToWide(settings.model))
+            << L" --device " << Utf8ToWide(settings.device) << L" --min-free-vram-mib " << settings.minimumFreeVramMiB << L" --steps "
+            << settings.steps << L" --guidance " << settings.guidance << L" --width " << settings.width << L" --height " << settings.height
+            << L" --gpu-reserve-mib " << settings.gpuReserveMiB << L" --cpu-threads " << settings.cpuThreads << L" --output-root "
+            << QuoteWindowsArgument(ResolveRuntimePath(settings.outputPath).wstring()) << L" --cache-dir "
+            << QuoteWindowsArgument(ResolveRuntimePath(settings.cacheDirectory).wstring());
+    if (settings.bKeepLoaded)
+        command << L" --keep-loaded";
+    if (settings.bOffline)
+        command << L" --offline";
+    if (!settings.variant.empty())
+        command << L" --variant " << QuoteWindowsArgument(Utf8ToWide(settings.variant));
     if (!apiKey.empty())
     {
         command << L" --api-key " << QuoteWindowsArgument(Utf8ToWide(apiKey));
@@ -236,9 +240,15 @@ bool ImageServerProcess::Start(const imageSettings& settings, const std::string&
     {
         jobHandle = job;
     }
-    else if (job != nullptr)
+    else
     {
-        CloseHandle(job);
+        if (job != nullptr)
+            CloseHandle(job);
+        TerminateProcess(information.hProcess, 1);
+        CloseHandle(information.hThread);
+        CloseHandle(information.hProcess);
+        outError = "The image worker could not obtain owned process lifetime.";
+        return false;
     }
     if (ResumeThread(information.hThread) == static_cast<DWORD>(-1))
     {
@@ -310,17 +320,32 @@ ImageGenerator::~ImageGenerator()
 
 void ImageGenerator::Configure(imageSettings settings)
 {
+    Cancel();
     std::lock_guard lock(mutex);
+    process.Stop();
     configuration = std::move(settings);
+    enabled.store(configuration.bEnabled);
+    shuttingDown.store(false);
+    ImageJobSnapshot initial;
+    initial.state = configuration.bEnabled ? "idle" : "disabled";
+    initial.model = configuration.model;
+    SetSnapshot(std::move(initial));
 }
 
 bool ImageGenerator::IsEnabled() const
 {
-    return configuration.bEnabled;
+    return enabled.load();
+}
+
+std::filesystem::path ImageGenerator::OutputDirectory()
+{
+    std::lock_guard lock(mutex);
+    return ResolveRuntimePath(configuration.outputPath);
 }
 
 bool ImageGenerator::IsAvailable(std::string& outDetail)
 {
+    std::lock_guard lock(mutex);
     if (!configuration.bEnabled)
     {
         outDetail = "Image generation is off. Set image.enabled true in "
@@ -338,7 +363,7 @@ bool ImageGenerator::IsAvailable(std::string& outDetail)
     return true;
 }
 
-bool ImageGenerator::EnsureRunning(std::string& outError)
+bool ImageGenerator::EnsureRunning(std::string& outError, const std::function<bool()>& cancelled)
 {
     if (process.IsRunning())
     {
@@ -360,15 +385,16 @@ bool ImageGenerator::EnsureRunning(std::string& outError)
     // The worker binds before it loads a model, so health comes back quickly even though
     // the first generation will not.
     httplib::Client client(configuration.host, configuration.port);
-    client.set_connection_timeout(2);
-    client.set_read_timeout(10);
+    client.set_connection_timeout(1);
+    client.set_read_timeout(1);
     const auto deadline = std::chrono::steady_clock::now() +
         std::chrono::seconds(configuration.startupTimeoutSeconds);
     while (std::chrono::steady_clock::now() < deadline)
     {
-        if (shuttingDown.load())
+        if (cancelled())
         {
-            outError = "Shutting down.";
+            process.Stop();
+            outError = "Image generation was cancelled.";
             return false;
         }
         httplib::Headers headers;
@@ -382,18 +408,34 @@ bool ImageGenerator::EnsureRunning(std::string& outError)
     }
     outError = "The image worker did not become ready within " +
         std::to_string(configuration.startupTimeoutSeconds) + " seconds.";
+    process.Stop();
     return false;
 }
 
-ImageResult ImageGenerator::Generate(const std::string& prompt, const std::string& negativePrompt)
+ImageResult ImageGenerator::Generate(const std::string& prompt, const std::string& negativePrompt, const std::stop_token stopToken,
+    std::function<bool()> admission, const std::filesystem::path& expectedOutputRoot)
 {
     ImageResult result;
+    const auto generation = cancellationGeneration.load();
     std::lock_guard lock(mutex);
-
-    std::string detail;
-    if (!IsAvailable(detail))
+    const auto cancelled = [&]()
     {
-        result.message = detail;
+        return shuttingDown.load() || stopToken.stop_requested() || generation != cancellationGeneration.load() ||
+               (admission && !admission());
+    };
+    if (!expectedOutputRoot.empty())
+    {
+        std::error_code error;
+        const auto currentRoot = std::filesystem::weakly_canonical(ResolveRuntimePath(configuration.outputPath), error);
+        if (error || currentRoot != expectedOutputRoot)
+        {
+            result.message = "The image provider destination changed after admission.";
+            return result;
+        }
+    }
+    if (!configuration.bEnabled)
+    {
+        result.message = "Image generation is disabled. Enable the installed image provider in settings.";
         return result;
     }
     if (prompt.empty())
@@ -401,11 +443,25 @@ ImageResult ImageGenerator::Generate(const std::string& prompt, const std::strin
         result.message = "I need something to picture.";
         return result;
     }
-
+    if (cancelled())
+    {
+        result.cancelled = true;
+        result.message = "Image generation was cancelled before it started.";
+        return result;
+    }
+    ImageJobSnapshot progress;
+    progress.state = "starting";
+    progress.model = configuration.model;
+    progress.jobId = core::GenerateLocalApiKey();
+    SetSnapshot(progress);
     std::string error;
-    if (!EnsureRunning(error))
+    if (!EnsureRunning(error, cancelled))
     {
         result.message = error;
+        result.cancelled = cancelled();
+        progress.state = result.cancelled ? "cancelled" : "failed";
+        progress.detail = error;
+        SetSnapshot(progress);
         return result;
     }
 
@@ -413,75 +469,170 @@ ImageResult ImageGenerator::Generate(const std::string& prompt, const std::strin
     const std::filesystem::path outputDirectory =
         ResolveRuntimePath(configuration.outputPath);
     std::filesystem::create_directories(outputDirectory, directoryError);
-    const std::filesystem::path target =
-        outputDirectory / ("image-" + Timestamp() + ".png");
+    const std::filesystem::path target = outputDirectory / ("image-" + Timestamp() + "-" + progress.jobId + ".png");
+    if (directoryError || std::filesystem::exists(target))
+    {
+        result.message = "The image output directory is unavailable or the artifact already exists.";
+        progress.state = "failed";
+        progress.detail = result.message;
+        SetSnapshot(progress);
+        return result;
+    }
 
-    nlohmann::json body = {
-        {"prompt", prompt},
-        {"outputPath", target.string()},
-        {"steps", configuration.steps},
-        {"guidance", configuration.guidance},
-        {"width", configuration.width},
-        {"height", configuration.height}
-    };
+    nlohmann::json body = {{"jobId", progress.jobId}, {"prompt", prompt},
+        {"outputPath", std::string(reinterpret_cast<const char*>(target.u8string().c_str()))}, {"steps", configuration.steps},
+        {"guidance", configuration.guidance}, {"width", configuration.width}, {"height", configuration.height}};
+    if (configuration.seed >= 0)
+        body["seed"] = configuration.seed;
     if (!negativePrompt.empty())
     {
         body["negativePrompt"] = negativePrompt;
     }
 
     httplib::Client client(configuration.host, configuration.port);
-    client.set_connection_timeout(5);
-    client.set_read_timeout(configuration.requestTimeoutSeconds);
+    client.set_connection_timeout(1);
+    client.set_read_timeout(2);
+    client.set_write_timeout(2);
     httplib::Headers headers;
     headers.emplace("Authorization", "Bearer " + apiKey);
 
     const auto started = std::chrono::steady_clock::now();
-    const auto response =
-        client.Post("/generate", headers, body.dump(), "application/json");
-    result.elapsedMilliseconds = std::chrono::duration<double, std::milli>(
-        std::chrono::steady_clock::now() - started).count();
-
-    if (!response)
-    {
-        result.message = "The image worker stopped responding.";
-        return result;
-    }
+    const auto deadline = started + std::chrono::seconds(configuration.requestTimeoutSeconds);
     try
     {
-        const nlohmann::json parsed = nlohmann::json::parse(response->body);
-        if (response->status != 200 || !parsed.value("ok", false))
+        const auto response = client.Post("/jobs", headers, body.dump(), "application/json");
+        if (!response || response->status != 202)
         {
-            result.message = "The picture could not be generated: " +
-                parsed.value("error", std::string("unknown error"));
-            return result;
+            throw std::runtime_error("The image worker could not admit the job." +
+                                     (response ? " " + nlohmann::json::parse(response->body).value("error", std::string()) : ""));
         }
-        result.succeeded = true;
-        result.path = std::filesystem::path(parsed.value("path", target.string()));
-        std::ostringstream summary;
-        summary << parsed.value("width", configuration.width) << 'x'
-            << parsed.value("height", configuration.height) << ", "
-            << parsed.value("steps", configuration.steps) << " steps on "
-            << parsed.value("deviceName", std::string("CPU")) << " ("
-            << parsed.value("dtype", std::string("float32")) << ") using "
-            << parsed.value("model", configuration.model);
-        result.detail = summary.str();
-        result.message = "Generated in " +
-            std::to_string(static_cast<long long>(result.elapsedMilliseconds / 1000.0)) +
-            "s.";
+        while (true)
+        {
+            if (cancelled())
+            {
+                result.cancelled = true;
+                throw std::runtime_error("Image generation was cancelled.");
+            }
+            if (std::chrono::steady_clock::now() >= deadline)
+            {
+                throw std::runtime_error("Image generation exceeded its time limit.");
+            }
+            const auto poll = client.Get("/jobs/" + progress.jobId, headers);
+            if (!poll || poll->status != 200)
+            {
+                throw std::runtime_error("The image worker stopped responding.");
+            }
+            const nlohmann::json parsed = nlohmann::json::parse(poll->body);
+            if (parsed.at("jobId").get<std::string>() != progress.jobId)
+            {
+                throw std::runtime_error("The image worker returned another job's status.");
+            }
+            progress.state = parsed.at("state").get<std::string>();
+            progress.step = parsed.value("step", 0);
+            progress.steps = parsed.value("steps", 0);
+            progress.device = parsed.value("device", std::string());
+            progress.loaded = parsed.value("loaded", false);
+            progress.detail =
+                progress.state +
+                (progress.steps > 0 ? ": " + std::to_string(progress.step) + "/" + std::to_string(progress.steps) + " steps" : "");
+            SetSnapshot(progress);
+            if (progress.state == "cancelled" || progress.state == "failed")
+            {
+                result.cancelled = progress.state == "cancelled";
+                throw std::runtime_error(parsed.value("error", std::string("The image job failed.")));
+            }
+            if (progress.state == "succeeded")
+            {
+                ImageArtifactReceipt receipt;
+                const auto returnedPath = parsed.at("path").get<std::string>();
+                receipt.path = std::filesystem::path(std::u8string(returnedPath.begin(), returnedPath.end()));
+                receipt.jobId = parsed.at("jobId").get<std::string>();
+                receipt.model = parsed.at("model").get<std::string>();
+                receipt.sha256 = parsed.at("sha256").get<std::string>();
+                receipt.width = parsed.at("width").get<int>();
+                receipt.height = parsed.at("height").get<int>();
+                const int width = std::clamp(configuration.width, 256, 1024) / 8 * 8;
+                const int height = std::clamp(configuration.height, 256, 1024) / 8 * 8;
+                if (!VerifyImageArtifact(target, progress.jobId, configuration.model, width, height, receipt, error))
+                {
+                    throw std::runtime_error(error);
+                }
+                if (cancelled())
+                {
+                    result.cancelled = true;
+                    throw std::runtime_error("Image generation was cancelled before publication.");
+                }
+                result.succeeded = true;
+                result.receipt = receipt;
+                result.modelLoadMilliseconds = parsed.value("loadElapsedMs", 0.0);
+                result.inferenceMilliseconds = parsed.value("elapsedMs", 0.0);
+                result.peakAllocatedMiB = parsed.value("peakAllocatedMiB", 0.0);
+                result.peakReservedMiB = parsed.value("peakReservedMiB", 0.0);
+                result.path = target;
+                result.detail = std::to_string(width) + "x" + std::to_string(height) + ", " + std::to_string(progress.steps) +
+                                " steps on " + parsed.value("deviceName", std::string("unknown")) + " using " + receipt.model +
+                                "; decoded PNG and SHA256 verified; visual quality requires review.";
+                result.message = "Generated and verified the image file.";
+                break;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
     }
-    catch (const std::exception& parseError)
+    catch (const std::exception& failure)
     {
-        result.message = std::string("The image worker returned something unreadable: ") +
-            parseError.what();
+        result.succeeded = false;
+        result.path.clear();
+        result.cancelled = result.cancelled || cancelled();
+        result.message = failure.what();
+        process.Stop();
+        std::filesystem::remove(target, directoryError);
+        std::filesystem::remove(target.parent_path() / (target.stem().string() + ".pending.png"), directoryError);
+        progress.state = result.cancelled ? "cancelled" : "failed";
+        progress.loaded = false;
+        progress.detail = result.message;
     }
+    result.elapsedMilliseconds = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
+    if (result.succeeded && !configuration.bKeepLoaded)
+    {
+        process.Stop();
+        progress.loaded = false;
+    }
+    SetSnapshot(progress);
     return result;
+}
+
+void ImageGenerator::Cancel()
+{
+    cancellationGeneration.fetch_add(1);
+}
+
+ImageJobSnapshot ImageGenerator::Snapshot() const
+{
+    std::lock_guard lock(statusMutex);
+    return status;
+}
+
+void ImageGenerator::SetSnapshot(ImageJobSnapshot value)
+{
+    std::lock_guard lock(statusMutex);
+    status = std::move(value);
+}
+
+void ImageGenerator::Unload()
+{
+    Cancel();
+    std::lock_guard lock(mutex);
+    process.Stop();
+    auto snapshot = Snapshot();
+    snapshot.loaded = false;
+    snapshot.state = "unloaded";
+    SetSnapshot(std::move(snapshot));
 }
 
 void ImageGenerator::Shutdown()
 {
     shuttingDown.store(true);
-    std::lock_guard lock(mutex);
-    process.Stop();
+    Unload();
 }
 
 } // namespace revia::visual

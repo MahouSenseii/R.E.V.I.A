@@ -55,6 +55,7 @@ struct RoutingInputs
 };
 
 [[nodiscard]] intelligence::RoutingContext BuildRoutingContext(const RoutingInputs& inputs);
+[[nodiscard]] std::optional<intelligence::IntelligenceTier> DeliveredResponseTier(const responseOutput& output);
 
 // Owns admitted conversational turns; lifecycle and permissions stay with the session.
 class ConversationRuntime
@@ -112,8 +113,8 @@ public:
     // The second argument is the question being answered. It is archived before the
     // reply is generated, so without it a search for "what did I say about X" reliably
     // finds the user asking what they said about X.
-    using ConversationRecallHandler = std::function<std::string(
-        const memory::RecallRequest&, const std::string& currentInput)>;
+    using ConversationRecallHandler =
+        std::function<std::string(const memory::RecallRequest&, const std::string& currentInput, const memory::MemoryScope& scope)>;
     // One sentence on what she can sing right now, from the song library. Without it she
     // answered "can you sing?" from the model's guess -- that she is text and cannot --
     // while a folder of songs sat ready to play.
@@ -134,6 +135,7 @@ public:
 
     // Set once at startup, before the first turn.
     void SetSongListProvider(SongListProvider provider);
+    void ResetParticipantContinuity();
     void SetPrivateAdmissionFactory(std::function<std::function<bool()>()> factory);
     using InvestigationExecutorFactory = std::function<agents::CheckExecutor(std::function<bool()>, std::stop_token)>;
     void SetInvestigationExecutorFactory(InvestigationExecutorFactory factory);
@@ -153,7 +155,8 @@ public:
     SessionResult ReplyForAudience(const std::string& input, const std::vector<conversationMessage>& channelHistory,
         const identity::AudienceContext& audience, const identity::RelationshipState& relationship, const aiProfile& profile,
         bool llmAvailable, bool shouldSpeak, std::stop_token stopToken = {}, std::function<bool()> admission = {},
-        const std::string& turnReference = {}, std::chrono::steady_clock::time_point acceptedAt = {});
+        const std::string& turnReference = {}, std::chrono::steady_clock::time_point acceptedAt = {},
+        const memory::MemoryScope& memoryScope = {});
 
     // Guest overload: the caller owns an isolated router with PublicGuestProfile(),
     // never the desktop router. No instance state, provider, logger or event bus is
@@ -198,6 +201,7 @@ private:
         std::function<bool()> deliveryAdmission;
         std::chrono::steady_clock::time_point acceptedAt{};
         std::uint64_t audienceRevision = 0;
+        memory::MemoryScope memoryScope;
     };
 
     // Canonical state and posture for replies, proactive openings and evaluation.

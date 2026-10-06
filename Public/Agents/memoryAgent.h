@@ -117,14 +117,14 @@ public:
     void Submit(const messageRouter& router, std::string input, std::string assistantResponse, ResponseProvenance provenance,
         std::uint64_t turnId = 0);
     void Submit(const messageRouter& router, std::string input, std::string assistantResponse, ResponseProvenance provenance,
-        std::uint64_t turnId, std::function<bool()> contextAdmission);
+        std::uint64_t turnId, std::function<bool()> contextAdmission, const memory::MemoryScope& scope = {});
     // Commits already-approved semantic content before accepting optional embedding
     // work. A successful disposition guarantees the content is in the existing store;
     // cancellation/queue pressure can defer vectors, never the accepted content.
     // Unclassified candidates still use Submit and are not persisted by this path.
     [[nodiscard]] LearnedFindingResult SubmitLearnedFinding(const messageRouter& router, memoryDecision decision, std::uint64_t turnId = 0);
-    [[nodiscard]] LearnedFindingResult SubmitLearnedFinding(const messageRouter& router, memoryDecision decision,
-        std::uint64_t turnId, std::string* outMemoryId);
+    [[nodiscard]] LearnedFindingResult SubmitLearnedFinding(const messageRouter& router, memoryDecision decision, std::uint64_t turnId,
+        std::string* outMemoryId, std::function<bool()> contextAdmission = {});
     [[nodiscard]] LearnedFindingResult SubmitOwnerMemoryRevision(const messageRouter& router, const memory::MemoryRevisionRequest& request,
         memory::MemoryRevisionReceipt& outReceipt, std::string& outError, std::stop_token stopToken = {});
     void SubmitEmbeddingBackfill(const messageRouter& router, const std::string& embeddingModel);
@@ -179,6 +179,7 @@ private:
         std::string input;
         std::string assistantResponse;
         ResponseProvenance provenance = ResponseProvenance::NormalGeneration;
+        memory::MemoryScope scope;
         std::string memoryId;
         std::string embeddingModel;
         std::stop_token backfillStop;

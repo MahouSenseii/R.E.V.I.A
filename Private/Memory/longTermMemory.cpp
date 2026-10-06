@@ -106,9 +106,11 @@ std::string CurrentEpochSeconds()
     return std::to_string(std::chrono::duration_cast<std::chrono::seconds>(now).count());
 }
 
-std::string BuildMemoryId(const std::string& summary, const std::string& createdAt)
+std::string BuildMemoryId(const std::string& summary, const std::string& createdAt, const revia::memory::MemorySubject& subject = {})
 {
-    return "memory-" + createdAt + "-" + std::to_string(std::hash<std::string>{}(summary));
+    const std::string material =
+        subject.kind == revia::memory::MemorySubjectKind::Unattributed ? summary : revia::memory::SubjectKey(subject) + summary;
+    return "memory-" + createdAt + "-" + std::to_string(std::hash<std::string>{}(material));
 }
 
 bool Execute(sqlite3* database, const char* sql)
@@ -136,35 +138,31 @@ void BindText(sqlite3_stmt* statement, const int index, const std::string& value
         SQLITE_TRANSIENT);
 }
 
-// Deduplication is two indexed equality lookups on normalized_summary, which is UNIQUE,
-// rather than a read of every active memory into a vector.
-//
-// Two are needed, not one. The v2 key is exactly the comparison IsDuplicateSummary
-// makes, so a v2 hit is a duplicate -- but the stored text is still compared, because a
-// key that disagrees with its own row is corruption and must not quietly merge two
-// different memories. A legacy key is coarser: it dropped punctuation, so "C++" and "C"
-// share one, and a hit there proves candidacy only. Such a row cannot be missed either,
-// because equal v2 keys imply equal legacy keys -- v2 preserves everything the legacy
-// key kept, so anything the old scan called a duplicate still collides on one of these.
-bool FindDuplicate(sqlite3* const database, const std::string& summary, std::string& outId, std::string& outSummary)
+// Attributed rows use one subject-qualified lookup. Unattributed rows also check
+// historical keys; their coarse normalization never replaces exact text comparison.
+bool FindDuplicate(sqlite3* const database, const std::string& summary, const revia::memory::MemorySubject& subject, std::string& outId,
+    std::string& outSummary)
 {
-    Statement query = Prepare(database,
-        "SELECT id, summary FROM memories "
-        "WHERE normalized_summary = ? AND active = 1 LIMIT 1;");
+    Statement query = Prepare(database, "SELECT id, summary FROM memories "
+                                        "WHERE normalized_summary = ? AND active = 1 AND subject_kind = ? AND subject_id = ? LIMIT 1;");
     if (!query)
     {
         return false;
     }
 
-    const std::string keys[] = {
-        "v2:" + NormalizeSummary(summary),
-        LegacyNormalizedKey(summary)
-    };
+    std::vector<std::string> keys = {"v3:" + revia::memory::SubjectKey(subject) + ":" + NormalizeSummary(summary)};
+    if (subject.kind == revia::memory::MemorySubjectKind::Unattributed)
+    {
+        keys.push_back("v2:" + NormalizeSummary(summary));
+        keys.push_back(LegacyNormalizedKey(summary));
+    }
     for (const std::string& key : keys)
     {
         sqlite3_reset(query.get());
         sqlite3_clear_bindings(query.get());
         BindText(query.get(), 1, key);
+        sqlite3_bind_int(query.get(), 2, static_cast<int>(subject.kind));
+        BindText(query.get(), 3, subject.entityId);
         if (sqlite3_step(query.get()) != SQLITE_ROW)
         {
             continue;
@@ -191,10 +189,10 @@ bool FindDuplicate(sqlite3* const database, const std::string& summary, std::str
 bool InsertEntry(sqlite3* database, const memoryEntry& entry, std::string* outInsertedId = nullptr)
 {
     if (outInsertedId) outInsertedId->clear();
-    Statement insert = Prepare(database,
-        "INSERT OR IGNORE INTO memories "
-        "(id, category, summary, normalized_summary, source, created_at, active) "
-        "VALUES (?, ?, ?, ?, ?, ?, 1) RETURNING id;");
+    Statement insert =
+        Prepare(database, "INSERT OR IGNORE INTO memories "
+                          "(id, category, summary, normalized_summary, source, created_at, active, subject_kind, subject_id) "
+                          "VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?) RETURNING id;");
     if (!insert)
     {
         return false;
@@ -206,9 +204,14 @@ bool InsertEntry(sqlite3* database, const memoryEntry& entry, std::string* outIn
     // Legacy keys stripped all punctuation and spaces. A separate key namespace
     // avoids their UNIQUE constraint discarding new propositions without rewriting
     // old rows. Deduplication compares the stored text, not this historical key.
-    BindText(insert.get(), 4, "v2:" + NormalizeSummary(entry.summary));
+    BindText(insert.get(), 4,
+        entry.subject.kind == revia::memory::MemorySubjectKind::Unattributed
+            ? "v2:" + NormalizeSummary(entry.summary)
+            : "v3:" + revia::memory::SubjectKey(entry.subject) + ":" + NormalizeSummary(entry.summary));
     BindText(insert.get(), 5, entry.source.empty() ? "automatic" : entry.source);
     BindText(insert.get(), 6, entry.createdAt);
+    sqlite3_bind_int(insert.get(), 7, static_cast<int>(entry.subject.kind));
+    BindText(insert.get(), 8, entry.subject.entityId);
     std::string insertedId;
     int status = sqlite3_step(insert.get());
     if (status == SQLITE_ROW)
@@ -354,6 +357,29 @@ bool ImportLegacyJsonl(sqlite3* database, const std::filesystem::path& databaseP
     return false;
 }
 
+bool MigrateSubjects(sqlite3* database)
+{
+    if (!Execute(database, "BEGIN IMMEDIATE;"))
+        return false;
+    bool hasKind = false, hasId = false;
+    auto columns = Prepare(database, "PRAGMA table_info(memories);");
+    while (columns && sqlite3_step(columns.get()) == SQLITE_ROW)
+    {
+        const auto* text = sqlite3_column_text(columns.get(), 1);
+        const std::string name = text ? reinterpret_cast<const char*>(text) : "";
+        hasKind = hasKind || name == "subject_kind";
+        hasId = hasId || name == "subject_id";
+    }
+    columns.reset();
+    const bool ok = (hasKind || Execute(database, "ALTER TABLE memories ADD COLUMN subject_kind INTEGER NOT NULL DEFAULT 0;")) &&
+                    (hasId || Execute(database, "ALTER TABLE memories ADD COLUMN subject_id TEXT NOT NULL DEFAULT '';")) &&
+                    Execute(database, "CREATE INDEX IF NOT EXISTS memories_subject ON memories(subject_kind, subject_id, active);") &&
+                    Execute(database, "COMMIT;");
+    if (!ok)
+        Execute(database, "ROLLBACK;");
+    return ok;
+}
+
 Database OpenDatabase(const std::string& memoryPath)
 {
     const std::filesystem::path path(memoryPath);
@@ -455,7 +481,7 @@ Database OpenDatabase(const std::string& memoryPath)
                                    "  receipt_json TEXT NOT NULL,"
                                    "  UNIQUE(chain_id, prior_receipt_id)"
                                    ");";
-    if (!Execute(database.get(), Schema) || !ImportLegacyJsonl(database.get(), path))
+    if (!Execute(database.get(), Schema) || !MigrateSubjects(database.get()) || !ImportLegacyJsonl(database.get(), path))
     {
         return {};
     }
@@ -476,6 +502,14 @@ memoryEntry ReadEntry(sqlite3_stmt* statement)
     entry.summary = text(2);
     entry.source = text(3);
     entry.createdAt = text(4);
+    for (int column = 5; column < sqlite3_column_count(statement); ++column)
+    {
+        const std::string name = sqlite3_column_name(statement, column);
+        if (name == "subject_kind")
+            entry.subject.kind = static_cast<revia::memory::MemorySubjectKind>(sqlite3_column_int(statement, column));
+        if (name == "subject_id")
+            entry.subject.entityId = text(column);
+    }
     return entry;
 }
 
@@ -525,6 +559,16 @@ std::string BuildFtsQuery(const std::string& query)
     return expression.str();
 }
 
+void BindScope(sqlite3_stmt* statement, const revia::memory::MemoryScope* scope)
+{
+    const int index = sqlite3_bind_parameter_index(statement, "?4");
+    if (scope && index)
+    {
+        BindText(statement, index, scope->participantId);
+        BindText(statement, sqlite3_bind_parameter_index(statement, "?5"), scope->companionId);
+    }
+}
+
 using RevisionRequest = revia::memory::MemoryRevisionRequest;
 using RevisionReceipt = revia::memory::MemoryRevisionReceipt;
 using Json = nlohmann::json;
@@ -537,17 +581,21 @@ Json OriginJson(const revia::runtime::RuntimeStamp& value)
 
 Json RevisionRequestJson(const RevisionRequest& value)
 {
-    return {{"ownerRequestId", value.ownerRequestId}, {"originalId", value.originalId},
+    Json result = {{"ownerRequestId", value.ownerRequestId}, {"originalId", value.originalId},
         {"expectedSummaryDigest", value.expectedSummaryDigest}, {"priorReceiptId", value.priorReceiptId},
         {"origin", OriginJson(value.origin)}, {"audienceRevision", value.audienceRevision}, {"category", value.corrected.category},
         {"summary", value.corrected.summary}, {"reason", value.reason}, {"evidence", value.evidence}};
+    if (value.expectedSubject.kind != revia::memory::MemorySubjectKind::Unattributed)
+        result["subject"] = {{"kind", static_cast<int>(value.expectedSubject.kind)}, {"entityId", value.expectedSubject.entityId}};
+    return result;
 }
 
 bool ValidRevisionRequest(const RevisionRequest& value)
 {
     const auto bounded = [](const std::string& text, const std::size_t limit)
     { return !text.empty() && text.size() <= limit && text.find('\0') == std::string::npos; };
-    return bounded(value.ownerRequestId, 128) && bounded(value.originalId, 128) && value.expectedSummaryDigest.size() == 64 &&
+    return revia::memory::IsValidSubject(value.expectedSubject) && value.corrected.subject == value.expectedSubject &&
+           bounded(value.ownerRequestId, 128) && bounded(value.originalId, 128) && value.expectedSummaryDigest.size() == 64 &&
            std::all_of(value.expectedSummaryDigest.begin(), value.expectedSummaryDigest.end(),
                [](const char character) { return (character >= '0' && character <= '9') || (character >= 'a' && character <= 'f'); }) &&
            value.priorReceiptId.size() <= 128 && bounded(value.origin.companionId, 128) && bounded(value.origin.sessionId, 128) &&
@@ -563,7 +611,8 @@ Json RevisionReceiptJson(const RevisionReceipt& value)
     return {{"requestId", value.requestId}, {"digest", value.digest}, {"originalId", value.originalId}, {"revisedId", value.revisedId},
         {"chainId", value.chainId}, {"priorReceiptId", value.priorReceiptId}, {"origin", OriginJson(value.origin)},
         {"audienceRevision", value.audienceRevision}, {"reason", value.reason}, {"evidence", value.evidence},
-        {"createdAt", value.createdAt}, {"wasAdded", value.wasAdded}};
+        {"createdAt", value.createdAt}, {"wasAdded", value.wasAdded},
+        {"subject", {{"kind", static_cast<int>(value.subject.kind)}, {"entityId", value.subject.entityId}}}};
 }
 
 RevisionReceipt DecodeRevisionReceipt(const std::string& text)
@@ -585,6 +634,9 @@ RevisionReceipt DecodeRevisionReceipt(const std::string& text)
     result.evidence = value.at("evidence").get<std::string>();
     result.createdAt = value.at("createdAt").get<std::string>();
     result.wasAdded = value.at("wasAdded").get<bool>();
+    if (value.contains("subject"))
+        result.subject = {static_cast<revia::memory::MemorySubjectKind>(value["subject"].at("kind").get<int>()),
+            value["subject"].at("entityId").get<std::string>()};
     return result;
 }
 
@@ -712,10 +764,9 @@ std::vector<memoryEntry> longTermMemory::Load() const
         return {};
     }
 
-    Statement query = Prepare(database,
-        "SELECT id, category, summary, source, created_at "
-        "FROM memories WHERE active = 1 "
-        "ORDER BY CAST(created_at AS INTEGER), rowid;");
+    Statement query = Prepare(database, "SELECT id, category, summary, source, created_at, subject_kind, subject_id "
+                                        "FROM memories WHERE active = 1 "
+                                        "ORDER BY CAST(created_at AS INTEGER), rowid;");
     if (!query)
     {
         return {};
@@ -729,12 +780,35 @@ std::vector<memoryEntry> longTermMemory::Load() const
     return ProjectRevisions(database, entries) ? entries : std::vector<memoryEntry>{};
 }
 
-bool longTermMemory::Save(const memoryDecision& decision, bool& outWasAdded, std::string* outMemoryId) const
+std::vector<memoryEntry> longTermMemory::LoadScoped(const revia::memory::MemoryScope& scope, const std::size_t maxEntries) const
+{
+    if (!revia::memory::IsAttributedPrivateScope(scope) || maxEntries == 0)
+        return {};
+    const std::lock_guard operationLock(databaseMutex);
+    sqlite3* const database = Acquire();
+    if (!database)
+        return {};
+    Statement query = Prepare(database,
+        "SELECT id, category, summary, source, created_at, subject_kind, subject_id "
+        "FROM memories WHERE active = 1 AND ((subject_kind = 1 AND subject_id = ?4) OR (subject_kind = 2 AND subject_id = ?5)) "
+        "ORDER BY CAST(created_at AS INTEGER) DESC, rowid DESC LIMIT ?1;");
+    if (!query)
+        return {};
+    BindScope(query.get(), &scope);
+    sqlite3_bind_int64(query.get(), 1, static_cast<sqlite3_int64>(std::min<std::size_t>(maxEntries, 500)));
+    std::vector<memoryEntry> entries;
+    while (sqlite3_step(query.get()) == SQLITE_ROW)
+        entries.push_back(ReadEntry(query.get()));
+    return ProjectRevisions(database, entries) ? entries : std::vector<memoryEntry>{};
+}
+
+bool longTermMemory::Save(
+    const memoryDecision& decision, bool& outWasAdded, std::string* outMemoryId, std::function<bool()> admission) const
 {
     const std::lock_guard operationLock(databaseMutex);
     outWasAdded = false;
     if (outMemoryId) outMemoryId->clear();
-    if (!decision.bSuccess || !decision.bShouldRemember || decision.summary.empty())
+    if (!decision.bSuccess || !decision.bShouldRemember || decision.summary.empty() || !revia::memory::IsValidSubject(decision.subject))
     {
         return false;
     }
@@ -758,64 +832,94 @@ bool longTermMemory::Save(const memoryDecision& decision, bool& outWasAdded, std
         return false;
     }
 
-    std::string duplicateId;
-    std::string duplicateSummary;
-    const auto retainDuplicate = [&]()
+    const auto admitted = [&]()
     {
-        if (outMemoryId) *outMemoryId = duplicateId;
-        // The retained summary is the embedding input, even for formatting-only
-        // duplicates. Missing vectors for that text can be filled by backfill.
-        if (duplicateSummary == decision.summary &&
-            !decision.embedding.empty() && !decision.embeddingModel.empty())
+        try
         {
-            return SaveEmbedding(
-                duplicateId,
-                decision.embeddingModel,
-                decision.embedding);
+            return !admission || admission();
+        }
+        catch (...)
+        {
+            return false;
+        }
+    };
+    if (!admitted() || (admission && !Execute(database, "SAVEPOINT automatic_memory;")))
+        return false;
+    const auto persist = [&]() -> bool
+    {
+        std::string duplicateId;
+        std::string duplicateSummary;
+        const auto retainDuplicate = [&]()
+        {
+            if (outMemoryId)
+                *outMemoryId = duplicateId;
+            // The retained summary is the embedding input, even for formatting-only
+            // duplicates. Missing vectors for that text can be filled by backfill.
+            if (duplicateSummary == decision.summary && !decision.embedding.empty() && !decision.embeddingModel.empty())
+            {
+                return SaveEmbedding(duplicateId, decision.embeddingModel, decision.embedding);
+            }
+            return true;
+        };
+        if (FindDuplicate(database, decision.summary, decision.subject, duplicateId, duplicateSummary))
+        {
+            return retainDuplicate();
+        }
+
+        // The indexed text comparison above is the only deduplication authority.
+        // Similar vectors aid retrieval but cannot justify discarding a distinct claim.
+        const std::string createdAt = CurrentEpochSeconds();
+        memoryEntry entry;
+        entry.subject = decision.subject;
+        entry.id = BuildMemoryId(decision.summary, createdAt, decision.subject);
+        entry.category = decision.category.empty() ? "other" : decision.category;
+        entry.summary = decision.summary;
+        entry.source = decision.source.empty() ? "automatic" : decision.source;
+        entry.createdAt = createdAt;
+
+        std::string insertedId;
+        if (!InsertEntry(database, entry, &insertedId))
+        {
+            return false;
+        }
+        if (insertedId.empty())
+        {
+            // Another store may have won after our lookup. Only an active exact duplicate
+            // can turn an ignored insert into success; unrelated id/key collisions and
+            // inactive rows must still fail without returning an unwritten candidate id.
+            if (FindDuplicate(database, decision.summary, decision.subject, duplicateId, duplicateSummary))
+                return retainDuplicate();
+            return false;
+        }
+        outWasAdded = true;
+        if (outMemoryId)
+            *outMemoryId = insertedId;
+        if (!decision.embedding.empty() && !decision.embeddingModel.empty() &&
+            !UpsertEmbedding(database, insertedId, decision.embeddingModel, decision.embedding))
+        {
+            return false;
         }
         return true;
     };
-    if (FindDuplicate(database, decision.summary, duplicateId, duplicateSummary))
+    bool saved = persist();
+    if (admission)
     {
-        return retainDuplicate();
+        saved = saved && admitted();
+        if (saved)
+            saved = Execute(database, "RELEASE automatic_memory;");
+        if (!saved)
+        {
+            Execute(database, "ROLLBACK TO automatic_memory;");
+            Execute(database, "RELEASE automatic_memory;");
+        }
     }
-
-    // The indexed text comparison above is the only deduplication authority.
-    // Similar vectors aid retrieval but cannot justify discarding a distinct claim.
-    const std::string createdAt = CurrentEpochSeconds();
-    memoryEntry entry;
-    entry.id = BuildMemoryId(decision.summary, createdAt);
-    entry.category = decision.category.empty() ? "other" : decision.category;
-    entry.summary = decision.summary;
-    entry.source = decision.source.empty() ? "automatic" : decision.source;
-    entry.createdAt = createdAt;
-
-    std::string insertedId;
-    if (!InsertEntry(database, entry, &insertedId))
+    if (!saved)
     {
-        return false;
+        outWasAdded = false;
+        if (outMemoryId)
+            outMemoryId->clear();
     }
-    if (insertedId.empty())
-    {
-        // Another store may have won after our lookup. Only an active exact duplicate
-        // can turn an ignored insert into success; unrelated id/key collisions and
-        // inactive rows must still fail without returning an unwritten candidate id.
-        if (FindDuplicate(database, decision.summary, duplicateId, duplicateSummary))
-            return retainDuplicate();
-        return false;
-    }
-    outWasAdded = true;
-    if (outMemoryId) *outMemoryId = insertedId;
-    if (!decision.embedding.empty() && !decision.embeddingModel.empty() &&
-        !UpsertEmbedding(
-            database,
-            insertedId,
-            decision.embeddingModel,
-            decision.embedding))
-    {
-        return false;
-    }
-    return true;
+    return saved;
 }
 
 bool longTermMemory::SaveOwnerRevision(
@@ -862,10 +966,12 @@ bool longTermMemory::SaveOwnerRevision(
         if (sqlite3_step(capacity.get()) != SQLITE_ROW || sqlite3_column_int64(capacity.get(), 0) >= 4096)
             throw std::runtime_error("Revision history capacity exhausted.");
         capacity.reset();
-        auto original = RequiredStatement(database, "SELECT summary FROM memories WHERE id = ? AND active = 1;");
+        auto original = RequiredStatement(database, "SELECT summary, subject_kind, subject_id FROM memories WHERE id = ? AND active = 1;");
         BindText(original.get(), 1, request.originalId);
         if (sqlite3_step(original.get()) != SQLITE_ROW ||
-            revia::audit::ContentDigest(ColumnText(original.get(), 0)) != request.expectedSummaryDigest)
+            revia::audit::ContentDigest(ColumnText(original.get(), 0)) != request.expectedSummaryDigest ||
+            sqlite3_column_int(original.get(), 1) != static_cast<int>(request.expectedSubject.kind) ||
+            ColumnText(original.get(), 2) != request.expectedSubject.entityId)
             throw std::runtime_error("Revision exact target changed or is absent.");
         original.reset();
         std::string chain = request.originalId;
@@ -894,7 +1000,7 @@ bool longTermMemory::SaveOwnerRevision(
         if (!otherChain.empty() && otherChain != chain)
             throw std::runtime_error("Replacement belongs to a different revision chain.");
         RevisionReceipt saved{request.ownerRequestId, digest, request.originalId, memoryId, chain, request.priorReceiptId, request.origin,
-            request.audienceRevision, request.reason, request.evidence, CurrentEpochSeconds(), added};
+            request.audienceRevision, request.reason, request.evidence, CurrentEpochSeconds(), added, request.expectedSubject};
         auto insert = RequiredStatement(database,
             "INSERT INTO memory_revisions(request_id, request_digest, original_id, revised_id, chain_id, prior_receipt_id, receipt_json) "
             "VALUES (?, ?, ?, ?, ?, ?, ?);");
@@ -955,10 +1061,11 @@ bool longTermMemory::HasMemories() const
 }
 
 std::vector<memoryEntry> longTermMemory::Search(const std::string& queryText, const std::size_t maxEntries,
-    const std::vector<float>& queryEmbedding, const std::string& embeddingModel, const std::int64_t nowEpoch) const
+    const std::vector<float>& queryEmbedding, const std::string& embeddingModel, const std::int64_t nowEpoch,
+    const revia::memory::MemoryScope* scope) const
 {
     const std::lock_guard operationLock(databaseMutex);
-    if (maxEntries == 0 || (queryText.empty() && queryEmbedding.empty()))
+    if ((scope && !revia::memory::IsAttributedPrivateScope(*scope)) || maxEntries == 0 || (queryText.empty() && queryEmbedding.empty()))
     {
         return {};
     }
@@ -974,18 +1081,21 @@ std::vector<memoryEntry> longTermMemory::Search(const std::string& queryText, co
     const std::string ftsQuery = BuildFtsQuery(queryText);
     if (!ftsQuery.empty())
     {
-        Statement lexicalQuery = Prepare(database,
-            "SELECT memories.id, memories.category, memories.summary, "
-            "       memories.source, memories.created_at "
-            "FROM memory_search "
-            "JOIN memories ON memories.rowid = memory_search.rowid "
-            "WHERE memory_search MATCH ? AND memories.active = 1 "
-            "ORDER BY bm25(memory_search, 6.0, 1.0), "
-            "         CAST(memories.created_at AS INTEGER) DESC "
-            "LIMIT ?;");
+        Statement lexicalQuery =
+            Prepare(database, "SELECT memories.id, memories.category, memories.summary, "
+                              "       memories.source, memories.created_at, memories.subject_kind, memories.subject_id "
+                              "FROM memory_search "
+                              "JOIN memories ON memories.rowid = memory_search.rowid "
+                              "WHERE memory_search MATCH ?1 AND memories.active = 1 "
+                              "AND (?4 IS NULL OR (memories.subject_kind = 2 AND memories.subject_id = ?5) OR (memories.subject_kind = 1 "
+                              "AND memories.subject_id = ?4)) "
+                              "ORDER BY bm25(memory_search, 6.0, 1.0), "
+                              "         CAST(memories.created_at AS INTEGER) DESC "
+                              "LIMIT ?2;");
         if (lexicalQuery)
         {
             BindText(lexicalQuery.get(), 1, ftsQuery);
+            BindScope(lexicalQuery.get(), scope);
             sqlite3_bind_int64(
                 lexicalQuery.get(),
                 2,
@@ -1005,13 +1115,15 @@ std::vector<memoryEntry> longTermMemory::Search(const std::string& queryText, co
     std::vector<SemanticCandidate> semanticEntries;
     if (IsValidEmbedding(queryEmbedding) && !embeddingModel.empty())
     {
-        Statement semanticQuery = Prepare(database,
-            "SELECT memories.id, memories.category, memories.summary, "
-            "       memories.source, memories.created_at, "
-            "       memory_embeddings.dimensions, memory_embeddings.vector "
-            "FROM memory_embeddings "
-            "JOIN memories ON memories.id = memory_embeddings.memory_id "
-            "WHERE memory_embeddings.model = ? AND memories.active = 1;");
+        Statement semanticQuery =
+            Prepare(database, "SELECT memories.id, memories.category, memories.summary, "
+                              "       memories.source, memories.created_at, "
+                              "       memory_embeddings.dimensions, memory_embeddings.vector, memories.subject_kind, memories.subject_id "
+                              "FROM memory_embeddings "
+                              "JOIN memories ON memories.id = memory_embeddings.memory_id "
+                              "WHERE memory_embeddings.model = ?1 AND memories.active = 1 "
+                              "AND (?4 IS NULL OR (memories.subject_kind = 2 AND memories.subject_id = ?5) OR (memories.subject_kind = 1 "
+                              "AND memories.subject_id = ?4));");
         // The query vector does not change between rows, so its norm is computed once
         // here rather than recomputed inside the per-row scoring loop, and the scratch
         // buffer is reused instead of allocating a vector per candidate.
@@ -1025,6 +1137,7 @@ std::vector<memoryEntry> longTermMemory::Search(const std::string& queryText, co
         if (semanticQuery && queryNorm > 0.0)
         {
             BindText(semanticQuery.get(), 1, embeddingModel);
+            BindScope(semanticQuery.get(), scope);
             while (sqlite3_step(semanticQuery.get()) == SQLITE_ROW)
             {
                 const sqlite3_int64 dimensions = sqlite3_column_int64(semanticQuery.get(), 5);
@@ -1080,17 +1193,20 @@ std::vector<memoryEntry> longTermMemory::Search(const std::string& queryText, co
         nowEpoch > 0 ? nowEpoch : revia::memory::CurrentEpoch());
     if (window.IsValid())
     {
-        Statement temporalQuery = Prepare(database,
-            "SELECT memories.id, memories.category, memories.summary, "
-            "       memories.source, memories.created_at "
-            "FROM memories "
-            "WHERE memories.active = 1 "
-            "  AND CAST(memories.created_at AS INTEGER) >= ? "
-            "  AND CAST(memories.created_at AS INTEGER) < ? "
-            "ORDER BY CAST(memories.created_at AS INTEGER) DESC "
-            "LIMIT ?;");
+        Statement temporalQuery =
+            Prepare(database, "SELECT memories.id, memories.category, memories.summary, "
+                              "       memories.source, memories.created_at, memories.subject_kind, memories.subject_id "
+                              "FROM memories "
+                              "WHERE memories.active = 1 "
+                              "  AND CAST(memories.created_at AS INTEGER) >= ?1 "
+                              "  AND CAST(memories.created_at AS INTEGER) < ?2 "
+                              "AND (?4 IS NULL OR (memories.subject_kind = 2 AND memories.subject_id = ?5) OR (memories.subject_kind = 1 "
+                              "AND memories.subject_id = ?4)) "
+                              "ORDER BY CAST(memories.created_at AS INTEGER) DESC "
+                              "LIMIT ?3;");
         if (temporalQuery)
         {
+            BindScope(temporalQuery.get(), scope);
             sqlite3_bind_int64(temporalQuery.get(), 1, window.startEpoch);
             sqlite3_bind_int64(temporalQuery.get(), 2, window.endEpoch);
             sqlite3_bind_int64(
@@ -1170,18 +1286,25 @@ std::vector<memoryEntry> longTermMemory::Search(const std::string& queryText, co
 }
 
 std::string longTermMemory::BuildPromptBlock(const std::string& query, const std::size_t maxEntries,
-    const std::vector<float>& queryEmbedding, const std::string& embeddingModel, const std::int64_t nowEpoch) const
+    const std::vector<float>& queryEmbedding, const std::string& embeddingModel, const std::int64_t nowEpoch,
+    const revia::memory::MemoryScope* scope) const
 {
     const std::lock_guard operationLock(databaseMutex);
-    if (maxEntries == 0)
+    if ((scope && !revia::memory::IsAttributedPrivateScope(*scope)) || maxEntries == 0)
     {
         return "";
     }
 
     const std::int64_t now = nowEpoch > 0 ? nowEpoch : revia::memory::CurrentEpoch();
-    std::vector<memoryEntry> entries = query.empty()
-        ? Load()
-        : Search(query, maxEntries, queryEmbedding, embeddingModel, now);
+    std::vector<memoryEntry> entries = query.empty() ? (scope ? LoadScoped(*scope, maxEntries) : Load())
+                                                     : Search(query, maxEntries, queryEmbedding, embeddingModel, now, scope);
+    if (scope)
+        std::erase_if(entries,
+            [&](const memoryEntry& entry)
+            {
+                return entry.subject != revia::memory::MemorySubject{revia::memory::MemorySubjectKind::Companion, scope->companionId} &&
+                       entry.subject != revia::memory::ParticipantSubject(*scope);
+            });
     if (entries.empty())
     {
         return "";
@@ -1202,13 +1325,16 @@ std::string longTermMemory::BuildPromptBlock(const std::string& query, const std
         const auto& entry = entries[index];
         if (entry.currentRevisionId.empty() || shown.contains(entry.currentRevisionId))
             continue;
-        auto current = Prepare(database, "SELECT id, category, summary, source, created_at FROM memories WHERE id = ? AND active = 1;");
+        auto current = Prepare(database,
+            "SELECT id, category, summary, source, created_at, subject_kind, subject_id FROM memories WHERE id = ? AND active = 1;");
         if (!current)
             return {};
         BindText(current.get(), 1, entry.currentRevisionId);
         if (sqlite3_step(current.get()) != SQLITE_ROW)
             return {};
         auto replacement = ReadEntry(current.get());
+        if (replacement.subject != entry.subject)
+            return {};
         shown.insert(replacement.id);
         entries.push_back(std::move(replacement));
     }
@@ -1231,7 +1357,11 @@ std::string longTermMemory::BuildPromptBlock(const std::string& query, const std
               "conflicts:\n";
     for (const memoryEntry& entry : entries)
     {
-        stream << "- [" << entry.category << "] [source: " << entry.source << "; id: " << entry.id << "] ";
+        stream << "- [" << entry.category << "] [subject: "
+               << (entry.subject.kind == revia::memory::MemorySubjectKind::Participant    ? "participant "
+                      : entry.subject.kind == revia::memory::MemorySubjectKind::Companion ? "companion "
+                                                                                          : "unattributed")
+               << entry.subject.entityId << "] [source: " << entry.source << "; id: " << entry.id << "] ";
         if (!entry.currentRevisionId.empty())
         {
             stream << (entry.currentRevisionId == entry.id ? "[current owner revision" : "[historical owner-revised record")
@@ -1279,13 +1409,12 @@ EmbeddingBackfillPage longTermMemory::ReadMissingEmbeddings(const std::string& e
         return page;
     }
 
-    std::string sql =
-        "SELECT memories.id, memories.category, memories.summary, "
-        "       memories.source, memories.created_at, memories.rowid "
-        "FROM memories "
-        "LEFT JOIN memory_embeddings ON "
-        "  memory_embeddings.memory_id = memories.id AND memory_embeddings.model = ? "
-        "WHERE memories.active = 1 AND memory_embeddings.memory_id IS NULL ";
+    std::string sql = "SELECT memories.id, memories.category, memories.summary, "
+                      "       memories.source, memories.created_at, memories.rowid, memories.subject_kind, memories.subject_id "
+                      "FROM memories "
+                      "LEFT JOIN memory_embeddings ON "
+                      "  memory_embeddings.memory_id = memories.id AND memory_embeddings.model = ? "
+                      "WHERE memories.active = 1 AND memory_embeddings.memory_id IS NULL ";
     sql += afterRowId
         ? "AND memories.rowid > ? ORDER BY memories.rowid LIMIT ?;"
         : "ORDER BY CAST(memories.created_at AS INTEGER), memories.rowid LIMIT ?;";

@@ -55,6 +55,15 @@ struct LoopFixture
         std::string error;
         Check(runtime.Initialize(configPath, directory.root / "audit.jsonl", error),
             "The action runtime did not initialize for the loop: " + error);
+        runner.SetCompletionVerifier([this](const Goal& goal, std::stop_token stopToken)
+        {
+            if (goal.steps.empty()) return CompletionEvidence{false, "No requested fixture step is available for acceptance."};
+            const auto& last = goal.steps.back();
+            const auto observed = runtime.ExecuteScoped(last.check, revia::policy::CapabilityPolicy(goal.scope), false, stopToken);
+            const auto judgement = JudgeStep(goal.verificationSchema, DerivePostcondition(last), last.expected, observed.result);
+            return CompletionEvidence{observed.Succeeded() && judgement.outcome == VerificationOutcome::Verified,
+                "The trusted fixture's final requested state was observed independently: " + observed.Message()};
+        });
     }
 
     [[nodiscard]] Goal NewGoal(const std::string& title) const

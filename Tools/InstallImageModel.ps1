@@ -4,6 +4,7 @@ param(
     # where the chat model already owns the GPU this worker lands on CPU, and a 30-step
     # model there takes minutes per picture rather than under one.
     [string]$Model = 'stabilityai/sd-turbo',
+    [string]$Variant = '',
     [switch]$SkipModelDownload
 )
 
@@ -55,7 +56,7 @@ if ($LASTEXITCODE -ne 0) {
 if (-not $SkipModelDownload) {
     Write-Host "Fetching $Model into $cacheRoot (this is the large step)..."
     $env:HF_HUB_DISABLE_TELEMETRY = '1'
-    & $pythonPath -c "from diffusers import AutoPipelineForText2Image; AutoPipelineForText2Image.from_pretrained('$Model', cache_dir=r'$cacheRoot')"
+    & $pythonPath -c 'import sys, torch; from diffusers import AutoPipelineForText2Image; AutoPipelineForText2Image.from_pretrained(sys.argv[1], cache_dir=sys.argv[2], variant=sys.argv[3] or None, torch_dtype=torch.float16 if sys.argv[3] == "fp16" else torch.float32)' $Model $cacheRoot $Variant
     if ($LASTEXITCODE -ne 0) {
         throw "Could not download $Model. Re-run with -SkipModelDownload to install the runtime only."
     }
@@ -64,6 +65,7 @@ if (-not $SkipModelDownload) {
 Write-Host ''
 Write-Host "Image runtime is ready: $pythonPath"
 Write-Host "Model: $Model"
+Write-Host "Variant: $Variant"
 Write-Host "Weights cached in: $cacheRoot"
 Write-Host ''
 Write-Host 'Check the model license before using output beyond personal work.'

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <filesystem>
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -36,6 +37,12 @@ struct CaptureResult
     // the actual foreground process before capability policy sees it.
     std::string foregroundApplication;
     std::string foregroundWindowTitle;
+    void* foregroundWindow = nullptr;
+    std::uint32_t foregroundProcessId = 0;
+    int windowLeft = 0;
+    int windowTop = 0;
+    int windowRight = 0;
+    int windowBottom = 0;
     double elapsedMilliseconds = 0.0;
 };
 
@@ -50,6 +57,7 @@ public:
     // Captures only the foreground window and preserves its screen-space origin so
     // vision regions can be matched to UI Automation bounds without guessing.
     [[nodiscard]] CaptureResult CaptureForegroundWindow(const std::filesystem::path& outputDirectory) const;
+    [[nodiscard]] bool IsForegroundCurrent(const CaptureResult& capture) const;
 };
 
 } // namespace revia::vision

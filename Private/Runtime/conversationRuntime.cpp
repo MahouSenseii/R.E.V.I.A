@@ -1,3 +1,4 @@
+#include "LLM/promptBuilder.h"
 #include "Agents/responseFilterSettings.h"
 #include "Core/conversationMessage.h"
 #include "Core/profile.h"
@@ -152,6 +153,18 @@ std::string InternetActivityDetail(const std::vector<std::string>& sources, cons
 }
 }
 
+std::optional<intelligence::IntelligenceTier> DeliveredResponseTier(const responseOutput& output)
+{
+    if (!output.bSuccess || output.response.empty())
+        return std::nullopt;
+    for (const auto tier :
+        {intelligence::IntelligenceTier::Reflex, intelligence::IntelligenceTier::Fast, intelligence::IntelligenceTier::Main,
+            intelligence::IntelligenceTier::Expert, intelligence::IntelligenceTier::Vision, intelligence::IntelligenceTier::ExpertVision})
+        if (output.selectedTier == intelligence::ToString(tier))
+            return tier;
+    return std::nullopt;
+}
+
 intelligence::RoutingContext BuildRoutingContext(const RoutingInputs& inputs)
 {
     intelligence::RoutingContext context;
@@ -266,10 +279,17 @@ SessionResult ConversationRuntime::ReplyPublic(const std::string& input, const s
     return Generate(input, promptContext, publicProfile, llmAvailable, shouldSpeak, false, false, {}, {}, stopToken, policy);
 }
 
+void ConversationRuntime::ResetParticipantContinuity()
+{
+    context.Clear();
+    previousDeliveredTier.reset();
+    previousTurnWasUnreliable = false;
+}
+
 SessionResult ConversationRuntime::ReplyForAudience(const std::string& input, const std::vector<conversationMessage>& channelHistory,
     const identity::AudienceContext& audience, const identity::RelationshipState& relationship, const aiProfile& profile,
     const bool llmAvailable, const bool shouldSpeak, const std::stop_token stopToken, std::function<bool()> admission,
-    const std::string& turnReference, const std::chrono::steady_clock::time_point acceptedAt)
+    const std::string& turnReference, const std::chrono::steady_clock::time_point acceptedAt, const memory::MemoryScope& memoryScope)
 {
     const auto denied = []()
     {
@@ -291,13 +311,14 @@ SessionResult ConversationRuntime::ReplyForAudience(const std::string& input, co
     policy.deliveryAdmission = std::move(admission);
     policy.acceptedAt = acceptedAt;
     policy.audienceRevision = audience.revision;
+    policy.memoryScope = memoryScope;
     policy.publicAudience = audience.kind != identity::AudienceKind::Private;
     policy.relationship = audience.kind == identity::AudienceKind::Unknown ? identity::RelationshipState{} : relationship;
     aiProfile scopedProfile = profile;
     std::vector<conversationMessage> promptContext;
     if (!policy.publicAudience)
     {
-        context.AddMessage("user", input);
+        context.AddMessage({"user", input, memoryScope.participantId, memoryScope});
         promptContext = context.GetRecentMessages();
         policy.instruction = turnReference;
     }
@@ -715,7 +736,8 @@ agents::SelfInquiryResult ConversationRuntime::RunSelfInquiry(const std::string&
         "Facts about yourself (authoritative; they outrank anything said earlier in the "
         "conversation): " +
             DescribeBody() + "\n\n" + basePosture,
-        promptContext, selfInquiryPolicy.Limits().maximumQuestions, stopToken, router.RelatedMemories(policyInput, stopToken));
+        promptContext, selfInquiryPolicy.Limits().maximumQuestions, stopToken,
+        router.RelatedMemories(policyInput, stopToken, promptBuilder::CapturedMemoryScope(promptContext)));
     if (!inquiry.HasQuestions())
     {
         // Never fatal. A deliberation that failed, was preempted, or came back unusable
@@ -1137,7 +1159,7 @@ SessionResult ConversationRuntime::Generate(const std::string& policyInput, cons
         {
             publishComponent("Conversation history", "Searching", recall.reason, -1.0, 0, currentTurn);
             const auto recallStarted = std::chrono::steady_clock::now();
-            recallGrounding = conversationRecall(recall, policyInput);
+            recallGrounding = conversationRecall(recall, policyInput, turnPolicy.memoryScope);
             publishComponent("Conversation history", recallGrounding.empty() ? "Nothing found" : "Ready",
                 recallGrounding.empty() ? recall.reason + " Nothing archived matches, so she answers without it."
                                         : recall.reason + " The recorded turns are grounding this answer.",
@@ -1151,6 +1173,8 @@ SessionResult ConversationRuntime::Generate(const std::string& policyInput, cons
     // gone. Holding it until delivery is certain is what keeps a cancelled opening
     // from costing real conversation.
     std::string undeliveredOpening;
+    std::optional<intelligence::IntelligenceTier> deliveredTier;
+    std::optional<bool> deliveredUnreliable;
     const auto finish = [&](SessionResult finished)
     {
         finished.audienceRevision = turnPolicy.audienceRevision;
@@ -1173,6 +1197,11 @@ SessionResult ConversationRuntime::Generate(const std::string& policyInput, cons
         {
             context.AddMessage("assistant", undeliveredOpening);
             undeliveredOpening.clear();
+        }
+        if (deliveredUnreliable)
+        {
+            previousDeliveredTier = deliveredTier;
+            previousTurnWasUnreliable = *deliveredUnreliable;
         }
         // Read before ObserveOutcome for the same reason as above: the confidence that
         // decides whether this failure defeats or merely annoys her is the confidence she
@@ -1488,7 +1517,7 @@ SessionResult ConversationRuntime::Generate(const std::string& policyInput, cons
         turnResult = coordinator.Execute(router, policyInput, promptContext, filters, filterContext, evaluateMemory, provenance,
             currentTurn, stopToken, onDelta, answerDecision,
             turnPolicy.publicAudience ? llm::PrivateMemoryAccess::Denied : llm::PrivateMemoryAccess::ProfileSetting,
-            turnPolicy.deliveryAdmission);
+            turnPolicy.deliveryAdmission, turnPolicy.memoryScope);
         // Generation is finished, so anything held back for fear of a marker is safe.
         flushHeldFragment();
     }
@@ -1582,6 +1611,16 @@ SessionResult ConversationRuntime::Generate(const std::string& policyInput, cons
                         : output.reason,
         ElapsedMilliseconds(turnStarted), 0, currentTurn);
 
+    if (output.contextFit.available)
+    {
+        const auto& fit = output.contextFit;
+        publishComponent("Context budget", fit.backendCounted ? "Backend counted" : "Conservative estimate",
+            std::to_string(fit.promptTokens) + " prompt tokens; " + std::to_string(fit.responseReserve) + " output tokens and " +
+                std::to_string(fit.templateReserve) + " safety tokens reserved; " + std::to_string(fit.retainedMessages) + "/" +
+                std::to_string(fit.inputMessages) + " messages retained. " + fit.reason,
+            -1.0, 0, currentTurn);
+    }
+
     const AffectSnapshot posture = emotions.ToAffectSnapshot();
     std::ostringstream trace;
     // Her thinking first. This block is what "Thought process" is for; routing, mood,
@@ -1620,6 +1659,13 @@ SessionResult ConversationRuntime::Generate(const std::string& policyInput, cons
           << static_cast<int>(answerDecision.confidence * 100.0F) << "%. " << answerDecision.reason;
     if (output.bRoutingFallback)
         trace << " Fallback: " << output.routingFallbackReason;
+    if (output.contextFit.available)
+    {
+        const auto& fit = output.contextFit;
+        trace << "\n\nContext: " << fit.promptTokens << (fit.backendCounted ? " backend-counted" : " conservatively estimated")
+              << " prompt tokens of " << fit.contextTokens << "; reserves " << fit.responseReserve << " output + " << fit.templateReserve
+              << " safety; " << fit.retainedMessages << '/' << fit.inputMessages << " messages. " << fit.reason;
+    }
     if (proactive)
     {
         trace << "\n\nInitiative: a verified event, not an elapsed timer, opened this turn.";
@@ -1722,16 +1768,11 @@ SessionResult ConversationRuntime::Generate(const std::string& policyInput, cons
             {
                 if (!admitted())
                     return revoked();
-                context.AddMessage("assistant", output.response);
+                context.AddMessage({"assistant", output.response, turnPolicy.memoryScope.participantId, turnPolicy.memoryScope});
             }
-            // Recorded here, beside the one place a reply becomes part of this
-            // conversation, so the tier a follow-up inherits is always the tier that
-            // produced an answer the user actually received. A failed generation
-            // returned above, a cancelled one returned a few lines above that, and an
-            // empty response never enters this block, so none of them can be inherited.
-            // The self-inquiry pass has its own agent and never touches routeDecision,
-            // so deliberation cannot be mistaken for the answering tier either.
-            previousDeliveredTier = routeDecision.selectedTier;
+            // Commit routing continuity only after finish rechecks delivery admission.
+            // Router fallbacks report the answering tier; absent metadata stays unknown.
+            deliveredTier = DeliveredResponseTier(output);
 
             // And whether that answer is one to build on cheaply.
             //
@@ -1743,7 +1784,7 @@ SessionResult ConversationRuntime::Generate(const std::string& policyInput, cons
             // handled where it returns.
             const bool ungrounded = agents::ConversationQualityMonitor::ClaimsInventedPhysicalLife(output.response) ||
                                     agents::ConversationQualityMonitor::ProjectsStateOntoUser(policyInput, output.response);
-            previousTurnWasUnreliable = output.bHardFilterBlocked || ungrounded;
+            deliveredUnreliable = output.bHardFilterBlocked || ungrounded;
         }
     }
 

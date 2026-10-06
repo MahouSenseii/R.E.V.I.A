@@ -38,6 +38,37 @@ void TestEntityIdsKeepPeopleApart()
         "An anonymous adapter author produced an empty entity id.");
 }
 
+void TestRejectedIntroductionPreservesAnonymousIdentity()
+{
+    ScopedTestDirectory directory;
+    const auto path = directory.root / "guarded-identity.json";
+    RelationshipRegistry registry(path);
+    ApplyTurn(registry, LocalUserEntityId(), "Thank you, that helped.");
+    const auto original = registry.Find(LocalUserEntityId());
+    const auto evidence = registry.RetainedEvidence();
+    std::string error;
+    Check(registry.GrantRecognitionConsent(LocalUserEntityId(), error), error);
+    const auto consent = registry.RecognitionConsentRevision(LocalUserEntityId());
+    Check(registry.ResolveNamedLocalSpeaker("Alice", [] { return false; }).empty(), "A retired introduction returned an admitted person.");
+    Check(registry.ResolveNamedLocalSpeaker("Alice", []() -> bool { throw std::runtime_error("retired"); }).empty(),
+        "A failed admission escaped or admitted an introduction.");
+    Check(registry.Count() == 1 && registry.Find(LocalUserEntityId()).has_value() &&
+              !registry.Find(RelationshipRegistry::NamedLocalEntityId("Alice")) &&
+              registry.Find(LocalUserEntityId())->interactionCount == original->interactionCount &&
+              registry.RetainedEvidence().size() == evidence.size() && registry.RecognitionConsentRevision(LocalUserEntityId()) == consent,
+        "Rejected introduction created a person or migrated anonymous evidence/consent.");
+    Check(registry.Save(error), error);
+    RelationshipRegistry reopened(path);
+    Check(reopened.Load(error) && reopened.Count() == 1 && reopened.Find(LocalUserEntityId()).has_value(),
+        "Rejected introduction persisted an identity mutation.");
+    const auto admitted = reopened.ResolveNamedLocalSpeaker("Alice", [] { return true; });
+    Check(admitted == RelationshipRegistry::NamedLocalEntityId("Alice") && !reopened.Find(LocalUserEntityId()) &&
+              reopened.Find(admitted)->interactionCount == original->interactionCount,
+        "Admitted first introduction stopped preserving anonymous relationship history.");
+    Check(reopened.ResolveNamedLocalSpeaker("ALICE", [] { return false; }).empty() && reopened.Find(admitted)->displayName == "Alice",
+        "A retired existing-person introduction rewrote display identity.");
+}
+
 void TestEvidenceComesFromSignalsNotAssignment()
 {
     // The rule the whole system rests on: relationship numbers are earned from
@@ -239,6 +270,7 @@ void TestACorruptFileIsNeverOverwritten()
 void RunRelationshipTests()
 {
     TestEntityIdsKeepPeopleApart();
+    TestRejectedIntroductionPreservesAnonymousIdentity();
     TestEvidenceComesFromSignalsNotAssignment();
     TestRelationshipsStayIndependentInTheRegistry();
     TestRelationshipsSurviveARestart();

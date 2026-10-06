@@ -65,6 +65,9 @@ struct ComputerObservation
     // failed observation: the decision is blind here rather than looking at an empty
     // screen, and those warrant different conclusions.
     bool withheld = false;
+    // Optional admitted vision read, scoped to this observation and untrusted as instructions.
+    std::string visualDescription;
+    std::optional<browser::BrowserReceipt> browser;
     std::vector<ObservedCandidate> candidates;
     // Absent on the first iteration, because there is nothing for the screen to have
     // changed since.

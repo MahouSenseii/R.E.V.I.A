@@ -63,6 +63,31 @@ std::string FormatLegacyContext(const ComputerTaskContext& context)
     nlohmann::json roots = nlohmann::json::array();
     for (const auto& root : context.scope.approvedRoots)
         roots.push_back(actions::PathToUtf8(root));
+    nlohmann::json executables = nlohmann::json::array();
+    for (const auto& executable : context.scope.process.approvedExecutables)
+        executables.push_back(actions::PathToUtf8(executable));
+    nlohmann::json available = nlohmann::json::array();
+    if (context.scope.mode != actions::ExecutionMode::Disabled)
+    {
+        for (const auto action : actions::AllActionTypes())
+        {
+            using actions::ActionType;
+            bool enabled = true;
+            if (action == ActionType::GenerateImage) enabled = context.scope.image.enabled;
+            else if (action == ActionType::ExecuteProcess)
+                enabled = context.scope.process.enabled && !executables.empty() && !roots.empty();
+            else if (actions::IsBrowserAction(action)) enabled = context.scope.browser.enabled && !context.scope.browser.approvedOrigins.empty() &&
+                (action != ActionType::BrowserNavigate || context.scope.browser.navigate) &&
+                ((action != ActionType::BrowserClick && action != ActionType::BrowserFill) || context.scope.browser.interact);
+            else if (action == ActionType::WebSearch) enabled = context.scope.internet.enabled;
+            else if (action == ActionType::LaunchApplication) enabled = context.scope.desktopControl.applicationLaunch;
+            else if (action == ActionType::PressKeys || action == ActionType::TypeText) enabled = context.scope.desktopControl.keyboard;
+            else if (actions::IsSynthesizedInputAction(action)) enabled = context.scope.desktopControl.pointer;
+            else if (actions::IsUiAutomationAction(action)) enabled = !context.scope.approvedApplications.empty();
+            else enabled = !roots.empty();
+            if (enabled) available.push_back(actions::ToString(action));
+        }
+    }
 
     const actions::windows::DesktopObservation& screen = context.observation.screen;
     nlohmann::json observation;
@@ -89,6 +114,9 @@ std::string FormatLegacyContext(const ComputerTaskContext& context)
     {
         observation = {
             {"available", true},
+            {"id", screen.id},
+            {"generation", screen.generation},
+            {"fingerprint", screen.Fingerprint()},
             {"application", Bounded(screen.foregroundApplication, 120)},
             {"title", Bounded(screen.foregroundTitle, MaximumObservationCharacters)},
             {"window", {
@@ -118,6 +146,22 @@ std::string FormatLegacyContext(const ComputerTaskContext& context)
         }
     }
     observation["control_targets"] = std::move(controlTargets);
+    if (context.observation.browser && context.scope.browser.enabled)
+    {
+        const auto& receipt = *context.observation.browser;
+        nlohmann::json elements = nlohmann::json::array();
+        for (const auto& element : receipt.elements)
+            elements.push_back({{"id", element.id}, {"name", element.name}, {"role", element.role},
+                {"clickable", element.clickable}, {"editable", element.editable}});
+        observation["browser"] = {{"session", receipt.session}, {"generation", receipt.generation}, {"url", receipt.url},
+            {"title", receipt.title}, {"untrusted_page_text", Bounded(receipt.text, 4096)}, {"elements", elements}};
+    }
+    if (observation.value("available", false) && !context.observation.visualDescription.empty())
+    {
+        std::string visual = utf8::Sanitize(context.observation.visualDescription);
+        utf8::Truncate(visual, 4096);
+        observation["untrusted_visual_description"] = std::move(visual);
+    }
 
     // Acting is not achieving. An action that ran, succeeded, and left the screen
     // identical has made no progress, and saying so is what stops the loop from
@@ -162,10 +206,16 @@ std::string FormatLegacyContext(const ComputerTaskContext& context)
         {"actions_left", context.actionsLeft},
         {"retries_left", context.retriesLeft},
         {"scope", {
+            {"image", {{"enabled", context.scope.image.enabled}}},
+            {"browser", {{"enabled", context.scope.browser.enabled}, {"approved_origins", context.scope.browser.approvedOrigins}}},
+            {"available_actions", available},
             {"roots", roots},
             {"applications", context.scope.approvedApplications},
             {"controls", context.scope.approvedControls},
             {"mode", actions::ToString(context.scope.mode)},
+            {"process", {{"enabled", context.scope.process.enabled}, {"approved_executables", executables},
+                {"allow_command_interpreters", context.scope.process.allowCommandInterpreters},
+                {"max_timeout_ms", context.scope.process.maxTimeoutMs}, {"max_output_bytes", context.scope.process.maxOutputBytes}}},
             {"auto_approve_risk_through",
                 actions::ToString(context.scope.autoApproveRiskThrough)},
             {"desktop_control", {
@@ -214,6 +264,14 @@ ComputerDecision LegacyLlmComputerPolicy::Decide(const ComputerTaskContext& cont
     if (parsed.finished)
     {
         decision.kind = ComputerDecisionKind::ProposeCompletion;
+        decision.detail = parsed.error;
+        return decision;
+    }
+    if (parsed.needsInput || parsed.recovery != goals::GoalRecovery::None)
+    {
+        decision.kind = parsed.needsInput ? ComputerDecisionKind::NeedUser
+            : parsed.recovery == goals::GoalRecovery::WaitForState ? ComputerDecisionKind::WaitForState
+            : parsed.recovery == goals::GoalRecovery::Reobserve ? ComputerDecisionKind::Reobserve : ComputerDecisionKind::NeedVision;
         decision.detail = parsed.error;
         return decision;
     }

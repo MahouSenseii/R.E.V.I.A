@@ -944,6 +944,8 @@ ResourcePlan PlanResources(const HardwareInventory& hardware, const resourceSett
 
 void ApplyResourcePlan(const ResourcePlan& plan, appSettings& settings)
 {
+    settings.image.cpuThreads = std::max(1, plan.chatCpuThreads);
+    settings.image.gpuReserveMiB = plan.gpuReserveMiB;
     settings.resources.llamaPromptCacheMiB = plan.llamaPromptCacheMiB;
     settings.resources.sqliteCacheMiB = plan.sqliteCacheMiB;
     settings.llm.device = plan.chatDevice;

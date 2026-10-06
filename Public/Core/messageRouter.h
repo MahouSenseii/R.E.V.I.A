@@ -36,7 +36,8 @@ public:
     void SetReplyNote(std::string note);
     // The saved memories related to `query`, for work that happens before the reply's
     // own prompt is built -- the self-inquiry.
-    std::string RelatedMemories(const std::string& query, std::stop_token stopToken = {}) const;
+    std::string RelatedMemories(
+        const std::string& query, std::stop_token stopToken = {}, const revia::memory::MemoryScope& scope = {}) const;
     responseOutput PlanAction(const std::string& request) const;
     // A review of her own code. Expert when it can be had -- loaded on demand if it is
     // managed that way -- because this is the hardest reading she does and nobody is
@@ -74,7 +75,7 @@ public:
     // has no default on purpose: a caller that does not know must decide, because the
     // safe answer and the convenient answer are not the same one.
     memoryDecision EvaluateMemory(const std::string& userMessage, const std::string& assistantMessage,
-        revia::agents::ResponseProvenance provenance, std::stop_token stopToken = {}) const;
+        revia::agents::ResponseProvenance provenance, std::stop_token stopToken = {}, const revia::memory::MemoryScope& scope = {}) const;
     bool IsLLMAvailable() const;
     bool WarmUpLLM(std::stop_token stopToken, std::string& outError) const;
     bool WarmUpFast(std::stop_token stopToken, std::string& outError) const;

@@ -29,7 +29,8 @@ public:
     bool WarmUp(std::stop_token stopToken, std::string& outError) const;
     void SetPosture(std::string posture);
     void SetReplyNote(std::string note);
-    std::string RelatedMemories(const std::string& query, std::stop_token stopToken = {}) const;
+    std::string RelatedMemories(
+        const std::string& query, std::stop_token stopToken = {}, const revia::memory::MemoryScope& scope = {}) const;
     healthOutput CheckBackendHealth(std::stop_token stopToken = {}) const;
     using DeltaHandler = std::function<void(const std::string&)>;
     responseOutput GenerateResponse(const std::vector<conversationMessage>& context, std::stop_token stopToken = {},
@@ -59,7 +60,7 @@ public:
     // has no default on purpose: a caller that does not know must decide, because the
     // safe answer and the convenient answer are not the same one.
     memoryDecision EvaluateMemory(const std::string& userMessage, const std::string& assistantMessage,
-        revia::agents::ResponseProvenance provenance, std::stop_token stopToken = {}) const;
+        revia::agents::ResponseProvenance provenance, std::stop_token stopToken = {}, const revia::memory::MemoryScope& scope = {}) const;
     healthOutput CheckEmbeddingHealth(std::stop_token stopToken = {}) const;
     embeddingOutput EmbedMemory(const std::string& summary, std::stop_token stopToken = {}) const;
 private:

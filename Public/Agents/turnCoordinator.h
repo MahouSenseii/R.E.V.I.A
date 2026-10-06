@@ -30,12 +30,12 @@ public:
         const responseFilterSettings& filterSettings, const ResponseFilterContext& filterContext, bool evaluateMemory,
         ResponseProvenance provenance, std::uint64_t turnId = 0, std::stop_token stopToken = {}, messageRouter::DeltaHandler onDelta = {},
         const revia::intelligence::IntelligenceDecision& decision = {},
-        llm::PrivateMemoryAccess memoryAccess = llm::PrivateMemoryAccess::ProfileSetting,
-        std::function<bool()> contextAdmission = {}) const;
+        llm::PrivateMemoryAccess memoryAccess = llm::PrivateMemoryAccess::ProfileSetting, std::function<bool()> contextAdmission = {},
+        const memory::MemoryScope& scope = {}) const;
     std::vector<MemoryAgentEvent> DrainMemoryEvents();
     [[nodiscard]] LearnedFindingResult SubmitLearnedFinding(const messageRouter& router, memoryDecision decision, std::uint64_t turnId = 0);
-    [[nodiscard]] LearnedFindingResult SubmitLearnedFinding(const messageRouter& router, memoryDecision decision,
-        std::uint64_t turnId, std::string* outMemoryId);
+    [[nodiscard]] LearnedFindingResult SubmitLearnedFinding(const messageRouter& router, memoryDecision decision, std::uint64_t turnId,
+        std::string* outMemoryId, std::function<bool()> contextAdmission = {});
     void BackfillMemoryEmbeddings(const messageRouter& router, const std::string& embeddingModel);
     void Stop();
 

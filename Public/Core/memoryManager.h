@@ -17,7 +17,8 @@ public:
     explicit memoryManager(std::string databasePath);
     ~memoryManager();
 
-    bool SaveAutomaticMemory(const memoryDecision& decision, bool& outWasAdded, std::string* outMemoryId = nullptr) const;
+    bool SaveAutomaticMemory(
+        const memoryDecision& decision, bool& outWasAdded, std::string* outMemoryId = nullptr, std::function<bool()> admission = {}) const;
     bool SaveOwnerRevision(const revia::memory::MemoryRevisionRequest& request, revia::memory::MemoryRevisionReceipt& outReceipt,
         std::string& outError, std::function<bool()> admission = {}) const;
     std::vector<memoryEntry> LoadMemories() const;

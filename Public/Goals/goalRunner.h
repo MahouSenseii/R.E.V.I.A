@@ -29,6 +29,8 @@ struct GoalProgress
 // Undecided must never be recorded as finished.
 struct NextStep
 {
+    using Recovery = GoalRecovery;
+    Recovery recovery = Recovery::None;
     bool hasStep = false;
     bool finished = false;
     GoalStep step;
@@ -56,6 +58,8 @@ class GoalRunner
     // gets. Observing the machine is the provider's job, not the runner's: keeping the
     // observation on that side is what stops Goals from depending on Windows.
     using StepProvider = std::function<NextStep(const Goal&, std::uint32_t iteration)>;
+    using CompletionVerifier = std::function<CompletionEvidence(const Goal&, std::stop_token)>;
+    using RecoveryHandler = std::function<bool(NextStep::Recovery, const Goal&, std::stop_token, std::string&)>;
 
     GoalRunner(actions::ActionRuntime& runtime, const GoalStore& store);
 
@@ -70,7 +74,10 @@ class GoalRunner
     // Consumed by the next run only; never stored or used to widen permissions.
     // Covers only the shown risk ceiling; escalation and deletion still require confirmation.
     void SeedStandingApproval(actions::RiskLevel ceiling, bool refuseEscalation = false);
+    void SeedToolDelegation(bool process, bool browser);
     void SetStepProvider(StepProvider provider);
+    void SetCompletionVerifier(CompletionVerifier verifier);
+    void SetRecoveryHandler(RecoveryHandler handler);
     void SetExecutionStamp(runtime::RuntimeStamp stamp);
 
     // Validates the plan, then runs it. Returns the goal in its final state;
@@ -112,9 +119,15 @@ class GoalRunner
     // Set before a run starts, consumed by it. Separate from the live flag so that
     // starting a run still clears whatever the previous one left behind.
     bool seededApproval = false;
+    bool seededProcessDelegation = false;
+    bool seededBrowserDelegation = false;
+    bool processDelegation = false;
+    bool browserDelegation = false;
     bool seededRefuseEscalation = false;
     actions::RiskLevel seededCeiling = actions::RiskLevel::ReadOnly;
     StepProvider stepProvider;
+    CompletionVerifier completionVerifier;
+    RecoveryHandler recoveryHandler;
     runtime::RuntimeStamp executionStamp;
 };
 

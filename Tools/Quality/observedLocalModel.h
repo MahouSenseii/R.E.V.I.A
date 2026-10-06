@@ -45,6 +45,23 @@ class ObservedLocalModel
                 response.status = received->status;
                 response.set_content(received->body, received->get_header_value("Content-Type"));
             });
+        for (const auto* path : {"/apply-template", "/tokenize"})
+        {
+            server.Post(path,
+                [this, upstreamPort](const auto& request, auto& response)
+                {
+                    // Token accounting must not change the completion indices used by quality reviewers.
+                    const auto upstream = Client(upstreamPort);
+                    const auto received = upstream ? upstream->Post(request.path, request.body, "application/json") : httplib::Result{};
+                    if (!received)
+                    {
+                        response.status = 502;
+                        return;
+                    }
+                    response.status = received->status;
+                    response.set_content(received->body, received->get_header_value("Content-Type"));
+                });
+        }
         server.Post("/v1/chat/completions",
             [this, upstreamPort](const auto& request, auto& response)
             {

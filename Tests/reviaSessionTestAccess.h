@@ -71,7 +71,7 @@ struct ReviaSessionTestAccess
     { return session.config.LoadProfile(id, profile); }
     static agents::NodeResult RunAgentProvider(ReviaSession& session, const agents::NodeRequest& request)
     {
-        return session.AgentProvider(false)(request, {});
+        return session.AgentProvider(AgentProviderMode::Local)(request, {});
     }
     static void ConfigureStartupBrains(ReviaSession& session, int port, bool fastWarm = true, bool expertWarm = true)
     {
@@ -263,6 +263,20 @@ struct ReviaSessionTestAccess
         PrepareActions(session, root);
         session.goalStore = goals::GoalStore((root / "goals.db").string());
         if (provider) session.goalRunner.SetStepProvider(std::move(provider));
+    }
+
+    static void CheckOperatorAdmission(ReviaSession& session)
+    {
+        session.started.store(true);
+        {
+            ReviaSession::GoalTokenScope scope(session, {});
+            tests::Check(scope.admitted && session.OperatorAdmitted({}),
+                "Registering a goal invalidated its own captured policy revision.");
+            session.companionAuthority->SetCompanionDefaults(session.Paths().Descriptor().id,
+                policy::AuthorityPermissions::WithinMachineCeiling());
+            tests::Check(!session.OperatorAdmitted({}), "An external authority change left operator admission current.");
+        }
+        session.started.store(false);
     }
 
     static void ConfigureLiveOperatorPlanner(ReviaSession& session, const int port)
@@ -472,8 +486,19 @@ struct ReviaSessionTestAccess
     static goals::Goal OperateGoal(ReviaSession& session, goals::Goal goal, const bool cancelBeforeRun = false)
     {
         std::lock_guard lock(session.operationMutex);
+        struct RestoreStarted
+        {
+            std::atomic<bool>& value;
+            bool previous;
+            ~RestoreStarted() { value.store(previous); }
+        } restoreStarted{session.started, session.started.exchange(true)};
         (void)session.BeginOperation();
         if (cancelBeforeRun) session.RequestStop();
+        const auto stopToken = session.CurrentOperationToken();
+        const ReviaSession::GoalTokenScope scope(session, stopToken);
+        tests::Check(scope.admitted, "The operator fixture could not register its real goal authority.");
+        tests::Check(cancelBeforeRun || session.OperatorAdmitted(stopToken),
+            "The operator fixture did not retain current observation admission.");
         // Exactly what the /operate path does once the person approves the task: a
         // standing yes bounded to this run, and the desktop task approval that raises
         // the consequence ceiling for it. Without both, an ordinary content edit is
@@ -483,7 +508,7 @@ struct ReviaSessionTestAccess
         const auto approval = session.actionRuntime.ApproveDesktopTask(goal.id, false);
         static_cast<void>(approval);
         return session.goalRunner.Operate(
-            std::move(goal), session.CurrentOperationToken());
+            std::move(goal), stopToken);
     }
 
     static void BeginComputerTask(ReviaSession& session, const std::string& goalId, computer::TaskContent content = {})

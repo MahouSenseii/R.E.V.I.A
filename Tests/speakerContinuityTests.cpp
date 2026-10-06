@@ -122,6 +122,8 @@ void TestSessionPeopleAndAdapterIsolation()
             }
             const auto result = session.Submit(input);
             Check(result.succeeded && result.fromAssistant, "A real local turn failed: " + result.reason);
+            Check(result.audienceRevision == session.Audience().revision,
+                "The reply retained the audience revision from before its admitted introduction.");
             Check(session.CurrentRelationship().entityId == expected,
                 "A completed local turn changed the selected person.");
             std::lock_guard lock(observationMutex);
@@ -219,6 +221,19 @@ void TestSessionPeopleAndAdapterIsolation()
             Person(restarted, quentin).interactionCount == 7 &&
             Person(restarted, sam).interactionCount == 2 && Person(restarted, viewer).interactionCount == 1,
             "Restart lost or merged the saved person-specific history.");
+        bool audienceChanged = false;
+        std::string audienceError;
+        const EventSubscription revokeIntroduction{restarted.Events(), restarted.Events().Subscribe([&](const RuntimeEvent& event)
+        {
+            if (event.component == "Relationship" && event.phase == "Named")
+            {
+                audienceChanged = restarted.SetAudience({AudienceKind::Public, "revoked-introduction", 0, {"visitor"}}, audienceError);
+            }
+        })};
+        const auto revoked = restarted.Submit("my name is Mallory");
+        Check(audienceChanged && audienceError.empty() && restarted.Audience().kind == AudienceKind::Public &&
+            !revoked.succeeded && !revoked.fromAssistant && revoked.text.empty(),
+            "An admitted introduction recaptured a later audience change and disclosed its reply.");
         restarted.Stop();
     }
 }

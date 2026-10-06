@@ -106,14 +106,14 @@ void ReviaWindow::BuildCompanionControls()
     scroll->setWidgetResizable(true);
     scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     AgentStudioPanel::Controls controls;
-    controls.start = [this](const std::string& objective, const bool demo, std::string& error)
+    controls.start = [this](const std::string& objective, const revia::runtime::AgentProviderMode mode, std::string& error)
     {
         if (switchingCompanion)
         {
             error = "Companion selection is in progress.";
             return false;
         }
-        return Session().StartAgentWorkflow(objective, demo, error);
+        return Session().StartAgentWorkflow(objective, mode, error);
     };
     controls.cancel = [this]() { Session().CancelAgentWorkflow(); };
     controls.resume = [this](std::string& error) { return Session().ResumeAgentWorkflow(error); };

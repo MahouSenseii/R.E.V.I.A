@@ -2,6 +2,7 @@
 #include "Core/profile.h"
 #include "LLM/endpointSettings.h"
 #include "Memory/memoryTypes.h"
+#include "Memory/memoryScope.h"
 #include "testSupport.h"
 #include "Presence/webGuestRuntime.h"
 #include "Runtime/conversationRuntime.h"
@@ -140,24 +141,79 @@ struct Owner {
     std::map<std::string, int> calls;
     ConversationRuntime runtime;
     explicit Owner(int port)
-        : runtime(router, history, coordinator, speech, affect, emotions, events, log,
-            [this](RuntimeState, const std::string&) { ++calls["state"]; },
-            [this](const AffectSnapshot&) { ++calls["affect"]; },
-            [this] { ++calls["internet permissions"]; actions::CapabilitySettings::InternetAccess a;
-                a.enabled = a.automaticLookup = true; return a; },
-            [this] { ++calls["desktop permissions"]; actions::CapabilitySettings::DesktopControl a;
-                a.pointer = a.keyboard = a.applicationLaunch = true; return a; },
-            [this](const std::string&, const std::string&) { ++calls["internet executor"]; return actions::ActionOutcome{}; },
-            [this] { ++calls["filters"]; responseFilterSettings f; f.bAiReviewEnabled = false; return f; },
-            [this] { ++calls["cached perception"]; return std::string("SCREEN_CANARY CAMERA_CANARY CLIPBOARD_CANARY"); },
-            [this] { ++calls["relationship"]; return relationship; },
-            [this] { ++calls["development"]; return development; },
-            [this](const emotion::Stimulus&) { ++calls["appraisal"]; },
-            [this] { ++calls["capture executor"]; return std::string("CAPTURE_CANARY"); },
-            [this] { ++calls["preferences"]; return preferences; },
-            [this] { ++calls["self inquiry"]; agents::SelfInquiryLimits limits; limits.enabled = false; return limits; },
-            [this](const memory::RecallRequest&, const std::string&) { ++calls["archive"]; return std::string("ARCHIVE_CANARY"); },
-            [this] { ++calls["autonomy"]; return ConversationRuntime::AutonomyContext{"WANTING_CANARY", "ACTIVITY_CANARY"}; }) {
+        : runtime(
+              router, history, coordinator, speech, affect, emotions, events, log,
+              [this](RuntimeState, const std::string&) { ++calls["state"]; }, [this](const AffectSnapshot&) { ++calls["affect"]; },
+              [this]
+              {
+                  ++calls["internet permissions"];
+                  actions::CapabilitySettings::InternetAccess a;
+                  a.enabled = a.automaticLookup = true;
+                  return a;
+              },
+              [this]
+              {
+                  ++calls["desktop permissions"];
+                  actions::CapabilitySettings::DesktopControl a;
+                  a.pointer = a.keyboard = a.applicationLaunch = true;
+                  return a;
+              },
+              [this](const std::string&, const std::string&)
+              {
+                  ++calls["internet executor"];
+                  return actions::ActionOutcome{};
+              },
+              [this]
+              {
+                  ++calls["filters"];
+                  responseFilterSettings f;
+                  f.bAiReviewEnabled = false;
+                  return f;
+              },
+              [this]
+              {
+                  ++calls["cached perception"];
+                  return std::string("SCREEN_CANARY CAMERA_CANARY CLIPBOARD_CANARY");
+              },
+              [this]
+              {
+                  ++calls["relationship"];
+                  return relationship;
+              },
+              [this]
+              {
+                  ++calls["development"];
+                  return development;
+              },
+              [this](const emotion::Stimulus&) { ++calls["appraisal"]; },
+              [this]
+              {
+                  ++calls["capture executor"];
+                  return std::string("CAPTURE_CANARY");
+              },
+              [this]
+              {
+                  ++calls["preferences"];
+                  return preferences;
+              },
+              [this]
+              {
+                  ++calls["self inquiry"];
+                  agents::SelfInquiryLimits limits;
+                  limits.enabled = false;
+                  return limits;
+              },
+              [this](const memory::RecallRequest&, const std::string&, const memory::MemoryScope&)
+              {
+                  ++calls["archive"];
+                  return std::string("ARCHIVE_CANARY");
+              },
+              [this]
+              {
+                  ++calls["autonomy"];
+                  return ConversationRuntime::AutonomyContext{"WANTING_CANARY", "ACTIVITY_CANARY"};
+              })
+    {
         profile.id = "owner-private"; profile.displayName = "Revia";
         profile.systemPrompt = "You are Revia. OWNER_PROFILE_CANARY";
         // Retrieval is tested below with the router's actual memory-enabled profile;
@@ -230,6 +286,7 @@ void Run() {
     remembered.bSuccess = remembered.bShouldRemember = true;
     remembered.category = "project"; remembered.source = "conversation";
     remembered.summary = "Maple leaf drawing DURABLE_MEMORY_CANARY is a private botanical project.";
+    remembered.subject = {memory::MemorySubjectKind::Participant, "local:RELATIONSHIP_CANARY"};
     bool added = false;
     Check(memory.Save(remembered, added) && added, "Could not seed real owner memory database");
     Check(memory.BuildPromptBlock("Describe a maple leaf.").find("DURABLE_MEMORY_CANARY") != std::string::npos,
@@ -238,7 +295,10 @@ void Run() {
     Check(owner.history.GetCompressedHistorySummary().find("PRIVATE_SUMMARY_CANARY") != std::string::npos,
         "Owner compressed history was not actually seeded");
     Check(owner.emotions.Current().cause == "MOOD_CAUSE_CANARY", "Owner mood cause was not actually seeded");
-    const auto privateReply = owner.router.RouteMessage("Describe a maple leaf.", {{"user", "Describe a maple leaf."}});
+    const memory::MemoryScope privateScope{"local:RELATIONSHIP_CANARY", {identity::AudienceKind::Private, "local:private", 1, {}},
+        identity::SpeakerSource::ExplicitIntroduction, 0, "owner-private"};
+    const auto privateReply = owner.router.RouteMessage("Describe a maple leaf.",
+        {{"user", "Describe a maple leaf.", privateScope.participantId, privateScope}});
     Check(privateReply.bSuccess && backend.embeddings > 0 && backend.Last().dump().find("DURABLE_MEMORY_CANARY") != std::string::npos,
         "Actual owner model request must retrieve the seeded durable memory");
     const auto opening = owner.runtime.StartConversation("a maple leaf was observed", "verified private observation", owner.profile, true, false);

@@ -1,4 +1,5 @@
 #include "Goals/goalStore.h"
+#include "Planning/structuredActionParser.h"
 
 #include <chrono>
 #include <exception>
@@ -170,10 +171,22 @@ nlohmann::json ActionToJson(const actions::ActionRequest& request)
         {"window_title", request.windowTitle},
         {"control", request.control},
         {"value", request.value},
+        {"expected_digest", request.expectedDigest},
         {"dry_run", request.dryRun},
         {"requested_by", request.requestedBy},
         {"requires_runtime_guard", request.requiresRuntimeGuard}
     };
+    if (request.type == actions::ActionType::ExecuteProcess)
+    {
+        action["process"] = {{"action", "execute_process"},
+            {"executable", actions::PathToUtf8(request.process.executable)},
+            {"working_directory", actions::PathToUtf8(request.process.workingDirectory)},
+            {"arguments", request.process.arguments}, {"environment", request.process.environment},
+            {"timeout_ms", request.process.timeoutMs}};
+    }
+    if (actions::IsBrowserAction(request.type))
+        action["browser"] = {{"action", actions::ToString(request.type)}, {"url", request.browser.url},
+            {"session", request.browser.session}, {"generation", request.browser.generation}, {"element", request.browser.element}, {"value", request.browser.value}};
     if (actions::IsSynthesizedInputAction(request.type))
     {
         action["input"] = nlohmann::json{
@@ -208,6 +221,19 @@ actions::ActionRequest ActionFromJson(const nlohmann::json& value)
     request.windowTitle = value.value("window_title", std::string());
     request.control = value.value("control", std::string());
     request.value = value.value("value", std::string());
+    request.expectedDigest = value.value("expected_digest", std::string());
+    if (actions::IsBrowserAction(request.type))
+    {
+        const auto parsed = planning::StructuredActionParser::ParseObject(value.value("browser", nlohmann::json::object()));
+        if (!parsed.succeeded) request.type = actions::ActionType::Unknown;
+        else request.browser = parsed.request.browser;
+    }
+    if (request.type == actions::ActionType::ExecuteProcess)
+    {
+        const auto parsed = planning::StructuredActionParser::ParseObject(value.value("process", nlohmann::json::object()));
+        if (!parsed.succeeded) request.type = actions::ActionType::Unknown;
+        else request.process = parsed.request.process;
+    }
     request.dryRun = value.value("dry_run", false);
     request.requestedBy = value.value("requested_by", std::string("goal"));
     // An obligation, never restored authority. A malformed marker fails closed; old
@@ -337,6 +363,19 @@ nlohmann::json ScopeToJson(const actions::CapabilitySettings& scope)
         {"max_affected_entries", scope.maxAffectedEntries},
         {"max_desktop_actions_per_minute", scope.maxDesktopActionsPerMinute},
         {"minimum_desktop_action_interval_ms", scope.minimumDesktopActionIntervalMs},
+        {"process", [&]
+            {
+                nlohmann::json executables = nlohmann::json::array();
+                for (const auto& executable : scope.process.approvedExecutables) executables.push_back(actions::PathToUtf8(executable));
+                return nlohmann::json{{"enabled", scope.process.enabled}, {"allowTaskExecution", scope.process.allowTaskExecution}, {"approvedExecutables", executables},
+                    {"allowCommandInterpreters", scope.process.allowCommandInterpreters}, {"maxTimeoutMs", scope.process.maxTimeoutMs},
+                    {"maxOutputBytes", scope.process.maxOutputBytes}, {"maxEnvironmentBytes", scope.process.maxEnvironmentBytes},
+                    {"approvedEnvironmentNames", scope.process.approvedEnvironmentNames}};
+            }()},
+        {"browser", {{"enabled", scope.browser.enabled}, {"navigate", scope.browser.navigate}, {"interact", scope.browser.interact},
+            {"allowTaskInteraction", scope.browser.allowTaskInteraction}, {"allowLoopback", scope.browser.allowLoopback},
+            {"approvedOrigins", scope.browser.approvedOrigins}, {"timeoutMs", scope.browser.timeoutMs},
+            {"maxTextBytes", scope.browser.maxTextBytes}, {"maxElements", scope.browser.maxElements}, {"maxValueBytes", scope.browser.maxValueBytes}}},
         // Without this a resumed desktop goal came back with every hand switched off,
         // because the struct defaults are all false. That failed closed, which is the
         // right direction, but it also meant a saved desktop goal could never actually
@@ -422,6 +461,35 @@ actions::CapabilitySettings ScopeFromJson(const nlohmann::json& value)
     scope.minimumDesktopActionIntervalMs = value.value(
         "minimum_desktop_action_interval_ms",
         scope.minimumDesktopActionIntervalMs);
+    if (value.contains("process") && value.at("process").is_object())
+    {
+        const auto& process = value.at("process");
+        scope.process.enabled = process.value("enabled", false);
+        scope.process.allowTaskExecution = process.value("allowTaskExecution", false);
+        scope.process.allowCommandInterpreters = process.value("allowCommandInterpreters", false);
+        scope.process.maxTimeoutMs = process.value("maxTimeoutMs", 30000);
+        scope.process.maxOutputBytes = process.value("maxOutputBytes", std::size_t(65536));
+        scope.process.maxEnvironmentBytes = process.value("maxEnvironmentBytes", std::size_t(16384));
+        scope.process.approvedEnvironmentNames = process.value("approvedEnvironmentNames", std::vector<std::string>{});
+        for (const auto& executable : process.value("approvedExecutables", std::vector<std::string>{}))
+            scope.process.approvedExecutables.push_back(actions::Utf8ToPath(executable));
+    }
+    if (value.contains("browser") && value.at("browser").is_object())
+    {
+        const auto& browser = value.at("browser");
+        scope.browser.enabled = browser.value("enabled", false);
+        scope.browser.navigate = browser.value("navigate", false);
+        scope.browser.interact = browser.value("interact", false);
+        scope.browser.allowTaskInteraction = browser.value("allowTaskInteraction", false);
+        scope.browser.allowLoopback = browser.value("allowLoopback", false);
+        scope.browser.approvedOrigins = browser.value("approvedOrigins", std::vector<std::string>{});
+        scope.browser.timeoutMs = browser.value("timeoutMs", 15000);
+        scope.browser.maxTextBytes = browser.value("maxTextBytes", std::size_t{8192});
+        scope.browser.maxElements = browser.value("maxElements", std::size_t{60});
+        scope.browser.maxValueBytes = browser.value("maxValueBytes", std::size_t{4096});
+        std::string error;
+        if (!revia::browser::ValidateSettings(scope.browser, error)) scope.browser = {};
+    }
     // Absent on every row written before the scope was kept whole. The defaults are
     // every hand off, so an older row reloads exactly as it did before rather than
     // acquiring an authority nobody granted it.
@@ -515,7 +583,8 @@ Database OpenDatabase(const std::string& storePath)
         // Which verification contract this goal's steps are judged under. A row
         // written by an older build has none and reads back as 0, which is the
         // combined rule it was actually written under; see Goal::verificationSchema.
-        "  verification_schema INTEGER NOT NULL DEFAULT 0"
+        "  verification_schema INTEGER NOT NULL DEFAULT 0,"
+        "  iterative INTEGER NOT NULL DEFAULT 0"
         ");"
         "CREATE INDEX IF NOT EXISTS goals_by_status ON goals(status, updated_at);"
         "CREATE TABLE IF NOT EXISTS goal_steps ("
@@ -589,6 +658,19 @@ Database OpenDatabase(const std::string& storePath)
     if (!hasVerificationSchema && !Execute(database.get(),
             "ALTER TABLE goals ADD COLUMN verification_schema INTEGER NOT NULL "
             "DEFAULT 0;"))
+        return {};
+
+    bool hasIterative = false;
+    {
+        Statement columns = Prepare(database.get(), "PRAGMA table_info(goals);");
+        if (!columns) return {};
+        int status = SQLITE_ROW;
+        while ((status = sqlite3_step(columns.get())) == SQLITE_ROW)
+            if (ColumnText(columns.get(), 1) == "iterative") hasIterative = true;
+        if (status != SQLITE_DONE) return {};
+    }
+    if (!hasIterative && !Execute(database.get(),
+            "ALTER TABLE goals ADD COLUMN iterative INTEGER NOT NULL DEFAULT 0;"))
         return {};
 
     // The same additive migration for the attempt record. An older row has no recorded
@@ -695,8 +777,8 @@ bool WriteGoal(sqlite3* database, const Goal& goal)
     Statement insert = Prepare(database,
         "INSERT OR REPLACE INTO goals "
         "(id, title, status, stop_reason, current_step, budget, spend, scope, "
-        " created_at, updated_at, stop_detail, verification_schema) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);");
+        " created_at, updated_at, stop_detail, verification_schema, iterative) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);");
     if (!insert)
     {
         return false;
@@ -714,6 +796,7 @@ bool WriteGoal(sqlite3* database, const Goal& goal)
     BindText(insert.get(), 10, EpochSeconds(goal.updatedAt));
     BindText(insert.get(), 11, goal.stopDetail);
     BindInt(insert.get(), 12, static_cast<int>(goal.verificationSchema));
+    BindInt(insert.get(), 13, goal.iterative ? 1 : 0);
     if (sqlite3_step(insert.get()) != SQLITE_DONE)
     {
         return false;
@@ -832,13 +915,15 @@ Goal ReadGoal(sqlite3* database, sqlite3_stmt* statement)
     // as long as it exists, which is what makes the migration safe to apply to a
     // database with runs already in it.
     goal.verificationSchema = static_cast<std::uint32_t>(ColumnInt(statement, 11));
+    // Older iterative records predate the flag; only the operator charges planner requests.
+    goal.iterative = ColumnInt(statement, 12) != 0 || goal.spend.plannerRequests > 0;
     goal.steps = ReadSteps(database, goal.id);
     return goal;
 }
 
 constexpr const char* GoalColumns =
     "SELECT id, title, status, stop_reason, current_step, budget, spend, scope, "
-    "       created_at, updated_at, stop_detail, verification_schema FROM goals ";
+    "       created_at, updated_at, stop_detail, verification_schema, iterative FROM goals ";
 
 } // namespace
 

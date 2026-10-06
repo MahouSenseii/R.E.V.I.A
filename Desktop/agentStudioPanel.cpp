@@ -61,8 +61,9 @@ AgentStudioPanel::AgentStudioPanel(Controls inputControls, QWidget* parent) : QW
     requestLayout->addWidget(objective, 0, 0, 1, 3);
     provider = new QComboBox(request);
     provider->setObjectName("agentProvider");
-    provider->addItem("Companion local model", false);
-    provider->addItem("Deterministic diagnostic", true);
+    provider->addItem("Companion local model", static_cast<int>(revia::runtime::AgentProviderMode::Local));
+    provider->addItem("Local model with permitted tools", static_cast<int>(revia::runtime::AgentProviderMode::LocalWithTools));
+    provider->addItem("Deterministic diagnostic", static_cast<int>(revia::runtime::AgentProviderMode::Demonstration));
     requestLayout->addWidget(provider, 1, 0, 1, 3);
     start = new QPushButton("Start workflow", request);
     start->setObjectName("agentStart");
@@ -141,9 +142,9 @@ AgentStudioPanel::AgentStudioPanel(Controls inputControls, QWidget* parent) : QW
         [this]()
         {
             std::string error;
-            const bool demo = provider->currentData().toBool();
+            const auto mode = static_cast<revia::runtime::AgentProviderMode>(provider->currentData().toInt());
             const std::string input = objective->toPlainText().toStdString();
-            ShowResult(controls.start(input, demo, error), error);
+            ShowResult(controls.start(input, mode, error), error);
         });
     connect(cancel, &QPushButton::clicked, this, [this]() { controls.cancel(); });
     connect(resume, &QPushButton::clicked, this,
@@ -175,7 +176,7 @@ AgentStudioPanel::AgentStudioPanel(Controls inputControls, QWidget* parent) : QW
     connect(fixtureRepair, &QPushButton::clicked, this,
         [this]()
         {
-            if (!provider->currentData().toBool())
+            if (provider->currentData().toInt() != static_cast<int>(revia::runtime::AgentProviderMode::Demonstration))
             {
                 ShowResult(false, "Fixture repair is available for the deterministic diagnostic only.");
                 return;
@@ -233,7 +234,10 @@ void AgentStudioPanel::SetSnapshot(const revia::agents::WorkflowSnapshot& incomi
     summary->setText(Text(ToString(snapshot.state)) + " · parent: " + Text(ToString(snapshot.parentDecision)) +
                      " · requests: " + QString::number(snapshot.requests) + " · reported tokens: " +
                      (snapshot.unreportedRequests || running ? QString::number(snapshot.reportedTokens) + " + unavailable usage"
-                                                             : QString::number(snapshot.reportedTokens)));
+                                                             : QString::number(snapshot.reportedTokens)) +
+                     "\nModel calls: " + QString::number(snapshot.providerCalls) + " · tool calls: " +
+                     QString::number(snapshot.toolCalls) + " · tool output reserved: " +
+                     QString::number(snapshot.toolOutputBytes / 1024) + " KiB");
     QString selectedId;
     if (auto* selected = hierarchy->currentItem())
         selectedId = selected->data(0, Qt::UserRole).toString();

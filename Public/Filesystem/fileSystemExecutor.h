@@ -22,6 +22,7 @@ private:
     [[nodiscard]] actions::ActionResult ReadTextStream(std::istream& file) const;
     [[nodiscard]] actions::ActionResult ListDirectory(const actions::ActionRequest& request, const actions::PolicyDecision& decision) const;
     [[nodiscard]] actions::ActionResult ReadTextFile(const actions::ActionRequest& request, const actions::PolicyDecision& decision) const;
+    [[nodiscard]] actions::ActionResult WriteTextFile(const actions::ActionRequest& request, const actions::PolicyDecision& decision) const;
     [[nodiscard]] actions::ActionResult CreateDirectory(const actions::ActionRequest& request,
         const actions::PolicyDecision& decision) const;
     [[nodiscard]] actions::ActionResult CopyFile(const actions::ActionRequest& request, const actions::PolicyDecision& decision) const;

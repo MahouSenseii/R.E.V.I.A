@@ -1,4 +1,5 @@
 #include "Audit/actionAuditLogger.h"
+#include "Audit/contentDigest.h"
 
 #include <chrono>
 #include <algorithm>
@@ -199,6 +200,49 @@ bool ActionAuditLogger::WriteRecord(const actions::ActionRequest& request, const
         if (elapsedMilliseconds >= 0.0)
         {
             entry["elapsed_ms"] = elapsedMilliseconds;
+        }
+        if (request.type == actions::ActionType::WriteTextFile)
+        {
+            entry["file_write"] = {{"expected_digest", request.expectedDigest},
+                {"content_digest", ContentDigest(request.value)}, {"content_bytes", request.value.size()}};
+        }
+        if (request.type == actions::ActionType::GenerateImage)
+        {
+            entry["image"] = {{"prompt_digest", ContentDigest(request.value)}, {"prompt_bytes", request.value.size()}};
+            if (result.image)
+            {
+                const auto& image = *result.image;
+                entry["image"]["cancelled"] = image.cancelled;
+                entry["image"]["receipt"] = {{"path", actions::PathToUtf8(image.receipt.path)},
+                    {"sha256", image.receipt.sha256}, {"job_id", image.receipt.jobId}, {"model", image.receipt.model},
+                    {"width", image.receipt.width}, {"height", image.receipt.height}, {"verified", image.succeeded}};
+            }
+        }
+        if (request.type == actions::ActionType::ExecuteProcess)
+        {
+            entry["process"] = {{"executable", actions::PathToUtf8(request.process.executable)},
+                {"working_directory", actions::PathToUtf8(request.process.workingDirectory)},
+                {"arguments_digest", ContentDigest(nlohmann::json(request.process.arguments).dump())},
+                {"argument_count", request.process.arguments.size()}, {"environment_count", request.process.environment.size()},
+                {"timeout_ms", request.process.timeoutMs}, {"canonical_executable", actions::PathToUtf8(decision.canonicalExecutable)}};
+            if (result.process)
+            {
+                const auto& receipt = *result.process;
+                entry["process"]["receipt"] = {{"exit_code", receipt.exitCode}, {"cancelled", receipt.cancelled},
+                    {"timed_out", receipt.timedOut}, {"output_truncated", receipt.outputTruncated},
+                    {"stdout_bytes", receipt.standardOutput.size()}, {"stderr_bytes", receipt.standardError.size()},
+                    {"stdout_digest", ContentDigest(receipt.standardOutput)}, {"stderr_digest", ContentDigest(receipt.standardError)}};
+            }
+        }
+        if (actions::IsBrowserAction(request.type))
+        {
+            entry["browser"] = {{"url_digest", ContentDigest(request.browser.url)}, {"session", request.browser.session},
+                {"generation", request.browser.generation}, {"element", request.browser.element},
+                {"value_bytes", request.browser.value.size()}, {"value_digest", ContentDigest(request.browser.value)}};
+            if (result.browser)
+                entry["browser"]["receipt"] = {{"session", result.browser->session}, {"generation", result.browser->generation},
+                    {"fingerprint", result.browser->fingerprint}, {"uncertain_effect", result.browser->uncertainEffect},
+                    {"text_digest", ContentDigest(result.browser->text)}, {"text_bytes", result.browser->text.size()}};
         }
         if (request.type == actions::ActionType::WebSearch)
         {

@@ -19,6 +19,8 @@ struct ParsedGoal
 // error also carries the reason a finished run stopped.
 struct ParsedNextStep
 {
+    goals::GoalRecovery recovery = goals::GoalRecovery::None;
+    bool needsInput = false;
     bool succeeded = false;
     bool finished = false;
     goals::GoalStep step;

@@ -42,12 +42,9 @@ std::string Trim(const std::string& value)
 
 } // namespace
 
-DocumentWorkshop::DocumentWorkshop(messageRouter& messageRouter,
-    visual::ImageGenerator& generator, visual::DiagramStore& store, logger& sessionLogger)
-    : router(messageRouter)
-    , imageGenerator(generator)
-    , diagramStore(store)
-    , log(sessionLogger)
+DocumentWorkshop::DocumentWorkshop(
+    messageRouter& messageRouter, actions::ActionRuntime& actions, visual::DiagramStore& store, logger& sessionLogger)
+    : router(messageRouter), actionRuntime(actions), diagramStore(store), log(sessionLogger)
 {
 }
 
@@ -250,9 +247,17 @@ TurnOutcome DocumentWorkshop::ReviseDocumentBlock(const std::string& reference, 
     return turn;
 }
 
-TurnOutcome DocumentWorkshop::GenerateImage(const std::string& prompt)
+TurnOutcome DocumentWorkshop::GenerateImage(const std::string& prompt, const std::stop_token stopToken, std::function<bool()> admission,
+    const RuntimeStamp& stamp, const bool publishToCanvas, std::string requestedBy)
 {
     TurnOutcome turn;
+    if (stopToken.stop_requested() || (admission && !admission()))
+    {
+        turn.result.succeeded = false;
+        turn.result.text = "The image request is no longer admitted.";
+        turn.result.reason = turn.result.text;
+        return turn;
+    }
     if (prompt.empty())
     {
         turn.result.succeeded = false;
@@ -262,59 +267,62 @@ TurnOutcome DocumentWorkshop::GenerateImage(const std::string& prompt)
         return turn;
     }
 
-    std::string availability;
-    if (!imageGenerator.IsAvailable(availability))
-    {
-        turn.result.succeeded = false;
-        turn.result.text = availability;
-        turn.result.reason = availability;
-        turn.result.reasoning = "Image generation was asked for but the local runtime is not "
-            "ready. This is a separate optional model from the diagram path: /draw can "
-            "still produce a diagram, which is a different thing from a picture.";
-        turn.Then(TurnEvent::Moved(RuntimeState::Blocked, turn.result.reason));
-        return turn;
-    }
-
     turn.Then(TurnEvent::Moved(RuntimeState::Thinking, "Generating a picture."));
-    turn.Then(TurnEvent::Progress("Image", "Generating",
-        "Running the local image model. The first request also loads it."));
+    turn.Then(TurnEvent::Progress("Image", "Generating", "Running the local image model. The first request also loads it."));
 
-    const visual::ImageResult generated = imageGenerator.Generate(prompt);
+    actions::ActionRequest request;
+    request.id = actions::NewActionId();
+    request.type = actions::ActionType::GenerateImage;
+    request.value = prompt;
+    request.requestedBy = std::move(requestedBy);
+    request.beforeEffect = [stopToken, admission](const std::string&)
+    {
+        return stopToken.stop_requested() || (admission && !admission()) ? std::string("The image request is no longer admitted.")
+                                                                         : std::string{};
+    };
+    const auto executed = stamp.sessionId.empty() ? actionRuntime.Execute(request, false, stopToken)
+                                                  : actionRuntime.ExecuteFor(stamp, request, false, stopToken);
+    const visual::ImageResult generated = executed.result.image.value_or(visual::ImageResult{});
     std::ostringstream trace;
-    trace << "Picture: sent \"" << prompt << "\" to the local image model. This is a "
+    trace << "Picture: sent \"" << prompt
+          << "\" to the local image model. This is a "
              "diffusion model in an owned Python worker, not the language model.";
     if (!generated.detail.empty())
     {
         trace << "\n" << generated.detail << '.';
     }
 
-    if (!generated.succeeded)
+    if (!executed.Succeeded() || !generated.succeeded || stopToken.stop_requested() || (admission && !admission()))
     {
         turn.result.succeeded = false;
-        turn.result.text = generated.message;
-        turn.result.reason = generated.message;
-        trace << "\n\nNothing was produced: " << generated.message;
+        const bool cancelled = generated.cancelled || stopToken.stop_requested() || (admission && !admission());
+        turn.result.text = cancelled ? "Image generation was cancelled before publication." : executed.Message();
+        turn.result.reason = turn.result.text;
+        trace << "\n\nNo image was published: " << turn.result.text;
         turn.result.reasoning = trace.str();
-        turn.Then(TurnEvent::Progress("Image", "Error", generated.message));
-        turn.Then(TurnEvent::Moved(RuntimeState::Error, turn.result.reason));
+        turn.Then(TurnEvent::Progress("Image", cancelled ? "Cancelled" : "Error", turn.result.text));
+        turn.Then(TurnEvent::Moved(cancelled ? RuntimeState::Idle : RuntimeState::Error, turn.result.reason));
         return turn;
     }
 
-    RuntimeEvent event;
-    event.kind = RuntimeEventKind::Diagram;
-    event.state = RuntimeState::Responding;
-    event.component = "Canvas";
-    event.phase = "Image";
-    event.message = prompt.size() > 60 ? revia::utf8::Prefix(prompt, 60) + "..." : prompt;
-    event.resource = actions::PathToUtf8(generated.path);
-    turn.Then(TurnEvent::Published(std::move(event)));
+    if (publishToCanvas)
+    {
+        RuntimeEvent event;
+        event.kind = RuntimeEventKind::Diagram;
+        event.state = RuntimeState::Responding;
+        event.component = "Canvas";
+        event.phase = "Image";
+        event.message = prompt.size() > 60 ? revia::utf8::Prefix(prompt, 60) + "..." : prompt;
+        event.resource = actions::PathToUtf8(generated.path);
+        turn.Then(TurnEvent::Published(std::move(event)));
+    }
 
     trace << "\nSaved to " << actions::PathToUtf8(generated.path)
-        << " and published to the Canvas tab. Took "
-        << static_cast<long long>(generated.elapsedMilliseconds / 1000.0) << "s.";
+          << (publishToCanvas ? " and published to the Canvas tab. Took " : ". Took ")
+          << static_cast<long long>(generated.elapsedMilliseconds / 1000.0) << "s.";
     turn.result.succeeded = true;
     turn.result.reasoning = trace.str();
-    turn.result.text = "Pictured that - it's on the Canvas tab. " + generated.message;
+    turn.result.text = publishToCanvas ? "Pictured that - it's on the Canvas tab. " + generated.message : generated.message;
     turn.Then(TurnEvent::Progress("Image", "Ready", generated.detail, generated.elapsedMilliseconds));
     turn.Then(TurnEvent::Moved(RuntimeState::Idle));
     return turn;

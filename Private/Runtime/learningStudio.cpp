@@ -253,8 +253,9 @@ bool ReviaSession::ReviewLearning(const std::string& recordId, const learning::L
     finding.summary = learning::LearningReview::MemorySummary(record->candidate.lesson);
     finding.reason = "Verified candidate accepted by parent review.";
     finding.source = "reviewed_lesson:" + record->id;
+    finding.subject = {memory::MemorySubjectKind::Companion, origin.companionId};
     std::string memoryId;
-    const auto disposition = turnCoordinator.SubmitLearnedFinding(router, finding, 0, &memoryId);
+    const auto disposition = turnCoordinator.SubmitLearnedFinding(router, finding, 0, &memoryId, [this, origin] { return Admits(origin); });
     const bool saved = disposition != agents::LearnedFindingResult::Failed && !memoryId.empty();
     std::string recordError;
     if (!learningRecords->RecordAdmission(recordId, saved, memoryId, recordError))

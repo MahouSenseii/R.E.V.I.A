@@ -153,6 +153,24 @@ bool ActionRuntime::SetCameraAccess(const bool enabled, const bool autonomousCap
         "camera-access", outError);
 }
 
+bool ActionRuntime::SetProcessSettings(const process::ProcessSettings& settings, std::string& outError)
+{
+    return EditCapabilities([&](std::string& error) { return capabilityEditor.SetProcessSettings(capabilityConfigPath, settings, error); },
+        [](CapabilitySettings& current)
+        {
+            // Withdraw running command admission before waiting for a configuration reload.
+            current.process.enabled = false;
+        },
+        "process-access", outError);
+}
+
+bool ActionRuntime::SetInteractiveBrowser(const browser::BrowserSettings& settings, std::string& outError)
+{
+    return EditCapabilities([&](std::string& error)
+        { return capabilityEditor.SetInteractiveBrowser(capabilityConfigPath, settings, error); },
+        [](CapabilitySettings& current) { current.browser.enabled = false; }, "interactive-browser", outError);
+}
+
 bool ActionRuntime::SetDesktopControl(const bool pointer, const bool keyboard, const bool applicationLaunch, const bool rawCoordinates,
     const bool visualTargeting, const bool autonomous, const CapabilitySettings::DesktopControl::InputScope scope,
     const bool allowCommandSurfaces, std::string& outError)

@@ -21,6 +21,19 @@ struct promptSection
     bool stable = false;
 };
 
+struct promptFitReport
+{
+    bool available = false;
+    bool backendCounted = false;
+    std::size_t promptTokens = 0;
+    std::size_t contextTokens = 0;
+    std::size_t responseReserve = 0;
+    std::size_t templateReserve = 0;
+    std::size_t inputMessages = 0;
+    std::size_t retainedMessages = 0;
+    std::string reason;
+};
+
 struct responseOutput
 {
     bool bSuccess = false;
@@ -60,6 +73,7 @@ struct responseOutput
     std::uint32_t promptTokens = 0;
     std::uint32_t completionTokens = 0;
     bool bTokensReported = false;
+    promptFitReport contextFit;
 
     [[nodiscard]] std::uint32_t TotalTokens() const
     {

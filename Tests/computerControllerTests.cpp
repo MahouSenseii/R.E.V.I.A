@@ -241,6 +241,14 @@ void TestEveryDecisionMapsOntoTheRunnersVocabulary()
         const auto stuck = decide(kind, "beyond me");
         Check(!stuck.hasStep && !stuck.finished && stuck.reason == "beyond me",
             "A decision that was neither a step nor a completion was collapsed into one.");
+        if (kind == ComputerDecisionKind::NeedVision)
+            Check(stuck.recovery == revia::goals::NextStep::Recovery::NeedVision, "Vision recovery was lost at the controller boundary.");
+        if (kind == ComputerDecisionKind::Reobserve)
+            Check(stuck.recovery == revia::goals::NextStep::Recovery::Reobserve, "Reobserve recovery was lost at the controller boundary.");
+        if (kind == ComputerDecisionKind::WaitForState)
+            Check(stuck.recovery == revia::goals::NextStep::Recovery::WaitForState, "Wait recovery was lost at the controller boundary.");
+        if (kind == ComputerDecisionKind::NeedUser)
+            Check(stuck.needsInput, "A required user answer was lost at the controller boundary.");
     }
 }
 
@@ -344,6 +352,15 @@ void TestAFailedPlannerCallIsNotACompletion()
 
 void RunComputerControllerTests()
 {
+    ComputerTaskContext vision = MakeContext();
+    vision.observation.visualDescription = std::string(5000, 'v');
+    const auto visual = nlohmann::json::parse(FormatLegacyContext(vision));
+    Check(visual.at("observation").contains("untrusted_visual_description") &&
+        visual.at("observation").at("untrusted_visual_description").get<std::string>().size() <= 4096,
+        "An admitted vision recovery was omitted from planning or exceeded its bound.");
+    vision.observation.withheld = true;
+    Check(!nlohmann::json::parse(FormatLegacyContext(vision)).at("observation").contains("untrusted_visual_description"),
+        "A withheld observation leaked its visual description.");
     TestTheLegacyContextKeepsItsShape();
     TestAWithheldWindowIsNotAnEmptyScreen();
     TestTheFirstDecisionClaimsNoChange();

@@ -261,6 +261,28 @@ void TestAPossessiveFactIsSavedAndHerToneIsLeftOut()
     Check(misfiled.bSuccess && !misfiled.bShouldRemember &&
         misfiled.reason.find("wrong owner") != std::string::npos,
         "Revia's opinion was filed as the user's: " + misfiled.summary);
+    revia::memory::MemoryScope scope;
+    scope.companionId = "fixture-companion";
+    scope.participantId = "local:alice";
+    scope.audience = {revia::identity::AudienceKind::Private, "local-private", 1, {"local:alice"}};
+    scope.participantSource = revia::identity::SpeakerSource::ExplicitIntroduction;
+    {
+        std::lock_guard lock(mutex);
+        answer = R"({"shouldRemember":true,"category":"preference","subject":"speaker","entityId":"local:bob",)"
+                 R"("summary":"The user prefers mint tea.","reason":"Standing preference."})";
+    }
+    const auto attributed = service.EvaluateMemory("I prefer mint tea.", "Understood.", ResponseProvenance::NormalGeneration, {}, scope);
+    Check(attributed.bShouldRemember && attributed.subject == revia::memory::ParticipantSubject(scope),
+        "Classifier accepted a provider identity instead of the captured participant.");
+    {
+        std::lock_guard lock(mutex);
+        answer = R"({"shouldRemember":true,"category":"relationship","subject":"other",)"
+                 R"("summary":"The user's friend prefers mint tea.","reason":"Third-party preference."})";
+    }
+    const auto thirdParty =
+        service.EvaluateMemory("My friend prefers mint tea.", "Understood.", ResponseProvenance::NormalGeneration, {}, scope);
+    Check(thirdParty.bShouldRemember && thirdParty.subject.kind == revia::memory::MemorySubjectKind::Unattributed,
+        "Third-party claim was silently assigned to the speaker.");
     server.stop();
 }
 

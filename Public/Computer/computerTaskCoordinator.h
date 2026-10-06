@@ -80,6 +80,12 @@ public:
     // failure, because a routine policy with nothing bounded to work toward should not
     // be deciding anything.
     void SetSubgoalPlanner(SubgoalPlannerCall planner);
+    void SetScopeResolver(std::function<actions::CapabilitySettings(const goals::Goal&)> resolver);
+    void SetObservationEnricher(std::function<void(ComputerTaskContext&, std::stop_token)> enricher);
+
+    // The session supplies a fresh admitted observation; the existing content gate reads back the draft.
+    [[nodiscard]] goals::CompletionEvidence VerifyCompletion(const goals::Goal& goal,
+        const ComputerObservation& observation, std::stop_token stopToken);
 
     // Applied at a task boundary. Mid-run the providers would change under a goal that
     // had already been approved on the strength of how it was going to be decided.
@@ -166,6 +172,8 @@ private:
     std::filesystem::path defaultDatasetRoot;
 
     SubgoalPlannerCall subgoalPlanner;
+    std::function<actions::CapabilitySettings(const goals::Goal&)> scopeResolver;
+    std::function<void(ComputerTaskContext&, std::stop_token)> observationEnricher;
     computerControlSettings configured;
 
     std::string activeGoalId;

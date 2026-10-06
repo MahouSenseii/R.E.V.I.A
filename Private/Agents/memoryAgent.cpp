@@ -354,7 +354,7 @@ void MemoryAgent::Submit(const messageRouter& router, std::string input, std::st
 }
 
 void MemoryAgent::Submit(const messageRouter& router, std::string input, std::string assistantResponse, const ResponseProvenance provenance,
-    const std::uint64_t turnId, std::function<bool()> contextAdmission)
+    const std::uint64_t turnId, std::function<bool()> contextAdmission, const memory::MemoryScope& scope)
 {
     if (input.empty() || worker.get_stop_token().stop_requested())
     {
@@ -371,6 +371,7 @@ void MemoryAgent::Submit(const messageRouter& router, std::string input, std::st
     task.input = std::move(input);
     task.assistantResponse = std::move(assistantResponse);
     task.provenance = provenance;
+    task.scope = scope;
     task.turnId = turnId;
     (void)Enqueue(MemoryTaskClass::InteractiveTurn, std::move(task));
     Report("[MemoryAgent] queued | type=turn | depth=" +
@@ -382,8 +383,8 @@ LearnedFindingResult MemoryAgent::SubmitLearnedFinding(const messageRouter& rout
     return SubmitLearnedFinding(router, std::move(decision), turnId, nullptr);
 }
 
-LearnedFindingResult MemoryAgent::SubmitLearnedFinding(const messageRouter& router, memoryDecision decision,
-    const std::uint64_t turnId, std::string* outMemoryId)
+LearnedFindingResult MemoryAgent::SubmitLearnedFinding(const messageRouter& router, memoryDecision decision, const std::uint64_t turnId,
+    std::string* outMemoryId, std::function<bool()> contextAdmission)
 {
     if (outMemoryId)
         outMemoryId->clear();
@@ -393,7 +394,9 @@ LearnedFindingResult MemoryAgent::SubmitLearnedFinding(const messageRouter& rout
         return LearnedFindingResult::Failed;
     }
 
-    const auto guard = CaptureAdmission();
+    const auto sessionAdmission = CaptureAdmission();
+    const auto guard = [sessionAdmission, contextAdmission = std::move(contextAdmission)]
+    { return Admitted(sessionAdmission) && Admitted(contextAdmission); };
     if (!Admitted(guard)) return LearnedFindingResult::Failed;
 
     // Acceptance is a database boundary, not a queue boundary. This is the same
@@ -403,7 +406,7 @@ LearnedFindingResult MemoryAgent::SubmitLearnedFinding(const messageRouter& rout
     bool wasAdded = false;
     std::string memoryId;
     const auto saveStarted = std::chrono::steady_clock::now();
-    if (!Admitted(guard) || !memory.SaveAutomaticMemory(decision, wasAdded, &memoryId))
+    if (!Admitted(guard) || !memory.SaveAutomaticMemory(decision, wasAdded, &memoryId, guard))
     {
         Report("[MemoryAgent] acceptance | type=learning | result=save_failed");
         return LearnedFindingResult::Failed;
@@ -843,9 +846,8 @@ void MemoryAgent::Run(const std::stop_token stopToken)
                 evaluator = evaluateOverride;
             }
             event.decision = evaluator
-                ? evaluator(task.input, task.assistantResponse)
-                : task.router->EvaluateMemory(
-                    task.input, task.assistantResponse, task.provenance, stopToken);
+                                 ? evaluator(task.input, task.assistantResponse)
+                                 : task.router->EvaluateMemory(task.input, task.assistantResponse, task.provenance, stopToken, task.scope);
         }
         if (stopToken.stop_requested() || !Admitted(task.admission))
         {
@@ -881,9 +883,16 @@ void MemoryAgent::Run(const std::stop_token stopToken)
 
         if (!task.hasLearnedDecision && event.decision.bSuccess && event.decision.bShouldRemember)
         {
+            if (event.decision.subject.kind == memory::MemorySubjectKind::Participant)
+                event.decision.subject = memory::ParticipantSubject(task.scope);
+            else if (event.decision.subject.kind == memory::MemorySubjectKind::Companion)
+                event.decision.subject = MayExpressOwnOpinion(task.provenance) && event.decision.category.starts_with("self_") &&
+                                                 memory::IsAttributedPrivateScope(task.scope)
+                                             ? memory::MemorySubject{memory::MemorySubjectKind::Companion, task.scope.companionId}
+                                             : memory::MemorySubject{};
             const auto saveStarted = std::chrono::steady_clock::now();
             if (!Admitted(task.admission)) continue;
-            event.saveSucceeded = memory.SaveAutomaticMemory(event.decision, event.wasAdded);
+            event.saveSucceeded = memory.SaveAutomaticMemory(event.decision, event.wasAdded, nullptr, task.admission);
             event.decision.timings.push_back({
                 "memory_db_save",
                 std::chrono::duration<double, std::milli>(

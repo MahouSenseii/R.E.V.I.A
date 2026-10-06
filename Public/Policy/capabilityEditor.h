@@ -29,6 +29,9 @@ public:
     // cannot outlive the authority it is a subset of.
     [[nodiscard]] bool SetCameraAccess(const std::filesystem::path& path,
         bool enabled, bool autonomousCapture, std::string& outError) const;
+    [[nodiscard]] bool SetInteractiveBrowser(const std::filesystem::path& path, const browser::BrowserSettings& settings, std::string& outError) const;
+    [[nodiscard]] bool SetProcessSettings(const std::filesystem::path& path, const process::ProcessSettings& settings,
+        std::string& outError) const;
     // Withdrawing pointer control withdraws raw coordinates with it, and withdrawing
     // every hand withdraws autonomy, for the same reason the camera works that way:
     // a subset authority must not survive the authority it is a subset of and quietly

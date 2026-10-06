@@ -35,6 +35,53 @@ computer activity methods. `sessionSpeech.cpp` adapts speech events to session
 coordination, diagnostics, and runtime events. All three implement the existing
 `ReviaSession` class; startup only wires the speech callback.
 
+## Continuity, admitted tools and generated art
+
+`conversationContext` retains recent messages and bounded source-linked continuity
+notes. The llama.cpp owner measures the loaded chat template and tokenizer when
+available, retains conservative fitting on failure and reports context-fit
+telemetry. `ConversationRuntime` remembers the tier that actually delivered the
+reply. Retrieval uses the admitted current topic when a follow-up has little
+independent meaning.
+
+`MemoryScope` captures companion, participant, audience and consent provenance.
+Structured facts carry a Participant, Companion or Unattributed subject. SQL
+filters automatic retrieval and archive restoration before applying limits;
+legacy unattributed facts remain in the owner inventory without being silently
+assigned to a person. A private named introduction permits compatible restart
+restoration. Queued writes retain admission, and changing participants clears
+private in-memory continuity. Corrections preserve subject identity and receipts.
+
+`Process` owns Windows process trees, bounded output and cancellation. Typed
+`execute_process` and content-digest-guarded `write_text_file` proposals reuse
+ActionRuntime, current/captured authority and audit. Explicit task delegation
+can cover bounded process operations; it does not expand approved executables,
+roots or budgets. A process working directory cannot prevent that executable
+from accessing other host resources.
+
+`BrowserSession` owns a separate private Edge profile through inherited pipes.
+The interactive worker accepts fixed operations and host-issued element IDs,
+checks origin and generation, and invalidates uncertain effects. Permission
+changes stop the existing session. The older public research worker retains its
+original read-only contract.
+
+`sessionOperator` supplies fresh UI Automation and requested screenshot analysis
+to the existing Computer/Goals loop. Captures retain window identity and bounds
+and are discarded after analysis. Recovery performs wait/reobserve/vision work;
+completion needs an independent acceptance result. Currently native whole-task
+acceptance proves exact supplied content placed in its requested application or
+read back from a unique named browser field on the originally requested origin;
+unsupported completion criteria remain unresolved rather than inheriting success
+from one successful action.
+
+`ImageGenerator` owns cancellable local Diffusers jobs and resource lifetime.
+`GenerateImage` passes the same authority/audit path as other tools; verified
+native decoding, dimensions, owned path and content identity precede Canvas
+publication. Natural picture requests and autonomous art nominations share it.
+Diagrams retain the structured renderer. See [image setup and evidence](IMAGE_GENERATION.md)
+and [guest preparation limits](GUEST_ENVIRONMENT.md). Artifact validity does not
+certify visual quality, VM readiness or game competence.
+
 ## Desktop navigation
 
 `Desktop/tabNavigation` groups the existing Qt pages and selects their complete
@@ -507,6 +554,8 @@ and `/perception` status state this boundary explicitly.
 | `Policy` | Load capability settings, normalize paths, calculate risk and verdict | Prompting the LLM or changing files |
 | `Actions` | Define action/result types, coordinate evaluation and dispatch | Action-specific Windows behavior |
 | `Filesystem` | Perform the supported file operation using the policy-resolved paths | Expanding scope or bypassing confirmation |
+| `Process` | Launch typed executable/argument requests, capture bounded output and own cancellable child-process trees | Granting executable authority or treating the working directory as isolation |
+| `Browser` | Own the interactive browser's private profile, worker lifetime and generation-bound observation receipts | Granting origins, exposing raw scripts/selectors, or replacing the research worker |
 | `Windows` | Resolve vision regions to typed UIA identities, inspect or interact through control patterns, and synthesize pointer/keyboard input into a verified approved foreground window | Shell execution, app-scope decisions, input to an unverified window, or acting without an emergency stop |
 | `Internet` | Decide when an enabled lookup is useful and query fixed approved HTTPS knowledge endpoints | General sockets, arbitrary URL fetching, or permission changes |
 | `Speech` | Own SAPI/Qwen3-TTS output, persistent voice presets and profile assignments, WinMM capture, whisper.cpp transcription, queues, and cancellation | Conversation policy or widget rendering |
@@ -871,15 +920,15 @@ capability authority.
 
 ## Non-negotiable invariants
 
-1. Model text never becomes a shell command.
+1. Model output cannot execute itself. Typed process proposals pass ActionRuntime, captured and current policy, executable grants and native execution. Interpreters require a separate explicit grant; a working directory is not a sandbox.
 2. Source and destination must both remain within an approved root.
 3. Synthesized pointer and keyboard input is a separate opt-in capability with two scopes, and the scope decides what containment means. Under `approved_applications` an action names an executable in the allowlist, input is confined to a verified foreground window of that executable, and Windows-key and application-switching chords are refused. Under `whole_desktop` the owner has deliberately removed that confinement so a general pointer and keyboard skill can exist; what remains is the explicit grant, the command-surface refusal, the input budget, the audit trail, and the emergency stop. The second scope is not a weaker version of the first — it is the owner choosing a different trade, and it is off until they do.
-3a. Command interpreters, script hosts, and the chords that summon them are refused in both scopes unless `allowCommandSurfaces` is set. This is the surviving form of "model text never becomes a shell command": it is enforced by executable name at the point of injection and by chord before it, not by the application allowlist.
+3a. Desktop command interpreters, script hosts, and the chords that summon them are refused in both input scopes unless `allowCommandSurfaces` is set. This input grant does not grant the separate typed process capability.
 4. A dry run must not mutate state.
 5. Blocked or unconfirmed actions never reach an executor.
 6. Unknown configuration values fail closed.
 7. Every dispatched or rejected action is auditable.
 8. Screen capture is opt-in, local, short-lived, and visibly reported.
 9. New capabilities start disabled or supervised and earn unattended access through tests and explicit configuration.
-10. Internet grounding never exposes a general socket, raw browser API, selector, script, or model-selected URL; the visible worker accepts only a bounded query and enforces public read-only navigation.
+10. Internet grounding retains its bounded public read-only query contract. Interactive browsing is a separate disabled-by-default capability: exact approved origins, typed navigation/observation/click/fill, private worker ownership and current generation targets. It never exposes a raw browser API, script or selector to the planner.
 11. Desktop operation has a deterministic stop that does not depend on model inference, and an executor without one refuses to act.

@@ -8,7 +8,9 @@
 
 class QLabel;
 class QComboBox;
+class QFrame;
 class QLineEdit;
+class QPlainTextEdit;
 class QPushButton;
 class QTableWidget;
 class QTreeWidget;
@@ -39,7 +41,11 @@ private:
     void RemoveSelectedPermission();
     void ApplyInternetSettings();
     void ApplyBrowserSettings();
+    QFrame* CreateInteractiveBrowserCard();
+    void RefreshInteractiveBrowserSettings(const revia::actions::CapabilitySettings& settings);
+    void ApplyInteractiveBrowserSettings();
     void ApplyCameraSettings();
+    void ApplyProcessSettings();
     void ApplyDesktopControlSettings();
     void ToggleDesktopStop();
 
@@ -56,6 +62,20 @@ private:
     ToggleSwitch* autonomousResearchCheck = nullptr;
     ToggleSwitch* cameraCheck = nullptr;
     ToggleSwitch* autonomousCameraCheck = nullptr;
+    ToggleSwitch* processCheck = nullptr;
+    ToggleSwitch* taskProcessCheck = nullptr;
+    ToggleSwitch* commandInterpreterCheck = nullptr;
+    QPlainTextEdit* approvedExecutablesEdit = nullptr;
+    QLabel* processStatusLabel = nullptr;
+    QPushButton* applyProcessButton = nullptr;
+    ToggleSwitch* interactiveBrowserCheck = nullptr;
+    ToggleSwitch* browserNavigateCheck = nullptr;
+    ToggleSwitch* browserInteractCheck = nullptr;
+    ToggleSwitch* taskBrowserCheck = nullptr;
+    ToggleSwitch* browserLoopbackCheck = nullptr;
+    QPlainTextEdit* approvedOriginsEdit = nullptr;
+    QLabel* browserStatusLabel = nullptr;
+    QPushButton* applyInteractiveBrowserButton = nullptr;
     ToggleSwitch* pointerCheck = nullptr;
     ToggleSwitch* keyboardCheck = nullptr;
     ToggleSwitch* launchCheck = nullptr;
@@ -67,5 +87,7 @@ private:
     QPushButton* desktopStopButton = nullptr;
     QPushButton* approveDiscoveredButton = nullptr;
     bool refreshing = false;
+    bool processSettingsDirty = false;
+    bool browserSettingsDirty = false;
     std::string discoveredApplication;
 };

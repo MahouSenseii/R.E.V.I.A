@@ -5,6 +5,7 @@
 #include "LLM/endpointSettings.h"
 #include "LLM/responseTypes.h"
 #include "Memory/memoryTypes.h"
+#include "Memory/memoryScope.h"
 #include "testSupport.h"
 #include "promptLayoutTestSupport.h"
 #include "Runtime/conversationRuntime.h"
@@ -176,39 +177,66 @@ json History(const conversationContext& context)
 struct Fixture
 {
     explicit Fixture(int port)
-        : runtime(router, context, coordinator, speech, affect, emotions, events, log,
-            [this](RuntimeState state, const std::string&)
-            {
-                if (cancelAtDelivery && state == RuntimeState::Responding) cancellation.request_stop();
-            }, [](const AffectSnapshot&) {},
-            []
-            {
-                actions::CapabilitySettings::InternetAccess access;
-                access.enabled = access.automaticLookup = access.autonomousResearch = true;
-                return access;
-            },
-            // Hands on, so this fixture keeps measuring what it was written to measure
-            // and does not start tripping the no-permission grounding rule.
-            []
-            {
-                actions::CapabilitySettings::DesktopControl hands;
-                hands.pointer = hands.keyboard = hands.applicationLaunch = true;
-                return hands;
-            },
-            [this](const std::string&, const std::string&)
-            { ++lookups; return actions::ActionOutcome{}; },
-            [] { responseFilterSettings filters; filters.bAiReviewEnabled = false; return filters; },
-            [this] { ++cachedReads; return std::string("PRIVATE_SCREEN_SENTINEL: cached local observation."); },
-            [this] { return person; }, [this] { return development; },
-            [this](const emotion::Stimulus& stimulus)
-            {
-                if (stimulus.eventType != "reply_delivered" && stimulus.eventType != "reply_failed") ++inputAppraisals;
-            },
-            [this] { ++captures; return std::string("UNEXPECTED_CAPTURE"); },
-            [this] { return preferences; },
-            [this] { ++inquiries; return agents::SelfInquiryLimits{}; },
-            [this](const memory::RecallRequest&, const std::string&)
-            { ++recalls; return std::string("UNEXPECTED_ARCHIVE_READ"); })
+        : runtime(
+              router, context, coordinator, speech, affect, emotions, events, log,
+              [this](RuntimeState state, const std::string&)
+              {
+                  if (cancelAtDelivery && state == RuntimeState::Responding)
+                      cancellation.request_stop();
+              },
+              [](const AffectSnapshot&) {},
+              []
+              {
+                  actions::CapabilitySettings::InternetAccess access;
+                  access.enabled = access.automaticLookup = access.autonomousResearch = true;
+                  return access;
+              },
+              // Hands on, so this fixture keeps measuring what it was written to measure
+              // and does not start tripping the no-permission grounding rule.
+              []
+              {
+                  actions::CapabilitySettings::DesktopControl hands;
+                  hands.pointer = hands.keyboard = hands.applicationLaunch = true;
+                  return hands;
+              },
+              [this](const std::string&, const std::string&)
+              {
+                  ++lookups;
+                  return actions::ActionOutcome{};
+              },
+              []
+              {
+                  responseFilterSettings filters;
+                  filters.bAiReviewEnabled = false;
+                  return filters;
+              },
+              [this]
+              {
+                  ++cachedReads;
+                  return std::string("PRIVATE_SCREEN_SENTINEL: cached local observation.");
+              },
+              [this] { return person; }, [this] { return development; },
+              [this](const emotion::Stimulus& stimulus)
+              {
+                  if (stimulus.eventType != "reply_delivered" && stimulus.eventType != "reply_failed")
+                      ++inputAppraisals;
+              },
+              [this]
+              {
+                  ++captures;
+                  return std::string("UNEXPECTED_CAPTURE");
+              },
+              [this] { return preferences; },
+              [this]
+              {
+                  ++inquiries;
+                  return agents::SelfInquiryLimits{};
+              },
+              [this](const memory::RecallRequest&, const std::string&, const memory::MemoryScope&)
+              {
+                  ++recalls;
+                  return std::string("UNEXPECTED_ARCHIVE_READ");
+              })
     {
         profile.id = "proactive-fixture";
         profile.displayName = "Revia";
@@ -284,6 +312,7 @@ void TestProactiveGenerationAndPublicBoundary()
     privateMemory.bSuccess = privateMemory.bShouldRemember = true;
     privateMemory.category = "project";
     privateMemory.source = "conversation";
+    privateMemory.subject = {memory::MemorySubjectKind::Participant, "local:quentin"};
     privateMemory.summary = "Maple leaf drawing PRIVATE_MEMORY_SENTINEL is a private botanical project.";
     bool added = false;
     longTermMemory stored;
@@ -358,7 +387,9 @@ void TestProactiveGenerationAndPublicBoundary()
     const auto fast = MetadataSettings(backend.port, "metadata-fast");
     const auto expert = MetadataSettings(backend.port, "metadata-expert");
     fixture.router.ApplyLLMSettings(main, fast, expert, MetadataEmbeddings(backend.port, true), fixture.profile, true, true);
-    const std::vector<conversationMessage> question{{"user", "Describe a maple leaf."}};
+    const memory::MemoryScope privateScope{"local:quentin", {identity::AudienceKind::Private, "local:private", 1, {}},
+        identity::SpeakerSource::ExplicitIntroduction, 0, "proactive-fixture"};
+    const std::vector<conversationMessage> question{{"user", "Describe a maple leaf.", "local:quentin", privateScope}};
     struct ExpectedRoute
     {
         intelligence::IntelligenceTier tier;

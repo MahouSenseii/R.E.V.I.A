@@ -37,11 +37,13 @@ public:
     static void ConfigureCache(int cacheMiB, int mmapMiB);
 
     std::vector<memoryEntry> Load() const;
+    std::vector<memoryEntry> LoadScoped(const revia::memory::MemoryScope& scope, std::size_t maxEntries = 12) const;
     // Returns the new or deduplicated row id when requested, so optional work
     // can address the accepted memory without saving its content a second time.
     // Duplicates retain their stored summary; an incoming vector is accepted only
     // for identical text. Deferred embedding work must use the stored summary.
-    bool Save(const memoryDecision& decision, bool& outWasAdded, std::string* outMemoryId = nullptr) const;
+    bool Save(
+        const memoryDecision& decision, bool& outWasAdded, std::string* outMemoryId = nullptr, std::function<bool()> admission = {}) const;
     bool SaveOwnerRevision(const revia::memory::MemoryRevisionRequest& request, revia::memory::MemoryRevisionReceipt& outReceipt,
         std::string& outError, std::function<bool()> admission = {}) const;
     [[nodiscard]] std::vector<revia::memory::MemoryRevisionReceipt> RevisionHistory() const;
@@ -49,9 +51,9 @@ public:
     // Time references add a created_at-index candidate list without filtering out other rankings.
     // nowEpoch selects the resolution clock; zero uses the system clock.
     std::vector<memoryEntry> Search(const std::string& query, std::size_t maxEntries = 6, const std::vector<float>& queryEmbedding = {},
-        const std::string& embeddingModel = "", std::int64_t nowEpoch = 0) const;
+        const std::string& embeddingModel = "", std::int64_t nowEpoch = 0, const revia::memory::MemoryScope* scope = nullptr) const;
     std::string BuildPromptBlock(const std::string& query = "", std::size_t maxEntries = 6, const std::vector<float>& queryEmbedding = {},
-        const std::string& embeddingModel = "", std::int64_t nowEpoch = 0) const;
+        const std::string& embeddingModel = "", std::int64_t nowEpoch = 0, const revia::memory::MemoryScope* scope = nullptr) const;
     std::vector<memoryEntry> LoadMissingEmbeddings(const std::string& embeddingModel, std::size_t maxEntries = 25) const;
     // Row-id traversal moves past failed rows without an offset into a shrinking
     // result set. Restarting a scan at zero rediscovers failures and newly added rows.

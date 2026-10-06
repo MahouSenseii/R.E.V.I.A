@@ -399,11 +399,23 @@ goals::NextStep ComputerController::Decide(const ComputerTaskContext& context, s
         // Everything below is a real answer that is neither a step nor a completion.
         // The runner records it as Undecided, which is honest: nothing went wrong and
         // nothing finished.
-        case ComputerDecisionKind::NeedReasoning:
         case ComputerDecisionKind::NeedVision:
+            next.recovery = goals::NextStep::Recovery::NeedVision;
+            next.reason = chosen.detail;
+            break;
         case ComputerDecisionKind::NeedUser:
+            next.needsInput = true;
+            next.reason = chosen.detail;
+            break;
         case ComputerDecisionKind::WaitForState:
+            next.recovery = goals::NextStep::Recovery::WaitForState;
+            next.reason = chosen.detail;
+            break;
         case ComputerDecisionKind::Reobserve:
+            next.recovery = goals::NextStep::Recovery::Reobserve;
+            next.reason = chosen.detail;
+            break;
+        case ComputerDecisionKind::NeedReasoning:
         case ComputerDecisionKind::CannotHandle:
         default:
             next.reason = chosen.detail.empty()

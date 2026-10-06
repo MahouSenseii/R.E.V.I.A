@@ -1122,9 +1122,13 @@ bool configManager::LoadSettings(appSettings& outSettings) const
             text("outputPath", outSettings.image.outputPath);
             text("host", outSettings.image.host);
             text("model", outSettings.image.model);
+            text("variant", outSettings.image.variant);
             text("device", outSettings.image.device);
             number("port", outSettings.image.port);
             number("minimumFreeVramMiB", outSettings.image.minimumFreeVramMiB);
+            number("gpuReserveMiB", outSettings.image.gpuReserveMiB);
+            number("cpuThreads", outSettings.image.cpuThreads);
+            number("seed", outSettings.image.seed);
             number("steps", outSettings.image.steps);
             number("width", outSettings.image.width);
             number("height", outSettings.image.height);
@@ -1138,6 +1142,8 @@ bool configManager::LoadSettings(appSettings& outSettings) const
             {
                 outSettings.image.bShutdownOnExit = imageData["shutdownOnExit"].get<bool>();
             }
+            if (imageData.contains("keepLoaded")) outSettings.image.bKeepLoaded = imageData["keepLoaded"].get<bool>();
+            if (imageData.contains("offline")) outSettings.image.bOffline = imageData["offline"].get<bool>();
         }
         if (data.contains("conversation"))
         {
@@ -1450,6 +1456,10 @@ bool configManager::LoadSettings(appSettings& outSettings) const
         outSettings.image.steps < 1 || outSettings.image.steps > 100 ||
         outSettings.image.width < 256 || outSettings.image.width > 1024 ||
         outSettings.image.height < 256 || outSettings.image.height > 1024 ||
+        outSettings.image.minimumFreeVramMiB < 0 || outSettings.image.minimumFreeVramMiB > 131072 ||
+        outSettings.image.gpuReserveMiB < 0 || outSettings.image.gpuReserveMiB > 131072 ||
+        outSettings.image.cpuThreads < 1 || outSettings.image.cpuThreads > 256 ||
+        outSettings.image.seed < -1 ||
         outSettings.image.host.empty() || outSettings.image.model.empty() ||
         !IsDeviceSelector(outSettings.image.device, true) ||
         outSettings.resources.chat.empty() ||

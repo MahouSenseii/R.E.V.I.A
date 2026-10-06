@@ -1,13 +1,15 @@
 #pragma once
 
+#include "Actions/actionRuntime.h"
 #include "Content/workingDocument.h"
 #include "Core/logger.h"
 #include "Core/messageRouter.h"
 #include "Runtime/turnContext.h"
 #include "Visual/svgCanvas.h"
-#include "Visual/imageGenerator.h"
 
 #include <filesystem>
+#include <functional>
+#include <stop_token>
 #include <string>
 #include <vector>
 
@@ -25,7 +27,7 @@ public:
         std::string mediaPath;
     };
 
-    DocumentWorkshop(messageRouter& router, visual::ImageGenerator& imageGenerator, visual::DiagramStore& diagramStore, logger& log);
+    DocumentWorkshop(messageRouter& router, actions::ActionRuntime& actionRuntime, visual::DiagramStore& diagramStore, logger& log);
 
     DocumentWorkshop(const DocumentWorkshop&) = delete;
     DocumentWorkshop& operator=(const DocumentWorkshop&) = delete;
@@ -37,13 +39,14 @@ public:
 
     [[nodiscard]] TurnOutcome ComposeDocument(const std::string& request);
     [[nodiscard]] TurnOutcome ReviseDocumentBlock(const std::string& reference, const std::string& instruction);
-    [[nodiscard]] TurnOutcome GenerateImage(const std::string& prompt);
+    [[nodiscard]] TurnOutcome GenerateImage(const std::string& prompt, std::stop_token stopToken = {}, std::function<bool()> admission = {},
+        const RuntimeStamp& stamp = {}, bool publishToCanvas = true, std::string requestedBy = "user");
     [[nodiscard]] TurnOutcome ShowPicture(const std::string& path, const PictureScope& scope);
     [[nodiscard]] TurnOutcome DrawDiagram(const std::string& request);
 
-private:
+  private:
     messageRouter& router;
-    visual::ImageGenerator& imageGenerator;
+    actions::ActionRuntime& actionRuntime;
     visual::DiagramStore& diagramStore;
     logger& log;
     content::WorkingDocument document;

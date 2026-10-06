@@ -1,4 +1,5 @@
 #include "Computer/contentGate.h"
+#include "Computer/taskAcceptance.h"
 #include "Core/utf8.h"
 #include "Policy/desktopAuthorization.h"
 
@@ -207,9 +208,73 @@ ContentGate::DestinationVerdict ContentGate::CheckDestination(const std::string&
     return matches ? DestinationVerdict::Matches : DestinationVerdict::Mismatch;
 }
 
+ContentDecision ContentGate::ApplyBrowser(goals::GoalStep& step, const ComputerTaskContext& context)
+{
+    ContentDecision decision;
+    auto& request = step.action.browser;
+    if (!task.Any())
+    {
+        if (request.value == PreparedContentToken)
+        {
+            decision.allowed = false;
+            decision.needsInput = true;
+            decision.outcome = ContentOutcome::MissingPayload;
+            decision.detail = "The browser step requested prepared content that this task does not hold.";
+        }
+        return decision;
+    }
+    std::string refusal = "A current admitted browser observation is required before placing prepared content.";
+    const auto* field = context.observation.browser ? MatchOriginalBrowserField(task, *context.observation.browser, refusal) : nullptr;
+    if (!field || field->id != request.element || context.observation.browser->session != request.session ||
+        context.observation.browser->generation != request.generation || context.observation.browser->url != request.url)
+    {
+        ++stats.wrongDestinations;
+        decision.allowed = false;
+        decision.outcome = ContentOutcome::WrongDestination;
+        decision.detail = refusal.empty() ? "The browser step does not identify the freshly observed original field." : refusal;
+        return decision;
+    }
+    const auto value = vault && held.Valid() ? vault->Redeem(held) : std::nullopt;
+    if (!value || value->size() > context.scope.browser.maxValueBytes)
+    {
+        ++stats.missingPayloads;
+        decision.allowed = false;
+        decision.needsInput = true;
+        decision.outcome = ContentOutcome::MissingPayload;
+        decision.detail = "The exact prepared value is unavailable or exceeds the admitted browser input bound.";
+        return decision;
+    }
+    if (!request.value.empty() && request.value != PreparedContentToken && request.value != *value)
+    {
+        ++stats.inventions;
+        decision.outcome = ContentOutcome::InventedText;
+        decision.attempted = Excerpt(request.value);
+        decision.detail = "The browser step proposed replacement text; the exact prepared content was supplied instead.";
+    }
+    else
+    {
+        ++stats.supplied;
+        decision.outcome = ContentOutcome::Supplied;
+    }
+    request.value = *value;
+    step.expected = request.element + " holds the prepared content";
+    step.check.type = actions::ActionType::BrowserObserve;
+    step.check.browser = {};
+    step.check.browser.url = request.url;
+    return decision;
+}
+
 ContentDecision ContentGate::Apply(goals::GoalStep& step, const ComputerTaskContext& context)
 {
     ContentDecision decision;
+    if (step.action.type == actions::ActionType::BrowserFill) return ApplyBrowser(step, context);
+    if (step.action.type == actions::ActionType::BrowserClick && task.Any())
+    {
+        decision.allowed = false;
+        decision.outcome = ContentOutcome::StaleDraft;
+        decision.detail = "Browser submission has no independent recipient or commit verification; this content task remains unresolved.";
+        return decision;
+    }
     if (!EntersText(step.action.type))
     {
         if (!task.Any()) return decision;

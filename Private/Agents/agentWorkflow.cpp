@@ -246,7 +246,8 @@ bool AgentWorkflow::Validate(const WorkflowSpec& spec, std::string& error)
     if (budget.maximumParallel == 0 || budget.maximumParallel > 2 || budget.maximumAttemptsPerNode == 0 ||
         budget.maximumAttemptsPerNode > 4 || budget.maximumRequests == 0 || budget.maximumRequests > 32 ||
         budget.maximumActiveMilliseconds == 0 || budget.maximumActiveMilliseconds > 3600000 || budget.maximumReportedTokens == 0 ||
-        budget.maximumReportedTokens > 1000000)
+        budget.maximumReportedTokens > 1000000 || budget.maximumProviderCalls == 0 || budget.maximumProviderCalls > 128 ||
+        budget.maximumToolCalls > 64 || budget.maximumToolOutputBytes > 1048576)
         return fail("Workflow budgets must be positive and within hard bounds.");
     std::map<std::string, const WorkflowNode*> nodes;
     const WorkflowNode* parent = nullptr;
@@ -258,8 +259,8 @@ bool AgentWorkflow::Validate(const WorkflowSpec& spec, std::string& error)
             return false;
         if (!Identifier(node.id) || node.id.size() > 64 || !nodes.emplace(node.id, &node).second || node.label.empty() ||
             node.label.size() > 160 || node.objective.size() > MaximumMaterial || node.inputText.size() > MaximumMaterial ||
-            node.evidenceKey.size() > 256 || !node.readOnly)
-            return fail("Node identity/material must be bounded and providers must be read-only.");
+            node.evidenceKey.size() > 256 || (!node.readOnly && node.role != WorkflowRole::Worker))
+            return fail("Node identity/material must be bounded and only workers may request tools.");
         switch (node.role)
         {
         case WorkflowRole::Parent:
@@ -314,8 +315,14 @@ bool AgentWorkflow::Validate(const WorkflowSpec& spec, std::string& error)
         parent->dependsOn != std::vector<std::string>{reviewer->id})
         return fail("Both workers must feed the reviewer before separate parent acceptance.");
     for (const auto& id : workers)
-        if (!nodes.at(id)->dependsOn.empty())
-            return fail("The two bounded workers must be independent.");
+    {
+        const auto& node = *nodes.at(id);
+        if (node.dependsOn.empty())
+            continue;
+        if (node.readOnly || node.dependsOn.size() != 1 || !workers.contains(node.dependsOn.front()) ||
+            nodes.at(node.dependsOn.front())->readOnly || !nodes.at(node.dependsOn.front())->dependsOn.empty())
+            return fail("Only a tool worker may depend on the other independent tool worker.");
+    }
     error.clear();
     return true;
 }
@@ -474,6 +481,21 @@ struct AgentWorkflow::Impl
             total += node.view.activeMilliseconds + (node.view.state == WorkflowState::Running ? Milliseconds(node.changed) : 0);
         return total;
     }
+    Node* CurrentAttempt(const runtime::RuntimeStamp& stamp, const bool enforceBudget = true)
+    {
+        if (!running || !summary.stamp.SameSession(stamp) || stamp.taskId != spec.id || stamp.attemptId.empty() ||
+            (enforceBudget && (cancellation.stop_requested() || ActiveTime() >= spec.budget.maximumActiveMilliseconds ||
+                                  summary.reportedTokens >= spec.budget.maximumReportedTokens)))
+            return nullptr;
+        const auto found = std::find_if(nodes.begin(), nodes.end(),
+            [&](const auto& node)
+            {
+                return node.view.state == WorkflowState::Running && !node.history.empty() &&
+                       node.history.back().view.stamp.attemptId == stamp.attemptId &&
+                       node.history.back().view.stamp.policyVersion == stamp.policyVersion;
+            });
+        return found == nodes.end() ? nullptr : &*found;
+    }
     void Complete(const std::string& id, const std::uint64_t capturedEra, NodeResult result)
     {
         {
@@ -486,7 +508,8 @@ struct AgentWorkflow::Impl
             attempt.view.reportedTokens = result.reportedTokens;
             attempt.view.reportedModel = result.reportedModel && ReportedModel(*result.reportedModel) ? result.reportedModel : std::nullopt;
             if (result.reportedTokens && *result.reportedTokens <= 1000000000)
-                summary.reportedTokens += *result.reportedTokens;
+                summary.reportedTokens +=
+                    *result.reportedTokens > attempt.view.chargedTokens ? *result.reportedTokens - attempt.view.chargedTokens : 0;
             else
             {
                 ++summary.unreportedRequests;
@@ -638,13 +661,15 @@ struct AgentWorkflow::Impl
     {
         const auto snapshot = SnapshotLocked();
         const auto& budget = spec.budget;
-        Json value = {{"schema", 2}, {"id", spec.id}, {"stamp", StampJson(snapshot.stamp)}, {"state", snapshot.state},
+        Json value = {{"schema", 3}, {"id", spec.id}, {"stamp", StampJson(snapshot.stamp)}, {"state", snapshot.state},
             {"decision", snapshot.parentDecision}, {"sequence", snapshot.sequence}, {"requests", snapshot.requests},
             {"reportedTokens", snapshot.reportedTokens}, {"unreportedRequests", snapshot.unreportedRequests},
+            {"providerCalls", snapshot.providerCalls}, {"toolCalls", snapshot.toolCalls}, {"toolOutputBytes", snapshot.toolOutputBytes},
             {"parentEvaluation", parentEvaluation},
-            {"budget",
-                {{"parallel", budget.maximumParallel}, {"attempts", budget.maximumAttemptsPerNode}, {"requests", budget.maximumRequests},
-                    {"activeMilliseconds", budget.maximumActiveMilliseconds}, {"reportedTokens", budget.maximumReportedTokens}}},
+            {"budget", {{"parallel", budget.maximumParallel}, {"attempts", budget.maximumAttemptsPerNode},
+                           {"requests", budget.maximumRequests}, {"activeMilliseconds", budget.maximumActiveMilliseconds},
+                           {"reportedTokens", budget.maximumReportedTokens}, {"providerCalls", budget.maximumProviderCalls},
+                           {"toolCalls", budget.maximumToolCalls}, {"toolOutputBytes", budget.maximumToolOutputBytes}}},
             {"nodes", Json::array()}};
         for (std::size_t index = 0; index < nodes.size(); ++index)
         {
@@ -663,7 +688,9 @@ struct AgentWorkflow::Impl
                 Json item = {{"id", captured.id}, {"ordinal", captured.ordinal}, {"stamp", StampJson(captured.stamp)},
                     {"state", captured.state}, {"executed", captured.executionSucceeded}, {"verified", captured.verified},
                     {"activeMilliseconds", captured.activeMilliseconds}, {"fingerprint", attempt.fingerprint},
-                    {"diagnostic", attempt.privateDiagnostic}, {"prerequisites", Json::array()}};
+                    {"diagnostic", attempt.privateDiagnostic}, {"prerequisites", Json::array()}, {"providerCalls", captured.providerCalls},
+                    {"toolCalls", captured.toolCalls}, {"toolOutputBytes", captured.toolOutputBytes},
+                    {"chargedTokens", captured.chargedTokens}};
                 for (const auto& prerequisite : captured.prerequisites)
                     item["prerequisites"].push_back(ReferenceJson(prerequisite));
                 if (captured.reportedTokens)
@@ -721,12 +748,19 @@ struct AgentWorkflow::Impl
             view.executionSucceeded = item.at("executed");
             view.verified = item.at("verified");
             view.activeMilliseconds = item.at("activeMilliseconds");
+            view.providerCalls = item.value("providerCalls", 0U);
+            view.toolCalls = item.value("toolCalls", 0U);
+            view.toolOutputBytes = item.value("toolOutputBytes", std::uint64_t{0});
+            view.chargedTokens = item.value("chargedTokens", std::uint64_t{0});
             attempt.fingerprint = item.at("fingerprint");
             attempt.privateDiagnostic = item.at("diagnostic");
             if (!Identifier(view.id) || !attempts.insert(view.id).second || view.ordinal != node.history.size() + 1 ||
                 !StampValid(view.stamp, workflow) || view.stamp.companionId != companion || view.stamp.attemptId != view.id ||
                 !Digest(attempt.fingerprint) || attempt.privateDiagnostic.size() > 1024 ||
-                view.activeMilliseconds > node.view.activeMilliseconds ||
+                view.activeMilliseconds > node.view.activeMilliseconds || view.chargedTokens > 128000000000ULL ||
+                view.providerCalls > budget.maximumProviderCalls || view.toolCalls > budget.maximumToolCalls ||
+                view.toolOutputBytes > budget.maximumToolOutputBytes || (view.toolCalls == 0 && view.toolOutputBytes != 0) ||
+                (view.toolCalls != 0 && node.spec.readOnly) ||
                 (view.state != WorkflowState::Running && view.state != WorkflowState::Succeeded && view.state != WorkflowState::Failed &&
                     view.state != WorkflowState::Interrupted && view.state != WorkflowState::Cancelled))
                 throw std::runtime_error("attempt");
@@ -739,8 +773,8 @@ struct AgentWorkflow::Impl
                 view.reportedTokens = item.at("reportedTokens").get<std::uint64_t>();
                 if (*view.reportedTokens > 1000000000)
                     throw std::runtime_error("tokens");
-                reportedTokens += *view.reportedTokens;
             }
+            reportedTokens += std::max(view.reportedTokens.value_or(0), view.chargedTokens);
             if (item.contains("reportedModel"))
             {
                 view.reportedModel = item.at("reportedModel").get<std::string>();
@@ -763,7 +797,7 @@ struct AgentWorkflow::Impl
             {
                 view.state = WorkflowState::Interrupted;
                 ++unreported;
-                view.diagnostic = "The process ended during this attempt; explicit read-only resume is required.";
+                view.diagnostic = "The process ended during this attempt; explicit resume is required.";
             }
             else
                 view.diagnostic = view.verified ? "Execution and artifact verification completed; parent acceptance remains separate."
@@ -813,17 +847,30 @@ struct AgentWorkflow::Impl
         summary.requests = value.at("requests");
         summary.reportedTokens = value.at("reportedTokens");
         summary.unreportedRequests = value.at("unreportedRequests");
+        summary.providerCalls = value.value("providerCalls", 0U);
+        summary.toolCalls = value.value("toolCalls", 0U);
+        summary.toolOutputBytes = value.value("toolOutputBytes", std::uint64_t{0});
         const bool parentEvaluation = value.at("parentEvaluation");
         const auto& budget = value.at("budget");
         spec.budget = {budget.at("parallel"), budget.at("attempts"), budget.at("requests"), budget.at("activeMilliseconds"),
             budget.at("reportedTokens")};
+        spec.budget.maximumProviderCalls = budget.value("providerCalls", 32U);
+        spec.budget.maximumToolCalls = budget.value("toolCalls", 16U);
+        spec.budget.maximumToolOutputBytes = budget.value("toolOutputBytes", std::uint64_t{262144});
         std::vector<Node> nodes;
         std::set<std::string> attempts;
         std::uint64_t reportedTokens = 0;
+        std::uint64_t providerCalls = 0, toolCalls = 0, toolOutputBytes = 0;
         for (const auto& row : value.at("nodes"))
         {
             auto node =
                 ReadNode(row, spec.budget, spec.id, summary.stamp.companionId, attempts, reportedTokens, summary.unreportedRequests);
+            for (const auto& attempt : node.history)
+            {
+                providerCalls += attempt.view.providerCalls;
+                toolCalls += attempt.view.toolCalls;
+                toolOutputBytes += attempt.view.toolOutputBytes;
+            }
             spec.nodes.push_back(node.spec);
             nodes.push_back(std::move(node));
         }
@@ -831,7 +878,9 @@ struct AgentWorkflow::Impl
         if (!Validate(spec, validation) || !StampValid(summary.stamp, spec.id) || ToString(summary.state) == "Unknown" ||
             ToString(summary.parentDecision) == "Unknown" || summary.requests != attempts.size() ||
             summary.requests > spec.budget.maximumRequests || summary.reportedTokens != reportedTokens ||
-            summary.unreportedRequests > summary.requests)
+            summary.unreportedRequests > summary.requests || summary.providerCalls != providerCalls || summary.toolCalls != toolCalls ||
+            summary.toolOutputBytes != toolOutputBytes || providerCalls > spec.budget.maximumProviderCalls ||
+            toolCalls > spec.budget.maximumToolCalls || toolOutputBytes > spec.budget.maximumToolOutputBytes)
             throw std::runtime_error("budget");
         for (const auto& node : nodes)
             for (const auto& attempt : node.history)
@@ -926,6 +975,53 @@ WorkflowSnapshot AgentWorkflow::Snapshot() const
 {
     std::lock_guard lock(impl->mutex);
     return impl->SnapshotLocked();
+}
+bool AgentWorkflow::AttemptCurrent(const runtime::RuntimeStamp& stamp) const
+{
+    std::lock_guard lock(impl->mutex);
+    return impl->CurrentAttempt(stamp) != nullptr;
+}
+bool AgentWorkflow::ReserveWork(const runtime::RuntimeStamp& stamp, const WorkflowWorkKind kind, const std::uint64_t outputBytes)
+{
+    std::lock_guard lock(impl->mutex);
+    auto* node = impl->CurrentAttempt(stamp);
+    if (!node)
+        return false;
+    auto& attempt = node->history.back().view;
+    auto& summary = impl->summary;
+    const auto& budget = impl->spec.budget;
+    if (kind == WorkflowWorkKind::Provider)
+    {
+        if (outputBytes != 0 || summary.providerCalls >= budget.maximumProviderCalls)
+            return false;
+        ++attempt.providerCalls;
+        ++summary.providerCalls;
+    }
+    else if (kind == WorkflowWorkKind::Tool)
+    {
+        if (node->spec.role != WorkflowRole::Worker || node->spec.readOnly || outputBytes == 0 ||
+            summary.toolCalls >= budget.maximumToolCalls || outputBytes > budget.maximumToolOutputBytes - summary.toolOutputBytes)
+            return false;
+        ++attempt.toolCalls;
+        ++summary.toolCalls;
+        attempt.toolOutputBytes += outputBytes;
+        summary.toolOutputBytes += outputBytes;
+    }
+    else
+        return false;
+    ++summary.sequence;
+    return true;
+}
+bool AgentWorkflow::ChargeReportedTokens(const runtime::RuntimeStamp& stamp, const std::uint64_t tokens)
+{
+    std::lock_guard lock(impl->mutex);
+    auto* node = impl->CurrentAttempt(stamp, false);
+    if (!node || tokens > 1000000000)
+        return false;
+    node->history.back().view.chargedTokens += tokens;
+    impl->summary.reportedTokens += tokens;
+    ++impl->summary.sequence;
+    return true;
 }
 std::optional<WorkflowArtifact> AgentWorkflow::AcceptedArtifact() const
 {
@@ -1040,6 +1136,12 @@ bool AgentWorkflow::Retry(const std::string& nodeId, std::string changedInput, s
             error = "The node cannot be retried in its current state.";
             return false;
         }
+        if (found->history.back().view.toolCalls > 0 && !found->history.back().view.verified &&
+            (changedEvidence.empty() || changedEvidence == found->spec.evidenceKey))
+        {
+            error = "Tool recovery requires new observed evidence about the prior effects before another attempt.";
+            return false;
+        }
         const auto fingerprint = InputFingerprint(changedInput, changedEvidence, found->spec.deliverableContract);
         if (fingerprint.empty() ||
             std::any_of(
@@ -1126,6 +1228,20 @@ bool AgentWorkflow::Resume(runtime::RuntimeStamp newStamp, Provider provider, st
             {
                 error = "Explicit resume requires the same companion, a valid runtime origin and unfinished work.";
                 return false;
+            }
+            for (const auto& node : impl->nodes)
+            {
+                if (node.history.empty())
+                    continue;
+                const auto& attempt = node.history.back();
+                if (attempt.view.toolCalls > 0 && !attempt.view.verified &&
+                    (attempt.view.state == WorkflowState::Interrupted || attempt.view.state == WorkflowState::Cancelled) &&
+                    attempt.fingerprint == InputFingerprint(node.spec.inputText, node.spec.evidenceKey, node.spec.deliverableContract))
+                {
+                    error = "An interrupted tool attempt may already have changed state. Supply new observed recovery evidence through "
+                            "Retry first.";
+                    return false;
+                }
             }
         }
         if (impl->runner.joinable())
@@ -1269,7 +1385,7 @@ bool AgentWorkflow::Load(const std::filesystem::path& path, std::string& error)
             error = "This checkpoint uses the previous weak acceptance format. Its file is preserved; start an explicit new workflow.";
             return false;
         }
-        if (value.at("schema") != 2)
+        if (value.at("schema") != 2 && value.at("schema") != 3)
             throw std::runtime_error("schema");
         auto decoded = Impl::Decode(value);
         if (impl->runner.joinable())

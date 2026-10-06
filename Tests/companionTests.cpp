@@ -9,6 +9,7 @@
 #include "LLM/promptBuilder.h"
 #include "Memory/conversationArchive.h"
 #include "Memory/longTermMemory.h"
+#include "Memory/memoryScope.h"
 #include "memoryAgentTestAccess.h"
 #include "testSupport.h"
 #include <httplib.h>
@@ -166,7 +167,12 @@ void TestAllRouterTiersUseCapturedMemory()
     ScopedTestDirectory directory;
     const auto db = directory.root / "A/Memory/revia_memory.db";
     longTermMemory memory(db.string());
-    Save(memory, "Only A knows the cobalt compass.");
+    auto finding = Finding("Only A knows the cobalt compass.");
+    finding.subject = {revia::memory::MemorySubjectKind::Participant, "local:fixture"};
+    bool added = false;
+    Check(memory.Save(finding, added) && added, "The tier fixture could not save attributed private memory.");
+    const revia::memory::MemoryScope scope{"local:fixture", {revia::identity::AudienceKind::Private, "local:private", 1, {}},
+        revia::identity::SpeakerSource::ExplicitIntroduction, 0, "A"};
     httplib::Server server;
     std::mutex mutex;
     std::vector<std::string> requests;
@@ -218,7 +224,8 @@ void TestAllRouterTiersUseCapturedMemory()
         revia::intelligence::IntelligenceDecision decision;
         decision.selectedTier = tier;
         const auto result =
-            router.RouteMessage("Tell me about my cobalt compass.", {{"user", "Tell me about my cobalt compass."}}, {}, {}, decision);
+            router.RouteMessage("Tell me about my cobalt compass.",
+                {{"user", "Tell me about my cobalt compass.", scope.participantId, scope}}, {}, {}, decision);
         Check(result.bSuccess, "Actual tier request failed on controlled loopback: " + result.reason);
     }
     Check(requests.size() == 3, "Actual three-tier request count differed.");
@@ -426,7 +433,9 @@ void TestStorageAwareResumableMigration()
         }
     } close{database};
     Check(sqlite3_exec(database,
-              "PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; INSERT INTO memories VALUES ('wal-stable-id','fact','Committed only "
+              "PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; "
+              "INSERT INTO memories (id,category,summary,normalized_summary,source,created_at,active) "
+              "VALUES ('wal-stable-id','fact','Committed only "
               "in WAL.','committed only in wal.','fixture','123456',1);",
               nullptr, nullptr, nullptr) == SQLITE_OK,
         "WAL fixture write failed.");

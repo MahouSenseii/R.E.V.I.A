@@ -494,15 +494,15 @@ void TestDurableEvidenceAndInvalidCheckpointRejection()
         std::ifstream stream(path);
         stream >> checkpoint;
     }
-    checkpoint["nodes"][1]["readOnly"] = false;
+    checkpoint["nodes"][0]["readOnly"] = false;
     {
         std::ofstream stream(path);
         stream << checkpoint.dump();
     }
     Check(!restored.Load(path, error) && restored.Snapshot().state == WorkflowState::Accepted,
         "A privileged checkpoint replaced valid owner state.");
-    checkpoint["nodes"][1]["readOnly"] = true;
-    checkpoint["schema"] = 3;
+    checkpoint["nodes"][0]["readOnly"] = true;
+    checkpoint["schema"] = 4;
     {
         std::ofstream stream(path);
         stream << checkpoint.dump();
@@ -537,7 +537,7 @@ void TestBoundsPrivacyAndReportedUsage()
     invalid.nodes[1].id = invalid.nodes[2].id;
     Check(!AgentWorkflow::Validate(invalid, error), "Duplicate node IDs were accepted.");
     invalid = Spec();
-    invalid.nodes[1].readOnly = false;
+    invalid.nodes[0].readOnly = false;
     Check(!AgentWorkflow::Validate(invalid, error), "An effectful provider spec was accepted.");
     auto spec = Spec();
     spec.nodes[1].inputText = "PRIVATE_SENTINEL";

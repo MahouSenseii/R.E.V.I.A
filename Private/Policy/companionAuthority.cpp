@@ -51,11 +51,15 @@ bool Matches(const AuthorityPermissions& permissions, const actions::ActionReque
         return true;
     if (std::find(permissions.operations.begin(), permissions.operations.end(), request.type) == permissions.operations.end())
         return false;
+    if (request.type == actions::ActionType::GenerateImage)
+        return !decision.canonicalDestination.empty() && (permissions.roots.empty() ||
+            std::any_of(permissions.roots.begin(), permissions.roots.end(),
+                [&](const auto& root) { return WithinRoot(decision.canonicalDestination, root); }));
     const bool filesystemOperation =
         request.type == actions::ActionType::ListDirectory || request.type == actions::ActionType::ReadTextFile ||
         request.type == actions::ActionType::CreateDirectory || request.type == actions::ActionType::CopyFile ||
         request.type == actions::ActionType::MoveFile || request.type == actions::ActionType::RenamePath ||
-        request.type == actions::ActionType::MoveToRecycleBin;
+        request.type == actions::ActionType::MoveToRecycleBin || request.type == actions::ActionType::WriteTextFile;
     if (filesystemOperation && decision.canonicalSource.empty())
         return false;
     if (!decision.canonicalSource.empty() || !decision.canonicalDestination.empty())
@@ -76,7 +80,9 @@ bool Matches(const AuthorityPermissions& permissions, const actions::ActionReque
                (resource.empty() || std::any_of(permissions.internetHosts.begin(), permissions.internetHosts.end(),
                                         [&](const auto& host) { return Lower(host) == Lower(resource); }));
     }
-    const auto application = request.application.empty() ? std::string("desktop") : request.application;
+    const auto application = request.type == actions::ActionType::ExecuteProcess
+        ? actions::PathToUtf8(decision.canonicalExecutable)
+        : request.application.empty() ? std::string("desktop") : request.application;
     return std::any_of(permissions.applications.begin(), permissions.applications.end(),
         [&](const auto& admitted) { return Lower(admitted) == Lower(application); });
 }
@@ -105,10 +111,12 @@ bool Denies(const AuthorityPermissions& permissions, const actions::ActionReques
 bool ValidGrant(const AuthorityGrantRequest& request)
 {
     const auto& permissions = request.scope.permissions;
+    const bool ownedImageOnly = permissions.operations.size() == 1 &&
+        permissions.operations.front() == actions::ActionType::GenerateImage;
     return !permissions.withinMachineCeiling && !permissions.operations.empty() &&
            std::find(permissions.operations.begin(), permissions.operations.end(), actions::ActionType::Unknown) ==
                permissions.operations.end() &&
-           (!permissions.roots.empty() || !permissions.applications.empty() || !permissions.internetHosts.empty()) &&
+           (ownedImageOnly || !permissions.roots.empty() || !permissions.applications.empty() || !permissions.internetHosts.empty()) &&
            std::all_of(permissions.roots.begin(), permissions.roots.end(), [](const auto& root) { return root.is_absolute(); }) &&
            request.lifetime > std::chrono::seconds::zero() && request.lifetime <= std::chrono::hours(24);
 }

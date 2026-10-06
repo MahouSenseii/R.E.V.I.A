@@ -21,6 +21,10 @@
 #include <stop_token>
 #include <string>
 
+namespace revia::browser { class BrowserSession; }
+
+namespace revia::visual { class ImageGenerator; }
+
 namespace revia::actions
 {
 
@@ -50,6 +54,9 @@ class ActionRuntime
     [[nodiscard]] ActionOutcome ExecuteScopedFor(const runtime::RuntimeStamp& stamp, const ActionRequest& request,
         const policy::CapabilityPolicy& scopedPolicy, bool confirmationGranted = false, std::stop_token stopToken = {});
     void SetPrivateRuntimePaths(std::filesystem::path profileDirectory, std::filesystem::path logDirectory);
+    void SetBrowserSession(std::shared_ptr<browser::BrowserSession> session);
+    // The provider outlives this binding; its configured destination must match this private root.
+    void BindImageProvider(visual::ImageGenerator& provider, const std::filesystem::path& ownedOutputRoot, bool allowAutonomous);
 
     // Scoped evaluation for the goal runner. A goal carries its own, narrower
     // CapabilitySettings; the result is the more restrictive of the global
@@ -83,6 +90,8 @@ class ActionRuntime
     [[nodiscard]] policy::DesktopApprovalGate::TaskApproval ApproveDesktopTask(const std::string& goalId, bool messaging);
 
     [[nodiscard]] bool SetCameraAccess(bool enabled, bool autonomousCapture, std::string& outError);
+    [[nodiscard]] bool SetProcessSettings(const process::ProcessSettings& settings, std::string& outError);
+    [[nodiscard]] bool SetInteractiveBrowser(const browser::BrowserSettings& settings, std::string& outError);
     // pointer/keyboard/applicationLaunch are the hands themselves; rawCoordinates and
     // autonomous are narrower authorities inside them and are dropped when the
     // authority they are a subset of is withdrawn.
@@ -132,6 +141,7 @@ class ActionRuntime
     policy::CapabilityEditor capabilityEditor;
     std::unique_ptr<policy::CapabilityPolicy> policy;
     std::shared_ptr<internet::VisibleBrowserCancellation> internetCancellation;
+    std::shared_ptr<browser::BrowserSession> browserSession;
     ActionDispatcher dispatcher;
     std::unique_ptr<audit::ActionAuditLogger> auditLogger;
     planning::StructuredActionParser parser;
@@ -146,6 +156,8 @@ class ActionRuntime
     runtime::RuntimeStamp sessionStamp;
     std::filesystem::path browserProfileDirectory;
     std::filesystem::path browserLogDirectory;
+    visual::ImageGenerator* imageProvider = nullptr;
+    CapabilitySettings::ImageGeneration imageAccess;
 };
 
 } // namespace revia::actions

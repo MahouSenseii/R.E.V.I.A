@@ -39,20 +39,16 @@ std::string Trim(std::string value)
 // to draw one -- so they live in the noun list below and need a request phrase alongside
 // them. A recognizer that fires on any mention of a picture would turn ordinary
 // conversation into unwanted drawings, which is worse than having no shortcut at all.
-constexpr std::array DrawVerbs = {
-    std::string_view("draw"), std::string_view("sketch"),
-    std::string_view("mock up"), std::string_view("mockup"),
-    std::string_view("wireframe"), std::string_view("illustrate"),
-    std::string_view("visualise"), std::string_view("visualize")
-};
+constexpr std::array DrawVerbs = {std::string_view("draw"), std::string_view("sketch"), std::string_view("mock up"),
+    std::string_view("mockup"), std::string_view("wireframe"), std::string_view("illustrate"), std::string_view("visualise"),
+    std::string_view("visualize"), std::string_view("paint")};
 
 // Nouns that make an otherwise ambiguous "show me" a request for a picture.
-constexpr std::array VisualNouns = {
-    std::string_view("diagram"), std::string_view("mockup"), std::string_view("mock-up"),
-    std::string_view("wireframe"), std::string_view("layout"), std::string_view("sketch"),
-    std::string_view("flowchart"), std::string_view("flow chart"),
-    std::string_view("chart"), std::string_view("drawing"), std::string_view("picture")
-};
+constexpr std::array VisualNouns = {std::string_view("diagram"), std::string_view("mockup"), std::string_view("mock-up"),
+    std::string_view("wireframe"), std::string_view("layout"), std::string_view("sketch"), std::string_view("flowchart"),
+    std::string_view("flow chart"), std::string_view("chart"), std::string_view("drawing"), std::string_view("picture"),
+    std::string_view("image"), std::string_view("illustration"), std::string_view("portrait"), std::string_view("artwork"),
+    std::string_view("painting")};
 
 bool Contains(const std::string& haystack, const std::string_view needle)
 {
@@ -63,43 +59,62 @@ bool Contains(const std::string& haystack, const std::string_view needle)
 
 bool DrawingRequestPolicy::ShouldDraw(const std::string& input)
 {
-    const std::string lowered = Lower(Trim(input));
-    // A drawing request is a sentence, not an essay. The ceiling keeps a long message
-    // that happens to contain "chart" from turning into a drawing nobody asked for.
-    if (lowered.empty() || lowered.size() > 400)
+    return Classify(input) != DrawingIntent::None;
+}
+
+bool ContainsWords(const std::string& text, const std::string_view phrase)
+{
+    std::size_t position = text.find(phrase);
+    while (position != std::string::npos)
     {
-        return false;
+        const std::size_t end = position + phrase.size();
+        if ((position == 0 || !std::isalnum(static_cast<unsigned char>(text[position - 1]))) &&
+            (end == text.size() || !std::isalnum(static_cast<unsigned char>(text[end]))))
+        {
+            return true;
+        }
+        position = text.find(phrase, position + 1);
+    }
+    return false;
+}
+
+DrawingIntent DrawingRequestPolicy::Classify(const std::string& input)
+{
+    const std::string lowered = Lower(Trim(input));
+    // Leading request framing distinguishes a detailed art brief from discussion.
+    if (lowered.empty() || lowered.size() > 8192)
+    {
+        return DrawingIntent::None;
     }
     // Never hijack a command.
     if (lowered.front() == '/')
     {
-        return false;
+        return DrawingIntent::None;
     }
-    // Asking what something looks like, or discussing drawings, is not asking for one.
-    if (Contains(lowered, "how do you draw") || Contains(lowered, "can you draw?") ||
-        Contains(lowered, "don't draw") || Contains(lowered, "do not draw") ||
-        Contains(lowered, "instead of a diagram"))
+    const std::string subject = Lower(ExtractSubject(input));
+    if (subject.starts_with("don't ") || subject.starts_with("do not ") || subject.starts_with("stop ") || subject.starts_with("never "))
     {
-        return false;
+        return DrawingIntent::None;
     }
-
-    const bool hasVerb = std::any_of(DrawVerbs.begin(), DrawVerbs.end(),
-        [&lowered](const std::string_view verb) { return Contains(lowered, verb); });
-    if (hasVerb)
-    {
-        return true;
-    }
+    const auto starts = [&subject](const std::string_view word)
+    { return subject.starts_with(word) && subject.size() > word.size() && std::isspace(static_cast<unsigned char>(subject[word.size()])); };
+    const bool hasVerb = std::any_of(DrawVerbs.begin(), DrawVerbs.end(), starts);
 
     // "show me the layout", "what would that look like as a flowchart".
-    const bool hasNoun = std::any_of(VisualNouns.begin(), VisualNouns.end(),
-        [&lowered](const std::string_view noun) { return Contains(lowered, noun); });
-    if (!hasNoun)
+    const bool hasNoun = std::any_of(
+        VisualNouns.begin(), VisualNouns.end(), [&lowered](const std::string_view noun) { return ContainsWords(lowered, noun); });
+    const bool requested =
+        hasVerb || (hasNoun && (starts("generate") || starts("create") || starts("make") || starts("show me") || starts("give me") ||
+                                   Contains(lowered, "look like as a") || Contains(lowered, "can i see")));
+    if (!requested)
     {
-        return false;
+        return DrawingIntent::None;
     }
-    return Contains(lowered, "show me") || Contains(lowered, "look like") ||
-        Contains(lowered, "give me a") || Contains(lowered, "make me a") ||
-        Contains(lowered, "can i see");
+    constexpr std::array structured = {"diagram", "flowchart", "flow chart", "chart", "wireframe", "mockup", "mock up", "mock-up", "layout",
+        "ui", "interface", "settings screen", "chat panel", "resources tab", "illustrate how", "visualize how"};
+    return std::any_of(structured.begin(), structured.end(), [&lowered](const char* word) { return ContainsWords(lowered, word); })
+               ? DrawingIntent::Diagram
+               : DrawingIntent::Raster;
 }
 
 std::string DrawingRequestPolicy::ExtractSubject(const std::string& input)

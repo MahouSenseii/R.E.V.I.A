@@ -31,6 +31,28 @@
   "maxAffectedEntries": 200,
   "maxDesktopActionsPerMinute": 12,
   "minimumDesktopActionIntervalMs": 250,
+  "process": {
+    "enabled": false,
+    "allowTaskExecution": false,
+    "approvedExecutables": [],
+    "allowCommandInterpreters": false,
+    "maxTimeoutMs": 30000,
+    "maxOutputBytes": 65536,
+    "maxEnvironmentBytes": 16384,
+    "approvedEnvironmentNames": []
+  },
+  "browser": {
+    "enabled": false,
+    "navigate": false,
+    "interact": false,
+    "allowTaskInteraction": false,
+    "allowLoopback": false,
+    "approvedOrigins": [],
+    "timeoutMs": 15000,
+    "maxTextBytes": 8192,
+    "maxElements": 60,
+    "maxValueBytes": 4096
+  },
   "desktopControl": {
     "pointer": false,
     "keyboard": false,

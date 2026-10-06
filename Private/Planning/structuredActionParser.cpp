@@ -121,6 +121,58 @@ ParsedAction StructuredActionParser::ParseObject(const nlohmann::json& data)
         result.request.id = actions::NewActionId();
         result.request.dryRun = data.value("dry_run", false);
         result.request.requestedBy = "user";
+        if (actions::IsBrowserAction(result.request.type))
+        {
+            for (const auto& entry : data.items())
+                if (entry.key() != "action" && entry.key() != "url" && entry.key() != "session" && entry.key() != "generation" &&
+                    entry.key() != "element" && entry.key() != "value" && entry.key() != "dry_run")
+                    return Error(true, "Unknown browser request field: " + entry.key());
+            auto& browser = result.request.browser;
+            browser.url = data.at("url").get<std::string>();
+            browser.session = data.value("session", std::string{});
+            if (data.contains("generation") && (!data.at("generation").is_number_unsigned() &&
+                (!data.at("generation").is_number_integer() || data.at("generation").get<std::int64_t>() < 0)))
+                return Error(true, "Browser generation must be an unsigned integer.");
+            browser.generation = data.value("generation", std::uint64_t{0});
+            browser.element = data.value("element", std::string{});
+            browser.value = data.value("value", std::string{});
+            result.succeeded = true;
+            return result;
+        }
+        if (result.request.type == actions::ActionType::GenerateImage)
+        {
+            for (const auto& entry : data.items())
+            {
+                if (entry.key() != "action" && entry.key() != "prompt" && entry.key() != "dry_run")
+                    return Error(true, "Unknown image request field: " + entry.key());
+            }
+            result.request.value = data.at("prompt").get<std::string>();
+            if (result.request.value.find_first_not_of(" \t\r\n") == std::string::npos || result.request.value.size() > 8192)
+                return Error(true, "Image generation requires a prompt no longer than 8192 bytes.");
+            result.succeeded = true;
+            return result;
+        }
+        if (result.request.type == actions::ActionType::ExecuteProcess)
+        {
+            for (const auto& entry : data.items())
+            {
+                if (entry.key() != "action" && entry.key() != "executable" && entry.key() != "working_directory" &&
+                    entry.key() != "arguments" && entry.key() != "environment" && entry.key() != "timeout_ms" && entry.key() != "dry_run")
+                    return Error(true, "Unknown process request field: " + entry.key());
+            }
+            auto& process = result.request.process;
+            process.executable = actions::Utf8ToPath(data.at("executable").get<std::string>());
+            process.workingDirectory = actions::Utf8ToPath(data.at("working_directory").get<std::string>());
+            process.arguments = data.at("arguments").get<std::vector<std::string>>();
+            if (data.contains("environment")) process.environment = data.at("environment").get<std::map<std::string, std::string>>();
+            if (data.contains("timeout_ms") && !data.at("timeout_ms").is_number_integer())
+                return Error(true, "Process timeout must be an integer.");
+            process.timeoutMs = data.value("timeout_ms", 30000);
+            if (!process.executable.is_absolute() || !process.workingDirectory.is_absolute())
+                return Error(true, "Process executable and working directory must be absolute paths.");
+            result.succeeded = true;
+            return result;
+        }
         if (desktopControl)
         {
             result.request.application = data.value("application", "");
@@ -240,6 +292,11 @@ ParsedAction StructuredActionParser::ParseObject(const nlohmann::json& data)
         }
 
         result.request.source = actions::Utf8ToPath(source);
+        if (result.request.type == actions::ActionType::WriteTextFile)
+        {
+            result.request.value = data.at("content").get<std::string>();
+            result.request.expectedDigest = data.at("expected_digest").get<std::string>();
+        }
         if (data.contains("destination") && data["destination"].is_string())
         {
             result.request.destination = actions::Utf8ToPath(

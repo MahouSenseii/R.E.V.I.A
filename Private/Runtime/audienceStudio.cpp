@@ -1,9 +1,23 @@
 #include "Runtime/reviaSession.h"
+#include "Browser/browserSession.h"
 
 #include <algorithm>
 
 namespace revia::runtime
 {
+
+memory::MemoryScope ReviaSession::CapturePrivateMemoryScope() const
+{
+    const std::scoped_lock lock(speakerMutex, audienceMutex);
+    memory::MemoryScope scope;
+    scope.participantId = lastInputParticipant;
+    scope.audience = configuredAudience;
+    scope.audience.kind = lastInputAudience;
+    scope.companionId = companionPaths.Descriptor().id;
+    if (lastInputParticipant == currentSpeakerId && !currentSpeakerId.empty() && currentSpeakerId != "local:user")
+        scope.participantSource = identity::SpeakerSource::ExplicitIntroduction;
+    return scope;
+}
 
 identity::AudienceContext ReviaSession::Audience() const
 {
@@ -33,6 +47,8 @@ void ReviaSession::InvalidateAudience()
     speechService.StopSpeaking();
     userInteractionGeneration.fetch_add(1);
     PreemptAutonomousActivity("the disclosure audience changed");
+    if (interactiveBrowser)
+        interactiveBrowser->Stop();
 }
 
 std::function<bool()> ReviaSession::CaptureSpeechAdmission(const identity::AudienceContext& audience, const RuntimeStamp& origin) const
@@ -67,6 +83,7 @@ bool ReviaSession::SetAudience(identity::AudienceContext audience, std::string& 
         audienceHistory.clear();
     }
     InvalidateAudience();
+    imageGenerator.Cancel();
     return true;
 }
 
@@ -88,6 +105,8 @@ agents::InputContext ReviaSession::CaptureInputContext(const agents::InputSource
     {
         std::lock_guard lock(speakerMutex);
         result.participantId = currentSpeakerId;
+        if (!result.participantId.empty() && result.participantId != "local:user")
+            result.participantSource = identity::SpeakerSource::ExplicitIntroduction;
     }
     else
     {
@@ -96,27 +115,34 @@ agents::InputContext ReviaSession::CaptureInputContext(const agents::InputSource
         result.participantSource = speaker.source;
         result.consentRevision = speaker.consentRevision;
     }
-    std::lock_guard lock(audienceMutex);
-    result.audience = configuredAudience;
-    if (!audienceExplicit && source != agents::InputSource::Typed)
+    bool changed = false;
     {
-        result.audience.kind = identity::AudienceKind::Unknown;
-        result.audience.audienceId = "local-room";
-        result.audience.recipientEntityIds.clear();
+        std::lock_guard lock(audienceMutex);
+        result.audience = configuredAudience;
+        if (!audienceExplicit && source != agents::InputSource::Typed)
+        {
+            result.audience.kind = identity::AudienceKind::Unknown;
+            result.audience.audienceId = "local-room";
+            result.audience.recipientEntityIds.clear();
+        }
+        if (source != agents::InputSource::Typed && result.audience.kind == identity::AudienceKind::Private)
+        {
+            result.audience.kind = speaker.source == identity::SpeakerSource::ConsentedVoice && !result.audience.recipientEntityIds.empty()
+                                       ? identity::AudienceKind::Shared
+                                       : identity::AudienceKind::Unknown;
+        }
+        if (lastInputAudience != result.audience.kind || (!lastInputParticipant.empty() && lastInputParticipant != result.participantId))
+        {
+            changed = true;
+            ++configuredAudience.revision;
+            audienceHistory.clear();
+        }
+        lastInputAudience = result.audience.kind;
+        lastInputParticipant = result.participantId;
+        result.audience.revision = configuredAudience.revision;
     }
-    if (source != agents::InputSource::Typed && result.audience.kind == identity::AudienceKind::Private)
-    {
-        result.audience.kind = speaker.source == identity::SpeakerSource::ConsentedVoice && !result.audience.recipientEntityIds.empty()
-            ? identity::AudienceKind::Shared : identity::AudienceKind::Unknown;
-    }
-    if (lastInputAudience != result.audience.kind || (!lastInputParticipant.empty() && lastInputParticipant != result.participantId))
-    {
-        ++configuredAudience.revision;
-        audienceHistory.clear();
-    }
-    lastInputAudience = result.audience.kind;
-    lastInputParticipant = result.participantId;
-    result.audience.revision = configuredAudience.revision;
+    if (changed && interactiveBrowser)
+        interactiveBrowser->Stop();
     return result;
 }
 

@@ -285,7 +285,7 @@ struct ReviaWindowStopTests
                 }
             }
         };
-        provider->setCurrentIndex(1);
+        provider->setCurrentIndex(provider->findData(static_cast<int>(revia::runtime::AgentProviderMode::Demonstration)));
         objective->setPlainText("Bounded native workflow diagnostic");
         start->click();
         wait([&]() { return window.Session().AgentWorkflowSnapshot().state == WorkflowState::Paused; });
@@ -608,6 +608,22 @@ struct ReviaWindowStopTests
                     const QString path =
                         QDir(renderDirectory).filePath(QString("%1-%2x%3.png").arg(name).arg(size.width()).arg(size.height()));
                     expect(window.grab().save(path), "actual Qt render must be saved");
+                    for (const auto& anchor : {QString("processApprovedExecutables"), QString("browserApprovedOrigins")})
+                    {
+                        auto* field = page->findChild<QPlainTextEdit*>(anchor);
+                        if (!field)
+                            continue;
+                        for (auto* scroll : scrolls)
+                        {
+                            if (!scroll->isAncestorOf(field))
+                                continue;
+                            scroll->ensureWidgetVisible(field, 0, 100);
+                            SettleLayouts();
+                            expect(window.grab().save(QDir(renderDirectory)
+                                           .filePath(QString("%1-%2x%3.png").arg(anchor).arg(size.width()).arg(size.height()))),
+                                "command and browser controls must render in the responsive viewport");
+                        }
+                    }
                 }
             }
         }

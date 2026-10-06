@@ -1,6 +1,9 @@
 #include "capabilityPanel.h"
 #include "toggleSwitch.h"
 
+#include "Browser/browserTypes.h"
+#include "Process/processTypes.h"
+
 #include <QAbstractItemView>
 #include <QCheckBox>
 #include <QComboBox>
@@ -14,7 +17,9 @@
 #include <QLineEdit>
 #include <QMessageBox>
 #include <QMouseEvent>
+#include <QPlainTextEdit>
 #include <QPushButton>
+#include <QStringList>
 #include <QSvgWidget>
 #include <QTableWidget>
 #include <QTableWidgetItem>
@@ -24,6 +29,7 @@
 #include <QVariant>
 
 #include <algorithm>
+#include <filesystem>
 #include <utility>
 
 namespace
@@ -181,7 +187,7 @@ CapabilityPanel::CapabilityPanel(revia::runtime::ReviaSession& inputSession, Dis
     layout->setContentsMargins(0, 10, 0, 0);
     layout->setSpacing(16);
 
-    auto* title = new QLabel("Application and internet permissions", this);
+    auto* title = new QLabel("Application, command and internet permissions", this);
     title->setObjectName("sectionTitle");
     layout->addWidget(title);
 
@@ -240,9 +246,7 @@ CapabilityPanel::CapabilityPanel(revia::runtime::ReviaSession& inputSession, Dis
     AddCardHeader(internetCard,
         "<circle cx='12' cy='12' r='9'/><path d='M3 12h18M12 3c2.5 2.6 2.5 15.4 0 18M12 3"
         "c-2.5 2.6-2.5 15.4 0 18'/>",
-        "#55E8F2", "iconWell",
-        "Internet & Browser",
-        "Read-only and rate-limited. Results are grounding, never instructions.");
+        "#55E8F2", "iconWell", "Internet & Research", "Read-only and rate-limited. Results are grounding, never instructions.");
     internetCheck = new ToggleSwitch(ToggleSwitch::Accent::Cyan, this);
     automaticLookupCheck = new ToggleSwitch(ToggleSwitch::Accent::Cyan, this);
     visibleBrowserCheck = new ToggleSwitch(ToggleSwitch::Accent::Cyan, this);
@@ -372,16 +376,58 @@ CapabilityPanel::CapabilityPanel(revia::runtime::ReviaSession& inputSession, Dis
         "Off by default. Typing into a command interpreter is model text reaching a "
         "shell no matter which window it arrived through."));
     AddRow(gatedCard, MakeSeparator());
-    AddRow(gatedCard, MakeRow(autonomousDesktopCheck,
-        "Let Revia operate on her own",
-        "Unprompted desktop work. Still refused while you are actively working.",
-        "Autonomy", "chipAutonomy", false,
-        "A separate permission. Without it she may only do this as part of something "
-        "you asked for."));
+    AddRow(gatedCard, MakeRow(autonomousDesktopCheck, "Let Revia operate on her own",
+                          "Unprompted desktop work. Still refused while you are actively working.", "Autonomy", "chipAutonomy", false,
+                          "A separate permission. Without it she may only do this as part of something "
+                          "you asked for."));
     gatedLayout->addStretch();
     cards->addWidget(gatedCard, 1, 1);
-
     layout->addLayout(cards);
+
+    auto* processCard = MakeCard("permCard");
+    AddCardHeader(processCard, "<rect x='3' y='4' width='18' height='16' rx='2'/><path d='m7 9 3 3-3 3M13 15h4'/>", "#55E8F2", "iconWell",
+        "Commands", "Run approved programs with bounded time and output.");
+    processCheck = new ToggleSwitch(ToggleSwitch::Accent::Cyan, this);
+    processCheck->setObjectName("processEnabled");
+    taskProcessCheck = new ToggleSwitch(ToggleSwitch::Accent::Violet, this);
+    taskProcessCheck->setObjectName("processTaskExecution");
+    commandInterpreterCheck = new ToggleSwitch(ToggleSwitch::Accent::Amber, this);
+    commandInterpreterCheck->setObjectName("processCommandInterpreters");
+    AddRow(processCard, MakeRow(processCheck, "Allow approved programs to run",
+                            "Use an approved working directory. Programs retain their normal Windows account access."));
+    AddRow(processCard, MakeRow(commandInterpreterCheck, "Allow approved command interpreters",
+                            "Shells and script hosts must also be listed below. Task approval and execution limits still apply.",
+                            "Command surface", "chipCritical"));
+    AddRow(processCard, MakeRow(taskProcessCheck, "Use commands in delegated tasks",
+                            "Delegated work may use the same approved executables, working directories and execution limits."));
+    auto* processLayout = qobject_cast<QVBoxLayout*>(processCard->layout());
+    processLayout->addSpacing(8);
+    auto* executableLabel = new QLabel("Approved executable paths — one absolute path per line");
+    executableLabel->setObjectName("permLabel");
+    processLayout->addWidget(executableLabel);
+    processLayout->addSpacing(6);
+    approvedExecutablesEdit = new QPlainTextEdit(this);
+    approvedExecutablesEdit->setObjectName("processApprovedExecutables");
+    approvedExecutablesEdit->setAccessibleName("Approved executable paths");
+    approvedExecutablesEdit->setPlaceholderText("C:\\Tools\\program.exe");
+    approvedExecutablesEdit->setLineWrapMode(QPlainTextEdit::NoWrap);
+    approvedExecutablesEdit->setMinimumHeight(96);
+    approvedExecutablesEdit->setMaximumHeight(160);
+    executableLabel->setBuddy(approvedExecutablesEdit);
+    processLayout->addWidget(approvedExecutablesEdit);
+    processLayout->addSpacing(10);
+    auto* processActions = new QHBoxLayout();
+    processStatusLabel = new QLabel(this);
+    processStatusLabel->setObjectName("secondaryText");
+    processStatusLabel->setWordWrap(true);
+    processActions->addWidget(processStatusLabel, 1);
+    applyProcessButton = new QPushButton("Apply", this);
+    applyProcessButton->setObjectName("primaryButton");
+    applyProcessButton->setAccessibleName("Apply command permissions");
+    processActions->addWidget(applyProcessButton);
+    processLayout->addLayout(processActions);
+    layout->addWidget(processCard);
+    layout->addWidget(CreateInteractiveBrowserCard());
 
     // Whole-row clicking for every permission built above.
     for (QFrame* row : findChildren<QFrame*>())
@@ -481,6 +527,21 @@ CapabilityPanel::CapabilityPanel(revia::runtime::ReviaSession& inputSession, Dis
     connect(cameraCheck, &QCheckBox::toggled, this, [this]() { ApplyCameraSettings(); });
     connect(autonomousCameraCheck, &QCheckBox::toggled,
         this, [this]() { ApplyCameraSettings(); });
+    const auto markProcessSettingsDirty = [this]()
+    {
+        if (refreshing)
+        {
+            return;
+        }
+        processSettingsDirty = true;
+        applyProcessButton->setEnabled(true);
+        processStatusLabel->setText("Unapplied changes. Saved command permissions remain in effect until Apply.");
+    };
+    connect(processCheck, &QCheckBox::toggled, this, markProcessSettingsDirty);
+    connect(taskProcessCheck, &QCheckBox::toggled, this, markProcessSettingsDirty);
+    connect(commandInterpreterCheck, &QCheckBox::toggled, this, markProcessSettingsDirty);
+    connect(approvedExecutablesEdit, &QPlainTextEdit::textChanged, this, markProcessSettingsDirty);
+    connect(applyProcessButton, &QPushButton::clicked, this, [this]() { ApplyProcessSettings(); });
     connect(pointerCheck, &QCheckBox::toggled,
         this, [this]() { ApplyDesktopControlSettings(); });
     connect(keyboardCheck, &QCheckBox::toggled,
@@ -509,6 +570,165 @@ CapabilityPanel::CapabilityPanel(revia::runtime::ReviaSession& inputSession, Dis
     connect(approveDiscoveredButton, &QPushButton::clicked, this,
         [this]() { ApproveSelectedDiscoveredControls(); });
     Refresh();
+}
+
+QFrame* CapabilityPanel::CreateInteractiveBrowserCard()
+{
+    auto* card = MakeCard("permCard");
+    AddCardHeader(card, "<rect x='3' y='4' width='18' height='16' rx='2'/><path d='M3 9h18M7 6.5h.01M10 6.5h.01m-1 6 6 3-3 1-1 3z'/>",
+        "#55E8F2", "iconWell", "Interactive Browser", "Navigate pages, click controls and fill forms on sites you approve.");
+    interactiveBrowserCheck = new ToggleSwitch(ToggleSwitch::Accent::Cyan, this);
+    interactiveBrowserCheck->setObjectName("browserEnabled");
+    browserNavigateCheck = new ToggleSwitch(ToggleSwitch::Accent::Cyan, this);
+    browserNavigateCheck->setObjectName("browserNavigate");
+    browserInteractCheck = new ToggleSwitch(ToggleSwitch::Accent::Amber, this);
+    browserInteractCheck->setObjectName("browserInteract");
+    taskBrowserCheck = new ToggleSwitch(ToggleSwitch::Accent::Violet, this);
+    taskBrowserCheck->setObjectName("browserTaskInteraction");
+    browserLoopbackCheck = new ToggleSwitch(ToggleSwitch::Accent::Amber, this);
+    browserLoopbackCheck->setObjectName("browserLoopback");
+    AddRow(
+        card, MakeRow(interactiveBrowserCheck, "Enable interactive browsing", "Use a dedicated browser within the approved sites below."));
+    AddRow(card, MakeRow(browserNavigateCheck, "Navigate approved sites", "Open pages within an approved site.", {}, {}, true));
+    AddRow(card, MakeRow(browserInteractCheck, "Click controls and fill forms",
+                     "Allows changes through page controls, including submitting forms.", {}, {}, true));
+    AddRow(card, MakeRow(taskBrowserCheck, "Use the browser in delegated tasks",
+                     "Delegated work uses the same approved sites, navigation and interaction permissions."));
+    AddRow(card, MakeRow(browserLoopbackCheck, "Allow local test sites",
+                     "Localhost and loopback addresses still need an approved origin. HTTP is allowed for these local sites."));
+    auto* cardLayout = qobject_cast<QVBoxLayout*>(card->layout());
+    cardLayout->addSpacing(8);
+    auto* originsLabel = new QLabel("Approved site origins — one per line");
+    originsLabel->setObjectName("permLabel");
+    cardLayout->addWidget(originsLabel);
+    auto* originsHelp = new QLabel("Use https://host[:port] with no path or trailing slash. Each site needs its own origin.");
+    originsHelp->setObjectName("permHelp");
+    originsHelp->setWordWrap(true);
+    cardLayout->addWidget(originsHelp);
+    cardLayout->addSpacing(6);
+    approvedOriginsEdit = new QPlainTextEdit(this);
+    approvedOriginsEdit->setObjectName("browserApprovedOrigins");
+    approvedOriginsEdit->setAccessibleName("Approved browser site origins");
+    approvedOriginsEdit->setPlaceholderText("https://example.com\nhttps://app.example.com:8443");
+    approvedOriginsEdit->setLineWrapMode(QPlainTextEdit::NoWrap);
+    approvedOriginsEdit->setMinimumHeight(96);
+    approvedOriginsEdit->setMaximumHeight(160);
+    originsLabel->setBuddy(approvedOriginsEdit);
+    cardLayout->addWidget(approvedOriginsEdit);
+    cardLayout->addSpacing(10);
+    auto* actions = new QHBoxLayout();
+    browserStatusLabel = new QLabel(this);
+    browserStatusLabel->setObjectName("secondaryText");
+    browserStatusLabel->setWordWrap(true);
+    actions->addWidget(browserStatusLabel, 1);
+    applyInteractiveBrowserButton = new QPushButton("Apply", this);
+    applyInteractiveBrowserButton->setObjectName("primaryButton");
+    applyInteractiveBrowserButton->setAccessibleName("Apply interactive browser permissions");
+    actions->addWidget(applyInteractiveBrowserButton);
+    cardLayout->addLayout(actions);
+    const auto markBrowserSettingsDirty = [this]()
+    {
+        if (refreshing)
+        {
+            return;
+        }
+        browserSettingsDirty = true;
+        applyInteractiveBrowserButton->setEnabled(true);
+        browserStatusLabel->setText("Unapplied changes. Saved browser permissions remain in effect until Apply.");
+    };
+    for (auto* toggle : {interactiveBrowserCheck, browserNavigateCheck, browserInteractCheck, taskBrowserCheck, browserLoopbackCheck})
+    {
+        connect(toggle, &QCheckBox::toggled, this, markBrowserSettingsDirty);
+    }
+    connect(approvedOriginsEdit, &QPlainTextEdit::textChanged, this, markBrowserSettingsDirty);
+    connect(applyInteractiveBrowserButton, &QPushButton::clicked, this, [this]() { ApplyInteractiveBrowserSettings(); });
+    return card;
+}
+
+void CapabilityPanel::RefreshInteractiveBrowserSettings(const revia::actions::CapabilitySettings& settings)
+{
+    const auto& browser = settings.browser;
+    if (!browserSettingsDirty)
+    {
+        interactiveBrowserCheck->setChecked(browser.enabled);
+        browserNavigateCheck->setChecked(browser.navigate);
+        browserInteractCheck->setChecked(browser.interact);
+        taskBrowserCheck->setChecked(browser.allowTaskInteraction);
+        browserLoopbackCheck->setChecked(browser.allowLoopback);
+        QStringList origins;
+        for (const auto& origin : browser.approvedOrigins)
+        {
+            origins.push_back(QString::fromStdString(origin));
+        }
+        const QString savedOrigins = origins.join('\n');
+        if (approvedOriginsEdit->toPlainText() != savedOrigins)
+        {
+            approvedOriginsEdit->setPlainText(savedOrigins);
+        }
+    }
+    QString status = "Interactive browsing is disabled.";
+    if (browser.enabled)
+    {
+        status = browser.approvedOrigins.empty()
+                     ? "No site origins are approved. Browser actions cannot run yet."
+                     : QString("Interactive browsing enabled for %1 site(s).").arg(static_cast<qulonglong>(browser.approvedOrigins.size()));
+        status += browser.navigate ? " Navigation allowed." : " Navigation blocked.";
+        status += browser.interact ? " Interaction allowed." : " Interaction blocked.";
+        status += browser.allowTaskInteraction ? " Delegated browser use allowed." : " Delegated browser use blocked.";
+    }
+    if (settings.mode == revia::actions::ExecutionMode::Disabled)
+    {
+        status += " Requested tasks are disabled.";
+    }
+    if (browserSettingsDirty)
+    {
+        status += " Draft changes are not applied.";
+    }
+    browserStatusLabel->setText(status);
+    applyInteractiveBrowserButton->setEnabled(browserSettingsDirty);
+}
+
+void CapabilityPanel::ApplyInteractiveBrowserSettings()
+{
+    if (refreshing)
+    {
+        return;
+    }
+    revia::browser::BrowserSettings settings = session.Capabilities().browser;
+    settings.enabled = interactiveBrowserCheck->isChecked();
+    settings.navigate = browserNavigateCheck->isChecked();
+    settings.interact = browserInteractCheck->isChecked();
+    settings.allowTaskInteraction = taskBrowserCheck->isChecked();
+    settings.allowLoopback = browserLoopbackCheck->isChecked();
+    settings.approvedOrigins.clear();
+    const QStringList lines = approvedOriginsEdit->toPlainText().split('\n');
+    for (const QString& line : lines)
+    {
+        const QString origin = line.trimmed();
+        if (!origin.isEmpty())
+        {
+            settings.approvedOrigins.push_back(origin.toStdString());
+        }
+    }
+    std::string error;
+    if (!revia::browser::ValidateSettings(settings, error))
+    {
+        browserStatusLabel->setText(QString::fromStdString(error));
+        SetStatus(QString::fromStdString(error), true);
+        approvedOriginsEdit->setFocus();
+        return;
+    }
+    const auto result = session.SetInteractiveBrowser(settings);
+    if (result.succeeded)
+    {
+        browserSettingsDirty = false;
+    }
+    Refresh();
+    SetStatus(QString::fromStdString(result.message), !result.succeeded);
+    if (!result.succeeded)
+    {
+        browserStatusLabel->setText(QString::fromStdString(result.message));
+    }
 }
 
 void CapabilityPanel::Refresh()
@@ -554,6 +774,44 @@ void CapabilityPanel::Refresh()
     cameraCheck->setChecked(settings.camera.enabled);
     autonomousCameraCheck->setChecked(settings.camera.autonomousCapture);
     autonomousCameraCheck->setEnabled(settings.camera.enabled);
+    if (!processSettingsDirty)
+    {
+        processCheck->setChecked(settings.process.enabled);
+        taskProcessCheck->setChecked(settings.process.allowTaskExecution);
+        commandInterpreterCheck->setChecked(settings.process.allowCommandInterpreters);
+        QStringList executablePaths;
+        for (const auto& executable : settings.process.approvedExecutables)
+        {
+            executablePaths.push_back(QString::fromStdWString(executable.wstring()));
+        }
+        const QString savedPaths = executablePaths.join('\n');
+        if (approvedExecutablesEdit->toPlainText() != savedPaths)
+        {
+            approvedExecutablesEdit->setPlainText(savedPaths);
+        }
+    }
+    QString processStatus = "Commands are disabled.";
+    if (settings.process.enabled)
+    {
+        processStatus =
+            settings.process.approvedExecutables.empty()
+                ? "No executable paths are approved. Commands cannot run yet."
+                : QString("Commands enabled for %1 approved executable(s). %2")
+                      .arg(static_cast<qulonglong>(settings.process.approvedExecutables.size()))
+                      .arg(settings.process.allowCommandInterpreters ? "Approved interpreters are allowed." : "Interpreters are blocked.");
+        processStatus += settings.process.allowTaskExecution ? " Delegated command use is allowed." : " Delegated command use is blocked.";
+    }
+    if (settings.mode == revia::actions::ExecutionMode::Disabled)
+    {
+        processStatus += " Requested tasks are disabled.";
+    }
+    if (processSettingsDirty)
+    {
+        processStatus += " Draft changes are not applied.";
+    }
+    processStatusLabel->setText(processStatus);
+    applyProcessButton->setEnabled(processSettingsDirty);
+    RefreshInteractiveBrowserSettings(settings);
     const auto& desktop = settings.desktopControl;
     pointerCheck->setChecked(desktop.pointer);
     keyboardCheck->setChecked(desktop.keyboard);
@@ -574,6 +832,49 @@ void CapabilityPanel::Refresh()
     desktopStopButton->setText(session.DesktopControlStopped()
         ? "Resume desktop control" : "Stop desktop control");
     refreshing = false;
+}
+
+void CapabilityPanel::ApplyProcessSettings()
+{
+    if (refreshing)
+    {
+        return;
+    }
+    auto settings = session.Capabilities().process;
+    settings.enabled = processCheck->isChecked();
+    settings.allowTaskExecution = taskProcessCheck->isChecked();
+    settings.allowCommandInterpreters = commandInterpreterCheck->isChecked();
+    settings.approvedExecutables.clear();
+    const QStringList lines = approvedExecutablesEdit->toPlainText().split('\n');
+    for (const QString& line : lines)
+    {
+        const QString text = line.trimmed();
+        if (text.isEmpty())
+        {
+            continue;
+        }
+        const std::filesystem::path executable(text.toStdWString());
+        if (!executable.is_absolute())
+        {
+            const QString message = QString("Use an absolute executable path: %1").arg(text);
+            processStatusLabel->setText(message);
+            SetStatus(message, true);
+            approvedExecutablesEdit->setFocus();
+            return;
+        }
+        settings.approvedExecutables.push_back(executable);
+    }
+    const auto result = session.SetProcessSettings(settings);
+    if (result.succeeded)
+    {
+        processSettingsDirty = false;
+    }
+    Refresh();
+    SetStatus(QString::fromStdString(result.message), !result.succeeded);
+    if (!result.succeeded)
+    {
+        processStatusLabel->setText(QString::fromStdString(result.message));
+    }
 }
 
 void CapabilityPanel::ApplyCameraSettings()

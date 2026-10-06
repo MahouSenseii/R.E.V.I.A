@@ -152,6 +152,57 @@ bool CapabilityEditor::SetCameraAccess(const std::filesystem::path& path,
         outError, {}, actions::ExecutionMode::Supervised);
 }
 
+bool CapabilityEditor::SetInteractiveBrowser(
+    const std::filesystem::path& path, const browser::BrowserSettings& settings, std::string& outError) const
+{
+    try
+    {
+        std::ifstream stream(path);
+        json data;
+        stream >> data;
+        stream.close();
+        if (!data.is_object())
+            throw std::invalid_argument("Capability configuration must be an object.");
+        data["browser"] = {{"enabled", settings.enabled}, {"navigate", settings.navigate}, {"interact", settings.interact},
+            {"allowLoopback", settings.allowLoopback}, {"allowTaskInteraction", settings.allowTaskInteraction},
+            {"approvedOrigins", settings.approvedOrigins}, {"timeoutMs", settings.timeoutMs}, {"maxTextBytes", settings.maxTextBytes},
+            {"maxElements", settings.maxElements}, {"maxValueBytes", settings.maxValueBytes}};
+        return ReplaceValidated(path, data, outError);
+    }
+    catch (const std::exception& error)
+    {
+        outError = error.what();
+        return false;
+    }
+}
+
+bool CapabilityEditor::SetProcessSettings(
+    const std::filesystem::path& path, const process::ProcessSettings& settings, std::string& outError) const
+{
+    try
+    {
+        std::ifstream stream(path);
+        json data;
+        stream >> data;
+        stream.close();
+        if (!data.is_object())
+            throw std::invalid_argument("Capability configuration must be an object.");
+        std::vector<std::string> executables;
+        for (const auto& executable : settings.approvedExecutables)
+            executables.push_back(actions::PathToUtf8(executable));
+        data["process"] = {{"enabled", settings.enabled}, {"approvedExecutables", executables},
+            {"allowCommandInterpreters", settings.allowCommandInterpreters}, {"allowTaskExecution", settings.allowTaskExecution},
+            {"maxTimeoutMs", settings.maxTimeoutMs}, {"maxOutputBytes", settings.maxOutputBytes},
+            {"maxEnvironmentBytes", settings.maxEnvironmentBytes}, {"approvedEnvironmentNames", settings.approvedEnvironmentNames}};
+        return ReplaceValidated(path, data, outError);
+    }
+    catch (const std::exception& error)
+    {
+        outError = std::string("Could not update command permissions: ") + error.what();
+        return false;
+    }
+}
+
 bool CapabilityEditor::SetDesktopControl(const std::filesystem::path& path, const bool pointer, const bool keyboard,
     const bool applicationLaunch, const bool rawCoordinates, const bool visualTargeting, const bool autonomous,
     const actions::CapabilitySettings::DesktopControl::InputScope scope, const bool allowCommandSurfaces, std::string& outError) const
@@ -218,6 +269,10 @@ bool CapabilityEditor::Apply(const std::filesystem::path& path, const Mutation m
         return false;
     }
 
+    if (!data.contains("approvedApplications"))
+        data["approvedApplications"] = json::array();
+    if (!data.contains("approvedControls"))
+        data["approvedControls"] = json::object();
     json& applications = data["approvedApplications"];
     json& controls = data["approvedControls"];
     if (!applications.is_array() || !controls.is_object())

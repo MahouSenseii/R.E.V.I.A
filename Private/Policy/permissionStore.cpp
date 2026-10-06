@@ -5,6 +5,7 @@
 #include <cstdlib>
 #include <fstream>
 #include <limits>
+#include <stdexcept>
 #include <nlohmann/json.hpp>
 
 namespace revia::policy
@@ -57,6 +58,65 @@ T BoundedInteger(const json& data, const char* key, T fallback, T minimum, T max
     return static_cast<T>(raw);
 }
 
+bool ReadProcessSettings(const json& data, process::ProcessSettings& settings, std::string& outError)
+{
+    if (!data.is_object())
+    {
+        outError = "process must be a configuration object.";
+        return false;
+    }
+    settings.enabled = data.value("enabled", false);
+    settings.allowCommandInterpreters = data.value("allowCommandInterpreters", false);
+    settings.allowTaskExecution = data.value("allowTaskExecution", false);
+    const auto integer = [&](const char* key, const std::int64_t fallback, const std::int64_t maximum)
+    {
+        if (!data.contains(key))
+            return fallback;
+        if (!data[key].is_number_integer())
+            throw std::invalid_argument(std::string("process.") + key + " must be an integer.");
+        const auto value = data[key].get<std::int64_t>();
+        if (value < 1 || value > maximum)
+            throw std::invalid_argument(std::string("process.") + key + " is outside its supported range.");
+        return value;
+    };
+    settings.maxTimeoutMs = static_cast<int>(integer("maxTimeoutMs", 30000, 600000));
+    settings.maxOutputBytes = static_cast<std::size_t>(integer("maxOutputBytes", 65536, 1048576));
+    settings.maxEnvironmentBytes = static_cast<std::size_t>(integer("maxEnvironmentBytes", 16384, 65536));
+    if (data.contains("approvedExecutables"))
+    {
+        const auto& executables = data["approvedExecutables"];
+        if (!executables.is_array() || executables.size() > 128)
+            throw std::invalid_argument("process.approvedExecutables must be an array of at most 128 paths.");
+        for (const auto& value : executables)
+        {
+            if (!value.is_string())
+                throw std::invalid_argument("Every approved process executable must be a path string.");
+            const auto text = PermissionStore::ExpandEnvironmentVariables(value.get<std::string>());
+            const auto path = actions::Utf8ToPath(text);
+            if (text.empty() || text.size() > 4096 || text.find('\0') != std::string::npos || !path.is_absolute())
+                throw std::invalid_argument("Every approved process executable must be an absolute path.");
+            settings.approvedExecutables.push_back(path.lexically_normal());
+        }
+    }
+    if (data.contains("approvedEnvironmentNames"))
+    {
+        const auto& names = data["approvedEnvironmentNames"];
+        if (!names.is_array() || names.size() > 128)
+            throw std::invalid_argument("process.approvedEnvironmentNames must be a bounded array.");
+        for (const auto& value : names)
+        {
+            if (!value.is_string())
+                throw std::invalid_argument("Approved process environment names must be strings.");
+            const auto name = value.get<std::string>();
+            if (name.empty() || name.size() > 128 || (!std::isalpha(static_cast<unsigned char>(name.front())) && name.front() != '_') ||
+                !std::all_of(name.begin(), name.end(), [](unsigned char c) { return std::isalnum(c) || c == '_'; }))
+                throw std::invalid_argument("Invalid approved process environment name.");
+            settings.approvedEnvironmentNames.push_back(name);
+        }
+    }
+    return true;
+}
+
 } // namespace
 
 bool PermissionStore::Load(const std::filesystem::path& path, actions::CapabilitySettings& outSettings, std::string& outError) const
@@ -105,6 +165,39 @@ bool PermissionStore::Load(const std::filesystem::path& path, actions::Capabilit
             data, "maxDesktopActionsPerMinute", 12, 1, 600);
         settings.minimumDesktopActionIntervalMs = BoundedInteger<int>(
             data, "minimumDesktopActionIntervalMs", 250, 0, 60000);
+
+        if (data.contains("process") && !ReadProcessSettings(data["process"], settings.process, outError))
+            return false;
+
+        if (data.contains("browser"))
+        {
+            const auto& dataBrowser = data.at("browser");
+            if (!dataBrowser.is_object())
+                throw std::invalid_argument("browser must be a configuration object.");
+            settings.browser.enabled = dataBrowser.value("enabled", false);
+            settings.browser.navigate = dataBrowser.value("navigate", false);
+            settings.browser.interact = dataBrowser.value("interact", false);
+            settings.browser.allowLoopback = dataBrowser.value("allowLoopback", false);
+            settings.browser.allowTaskInteraction = dataBrowser.value("allowTaskInteraction", false);
+            settings.browser.approvedOrigins = dataBrowser.value("approvedOrigins", std::vector<std::string>{});
+            const auto integer = [&](const char* key, const std::int64_t fallback)
+            {
+                if (!dataBrowser.contains(key))
+                    return fallback;
+                if (!dataBrowser[key].is_number_integer())
+                    throw std::invalid_argument(std::string("browser.") + key + " must be an integer.");
+                const auto value = dataBrowser[key].get<std::int64_t>();
+                if (value < 1 || value > 1048576)
+                    throw std::invalid_argument(std::string("browser.") + key + " is outside its supported range.");
+                return value;
+            };
+            settings.browser.timeoutMs = static_cast<int>(integer("timeoutMs", 15000));
+            settings.browser.maxTextBytes = static_cast<std::size_t>(integer("maxTextBytes", 8192));
+            settings.browser.maxElements = static_cast<std::size_t>(integer("maxElements", 60));
+            settings.browser.maxValueBytes = static_cast<std::size_t>(integer("maxValueBytes", 4096));
+            if (!browser::ValidateSettings(settings.browser, outError))
+                return false;
+        }
 
         if (data.contains("internet"))
         {
@@ -387,12 +480,6 @@ bool PermissionStore::Load(const std::filesystem::path& path, actions::Capabilit
                 outError = "Every approved application requires an approvedControls entry.";
                 return false;
             }
-        }
-
-        if (settings.approvedRoots.empty())
-        {
-            outError = "At least one approved root is required.";
-            return false;
         }
 
         outSettings = std::move(settings);

@@ -128,6 +128,7 @@ private:
     // a mismatch, and is reported as such rather than refused.
     enum class DestinationVerdict { Unchecked, Matches, Mismatch };
     [[nodiscard]] DestinationVerdict CheckDestination(const std::string& control, const ComputerTaskContext& context) const;
+    [[nodiscard]] ContentDecision ApplyBrowser(goals::GoalStep& step, const ComputerTaskContext& context);
 
     PayloadVault* vault = nullptr;
     TaskContent task;

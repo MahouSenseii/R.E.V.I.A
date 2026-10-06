@@ -323,6 +323,7 @@ void MemoryPanel::ReviseSelectedMemory()
     request.ownerRequestId = QUuid::createUuid().toString(QUuid::WithoutBraces).toStdString();
     request.originalId = entry.id;
     request.expectedSummaryDigest = revia::audit::ContentDigest(entry.summary);
+    request.expectedSubject = entry.subject;
     request.priorReceiptId = entry.revisionReceiptId;
     request.origin = memorySnapshotOrigin;
     request.audienceRevision = memorySnapshotAudienceRevision;
@@ -330,6 +331,7 @@ void MemoryPanel::ReviseSelectedMemory()
     request.corrected.bShouldRemember = true;
     request.corrected.category = entry.category;
     request.corrected.source = "owner_revision";
+    request.corrected.subject = entry.subject;
     revisionDialog = new QDialog(this);
     revisionDialog->setObjectName("memoryRevisionDialog");
     revisionDialog->setWindowTitle("Correct selected memory");

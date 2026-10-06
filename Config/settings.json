@@ -211,18 +211,24 @@
                                       }
                   },
     "image":  {
-                  "enabled":  false,
+                  "enabled":  true,
                   "model":  "stabilityai/sd-turbo",
+                  "variant":  "",
                   "device":  "auto",
                   "minimumFreeVramMiB":  4200,
+                  "gpuReserveMiB":  1536,
+                  "cpuThreads":  4,
                   "steps":  4,
-                  "guidance":  1.0,
+                  "guidance":  0.0,
                   "width":  512,
                   "height":  512,
                   "port":  8093,
                   "startupTimeoutSeconds":  120,
                   "requestTimeoutSeconds":  900,
-                  "shutdownOnExit":  true
+                  "shutdownOnExit":  true,
+                  "keepLoaded":  false,
+                  "offline":  true,
+                  "seed":  -1
               },
     "conversation":  {
                          "archiveEnabled":  true,

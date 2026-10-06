@@ -9,6 +9,19 @@
 
 namespace revia::goals
 {
+enum class GoalRecovery
+{
+    None,
+    WaitForState,
+    Reobserve,
+    NeedVision
+};
+
+struct CompletionEvidence
+{
+    bool accepted = false;
+    std::string detail;
+};
 
 // Lifecycle of a whole goal. Persisted, so a restart can pick it back up.
 enum class GoalStatus
@@ -126,7 +139,8 @@ enum class PostconditionKind
     ControlValueIs,
     // Compares runtime observations before/after a press to prove window change.
     // Supports target-selection evidence only, not that the intended effect occurred.
-    ControlStateChanged
+    ControlStateChanged,
+    BrowserControlValueIs
 };
 
 struct Postcondition
@@ -138,6 +152,10 @@ struct Postcondition
     // What it should be. For TextObserved this is GoalStep::expected, carried here so
     // evaluation has one input rather than two.
     std::string value;
+
+    std::string browserSession;
+    std::string browserUrl;
+    std::uint64_t browserGeneration = 0;
 
     // Whether this condition can be trusted to have said "no" rather than "I could not
     // tell". Only a derived condition can: TextObserved failing to find a substring is
@@ -218,6 +236,8 @@ struct Goal
     // The contract this goal's steps are judged under. New goals get the current one;
     // a goal read back from an older database keeps the one it was written with.
     std::uint32_t verificationSchema = CurrentVerificationSchema;
+    // Iterative runs must revisit whole-goal acceptance when resumed.
+    bool iterative = false;
 
     std::chrono::system_clock::time_point createdAt = std::chrono::system_clock::now();
     std::chrono::system_clock::time_point updatedAt = std::chrono::system_clock::now();

@@ -112,11 +112,11 @@ void TestApprovalReachesExecution(const std::string& input, const bool approve, 
     }
     else
     {
-        Check(result.succeeded && goals.size() == 1 &&
-            goals.front().status == GoalStatus::Succeeded &&
+        Check(!result.succeeded && goals.size() == 1 &&
+            goals.front().status == GoalStatus::Blocked &&
             goals.front().steps.size() == 1 &&
             goals.front().steps.front().status == StepStatus::Succeeded,
-            "An approved operator request did not execute and verify its first step.");
+            "The fixture step must execute and verify without promoting an unsupported whole-task completion claim.");
         Check(std::filesystem::file_size(directory.root / "session-audit.jsonl") > 0,
             "The operator step was not audited.");
     }
@@ -288,6 +288,11 @@ void TestLiveModelBrowserNavigation()
 
 void RunOperatorSessionTests()
 {
+    {
+        revia::tests::ScopedTestDirectory directory;
+        ReviaSession session;
+        ReviaSessionTestAccess::CheckOperatorAdmission(session);
+    }
     TestPlannerFailureIsExplained();
     RunApplicationLocatorTests();
     TestApprovalReachesExecution("/operate read the fixture", false, false);

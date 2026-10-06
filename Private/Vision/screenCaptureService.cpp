@@ -88,6 +88,16 @@ namespace
         }
         DWORD processId = 0;
         GetWindowThreadProcessId(window, &processId);
+        result.foregroundWindow = window;
+        result.foregroundProcessId = processId;
+        RECT bounds{};
+        if (GetWindowRect(window, &bounds))
+        {
+            result.windowLeft = bounds.left;
+            result.windowTop = bounds.top;
+            result.windowRight = bounds.right;
+            result.windowBottom = bounds.bottom;
+        }
         HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, processId);
         if (process != nullptr)
         {
@@ -246,6 +256,22 @@ std::vector<MonitorDescriptor> ScreenCaptureService::EnumerateMonitors() const
     return ReadMonitors().monitors;
 #else
     return {};
+#endif
+}
+
+bool ScreenCaptureService::IsForegroundCurrent(const CaptureResult& capture) const
+{
+#ifdef _WIN32
+    const HWND window = GetForegroundWindow();
+    DWORD processId = 0;
+    GetWindowThreadProcessId(window, &processId);
+    RECT bounds{};
+    return capture.succeeded && window && window == capture.foregroundWindow && processId == capture.foregroundProcessId &&
+        GetWindowRect(window, &bounds) && bounds.left == capture.windowLeft && bounds.top == capture.windowTop &&
+        bounds.right == capture.windowRight && bounds.bottom == capture.windowBottom;
+#else
+    (void)capture;
+    return false;
 #endif
 }
 

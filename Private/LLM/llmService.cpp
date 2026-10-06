@@ -53,11 +53,10 @@ void llmService::SetReplyNote(std::string note)
     llamaCpp.SetReplyNote(std::move(note));
 }
 
-std::string llmService::RelatedMemories(const std::string& query, const std::stop_token stopToken) const
+std::string llmService::RelatedMemories(
+    const std::string& query, const std::stop_token stopToken, const revia::memory::MemoryScope& scope) const
 {
-    return bIsReady && backendType == llmBackendType::LLamaCpp
-        ? llamaCpp.RelatedMemories(query, stopToken)
-        : std::string{};
+    return bIsReady && backendType == llmBackendType::LLamaCpp ? llamaCpp.RelatedMemories(query, stopToken, scope) : std::string{};
 }
 
 healthOutput llmService::CheckEmbeddingHealth(std::stop_token stopToken) const
@@ -489,7 +488,7 @@ responseOutput llmService::AnalyzeImage(const std::filesystem::path& imagePath, 
 }
 
 memoryDecision llmService::EvaluateMemory(const std::string& userMessage, const std::string& assistantMessage,
-    const revia::agents::ResponseProvenance provenance, const std::stop_token stopToken) const
+    const revia::agents::ResponseProvenance provenance, const std::stop_token stopToken, const revia::memory::MemoryScope& scope) const
 {
     if (!bIsReady)
     {
@@ -501,8 +500,7 @@ memoryDecision llmService::EvaluateMemory(const std::string& userMessage, const 
     switch (backendType)
     {
         case llmBackendType::LLamaCpp:
-            return llamaCpp.EvaluateMemory(
-                userMessage, assistantMessage, provenance, stopToken);
+            return llamaCpp.EvaluateMemory(userMessage, assistantMessage, provenance, stopToken, scope);
         case llmBackendType::Placeholder:
         {
             memoryDecision decision;

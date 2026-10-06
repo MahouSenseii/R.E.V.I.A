@@ -205,6 +205,7 @@ std::string ToString(const PostconditionKind value)
         case PostconditionKind::FileContains: return "file_contains";
         case PostconditionKind::ForegroundApplicationIs: return "foreground_application_is";
         case PostconditionKind::ControlValueIs: return "control_value_is";
+        case PostconditionKind::BrowserControlValueIs: return "browser_control_value_is";
         case PostconditionKind::ControlStateChanged: return "control_state_changed";
         case PostconditionKind::TextObserved:
         default: return "text_observed";
@@ -222,6 +223,7 @@ PostconditionKind PostconditionKindFromString(const std::string& value)
     if (name == "file_contains") return PostconditionKind::FileContains;
     if (name == "foreground_application_is") return PostconditionKind::ForegroundApplicationIs;
     if (name == "control_value_is") return PostconditionKind::ControlValueIs;
+    if (name == "browser_control_value_is") return PostconditionKind::BrowserControlValueIs;
     if (name == "control_state_changed") return PostconditionKind::ControlStateChanged;
     return PostconditionKind::TextObserved;
 }
@@ -424,6 +426,18 @@ VerificationOutcome EvaluatePostcondition(const Postcondition& postcondition, co
             return VerificationOutcome::Unknown;
         }
 
+        case PostconditionKind::BrowserControlValueIs:
+        {
+            if (!result.browser || result.browser->uncertainEffect || result.browser->session != postcondition.browserSession ||
+                result.browser->url != postcondition.browserUrl || result.browser->generation <= postcondition.browserGeneration)
+                return VerificationOutcome::Unknown;
+            const auto& elements = result.browser->elements;
+            const auto field = std::find_if(elements.begin(), elements.end(), [&](const auto& element) { return element.id == postcondition.subject; });
+            if (field == elements.end() || !field->editable || !field->valueAvailable)
+                return VerificationOutcome::Unknown;
+            return field->value == postcondition.value ? VerificationOutcome::Verified : VerificationOutcome::Failed;
+        }
+
         case PostconditionKind::ControlStateChanged:
         {
             // No baseline means the comparison was never set up, which is an absence of
@@ -496,6 +510,7 @@ namespace
         case PostconditionKind::ForegroundApplicationIs:
             return mentions(postcondition.value);
         case PostconditionKind::ControlValueIs:
+        case PostconditionKind::BrowserControlValueIs:
             // Either half corroborates: a step may name the box it filled or the text
             // it put there, and naming one of them ties the description to the action.
             return mentions(postcondition.value) || mentions(postcondition.subject);
@@ -647,6 +662,20 @@ Postcondition DerivePostcondition(const GoalStep& step)
         Postcondition derived;
         derived.kind = PostconditionKind::FileContains;
         derived.value = step.expected;
+        return derived;
+    }
+
+    if (step.action.type == ActionType::BrowserFill && step.check.type == ActionType::BrowserObserve &&
+        !step.action.browser.element.empty() && !step.action.browser.session.empty() && step.action.browser.generation > 0 &&
+        step.check.browser.url == step.action.browser.url)
+    {
+        Postcondition derived;
+        derived.kind = PostconditionKind::BrowserControlValueIs;
+        derived.subject = step.action.browser.element;
+        derived.value = step.action.browser.value;
+        derived.browserSession = step.action.browser.session;
+        derived.browserUrl = step.action.browser.url;
+        derived.browserGeneration = step.action.browser.generation;
         return derived;
     }
 

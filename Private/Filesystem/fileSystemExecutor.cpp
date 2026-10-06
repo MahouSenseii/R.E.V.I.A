@@ -1,6 +1,7 @@
 #include "Filesystem/fileSystemExecutor.h"
 
 #include "Core/utf8.h"
+#include "Audit/contentDigest.h"
 
 #include <algorithm>
 #include <array>
@@ -162,6 +163,7 @@ bool FileSystemExecutor::Handles(actions::ActionType type) const
 {
     return type == actions::ActionType::ListDirectory ||
         type == actions::ActionType::ReadTextFile ||
+        type == actions::ActionType::WriteTextFile ||
         type == actions::ActionType::CreateDirectory ||
         type == actions::ActionType::CopyFile ||
         type == actions::ActionType::MoveFile ||
@@ -183,6 +185,8 @@ actions::ActionResult FileSystemExecutor::Execute(const actions::ActionRequest& 
             return ListDirectory(request, decision);
         case actions::ActionType::ReadTextFile:
             return ReadTextFile(request, decision);
+        case actions::ActionType::WriteTextFile:
+            return WriteTextFile(request, decision);
         case actions::ActionType::CreateDirectory:
             return CreateDirectory(request, decision);
         case actions::ActionType::CopyFile:
@@ -339,6 +343,7 @@ actions::ActionResult FileSystemExecutor::ReadTextStream(std::istream& file) con
     {
         return Failure("Could not read text file.", true);
     }
+    const auto digest = audit::ContentDigest(content);
     if (std::optional<std::string> decoded = DecodeUtf16WithByteOrderMark(content))
     {
         content = std::move(*decoded);
@@ -356,6 +361,7 @@ actions::ActionResult FileSystemExecutor::ReadTextStream(std::istream& file) con
     result.attempted = true;
     result.succeeded = true;
     result.content = std::move(content);
+    result.entries.push_back("sha256:" + digest);
     return result;
 }
 

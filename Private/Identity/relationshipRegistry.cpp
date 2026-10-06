@@ -356,13 +356,27 @@ std::string RelationshipRegistry::NamedLocalEntityId(const std::string& name)
 
 std::string RelationshipRegistry::ResolveNamedLocalSpeaker(const std::string& name)
 {
+    return ResolveNamedLocalSpeaker(name, [] { return true; });
+}
+
+std::string RelationshipRegistry::ResolveNamedLocalSpeaker(const std::string& name, const std::function<bool()>& admission)
+{
     const std::string target = NamedLocalEntityId(name);
+    std::lock_guard lock(mutex);
+    try
+    {
+        if (!admission || !admission())
+            return {};
+    }
+    catch (...)
+    {
+        return {};
+    }
     if (target == LocalUserEntityId())
     {
         return target;
     }
 
-    std::lock_guard lock(mutex);
     if (snapshot.relationships.count(target) != 0)
     {
         // Someone she already knows has come back.

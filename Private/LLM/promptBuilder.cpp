@@ -8,11 +8,37 @@
 #include "Agents/conversationStylePolicy.h"
 #include "Core/speechAttribution.h"
 #include "Identity/promptMarkers.h"
+#include "LLM/tokenEstimate.h"
 
 #include <chrono>
+#include <algorithm>
+#include <iterator>
+#include <cctype>
 
 namespace
 {
+bool ContinuesRecentTopic(const std::string& input)
+{
+    if (input.size() > 512)
+        return false;
+    std::string words;
+    for (const unsigned char character : input)
+    {
+        if (std::isalnum(character))
+            words += static_cast<char>(std::tolower(character));
+        else if (!words.empty() && words.back() != ' ')
+            words += ' ';
+    }
+    if (!words.empty() && words.back() == ' ')
+        words.pop_back();
+    words = ' ' + words + ' ';
+    for (const auto signal : {" it ", " its ", " that ", " this ", " them ", " their ", " those ", " they ", " same ", " more ", " expand ",
+             " elaborate ", " continue "})
+        if (words.find(signal) != std::string::npos)
+            return true;
+    return words == " why " || words == " how so " || words.starts_with(" and ");
+}
+
     double ElapsedMilliseconds(const std::chrono::steady_clock::time_point start)
     {
         return std::chrono::duration<double, std::milli>(
@@ -39,6 +65,36 @@ promptBuilder::promptBuilder(std::string memoryDatabasePath)
 }
 
 promptBuilder::~promptBuilder() = default;
+
+std::string promptBuilder::BuildRetrievalQuery(const std::vector<conversationMessage>& context)
+{
+    const auto latest = std::find_if(
+        context.rbegin(), context.rend(), [](const auto& message) { return message.role == "user" && !message.content.empty(); });
+    if (latest == context.rend())
+        return {};
+    std::string query = revia::llm::CompactToTokenBudget(latest->content, 2800, " [...] ");
+    if (!ContinuesRecentTopic(latest->content))
+        return query;
+    std::size_t included = 0;
+    for (auto previous = std::next(latest); previous != context.rend() && included < 8 && query.size() < 3999; ++previous)
+    {
+        if ((previous->role != "user" && previous->role != "assistant") || previous->content.empty())
+            continue;
+        query += '\n' + revia::llm::CompactToTokenBudget(previous->content, std::min<std::size_t>(599, 3999 - query.size()), " [...] ");
+        ++included;
+        if (previous->role == "user" && !ContinuesRecentTopic(previous->content))
+            break;
+    }
+    return query;
+}
+
+revia::memory::MemoryScope promptBuilder::CapturedMemoryScope(const std::vector<conversationMessage>& context)
+{
+    for (auto message = context.rbegin(); message != context.rend(); ++message)
+        if (message->role == "user")
+            return message->memoryScope.value_or(revia::memory::MemoryScope{});
+    return {};
+}
 
 nlohmann::json promptBuilder::BuildMessages(const aiProfile& profile, const std::vector<conversationMessage>& context,
     const std::vector<float>& queryEmbedding, const std::string& embeddingModel, std::vector<latencySample>* timings,
@@ -70,31 +126,24 @@ nlohmann::json promptBuilder::BuildMessages(const aiProfile& profile, const std:
     const bool moveTurnContext = stablePrefix && !context.empty() &&
         context.back().role == "user" && !context.back().content.empty();
 
-    std::string retrievalQuery;
+    std::string latestInput;
     for (auto message = context.rbegin(); message != context.rend(); ++message)
     {
         if (message->role == "user" && !message->content.empty())
         {
-            retrievalQuery = message->content;
+            latestInput = message->content;
             break;
         }
     }
-    // Retrieval needs what the turn is about, not all of it. A 380,000-character paste
-    // cost almost a second of memory scoring for a query no memory could match better
-    // than its opening would.
-    constexpr std::size_t MaximumRetrievalQueryCharacters = 4000;
-    revia::utf8::Truncate(retrievalQuery, MaximumRetrievalQueryCharacters);
+    const std::string retrievalQuery = BuildRetrievalQuery(context);
+    const auto scope = CapturedMemoryScope(context);
 
     const auto retrievalStarted = std::chrono::steady_clock::now();
-    const bool briefSocial = revia::agents::ConversationStylePolicy::IsBriefSocialTurn(retrievalQuery);
-    const std::string memoryBlock = memoryAccess == revia::llm::PrivateMemoryAccess::ProfileSetting &&
-        profile.bMemoryEnabled && !briefSocial
-        ? memory.BuildPromptBlock(
-            retrievalQuery,
-            6,
-            queryEmbedding,
-            embeddingModel)
-        : std::string{};
+    const bool briefSocial = revia::agents::ConversationStylePolicy::IsBriefSocialTurn(latestInput);
+    const std::string memoryBlock =
+        memoryAccess == revia::llm::PrivateMemoryAccess::ProfileSetting && profile.bMemoryEnabled && !briefSocial
+            ? memory.BuildPromptBlock(retrievalQuery, 6, queryEmbedding, embeddingModel, 0, &scope)
+            : std::string{};
     if (timings)
     {
         timings->push_back({"memory_retrieval", ElapsedMilliseconds(retrievalStarted)});
@@ -200,9 +249,9 @@ nlohmann::json promptBuilder::BuildMessages(const aiProfile& profile, const std:
 }
 
 std::string promptBuilder::BuildRelatedMemoryBlock(const std::string& query, const std::vector<float>& queryEmbedding,
-    const std::string& embeddingModel, const std::size_t maxEntries) const
+    const std::string& embeddingModel, const std::size_t maxEntries, const revia::memory::MemoryScope* scope) const
 {
-    return memory.BuildPromptBlock(query, maxEntries, queryEmbedding, embeddingModel);
+    return memory.BuildPromptBlock(query, maxEntries, queryEmbedding, embeddingModel, 0, scope);
 }
 
 std::string promptBuilder::BuildMemoryBlock(const std::string& query) const
