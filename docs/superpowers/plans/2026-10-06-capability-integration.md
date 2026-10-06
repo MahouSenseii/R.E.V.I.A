@@ -25,11 +25,11 @@
 | Package | Owner | Produced interfaces / integration | Current status |
 |---|---|---|---|
 | Continuity | Level 2 continuity supervisor | Existing context/prompt owners; `conversationContext::RestoreMessages(source, recentMessages)`; exact backend token fitting with conservative fallback; actual delivered tier. | Implementation and focused checks complete. |
-| Process and operator | Level 2 operator supervisor | `ProcessRequest/Result/Settings`; typed `execute_process` and guarded `write_text_file`; GoalRunner recovery and independent completion evidence callbacks. | Implementation and focused checks complete; final combined regression pending. |
+| Process and operator | Level 2 operator supervisor | `ProcessRequest/Result/Settings`; typed `execute_process` and guarded `write_text_file`; GoalRunner recovery and independent completion evidence callbacks. | Implementation and final combined regression complete. |
 | Art | Level 2 art supervisor | `DrawingRequestPolicy::Classify`, cancellable `ImageGenerator::Generate`, `Cancel/Snapshot/Unload`, admitted `DocumentWorkshop::GenerateImage`. | Implementation and two-provider live acceptance complete within the limits below. |
-| Runtime/config/build | Level 3 director | Session routing/admission/cancellation, settings persistence and controls, CMake registration, resource setup and final acceptance. | Integration changes complete; Director is verifying the final build. |
+| Runtime/config/build | Level 3 director | Session routing/admission/cancellation, settings persistence and controls, CMake registration, resource setup and final acceptance. | Verified and delivered to main. |
 | Scoped memory/archive | Continuity supervisor and Director | Person attribution, conservative legacy-unattributed migration, scoped recall/restore, guarded introductions and admitted learning/reflection. | Implementation, focused storage/relationship checks and independent review complete. |
-| Interactive browser and tool workers | Operator and continuity supervisors | Owned browser session/receipts; bounded tool workers through existing authority, cumulative budgets, reviewer and parent acceptance. | Implementation and focused checks complete; final integrated native fixtures pending. |
+| Interactive browser and tool workers | Operator and continuity supervisors | Owned browser session/receipts; bounded tool workers through existing authority, cumulative budgets, reviewer and parent acceptance. | Implementation and final integrated native fixtures complete. |
 | Guest preparation and measurements | Independent review/support agent | Opt-in Windows Sandbox doctor/configuration/receipt tooling; fixed direct-backend 16K/32K measurements. | Tooling and measurements complete. Live guest adapters and game qualification remain outstanding. |
 
 ## Integration steps
@@ -46,7 +46,7 @@
 - [x] Run three fixed direct-backend probes each at 16K and 32K, retain exact traffic and measurements, and leave context defaults unchanged.
 - [x] Complete independent source review and address material findings, including operator registration revision, browser task ownership, tool recovery/token charging and art audit acceptance.
 - [x] Complete the Director's final combined native/Qt build and relevant regression run against the integrated source, including the latest operator and worker fixtures.
-- [ ] Integrate tested commits into main, push, verify remote head and clean up the task's merged branch/worktree.
+- [x] Integrate tested commits into main, push, verify remote head and clean up the task's merged branch/worktree.
 - [ ] Separately deliver and exercise real guest capture/input/process/reset/reconnect adapters after host readiness; qualify a game-specific policy before making game competence claims.
 
 ## Current execution ledger
@@ -55,9 +55,9 @@
 
 | Real hierarchy | Status at this ledger update | Remaining responsibility |
 |---|---|---|
-| Level 3 Director (`/root`) | Verification complete; integrating | Authorized Git delivery and cleanup. |
+| Level 3 Director (`/root`) | Verified, delivered and cleaned up | No remaining work in this delivery; guest adapters and game qualification remain separately outstanding. |
 | Level 2 continuity supervisor (`/root/continuity_implementation`) | Finished; product files frozen | Respond only to concrete integration failures. Scoped storage, relationship and existing workflow suites plus new parser/budget/recovery checks passed in focused runs. |
-| Level 2 operator supervisor (`/root/operator_implementation`) | Finished; product files frozen | Respond only to concrete integration failures. Final fixture changes have syntax verification; combined execution remains with Director. |
+| Level 2 operator supervisor (`/root/operator_implementation`) | Finished; product files frozen | Final fixtures passed the Director's combined regression. |
 | Level 2 art supervisor | Finished | Native live-provider results and quality limitations handed off; no active art implementation remains. |
 | Independent review/support (`/root/integration_review`) | Review and support complete; ledger handoff | Final bounded review found no remaining P1/P2 after rereading fixes. Guest/context/proxy checks passed; no additional product edits or shared builds. |
 
@@ -79,4 +79,6 @@ Ruling: user execution authorization covers the reviewed design and routine reve
 
 **Packaged application:** `build/capability-release/ReviaDesktop.exe` contains the completed application build and its Qt/compiler dependencies. A read-only import check found no unresolved imports across 23 binaries and 195 import references on this host. Its SHA256 is `52FD12597DFFE90501D531C881956EEDADA6C25CE538AD596D9E86D0FF845AF9`. The source-build desktop smoke test passed. Automatic approval review blocked the separate packaged-app smoke command with "blocked by policy" and no specific reason, so standalone package launch is not claimed as verified. This local package resolves the primary checkout's Config and Tools rather than establishing another runtime root.
 
-Preserved local live evidence is under `C:/Users/davis/OneDrive/Documents/GitHub/R.E.V.I.A/build/capability-evidence-20261006/`, including `art-acceptance-sd-metrics`, `art-acceptance-sdxl`, `context-benchmark-20261006`, `ui-renders` and `verification`. Runtime reports and generated images remain user data rather than tracked source. The Git delivery box remains unchecked until integration, push and cleanup are verified.
+Preserved local live evidence is under `C:/Users/davis/OneDrive/Documents/GitHub/R.E.V.I.A/build/capability-evidence-20261006/`, including `art-acceptance-sd-metrics`, `art-acceptance-sdxl`, `context-benchmark-20261006`, `ui-renders` and `verification`. Runtime reports and generated images remain user data rather than tracked source.
+
+**Git delivery:** Implementation commit `608e2eb74a413bb60495271fb462872d02863625` was fast-forwarded into main and pushed to GitHub; the remote main SHA was verified. Four focused native checks passed again from the merged primary checkout. The managed capability-upgrades worktree was archived after preserving its live evidence and remaining runtime data, and the merged local `codex/capability-upgrades` branch was deleted. The owner's pre-existing local IDE/CMake changes and `.output.txt` remain uncommitted and preserved. Real guest adapters and game qualification remain outside this completed delivery.
