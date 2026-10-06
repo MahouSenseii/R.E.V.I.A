@@ -3,7 +3,7 @@ const phases = new Set(['offline', 'idle', 'listening', 'thinking', 'responding'
 const clamp = (value, min = 0, max = 1) => Math.max(min, Math.min(max, value));
 
 export const parameterDefinitions = [
-    ['ReviaMouthGate', 'Speaking gate only; not audio amplitude or visemes.', 0, 1],
+    ['ReviaMouthGate', 'Output-audio opening; legacy voices use a speaking gate. No visemes.', 0, 1],
     ['ReviaJoy', 'Happy, excited and playful expression strength.', 0, 1],
     ['ReviaSadness', 'Sad, lonely and sulky expression strength.', 0, 1],
     ['ReviaAnger', 'Angry and frustrated expression strength.', 0, 1],
@@ -43,10 +43,21 @@ export function mapSnapshot(snapshot, now = Date.now())
     if (snapshot.phase === 'thinking') values.ReviaFocus = Math.max(values.ReviaFocus, 0.35);
     values.ReviaEngagement = clamp(snapshot.conversation_momentum);
     values.ReviaGazeX = snapshot.gaze_target === 'screen' ? 0.35 : 0;
-    values.ReviaMouthGate = transientFresh && snapshot.phase === 'speaking' && snapshot.speaking === true
-        ? clamp(snapshot.mouth) : 0;
+    values.ReviaMouthGate = snapshot.mouth_track != null
+        ? playbackMouth(snapshot.mouth_track, snapshot.speaking === true, now)
+        : transientFresh && snapshot.phase === 'speaking' && snapshot.speaking === true ? clamp(snapshot.mouth) : 0;
     values.ReviaListening = transientFresh && snapshot.phase === 'listening' && snapshot.listening === true ? 1 : 0;
     return { faceFound: true, mode: 'set', parameterValues: entries(values) };
+}
+
+function playbackMouth(track, speaking, now)
+{
+    if (!speaking || !Number.isSafeInteger(track.started_at_ms) || track.started_at_ms <= 0 ||
+        track.started_at_ms > now + 5000 || track.interval_ms !== 50 ||
+        !Array.isArray(track.values) || track.values.length === 0 || track.values.length > 2400 ||
+        !track.values.every(value => Number.isInteger(value) && value >= 0 && value <= 255)) return 0;
+    const index = Math.floor((now - track.started_at_ms) / track.interval_ms);
+    return index >= 0 && index < track.values.length ? track.values[index] / 255 : 0;
 }
 
 function entries(values)

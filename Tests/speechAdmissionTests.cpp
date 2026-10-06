@@ -111,6 +111,7 @@ struct QwenFixture
     Backend backend;
     VoicePreset voice;
     std::vector<SpeechEvent> events;
+    std::function<void(const SpeechEvent&)> onEvent;
     SpeechService service;
     explicit QwenFixture(const bool directPcm = true)
     {
@@ -125,8 +126,13 @@ struct QwenFixture
         settings.qwenDevice = "cpu";
         settings.voiceDataPath = directory.root.string();
         settings.bQwenDirectPcm = directPcm;
-        SpeechServiceTestAccess::ConfigureSynthesisWithoutWorkers(
-            service, settings, voice, [&](const auto& event) { events.push_back(event); });
+        SpeechServiceTestAccess::ConfigureSynthesisWithoutWorkers(service, settings, voice,
+            [&](const auto& event)
+            {
+                events.push_back(event);
+                if (onEvent)
+                    onEvent(event);
+            });
         service.SetActiveProfile("fixture-profile");
         service.UseVoice(voice);
     }
@@ -208,6 +214,39 @@ void TestCachedCueGuardStopsBeforeFakePlayer()
               std::none_of(fixture.events.begin() + static_cast<std::ptrdiff_t>(start), fixture.events.end(),
                   [](const auto& event) { return event.phase == "CuePlaying"; }),
         "Reentrant player revocation published stale playing activity or retained the audio flag.");
+}
+
+void TestRevokedActiveQwenPlaybackPublishesOnlyNeutralCleanup()
+{
+    QwenFixture fixture(false);
+    bool current = true;
+    fixture.service.SetAdmissionGuard([&] { return current; });
+    fixture.service.Speak("PRIVATE_REVOKED_PLAYBACK_SENTINEL", {}, 88);
+    SpeechServiceTestAccess::TakeNext(fixture.service)();
+    const auto playback = SpeechServiceTestAccess::TakeQwenPlayback(fixture.service);
+    std::size_t revokedAt = 0;
+    bool trackedPlayback = false;
+    fixture.onEvent = [&](const SpeechEvent& event)
+    {
+        if (event.phase == "Speaking")
+        {
+            trackedPlayback = event.playbackEnvelope && !event.playbackEnvelope->values.empty();
+            revokedAt = fixture.events.size();
+            current = false;
+            fixture.service.SetAdmissionGuard([] { return true; });
+        }
+    };
+    int started = 0;
+    Check(playback([&] { ++started; return true; }), "Revoked playback fell through to another speech backend.");
+    Check(started == 1 && trackedPlayback && revokedAt > 0, "Admission was not revoked after the actual tracked playback start.");
+    Check(fixture.events.size() == revokedAt + 1, "Revoked playback did not publish exactly one neutral cleanup event.");
+    const auto& cleanup = fixture.events.back();
+    Check(cleanup.phase == "PlaybackEnded" && cleanup.utteranceId == 88 && cleanup.detail == "Voice audio playback has finished." &&
+              cleanup.device.empty() && cleanup.elapsedMilliseconds < 0 && cleanup.queueDepth == 0 && cleanup.timings.empty() &&
+              !cleanup.synthesis && !cleanup.playbackEnvelope,
+        "Revoked playback retained its mouth track or published stale private speech evidence.");
+    Check(!fixture.service.IsAudioPlaying() && !std::filesystem::exists(fixture.backend.outputPath),
+        "Revoked active playback retained audio activity or its temporary WAV.");
 }
 
 void TestBatchingDoesNotMergeDistinctAdmissionContexts()
@@ -335,8 +374,9 @@ void RunSpeechAdmissionTests()
     TestRevokedQwenBeforeAndAfterRealRequestDropsDelivery();
     TestRevokedDiskCompletionReleasesTemporaryAudio();
     TestCachedCueGuardStopsBeforeFakePlayer();
+    TestRevokedActiveQwenPlaybackPublishesOnlyNeutralCleanup();
     TestBatchingDoesNotMergeDistinctAdmissionContexts();
     TestConcurrentProducerKeepsItsCapturedAdmission();
     TestExplicitHandlesFailClosedAndPreserveBatchScope();
-    std::cout << "Speech admission tests passed (8 queued owner fixtures; no physical playback).\n";
+    std::cout << "Speech admission tests passed (9 owner fixtures; no physical playback).\n";
 }

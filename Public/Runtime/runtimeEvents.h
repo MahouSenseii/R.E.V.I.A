@@ -2,11 +2,13 @@
 
 #include "Runtime/affectTypes.h"
 #include "Runtime/runtimeStamp.h"
+#include "Speech/playbackEnvelope.h"
 
 #include <chrono>
 #include <cstdint>
 #include <functional>
 #include <mutex>
+#include <memory>
 #include <string>
 #include <unordered_map>
 #include <utility>
@@ -130,6 +132,7 @@ struct RuntimeEvent
     // rather than a zero, which would read as "nothing is using it".
     bool usageMeasured = false;
     std::chrono::system_clock::time_point occurredAt = std::chrono::system_clock::now();
+    std::shared_ptr<const speech::PlaybackEnvelope> playbackEnvelope;
 };
 
 std::string ToString(RuntimeState state);

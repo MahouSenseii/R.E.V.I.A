@@ -10,7 +10,18 @@ exported Live2D model. No third-party character or sample rig was substituted.
 
 The editable 25-layer PSD and registered component PNGs are now in
 [Live2D](Live2D/README.md). Its corrected head was imported and saved in Cubism
-5.3.04 FREE. The animation rig and VTube Studio runtime verification remain open.
+5.3.04 FREE. A first rig is saved in
+`Models/Live2D/Revia/Source/Revia-first-rig.cmo3` and exported locally. It has
+initial expression, blink, speaking-mouth and lean controls. Blink uses basic
+compression and may need visual polish; mouth control now accepts a WAV loudness
+track with estimated playback timing and retains the older gate fallback.
+Gaze, head X/Y turns, hair physics and independently animated limbs remain
+unrigged. VTube Studio has loaded Revia and displayed the neutral pose.
+Authentication and the eleven visual mappings are complete. Controlled live
+checks confirmed the authored expression/mouth/lean controls and automatic
+blink/breath. Actual conversation/speech worked with the original gate, and
+renderer restart/reauthentication passed. The owner reported poor gate lip sync;
+the corrected loudness-track build awaits fresh real conversation acceptance.
 
 ## Layer preparation
 
@@ -37,6 +48,8 @@ they can respond to attention and affect without recoloring the entire character
 
 ## Cubism rig specification
 
+The following is the intended full rig, beyond the initial controls above.
+Parameter IDs in the export do not establish that every motion is authored.
 Rig a stable closed-mouth neutral pose first. Establish face and body turn
 deformers before secondary hair/jacket physics. Check all corners of X/Y/Z
 combinations for holes, inverted meshes and eye/mouth drift.
@@ -58,25 +71,42 @@ combinations for holes, inverted meshes and eye/mouth drift.
 | ParamReviaListening | 0…1 | ReviaListening → attentive small posture change |
 | ParamReviaEngagement | 0…1 | ReviaEngagement → subtle idle-motion strength |
 
-The custom ParamRevia outputs are a rigging specification; they must actually be
-created and keyed in Cubism. The adapter creates tracking inputs with names
+The proposed ParamRevia responses must be authored and checked in Cubism; the
+first rig does not establish every response in this specification. The adapter
+creates tracking inputs with names
 beginning `Revia`, not these output parameters. VTube Studio mappings connect them.
-Do not map webcam mouth tracking on top of the Revia mouth gate. For polished lip
-sync, replace that mapping with measured Revia output audio, not the user's mic.
+Keep webcam mouth tracking off for the Revia mouth input. Qwen now supplies
+measured loudness from Revia's own output WAV through that same input; older/SAPI
+speech retains a gate. Detailed phoneme shapes require additional mouth rigging.
 
 ## Required production deliverables
 
-The layered `.psd` is checked in. A corrected, unrigged `.cmo3` was saved locally
-under `Models/Live2D/Revia/Source/Revia-reference-matched.cmo3`. No `.moc3` has been
-exported. Complete the rig, then export a real `Revia.model3.json`, its referenced
-`.moc3` and texture atlas files, plus configured `.physics3.json` and any authored
-expressions/motions.
-Keep editable source files with the artist/rigging project and deploy runtime files
-as local user data under `Models/Live2D/Revia` or VTube Studio's model folder.
+The layered `.psd` is checked in. The first rig source is
+`Models/Live2D/Revia/Source/Revia-first-rig.cmo3`; the earlier reference-matched
+source is retained. The native export under `Models/Live2D/Revia/Runtime` contains
+`Revia.model3.json`, `Revia.moc3`, `Revia.cdi3.json` and
+`Revia.2048/texture_00.png`. Its parameter groups declare both eye-open parameters
+for `EyeBlink` and `ParamMouthOpenY` for `LipSync`. No physics file is authored.
+
+These runtime files were copied into the local VTube Studio model folder:
+
+`D:/SteamLibrary/steamapps/common/VTube Studio/VTube Studio_Data/StreamingAssets/Live2DModels/Revia`
+
+File installation and loading are complete, and the neutral pose was visually
+checked in VTube Studio. Its Plugin API is enabled; authentication and mappings
+are verified. The production adapter passed corrupt/missing/offline source
+resets, recovery and the speaking-gate expiry against the actual renderer using
+an isolated test snapshot. The running desktop now writes a fresh Presence
+snapshot. Real speech and renderer restart are confirmed for the original gate
+build; the corrected loudness-track build still needs a fresh runtime check.
+The renderer selection in
+`Config/avatar.json` remains `unselected`. Editable sources and runtime files
+remain ignored local user data.
 
 Live2D documents the editor's
 [runtime export procedure](https://docs.live2d.com/en/cubism-editor-manual/export-moc3-motion3-files/).
-After import, verify neutral pose, blink, gaze, every affect input, long speech,
-offline reset, disconnect and restart using the
+After loading, verify neutral pose, blink, mouth, authored affect/lean controls,
+long speech, offline reset, disconnect and restart using the
 [Revia VTube Studio adapter](../../../Tools/Presence/Live2D/README.md).
-Only then select the real renderer/model in `Config/avatar.json`.
+Finish and verify gaze, turns and physics before claiming those motions. Only
+after live acceptance select the real renderer/model in `Config/avatar.json`.

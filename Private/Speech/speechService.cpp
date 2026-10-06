@@ -9,6 +9,7 @@
 #include <array>
 #include <chrono>
 #include <cctype>
+#include <exception>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
@@ -34,6 +35,19 @@ namespace
     }
 
     constexpr const char* WindowsSapiResource = "CPU / Windows SAPI";
+
+    std::optional<PlaybackEnvelope> PreparePlaybackEnvelope(const VoiceOperationResult& audio, const std::filesystem::path& path)
+    {
+        try
+        {
+            return audio.audioBytes.empty() ? BuildPlaybackEnvelope(path) : BuildPlaybackEnvelope(audio.audioBytes);
+        }
+        catch (const std::exception&)
+        {
+            // Optional presentation data must not prevent voice playback.
+            return std::nullopt;
+        }
+    }
 
     VoiceOperationResult ManualVoiceOperation(
         const std::function<VoiceOperationResult()>& operation, const char* failureMessage, const char* successMessage)
@@ -2484,10 +2498,11 @@ void SpeechService::PlayBankClip(
 #endif
 }
 
-bool SpeechService::PlayPreparedQwen(const PreparedUtterance& preparedUtterance)
+bool SpeechService::PlayPreparedQwen(const PreparedUtterance& preparedUtterance, const std::function<bool()>& player)
 {
 #ifndef _WIN32
     (void)preparedUtterance;
+    (void)player;
     return false;
 #else
     const Utterance& utterance = preparedUtterance.utterance;
@@ -2511,18 +2526,25 @@ bool SpeechService::PlayPreparedQwen(const PreparedUtterance& preparedUtterance)
     playing.utteranceId = utterance.utteranceId;
     playing.device = ActualQwenResource(generated);
     const bool inMemory = !generated.audioBytes.empty();
+    auto envelope = PreparePlaybackEnvelope(generated, output);
     const std::wstring diskPath = inMemory ? std::wstring{} : output.wstring();
     const wchar_t* sound = inMemory ? reinterpret_cast<const wchar_t*>(generated.audioBytes.data()) : diskPath.c_str();
     const DWORD flags = (inMemory ? SND_MEMORY : SND_FILENAME) | SND_ASYNC | SND_NODEFAULT;
-    if (!AdmissionCurrent(utterance))
+    if (!AdmissionCurrent(utterance) || !StillCurrent(utterance.generation, generation.load(), enabled.load()))
     {
         ReleaseAudio(output, preparedUtterance.lifetime);
         return true;
     }
-    if (!PlaySoundW(sound, nullptr, flags))
+    if (!(player ? player() : PlaySoundW(sound, nullptr, flags) != 0))
     {
         Notify({"Fallback", "Windows could not play the Qwen3-TTS WAV; using SAPI.", -1.0, 0, utterance.utteranceId, WindowsSapiResource});
         return false;
+    }
+    if (envelope)
+    {
+        envelope->startedAtUnixMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count();
+        playing.playbackEnvelope = std::make_shared<const PlaybackEnvelope>(std::move(*envelope));
     }
     Notify({"FirstAudioPlayed", "Ordered Qwen3-TTS playback began.", ElapsedMilliseconds(utterance.queuedAt), 0, utterance.utteranceId,
         ActualQwenResource(generated)});
@@ -2541,7 +2563,8 @@ bool SpeechService::PlayPreparedQwen(const PreparedUtterance& preparedUtterance)
     {
         if (generation.load() != utterance.generation || !enabled.load() || !AdmissionCurrent(utterance))
         {
-            PlaySoundW(nullptr, nullptr, 0);
+            if (!player)
+                PlaySoundW(nullptr, nullptr, 0);
             cancelled = true;
             break;
         }
@@ -2552,7 +2575,10 @@ bool SpeechService::PlayPreparedQwen(const PreparedUtterance& preparedUtterance)
     if (!inMemory)
         std::filesystem::remove(output, error);
     if (!AdmissionCurrent(utterance))
+    {
+        Notify({"PlaybackEnded", "Voice audio playback has finished.", -1.0, 0, utterance.utteranceId});
         return true;
+    }
     Notify({interrupted ? "Interrupted" : (cancelled ? "Stopped" : "Ready"),
         interrupted ? "You started speaking, so I stopped." : (cancelled ? "Speech was stopped." : "Qwen3-TTS speech completed."),
         ElapsedMilliseconds(startedAt), 0, utterance.utteranceId, ActualQwenResource(generated)});

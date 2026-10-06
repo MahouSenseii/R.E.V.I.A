@@ -7,6 +7,7 @@
 #include <cstring>
 #include <fstream>
 #include <limits>
+#include <streambuf>
 
 namespace revia::performance
 {
@@ -103,32 +104,50 @@ std::int64_t PcmAudio::DurationMs() const
     return sampleRate > 0 ? (FrameCount() * 1000) / sampleRate : 0;
 }
 
-bool ReadWavFile(const std::filesystem::path& path, PcmAudio& outAudio, std::string& outError, const std::int64_t maximumDurationMs)
+namespace
+{
+
+class WavSpanBuffer : public std::streambuf
+{
+public:
+    explicit WavSpanBuffer(const std::span<const std::uint8_t> bytes)
+    {
+        if (!bytes.empty())
+        {
+            auto* data = const_cast<char*>(reinterpret_cast<const char*>(bytes.data()));
+            setg(data, data, data + bytes.size());
+        }
+    }
+
+protected:
+    pos_type seekoff(const off_type offset, const std::ios_base::seekdir direction, const std::ios_base::openmode mode) override
+    {
+        if ((mode & std::ios_base::in) == 0 || eback() == nullptr)
+            return pos_type(off_type(-1));
+        const off_type length = egptr() - eback();
+        const off_type base = direction == std::ios_base::beg ? 0 : direction == std::ios_base::end ? length : gptr() - eback();
+        if (offset < -base || offset > length - base)
+            return pos_type(off_type(-1));
+        const off_type position = base + offset;
+        setg(eback(), eback() + position, egptr());
+        return pos_type(position);
+    }
+
+    pos_type seekpos(const pos_type position, const std::ios_base::openmode mode) override
+    {
+        return seekoff(static_cast<off_type>(position), std::ios_base::beg, mode);
+    }
+};
+
+bool ReadWavStream(std::istream& file, const std::uintmax_t fileBytes, const std::string& label,
+    PcmAudio& outAudio, std::string& outError, const std::int64_t maximumDurationMs)
 {
     outAudio = {};
-    std::error_code error;
-    if (!std::filesystem::is_regular_file(path, error))
-    {
-        outError = "There is no readable file at " + revia::actions::PathToUtf8(path.filename()) + ".";
-        return false;
-    }
-
-    // Zero when it cannot be measured, which leaves the header's own sizes in charge.
-    const std::uintmax_t fileBytes = std::filesystem::file_size(path, error);
-    if (error) error.clear();
-
-    std::ifstream file(path, std::ios::binary);
-    if (!file)
-    {
-        outError = "Could not open " + revia::actions::PathToUtf8(path.filename()) + ".";
-        return false;
-    }
-
     unsigned char header[12]{};
     if (!file.read(reinterpret_cast<char*>(header), sizeof(header)) ||
         std::memcmp(header, "RIFF", 4) != 0 || std::memcmp(header + 8, "WAVE", 4) != 0)
     {
-        outError = revia::actions::PathToUtf8(path.filename()) + " is not a RIFF/WAVE file.";
+        outError = label + " is not a RIFF/WAVE file.";
         return false;
     }
 
@@ -152,12 +171,12 @@ bool ReadWavFile(const std::filesystem::path& path, PcmAudio& outAudio, std::str
         {
             if (chunkSize < 16)
             {
-                outError = "The format chunk in " + revia::actions::PathToUtf8(path.filename()) + " is too short.";
+                outError = "The format chunk in " + label + " is too short.";
                 return false;
             }
             if (chunkSize > MaximumFormatChunkBytes)
             {
-                outError = "The format chunk in " + revia::actions::PathToUtf8(path.filename()) +
+                outError = "The format chunk in " + label +
                     " declares an impossible size.";
                 return false;
             }
@@ -165,7 +184,7 @@ bool ReadWavFile(const std::filesystem::path& path, PcmAudio& outAudio, std::str
             if (!file.read(reinterpret_cast<char*>(formatChunk.data()),
                     static_cast<std::streamsize>(chunkSize)))
             {
-                outError = "The format chunk in " + revia::actions::PathToUtf8(path.filename()) + " is truncated.";
+                outError = "The format chunk in " + label + " is truncated.";
                 return false;
             }
             format = ReadU16(formatChunk.data());
@@ -186,7 +205,7 @@ bool ReadWavFile(const std::filesystem::path& path, PcmAudio& outAudio, std::str
         {
             if (!haveFormat)
             {
-                outError = revia::actions::PathToUtf8(path.filename()) + " has audio data before its format.";
+                outError = label + " has audio data before its format.";
                 return false;
             }
             const bool supportedFormat = format == FormatPcm || format == FormatFloat;
@@ -196,20 +215,20 @@ bool ReadWavFile(const std::filesystem::path& path, PcmAudio& outAudio, std::str
                     bitsPerSample == 32);
             if (!supportedFormat || !supportedDepth)
             {
-                outError = revia::actions::PathToUtf8(path.filename()) + " uses an unsupported encoding (format " +
+                outError = label + " uses an unsupported encoding (format " +
                     std::to_string(format) + ", " + std::to_string(bitsPerSample) +
                     "-bit). Save it as 16-bit PCM WAV.";
                 return false;
             }
             if (channels < 1 || channels > 2)
             {
-                outError = revia::actions::PathToUtf8(path.filename()) + " has " + std::to_string(channels) +
+                outError = label + " has " + std::to_string(channels) +
                     " channels; mono or stereo is required.";
                 return false;
             }
             if (sampleRate < 8000 || sampleRate > 192000)
             {
-                outError = revia::actions::PathToUtf8(path.filename()) + " has an unusable sample rate of " +
+                outError = label + " has an unusable sample rate of " +
                     std::to_string(sampleRate) + " Hz.";
                 return false;
             }
@@ -218,7 +237,7 @@ bool ReadWavFile(const std::filesystem::path& path, PcmAudio& outAudio, std::str
             const std::uint32_t frameBytes = bytesPerSample * channels;
             if (frameBytes == 0)
             {
-                outError = revia::actions::PathToUtf8(path.filename()) + " declares a zero-length frame.";
+                outError = label + " declares a zero-length frame.";
                 return false;
             }
             // Streaming encoders write a placeholder size (0xFFFFFFFF is common) and never
@@ -237,7 +256,7 @@ bool ReadWavFile(const std::filesystem::path& path, PcmAudio& outAudio, std::str
             if (maximumDurationMs > 0 &&
                 (frames * 1000) / static_cast<std::int64_t>(sampleRate) > maximumDurationMs)
             {
-                outError = revia::actions::PathToUtf8(path.filename()) + " is longer than the configured limit.";
+                outError = label + " is longer than the configured limit.";
                 return false;
             }
 
@@ -252,7 +271,7 @@ bool ReadWavFile(const std::filesystem::path& path, PcmAudio& outAudio, std::str
             frames = std::min(frames, readFrames);
             if (frames <= 0)
             {
-                outError = revia::actions::PathToUtf8(path.filename()) + " contains no audio.";
+                outError = label + " contains no audio.";
                 return false;
             }
 
@@ -281,8 +300,37 @@ bool ReadWavFile(const std::filesystem::path& path, PcmAudio& outAudio, std::str
         }
     }
 
-    outError = revia::actions::PathToUtf8(path.filename()) + " has no audio data chunk.";
+    outError = label + " has no audio data chunk.";
     return false;
+}
+
+} // namespace
+
+bool ReadWavFile(const std::filesystem::path& path, PcmAudio& outAudio, std::string& outError, const std::int64_t maximumDurationMs)
+{
+    outAudio = {};
+    std::error_code error;
+    if (!std::filesystem::is_regular_file(path, error))
+    {
+        outError = "There is no readable file at " + revia::actions::PathToUtf8(path.filename()) + ".";
+        return false;
+    }
+    const std::uintmax_t fileBytes = std::filesystem::file_size(path, error);
+    if (error) error.clear();
+    std::ifstream file(path, std::ios::binary);
+    if (!file)
+    {
+        outError = "Could not open " + revia::actions::PathToUtf8(path.filename()) + ".";
+        return false;
+    }
+    return ReadWavStream(file, fileBytes, revia::actions::PathToUtf8(path.filename()), outAudio, outError, maximumDurationMs);
+}
+
+bool ReadWavBytes(const std::span<const std::uint8_t> bytes, PcmAudio& outAudio, std::string& outError, const std::int64_t maximumDurationMs)
+{
+    WavSpanBuffer buffer(bytes);
+    std::istream stream(&buffer);
+    return ReadWavStream(stream, bytes.size(), "WAV audio", outAudio, outError, maximumDurationMs);
 }
 
 bool ConvertToStereo(PcmAudio& audio, std::string& outError)

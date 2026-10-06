@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -27,6 +28,10 @@ struct PcmAudio
 // Converts mono/stereo 8/16/24/32-bit PCM or 32/64-bit float RIFF/WAVE to 16-bit; rejects other formats.
 // maximumDurationMs bounds header duration before audio allocation; zero disables the limit.
 [[nodiscard]] bool ReadWavFile(const std::filesystem::path& path,
+    PcmAudio& outAudio, std::string& outError, std::int64_t maximumDurationMs = 0);
+
+// Uses the same bounded decoder without copying the encoded input into another stream.
+[[nodiscard]] bool ReadWavBytes(std::span<const std::uint8_t> bytes,
     PcmAudio& outAudio, std::string& outError, std::int64_t maximumDurationMs = 0);
 
 // Duplicates a mono track across both channels. A mono vocal over a stereo backing

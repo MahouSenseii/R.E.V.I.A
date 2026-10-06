@@ -66,6 +66,32 @@ struct SpeechServiceTestAccess
             service.condition.notify_all();
         };
     }
+    static std::function<bool(const std::function<bool()>&)> TakeQwenPlayback(SpeechService& service)
+    {
+        SpeechService::PreparedUtterance item;
+        {
+            std::lock_guard lock(service.mutex);
+            const auto sequence = service.playbackOrder.PopFrontReady();
+            tests::Check(sequence.has_value(), "No real prepared Qwen phrase to play.");
+            item = std::move(service.prepared.at(*sequence));
+            service.prepared.erase(*sequence);
+            service.bufferedAudioBytes -= item.bufferedBytes;
+            tests::Check(item.qwenAttempted && item.result.succeeded, "The prepared phrase did not complete Qwen synthesis.");
+            service.playingAudio = true;
+            service.activeUtteranceId.store(item.utterance.utteranceId);
+        }
+        return [&service, item = std::move(item)](const auto& player)
+        {
+            const bool consumed = service.PlayPreparedQwen(item, player);
+            {
+                std::lock_guard lock(service.mutex);
+                service.playingAudio = false;
+                service.activeUtteranceId.store(0);
+            }
+            service.condition.notify_all();
+            return consumed;
+        };
+    }
     static void AssignAdapterTestVoice(SpeechService& service, VoicePreset preset = {})
     {
         service.configuration.bEnabled = true;

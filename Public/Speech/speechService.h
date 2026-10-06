@@ -8,6 +8,7 @@
 #include "Runtime/affectTypes.h"
 #include "Speech/qwenTtsPool.h"
 #include "Speech/orderedSpeechQueue.h"
+#include "Speech/playbackEnvelope.h"
 #include "Speech/voiceActivityMonitor.h"
 #include "Speech/vocalization.h"
 #include "Speech/voicePresetStore.h"
@@ -57,6 +58,7 @@ struct SpeechEvent
     std::string device;
     std::vector<latencySample> timings;
     std::optional<SynthesisObservation> synthesis;
+    std::shared_ptr<const PlaybackEnvelope> playbackEnvelope;
 };
 
 struct SpeechServiceTestAccess;
@@ -270,7 +272,7 @@ private:
     // per session. Graph capture is deferred to that phrase, so this is the earliest
     // point at which the answer is an observation rather than a setting.
     void VerifyInferenceBackend(const VoiceOperationResult& result, std::uint64_t utteranceId);
-    bool PlayPreparedQwen(const PreparedUtterance& prepared);
+    bool PlayPreparedQwen(const PreparedUtterance& prepared, const std::function<bool()>& player = {});
     // Plays one bank clip in its place in the reply, and never deletes it.
     void PlayVocalizationClip(const PreparedUtterance& prepared);
     void PrepareSystemCue();

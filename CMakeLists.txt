@@ -355,6 +355,9 @@ if(BUILD_TESTING)
     revia_add_studio_check(ReviaRelationshipEvidenceTests Tests/relationshipEvidenceTests.cpp RunRelationshipEvidenceTests)
     revia_add_studio_check(ReviaConversationGuidanceTests Tests/conversationGuidanceTests.cpp RunConversationGuidanceTests)
     revia_add_studio_check(ReviaSpeechAdmissionTests Tests/speechAdmissionTests.cpp RunSpeechAdmissionTests)
+    revia_add_studio_check(ReviaPlaybackEnvelopeTests Tests/playbackEnvelopeTests.cpp RunPlaybackEnvelopeTests)
+    revia_add_studio_check(ReviaPlaybackPresenceTests Tests/playbackPresenceTests.cpp RunPlaybackPresenceTests)
+    revia_add_studio_check(ReviaPerformanceTests Tests/performanceTests.cpp RunPerformanceTests)
     revia_add_studio_check(ReviaSelfDevelopmentTests Tests/selfDevelopmentTests.cpp RunSelfDevelopmentTests)
     revia_add_studio_check(ReviaStudioRuntimeTests Tests/studioRuntimeTests.cpp RunStudioRuntimeTests)
     revia_add_studio_check(ReviaContentDigestTests Tests/contentDigestTests.cpp RunContentDigestTests)
@@ -516,6 +519,7 @@ if(BUILD_TESTING)
                 NAME Revia.Live2DBridge
                 COMMAND "${REVIA_NODE_EXECUTABLE}" --test
                         "${CMAKE_CURRENT_SOURCE_DIR}/Tests/live2dBridge.test.mjs"
+                        "${CMAKE_CURRENT_SOURCE_DIR}/Tests/live2dRenderer.live.test.mjs"
         )
         set_tests_properties(Revia.Live2DBridge PROPERTIES TIMEOUT 30)
     endif()

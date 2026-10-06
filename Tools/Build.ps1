@@ -208,6 +208,19 @@ try {
     Assert-ReviaBuildTree -BuildDirectory $buildDirectory
 
     if (-not $SkipTests) {
+        $nodeCommand = Get-Command -Name 'node.exe' -CommandType Application -ErrorAction SilentlyContinue
+        if ($null -ne $nodeCommand) {
+            $npmCommand = Get-Command -Name 'npm.cmd' -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($null -eq $npmCommand) {
+                throw 'Node.js is available, but npm.cmd is missing. Install npm alongside Node.js before running tests.'
+            }
+            $live2DDirectory = Join-Path $repoRoot 'Tools\Presence\Live2D'
+            Write-Host 'Installing pinned Live2D test dependencies.'
+            & $npmCommand.Source ci --prefix $live2DDirectory --ignore-scripts --no-audit --no-fund
+            if ($LASTEXITCODE -ne 0) {
+                throw "Live2D test dependency installation failed with exit code $LASTEXITCODE."
+            }
+        }
         & $ctestPath --preset $preset
         if ($LASTEXITCODE -ne 0) {
             throw "Tests failed with exit code $LASTEXITCODE."

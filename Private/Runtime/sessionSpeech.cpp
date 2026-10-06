@@ -225,6 +225,11 @@ void ReviaSession::HandleSpeechEvent(const speech::SpeechEvent& speechEvent)
     {
         speechRecognitionService.SetOutputActive(true);
     }
+    else if (speechEvent.phase == "PlaybackEnded")
+    {
+        // Revoked playback ends without completing a newer conversation intent.
+        speechRecognitionService.SetOutputActive(false);
+    }
     else if (speechEvent.phase == "Ready" || speechEvent.phase == "Stopped" || speechEvent.phase == "Interrupted" ||
              speechEvent.phase == "Error" || speechEvent.phase == "Disabled" || speechEvent.phase == "Fallback")
     {
@@ -285,6 +290,7 @@ void ReviaSession::HandleSpeechEvent(const speech::SpeechEvent& speechEvent)
     // Use the existing turn correlation for text and audio.
     event.turnId = speechEvent.utteranceId;
     event.utteranceId = speechEvent.utteranceId;
+    event.playbackEnvelope = speechEvent.playbackEnvelope;
     const std::size_t workerMarker = speechEvent.device.find("voice-worker-");
     if (workerMarker != std::string::npos)
     {

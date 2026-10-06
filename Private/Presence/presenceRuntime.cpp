@@ -209,6 +209,9 @@ bool PresenceRuntime::Start(const presenceSettings& settings, NoticeHandler inpu
         noticeHandler = std::move(inputNoticeHandler);
         adapterHandler = std::move(inputAdapterHandler);
         snapshot = {};
+        playbackEnvelope.reset();
+        playbackUtteranceId = 0;
+        outputAudioActive = false;
         snapshot.enabled = settings.bEnabled;
         snapshot.avatarBridgeEnabled = settings.bAvatarBridgeEnabled;
         snapshot.adaptersEnabled = settings.bExternalAdaptersEnabled;
@@ -293,6 +296,8 @@ void PresenceRuntime::Observe(const runtime::RuntimeEvent& event)
             return;
         }
         before = snapshot;
+        const auto previousEnvelope = playbackEnvelope;
+        const bool previousAudioActive = outputAudioActive;
         if (event.kind == runtime::RuntimeEventKind::AffectChanged)
         {
             snapshot.affect = event.affect;
@@ -317,11 +322,31 @@ void PresenceRuntime::Observe(const runtime::RuntimeEvent& event)
         }
         if (event.kind == runtime::RuntimeEventKind::ComponentStatus && event.component == "Voice")
         {
-            if (event.phase == "Speaking") snapshot.phase = "speaking";
+            if (event.phase == "Speaking")
+            {
+                snapshot.phase = "speaking";
+                playbackEnvelope = event.playbackEnvelope;
+                playbackUtteranceId = event.utteranceId;
+                outputAudioActive = true;
+            }
             else if (event.phase == "Generating" || event.phase == "Queued") snapshot.phase = "responding";
             else if (event.phase == "Error") snapshot.phase = "error";
             else if (event.phase == "Ready" || event.phase == "Stopped" ||
                 event.phase == "Interrupted") snapshot.phase = "idle";
+            else if (event.phase == "PlaybackEnded" && event.utteranceId == playbackUtteranceId && snapshot.phase == "speaking")
+                snapshot.phase = "idle";
+            if ((event.phase == "Ready" || event.phase == "Stopped" || event.phase == "Interrupted" ||
+                event.phase == "Disabled" || event.phase == "Error" || event.phase == "Fallback" || event.phase == "PlaybackEnded") &&
+                (event.utteranceId == 0 || event.utteranceId == playbackUtteranceId))
+            {
+                outputAudioActive = false;
+                playbackEnvelope.reset();
+            }
+        }
+        if (snapshot.phase == "offline")
+        {
+            outputAudioActive = false;
+            playbackEnvelope.reset();
         }
         if (event.kind == runtime::RuntimeEventKind::ComponentStatus &&
             event.component == "Microphone")
@@ -354,7 +379,8 @@ void PresenceRuntime::Observe(const runtime::RuntimeEvent& event)
         if (snapshot.phase != before.phase || snapshot.affect != before.affect ||
             snapshot.affectIntensity != before.affectIntensity ||
             snapshot.attention != before.attention ||
-            snapshot.conversationMomentum != before.conversationMomentum)
+            snapshot.conversationMomentum != before.conversationMomentum ||
+            playbackEnvelope != previousEnvelope || outputAudioActive != previousAudioActive)
         {
             ++snapshot.sequence;
         }
@@ -494,10 +520,12 @@ void PresenceRuntime::Shutdown()
     {
         std::lock_guard lock(mutex);
         write = snapshot.enabled && snapshot.avatarBridgeEnabled &&
-            snapshot.phase != "offline";
+            (snapshot.phase != "offline" || outputAudioActive);
         if (write)
         {
             snapshot.phase = "offline";
+            outputAudioActive = false;
+            playbackEnvelope.reset();
             ++snapshot.sequence;
         }
     }
@@ -831,11 +859,15 @@ void PresenceRuntime::WriteAvatarState(const bool appendEvent)
         std::lock_guard writerLock(writerMutex);
 
         PresenceSnapshot current;
+        std::shared_ptr<const speech::PlaybackEnvelope> currentEnvelope;
+        bool currentAudioActive = false;
         std::filesystem::path statePath;
         std::filesystem::path eventsPath;
         {
             std::lock_guard lock(mutex);
             current = snapshot;
+            currentEnvelope = playbackEnvelope;
+            currentAudioActive = outputAudioActive;
             statePath = stateFile;
             eventsPath = eventFile;
         }
@@ -844,16 +876,21 @@ void PresenceRuntime::WriteAvatarState(const bool appendEvent)
         // newer than what is already on disk is not written at all: the file is a current
         // state, and replacing it with an older one is worse than skipping the write.
         if (lastWrittenSequence != 0 && current.sequence <= lastWrittenSequence) return;
-        const nlohmann::json document = {
+        nlohmann::json document = {
             {"version", 1}, {"sequence", current.sequence}, {"timestamp", IsoTimestamp()},
             {"phase", current.phase}, {"expression", Expression(current.affect)},
             {"affect_intensity", current.affectIntensity},
             {"conversation_momentum", current.conversationMomentum},
-            {"attention", current.attention}, {"speaking", current.phase == "speaking"},
+            {"attention", current.attention}, {"speaking", currentAudioActive || current.phase == "speaking"},
             {"listening", current.phase == "listening"},
             {"mouth", current.phase == "speaking" ? 1.0 : 0.0},
             {"gaze_target", current.attention}
         };
+        if (currentEnvelope)
+        {
+            document["mouth_track"] = {{"started_at_ms", currentEnvelope->startedAtUnixMs},
+                {"interval_ms", currentEnvelope->intervalMs}, {"values", currentEnvelope->values}};
+        }
         if (!AtomicJsonWrite(statePath, document))
         {
             writeFailed = true;

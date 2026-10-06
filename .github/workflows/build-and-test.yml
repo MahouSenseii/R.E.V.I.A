@@ -120,6 +120,9 @@ jobs:
         with:
           node-version: '24'
 
+      - name: Install pinned Live2D transport
+        run: npm ci --prefix Tools/Presence/Live2D --ignore-scripts --no-audit --no-fund
+
       - name: Test relay through native public conversation with fake model
         working-directory: Tools/Presence/WebDemo
         env:

@@ -14,11 +14,16 @@ The version 1 snapshot contains:
 - `listening`: an animation and gaze cue;
 - `attention` and `gaze_target`: a bounded label for the current target;
 - `conversation_momentum`: a 0-1 idle-motion and engagement input;
-- `sequence` and `timestamp`: restart-safe ordering.
+- `sequence` and `timestamp`: restart-safe ordering;
+- optional `mouth_track`: `started_at_ms`, `interval_ms` (50), and at most 2,400
+  normalized 0…255 loudness values from Revia's own Qwen playback WAV.
 
 A renderer should smooth `mouth`, expression, and gaze locally at its display frame rate.
-Audio-amplitude or phoneme-driven visemes can replace the base mouth gate later without
-changing the state owner or the rest of the schema. Rendering remains a consumer: it must
+The optional audio track follows the measured WAV loudness from successful
+playback submission, so device latency remains estimated. It is independent of
+general runtime phase and is cleared on completion, interruption and offline
+state. SAPI/older producers retain the base gate. Phoneme-driven visemes remain
+future work. Rendering remains a consumer: it must
 never call inference or grant an action.
 
 The canonical design, palette, expression mapping, and selected renderer target are in
@@ -27,8 +32,10 @@ renderer are chosen. The transition stream rotates to `avatar_events.jsonl.1` at
 configured byte ceiling, and repeated shutdown calls do not emit duplicate offline states.
 
 The optional [Live2D adapter](Live2D/README.md) consumes this same snapshot and
-injects custom tracking inputs into VTube Studio. The current `mouth` is a binary
-speaking gate, and snapshots are event-only rather than heartbeats. Its bounded
-mouth timeout and required model mapping are documented explicitly. Original
+injects custom tracking inputs into VTube Studio. `mouth` retains the legacy
+binary gate; the adapter prefers a valid optional output-audio track. Snapshots
+remain event-only rather than heartbeats. The bounded legacy timeout, track
+limits and required model mappings are documented explicitly. Original
 [reference art and rigging instructions](../../Assets/Avatar/Revia/README.md)
-do not constitute a Cubism model export.
+are accompanied by a local first rig and native export; further motion and
+fresh corrected-build acceptance are recorded separately.

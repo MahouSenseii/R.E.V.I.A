@@ -2,6 +2,7 @@
 
 #include "Presence/presenceSettings.h"
 #include "Runtime/runtimeEvents.h"
+#include "Speech/playbackEnvelope.h"
 
 #include <chrono>
 #include <cstdint>
@@ -9,6 +10,7 @@
 #include <filesystem>
 #include <functional>
 #include <mutex>
+#include <memory>
 #include <optional>
 #include <stop_token>
 #include <string>
@@ -121,6 +123,9 @@ private:
     std::filesystem::path stateFile;
     std::filesystem::path eventFile;
     std::jthread adapterWorker;
+    std::shared_ptr<const speech::PlaybackEnvelope> playbackEnvelope;
+    std::uint64_t playbackUtteranceId = 0;
+    bool outputAudioActive = false;
 };
 
 } // namespace revia::presence

@@ -1,10 +1,13 @@
+import WebSocket from 'ws';
 import { mapSnapshot, parameterDefinitions, validateEndpoint } from './state.mjs';
 
 export const pluginIdentity = { pluginName: 'Revia Presence', pluginDeveloper: 'Revia Project' };
 
+export class RendererTransportError extends Error {}
+
 export class VtsClient
 {
-    constructor(endpoint, { socketFactory = url => new WebSocket(url), timeoutMs = 3000 } = {})
+    constructor(endpoint, { socketFactory = url => new WebSocket(url, { perMessageDeflate: false }), timeoutMs = 3000 } = {})
     {
         this.endpoint = validateEndpoint(endpoint);
         this.socketFactory = socketFactory;
@@ -12,10 +15,12 @@ export class VtsClient
         this.pending = new Map();
         this.nextId = 0;
         this.authenticated = false;
+        this.connectionFailure = null;
     }
 
     async connect()
     {
+        this.connectionFailure = null;
         this.socket = this.socketFactory(this.endpoint);
         this.socket.addEventListener('message', event => this.receive(event.data));
         this.socket.addEventListener('close', () => this.rejectPending('Renderer connection closed.'));
@@ -31,10 +36,10 @@ export class VtsClient
                 if (error) reject(error); else resolve();
             };
             const opened = () => finish();
-            const failed = () => finish(new Error('Cannot connect to VTube Studio. Enable its Plugin API on the configured port.'));
+            const failed = () => finish(new RendererTransportError('Cannot connect to VTube Studio. Enable its Plugin API on the configured port.'));
             const timer = setTimeout(() =>
             {
-                finish(new Error('Renderer connection timed out.'));
+                finish(new RendererTransportError('Renderer connection timed out.'));
                 this.close();
             }, this.timeoutMs);
             this.socket.addEventListener('open', opened);
@@ -46,14 +51,15 @@ export class VtsClient
     request(messageType, data = {}, timeoutMs = this.timeoutMs, allowCancelled = false)
     {
         if (this.cancelled && !allowCancelled) return Promise.reject(new Error('Renderer operation cancelled.'));
-        if (this.socket?.readyState !== 1) return Promise.reject(new Error('Renderer connection closed.'));
+        if (this.connectionFailure) return Promise.reject(this.connectionFailure);
+        if (this.socket?.readyState !== 1) return Promise.reject(new RendererTransportError('Renderer connection closed.'));
         const requestID = `revia-${++this.nextId}`;
         return new Promise((resolve, reject) =>
         {
             const timer = setTimeout(() =>
             {
                 this.pending.delete(requestID);
-                reject(new Error(`${messageType} timed out.`));
+                reject(new RendererTransportError(`${messageType} timed out.`));
             }, timeoutMs);
             this.pending.set(requestID, { resolve, reject, timer, expected: messageType.replace(/Request$/, 'Response') });
             try
@@ -65,7 +71,7 @@ export class VtsClient
             {
                 clearTimeout(timer);
                 this.pending.delete(requestID);
-                reject(new Error('Renderer send failed.'));
+                reject(new RendererTransportError('Renderer send failed.'));
             }
         });
     }
@@ -111,13 +117,17 @@ export class VtsClient
 
     requireAuthentication()
     {
+        if (this.cancelled) throw new Error('Renderer operation cancelled.');
+        if (this.connectionFailure) throw this.connectionFailure;
+        if (this.socket?.readyState !== 1) throw new RendererTransportError('Renderer connection closed.');
         if (!this.authenticated) throw new Error('The renderer session must be authenticated.');
     }
 
     rejectPending(reason)
     {
         this.authenticated = false;
-        this.cancelPending(reason);
+        this.connectionFailure = new RendererTransportError(reason);
+        this.cancelPending(this.connectionFailure);
     }
 
     cancelPending(reason)
@@ -125,7 +135,7 @@ export class VtsClient
         for (const call of this.pending.values())
         {
             clearTimeout(call.timer);
-            call.reject(new Error(reason));
+            call.reject(reason instanceof Error ? reason : new Error(reason));
         }
         this.pending.clear();
     }

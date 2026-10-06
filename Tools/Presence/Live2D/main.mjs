@@ -2,7 +2,7 @@ import { readFile, open, mkdir, rename, writeFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
-import { VtsClient, pluginIdentity } from './client.mjs';
+import { VtsClient, pluginIdentity, RendererTransportError } from './client.mjs';
 import { mapSnapshot, validateEndpoint } from './state.mjs';
 
 const root = fileURLToPath(new URL('../../../', import.meta.url));
@@ -16,9 +16,9 @@ async function readSnapshot(path)
         const file = await open(path, 'r');
         try
         {
-            const buffer = Buffer.alloc(16385);
+            const buffer = Buffer.alloc(65537);
             const { bytesRead } = await file.read(buffer, 0, buffer.length, 0);
-            if (bytesRead > 16384) return null;
+            if (bytesRead > 65536) return null;
             return JSON.parse(buffer.subarray(0, bytesRead).toString('utf8'));
         }
         finally { await file.close(); }
@@ -81,7 +81,7 @@ async function run()
     if (options.inspect)
     {
         console.log(JSON.stringify({ statePath: options.state, inputs: mapSnapshot(await readSnapshot(options.state)),
-            note: 'Speaking gate only; a mapped Cubism model and renderer approval are still required.' }, null, 2));
+            note: 'Output-audio tracks use measured loudness and estimated playback timing; older voices use a gate.' }, null, 2));
         return;
     }
     const stop = new AbortController();
@@ -92,30 +92,32 @@ async function run()
     try
     {
         let token = await loadToken();
+        let established = false;
         while (!stop.signal.aborted)
         {
             client = new VtsClient(options.endpoint);
-            await client.connect();
-            const state = await client.request('APIStateRequest');
-            if (state.active !== true) throw new Error('VTube Studio Plugin API is disabled.');
-            if (!token)
-            {
-                console.log('Approve Revia Presence in the VTube Studio plugin dialog.');
-                const response = await client.request('AuthenticationTokenRequest', pluginIdentity, 90000);
-                token = response.authenticationToken;
-                if (typeof token !== 'string' || !token || token.length > 64) throw new Error('No valid plugin token was returned.');
-                await client.authenticate(token);
-                stop.signal.throwIfAborted();
-                await saveToken(token);
-            }
-            else await client.authenticate(token);
-            await client.initializeParameters();
-            const model = await client.request('CurrentModelRequest');
-            console.log(model.modelLoaded === true
-                ? 'Renderer connected. Verify that the loaded model maps the eight Revia inputs; model selection is manual.'
-                : 'Renderer connected without a model. Import the rigged Revia model and map the eight inputs.');
             try
             {
+                await client.connect();
+                const state = await client.request('APIStateRequest');
+                if (state.active !== true) throw new Error('VTube Studio Plugin API is disabled.');
+                if (!token)
+                {
+                    console.log('Approve Revia Presence in the VTube Studio plugin dialog.');
+                    const response = await client.request('AuthenticationTokenRequest', pluginIdentity, 90000);
+                    token = response.authenticationToken;
+                    if (typeof token !== 'string' || !token || token.length > 64) throw new Error('No valid plugin token was returned.');
+                    await client.authenticate(token);
+                    stop.signal.throwIfAborted();
+                    await saveToken(token);
+                }
+                else await client.authenticate(token);
+                await client.initializeParameters();
+                const model = await client.request('CurrentModelRequest');
+                established = true;
+                console.log(model.modelLoaded === true
+                    ? 'Renderer connected. Verify that the loaded model maps the eight Revia inputs; model selection is manual.'
+                    : 'Renderer connected without a model. Import the rigged Revia model and map the eight inputs.');
                 while (!stop.signal.aborted)
                 {
                     await client.inject(mapSnapshot(await readSnapshot(options.state)));
@@ -125,7 +127,8 @@ async function run()
             catch (error)
             {
                 if (stop.signal.aborted) break;
-                if (!/connection (closed|failed)|timed out|send failed/.test(error.message)) throw error;
+                // Retry a lost session through renderer startup; approval failures stay terminal.
+                if (!established || !(error instanceof RendererTransportError)) throw error;
                 client.close();
                 console.log('Renderer disconnected. Reconnecting with the existing approval in two seconds.');
                 await delay(2000, undefined, { signal: stop.signal });

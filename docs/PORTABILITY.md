@@ -56,6 +56,9 @@ will not link against this build.
 - Prints the resolved compiler, CMake, and Ninja paths, because an ABI mismatch
   between the compiler and the Qt kit is otherwise very hard to attribute.
 - Warns explicitly when `ReviaDesktop.exe` was not produced.
+- Before running CTest, installs the pinned Live2D adapter dependencies with
+  `npm ci --ignore-scripts --no-audit --no-fund` when Node.js is available.
+  `-SkipTests` skips this installation; a failed installation stops before CTest.
 
 ## Phase 2 — CPU and non-NVIDIA runtime (done)
 

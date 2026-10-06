@@ -1,0 +1,258 @@
+{
+  "version": 2,
+  "generatedImage": "Assets/Avatar/Revia/Live2D/Source/revia-reference-underpaint-v2.png",
+  "canvas": [
+    1024,
+    1536
+  ],
+  "sourceCrop": {
+    "left": 340,
+    "top": 0,
+    "width": 350,
+    "height": 310
+  },
+  "headScale": 0.8,
+  "headCanvasPlacement": [
+    374,
+    232,
+    280,
+    248
+  ],
+  "safetySourcePixels": 4,
+  "maskNames": [
+    "Face",
+    "Eye_ViewerLeft_White",
+    "Eye_ViewerRight_White",
+    "Eye_ViewerLeft_Upper",
+    "Eye_ViewerRight_Upper",
+    "Eye_ViewerLeft_Lower",
+    "Eye_ViewerRight_Lower",
+    "Brow_ViewerLeft",
+    "Brow_ViewerRight",
+    "Mouth_Upper"
+  ],
+  "replacementLayer": {
+    "name": "Face_Underpaint",
+    "placement": [
+      449,
+      305,
+      128,
+      125
+    ],
+    "hidden": true,
+    "nonzeroPixels": 8326,
+    "opaquePixels": 8326,
+    "pixelSha256": "1a3ab6ae5d96b472a7d71ac9a74b3a88e9bd5597cacae873fe02effc72aca5ef"
+  },
+  "coverage": [
+    {
+      "name": "Eye_ViewerLeft_White",
+      "featurePixels": 144,
+      "coveredPixels": 144
+    },
+    {
+      "name": "Eye_ViewerRight_White",
+      "featurePixels": 106,
+      "coveredPixels": 106
+    },
+    {
+      "name": "Eye_ViewerLeft_Iris",
+      "featurePixels": 219,
+      "coveredPixels": 219
+    },
+    {
+      "name": "Eye_ViewerRight_Iris",
+      "featurePixels": 216,
+      "coveredPixels": 216
+    },
+    {
+      "name": "Eye_ViewerLeft_Upper",
+      "featurePixels": 217,
+      "coveredPixels": 217
+    },
+    {
+      "name": "Eye_ViewerRight_Upper",
+      "featurePixels": 194,
+      "coveredPixels": 194
+    },
+    {
+      "name": "Eye_ViewerLeft_Lower",
+      "featurePixels": 82,
+      "coveredPixels": 82
+    },
+    {
+      "name": "Eye_ViewerRight_Lower",
+      "featurePixels": 86,
+      "coveredPixels": 86
+    },
+    {
+      "name": "Brow_ViewerLeft",
+      "featurePixels": 74,
+      "coveredPixels": 74
+    },
+    {
+      "name": "Brow_ViewerRight",
+      "featurePixels": 75,
+      "coveredPixels": 75
+    },
+    {
+      "name": "Mouth_Upper",
+      "featurePixels": 166,
+      "coveredPixels": 166
+    }
+  ],
+  "unchangedOtherLayers": 24,
+  "layerMetadataAndPixelsExact": true,
+  "neutralCompositeMaximumWeightedDifference": 1.3254901960784313,
+  "originalFiles": [
+    {
+      "path": "Assets/Avatar/Revia/Live2D/revia-parts.psd",
+      "sha256": "78e7d4437bd5cdf05db752a34dba91c412339d429cb8e9b0d8c26d8bd2aa5251"
+    },
+    {
+      "path": "Assets/Avatar/Revia/Live2D/Source/layout.json",
+      "sha256": "24e5b5e8babd86bcce71e6f88038807f6b07996de32380436d01db786a7405c4"
+    },
+    {
+      "path": "Assets/Avatar/Revia/Live2D/Source/revia-approved-reference.png",
+      "sha256": "00173d714efc70061a663ad91d1acaa1ff16fead17eaf1e3d4ffebc6a3d81324"
+    },
+    {
+      "path": "Assets/Avatar/Revia/Live2D/revia-layered-preview.png",
+      "sha256": "42d8ec8ba335674baf931048d6c35cc31649da13d4fa4192f0d91da582e55155"
+    },
+    {
+      "path": "Assets/Avatar/Revia/Live2D/Source/revia-reference-underpaint-v2.png",
+      "sha256": "65e2b44383ee56a5ce9ff57c8ccdfe2048d44d95a16cfc4d9d892a1e380ce37c"
+    },
+    {
+      "path": "Assets/Avatar/Revia/Live2D/Parts/Hair_Back.png",
+      "sha256": "819dee31ff2a88cba2aa0b1db4a16696cfd27e1f571f150e18281a221b0773f4"
+    },
+    {
+      "path": "Assets/Avatar/Revia/Live2D/Parts/Neck.png",
+      "sha256": "006b080d6026ec421d4ad7056b4120e5db9798cf449f5c677f49430f2520154b"
+    },
+    {
+      "path": "Assets/Avatar/Revia/Live2D/Parts/Arm_ViewerLeft.png",
+      "sha256": "670694c73ff627df876af0e9e86d098d79dad32d721fbeaea4241dc29c56188a"
+    },
+    {
+      "path": "Assets/Avatar/Revia/Live2D/Parts/Arm_ViewerRight.png",
+      "sha256": "33687d3f0945549f8d19e1361b3758a69b79c87084aa7952e68574fb3f1ee581"
+    },
+    {
+      "path": "Assets/Avatar/Revia/Live2D/Parts/Body.png",
+      "sha256": "bc6eb94737b4b40123915d0ad4efad18fdbc6543419f7c3d08051e318a6719b9"
+    },
+    {
+      "path": "Assets/Avatar/Revia/Live2D/Parts/Face_Underpaint.png",
+      "sha256": "cc5b2d450129f90ba416f9293d990bf848be59a7af4fbea50d62b0f0590a6636"
+    },
+    {
+      "path": "Assets/Avatar/Revia/Live2D/Parts/Face.png",
+      "sha256": "ccb72210cd7fb257a38c329f87ccba62af4fcd619cad4a0154b11e109c76b96c"
+    },
+    {
+      "path": "Assets/Avatar/Revia/Live2D/Parts/Eye_ViewerLeft_White.png",
+      "sha256": "675b6160d1f2aec8bb62d021401610680d9268b5c3eee124d5bae6703d4b33f9"
+    },
+    {
+      "path": "Assets/Avatar/Revia/Live2D/Parts/Eye_ViewerRight_White.png",
+      "sha256": "e67cc25ad7c9b659c22a35d61ce263436cd5eb8aa622b23b8d4a57d6c7cb4131"
+    },
+    {
+      "path": "Assets/Avatar/Revia/Live2D/Parts/Eye_ViewerLeft_Iris.png",
+      "sha256": "527baa53d794da80e56187255b84d45a383949f42edd7cf1e0f79185fa16b3ab"
+    },
+    {
+      "path": "Assets/Avatar/Revia/Live2D/Parts/Eye_ViewerRight_Iris.png",
+      "sha256": "ae2f36f04da09f6a4f0c324df7c41560980bfddce2148ab36ea009c08ecb575f"
+    },
+    {
+      "path": "Assets/Avatar/Revia/Live2D/Parts/Eye_ViewerLeft_Lower.png",
+      "sha256": "847530d7981a853016f367f4d081ed4bea35d26e892d4eaa507335969298a037"
+    },
+    {
+      "path": "Assets/Avatar/Revia/Live2D/Parts/Eye_ViewerRight_Lower.png",
+      "sha256": "568426e2b28159529f6d99aec25ff0ba93d1a42e51189cb4ff19d558b3a44044"
+    },
+    {
+      "path": "Assets/Avatar/Revia/Live2D/Parts/Eye_ViewerLeft_Upper.png",
+      "sha256": "a7b5ef29ef94b20093bad095c82aef96c494a934a3ccbe89192fe45d5b1c805f"
+    },
+    {
+      "path": "Assets/Avatar/Revia/Live2D/Parts/Eye_ViewerRight_Upper.png",
+      "sha256": "6eb89495c9370a7dc1b6426a91f3c4b309e97f4cb5fdf2450db54e6452adb6e7"
+    },
+    {
+      "path": "Assets/Avatar/Revia/Live2D/Parts/Brow_ViewerLeft.png",
+      "sha256": "ff87a9d7ebd198179c676190956ee8e99b7e7132603a691e23f3e4bda65d5efb"
+    },
+    {
+      "path": "Assets/Avatar/Revia/Live2D/Parts/Brow_ViewerRight.png",
+      "sha256": "78044611fc1b8a79e6116af80dce92a85fc5c6d1c3fb45081556f86cef30a294"
+    },
+    {
+      "path": "Assets/Avatar/Revia/Live2D/Parts/Mouth_Upper.png",
+      "sha256": "17933bce0c1b2df02fc00479f3db96f89e34280dedad8b3af06b8a279449b925"
+    },
+    {
+      "path": "Assets/Avatar/Revia/Live2D/Parts/Hair_ViewerLeft.png",
+      "sha256": "52c5483b4e4e09656eb8541d94462ad6715cfe50a91905aed698584ce9b6bbaf"
+    },
+    {
+      "path": "Assets/Avatar/Revia/Live2D/Parts/Hair_ViewerRight.png",
+      "sha256": "fe6650c7a7f7801b1bfe77d89dd48843a2a28ed78dd08b441ed6dab38869e64a"
+    },
+    {
+      "path": "Assets/Avatar/Revia/Live2D/Parts/Hair_Front.png",
+      "sha256": "ceef40446e9be8d10cd8e39670363deee8208b05419e5270dc1666a8546827f3"
+    },
+    {
+      "path": "Assets/Avatar/Revia/Live2D/Parts/Hair_SignalClip.png",
+      "sha256": "360f898c20c4dc20b808f285860635bd2f2c4b3bec6f2417d934934ccc8dbf7e"
+    },
+    {
+      "path": "Assets/Avatar/Revia/Live2D/Parts/Earring_ViewerRight.png",
+      "sha256": "727331224d53bd0f268d1dfe065bf1a26267ecb1960e7af9d74b95ea3e8cf04c"
+    },
+    {
+      "path": "Assets/Avatar/Revia/Live2D/Parts/Mouth_Inside.png",
+      "sha256": "596c4a4a68fbff2af07cd777505ca05fb73a66db428e87bad2fcfcec4705aef4"
+    },
+    {
+      "path": "Assets/Avatar/Revia/Live2D/Parts/Mouth_Lower.png",
+      "sha256": "b730b05f50adbb30fcc8da08f1a3f57767d970bdca2ac99a763b898b83ef0b2e"
+    }
+  ],
+  "outputs": [
+    {
+      "name": "revia-parts-reference-backing-v2.psd",
+      "sha256": "17c98c3e180f4467e5749ac6cbb766a010fd2cf04a4ff5f4030db136bc493304",
+      "layers": 25
+    },
+    {
+      "name": "revia-underpaint-only-v2.psd",
+      "sha256": "27818e13f89b8a07ed9d9509c59c09a9856ef4b41ba9b637533fd701e5c64335",
+      "layers": 1
+    },
+    {
+      "name": "Face_Underpaint.png",
+      "sha256": "d1425eeb38e9f3b90cc24ad0742a33392faaf58cd7fa3e959d4ff70bcc6ab5f8",
+      "canvas": [
+        128,
+        125
+      ]
+    },
+    {
+      "name": "Face_Underpaint-canvas.png",
+      "sha256": "6263cf09b82398c7325960acbd3cef062c593dbd55582c8fb8e28752a25f5c7f",
+      "canvas": [
+        1024,
+        1536
+      ]
+    }
+  ],
+  "editDescription": "Root-supplied generated edit clears eyes, lashes, brows and mouth while retaining reference framing. This description is not the exact generation prompt."
+}

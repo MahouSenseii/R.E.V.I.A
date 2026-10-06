@@ -53,7 +53,15 @@ mapper reads the existing Presence snapshot; its API client owns loopback
 WebSocket requests and plugin authentication; its runner owns polling and local
 credentials. It creates eight custom VTube Studio tracking inputs and requires
 explicit model mappings. It owns no inference, memory, permission or action state.
-The event-only mouth gate is distinct from future output-audio lip sync. Original
+The client uses a pinned `ws` transport with compression disabled. A separate
+opt-in live check verifies repeated status responses against VTube Studio;
+simulated renderer checks cover lifecycle and state admission.
+Speech owns a bounded WAV loudness envelope and stamps it after successful Qwen
+playback submission. The existing speech/session/event pipeline carries that
+immutable value to Presence, which retains audio activity independently of
+next-phrase generation status. The renderer samples the track without another
+audio player or per-frame disk writes. Device timing remains estimated; SAPI
+and older producers retain the event-only gate. Original
 reference art and the Cubism production handoff live in `Assets/Avatar/Revia`;
 editable rig projects and exported models remain user data. See the
 [Live2D setup](../Tools/Presence/Live2D/README.md) for actual verification limits.

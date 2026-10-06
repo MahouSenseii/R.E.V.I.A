@@ -1,0 +1,62 @@
+{
+  "version": 2,
+  "generation": {
+    "tool": "image_gen.imagegen",
+    "promptFile": "imagegen-prompt.txt",
+    "promptSha256": "675e1ecdf41f5bc88321d890ff97204156c4f088919591dcf2e231c150d4fe46",
+    "exactPromptSuppliedBy": "parent agent /root",
+    "inputReference": "Assets/Avatar/Revia/Live2D/Source/revia-approved-reference.png",
+    "inputSha256": "00173d714efc70061a663ad91d1acaa1ff16fead17eaf1e3d4ffebc6a3d81324",
+    "outputReference": "Assets/Avatar/Revia/Live2D/Source/revia-reference-underpaint-v2.png",
+    "outputSha256": "65e2b44383ee56a5ce9ff57c8ccdfe2048d44d95a16cfc4d9d892a1e380ce37c",
+    "outputCanvas": [
+      1024,
+      1536
+    ],
+    "measuredAlpha": {
+      "minimum": 0,
+      "maximum": 254,
+      "fullyTransparentPixels": 1139357,
+      "alphaAtLeast250Pixels": 386492
+    }
+  },
+  "assembly": {
+    "script": "build/avatar-parts-20261004/reference-backing.cjs",
+    "scriptSha256": "68f5a1da8678ca5e38e09fb2833423e5952f2e9eea578f992623d0dd32177a6d",
+    "node": "v24.15.0",
+    "agPsd": "31.0.2",
+    "sharp": "0.35.4",
+    "sourceCrop": {
+      "left": 340,
+      "top": 0,
+      "width": 350,
+      "height": 310
+    },
+    "scale": 0.8,
+    "headCanvasPlacement": [
+      374,
+      232,
+      280,
+      248
+    ],
+    "replacementPlacement": [
+      449,
+      305,
+      128,
+      125
+    ],
+    "safetySourcePixels": 4,
+    "alphaRule": "Minimum of resized approved-reference and resized generated-edit alpha; no color painting or generated color synthesis in assembly.",
+    "proofFile": "proof.json"
+  },
+  "verification": {
+    "savedFiles": "build/avatar-parts-20261004/verify-backing.cjs",
+    "savedFilesScriptSha256": "42733a2769d1e12d75e6794d8905a07f01d89dbd2432f41701f0724e7e09233d",
+    "originalHashesUnchanged": 30,
+    "otherLayersMetadataAndPixelsExact": 24,
+    "sourceFacialAlphaThreshold": 250,
+    "facialPixelsCovered": 1579,
+    "visualReview": "Enlarged generated and approved face crops plus replacement patch; no new ear at viewer-left eye.",
+    "scope": "Source/PSD/PNG assembly only; native deformation and renderer behavior require separate verification."
+  }
+}

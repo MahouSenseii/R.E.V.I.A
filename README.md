@@ -35,7 +35,8 @@ The design rule: **one Revia**. Reflex, Fast, Main, and Expert share one identit
 | Voice interruption (barge-in) | Tested | Enabled in settings; not confirmed in recent logs |
 | Discord text chat through the Presence inbox | Tested | Off until you turn on adapters in the Presence tab |
 | Discord **voice** channel (she listens and talks in a call) | Tested | Connector tests pass 18/18; **no live Discord join has been done yet** |
-| Animated avatar (Live2D/VRM), OBS, streaming platforms | **Not yet** | Only the state/event contract exists; there is no renderer |
+| Live2D avatar through VTube Studio | **First rig connected** | Native model, authentication, mappings, controls, source resets and renderer restart verified. Real speech worked with the original gate; corrected audio loudness timing awaits a fresh runtime check. See [avatar production status](Assets/Avatar/Revia/README.md) |
+| VRM avatar, OBS and streaming platform integration | **Not yet** | Separate renderer/integration work remains |
 | Clean install on a second PC, laptop/CPU-only machines | **Not yet verified** | Setup is designed for it but has only been run on the dev PC |
 
 ---
@@ -181,6 +182,16 @@ If a step fails, it stops and names the step. Fix the cause (usually a missing p
 .\Tools\Build.ps1                      # add -SkipTests to skip verification, -Release for an optimized build
 .\Tools\HealthCheck.ps1 -Profile Full  # add -SkipHashes for a faster check
 ```
+
+For CLion, select the compiler belonging to the installed Qt kit. Qt 6.8.3's
+MinGW kit on the development PC uses `mingw1310_64`; CLion's bundled MinGW 15.2
+failed the static pthread link with `undefined reference to __intrinsic_setjmpex`.
+Set the C and C++ compilers to that Qt toolchain's `gcc.exe`/`g++.exe`, and use
+the same Ninja for a build directory. A local `CMakeUserPresets.json` can inherit
+`debug` and pin these paths; it is ignored because installed paths vary by PC.
+Select the corresponding imported CMake profile in CLion. The standard build
+script already selects the installed toolchain. See
+[CLion's preset workflow](https://www.jetbrains.com/help/clion/cmake-presets.html).
 
 ### 3. Start Revia
 
