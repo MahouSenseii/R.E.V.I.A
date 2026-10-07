@@ -35,7 +35,7 @@ Run focused new suites and existing action-audit/runtime events/companion isolat
 
 | Actor | Responsibility | Status |
 |---|---|---|
-| /root Director | Integration, COG-01, acceptance and delivery | All 24 targets built; 29 selected checks passed; four registry campaigns and actual 720-run collection complete; delivery integration pending |
+| /root Director | Integration, COG-01, acceptance and delivery | All 24 targets built; 29 selected checks passed; four registry campaigns and actual 720-run collection complete; implementation c652e4b merged and verified on GitHub main |
 | /root/foundation_contracts | FND-01, native admission, session lifecycle, bound live producer | Core/native/session checks passed; real confirmation and audit regression passed |
 | /root/starting_package_audit | FND-02, receipt runner, immutable live evidence and documentation | Runner fixtures and delegated-process regression passed; timestamp receipt fix passed registered check and actual six-slot smoke |
 | /root/foundation_journal | FND-03 persistence and crash recovery | Imported; focused durable/crash/backpressure checks passed |
