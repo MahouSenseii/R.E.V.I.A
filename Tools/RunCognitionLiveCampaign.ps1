@@ -133,6 +133,11 @@ function Get-ProviderIdentity([string]$Phase)
     Write-JsonOnce ($Phase + '.props.json') $properties
     $models = @($inventory.data)
     if ($models.Count -ne 1 -or [string]::IsNullOrWhiteSpace([string]$models[0].id)) { throw 'Exactly one observed model ID is required.' }
+    # Full receipts retain response timestamps; only data[*].created is excluded from model identity.
+    $inventoryIdentity = ConvertTo-Json -InputObject $inventory -Depth 24 | ConvertFrom-Json
+    foreach ($entry in @($inventoryIdentity.data)) {
+        if (@($entry.PSObject.Properties.Name) -ccontains 'created') { $entry.PSObject.Properties.Remove('created') }
+    }
     $modelPath = [IO.Path]::GetFullPath([string]$properties.model_path)
     if (-not $modelPath.Equals([IO.Path]::GetFullPath([string]$launch.model), [StringComparison]::OrdinalIgnoreCase)) { throw 'Observed model path differs from the owned launch receipt.' }
     $wrapperDirectory = [IO.Path]::GetDirectoryName([IO.Path]::GetFullPath([string]$launch.server))
@@ -145,7 +150,7 @@ function Get-ProviderIdentity([string]$Phase)
         launch = Get-FileIdentity $LaunchMetadataPath; wrapper = Get-FileIdentity ([string]$launch.server)
         resolvedServerExecutable = Get-FileIdentity $process.Path; model = Get-FileIdentity $modelPath
         loadedProviderModules = @(Get-FileIdentities $modules); observedModelId = [string]$models[0].id
-        inventorySha256 = Get-ValueDigest $inventory; propertiesSha256 = Get-ValueDigest $properties
+        inventorySha256 = Get-ValueDigest $inventoryIdentity; propertiesSha256 = Get-ValueDigest $properties
         listeningProcessId = $processId; listeningProcessStarted = $process.StartTime.ToUniversalTime().ToString('o')
         launchArguments = @($launch.arguments); providerIdentityVerified = $false; backendSeedVerified = $false
     }

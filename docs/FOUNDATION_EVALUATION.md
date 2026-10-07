@@ -88,6 +88,9 @@ $corpus = (Resolve-Path '.\Tests\Fixtures\Cognition\heldout-manifest.json').Path
 The mode retains authored prompt/profile settings and the existing runtime/evaluator.
 It captures original corpus bytes and observes `/v1/models` and `/props`;
 a single observed model ID selects completions; each seed enters retained forwarded requests.
+Raw model-list receipts retain every field. Provider identity excludes only the
+direct `data[*].created` response timestamp; IDs, metadata, nested fields and
+provider/process/weight identities remain part of the comparison.
 `providerIdentityVerified`, `backendSeedVerified` and `liveQualified` remain false.
 Qualification needs an external receipt binding source, build, provider executable
 and actual weights digests, backend seed evidence and independent bound reviews.

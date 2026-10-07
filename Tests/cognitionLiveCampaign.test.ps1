@@ -30,6 +30,9 @@ if ($Mode -ne 'cognition') { throw 'Actual cognition CLI mode was not forwarded.
 $binding = Get-Content -LiteralPath $Manifest -Raw | ConvertFrom-Json
 if ($binding.schemaVersion -ne 1 -or $binding.seed -ne 0 -or -not $binding.providerAvailable -or $binding.sourceDigest.Length -ne 64) { throw 'Typed manifest was not provided before CLI invocation.' }
 if ($authored.fixtureMode -eq 'change') { Add-Content -LiteralPath $Profile -Value ' ' }
+if ($authored.fixtureMode -in 'model-id-change', 'model-metadata-change', 'nested-created-change', 'top-created-change') {
+    Set-Content -LiteralPath $authored.inventoryControl -Value $authored.fixtureMode -Encoding UTF8
+}
 $result = @{ liveQualified = $false; expectedRuns = 4; recordedRuns = 4; missingRuns = 0; unavailable = 0 }
 if ($authored.fixtureMode -eq 'fail') { $result.unavailable = 1 }
 $result | ConvertTo-Json | Set-Content -LiteralPath $Report -Encoding UTF8
@@ -39,9 +42,10 @@ exit 0
 '@ | Set-Content $client -Encoding UTF8
     $serverScript = Join-Path $taskDirectory 'server.ps1'
     @'
-param([int]$Port, [string]$Model)
+param([int]$Port, [string]$Model, [string]$InventoryControl)
 $listener = New-Object Net.Sockets.TcpListener([Net.IPAddress]::Loopback, $Port)
 $listener.Start()
+$inventoryQueries = 0
 try {
     while ($true) {
         $client = $listener.AcceptTcpClient()
@@ -53,7 +57,16 @@ try {
             if ($count -le 0) { break }
             $request += [Text.Encoding]::ASCII.GetString($buffer, 0, $count)
         }
-        if ($request.StartsWith('GET /v1/models ')) { $value = @{ data = @(@{ id = 'fixture-model' }) } }
+        if ($request.StartsWith('GET /v1/models ')) {
+            ++$inventoryQueries
+            $mode = (Get-Content -LiteralPath $InventoryControl -Raw).Trim()
+            $entry = [ordered]@{ id = 'fixture-model'; created = 1791369327 + $inventoryQueries; meta = [ordered]@{ n_ctx = 8192; created = 100 } }
+            $value = [ordered]@{ object = 'list'; created = 200; data = @($entry) }
+            if ($mode -eq 'model-id-change') { $entry.id = 'changed-fixture-model' }
+            if ($mode -eq 'model-metadata-change') { $entry.meta.n_ctx = 4096 }
+            if ($mode -eq 'nested-created-change') { $entry.meta.created = 101 }
+            if ($mode -eq 'top-created-change') { $value.created = 201 }
+        }
         else { $value = @{ model_path = $Model; model_alias = 'fixture-model'; default_generation_settings = @{ n_ctx = 8192 } } }
         $bytes = [Text.Encoding]::UTF8.GetBytes(($value | ConvertTo-Json -Depth 8))
         $headers = [Text.Encoding]::ASCII.GetBytes("HTTP/1.1 200 OK`r`nContent-Type: application/json`r`nContent-Length: $($bytes.Length)`r`nConnection: close`r`n`r`n")
@@ -68,7 +81,9 @@ try {
     $port = $socket.LocalEndpoint.Port
     $socket.Stop()
     $shell = (Get-Process -Id $PID).Path
-    $server = Start-Process -FilePath $shell -ArgumentList @('-NoProfile', '-File', ('"' + $serverScript + '"'), $port, ('"' + $model + '"')) -WindowStyle Hidden -PassThru
+    $inventoryControl = Join-Path $taskDirectory 'inventory-control.txt'
+    'stable' | Set-Content $inventoryControl -Encoding UTF8
+    $server = Start-Process -FilePath $shell -ArgumentList @('-NoProfile', '-File', ('"' + $serverScript + '"'), $port, ('"' + $model + '"'), ('"' + $inventoryControl + '"')) -WindowStyle Hidden -PassThru
     $ready = $false
     for ($attempt = 0; $attempt -lt 40; ++$attempt) {
         try { $null = Invoke-RestMethod "http://127.0.0.1:$port/v1/models" -TimeoutSec 1; $ready = $true; break }
@@ -89,7 +104,7 @@ try {
     $ErrorActionPreference = 'Stop'
     if ($knownExit -ne 0) {
         $diagnostic = Get-Content (Join-Path $taskDirectory 'known.log') -Raw
-        if (Test-Path (Join-Path $known 'results.json')) { $diagnostic += Get-Content (Join-Path $known 'results.json') -Raw }
+        if (Test-Path (Join-Path $known 'results.json')) { $diagnostic += Get-Content (Join-Path $known 'results.json') -Raw | ConvertFrom-Json | Select-Object failure, runnerExitCode, provenanceStable, mismatches, qualification | ConvertTo-Json -Depth 4 }
         throw ('Receipt fixture failed: ' + $diagnostic)
     }
     $before = Get-Content (Join-Path $known 'before.json') -Raw | ConvertFrom-Json
@@ -101,6 +116,12 @@ try {
     if ($before.expectedRuns -ne 4 -or ($before.seeds -join ',') -ne '11,29' -or $before.provider.observedModelId -ne 'fixture-model') { throw 'Corpus or observed provider identity was replaced with a guessed value.' }
     if (-not $results.provenanceStable -or $results.sourceBuildVerified -or $before.sourceBuildVerified -or $results.liveQualified -or $results.providerIdentityVerified -or $results.backendSeedVerified -or $results.qualification -ne 'fixture-only-unqualified' -or $results.independentSemanticReview -ne 'pending') { throw 'Receipt facts manufactured qualification or discarded pending review.' }
     if ($before.source.digest -ne $after.source.digest) { throw 'Unchanged fixture source changed identity.' }
+    $beforeModels = Get-Content (Join-Path $known 'before.models.json') -Raw | ConvertFrom-Json
+    $afterModels = Get-Content (Join-Path $known 'after.models.json') -Raw | ConvertFrom-Json
+    if ($beforeModels.data[0].created -eq $afterModels.data[0].created -or $before.provider.inventorySha256 -ne $after.provider.inventorySha256) { throw 'Changing response creation time changed immutable provider identity or was removed from raw receipts.' }
+    $beforeModelsHash = @($results.artifacts | Where-Object { $_.path.EndsWith('before.models.json') })[0].sha256
+    $afterModelsHash = @($results.artifacts | Where-Object { $_.path.EndsWith('after.models.json') })[0].sha256
+    if ($beforeModelsHash.Length -ne 64 -or $afterModelsHash.Length -ne 64 -or $beforeModelsHash -eq $afterModelsHash) { throw 'Full changing model inventory bytes were not independently retained and hashed.' }
     $receiptBytes = [IO.File]::ReadAllBytes((Join-Path $known 'before.json'))
     $aggregateBytes = [IO.File]::ReadAllBytes((Join-Path $known 'cognition.json'))
     $ErrorActionPreference = 'Continue'
@@ -120,6 +141,18 @@ try {
         if ($mode -eq 'fail' -and $result.runnerExitCode -ne 2) { throw 'Actual CLI failure was not preserved.' }
         if ($mode -eq 'change' -and ($result.provenanceStable -or $result.mismatches -notcontains 'profile')) { throw 'Changed authored profile was not diagnosed by name.' }
     }
+    foreach ($mode in 'model-id-change', 'model-metadata-change', 'nested-created-change', 'top-created-change') {
+        'stable' | Set-Content $inventoryControl -Encoding UTF8
+        @{ id = 'fixture'; fixtureMode = $mode; inventoryControl = $inventoryControl } | ConvertTo-Json | Set-Content $profile -Encoding UTF8
+        $output = Join-Path $taskDirectory $mode
+        $ErrorActionPreference = 'Continue'
+        & $shell -NoProfile -File $Runner @common -CampaignId $mode -OutputDirectory $output *> (Join-Path $taskDirectory "$mode.log")
+        $exit = $LASTEXITCODE
+        $ErrorActionPreference = 'Stop'
+        $result = Get-Content (Join-Path $output 'results.json') -Raw | ConvertFrom-Json
+        if ($exit -eq 0 -or $result.provenanceStable -or $result.mismatches -notcontains 'provider') { throw "Actual provider inventory drift was omitted: $mode" }
+    }
+    'stable' | Set-Content $inventoryControl -Encoding UTF8
     $nativeClient = Join-Path $taskDirectory 'fresh-fixture-client.exe'
     $compile = Join-Path $taskDirectory 'compile-fixture.ps1'
     @'
@@ -162,12 +195,12 @@ add_custom_target(ReviaAnswerQualityLive
     $ErrorActionPreference = 'Stop'
     if ($builtExit -ne 0) {
         $diagnostic = Get-Content (Join-Path $taskDirectory 'rebuilt.log') -Raw
-        if (Test-Path (Join-Path $built 'results.json')) { $diagnostic += Get-Content (Join-Path $built 'results.json') -Raw }
+        if (Test-Path (Join-Path $built 'results.json')) { $diagnostic += Get-Content (Join-Path $built 'results.json') -Raw | ConvertFrom-Json | Select-Object failure, runnerExitCode, provenanceStable, mismatches, qualification | ConvertTo-Json -Depth 4 }
         throw ('Default build fixture failed: ' + $diagnostic)
     }
     $result = Get-Content (Join-Path $built 'results.json') -Raw | ConvertFrom-Json
     if (-not $result.sourceBuildVerified -or -not $result.provenanceStable -or $result.aggregate.fixtureBuild -ne 'fresh' -or $result.liveQualified) { throw 'Default runner admitted a stale executable or manufactured qualification.' }
-    'Cognition receipt fixture passed: immutable provenance, failure/change retention and stale executable rebuild; no inference or qualification.'
+    'Cognition receipt fixture passed: immutable provenance, changing response time, model/metadata drift, failure retention and stale executable rebuild; no inference or qualification.'
 } finally {
     if ($server -and -not $server.HasExited) { Stop-Process -Id $server.Id -Force }
     $resolved = [IO.Path]::GetFullPath($taskDirectory)
