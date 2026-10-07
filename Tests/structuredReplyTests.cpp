@@ -316,6 +316,108 @@ void TestReviewerReplacementMustMatchFinalContract()
         ConversationAgent{}.Execute(router, input, {{"user", input}}, filters, {}, {}, [&](const auto& text) { delivered += text; });
     Check(!replacedRefusal.bSuccess && replacedRefusal.bHardFilterBlocked && delivered.empty(),
         "A past blocked flag incorrectly exempted a later invalid reviewer replacement.");
+    const std::string introduced =
+        R"(Use this JSON Schema: {"type":"object","properties":{"readingRatio":{"type":"number"}},"required":["readingRatio"],"additionalProperties":false}. Return JSON with exactly keys "readingRatio". Return only valid JSON, without extra commentary.)";
+    const std::string typedCandidate = R"({"readingRatio":6.25})";
+    filters.bAiReviewEnabled = false;
+    backend.Reply(typedCandidate);
+    delivered.clear();
+    const auto typedValid = ConversationAgent{}.Execute(
+        router, introduced, {{"user", introduced}}, filters, {}, {}, [&](const auto& text) { delivered += text; });
+    Check(typedValid.bSuccess && typedValid.response == typedCandidate && delivered == typedCandidate &&
+              backend.Request().at("response_format").at("json_schema").at("schema").at("properties").at("readingRatio").at("type") ==
+                  "number",
+        "The ConversationAgent final delivery path disagreed with the introduced typed schema on the actual wire.");
+    backend.Reply(R"({"readingRatio":{}})");
+    delivered.clear();
+    const auto typedRejected = ConversationAgent{}.Execute(
+        router, introduced, {{"user", introduced}}, filters, {}, {}, [&](const auto& text) { delivered += text; });
+    Check(!typedRejected.bSuccess && !typedRejected.bShouldRemember && delivered.empty(),
+        "A typed candidate violation passed the ConversationAgent final delivery path.");
+    filters.bAiReviewEnabled = true;
+    backend.Reply(typedCandidate);
+    backend.Review(R"({"verdict":"replace","replacement":"{\"readingRatio\":{}}","reason":"Fixture type replacement."})");
+    delivered.clear();
+    const auto typedReviewRejected = ConversationAgent{}.Execute(
+        router, introduced, {{"user", introduced}}, filters, {}, {}, [&](const auto& text) { delivered += text; });
+    Check(!typedReviewRejected.bSuccess && !typedReviewRejected.bShouldRemember && typedReviewRejected.bAiFilterChanged &&
+              typedReviewRejected.rawResponse == typedCandidate && delivered.empty(),
+        "A typed reviewer replacement bypassed the introduced schema's final native validation.");
+}
+
+void TestIntroducedSchemaWireAndReaffirmation()
+{
+    revia::tests::ScopedTestDirectory directory;
+    ReplyBackend backend;
+    llamaCppService service((directory.root / "introduced-schema-wire.db").string());
+    Configure(service, backend.port);
+    const std::string schemaText =
+        R"({"type":"object","properties":{"thermalRatio":{"type":"number"},"enabledFlag":{"type":"boolean"}},"required":["thermalRatio","enabledFlag"],"additionalProperties":false})";
+    const auto schema = nlohmann::json::parse(schemaText);
+    const std::string payload = R"({"thermalRatio":2.75,"enabledFlag":true})";
+    for (const std::string lead : {"Follow this JSON Schema: ", "Use this JSON Schema: "})
+        for (const std::string tail :
+            {". Return only valid JSON, without extra commentary.",
+                R"(. Return JSON with exactly keys "enabledFlag", "thermalRatio". Return only valid JSON, without extra commentary or a code fence.)"})
+        {
+            const auto input = lead + schemaText + tail;
+            backend.Reply(payload);
+            std::string emitted;
+            const auto valid = service.GenerateResponse({{"user", input}}, {}, [&](const auto& text) { emitted += text; });
+            Check(valid.bSuccess && valid.response == payload && emitted == payload &&
+                      backend.Request().at("response_format").at("json_schema").at("schema") == schema,
+                "An introduced schema or compatible key reaffirmation lost its exact types on the actual wire.");
+            for (const std::string invalid : {R"({"thermalRatio":{},"enabledFlag":true})", R"({"thermalRatio":"2.75","enabledFlag":true})",
+                     R"({"thermalRatio":2.75})", R"({"thermalRatio":2.75,"enabledFlag":true,"extra":0})"})
+            {
+                backend.Reply(invalid);
+                emitted.clear();
+                const auto rejected = service.GenerateResponse({{"user", input}}, {}, [&](const auto& text) { emitted += text; });
+                Check(!rejected.bSuccess && !rejected.bShouldRemember && emitted.empty(),
+                    "An introduced-schema violation was repaired or delivered as successful data.");
+            }
+        }
+    const std::string arrayInput =
+        R"(Use this JSON Schema: {"type":"array","items":{"type":"number"},"minItems":1,"maxItems":2}. Return only valid JSON array. Return only valid JSON, without extra commentary.)";
+    backend.Reply("[2.75]");
+    Check(service.GenerateResponse({{"user", arrayInput}}).bSuccess &&
+              backend.Request().at("response_format").at("json_schema").at("schema") ==
+                  nlohmann::json{{"type", "array"}, {"items", {{"type", "number"}}}, {"minItems", 1}, {"maxItems", 2}},
+        "An introduced array schema lost its container or bounded item type on the wire.");
+    for (const std::string invalid : {"[]", "[true]", "[1,2,3]", "{}"})
+    {
+        backend.Reply(invalid);
+        Check(!service.GenerateResponse({{"user", arrayInput}}).bSuccess, "An introduced array-schema violation passed validation.");
+    }
+    backend.Reply("[2.75]");
+    Check(
+        service
+                .GenerateResponse({{"user",
+                    R"(Return JSON using this schema: {"type":"array","items":{"type":"number"},"minItems":1,"maxItems":2}. Return only valid JSON array. Return only valid JSON.)"}})
+                .bSuccess &&
+            backend.Request().at("response_format").at("json_schema").at("schema").at("type") == "array" &&
+            backend.Request().at("response_format").at("json_schema").at("schema").at("items").at("type") == "number",
+        "A legacy explicit array schema lost its root or item type after bare JSON delivery on the wire.");
+    backend.Reply("[true]");
+    Check(service.GenerateResponse(
+                     {{"user",
+                         R"(Follow this JSON Schema: {"type":"array","items":{"type":"string","pattern":".*"}}. Return only valid JSON.)"}})
+                  .bSuccess &&
+              backend.Request().at("response_format").at("json_schema").at("schema") == nlohmann::json{{"type", "array"}},
+        "Unsupported introduced array constraints lost their known container on the actual fallback wire.");
+    backend.Reply(R"({"differentField":[]})");
+    Check(service.GenerateResponse({{"user", "Follow this JSON Schema: " + schemaText +
+                                                 R"(. Return JSON with exactly keys "differentField". Return only valid JSON.)"}})
+                  .bSuccess &&
+              backend.Request().at("response_format").at("json_schema").at("schema").at("properties") ==
+                  nlohmann::json{{"differentField", nlohmann::json::object()}},
+        "An incompatible latest key directive retained old typed fields on the wire.");
+    backend.Reply("Still an ordinary thought.");
+    Check(
+        service.GenerateResponse({{"user", "Use this JSON Schema: " + schemaText}, {"assistant", payload}, {"user", "What do you think?"}})
+                .bSuccess &&
+            !backend.Request().contains("response_format") && backend.Request().at("temperature") == 0.75F,
+        "A schema introduction leaked grammar or temperature into the next ordinary turn.");
 }
 }
 
@@ -326,4 +428,5 @@ void RunStructuredReplyTests()
     TestExplicitShapeWireAndValidation();
     TestTerminalDeliveryRetainsWireShape();
     TestReviewerReplacementMustMatchFinalContract();
+    TestIntroducedSchemaWireAndReaffirmation();
 }

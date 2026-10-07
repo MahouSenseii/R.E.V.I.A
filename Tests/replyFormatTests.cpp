@@ -10,6 +10,118 @@ void RunReplyContractTests()
 {
     using namespace revia::agents;
     using revia::tests::Check;
+    const std::string introducedSchema =
+        R"({"type":"object","properties":{"thermalRatio":{"type":"number"},"enabledFlag":{"type":"boolean"}},"required":["thermalRatio","enabledFlag"],"additionalProperties":false})";
+    for (const std::string lead : {"Follow this JSON Schema: ", "Use this JSON Schema: "})
+        for (const std::string tail : {"", ". Return only valid JSON, without extra commentary.",
+                 R"(. Return JSON with exactly keys "enabledFlag", "thermalRatio". Return only valid JSON.)"})
+        {
+            const auto introduced = RequestedReplyContract(lead + introducedSchema + tail);
+            Check(introduced.extractionStatus == ReplyContractStatus::ExplicitShape &&
+                      nlohmann::json::parse(introduced.schemaJson) == nlohmann::json::parse(introducedSchema) &&
+                      MatchesReplyContract(R"({"thermalRatio":2.75,"enabledFlag":true})", introduced) &&
+                      !MatchesReplyContract(R"({"thermalRatio":"2.75","enabledFlag":true})", introduced),
+                "A direct schema introduction or compatible reaffirmation lost explicit types: " + lead + tail);
+        }
+    const auto introducedArray = RequestedReplyContract(
+        R"(Follow this JSON Schema: {"type":"array","items":{"type":"number"},"minItems":1,"maxItems":2}. Return only valid JSON array, without extra commentary.)");
+    Check(introducedArray.rootKind == ReplyFormat::JsonArray && introducedArray.extractionStatus == ReplyContractStatus::ExplicitShape &&
+              MatchesReplyContract("[2.75]", introducedArray) && !MatchesReplyContract("[true]", introducedArray),
+        "A direct array-schema introduction lost its root or bounded item types.");
+    const auto bareArrayDelivery = RequestedReplyContract(
+        R"(Use this JSON Schema: {"type":"array","items":{"type":"number"},"minItems":1,"maxItems":2}. Return only valid JSON. Return only JSON, without extra commentary.)");
+    Check(bareArrayDelivery.rootKind == ReplyFormat::JsonArray &&
+              bareArrayDelivery.extractionStatus == ReplyContractStatus::ExplicitShape &&
+              MatchesReplyContract("[2.75]", bareArrayDelivery) && !MatchesReplyContract("{}", bareArrayDelivery),
+        "A bare JSON delivery reaffirmation silently replaced an intrinsic array-schema root.");
+    const auto legacyArrayDelivery = RequestedReplyContract(
+        R"(Return JSON using this schema: {"type":"array","items":{"type":"number"},"minItems":1,"maxItems":2}. Return only valid JSON.)");
+    Check(legacyArrayDelivery.rootKind == ReplyFormat::JsonArray &&
+              legacyArrayDelivery.extractionStatus == ReplyContractStatus::ExplicitShape &&
+              MatchesReplyContract("[2.75]", legacyArrayDelivery) && !MatchesReplyContract("{}", legacyArrayDelivery),
+        "A legacy schema introduction or bare delivery lost its declared array root.");
+    for (const std::string lead : {"Use this JSON Schema: ", "Return JSON using this schema: "})
+    {
+        const auto mixedArrayDelivery = RequestedReplyContract(
+            lead + R"({"type":"array","items":{"type":"number"}}. Return only valid JSON array. Return only valid JSON.)");
+        Check(mixedArrayDelivery.rootKind == ReplyFormat::JsonArray &&
+                  mixedArrayDelivery.extractionStatus == ReplyContractStatus::ExplicitShape &&
+                  MatchesReplyContract("[2.75]", mixedArrayDelivery) && !MatchesReplyContract("[true]", mixedArrayDelivery),
+            "Same-kind explicit array delivery followed by bare JSON lost the declared array schema.");
+    }
+    const auto conflictingRoot =
+        RequestedReplyContract(R"(Return JSON object using this schema: {"type":"array","items":{"type":"number"}}.)");
+    Check(conflictingRoot.rootKind == ReplyFormat::JsonObject && conflictingRoot.extractionStatus == ReplyContractStatus::Unsupported,
+        "A schema root overrode an explicitly incompatible current container request.");
+    const auto unsupportedArray = RequestedReplyContract(
+        R"(Use this JSON Schema: {"type":"array","items":{"type":"string","pattern":".*"}}. Return only valid JSON.)");
+    Check(unsupportedArray.rootKind == ReplyFormat::JsonArray && unsupportedArray.extractionStatus == ReplyContractStatus::Unsupported &&
+              !unsupportedArray.reason.empty() && unsupportedArray.schemaJson == R"({"type":"array"})" &&
+              MatchesReplyContract("[true]", unsupportedArray) && !MatchesReplyContract("{}", unsupportedArray),
+        "Unsupported introduced array constraints lost their known root or diagnostic instead of falling back to type-only.");
+    const auto malformedIntroduced =
+        RequestedReplyContract(std::string(R"(Follow this JSON Schema: {"type":"array","items":{"type":")") + char(0xFF) + R"("}})");
+    Check(malformedIntroduced.extractionStatus == ReplyContractStatus::Unsupported && !malformedIntroduced.reason.empty(),
+        "Malformed UTF-8 in a schema introduction threw or lacked a conservative extraction diagnostic.");
+    const auto overriddenArray = RequestedReplyContract(
+        R"(Follow this JSON Schema: {"type":"array","items":{"type":"number"}}. Return a JSON object. Return only valid JSON.)");
+    Check(overriddenArray.rootKind == ReplyFormat::JsonObject && overriddenArray.extractionStatus == ReplyContractStatus::TypeOnly &&
+              MatchesReplyContract("{}", overriddenArray) && !MatchesReplyContract("[2.75]", overriddenArray),
+        "A later explicit object override resurrected an earlier array schema.");
+    for (const std::string input : {"Never follow this JSON Schema: " + introducedSchema,
+             "Do not use this JSON Schema: " + introducedSchema, "Explain how to use this JSON Schema: " + introducedSchema,
+             "She said: 'Follow this JSON Schema: " + introducedSchema + "'. Explain.",
+             "Summarize this example:\n```\nUse this JSON Schema: " + introducedSchema + "\n```",
+             "Follow this JSON Schema: " + introducedSchema + ". Actually respond in prose."})
+        Check(RequestedReplyContract(input).rootKind == ReplyFormat::Conversation,
+            "A quoted, explanatory, withdrawn or negated schema introduction forced structured output.");
+    for (const std::string separator :
+        {" Ignore that shape.", " Do not return JSON.", " Change the task.", " Return a JSON array.", " Actually,"})
+    {
+        const auto isolated = RequestedReplyContract("Use this JSON Schema: " + introducedSchema + "." + separator +
+                                                     R"( Return JSON with exactly keys "thermalRatio", "enabledFlag".)");
+        Check(isolated.extractionStatus == ReplyContractStatus::ExplicitShape &&
+                  nlohmann::json::parse(isolated.schemaJson).at("properties").at("thermalRatio").empty(),
+            "An intervening clause resurrected superseded schema types.");
+    }
+    const auto changedKeys = RequestedReplyContract(
+        "Follow this JSON Schema: " + introducedSchema + R"(. Return JSON with exactly keys "differentField". Return only valid JSON.)");
+    Check(changedKeys.extractionStatus == ReplyContractStatus::ExplicitShape &&
+              MatchesReplyContract(R"({"differentField":[]})", changedKeys) &&
+              !MatchesReplyContract(R"({"thermalRatio":2.75,"enabledFlag":true})", changedKeys),
+        "A different latest key directive retained obsolete schema fields.");
+    const auto latestSchema = RequestedReplyContract(
+        "Follow this JSON Schema: " + introducedSchema +
+        R"(. Use this JSON Schema: {"type":"object","properties":{"newReading":{"type":"string"}},"required":["newReading"],"additionalProperties":false}. Return only valid JSON.)");
+    Check(latestSchema.extractionStatus == ReplyContractStatus::ExplicitShape &&
+              MatchesReplyContract(R"({"newReading":"literal"})", latestSchema) &&
+              !MatchesReplyContract(R"({"thermalRatio":2.75,"enabledFlag":true})", latestSchema),
+        "A latest explicit schema replacement lost authority.");
+    for (const std::string earlier :
+        {R"({"type":"object","properties":{"thermalRatio":{"type":"number"},"enabledFlag":{"type":"boolean"}},"required":["thermalRatio"],"additionalProperties":false})",
+            R"({"type":"object","properties":{"thermalRatio":{"type":"number"},"enabledFlag":{"type":"boolean"}},"required":["thermalRatio","enabledFlag"],"additionalProperties":true})"})
+    {
+        const auto incompatible =
+            RequestedReplyContract("Use this JSON Schema: " + earlier +
+                                   R"(. Return JSON with exactly keys "thermalRatio", "enabledFlag". Return only valid JSON.)");
+        Check(incompatible.extractionStatus == ReplyContractStatus::ExplicitShape &&
+                  nlohmann::json::parse(incompatible.schemaJson).at("properties").at("thermalRatio").empty(),
+            "An optional or open earlier schema was treated as an identical closed key reaffirmation.");
+    }
+    for (const std::string suffix : {". Unknown instruction. Return only valid JSON.", ". Actually, return only valid JSON.",
+             ". Do not return JSON. Return only valid JSON.", ". Return a JSON array. Return only valid JSON.",
+             ". \"Return only valid JSON.\""})
+        Check(RequestedReplyContract("Follow this JSON Schema: " + introducedSchema + suffix).extractionStatus !=
+                  ReplyContractStatus::ExplicitShape,
+            "A terminal delivery resurrected a schema through an incompatible or masked barrier.");
+    for (const std::string badSchema : {R"({"type":"object","type":"object"})", R"({"type":"object","$ref":"remote"})",
+             R"({"type":"string"})", R"({"type":"object","properties":{"x":{"type":"string","pattern":".*"}}})", "{"})
+    {
+        const auto unsupported = RequestedReplyContract("Follow this JSON Schema: " + badSchema);
+        Check(unsupported.rootKind == ReplyFormat::JsonObject && unsupported.extractionStatus == ReplyContractStatus::Unsupported &&
+                  !unsupported.reason.empty() && MatchesReplyContract("{}", unsupported),
+            "A malformed, unsupported or scalar schema introduction escaped conservative type-only handling.");
+    }
     const auto keys = RequestedReplyContract("Return JSON with exactly keys empty and count.");
     Check(keys.extractionStatus == ReplyContractStatus::ExplicitShape, "Exact keys were not extracted into the turn contract.");
     const auto schema = nlohmann::json::parse(keys.schemaJson);

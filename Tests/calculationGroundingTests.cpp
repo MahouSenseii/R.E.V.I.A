@@ -85,6 +85,96 @@ void TestScopedArithmeticGrounding()
         "Numerical evidence was returned after the captured admission was revoked.");
 }
 
+void TestMissingNumericalPremisesCannotBecomeObservations()
+{
+    using revia::agents::BuildCalculationGrounding;
+    int proposals = 0;
+    const auto incompleteProposal = [&](const std::string& envelope, std::stop_token)
+    {
+        ++proposals;
+        return Proposal(json::parse(envelope).at("currentText").get<std::string>(), "18+7");
+    };
+    for (const std::string input : {"I had 18 parcels, sold an unspecified amount, and received 7 more. How many remain?",
+             "I had 18 parcels, sold some, and received 7 more. How many remain?",
+             "There were 28 files. I deleted an unknown quantity. What is the remaining count?",
+             "I had 24 tickets and gave away some of them. How many are left?",
+             "A 12-second timer runs for an unknown duration. Calculate the elapsed time.",
+             "Convert 9 to meters; the source unit is not specified."})
+    {
+        const auto grounded = BuildCalculationGrounding(input, {}, incompleteProposal);
+        Check(!grounded.ran && proposals == 0 && grounded.promptBlock.find("[Arithmetic uncertainty for this turn]") != std::string::npos &&
+                  grounded.promptBlock.find("No determinate final numerical answer") != std::string::npos &&
+                  grounded.promptBlock.find("[Native arithmetic observations") == std::string::npos &&
+                  grounded.promptBlock.find("receiptDigest") == std::string::npos && !grounded.reason.empty(),
+            "An explicitly missing numerical premise reached the proposer or became a verified subtotal: " + input);
+    }
+    Check(BuildCalculationGrounding("Convert 9 to meters; the source unit is unknown.", {}, incompleteProposal)
+                  .promptBlock.find("source measurement unit") != std::string::npos,
+        "A missing conversion unit did not identify the required clarification.");
+    Check(BuildCalculationGrounding(
+              "A timer has 12 seconds left; an unknown duration passes. Calculate the remaining time.", {}, incompleteProposal)
+                  .promptBlock.find("duration") != std::string::npos,
+        "A missing duration did not identify the required clarification.");
+    const std::string unresolved = "There were 28 files. I deleted an unknown quantity. What is the remaining count?";
+    std::stop_source stop;
+    stop.request_stop();
+    const auto cancelled = BuildCalculationGrounding(unresolved, {}, incompleteProposal, stop.get_token());
+    Check(!cancelled.ran && cancelled.promptBlock.empty() && proposals == 0,
+        "Cancelled missing-premise grounding published a note or contacted the proposer.");
+    int admissions = 0;
+    const auto revoked = BuildCalculationGrounding(unresolved, {}, incompleteProposal, {}, [&] { return ++admissions == 1; });
+    Check(!revoked.ran && revoked.promptBlock.empty() && proposals == 0,
+        "Missing-premise guidance survived a change to its captured admission.");
+}
+
+void TestMissingPremiseCuesRemainScoped()
+{
+    using revia::agents::BuildCalculationGrounding;
+    int proposals = 0;
+    const auto supplied = [&](const std::string& envelope, std::stop_token)
+    {
+        ++proposals;
+        return Proposal(json::parse(envelope).at("currentText").get<std::string>(), "18-3+7");
+    };
+    for (const std::string input :
+        {"I had 18 parcels, sold 3, and received 7 more. How many remain?",
+            "I had 18 parcels, sold some 3 parcels, and received 7 more. How many remain?",
+            "I had 18 parcels, removed some 3.0, and received 7 more. How many remain?",
+            "I had 18 parcels, used some +3, and received 7 more. How many remain?",
+            "An unknown customer bought 3 of my 18 parcels. I received 7 more. What is the remaining count?",
+            "Calculate (18-3)+7. Return JSON with key \"unknown quantity\".", "She said: \"I sold an unknown amount.\" Calculate (18-3)+7.",
+            "The sample is `deleted an unspecified quantity`. Calculate (18-3)+7."})
+    {
+        const auto grounded = BuildCalculationGrounding(input, {}, supplied);
+        Check(grounded.ran && grounded.promptBlock.find("[Arithmetic uncertainty") == std::string::npos &&
+                  grounded.promptBlock.find("\"value\":\"22\"") != std::string::npos,
+            "An unrelated person, quoted sample, or complete numerical request became missing-premise guidance: " + input);
+    }
+    const auto fromCurrent =
+        BuildCalculationGrounding("Calculate (18-3)+7", {{"user", "I deleted an unknown quantity yesterday."}}, supplied);
+    Check(fromCurrent.ran && fromCurrent.promptBlock.find("[Arithmetic uncertainty") == std::string::npos,
+        "An old request's unknown quantity contaminated a complete current expression.");
+    for (const std::string input : {"Calculate a symbolic formula: I had 18 parcels, sold an unknown quantity, and received 7 more.",
+             "I removed an unknown quantity of unused files. Calculate how many of 18 parcels remain after selling 3."})
+    {
+        const int before = proposals;
+        const auto grounded = BuildCalculationGrounding(input, {}, supplied);
+        Check(!grounded.ran && proposals == before && grounded.promptBlock.find("that depends on that premise") != std::string::npos &&
+                  grounded.promptBlock.find("supported independent answers") != std::string::npos &&
+                  grounded.promptBlock.find("symbolic or conditional relation") != std::string::npos,
+            "Missing-premise guidance unconditionally denied independent or symbolic answers.");
+    }
+    for (const std::string input :
+        {"An unknown amount of rain fell. Tell me a joke.", "Explain this example: ```Calculate 18 minus an unknown quantity.```",
+            "She said: \"Calculate 18 minus an unknown quantity.\" Explain her tone."})
+    {
+        const int before = proposals;
+        const auto grounded = BuildCalculationGrounding(input, {}, supplied);
+        Check(!grounded.ran && grounded.promptBlock.empty() && proposals == before,
+            "Unrelated or quoted missing quantities triggered arithmetic guidance.");
+    }
+}
+
 void TestLiteralArithmeticWithPresentationSuffix()
 {
     using revia::agents::BuildCalculationGrounding;
@@ -216,7 +306,9 @@ class GroundingBackend
                             lastAnswerPrompt += message.at("content").template get<std::string>() + "\n";
                     }
                     ++answers;
-                    answer = "The total is 39 discs. That stash is still impressive!";
+                    answer = AnswerPrompt().find("[Arithmetic uncertainty for this turn]") != std::string::npos
+                                 ? "How many did you sell? I need that amount to work out the remainder."
+                                 : "The total is 39 discs. That stash is still impressive!";
                 }
                 const json choice = {{"choices", json::array({{{"message", {{"content", answer}}}, {"finish_reason", "stop"}}})}};
                 if (body.value("stream", false))
@@ -334,12 +426,44 @@ void TestNormalAndEvaluationShareGrounding()
     Check(!revoked.succeeded && fixture.backend.answers == before,
         "A numerical proposal arriving after revocation reached final answer generation.");
 }
+
+void TestMissingPremiseGuidanceReachesBothFinalRequests()
+{
+    RuntimeFixture fixture;
+    const std::string input = "I had 18 parcels, sold an unspecified amount, and received 7 more. How many remain?";
+    const auto checkPrompt = [&]
+    {
+        const auto prompt = fixture.backend.AnswerPrompt();
+        Check(fixture.backend.proposals == 0 && prompt.find("[Arithmetic uncertainty for this turn]") != std::string::npos &&
+                  prompt.find("No determinate final numerical answer") != std::string::npos &&
+                  prompt.find("[Native arithmetic observations") == std::string::npos && prompt.find("receiptDigest") == std::string::npos,
+            "A final decoded request lost uncertainty or received a verified subtotal for a missing premise.");
+    };
+    const auto evaluated = fixture.runtime.EvaluateTurn(input, {}, fixture.profile, true);
+    Check(evaluated.succeeded, "The missing-premise evaluation fixture did not generate its final response.");
+    checkPrompt();
+    const auto ordinary = fixture.runtime.Reply(input, fixture.profile, true, false);
+    Check(ordinary.succeeded, "The missing-premise normal-turn fixture did not generate its final response.");
+    checkPrompt();
+    const auto unrelated = fixture.runtime.EvaluateTurn("Tell me a playful fact about trees.", {}, fixture.profile, true);
+    Check(unrelated.succeeded && fixture.backend.proposals == 0 &&
+              fixture.backend.AnswerPrompt().find("[Arithmetic uncertainty") == std::string::npos,
+        "Missing-premise guidance leaked into a later unrelated response.");
+    fixture.runtime.SetPrivateAdmissionFactory([] { return [] { return false; }; });
+    const int before = fixture.backend.answers;
+    const auto revoked = fixture.runtime.Reply(input, fixture.profile, true, false);
+    Check(!revoked.succeeded && fixture.backend.answers == before && fixture.backend.proposals == 0,
+        "Revoked missing-premise guidance reached final answer generation.");
+}
 }
 
 void RunCalculationGroundingTests()
 {
     TestScopedArithmeticGrounding();
+    TestMissingNumericalPremisesCannotBecomeObservations();
+    TestMissingPremiseCuesRemainScoped();
     TestLiteralArithmeticWithPresentationSuffix();
     TestCalculationProposalSourceChoices();
     TestNormalAndEvaluationShareGrounding();
+    TestMissingPremiseGuidanceReachesBothFinalRequests();
 }

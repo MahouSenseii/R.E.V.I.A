@@ -8,6 +8,7 @@
 #include <optional>
 #include <regex>
 #include <set>
+#include <string_view>
 #include <vector>
 
 namespace revia::agents
@@ -101,25 +102,198 @@ std::optional<bool> RequestPolarity(const std::string& text, std::size_t positio
             return false;
     return std::nullopt;
 }
+
+struct DirectiveText
+{
+    std::string text;
+    std::vector<std::size_t> offsets;
+};
+
+DirectiveText Directives(const std::string& input)
+{
+    const auto masked = RequestText(input, false);
+    DirectiveText result;
+    for (std::size_t index = 0; index < masked.size(); ++index)
+    {
+        const auto character = static_cast<unsigned char>(masked[index]);
+        if (std::isspace(character) && !result.text.empty() && std::isspace(static_cast<unsigned char>(result.text.back())))
+        {
+            if (character == '\r' || character == '\n')
+                result.text.back() = '\n';
+            continue;
+        }
+        result.offsets.push_back(index);
+        result.text += std::isspace(character) ? (character == '\r' || character == '\n' ? '\n' : ' ') : static_cast<char>(character);
+    }
+    result.offsets.push_back(masked.size());
+    return result;
+}
+
+const std::regex& DirectivePattern()
+{
+    static const std::regex request(
+        R"(\b(?:return|reply|respond|answer|output|produce|write|give|use)\s+(?:(?:the|your)\s+(?:answer|result|response)\s+)?(?:(?:only|a|an)\s+){0,2}(?:top[- ]level\s+)?(?:(?:in|as)\s+)?(?:only\s+)?(?:valid\s+)?(json|prose|plain text)(?:\s+(?:as\s+(?:an?\s+)?)?(?:top[- ]level\s+)?(object|array))?\b|\b((?:follow|use)\s+this\s+json\s+schema\s*:))");
+    return request;
+}
+
+const std::string& DeliveryPattern()
+{
+    static const std::string body =
+        R"((?:return|reply|respond|output)\s+(?:(?:only\s+)?(?:(?:in|as)\s+)?(?:valid\s+)?json(?:\s+(?:object|array))?|only\s+the\s+(?:valid\s+)?json\s+(?:object|array))(?:,\s*without\s+(?:prose|extra\s+commentary)(?:\s+or\s+(?:a\s+)?code\s+fences?)?)?)";
+    return body;
+}
+
+std::string NormalizedClause(const std::string& clause)
+{
+    std::string normalized;
+    for (const unsigned char character : clause)
+    {
+        if (std::isspace(character))
+        {
+            if (!normalized.empty() && normalized.back() != ' ')
+                normalized += ' ';
+        }
+        else
+            normalized += static_cast<char>(std::tolower(character));
+    }
+    if (!normalized.empty() && normalized.back() == ' ')
+        normalized.pop_back();
+    return normalized;
+}
+
+bool PlainDelivery(const std::string& clause)
+{
+    static const std::regex plain("^" + DeliveryPattern() + "[.!?;]?$");
+    return std::regex_match(NormalizedClause(clause), plain);
+}
+
+std::string SchemaPrefix(const std::string& suffix)
+{
+    const auto begin = suffix.find_first_not_of(" \t\r\n");
+    if (begin == std::string::npos || suffix[begin] != '{')
+        return {};
+    int depth = 0;
+    bool quoted = false;
+    bool escaped = false;
+    for (std::size_t index = begin; index < suffix.size() && index - begin < MaximumReplySchemaBytes; ++index)
+    {
+        const char character = suffix[index];
+        if (quoted)
+        {
+            if (!escaped && character == '"')
+                quoted = false;
+            escaped = !escaped && character == '\\';
+        }
+        else if (character == '"')
+            quoted = true;
+        else if (character == '{' || character == '[')
+            ++depth;
+        else if (character == '}' || character == ']')
+        {
+            if (--depth == 0)
+                return suffix.substr(begin, index - begin + 1);
+        }
+    }
+    return {};
+}
+
+struct DeclaredSchemaRoot
+{
+    ReplyFormat kind;
+    std::size_t end;
+};
+
+std::optional<DeclaredSchemaRoot> ReadSchemaRoot(const std::string& input, std::size_t begin, bool directIntroduction)
+{
+    begin = input.find_first_not_of(" \t\r\n", begin);
+    if (begin == std::string::npos)
+        return std::nullopt;
+    if (!directIntroduction)
+    {
+        constexpr std::string_view legacyLead = "using this schema:";
+        if (NormalizedClause(input.substr(begin, legacyLead.size())) != legacyLead)
+            return std::nullopt;
+        begin = input.find_first_not_of(" \t\r\n", begin + legacyLead.size());
+        if (begin == std::string::npos)
+            return std::nullopt;
+    }
+    const auto schemaText = SchemaPrefix(input.substr(begin));
+    if (!IsCompleteJsonReply(schemaText, MaximumReplySchemaBytes))
+        return std::nullopt;
+    try
+    {
+        const auto schema = nlohmann::json::parse(schemaText);
+        if (!schema.contains("type"))
+            return std::nullopt;
+        if (schema["type"] == "object")
+            return DeclaredSchemaRoot{ReplyFormat::JsonObject, begin + schemaText.size()};
+        if (schema["type"] == "array")
+            return DeclaredSchemaRoot{ReplyFormat::JsonArray, begin + schemaText.size()};
+    }
+    catch (const std::exception&)
+    {
+        return std::nullopt;
+    }
+    return std::nullopt;
+}
 }
 
 ReplyFormat RequestedReplyFormat(const std::string& input)
 {
     if (input.size() > MaximumJsonReplyBytes)
         return ReplyFormat::Conversation;
-    const std::string text = RequestText(input);
-    static const std::regex request(
-        R"(\b(?:return|reply|respond|answer|output|produce|write|give|use)\s+(?:(?:the|your)\s+(?:answer|result|response)\s+)?(?:(?:only|a|an)\s+){0,2}(?:top[- ]level\s+)?(?:(?:in|as)\s+)?(?:only\s+)?(json|prose|plain text)(?:\s+(?:as\s+(?:an?\s+)?)?(?:top[- ]level\s+)?(object|array))?\b)");
+    const auto directives = Directives(input);
+    const auto& text = directives.text;
+    const auto& request = DirectivePattern();
     ReplyFormat format = ReplyFormat::Conversation;
+    bool schemaRoot = false;
+    std::size_t previousEnd = 0;
     for (auto match = std::sregex_iterator(text.begin(), text.end(), request); match != std::sregex_iterator(); ++match)
     {
         const auto polarity = RequestPolarity(text, static_cast<std::size_t>(match->position()));
         if (!polarity)
             continue;
-        if (!*polarity || (*match)[1] != "json")
+        const auto matchEnd = directives.offsets[static_cast<std::size_t>(match->position() + match->length())];
+        if (!*polarity || (!(*match)[3].matched && (*match)[1] != "json"))
+        {
             format = ReplyFormat::Conversation;
+            schemaRoot = false;
+        }
+        else if ((*match)[3].matched)
+        {
+            format = ReplyFormat::JsonObject;
+            schemaRoot = false;
+            if (const auto declared = ReadSchemaRoot(input, matchEnd, true))
+            {
+                format = declared->kind;
+                schemaRoot = true;
+                previousEnd = declared->end;
+            }
+        }
         else
-            format = (*match)[2] == "array" ? ReplyFormat::JsonArray : ReplyFormat::JsonObject;
+        {
+            const auto begin = directives.offsets[static_cast<std::size_t>(match->position())];
+            const auto end = input.find_first_of(".!?;\r\n", begin);
+            const auto clauseEnd = end == std::string::npos ? input.size() : end;
+            const auto deliveryKind = (*match)[2] == "array" ? ReplyFormat::JsonArray : ReplyFormat::JsonObject;
+            const bool compatible = schemaRoot && (!(*match)[2].matched || deliveryKind == format) && begin >= previousEnd &&
+                                    input.substr(previousEnd, begin - previousEnd).find_first_not_of(" \t\r\n.!?;") == std::string::npos &&
+                                    PlainDelivery(input.substr(begin, clauseEnd - begin));
+            if (!compatible)
+            {
+                format = (*match)[2] == "array" ? ReplyFormat::JsonArray : ReplyFormat::JsonObject;
+                schemaRoot = false;
+                if (const auto declared = ReadSchemaRoot(input, matchEnd, false);
+                    declared && (!(*match)[2].matched || format == declared->kind))
+                {
+                    format = declared->kind;
+                    schemaRoot = true;
+                    previousEnd = declared->end;
+                }
+            }
+            else
+                previousEnd = clauseEnd;
+        }
     }
     return format;
 }
@@ -327,7 +501,7 @@ std::optional<Json> KeySchema(std::string text)
 }
 }
 
-static ReplyContract ExtractReplyContract(const std::string& input, bool retainDelivery)
+static ReplyContract ExtractReplyContract(const std::string& input, bool retainDelivery, int remainingReaffirmations = 16)
 {
     ReplyContract contract;
     contract.rootKind = RequestedReplyFormat(input);
@@ -338,28 +512,12 @@ static ReplyContract ExtractReplyContract(const std::string& input, bool retainD
     // Only the admitted directive opens this clause. Preserve its quoted field names;
     // the speech/quote-masked search view still decides whether the directive exists.
     const auto& original = input;
-    const auto masked = RequestText(input, false);
-    std::string text;
-    std::vector<std::size_t> offsets;
-    for (std::size_t index = 0; index < masked.size(); ++index)
-    {
-        const auto character = static_cast<unsigned char>(masked[index]);
-        if (std::isspace(character) && !text.empty() && std::isspace(static_cast<unsigned char>(text.back())))
-        {
-            if (character == '\r' || character == '\n')
-                text.back() = '\n';
-            continue;
-        }
-        offsets.push_back(index);
-        text += std::isspace(character) ? (character == '\r' || character == '\n' ? '\n' : ' ') : static_cast<char>(character);
-    }
-    offsets.push_back(masked.size());
+    const auto directives = Directives(input);
+    const auto& text = directives.text;
+    const auto& offsets = directives.offsets;
     if (retainDelivery)
     {
-        static const std::string deliveryBody =
-            R"((?:return|reply|respond|output)\s+(?:(?:only\s+)?(?:(?:in|as)\s+)?json(?:\s+(?:object|array))?|only\s+the\s+json\s+(?:object|array))(?:,\s*without\s+prose\s+or\s+a\s+code\s+fence)?)";
-        static const std::regex terminal("(^|[.!?;\\n])\\s*(" + deliveryBody + ")[.!?;]?\\s*$");
-        static const std::regex plain("^" + deliveryBody + "[.!?;]?$");
+        static const std::regex terminal("(^|[.!?;\\n])\\s*(" + DeliveryPattern() + ")[.!?;]?\\s*$");
         std::size_t inputEnd = original.size();
         std::size_t textEnd = text.size();
         for (int count = 0; count < 16; ++count)
@@ -370,22 +528,14 @@ static ReplyContract ExtractReplyContract(const std::string& input, bool retainD
                 break;
             const auto begin = offsets[static_cast<std::size_t>(delivery.position(2))];
             const auto rawClause = Trim(original.substr(begin, inputEnd - begin));
-            std::string normalized;
-            for (const unsigned char character : rawClause)
-            {
-                if (std::isspace(character))
-                {
-                    if (!normalized.empty() && normalized.back() != ' ')
-                        normalized += ' ';
-                }
-                else
-                    normalized += static_cast<char>(std::tolower(character));
-            }
+            const auto normalized = NormalizedClause(rawClause);
             // The search view masks quoted payloads. Require the entire original
             // clause to be plain delivery text before discarding any suffix.
-            if (!std::regex_match(normalized, plain))
+            if (!PlainDelivery(rawClause))
                 break;
-            const auto deliveryKind = normalized.find("json array") == std::string::npos ? ReplyFormat::JsonObject : ReplyFormat::JsonArray;
+            const auto deliveryKind = normalized.find("json array") != std::string::npos    ? ReplyFormat::JsonArray
+                                      : normalized.find("json object") != std::string::npos ? ReplyFormat::JsonObject
+                                                                                            : contract.rootKind;
             if (deliveryKind != contract.rootKind)
                 break;
             inputEnd = begin;
@@ -394,16 +544,22 @@ static ReplyContract ExtractReplyContract(const std::string& input, bool retainD
         if (inputEnd < original.size())
         {
             const auto preceding = ExtractReplyContract(Trim(original.substr(0, inputEnd)), false);
-            if (preceding.rootKind == contract.rootKind && preceding.extractionStatus == ReplyContractStatus::ExplicitShape)
+            if (preceding.rootKind == contract.rootKind && (preceding.extractionStatus == ReplyContractStatus::ExplicitShape ||
+                                                               preceding.extractionStatus == ReplyContractStatus::Unsupported))
                 return preceding;
         }
     }
-    static const std::regex request(
-        R"(\b(?:return|reply|respond|answer|output|produce|write|give|use)\s+(?:(?:the|your)\s+(?:answer|result|response)\s+)?(?:(?:only|a|an)\s+){0,2}(?:top[- ]level\s+)?(?:(?:in|as)\s+)?(?:only\s+)?(json|prose|plain text)(?:\s+(?:as\s+(?:an?\s+)?)?(?:top[- ]level\s+)?(object|array))?\b)");
+    const auto& request = DirectivePattern();
     std::size_t end = std::string::npos;
+    std::size_t directiveBegin = 0;
+    bool introducedSchema = false;
     for (auto match = std::sregex_iterator(text.begin(), text.end(), request); match != std::sregex_iterator(); ++match)
         if (RequestPolarity(text, static_cast<std::size_t>(match->position())).value_or(false))
+        {
+            directiveBegin = offsets[static_cast<std::size_t>(match->position())];
             end = offsets[static_cast<std::size_t>(match->position() + match->length())];
+            introducedSchema = (*match)[3].matched;
+        }
     if (end == std::string::npos)
         return contract;
     const auto suffix = Trim(original.substr(end));
@@ -413,7 +569,7 @@ static ReplyContract ExtractReplyContract(const std::string& input, bool retainD
     static const std::regex keyLead(R"(^with\s+(?:exactly\s+)?keys?\s+)");
     std::smatch match;
     const bool keyRequest = std::regex_search(lowerSuffix, match, keyLead);
-    const bool schemaRequest = lowerSuffix.starts_with("using this schema:");
+    const bool schemaRequest = introducedSchema || lowerSuffix.starts_with("using this schema:");
     if (!keyRequest && !schemaRequest)
         return contract;
     const auto unsupported = [&](const std::string& reason)
@@ -435,7 +591,7 @@ static ReplyContract ExtractReplyContract(const std::string& input, bool retainD
         }
         else
         {
-            auto schemaText = Trim(suffix.substr(std::string("using this schema:").size()));
+            auto schemaText = introducedSchema ? suffix : Trim(suffix.substr(std::string("using this schema:").size()));
             if (!schemaText.empty() && schemaText.back() == '.')
                 schemaText.pop_back();
             if (schemaText.size() > MaximumReplySchemaBytes || !IsCompleteJsonReply(schemaText, MaximumReplySchemaBytes))
@@ -449,6 +605,27 @@ static ReplyContract ExtractReplyContract(const std::string& input, bool retainD
             return unsupported("Explicit reply shape is ambiguous, unsupported or exceeds its key/depth limit.");
         contract.schemaJson = schema->dump();
         contract.extractionStatus = ReplyContractStatus::ExplicitShape;
+        if (keyRequest && remainingReaffirmations > 0 && directiveBegin > 0)
+        {
+            const auto preceding = ExtractReplyContract(Trim(original.substr(0, directiveBegin)), false, remainingReaffirmations - 1);
+            if (preceding.rootKind == contract.rootKind && preceding.extractionStatus == ReplyContractStatus::ExplicitShape)
+            {
+                const auto previousSchema = Json::parse(preceding.schemaJson);
+                if (previousSchema.contains("properties") && previousSchema.contains("required") &&
+                    previousSchema.contains("additionalProperties") && previousSchema["additionalProperties"] == false &&
+                    previousSchema["properties"].size() == schema->at("properties").size() &&
+                    previousSchema["required"].size() == schema->at("required").size())
+                {
+                    bool identicalKeys = true;
+                    for (const auto& key : schema->at("required"))
+                        identicalKeys = identicalKeys && previousSchema["properties"].contains(key.get<std::string>()) &&
+                                        std::find(previousSchema["required"].begin(), previousSchema["required"].end(), key) !=
+                                            previousSchema["required"].end();
+                    if (identicalKeys)
+                        return preceding;
+                }
+            }
+        }
     }
     catch (const std::exception&)
     {

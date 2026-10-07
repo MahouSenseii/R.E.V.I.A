@@ -90,6 +90,57 @@ bool NumericalRequest(const std::string& intent)
     return std::any_of(intent.begin(), intent.end(), [](const unsigned char ch) { return std::isdigit(ch); });
 }
 
+enum class MissingPremise
+{
+    None,
+    Quantity,
+    Duration,
+    Unit
+};
+
+MissingPremise ExplicitMissingPremise(const std::string& intent)
+{
+    static const std::regex unit(
+        R"(\b(?:unknown|unspecified|unreported|unstated|missing)\s+(?:(?:source|measurement|input)\s+)?units?\b|\b(?:(?:source|measurement|input)\s+)?units?\b(?:\s+(?:is|was|are|were|remains))?\s+(?:unknown|unspecified|unreported|unstated|missing|not\s+(?:given|known|provided|specified|stated|reported))\b)");
+    if (std::regex_search(intent, unit))
+        return MissingPremise::Unit;
+    static const std::regex duration(
+        R"(\b(?:unknown|unspecified|unreported|unstated|missing)\s+(?:duration|time|elapsed\s+time|length\s+of\s+time)\b|\b(?:duration|elapsed\s+time|length\s+of\s+time)\b(?:\s+(?:is|was|remains))?\s+(?:unknown|unspecified|unreported|unstated|missing|not\s+(?:given|known|provided|specified|stated|reported))\b)");
+    if (std::regex_search(intent, duration))
+        return MissingPremise::Duration;
+    static const std::regex quantity(
+        R"(\b(?:unknown|unspecified|unreported|unstated|missing)\s+(?:amount|quantity|number|count)\b|\b(?:amount|quantity|number|count)\b[^.!?;]{0,64}\b(?:is|was|remains)\s+(?:unknown|unspecified|unreported|unstated|missing|not\s+(?:given|known|provided|specified|stated|reported))\b|\b(?:sold|sell|gave\s+away|give\s+away|removed|remove|deleted|delete|lost|spent|used|added|received|bought)\s+(?:an?\s+)?(?:some(?!\s+[+-]?(?:\d|\.\d))|unknown|unspecified|unreported|unstated)\b)");
+    return std::regex_search(intent, quantity) ? MissingPremise::Quantity : MissingPremise::None;
+}
+
+CalculationGrounding MissingPremiseGuidance(const MissingPremise missing)
+{
+    std::string needed;
+    switch (missing)
+    {
+    case MissingPremise::Quantity:
+        needed = "Ask for the missing amount or count if the requested total depends on it.";
+        break;
+    case MissingPremise::Duration:
+        needed = "Ask for the missing duration if the requested time depends on it.";
+        break;
+    case MissingPremise::Unit:
+        needed = "Ask for the source measurement unit if the requested conversion depends on it.";
+        break;
+    case MissingPremise::None:
+        return {};
+    }
+    return {false,
+        "[Arithmetic uncertainty for this turn]\nThe active message explicitly leaves a numerical premise unspecified. No "
+        "determinate final numerical answer that depends on that premise is supported. Do not omit it, assume it is zero, or present "
+        "a partial subtotal as the full answer. " +
+            needed +
+            " Allow supported independent answers or a symbolic or conditional relation when requested. Keep the clarification in "
+            "your own voice and requested format, without extra commentary or narrating this machinery. No native computation or "
+            "verification receipt was produced.",
+        "An explicit missing numerical premise needs dependency-aware clarification."};
+}
+
 std::vector<std::string> PresentationClauses(const std::string& suffix)
 {
     std::vector<std::string> clauses;
@@ -308,6 +359,12 @@ CalculationGrounding BuildCalculationGrounding(const std::string& input, const s
         const auto result = evaluation::VerifyCalculation(nlohmann::json{{"expression", expression}}.dump(), stopToken);
         if (result.succeeded)
             receipts.push_back(Receipt(result, "requested expression", expression, inputDigest, false));
+    }
+    if (receipts.empty())
+    {
+        const auto missing = ExplicitMissingPremise(intent);
+        if (missing != MissingPremise::None)
+            return Current(stopToken, admission) ? MissingPremiseGuidance(missing) : CalculationGrounding{};
     }
     if (receipts.empty() && proposer && Current(stopToken, admission))
     {
