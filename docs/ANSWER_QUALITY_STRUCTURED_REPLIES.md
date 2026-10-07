@@ -42,10 +42,10 @@ rejected or unavailable samples cannot carry accepted answer/personality claims.
 
 | Role | Assigned area | Status |
 |---|---|---|
-| Director / integration | Provider contract, bounded intent detector, native build, live evidence and main integration | Native checks passed; fresh validation and integration pending |
+| Director / integration | Provider contract, bounded intent detector, native build, live evidence and main integration | Native and fresh verification accepted; integration pending |
 | Pipeline worker | Shared style/hard-filter preservation and security regression checks | Native regression and integrated checks passed |
 | Evaluation worker | Honest raw/final diagnostics and authoritative report serialization | Native regression and integrated checks passed |
-| Independent validation author | New 24-case / 72-slot set and six personality control conversations | Frozen before outcomes |
+| Independent validation author | New 24-case / 72-slot set and six personality control conversations | Frozen; independent evidence audit passed |
 | Independent reviewer | Source review of format, security, admission and ordinary conversation paths | Accepted; no remaining material source finding |
 
 ## Verification design
@@ -78,5 +78,5 @@ and personality review and external qualification remain pending.
 
 Original 720-run baseline evidence and its 184/720 score remain unchanged.
 New evidence stays outside Git under the owner's Codex attachment directory;
-an acceptance receipt will record source, build, checks, actual outcomes and
-limitations after verification.
+[acceptance receipt](ANSWER_QUALITY_STRUCTURED_ACCEPTANCE.md) records source,
+build, checks, actual outcomes and limitations after verification.
