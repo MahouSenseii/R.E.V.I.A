@@ -68,3 +68,19 @@ the existing stable-prefix prompt placement without weakening its assertions.
 - Shared-file ownership: shape worker owns replyFormat, provider and conversationAgent;
   Director owns conversationRuntime, investigation adapters and CMake registration;
   arithmetic worker owns only its new evaluator header, implementation and tests.
+
+## Initial live assessment and activation correction
+
+The first frozen 20-case/three-seed campaign scored 37/60 versus the retained
+baseline's 39/60. All 33 interpretation requests returned empty calculation
+arrays, and none of the 60 final requests contained native observations. Those
+receipts remain unchanged and do not support an arithmetic accuracy benefit.
+The first cohort is now development evidence after this diagnosis.
+
+The correction distinguishes JSON transport from quoted conversation, pins short
+source choices to actual supplied text, and extracts literal expressions only when
+the complete remainder is admitted presentation guidance. Corrections and extra
+tasks still defer. Long current sources retain excerpt handling; raw format clauses
+are bounded and intent whitespace is compacted without changing source bytes.
+A separate independent 12-case/36-slot cohort was frozen before corrected
+candidate outcomes. Final results belong in the delivery acceptance report.

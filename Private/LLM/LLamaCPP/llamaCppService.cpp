@@ -1472,7 +1472,7 @@ void llamaCppService::SetReplyNote(std::string note)
 responseOutput llamaCppService::GenerateCalculationProposal(const std::string& envelope, std::stop_token stopToken) const
 {
     return GeneratePlannerResponse(revia::agents::CalculationProposalInstructions(), envelope, 640, true, stopToken,
-        revia::llm::InferencePriority::Interactive, 0.1F, "arithmetic interpretation", revia::agents::CalculationProposalSchema());
+        revia::llm::InferencePriority::Interactive, 0.1F, "arithmetic interpretation", revia::agents::CalculationProposalSchema(envelope));
 }
 
 responseOutput llamaCppService::GenerateActionProposal(const std::string& userRequest) const

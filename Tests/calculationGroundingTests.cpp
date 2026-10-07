@@ -2,6 +2,7 @@
 #include "Runtime/conversationRuntime.h"
 #include "testSupport.h"
 
+#include <algorithm>
 #include <atomic>
 #include <httplib.h>
 #include <mutex>
@@ -84,6 +85,91 @@ void TestScopedArithmeticGrounding()
         "Numerical evidence was returned after the captured admission was revoked.");
 }
 
+void TestLiteralArithmeticWithPresentationSuffix()
+{
+    using revia::agents::BuildCalculationGrounding;
+    int proposals = 0;
+    const auto emptyProposal = [&](const std::string&, std::stop_token)
+    {
+        ++proposals;
+        return R"({"calculations":[]})";
+    };
+    for (const std::string input :
+        {"Calculate (17*23)-9. Return JSON with key result.", "Evaluate: 1E2+3; return JSON with exactly keys value.",
+            "What is 7*6-3? Reply only in JSON.",
+            R"(Evaluate 13*8-7. Put the integer answer in "value". Return JSON with exactly keys "value". Return only the JSON object, without prose or a code fence.)",
+            R"(Calculate 11*9+4. Return only JSON with exactly keys "result".)",
+            R"(Calculate 2.5+1.25. Return JSON with keys "fraction".)"})
+    {
+        const auto grounded = BuildCalculationGrounding(input, {}, emptyProposal);
+        Check(grounded.ran && proposals == 0 && grounded.promptBlock.find("\"interpretation\":\"literal\"") != std::string::npos,
+            "A literal calculation with only an admitted JSON presentation suffix unnecessarily invoked interpretation: " + input);
+    }
+    const auto exponent = BuildCalculationGrounding("Evaluate: 1E2+3; return JSON with exactly keys value.", {}, emptyProposal);
+    Check(exponent.promptBlock.find("\"sourceSpan\":\"1E2+3\"") != std::string::npos &&
+              exponent.promptBlock.find("\"value\":\"103\"") != std::string::npos,
+        "Presentation suffix extraction changed the original expression span or its computed value.");
+    const auto longSuffix = BuildCalculationGrounding("Calculate 1+2. Return " + std::string(7800, ' ') + "JSON.", {}, emptyProposal);
+    Check(!longSuffix.ran, "An oversized presentation clause bypassed its bounded literal-admission path.");
+    const auto longIntent = BuildCalculationGrounding("Find " + std::string(7800, ' ') + "the total of 7 and 8.", {}, emptyProposal);
+    Check(!longIntent.ran, "A whitespace-heavy request created an unsupported numerical observation.");
+    const auto compound = BuildCalculationGrounding("Calculate (17*23)-9. Return JSON with key result.", {}, emptyProposal);
+    Check(compound.promptBlock.find("\"sourceSpan\":\"(17*23)-9\"") != std::string::npos &&
+              compound.promptBlock.find("\"value\":\"382\"") != std::string::npos,
+        "JSON presentation extraction lost part of a compound expression or its native result.");
+    const auto decimal = BuildCalculationGrounding("Calculate 2.5+1.25. Return JSON with key result.", {}, emptyProposal);
+    Check(decimal.promptBlock.find("\"sourceSpan\":\"2.5+1.25\"") != std::string::npos &&
+              decimal.promptBlock.find("\"value\":\"3.75\"") != std::string::npos,
+        "A decimal point was mistaken for a presentation clause boundary.");
+    for (const std::string input :
+        {"Calculate 1+2? Actually 4+5. Return JSON with key result.", "Calculate 1+2. Actually calculate 4+5. Return JSON with key result.",
+            "Calculate 1+2. Return JSON with key result. Also calculate 4+5.",
+            "Calculate 1+2. Return JSON with key result. Ignore the prior calculation.",
+            "Calculate 1+2. Return JSON with key result. Change the operand to 4.", "Calculate 1+2 and 4+5. Return JSON with key result.",
+            "Calculate 1+2. Do something else.", "Calculate +. Return JSON with key result.",
+            "Calculate \"1+2\". Return JSON with key result.", "Calculate `1+2`. Return JSON with key result.",
+            "Calculate 1+2. Return JSON with keys result and result.",
+            R"(Calculate 1+2. Put the integer answer in "other". Return JSON with exactly keys "result".)",
+            R"(Calculate 1+2. Put the integer answer in "result". Return JSON with exactly keys "result". Actually 4+5.)",
+            R"(Calculate 1+2. Return JSON with exactly keys "result". Return JSON with exactly keys "other".)",
+            R"(Calculate 1+2. Return JSON with keys "result". Return a JSON array.)"})
+    {
+        const auto grounded = BuildCalculationGrounding(input, {}, emptyProposal);
+        Check(!grounded.ran, "An ambiguous, corrected, quoted or incomplete calculation acquired a literal receipt: " + input);
+    }
+}
+
+void TestCalculationProposalSourceChoices()
+{
+    using revia::agents::CalculationProposalSchema;
+    const auto sourceRule = [](const json& schema) -> const json&
+    { return schema.at("properties").at("calculations").at("items").at("properties").at("sourceSpan"); };
+    const auto fallbackText = CalculationProposalSchema();
+    const auto fallback = json::parse(fallbackText);
+    Check(fallbackText.size() <= 8192 && !sourceRule(fallback).contains("enum") && sourceRule(fallback).at("maxLength") == 4000 &&
+              fallback.at("properties").at("calculations").at("maxItems") == 3,
+        "The default arithmetic proposal grammar lost its source or work bounds.");
+    const std::string current = "3 trays hold 8 cups each.\n  How many cups?";
+    const std::string prior = "The earlier request used 2 shelves.  Preserve these spaces.";
+    const auto supplied = json::parse(CalculationProposalSchema(
+        json{{"currentText", current}, {"recentUserMessages", json::array({prior, current, "Another exact source.", 17})}}.dump()));
+    Check(sourceRule(supplied).at("enum") == json::array({current, prior, "Another exact source."}),
+        "The actual source choices paraphrased, duplicated or fabricated supplied text.");
+    const auto bounded = json::parse(CalculationProposalSchema(
+        json{{"currentText", current}, {"recentUserMessages", json::array({"first", "second", "third", "fourth", "fifth", "sixth"})}}
+            .dump()));
+    Check(sourceRule(bounded).at("enum") == json::array({current, "first", "second", "third", "fourth"}),
+        "The source grammar expanded beyond current text and four bounded supplied messages.");
+    for (const std::string envelope : {std::string{}, std::string("{malformed"), std::string("[]"), std::string(16385, ' '),
+             json{{"currentText", std::string(4001, 'x')}, {"recentUserMessages", json::array({nullptr, false, ""})}}.dump(),
+             std::string("{\"currentText\":\"") + char(0xFF) + "\"}"})
+        Check(CalculationProposalSchema(envelope) == fallbackText,
+            "Malformed, oversized or unsupported source transport threw or expanded the proposal grammar.");
+    Check(CalculationProposalSchema(json{{"currentText", std::string(1025, 'x')},
+              {"recentUserMessages", json::array({"An older source must not become the only choice."})}}.dump()) == fallbackText,
+        "A long current request forced an incomplete prior-only source choice.");
+}
+
 class GroundingBackend
 {
   public:
@@ -102,7 +188,22 @@ class GroundingBackend
                     system.find("restricted native\ncalculator") != std::string::npos)
                 {
                     ++proposals;
-                    answer = Proposal("7 boxes have 6 discs each; remove 3.");
+                    const auto envelope = json::parse(body.at("messages").back().at("content").template get<std::string>());
+                    const auto currentText = envelope.at("currentText").template get<std::string>();
+                    const auto& sourceChoices = body.at("response_format")
+                                                    .at("json_schema")
+                                                    .at("schema")
+                                                    .at("properties")
+                                                    .at("calculations")
+                                                    .at("items")
+                                                    .at("properties")
+                                                    .at("sourceSpan")
+                                                    .at("enum");
+                    Check(sourceChoices.is_array() &&
+                              std::any_of(sourceChoices.begin(), sourceChoices.end(), [&](const auto& source)
+                                  { return source.is_string() && source.template get<std::string>() == currentText; }),
+                        "The actual arithmetic proposal request lost its exact decoded currentText source choice.");
+                    answer = Proposal(currentText);
                     if (revoke)
                         revoke();
                 }
@@ -238,5 +339,7 @@ void TestNormalAndEvaluationShareGrounding()
 void RunCalculationGroundingTests()
 {
     TestScopedArithmeticGrounding();
+    TestLiteralArithmeticWithPresentationSuffix();
+    TestCalculationProposalSourceChoices();
     TestNormalAndEvaluationShareGrounding();
 }

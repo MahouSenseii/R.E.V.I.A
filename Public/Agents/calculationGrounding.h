@@ -18,7 +18,7 @@ struct CalculationGrounding
 };
 
 [[nodiscard]] std::string CalculationProposalInstructions();
-[[nodiscard]] std::string CalculationProposalSchema();
+[[nodiscard]] std::string CalculationProposalSchema(const std::string& envelope = {});
 [[nodiscard]] CalculationGrounding BuildCalculationGrounding(const std::string& input, const std::vector<conversationMessage>& context,
     const CalculationProposer& proposer, std::stop_token stopToken = {}, const std::function<bool()>& admission = {});
 }

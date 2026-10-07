@@ -972,6 +972,19 @@ observations to the existing final conversation generator. Small talk does not o
 the arithmetic path. Cancellation and live-turn admission are checked around
 proposal and verification; this work adds no capability authority.
 
+Literal arithmetic can bypass interpretation when trailing clauses contain only
+admitted JSON presentation instructions. Unknown clauses, later corrections and
+additional calculations stay on the interpretation path. Original expressions and
+source bytes are preserved; masked intent searches compact whitespace and raw
+presentation clauses are bounded before regex matching. The interpretation prompt
+distinguishes JSON transport quoting from reported speech and separates arithmetic
+planning from the final answer's presentation. For short current requests, its
+source grammar pins exact supplied current/recent text choices up to 1,024 bytes;
+longer current requests retain bounded excerpt handling instead of prior-only
+choices. These choices contain user data, not evaluation answers. Long or complex
+interpretations can exceed the small proposal response budget and yield no
+verified observation; ordinary generation remains available.
+
 Ordinary/evaluation arithmetic observations are ephemeral prompt grounding, with
 current-input and observation digests and explicit interpretation limits. They are
 not canonical journal receipts or durable memory. Investigation Calculation checks
