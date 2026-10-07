@@ -1,0 +1,42 @@
+{
+  "schemaVersion": 1,
+  "changes": [
+    {
+      "id": "FND-01",
+      "automatedTests": [
+        {"id": "T-FND-01-A", "qualification": "fixture", "minimumCases": 24},
+        {"id": "T-FND-01-B", "qualification": "fixture", "minimumCases": 100}
+      ],
+      "requiredEvidence": [{"id": "FND-01-ADAPTER-PARITY", "kind": "integration-review"}]
+    },
+    {
+      "id": "FND-02",
+      "automatedTests": [
+        {"id": "T-FND-02-A", "qualification": "fixture", "minimumCases": 3},
+        {"id": "T-FND-02-B", "qualification": "fixture", "minimumCases": 12}
+      ],
+      "requiredEvidence": [{"id": "FND-02-HOST-BASELINE", "kind": "live"}, {"id": "FND-02-INDEPENDENT-ORACLE", "kind": "human"}]
+    },
+    {
+      "id": "FND-03",
+      "automatedTests": [
+        {"id": "T-FND-03-A", "qualification": "fixture", "minimumCases": 20},
+        {"id": "T-FND-03-B", "qualification": "fixture", "minimumCases": 100},
+        {"id": "T-FND-03-C", "qualification": "fixture", "minimumCases": 60}
+      ],
+      "requiredEvidence": [{"id": "FND-03-REAL-EFFECT-RECONCILIATION", "kind": "live"}]
+    },
+    {
+      "id": "COG-01",
+      "automatedTests": [
+        {"id": "T-COG-01-A", "qualification": "fixture", "minimumCases": 30},
+        {"id": "T-COG-01-B", "qualification": "fixture", "minimumCases": 720}
+      ],
+      "requiredEvidence": [
+        {"id": "COG-01-HELDOUT-240-X-3", "kind": "live"},
+        {"id": "COG-01-INDEPENDENT-SEMANTIC-VERDICTS", "kind": "human"},
+        {"id": "COG-01-INDEPENDENT-PERSONALITY-VERDICTS", "kind": "human"}
+      ]
+    }
+  ]
+}

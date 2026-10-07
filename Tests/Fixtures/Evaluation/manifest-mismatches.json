@@ -1,0 +1,25 @@
+{
+  "baseline": {
+    "schemaVersion": 1, "campaignId": "fixture-baseline", "commit": "407c779e9152f52613d3421382cad485159679ce",
+    "sourceDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "sourceDirty": false,
+    "buildDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "providerDigest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", "providerAvailable": true,
+    "settingsDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "fixtureDigest": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    "oracleVersion": "ground-truth-v1", "hardware": "fixture-host-a", "seed": 17, "timingBoundary": "ctest-process-start-to-exit"
+  },
+  "mismatches": [
+    {"changed": {"commit": "507c779e9152f52613d3421382cad485159679ce"}, "expected": ["commit"]},
+    {"changed": {"sourceDigest": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"}, "expected": ["sourceDigest"]},
+    {"changed": {"sourceDirty": true}, "expected": ["sourceDirty"]},
+    {"changed": {"buildDigest": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"}, "expected": ["buildDigest"]},
+    {"changed": {"providerDigest": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"}, "expected": ["providerDigest"]},
+    {"changed": {"providerAvailable": false, "providerDigest": ""}, "expected": ["providerDigest", "providerAvailable"]},
+    {"changed": {"settingsDigest": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"}, "expected": ["settingsDigest"]},
+    {"changed": {"fixtureDigest": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"}, "expected": ["fixtureDigest"]},
+    {"changed": {"oracleVersion": "ground-truth-v2"}, "expected": ["oracleVersion"]},
+    {"changed": {"hardware": "fixture-host-b"}, "expected": ["hardware"]},
+    {"changed": {"seed": 18}, "expected": ["seed"]},
+    {"changed": {"timingBoundary": "model-generation-only"}, "expected": ["timingBoundary"]}
+  ]
+}
