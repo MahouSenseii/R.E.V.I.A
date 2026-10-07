@@ -1,0 +1,1940 @@
+[
+  {
+    "name": "chat_valid",
+    "error": "",
+    "contract": {
+      "version": {
+        "major": 1,
+        "minor": 0
+      },
+      "stamp": {
+        "companionId": "revia-a",
+        "sessionId": "session-a",
+        "generation": 7,
+        "taskId": "task-42",
+        "attemptId": "attempt-3",
+        "policyVersion": 9
+      },
+      "scope": {
+        "participantId": "owner-a",
+        "companionId": "revia-a",
+        "participantSource": 2,
+        "consentRevision": 8,
+        "audience": {
+          "kind": 1,
+          "audienceId": "private-owner",
+          "revision": 4,
+          "recipientEntityIds": [
+            "owner-a"
+          ]
+        }
+      },
+      "goal": "Answer the current chat question",
+      "positiveConstraints": [
+        "Preserve the supplied context"
+      ],
+      "negativeConstraints": [
+        "Do not invent evidence",
+        "Do not disclose private memory"
+      ],
+      "deliverables": [
+        "A grounded answer"
+      ],
+      "acceptanceObligations": [
+        "The answer addresses the actual question",
+        "Claims retain source attribution"
+      ],
+      "resourceCeilings": {
+        "maximumParallel": 2,
+        "maximumAttemptsPerNode": 3,
+        "maximumRequests": 8,
+        "maximumActiveMilliseconds": 120000,
+        "maximumReportedTokens": 20000,
+        "maximumProviderCalls": 32,
+        "maximumToolCalls": 16,
+        "maximumToolOutputBytes": 262144
+      },
+      "deliverableContract": {
+        "requirements": [
+          {
+            "section": 3,
+            "instruction": "Independently check the requested result",
+            "allowNoneWithReason": false
+          }
+        ],
+        "requireAllPrerequisites": true
+      },
+      "cancellation": {
+        "origin": {
+          "companionId": "revia-a",
+          "sessionId": "session-a",
+          "generation": 7,
+          "taskId": "task-42",
+          "attemptId": "attempt-3",
+          "policyVersion": 9
+        },
+        "ancestorTaskIds": [
+          "parent-task"
+        ]
+      },
+      "sourceKind": "chat",
+      "sourceId": "42"
+    }
+  },
+  {
+    "name": "chat_missing_goal",
+    "error": "missing_goal",
+    "contract": {
+      "version": {
+        "major": 1,
+        "minor": 0
+      },
+      "stamp": {
+        "companionId": "revia-a",
+        "sessionId": "session-a",
+        "generation": 7,
+        "taskId": "task-42",
+        "attemptId": "attempt-3",
+        "policyVersion": 9
+      },
+      "scope": {
+        "participantId": "owner-a",
+        "companionId": "revia-a",
+        "participantSource": 2,
+        "consentRevision": 8,
+        "audience": {
+          "kind": 1,
+          "audienceId": "private-owner",
+          "revision": 4,
+          "recipientEntityIds": [
+            "owner-a"
+          ]
+        }
+      },
+      "positiveConstraints": [
+        "Preserve the supplied context"
+      ],
+      "negativeConstraints": [
+        "Do not invent evidence",
+        "Do not disclose private memory"
+      ],
+      "deliverables": [
+        "A grounded answer"
+      ],
+      "acceptanceObligations": [
+        "The answer addresses the actual question",
+        "Claims retain source attribution"
+      ],
+      "resourceCeilings": {
+        "maximumParallel": 2,
+        "maximumAttemptsPerNode": 3,
+        "maximumRequests": 8,
+        "maximumActiveMilliseconds": 120000,
+        "maximumReportedTokens": 20000,
+        "maximumProviderCalls": 32,
+        "maximumToolCalls": 16,
+        "maximumToolOutputBytes": 262144
+      },
+      "deliverableContract": {
+        "requirements": [
+          {
+            "section": 3,
+            "instruction": "Independently check the requested result",
+            "allowNoneWithReason": false
+          }
+        ],
+        "requireAllPrerequisites": true
+      },
+      "cancellation": {
+        "origin": {
+          "companionId": "revia-a",
+          "sessionId": "session-a",
+          "generation": 7,
+          "taskId": "task-42",
+          "attemptId": "attempt-3",
+          "policyVersion": 9
+        },
+        "ancestorTaskIds": [
+          "parent-task"
+        ]
+      },
+      "sourceKind": "chat",
+      "sourceId": "42"
+    }
+  },
+  {
+    "name": "chat_missing_acceptance",
+    "error": "missing_acceptance",
+    "contract": {
+      "version": {
+        "major": 1,
+        "minor": 0
+      },
+      "stamp": {
+        "companionId": "revia-a",
+        "sessionId": "session-a",
+        "generation": 7,
+        "taskId": "task-42",
+        "attemptId": "attempt-3",
+        "policyVersion": 9
+      },
+      "scope": {
+        "participantId": "owner-a",
+        "companionId": "revia-a",
+        "participantSource": 2,
+        "consentRevision": 8,
+        "audience": {
+          "kind": 1,
+          "audienceId": "private-owner",
+          "revision": 4,
+          "recipientEntityIds": [
+            "owner-a"
+          ]
+        }
+      },
+      "goal": "Answer the current chat question",
+      "positiveConstraints": [
+        "Preserve the supplied context"
+      ],
+      "negativeConstraints": [
+        "Do not invent evidence",
+        "Do not disclose private memory"
+      ],
+      "deliverables": [
+        "A grounded answer"
+      ],
+      "resourceCeilings": {
+        "maximumParallel": 2,
+        "maximumAttemptsPerNode": 3,
+        "maximumRequests": 8,
+        "maximumActiveMilliseconds": 120000,
+        "maximumReportedTokens": 20000,
+        "maximumProviderCalls": 32,
+        "maximumToolCalls": 16,
+        "maximumToolOutputBytes": 262144
+      },
+      "deliverableContract": {
+        "requirements": [
+          {
+            "section": 3,
+            "instruction": "Independently check the requested result",
+            "allowNoneWithReason": false
+          }
+        ],
+        "requireAllPrerequisites": true
+      },
+      "cancellation": {
+        "origin": {
+          "companionId": "revia-a",
+          "sessionId": "session-a",
+          "generation": 7,
+          "taskId": "task-42",
+          "attemptId": "attempt-3",
+          "policyVersion": 9
+        },
+        "ancestorTaskIds": [
+          "parent-task"
+        ]
+      },
+      "sourceKind": "chat",
+      "sourceId": "42"
+    }
+  },
+  {
+    "name": "chat_unsupported_major",
+    "error": "unsupported_major",
+    "contract": {
+      "version": {
+        "major": 2,
+        "minor": 0
+      },
+      "stamp": {
+        "companionId": "revia-a",
+        "sessionId": "session-a",
+        "generation": 7,
+        "taskId": "task-42",
+        "attemptId": "attempt-3",
+        "policyVersion": 9
+      },
+      "scope": {
+        "participantId": "owner-a",
+        "companionId": "revia-a",
+        "participantSource": 2,
+        "consentRevision": 8,
+        "audience": {
+          "kind": 1,
+          "audienceId": "private-owner",
+          "revision": 4,
+          "recipientEntityIds": [
+            "owner-a"
+          ]
+        }
+      },
+      "goal": "Answer the current chat question",
+      "positiveConstraints": [
+        "Preserve the supplied context"
+      ],
+      "negativeConstraints": [
+        "Do not invent evidence",
+        "Do not disclose private memory"
+      ],
+      "deliverables": [
+        "A grounded answer"
+      ],
+      "acceptanceObligations": [
+        "The answer addresses the actual question",
+        "Claims retain source attribution"
+      ],
+      "resourceCeilings": {
+        "maximumParallel": 2,
+        "maximumAttemptsPerNode": 3,
+        "maximumRequests": 8,
+        "maximumActiveMilliseconds": 120000,
+        "maximumReportedTokens": 20000,
+        "maximumProviderCalls": 32,
+        "maximumToolCalls": 16,
+        "maximumToolOutputBytes": 262144
+      },
+      "deliverableContract": {
+        "requirements": [
+          {
+            "section": 3,
+            "instruction": "Independently check the requested result",
+            "allowNoneWithReason": false
+          }
+        ],
+        "requireAllPrerequisites": true
+      },
+      "cancellation": {
+        "origin": {
+          "companionId": "revia-a",
+          "sessionId": "session-a",
+          "generation": 7,
+          "taskId": "task-42",
+          "attemptId": "attempt-3",
+          "policyVersion": 9
+        },
+        "ancestorTaskIds": [
+          "parent-task"
+        ]
+      },
+      "sourceKind": "chat",
+      "sourceId": "42"
+    }
+  },
+  {
+    "name": "code_valid",
+    "error": "",
+    "contract": {
+      "version": {
+        "major": 1,
+        "minor": 0
+      },
+      "stamp": {
+        "companionId": "revia-a",
+        "sessionId": "session-a",
+        "generation": 7,
+        "taskId": "task-42",
+        "attemptId": "attempt-3",
+        "policyVersion": 9
+      },
+      "scope": {
+        "participantId": "owner-a",
+        "companionId": "revia-a",
+        "participantSource": 2,
+        "consentRevision": 8,
+        "audience": {
+          "kind": 1,
+          "audienceId": "private-owner",
+          "revision": 4,
+          "recipientEntityIds": [
+            "owner-a"
+          ]
+        }
+      },
+      "goal": "Repair a failing parser",
+      "positiveConstraints": [
+        "Preserve the supplied context"
+      ],
+      "negativeConstraints": [
+        "Do not invent evidence",
+        "Do not disclose private memory"
+      ],
+      "deliverables": [
+        "Reviewed source and regression evidence"
+      ],
+      "acceptanceObligations": [
+        "Malformed input fails without mutation",
+        "Claims retain source attribution"
+      ],
+      "resourceCeilings": {
+        "maximumParallel": 2,
+        "maximumAttemptsPerNode": 3,
+        "maximumRequests": 8,
+        "maximumActiveMilliseconds": 120000,
+        "maximumReportedTokens": 20000,
+        "maximumProviderCalls": 32,
+        "maximumToolCalls": 16,
+        "maximumToolOutputBytes": 262144
+      },
+      "deliverableContract": {
+        "requirements": [
+          {
+            "section": 3,
+            "instruction": "Independently check the requested result",
+            "allowNoneWithReason": false
+          }
+        ],
+        "requireAllPrerequisites": true
+      },
+      "cancellation": {
+        "origin": {
+          "companionId": "revia-a",
+          "sessionId": "session-a",
+          "generation": 7,
+          "taskId": "task-42",
+          "attemptId": "attempt-3",
+          "policyVersion": 9
+        },
+        "ancestorTaskIds": [
+          "parent-task"
+        ]
+      },
+      "sourceKind": "code",
+      "sourceId": "42"
+    }
+  },
+  {
+    "name": "code_missing_goal",
+    "error": "missing_goal",
+    "contract": {
+      "version": {
+        "major": 1,
+        "minor": 0
+      },
+      "stamp": {
+        "companionId": "revia-a",
+        "sessionId": "session-a",
+        "generation": 7,
+        "taskId": "task-42",
+        "attemptId": "attempt-3",
+        "policyVersion": 9
+      },
+      "scope": {
+        "participantId": "owner-a",
+        "companionId": "revia-a",
+        "participantSource": 2,
+        "consentRevision": 8,
+        "audience": {
+          "kind": 1,
+          "audienceId": "private-owner",
+          "revision": 4,
+          "recipientEntityIds": [
+            "owner-a"
+          ]
+        }
+      },
+      "positiveConstraints": [
+        "Preserve the supplied context"
+      ],
+      "negativeConstraints": [
+        "Do not invent evidence",
+        "Do not disclose private memory"
+      ],
+      "deliverables": [
+        "Reviewed source and regression evidence"
+      ],
+      "acceptanceObligations": [
+        "Malformed input fails without mutation",
+        "Claims retain source attribution"
+      ],
+      "resourceCeilings": {
+        "maximumParallel": 2,
+        "maximumAttemptsPerNode": 3,
+        "maximumRequests": 8,
+        "maximumActiveMilliseconds": 120000,
+        "maximumReportedTokens": 20000,
+        "maximumProviderCalls": 32,
+        "maximumToolCalls": 16,
+        "maximumToolOutputBytes": 262144
+      },
+      "deliverableContract": {
+        "requirements": [
+          {
+            "section": 3,
+            "instruction": "Independently check the requested result",
+            "allowNoneWithReason": false
+          }
+        ],
+        "requireAllPrerequisites": true
+      },
+      "cancellation": {
+        "origin": {
+          "companionId": "revia-a",
+          "sessionId": "session-a",
+          "generation": 7,
+          "taskId": "task-42",
+          "attemptId": "attempt-3",
+          "policyVersion": 9
+        },
+        "ancestorTaskIds": [
+          "parent-task"
+        ]
+      },
+      "sourceKind": "code",
+      "sourceId": "42"
+    }
+  },
+  {
+    "name": "code_missing_acceptance",
+    "error": "missing_acceptance",
+    "contract": {
+      "version": {
+        "major": 1,
+        "minor": 0
+      },
+      "stamp": {
+        "companionId": "revia-a",
+        "sessionId": "session-a",
+        "generation": 7,
+        "taskId": "task-42",
+        "attemptId": "attempt-3",
+        "policyVersion": 9
+      },
+      "scope": {
+        "participantId": "owner-a",
+        "companionId": "revia-a",
+        "participantSource": 2,
+        "consentRevision": 8,
+        "audience": {
+          "kind": 1,
+          "audienceId": "private-owner",
+          "revision": 4,
+          "recipientEntityIds": [
+            "owner-a"
+          ]
+        }
+      },
+      "goal": "Repair a failing parser",
+      "positiveConstraints": [
+        "Preserve the supplied context"
+      ],
+      "negativeConstraints": [
+        "Do not invent evidence",
+        "Do not disclose private memory"
+      ],
+      "deliverables": [
+        "Reviewed source and regression evidence"
+      ],
+      "resourceCeilings": {
+        "maximumParallel": 2,
+        "maximumAttemptsPerNode": 3,
+        "maximumRequests": 8,
+        "maximumActiveMilliseconds": 120000,
+        "maximumReportedTokens": 20000,
+        "maximumProviderCalls": 32,
+        "maximumToolCalls": 16,
+        "maximumToolOutputBytes": 262144
+      },
+      "deliverableContract": {
+        "requirements": [
+          {
+            "section": 3,
+            "instruction": "Independently check the requested result",
+            "allowNoneWithReason": false
+          }
+        ],
+        "requireAllPrerequisites": true
+      },
+      "cancellation": {
+        "origin": {
+          "companionId": "revia-a",
+          "sessionId": "session-a",
+          "generation": 7,
+          "taskId": "task-42",
+          "attemptId": "attempt-3",
+          "policyVersion": 9
+        },
+        "ancestorTaskIds": [
+          "parent-task"
+        ]
+      },
+      "sourceKind": "code",
+      "sourceId": "42"
+    }
+  },
+  {
+    "name": "code_unsupported_major",
+    "error": "unsupported_major",
+    "contract": {
+      "version": {
+        "major": 2,
+        "minor": 0
+      },
+      "stamp": {
+        "companionId": "revia-a",
+        "sessionId": "session-a",
+        "generation": 7,
+        "taskId": "task-42",
+        "attemptId": "attempt-3",
+        "policyVersion": 9
+      },
+      "scope": {
+        "participantId": "owner-a",
+        "companionId": "revia-a",
+        "participantSource": 2,
+        "consentRevision": 8,
+        "audience": {
+          "kind": 1,
+          "audienceId": "private-owner",
+          "revision": 4,
+          "recipientEntityIds": [
+            "owner-a"
+          ]
+        }
+      },
+      "goal": "Repair a failing parser",
+      "positiveConstraints": [
+        "Preserve the supplied context"
+      ],
+      "negativeConstraints": [
+        "Do not invent evidence",
+        "Do not disclose private memory"
+      ],
+      "deliverables": [
+        "Reviewed source and regression evidence"
+      ],
+      "acceptanceObligations": [
+        "Malformed input fails without mutation",
+        "Claims retain source attribution"
+      ],
+      "resourceCeilings": {
+        "maximumParallel": 2,
+        "maximumAttemptsPerNode": 3,
+        "maximumRequests": 8,
+        "maximumActiveMilliseconds": 120000,
+        "maximumReportedTokens": 20000,
+        "maximumProviderCalls": 32,
+        "maximumToolCalls": 16,
+        "maximumToolOutputBytes": 262144
+      },
+      "deliverableContract": {
+        "requirements": [
+          {
+            "section": 3,
+            "instruction": "Independently check the requested result",
+            "allowNoneWithReason": false
+          }
+        ],
+        "requireAllPrerequisites": true
+      },
+      "cancellation": {
+        "origin": {
+          "companionId": "revia-a",
+          "sessionId": "session-a",
+          "generation": 7,
+          "taskId": "task-42",
+          "attemptId": "attempt-3",
+          "policyVersion": 9
+        },
+        "ancestorTaskIds": [
+          "parent-task"
+        ]
+      },
+      "sourceKind": "code",
+      "sourceId": "42"
+    }
+  },
+  {
+    "name": "web_valid",
+    "error": "",
+    "contract": {
+      "version": {
+        "major": 1,
+        "minor": 0
+      },
+      "stamp": {
+        "companionId": "revia-a",
+        "sessionId": "session-a",
+        "generation": 7,
+        "taskId": "task-42",
+        "attemptId": "attempt-3",
+        "policyVersion": 9
+      },
+      "scope": {
+        "participantId": "owner-a",
+        "companionId": "revia-a",
+        "participantSource": 2,
+        "consentRevision": 8,
+        "audience": {
+          "kind": 1,
+          "audienceId": "private-owner",
+          "revision": 4,
+          "recipientEntityIds": [
+            "owner-a"
+          ]
+        }
+      },
+      "goal": "Research an announced release",
+      "positiveConstraints": [
+        "Preserve the supplied context"
+      ],
+      "negativeConstraints": [
+        "Do not invent evidence",
+        "Do not disclose private memory"
+      ],
+      "deliverables": [
+        "Findings with original URLs"
+      ],
+      "acceptanceObligations": [
+        "Each factual claim has a retrievable source",
+        "Claims retain source attribution"
+      ],
+      "resourceCeilings": {
+        "maximumParallel": 2,
+        "maximumAttemptsPerNode": 3,
+        "maximumRequests": 8,
+        "maximumActiveMilliseconds": 120000,
+        "maximumReportedTokens": 20000,
+        "maximumProviderCalls": 32,
+        "maximumToolCalls": 16,
+        "maximumToolOutputBytes": 262144
+      },
+      "deliverableContract": {
+        "requirements": [
+          {
+            "section": 3,
+            "instruction": "Independently check the requested result",
+            "allowNoneWithReason": false
+          }
+        ],
+        "requireAllPrerequisites": true
+      },
+      "cancellation": {
+        "origin": {
+          "companionId": "revia-a",
+          "sessionId": "session-a",
+          "generation": 7,
+          "taskId": "task-42",
+          "attemptId": "attempt-3",
+          "policyVersion": 9
+        },
+        "ancestorTaskIds": [
+          "parent-task"
+        ]
+      },
+      "sourceKind": "web",
+      "sourceId": "42"
+    }
+  },
+  {
+    "name": "web_missing_goal",
+    "error": "missing_goal",
+    "contract": {
+      "version": {
+        "major": 1,
+        "minor": 0
+      },
+      "stamp": {
+        "companionId": "revia-a",
+        "sessionId": "session-a",
+        "generation": 7,
+        "taskId": "task-42",
+        "attemptId": "attempt-3",
+        "policyVersion": 9
+      },
+      "scope": {
+        "participantId": "owner-a",
+        "companionId": "revia-a",
+        "participantSource": 2,
+        "consentRevision": 8,
+        "audience": {
+          "kind": 1,
+          "audienceId": "private-owner",
+          "revision": 4,
+          "recipientEntityIds": [
+            "owner-a"
+          ]
+        }
+      },
+      "positiveConstraints": [
+        "Preserve the supplied context"
+      ],
+      "negativeConstraints": [
+        "Do not invent evidence",
+        "Do not disclose private memory"
+      ],
+      "deliverables": [
+        "Findings with original URLs"
+      ],
+      "acceptanceObligations": [
+        "Each factual claim has a retrievable source",
+        "Claims retain source attribution"
+      ],
+      "resourceCeilings": {
+        "maximumParallel": 2,
+        "maximumAttemptsPerNode": 3,
+        "maximumRequests": 8,
+        "maximumActiveMilliseconds": 120000,
+        "maximumReportedTokens": 20000,
+        "maximumProviderCalls": 32,
+        "maximumToolCalls": 16,
+        "maximumToolOutputBytes": 262144
+      },
+      "deliverableContract": {
+        "requirements": [
+          {
+            "section": 3,
+            "instruction": "Independently check the requested result",
+            "allowNoneWithReason": false
+          }
+        ],
+        "requireAllPrerequisites": true
+      },
+      "cancellation": {
+        "origin": {
+          "companionId": "revia-a",
+          "sessionId": "session-a",
+          "generation": 7,
+          "taskId": "task-42",
+          "attemptId": "attempt-3",
+          "policyVersion": 9
+        },
+        "ancestorTaskIds": [
+          "parent-task"
+        ]
+      },
+      "sourceKind": "web",
+      "sourceId": "42"
+    }
+  },
+  {
+    "name": "web_missing_acceptance",
+    "error": "missing_acceptance",
+    "contract": {
+      "version": {
+        "major": 1,
+        "minor": 0
+      },
+      "stamp": {
+        "companionId": "revia-a",
+        "sessionId": "session-a",
+        "generation": 7,
+        "taskId": "task-42",
+        "attemptId": "attempt-3",
+        "policyVersion": 9
+      },
+      "scope": {
+        "participantId": "owner-a",
+        "companionId": "revia-a",
+        "participantSource": 2,
+        "consentRevision": 8,
+        "audience": {
+          "kind": 1,
+          "audienceId": "private-owner",
+          "revision": 4,
+          "recipientEntityIds": [
+            "owner-a"
+          ]
+        }
+      },
+      "goal": "Research an announced release",
+      "positiveConstraints": [
+        "Preserve the supplied context"
+      ],
+      "negativeConstraints": [
+        "Do not invent evidence",
+        "Do not disclose private memory"
+      ],
+      "deliverables": [
+        "Findings with original URLs"
+      ],
+      "resourceCeilings": {
+        "maximumParallel": 2,
+        "maximumAttemptsPerNode": 3,
+        "maximumRequests": 8,
+        "maximumActiveMilliseconds": 120000,
+        "maximumReportedTokens": 20000,
+        "maximumProviderCalls": 32,
+        "maximumToolCalls": 16,
+        "maximumToolOutputBytes": 262144
+      },
+      "deliverableContract": {
+        "requirements": [
+          {
+            "section": 3,
+            "instruction": "Independently check the requested result",
+            "allowNoneWithReason": false
+          }
+        ],
+        "requireAllPrerequisites": true
+      },
+      "cancellation": {
+        "origin": {
+          "companionId": "revia-a",
+          "sessionId": "session-a",
+          "generation": 7,
+          "taskId": "task-42",
+          "attemptId": "attempt-3",
+          "policyVersion": 9
+        },
+        "ancestorTaskIds": [
+          "parent-task"
+        ]
+      },
+      "sourceKind": "web",
+      "sourceId": "42"
+    }
+  },
+  {
+    "name": "web_unsupported_major",
+    "error": "unsupported_major",
+    "contract": {
+      "version": {
+        "major": 2,
+        "minor": 0
+      },
+      "stamp": {
+        "companionId": "revia-a",
+        "sessionId": "session-a",
+        "generation": 7,
+        "taskId": "task-42",
+        "attemptId": "attempt-3",
+        "policyVersion": 9
+      },
+      "scope": {
+        "participantId": "owner-a",
+        "companionId": "revia-a",
+        "participantSource": 2,
+        "consentRevision": 8,
+        "audience": {
+          "kind": 1,
+          "audienceId": "private-owner",
+          "revision": 4,
+          "recipientEntityIds": [
+            "owner-a"
+          ]
+        }
+      },
+      "goal": "Research an announced release",
+      "positiveConstraints": [
+        "Preserve the supplied context"
+      ],
+      "negativeConstraints": [
+        "Do not invent evidence",
+        "Do not disclose private memory"
+      ],
+      "deliverables": [
+        "Findings with original URLs"
+      ],
+      "acceptanceObligations": [
+        "Each factual claim has a retrievable source",
+        "Claims retain source attribution"
+      ],
+      "resourceCeilings": {
+        "maximumParallel": 2,
+        "maximumAttemptsPerNode": 3,
+        "maximumRequests": 8,
+        "maximumActiveMilliseconds": 120000,
+        "maximumReportedTokens": 20000,
+        "maximumProviderCalls": 32,
+        "maximumToolCalls": 16,
+        "maximumToolOutputBytes": 262144
+      },
+      "deliverableContract": {
+        "requirements": [
+          {
+            "section": 3,
+            "instruction": "Independently check the requested result",
+            "allowNoneWithReason": false
+          }
+        ],
+        "requireAllPrerequisites": true
+      },
+      "cancellation": {
+        "origin": {
+          "companionId": "revia-a",
+          "sessionId": "session-a",
+          "generation": 7,
+          "taskId": "task-42",
+          "attemptId": "attempt-3",
+          "policyVersion": 9
+        },
+        "ancestorTaskIds": [
+          "parent-task"
+        ]
+      },
+      "sourceKind": "web",
+      "sourceId": "42"
+    }
+  },
+  {
+    "name": "file_valid",
+    "error": "",
+    "contract": {
+      "version": {
+        "major": 1,
+        "minor": 0
+      },
+      "stamp": {
+        "companionId": "revia-a",
+        "sessionId": "session-a",
+        "generation": 7,
+        "taskId": "task-42",
+        "attemptId": "attempt-3",
+        "policyVersion": 9
+      },
+      "scope": {
+        "participantId": "owner-a",
+        "companionId": "revia-a",
+        "participantSource": 2,
+        "consentRevision": 8,
+        "audience": {
+          "kind": 1,
+          "audienceId": "private-owner",
+          "revision": 4,
+          "recipientEntityIds": [
+            "owner-a"
+          ]
+        }
+      },
+      "goal": "Copy the approved document",
+      "positiveConstraints": [
+        "Preserve the supplied context"
+      ],
+      "negativeConstraints": [
+        "Do not invent evidence",
+        "Do not disclose private memory"
+      ],
+      "deliverables": [
+        "Destination document"
+      ],
+      "acceptanceObligations": [
+        "Read-back digest matches the original",
+        "Claims retain source attribution"
+      ],
+      "resourceCeilings": {
+        "maximumParallel": 2,
+        "maximumAttemptsPerNode": 3,
+        "maximumRequests": 8,
+        "maximumActiveMilliseconds": 120000,
+        "maximumReportedTokens": 20000,
+        "maximumProviderCalls": 32,
+        "maximumToolCalls": 16,
+        "maximumToolOutputBytes": 262144
+      },
+      "deliverableContract": {
+        "requirements": [
+          {
+            "section": 3,
+            "instruction": "Independently check the requested result",
+            "allowNoneWithReason": false
+          }
+        ],
+        "requireAllPrerequisites": true
+      },
+      "cancellation": {
+        "origin": {
+          "companionId": "revia-a",
+          "sessionId": "session-a",
+          "generation": 7,
+          "taskId": "task-42",
+          "attemptId": "attempt-3",
+          "policyVersion": 9
+        },
+        "ancestorTaskIds": [
+          "parent-task"
+        ]
+      },
+      "sourceKind": "file",
+      "sourceId": "42"
+    }
+  },
+  {
+    "name": "file_missing_goal",
+    "error": "missing_goal",
+    "contract": {
+      "version": {
+        "major": 1,
+        "minor": 0
+      },
+      "stamp": {
+        "companionId": "revia-a",
+        "sessionId": "session-a",
+        "generation": 7,
+        "taskId": "task-42",
+        "attemptId": "attempt-3",
+        "policyVersion": 9
+      },
+      "scope": {
+        "participantId": "owner-a",
+        "companionId": "revia-a",
+        "participantSource": 2,
+        "consentRevision": 8,
+        "audience": {
+          "kind": 1,
+          "audienceId": "private-owner",
+          "revision": 4,
+          "recipientEntityIds": [
+            "owner-a"
+          ]
+        }
+      },
+      "positiveConstraints": [
+        "Preserve the supplied context"
+      ],
+      "negativeConstraints": [
+        "Do not invent evidence",
+        "Do not disclose private memory"
+      ],
+      "deliverables": [
+        "Destination document"
+      ],
+      "acceptanceObligations": [
+        "Read-back digest matches the original",
+        "Claims retain source attribution"
+      ],
+      "resourceCeilings": {
+        "maximumParallel": 2,
+        "maximumAttemptsPerNode": 3,
+        "maximumRequests": 8,
+        "maximumActiveMilliseconds": 120000,
+        "maximumReportedTokens": 20000,
+        "maximumProviderCalls": 32,
+        "maximumToolCalls": 16,
+        "maximumToolOutputBytes": 262144
+      },
+      "deliverableContract": {
+        "requirements": [
+          {
+            "section": 3,
+            "instruction": "Independently check the requested result",
+            "allowNoneWithReason": false
+          }
+        ],
+        "requireAllPrerequisites": true
+      },
+      "cancellation": {
+        "origin": {
+          "companionId": "revia-a",
+          "sessionId": "session-a",
+          "generation": 7,
+          "taskId": "task-42",
+          "attemptId": "attempt-3",
+          "policyVersion": 9
+        },
+        "ancestorTaskIds": [
+          "parent-task"
+        ]
+      },
+      "sourceKind": "file",
+      "sourceId": "42"
+    }
+  },
+  {
+    "name": "file_missing_acceptance",
+    "error": "missing_acceptance",
+    "contract": {
+      "version": {
+        "major": 1,
+        "minor": 0
+      },
+      "stamp": {
+        "companionId": "revia-a",
+        "sessionId": "session-a",
+        "generation": 7,
+        "taskId": "task-42",
+        "attemptId": "attempt-3",
+        "policyVersion": 9
+      },
+      "scope": {
+        "participantId": "owner-a",
+        "companionId": "revia-a",
+        "participantSource": 2,
+        "consentRevision": 8,
+        "audience": {
+          "kind": 1,
+          "audienceId": "private-owner",
+          "revision": 4,
+          "recipientEntityIds": [
+            "owner-a"
+          ]
+        }
+      },
+      "goal": "Copy the approved document",
+      "positiveConstraints": [
+        "Preserve the supplied context"
+      ],
+      "negativeConstraints": [
+        "Do not invent evidence",
+        "Do not disclose private memory"
+      ],
+      "deliverables": [
+        "Destination document"
+      ],
+      "resourceCeilings": {
+        "maximumParallel": 2,
+        "maximumAttemptsPerNode": 3,
+        "maximumRequests": 8,
+        "maximumActiveMilliseconds": 120000,
+        "maximumReportedTokens": 20000,
+        "maximumProviderCalls": 32,
+        "maximumToolCalls": 16,
+        "maximumToolOutputBytes": 262144
+      },
+      "deliverableContract": {
+        "requirements": [
+          {
+            "section": 3,
+            "instruction": "Independently check the requested result",
+            "allowNoneWithReason": false
+          }
+        ],
+        "requireAllPrerequisites": true
+      },
+      "cancellation": {
+        "origin": {
+          "companionId": "revia-a",
+          "sessionId": "session-a",
+          "generation": 7,
+          "taskId": "task-42",
+          "attemptId": "attempt-3",
+          "policyVersion": 9
+        },
+        "ancestorTaskIds": [
+          "parent-task"
+        ]
+      },
+      "sourceKind": "file",
+      "sourceId": "42"
+    }
+  },
+  {
+    "name": "file_unsupported_major",
+    "error": "unsupported_major",
+    "contract": {
+      "version": {
+        "major": 2,
+        "minor": 0
+      },
+      "stamp": {
+        "companionId": "revia-a",
+        "sessionId": "session-a",
+        "generation": 7,
+        "taskId": "task-42",
+        "attemptId": "attempt-3",
+        "policyVersion": 9
+      },
+      "scope": {
+        "participantId": "owner-a",
+        "companionId": "revia-a",
+        "participantSource": 2,
+        "consentRevision": 8,
+        "audience": {
+          "kind": 1,
+          "audienceId": "private-owner",
+          "revision": 4,
+          "recipientEntityIds": [
+            "owner-a"
+          ]
+        }
+      },
+      "goal": "Copy the approved document",
+      "positiveConstraints": [
+        "Preserve the supplied context"
+      ],
+      "negativeConstraints": [
+        "Do not invent evidence",
+        "Do not disclose private memory"
+      ],
+      "deliverables": [
+        "Destination document"
+      ],
+      "acceptanceObligations": [
+        "Read-back digest matches the original",
+        "Claims retain source attribution"
+      ],
+      "resourceCeilings": {
+        "maximumParallel": 2,
+        "maximumAttemptsPerNode": 3,
+        "maximumRequests": 8,
+        "maximumActiveMilliseconds": 120000,
+        "maximumReportedTokens": 20000,
+        "maximumProviderCalls": 32,
+        "maximumToolCalls": 16,
+        "maximumToolOutputBytes": 262144
+      },
+      "deliverableContract": {
+        "requirements": [
+          {
+            "section": 3,
+            "instruction": "Independently check the requested result",
+            "allowNoneWithReason": false
+          }
+        ],
+        "requireAllPrerequisites": true
+      },
+      "cancellation": {
+        "origin": {
+          "companionId": "revia-a",
+          "sessionId": "session-a",
+          "generation": 7,
+          "taskId": "task-42",
+          "attemptId": "attempt-3",
+          "policyVersion": 9
+        },
+        "ancestorTaskIds": [
+          "parent-task"
+        ]
+      },
+      "sourceKind": "file",
+      "sourceId": "42"
+    }
+  },
+  {
+    "name": "voice_valid",
+    "error": "",
+    "contract": {
+      "version": {
+        "major": 1,
+        "minor": 0
+      },
+      "stamp": {
+        "companionId": "revia-a",
+        "sessionId": "session-a",
+        "generation": 7,
+        "taskId": "task-42",
+        "attemptId": "attempt-3",
+        "policyVersion": 9
+      },
+      "scope": {
+        "participantId": "owner-a",
+        "companionId": "revia-a",
+        "participantSource": 2,
+        "consentRevision": 8,
+        "audience": {
+          "kind": 1,
+          "audienceId": "private-owner",
+          "revision": 4,
+          "recipientEntityIds": [
+            "owner-a"
+          ]
+        }
+      },
+      "goal": "Speak the supplied answer",
+      "positiveConstraints": [
+        "Preserve the supplied context"
+      ],
+      "negativeConstraints": [
+        "Do not invent evidence",
+        "Do not disclose private memory"
+      ],
+      "deliverables": [
+        "Delivered audio"
+      ],
+      "acceptanceObligations": [
+        "Audio retains the supplied wording",
+        "Claims retain source attribution"
+      ],
+      "resourceCeilings": {
+        "maximumParallel": 2,
+        "maximumAttemptsPerNode": 3,
+        "maximumRequests": 8,
+        "maximumActiveMilliseconds": 120000,
+        "maximumReportedTokens": 20000,
+        "maximumProviderCalls": 32,
+        "maximumToolCalls": 16,
+        "maximumToolOutputBytes": 262144
+      },
+      "deliverableContract": {
+        "requirements": [
+          {
+            "section": 3,
+            "instruction": "Independently check the requested result",
+            "allowNoneWithReason": false
+          }
+        ],
+        "requireAllPrerequisites": true
+      },
+      "cancellation": {
+        "origin": {
+          "companionId": "revia-a",
+          "sessionId": "session-a",
+          "generation": 7,
+          "taskId": "task-42",
+          "attemptId": "attempt-3",
+          "policyVersion": 9
+        },
+        "ancestorTaskIds": [
+          "parent-task"
+        ]
+      },
+      "sourceKind": "voice",
+      "sourceId": "42"
+    }
+  },
+  {
+    "name": "voice_missing_goal",
+    "error": "missing_goal",
+    "contract": {
+      "version": {
+        "major": 1,
+        "minor": 0
+      },
+      "stamp": {
+        "companionId": "revia-a",
+        "sessionId": "session-a",
+        "generation": 7,
+        "taskId": "task-42",
+        "attemptId": "attempt-3",
+        "policyVersion": 9
+      },
+      "scope": {
+        "participantId": "owner-a",
+        "companionId": "revia-a",
+        "participantSource": 2,
+        "consentRevision": 8,
+        "audience": {
+          "kind": 1,
+          "audienceId": "private-owner",
+          "revision": 4,
+          "recipientEntityIds": [
+            "owner-a"
+          ]
+        }
+      },
+      "positiveConstraints": [
+        "Preserve the supplied context"
+      ],
+      "negativeConstraints": [
+        "Do not invent evidence",
+        "Do not disclose private memory"
+      ],
+      "deliverables": [
+        "Delivered audio"
+      ],
+      "acceptanceObligations": [
+        "Audio retains the supplied wording",
+        "Claims retain source attribution"
+      ],
+      "resourceCeilings": {
+        "maximumParallel": 2,
+        "maximumAttemptsPerNode": 3,
+        "maximumRequests": 8,
+        "maximumActiveMilliseconds": 120000,
+        "maximumReportedTokens": 20000,
+        "maximumProviderCalls": 32,
+        "maximumToolCalls": 16,
+        "maximumToolOutputBytes": 262144
+      },
+      "deliverableContract": {
+        "requirements": [
+          {
+            "section": 3,
+            "instruction": "Independently check the requested result",
+            "allowNoneWithReason": false
+          }
+        ],
+        "requireAllPrerequisites": true
+      },
+      "cancellation": {
+        "origin": {
+          "companionId": "revia-a",
+          "sessionId": "session-a",
+          "generation": 7,
+          "taskId": "task-42",
+          "attemptId": "attempt-3",
+          "policyVersion": 9
+        },
+        "ancestorTaskIds": [
+          "parent-task"
+        ]
+      },
+      "sourceKind": "voice",
+      "sourceId": "42"
+    }
+  },
+  {
+    "name": "voice_missing_acceptance",
+    "error": "missing_acceptance",
+    "contract": {
+      "version": {
+        "major": 1,
+        "minor": 0
+      },
+      "stamp": {
+        "companionId": "revia-a",
+        "sessionId": "session-a",
+        "generation": 7,
+        "taskId": "task-42",
+        "attemptId": "attempt-3",
+        "policyVersion": 9
+      },
+      "scope": {
+        "participantId": "owner-a",
+        "companionId": "revia-a",
+        "participantSource": 2,
+        "consentRevision": 8,
+        "audience": {
+          "kind": 1,
+          "audienceId": "private-owner",
+          "revision": 4,
+          "recipientEntityIds": [
+            "owner-a"
+          ]
+        }
+      },
+      "goal": "Speak the supplied answer",
+      "positiveConstraints": [
+        "Preserve the supplied context"
+      ],
+      "negativeConstraints": [
+        "Do not invent evidence",
+        "Do not disclose private memory"
+      ],
+      "deliverables": [
+        "Delivered audio"
+      ],
+      "resourceCeilings": {
+        "maximumParallel": 2,
+        "maximumAttemptsPerNode": 3,
+        "maximumRequests": 8,
+        "maximumActiveMilliseconds": 120000,
+        "maximumReportedTokens": 20000,
+        "maximumProviderCalls": 32,
+        "maximumToolCalls": 16,
+        "maximumToolOutputBytes": 262144
+      },
+      "deliverableContract": {
+        "requirements": [
+          {
+            "section": 3,
+            "instruction": "Independently check the requested result",
+            "allowNoneWithReason": false
+          }
+        ],
+        "requireAllPrerequisites": true
+      },
+      "cancellation": {
+        "origin": {
+          "companionId": "revia-a",
+          "sessionId": "session-a",
+          "generation": 7,
+          "taskId": "task-42",
+          "attemptId": "attempt-3",
+          "policyVersion": 9
+        },
+        "ancestorTaskIds": [
+          "parent-task"
+        ]
+      },
+      "sourceKind": "voice",
+      "sourceId": "42"
+    }
+  },
+  {
+    "name": "voice_unsupported_major",
+    "error": "unsupported_major",
+    "contract": {
+      "version": {
+        "major": 2,
+        "minor": 0
+      },
+      "stamp": {
+        "companionId": "revia-a",
+        "sessionId": "session-a",
+        "generation": 7,
+        "taskId": "task-42",
+        "attemptId": "attempt-3",
+        "policyVersion": 9
+      },
+      "scope": {
+        "participantId": "owner-a",
+        "companionId": "revia-a",
+        "participantSource": 2,
+        "consentRevision": 8,
+        "audience": {
+          "kind": 1,
+          "audienceId": "private-owner",
+          "revision": 4,
+          "recipientEntityIds": [
+            "owner-a"
+          ]
+        }
+      },
+      "goal": "Speak the supplied answer",
+      "positiveConstraints": [
+        "Preserve the supplied context"
+      ],
+      "negativeConstraints": [
+        "Do not invent evidence",
+        "Do not disclose private memory"
+      ],
+      "deliverables": [
+        "Delivered audio"
+      ],
+      "acceptanceObligations": [
+        "Audio retains the supplied wording",
+        "Claims retain source attribution"
+      ],
+      "resourceCeilings": {
+        "maximumParallel": 2,
+        "maximumAttemptsPerNode": 3,
+        "maximumRequests": 8,
+        "maximumActiveMilliseconds": 120000,
+        "maximumReportedTokens": 20000,
+        "maximumProviderCalls": 32,
+        "maximumToolCalls": 16,
+        "maximumToolOutputBytes": 262144
+      },
+      "deliverableContract": {
+        "requirements": [
+          {
+            "section": 3,
+            "instruction": "Independently check the requested result",
+            "allowNoneWithReason": false
+          }
+        ],
+        "requireAllPrerequisites": true
+      },
+      "cancellation": {
+        "origin": {
+          "companionId": "revia-a",
+          "sessionId": "session-a",
+          "generation": 7,
+          "taskId": "task-42",
+          "attemptId": "attempt-3",
+          "policyVersion": 9
+        },
+        "ancestorTaskIds": [
+          "parent-task"
+        ]
+      },
+      "sourceKind": "voice",
+      "sourceId": "42"
+    }
+  },
+  {
+    "name": "desktop_valid",
+    "error": "",
+    "contract": {
+      "version": {
+        "major": 1,
+        "minor": 0
+      },
+      "stamp": {
+        "companionId": "revia-a",
+        "sessionId": "session-a",
+        "generation": 7,
+        "taskId": "task-42",
+        "attemptId": "attempt-3",
+        "policyVersion": 9
+      },
+      "scope": {
+        "participantId": "owner-a",
+        "companionId": "revia-a",
+        "participantSource": 2,
+        "consentRevision": 8,
+        "audience": {
+          "kind": 1,
+          "audienceId": "private-owner",
+          "revision": 4,
+          "recipientEntityIds": [
+            "owner-a"
+          ]
+        }
+      },
+      "goal": "Place supplied text in the requested app",
+      "positiveConstraints": [
+        "Preserve the supplied context"
+      ],
+      "negativeConstraints": [
+        "Do not invent evidence",
+        "Do not disclose private memory"
+      ],
+      "deliverables": [
+        "Read-back text from the target"
+      ],
+      "acceptanceObligations": [
+        "Independent observation matches requested text",
+        "Claims retain source attribution"
+      ],
+      "resourceCeilings": {
+        "maximumParallel": 2,
+        "maximumAttemptsPerNode": 3,
+        "maximumRequests": 8,
+        "maximumActiveMilliseconds": 120000,
+        "maximumReportedTokens": 20000,
+        "maximumProviderCalls": 32,
+        "maximumToolCalls": 16,
+        "maximumToolOutputBytes": 262144
+      },
+      "deliverableContract": {
+        "requirements": [
+          {
+            "section": 3,
+            "instruction": "Independently check the requested result",
+            "allowNoneWithReason": false
+          }
+        ],
+        "requireAllPrerequisites": true
+      },
+      "cancellation": {
+        "origin": {
+          "companionId": "revia-a",
+          "sessionId": "session-a",
+          "generation": 7,
+          "taskId": "task-42",
+          "attemptId": "attempt-3",
+          "policyVersion": 9
+        },
+        "ancestorTaskIds": [
+          "parent-task"
+        ]
+      },
+      "sourceKind": "desktop",
+      "sourceId": "42"
+    }
+  },
+  {
+    "name": "desktop_missing_goal",
+    "error": "missing_goal",
+    "contract": {
+      "version": {
+        "major": 1,
+        "minor": 0
+      },
+      "stamp": {
+        "companionId": "revia-a",
+        "sessionId": "session-a",
+        "generation": 7,
+        "taskId": "task-42",
+        "attemptId": "attempt-3",
+        "policyVersion": 9
+      },
+      "scope": {
+        "participantId": "owner-a",
+        "companionId": "revia-a",
+        "participantSource": 2,
+        "consentRevision": 8,
+        "audience": {
+          "kind": 1,
+          "audienceId": "private-owner",
+          "revision": 4,
+          "recipientEntityIds": [
+            "owner-a"
+          ]
+        }
+      },
+      "positiveConstraints": [
+        "Preserve the supplied context"
+      ],
+      "negativeConstraints": [
+        "Do not invent evidence",
+        "Do not disclose private memory"
+      ],
+      "deliverables": [
+        "Read-back text from the target"
+      ],
+      "acceptanceObligations": [
+        "Independent observation matches requested text",
+        "Claims retain source attribution"
+      ],
+      "resourceCeilings": {
+        "maximumParallel": 2,
+        "maximumAttemptsPerNode": 3,
+        "maximumRequests": 8,
+        "maximumActiveMilliseconds": 120000,
+        "maximumReportedTokens": 20000,
+        "maximumProviderCalls": 32,
+        "maximumToolCalls": 16,
+        "maximumToolOutputBytes": 262144
+      },
+      "deliverableContract": {
+        "requirements": [
+          {
+            "section": 3,
+            "instruction": "Independently check the requested result",
+            "allowNoneWithReason": false
+          }
+        ],
+        "requireAllPrerequisites": true
+      },
+      "cancellation": {
+        "origin": {
+          "companionId": "revia-a",
+          "sessionId": "session-a",
+          "generation": 7,
+          "taskId": "task-42",
+          "attemptId": "attempt-3",
+          "policyVersion": 9
+        },
+        "ancestorTaskIds": [
+          "parent-task"
+        ]
+      },
+      "sourceKind": "desktop",
+      "sourceId": "42"
+    }
+  },
+  {
+    "name": "desktop_missing_acceptance",
+    "error": "missing_acceptance",
+    "contract": {
+      "version": {
+        "major": 1,
+        "minor": 0
+      },
+      "stamp": {
+        "companionId": "revia-a",
+        "sessionId": "session-a",
+        "generation": 7,
+        "taskId": "task-42",
+        "attemptId": "attempt-3",
+        "policyVersion": 9
+      },
+      "scope": {
+        "participantId": "owner-a",
+        "companionId": "revia-a",
+        "participantSource": 2,
+        "consentRevision": 8,
+        "audience": {
+          "kind": 1,
+          "audienceId": "private-owner",
+          "revision": 4,
+          "recipientEntityIds": [
+            "owner-a"
+          ]
+        }
+      },
+      "goal": "Place supplied text in the requested app",
+      "positiveConstraints": [
+        "Preserve the supplied context"
+      ],
+      "negativeConstraints": [
+        "Do not invent evidence",
+        "Do not disclose private memory"
+      ],
+      "deliverables": [
+        "Read-back text from the target"
+      ],
+      "resourceCeilings": {
+        "maximumParallel": 2,
+        "maximumAttemptsPerNode": 3,
+        "maximumRequests": 8,
+        "maximumActiveMilliseconds": 120000,
+        "maximumReportedTokens": 20000,
+        "maximumProviderCalls": 32,
+        "maximumToolCalls": 16,
+        "maximumToolOutputBytes": 262144
+      },
+      "deliverableContract": {
+        "requirements": [
+          {
+            "section": 3,
+            "instruction": "Independently check the requested result",
+            "allowNoneWithReason": false
+          }
+        ],
+        "requireAllPrerequisites": true
+      },
+      "cancellation": {
+        "origin": {
+          "companionId": "revia-a",
+          "sessionId": "session-a",
+          "generation": 7,
+          "taskId": "task-42",
+          "attemptId": "attempt-3",
+          "policyVersion": 9
+        },
+        "ancestorTaskIds": [
+          "parent-task"
+        ]
+      },
+      "sourceKind": "desktop",
+      "sourceId": "42"
+    }
+  },
+  {
+    "name": "desktop_unsupported_major",
+    "error": "unsupported_major",
+    "contract": {
+      "version": {
+        "major": 2,
+        "minor": 0
+      },
+      "stamp": {
+        "companionId": "revia-a",
+        "sessionId": "session-a",
+        "generation": 7,
+        "taskId": "task-42",
+        "attemptId": "attempt-3",
+        "policyVersion": 9
+      },
+      "scope": {
+        "participantId": "owner-a",
+        "companionId": "revia-a",
+        "participantSource": 2,
+        "consentRevision": 8,
+        "audience": {
+          "kind": 1,
+          "audienceId": "private-owner",
+          "revision": 4,
+          "recipientEntityIds": [
+            "owner-a"
+          ]
+        }
+      },
+      "goal": "Place supplied text in the requested app",
+      "positiveConstraints": [
+        "Preserve the supplied context"
+      ],
+      "negativeConstraints": [
+        "Do not invent evidence",
+        "Do not disclose private memory"
+      ],
+      "deliverables": [
+        "Read-back text from the target"
+      ],
+      "acceptanceObligations": [
+        "Independent observation matches requested text",
+        "Claims retain source attribution"
+      ],
+      "resourceCeilings": {
+        "maximumParallel": 2,
+        "maximumAttemptsPerNode": 3,
+        "maximumRequests": 8,
+        "maximumActiveMilliseconds": 120000,
+        "maximumReportedTokens": 20000,
+        "maximumProviderCalls": 32,
+        "maximumToolCalls": 16,
+        "maximumToolOutputBytes": 262144
+      },
+      "deliverableContract": {
+        "requirements": [
+          {
+            "section": 3,
+            "instruction": "Independently check the requested result",
+            "allowNoneWithReason": false
+          }
+        ],
+        "requireAllPrerequisites": true
+      },
+      "cancellation": {
+        "origin": {
+          "companionId": "revia-a",
+          "sessionId": "session-a",
+          "generation": 7,
+          "taskId": "task-42",
+          "attemptId": "attempt-3",
+          "policyVersion": 9
+        },
+        "ancestorTaskIds": [
+          "parent-task"
+        ]
+      },
+      "sourceKind": "desktop",
+      "sourceId": "42"
+    }
+  }
+]
