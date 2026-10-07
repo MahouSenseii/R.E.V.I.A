@@ -3,7 +3,13 @@
 #include "Runtime/runtimeStamp.h"
 
 #include <cstdint>
+#include <memory>
 #include <string>
+
+namespace revia::core
+{
+struct TaskContract;
+}
 
 namespace revia::runtime
 {
@@ -34,6 +40,7 @@ struct SessionResult
     std::uint64_t utteranceId = 0;
     RuntimeStamp stamp;
     std::uint64_t audienceRevision = 0;
+    std::shared_ptr<const core::TaskContract> taskContract;
 };
 
 } // namespace revia::runtime

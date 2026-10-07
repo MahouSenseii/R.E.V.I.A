@@ -16,6 +16,11 @@
 #include <string>
 #include <vector>
 
+namespace revia::core
+{
+struct TaskContract;
+}
+
 namespace revia::actions
 {
 
@@ -298,6 +303,8 @@ struct ActionRequest
     std::function<std::string(const std::string&)> beforeEffect;
     // Stamped by ActionRuntime from its bound subject, never decoded or serialized as a command.
     runtime::RuntimeStamp authorityStamp;
+    // Host admission metadata; model action JSON never supplies this envelope.
+    std::shared_ptr<const core::TaskContract> taskContract;
 };
 
 struct PolicyDecision

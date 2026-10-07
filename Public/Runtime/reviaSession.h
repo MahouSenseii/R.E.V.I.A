@@ -15,6 +15,7 @@
 #include "Policy/companionAuthority.h"
 #include "Agents/agentWorkflow.h"
 #include "Actions/actionRuntime.h"
+#include "Audit/runtimeEvidenceBridge.h"
 #include "Agents/curiosityAgent.h"
 #include "Agents/turnCoordinator.h"
 #include "Agents/inputArbiter.h"
@@ -553,6 +554,12 @@ class ReviaSession
     // Shared by the immediate typed path and the merged voice path. Callers hold
     // operationMutex; the arbiter has already decided what the turn's text is.
     SessionResult RunTurnLocked(const agents::InputBatch& batch);
+    void InitializeTaskContracts();
+    [[nodiscard]] std::shared_ptr<const core::TaskContract> BuildTurnTaskContract(const agents::InputBatch& batch);
+    [[nodiscard]] std::shared_ptr<const core::TaskContract> BuildActionTaskContract(const actions::ActionRequest& request,
+        const RuntimeStamp& stamp, std::stop_token stopToken);
+    [[nodiscard]] std::string TaskContractRefusal(const core::TaskContract& task, std::stop_token stopToken) const;
+
     agents::InputContext CaptureInputContext(agents::InputSource source, const identity::SpeakerObservation& speaker = {});
     [[nodiscard]] bool InputContextCurrent(const agents::InputContext& captured) const;
     void InitializeSpeakerEnrollment();
@@ -676,6 +683,7 @@ class ReviaSession
     resources::ResourcePlan resourcePlan;
     resources::ResourceMonitor resourceMonitor;
     actions::ActionRuntime actionRuntime;
+    audit::RuntimeEvidenceBridge runtimeEvidenceBridge;
     // Declared after actionRuntime: GoalRunner holds references to both of these.
     goals::GoalStore goalStore;
     goals::GoalRunner goalRunner;
@@ -930,6 +938,9 @@ class ReviaSession
     std::atomic<bool> responseAiReviewEnabled = true;
     int responseAiMaxReviewTokens = 192;
     int responseMaxReplyCharacters = 12000;
+    mutable std::mutex taskContractMutex;
+    std::shared_ptr<const core::TaskContract> foregroundTaskContract;
+    std::optional<agents::InputContext> admittedTaskInputContext;
 };
 
 } // namespace revia::runtime

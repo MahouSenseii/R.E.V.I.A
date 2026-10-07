@@ -49,6 +49,11 @@ class ActionRuntime
     [[nodiscard]] ActionOutcome Execute(const ActionRequest& request, bool confirmationGranted = false, std::stop_token stopToken = {});
     void BindAuthority(std::shared_ptr<policy::CompanionAuthority> authority, runtime::RuntimeStamp sessionStamp);
     void ClearAuthorityBinding();
+    using TaskContractFactory = std::function<std::shared_ptr<const core::TaskContract>(const ActionRequest&,
+        const runtime::RuntimeStamp&, std::stop_token)>;
+    using TaskContractGuard = std::function<std::string(const core::TaskContract&, std::stop_token)>;
+    void BindTaskContracts(TaskContractFactory factory, TaskContractGuard guard);
+    [[nodiscard]] std::shared_ptr<audit::EvidenceJournal> EvidenceJournalOwner() const;
     [[nodiscard]] ActionOutcome ExecuteFor(
         const runtime::RuntimeStamp& stamp, const ActionRequest& request, bool confirmationGranted = false, std::stop_token stopToken = {});
     [[nodiscard]] ActionOutcome ExecuteScopedFor(const runtime::RuntimeStamp& stamp, const ActionRequest& request,
@@ -154,10 +159,13 @@ class ActionRuntime
     std::filesystem::path auditPath;
     std::shared_ptr<policy::CompanionAuthority> authority;
     runtime::RuntimeStamp sessionStamp;
+    TaskContractFactory taskContractFactory;
+    TaskContractGuard taskContractGuard;
     std::filesystem::path browserProfileDirectory;
     std::filesystem::path browserLogDirectory;
     visual::ImageGenerator* imageProvider = nullptr;
     CapabilitySettings::ImageGeneration imageAccess;
+    std::uint64_t taskContractBindingRevision = 0;
 };
 
 } // namespace revia::actions

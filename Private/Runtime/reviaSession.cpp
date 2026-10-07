@@ -14,6 +14,7 @@
 #include "Identity/promptMarkers.h"
 #include "Runtime/publicContextCache.h"
 #include "Runtime/reviaSession.h"
+#include "Core/taskContract.h"
 #include "Browser/browserSession.h"
 #include "Policy/capabilityProjection.h"
 #include "Audit/contentDigest.h"
@@ -345,6 +346,7 @@ ReviaSession::ReviaSession(CompanionPaths paths, std::shared_ptr<policy::Compani
     }
     (void)companionAuthority->RegisterSession(origin);
     actionRuntime.BindAuthority(companionAuthority, origin);
+    InitializeTaskContracts();
     InitializeSpeakerEnrollment();
     actionRuntime.SetPrivateRuntimePaths(companionPaths.Resolve("RuntimeData/Browser/Profile"), CompanionLogDirectory(companionPaths));
     eventBus.BindOrigin(origin, [this](const RuntimeStamp& stamp) { return sessionIdentity.IsCurrent(stamp); });
@@ -471,6 +473,7 @@ bool ReviaSession::Start()
         const RuntimeStamp origin = sessionIdentity.Stamp();
         (void)companionAuthority->RegisterSession(origin);
         actionRuntime.BindAuthority(companionAuthority, origin);
+        InitializeTaskContracts();
         eventBus.BindOrigin(origin, [this](const RuntimeStamp& stamp) { return sessionIdentity.IsCurrent(stamp); });
         conversationRuntime.ResetResponseLatency(origin);
         turnCoordinator.SetAdmissionGuard([this, origin]() { return sessionIdentity.IsCurrent(origin); });
@@ -649,6 +652,14 @@ bool ReviaSession::Start()
     else
     {
         appLogger.Log("Capability runtime initialized.");
+        runtimeEvidenceBridge.Start(eventBus, actionRuntime.EvidenceJournalOwner(), [this](const audit::JournalHealth& health)
+        {
+            PublishComponent("Evidence journal", health.degraded ? "Degraded" : "Ready",
+                "Dropped telemetry: " + std::to_string(health.droppedTelemetry) +
+                "; unresolved transactions: " + std::to_string(health.unresolvedTransactions.size()) +
+                "; quarantined records: " + std::to_string(health.quarantinedRecords) +
+                "; persistence diagnostic present: " + std::string(health.error.empty() ? "no" : "yes"));
+        });
         // Queue pressure and overflow reach the log rather than only the queue. A
         // memory evaluation that was dropped or delayed is otherwise invisible.
         turnCoordinator.Memory().SetDiagnosticSink([this](const std::string& line) { appLogger.Log(line); });
@@ -3831,15 +3842,20 @@ SessionResult ReviaSession::RunTurnLocked(const agents::InputBatch& batch)
         return denied;
     }
     auto admittedBatch = batch;
-    SessionResult result = GuardTurn([this, &admittedBatch]()
-    {
-        if (admittedBatch.source == agents::InputSource::Typed &&
-            admittedBatch.context.audience.kind == identity::AudienceKind::Private && InputContextCurrent(admittedBatch.context))
+    SessionResult result = GuardTurn(
+        [this, &admittedBatch]()
         {
-            (void)ResolveLocalSpeaker(admittedBatch.text, admittedBatch.context);
-        }
-        return RunTurnUnguarded(admittedBatch);
-    });
+            if (admittedBatch.source == agents::InputSource::Typed &&
+                admittedBatch.context.audience.kind == identity::AudienceKind::Private && InputContextCurrent(admittedBatch.context))
+            {
+                (void)ResolveLocalSpeaker(admittedBatch.text, admittedBatch.context);
+            }
+            return RunTurnUnguarded(admittedBatch);
+        });
+    {
+        std::lock_guard lock(taskContractMutex);
+        foregroundTaskContract.reset();
+    }
     result.audienceRevision = admittedBatch.context.audience.revision;
     if (!InputContextCurrent(admittedBatch.context))
     {
@@ -3888,7 +3904,7 @@ SessionResult ReviaSession::GuardTurn(const std::function<SessionResult()>& turn
     try
     {
         SessionResult result = turn();
-        result.stamp = origin;
+        result.stamp = result.taskContract ? result.taskContract->stamp : origin;
         if (!sessionIdentity.IsCurrent(origin))
         {
             result.succeeded = false;
@@ -3912,13 +3928,13 @@ SessionResult ReviaSession::RunTurnUnguarded(const agents::InputBatch& batch)
 {
     const auto& acceptedInput = batch.text;
     const auto captured = batch.context;
-    const auto admission = [this, captured]()
+    const auto inputAdmission = [this, captured]()
     { return InputContextCurrent(captured) && captured.stamp.policyVersion == companionAuthority->Revision(); };
     const bool privateAudience = captured.audience.kind == identity::AudienceKind::Private;
     const memory::MemoryScope memoryScope{
         captured.participantId, captured.audience, captured.participantSource, captured.consentRevision, captured.stamp.companionId};
     SessionResult result;
-    if (!admission())
+    if (!inputAdmission())
     {
         result.succeeded = false;
         result.reason = "The captured input is no longer current.";
@@ -3926,10 +3942,23 @@ SessionResult ReviaSession::RunTurnUnguarded(const agents::InputBatch& batch)
     }
     busy.store(true);
     const std::stop_token stopToken = BeginOperation();
+    const auto taskContract = BuildTurnTaskContract(batch);
+    if (!taskContract || !TaskContractRefusal(*taskContract, stopToken).empty())
+    {
+        busy.store(false);
+        result.succeeded = false;
+        result.reason = "The accepted input task contract could not be admitted.";
+        return result;
+    }
+    const auto admission = [this, captured, taskContract, stopToken]()
+    { return InputContextCurrent(captured) && TaskContractRefusal(*taskContract, stopToken).empty(); };
     speechService.SetAdmissionGuard(admission);
-    if (initiativeController.RequestQuiet(acceptedInput)) speechService.StopSpeaking();
+    if (initiativeController.RequestQuiet(acceptedInput))
+        speechService.StopSpeaking();
     const auto finish = [&](SessionResult finished)
     {
+        if (!finished.taskContract)
+            finished.taskContract = taskContract;
         if (!finished.shouldExit && !stopToken.stop_requested())
         {
             (void)affectController.ObserveTurn(acceptedInput, finished.text, finished.succeeded);
@@ -4082,6 +4111,7 @@ SessionResult ReviaSession::RunTurnUnguarded(const agents::InputBatch& batch)
     {
         SignalCuriosity("a completed conversation left new context to consider");
     }
+    result.taskContract = taskContract;
     return result;
 }
 
@@ -4280,6 +4310,7 @@ void ReviaSession::Stop()
         // outlives the process that installed it.
         windowEventMonitor.Shutdown();
         state.store(RuntimeState::Offline);
+        runtimeEvidenceBridge.Stop();
         foregroundLease.Release();
         return;
     }
@@ -4376,6 +4407,7 @@ void ReviaSession::Stop()
     busy.store(false);
     state.store(RuntimeState::Offline);
     Publish(RuntimeEventKind::StateChanged, "Offline");
+    runtimeEvidenceBridge.Stop();
 }
 
 void ReviaSession::SetConfirmationHandler(ConfirmationHandler handler)
@@ -9615,16 +9647,19 @@ SessionResult ReviaSession::ExecuteAction(actions::ActionRequest request)
     const std::stop_token stopToken = CurrentOperationToken();
     const auto capturedAudience = Audience();
     const auto origin = sessionIdentity.Stamp({}, {}, companionAuthority->Revision());
-    const auto contextCurrent = [this, capturedAudience, origin]()
+    if (!request.taskContract)
+        request.taskContract = BuildActionTaskContract(request, origin, stopToken);
+    const auto contextCurrent = [this, capturedAudience, origin, task = request.taskContract]()
     {
         const auto audience = Audience();
-        return sessionIdentity.IsCurrent(origin) && origin.policyVersion == companionAuthority->Revision() &&
-               capturedAudience.kind == identity::AudienceKind::Private && audience.kind == capturedAudience.kind &&
-               audience.revision == capturedAudience.revision;
+        return task && TaskContractRefusal(*task, {}).empty() && sessionIdentity.IsCurrent(origin) &&
+               origin.policyVersion == companionAuthority->Revision() && capturedAudience.kind == identity::AudienceKind::Private &&
+               audience.kind == capturedAudience.kind && audience.revision == capturedAudience.revision;
     };
     const auto admitted = [contextCurrent, stopToken]() { return !stopToken.stop_requested() && contextCurrent(); };
     SessionResult result;
-    result.stamp = origin;
+    result.taskContract = request.taskContract;
+    result.stamp = request.taskContract ? request.taskContract->stamp : origin;
     result.audienceRevision = capturedAudience.revision;
     bool dispatched = false;
     const auto retired = [&]()

@@ -1,5 +1,6 @@
 #include "Actions/actionRuntime.h"
 
+#include "Core/taskContract.h"
 #include "Filesystem/fileSystemExecutor.h"
 #include "Process/processExecutor.h"
 #include "Browser/browserExecutor.h"
@@ -84,7 +85,8 @@ bool ActionRuntime::InitializeUnlocked(const std::filesystem::path& capabilityCo
     dispatcher.Register(std::make_unique<windows::DesktopControlExecutor>(
         settings.desktopControl, desktopInputGuard, desktopApprovals));
 #endif
-    auditLogger = std::make_unique<audit::ActionAuditLogger>(inputAuditPath);
+    if (!auditLogger || auditLogger->Path() != inputAuditPath)
+        auditLogger = std::make_unique<audit::ActionAuditLogger>(inputAuditPath);
     capabilityConfigPath = capabilityConfig;
     auditPath = inputAuditPath;
     {
@@ -143,6 +145,23 @@ void ActionRuntime::ClearAuthorityBinding()
     if (browserSession) browserSession->Stop();
     authority.reset();
     sessionStamp = {};
+    taskContractFactory = {};
+    taskContractGuard = {};
+    ++taskContractBindingRevision;
+}
+
+void ActionRuntime::BindTaskContracts(TaskContractFactory factory, TaskContractGuard guard)
+{
+    std::lock_guard lock(mutex);
+    taskContractFactory = std::move(factory);
+    taskContractGuard = std::move(guard);
+    ++taskContractBindingRevision;
+}
+
+std::shared_ptr<audit::EvidenceJournal> ActionRuntime::EvidenceJournalOwner() const
+{
+    std::lock_guard lock(mutex);
+    return auditLogger ? auditLogger->Journal() : nullptr;
 }
 
 ActionOutcome ActionRuntime::ExecuteFor(
@@ -210,6 +229,67 @@ ActionOutcome ActionRuntime::ExecuteWithPolicy(const ActionRequest& inputRequest
         request.authorityStamp = capturedStamp;
         request.authorityStamp.policyVersion = capturedAuthority->Revision();
     }
+    const auto capturedContractGuard = taskContractGuard;
+    const auto capturedContractBinding = taskContractBindingRevision;
+    std::shared_ptr<const core::TaskContract> hostContract;
+    std::string contractError;
+    try
+    {
+        if (taskContractFactory && !request.taskContract)
+            hostContract = taskContractFactory(request, request.authorityStamp, stopToken);
+        if (!request.taskContract)
+            request.taskContract = hostContract;
+        if (taskContractFactory && !request.taskContract)
+            contractError = "The host could not construct the action task contract.";
+    }
+    catch (...)
+    {
+        contractError = "The host task contract factory failed.";
+    }
+    const auto contractRefusal = [this, request, hostContract, contractError, capturedStamp, capturedContractGuard, capturedContractBinding,
+                                     stopToken]() -> std::string
+    {
+        if (!contractError.empty())
+            return contractError;
+        if (!request.taskContract)
+            return capturedContractGuard ? "The bound host admission requires a task contract." : std::string{};
+        if (taskContractBindingRevision != capturedContractBinding || !capturedContractGuard)
+            return "Task contract admission requires the originating host guard.";
+        const auto& task = *request.taskContract;
+        const auto shape = core::ValidateTaskContract(task);
+        if (!shape)
+            return "Task contract refused: " + shape.code;
+        if (task.sourceKind != "action" || task.sourceId != request.id)
+            return "Task contract action provenance does not match the request.";
+        if ((!capturedStamp.companionId.empty() && !task.stamp.SameSession(capturedStamp)) ||
+            (!capturedStamp.taskId.empty() && task.stamp.taskId != capturedStamp.taskId) ||
+            (!capturedStamp.attemptId.empty() && task.stamp.attemptId != capturedStamp.attemptId) ||
+            (capturedStamp.policyVersion != 0 && task.stamp.policyVersion != capturedStamp.policyVersion))
+            return "Task contract does not retain the admitted authority subject.";
+        if (hostContract &&
+            (!core::SameRuntimeStamp(task.stamp, hostContract->stamp) || !core::SameMemoryScope(task.scope, hostContract->scope)))
+            return "Task contract differs from the host captured identity or scope.";
+        try
+        {
+            const auto refusal = capturedContractGuard(task, stopToken);
+            return refusal.empty() ? std::string{} : "Task contract refused: " + refusal;
+        }
+        catch (...)
+        {
+            return "The host task contract guard failed.";
+        }
+    };
+    // Metadata identities never replace the subject evaluated by CompanionAuthority.
+    const auto applyContract = [&](PolicyDecision decision)
+    {
+        const auto refusal = contractRefusal();
+        if (!refusal.empty())
+        {
+            decision.verdict = PolicyVerdict::Blocked;
+            decision.reason = refusal;
+        }
+        return decision;
+    };
     const auto applyAuthority = [&](PolicyDecision decision)
     {
         if (subject && (!capturedAuthority || !capturedStamp.SameSession(sessionStamp)))
@@ -228,7 +308,14 @@ ActionOutcome ActionRuntime::ExecuteWithPolicy(const ActionRequest& inputRequest
         }
         return decision;
     };
-    outcome.policy = applyAuthority(std::move(outcome.policy));
+    outcome.policy = applyContract(applyAuthority(std::move(outcome.policy)));
+    const bool contractAdmitted = contractRefusal().empty();
+    if (request.taskContract && contractAdmitted)
+    {
+        request.authorityStamp = request.taskContract->stamp;
+        if (auditLogger)
+            auditLogger->SetScope(request.taskContract->scope);
+    }
     const bool otherwiseExecutable =
         outcome.policy.verdict == PolicyVerdict::Allowed ||
         (outcome.policy.verdict == PolicyVerdict::RequiresConfirmation && confirmationGranted);
@@ -248,7 +335,13 @@ ActionOutcome ActionRuntime::ExecuteWithPolicy(const ActionRequest& inputRequest
     // gets stuck in a state an aborted action put it in.
     if (dispatchObserver) dispatchObserver(request, true);
     if (outcome.policy.verdict != PolicyVerdict::Blocked)
-        outcome.policy = applyAuthority(scopedPolicy ? EvaluateScoped(request, *scopedPolicy) : Evaluate(request));
+        outcome.policy = applyContract(applyAuthority(scopedPolicy ? EvaluateScoped(request, *scopedPolicy) : Evaluate(request)));
+    if (outcome.policy.verdict != PolicyVerdict::Blocked && request.taskContract && auditLogger &&
+        auditLogger->Journal()->HasUnresolvedForTask(request.taskContract->stamp, request.taskContract->scope))
+    {
+        outcome.policy.verdict = PolicyVerdict::Blocked;
+        outcome.policy.reason = "An unresolved action intent prevents dependent effects for this task.";
+    }
     const std::string transactionId = NewActionId();
     const bool executable = outcome.policy.verdict == PolicyVerdict::Allowed ||
         (outcome.policy.verdict == PolicyVerdict::RequiresConfirmation && confirmationGranted);
@@ -273,12 +366,12 @@ ActionOutcome ActionRuntime::ExecuteWithPolicy(const ActionRequest& inputRequest
     else
     {
         if (outcome.policy.verdict != PolicyVerdict::Blocked)
-            outcome.policy = applyAuthority(scopedPolicy ? EvaluateScoped(request, *scopedPolicy) : Evaluate(request));
+            outcome.policy = applyContract(applyAuthority(scopedPolicy ? EvaluateScoped(request, *scopedPolicy) : Evaluate(request)));
         ActionRequest guardedRequest = request;
         const auto priorEffect = request.beforeEffect;
         const auto canonicalDecision = outcome.policy;
         guardedRequest.beforeEffect = [this, request, priorEffect, capturedAuthority, capturedStamp, stopToken, canonicalDecision,
-                                          scopedPolicy, confirmationGranted](const std::string& resource)
+                                          scopedPolicy, confirmationGranted, contractRefusal](const std::string& resource)
         {
             if (stopToken.stop_requested())
                 return std::string("Action cancellation was requested.");
@@ -290,6 +383,8 @@ ActionOutcome ActionRuntime::ExecuteWithPolicy(const ActionRequest& inputRequest
             }
             if (stopToken.stop_requested())
                 return std::string("Action cancellation was requested.");
+            const auto taskRefusal = contractRefusal();
+            if (!taskRefusal.empty()) return taskRefusal;
             const auto current = scopedPolicy ? EvaluateScoped(request, *scopedPolicy) : Evaluate(request);
             if (current.verdict == PolicyVerdict::Blocked ||
                 (current.verdict == PolicyVerdict::RequiresConfirmation && !confirmationGranted))
@@ -306,7 +401,8 @@ ActionOutcome ActionRuntime::ExecuteWithPolicy(const ActionRequest& inputRequest
                 const auto& now = current.browser;
                 if ((!resource.empty() && !browser::IsApprovedUrl(resource, now)) || previous.approvedOrigins != now.approvedOrigins ||
                     previous.navigate != now.navigate || previous.interact != now.interact || previous.allowLoopback != now.allowLoopback ||
-                    now.timeoutMs < previous.timeoutMs || now.maxTextBytes < previous.maxTextBytes || now.maxElements < previous.maxElements || now.maxValueBytes < previous.maxValueBytes)
+                    now.timeoutMs < previous.timeoutMs || now.maxTextBytes < previous.maxTextBytes ||
+                    now.maxElements < previous.maxElements || now.maxValueBytes < previous.maxValueBytes)
                     return std::string("The interactive browser authority changed during this operation.");
             }
             if (capturedAuthority && (authority != capturedAuthority || !sessionStamp.SameSession(capturedStamp)))
@@ -327,7 +423,7 @@ ActionOutcome ActionRuntime::ExecuteWithPolicy(const ActionRequest& inputRequest
         outcome.result = dispatcher.Dispatch(guardedRequest, outcome.policy, confirmationGranted);
     }
     if (dispatchObserver) dispatchObserver(request, false);
-    if (auditLogger)
+    if (auditLogger && contractAdmitted)
     {
         const double elapsedMilliseconds = std::chrono::duration<double, std::milli>(
             std::chrono::steady_clock::now() - executionStarted).count();
@@ -338,7 +434,8 @@ ActionOutcome ActionRuntime::ExecuteWithPolicy(const ActionRequest& inputRequest
             outcome.auditError += "The completion audit could not be recorded; the executor result is retained.";
         }
     }
-    else outcome.auditError = "The action audit is unavailable.";
+    else outcome.auditError = contractAdmitted ? "The action audit is unavailable." :
+        "The rejected task envelope was not admitted to the evidence journal.";
     return outcome;
 }
 
