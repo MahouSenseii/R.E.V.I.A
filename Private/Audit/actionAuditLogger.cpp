@@ -3,20 +3,10 @@
 
 #include <chrono>
 #include <algorithm>
-#include <fstream>
 #include <iomanip>
 #include <nlohmann/json.hpp>
 #include <sstream>
-#include <limits>
 #include <string_view>
-
-#ifdef _WIN32
-#include <Windows.h>
-#else
-#include <fcntl.h>
-#include <sys/file.h>
-#include <unistd.h>
-#endif
 
 namespace revia::audit
 {
@@ -41,108 +31,31 @@ std::string UtcTimestamp()
 
 std::string BoundedUtf8Prefix(const std::string& value, const std::size_t maximumBytes)
 {
-    if (value.size() <= maximumBytes) return value;
+    if (value.size() <= maximumBytes)
+        return value;
     std::size_t end = maximumBytes;
-    while (end > 0 &&
-        (static_cast<unsigned char>(value[end]) & 0xC0U) == 0x80U)
+    while (end > 0 && (static_cast<unsigned char>(value[end]) & 0xC0U) == 0x80U)
     {
         --end;
     }
     return value.substr(0, end);
 }
 
-// Another writer holds the journal only while it finishes one append, so a brief
-// retry distinguishes that from a journal that is genuinely unavailable. Without it,
-// ordinary contention between two writers refuses an action outright.
-constexpr int MaximumOpenAttempts = 5;
-constexpr int OpenRetryMilliseconds = 20;
-
-// Exclude competing writers, and repair -- never hide, complete or replay -- a partial
-// previous record. A failed append must not permit dispatch.
-//
-// A torn trailing line used to refuse every later append for the life of the file, and
-// because a refused intent append blocks dispatch, one crash mid-write disabled every
-// future action until a human edited the journal. Failing closed was right; staying
-// closed forever was not. The torn line is now terminated and followed by
-// `recoveryRecord`, which names it incomplete and its outcome unknown. That is the same
-// thing an orphan intent already means, said out loud: no byte of the torn record is
-// altered, and nothing about it becomes safe to retry.
-bool AppendDurably(const std::filesystem::path& path, const std::string& bytes, const std::string& recoveryRecord)
-{
-#ifdef _WIN32
-    HANDLE file = INVALID_HANDLE_VALUE;
-    for (int attempt = 0; attempt < MaximumOpenAttempts; ++attempt)
-    {
-        file = CreateFileW(path.c_str(), GENERIC_READ | GENERIC_WRITE,
-            FILE_SHARE_READ, nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
-        if (file != INVALID_HANDLE_VALUE) break;
-        const DWORD error = GetLastError();
-        if (error != ERROR_SHARING_VIOLATION && error != ERROR_LOCK_VIOLATION) break;
-        Sleep(OpenRetryMilliseconds);
-    }
-    if (file == INVALID_HANDLE_VALUE) return false;
-    LARGE_INTEGER size{};
-    bool valid = GetFileSizeEx(file, &size) != FALSE;
-    bool torn = false;
-    if (valid && size.QuadPart > 0)
-    {
-        LARGE_INTEGER last{};
-        last.QuadPart = -1;
-        char tail = 0;
-        DWORD count = 0;
-        valid = SetFilePointerEx(file, last, nullptr, FILE_END) &&
-            ReadFile(file, &tail, 1, &count, nullptr) && count == 1;
-        torn = valid && tail != '\n';
-    }
-    // One write, so a reader never sees the repair without the record that prompted it.
-    const std::string payload = torn ? "\n" + recoveryRecord + bytes : bytes;
-    LARGE_INTEGER end{};
-    DWORD written = 0;
-    valid = valid && payload.size() <= std::numeric_limits<DWORD>::max() &&
-        SetFilePointerEx(file, end, nullptr, FILE_END) &&
-        WriteFile(file, payload.data(), static_cast<DWORD>(payload.size()), &written, nullptr) &&
-        written == payload.size() && FlushFileBuffers(file);
-    const bool closed = CloseHandle(file) != FALSE;
-    return valid && closed;
-#else
-    const int file = open(path.c_str(), O_RDWR | O_CREAT | O_CLOEXEC, 0600);
-    if (file < 0) return false;
-    bool locked = false;
-    for (int attempt = 0; attempt < MaximumOpenAttempts && !locked; ++attempt)
-    {
-        locked = flock(file, LOCK_EX | LOCK_NB) == 0;
-        if (!locked) usleep(OpenRetryMilliseconds * 1000);
-    }
-    bool valid = locked;
-    const off_t size = valid ? lseek(file, 0, SEEK_END) : -1;
-    valid = valid && size >= 0;
-    bool torn = false;
-    if (valid && size > 0)
-    {
-        char tail = 0;
-        valid = lseek(file, -1, SEEK_END) >= 0 && read(file, &tail, 1) == 1;
-        torn = valid && tail != '\n';
-    }
-    const std::string payload = torn ? "\n" + recoveryRecord + bytes : bytes;
-    valid = valid && lseek(file, 0, SEEK_END) >= 0;
-    std::size_t offset = 0;
-    while (valid && offset < payload.size())
-    {
-        const ssize_t count = write(file, payload.data() + offset, payload.size() - offset);
-        if (count <= 0) valid = false;
-        else offset += static_cast<std::size_t>(count);
-    }
-    valid = valid && fsync(file) == 0;
-    const bool closed = close(file) == 0;
-    return valid && closed;
-#endif
-}
-
 } // namespace
 
 ActionAuditLogger::ActionAuditLogger(std::filesystem::path inputPath)
-    : path(std::move(inputPath))
+    : path(std::move(inputPath)), journal(std::make_shared<EvidenceJournal>(path))
 {
+}
+
+ActionAuditLogger::ActionAuditLogger(std::shared_ptr<EvidenceJournal> owner) : path(owner->Path()), journal(std::move(owner))
+{
+}
+
+void ActionAuditLogger::SetScope(memory::MemoryScope inputScope)
+{
+    std::lock_guard lock(mutex);
+    scope = std::move(inputScope);
 }
 
 bool ActionAuditLogger::Record(const actions::ActionRequest& request, const actions::PolicyDecision& decision,
@@ -151,8 +64,8 @@ bool ActionAuditLogger::Record(const actions::ActionRequest& request, const acti
     return WriteRecord(request, decision, result, elapsedMilliseconds, "result", transactionId);
 }
 
-bool ActionAuditLogger::RecordIntent(const actions::ActionRequest& request,
-    const actions::PolicyDecision& decision, const std::string& transactionId)
+bool ActionAuditLogger::RecordIntent(
+    const actions::ActionRequest& request, const actions::PolicyDecision& decision, const std::string& transactionId)
 {
     actions::ActionResult pending;
     pending.dryRun = request.dryRun;
@@ -203,8 +116,8 @@ bool ActionAuditLogger::WriteRecord(const actions::ActionRequest& request, const
         }
         if (request.type == actions::ActionType::WriteTextFile)
         {
-            entry["file_write"] = {{"expected_digest", request.expectedDigest},
-                {"content_digest", ContentDigest(request.value)}, {"content_bytes", request.value.size()}};
+            entry["file_write"] = {{"expected_digest", request.expectedDigest}, {"content_digest", ContentDigest(request.value)},
+                {"content_bytes", request.value.size()}};
         }
         if (request.type == actions::ActionType::GenerateImage)
         {
@@ -213,9 +126,9 @@ bool ActionAuditLogger::WriteRecord(const actions::ActionRequest& request, const
             {
                 const auto& image = *result.image;
                 entry["image"]["cancelled"] = image.cancelled;
-                entry["image"]["receipt"] = {{"path", actions::PathToUtf8(image.receipt.path)},
-                    {"sha256", image.receipt.sha256}, {"job_id", image.receipt.jobId}, {"model", image.receipt.model},
-                    {"width", image.receipt.width}, {"height", image.receipt.height}, {"verified", image.succeeded}};
+                entry["image"]["receipt"] = {{"path", actions::PathToUtf8(image.receipt.path)}, {"sha256", image.receipt.sha256},
+                    {"job_id", image.receipt.jobId}, {"model", image.receipt.model}, {"width", image.receipt.width},
+                    {"height", image.receipt.height}, {"verified", image.succeeded}};
             }
         }
         if (request.type == actions::ActionType::ExecuteProcess)
@@ -250,21 +163,14 @@ bool ActionAuditLogger::WriteRecord(const actions::ActionRequest& request, const
             constexpr std::size_t MaximumAuditedUrls = 10;
             constexpr std::size_t MaximumUrlBytes = 2048;
             nlohmann::json visitedUrls = nlohmann::json::array();
-            for (std::size_t index = 0;
-                 index < std::min(result.entries.size(), MaximumAuditedUrls);
-                 ++index)
+            for (std::size_t index = 0; index < std::min(result.entries.size(), MaximumAuditedUrls); ++index)
             {
-                visitedUrls.push_back(BoundedUtf8Prefix(
-                    result.entries[index], MaximumUrlBytes));
+                visitedUrls.push_back(BoundedUtf8Prefix(result.entries[index], MaximumUrlBytes));
             }
-            entry["internet_activity"] = {
-                {"query", BoundedUtf8Prefix(request.value, MaximumQueryBytes)},
-                {"query_truncated", request.value.size() > MaximumQueryBytes},
-                {"backend", result.backend},
-                {"visited_urls", std::move(visitedUrls)},
-                {"source_count", result.entries.size()},
-                {"grounding_bytes", result.content.size()}
-            };
+            entry["internet_activity"] = {{"query", BoundedUtf8Prefix(request.value, MaximumQueryBytes)},
+                {"query_truncated", request.value.size() > MaximumQueryBytes}, {"backend", result.backend},
+                {"visited_urls", std::move(visitedUrls)}, {"source_count", result.entries.size()},
+                {"grounding_bytes", result.content.size()}};
         }
         if (actions::IsDesktopControlAction(request.type))
         {
@@ -272,17 +178,12 @@ bool ActionAuditLogger::WriteRecord(const actions::ActionRequest& request, const
             // what was done. Typed text is not: value_length above is deliberately the
             // only trace of it, so an audit trail cannot become a keystroke log.
             nlohmann::json desktop = {
-                {"button", request.input.button ==
-                    actions::ActionRequest::DesktopInput::PointerButton::Right ? "right"
-                    : request.input.button ==
-                        actions::ActionRequest::DesktopInput::PointerButton::Middle
-                        ? "middle" : "left"},
-                {"click_count", request.input.clickCount},
-                {"scroll_clicks", request.input.scrollClicks},
-                {"horizontal_scroll", request.input.horizontalScroll},
-                {"keys", request.input.keys},
-                {"targeted_point", request.input.hasPoint}
-            };
+                {"button", request.input.button == actions::ActionRequest::DesktopInput::PointerButton::Right    ? "right"
+                           : request.input.button == actions::ActionRequest::DesktopInput::PointerButton::Middle ? "middle"
+                                                                                                                 : "left"},
+                {"click_count", request.input.clickCount}, {"scroll_clicks", request.input.scrollClicks},
+                {"horizontal_scroll", request.input.horizontalScroll}, {"keys", request.input.keys},
+                {"targeted_point", request.input.hasPoint}};
             if (request.input.hasPoint)
             {
                 desktop["requested_x"] = request.input.x;
@@ -300,8 +201,7 @@ bool ActionAuditLogger::WriteRecord(const actions::ActionRequest& request, const
         }
         else if (request.input.hasPoint && actions::IsSynthesizedInputAction(request.type))
         {
-            entry["target_resolution"] =
-                actions::ToString(actions::TargetResolutionKind::RawCoordinate);
+            entry["target_resolution"] = actions::ToString(actions::TargetResolutionKind::RawCoordinate);
         }
         if (request.resolution.IsVisualRegionTarget())
         {
@@ -310,66 +210,55 @@ bool ActionAuditLogger::WriteRecord(const actions::ActionRequest& request, const
             // description is the model's own words about a button, which is not
             // sensitive in the way typed text is -- and typed text still never lands
             // here, only its length.
-            entry["visual_target"] = {
-                {"target_description", request.resolution.modelTarget},
-                {"region", {
-                    {"left", request.resolution.regionLeft},
-                    {"top", request.resolution.regionTop},
-                    {"right", request.resolution.regionRight},
-                    {"bottom", request.resolution.regionBottom}}},
-                {"model_confidence", request.resolution.modelConfidence},
-                {"observation_id", request.resolution.observationId},
-                {"observation_generation", request.resolution.observationGeneration},
-                {"screen_digest", request.resolution.screenDigest},
-                {"application", request.resolution.observedApplication},
-                {"window_title", request.windowTitle},
-                {"window", {
-                    {"left", request.resolution.observedWindowLeft},
-                    {"top", request.resolution.observedWindowTop},
-                    {"right", request.resolution.observedWindowRight},
-                    {"bottom", request.resolution.observedWindowBottom}}},
+            entry["visual_target"] = {{"target_description", request.resolution.modelTarget},
+                {"region", {{"left", request.resolution.regionLeft}, {"top", request.resolution.regionTop},
+                               {"right", request.resolution.regionRight}, {"bottom", request.resolution.regionBottom}}},
+                {"model_confidence", request.resolution.modelConfidence}, {"observation_id", request.resolution.observationId},
+                {"observation_generation", request.resolution.observationGeneration}, {"screen_digest", request.resolution.screenDigest},
+                {"application", request.resolution.observedApplication}, {"window_title", request.windowTitle},
+                {"window", {{"left", request.resolution.observedWindowLeft}, {"top", request.resolution.observedWindowTop},
+                               {"right", request.resolution.observedWindowRight}, {"bottom", request.resolution.observedWindowBottom}}},
                 // Whether the stronger route was tried, and what it said. Without this a
                 // reader cannot tell an interface that exposes nothing from a resolver
                 // that was never asked.
-                {"uia_attempted", request.resolution.uiaAttempted},
-                {"uia_failure", request.resolution.uiaFailure}
-            };
+                {"uia_attempted", request.resolution.uiaAttempted}, {"uia_failure", request.resolution.uiaFailure}};
         }
         if (request.resolution.IsUiaElementTarget())
         {
-            entry["vision_resolution"] = {
-                {"model_target", request.resolution.modelTarget},
-                {"model_region", {
-                    {"left", request.resolution.regionLeft},
-                    {"top", request.resolution.regionTop},
-                    {"right", request.resolution.regionRight},
-                    {"bottom", request.resolution.regionBottom}}},
-                {"model_confidence", request.resolution.modelConfidence},
-                {"resolved_name", request.resolution.resolvedName},
+            entry["vision_resolution"] = {{"model_target", request.resolution.modelTarget},
+                {"model_region", {{"left", request.resolution.regionLeft}, {"top", request.resolution.regionTop},
+                                     {"right", request.resolution.regionRight}, {"bottom", request.resolution.regionBottom}}},
+                {"model_confidence", request.resolution.modelConfidence}, {"resolved_name", request.resolution.resolvedName},
                 {"resolved_automation_id", request.resolution.resolvedAutomationId},
                 {"resolved_runtime_id", request.resolution.resolvedRuntimeId},
                 {"resolved_control_type", request.resolution.resolvedControlType},
-                {"resolved_bounds", {
-                    {"left", request.resolution.boundsLeft},
-                    {"top", request.resolution.boundsTop},
-                    {"right", request.resolution.boundsRight},
-                    {"bottom", request.resolution.boundsBottom}}},
-                {"spatial_agreement", request.resolution.spatialAgreement},
-                {"name_agreement", request.resolution.nameAgreement},
-                {"match_confidence", request.resolution.matchConfidence}
-            };
+                {"resolved_bounds", {{"left", request.resolution.boundsLeft}, {"top", request.resolution.boundsTop},
+                                        {"right", request.resolution.boundsRight}, {"bottom", request.resolution.boundsBottom}}},
+                {"spatial_agreement", request.resolution.spatialAgreement}, {"name_agreement", request.resolution.nameAgreement},
+                {"match_confidence", request.resolution.matchConfidence}};
         }
-        // Written only if the previous append was interrupted. It marks the torn record
-        // unknown rather than failed: an interrupted write says nothing about whether
-        // the executor ran, which is precisely why it must not be replayed.
-        const nlohmann::json recovery = {
-            {"record_type", "recovery"},
-            {"timestamp", UtcTimestamp()},
-            {"observed_by_transaction", transactionId},
-            {"result", "The preceding record was written incompletely. Its outcome is "
-                "unknown: it was terminated, not completed, and must not be replayed."}
-        };
-        return AppendDurably(path, entry.dump() + '\n', recovery.dump() + '\n');
+        const auto eventId = transactionId.empty() ? NewJournalEventId() : transactionId + ":" + recordType;
+        const auto kind = std::string_view(recordType) == "intent" ? JournalKind::Intent : JournalKind::Result;
+        std::optional<core::EvidenceRef> reference;
+        if (scope)
+        {
+            core::EvidenceRef captured;
+            captured.id = eventId;
+            captured.sourceLocator = actions::PathToUtf8(path) + "#" + eventId;
+            auto redacted = entry;
+            redacted.erase("timestamp");
+            captured.digest = ContentDigest(redacted.dump());
+            captured.mediaType = "application/json";
+            captured.observedAtUnixMs = static_cast<std::uint64_t>(
+                std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count());
+            captured.sourceId = "host:action-audit";
+            captured.stamp = request.authorityStamp;
+            captured.scope = *scope;
+            if (!core::ValidateEvidenceRef(captured))
+                return false;
+            reference = std::move(captured);
+        }
+        return journal->AppendActionRecord(entry.dump(), eventId, kind, transactionId, reference).Durable();
     }
     catch (const std::exception&)
     {
