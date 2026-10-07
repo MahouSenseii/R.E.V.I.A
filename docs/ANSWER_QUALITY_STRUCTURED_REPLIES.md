@@ -42,7 +42,7 @@ rejected or unavailable samples cannot carry accepted answer/personality claims.
 
 | Role | Assigned area | Status |
 |---|---|---|
-| Director / integration | Provider contract, bounded intent detector, native build, live evidence and main integration | Native and fresh verification accepted; integration pending |
+| Director / integration | Provider contract, bounded intent detector, native build, live evidence and main integration | Delivered on main and GitHub; native and fresh evidence verified |
 | Pipeline worker | Shared style/hard-filter preservation and security regression checks | Native regression and integrated checks passed |
 | Evaluation worker | Honest raw/final diagnostics and authoritative report serialization | Native regression and integrated checks passed |
 | Independent validation author | New 24-case / 72-slot set and six personality control conversations | Frozen; independent evidence audit passed |

@@ -103,3 +103,13 @@ pipeline evidence directory. The runnable desktop and live evaluator were
 preserved at `build/answer-quality-d3c21b1` in the owner's primary checkout,
 with matching Qt dependencies, Config and Tools. Existing owner edits and user
 data are excluded from this delivery.
+
+## Integration
+
+The accepted source and results were fast-forwarded to main and pushed to GitHub;
+the matching remote head was verified at `e1078f9a46f8590969730327c398c3a9c21387bd`.
+Three post-merge format/pipeline checks passed in 0.85 seconds against binaries
+whose implementation is identical to the merged tracked source. Later reporting
+commits change documentation only. Existing owner IDE files and the exact local
+CMake edit delta remain unstaged and uncommitted. The scoped worktree is archived
+after preserving its needed binaries and evidence, then its merged branch is removed.
