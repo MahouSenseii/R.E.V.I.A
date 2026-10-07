@@ -355,11 +355,16 @@ ReviaSession::ReviaSession(CompanionPaths paths, std::shared_ptr<policy::Compani
         [this](std::function<bool()> admission, const std::stop_token stopToken)
         {
             RuntimeStamp captured = Stamp();
+            std::shared_ptr<const core::TaskContract> contract;
+            {
+                const std::lock_guard lock(taskContractMutex);
+                contract = foregroundTaskContract;
+            }
             captured.attemptId = "conversation-investigation-" +
                                  audit::ContentDigest(std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
-            return [this, captured, admission = std::move(admission), stopToken](
+            return [this, captured, contract, admission = std::move(admission), stopToken](
                        const agents::CheckKind kind, const std::string& proposal, const std::string&)
-            { return ExecuteInvestigationCheck(actionRuntime, captured, kind, proposal, stopToken, admission); };
+            { return ExecuteInvestigationCheck(actionRuntime, captured, kind, proposal, stopToken, admission, contract); };
         });
     turnCoordinator.SetAdmissionGuard([this, origin]() { return sessionIdentity.IsCurrent(origin); });
     appLogger.SetSink(

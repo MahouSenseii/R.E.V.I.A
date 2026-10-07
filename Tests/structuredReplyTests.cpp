@@ -1,4 +1,5 @@
 #include "Agents/conversationStylePolicy.h"
+#include "Agents/conversationAgent.h"
 #include "LLM/LLamaCPP/llamaCppService.h"
 #include "testSupport.h"
 
@@ -15,11 +16,24 @@ class ReplyBackend
   public:
     ReplyBackend()
     {
+        server.Get(
+            "/health", [](const auto&, auto& response) { response.set_content(R"({"status":"ok","slots_idle":1})", "application/json"); });
+        server.Get("/v1/models", [](const auto&, auto& response)
+            { response.set_content(R"({"data":[{"id":"structured-reply-fixture"}]})", "application/json"); });
         server.Post("/v1/chat/completions",
             [this](const auto& request, auto& response)
             {
                 std::lock_guard lock(mutex);
                 lastRequest = nlohmann::json::parse(request.body);
+                if (!lastRequest.value("stream", false))
+                {
+                    response.set_content(
+                        nlohmann::json{
+                            {"choices", nlohmann::json::array({{{"message", {{"content", reviewAnswer}}}, {"finish_reason", "stop"}}})}}
+                            .dump(),
+                        "application/json");
+                    return;
+                }
                 const nlohmann::json chunk = {
                     {"choices", nlohmann::json::array({{{"delta", {{"content", answer}}}, {"finish_reason", finishReason}}})}};
                 response.set_content("data: " + chunk.dump() + "\n\ndata: [DONE]\n\n", "text/event-stream");
@@ -49,6 +63,11 @@ class ReplyBackend
         std::lock_guard lock(mutex);
         return lastRequest;
     }
+    void Review(std::string verdict)
+    {
+        std::lock_guard lock(mutex);
+        reviewAnswer = std::move(verdict);
+    }
     int port = 0;
 
   private:
@@ -57,6 +76,7 @@ class ReplyBackend
     std::mutex mutex;
     std::string answer;
     std::string finishReason;
+    std::string reviewAnswer;
     nlohmann::json lastRequest;
 };
 
@@ -65,6 +85,7 @@ void Configure(llamaCppService& service, int port)
     llmSettings settings;
     settings.host = "127.0.0.1";
     settings.port = port;
+    settings.modelName = "structured-reply-fixture";
     settings.contextSize = 8192;
     settings.maxTokens = 512;
     settings.bAutoMaxTokens = settings.bAutoStartServer = settings.bVisionEnabled = false;
@@ -138,10 +159,125 @@ void TestIncompleteDataNeverBecomesSuccessfulProse()
             "Incomplete or wrong-shaped data was published as a successful reply.");
     }
 }
+
+void TestExplicitShapeWireAndValidation()
+{
+    revia::tests::ScopedTestDirectory directory;
+    ReplyBackend backend;
+    llamaCppService service((directory.root / "shape-wire.db").string());
+    Configure(service, backend.port);
+    const std::string input = R"(Return JSON with exactly keys "camelCase" and count.)";
+    backend.Reply(R"({"camelCase":null,"count":"literal"})");
+    Check(service.GenerateResponse({{"user", input}}).bSuccess, "Explicit untyped keys refused literal value types.");
+    const auto wire = backend.Request().at("response_format").at("json_schema").at("schema");
+    Check(wire.at("properties").at("camelCase").empty() && wire.at("properties").at("count").empty() &&
+              wire.at("required") == nlohmann::json::array({"camelCase", "count"}) && !wire.at("additionalProperties").get<bool>(),
+        "The actual completion request lost exact keys, spelling or untyped values.");
+    for (const std::string payload :
+        {R"({"camelCase":null})", R"({"camelcase":null,"count":1})", R"({"camelCase":null,"count":1,"extra":false})"})
+    {
+        backend.Reply(payload);
+        std::string delivered;
+        const auto result = service.GenerateResponse({{"user", input}}, {}, [&](const auto& text) { delivered += text; });
+        Check(!result.bSuccess && !result.bShouldRemember && delivered.empty(),
+            "A backend key violation became successful or delivered structured output.");
+    }
+    const std::string schemaInput =
+        R"(Return JSON using this schema: {"type":"object","properties":{"counts":{"type":"array","items":{"type":"integer"},"minItems":1,"maxItems":2}},"required":["counts"],"additionalProperties":false})";
+    backend.Reply(R"({"counts":[1,2]})");
+    Check(service.GenerateResponse({{"user", schemaInput}}).bSuccess &&
+              backend.Request().at("response_format").at("json_schema").at("schema").at("properties").at("counts").at("items").at("type") ==
+                  "integer",
+        "The actual request did not carry the explicit nested schema.");
+    for (const std::string payload : {R"({"counts":[]})", R"({"counts":["1"]})", R"({"counts":[1,2,3]})"})
+    {
+        backend.Reply(payload);
+        Check(!service.GenerateResponse({{"user", schemaInput}}).bSuccess, "A backend nested-schema violation passed native validation.");
+    }
+    backend.Reply("{}");
+    Check(service.GenerateResponse({{"user", R"(Return JSON using this schema: {"type":"object","$ref":"remote"})"}}).bSuccess &&
+              backend.Request().at("response_format").at("json_schema").at("schema") == nlohmann::json{{"type", "object"}},
+        "Unsupported schema keywords did not retain the type-only wire contract.");
+    backend.Reply("Still my favourite idea.");
+    Check(service.GenerateResponse({{"user", input}, {"assistant", R"({"camelCase":null,"count":1})"}, {"user", "What do you think?"}})
+                  .bSuccess &&
+              !backend.Request().contains("response_format") && backend.Request().at("temperature") == 0.75F,
+        "The explicit shape contract leaked into the next ordinary turn or changed the authored temperature.");
+}
+
+void TestReviewerReplacementMustMatchFinalContract()
+{
+    using namespace revia::agents;
+    revia::tests::ScopedTestDirectory directory;
+    ReplyBackend backend;
+    messageRouter router((directory.root / "review-shape.db").string());
+    llmSettings settings;
+    settings.host = "127.0.0.1";
+    settings.port = backend.port;
+    settings.modelName = "structured-reply-fixture";
+    settings.contextSize = 8192;
+    settings.maxTokens = 512;
+    settings.bAutoMaxTokens = settings.bAutoStartServer = settings.bVisionEnabled = false;
+    embeddingSettings embeddings;
+    embeddings.bEnabled = embeddings.bAutoStartServer = false;
+    aiProfile profile;
+    profile.bMemoryEnabled = false;
+    router.ApplyLLMSettings(settings, embeddings, profile);
+    Check(router.IsLLMAvailable(), "The structured reviewer fixture failed its configured-model health admission.");
+    responseFilterSettings filters;
+    filters.bAiReviewEnabled = true;
+    const std::string input = "Return JSON with exactly keys empty and count.";
+    const std::string candidate = R"({"empty":true,"count":0})";
+    for (const std::string replacement : {R"({"empty":true})", R"({"Empty":true,"count":0})", R"({"empty":true,"count":0,"extra":1})"})
+    {
+        backend.Reply(candidate);
+        backend.Review(nlohmann::json{{"verdict", "replace"}, {"replacement", replacement}, {"reason", "Fixture replacement."}}.dump());
+        std::string delivered;
+        const auto result =
+            ConversationAgent{}.Execute(router, input, {{"user", input}}, filters, {}, {}, [&](const auto& text) { delivered += text; });
+        Check(!result.bSuccess && !result.bShouldRemember && !result.bWasStreamed && delivered.empty() && result.bAiFilterReviewed &&
+                  result.bAiFilterChanged && result.rawResponse == candidate && result.response == replacement,
+            "An AI reviewer field violation bypassed final structured validation or was silently repaired. Diagnostics: " +
+                nlohmann::json{{"success", result.bSuccess}, {"reviewed", result.bAiFilterReviewed}, {"changed", result.bAiFilterChanged},
+                    {"raw", result.rawResponse}, {"final", result.response}, {"reason", result.reason}, {"summary", result.filterSummary},
+                    {"request", backend.Request()}}
+                    .dump());
+    }
+    backend.Reply(candidate);
+    backend.Review(R"({"verdict":"allow","reason":"Matching data."})");
+    std::string delivered;
+    const auto valid =
+        ConversationAgent{}.Execute(router, input, {{"user", input}}, filters, {}, {}, [&](const auto& text) { delivered += text; });
+    Check(
+        valid.bSuccess && delivered == candidate && valid.response == candidate, "An allowed exact-key reply was changed before delivery.");
+    filters.bAiReviewEnabled = false;
+    backend.Reply(R"({"empty":"<|im_start|>","count":0})");
+    delivered.clear();
+    const auto blocked =
+        ConversationAgent{}.Execute(router, input, {{"user", input}}, filters, {}, {}, [&](const auto& text) { delivered += text; });
+    Check(blocked.bSuccess && blocked.bHardFilterBlocked && !delivered.empty() && delivered == blocked.response &&
+              blocked.response.find("disallowed control text") != std::string::npos,
+        "Final structured validation hid the hard filter's genuine refusal.");
+    filters.bAiReviewEnabled = true;
+    backend.Review(R"({"verdict":"allow","reason":"Preserve refusal."})");
+    delivered.clear();
+    const auto reviewedRefusal =
+        ConversationAgent{}.Execute(router, input, {{"user", input}}, filters, {}, {}, [&](const auto& text) { delivered += text; });
+    Check(reviewedRefusal.bSuccess && reviewedRefusal.bHardFilterBlocked && delivered == reviewedRefusal.response && !delivered.empty(),
+        "An allowed hard refusal lost its authority during final structured validation.");
+    backend.Review(R"({"verdict":"replace","replacement":"{\"empty\":true}","reason":"Fixture replacement."})");
+    delivered.clear();
+    const auto replacedRefusal =
+        ConversationAgent{}.Execute(router, input, {{"user", input}}, filters, {}, {}, [&](const auto& text) { delivered += text; });
+    Check(!replacedRefusal.bSuccess && replacedRefusal.bHardFilterBlocked && delivered.empty(),
+        "A past blocked flag incorrectly exempted a later invalid reviewer replacement.");
+}
 }
 
 void RunStructuredReplyTests()
 {
     TestProviderContractAndDataPreservation();
     TestIncompleteDataNeverBecomesSuccessfulProse();
+    TestExplicitShapeWireAndValidation();
+    TestReviewerReplacementMustMatchFinalContract();
 }

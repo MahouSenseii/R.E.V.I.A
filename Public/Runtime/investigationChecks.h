@@ -2,8 +2,10 @@
 
 #include "Agents/investigationAgent.h"
 #include "Runtime/runtimeStamp.h"
+#include "Core/taskContract.h"
 
 #include <functional>
+#include <memory>
 #include <stop_token>
 #include <string>
 
@@ -16,6 +18,7 @@ namespace revia::runtime
 {
 
 [[nodiscard]] agents::ExecutedCheck ExecuteInvestigationCheck(actions::ActionRuntime& runtime, const RuntimeStamp& origin,
-    agents::CheckKind kind, const std::string& proposalJson, std::stop_token stopToken, const std::function<bool()>& admission);
+    agents::CheckKind kind, const std::string& proposalJson, std::stop_token stopToken, const std::function<bool()>& admission,
+    const std::shared_ptr<const core::TaskContract>& contract = {});
 
 }

@@ -5,6 +5,7 @@
 #include "LLM/responseTypes.h"
 #include "Core/utf8.h"
 #include "Runtime/conversationRuntime.h"
+#include "Agents/calculationGrounding.h"
 
 #include "Identity/promptMarkers.h"
 
@@ -807,6 +808,17 @@ agents::ResponseFilterContext ConversationRuntime::BuildResponseFilterContext(
     return contextFacts;
 }
 
+std::string ConversationRuntime::BuildArithmeticGrounding(const std::string& input,
+    const std::vector<conversationMessage>& promptContext, const std::stop_token stopToken, const std::function<bool()>& admission) const
+{
+    const auto proposer = [this](const std::string& envelope, const std::stop_token token)
+    {
+        const auto proposed = router.ProposeCalculation(envelope, token);
+        return proposed.bSuccess ? proposed.response : std::string{};
+    };
+    return agents::BuildCalculationGrounding(input, promptContext, proposer, stopToken, admission).promptBlock;
+}
+
 evaluation::EvaluationReply ConversationRuntime::EvaluateTurn(const std::string& input, const std::vector<conversationMessage>& priorTurns,
     const aiProfile& profile, const bool llmAvailable, const std::stop_token stopToken)
 {
@@ -814,7 +826,14 @@ evaluation::EvaluationReply ConversationRuntime::EvaluateTurn(const std::string&
     // measures the corpus and not whatever the user happened to say beforehand.
     std::vector<conversationMessage> promptContext = priorTurns;
     promptContext.push_back({"user", input});
-    router.SetPosture(BuildTurnPosture(input, promptContext, profile, llmAvailable, {}));
+    std::string posture = BuildTurnPosture(input, promptContext, profile, llmAvailable, {});
+    if (llmAvailable)
+    {
+        const auto arithmetic = BuildArithmeticGrounding(input, promptContext, stopToken);
+        if (!arithmetic.empty())
+            posture += "\n\n" + arithmetic;
+    }
+    router.SetPosture(std::move(posture));
 
     // The same builder the live turn uses, so an evaluation run measures the routing
     // the runtime really performs rather than a second assembly of the same fields.
@@ -1291,6 +1310,13 @@ SessionResult ConversationRuntime::Generate(const std::string& policyInput, cons
         }
         std::ostringstream postureLine;
         postureLine << basePosture;
+        std::string arithmetic;
+        if (!turnPolicy.publicAudience && llmAvailable && !reflex.matched)
+        {
+            arithmetic = BuildArithmeticGrounding(policyInput, promptContext, stopToken, admitted);
+            if (!arithmetic.empty())
+                postureLine << "\n\n" << arithmetic;
+        }
         if (const std::string inquiryBlock = inquiry.PromptBlock(); !inquiryBlock.empty())
         {
             postureLine << "\n\n" << inquiryBlock;
@@ -1349,7 +1375,13 @@ SessionResult ConversationRuntime::Generate(const std::string& policyInput, cons
         if (!admitted())
             return revoked();
         router.SetPosture(postureLine.str());
-        router.SetReplyNote(inquiry.ReplyNote());
+        std::string replyNote = inquiry.ReplyNote();
+        if (!arithmetic.empty())
+        {
+            replyNote += "\nNative arithmetic observations above outrank contradictory unaided arithmetic in earlier thoughts. "
+                         "The mapping from the question to each expression remains unverified; check that mapping before using a result.";
+        }
+        router.SetReplyNote(std::move(replyNote));
     }
     else
     {

@@ -58,6 +58,7 @@ class CompanionAuthority
     [[nodiscard]] bool Revoke(const std::string& id);
     void SetEmergencyStopped(const std::string& companionId, bool stopped);
     [[nodiscard]] std::uint64_t Revision() const;
+    [[nodiscard]] bool IsActive(const runtime::RuntimeStamp& stamp) const;
     [[nodiscard]] std::string Evaluate(const runtime::RuntimeStamp& stamp, const actions::ActionRequest& request,
         const actions::PolicyDecision& canonicalDecision, const std::string& effectResource = {}) const;
 

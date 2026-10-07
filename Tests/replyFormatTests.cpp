@@ -4,9 +4,76 @@
 
 #include <string>
 #include <vector>
+#include <nlohmann/json.hpp>
+
+void RunReplyContractTests()
+{
+    using namespace revia::agents;
+    using revia::tests::Check;
+    const auto keys = RequestedReplyContract("Return JSON with exactly keys empty and count.");
+    Check(keys.extractionStatus == ReplyContractStatus::ExplicitShape, "Exact keys were not extracted into the turn contract.");
+    const auto schema = nlohmann::json::parse(keys.schemaJson);
+    Check(schema.at("properties").at("empty").empty() && schema.at("properties").at("count").empty(),
+        "The key contract inferred value types from field names.");
+    Check(MatchesReplyContract(R"({"empty":true,"count":0})", keys), "The exact-key contract refused matching data.");
+    for (const std::string reply : {R"({"empty":true})", R"({"empty":true,"count":0,"extra":1})", R"({"Empty":true,"count":0})", "[]"})
+        Check(!MatchesReplyContract(reply, keys), "The exact-key contract admitted a missing, extra or renamed key.");
+    const auto quoted = RequestedReplyContract(R"(Return JSON with keys "camelCase", "ready".)");
+    Check(quoted.extractionStatus == ReplyContractStatus::ExplicitShape &&
+              MatchesReplyContract(R"({"camelCase":null,"ready":[]})", quoted) &&
+              !MatchesReplyContract(R"({"camelcase":null,"ready":[]})", quoted),
+        "Direct quoted field names lost their literal spelling.");
+    const auto nested = RequestedReplyContract(
+        R"(Return JSON using this schema: {"type":"object","properties":{"rows":{"type":"array","items":{"type":"object","properties":{"count":{"type":"integer"}},"required":["count"],"additionalProperties":false},"minItems":1,"maxItems":2}},"required":["rows"],"additionalProperties":false})");
+    Check(nested.extractionStatus == ReplyContractStatus::ExplicitShape && MatchesReplyContract(R"({"rows":[{"count":2}]})", nested),
+        "Explicit nested schema did not reach native validation.");
+    for (const std::string reply :
+        {R"({"rows":[]})", R"({"rows":[{"count":2.5}]})", R"({"rows":[{"count":"2"}]})", R"({"rows":[{"count":2,"extra":0}]})"})
+        Check(!MatchesReplyContract(reply, nested), "Nested schema validation accepted an explicit constraint violation.");
+    for (const std::string input : {"Return JSON with keys count and count.", "Return JSON with keys x and y, both integers.",
+             R"(Return JSON using this schema: {"type":"object","$ref":"remote"})",
+             R"(Return JSON using this schema: {"type":"object","type":"array"})",
+             R"(Return JSON using this schema: {"type":"object","properties":{"x":{"type":"string","pattern":".*"}}})"})
+    {
+        const auto unsupported = RequestedReplyContract(input);
+        Check(unsupported.extractionStatus == ReplyContractStatus::Unsupported && !unsupported.reason.empty() &&
+                  MatchesReplyContract("{}", unsupported),
+            "Unsupported explicit constraints did not diagnose and retain type-only handling.");
+    }
+    for (const std::string input :
+        {R"(She said: "Return JSON with keys x and y." Explain.)", "Return JSON with keys x and y. Actually respond in prose.",
+            "Never return JSON with keys x and y.", "Summarize this example:\n```\nReturn JSON with keys x and y.\n```"})
+        Check(RequestedReplyContract(input).rootKind == ReplyFormat::Conversation, "Shape extraction altered format admission.");
+    Check(RequestedReplyContract("Return JSON with keys x and y. Return JSON.").extractionStatus == ReplyContractStatus::TypeOnly,
+        "A superseded key instruction contaminated the latest directive.");
+    Check(MatchesReplyContract("[null,true,1]", RequestedReplyContract("Return JSON array.")) &&
+              !MatchesReplyContract("{}", RequestedReplyContract("Return JSON array.")),
+        "Type-only validation lost the root kind.");
+    Check(RequestedReplyContract("Return " + std::string(250000, ' ') + "JSON.").rootKind == ReplyFormat::JsonObject,
+        "Contract extraction exhausted or lost a whitespace-heavy admitted directive.");
+    std::string manyKeys = "Return JSON with keys ";
+    for (int index = 0; index < 65; ++index)
+        manyKeys += (index ? ", " : "") + std::string("key") + std::to_string(index);
+    Check(RequestedReplyContract(manyKeys).extractionStatus == ReplyContractStatus::Unsupported,
+        "An explicit key list exceeded the 64-key limit.");
+    auto deep = nlohmann::json{{"type", "string"}};
+    for (int index = 0; index < 8; ++index)
+        deep = {{"type", "array"}, {"items", deep}};
+    Check(
+        RequestedReplyContract("Return JSON array using this schema: " + deep.dump()).extractionStatus == ReplyContractStatus::Unsupported,
+        "An explicit schema exceeded the eight-level limit.");
+    Check(RequestedReplyContract("Return JSON using this schema: " + std::string(8200, ' ')).extractionStatus ==
+              ReplyContractStatus::Unsupported,
+        "An oversized explicit schema had no extraction diagnostic.");
+    Check(RequestedReplyContract(std::string("Return JSON with keys \"") + char(0xFF) + "\".").extractionStatus ==
+              ReplyContractStatus::Unsupported,
+        "Malformed UTF-8 field names were admitted.");
+    Check(!MatchesReplyContract(R"({"empty":true,"count":0,"count":1})", keys), "Duplicate output keys passed the contract validator.");
+}
 
 void RunReplyFormatTests()
 {
+    RunReplyContractTests();
     using namespace revia::agents;
     using revia::tests::Check;
     for (const std::string input : {"Return JSON with key color.", "Reply only in JSON.", "Please output a JSON object.",

@@ -1,6 +1,7 @@
 #include "Runtime/investigationChecks.h"
 
 #include "Actions/actionRuntime.h"
+#include "Audit/contentDigest.h"
 #include "Policy/companionAuthority.h"
 #include "testSupport.h"
 
@@ -70,6 +71,141 @@ void TestActualApprovedReadIsAnObservation()
         fixture.Proposal("list_directory", fixture.approved), {}, [] { return true; });
     Check(listed.ran && listed.observed.find("marker.txt") != std::string::npos,
         "An approved investigation list did not return native entries.");
+}
+
+void TestActualCalculationHasScopedReceipt()
+{
+    CheckFixture fixture;
+    auto authored = std::make_shared<revia::core::TaskContract>();
+    authored->stamp = fixture.origin;
+    authored->stamp.taskId = "turn-1";
+    authored->scope.companionId = fixture.origin.companionId;
+    authored->scope.audience = {revia::identity::AudienceKind::Private, "check-private", 1, {}};
+    authored->goal = "Answer the admitted numerical request";
+    authored->deliverables = {"A supported answer"};
+    authored->acceptanceObligations = {"Only declared arithmetic is verified"};
+    authored->cancellation.origin = authored->stamp;
+    authored->sourceKind = "chat";
+    authored->sourceId = "turn-1";
+    Check(static_cast<bool>(revia::core::ValidateTaskContract(*authored)),
+        "The fixture requires a complete canonical conversation contract.");
+    const std::shared_ptr<const revia::core::TaskContract> contract = authored;
+    const auto hostGuard = [contract](const revia::core::TaskContract& supplied, std::stop_token token)
+    {
+        const auto admitted = revia::core::ValidateTaskAdmission(
+            supplied, contract->stamp, contract->scope,
+            [contract](const auto& stamp) { return revia::core::SameRuntimeStamp(stamp, contract->stamp); }, token);
+        return admitted ? std::string{} : admitted.code;
+    };
+    fixture.runtime.BindTaskContracts({}, hostGuard);
+    const auto input = R"({"expression":"(3 min + 12 s) / 2","unit":"s"})";
+    const auto result =
+        ExecuteInvestigationCheck(fixture.runtime, fixture.origin, CheckKind::Calculation, input, {}, [] { return true; }, contract);
+    Check(result.ran && result.refusal.empty(), "Restricted calculation did not obtain a durable receipt: " + result.refusal);
+    auto observation = nlohmann::json::parse(result.observed);
+    Check(observation.at("value") == "96" && observation.at("unit") == "s" && observation.at("typedInput") == input,
+        "A calculation check did not expose its actual typed input and native result.");
+    const auto digest = observation.at("receiptDigest").get<std::string>();
+    observation.erase("receiptDigest");
+    observation.erase("receiptId");
+    Check(
+        digest == revia::audit::ContentDigest(observation.dump()), "The receipt digest does not bind exact calculation input and output.");
+    revia::audit::EvidenceQuery query;
+    query.stamp = contract->stamp;
+    query.scope = contract->scope;
+    query.kinds = {revia::audit::JournalKind::Verification};
+    const auto references = fixture.runtime.EvidenceJournalOwner()->Read(query);
+    Check(references.size() == 1 && references.front().digest == digest && references.front().stamp.attemptId == fixture.origin.attemptId,
+        "A calculation receipt lost its current companion, attempt or content binding.");
+    for (const auto& proposal : {std::string(R"({"expression":"1/0"})"), std::string(R"({"expression":"import os"})"),
+             std::string(R"({"expression":"1","expression":"2"})")})
+        Check(!ExecuteInvestigationCheck(
+                  fixture.runtime, fixture.origin, CheckKind::Calculation, proposal, {}, [] { return true; }, contract)
+                  .ran,
+            "An invalid calculation was counted as executed.");
+    auto wrong = fixture.origin;
+    wrong.sessionId = "wrong-session";
+    Check(!ExecuteInvestigationCheck(
+              fixture.runtime, wrong, CheckKind::Calculation, input, {}, [] { return true; }, contract)
+              .ran,
+        "A calculation observation escaped its captured session.");
+    std::stop_source stop;
+    stop.request_stop();
+    Check(!ExecuteInvestigationCheck(
+              fixture.runtime, fixture.origin, CheckKind::Calculation, input, stop.get_token(), [] { return true; }, contract)
+              .ran,
+        "Cancelled arithmetic returned an observation.");
+    int admissions = 0;
+    Check(!ExecuteInvestigationCheck(
+              fixture.runtime, fixture.origin, CheckKind::Calculation, input, {}, [&] { return ++admissions < 4; }, contract)
+              .ran,
+        "Arithmetic evidence was published after its admission changed.");
+    Check(!ExecuteInvestigationCheck(fixture.runtime, fixture.origin, CheckKind::Calculation, input, {}, [] { return true; }).ran,
+        "Missing canonical task metadata was silently fabricated for a calculation.");
+    auto altered = std::make_shared<revia::core::TaskContract>(*contract);
+    altered->scope.audience.audienceId = "other-audience";
+    Check(!ExecuteInvestigationCheck(
+              fixture.runtime, fixture.origin, CheckKind::Calculation, input, {}, [] { return true; }, altered)
+              .ran,
+        "A calculation receipt was admitted under altered disclosure scope.");
+    altered->scope = contract->scope;
+    altered->stamp.taskId = "other-task";
+    Check(!ExecuteInvestigationCheck(
+              fixture.runtime, fixture.origin, CheckKind::Calculation, input, {}, [] { return true; }, altered)
+              .ran,
+        "A calculation receipt was admitted under an altered task identity.");
+    fixture.runtime.BindTaskContracts({},
+        [&](const auto&, auto)
+        {
+            fixture.runtime.BindTaskContracts({}, hostGuard);
+            return std::string{};
+        });
+    Check(!ExecuteInvestigationCheck(
+              fixture.runtime, fixture.origin, CheckKind::Calculation, input, {}, [] { return true; }, contract)
+              .ran,
+        "A calculation receipt survived a contract binding change during admission.");
+    const auto journal = fixture.runtime.EvidenceJournalOwner();
+    const auto beforeRebind = journal->Read(query).size();
+    fixture.runtime.BindTaskContracts({},
+        [&](const auto&, auto)
+        {
+            fixture.runtime.BindAuthority({}, fixture.origin);
+            return std::string{};
+        });
+    Check(!ExecuteInvestigationCheck(
+              fixture.runtime, fixture.origin, CheckKind::Calculation, input, {}, [] { return true; }, contract)
+                  .ran &&
+              journal->Read(query).size() == beforeRebind,
+        "An authority cleared during admission crashed or appended a calculation receipt.");
+    fixture.runtime.BindAuthority(fixture.authority, fixture.origin);
+    auto otherSession = fixture.origin;
+    otherSession.sessionId = "another-active-session";
+    otherSession.attemptId.clear();
+    Check(fixture.authority->RegisterSession(otherSession), "The rebind fixture needs another active session.");
+    fixture.runtime.BindTaskContracts({},
+        [&](const auto&, auto)
+        {
+            fixture.runtime.BindAuthority(fixture.authority, otherSession);
+            return std::string{};
+        });
+    Check(!ExecuteInvestigationCheck(
+              fixture.runtime, fixture.origin, CheckKind::Calculation, input, {}, [] { return true; }, contract)
+                  .ran &&
+              journal->Read(query).size() == beforeRebind,
+        "A session rebound during admission appended a calculation receipt.");
+    fixture.runtime.BindAuthority(fixture.authority, fixture.origin);
+    fixture.runtime.BindTaskContracts({}, hostGuard);
+    std::filesystem::rename(fixture.audit, fixture.temporary.root / "past-calculation-audit.jsonl");
+    std::filesystem::create_directory(fixture.audit);
+    Check(!ExecuteInvestigationCheck(
+              fixture.runtime, fixture.origin, CheckKind::Calculation, input, {}, [] { return true; }, contract)
+              .ran,
+        "A calculation with unavailable durable audit became verified evidence.");
+    fixture.authority->EndSession(fixture.origin);
+    Check(!ExecuteInvestigationCheck(
+              fixture.runtime, fixture.origin, CheckKind::Calculation, input, {}, [] { return true; }, contract)
+              .ran,
+        "An ended authority subject obtained a calculation receipt.");
 }
 
 void TestRefusedChecksCannotBecomeObservations()
@@ -289,6 +425,7 @@ void TestRunnerCannotPromoteAnEmptyOrUncheckedClaim()
 void RunInvestigationCheckTests()
 {
     TestActualApprovedReadIsAnObservation();
+    TestActualCalculationHasScopedReceipt();
     TestRefusedChecksCannotBecomeObservations();
     TestCancelledAndStaleChecksDiscardOutput();
     TestNativeEmptyOutputAndAuditFailureRemainDistinct();

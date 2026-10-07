@@ -245,6 +245,8 @@ private:
         std::uint64_t audienceRevision);
     [[nodiscard]] agents::ResponseFilterContext BuildResponseFilterContext(const std::string& policyInput,
         const std::vector<conversationMessage>& promptContext) const;
+    [[nodiscard]] std::string BuildArithmeticGrounding(const std::string& input, const std::vector<conversationMessage>& promptContext,
+        std::stop_token stopToken, const std::function<bool()>& admission = {}) const;
     SessionResult Generate(const std::string& policyInput, const std::vector<conversationMessage>& promptContext, const aiProfile& profile,
         bool llmAvailable, bool shouldSpeak, bool evaluateMemory, bool proactive, const std::string& proactiveInstruction,
         const std::string& precomputedInternetGrounding, std::stop_token stopToken, const TurnPolicy& turnPolicy);

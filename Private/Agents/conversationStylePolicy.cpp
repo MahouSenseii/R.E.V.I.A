@@ -748,12 +748,17 @@ std::string ConversationStylePolicy::BuildTurnGuidance(const std::string& rawInp
     }
     if (unavailableHistory)
         guidance << " Unavailable private history is unknown; invent no contents or changes.";
-    const auto format = RequestedReplyFormat(rawInput);
+    const auto contract = RequestedReplyContract(rawInput);
+    const auto format = contract.rootKind;
     if (format != ReplyFormat::Conversation)
     {
         guidance << " Return exactly one complete JSON " << (format == ReplyFormat::JsonArray ? "array" : "object")
                  << ". Follow the requested keys, types and values. Preserve literal data, including spaces and repeated text. "
                     "Include no code fence, prose preamble, aside, vocalization or invented extra field.";
+        if (contract.extractionStatus == ReplyContractStatus::ExplicitShape)
+            guidance << " Apply this explicit turn-local schema: " << contract.schemaJson;
+        else if (contract.extractionStatus == ReplyContractStatus::Unsupported)
+            guidance << " Native shape extraction retained only the container constraint: " << contract.reason;
         if (!attributionGuidance.empty())
             guidance << '\n' << attributionGuidance;
         return guidance.str();

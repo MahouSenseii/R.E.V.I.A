@@ -291,6 +291,13 @@ std::uint64_t CompanionAuthority::Revision() const
     return revision;
 }
 
+bool CompanionAuthority::IsActive(const runtime::RuntimeStamp& stamp) const
+{
+    const std::lock_guard lock(mutex);
+    const auto stopped = emergencyStops.find(stamp.companionId);
+    return SubjectExists(stamp) && (stopped == emergencyStops.end() || !stopped->second);
+}
+
 std::string CompanionAuthority::Evaluate(const runtime::RuntimeStamp& stamp, const actions::ActionRequest& request,
     const actions::PolicyDecision& decision, const std::string& effectResource) const
 {

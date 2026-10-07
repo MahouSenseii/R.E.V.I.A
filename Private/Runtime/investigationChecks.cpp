@@ -2,6 +2,8 @@
 
 #include "Actions/actionRuntime.h"
 #include "Core/utf8.h"
+#include "Audit/contentDigest.h"
+#include "Evaluation/calculationVerifier.h"
 #include "Policy/capabilityPolicy.h"
 
 #include <algorithm>
@@ -28,16 +30,36 @@ bool Admitted(const std::function<bool()>& admission, const std::stop_token stop
 }
 
 agents::ExecutedCheck ExecuteInvestigationCheck(actions::ActionRuntime& runtime, const RuntimeStamp& origin, const agents::CheckKind kind,
-    const std::string& proposalJson, const std::stop_token stopToken, const std::function<bool()>& admission)
+    const std::string& proposalJson, const std::stop_token stopToken, const std::function<bool()>& admission,
+    const std::shared_ptr<const core::TaskContract>& contract)
 {
     const auto refuse = [](const char* reason) { return agents::ExecutedCheck{false, {}, {}, reason}; };
     if (!Admitted(admission, stopToken))
         return refuse("The captured investigation context is no longer admitted or was cancelled.");
+    if (kind == agents::CheckKind::Calculation)
+    {
+        if (!contract)
+            return refuse("The calculation has no captured admitted task contract.");
+        const auto calculated = evaluation::VerifyCalculation(proposalJson, stopToken);
+        if (!calculated.succeeded)
+            return {false, {}, {}, calculated.refusal};
+        if (!Admitted(admission, stopToken))
+            return refuse("The captured calculation was cancelled or revoked; its output was discarded.");
+        nlohmann::json observation = {{"typedInput", proposalJson}, {"expression", calculated.expression}, {"value", calculated.value},
+            {"unit", calculated.unit}, {"limitations", calculated.limitations}};
+        const auto reference =
+            runtime.RecordLocalVerificationFor(origin, *contract, audit::ContentDigest(observation.dump()), stopToken, admission);
+        if (!reference || !Admitted(admission, stopToken))
+            return refuse("The calculation has no durable current-context verification receipt; its output was discarded.");
+        observation["receiptId"] = reference->id;
+        observation["receiptDigest"] = reference->digest;
+        return {true, observation.dump(), calculated.limitations, {}};
+    }
     const bool fileState = kind == agents::CheckKind::FileOrApplicationState;
     if (!fileState && kind != agents::CheckKind::ResolvedConfiguration && kind != agents::CheckKind::SourceCode &&
         kind != agents::CheckKind::LogsAndMeasurements)
-        return refuse(
-            "This investigation adapter supports explicit file reads and directory lists only; the requested kind is unavailable.");
+        return refuse("This investigation adapter supports restricted arithmetic, explicit file reads and directory lists; the requested "
+                      "kind is unavailable.");
     if (proposalJson.empty() || proposalJson.size() > 8192 || !utf8::IsValid(proposalJson))
         return refuse("The check must supply one bounded explicit JSON read or list proposal.");
     actions::ActionRequest request;

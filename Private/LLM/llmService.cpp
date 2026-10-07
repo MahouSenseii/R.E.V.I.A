@@ -308,6 +308,17 @@ responseOutput llmService::Deliberate(const std::string& boundedInquiryPrompt, c
     return llamaCpp.Deliberate(boundedInquiryPrompt, stopToken);
 }
 
+responseOutput llmService::GenerateCalculationProposal(const std::string& envelope, const std::stop_token stopToken) const
+{
+    if (!bIsReady || backendType != llmBackendType::LLamaCpp || stopToken.stop_requested())
+    {
+        responseOutput output;
+        output.reason = "Arithmetic interpretation requires the active llama.cpp backend.";
+        return output;
+    }
+    return llamaCpp.GenerateCalculationProposal(envelope, stopToken);
+}
+
 responseOutput llmService::GenerateGoalPlan(const std::string& userRequest) const
 {
     if (!bIsReady)

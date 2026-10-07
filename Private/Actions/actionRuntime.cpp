@@ -186,6 +186,55 @@ std::shared_ptr<audit::EvidenceJournal> ActionRuntime::EvidenceJournalOwner() co
     return auditLogger ? auditLogger->Journal() : nullptr;
 }
 
+std::optional<core::EvidenceRef> ActionRuntime::RecordLocalVerificationFor(const runtime::RuntimeStamp& stamp,
+    const core::TaskContract& contract, const std::string& digest, const std::stop_token stopToken, const std::function<bool()>& admission)
+{
+    const std::lock_guard lock(mutex);
+    const auto bindingRevision = taskContractBindingRevision;
+    const auto guard = taskContractGuard;
+    const auto capturedAuthority = authority;
+    const auto current = [&]
+    {
+        if (stopToken.stop_requested() || !admission || !authority || !stamp.SameSession(sessionStamp) || !authority->IsActive(stamp) ||
+            !contract.stamp.SameSession(stamp) || !guard || bindingRevision != taskContractBindingRevision ||
+            !core::ValidateTaskContract(contract))
+            return false;
+        try
+        {
+            const bool admitted = admission() && guard(contract, stopToken).empty();
+            return admitted && !stopToken.stop_requested() && bindingRevision == taskContractBindingRevision &&
+                   authority == capturedAuthority && authority && stamp.SameSession(sessionStamp) && authority->IsActive(stamp);
+        }
+        catch (...)
+        {
+            return false;
+        }
+    };
+    if (!auditLogger || !current())
+        return std::nullopt;
+    core::EvidenceRef reference;
+    reference.id = audit::NewJournalEventId();
+    reference.sourceLocator = "verification:calculation/" + reference.id;
+    reference.sourceId = "restricted-native-arithmetic";
+    reference.digest = digest;
+    reference.mediaType = "application/json";
+    reference.stamp = contract.stamp;
+    reference.scope = contract.scope;
+    reference.observedAtUnixMs = static_cast<std::uint64_t>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count());
+    if (!core::ValidateEvidenceRef(reference))
+        return std::nullopt;
+    audit::JournalEvent event;
+    event.evidence = reference;
+    event.kind = audit::JournalKind::Verification;
+    event.transactionId = reference.id;
+    event.redactedSummary =
+        "Restricted native arithmetic verified only a declared operation; interpretation and premises remain unverified.";
+    if (!auditLogger->Journal()->Append(event).Durable() || !current())
+        return std::nullopt;
+    return reference;
+}
+
 ActionOutcome ActionRuntime::ExecuteFor(
     const runtime::RuntimeStamp& stamp, const ActionRequest& request, const bool confirmationGranted, const std::stop_token stopToken)
 {

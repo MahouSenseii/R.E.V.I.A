@@ -211,8 +211,14 @@ refused with an explanation. Structural completeness and exact evidence identity
 still require semantic review before parent acceptance.
 
 `Runtime/investigationChecks` implements the existing investigation executor with
-explicit JSON read/list proposals. Captured session and attempt authority flows
-through `ActionRuntime::ExecuteScopedFor`; cancellation and admission are checked
+restricted Calculation checks and explicit JSON read/list proposals. Calculation
+checks use `Evaluation/calculationVerifier`; `ActionRuntime::RecordLocalVerificationFor`
+binds the observation digest to the captured valid task contract, stamp and scope.
+The canonical `EvidenceJournal` must acknowledge a durable verification event,
+with cancellation, admission and current authority checked before and after the
+append, before the adapter releases the receipt ID and digest. Read/list checks
+carry captured session and attempt authority through `ActionRuntime::ExecuteScopedFor`;
+cancellation and admission are checked
 before and after the effect. Public turns have no executor. Native I/O retains
 the machine-configured ceiling; observations over 8,192 bytes, lists over 64
 entries and incomplete machine-capped results are refused. Native observations
@@ -917,12 +923,63 @@ controlled production traces and live personality review in addition to build/te
 
 ## Structured replies
 
-For requested structured replies, `Agents/replyFormat` supplies a bounded
-current-turn contract shared by conversation guidance and the llama.cpp provider.
-Validated JSON containers bypass presentation-only rewriting while retaining
-hard security and authority guards. `Evaluation` reports raw/final syntax,
-structure and value diagnostics separately without changing its strict oracle.
+`Agents/replyFormat` owns the turn-local `ReplyContract`: root container kind,
+serialized schema, extraction status and limit or unsupported-shape reason.
+Only an admitted current directive supplies constraints. Literal key names retain
+their spelling and key-only fields remain untyped; quoted speech, fenced examples,
+negation and superseded requests do not supply a new contract. Clearly introduced
+schemas admit a restricted subset of types, object properties and required fields,
+Boolean additional-properties policy, array items and item-count bounds. Extraction
+is limited to 64 property keys, eight schema levels and 8,192 schema bytes.
+Malformed, ambiguous or unsupported constraints retain type-only handling with
+diagnostics; no evaluation answer values enter the contract.
+
+`ConversationStylePolicy` uses this owner for turn guidance. The llama.cpp provider
+sends its schema through `response_format.json_schema.schema`, buffers structured
+deltas and validates the completed response against the contract. `ConversationAgent`
+validates again after style processing, optional AI review and the final hard pass,
+before delivering any final delta. Invalid structure fails generation and cannot be
+remembered; validation never fills, renames, drops or coerces fields. A retained
+hard-filter refusal keeps its authority and remains visible. A later reviewer
+replacement must satisfy the contract unless the final hard pass blocks it.
+Validated JSON containers bypass presentation-only rewriting while retaining hard
+security and authority guards. The authored profile, final-response temperature and
+ordinary conversational renderer retain their existing ownership. `Evaluation`
+reports raw/final syntax, structure and value diagnostics separately without
+changing its strict oracle.
 See [structured answer ownership and verification](ANSWER_QUALITY_STRUCTURED_REPLIES.md).
+
+## Restricted arithmetic grounding
+
+`Evaluation/calculationVerifier` is the pure native arithmetic owner shared by
+conversation grounding and the existing Calculation investigation adapter. It
+accepts bounded typed JSON containing an expression and optional unit, with decimal
+literals, unary signs, parentheses and addition, subtraction, multiplication and
+division. It uses finite double precision and a fixed scalar/time/length/mass unit
+table: seconds/minutes/hours, mm/cm/m/km and g/kg. Dimension checks, depth and
+operation budgets, overflow, zero division and cancellation bound the work. Names,
+code execution, external facts and composite units are unsupported. A successful
+result verifies only the declared operation, not its premises, measurements or
+real-world correctness.
+
+`Agents/calculationGrounding` owns the shared current-input numerical-request gate,
+literal-expression path and bounded model proposal of at most three calculations.
+Proposed source spans must match supplied current or recent user text; each admitted
+expression passes through the pure verifier. Word-problem mapping remains model
+interpretation, even when its arithmetic succeeds. `ConversationRuntime` calls the
+same helper before ordinary private replies and `EvaluateTurn`, then passes its
+observations to the existing final conversation generator. Small talk does not open
+the arithmetic path. Cancellation and live-turn admission are checked around
+proposal and verification; this work adds no capability authority.
+
+Ordinary/evaluation arithmetic observations are ephemeral prompt grounding, with
+current-input and observation digests and explicit interpretation limits. They are
+not canonical journal receipts or durable memory. Investigation Calculation checks
+instead require the contract/scope-guarded durable verification reference described
+above. Neither path patches the final answer or certifies that a model translated
+the user's question correctly. The separate interpretation request leaves the
+authored profile and final-response temperature unchanged. See
+[answer reasoning ownership and verification](ANSWER_REASONING_PLAN.md).
 
 ## Profile activation
 

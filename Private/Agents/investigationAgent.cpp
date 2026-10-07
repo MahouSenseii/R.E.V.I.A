@@ -222,7 +222,9 @@ std::string InvestigationAgent::BuildRoundEnvelope(const RoundRequest& request,
             << "You may propose only a bounded native read or directory list. For config, source, or logs use "
                "{\"action\":\"read_text_file\",\"source\":\"an explicit absolute path\"}; for file state you may also use "
                "{\"action\":\"list_directory\",\"source\":\"an explicit absolute path\"}. Put this exact JSON in the what-you-did field. "
-               "No prose path extraction, writes, commands, test execution, research or calculation is available. "
+               "For calculation use {\"expression\":\"numeric + - * / and parentheses\",\"unit\":\"optional s/min/h, mm/cm/m/km or g/kg\"}. "
+               "Calculation accepts only literal arithmetic and declared units; story interpretation remains unverified. "
+               "No prose path extraction, writes, commands, test execution or research is available. "
                "A raw read is an observation to interpret in a later round, not proof of your proposed answer.\n";
     }
     else
@@ -239,7 +241,7 @@ std::string InvestigationAgent::BuildRoundEnvelope(const RoundRequest& request,
     envelope
         << "\nReply with these lines and nothing else:\n"
            "FOUND <question id> | <supported|refuted|unresolved> | <reasoning|config|"
-           "source|logs|tests|file> | <what you did> | <what it shows>\n"
+           "source|logs|tests|file|calculation> | <what you did> | <what it shows>\n"
            "BLOCKED <question id> | <what you would need and cannot get>\n"
            "LIMIT <question id> | <what this does not establish>\n"
            "NEXT <materiality 0.0-1.0> | <a question these findings raise>\n"

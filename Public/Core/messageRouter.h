@@ -55,6 +55,7 @@ public:
     // Runs one bounded self-inquiry pass for a hard conversational turn. Interactive
     // priority, because the user's own reply is waiting behind it.
     responseOutput Deliberate(const std::string& boundedInquiryPrompt, std::stop_token stopToken = {}) const;
+    responseOutput ProposeCalculation(const std::string& envelope, std::stop_token stopToken = {}) const;
     responseOutput PlanGoal(const std::string& request) const;
     // The iterative form: one step at a time, from what has already happened.
     // Ask Main for one bounded subgoal.

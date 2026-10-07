@@ -380,6 +380,22 @@ responseOutput messageRouter::Deliberate(const std::string& boundedInquiryPrompt
     return output;
 }
 
+responseOutput messageRouter::ProposeCalculation(const std::string& envelope, const std::stop_token stopToken) const
+{
+    if (envelope.empty() || stopToken.stop_requested())
+        return {};
+    if (!llm.IsBackendAvailable(stopToken))
+    {
+        responseOutput output;
+        output.reason = "The balanced local model is unavailable for arithmetic interpretation.";
+        return output;
+    }
+    residency.BeginInference(revia::intelligence::IntelligenceTier::Main, "interactive");
+    const auto output = llm.GenerateCalculationProposal(envelope, stopToken);
+    residency.EndInference(revia::intelligence::IntelligenceTier::Main);
+    return output;
+}
+
 responseOutput messageRouter::PlanGoal(const std::string& request) const
 {
     if (request.empty())

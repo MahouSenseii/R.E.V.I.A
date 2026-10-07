@@ -15,6 +15,7 @@
 #include "Memory/sensitiveContent.h"
 #include "Agents/conversationStylePolicy.h"
 #include "Agents/replyFormat.h"
+#include "Agents/calculationGrounding.h"
 #include "Actions/actionTypes.h"
 #include "Planning/goalPlanner.h"
 #include <httplib.h>
@@ -1111,8 +1112,9 @@ responseOutput llamaCppService::GenerateResponse(const std::vector<conversationM
 
     const auto latestUser = std::find_if(
         context.rbegin(), context.rend(), [](const auto& message) { return message.role == "user" && !message.content.empty(); });
-    const auto replyFormat =
-        latestUser == context.rend() ? revia::agents::ReplyFormat::Conversation : revia::agents::RequestedReplyFormat(latestUser->content);
+    const auto replyContract =
+        latestUser == context.rend() ? revia::agents::ReplyContract{} : revia::agents::RequestedReplyContract(latestUser->content);
+    const auto replyFormat = replyContract.rootKind;
     const bool jsonReply = replyFormat != revia::agents::ReplyFormat::Conversation;
     const bool activeReasoning = deepReasoning && !jsonReply;
     const bool briefSocial =
@@ -1199,9 +1201,8 @@ responseOutput llamaCppService::GenerateResponse(const std::vector<conversationM
     // leaving short, intentional emphasis alone.
     if (jsonReply)
     {
-        requestBody["response_format"] = {{"type", "json_schema"},
-            {"json_schema", {{"name", "requested_reply"},
-                                {"schema", {{"type", replyFormat == revia::agents::ReplyFormat::JsonArray ? "array" : "object"}}}}}};
+        requestBody["response_format"] = {
+            {"type", "json_schema"}, {"json_schema", {{"name", "requested_reply"}, {"schema", json::parse(replyContract.schemaJson)}}}};
     }
     else
     {
@@ -1399,12 +1400,12 @@ responseOutput llamaCppService::GenerateResponse(const std::vector<conversationM
         return output;
     }
 
-    if (jsonReply && (finishReason == "length" || !revia::agents::IsCompleteJsonReply(cleanedResponse) ||
-                         (replyFormat == revia::agents::ReplyFormat::JsonArray ? !json::parse(cleanedResponse).is_array()
-                                                                               : !json::parse(cleanedResponse).is_object())))
+    if (jsonReply && (finishReason == "length" || !revia::agents::MatchesReplyContract(cleanedResponse, replyContract)))
     {
         output.response = "I couldn't finish a valid JSON reply within the response limit. Ask for a smaller result.";
-        output.reason = "Structured reply was incomplete, invalid or of the wrong container type.";
+        output.reason = "Structured reply was incomplete or violated its explicit turn-local contract.";
+        if (!replyContract.reason.empty())
+            output.reason += " " + replyContract.reason;
         output.bShouldSpeak = true;
         output.bShouldRemember = false;
         return output;
@@ -1447,6 +1448,8 @@ responseOutput llamaCppService::GenerateResponse(const std::vector<conversationM
     output.bShouldSpeak = true;
     output.bShouldRemember = false;
     output.bWasStreamed = static_cast<bool>(onDelta);
+    if (jsonReply && !replyContract.reason.empty())
+        output.reason = replyContract.reason;
 
     return output;
 }
@@ -1464,6 +1467,12 @@ void llamaCppService::SetReplyNote(std::string note)
 {
     std::lock_guard postureLock(postureMutex);
     activeReplyNote = std::move(note);
+}
+
+responseOutput llamaCppService::GenerateCalculationProposal(const std::string& envelope, std::stop_token stopToken) const
+{
+    return GeneratePlannerResponse(revia::agents::CalculationProposalInstructions(), envelope, 640, true, stopToken,
+        revia::llm::InferencePriority::Interactive, 0.1F, "arithmetic interpretation", revia::agents::CalculationProposalSchema());
 }
 
 responseOutput llamaCppService::GenerateActionProposal(const std::string& userRequest) const

@@ -44,6 +44,7 @@ public:
     responseOutput GenerateCuriosityPlan(const std::string& boundedContextPrompt,
         const std::vector<std::string>& availableActions, std::stop_token stopToken = {}) const;
     responseOutput Deliberate(const std::string& boundedInquiryPrompt, std::stop_token stopToken = {}) const;
+    responseOutput GenerateCalculationProposal(const std::string& envelope, std::stop_token stopToken = {}) const;
     responseOutput GenerateGoalPlan(const std::string& userRequest) const;
     responseOutput GenerateCodeReview(const std::string& instructions,
         const std::string& material, const std::string& schema, std::stop_token stopToken = {}) const;

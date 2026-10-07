@@ -11,6 +11,7 @@
 #include "Policy/permissionStore.h"
 #include "Runtime/runtimeStamp.h"
 #include "Policy/companionAuthority.h"
+#include "Core/evidenceRef.h"
 
 #include <filesystem>
 #include <cstdint>
@@ -18,6 +19,7 @@
 #include <memory>
 #include <map>
 #include <mutex>
+#include <optional>
 #include <stop_token>
 #include <string>
 
@@ -54,6 +56,8 @@ class ActionRuntime
     using TaskContractGuard = std::function<std::string(const core::TaskContract&, std::stop_token)>;
     void BindTaskContracts(TaskContractFactory factory, TaskContractGuard guard);
     [[nodiscard]] std::shared_ptr<audit::EvidenceJournal> EvidenceJournalOwner() const;
+    [[nodiscard]] std::optional<core::EvidenceRef> RecordLocalVerificationFor(const runtime::RuntimeStamp& stamp,
+        const core::TaskContract& contract, const std::string& digest, std::stop_token stopToken, const std::function<bool()>& admission);
     [[nodiscard]] ActionOutcome ExecuteFor(
         const runtime::RuntimeStamp& stamp, const ActionRequest& request, bool confirmationGranted = false, std::stop_token stopToken = {});
     [[nodiscard]] ActionOutcome ExecuteScopedFor(const runtime::RuntimeStamp& stamp, const ActionRequest& request,
