@@ -947,6 +947,14 @@ security and authority guards. The authored profile, final-response temperature 
 ordinary conversational renderer retain their existing ownership. `Evaluation`
 reports raw/final syntax, structure and value diagnostics separately without
 changing its strict oracle.
+Natural introductions including "Follow this JSON Schema" and "Use this JSON
+Schema" use the same contract owner as the earlier schema syntax. Compatible
+terminal delivery reminders preserve the admitted schema and object/array root.
+An identical closed property and required-key reaffirmation can retain existing
+field types; optional/open objects, different keys, withdrawals, replacements and
+unknown intervening instructions cannot recover older constraints. Unsupported
+schema keywords retain an unambiguous known container with diagnostics. These
+bounded rules do not repair the model's response.
 See [structured answer ownership and verification](ANSWER_QUALITY_STRUCTURED_REPLIES.md).
 
 ## Restricted arithmetic grounding
@@ -985,6 +993,16 @@ choices. These choices contain user data, not evaluation answers. Long or comple
 interpretations can exceed the small proposal response budget and yield no
 verified observation; ordinary generation remains available.
 
+When no complete literal calculation has been admitted, a bounded current-input
+cue guard checks for explicitly missing numerical quantities, durations or units.
+It uses the same masked intent view, excluding quoted, fenced and reported content.
+A dependent unknown can yield a turn-local clarification note with `ran=false`, no model
+proposal and no native receipt. The note allows independent, symbolic and
+conditional answers and instructs the generator to withhold a numerical answer
+that depends on the missing premise. Directly quantified phrases remain eligible.
+The guard rechecks admission before publication and does not claim exhaustive
+ambiguity detection.
+
 Ordinary/evaluation arithmetic observations are ephemeral prompt grounding, with
 current-input and observation digests and explicit interpretation limits. They are
 not canonical journal receipts or durable memory. Investigation Calculation checks
@@ -992,7 +1010,8 @@ instead require the contract/scope-guarded durable verification reference descri
 above. Neither path patches the final answer or certifies that a model translated
 the user's question correctly. The separate interpretation request leaves the
 authored profile and final-response temperature unchanged. See
-[answer reasoning ownership and verification](ANSWER_REASONING_PLAN.md).
+[answer reasoning ownership and verification](ANSWER_REASONING_PLAN.md) and
+[the targeted acceptance evidence](ANSWER_REASONING_ACCEPTANCE.md).
 
 ## Profile activation
 

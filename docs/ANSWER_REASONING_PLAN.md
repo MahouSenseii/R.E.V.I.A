@@ -28,10 +28,10 @@ accuracy and human judgment of personality remain separate measurements.
 
 | Role | Owned work | Status |
 | --- | --- | --- |
-| Director | Integration, admissions, verification, main delivery | Native verification complete; frozen model comparison pending |
-| Arithmetic worker | Pure bounded evaluator and native fixtures | Implemented; standalone native checks pass |
-| Shape worker | Existing reply contract, provider and final-delivery validation | Implemented; provider and reviewer fixtures pass |
-| Independent reviewers | Frozen cases, source review, canonical receipt admission and evidence audit | Cases frozen; no remaining material source finding; final campaign pending |
+| Director | Integration, admissions, verification, main delivery | Runtime frozen at af2a7d0; native checks and model evidence audited; main delivery tracked by integration receipt |
+| Arithmetic worker | Pure evaluator, grounding, missing-premise guard and native fixtures | Implemented; pure, ordinary/evaluation and admission checks pass |
+| Shape worker | Existing reply contract, provider and final-delivery validation | Implemented; source and actual transmitted schema checks pass |
+| Independent reviewers | Frozen cases, source review, canonical receipt admission and evidence audit | Complete for this slice; no remaining material source finding; personality qualification pending |
 
 ## Work and verification
 
@@ -42,7 +42,7 @@ accuracy and human judgment of personality remain separate measurements.
 4. Freeze independently authored fresh cases before candidate model outputs.
 5. Build affected native targets and run focused and existing foundation checks.
 6. Review source and evidence, record actual results and limits, merge to main,
-  push GitHub and archive the completed worktree while preserving owner edits.
+   push GitHub and archive the completed worktree while preserving owner edits.
 
 All 17 affected executable targets built with Qt 6.8.3 and matching MinGW 13.1,
 with assertions enabled. The 18 selected native checks passed across focused,
@@ -50,24 +50,36 @@ grounding, latency, desktop and broad foundation selections. Initial fixture
 failures and the corrected runs are retained outside Git. A fixture that inspected
 only the system message now checks all decoded final-request messages, matching
 the existing stable-prefix prompt placement without weakening its assertions.
+The final frozen eight-task/three-seed comparison passed 22/24 strict checks versus
+11/24 for the retained baseline. Two value failures remain. Earlier campaigns and
+ordinary conversation limitations are recorded in
+[the acceptance report](ANSWER_REASONING_ACCEPTANCE.md); this is a targeted result,
+not an overall cognition or personality grade.
 
 ## Decisions
 
 - Reuse existing owners instead of enabling the entire iterative investigation loop
   for simple arithmetic: its optional gate does not cover ordinary or evaluation turns.
-- Do not patch final numbers or JSON keys. The generator receives only actual
-  computation receipts and explicit user constraints; independent oracles score output.
+- Do not patch final numbers or JSON keys. Added generator guidance carries actual
+  computation results, source-grounded uncertainty notes and explicit user
+  constraints; independent oracles score output.
 - User approval to continue and merge verified work is already present in this task.
 - The parser computes finite double-precision arithmetic, not exact decimal or
   arbitrary-precision mathematics. It refuses unsupported units and operations.
 - Word-problem receipts verify arithmetic on a model-proposed expression. Exact
   source excerpts establish provenance, not the correctness of that interpretation.
+- Explicitly missing numerical premises can produce a conditional clarification
+  note without a proposal or native result. This bounded cue guard permits
+  independent, symbolic and conditional answers; it does not cover all ambiguity.
+- Compatible JSON delivery reminders retain the current schema and container.
+  Closed, identical key reaffirmations retain admitted types; replacement,
+  withdrawal, unknown clauses and different keys prevent old constraint recovery.
 - Investigation receipts retain the existing foreground task contract and scope;
   admission is rechecked around journaling. Conversation observations remain local
   to the current turn and do not create an alternate persistent evidence store.
 - Shared-file ownership: shape worker owns replyFormat, provider and conversationAgent;
   Director owns conversationRuntime, investigation adapters and CMake registration;
-  arithmetic worker owns only its new evaluator header, implementation and tests.
+  arithmetic worker owns the pure evaluator and calculationGrounding with their tests.
 
 ## Initial live assessment and activation correction
 
