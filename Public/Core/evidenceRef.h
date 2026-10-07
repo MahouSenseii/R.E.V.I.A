@@ -14,6 +14,8 @@ struct EvidenceRef
     std::string mediaType;
     runtime::RuntimeStamp stamp;
     memory::MemoryScope scope;
+    std::uint64_t observedAtUnixMs = 0;
+    std::string sourceId;
 };
 
 [[nodiscard]] ContractValidation ValidateEvidenceRef(const EvidenceRef& reference);

@@ -71,7 +71,8 @@ core::TaskContract Task(const std::filesystem::path& directory)
 
 core::EvidenceRef Reference(const core::TaskContract& task)
 {
-    return {{1, 0}, "receipt-42", "journal://session-a/receipt-42", std::string(64, 'a'), "application/json", task.stamp, task.scope};
+    return {{1, 0}, "receipt-42", "journal://session-a/receipt-42", std::string(64, 'a'), "application/json", task.stamp, task.scope,
+        1791342000123ULL, "native-observation-42"};
 }
 
 void StrictNumbersAndBounds(const std::filesystem::path& directory)
@@ -130,6 +131,9 @@ void EvidenceAdmission(const std::filesystem::path& directory, const std::filesy
     auto decoded = core::DeserializeEvidenceBundle(encoded, result);
     Check(decoded.has_value() && core::SameRuntimeStamp(decoded->references().at(0).stamp, task.stamp), "bundle identity round trip");
     Check(core::SameMemoryScope(decoded->scope(), task.scope), "bundle scope round trip");
+    Check(
+        decoded->references().at(0).observedAtUnixMs == 1791342000123ULL && decoded->references().at(0).sourceId == "native-observation-42",
+        "original observation time and source identity preserved");
     std::string refEncoded;
     Check(core::SerializeEvidenceRef(reference, refEncoded).valid, "reference encode");
     core::EvidenceRef refDecoded;
@@ -346,6 +350,12 @@ void AdditionalBoundaryChecks(const std::filesystem::path& directory)
     Check(!mismatch && result.code == "scope_mismatch", "mixed reference scope rejected");
     auto decoded = core::DeserializeEvidenceBundle("{broken", result);
     Check(!decoded && result.code == "invalid_json", "malformed bundle returns named error");
+    reference = Reference(Task(directory));
+    reference.observedAtUnixMs = 0;
+    Check(core::ValidateEvidenceRef(reference).code == "missing_observation_time", "observation time cannot be defaulted");
+    reference = Reference(Task(directory));
+    reference.sourceId.clear();
+    Check(core::ValidateEvidenceRef(reference).code == "missing_source_identity", "source identity cannot be defaulted");
 }
 }
 

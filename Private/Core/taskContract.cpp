@@ -149,6 +149,9 @@ void CheckReference(const EvidenceRef& reference)
     Text(reference.id, "id");
     Text(reference.sourceLocator, "sourceLocator");
     Text(reference.mediaType, "mediaType");
+    Require(reference.observedAtUnixMs > 0, "missing_observation_time", "observedAtUnixMs", "Original observation time is required.");
+    Require(!reference.sourceId.empty(), "missing_source_identity", "sourceId", "Original source identity is required.");
+    Text(reference.sourceId, "sourceId");
     Require(reference.digest.size() == 64 &&
                 std::all_of(reference.digest.begin(), reference.digest.end(), [](unsigned char value)
                     { return (value >= '0' && value <= '9') || (value >= 'a' && value <= 'f') || (value >= 'A' && value <= 'F'); }),
@@ -373,15 +376,16 @@ TaskContract DecodeTask(const json& object)
 json EncodeReference(const EvidenceRef& reference)
 {
     return {{"version", EncodeVersion(reference.version)}, {"id", reference.id}, {"sourceLocator", reference.sourceLocator},
-        {"digest", reference.digest}, {"mediaType", reference.mediaType}, {"stamp", EncodeStamp(reference.stamp)},
-        {"scope", EncodeScope(reference.scope)}};
+        {"digest", reference.digest}, {"mediaType", reference.mediaType}, {"observedAtUnixMs", reference.observedAtUnixMs},
+        {"sourceId", reference.sourceId}, {"stamp", EncodeStamp(reference.stamp)}, {"scope", EncodeScope(reference.scope)}};
 }
 
 EvidenceRef DecodeReference(const json& object)
 {
-    Object(object, "evidence", {"version", "id", "sourceLocator", "digest", "mediaType", "stamp", "scope"});
+    Object(object, "evidence", {"version", "id", "sourceLocator", "digest", "mediaType", "stamp", "scope", "observedAtUnixMs", "sourceId"});
     EvidenceRef reference{DecodeVersion(object.at("version")), ReadText(object, "id"), ReadText(object, "sourceLocator"),
-        ReadText(object, "digest"), ReadText(object, "mediaType"), DecodeStamp(object.at("stamp")), DecodeScope(object.at("scope"))};
+        ReadText(object, "digest"), ReadText(object, "mediaType"), DecodeStamp(object.at("stamp")), DecodeScope(object.at("scope")),
+        ReadNumber<std::uint64_t>(object, "observedAtUnixMs"), ReadText(object, "sourceId")};
     CheckReference(reference);
     return reference;
 }
