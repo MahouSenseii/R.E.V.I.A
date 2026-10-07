@@ -1,4 +1,5 @@
 #include "Core/taskContract.h"
+#include "Audit/contentDigest.h"
 #include "Runtime/reviaSession.h"
 #include "testSupport.h"
 #include <algorithm>
@@ -34,11 +35,11 @@ struct ReviaSessionTestAccess
         const auto config = root / "fixture-capabilities.json";
         {
             std::ofstream output(config);
-            output << "{}";
+            output << R"({"approvedRoots":[],"createMissingApprovedRoots":false})";
         }
         std::string error;
-        tests::Check(
-            session.actionRuntime.Initialize(config, root / "fixture-journal.jsonl", error), "initialize real session audit owner");
+        const bool initialized = session.actionRuntime.Initialize(config, root / "fixture-journal.jsonl", error);
+        tests::Check(initialized, "initialize real session audit owner: " + error);
         auto journal = session.actionRuntime.EvidenceJournalOwner();
         session.runtimeEvidenceBridge.Start(session.eventBus, journal);
         RuntimeEvent event;
@@ -74,6 +75,14 @@ void SessionContractPropagation()
     Check(!first.taskContract->acceptanceObligations.empty() && !first.taskContract->negativeConstraints.empty(),
         "session explicitly captures obligations and restrictions");
     Check(core::SameRuntimeStamp(first.stamp, first.taskContract->stamp), "outer guard cannot erase task and attempt identity");
+    const auto longInput = Access::Input(session, "/help " + std::string(9000, 'x'));
+    const auto longResult = Access::Run(session, longInput);
+    const auto shortUnknown = Access::Run(session, Access::Input(session, "/not-a-command"));
+    Check(longResult.taskContract && longResult.succeeded == shortUnknown.succeeded && longResult.text == shortUnknown.text,
+        "long unknown command retains the existing named refusal after admission");
+    Check(longResult.taskContract->goal.size() <= 8192, "contract metadata does not copy an unbounded conversation input");
+    Check(longResult.taskContract->goal.find(audit::ContentDigest(longInput.text)) != std::string::npos,
+        "bounded contract metadata binds the full accepted input bytes");
     auto legacyInput = Access::Input(session, "/help");
     const auto legacy = Access::Run(session, legacyInput);
     Check(legacy.succeeded && legacy.taskContract && !legacy.taskContract->stamp.taskId.empty() &&

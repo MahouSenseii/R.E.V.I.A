@@ -67,6 +67,8 @@ struct JournalHealth
     std::string error;
     std::size_t quarantinedRecords = 0;
     std::size_t droppedTelemetry = 0;
+    std::size_t durableDroppedTelemetry = 0;
+    std::size_t pendingDroppedTelemetry = 0;
     std::vector<std::string> unresolvedTransactions;
 };
 
@@ -79,9 +81,11 @@ class EvidenceJournal
     explicit EvidenceJournal(std::filesystem::path path, std::size_t telemetryCapacity = 64, JournalIoGate ioGate = {});
     [[nodiscard]] AppendReceipt Append(const JournalEvent& event);
     [[nodiscard]] std::vector<core::EvidenceRef> Read(const EvidenceQuery& query);
+    [[nodiscard]] bool HasUnresolvedForTask(const runtime::RuntimeStamp& stamp, const memory::MemoryScope& scope);
     [[nodiscard]] JournalHealth Recover();
     [[nodiscard]] JournalHealth Health() const;
     [[nodiscard]] bool QueueTelemetry(const JournalEvent& event);
+    // Flush the captured batch; concurrent admissions remain queued for the next flush.
     [[nodiscard]] bool FlushTelemetry();
     [[nodiscard]] const std::filesystem::path& Path() const;
 
@@ -92,12 +96,16 @@ class EvidenceJournal
   private:
     [[nodiscard]] AppendReceipt AppendRecord(const std::string& record, const std::string& eventId, bool retainActionObservation = false);
     [[nodiscard]] AppendReceipt AppendLocked(const JournalEvent& event);
+    [[nodiscard]] JournalHealth SnapshotHealthLocked() const;
     std::filesystem::path path;
     std::size_t telemetryCapacity;
     JournalIoGate ioGate;
     mutable std::mutex mutex;
+    mutable std::mutex telemetryMutex;
+    std::mutex telemetryFlushMutex;
     std::deque<JournalEvent> telemetry;
     std::size_t pendingDrops = 0;
+    std::size_t flushingDrops = 0;
     std::optional<JournalEvent> droppedContext;
     JournalHealth health;
 };

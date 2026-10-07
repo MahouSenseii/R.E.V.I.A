@@ -32,5 +32,6 @@ struct CampaignManifest
 [[nodiscard]] std::string SerializeCampaignManifest(const CampaignManifest& manifest);
 [[nodiscard]] bool ParseCampaignManifest(const std::string& bytes, CampaignManifest& manifest, std::string& error);
 [[nodiscard]] bool WriteCampaignManifestOnce(const std::filesystem::path& path, const CampaignManifest& manifest, std::string& error);
+[[nodiscard]] bool WriteEvaluationArtifactOnce(const std::filesystem::path& path, const std::string& bytes, std::string& error);
 
 }

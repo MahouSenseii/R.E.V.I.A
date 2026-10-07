@@ -82,6 +82,28 @@ Diagrams retain the structured renderer. See [image setup and evidence](IMAGE_GE
 and [guest preparation limits](GUEST_ENVIRONMENT.md). Artifact validity does not
 certify visual quality, VM readiness or game competence.
 
+## Task contracts, evidence and evaluation
+
+`Core/TaskContract` carries the existing stamp, memory scope, resource ceilings,
+deliverables and acceptance obligations across turn, workflow and action owners.
+The session captures admission; the action runtime checks that contract against
+current identity and scope before dispatch and again before an effect. Contracts
+and immutable evidence references add no authority.
+
+`Audit/EvidenceJournal` is the shared persistence owner for action receipts and
+scoped evidence. The existing action logger adapts readable records to it. Intent
+and result acknowledgements are durable; the runtime bridge queues bounded,
+content-omitted lifecycle observations and flushes on shutdown. Recovery reports
+uncertain effects without replaying them. The same-task gate preserves uncertainty
+across retries and policy refreshes.
+
+`Evaluation` owns campaign identity, independent deterministic oracles and bound
+human review. `Tools/Quality` collects actual model traffic through the existing
+conversation evaluator. Structured cognition, mechanical checks and personality
+judgments keep separate denominators and pending states. See
+[foundation evaluation](FOUNDATION_EVALUATION.md) for commands and qualification
+limits.
+
 ## Desktop navigation
 
 `Desktop/tabNavigation` groups the existing Qt pages and selects their complete

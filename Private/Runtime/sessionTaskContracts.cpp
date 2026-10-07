@@ -1,5 +1,6 @@
 #include "Runtime/reviaSession.h"
 #include "Core/taskContract.h"
+#include "Audit/contentDigest.h"
 
 namespace revia::runtime
 {
@@ -41,7 +42,9 @@ std::shared_ptr<const core::TaskContract> ReviaSession::BuildTurnTaskContract(co
     core::TaskContract task;
     task.stamp = batch.context.stamp;
     task.scope = InputScope(batch.context);
-    task.goal = batch.text;
+    // Full input stays with the admitted batch; contract metadata has a smaller bound.
+    task.goal = batch.text.size() <= 8192 ? batch.text
+                                          : "Respond to the admitted conversation input (SHA256 " + audit::ContentDigest(batch.text) + ").";
     task.positiveConstraints = {"Respond to the accepted input within its captured participant and audience context"};
     task.negativeConstraints = {
         "Do not disclose evidence outside its captured scope", "Do not make unsupported completion or factual claims"};

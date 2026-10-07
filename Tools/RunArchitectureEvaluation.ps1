@@ -4,6 +4,7 @@ param(
     [Parameter(Mandatory = $true)][string]$ChangeId,
     [Parameter(Mandatory = $true)][string]$OutputDirectory,
     [string]$BuildDirectory,
+    [switch]$FixtureOnly,
     [string]$RegistryPath = (Join-Path $PSScriptRoot '../Config/Evaluation/architecture_tests.json'),
     [string[]]$ProviderFiles = @(),
     [string[]]$SettingsFiles = @(),
@@ -34,6 +35,14 @@ function Get-TextDigest([string]$Text)
     finally { $algorithm.Dispose() }
 }
 
+function Get-FileDigest([string]$Path)
+{
+    $algorithm = [Security.Cryptography.SHA256]::Create()
+    $stream = [IO.File]::OpenRead($Path)
+    try { return ([BitConverter]::ToString($algorithm.ComputeHash($stream))).Replace('-', '').ToLowerInvariant() }
+    finally { $stream.Dispose(); $algorithm.Dispose() }
+}
+
 function Invoke-InventoryCommand([string]$Command, [string[]]$Arguments, [string]$ErrorFile)
 {
     $ErrorActionPreference = 'Continue'
@@ -56,7 +65,7 @@ function Get-ArtifactIdentity([string[]]$Paths)
         $name = $_.FullName.Replace('\', '/')
         $prefix = $sourceRoot.Replace('\', '/') + '/'
         if ($name.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase)) { $name = $name.Substring($prefix.Length) }
-        [ordered]@{ path = $name; sha256 = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant(); bytes = $_.Length }
+        [ordered]@{ path = $name; sha256 = Get-FileDigest $_.FullName; bytes = $_.Length }
     })
     return [ordered]@{ digest = Get-TextDigest (ConvertTo-Json -InputObject $entries -Depth 8 -Compress); artifacts = $entries }
 }
@@ -85,6 +94,39 @@ try
     }
     $BuildDirectory = [IO.Path]::GetFullPath($BuildDirectory)
     if (-not (Test-Path -LiteralPath $BuildDirectory -PathType Container)) { throw 'Configured build directory is unavailable.' }
+    $cachePath = Join-Path $BuildDirectory 'CMakeCache.txt'
+    if (-not (Test-Path -LiteralPath $cachePath -PathType Leaf)) { throw 'Build source identity is unavailable: no CMake cache.' }
+    $configuredSource = @(Get-Content -LiteralPath $cachePath | Where-Object { $_.StartsWith('CMAKE_HOME_DIRECTORY:INTERNAL=') })
+    if ($configuredSource.Count -ne 1) { throw 'Build source identity is unavailable.' }
+    $buildSourceRoot = [IO.Path]::GetFullPath($configuredSource[0].Substring('CMAKE_HOME_DIRECTORY:INTERNAL='.Length))
+    if (-not $FixtureOnly -and -not $buildSourceRoot.Equals($sourceRoot, [StringComparison]::OrdinalIgnoreCase))
+    {
+        throw 'Build source differs from this Revia checkout. FixtureOnly is required for an unqualified harness project.'
+    }
+    $relevantPaths = @('Public', 'Private', 'Desktop', 'Tools', 'Tests', 'Config', 'docs', 'CMakeLists.txt', 'CMakePresets.json', '.clang-format', 'AGENTS.md')
+    $commit = (Invoke-InventoryCommand 'git' @('-C', $sourceRoot, 'rev-parse', 'HEAD') 'git-stderr.txt') -join ''
+    if ($inventoryExit -ne 0) { throw 'Source commit cannot be established.' }
+    $patch = (Invoke-InventoryCommand 'git' (@('-C', $sourceRoot, 'diff', '--binary', '--no-ext-diff', 'HEAD', '--') + $relevantPaths) 'git-stderr.txt') -join "`n"
+    if ($inventoryExit -ne 0) { throw 'Source patch cannot be established.' }
+    $status = @(Invoke-InventoryCommand 'git' (@('-C', $sourceRoot, 'status', '--porcelain', '--untracked-files=all', '--') + $relevantPaths) 'git-stderr.txt')
+    if ($inventoryExit -ne 0) { throw 'Source status cannot be established.' }
+    $untrackedPaths = @(Invoke-InventoryCommand 'git' (@('-C', $sourceRoot, '-c', 'core.quotepath=false', 'ls-files', '--others', '--exclude-standard', '--') + $relevantPaths) 'git-stderr.txt')
+    if ($inventoryExit -ne 0) { throw 'Untracked source inventory cannot be established.' }
+    $untrackedFiles = @($untrackedPaths | ForEach-Object { Join-Path $sourceRoot $_ })
+    $untracked = Get-ArtifactIdentity $untrackedFiles
+    Write-Once 'source.patch' $patch
+    $sourceIdentity = [ordered]@{ commit = $commit; patchDigest = Get-TextDigest $patch; untracked = $untracked.artifacts }
+    $sourceDigest = Get-TextDigest (ConvertTo-Json -InputObject $sourceIdentity -Depth 8 -Compress)
+
+    $buildSourceVerified = -not $FixtureOnly
+    if ($buildSourceVerified)
+    {
+        $ErrorActionPreference = 'Continue'
+        & cmake -S $sourceRoot -B $BuildDirectory *> (Join-Path $outputPath 'configure.log')
+        $buildExit = $LASTEXITCODE
+        $ErrorActionPreference = 'Stop'
+        if ($buildExit -ne 0) { throw 'Configuring the captured Revia source failed; no campaign can run.' }
+    }
     $inventoryRaw = (Invoke-InventoryCommand 'ctest' @('--test-dir', $BuildDirectory, '--show-only=json-v1') 'inventory-stderr.txt') -join "`n"
     if ($inventoryExit -ne 0) { throw 'CTest inventory discovery failed.' }
     Write-Once 'inventory.json' $inventoryRaw
@@ -102,27 +144,31 @@ try
     }
     $selected = @($selected | Sort-Object name -Unique)
     $selectedCount = $selected.Count
+    if ($buildSourceVerified -and $selectedCount -gt 0)
+    {
+        $nativeTargets = @($selected | Where-Object {
+            $_.command.Count -gt 0 -and $_.command[0].EndsWith('.exe', [StringComparison]::OrdinalIgnoreCase) -and
+            ([IO.Path]::GetFullPath($_.command[0])).StartsWith($BuildDirectory.TrimEnd('\', '/') + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)
+        } | ForEach-Object { [IO.Path]::GetFileNameWithoutExtension($_.command[0]) } | Sort-Object -Unique)
+        if ($nativeTargets.Count -gt 0)
+        {
+            $ErrorActionPreference = 'Continue'
+            & cmake --build $BuildDirectory --parallel 4 --target @nativeTargets *> (Join-Path $outputPath 'build.log')
+            $buildExit = $LASTEXITCODE
+            $ErrorActionPreference = 'Stop'
+            if ($buildExit -ne 0) { throw 'Rebuilding the selected Revia targets failed; no campaign can run.' }
+        }
+    }
 
-    $relevantPaths = @('Public', 'Private', 'Desktop', 'Tools', 'Tests', 'Config', 'docs', 'CMakeLists.txt', 'CMakePresets.json', '.clang-format', 'AGENTS.md')
-    $commit = (Invoke-InventoryCommand 'git' @('-C', $sourceRoot, 'rev-parse', 'HEAD') 'git-stderr.txt') -join ''
-    if ($inventoryExit -ne 0) { throw 'Source commit cannot be established.' }
-    $patch = (Invoke-InventoryCommand 'git' (@('-C', $sourceRoot, 'diff', '--binary', '--no-ext-diff', 'HEAD', '--') + $relevantPaths) 'git-stderr.txt') -join "`n"
-    if ($inventoryExit -ne 0) { throw 'Source patch cannot be established.' }
-    $status = @(Invoke-InventoryCommand 'git' (@('-C', $sourceRoot, 'status', '--porcelain', '--untracked-files=all', '--') + $relevantPaths) 'git-stderr.txt')
-    if ($inventoryExit -ne 0) { throw 'Source status cannot be established.' }
-    $untrackedPaths = @(Invoke-InventoryCommand 'git' (@('-C', $sourceRoot, '-c', 'core.quotepath=false', 'ls-files', '--others', '--exclude-standard', '--') + $relevantPaths) 'git-stderr.txt')
-    if ($inventoryExit -ne 0) { throw 'Untracked source inventory cannot be established.' }
-    $untrackedFiles = @($untrackedPaths | ForEach-Object { Join-Path $sourceRoot $_ })
-    $untracked = Get-ArtifactIdentity $untrackedFiles
-    Write-Once 'source.patch' $patch
-    $sourceIdentity = [ordered]@{ commit = $commit; patchDigest = Get-TextDigest $patch; untracked = $untracked.artifacts }
-    $sourceDigest = Get-TextDigest (ConvertTo-Json -InputObject $sourceIdentity -Depth 8 -Compress)
     $buildFiles = @()
     $cachePath = Join-Path $BuildDirectory 'CMakeCache.txt'
     if (Test-Path -LiteralPath $cachePath) { $buildFiles += $cachePath }
     foreach ($test in $selected)
     {
-        if ($test.command.Count -gt 0 -and (Test-Path -LiteralPath $test.command[0] -PathType Leaf)) { $buildFiles += $test.command[0] }
+        foreach ($argument in $test.command)
+        {
+            if (Test-Path -LiteralPath $argument -PathType Leaf) { $buildFiles += $argument }
+        }
     }
     $buildIdentity = Get-ArtifactIdentity $buildFiles
     $buildDigest = Get-TextDigest (ConvertTo-Json -InputObject ([ordered]@{ preset = $Preset; inventoryDigest = Get-TextDigest $inventoryRaw; files = $buildIdentity.artifacts }) -Depth 8 -Compress)
@@ -147,9 +193,12 @@ try
         providerAvailable = ($ProviderFiles.Count -gt 0); settingsDigest = $settingsIdentity.digest; fixtureDigest = $fixtureIdentity.digest
         oracleVersion = $OracleVersion; hardware = (ConvertTo-Json -InputObject $hardware -Compress); seed = $Seed; timingBoundary = $TimingBoundary
         seedMechanism = 'declared seed forwarded as REVIA_EVALUATION_SEED'; seedVerified = $false
+        buildSourceRoot = $buildSourceRoot; buildSourceVerified = $buildSourceVerified; fixtureOnly = [bool]$FixtureOnly
+        buildSourceMechanism = 'CMake configure and selected native target build; command scripts hashed directly'
+        buildIdentityCoverage = 'CMake cache and selected command files; complete transitive DLL environment is not claimed'
         capturedAt = $started.ToString('o'); preset = $Preset; changeId = $ChangeId; sourceIdentity = $sourceIdentity
         buildIdentity = $buildIdentity.artifacts; providerIdentity = $providerIdentity.artifacts; settingsIdentity = $settingsIdentity.artifacts; fixtureIdentity = $fixtureIdentity.artifacts
-        registryDigest = (Get-FileHash -LiteralPath $RegistryPath -Algorithm SHA256).Hash.ToLowerInvariant()
+        registryDigest = Get-FileDigest $RegistryPath
     }
     Write-Once 'manifest.json' (ConvertTo-Json -InputObject $manifest -Depth 12)
     if ($missing.Count -gt 0 -or $selectedCount -eq 0) { throw ('CTest labels absent or removed: ' + ($missing -join ', ') + "; selected count: $selectedCount") }
@@ -161,6 +210,18 @@ try
     $testExit = $LASTEXITCODE
     $ErrorActionPreference = 'Stop'
     $timer.Stop()
+    $postBuildIdentity = Get-ArtifactIdentity $buildFiles
+    if ($postBuildIdentity.digest -ne $buildIdentity.digest) { throw 'Selected build artifacts changed during the campaign.' }
+    $postCommit = (Invoke-InventoryCommand 'git' @('-C', $sourceRoot, 'rev-parse', 'HEAD') 'git-stderr.txt') -join ''
+    $postPatch = (Invoke-InventoryCommand 'git' (@('-C', $sourceRoot, 'diff', '--binary', '--no-ext-diff', 'HEAD', '--') + $relevantPaths) 'git-stderr.txt') -join "`n"
+    $postUntrackedPaths = @(Invoke-InventoryCommand 'git' (@('-C', $sourceRoot, '-c', 'core.quotepath=false', 'ls-files', '--others', '--exclude-standard', '--') + $relevantPaths) 'git-stderr.txt')
+    if ($inventoryExit -ne 0) { throw 'Post-campaign source identity cannot be established.' }
+    $postUntracked = Get-ArtifactIdentity @($postUntrackedPaths | ForEach-Object { Join-Path $sourceRoot $_ })
+    $postSourceIdentity = [ordered]@{ commit = $postCommit; patchDigest = Get-TextDigest $postPatch; untracked = $postUntracked.artifacts }
+    if ((Get-TextDigest (ConvertTo-Json -InputObject $postSourceIdentity -Depth 8 -Compress)) -ne $sourceDigest)
+    {
+        throw 'Source changed during the campaign; results cannot qualify the captured source.'
+    }
     $cases = @()
     if (Test-Path -LiteralPath (Join-Path $outputPath 'results.xml'))
     {
@@ -189,6 +250,7 @@ try
         executedCount = $selectedCount - $unavailableCount; unavailableCount = $unavailableCount; perTestResults = $perTest
         elapsedMilliseconds = $timer.Elapsed.TotalMilliseconds; timingBoundary = $TimingBoundary; qualification = 'pending'
         requiredEvidence = $requirements; automatedQualification = @($change.automatedTests); manifestDigest = Get-TextDigest ([IO.File]::ReadAllText((Join-Path $outputPath 'manifest.json')))
+        buildSourceVerified = $buildSourceVerified; fixtureOnly = [bool]$FixtureOnly
     }
     Write-Once 'results.json' (ConvertTo-Json -InputObject $result -Depth 8)
     Write-Output "Campaign $CampaignId executed $selectedCount tests; qualification remains pending. Output: $outputPath"

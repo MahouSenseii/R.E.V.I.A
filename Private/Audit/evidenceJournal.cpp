@@ -540,6 +540,46 @@ std::vector<core::EvidenceRef> EvidenceJournal::Read(const EvidenceQuery& query)
     }
     return references;
 }
+bool EvidenceJournal::HasUnresolvedForTask(const runtime::RuntimeStamp& stamp, const memory::MemoryScope& scope)
+{
+    std::lock_guard lock(mutex);
+    try
+    {
+        const auto projection = Project(ReadBytes(path));
+        std::set<std::string> pending;
+        if (projection.unsupportedVersion || projection.conflictingIds)
+            return true;
+        for (const auto& record : projection.records)
+        {
+            if (!record.contains("evidence"))
+                continue;
+            core::EvidenceRef reference;
+            if (!core::DeserializeEvidenceRef(record["evidence"].dump(), reference))
+                continue;
+            auto captured = reference.stamp;
+            captured.attemptId = stamp.attemptId;
+            captured.policyVersion = stamp.policyVersion;
+            if (!core::SameRuntimeStamp(captured, stamp) || !core::SameMemoryScope(reference.scope, scope))
+                continue;
+            const auto transaction = record.value("audit_transaction", std::string());
+            const auto kind = record.value("record_type", std::string());
+            if (transaction.empty())
+                continue;
+            if (kind == "intent")
+                pending.insert(transaction);
+            else if (kind == "result" || kind == "verification")
+                pending.erase(transaction);
+        }
+        return !pending.empty();
+    }
+    catch (const std::exception& failure)
+    {
+        health.degraded = true;
+        health.error = failure.what();
+        return true;
+    }
+}
+
 JournalHealth EvidenceJournal::Recover()
 {
     std::lock_guard lock(mutex);
@@ -554,25 +594,33 @@ JournalHealth EvidenceJournal::Recover()
         health.degraded = true;
         health.error = failure.what();
     }
-    return health;
+    return SnapshotHealthLocked();
+}
+JournalHealth EvidenceJournal::SnapshotHealthLocked() const
+{
+    const std::lock_guard queueLock(telemetryMutex);
+    auto snapshot = health;
+    snapshot.durableDroppedTelemetry = health.droppedTelemetry;
+    snapshot.pendingDroppedTelemetry = pendingDrops + flushingDrops;
+    snapshot.droppedTelemetry = snapshot.durableDroppedTelemetry + snapshot.pendingDroppedTelemetry;
+    return snapshot;
 }
 JournalHealth EvidenceJournal::Health() const
 {
     std::lock_guard lock(mutex);
-    return health;
+    return SnapshotHealthLocked();
 }
 bool EvidenceJournal::QueueTelemetry(const JournalEvent& event)
 {
-    std::lock_guard lock(mutex);
     if (event.kind == JournalKind::Intent || event.kind == JournalKind::Result || !core::ValidateEvidenceRef(event.evidence) ||
         event.redactedSummary.size() > MaximumSummaryBytes)
         return false;
+    const std::lock_guard queueLock(telemetryMutex);
     if (telemetry.size() >= telemetryCapacity)
     {
         if (!droppedContext)
             droppedContext = event;
         ++pendingDrops;
-        ++health.droppedTelemetry;
         return false;
     }
     telemetry.push_back(event);
@@ -580,28 +628,81 @@ bool EvidenceJournal::QueueTelemetry(const JournalEvent& event)
 }
 bool EvidenceJournal::FlushTelemetry()
 {
-    std::lock_guard lock(mutex);
-    if (pendingDrops != 0 && droppedContext)
+    const std::lock_guard flushLock(telemetryFlushMutex);
+    std::deque<JournalEvent> batch;
+    std::size_t batchDrops = 0;
+    std::optional<JournalEvent> batchContext;
     {
-        auto marker = *droppedContext;
+        const std::lock_guard queueLock(telemetryMutex);
+        batch.swap(telemetry);
+        batchDrops = pendingDrops;
+        batchContext = std::move(droppedContext);
+        pendingDrops = 0;
+        droppedContext.reset();
+        flushingDrops = batchDrops;
+    }
+    const auto restore = [&]
+    {
+        const std::lock_guard queueLock(telemetryMutex);
+        pendingDrops += flushingDrops;
+        flushingDrops = 0;
+        if (batchDrops != 0 && batchContext)
+            droppedContext = std::move(batchContext);
+        while (!telemetry.empty())
+        {
+            if (batch.size() < telemetryCapacity)
+                batch.push_back(std::move(telemetry.front()));
+            else
+            {
+                if (!droppedContext)
+                    droppedContext = telemetry.front();
+                ++pendingDrops;
+            }
+            telemetry.pop_front();
+        }
+        telemetry.swap(batch);
+    };
+    if (batchDrops != 0 && batchContext)
+    {
+        auto marker = *batchContext;
         marker.evidence.id = "telemetry-dropped-" + NewJournalEventId();
         marker.kind = JournalKind::Observation;
         marker.transactionId.clear();
         marker.redactedSummary = "Nonessential telemetry was dropped by the bounded queue.";
         auto record = Encode(marker);
-        record["dropped_count"] = pendingDrops;
-        if (!AppendRecord(record.dump(), marker.evidence.id).Durable())
+        record["dropped_count"] = batchDrops;
+        bool durable = false;
+        {
+            const std::lock_guard diskLock(mutex);
+            durable = AppendRecord(record.dump(), marker.evidence.id).Durable();
+            if (durable)
+            {
+                const std::lock_guard queueLock(telemetryMutex);
+                flushingDrops = 0;
+                batchDrops = 0;
+            }
+        }
+        if (!durable)
+        {
+            restore();
             return false;
-        pendingDrops = 0;
-        droppedContext.reset();
+        }
     }
-    while (!telemetry.empty())
+    while (!batch.empty())
     {
-        if (!AppendLocked(telemetry.front()).Durable())
+        bool durable = false;
+        {
+            const std::lock_guard diskLock(mutex);
+            durable = AppendLocked(batch.front()).Durable();
+        }
+        if (!durable)
+        {
+            restore();
             return false;
-        telemetry.pop_front();
+        }
+        batch.pop_front();
     }
-    return pendingDrops == 0;
+    return true;
 }
 const std::filesystem::path& EvidenceJournal::Path() const
 {

@@ -1,0 +1,73 @@
+{
+  "schemaVersion": 1,
+  "split": "calibration",
+  "seeds": [
+    11,
+    29,
+    47
+  ],
+  "cases": [
+    {
+      "id": "calibration-presence-001",
+      "title": "calibration_presence",
+      "family": "calibration_presence",
+      "clause": "Grounded cognition baseline",
+      "oracleId": "json-exact-v1",
+      "turns": [
+        {
+          "input": "Calibration Box CX-201 is empty. Return JSON with key empty set to true.",
+          "checks": [
+            {
+              "kind": "not_empty"
+            }
+          ]
+        }
+      ],
+      "expected": {
+        "empty": true
+      },
+      "sourceDigest": "142dec56db085510391b094d74f3137e7da41464a66909ef62b8999f1cb91bfd",
+      "entityIds": [
+        "CX-201"
+      ],
+      "requiredClaims": [
+        "empty = true"
+      ],
+      "forbiddenClaims": [
+        "Additional keys, contradictory values, invented sources, or guessed missing facts."
+      ],
+      "uncertaintyDisposition": "Return explicitly unknown values as null; use supplied facts for all other values."
+    },
+    {
+      "id": "calibration-presence-002",
+      "title": "calibration_presence",
+      "family": "calibration_presence",
+      "clause": "Grounded cognition baseline",
+      "oracleId": "json-exact-v1",
+      "turns": [
+        {
+          "input": "Calibration Box CX-202 contains a bell. Return JSON with key empty set to false.",
+          "checks": [
+            {
+              "kind": "not_empty"
+            }
+          ]
+        }
+      ],
+      "expected": {
+        "empty": false
+      },
+      "sourceDigest": "b03ade2a14134d3c7f24f50f614b0a44874d139ba47b2f93cb761b1c93ef6972",
+      "entityIds": [
+        "CX-202"
+      ],
+      "requiredClaims": [
+        "empty = false"
+      ],
+      "forbiddenClaims": [
+        "Additional keys, contradictory values, invented sources, or guessed missing facts."
+      ],
+      "uncertaintyDisposition": "Return explicitly unknown values as null; use supplied facts for all other values."
+    }
+  ]
+}

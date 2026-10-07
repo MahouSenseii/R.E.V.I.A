@@ -19,9 +19,18 @@ set_tests_properties(FixtureKnown PROPERTIES LABELS "T-FND-02-A;FND-02")
     $registry = Join-Path $taskDirectory 'registry.json'
     '{"schemaVersion":1,"changes":[{"id":"FND-02","automatedTests":[{"id":"T-FND-02-A","qualification":"fixture"}],"requiredEvidence":[{"id":"HOST-BASELINE","kind":"live"}]}]}' | Set-Content -LiteralPath $registry -Encoding UTF8
     $shell = (Get-Process -Id $PID).Path
+    $foreign = Join-Path $taskDirectory 'foreign-source'
+    $ErrorActionPreference = 'Continue'
+    & $shell -NoProfile -File $Runner -Preset debug -CampaignId foreign -ChangeId FND-02 -OutputDirectory $foreign -BuildDirectory $build -RegistryPath $registry *> (Join-Path $taskDirectory 'foreign.log')
+    $foreignExit = $LASTEXITCODE
+    $ErrorActionPreference = 'Stop'
+    if ($foreignExit -eq 0) { throw 'An unrelated project was stamped as a Revia source build.' }
     $known = Join-Path $taskDirectory 'known'
-    & $shell -NoProfile -File $Runner -Preset debug -CampaignId known -ChangeId FND-02 -OutputDirectory $known -BuildDirectory $build -RegistryPath $registry *> (Join-Path $taskDirectory 'known.log')
-    if ($LASTEXITCODE -ne 0) { throw ('Known selector failed: ' + (Get-Content -LiteralPath (Join-Path $taskDirectory 'known.log') -Raw)) }
+    $ErrorActionPreference = 'Continue'
+    & $shell -NoProfile -File $Runner -Preset debug -CampaignId known -ChangeId FND-02 -OutputDirectory $known -BuildDirectory $build -RegistryPath $registry -FixtureOnly *> (Join-Path $taskDirectory 'known.log')
+    $knownExit = $LASTEXITCODE
+    $ErrorActionPreference = 'Stop'
+    if ($knownExit -ne 0) { throw ('Known selector failed: ' + (Get-Content -LiteralPath (Join-Path $taskDirectory 'known.log') -Raw)) }
     $manifest = Get-Content -LiteralPath (Join-Path $known 'manifest.json') -Raw | ConvertFrom-Json
     $results = Get-Content -LiteralPath (Join-Path $known 'results.json') -Raw | ConvertFrom-Json
     if ($results.selectedCount -ne 1 -or $results.qualification -ne 'pending' -or $results.requiredEvidence[0].status -ne 'pending') { throw 'Fixture execution claimed live qualification or omitted evidence.' }
@@ -31,26 +40,26 @@ set_tests_properties(FixtureKnown PROPERTIES LABELS "T-FND-02-A;FND-02")
     try {
         'Independent untracked source identity.' | Set-Content -LiteralPath $identityFile -Encoding UTF8
         $changed = Join-Path $taskDirectory 'changed-source'
-        & $shell -NoProfile -File $Runner -Preset debug -CampaignId changed -ChangeId FND-02 -OutputDirectory $changed -BuildDirectory $build -RegistryPath $registry *> (Join-Path $taskDirectory 'changed.log')
+        & $shell -NoProfile -File $Runner -Preset debug -CampaignId changed -ChangeId FND-02 -OutputDirectory $changed -BuildDirectory $build -RegistryPath $registry -FixtureOnly *> (Join-Path $taskDirectory 'changed.log')
         if ($LASTEXITCODE -ne 0) { throw 'Changed-source selector failed.' }
         $dirty = Get-Content -LiteralPath (Join-Path $changed 'manifest.json') -Raw | ConvertFrom-Json
         if (-not $dirty.sourceDirty -or $dirty.commit -ne $manifest.commit -or $dirty.sourceDigest -eq $manifest.sourceDigest) { throw 'Untracked source was mislabeled as an exact commit.' }
     } finally { Remove-Item -LiteralPath $identityFile -Force -ErrorAction SilentlyContinue }
     $original = [IO.File]::ReadAllBytes((Join-Path $known 'manifest.json'))
     $ErrorActionPreference = 'Continue'
-    & $shell -NoProfile -File $Runner -Preset debug -CampaignId known -ChangeId FND-02 -OutputDirectory $known -BuildDirectory $build -RegistryPath $registry *> (Join-Path $taskDirectory 'overwrite.log')
+    & $shell -NoProfile -File $Runner -Preset debug -CampaignId known -ChangeId FND-02 -OutputDirectory $known -BuildDirectory $build -RegistryPath $registry -FixtureOnly *> (Join-Path $taskDirectory 'overwrite.log')
     $runnerExit = $LASTEXITCODE
     $ErrorActionPreference = 'Stop'
     if ($runnerExit -eq 0 -or [Convert]::ToBase64String($original) -ne [Convert]::ToBase64String([IO.File]::ReadAllBytes((Join-Path $known 'manifest.json')))) { throw 'Immutable campaign was overwritten.' }
     $ErrorActionPreference = 'Continue'
-    & $shell -NoProfile -File $Runner -Preset debug -CampaignId missing -ChangeId UNKNOWN -OutputDirectory (Join-Path $taskDirectory 'missing') -BuildDirectory $build -RegistryPath $registry *> (Join-Path $taskDirectory 'missing.log')
+    & $shell -NoProfile -File $Runner -Preset debug -CampaignId missing -ChangeId UNKNOWN -OutputDirectory (Join-Path $taskDirectory 'missing') -BuildDirectory $build -RegistryPath $registry -FixtureOnly *> (Join-Path $taskDirectory 'missing.log')
     $runnerExit = $LASTEXITCODE
     $ErrorActionPreference = 'Stop'
     if ($runnerExit -eq 0) { throw 'Missing selector passed.' }
     $removed = Join-Path $taskDirectory 'removed'
     '# Test registration deliberately removed.' | Set-Content -LiteralPath (Join-Path $build 'CTestTestfile.cmake') -Encoding UTF8
     $ErrorActionPreference = 'Continue'
-    & $shell -NoProfile -File $Runner -Preset debug -CampaignId removed -ChangeId FND-02 -OutputDirectory $removed -BuildDirectory $build -RegistryPath $registry *> (Join-Path $taskDirectory 'removed.log')
+    & $shell -NoProfile -File $Runner -Preset debug -CampaignId removed -ChangeId FND-02 -OutputDirectory $removed -BuildDirectory $build -RegistryPath $registry -FixtureOnly *> (Join-Path $taskDirectory 'removed.log')
     $runnerExit = $LASTEXITCODE
     $ErrorActionPreference = 'Stop'
     if ($runnerExit -eq 0) { throw 'Removed label passed.' }
@@ -61,7 +70,7 @@ set_tests_properties(FixtureKnown PROPERTIES LABELS "T-FND-02-A;FND-02")
     if ($LASTEXITCODE -ne 0) { throw 'Disabled-test fixture configure failed.' }
     $disabled = Join-Path $taskDirectory 'disabled'
     $ErrorActionPreference = 'Continue'
-    & $shell -NoProfile -File $Runner -Preset debug -CampaignId disabled -ChangeId FND-02 -OutputDirectory $disabled -BuildDirectory $build -RegistryPath $registry *> (Join-Path $taskDirectory 'disabled.log')
+    & $shell -NoProfile -File $Runner -Preset debug -CampaignId disabled -ChangeId FND-02 -OutputDirectory $disabled -BuildDirectory $build -RegistryPath $registry -FixtureOnly *> (Join-Path $taskDirectory 'disabled.log')
     $runnerExit = $LASTEXITCODE
     $ErrorActionPreference = 'Stop'
     $unavailable = Get-Content -LiteralPath (Join-Path $disabled 'results.json') -Raw | ConvertFrom-Json

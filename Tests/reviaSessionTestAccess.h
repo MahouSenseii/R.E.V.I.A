@@ -255,7 +255,19 @@ struct ReviaSessionTestAccess
 
     static SessionResult Execute(ReviaSession& session, actions::ActionRequest request)
     {
-        return session.ExecuteAction(std::move(request));
+        // Direct action fixtures simulate admission without starting unrelated session services.
+        const bool wasStarted = session.started.exchange(true);
+        try
+        {
+            auto result = session.ExecuteAction(std::move(request));
+            session.started.store(wasStarted);
+            return result;
+        }
+        catch (...)
+        {
+            session.started.store(wasStarted);
+            throw;
+        }
     }
 
     static void PrepareOperator(ReviaSession& session, const std::filesystem::path& root, goals::GoalRunner::StepProvider provider = {})

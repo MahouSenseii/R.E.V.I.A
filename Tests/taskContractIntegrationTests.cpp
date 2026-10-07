@@ -106,6 +106,12 @@ void ActualConsumerAdmissions()
             "actual native consumer admitted stale/cross-audience contract case " + std::to_string(index));
         Check(outcome.policy.verdict == actions::PolicyVerdict::Blocked, "contract rejection must be a named policy refusal");
     }
+    {
+        std::ifstream saved(runtime.EvidenceJournalOwner()->Path());
+        const std::string bytes((std::istreambuf_iterator<char>(saved)), std::istreambuf_iterator<char>());
+        Check(bytes.find("contract_admission_refused") != std::string::npos, "contract rejections retain a durable redacted denial");
+        Check(bytes.find("other-audience-") == std::string::npos, "foreign contract scope cannot enter denied audit evidence");
+    }
     actions::ActionRequest valid;
     valid.id = "valid-native";
     valid.type = actions::ActionType::CreateDirectory;
@@ -186,6 +192,75 @@ void StandaloneEnvelopeCannotBypassHost()
     Check(legacy.Succeeded() && std::filesystem::is_directory(request.source), "standalone legacy behavior retained");
 }
 
+void LegacyHostRevisionPreservesSuppliedEnvelopes()
+{
+    tests::ScopedTestDirectory directory;
+    actions::ActionRuntime runtime;
+    actions::ActionRuntimeTestAccess::Configure(runtime, directory.root);
+    auto expected = Contract();
+    auto authority = std::make_shared<policy::CompanionAuthority>();
+    authority->SetCompanionDefaults(expected.stamp.companionId, policy::AuthorityPermissions::WithinMachineCeiling());
+    auto session = expected.stamp;
+    session.taskId.clear();
+    session.attemptId.clear();
+    Check(authority->RegisterSession(session) && authority->RegisterTask(expected.stamp, {}), "register legacy authority subject");
+    expected.stamp.policyVersion = authority->Revision();
+    expected.cancellation.origin = expected.stamp;
+    const auto legacySubject = expected.stamp;
+    runtime.BindAuthority(authority, legacySubject);
+    auto registration = legacySubject;
+    registration.taskId = "separate-registered-task";
+    Check(authority->RegisterTask(registration, {}), "advance authority revision through real task registration");
+    expected.stamp.policyVersion = authority->Revision();
+    expected.cancellation.origin = expected.stamp;
+    unsigned constructed = 0;
+    runtime.BindTaskContracts(
+        [&](const actions::ActionRequest& request, const runtime::RuntimeStamp& host, std::stop_token)
+        {
+            ++constructed;
+            Check(
+                core::SameRuntimeStamp(host, expected.stamp), "host construction changed actual subject identity or missed current policy");
+            auto task = expected;
+            task.sourceId = request.id;
+            return std::make_shared<const core::TaskContract>(std::move(task));
+        },
+        [&](const core::TaskContract& task, std::stop_token stop)
+        {
+            const auto validation = core::ValidateTaskAdmission(
+                task, expected.stamp, expected.scope, [&](const auto& stamp) { return core::SameRuntimeStamp(stamp, expected.stamp); },
+                stop);
+            return validation ? std::string{} : validation.code;
+        });
+    actions::ActionRequest legacy;
+    legacy.id = "host-current-policy";
+    legacy.type = actions::ActionType::CreateDirectory;
+    legacy.source = directory.root / legacy.id;
+    Check(runtime.ExecuteFor(legacySubject, legacy, true).Succeeded() && std::filesystem::is_directory(legacy.source),
+        "host-generated legacy contract must capture current policy without changing the actual authority subject");
+    for (const bool staleEnvelope : {false, true})
+    {
+        auto supplied = legacy;
+        supplied.id = staleEnvelope ? "explicit-stale-policy" : "explicit-current-policy-with-old-subject";
+        supplied.source = directory.root / supplied.id;
+        auto frozen = expected;
+        frozen.sourceId = supplied.id;
+        if (staleEnvelope)
+        {
+            frozen.stamp = legacySubject;
+            frozen.cancellation.origin = legacySubject;
+        }
+        supplied.taskContract = std::make_shared<const core::TaskContract>(std::move(frozen));
+        const auto subject = staleEnvelope ? expected.stamp : legacySubject;
+        const auto outcome = runtime.ExecuteFor(subject, supplied, true);
+        Check(!outcome.result.attempted && !outcome.result.succeeded && !std::filesystem::exists(supplied.source) &&
+                  outcome.policy.verdict == actions::PolicyVerdict::Blocked,
+            "explicit envelope version cannot be migrated or detached from its frozen authority subject");
+        Check(constructed == 1 && supplied.taskContract->stamp.policyVersion ==
+                                      (staleEnvelope ? legacySubject.policyVersion : expected.stamp.policyVersion),
+            "explicit envelope was reconstructed or its frozen policy stamp changed");
+    }
+}
+
 }
 
 int main()
@@ -194,6 +269,7 @@ int main()
     {
         ActualConsumerAdmissions();
         StandaloneEnvelopeCannotBypassHost();
+        LegacyHostRevisionPreservesSuppliedEnvelopes();
         std::cout << "PASS 100 actual ActionRuntime stale/cross-audience refusals; native filesystem controls; final effect scope; "
                      "version/standalone gates\n";
         return 0;

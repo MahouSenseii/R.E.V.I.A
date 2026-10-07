@@ -1,0 +1,73 @@
+{
+  "schemaVersion": 1,
+  "split": "development",
+  "seeds": [
+    11,
+    29,
+    47
+  ],
+  "cases": [
+    {
+      "id": "development-lookup-001",
+      "title": "development_lookup",
+      "family": "development_lookup",
+      "clause": "Grounded cognition baseline",
+      "oracleId": "json-exact-v1",
+      "turns": [
+        {
+          "input": "Development Kite DX-101 is amber. Return JSON with key color.",
+          "checks": [
+            {
+              "kind": "not_empty"
+            }
+          ]
+        }
+      ],
+      "expected": {
+        "color": "amber"
+      },
+      "sourceDigest": "5755b2e746e75eb683dda4371da0a0c6c47a3a78b810489692cfc38aef70cf15",
+      "entityIds": [
+        "DX-101"
+      ],
+      "requiredClaims": [
+        "color = \"amber\""
+      ],
+      "forbiddenClaims": [
+        "Additional keys, contradictory values, invented sources, or guessed missing facts."
+      ],
+      "uncertaintyDisposition": "Return explicitly unknown values as null; use supplied facts for all other values."
+    },
+    {
+      "id": "development-lookup-002",
+      "title": "development_lookup",
+      "family": "development_lookup",
+      "clause": "Grounded cognition baseline",
+      "oracleId": "json-exact-v1",
+      "turns": [
+        {
+          "input": "Development Kite DX-102 is silver. Return JSON with key color.",
+          "checks": [
+            {
+              "kind": "not_empty"
+            }
+          ]
+        }
+      ],
+      "expected": {
+        "color": "silver"
+      },
+      "sourceDigest": "da0d4fafaf9d55567a324ac1cb41c46275e6e2f1610dc09214d5d8f3272c9cca",
+      "entityIds": [
+        "DX-102"
+      ],
+      "requiredClaims": [
+        "color = \"silver\""
+      ],
+      "forbiddenClaims": [
+        "Additional keys, contradictory values, invented sources, or guessed missing facts."
+      ],
+      "uncertaintyDisposition": "Return explicitly unknown values as null; use supplied facts for all other values."
+    }
+  ]
+}

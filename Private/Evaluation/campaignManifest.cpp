@@ -180,7 +180,11 @@ bool WriteCampaignManifestOnce(const std::filesystem::path& path, const Campaign
     {
         return false;
     }
-    const auto bytes = SerializeCampaignManifest(manifest) + '\n';
+    return WriteEvaluationArtifactOnce(path, SerializeCampaignManifest(manifest) + '\n', error);
+}
+
+bool WriteEvaluationArtifactOnce(const std::filesystem::path& path, const std::string& bytes, std::string& error)
+{
 #ifdef _WIN32
     const HANDLE file = CreateFileW(path.c_str(), GENERIC_WRITE, FILE_SHARE_READ, nullptr, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
     if (file == INVALID_HANDLE_VALUE)

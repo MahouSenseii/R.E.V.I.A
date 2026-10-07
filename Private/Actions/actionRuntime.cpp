@@ -1,6 +1,7 @@
 #include "Actions/actionRuntime.h"
 
 #include "Core/taskContract.h"
+#include "Audit/contentDigest.h"
 #include "Filesystem/fileSystemExecutor.h"
 #include "Process/processExecutor.h"
 #include "Browser/browserExecutor.h"
@@ -18,6 +19,36 @@
 
 namespace revia::actions
 {
+namespace
+{
+bool RecordContractDenial(audit::ActionAuditLogger& logger, const ActionRequest& request, runtime::RuntimeStamp host)
+{
+    const auto id = audit::NewJournalEventId();
+    const std::string reason = "contract_admission_refused";
+    nlohmann::json record = {{"action_id_digest", audit::ContentDigest(request.id)}, {"action_type", ToString(request.type)},
+        {"reason", reason}, {"attempted", false}, {"succeeded", false}};
+    std::optional<core::EvidenceRef> evidence;
+    if (!host.companionId.empty() && !host.sessionId.empty() && host.generation > 0 && host.policyVersion > 0)
+    {
+        host.taskId = "contract-denials";
+        host.attemptId = id;
+        core::EvidenceRef reference;
+        reference.id = id;
+        reference.sourceLocator = "action-denial://" + id;
+        reference.sourceId = "contract-admission";
+        reference.digest = audit::ContentDigest(record.dump());
+        reference.mediaType = "application/json";
+        reference.stamp = std::move(host);
+        reference.scope.companionId = reference.stamp.companionId;
+        reference.scope.audience = {identity::AudienceKind::Unknown, "runtime-system", 0, {}};
+        reference.observedAtUnixMs = static_cast<std::uint64_t>(
+            std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count());
+        evidence = std::move(reference);
+    }
+    // Refused payload and scope never enter the host's durable denial record.
+    return logger.Journal()->AppendActionRecord(record.dump(), id, audit::JournalKind::Result, "denial-" + id, evidence).Durable();
+}
+}
 
 ActionRuntime::ActionRuntime()
     : internetCancellation(std::make_shared<internet::VisibleBrowserCancellation>()),
@@ -25,15 +56,15 @@ ActionRuntime::ActionRuntime()
 {
 }
 
-bool ActionRuntime::Initialize(const std::filesystem::path& capabilityConfig,
-    const std::filesystem::path& inputAuditPath, std::string& outError)
+bool ActionRuntime::Initialize(
+    const std::filesystem::path& capabilityConfig, const std::filesystem::path& inputAuditPath, std::string& outError)
 {
     std::lock_guard lock(mutex);
     return InitializeUnlocked(capabilityConfig, inputAuditPath, outError);
 }
 
-bool ActionRuntime::InitializeUnlocked(const std::filesystem::path& capabilityConfig,
-    const std::filesystem::path& inputAuditPath, std::string& outError)
+bool ActionRuntime::InitializeUnlocked(
+    const std::filesystem::path& capabilityConfig, const std::filesystem::path& inputAuditPath, std::string& outError)
 {
     CapabilitySettings settings;
     if (!permissionStore.Load(capabilityConfig, settings, outError))
@@ -49,8 +80,7 @@ bool ActionRuntime::InitializeUnlocked(const std::filesystem::path& capabilityCo
             std::filesystem::create_directories(root, error);
             if (error)
             {
-                outError = "Could not create approved root " + PathToUtf8(root) +
-                    ": " + error.message();
+                outError = "Could not create approved root " + PathToUtf8(root) + ": " + error.message();
                 return false;
             }
         }
@@ -65,25 +95,16 @@ bool ActionRuntime::InitializeUnlocked(const std::filesystem::path& capabilityCo
     dispatcher.Register(std::make_unique<browser::BrowserExecutor>(browserSession));
     if (imageProvider)
         dispatcher.Register(std::make_unique<visual::ImageExecutor>(*imageProvider, imageAccess.outputRoot));
-    desktopRateLimiter.Configure(
-        settings.maxDesktopActionsPerMinute,
-        settings.minimumDesktopActionIntervalMs,
+    desktopRateLimiter.Configure(settings.maxDesktopActionsPerMinute, settings.minimumDesktopActionIntervalMs,
         policy::DesktopActionRateLimiter::Scope::UiAutomation);
-    desktopControlRateLimiter.Configure(
-        settings.desktopControl.maxInputActionsPerMinute,
-        settings.desktopControl.minimumInputIntervalMs,
+    desktopControlRateLimiter.Configure(settings.desktopControl.maxInputActionsPerMinute, settings.desktopControl.minimumInputIntervalMs,
         policy::DesktopActionRateLimiter::Scope::DesktopControl);
-    dispatcher.Register(std::make_unique<filesystem::FileSystemExecutor>(
-        settings.maxReadBytes,
-        settings.maxDirectoryEntries,
-        settings.maxAffectedEntries));
-    dispatcher.Register(std::make_unique<internet::InternetSearchExecutor>(
-        settings.internet, internetCancellation));
+    dispatcher.Register(
+        std::make_unique<filesystem::FileSystemExecutor>(settings.maxReadBytes, settings.maxDirectoryEntries, settings.maxAffectedEntries));
+    dispatcher.Register(std::make_unique<internet::InternetSearchExecutor>(settings.internet, internetCancellation));
 #ifdef _WIN32
-    dispatcher.Register(std::make_unique<windows::WindowsAutomationExecutor>(
-        settings.desktopControl, desktopApprovals));
-    dispatcher.Register(std::make_unique<windows::DesktopControlExecutor>(
-        settings.desktopControl, desktopInputGuard, desktopApprovals));
+    dispatcher.Register(std::make_unique<windows::WindowsAutomationExecutor>(settings.desktopControl, desktopApprovals));
+    dispatcher.Register(std::make_unique<windows::DesktopControlExecutor>(settings.desktopControl, desktopInputGuard, desktopApprovals));
 #endif
     if (!auditLogger || auditLogger->Path() != inputAuditPath)
         auditLogger = std::make_unique<audit::ActionAuditLogger>(inputAuditPath);
@@ -142,7 +163,8 @@ void ActionRuntime::BindAuthority(std::shared_ptr<policy::CompanionAuthority> in
 void ActionRuntime::ClearAuthorityBinding()
 {
     std::lock_guard lock(mutex);
-    if (browserSession) browserSession->Stop();
+    if (browserSession)
+        browserSession->Stop();
     authority.reset();
     sessionStamp = {};
     taskContractFactory = {};
@@ -188,19 +210,20 @@ void ActionRuntime::SetPrivateRuntimePaths(std::filesystem::path profileDirector
 void ActionRuntime::SetBrowserSession(std::shared_ptr<browser::BrowserSession> session)
 {
     std::lock_guard lock(mutex);
-    if (browserSession) browserSession->Stop();
+    if (browserSession)
+        browserSession->Stop();
     browserSession = std::move(session);
     dispatcher.Unregister(ActionType::BrowserNavigate);
     dispatcher.Register(std::make_unique<browser::BrowserExecutor>(browserSession));
 }
 
-void ActionRuntime::BindImageProvider(visual::ImageGenerator& provider, const std::filesystem::path& ownedOutputRoot,
-    const bool allowAutonomous)
+void ActionRuntime::BindImageProvider(
+    visual::ImageGenerator& provider, const std::filesystem::path& ownedOutputRoot, const bool allowAutonomous)
 {
     std::error_code error;
     const auto root = std::filesystem::weakly_canonical(ownedOutputRoot, error);
-    const bool valid = !error && ownedOutputRoot.is_absolute() && root ==
-        std::filesystem::weakly_canonical(provider.OutputDirectory(), error) && !error;
+    const bool valid =
+        !error && ownedOutputRoot.is_absolute() && root == std::filesystem::weakly_canonical(provider.OutputDirectory(), error) && !error;
     std::lock_guard lock(mutex);
     imageProvider = &provider;
     imageAccess = {valid && provider.IsEnabled(), allowAutonomous, valid ? root : std::filesystem::path{}};
@@ -246,8 +269,10 @@ ActionOutcome ActionRuntime::ExecuteWithPolicy(const ActionRequest& inputRequest
     {
         contractError = "The host task contract factory failed.";
     }
+    // Host construction captures current policy; supplied envelopes retain their frozen subject version.
+    const auto contractPolicyVersion = hostContract ? request.authorityStamp.policyVersion : capturedStamp.policyVersion;
     const auto contractRefusal = [this, request, hostContract, contractError, capturedStamp, capturedContractGuard, capturedContractBinding,
-                                     stopToken]() -> std::string
+                                     contractPolicyVersion, stopToken]() -> std::string
     {
         if (!contractError.empty())
             return contractError;
@@ -264,7 +289,7 @@ ActionOutcome ActionRuntime::ExecuteWithPolicy(const ActionRequest& inputRequest
         if ((!capturedStamp.companionId.empty() && !task.stamp.SameSession(capturedStamp)) ||
             (!capturedStamp.taskId.empty() && task.stamp.taskId != capturedStamp.taskId) ||
             (!capturedStamp.attemptId.empty() && task.stamp.attemptId != capturedStamp.attemptId) ||
-            (capturedStamp.policyVersion != 0 && task.stamp.policyVersion != capturedStamp.policyVersion))
+            (contractPolicyVersion != 0 && task.stamp.policyVersion != contractPolicyVersion))
             return "Task contract does not retain the admitted authority subject.";
         if (hostContract &&
             (!core::SameRuntimeStamp(task.stamp, hostContract->stamp) || !core::SameMemoryScope(task.scope, hostContract->scope)))
@@ -316,9 +341,8 @@ ActionOutcome ActionRuntime::ExecuteWithPolicy(const ActionRequest& inputRequest
         if (auditLogger)
             auditLogger->SetScope(request.taskContract->scope);
     }
-    const bool otherwiseExecutable =
-        outcome.policy.verdict == PolicyVerdict::Allowed ||
-        (outcome.policy.verdict == PolicyVerdict::RequiresConfirmation && confirmationGranted);
+    const bool otherwiseExecutable = outcome.policy.verdict == PolicyVerdict::Allowed ||
+                                     (outcome.policy.verdict == PolicyVerdict::RequiresConfirmation && confirmationGranted);
     std::string rateReason;
     if (otherwiseExecutable && !stopToken.stop_requested())
     {
@@ -333,7 +357,8 @@ ActionOutcome ActionRuntime::ExecuteWithPolicy(const ActionRequest& inputRequest
     // Bracketed so the observer sees the action end on every path, including the
     // blocked and refused ones -- a scope that only closes on success is how a session
     // gets stuck in a state an aborted action put it in.
-    if (dispatchObserver) dispatchObserver(request, true);
+    if (dispatchObserver)
+        dispatchObserver(request, true);
     if (outcome.policy.verdict != PolicyVerdict::Blocked)
         outcome.policy = applyContract(applyAuthority(scopedPolicy ? EvaluateScoped(request, *scopedPolicy) : Evaluate(request)));
     if (outcome.policy.verdict != PolicyVerdict::Blocked && request.taskContract && auditLogger &&
@@ -344,14 +369,13 @@ ActionOutcome ActionRuntime::ExecuteWithPolicy(const ActionRequest& inputRequest
     }
     const std::string transactionId = NewActionId();
     const bool executable = outcome.policy.verdict == PolicyVerdict::Allowed ||
-        (outcome.policy.verdict == PolicyVerdict::RequiresConfirmation && confirmationGranted);
+                            (outcome.policy.verdict == PolicyVerdict::RequiresConfirmation && confirmationGranted);
     if (stopToken.stop_requested())
     {
         outcome.result.dryRun = request.dryRun;
         outcome.result.message = "Action was cancelled before execution.";
     }
-    else if (executable && (!auditLogger ||
-        !auditLogger->RecordIntent(request, outcome.policy, transactionId)))
+    else if (executable && (!auditLogger || !auditLogger->RecordIntent(request, outcome.policy, transactionId)))
     {
         outcome.result.dryRun = request.dryRun;
         outcome.result.message = "Action was not executed because its required audit could not be written.";
@@ -384,7 +408,8 @@ ActionOutcome ActionRuntime::ExecuteWithPolicy(const ActionRequest& inputRequest
             if (stopToken.stop_requested())
                 return std::string("Action cancellation was requested.");
             const auto taskRefusal = contractRefusal();
-            if (!taskRefusal.empty()) return taskRefusal;
+            if (!taskRefusal.empty())
+                return taskRefusal;
             const auto current = scopedPolicy ? EvaluateScoped(request, *scopedPolicy) : Evaluate(request);
             if (current.verdict == PolicyVerdict::Blocked ||
                 (current.verdict == PolicyVerdict::RequiresConfirmation && !confirmationGranted))
@@ -422,20 +447,37 @@ ActionOutcome ActionRuntime::ExecuteWithPolicy(const ActionRequest& inputRequest
         };
         outcome.result = dispatcher.Dispatch(guardedRequest, outcome.policy, confirmationGranted);
     }
-    if (dispatchObserver) dispatchObserver(request, false);
+    if (dispatchObserver)
+        dispatchObserver(request, false);
     if (auditLogger && contractAdmitted)
     {
-        const double elapsedMilliseconds = std::chrono::duration<double, std::milli>(
-            std::chrono::steady_clock::now() - executionStarted).count();
-        if (!auditLogger->Record(
-            request, outcome.policy, outcome.result, elapsedMilliseconds, transactionId))
+        const double elapsedMilliseconds =
+            std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - executionStarted).count();
+        if (!auditLogger->Record(request, outcome.policy, outcome.result, elapsedMilliseconds, transactionId))
         {
-            if (!outcome.auditError.empty()) outcome.auditError += " ";
+            if (!outcome.auditError.empty())
+                outcome.auditError += " ";
             outcome.auditError += "The completion audit could not be recorded; the executor result is retained.";
         }
     }
-    else outcome.auditError = contractAdmitted ? "The action audit is unavailable." :
-        "The rejected task envelope was not admitted to the evidence journal.";
+    else if (auditLogger)
+    {
+        auto host = sessionStamp;
+        if (authority)
+            host.policyVersion = authority->Revision();
+        bool recorded = false;
+        try
+        {
+            recorded = RecordContractDenial(*auditLogger, request, std::move(host));
+        }
+        catch (...)
+        {
+        }
+        if (!recorded)
+            outcome.auditError = "The redacted contract rejection audit could not be recorded.";
+    }
+    else
+        outcome.auditError = "The action audit is unavailable.";
     return outcome;
 }
 
@@ -448,17 +490,19 @@ int VerdictRank(const PolicyVerdict verdict)
 {
     switch (verdict)
     {
-        case PolicyVerdict::Allowed: return 0;
-        case PolicyVerdict::RequiresConfirmation: return 1;
-        case PolicyVerdict::Blocked: return 2;
+    case PolicyVerdict::Allowed:
+        return 0;
+    case PolicyVerdict::RequiresConfirmation:
+        return 1;
+    case PolicyVerdict::Blocked:
+        return 2;
     }
     return 2;
 }
 
 PolicyDecision MoreRestrictive(const PolicyDecision& first, const PolicyDecision& second)
 {
-    PolicyDecision combined =
-        VerdictRank(second.verdict) > VerdictRank(first.verdict) ? second : first;
+    PolicyDecision combined = VerdictRank(second.verdict) > VerdictRank(first.verdict) ? second : first;
     combined.risk = std::max(first.risk, second.risk);
     combined.processOutputLimitBytes = std::min(first.processOutputLimitBytes, second.processOutputLimitBytes);
     combined.browser = browser::IntersectSettings(first.browser, second.browser);
@@ -487,8 +531,8 @@ PolicyDecision ActionRuntime::EvaluateScoped(const ActionRequest& request, const
     return MoreRestrictive(globalDecision, scopedDecision);
 }
 
-ActionOutcome ActionRuntime::ExecuteScoped(const ActionRequest& request,
-    const policy::CapabilityPolicy& scopedPolicy, bool confirmationGranted, const std::stop_token stopToken)
+ActionOutcome ActionRuntime::ExecuteScoped(
+    const ActionRequest& request, const policy::CapabilityPolicy& scopedPolicy, bool confirmationGranted, const std::stop_token stopToken)
 {
     std::lock_guard lock(mutex);
     return ExecuteWithPolicy(request, &scopedPolicy, confirmationGranted, stopToken);
@@ -510,48 +554,30 @@ std::string ActionRuntime::StatusJson() const
     }
     nlohmann::json applications = settings.approvedApplications;
     nlohmann::json controls = settings.approvedControls;
-    return nlohmann::json({
-        {"initialized", true},
-        {"mode", ToString(settings.mode)},
-        {"approved_roots", roots},
-        {"approved_applications", applications},
-        {"approved_controls", controls},
-        {"auto_approve_risk_through", ToString(settings.autoApproveRiskThrough)},
-        {"max_read_bytes", settings.maxReadBytes},
-        {"max_directory_entries", settings.maxDirectoryEntries},
-        {"max_affected_entries", settings.maxAffectedEntries},
-        {"max_desktop_actions_per_minute", settings.maxDesktopActionsPerMinute},
-        {"minimum_desktop_action_interval_ms", settings.minimumDesktopActionIntervalMs},
-        {"desktop_control", {
-            {"pointer", settings.desktopControl.pointer},
-            {"keyboard", settings.desktopControl.keyboard},
-            {"application_launch", settings.desktopControl.applicationLaunch},
-            {"raw_coordinates", settings.desktopControl.rawCoordinates},
-            {"visual_targeting", settings.desktopControl.visualTargeting},
-            {"autonomous", settings.desktopControl.autonomous},
-            {"scope", ToString(settings.desktopControl.scope)},
-            {"allow_command_surfaces", settings.desktopControl.allowCommandSurfaces},
-            {"max_input_actions_per_minute",
-                settings.desktopControl.maxInputActionsPerMinute},
-            {"minimum_input_interval_ms",
-                settings.desktopControl.minimumInputIntervalMs},
-            {"max_typed_characters", settings.desktopControl.maxTypedCharacters},
-            {"stopped", desktopInputGuard && desktopInputGuard->IsTripped()},
-            {"stop_reason", desktopInputGuard ? desktopInputGuard->Reason() : std::string{}}
-        }},
-        {"internet", {
-            {"enabled", settings.internet.enabled},
-            {"automatic_lookup", settings.internet.automaticLookup},
-            {"provider", settings.internet.provider},
-            {"approved_hosts", settings.internet.approvedHosts},
-            {"request_timeout_ms", settings.internet.requestTimeoutMs},
-            {"max_response_bytes", settings.internet.maxResponseBytes},
-            {"max_requests_per_minute", settings.internet.maxRequestsPerMinute},
-            {"max_results", settings.internet.maxResults},
-            {"visible_browser", settings.internet.visibleBrowser},
-            {"autonomous_research", settings.internet.autonomousResearch}
-        }}
-    }).dump(2);
+    return nlohmann::json(
+        {{"initialized", true}, {"mode", ToString(settings.mode)}, {"approved_roots", roots}, {"approved_applications", applications},
+            {"approved_controls", controls}, {"auto_approve_risk_through", ToString(settings.autoApproveRiskThrough)},
+            {"max_read_bytes", settings.maxReadBytes}, {"max_directory_entries", settings.maxDirectoryEntries},
+            {"max_affected_entries", settings.maxAffectedEntries}, {"max_desktop_actions_per_minute", settings.maxDesktopActionsPerMinute},
+            {"minimum_desktop_action_interval_ms", settings.minimumDesktopActionIntervalMs},
+            {"desktop_control", {{"pointer", settings.desktopControl.pointer}, {"keyboard", settings.desktopControl.keyboard},
+                                    {"application_launch", settings.desktopControl.applicationLaunch},
+                                    {"raw_coordinates", settings.desktopControl.rawCoordinates},
+                                    {"visual_targeting", settings.desktopControl.visualTargeting},
+                                    {"autonomous", settings.desktopControl.autonomous}, {"scope", ToString(settings.desktopControl.scope)},
+                                    {"allow_command_surfaces", settings.desktopControl.allowCommandSurfaces},
+                                    {"max_input_actions_per_minute", settings.desktopControl.maxInputActionsPerMinute},
+                                    {"minimum_input_interval_ms", settings.desktopControl.minimumInputIntervalMs},
+                                    {"max_typed_characters", settings.desktopControl.maxTypedCharacters},
+                                    {"stopped", desktopInputGuard && desktopInputGuard->IsTripped()},
+                                    {"stop_reason", desktopInputGuard ? desktopInputGuard->Reason() : std::string{}}}},
+            {"internet",
+                {{"enabled", settings.internet.enabled}, {"automatic_lookup", settings.internet.automaticLookup},
+                    {"provider", settings.internet.provider}, {"approved_hosts", settings.internet.approvedHosts},
+                    {"request_timeout_ms", settings.internet.requestTimeoutMs}, {"max_response_bytes", settings.internet.maxResponseBytes},
+                    {"max_requests_per_minute", settings.internet.maxRequestsPerMinute}, {"max_results", settings.internet.maxResults},
+                    {"visible_browser", settings.internet.visibleBrowser}, {"autonomous_research", settings.internet.autonomousResearch}}}})
+        .dump(2);
 }
 
 bool ActionRuntime::IsInitialized() const
@@ -564,7 +590,8 @@ void ActionRuntime::StopDesktopControl(const std::string& reason)
 {
     // Deliberately does not acquire `mutex`: Execute() owns it for the whole action,
     // and an emergency stop that waits for the action it is stopping is not one.
-    if (desktopInputGuard) desktopInputGuard->Trip(reason);
+    if (desktopInputGuard)
+        desktopInputGuard->Trip(reason);
 }
 
 bool ActionRuntime::ResumeDesktopControl()
@@ -586,7 +613,8 @@ void ActionRuntime::CancelActiveInternet(const bool preserveTaskOwned)
 {
     // Deliberately do not acquire `mutex`: Execute() owns it for the full synchronous
     // request, and cancellation exists specifically to interrupt that wait.
-    if (internetCancellation) internetCancellation->CancelActive(preserveTaskOwned);
+    if (internetCancellation)
+        internetCancellation->CancelActive(preserveTaskOwned);
 }
 
 } // namespace revia::actions

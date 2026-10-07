@@ -3,6 +3,9 @@
 #include "Audit/contentDigest.h"
 
 #include <fstream>
+#include <future>
+#include <atomic>
+#include <chrono>
 #include <iostream>
 #include <iterator>
 #include <nlohmann/json.hpp>
@@ -54,6 +57,34 @@ EvidenceQuery Query()
     const auto event = Event("query");
     return {event.evidence.stamp, event.evidence.scope, {}, {}};
 }
+void TestDependentTaskRefusesUnknownEffects()
+{
+    Directory directory;
+    EvidenceJournal journal(directory.root / "dependencies.jsonl");
+    auto intent = Event("dependent-intent", JournalKind::Intent, "operation-1");
+    Check(journal.Append(intent).Durable(), "Dependent intent was not retained.");
+    auto retry = intent.evidence.stamp;
+    retry.attemptId = "new-attempt";
+    Check(journal.HasUnresolvedForTask(retry, intent.evidence.scope), "A retry bypassed an unknown prior effect.");
+    retry.policyVersion += 1;
+    Check(journal.HasUnresolvedForTask(retry, intent.evidence.scope), "Policy refresh bypassed an unknown prior effect.");
+    auto other = retry;
+    other.taskId = "unrelated-task";
+    Check(!journal.HasUnresolvedForTask(other, intent.evidence.scope), "Unrelated task was blocked by global health.");
+    auto otherScope = intent.evidence.scope;
+    otherScope.consentRevision += 1;
+    Check(!journal.HasUnresolvedForTask(retry, otherScope), "Journal assigned uncertainty to a different scope.");
+    auto result = Event("wrong-result", JournalKind::Result, "operation-1");
+    result.evidence.scope = otherScope;
+    Check(journal.Append(result).Durable(), "Other scope result was not retained.");
+    Check(journal.HasUnresolvedForTask(retry, intent.evidence.scope), "A foreign scope result resolved the original intent.");
+    result.evidence.scope = intent.evidence.scope;
+    result.evidence.id = "dependent-result";
+    Check(journal.Append(result).Durable(), "Dependent result was not retained.");
+    Check(!journal.HasUnresolvedForTask(retry, intent.evidence.scope), "Durable matching result did not resolve uncertainty.");
+    EvidenceJournal unreadable(directory.root);
+    Check(unreadable.HasUnresolvedForTask(retry, intent.evidence.scope), "Unreadable persistence allowed dependent effects.");
+}
 std::string Bytes(const std::filesystem::path& path)
 {
     std::ifstream input(path, std::ios::binary);
@@ -74,6 +105,72 @@ std::vector<nlohmann::json> Decode(const std::string& bytes)
         start = end + 1;
     }
     return records;
+}
+void TestTelemetryProducerDoesNotWaitForFailedDiskFlush()
+{
+    Directory directory;
+    std::promise<void> entered;
+    auto enteredFuture = entered.get_future();
+    std::promise<void> release;
+    auto releaseFuture = release.get_future().share();
+    std::atomic<bool> blocked{false};
+    EvidenceJournal journal(directory.root / "concurrent-telemetry.jsonl", 2,
+        [&](JournalIoBoundary boundary)
+        {
+            if (boundary == JournalIoBoundary::BeforeFlush && !blocked.exchange(true))
+            {
+                entered.set_value();
+                releaseFuture.wait();
+                return false;
+            }
+            return true;
+        });
+    Check(journal.QueueTelemetry(Event("old-0")) && journal.QueueTelemetry(Event("old-1")), "Initial telemetry was not admitted.");
+    Check(!journal.QueueTelemetry(Event("old-drop")), "Initial bounded queue did not drop overflow.");
+    auto flusher = std::async(std::launch::async, [&] { return journal.FlushTelemetry(); });
+    const bool reached = enteredFuture.wait_for(std::chrono::seconds(2)) == std::future_status::ready;
+    auto producer = std::async(std::launch::async,
+        [&]
+        {
+            return std::vector<bool>{
+                journal.QueueTelemetry(Event("new-0")), journal.QueueTelemetry(Event("new-1")), journal.QueueTelemetry(Event("new-drop"))};
+        });
+    const bool responsive = producer.wait_for(std::chrono::milliseconds(500)) == std::future_status::ready;
+    release.set_value();
+    const auto admissions = producer.get();
+    const bool flushed = flusher.get();
+    Check(reached && responsive, "Telemetry producer waited for the blocked disk flush.");
+    Check(admissions == std::vector<bool>{true, true, false} && !flushed, "Concurrent queue or injected flush failure was not observed.");
+    auto health = journal.Health();
+    Check(health.droppedTelemetry == 4 && health.pendingDroppedTelemetry == 4 && health.durableDroppedTelemetry == 0,
+        "Failed-batch restoration lost pending drops or exceeded the bounded queue.");
+    Check(journal.FlushTelemetry(), "Restored telemetry did not flush after disk recovery.");
+    health = journal.Health();
+    Check(health.droppedTelemetry == 4 && health.pendingDroppedTelemetry == 0 && health.durableDroppedTelemetry == 4,
+        "Durable dropped marker was counted twice or left pending.");
+    const auto records = Decode(Bytes(journal.Path()));
+    Check(records[records.size() - 2].at("event_id") == "old-0" && records.back().at("event_id") == "old-1",
+        "Failure restoration discarded accepted older telemetry instead of recording new overflow.");
+}
+
+void TestDurableDropMarkerIsNotRestoredAfterLaterFailure()
+{
+    Directory directory;
+    std::size_t writes = 0;
+    EvidenceJournal journal(directory.root / "drop-acknowledgement.jsonl", 2,
+        [&](JournalIoBoundary boundary) { return boundary != JournalIoBoundary::BeforeWrite || ++writes != 2; });
+    Check(journal.QueueTelemetry(Event("retained-0")) && journal.QueueTelemetry(Event("retained-1")), "Marker fixture queue failed.");
+    Check(!journal.QueueTelemetry(Event("first-drop")) && !journal.FlushTelemetry(), "Post-marker event failure was not injected.");
+    auto health = journal.Health();
+    Check(health.durableDroppedTelemetry == 1 && health.pendingDroppedTelemetry == 0 && health.droppedTelemetry == 1,
+        "Already durable drop marker was restored as pending.");
+    Check(!journal.QueueTelemetry(Event("second-drop")), "Restored queue exceeded capacity.");
+    health = journal.Recover();
+    Check(health.durableDroppedTelemetry == 1 && health.pendingDroppedTelemetry == 1 && health.droppedTelemetry == 2,
+        "Recovery hid newly pending telemetry drops.");
+    Check(journal.FlushTelemetry(), "Marker acknowledgement fixture did not recover.");
+    Check(journal.Health().durableDroppedTelemetry == 2 && journal.Health().pendingDroppedTelemetry == 0,
+        "Retry duplicated a previously durable drop marker.");
 }
 void TestReplayDeduplicatesAndQuarantinesTwentyCrashTails()
 {
@@ -445,6 +542,9 @@ void TestLegacyAdapterUsesJournalAndPreservesReadableFields()
 }
 void RunEvidenceJournalTests()
 {
+    TestTelemetryProducerDoesNotWaitForFailedDiskFlush();
+    TestDurableDropMarkerIsNotRestoredAfterLaterFailure();
+    TestDependentTaskRefusesUnknownEffects();
     TestReplayDeduplicatesAndQuarantinesTwentyCrashTails();
     TestExactScopeAndStampAdmission();
     TestOneHundredDeniedIntentsAndBoundedTelemetry();
@@ -470,6 +570,8 @@ int main(int argumentCount, char** arguments)
             TestOversizedActionResultIsNeverAcknowledgedOrProjected();
         else if (argumentCount > 1 && std::string(arguments[1]) == "scope")
             TestCapturedActionScopeProducesExactEvidenceReferences();
+        else if (argumentCount > 1 && std::string(arguments[1]) == "telemetry")
+            TestTelemetryProducerDoesNotWaitForFailedDiskFlush();
         else
             RunEvidenceJournalTests();
     }

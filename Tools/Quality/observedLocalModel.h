@@ -1,16 +1,20 @@
 #pragma once
 
+#include "Evaluation/campaignManifest.h"
+
 #include <httplib.h>
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -66,16 +70,32 @@ class ObservedLocalModel
             [this, upstreamPort](const auto& request, auto& response)
             {
                 std::size_t index;
+                std::string forwardedBody = request.body;
                 {
                     const std::lock_guard lock(mutex);
                     index = requests.size();
                     auto parsed = nlohmann::json::parse(request.body, nullptr, false);
+                    if (completionSeed)
+                    {
+                        if (!parsed.is_object())
+                        {
+                            response.status = 400;
+                            response.set_content(R"({"error":"Seeded completion requires a JSON object."})", "application/json");
+                            requests.push_back(nlohmann::json{});
+                            rawRequests.push_back({{"requestIndex", index}, {"method", request.method}, {"path", request.path},
+                                {"body", request.body}, {"seedInjectionError", true}});
+                            responses.push_back({{"requestIndex", index}, {"status", response.status}, {"body", response.body}});
+                            return;
+                        }
+                        parsed["seed"] = *completionSeed;
+                        forwardedBody = parsed.dump();
+                    }
                     requests.push_back(parsed.is_discarded() ? nlohmann::json{} : std::move(parsed));
-                    rawRequests.push_back(
-                        {{"requestIndex", index}, {"method", request.method}, {"path", request.path}, {"body", request.body}});
+                    rawRequests.push_back({{"requestIndex", index}, {"method", request.method}, {"path", request.path},
+                        {"body", request.body}, {"forwardedBody", forwardedBody}, {"seedInjected", completionSeed.has_value()}});
                 }
                 const auto upstream = Client(upstreamPort);
-                const auto received = upstream ? upstream->Post(request.path, request.body, "application/json") : httplib::Result{};
+                const auto received = upstream ? upstream->Post(request.path, forwardedBody, "application/json") : httplib::Result{};
                 if (!received)
                 {
                     const std::lock_guard lock(mutex);
@@ -155,6 +175,12 @@ class ObservedLocalModel
         return requests;
     }
 
+    void SetCompletionSeed(std::optional<std::uint64_t> seed)
+    {
+        const std::lock_guard lock(mutex);
+        completionSeed = seed;
+    }
+
     [[nodiscard]] std::vector<nlohmann::json> RawRequests() const
     {
         const std::lock_guard lock(mutex);
@@ -171,6 +197,18 @@ class ObservedLocalModel
     {
         SaveJson(reportPath.string() + ".requests.json", RawRequests());
         SaveJson(reportPath.string() + ".responses.json", Responses());
+    }
+
+    void SaveTrafficSince(const std::filesystem::path& reportPath, std::size_t firstRequestIndex) const
+    {
+        auto capturedRequests = RawRequests();
+        auto capturedResponses = Responses();
+        const auto previous = [firstRequestIndex](const auto& item)
+        { return item.at("requestIndex").template get<std::size_t>() < firstRequestIndex; };
+        std::erase_if(capturedRequests, previous);
+        std::erase_if(capturedResponses, previous);
+        SaveJson(reportPath.string() + ".requests.json", capturedRequests, true);
+        SaveJson(reportPath.string() + ".responses.json", capturedResponses, true);
     }
 
     int port = 0;
@@ -293,8 +331,15 @@ class ObservedLocalModel
         return client;
     }
 
-    static void SaveJson(const std::filesystem::path& path, const nlohmann::json& value)
+    static void SaveJson(const std::filesystem::path& path, const nlohmann::json& value, bool immutable = false)
     {
+        if (immutable)
+        {
+            std::string error;
+            if (!evaluation::WriteEvaluationArtifactOnce(path, value.dump(2) + '\n', error))
+                throw std::runtime_error(error);
+            return;
+        }
         std::ofstream output(path, std::ios::binary | std::ios::trunc);
         output << value.dump(2) << '\n';
         output.flush();
@@ -307,6 +352,7 @@ class ObservedLocalModel
 
     mutable std::mutex mutex;
     std::atomic<bool> closing{false};
+    std::optional<std::uint64_t> completionSeed;
     std::vector<nlohmann::json> requests;
     std::vector<nlohmann::json> rawRequests;
     std::vector<nlohmann::json> responses;

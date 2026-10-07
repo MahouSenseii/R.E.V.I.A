@@ -35,10 +35,20 @@ Run focused new suites and existing action-audit/runtime events/companion isolat
 
 | Actor | Responsibility | Status |
 |---|---|---|
-| /root Director | Integration, COG-01, acceptance and delivery | Planning; isolated worktree ready |
-| Contracts supervisor | FND-01 | Not dispatched |
-| Evaluation supervisor | FND-02 | Not dispatched |
-| Persistence supervisor | FND-03 | Not dispatched |
-| Independent reviewer | Final source/evidence review | Not dispatched |
+| /root Director | Integration, COG-01, acceptance and delivery | All 24 affected targets built; all 29 selected checks passed; host campaigns pending |
+| /root/foundation_contracts | FND-01, native admission, session lifecycle, bound live producer | Core/native/session checks passed; real confirmation and audit regression passed |
+| /root/starting_package_audit | FND-02, receipt runner, immutable live evidence and documentation | Runner fixtures and corrected delegated-process regression passed |
+| /root/foundation_journal | FND-03 persistence and crash recovery | Imported; focused durable/crash/backpressure checks passed |
+| /root/foundation_independent_review | Source/evidence review | Final source review found no remaining material issue; host evidence review pending |
 
-No implementation, live campaign or qualification is claimed by this initial record. Record actual actor IDs and evidence as work completes.
+The initial nine focused CTest checks passed. Independent review drove crash-tail,
+oracle, telemetry-lock, campaign-provenance and live artifact fixes. Final review
+also required per-sample campaign/evidence admission, one cohort across seeds,
+long-input compatibility and a redacted durable audit for refused contracts.
+The actual 720-run host campaign and human qualification are not yet claimed.
+
+Fresh combined verification passed 29/29 checks, including 12 focused checks and
+17 existing runtime regressions (229.02 seconds). A supplied contract retains its
+frozen authority subject; host-created legacy contracts capture current policy.
+Existing Studio delegation passed after correcting that comparison. Two fixture
+setup faults were repaired without changing production liveness or permissions.
