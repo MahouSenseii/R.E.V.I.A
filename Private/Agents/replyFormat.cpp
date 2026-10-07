@@ -327,7 +327,7 @@ std::optional<Json> KeySchema(std::string text)
 }
 }
 
-ReplyContract RequestedReplyContract(const std::string& input)
+static ReplyContract ExtractReplyContract(const std::string& input, bool retainDelivery)
 {
     ReplyContract contract;
     contract.rootKind = RequestedReplyFormat(input);
@@ -354,6 +354,50 @@ ReplyContract RequestedReplyContract(const std::string& input)
         text += std::isspace(character) ? (character == '\r' || character == '\n' ? '\n' : ' ') : static_cast<char>(character);
     }
     offsets.push_back(masked.size());
+    if (retainDelivery)
+    {
+        static const std::string deliveryBody =
+            R"((?:return|reply|respond|output)\s+(?:(?:only\s+)?(?:(?:in|as)\s+)?json(?:\s+(?:object|array))?|only\s+the\s+json\s+(?:object|array))(?:,\s*without\s+prose\s+or\s+a\s+code\s+fence)?)";
+        static const std::regex terminal("(^|[.!?;\\n])\\s*(" + deliveryBody + ")[.!?;]?\\s*$");
+        static const std::regex plain("^" + deliveryBody + "[.!?;]?$");
+        std::size_t inputEnd = original.size();
+        std::size_t textEnd = text.size();
+        for (int count = 0; count < 16; ++count)
+        {
+            std::smatch delivery;
+            const auto view = text.substr(0, textEnd);
+            if (!std::regex_search(view, delivery, terminal))
+                break;
+            const auto begin = offsets[static_cast<std::size_t>(delivery.position(2))];
+            const auto rawClause = Trim(original.substr(begin, inputEnd - begin));
+            std::string normalized;
+            for (const unsigned char character : rawClause)
+            {
+                if (std::isspace(character))
+                {
+                    if (!normalized.empty() && normalized.back() != ' ')
+                        normalized += ' ';
+                }
+                else
+                    normalized += static_cast<char>(std::tolower(character));
+            }
+            // The search view masks quoted payloads. Require the entire original
+            // clause to be plain delivery text before discarding any suffix.
+            if (!std::regex_match(normalized, plain))
+                break;
+            const auto deliveryKind = normalized.find("json array") == std::string::npos ? ReplyFormat::JsonObject : ReplyFormat::JsonArray;
+            if (deliveryKind != contract.rootKind)
+                break;
+            inputEnd = begin;
+            textEnd = static_cast<std::size_t>(delivery.position(2));
+        }
+        if (inputEnd < original.size())
+        {
+            const auto preceding = ExtractReplyContract(Trim(original.substr(0, inputEnd)), false);
+            if (preceding.rootKind == contract.rootKind && preceding.extractionStatus == ReplyContractStatus::ExplicitShape)
+                return preceding;
+        }
+    }
     static const std::regex request(
         R"(\b(?:return|reply|respond|answer|output|produce|write|give|use)\s+(?:(?:the|your)\s+(?:answer|result|response)\s+)?(?:(?:only|a|an)\s+){0,2}(?:top[- ]level\s+)?(?:(?:in|as)\s+)?(?:only\s+)?(json|prose|plain text)(?:\s+(?:as\s+(?:an?\s+)?)?(?:top[- ]level\s+)?(object|array))?\b)");
     std::size_t end = std::string::npos;
@@ -411,6 +455,11 @@ ReplyContract RequestedReplyContract(const std::string& input)
         return unsupported("Explicit reply shape could not be parsed without inference.");
     }
     return contract;
+}
+
+ReplyContract RequestedReplyContract(const std::string& input)
+{
+    return ExtractReplyContract(input, true);
 }
 
 bool MatchesReplyContract(const std::string& text, const ReplyContract& contract)

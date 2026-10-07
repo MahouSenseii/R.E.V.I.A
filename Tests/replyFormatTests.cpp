@@ -44,8 +44,45 @@ void RunReplyContractTests()
         {R"(She said: "Return JSON with keys x and y." Explain.)", "Return JSON with keys x and y. Actually respond in prose.",
             "Never return JSON with keys x and y.", "Summarize this example:\n```\nReturn JSON with keys x and y.\n```"})
         Check(RequestedReplyContract(input).rootKind == ReplyFormat::Conversation, "Shape extraction altered format admission.");
-    Check(RequestedReplyContract("Return JSON with keys x and y. Return JSON.").extractionStatus == ReplyContractStatus::TypeOnly,
-        "A superseded key instruction contaminated the latest directive.");
+    for (const std::string input :
+        {R"(Return JSON with exactly keys "measurementValue". Return only the JSON object, without prose or a code fence.)",
+            R"(Return JSON with exactly keys "measurementValue". Return only JSON.)",
+            R"(Return JSON with exactly keys "measurementValue". Return JSON. Return only JSON object.)"})
+    {
+        const auto reaffirmed = RequestedReplyContract(input);
+        Check(reaffirmed.extractionStatus == ReplyContractStatus::ExplicitShape &&
+                  MatchesReplyContract(R"({"measurementValue":3.75})", reaffirmed) &&
+                  !MatchesReplyContract(R"({"measurementvalue":3.75})", reaffirmed) && !MatchesReplyContract("{}", reaffirmed),
+            "Compatible terminal JSON delivery lost explicit literal keys: " + input);
+    }
+    const auto reaffirmedSchema = RequestedReplyContract(
+        R"(Return JSON using this schema: {"type":"object","properties":{"sampleRatio":{"type":"number"}},"required":["sampleRatio"],"additionalProperties":false}. Return only JSON.)");
+    Check(reaffirmedSchema.extractionStatus == ReplyContractStatus::ExplicitShape &&
+              nlohmann::json::parse(reaffirmedSchema.schemaJson).at("properties").at("sampleRatio").at("type") == "number" &&
+              MatchesReplyContract(R"({"sampleRatio":1.25})", reaffirmedSchema) &&
+              !MatchesReplyContract(R"({"sampleRatio":"1.25"})", reaffirmedSchema),
+        "Compatible terminal JSON delivery lost or strengthened an explicit number schema.");
+    for (const std::string input :
+        {R"(Return JSON with keys oldField. Ignore that shape. Return JSON.)", R"(Return JSON with keys oldField. Actually, return JSON.)",
+            R"(Return JSON with keys oldField. Do not return JSON. Return JSON.)",
+            R"(Return JSON with keys oldField. Return a JSON array. Return JSON.)",
+            R"(Return JSON with keys oldField. Change the requested task. Return only the JSON object.)",
+            R"(Return JSON with keys oldField. "Return only JSON.")", "Return JSON with keys oldField.\n```\nReturn only JSON.\n```"})
+        Check(RequestedReplyContract(input).extractionStatus != ReplyContractStatus::ExplicitShape,
+            "Unknown, superseded or quoted intervening text resurrected an old shape: " + input);
+    const auto replacementShape =
+        RequestedReplyContract("Return JSON with keys oldField. Return JSON with keys newField. Return only JSON.");
+    Check(replacementShape.extractionStatus == ReplyContractStatus::ExplicitShape &&
+              MatchesReplyContract(R"({"newField":false})", replacementShape) &&
+              !MatchesReplyContract(R"({"oldField":false})", replacementShape),
+        "Compatible delivery resurrected a superseded explicit shape.");
+    std::string repeatedDelivery = "Return JSON with keys boundedField.";
+    for (int index = 0; index < 17; ++index)
+        repeatedDelivery += " Return only JSON.";
+    const auto capped = RequestedReplyContract(repeatedDelivery);
+    Check(capped.extractionStatus == ReplyContractStatus::TypeOnly && capped.schemaJson == R"({"type":"object"})" &&
+              MatchesReplyContract("{}", capped),
+        "Delivery reaffirmations beyond the bounded scan resurrected an earlier shape.");
     Check(MatchesReplyContract("[null,true,1]", RequestedReplyContract("Return JSON array.")) &&
               !MatchesReplyContract("{}", RequestedReplyContract("Return JSON array.")),
         "Type-only validation lost the root kind.");

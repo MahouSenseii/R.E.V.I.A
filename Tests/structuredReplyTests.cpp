@@ -205,6 +205,51 @@ void TestExplicitShapeWireAndValidation()
         "The explicit shape contract leaked into the next ordinary turn or changed the authored temperature.");
 }
 
+void TestTerminalDeliveryRetainsWireShape()
+{
+    revia::tests::ScopedTestDirectory directory;
+    ReplyBackend backend;
+    llamaCppService service((directory.root / "delivery-shape-wire.db").string());
+    Configure(service, backend.port);
+    const std::string keyInput =
+        R"(Return JSON with exactly keys "measurementValue". Return only the JSON object, without prose or a code fence.)";
+    const std::string payload = R"({"measurementValue":3.75})";
+    backend.Reply(payload);
+    Check(service.GenerateResponse({{"user", keyInput}}).bSuccess, "Compatible delivery refused matching explicit-key data.");
+    const auto keyWire = backend.Request().at("response_format").at("json_schema").at("schema");
+    Check(keyWire.at("properties").at("measurementValue").empty() &&
+              keyWire.at("required") == nlohmann::json::array({"measurementValue"}) && !keyWire.at("additionalProperties").get<bool>(),
+        "The actual wire contract lost explicit keys after a terminal delivery reaffirmation.");
+    for (const std::string answer : {"{}", R"({"measurementvalue":3.75})", R"({"measurementValue":3.75,"extra":false})"})
+    {
+        backend.Reply(answer);
+        std::string delivered;
+        const auto invalid = service.GenerateResponse({{"user", keyInput}}, {}, [&](const auto& text) { delivered += text; });
+        Check(!invalid.bSuccess && !invalid.bShouldRemember && delivered.empty(),
+            "Compatible delivery silently discarded key validation or published invalid data.");
+    }
+    const std::string schemaInput =
+        R"(Return JSON using this schema: {"type":"object","properties":{"sampleRatio":{"type":"number"}},"required":["sampleRatio"],"additionalProperties":false}. Return only JSON.)";
+    const std::string fractional = R"({"sampleRatio":1.25})";
+    backend.Reply(fractional);
+    std::string delivered;
+    const auto numeric = service.GenerateResponse({{"user", schemaInput}}, {}, [&](const auto& text) { delivered += text; });
+    Check(numeric.bSuccess && numeric.response == fractional && delivered == fractional &&
+              backend.Request().at("response_format").at("json_schema").at("schema").at("properties").at("sampleRatio").at("type") ==
+                  "number",
+        "The actual wire contract lost or strengthened a number schema, or rewrote its fractional data.");
+    backend.Reply(R"({"sampleRatio":"1.25"})");
+    delivered.clear();
+    Check(
+        !service.GenerateResponse({{"user", schemaInput}}, {}, [&](const auto& text) { delivered += text; }).bSuccess && delivered.empty(),
+        "A schema type violation passed after a terminal delivery reaffirmation.");
+    backend.Reply("{}");
+    Check(service.GenerateResponse({{"user", "Return JSON with keys previousField. Change the shape requirement. Return only JSON."}})
+                  .bSuccess &&
+              backend.Request().at("response_format").at("json_schema").at("schema") == nlohmann::json{{"type", "object"}},
+        "Unknown intervening instructions resurrected old keys on the actual wire request.");
+}
+
 void TestReviewerReplacementMustMatchFinalContract()
 {
     using namespace revia::agents;
@@ -279,5 +324,6 @@ void RunStructuredReplyTests()
     TestProviderContractAndDataPreservation();
     TestIncompleteDataNeverBecomesSuccessfulProse();
     TestExplicitShapeWireAndValidation();
+    TestTerminalDeliveryRetainsWireShape();
     TestReviewerReplacementMustMatchFinalContract();
 }
