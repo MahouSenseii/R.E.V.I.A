@@ -35,17 +35,22 @@ Run focused new suites and existing action-audit/runtime events/companion isolat
 
 | Actor | Responsibility | Status |
 |---|---|---|
-| /root Director | Integration, COG-01, acceptance and delivery | All 24 affected targets built; all 29 selected checks passed; host campaigns pending |
+| /root Director | Integration, COG-01, acceptance and delivery | All 24 targets built; 29 selected checks passed; four registry campaigns and actual 720-run collection complete; delivery integration pending |
 | /root/foundation_contracts | FND-01, native admission, session lifecycle, bound live producer | Core/native/session checks passed; real confirmation and audit regression passed |
-| /root/starting_package_audit | FND-02, receipt runner, immutable live evidence and documentation | Runner fixtures and corrected delegated-process regression passed |
+| /root/starting_package_audit | FND-02, receipt runner, immutable live evidence and documentation | Runner fixtures and delegated-process regression passed; timestamp receipt fix passed registered check and actual six-slot smoke |
 | /root/foundation_journal | FND-03 persistence and crash recovery | Imported; focused durable/crash/backpressure checks passed |
-| /root/foundation_independent_review | Source/evidence review | Final source review found no remaining material issue; host evidence review pending |
+| /root/foundation_independent_review | Source/evidence review | Source and all 1,440 full-campaign source/output references reviewed; final receipt fix accepted; human qualification remains pending |
 
 The initial nine focused CTest checks passed. Independent review drove crash-tail,
 oracle, telemetry-lock, campaign-provenance and live artifact fixes. Final review
 also required per-sample campaign/evidence admission, one cohort across seeds,
 long-input compatibility and a redacted durable audit for refused contracts.
-The actual 720-run host campaign and human qualification are not yet claimed.
+The actual host campaign recorded all 720 slots and passed 184 strict answer-and-JSON
+checks. Its original provider timestamp mismatch is retained and leaves that
+campaign unqualified. A narrowly scoped timestamp normalization passed the
+registered receipt regression and a fresh actual six-slot smoke. No original
+campaign receipts or scores were rewritten. Human qualification remains pending.
+See `docs/FOUNDATION_COGNITION_ACCEPTANCE.md` for counts and practical limits.
 
 Fresh combined verification passed 29/29 checks, including 12 focused checks and
 17 existing runtime regressions (229.02 seconds). A supplied contract retains its
