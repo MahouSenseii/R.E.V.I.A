@@ -1,5 +1,7 @@
 #include "testSupport.h"
 #include "Agents/conversationStylePolicy.h"
+#include "Agents/responseFilter.h"
+#include "Identity/promptMarkers.h"
 
 #include <iostream>
 #include <string>
@@ -135,6 +137,97 @@ void TestExistingAnswerModesRetainCompletenessAndTruth()
                   text.find("you may not invent one you were not given") != std::string::npos,
             "An answer mode stopped preserving confirmed outcomes.");
 }
+
+void TestCompleteJsonRetainsLiteralData()
+{
+    const revia::agents::ConversationStylePolicy policy;
+    const revia::agents::ResponseFilter filter;
+    const std::string repeated = "The cabinet remains safely closed during the entire careful inspection.";
+    const std::string repeatedJson = "{\"text\":\"Intro. " + repeated + ' ' + repeated + " Outro.\"}";
+    const std::vector<std::string> replies = {R"({"literal":"a  b", "tag":"[laugh]", "text":"*smiles*"})", repeatedJson,
+        R"({"values":[3.1415,3.1415,-0.02],"nested":{"text":"a  b","tag":"*sighs*"}})", R"(["[laugh]","*smiles*","a  b",{"value":1.001}])",
+        " \n{\"text\":\"a  b\"}\n "};
+    for (const auto& reply : replies)
+    {
+        const std::vector<conversationMessage> prior = {{"assistant", reply}};
+        Check(policy.RefineReply("Correction: return the JSON exactly.", prior, reply) == reply,
+            "Conversational style changed a complete JSON value or its intentional repetition.");
+        const auto result = filter.ApplyHard("Return JSON exactly.", reply, {}, 12000);
+        Check(result.text == reply && !result.changed && !result.blocked,
+            "The hard filter changed a literal JSON value or its permitted whitespace.");
+    }
+}
+
+void TestJsonRetainsHardSafetyChecks()
+{
+    const revia::agents::ResponseFilter filter;
+    const std::string marker = "{\"text\":\"" + std::string(revia::identity::markers::RuntimeTurnContext) + "\"}";
+    Check(filter.ApplyHard("Return JSON.", marker, {}, 12000).blocked, "A JSON envelope bypassed the hidden prompt marker guard.");
+    revia::agents::ResponseFilterContext context;
+    context.desktopStateKnown = true;
+    Check(filter.ApplyHard("Return JSON.", R"({"claim":"I'm looking at your screen."})", context, 12000).blocked,
+        "A JSON envelope bypassed the unobserved screen claim guard.");
+    Check(filter.ApplyHard("Return JSON.", R"({"claim":"I clicked the button."})", context, 12000).blocked,
+        "A JSON envelope bypassed desktop authority grounding.");
+    const std::string malformedUtf8 = std::string("{\"text\":\"") + static_cast<char>(0xFF) + "\"}";
+    Check(filter.ApplyHard("Return JSON.", malformedUtf8, {}, 12000).blocked, "A JSON envelope bypassed UTF-8 validation.");
+}
+
+void TestJsonLimitsRefuseInsteadOfCuttingData()
+{
+    const revia::agents::ConversationStylePolicy policy;
+    const revia::agents::ResponseFilter filter;
+    for (const auto size : {std::size_t{400}, std::size_t{262145}})
+    {
+        const std::string oversized = "{\"text\":\"" + std::string(size, 'x') + "\"}";
+        const auto result = filter.ApplyHard("Return JSON.", oversized, {}, 256);
+        Check(result.blocked && result.changed && result.text.size() <= 256 && result.reason.find("JSON") != std::string::npos,
+            "The hard filter silently cut oversized JSON instead of reporting a bounded refusal.");
+    }
+    std::string repeated;
+    while (repeated.size() <= 262144)
+        repeated += "This complete sentence is intentionally repeated as part of the supplied data. ";
+    const std::string oversized = "{\"text\":\"" + repeated + "\"}";
+    Check(policy.RefineReply("Return JSON.", {}, oversized) == oversized,
+        "Style cleanup silently reduced JSON above its parse bound before the hard filter could refuse it.");
+}
+
+void TestJsonControlTokensFailInsteadOfChangingData()
+{
+    const revia::agents::ResponseFilter filter;
+    for (const std::string token : {"<|im_start|>", "<|im_end|>", "<|endoftext|>", "<|assistant|>", "<|user|>", "[INST]", "[/INST]"})
+    {
+        for (const std::string candidate : {"{\"nested\":{\"text\":\"before" + token + "after\"}}", "[\"before" + token + "after\"]"})
+        {
+            const auto result = filter.ApplyHard("Return JSON exactly.", candidate, {}, 256);
+            Check(result.blocked && result.changed && result.text.size() <= 256 && result.text.find(token) == std::string::npos &&
+                      result.reason.find("control") != std::string::npos && !result.text.starts_with('{') && !result.text.starts_with('['),
+                "The hard filter silently changed a JSON value containing a disallowed control token instead of refusing it.");
+        }
+        const auto prose = filter.ApplyHard("Explain the text.", "before" + token + "after", {}, 256);
+        Check(prose.text == "beforeafter" && prose.changed && !prose.blocked,
+            "JSON control-token refusal changed the existing prose erasure policy.");
+    }
+}
+
+void TestOrdinaryAndMalformedRepliesKeepPresentationChecks()
+{
+    const revia::agents::ConversationStylePolicy policy;
+    const revia::agents::ResponseFilter filter;
+    const std::string sentence = "The cabinet remains safely closed during the entire careful inspection.";
+    Check(policy.RefineReply("Explain the inspection.", {}, sentence + ' ' + sentence) == sentence,
+        "Preserving JSON disabled prose repetition cleanup.");
+    const auto ordinary = filter.ApplyHard("Say hello.", "Hello  there. *smiles* [laugh]", {}, 12000);
+    Check(ordinary.text == "Hello there. *laughs*" && ordinary.changed && !ordinary.blocked,
+        "Preserving JSON disabled ordinary vocalization and stage direction cleanup.");
+    for (const std::string malformed :
+        {R"({not-json *smiles*)", R"({"text":"*smiles*"} trailing)", R"({"text":"*smiles*","text":"another"})"})
+    {
+        const auto result = filter.ApplyHard("Return JSON.", malformed, {}, 12000);
+        Check(result.changed && result.text.find("*smiles*") == std::string::npos,
+            "Incomplete, trailing or duplicate-key JSON bypassed ordinary presentation checks.");
+    }
+}
 }
 
 void RunConversationGuidanceTests()
@@ -145,6 +238,11 @@ void RunConversationGuidanceTests()
     TestCorrectionDoesNotReplaceAnUnrelatedWellbeingAnswer();
     TestCorrectionConsumersRespectTheAuthoredSignal();
     TestExistingAnswerModesRetainCompletenessAndTruth();
+    TestCompleteJsonRetainsLiteralData();
+    TestJsonRetainsHardSafetyChecks();
+    TestJsonLimitsRefuseInsteadOfCuttingData();
+    TestJsonControlTokensFailInsteadOfChangingData();
+    TestOrdinaryAndMalformedRepliesKeepPresentationChecks();
     std::cout
         << "Direct correction guidance, evidence-based disagreement, non-correction mentions and configured answer freedom tests passed.\n";
 }

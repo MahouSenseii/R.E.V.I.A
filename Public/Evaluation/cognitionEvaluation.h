@@ -25,6 +25,17 @@ struct CognitionCase
     std::string uncertaintyDisposition;
 };
 
+enum class StructuredAnswerDiagnostic
+{
+    Unjudged,
+    InvalidJson,
+    ShapeMismatch,
+    ValueMismatch,
+    Match
+};
+
+[[nodiscard]] std::string ToString(StructuredAnswerDiagnostic diagnostic);
+
 struct CognitionVerdict
 {
     std::string caseId;
@@ -42,6 +53,13 @@ struct CognitionVerdict
     std::string criterionDigest;
     std::string campaignDigest;
     std::vector<core::EvidenceRef> evidence;
+    StructuredAnswerDiagnostic finalAnswerDiagnostic = StructuredAnswerDiagnostic::Unjudged;
+    StructuredAnswerDiagnostic rawAnswerDiagnostic = StructuredAnswerDiagnostic::Unjudged;
+    // Value judgments require complete JSON with the expected structure and types.
+    std::optional<bool> answerValuesPassed;
+    std::optional<bool> rawAnswerValuesPassed;
+    bool repairIntroducedFailure = false;
+    bool repairRescuedAnswer = false;
 };
 
 struct CognitionReview
@@ -85,8 +103,16 @@ struct CognitionReport
     std::size_t personalityPassed = 0;
     std::size_t personalityFailed = 0;
     std::size_t personalityUnjudged = 0;
+    std::size_t invalidJson = 0;
+    std::size_t shapeMismatch = 0;
+    std::size_t valueMismatch = 0;
+    std::size_t structuredMatch = 0;
+    std::size_t structuredUnjudged = 0;
+    std::size_t repairIntroducedFailures = 0;
+    std::size_t repairRescuedAnswers = 0;
     bool liveQualified = false;
     std::vector<std::string> errors;
+    std::vector<CognitionVerdict> normalizedRuns;
 };
 
 [[nodiscard]] CognitionVerdict EvaluateCognitionCase(
@@ -108,5 +134,6 @@ struct CognitionReport
 [[nodiscard]] std::string CognitionSourceBytes(const EvaluationCase& item);
 [[nodiscard]] std::string CognitionOutputBytes(const CaseOutcome& output);
 [[nodiscard]] std::string CognitionCriterionDigest(const CognitionCase& item);
+// Serialization uses the report's normalized admission snapshot; the second argument preserves existing callers.
 [[nodiscard]] std::string CognitionReportJson(const CognitionReport& report, const std::vector<CognitionVerdict>& runs);
 }

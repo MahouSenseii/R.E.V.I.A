@@ -51,6 +51,11 @@ inline nlohmann::json PendingCognitionReview(const evaluation::CognitionCase& it
         {"forbiddenClaims", item.forbiddenClaims}, {"uncertaintyDisposition", item.uncertaintyDisposition}, {"entityIds", item.entityIds},
         {"available", verdict.available}, {"bindingVerified", verdict.bindingVerified}, {"mechanicalPassed", verdict.mechanicalPassed},
         {"deterministicSemanticVerdict", verdict.semanticPassed ? nlohmann::json(*verdict.semanticPassed) : nlohmann::json(nullptr)},
+        {"finalAnswerDiagnostic", evaluation::ToString(verdict.finalAnswerDiagnostic)},
+        {"rawAnswerDiagnostic", evaluation::ToString(verdict.rawAnswerDiagnostic)},
+        {"answerValuesPassed", verdict.answerValuesPassed ? nlohmann::json(*verdict.answerValuesPassed) : nlohmann::json(nullptr)},
+        {"rawAnswerValuesPassed", verdict.rawAnswerValuesPassed ? nlohmann::json(*verdict.rawAnswerValuesPassed) : nlohmann::json(nullptr)},
+        {"repairIntroducedFailure", verdict.repairIntroducedFailure}, {"repairRescuedAnswer", verdict.repairRescuedAnswer},
         {"semanticPassed", nullptr}, {"personalityPassed", nullptr}, {"reviewerId", ""}, {"reviewStatus", "pending"},
         {"firstRequestIndex", firstRequest}, {"endRequestIndexExclusive", endRequest}, {"turns", turns}};
 }

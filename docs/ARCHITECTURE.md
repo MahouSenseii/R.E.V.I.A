@@ -915,6 +915,15 @@ maintenance before the final quiescent identity snapshot. Saved mood survives re
 momentary emotion and quiet-interval metadata do not. These behavior changes require
 controlled production traces and live personality review in addition to build/tests.
 
+## Structured replies
+
+For requested structured replies, `Agents/replyFormat` supplies a bounded
+current-turn contract shared by conversation guidance and the llama.cpp provider.
+Validated JSON containers bypass presentation-only rewriting while retaining
+hard security and authority guards. `Evaluation` reports raw/final syntax,
+structure and value diagnostics separately without changing its strict oracle.
+See [structured answer ownership and verification](ANSWER_QUALITY_STRUCTURED_REPLIES.md).
+
 ## Profile activation
 
 `ReviaSession` owns profile application. UI activation and `/profile` use the same

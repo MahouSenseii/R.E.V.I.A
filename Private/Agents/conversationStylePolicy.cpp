@@ -1,7 +1,9 @@
 #include "Agents/answerObligation.h"
+#include "Agents/replyFormat.h"
 #include "Core/conversationMessage.h"
 #include "Agents/conversationStylePolicy.h"
 #include "Agents/conversationQualityMonitor.h"
+#include "Agents/replyFormat.h"
 #include "Identity/relationshipEvidence.h"
 #include "Core/speechAttribution.h"
 #include "Core/utf8.h"
@@ -746,6 +748,16 @@ std::string ConversationStylePolicy::BuildTurnGuidance(const std::string& rawInp
     }
     if (unavailableHistory)
         guidance << " Unavailable private history is unknown; invent no contents or changes.";
+    const auto format = RequestedReplyFormat(rawInput);
+    if (format != ReplyFormat::Conversation)
+    {
+        guidance << " Return exactly one complete JSON " << (format == ReplyFormat::JsonArray ? "array" : "object")
+                 << ". Follow the requested keys, types and values. Preserve literal data, including spaces and repeated text. "
+                    "Include no code fence, prose preamble, aside, vocalization or invented extra field.";
+        if (!attributionGuidance.empty())
+            guidance << '\n' << attributionGuidance;
+        return guidance.str();
+    }
     const auto sentences = ConversationQualityMonitor::RequestedSentences(input);
     if (sentences.maximum > 0)
     {
@@ -947,16 +959,21 @@ bool ConversationStylePolicy::IsGenericContinuation(const std::string& sentence)
     return genericActivity && openEndedWhen;
 }
 
-std::string ConversationStylePolicy::RefineReply(const std::string& rawInput,
-    const std::vector<conversationMessage>& context, const std::string& reply) const
+std::string ConversationStylePolicy::RefineReply(
+    const std::string& rawInput, const std::vector<conversationMessage>& context, const std::string& reply) const
 {
+    const auto first = reply.find_first_not_of(" \t\r\n");
+    const bool aboveJsonLimit =
+        reply.size() > MaximumJsonReplyBytes && first != std::string::npos && (reply[first] == '{' || reply[first] == '[');
+    if (IsCompleteJsonReply(reply) || aboveJsonLimit)
+    {
+        // The hard filter refuses oversized structured replies without editing their data first.
+        return reply;
+    }
     const auto attribution = conversation::ReadSpeechAttribution(rawInput);
     const auto input = attribution.userAuthoredText;
     std::string refined = CollapseRepeatedSentenceRuns(Trim(reply));
-    refined = RemoveRedundantSentences(
-        refined,
-        context,
-        LooksLikeCorrection(input));
+    refined = RemoveRedundantSentences(refined, context, LooksLikeCorrection(input));
     if (refined.empty())
     {
         return refined;

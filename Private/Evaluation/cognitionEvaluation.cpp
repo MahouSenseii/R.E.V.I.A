@@ -41,6 +41,100 @@ Json ParseOracleJson(const std::string& bytes, std::size_t byteLimit = 262144)
             return true;
         });
 }
+
+bool SameJsonShape(const Json& expected, const Json& actual)
+{
+    if (expected.type() != actual.type() && !(expected.is_number_integer() && actual.is_number_integer()))
+        return false;
+    if (expected.is_object())
+    {
+        if (expected.size() != actual.size())
+            return false;
+        for (const auto& [key, value] : expected.items())
+            if (!actual.contains(key) || !SameJsonShape(value, actual.at(key)))
+                return false;
+    }
+    else if (expected.is_array())
+    {
+        if (expected.size() != actual.size())
+            return false;
+        for (std::size_t index = 0; index < expected.size(); ++index)
+            if (!SameJsonShape(expected.at(index), actual.at(index)))
+                return false;
+    }
+    return true;
+}
+
+StructuredAnswerDiagnostic ClassifyStructuredAnswer(const CognitionCase& item, const std::string& answer)
+{
+    Json expected;
+    try
+    {
+        expected = ParseOracleJson(item.expectedJson);
+    }
+    catch (const std::exception&)
+    {
+        return StructuredAnswerDiagnostic::Unjudged;
+    }
+    try
+    {
+        const auto actual = ParseOracleJson(answer);
+        if (!SameJsonShape(expected, actual))
+            return StructuredAnswerDiagnostic::ShapeMismatch;
+        return actual.dump() == expected.dump() ? StructuredAnswerDiagnostic::Match : StructuredAnswerDiagnostic::ValueMismatch;
+    }
+    catch (const std::exception&)
+    {
+        return StructuredAnswerDiagnostic::InvalidJson;
+    }
+}
+
+std::optional<bool> ComparableValues(const StructuredAnswerDiagnostic diagnostic)
+{
+    if (diagnostic == StructuredAnswerDiagnostic::Match)
+        return true;
+    if (diagnostic == StructuredAnswerDiagnostic::ValueMismatch)
+        return false;
+    return std::nullopt;
+}
+
+void ClearStructuredDiagnostics(CognitionVerdict& verdict)
+{
+    verdict.finalAnswerDiagnostic = StructuredAnswerDiagnostic::Unjudged;
+    verdict.rawAnswerDiagnostic = StructuredAnswerDiagnostic::Unjudged;
+    verdict.answerValuesPassed.reset();
+    verdict.rawAnswerValuesPassed.reset();
+    verdict.repairIntroducedFailure = false;
+    verdict.repairRescuedAnswer = false;
+}
+
+void ClearCognitionJudgments(CognitionVerdict& verdict)
+{
+    verdict.mechanicalPassed = false;
+    verdict.semanticPassed.reset();
+    verdict.oraclePassed.reset();
+    verdict.personalityPassed.reset();
+    verdict.reviewerId.clear();
+    ClearStructuredDiagnostics(verdict);
+}
+}
+
+std::string ToString(const StructuredAnswerDiagnostic diagnostic)
+{
+    switch (diagnostic)
+    {
+    case StructuredAnswerDiagnostic::InvalidJson:
+        return "invalid_json";
+    case StructuredAnswerDiagnostic::ShapeMismatch:
+        return "shape_mismatch";
+    case StructuredAnswerDiagnostic::ValueMismatch:
+        return "value_mismatch";
+    case StructuredAnswerDiagnostic::Match:
+        return "match";
+    case StructuredAnswerDiagnostic::Unjudged:
+        return "unjudged";
+    }
+    return "unjudged";
 }
 
 std::string CognitionSourceBytes(const EvaluationCase& item)
@@ -145,6 +239,25 @@ CognitionVerdict EvaluateCognitionCase(
     verdict.mechanicalPassed = std::all_of(output.turns.begin(), output.turns.end(), [](const TurnOutcome& turn) { return turn.Passed(); });
     verdict.semanticPassed = oracles.Judge(item, output);
     verdict.oraclePassed = verdict.semanticPassed;
+    if (item.oracleId == "json-exact-v1")
+    {
+        const auto& finalTurn = output.turns.back();
+        verdict.finalAnswerDiagnostic = ClassifyStructuredAnswer(item, finalTurn.reply);
+        verdict.answerValuesPassed = ComparableValues(verdict.finalAnswerDiagnostic);
+        if (!finalTurn.rawReply.empty())
+        {
+            verdict.rawAnswerDiagnostic = ClassifyStructuredAnswer(item, finalTurn.rawReply);
+            verdict.rawAnswerValuesPassed = ComparableValues(verdict.rawAnswerDiagnostic);
+        }
+        if (verdict.finalAnswerDiagnostic != StructuredAnswerDiagnostic::Unjudged &&
+            verdict.rawAnswerDiagnostic != StructuredAnswerDiagnostic::Unjudged)
+        {
+            verdict.repairIntroducedFailure = verdict.rawAnswerDiagnostic == StructuredAnswerDiagnostic::Match &&
+                                              verdict.finalAnswerDiagnostic != StructuredAnswerDiagnostic::Match;
+            verdict.repairRescuedAnswer = verdict.finalAnswerDiagnostic == StructuredAnswerDiagnostic::Match &&
+                                          verdict.rawAnswerDiagnostic != StructuredAnswerDiagnostic::Match;
+        }
+    }
     if (verdict.semanticPassed)
         verdict.reviewerId = "deterministic:" + item.oracleId;
     else
@@ -169,10 +282,7 @@ CognitionVerdict EvaluateBoundCognitionCase(const CognitionCase& item, const Cas
         task.stamp.attemptId != std::to_string(campaign.seed))
     {
         verdict.bindingVerified = false;
-        verdict.semanticPassed.reset();
-        verdict.oraclePassed.reset();
-        verdict.personalityPassed.reset();
-        verdict.reviewerId.clear();
+        ClearCognitionJudgments(verdict);
         verdict.diagnostic = "Campaign, task or retained source/output evidence admission failed.";
         return verdict;
     }
@@ -210,8 +320,7 @@ CognitionReport AggregateBoundCognition(
         if (!errors.empty() || found == identities.end() || run.campaignDigest != found->second || run.evidence.empty())
         {
             run.bindingVerified = false;
-            run.semanticPassed.reset();
-            run.personalityPassed.reset();
+            ClearCognitionJudgments(run);
             run.diagnostic = "Sample belongs to a different or unbound campaign.";
         }
     }
@@ -266,18 +375,25 @@ CognitionReport AggregateCognition(
         report.errors.push_back("Empty or duplicate frozen seeds.");
     report.uniqueCases = expected.size();
     report.expectedRuns = expected.size() * uniqueSeeds.size();
+    report.normalizedRuns = runs;
     std::set<std::pair<std::string, std::uint64_t>> observed;
-    for (const auto& run : runs)
+    for (auto& run : report.normalizedRuns)
     {
         const auto found = expected.find(run.caseId);
         if (found == expected.end() || !uniqueSeeds.contains(run.seed))
         {
             report.errors.push_back("Unexpected case/seed: " + run.caseId);
+            run.bindingVerified = false;
+            ClearCognitionJudgments(run);
+            run.diagnostic = "Unexpected frozen case or seed.";
             continue;
         }
         if (!observed.emplace(run.caseId, run.seed).second)
         {
             report.errors.push_back("Duplicate case/seed: " + run.caseId);
+            run.bindingVerified = false;
+            ClearCognitionJudgments(run);
+            run.diagnostic = "Duplicate frozen case or seed.";
             continue;
         }
         ++report.recordedRuns;
@@ -286,8 +402,38 @@ CognitionReport AggregateCognition(
         const bool bound = run.bindingVerified && found->second.first == run.sourceDigest && found->second.second == run.criterionDigest &&
                            IsDigest(run.outputDigest);
         if (!bound)
+        {
             ++report.invalidBindings;
+            run.bindingVerified = false;
+            if (run.diagnostic.empty())
+                run.diagnostic = "Frozen source, criterion or output identity mismatch.";
+        }
         const bool admitted = run.available && bound;
+        if (!admitted)
+            ClearCognitionJudgments(run);
+        const auto structured = admitted ? run.finalAnswerDiagnostic : StructuredAnswerDiagnostic::Unjudged;
+        switch (structured)
+        {
+        case StructuredAnswerDiagnostic::InvalidJson:
+            ++report.invalidJson;
+            break;
+        case StructuredAnswerDiagnostic::ShapeMismatch:
+            ++report.shapeMismatch;
+            break;
+        case StructuredAnswerDiagnostic::ValueMismatch:
+            ++report.valueMismatch;
+            break;
+        case StructuredAnswerDiagnostic::Match:
+            ++report.structuredMatch;
+            break;
+        case StructuredAnswerDiagnostic::Unjudged:
+            ++report.structuredUnjudged;
+            break;
+        }
+        if (admitted && run.repairIntroducedFailure)
+            ++report.repairIntroducedFailures;
+        if (admitted && run.repairRescuedAnswer)
+            ++report.repairRescuedAnswers;
         if (admitted && run.mechanicalPassed)
             ++report.mechanicalPassed;
         if (admitted && run.semanticPassed && !run.reviewerId.empty())
@@ -395,11 +541,12 @@ bool ValidateCognitionPartitions(const std::vector<CognitionCase>& development, 
     return true;
 }
 
-std::string CognitionReportJson(const CognitionReport& report, const std::vector<CognitionVerdict>& runs)
+std::string CognitionReportJson(const CognitionReport& report, const std::vector<CognitionVerdict>&)
 {
     Json results = Json::array();
-    for (const auto& run : runs)
+    for (const auto& run : report.normalizedRuns)
     {
+        const bool admitted = run.available && run.bindingVerified;
         Json evidence = Json::array();
         for (const auto& reference : run.evidence)
         {
@@ -408,11 +555,19 @@ std::string CognitionReportJson(const CognitionReport& report, const std::vector
                 evidence.push_back(Json::parse(bytes));
         }
         results.push_back({{"caseId", run.caseId}, {"seed", run.seed}, {"available", run.available},
-            {"mechanicalPassed", run.mechanicalPassed}, {"bindingVerified", run.bindingVerified},
-            {"semanticPassed", OptionalVerdict(run.semanticPassed)}, {"oraclePassed", OptionalVerdict(run.oraclePassed)},
-            {"personalityPassed", OptionalVerdict(run.personalityPassed)}, {"reviewerId", run.reviewerId},
-            {"outputDigest", run.outputDigest}, {"sourceDigest", run.sourceDigest}, {"criterionDigest", run.criterionDigest},
-            {"campaignDigest", run.campaignDigest}, {"evidence", evidence}, {"diagnostic", run.diagnostic}});
+            {"mechanicalPassed", admitted && run.mechanicalPassed}, {"bindingVerified", run.bindingVerified},
+            {"semanticPassed", admitted ? OptionalVerdict(run.semanticPassed) : Json(nullptr)},
+            {"oraclePassed", admitted ? OptionalVerdict(run.oraclePassed) : Json(nullptr)},
+            {"personalityPassed", admitted ? OptionalVerdict(run.personalityPassed) : Json(nullptr)},
+            {"reviewerId", admitted ? run.reviewerId : std::string()},
+            {"finalAnswerDiagnostic", ToString(admitted ? run.finalAnswerDiagnostic : StructuredAnswerDiagnostic::Unjudged)},
+            {"rawAnswerDiagnostic", ToString(admitted ? run.rawAnswerDiagnostic : StructuredAnswerDiagnostic::Unjudged)},
+            {"answerValuesPassed", admitted ? OptionalVerdict(run.answerValuesPassed) : Json(nullptr)},
+            {"rawAnswerValuesPassed", admitted ? OptionalVerdict(run.rawAnswerValuesPassed) : Json(nullptr)},
+            {"repairIntroducedFailure", admitted && run.repairIntroducedFailure},
+            {"repairRescuedAnswer", admitted && run.repairRescuedAnswer}, {"outputDigest", run.outputDigest},
+            {"sourceDigest", run.sourceDigest}, {"criterionDigest", run.criterionDigest}, {"campaignDigest", run.campaignDigest},
+            {"evidence", evidence}, {"diagnostic", run.diagnostic}});
     }
     return Json{{"schemaVersion", 1}, {"uniqueCases", report.uniqueCases}, {"expectedRuns", report.expectedRuns},
         {"recordedRuns", report.recordedRuns}, {"missingRuns", report.missingRuns}, {"unavailable", report.unavailable},
@@ -420,6 +575,9 @@ std::string CognitionReportJson(const CognitionReport& report, const std::vector
         {"semanticPassed", report.semanticPassed}, {"semanticFailed", report.semanticFailed}, {"semanticUnjudged", report.semanticUnjudged},
         {"personalityPassed", report.personalityPassed}, {"personalityFailed", report.personalityFailed},
         {"personalityUnjudged", report.personalityUnjudged}, {"liveQualified", report.liveQualified}, {"errors", report.errors},
+        {"invalidJson", report.invalidJson}, {"shapeMismatch", report.shapeMismatch}, {"valueMismatch", report.valueMismatch},
+        {"structuredMatch", report.structuredMatch}, {"structuredUnjudged", report.structuredUnjudged},
+        {"repairIntroducedFailures", report.repairIntroducedFailures}, {"repairRescuedAnswers", report.repairRescuedAnswers},
         {"runs", results}}
         .dump(2);
 }

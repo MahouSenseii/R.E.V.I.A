@@ -14,6 +14,7 @@
 #include "Memory/memoryAttribution.h"
 #include "Memory/sensitiveContent.h"
 #include "Agents/conversationStylePolicy.h"
+#include "Agents/replyFormat.h"
 #include "Actions/actionTypes.h"
 #include "Planning/goalPlanner.h"
 #include <httplib.h>
@@ -1100,10 +1101,7 @@ responseOutput llamaCppService::GenerateResponse(const std::vector<conversationM
     ApplyApiKey(client, apiKey);
     client.set_connection_timeout(5);
     client.set_read_timeout(120);
-    std::stop_callback cancelRequest(stopToken, [&client]()
-    {
-        client.stop();
-    });
+    std::stop_callback cancelRequest(stopToken, [&client]() { client.stop(); });
     if (stopToken.stop_requested())
     {
         output.response = "I stopped that response.";
@@ -1111,10 +1109,14 @@ responseOutput llamaCppService::GenerateResponse(const std::vector<conversationM
         return output;
     }
 
-    const auto latestUser = std::find_if(context.rbegin(), context.rend(),
-        [](const auto& message) { return message.role == "user" && !message.content.empty(); });
-    const bool briefSocial = !deepReasoning && latestUser != context.rend() &&
-        revia::agents::ConversationStylePolicy::IsBriefSocialTurn(latestUser->content);
+    const auto latestUser = std::find_if(
+        context.rbegin(), context.rend(), [](const auto& message) { return message.role == "user" && !message.content.empty(); });
+    const auto replyFormat =
+        latestUser == context.rend() ? revia::agents::ReplyFormat::Conversation : revia::agents::RequestedReplyFormat(latestUser->content);
+    const bool jsonReply = replyFormat != revia::agents::ReplyFormat::Conversation;
+    const bool activeReasoning = deepReasoning && !jsonReply;
+    const bool briefSocial =
+        !deepReasoning && latestUser != context.rend() && revia::agents::ConversationStylePolicy::IsBriefSocialTurn(latestUser->content);
     embeddingOutput queryEmbedding;
     if (memoryAccess == revia::llm::PrivateMemoryAccess::ProfileSetting && activeProfile.bMemoryEnabled && !briefSocial)
     {
@@ -1153,14 +1155,14 @@ responseOutput llamaCppService::GenerateResponse(const std::vector<conversationM
     const int requestedResponse = briefSocial ? std::min(128, ResponseTokenLimit()) : ResponseTokenLimit();
     const int responseTokens = std::clamp(requestedResponse, 1, std::max(1, contextTokens / 4));
     const json originalMessages = messages;
-    auto measured = CountBackendPrompt(host, port, apiKey, modelName, messages, deepReasoning, stopToken);
+    auto measured = CountBackendPrompt(host, port, apiKey, modelName, messages, activeReasoning, stopToken);
     const auto usableTokens = static_cast<long long>(contextTokens) - responseTokens - ContextReserveTokens;
     if (!measured || usableTokens <= 0 || *measured > static_cast<std::size_t>(usableTokens))
     {
         messages = BoundMessagesForContext(messages, contextTokens, responseTokens, priorityParagraphs);
         if (measured && !messages.empty())
         {
-            measured = CountBackendPrompt(host, port, apiKey, modelName, messages, deepReasoning, stopToken);
+            measured = CountBackendPrompt(host, port, apiKey, modelName, messages, activeReasoning, stopToken);
             if (measured && *measured > static_cast<std::size_t>(std::max<long long>(0, usableTokens)))
                 messages = json::array();
         }
@@ -1182,27 +1184,37 @@ responseOutput llamaCppService::GenerateResponse(const std::vector<conversationM
         output.reason = "No text prompt fits after reserving generation and chat-template overhead.";
         return output;
     }
-    requestBody["model"]       = modelName;
-    requestBody["messages"]    = std::move(messages);
+    requestBody["model"] = modelName;
+    requestBody["messages"] = std::move(messages);
     requestBody["temperature"] = temperature;
-    requestBody["max_tokens"]  = responseTokens;
-    requestBody["stream"]      = true;
+    requestBody["max_tokens"] = responseTokens;
+    requestBody["stream"] = true;
     requestBody["cache_prompt"] = bAllowPromptCache;
     // Qwen3.5 thinks by default. Ordinary companion conversation should begin speaking
     // immediately; explicit/complex technical turns may opt into the same model's deep
     // mode without loading a second brain.
-    requestBody["chat_template_kwargs"] = {{"enable_thinking", deepReasoning}};
+    requestBody["chat_template_kwargs"] = {{"enable_thinking", activeReasoning}};
     // The configured Qwen model can otherwise fall into a fluent phrase loop and run
     // all the way to the response ceiling. DRY penalizes repeated token sequences while
     // leaving short, intentional emphasis alone.
-    requestBody["dry_multiplier"] = 0.8;
-    requestBody["dry_base"] = 1.75;
-    requestBody["dry_allowed_length"] = 2;
-    requestBody["dry_penalty_last_n"] = 4096;
-    requestBody["stop"]        = json::array();
+    if (jsonReply)
+    {
+        requestBody["response_format"] = {{"type", "json_schema"},
+            {"json_schema", {{"name", "requested_reply"},
+                                {"schema", {{"type", replyFormat == revia::agents::ReplyFormat::JsonArray ? "array" : "object"}}}}}};
+    }
+    else
+    {
+        requestBody["dry_multiplier"] = 0.8;
+        requestBody["dry_base"] = 1.75;
+        requestBody["dry_allowed_length"] = 2;
+        requestBody["dry_penalty_last_n"] = 4096;
+    }
+    requestBody["stop"] = json::array();
     for (const char* marker : StopMarkers)
     {
-        requestBody["stop"].push_back(marker);
+        if (!jsonReply)
+            requestBody["stop"].push_back(marker);
     }
 
     std::string fullResponse;
@@ -1218,8 +1230,8 @@ responseOutput llamaCppService::GenerateResponse(const std::vector<conversationM
     constexpr std::size_t ErrorCaptureBytes = MaximumErrorBodyBytes + 4;
 
     httplib::Request req;
-    req.method  = "POST";
-    req.path    = "/v1/chat/completions";
+    req.method = "POST";
+    req.path = "/v1/chat/completions";
     // Serialization can fail, and a failed turn is not a reason to end the process.
     //
     // nlohmann throws on text that is not valid UTF-8. Compaction no longer produces
@@ -1277,6 +1289,8 @@ responseOutput llamaCppService::GenerateResponse(const std::vector<conversationM
             }
 
             fullResponse += token;
+            if (jsonReply)
+                continue;
 
             // An unterminated <think> keeps its content out of visibleResponse, so nothing
             // inside one is ever emitted, spoken, or shown while it is still open.
@@ -1358,19 +1372,16 @@ responseOutput llamaCppService::GenerateResponse(const std::vector<conversationM
         std::max(0.0, requestMilliseconds - firstTokenMilliseconds)});
     output.timings.push_back({"llama_request_total", requestMilliseconds, true});
 
-    std::string cleanedResponse = VisibleReplyText(fullResponse, &output.reasoning);
+    std::string cleanedResponse = jsonReply ? TrimWhitespace(fullResponse) : VisibleReplyText(fullResponse, &output.reasoning);
 
     if (!result)
     {
         output.bSuccess = false;
-        output.response = stopToken.stop_requested()
-            ? "I stopped that response."
-            : "My local llama.cpp request timed out or disconnected.";
-        output.reason = stopToken.stop_requested()
-            ? "Conversation generation was cancelled."
-            : "llama.cpp request failed at " + host + ":" +
-                std::to_string(port) + ": " + httplib::to_string(result.error()) + ".";
-        output.bShouldSpeak    = true;
+        output.response = stopToken.stop_requested() ? "I stopped that response." : "My local llama.cpp request timed out or disconnected.";
+        output.reason = stopToken.stop_requested() ? "Conversation generation was cancelled."
+                                                   : "llama.cpp request failed at " + host + ":" + std::to_string(port) + ": " +
+                                                         httplib::to_string(result.error()) + ".";
+        output.bShouldSpeak = true;
         output.bShouldRemember = false;
         return output;
     }
@@ -1379,18 +1390,25 @@ responseOutput llamaCppService::GenerateResponse(const std::vector<conversationM
     {
         output.bSuccess = false;
         output.response = "My local llama.cpp backend returned an error.";
-        const std::string boundedError = revia::utf8::Prefix(
-            errorBody.empty() ? result->body : errorBody, MaximumErrorBodyBytes);
-        const std::string preview = revia::utf8::IsValid(boundedError)
-            ? revia::utf8::Prefix(boundedError, 1024)
-            : "[backend error body contained malformed UTF-8]";
-        output.reason = "llama.cpp server returned HTTP status " +
-            std::to_string(result->status) + ": " + preview;
-        output.bShouldSpeak    = true;
+        const std::string boundedError = revia::utf8::Prefix(errorBody.empty() ? result->body : errorBody, MaximumErrorBodyBytes);
+        const std::string preview =
+            revia::utf8::IsValid(boundedError) ? revia::utf8::Prefix(boundedError, 1024) : "[backend error body contained malformed UTF-8]";
+        output.reason = "llama.cpp server returned HTTP status " + std::to_string(result->status) + ": " + preview;
+        output.bShouldSpeak = true;
         output.bShouldRemember = false;
         return output;
     }
 
+    if (jsonReply && (finishReason == "length" || !revia::agents::IsCompleteJsonReply(cleanedResponse) ||
+                         (replyFormat == revia::agents::ReplyFormat::JsonArray ? !json::parse(cleanedResponse).is_array()
+                                                                               : !json::parse(cleanedResponse).is_object())))
+    {
+        output.response = "I couldn't finish a valid JSON reply within the response limit. Ask for a smaller result.";
+        output.reason = "Structured reply was incomplete, invalid or of the wrong container type.";
+        output.bShouldSpeak = true;
+        output.bShouldRemember = false;
+        return output;
+    }
     if (finishReason == "length")
     {
         // Never commit or speak the dangling clause created by a token ceiling. The
@@ -1398,17 +1416,16 @@ responseOutput llamaCppService::GenerateResponse(const std::vector<conversationM
         // still exhausts one, retain every complete sentence and discard only its
         // unfinished tail.
         const std::string completePrefix = LastCompleteSentencePrefix(cleanedResponse);
-        cleanedResponse = completePrefix.empty()
-            ? "I ran out of room before I could finish that answer. Ask me to continue."
-            : completePrefix;
+        cleanedResponse =
+            completePrefix.empty() ? "I ran out of room before I could finish that answer. Ask me to continue." : completePrefix;
     }
 
     if (cleanedResponse.empty())
     {
         output.bSuccess = false;
         output.response = "The model returned an empty response.";
-        output.reason   = "Stream completed but no usable content tokens were received.";
-        output.bShouldSpeak    = true;
+        output.reason = "Stream completed but no usable content tokens were received.";
+        output.bShouldSpeak = true;
         output.bShouldRemember = false;
         return output;
     }
@@ -1425,11 +1442,11 @@ responseOutput llamaCppService::GenerateResponse(const std::vector<conversationM
         printedLength = cleanedResponse.size();
     }
 
-    output.bSuccess        = true;
-    output.response        = cleanedResponse;
-    output.bShouldSpeak    = true;
+    output.bSuccess = true;
+    output.response = cleanedResponse;
+    output.bShouldSpeak = true;
     output.bShouldRemember = false;
-    output.bWasStreamed     = static_cast<bool>(onDelta);
+    output.bWasStreamed = static_cast<bool>(onDelta);
 
     return output;
 }

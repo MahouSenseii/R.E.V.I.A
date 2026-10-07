@@ -1,4 +1,5 @@
 #include "Agents/responseFilter.h"
+#include "Agents/replyFormat.h"
 #include "Core/utf8.h"
 
 #include "Identity/promptMarkers.h"
@@ -427,6 +428,7 @@ HardFilterResult ResponseFilter::ApplyHard(const std::string& userInput,
     const std::string& candidate, const ResponseFilterContext& context, const int maxCharacters) const
 {
     HardFilterResult result;
+    const bool jsonReply = IsCompleteJsonReply(candidate);
     // Every exit, including a grounded replacement, observes the same encoding and
     // byte budget. Validation happens before trimming so malformed bytes cannot be
     // accidentally hidden by a control-character or size repair.
@@ -441,6 +443,13 @@ HardFilterResult ResponseFilter::ApplyHard(const std::string& userInput,
         const std::size_t limit = static_cast<std::size_t>(std::max(maxCharacters, 256));
         if (result.text.size() > limit)
         {
+            if (jsonReply && !result.blocked)
+            {
+                result.text = "That JSON reply exceeded the response limit. Ask for a smaller result.";
+                result.changed = result.blocked = true;
+                result.reason = "Hard response filter refused an oversized JSON reply.";
+                return result;
+            }
             std::size_t boundary = result.text.find_last_of(".!?\n", limit - 1);
             if (boundary == std::string::npos || boundary < limit / 2)
                 boundary = result.text.find_last_of(" \t", limit - 1);
@@ -459,6 +468,14 @@ HardFilterResult ResponseFilter::ApplyHard(const std::string& userInput,
         result.text = "I lost that reply before it was safe to send. Try that once more.";
         result.changed = result.blocked = true;
         result.reason = "Hard response filter replaced malformed UTF-8.";
+        return finish();
+    }
+    const auto first = candidate.find_first_not_of(" \t\r\n");
+    if (candidate.size() > MaximumJsonReplyBytes && first != std::string::npos && (candidate[first] == '{' || candidate[first] == '['))
+    {
+        result.text = "That JSON reply exceeded the response limit. Ask for a smaller result.";
+        result.changed = result.blocked = true;
+        result.reason = "Hard response filter refused a JSON reply above the parsing limit.";
         return finish();
     }
     result.text.reserve(candidate.size());
@@ -482,22 +499,34 @@ HardFilterResult ResponseFilter::ApplyHard(const std::string& userInput,
         std::size_t position = 0;
         while ((position = result.text.find(token, position)) != std::string::npos)
         {
+            if (jsonReply)
+            {
+                result.text = "I can't return that JSON because it contains disallowed control text.";
+                result.changed = result.blocked = true;
+                result.reason = "Hard response filter refused control tokens inside a JSON reply.";
+                return finish();
+            }
             result.text.erase(position, token.size());
             result.changed = true;
         }
     }
-    result.text = RemoveGeneratedConversationTurns(Trim(result.text), result.changed);
+    if (!jsonReply)
+    {
+        result.text = RemoveGeneratedConversationTurns(Trim(result.text), result.changed);
+    }
 
     // Sound effects survive; theatre does not. Qwen3-TTS renders an inline nonverbal cue
     // itself, so a recognised one is canonicalised and kept for the voice to perform.
     // Prose in asterisks is removed instead: the TTS would read it aloud word by word,
     // and a reply narrating its own body language was never what was asked for.
-    const revia::speech::VocalizationShaping shaped =
-        revia::speech::ShapeVocalizations(result.text, maximumVocalizationsPerReply);
-    if (shaped.changed)
+    if (!jsonReply)
     {
-        result.text = shaped.text;
-        result.changed = true;
+        const revia::speech::VocalizationShaping shaped = revia::speech::ShapeVocalizations(result.text, maximumVocalizationsPerReply);
+        if (shaped.changed)
+        {
+            result.text = shaped.text;
+            result.changed = true;
+        }
     }
 
     if (ContainsPromptLeak(Lower(result.text)))

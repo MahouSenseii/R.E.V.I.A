@@ -5,6 +5,7 @@
 #include <fstream>
 #include <set>
 #include <stdexcept>
+#include <nlohmann/json.hpp>
 
 namespace
 {
@@ -37,6 +38,159 @@ CaseOutcome Output(const CognitionCase& item, const std::string& answer)
     result.id = item.id;
     result.turns.push_back({item.conversation.turns.front().input, answer, answer, true, false, {}});
     return result;
+}
+
+nlohmann::json SerializedVerdict(const CognitionCase& item, const CognitionVerdict& verdict)
+{
+    return nlohmann::json::parse(CognitionReportJson(AggregateCognition({item}, {verdict.seed}, {verdict}), {verdict})).at("runs").front();
+}
+
+void TestStructuredDiagnostics()
+{
+    OracleRegistry oracles;
+    const auto item = MakeCase(0);
+    const auto verify = [&](const std::string& answer, const std::string& category, const nlohmann::json& values)
+    {
+        const auto verdict = EvaluateCognitionCase(item, Output(item, answer), 11, oracles);
+        const auto retained = SerializedVerdict(item, verdict);
+        Check(retained.contains("finalAnswerDiagnostic"), "Structured diagnostic metadata was not retained.");
+        Check(retained.at("finalAnswerDiagnostic") == category, "Structured answer was assigned the wrong failure category.");
+        Check(retained.at("answerValuesPassed") == values, "Uncomparable output invented a factual judgment.");
+        Check(verdict.oraclePassed == (category == "match"), "Diagnostic classification changed the strict oracle verdict.");
+        Check(!verdict.personalityPassed.has_value(), "Structured diagnostics invented personality approval.");
+    };
+    verify(R"({"objects":10})", "match", true);
+    verify(R"({"objects":9999})", "value_mismatch", false);
+    verify(R"({"objects":"10"})", "shape_mismatch", nullptr);
+    verify(R"({"objects":10.0})", "shape_mismatch", nullptr);
+    verify(R"({})", "shape_mismatch", nullptr);
+    verify(R"({"objects":10,"extra":true})", "shape_mismatch", nullptr);
+    verify("There are 10 objects.", "invalid_json", nullptr);
+    verify("```json\n{\"objects\":10}\n```", "invalid_json", nullptr);
+    verify(R"({"objects":10} But actually there are 9999.)", "invalid_json", nullptr);
+    verify(R"({"objects":9999,"objects":10})", "invalid_json", nullptr);
+    verify(std::string(33, '[') + "10" + std::string(33, ']'), "invalid_json", nullptr);
+    verify(std::string(262144 - item.expectedJson.size(), ' ') + item.expectedJson, "match", true);
+    verify(std::string(262145 - item.expectedJson.size(), ' ') + item.expectedJson, "invalid_json", nullptr);
+
+    auto nested = item;
+    nested.expectedJson = R"({"items":[{"count":-2,"missing":null}],"name":"box"})";
+    const auto judgeNested = [&](const std::string& answer, const std::string& category)
+    {
+        const auto verdict = EvaluateCognitionCase(nested, Output(nested, answer), 11, oracles);
+        Check(SerializedVerdict(nested, verdict).at("finalAnswerDiagnostic") == category,
+            "Nested diagnostic lost a shape or value mismatch.");
+    };
+    judgeNested(R"({"name":"box","items":[{"missing":null,"count":-2}]})", "match");
+    judgeNested(R"({"items":[{"count":2,"missing":null}],"name":"box"})", "value_mismatch");
+    judgeNested(R"({"items":[{"count":-2,"missing":"unknown"}],"name":"box"})", "shape_mismatch");
+    judgeNested(R"({"items":[],"name":"box"})", "shape_mismatch");
+    judgeNested(R"({"items":[{"count":-2}],"name":"box"})", "shape_mismatch");
+    judgeNested(R"({"items":[{"count":9999,"count":-2,"missing":null}],"name":"box"})", "invalid_json");
+
+    auto introduced = Output(item, R"({"objects":11})");
+    introduced.turns.back().rawReply = item.expectedJson;
+    auto verdict = EvaluateCognitionCase(item, introduced, 11, oracles);
+    auto retained = SerializedVerdict(item, verdict);
+    Check(retained.at("rawAnswerDiagnostic") == "match" && retained.at("rawAnswerValuesPassed") == true &&
+              retained.at("repairIntroducedFailure") == true && retained.at("repairRescuedAnswer") == false,
+        "A correct raw answer corrupted before delivery was not identified.");
+    auto rescued = Output(item, item.expectedJson);
+    rescued.turns.back().rawReply = "There are 10 objects.";
+    verdict = EvaluateCognitionCase(item, rescued, 11, oracles);
+    retained = SerializedVerdict(item, verdict);
+    Check(retained.at("rawAnswerDiagnostic") == "invalid_json" && retained.at("rawAnswerValuesPassed").is_null() &&
+              retained.at("repairIntroducedFailure") == false && retained.at("repairRescuedAnswer") == true,
+        "A strict failure rescued before delivery was not identified.");
+    rescued.turns.back().rawReply.clear();
+    retained = SerializedVerdict(item, EvaluateCognitionCase(item, rescued, 11, oracles));
+    Check(retained.at("rawAnswerDiagnostic") == "unjudged" && retained.at("repairRescuedAnswer") == false,
+        "An absent raw response invented a repair judgment.");
+    auto human = item;
+    human.oracleId = "human-rubric-v1";
+    retained = SerializedVerdict(human, EvaluateCognitionCase(human, Output(human, item.expectedJson), 11, oracles));
+    Check(retained.at("finalAnswerDiagnostic") == "unjudged" && retained.at("answerValuesPassed").is_null(),
+        "A human-rubric case inherited an unrequested structured oracle.");
+}
+
+void TestDiagnosticAccounting()
+{
+    const auto item = MakeCase(0);
+    OracleRegistry oracles;
+    std::vector<CognitionVerdict> runs;
+    const std::vector<std::uint64_t> seeds{11, 29, 47, 61, 73, 89};
+    for (std::size_t index = 0; index < seeds.size(); ++index)
+    {
+        const std::vector<std::string> answers{item.expectedJson, "Correct prose: 10 objects.", R"({"objects":"10"})", R"({"objects":11})",
+            item.expectedJson, item.expectedJson};
+        runs.push_back(EvaluateCognitionCase(item, Output(item, answers[index]), seeds[index], oracles));
+    }
+    runs[4].available = false;
+    runs[5].bindingVerified = false;
+    auto report = nlohmann::json::parse(CognitionReportJson(AggregateCognition({item}, seeds, runs), runs));
+    Check(report.at("expectedRuns") == 6 && report.at("recordedRuns") == 6 && report.at("unavailable") == 1 &&
+              report.at("invalidBindings") == 1 && report.at("semanticPassed") == 1,
+        "Diagnostic counters changed the frozen denominator or strict numerator.");
+    Check(report.at("invalidJson") == 1 && report.at("shapeMismatch") == 1 && report.at("valueMismatch") == 1 &&
+              report.at("structuredMatch") == 1 && report.at("structuredUnjudged") == 2,
+        "Unavailable or unbound output entered a structured diagnostic numerator.");
+    for (std::size_t index : {4u, 5u})
+    {
+        const auto& retained = report.at("runs").at(index);
+        Check(retained.at("finalAnswerDiagnostic") == "unjudged" && retained.at("rawAnswerDiagnostic") == "unjudged" &&
+                  retained.at("answerValuesPassed").is_null() && retained.at("rawAnswerValuesPassed").is_null(),
+            "Serialized unavailable or unbound output retained a structured judgment.");
+        Check(retained.at("semanticPassed").is_null() && retained.at("oraclePassed").is_null() &&
+                  retained.at("personalityPassed").is_null() && retained.at("mechanicalPassed") == false && retained.at("reviewerId") == "",
+            "Serialized unavailable or unbound output retained an earlier judgment.");
+    }
+    runs.pop_back();
+    report = nlohmann::json::parse(CognitionReportJson(AggregateCognition({item}, seeds, runs), runs));
+    Check(report.at("missingRuns") == 1 && report.at("expectedRuns") == 6 && report.at("structuredUnjudged") == 1,
+        "A missing diagnostic slot was silently filled or removed from the denominator.");
+    auto introduced = Output(item, R"({"objects":11})");
+    introduced.turns.back().rawReply = item.expectedJson;
+    auto rescued = Output(item, item.expectedJson);
+    rescued.turns.back().rawReply = "Correct prose: 10 objects.";
+    runs = {EvaluateCognitionCase(item, introduced, 11, oracles), EvaluateCognitionCase(item, rescued, 29, oracles)};
+    report = nlohmann::json::parse(CognitionReportJson(AggregateCognition({item}, {11, 29}, runs), runs));
+    Check(report.at("repairIntroducedFailures") == 1 && report.at("repairRescuedAnswers") == 1,
+        "Raw/delivered repair transitions were not counted independently.");
+    runs.front().bindingVerified = false;
+    runs.back().available = false;
+    report = nlohmann::json::parse(CognitionReportJson(AggregateCognition({item}, {11, 29}, runs), runs));
+    Check(report.at("repairIntroducedFailures") == 0 && report.at("repairRescuedAnswers") == 0,
+        "Unbound or unavailable repair metadata entered a diagnostic numerator.");
+    Check(report.at("runs").front().at("repairIntroducedFailure") == false && report.at("runs").back().at("repairRescuedAnswer") == false,
+        "Serialized unadmitted repair metadata invented an approved transition.");
+    auto original = EvaluateCognitionCase(item, Output(item, item.expectedJson), 11, oracles);
+    auto rejected = original;
+    rejected.criterionDigest = std::string(64, 'e');
+    report = nlohmann::json::parse(CognitionReportJson(AggregateCognition({item}, {11}, {rejected}), {rejected}));
+    Check(report.at("invalidBindings") == 1 && report.at("runs").front().at("bindingVerified") == false &&
+              report.at("runs").front().at("oraclePassed").is_null() && report.at("runs").front().at("finalAnswerDiagnostic") == "unjudged",
+        "Changed frozen criteria retained a serialized judgment.");
+    rejected = original;
+    rejected.sourceDigest = std::string(64, 'f');
+    report = nlohmann::json::parse(CognitionReportJson(AggregateCognition({item}, {11}, {rejected}), {rejected}));
+    Check(report.at("invalidBindings") == 1 && report.at("runs").front().at("answerValuesPassed").is_null(),
+        "Changed frozen source retained a serialized value judgment.");
+    report = nlohmann::json::parse(CognitionReportJson(AggregateCognition({item}, {11}, {original, original}), {original, original}));
+    Check(report.at("recordedRuns") == 1 && report.at("semanticPassed") == 1 && !report.at("errors").empty() &&
+              report.at("runs").at(1).at("bindingVerified") == false && report.at("runs").at(1).at("semanticPassed").is_null(),
+        "Duplicate evidence retained a second serialized approval.");
+    rejected = original;
+    rejected.caseId = "not-in-frozen-corpus";
+    report = nlohmann::json::parse(CognitionReportJson(AggregateCognition({item}, {11}, {rejected}), {rejected}));
+    Check(report.at("recordedRuns") == 0 && report.at("missingRuns") == 1 &&
+              report.at("runs").front().at("finalAnswerDiagnostic") == "unjudged",
+        "Unexpected evidence received a serialized judgment or filled a frozen slot.");
+    const auto snapshot = AggregateCognition({item}, {11}, {original});
+    report = nlohmann::json::parse(CognitionReportJson(snapshot, {rejected}));
+    Check(report.at("runs").front().at("caseId") == item.id && report.at("runs").front().at("semanticPassed") == true,
+        "Original run arguments replaced the report's admitted snapshot.");
+    report = nlohmann::json::parse(CognitionReportJson(CognitionReport{}, {original}));
+    Check(report.at("runs").empty(), "A report without admitted evidence serialized supplied raw approvals.");
 }
 
 void TestWrongAndUnreviewed()
@@ -136,6 +290,8 @@ void TestCampaignEvidenceAdmission()
     OracleRegistry oracles;
     auto valid = EvaluateBoundCognitionCase(item, output, campaign, *bundle, task, task.stamp, task.scope, guard, oracles);
     Check(valid.bindingVerified && valid.semanticPassed == true, "Bound campaign control failed.");
+    Check(valid.finalAnswerDiagnostic == StructuredAnswerDiagnostic::Match && valid.answerValuesPassed == true,
+        "Valid evidence admission lost a comparable structured answer.");
     CognitionReview review{item.id, 11, "independent-reviewer", valid.outputDigest, valid.sourceDigest, std::nullopt, true};
     review.criterionDigest = valid.criterionDigest;
     review.campaignDigest = "different-campaign";
@@ -146,6 +302,23 @@ void TestCampaignEvidenceAdmission()
     auto report = AggregateBoundCognition({item}, {swapped}, {valid});
     Check(report.expectedRuns == 1 && report.recordedRuns == 1 && report.invalidBindings == 1 && report.semanticPassed == 0,
         "Different build entered the live semantic numerator.");
+    Check(report.structuredMatch == 0 && report.structuredUnjudged == 1, "Different build retained a structured diagnostic judgment.");
+    auto reviewed = valid;
+    reviewed.personalityPassed = true;
+    reviewed.repairIntroducedFailure = true;
+    reviewed.repairRescuedAnswer = true;
+    auto serialized = nlohmann::json::parse(CognitionReportJson(AggregateBoundCognition({item}, {swapped}, {reviewed}), {reviewed}));
+    const auto& rejected = serialized.at("runs").front();
+    Check(rejected.at("bindingVerified") == false && rejected.at("finalAnswerDiagnostic") == "unjudged" &&
+              rejected.at("rawAnswerDiagnostic") == "unjudged" && rejected.at("answerValuesPassed").is_null() &&
+              rejected.at("rawAnswerValuesPassed").is_null(),
+        "Serialized report trusted original run judgments after campaign admission failed.");
+    Check(rejected.at("semanticPassed").is_null() && rejected.at("oraclePassed").is_null() && rejected.at("personalityPassed").is_null() &&
+              rejected.at("reviewerId") == "" && rejected.at("mechanicalPassed") == false &&
+              rejected.at("repairIntroducedFailure") == false && rejected.at("repairRescuedAnswer") == false,
+        "Rejected campaign retained a serialized semantic, personality or repair approval.");
+    Check(rejected.at("outputDigest") == reviewed.outputDigest && rejected.at("evidence").size() == 2,
+        "Admission normalization removed rejected raw evidence identity from inspection.");
     swapped = campaign;
     swapped.providerDigest = std::string(64, '8');
     Check(AggregateBoundCognition({item}, {swapped}, {valid}).semanticPassed == 0, "Different provider entered the live numerator.");
@@ -157,15 +330,34 @@ void TestCampaignEvidenceAdmission()
     foreignScope.audience.audienceId = "another-audience";
     auto refused = EvaluateBoundCognitionCase(item, output, campaign, *bundle, task, task.stamp, foreignScope, guard, oracles);
     Check(!refused.bindingVerified && !refused.semanticPassed, "Cross-audience evidence entered the semantic numerator.");
+    const auto cleared = [](const CognitionVerdict& verdict)
+    {
+        return verdict.finalAnswerDiagnostic == StructuredAnswerDiagnostic::Unjudged &&
+               verdict.rawAnswerDiagnostic == StructuredAnswerDiagnostic::Unjudged && !verdict.answerValuesPassed.has_value() &&
+               !verdict.rawAnswerValuesPassed.has_value() && !verdict.repairIntroducedFailure && !verdict.repairRescuedAnswer;
+    };
+    Check(cleared(refused), "Cross-audience evidence retained a new diagnostic judgment.");
     result.digest = std::string(64, '7');
     const auto wrongOutput = revia::core::EvidenceBundle::Create({source, result}, task.stamp, task.scope, validation);
     refused = EvaluateBoundCognitionCase(item, output, campaign, *wrongOutput, task, task.stamp, task.scope, guard, oracles);
     Check(!refused.bindingVerified && !refused.semanticPassed, "Different output evidence entered the semantic numerator.");
+    Check(cleared(refused), "Substituted output evidence retained a new diagnostic judgment.");
     std::stop_source stop;
     stop.request_stop();
     refused =
         EvaluateBoundCognitionCase(item, output, campaign, *wrongOutput, task, task.stamp, task.scope, guard, oracles, stop.get_token());
     Check(!refused.bindingVerified, "Cancelled task admitted campaign evidence.");
+    Check(cleared(refused), "Cancelled evidence retained a new diagnostic judgment.");
+    auto changed = Output(item, R"({"objects":11})");
+    changed.turns.back().rawReply = item.expectedJson;
+    refused = EvaluateBoundCognitionCase(item, changed, campaign, *bundle, task, task.stamp, task.scope, guard, oracles);
+    Check(cleared(refused), "Failed output binding retained an apparent repair-induced failure.");
+    auto unavailable = output;
+    unavailable.unavailable = true;
+    Check(cleared(EvaluateCognitionCase(item, unavailable, 11, oracles)), "Unavailable model output was assigned structured judgments.");
+    auto substituted = output;
+    substituted.turns.front().input = "foreign source";
+    Check(cleared(EvaluateCognitionCase(item, substituted, 11, oracles)), "Foreign source was assigned structured judgments.");
 }
 
 void TestFrozenDenominators()
@@ -248,6 +440,8 @@ int main(int argc, char** argv)
         const std::string selected = argc >= 2 ? argv[1] : "all";
         if (selected == "all" || selected == "A")
         {
+            TestStructuredDiagnostics();
+            TestDiagnosticAccounting();
             TestWrongAndUnreviewed();
             TestCampaignEvidenceAdmission();
         }
