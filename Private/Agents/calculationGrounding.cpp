@@ -175,10 +175,12 @@ bool OnlyJsonPresentation(const std::string& suffix)
     std::string explicitSchema;
     std::string assignedKey;
     bool assigned = false;
+    bool hasNumericType = false;
     static const std::regex plain(R"(^(?:return|reply|respond|output)\s+(?:only\s+)?(?:(?:in|as)\s+)?json(?:\s+(?:object|array))?$)");
     static const std::regex keys(
         R"(^(?:return|reply|respond|output)\s+(?:only\s+)?(?:(?:in|as)\s+)?json(?:\s+object)?\s+with\s+(?:exactly\s+)?keys?\s+)");
     static const std::regex assignment(R"(^put the (?:integer |numeric )?answer in\s+)");
+    static const std::regex numericType(R"(^use\s+json\s+type\s+(?:integer|number)\s+for\s+that\s+field$)");
     for (const auto& clause : PresentationClauses(suffix))
     {
         if (clause.size() > 1024)
@@ -190,6 +192,16 @@ bool OnlyJsonPresentation(const std::string& suffix)
         {
             if (format != ReplyFormat::JsonObject)
                 return false;
+            continue;
+        }
+        if (std::regex_match(lowered, numericType))
+        {
+            if (hasNumericType || format != ReplyFormat::JsonObject || explicitSchema.empty())
+                return false;
+            const auto schema = nlohmann::json::parse(explicitSchema);
+            if (schema.at("properties").size() != 1 || schema.at("required").size() != 1 || schema.at("additionalProperties") != false)
+                return false;
+            hasNumericType = true;
             continue;
         }
         std::smatch match;

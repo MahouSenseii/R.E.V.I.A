@@ -96,3 +96,21 @@ tasks still defer. Long current sources retain excerpt handling; raw format clau
 are bounded and intent whitespace is compacted without changing source bytes.
 A separate independent 12-case/36-slot cohort was frozen before corrected
 candidate outcomes. Final results belong in the delivery acceptance report.
+## Continuity and literal arithmetic follow-through
+
+After the frozen model campaign, two local host defects were reproduced: continuity
+split decimal constraints, and a finite numeric-type presentation clause forced a
+literal expression through interpretation. Existing Core and Agents owners carry
+the repairs. There is no separate memory store or arithmetic generator.
+
+| Role | Owned work | Status |
+| --- | --- | --- |
+| Director | Integration, native verification, saved desktop and main delivery | 13 targets built; 12 native checks and saved desktop startup pass; main delivery and preservation tracked by receipts |
+| Continuity worker | Decimal boundaries, eviction/restoration and ordinary private wire coverage | Implemented; native RED/GREEN probes and independent source review complete |
+| Arithmetic worker | Numeric presentation admission and ordinary/evaluation wire coverage | Implemented; six pure groups pass; fresh-request assertions reviewed |
+| Independent reviewers | Production boundaries, negative cases and wire evidence | No remaining source blocker; final native execution passed; personality and live-model qualification remain pending |
+
+The admission modifier does not strengthen provider type grammar. Context size,
+budgets and personality settings remain unchanged; no new model score is claimed.
+See [continuity acceptance](ANSWER_CONTINUITY_ACCEPTANCE.md) for delivered behavior,
+verification and the remaining roadmap boundaries.

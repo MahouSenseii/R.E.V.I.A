@@ -2,15 +2,18 @@
 
 #include "LLM/tokenEstimate.h"
 #include "Core/conversationContext.h"
+#include "Core/utf8.h"
 #include "LLM/LLamaCPP/llamaCppService.h"
 #include "Identity/promptMarkers.h"
 #include "Identity/reviaStatePacket.h"
 #include "Agents/conversationStylePolicy.h"
 #include "Memory/longTermMemory.h"
+#include "Runtime/conversationRuntime.h"
 
 #include <httplib.h>
 #include <nlohmann/json.hpp>
 
+#include <algorithm>
 #include <chrono>
 #include <atomic>
 #include <fstream>
@@ -19,6 +22,7 @@
 #include <string>
 #include <thread>
 #include <vector>
+#include <utility>
 
 // Whether a prompt built to fill the context actually fits in it.
 //
@@ -77,6 +81,71 @@ void TestContinuityRetainsLateCorrectionsAndSourceOrder()
     Check(history.GetCompressedHistorySummary().empty(), "Clearing dialogue retained old working continuity.");
 }
 
+void TestContinuityPreservesDecimalConstraintsAfterEvictionAndRestore()
+{
+    const std::vector<std::string> constraints = {"The rover must fit a 0.75 m doorway.", "Keep the sensor offset at -0.25 m.",
+        "Correction: the reserve is .75 credits.", "Keep the quoted margin at \"-.75 m\".",
+        "Keep the Unicode \u03BC sensor limit at +.75 m.", "Keep reserve=.75 credits.", "Keep reserve:.75 credits."};
+    for (const auto& constraint : constraints)
+    {
+        std::vector<conversationMessage> archive = {
+            {"user", constraint + " Ordinary unrelated tail."}, {"assistant", "The constraint is recorded."}};
+        for (int index = 0; index < 13; ++index)
+        {
+            archive.push_back({"user", "Routine observation " + std::to_string(index)});
+            archive.push_back({"assistant", "Routine acknowledgement " + std::to_string(index)});
+        }
+        conversationContext history;
+        for (const auto& message : archive)
+            history.AddMessage(message);
+        const auto recent = history.GetRecentMessages();
+        Check(std::none_of(recent.begin(), recent.end(),
+                  [&constraint](const auto& message) { return message.content.find(constraint) != std::string::npos; }),
+            "The decimal fixture did not evict its original constraint.");
+        const auto summary = history.GetCompressedHistorySummary();
+        Check(
+            summary.find(constraint) != std::string::npos, "Evicted continuity changed a decimal value or dropped its unit: " + constraint);
+        Check(summary.find("Ordinary unrelated tail.") == std::string::npos,
+            "Decimal preservation merged the following ordinary sentence into a selected constraint.");
+        Check(summary.find("[source 1] User:") != std::string::npos && summary.size() <= 2800 && revia::utf8::IsValid(summary),
+            "Decimal preservation lost admitted source ownership, its byte bound or valid UTF-8.");
+        history.RestoreMessages(archive, 2);
+        Check(history.GetRecentMessages().size() == 2 && history.GetCompressedHistorySummary().find(constraint) != std::string::npos,
+            "Archive reconstruction changed an older decimal constraint: " + constraint);
+        history.Clear();
+        Check(history.GetRecentMessages().empty() && history.GetCompressedHistorySummary().empty(),
+            "Clearing dialogue retained a decimal constraint.");
+    }
+}
+void TestContinuityKeepsNonnumericSentenceBoundaries()
+{
+    const std::vector<std::pair<std::string, std::string>> cases = {
+        {"Keep reservex.75 credits. Ordinary unrelated tail.", "Keep reservex."},
+        {"Keep reserve unchanged. 75 credits belongs to an unrelated sentence.", "Keep reserve unchanged."}};
+    for (const auto& [input, retained] : cases)
+    {
+        std::vector<conversationMessage> archive = {{"user", input}, {"assistant", "The constraint is recorded."}};
+        for (int index = 0; index < 13; ++index)
+        {
+            archive.push_back({"user", "Routine observation " + std::to_string(index)});
+            archive.push_back({"assistant", "Routine acknowledgement " + std::to_string(index)});
+        }
+        conversationContext history;
+        for (const auto& message : archive)
+            history.AddMessage(message);
+        const auto recent = history.GetRecentMessages();
+        Check(std::none_of(recent.begin(), recent.end(), [&input](const auto& message) { return message.content == input; }),
+            "The sentence-boundary fixture did not evict its original input.");
+        const auto checkSummary = [&](const std::string& summary)
+        {
+            Check(summary.find(retained) != std::string::npos && summary.find("75 credits") == std::string::npos,
+                "Numeric separator admission merged an after-letter or ordinary sentence boundary: " + input);
+        };
+        checkSummary(history.GetCompressedHistorySummary());
+        history.RestoreMessages(archive, 2);
+        checkSummary(history.GetCompressedHistorySummary());
+    }
+}
 void TestPronounRecallUsesTheLatestAdmittedTopic()
 {
     revia::tests::ScopedTestDirectory directory;
@@ -364,6 +433,10 @@ class ContextBackend
   public:
     explicit ContextBackend(const std::string& tokenization = "unsupported")
     {
+        server.Get(
+            "/health", [](const auto&, auto& response) { response.set_content(R"({"status":"ok","slots_idle":1})", "application/json"); });
+        server.Get("/v1/models",
+            [](const auto&, auto& response) { response.set_content(R"({"data":[{"id":"controlled-context"}]})", "application/json"); });
         if (tokenization != "unsupported")
         {
             server.Post("/apply-template",
@@ -453,6 +526,94 @@ class ContextBackend
     nlohmann::json lastRequest;
 };
 
+void TestPrivateReplyRetainsEvictedDecimalConstraintsOnTheWire()
+{
+    revia::tests::ScopedTestDirectory directory;
+    ContextBackend backend;
+    const auto database = (directory.root / "decimal-reply-memory.db").string();
+    messageRouter router(database);
+    conversationContext history;
+    revia::agents::TurnCoordinator coordinator(database);
+    revia::speech::SpeechService speech;
+    revia::runtime::AffectController affect;
+    revia::emotion::EmotionRuntime emotions;
+    revia::runtime::RuntimeEventBus events;
+    logger log(directory.root / "Logs");
+    revia::runtime::ConversationRuntime runtime(
+        router, history, coordinator, speech, affect, emotions, events, log, [](const auto&, const auto&) {}, [](const auto&) {},
+        [] { return revia::actions::CapabilitySettings::InternetAccess{}; },
+        [] { return revia::actions::CapabilitySettings::DesktopControl{}; }, {},
+        []
+        {
+            responseFilterSettings filters;
+            filters.bAiReviewEnabled = false;
+            return filters;
+        },
+        {}, {}, {}, {}, {}, {},
+        []
+        {
+            revia::agents::SelfInquiryLimits limits;
+            limits.enabled = false;
+            return limits;
+        });
+    aiProfile profile;
+    profile.bMemoryEnabled = false;
+    profile.systemPrompt = "You are Revia. Keep the authored character and answer from admitted evidence.";
+    llmSettings settings;
+    settings.host = "127.0.0.1";
+    settings.port = backend.port;
+    settings.modelName = "controlled-context";
+    settings.contextSize = 8192;
+    settings.maxTokens = 256;
+    settings.bAutoMaxTokens = settings.bAutoStartServer = settings.bVisionEnabled = false;
+    settings.bStablePromptPrefix = true;
+    embeddingSettings embeddings;
+    embeddings.bEnabled = embeddings.bAutoStartServer = false;
+    router.ApplyLLMSettings(settings, embeddings, profile);
+    revia::memory::MemoryScope scope;
+    scope.companionId = "decimal-fixture";
+    scope.participantId = "local:decimal-fixture";
+    scope.audience = {revia::identity::AudienceKind::Private, "decimal-private", 1, {scope.participantId}};
+    scope.participantSource = revia::identity::SpeakerSource::ExplicitIntroduction;
+    const std::vector<std::string> constraints = {"The rover must fit a 0.75 m doorway.", "Keep the sensor offset at -0.25 m.",
+        "Correction: the reserve is .75 credits.", "Keep reserve=.75 credits.", "Keep reserve:.75 credits."};
+    for (const auto& constraint : constraints)
+    {
+        history.AddMessage({"user", constraint, scope.participantId, scope});
+        history.AddMessage({"assistant", "The constraint is recorded.", scope.participantId, scope});
+    }
+    for (int index = 0; index < 13; ++index)
+    {
+        history.AddMessage({"user", "Routine observation " + std::to_string(index), scope.participantId, scope});
+        history.AddMessage({"assistant", "Routine acknowledgement " + std::to_string(index), scope.participantId, scope});
+    }
+    const auto recent = history.GetRecentMessages();
+    for (const auto& constraint : constraints)
+        Check(std::none_of(recent.begin(), recent.end(),
+                  [&constraint](const auto& message) { return message.content.find(constraint) != std::string::npos; }),
+            "The private reply fixture retained its original decimal constraint in raw dialogue.");
+    const std::string question = "What doorway limit, sensor offset and reserve must the rover keep?";
+    const auto reply =
+        runtime.ReplyForAudience(question, {}, scope.audience, {}, profile, true, false, {}, [] { return true; }, {}, {}, scope);
+    Check(reply.succeeded, "The ordinary private decimal reply failed: " + reply.reason);
+    const auto request = backend.Last();
+    const auto& messages = request.at("messages");
+    Check(messages.front().value("role", "") == "system" && messages.front().value("content", "").starts_with(profile.systemPrompt),
+        "Decimal continuity changed the fixture's authored system prompt.");
+    const auto latest = messages.back().at("content").get<std::string>();
+    Check(messages.back().value("role", "") == "user" && latest.starts_with(revia::identity::markers::RuntimeTurnContext) &&
+              latest.find(revia::identity::markers::RuntimeTurnContextEnd) != std::string::npos &&
+              latest.find(question) != std::string::npos,
+        "The ordinary private reply lost runtime attribution or the current question.");
+    std::string wire;
+    for (const auto& message : messages)
+        wire += message.at("content").get<std::string>() + '\n';
+    for (const auto& constraint : constraints)
+        Check(wire.find(constraint) != std::string::npos,
+            "The ordinary private reply lost an evicted decimal constraint before final transport: " + constraint);
+    Check(wire.find("Working continuity:") != std::string::npos && wire.find("[source 1] User:") != std::string::npos,
+        "The ordinary private reply lost source-linked working continuity.");
+}
 void TestBackendTemplateCountPreservesFittingDialogue()
 {
     revia::tests::ScopedTestDirectory directory;
@@ -890,6 +1051,9 @@ void TestActualWireRetainsCurrentPurposeAndConfiguredAnswerPosture()
 void RunContextFittingTests()
 {
     TestContinuityRetainsLateCorrectionsAndSourceOrder();
+    TestContinuityPreservesDecimalConstraintsAfterEvictionAndRestore();
+    TestContinuityKeepsNonnumericSentenceBoundaries();
+    TestPrivateReplyRetainsEvictedDecimalConstraintsOnTheWire();
     TestPronounRecallUsesTheLatestAdmittedTopic();
     TestContinuityRebuildAndRollbackStayBounded();
     TestBackendTemplateCountPreservesFittingDialogue();

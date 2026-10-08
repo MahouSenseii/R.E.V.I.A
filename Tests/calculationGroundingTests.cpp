@@ -229,6 +229,74 @@ void TestLiteralArithmeticWithPresentationSuffix()
     }
 }
 
+void TestNumericTypePresentationKeepsLiteralArithmetic()
+{
+    using revia::agents::BuildCalculationGrounding;
+    int proposals = 0;
+    const auto emptyProposal = [&](const std::string&, std::stop_token)
+    {
+        ++proposals;
+        return R"({"calculations":[]})";
+    };
+    const auto checkLiteral = [&](const std::string& input, const std::string& expression, const std::string& value)
+    {
+        const auto grounded = BuildCalculationGrounding(input, {}, emptyProposal);
+        Check(grounded.ran && proposals == 0 && grounded.promptBlock.find("\"interpretation\":\"literal\"") != std::string::npos &&
+                  grounded.promptBlock.find("\"sourceSpan\":\"" + expression + "\"") != std::string::npos &&
+                  grounded.promptBlock.find("\"value\":\"" + value + "\"") != std::string::npos,
+            "An unambiguous numeric field presentation modifier delegated or changed literal arithmetic: " + input);
+    };
+    checkLiteral(
+        R"(Compute (19 - 7) * 4 + 3. Return JSON with exactly keys "checkedAmount". Use JSON type integer for that field. Return only JSON.)",
+        "(19 - 7) * 4 + 3", "51");
+    checkLiteral(
+        R"(Calculate 2.5+1.25. Return JSON with exactly keys "fractionValue". Use JSON type number for that field. Return only JSON.)",
+        "2.5+1.25", "3.75");
+    checkLiteral(
+        "Evaluate 1E2+3. Return JSON with key \"eXactField\". USE \tJSON TYPE NUMBER FOR THAT FIELD. Return JSON.", "1E2+3", "103");
+    checkLiteral(R"(Calculate 2.5+1.25. Return JSON with key "fractionValue". Use JSON type integer for that field. Return only JSON.)",
+        "2.5+1.25", "3.75");
+    const std::string stem = "Calculate 7*6-3. ";
+    const std::string key = R"(Return JSON with exactly keys "value". )";
+    const std::string modifier = "Use JSON type integer for that field. ";
+    const std::string delivery = "Return only JSON.";
+    for (const std::string suffix :
+        {modifier + delivery, "Return JSON. " + modifier + delivery, modifier + key + delivery,
+            R"(Return JSON with exactly keys "value", "other". )" + modifier + delivery,
+            key + "Use JSON type integer for another field. " + delivery, key + R"(Use JSON type integer for field "other". )" + delivery,
+            key + "Use JSON type string for that field. " + delivery, key + "Use JSON type boolean for that field. " + delivery,
+            key + modifier + modifier + delivery, key + modifier + "Use JSON type number for that field. " + delivery,
+            key + modifier + R"(Return JSON with exactly keys "different". )" + delivery,
+            key + "Use JSON type integer for that field by rounding down. " + delivery, key + modifier + "Truncate the answer. " + delivery,
+            key + modifier + "Actually calculate 4+5. " + delivery, key + modifier + "Also calculate 4+5. " + delivery,
+            key + modifier + "Change the operand to 4. " + delivery, key + modifier + "Do something else. " + delivery,
+            key + R"("Use JSON type integer for that field." )" + delivery,
+            key + "She said: Use JSON type integer for that field. " + delivery,
+            key + std::string(3, char(96)) + modifier + std::string(3, char(96)) + " " + delivery,
+            key + "Use " + std::string(1100, ' ') + "JSON type integer for that field. " + delivery, key + modifier + "Return JSON array."})
+    {
+        const int before = proposals;
+        const auto grounded = BuildCalculationGrounding(stem + suffix, {}, emptyProposal);
+        Check(!grounded.ran && grounded.promptBlock.empty() && proposals == before + 1,
+            "An ambiguous, altered or untrusted numeric presentation modifier bypassed interpretation: " + suffix);
+    }
+    const int beforeMalformed = proposals;
+    const auto malformed =
+        BuildCalculationGrounding(stem + R"(Return JSON with exactly keys "value. )" + modifier + delivery, {}, emptyProposal);
+    Check(!malformed.ran && malformed.promptBlock.empty() && proposals == beforeMalformed,
+        "An unclosed field quotation bypassed the intent owner's fail-closed parse.");
+    const std::string input = stem + key + modifier + delivery;
+    std::stop_source stop;
+    stop.request_stop();
+    const int before = proposals;
+    Check(!BuildCalculationGrounding(input, {}, emptyProposal, stop.get_token()).ran && proposals == before,
+        "Cancelled numeric presentation admission contacted the proposer or published a result.");
+    int admissions = 0;
+    const auto revoked = BuildCalculationGrounding(input, {}, emptyProposal, {}, [&] { return ++admissions == 1; });
+    Check(!revoked.ran && revoked.promptBlock.empty() && proposals == before,
+        "A literal numeric presentation result survived revocation before publication.");
+}
+
 void TestCalculationProposalSourceChoices()
 {
     using revia::agents::CalculationProposalSchema;
@@ -304,11 +372,14 @@ class GroundingBackend
                         lastAnswerPrompt.clear();
                         for (const auto& message : body.at("messages"))
                             lastAnswerPrompt += message.at("content").template get<std::string>() + "\n";
+                        lastAnswerFormat = body.value("response_format", json::object());
+                        answer = finalAnswer;
                     }
                     ++answers;
-                    answer = AnswerPrompt().find("[Arithmetic uncertainty for this turn]") != std::string::npos
-                                 ? "How many did you sell? I need that amount to work out the remainder."
-                                 : "The total is 39 discs. That stash is still impressive!";
+                    if (answer.empty())
+                        answer = AnswerPrompt().find("[Arithmetic uncertainty for this turn]") != std::string::npos
+                                     ? "How many did you sell? I need that amount to work out the remainder."
+                                     : "The total is 39 discs. That stash is still impressive!";
                 }
                 const json choice = {{"choices", json::array({{{"message", {{"content", answer}}}, {"finish_reason", "stop"}}})}};
                 if (body.value("stream", false))
@@ -338,6 +409,16 @@ class GroundingBackend
         std::lock_guard lock(mutex);
         return lastAnswerPrompt;
     }
+    json AnswerResponseFormat()
+    {
+        std::lock_guard lock(mutex);
+        return lastAnswerFormat;
+    }
+    void SetAnswer(const std::string& answer)
+    {
+        std::lock_guard lock(mutex);
+        finalAnswer = answer;
+    }
     int port = 0;
     std::atomic<int> proposals{0}, answers{0};
     std::function<void()> revoke;
@@ -347,6 +428,8 @@ class GroundingBackend
     std::jthread worker;
     std::mutex mutex;
     std::string lastAnswerPrompt;
+    json lastAnswerFormat = json::object();
+    std::string finalAnswer;
 };
 
 struct RuntimeFixture
@@ -455,6 +538,40 @@ void TestMissingPremiseGuidanceReachesBothFinalRequests()
     Check(!revoked.succeeded && fixture.backend.answers == before && fixture.backend.proposals == 0,
         "Revoked missing-premise guidance reached final answer generation.");
 }
+
+void TestNumericPresentationLiteralReachesBothFinalRequests()
+{
+    RuntimeFixture fixture;
+    const std::string input =
+        R"(Compute 7*6-3. Return JSON with exactly keys "confirmedTotal". Use JSON type integer for that field. Return only JSON.)";
+    const std::string answer = R"({"confirmedTotal":39})";
+    fixture.backend.SetAnswer(answer);
+    const auto checkPrompt = [&]
+    {
+        const auto prompt = fixture.backend.AnswerPrompt();
+        Check(fixture.backend.proposals == 0 && prompt.find("[Native arithmetic observations") != std::string::npos &&
+                  prompt.find("\"interpretation\":\"literal\"") != std::string::npos &&
+                  prompt.find("\"sourceSpan\":\"7*6-3\"") != std::string::npos && prompt.find("\"value\":\"39\"") != std::string::npos &&
+                  prompt.find("receiptDigest") != std::string::npos,
+            "A decoded final request lost literal numeric-modifier grounding or called the proposer.");
+        Check(fixture.backend.AnswerResponseFormat().at("json_schema").at("schema") == json{{"type", "object"}},
+            "Literal presentation admission unexpectedly added typed provider grammar.");
+    };
+    const auto evaluated = fixture.runtime.EvaluateTurn(input, {}, fixture.profile, true);
+    Check(evaluated.succeeded && evaluated.text == answer,
+        "The numeric-presentation evaluation fixture did not deliver the controlled final reply.");
+    Check(fixture.backend.answers == 1, "The numeric-presentation evaluation did not send one fresh final request.");
+    checkPrompt();
+    const auto ordinary = fixture.runtime.Reply(input, fixture.profile, true, false);
+    Check(ordinary.succeeded && ordinary.text == answer, "The numeric-presentation normal fixture did not deliver the controlled reply.");
+    Check(fixture.backend.answers == 2, "The numeric-presentation normal reply did not send a second fresh final request.");
+    checkPrompt();
+    fixture.runtime.SetPrivateAdmissionFactory([] { return [] { return false; }; });
+    const int before = fixture.backend.answers;
+    const auto revoked = fixture.runtime.Reply(input, fixture.profile, true, false);
+    Check(!revoked.succeeded && fixture.backend.answers == before && fixture.backend.proposals == 0,
+        "Revoked numeric-presentation grounding reached final answer generation.");
+}
 }
 
 void RunCalculationGroundingTests()
@@ -463,7 +580,9 @@ void RunCalculationGroundingTests()
     TestMissingNumericalPremisesCannotBecomeObservations();
     TestMissingPremiseCuesRemainScoped();
     TestLiteralArithmeticWithPresentationSuffix();
+    TestNumericTypePresentationKeepsLiteralArithmetic();
     TestCalculationProposalSourceChoices();
     TestNormalAndEvaluationShareGrounding();
     TestMissingPremiseGuidanceReachesBothFinalRequests();
+    TestNumericPresentationLiteralReachesBothFinalRequests();
 }

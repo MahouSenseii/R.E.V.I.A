@@ -38,7 +38,9 @@ coordination, diagnostics, and runtime events. All three implement the existing
 ## Continuity, admitted tools and generated art
 
 `conversationContext` retains recent messages and bounded source-linked continuity
-notes. The llama.cpp owner measures the loaded chat template and tokenizer when
+notes. Decimal-aware sentence capture preserves numeric constraints with their
+units; archive restoration and private replies reuse that same bounded owner.
+The llama.cpp owner measures the loaded chat template and tokenizer when
 available, retains conservative fitting on failure and reports context-fit
 telemetry. `ConversationRuntime` remembers the tier that actually delivered the
 reply. Retrieval uses the admitted current topic when a follow-up has little

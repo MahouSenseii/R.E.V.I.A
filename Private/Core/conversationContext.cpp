@@ -20,6 +20,26 @@ std::string BoundExcerpt(const std::string& text, const std::size_t limit)
     return revia::utf8::Prefix(text, head) + std::string(marker) + text.substr(tail);
 }
 
+std::size_t FindContinuitySentenceBoundary(const std::string_view text, const std::size_t begin)
+{
+    auto boundary = text.find_first_of(".!?\n", begin);
+    while (boundary != std::string_view::npos && text[boundary] == '.' && boundary + 1 < text.size() &&
+           std::isdigit(static_cast<unsigned char>(text[boundary + 1])))
+    {
+        if (boundary > 0)
+        {
+            const auto previous = static_cast<unsigned char>(text[boundary - 1]);
+            if (!std::isdigit(previous) && !std::isspace(previous) &&
+                std::string_view("+-=:([{\"'").find(text[boundary - 1]) == std::string_view::npos)
+            {
+                break;
+            }
+        }
+        boundary = text.find_first_of(".!?\n", boundary + 1);
+    }
+    return boundary;
+}
+
 int ContinuityPriority(const std::string& text)
 {
     std::string lower = text;
@@ -153,7 +173,7 @@ void conversationContext::CaptureContinuity(const conversationMessage& message, 
     std::size_t begin = 0;
     while (begin < message.content.size())
     {
-        const auto boundary = message.content.find_first_of(".!?\n", begin);
+        const auto boundary = FindContinuitySentenceBoundary(message.content, begin);
         const auto end = boundary == std::string::npos ? message.content.size() : boundary + 1;
         std::string sentence = message.content.substr(begin, end - begin);
         const auto first = sentence.find_first_not_of(" \t\r\n");
