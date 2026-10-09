@@ -252,7 +252,6 @@ if(REVIA_BUILD_DESKTOP)
             target_link_options(ReviaDesktop PRIVATE
                     -static-libgcc
                     -static-libstdc++
-                    -Wl,-Bstatic,--whole-archive -lwinpthread -Wl,--no-whole-archive
             )
         endif()
 
@@ -270,6 +269,17 @@ if(REVIA_BUILD_DESKTOP)
                             "$<TARGET_FILE:ReviaDesktop>"
                     COMMENT "Deploying Qt runtime for ReviaDesktop"
             )
+            if(MINGW)
+                get_filename_component(REVIA_CXX_BIN_DIR "${CMAKE_CXX_COMPILER}" DIRECTORY)
+                if(EXISTS "${REVIA_CXX_BIN_DIR}/libwinpthread-1.dll")
+                    add_custom_command(TARGET ReviaDesktop POST_BUILD
+                            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                                    "${REVIA_CXX_BIN_DIR}/libwinpthread-1.dll"
+                                    "$<TARGET_FILE_DIR:ReviaDesktop>/libwinpthread-1.dll"
+                            COMMENT "Deploying compiler winpthread runtime for ReviaDesktop"
+                    )
+                endif()
+            endif()
         endif()
 
         add_custom_command(TARGET ReviaDesktop POST_BUILD
@@ -300,7 +310,7 @@ endif()
 # Produce a directly runnable Windows executable instead of requiring CLion's
 # MinGW runtime directory to be added to PATH at launch time.
 if(MINGW)
-    target_link_options(R_E_V_I_A PRIVATE -static)
+    target_link_options(R_E_V_I_A PRIVATE -static-libgcc -static-libstdc++)
 endif()
 
 # Keep runtime configuration synchronized on every build, not only configure.
@@ -511,20 +521,20 @@ if(BUILD_TESTING)
     revia_link_foundation(ReviaAnswerQualityLive)
     if(MINGW)
         target_compile_options(ReviaAnswerQualityLive PRIVATE -Wa,-mbig-obj)
-        target_link_options(ReviaAnswerQualityLive PRIVATE -static)
+        target_link_options(ReviaAnswerQualityLive PRIVATE -static-libgcc -static-libstdc++)
     endif()
     target_include_directories(ReviaStudioLive PRIVATE Tests)
     revia_link_foundation(ReviaStudioLive)
     if(MINGW)
         target_compile_options(ReviaStudioLive PRIVATE -Wa,-mbig-obj)
-        target_link_options(ReviaStudioLive PRIVATE -static)
+        target_link_options(ReviaStudioLive PRIVATE -static-libgcc -static-libstdc++)
     endif()
     add_executable(ReviaDevelopmentStudioTests Tests/developmentStudioLiveTests.cpp)
     target_include_directories(ReviaDevelopmentStudioTests PRIVATE Tests)
     revia_link_foundation(ReviaDevelopmentStudioTests)
     if(MINGW)
         target_compile_options(ReviaDevelopmentStudioTests PRIVATE -Wa,-mbig-obj)
-        target_link_options(ReviaDevelopmentStudioTests PRIVATE -static)
+        target_link_options(ReviaDevelopmentStudioTests PRIVATE -static-libgcc -static-libstdc++)
     endif()
     add_test(NAME Revia.DevelopmentStudioAdmission COMMAND ReviaDevelopmentStudioTests)
     set_tests_properties(Revia.DevelopmentStudioAdmission PROPERTIES TIMEOUT 30)
@@ -538,7 +548,7 @@ if(BUILD_TESTING)
         target_include_directories(ReviaArchiveWriterTests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/Public")
         target_link_libraries(ReviaArchiveWriterTests PRIVATE sqlite3)
         target_compile_options(ReviaArchiveWriterTests PRIVATE -Wall -Wextra -Wpedantic)
-        target_link_options(ReviaArchiveWriterTests PRIVATE -static
+        target_link_options(ReviaArchiveWriterTests PRIVATE -static-libgcc -static-libstdc++
                 -Wl,--wrap=sqlite3_prepare_v2 -Wl,--wrap=sqlite3_step)
         add_test(NAME Revia.ArchiveWriter COMMAND ReviaArchiveWriterTests)
         set_tests_properties(Revia.ArchiveWriter PROPERTIES TIMEOUT 20)
@@ -547,7 +557,7 @@ if(BUILD_TESTING)
     target_include_directories(ReviaWebGuestTests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/Tests")
     revia_link_foundation(ReviaWebGuestTests)
     if(MINGW)
-        target_link_options(ReviaWebGuestTests PRIVATE -static)
+        target_link_options(ReviaWebGuestTests PRIVATE -static-libgcc -static-libstdc++)
     endif()
     add_test(NAME revia_web_guest COMMAND ReviaWebGuestTests)
     set_tests_properties(revia_web_guest PROPERTIES TIMEOUT 60)
@@ -557,21 +567,21 @@ if(BUILD_TESTING)
     if(MINGW)
         # Over 32k sections; the default COFF object format stops at 32767.
         target_compile_options(ReviaWebGuestPrivacyTests PRIVATE -Wa,-mbig-obj)
-        target_link_options(ReviaWebGuestPrivacyTests PRIVATE -static)
+        target_link_options(ReviaWebGuestPrivacyTests PRIVATE -static-libgcc -static-libstdc++)
     endif()
     add_test(NAME revia_web_guest_privacy COMMAND ReviaWebGuestPrivacyTests)
     set_tests_properties(revia_web_guest_privacy PROPERTIES TIMEOUT 90)
     add_executable(ReviaWebGuestHost Tests/Fixture/webGuestHost.cpp)
     revia_link_foundation(ReviaWebGuestHost)
     if(MINGW)
-        target_link_options(ReviaWebGuestHost PRIVATE -static)
+        target_link_options(ReviaWebGuestHost PRIVATE -static-libgcc -static-libstdc++)
     endif()
     # Split test suites include testSupport.h from the Tests directory.
     target_include_directories(ReviaTests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/Tests")
     revia_link_foundation(ReviaTests)
     if(MINGW)
         target_compile_options(ReviaTests PRIVATE -Wa,-mbig-obj)
-        target_link_options(ReviaTests PRIVATE -static)
+        target_link_options(ReviaTests PRIVATE -static-libgcc -static-libstdc++)
     endif()
     if(MSVC)
         target_compile_options(ReviaTests PRIVATE /W4 /permissive-)
@@ -588,7 +598,7 @@ if(BUILD_TESTING)
             # -municode selects the wide entry point. Without it MinGW's startup looks
             # for WinMain and the fixture's wWinMain never links.
             target_compile_options(ReviaDesktopFixture PRIVATE -municode)
-            target_link_options(ReviaDesktopFixture PRIVATE -static -municode)
+            target_link_options(ReviaDesktopFixture PRIVATE -static-libgcc -static-libstdc++ -municode)
         endif()
         # The native tests launch it by path, so it has to exist before they run.
         add_dependencies(ReviaTests ReviaDesktopFixture)
@@ -604,7 +614,7 @@ if(BUILD_TESTING)
     revia_link_foundation(ReviaOutputBoundaryTests)
     if(MINGW)
         target_compile_options(ReviaOutputBoundaryTests PRIVATE -Wa,-mbig-obj)
-        target_link_options(ReviaOutputBoundaryTests PRIVATE -static)
+        target_link_options(ReviaOutputBoundaryTests PRIVATE -static-libgcc -static-libstdc++)
     endif()
     add_test(NAME Revia.OutputBoundaries COMMAND ReviaOutputBoundaryTests)
     set_tests_properties(Revia.OutputBoundaries PROPERTIES TIMEOUT 90)
