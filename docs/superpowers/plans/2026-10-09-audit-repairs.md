@@ -80,7 +80,7 @@ Owner: root. Files: docs/REVIA_REPAIR_STATUS.md, docs/REVIA_REPAIR_HANDOFF.md, r
 - [x] Freeze candidate source/build and evaluation tasks/settings before collecting paired baseline/candidate results. Include all failed/missing slots and distinguish mechanics/value/semantics/personality.
 - [x] Run available real-model evaluation across required families with reproducible manifests; unavailable model/platform/CI gates remain explicit. Do not reuse old scores as current.
 - [x] Generate per-task/full diff packages; fresh reviewer checks spec, authority, assertions, source/build and evidence. Resolve supported findings and rerun affected checks.
-- [ ] Commit the accessible candidate and write handoff with exact base/candidate/worktree, files, R1–R11 status, commands/results and limits. Preserve the candidate worktree for independent review.
+- [x] Commit the accessible candidate and write handoff with exact base/candidate/worktree, files, R1–R11 status, commands/results and limits. Preserve the candidate worktree for independent review.
 
 ## Preflight interface review
 
@@ -99,4 +99,4 @@ Owner: root. Files: docs/REVIA_REPAIR_STATUS.md, docs/REVIA_REPAIR_HANDOFF.md, r
 
 ## Verification boundary
 
-Code candidate f20193bc0a414df81bcb4cf82a0815053baaecb6 is committed and pushed. Local exact native inventory passed 93/93 with zero skips; relay, packaging controls, Linux journal and Windows operator gates passed. Both paired evaluation rounds are retained and independently reviewed. Hosted native Windows CI is the remaining final handoff dependency; see docs/REVIA_REPAIR_HANDOFF.md for current source and evidence identities. Only documentation is being edited after the tested code freeze.
+Tested code candidate `fd4f0f1f7d554c9851adcb0680ecd15175e3af87` is committed and pushed. Final local and hosted native inventories each passed93/93 with zero skips/failures; native relay, CLI packaging controls, Linux journal and actual Windows operator checks passed. All six hosted jobs are successful in run37988019053, and native artifact11645241309 has verified source identity, JUnit and both Ninja logs. Both paired evaluation rounds remain attributed to their actual58c905de/f20193bc source checkpoints; no production or evaluation inputs changed afterward. All18 grades remain unchanged. The implementation handoff and status record identify all commands, historical failures and capability limits. The final documentation-only child commit changes no tested code. Primary/main and unrelated work remain preserved.

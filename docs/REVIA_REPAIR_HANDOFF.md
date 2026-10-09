@@ -1,17 +1,18 @@
 # Revia repair implementation handoff
 
-Production repairs, local verification and paired evaluation are complete. Hosted verification exposed a cue-fixture port reservation failure and a resource-sampling identity issue. Both verification-only repairs now pass targeted and independent Foundation/driver checks; a new exact-commit complete gate is pending. No grade increase is claimed.
+The supported repairs, available verification gates and paired evaluation are complete. The final code candidate passes all six hosted CI jobs, including a fresh Windows build, native relay and all 93 required CTest cases; the complete local inventory also passes. Hosted checks also exposed three verification defects: cue-port reservation, PID-reuse contamination in resource sampling, and a relay shutdown assertion made before disconnection. Each has a retained reproduction, a focused correction and independent acceptance. No grade increase is claimed.
 
 ## Exact identities
 
 - Audited base: `44aa6bc4d890fe050a4336c530b340d08a3a0767`.
 - Implementation and paired-evaluation baseline: `ad207d6f04aad2a6981fa2a26a8f35124f287c0f`.
 - Frozen production candidate and first evaluation: **`58c905de45d0146a84c3f5e040e34f049a658380`**.
-- Previous code/evaluation checkpoint: **`f20193bc0a414df81bcb4cf82a0815053baaecb6`**. Six verification files changed; all 659 production file hashes remain identical.
+- Final code candidate: **`fd4f0f1f7d554c9851adcb0680ecd15175e3af87`**. Final local and hosted inventories both pass 93/93 with zero skips or failures; native relay passes on both. Production source remains identical to `58c905de`; later commits correct verification and evidence only.
+- Confirmation-evaluation checkpoint: **`f20193bc0a414df81bcb4cf82a0815053baaecb6`**. Six verification files changed; all 659 production file hashes remain identical.
 - Candidate branch: `codex/revia-audit-repairs`; worktree: `C:/Users/davis/.codex/worktrees/revia-audit-repairs/R.E.V.I.A`.
 - Baseline evaluation worktree: `C:/Users/davis/.codex/worktrees/revia-repair-baseline/R.E.V.I.A`. Production remains at the baseline; the identical six-file evaluation overlay is explicitly captured as dirty source.
-- Retained pre-follow-up GitHub run: https://github.com/MahouSenseii/R.E.V.I.A/actions/runs/37977328343 (build/relay passed, 92/93 native tests passed; cue bind failure retained).
-- Final code review binding: `build/repair-evidence/independent-review/f20193-review-binding.json`. The first model outcomes remain attributed to `58c905de`; the separately retained repetition is attributed to `f20193bc`. A later handoff-only commit changes documentation, not tested code.
+- Final GitHub run: [37988019053](https://github.com/MahouSenseii/R.E.V.I.A/actions/runs/37988019053), all six jobs successful on the exact code candidate. Earlier failed and cancelled runs are retained in the verification ledger below.
+- Final code review binding: `build/repair-evidence/independent-review/fd4f-review-binding.json`. The first model outcomes remain attributed to `58c905de`; the separately retained repetition is attributed to `f20193bc`. A later handoff-only commit changes documentation, not tested code.
 
 No earlier repair candidate was found in inspected branches, worktrees or implementation records. The available brief was the attached R1–R9 repair prompt (SHA256 `b5c751694e5e3c96aaa66846782ec2a758b6a3c1273ca529d172ffa5bc8ea62e`), the retained independent review, and the explicit R10/R11 implementation request. No separate newer prompt was located. The primary checkout's tracked files, user data, unrelated worktrees and older branch were preserved. Main was not merged as part of this candidate handoff.
 
@@ -19,7 +20,7 @@ No earlier repair candidate was found in inspected branches, worktrees or implem
 
 Root integrated the candidate and owned R6/R8/R9. The policy worker owned R2–R4, the scope worker R5/R11, and the build worker R1/R7/R10. File boundaries and the plan are in `docs/superpowers/plans/2026-10-09-audit-repairs.md`.
 
-A fresh independent agent inspected the actual diff and production callers, reproduced three additional search/continuity findings, and independently reran their final acceptance controls. All three production findings were closed. The reviewer also independently ran the journal, scope, desktop, build-driver, Windows operator and CLI loader checks; inspected raw model outcomes and provenance; and reran the frozen coding oracles. This is an independent agent review, not a claim of an external Claude review.
+A fresh independent agent inspected the actual diff and production callers, reproduced three additional search/continuity findings, and independently reran their final acceptance controls. All three production findings were closed. Final local source and exact JUnit inventory were also independently rechecked in `independent-review/fd4f-local-gate.json`; final hosted and documentation acceptance is recorded in `independent-review/fd4f-final-acceptance.txt`. The reviewer proved all37 hosted/local raw source-hash differences are exactly CRLF conversion; all shared hosted build/test manifest entries match. The reviewer also independently ran the journal, scope, desktop, build-driver, Windows operator and CLI loader checks; inspected raw model outcomes and provenance; and reran the frozen coding oracles. This is an independent agent review, not a claim of an external Claude review.
 
 Review records: `build/repair-evidence/independent-review/{final-review.txt,frozen-review.json,evaluation-review.txt,evaluation-code-checks.json}`. The historical review preserves failed probes and the initial desktop loader timeout caused by the reviewer's incorrect Qt path. The same binary passed under the unchanged timeout with the configured Qt6.8.3 path.
 
@@ -43,31 +44,65 @@ Review records: `build/repair-evidence/independent-review/{final-review.txt,froz
 
 All paths below are relative to the candidate worktree unless identified otherwise. Compiler: Qt MinGW GCC13.1; Qt6.8.3; CMake/Ninja. Assertions remain enabled (`NDEBUG` absent from all 592 configured compile commands).
 
+These are the actual final local commands and historical evidence destinations. For a new reproduction, choose new evidence directories/log filenames; do not overwrite these receipts. The complete fresh configuration and compiler arguments are retained in build receipts and the CI workflow.
+
 ```powershell
-$env:PATH = 'C:/Users/davis/Qt/Tools/mingw1310_64/bin;' + $env:PATH
-cmake -S . -B build/repair-integrated -G Ninja -DCMAKE_BUILD_TYPE=Debug `
-  '-DCMAKE_C_FLAGS_DEBUG=-Og -g1' '-DCMAKE_CXX_FLAGS_DEBUG=-Og -g1' `
-  -DBUILD_TESTING=ON -DREVIA_REQUIRE_DESKTOP=ON -DREVIA_COMPILE_JOBS=2 -DREVIA_LINK_JOBS=1 `
-  -DCMAKE_C_COMPILER=C:/Users/davis/Qt/Tools/mingw1310_64/bin/gcc.exe `
-  -DCMAKE_CXX_COMPILER=C:/Users/davis/Qt/Tools/mingw1310_64/bin/g++.exe `
-  -DREVIA_QT_ROOT=C:/Users/davis/Qt/6.8.3/mingw_64
-./Tools/Build/InvokeMeasuredBuild.ps1 -BuildDirectory build/repair-integrated -Parallel 3 `
-  -TimeoutSeconds 2700 -EvidenceDirectory build/repair-evidence/build/frozen-all-targets
-./Tools/Build/InvokeCheckedCTest.ps1 -BuildDirectory build/repair-integrated `
-  -EvidenceDirectory build/repair-evidence/build/f20193bc-final-ctest
-npm run test:operator --prefix Tools/Presence/WebDemo
-$env:REVIA_WEB_NATIVE_HOST = "$PWD/build/repair-integrated/ReviaWebGuestHost.exe"
-npm run test:native --prefix Tools/Presence/WebDemo
-./build/repair-evidence/policy/replay.ps1 -Mode Wire
-./build/repair-evidence/journal/journal-health-green.exe read
-./build/repair-evidence/journal/journal-health-green.exe all
+# Run in C:/Users/davis/.codex/worktrees/revia-audit-repairs/R.E.V.I.A
+$ErrorActionPreference = 'Stop'
+$env:PATH = 'C:/Users/davis/.cmake-deps/cmake/win/x64/bin;C:/Users/davis/.cmake-deps/ninja/win/x64;C:/Users/davis/Qt/Tools/mingw1310_64/bin;C:/Users/davis/Qt/6.8.3/mingw_64/bin;' + $env:PATH
+& ./Tools/Build/InvokeMeasuredBuild.ps1 -BuildDirectory build/repair-integrated -Parallel 3 -TimeoutSeconds 300 -EvidenceDirectory build/repair-evidence/build/fd4f0f1f-noop-refresh
+if ($LASTEXITCODE -ne 0) { throw 'Frozen all-target refresh failed' }
+$env:REVIA_WEB_NATIVE_HOST = (Resolve-Path build/repair-integrated/ReviaWebGuestHost.exe).Path
+npm run test:native --prefix Tools/Presence/WebDemo *> build/repair-evidence/build/fd4f0f1f-native-relay.log
+if ($LASTEXITCODE -ne 0) { throw 'Frozen native relay failed' }
+& ./Tools/Build/InvokeCheckedCTest.ps1 -BuildDirectory build/repair-integrated -EvidenceDirectory build/repair-evidence/build/fd4f0f1f-final-ctest -TimeoutSeconds 600
+
 ```
 
 Local fresh configurations additionally set `FETCHCONTENT_SOURCE_DIR_HTTPLIB/JSON/SQLITE/EXPAT` to the pinned dependency source trees beneath the primary checkout's `build/debug/_deps`. No primary build archives were reused. Exact configuration argument arrays, compiler commands, binary hashes and process samples accompany each receipt. Existing evidence directories are immutable records; use new output directories for a reproduction. PowerShell/Git source capture must trust the exact managed worktree; no global trust configuration is required.
 
-The final all-target build passed in **617.884 seconds**, no timeout and unchanged input bytes. Its pre-correction resource sampler recorded working/private samples of **2.905/3.011 GB**, but PID reuse can contaminate that sampler, so these are not qualified build-only peak measurements. The committed no-op refresh passed in **2.508 seconds** with Ninja reporting no work. Native relay **1/1** passed, zero skips, **2.296 seconds**. The first full CTest run on `58c905de` executed 93 tests, passed 92 and failed one (`Revia.BuildDrivers`), with zero skips. The failure was not suppressed: nested PowerShell hashing and repeat-fixture cache handling were repaired in `f20193bc`, and the exact CTest launch passed. Final local code-candidate qualification: **93 expected, 93 discovered, 93 executed, 93 passed, zero skipped/failed**, CTest exit0 and qualification exit0, **334.434 seconds**, trusted source identity. `f20193bc-noop-refresh` passed in2.525 seconds, unchanged source; `f20193bc-native-relay.log` passed1/1, zero skips, in2.170 seconds. Final full result: `build/repair-evidence/build/f20193bc-final-ctest/test-result.json` and JUnit SHA256 `D26B958EFED1D003122FEED33BDB365CF67D6BF81FDBCFDCE62F05BA81E8B7AA`. Hosted native result remains pending in this draft.
+### Final verification receipts
 
-The same-input archive probe preserves all 231 members and all archive bytes except symbol-table timestamp: **316.622 to179.369 seconds**. Full-symbol versus optimized representative session links were309.150 versus27.779 seconds, but those binaries also include repair changes, so that comparison is not a flags-only experiment. Assertions and required targets were retained. Driver tests cover empty/missing/extra/skipped/failed inventories, untrusted source identity, interrupted build/log retention, successful qualification and duplicate CMake PATH resolution; nine controls now pass, including real SHA256 hashing when Get-FileHash is unavailable in a nested process. Known-answer hashing passed under PowerShell5.1 and7; repeated fixture directories and the exact CTest launch passed.
+Final local result on `fd4f0f1`: all-target no-op refresh passed in 2.5264989s with Ninja reporting no work; native relay1/1 passed with zero failures/cancellations/skips,2235.8629ms. Checked CTest reports 93 expected/discovered/executed, zero failures/skips,320.6283085s; discovery/CTest/qualification all exit0, identityTrusted=true and all five Git capture exits0. Source matches the frozen commit and tracked worktree is clean. JUnit SHA256 `79E9FAB18C4263BECD2DE99504426237CC7952A01C1E9FC24CD6C25DF04032A5`. Receipts: `build/repair-evidence/build/fd4f0f1f-{noop-refresh,final-ctest}`, `fd4f0f1f-native-relay.log`, and `fd4f0f1f-command-lines.ps1`.
+
+Final hosted [run37988019053](https://github.com/MahouSenseii/R.E.V.I.A/actions/runs/37988019053) has all six jobs successful. The fresh native all-target build passed in **1156.6576918s**, exit0, no timeout or source change. Native relay passed **1/1**, zero skips, **2618.9579ms**. Checked CTest reports **93 expected/discovered/executed, zero failures/skips**, **223.3248234s**; discovery/CTest/qualification all exit0, identity trusted and all Git captures exit0. The separate Windows operator suite ran **5/5**, zero skips; Linux journal read/all suites passed, as did the web-text, offline Discord and PowerShell 5.1 jobs.
+
+Native artifact **11645241309** is downloaded and verified: ZIP1355392 bytes, SHA256 `47850908231BDDCE34FAE4B402D0DF99CEA62F956B5AB9EADE8D4B5716393E99`. Hosted JUnit SHA256 `37394A2E4C5ABD3ECB3B9B4949C50CDC1694C288419A5243EFC0135B584E864B`. Both build and test `.ninja_log` files are present at77578 bytes. Extraction: `build/repair-evidence/build/windows-native-fd4f0f1f7d554c9851adcb0680ecd15175e3af87/`; its `ci-evidence/build/` and `ci-evidence/tests/` contain actual build/test receipts, source hashes, commands, configuration and logs. Separate verified artifacts: Windows operator11643528684 and Linux journal11643044528, retained under the matching source-suffixed directories.
+
+The corrected two-second resource sampler observes a peak reachable process tree of11 processes, working1968410624 bytes and private2040270848 bytes. These are sampled instantaneous aggregates for creation-matched build descendants, not total-host memory or a hard process-memory maximum. Short-lived or orphaned descendants can be missed. No OOM claim is made.
+
+The hosted workflow executes these commands after the pinned toolchain/configuration steps; exact environment values and argument arrays are retained with the artifact:
+
+```powershell
+$remaining = ([DateTime]::Parse($env:REVIA_CI_DEADLINE_UTC) - [DateTime]::UtcNow).TotalSeconds - 1500
+if ($remaining -lt 1) { throw 'No build time remains after reserving relay, CTest and upload time.' }
+$budget = [int][Math]::Min(2700, $remaining)
+./Tools/Build/InvokeMeasuredBuild.ps1 -BuildDirectory build/ci -Parallel 3 -TimeoutSeconds $budget -EvidenceDirectory build/ci-evidence/build
+# In the native relay step: REVIA_WEB_NATIVE_HOST=<github.workspace>/build/ci/ReviaWebGuestHost.exe
+npm run test:native --prefix Tools/Presence/WebDemo
+# In the CTest step: QT_QPA_PLATFORM=windows
+./Tools/Build/InvokeCheckedCTest.ps1 -BuildDirectory build/ci -EvidenceDirectory build/ci-evidence/tests
+```
+
+Each workflow step preserves the native exit code. The authoritative complete command sequence is `.github/workflows/build-and-test.yml` at the tested commit; the snippet above omits only setup and log-redirection plumbing.
+
+### Build evidence and retained failure ledger
+
+The repair preserves all required targets and assertions. The same-input archive probe preserves all 231 members and all archive bytes except the symbol-table timestamp:316.622 to 179.369 seconds. Full-symbol versus optimized representative session links were 309.150 versus27.779 seconds; those binaries also include repair changes, so this is not a flags-only comparison. The first integrated all-target build passed in 617.884 seconds. Historical resource samples before the creation-time fix are unqualified because reused PIDs can incorrectly join the sampled process tree; their recorded wall times and artifact sizes remain usable.
+
+Ten build-driver controls cover empty/missing/extra/skipped/failed inventories, untrusted source identity, interrupted build/log retention, successful qualification, hashing when Get-FileHash is unavailable, duplicate CMake PATH resolution and process-birth ancestry. They pass in PowerShell 5.1 and 7 and were independently checked. Exact CTest launch and repeated fixture-directory controls also pass. Historical failures are preserved:
+
+| Checkpoint | Actual result | Follow-up |
+| --- | --- | --- |
+| Historical audited Windows job113896365749 | Cancelled during a large Debug archive/link build; no CTest result. | Measured bounded build; no evidence supporting an OOM claim. |
+| Local `58c905de` |93 executed,92 passed, one BuildDrivers failure; zero skips. | Nested PowerShell hashing and stale fixture-cache handling corrected in `f20193bc`. |
+| Hosted run37974101648 / `58c905de` |Cancelled by a later source push at644/684 edges;1648.116s; no relay/CTest success. | Cancellation artifact11638973217 retained; upload-on-cancellation verified. |
+| Local `f20193bc` |93/93, zero skips/failures;334.434s; trusted identity. | JUnit `D26B958EFED1D003122FEED33BDB365CF67D6BF81FDBCFDCE62F05BA81E8B7AA`. |
+| Hosted run37977328343 / `f20193bc` |Build1976.825s and relay pass;93 executed,92 passed, one Foundation cue-bind failure, zero skips;181.630s. | Artifact11641243309 retained. Exact historical socket port/error was not recorded. Paired-port reservation defect independently reproduced and corrected in `94d5d070`. |
+| Local `94d5d070` |93/93, zero skips/failures;318.968s; trusted identity; relay1/1. | JUnit `97CA8697945FC7FF35EA1CFF77B6EC79BE7D8C871700B61F3652FECB3B4BF432`. |
+| Hosted run37983534756 / `94d5d070` |All684 build edges passed in1836.156s; relay failed with200 versus expected401; CTest was skipped. | Artifact11644035832 retained. Fixture lifecycle ordering corrected in `fd4f0f1`; explicit CI dependency now permits CTest after a successful build even if relay fails. Relay failure still fails the job. |
+
+The old upload omitted hidden `.ninja_log` files even though drivers copied them locally. `fd4f0f1` enables hidden files only for the existing four owned native evidence paths. Earlier ZIPs remain incomplete for that log; their stdout/stderr, source/config manifests, resource receipts and available JUnit remain retained. The final artifact contains both build and test Ninja logs, verified above.
 
 ## Frozen R9 evidence
 
@@ -75,7 +110,7 @@ Campaign root: `C:/Users/davis/OneDrive/Documents/GitHub/R.E.V.I.A/build/repair-
 
 - Candidate: `candidate/`; baseline: `baseline-private-absolute-path/`. Both have runner exit0, 26/26 recorded slots, zero missing slots, stable source/build/provider receipts and no mismatches. The baseline's original `baseline/` directory retains a launcher failure before any model outcome: a relative build path resolved against the process working directory. The absolute-path retry did not selectively repeat failed answers.
 - Exact candidate evaluation binary SHA256: `2e97e92e3a4a42f84517f11343666a9e29d68bf691eabe07f1c68b739cbc827d`; baseline: `aac29cc7d4e853cfc8bd347319aa56e1ac6bad689709d37ff1d5cfc7ff8e8cfb`.
-- Model: Qwen3.5-4B Q4_K_M, SHA256 `00fe7986ff5f6b463e62455821146049db6f9313603938a70800d1fb69ef11a4`; llama.cpp build10453/commit3cb7ffb1a; 8192 context, one slot, thinking off, loopback18769, RTX5070. Host also has RTX2070 SUPER and128GiB RAM. Authored Revia profile and all32 configuration file hashes match. Raw settings digests include different absolute worktree paths; relative-path/content equivalence was independently checked.
+- Model: Qwen3.5-4B Q4_K_M, SHA256 `00fe7986ff5f6b463e62455821146049db6f9313603938a70800d1fb69ef11a4`; llama.cpp build10453/commit3cb7ffb1a; 8192 context, one slot, thinking off, loopback18769, RTX5070. Host also has RTX2070 SUPER and128GiB RAM. Authored Revia profile and all 32 configuration file hashes match. Raw settings digests include different absolute worktree paths; relative-path/content equivalence was independently checked.
 - Corpus SHA256 `3642f3e9d5049d9f12e922a7ae5f6511f92dd9ce532f51cc8cbde3133bddacea`; code oracle `7a88fd8079ed439656ec85a950e328bc9e62af902e63124e53bda8d4f9dc6b90`; 13 unique designs with repeated seeds101/211. Requests contain those seeds; backend application is not independently established.
 - Per-case fresh runtime, real bounded history and archive close/reopen were used. Research replays identical excerpts freshly checked against official Python and CMake sources; this does not establish autonomous live browser research. Expected answers and executable oracles were not given to the model.
 - The owned model server was stopped after collection and the reviewer's live identity check. Launch/stop and all request/response receipts remain retained.
@@ -96,11 +131,11 @@ Independent descriptive semantic inspection, kept separate from the frozen score
 
 All eight worker outcomes are preserved. The original participant211 `passed:true` fields on both sides are **not scope successes**: the typed parser rejects `source:"host"` before dispatch. The follow-up in `f20193bc` requires a proposal accepted by the production typed parser, an original-scope dispatched contract, the matching persisted workflow refusal and a matching durable denial. All 17 controls pass, including false-positive rejection. The first revised fixture incorrectly read the redacted public diagnostic; that failed run is retained, and the corrected fixture reads private persisted workflow evidence without changing production redaction. The correction does not rewrite historical outcomes.
 
-## Final-candidate confirmation repetition
+## Confirmation repetition on the evaluated source
 
-The final code candidate `f20193bc` was frozen before this separate repetition. Campaign root: `C:/Users/davis/OneDrive/Documents/GitHub/R.E.V.I.A/build/repair-r9-confirmation-20261009/`. It repeats the already-exposed 13 designs and two seeds; it is not a new held-out cohort and is not pooled with the first round.
+Code checkpoint `f20193bc` was frozen before this separate repetition. Campaign root: `C:/Users/davis/OneDrive/Documents/GitHub/R.E.V.I.A/build/repair-r9-confirmation-20261009/`. It repeats the already-exposed 13 designs and two seeds; it is not a new held-out cohort and is not pooled with the first round.
 
-Both sides were rebuilt from their recorded source states with the identical final six-file evaluation overlay. Baseline and candidate builds exited zero in 46.05 and 43.51 seconds. Both private runners exited zero, recorded all 26 expected slots, and reported stable provenance, verified source/build and no mismatches. Model execution durations were 57.498 and 58.553 seconds. Each side also retained all four worker attempts. The owned loopback provider was independently observed, then stopped after collection with an exact PID/start-time/path guard.
+Both sides were rebuilt from their recorded source states with the identical final six-file evaluation overlay. Baseline and candidate builds exited zero in 46.05 and 43.51 seconds. Both private runners exited zero, recorded all 26 expected slots, and reported stable provenance, verified source/build and no mismatches. Campaign runner elapsed durations were 57.498 and 58.553 seconds. Each side also retained all four worker attempts. The owned loopback provider was independently observed, then stopped after collection with an exact PID/start-time/path guard.
 
 The reviewer independently compared all 52 raw and delivered answers and all eight frozen coding-oracle outputs with round one: every one was identical. The strict family scores in the preceding table therefore remain unchanged. The final qualifier reports all eight worker trials false/unqualified, with no typed-valid proposal, scope denial, native attempt, effect or participant switch. These are inconclusive scope-negative trials, not successful guard demonstrations. The 17 deterministic session controls provide the separate production guard evidence.
 
@@ -150,11 +185,15 @@ All October9 grades stay unchanged. Confidence below describes the evidence supp
 
 Under candidate `build/repair-evidence/`: `journal/report.txt`, `policy/{report.txt,followup-report.txt,contextual-manifest.json}`, `scope/report.txt`, `build/report.txt`, `evaluation/{frozen-candidate.json,cohort-preflight.json,paired-settings-content.json,provider-launch.json,provider-stop.json}`, and independent-review reports identify exact commands, hashes, red/green outputs and boundaries. Paired output and executable-oracle results are in campaign-root `comparison-executed.json`; every raw case/wire outcome remains alongside it.
 
-Hosted Linux and Windows-operator artifacts were downloaded and verified against their published ZIP digests and candidate source-head files. The final instrumentation follow-up and independently reviewed confirmation are complete. Hosted `f20193bc` built successfully in 1976.825 seconds and passed relay, then executed 93 tests with one Foundation cue-fixture bind failure and zero skips (181.630 seconds). Artifact `11641243309`, SHA256 `54eab5ebe25a08c25108e9be87afa70a3896cf80e670062513acd800546cf699`, preserves the failure. The exact failing port/error was not recorded, so the historical socket cause cannot be distinguished; the paired-port assumption is being reproduced independently. The next candidate gate remains pending. Independent review should focus next on these qualification records and remaining real-model value/tool-selection failures. No broad “fully autonomous” or upgraded capability claim is warranted by this candidate.
+The final code candidate has no production or protected evaluation-input changes after the evaluated checkpoints. Independent comparison verifies all 659 production files unchanged. R9 evidence is therefore carried forward with that explicit source-equivalence boundary; it is not relabeled as a new run on `fd4f0f1`. Historical false-positive worker flags and failed gates remain available. No broad autonomy or upgraded capability claim follows from this candidate.
+
+The historical `policy/replay.ps1 -Mode Wire` invocation is recorded in the policy report; that helper writes fixed object/executable output paths and must not be rerun in place over the retained evidence. Use the checked CTest inventory with a fresh evidence directory for current regression verification, or copy the helper/output workspace before a focused replay.
+
+Raw local evidence and model outcomes are retained in the named worktrees/campaign roots and are ignored by Git. They are accessible on this PC; cloning the candidate alone does not fetch those raw records. GitHub CI logs/artifacts are available from the final run, subject to repository access and artifact retention. Tracked handoff, status, branch assessment, corpus, executable oracle and tests are in the pushed branch.
 
 ## Exact changed-file inventory
 
-40 files relative to the implementation baseline. Full and per-workstream binary-safe patches and SHA256 manifest are under `build/repair-evidence/diffs/`. Documentation may receive a final handoff-only follow-up.
+43 files relative to the implementation baseline. The full patch is `build/repair-evidence/diffs/fd4f0f1/full-candidate.patch`, SHA256 `539BF96FB5FE3F83E17EA30B3FC05D046D755809BC8A98D69541BE42232A589A`; the exact file inventory is also in `manifest.json`. The earlier scoped workstream patches remain in the parent diff directory. A final documentation-only child commit updates this handoff; tested code remains `fd4f0f1f7d554c9851adcb0680ecd15175e3af87`.
 
 ```text
 .github/workflows/build-and-test.yml
@@ -183,12 +222,15 @@ Tests/evidenceJournalTests.cpp
 Tests/foundationTests.cpp
 Tests/lookupAuthorityTests.cpp
 Tests/replyFormatTests.cpp
+Tests/systemCueTests.cpp
 Tests/taskContractSessionTests.cpp
 Tools/Build/FileHash.ps1
 Tools/Build/InvokeCheckedCTest.ps1
 Tools/Build/InvokeMeasuredBuild.ps1
+Tools/Build/ProcessTree.ps1
 Tools/Build/ctest-windows-expected.txt
 Tools/Presence/WebDemo/package.json
+Tools/Presence/WebDemo/test/native.integration.mjs
 Tools/Presence/WebDemo/test/operator.test.js
 Tools/Quality/answerQualityLive.cpp
 Tools/Quality/privateRuntimeEvaluation.h
@@ -199,6 +241,10 @@ docs/REVIA_REPAIR_STATUS.md
 docs/superpowers/plans/2026-10-09-audit-repairs.md
 ```
 
-## Hosted follow-up verification boundary
+## Verification-only follow-ups
 
-The following commit on this branch adds only cue-fixture and build-evidence corrections plus this record. Tests/systemCueTests.cpp preserves the real +32 voice/design routing, reserves exclusive pairs with at most32 attempts, and explicitly releases pre-listen sockets under pinned httplib ownership. Actual occupied-offset red reproduction and released-pair success are retained; the exact historical hosted socket cause remains unknown. Final targeted16cue fixtures plus speech-fault controls pass23.269s; independent full Foundation passes139.89s. Tools/Build/ProcessTree.ps1 and its caller bind sampled ancestry to process creation times;10driver controls pass in both PowerShell versions and independently. Historical memory peaks from the previous birthless sampler are unqualified; build wall times and archive/input comparisons remain valid. Reports: build/repair-evidence/hosted-cue/report.txt and independent-review/hosted-cue-foundation-result.json. No production or evaluation-runtime files changed. Final candidate SHA and complete hosted/local gate will be bound in the completion handoff.
+`94d5d070` repairs cue reservation without changing production +32 voice/design routing. The fixture exclusively reserves the pair with at most32 attempts and releases pre-listen sockets under pinned httplib ownership. Occupied-offset red, released-pair success, upper-range rejection, exhaustion and cleanup controls are retained. All16 cue fixtures plus speech-fault controls pass; independent Foundation also passes. The historical hosted socket cause cannot be narrowed beyond its recorded bind failure. Creation-aware process sampling separately rejects PID reuse; previously reported birthless memory peaks are unqualified.
+
+`fd4f0f1` changes only the native relay fixture and CI metadata. Existing protocol permits completed-result polling after offline readiness while rejecting new submissions; host disconnection revokes the token. Holding the exact session's native `/end` reproduces the old premature401 assertion as200. The corrected fixture asserts GET200 with expected content and new POST401 while cleanup is held, releases cleanup, observes autonomous host-socket close, and retains the original GET401 assertion. It then re-enables native and checks no connector reconnect or new inference during a bounded regression window. It never calls bridge.stop before the assertions. Focused native1/1, complete relay unit 47/47 and independent native1/1 pass. Production relay, bridge and native authorization are unchanged.
+
+CI now runs checked CTest after successful native build even when the separate relay step fails, while retaining that failure as a job failure. Failed/cancelled builds cannot trigger CTest. Five parsed-workflow controls and independent review pass. Hidden-file upload is restricted to the unchanged four build-evidence paths. Reports: `hosted-cue/report.txt`, `hosted-relay/report.txt`, `independent-review/hosted-relay-review.txt`, and build-driver metadata receipts.
