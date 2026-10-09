@@ -17,6 +17,21 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+# Template-heavy MinGW objects and repeated foundation links need separate limits.
+# Cache values let a measured local build choose a different compile budget.
+set(REVIA_COMPILE_JOBS 2 CACHE STRING "Maximum simultaneous Ninja MinGW compiles")
+set(REVIA_LINK_JOBS 1 CACHE STRING "Maximum simultaneous Ninja MinGW links")
+if(CMAKE_GENERATOR MATCHES "Ninja" AND MINGW)
+    foreach(budget REVIA_COMPILE_JOBS REVIA_LINK_JOBS)
+        if(NOT "${${budget}}" MATCHES "^[1-9][0-9]*$")
+            message(FATAL_ERROR "${budget} must be a positive integer")
+        endif()
+    endforeach()
+    set_property(GLOBAL PROPERTY JOB_POOLS revia_compile=${REVIA_COMPILE_JOBS} revia_link=${REVIA_LINK_JOBS})
+    set(CMAKE_JOB_POOL_COMPILE revia_compile)
+    set(CMAKE_JOB_POOL_LINK revia_link)
+endif()
+
 option(REVIA_BUILD_DESKTOP "Build the optional Qt 6 desktop shell" ON)
 option(REVIA_REQUIRE_DESKTOP "Fail configuration when the Qt desktop shell cannot be built" OFF)
 set(REVIA_QT_ROOT "" CACHE PATH "Explicit Qt 6 kit directory, e.g. C:/Qt/6.8.3/mingw_64")
@@ -162,6 +177,31 @@ if(MINGW)
     target_compile_options(ReviaFoundation PRIVATE -Wa,-mbig-obj)
 endif()
 
+# GNU ar indexes qc by default; CMake's separate ranlib then repeats that work.
+# Append every member without indexing and build the full symbol table once.
+if(MINGW)
+    set(CMAKE_C_ARCHIVE_CREATE "<CMAKE_AR> qcS <TARGET> <LINK_FLAGS> <OBJECTS>")
+    set(CMAKE_C_ARCHIVE_APPEND "<CMAKE_AR> qS <TARGET> <LINK_FLAGS> <OBJECTS>")
+    set(CMAKE_CXX_ARCHIVE_CREATE "<CMAKE_AR> qcS <TARGET> <LINK_FLAGS> <OBJECTS>")
+    set(CMAKE_CXX_ARCHIVE_APPEND "<CMAKE_AR> qS <TARGET> <LINK_FLAGS> <OBJECTS>")
+endif()
+
+function(revia_deploy_mingw_runtime targetName)
+    if(NOT MINGW)
+        return()
+    endif()
+    get_filename_component(compilerBin "${CMAKE_CXX_COMPILER}" DIRECTORY)
+    set(threadRuntime "${compilerBin}/libwinpthread-1.dll")
+    if(NOT EXISTS "${threadRuntime}")
+        message(FATAL_ERROR "Missing MinGW thread runtime: ${threadRuntime}")
+    endif()
+    add_custom_command(TARGET ${targetName} POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "${threadRuntime}" "$<TARGET_FILE_DIR:${targetName}>/libwinpthread-1.dll"
+            COMMENT "Deploying MinGW thread runtime for ${targetName}"
+            VERBATIM)
+endfunction()
+
 function(revia_link_foundation targetName)
     # ReviaFoundation has intentional cross-subsystem references (the session
     # coordinator reaches speech, vision, actions, and visuals). Let GNU ld
@@ -246,7 +286,7 @@ if(REVIA_BUILD_DESKTOP)
 
         # A shared Qt build cannot be fully statically linked, but the compiler
         # runtime can be. Without this the shipped executable depends on
-        # libgcc_s_seh-1.dll, libstdc++-6.dll, and libwinpthread-1.dll being
+        # libgcc_s_seh-1.dll and libstdc++-6.dll being
         # present on the target machine, which is only true on a dev box.
         if(MINGW)
             target_link_options(ReviaDesktop PRIVATE
@@ -254,6 +294,8 @@ if(REVIA_BUILD_DESKTOP)
                     -static-libstdc++
             )
         endif()
+
+        revia_deploy_mingw_runtime(ReviaDesktop)
 
         get_target_property(REVIA_QMAKE_EXECUTABLE Qt6::qmake IMPORTED_LOCATION)
         get_filename_component(REVIA_QT_BIN_DIR "${REVIA_QMAKE_EXECUTABLE}" DIRECTORY)
@@ -269,17 +311,6 @@ if(REVIA_BUILD_DESKTOP)
                             "$<TARGET_FILE:ReviaDesktop>"
                     COMMENT "Deploying Qt runtime for ReviaDesktop"
             )
-            if(MINGW)
-                get_filename_component(REVIA_CXX_BIN_DIR "${CMAKE_CXX_COMPILER}" DIRECTORY)
-                if(EXISTS "${REVIA_CXX_BIN_DIR}/libwinpthread-1.dll")
-                    add_custom_command(TARGET ReviaDesktop POST_BUILD
-                            COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                                    "${REVIA_CXX_BIN_DIR}/libwinpthread-1.dll"
-                                    "$<TARGET_FILE_DIR:ReviaDesktop>/libwinpthread-1.dll"
-                            COMMENT "Deploying compiler winpthread runtime for ReviaDesktop"
-                    )
-                endif()
-            endif()
         endif()
 
         add_custom_command(TARGET ReviaDesktop POST_BUILD
@@ -307,10 +338,11 @@ if(REVIA_BUILD_DESKTOP)
     endif()
 endif()
 
-# Produce a directly runnable Windows executable instead of requiring CLion's
-# MinGW runtime directory to be added to PATH at launch time.
+# Deploy the remaining thread DLL independently of the optional desktop target.
+# The compiler and C++ standard runtimes remain statically linked.
 if(MINGW)
     target_link_options(R_E_V_I_A PRIVATE -static-libgcc -static-libstdc++)
+    revia_deploy_mingw_runtime(R_E_V_I_A)
 endif()
 
 # Keep runtime configuration synchronized on every build, not only configure.
@@ -448,6 +480,7 @@ if(BUILD_TESTING)
     add_executable(ReviaBrowserOwnerTests Tests/browserOwnerTests.cpp Tests/Fixture/studioPackageTests.cpp)
     target_compile_definitions(ReviaBrowserOwnerTests PRIVATE REVIA_STUDIO_TEST_SUITE=RunBrowserOwnerTests)
     revia_link_foundation(ReviaBrowserOwnerTests)
+
     find_program(REVIA_NODE_EXECUTABLE NAMES node node.exe)
     if(REVIA_NODE_EXECUTABLE)
         add_test(NAME Revia.InteractiveBrowser COMMAND "${REVIA_NODE_EXECUTABLE}"
@@ -591,6 +624,13 @@ if(BUILD_TESTING)
     # The disposable fixture the native desktop tests drive. Windows only, and built
     # only when tests are enabled: nothing in the shipping runtime depends on it.
     if(WIN32)
+        add_executable(ReviaCliLoaderGate Tests/Fixture/cliLoaderGate.cpp)
+        if(MINGW)
+            target_compile_options(ReviaCliLoaderGate PRIVATE -municode)
+            target_link_options(ReviaCliLoaderGate PRIVATE -static -municode)
+        endif()
+        add_test(NAME Revia.CliLoaderDeployment COMMAND ReviaCliLoaderGate "$<TARGET_FILE:R_E_V_I_A>")
+        set_tests_properties(Revia.CliLoaderDeployment PROPERTIES TIMEOUT 40)
         add_executable(ReviaDesktopFixture WIN32
                 "${CMAKE_CURRENT_SOURCE_DIR}/Tests/Fixture/desktopFixture.cpp")
         target_link_libraries(ReviaDesktopFixture PRIVATE comctl32 user32 gdi32)
@@ -630,6 +670,13 @@ if(BUILD_TESTING)
         # Its own process: it types into a console, and a console belongs to a process.
         add_test(NAME Revia.TerminalInput COMMAND ReviaTests --terminal-input)
         set_tests_properties(Revia.TerminalInput PROPERTIES TIMEOUT 30)
+    endif()
+    if(WIN32)
+        find_program(REVIA_POWERSHELL_EXECUTABLE NAMES pwsh powershell REQUIRED)
+        add_test(NAME Revia.BuildDrivers COMMAND "${REVIA_POWERSHELL_EXECUTABLE}"
+                -NoProfile -ExecutionPolicy Bypass -File "${CMAKE_CURRENT_SOURCE_DIR}/Tests/buildDrivers.test.ps1"
+                -EvidenceDirectory "${CMAKE_CURRENT_BINARY_DIR}/BuildDriverFixtures")
+        set_tests_properties(Revia.BuildDrivers PROPERTIES TIMEOUT 90)
     endif()
     find_program(REVIA_NODE_EXECUTABLE NAMES node node.exe)
     if(REVIA_NODE_EXECUTABLE)

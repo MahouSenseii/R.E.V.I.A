@@ -10,6 +10,17 @@ void RunReplyContractTests()
 {
     using namespace revia::agents;
     using revia::tests::Check;
+    const auto commaContract = RequestedReplyContract(R"(Do not add commentary, return JSON with exactly keys "answer".)");
+    const auto periodContract = RequestedReplyContract(R"(Do not add commentary. Return JSON with exactly keys "answer".)");
+    Check(commaContract.schemaJson == periodContract.schemaJson && commaContract.rootKind == ReplyFormat::JsonObject &&
+              !MatchesReplyContract("Controlled prose.", commaContract) && !MatchesReplyContract(R"({"wrong":1})", commaContract),
+        "Unrelated comma-clause negation disabled the live JSON contract.");
+    Check(RequestedReplyContract(R"(Explain "say \". Return JSON.\"".)").rootKind == ReplyFormat::Conversation,
+        "An escaped quote let quoted data enable JSON authority.");
+    Check(RequestedReplyContract(R"(Return JSON with exactly keys "answer\". Return prose.".)").rootKind == ReplyFormat::JsonObject,
+        "An escaped quote in a key let quoted data withdraw JSON authority.");
+    Check(RequestedReplyContract(R"(Explain "say \\". Return JSON with exactly keys "answer".)").rootKind == ReplyFormat::JsonObject,
+        "An even backslash run incorrectly escaped a closing quote.");
     const std::string introducedSchema =
         R"({"type":"object","properties":{"thermalRatio":{"type":"number"},"enabledFlag":{"type":"boolean"}},"required":["thermalRatio","enabledFlag"],"additionalProperties":false})";
     for (const std::string lead : {"Follow this JSON Schema: ", "Use this JSON Schema: "})

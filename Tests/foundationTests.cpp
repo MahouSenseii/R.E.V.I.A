@@ -15,6 +15,8 @@
 #include "Speech/speechSettings.h"
 #include "testSupport.h"
 
+void RunLookupAuthorityTests();
+
 #include "Actions/IActionExecutor.h"
 #include "Actions/actionDispatcher.h"
 #include "Actions/actionTypes.h"
@@ -9659,6 +9661,7 @@ int main(const int argc, char** argv)
         TestInternetCapabilityIsBoundedAndGrounded();
         TestCurrentTechnicalFactsLookUpAndStableOnesStayLocal();
         TestLookupQueriesDropTheInstructionAndKeepTheSubject();
+        RunLookupAuthorityTests();
         TestConversationQualityMonitorReportsKnownFailures();
         TestDesktopActionRateLimitsAreDeterministic();
         TestDesktopRateLimitIsAudited();

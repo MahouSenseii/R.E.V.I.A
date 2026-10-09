@@ -132,9 +132,26 @@ struct ReviaWindowStopTests
             request.id = revia::actions::NewActionId();
             request.type = revia::actions::ActionType::CreateDirectory;
             request.source = owner.Paths().InstallRoot() / name;
+            const bool wasStarted = owner.IsStarted();
+            expect(!wasStarted, "companion switch fixture begins with its runtime stopped");
+            const auto stopped = runtime.Execute(request, true);
+            expect(!stopped.result.attempted && !stopped.Succeeded() && !std::filesystem::exists(request.source),
+                "stopped companion cannot authorize a native effect");
+            std::cerr << "companion stopped control " << name << " started=" << wasStarted
+                      << " attempted=" << stopped.result.attempted << " reason=" << stopped.Message() << '\n';
+            ReviaSessionTestAccess::MarkStudioStarted(owner, true);
+            (void)ReviaSessionTestAccess::StudioInput(owner, revia::agents::InputSource::Typed);
+            request.id = revia::actions::NewActionId();
             const auto outcome = runtime.Execute(request, true);
-            expect(outcome.Succeeded() == allowed && std::filesystem::exists(request.source) == allowed,
-                "companion selection lost its denial or narrowed the other companion");
+            ReviaSessionTestAccess::MarkStudioStarted(owner, wasStarted);
+            std::cerr << "companion action " << name << " expected=" << allowed << " succeeded=" << outcome.Succeeded()
+                      << " attempted=" << outcome.result.attempted << " exists=" << std::filesystem::exists(request.source)
+                      << " reason=" << outcome.Message() << " audit=" << outcome.auditError << '\n';
+            expect(outcome.Succeeded() == allowed, "companion action outcome differs from its exact expected allowance");
+            expect(std::filesystem::exists(request.source) == allowed, "companion action native effect differs from its expected allowance");
+            if (!allowed)
+                expect(outcome.Message().find("explicit companion denial") != std::string::npos,
+                    "original companion is refused by its retained denial, not an unrelated admission failure");
         };
         const auto cwd = QDir::currentPath();
         memoryDecision finding;

@@ -92,6 +92,7 @@
 #include <cstdint>
 #include <deque>
 #include <functional>
+#include <map>
 #include <mutex>
 #include <optional>
 #include <stop_token>
@@ -556,6 +557,9 @@ class ReviaSession
     SessionResult RunTurnLocked(const agents::InputBatch& batch);
     void InitializeTaskContracts();
     [[nodiscard]] std::shared_ptr<const core::TaskContract> BuildTurnTaskContract(const agents::InputBatch& batch);
+    [[nodiscard]] std::shared_ptr<const core::TaskContract> CaptureOwnedTaskContract(const RuntimeStamp& stamp,
+        const std::string& goal, const std::string& parentTaskId = {});
+    [[nodiscard]] bool TaskContextCurrent(const core::TaskContract& task) const;
     [[nodiscard]] std::shared_ptr<const core::TaskContract> BuildActionTaskContract(const actions::ActionRequest& request,
         const RuntimeStamp& stamp, std::stop_token stopToken);
     [[nodiscard]] std::string TaskContractRefusal(const core::TaskContract& task, std::stop_token stopToken) const;
@@ -940,6 +944,7 @@ class ReviaSession
     int responseMaxReplyCharacters = 12000;
     mutable std::mutex taskContractMutex;
     std::shared_ptr<const core::TaskContract> foregroundTaskContract;
+    std::map<std::string, std::shared_ptr<const core::TaskContract>> ownedTaskContracts;
     std::optional<agents::InputContext> admittedTaskInputContext;
 };
 

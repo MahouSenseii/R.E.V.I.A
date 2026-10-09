@@ -7732,16 +7732,28 @@ ReviaSession::GoalTokenScope::GoalTokenScope(ReviaSession& owner, std::stop_toke
         session.executingGoalStamp = stamp;
         session.executingGoalAudience = session.Audience();
         session.operatorNeedsVision = false;
-        if (session.activeTask)
+        if (session.activeTask && *session.executingGoalToken == session.taskStopSource.get_token())
             parentTask = session.activeTask->stamp.taskId;
     }
     admitted = session.companionAuthority->RegisterTask(stamp, parentTask);
     if (admitted)
     {
         stamp.policyVersion = session.companionAuthority->Revision();
+        const auto contract = session.CaptureOwnedTaskContract(stamp, "Execute the admitted goal", parentTask);
+        if (!contract)
+        {
+            session.companionAuthority->EndTask(stamp);
+            admitted = false;
+            return;
+        }
+        {
+            std::lock_guard lock(session.taskContractMutex);
+            session.ownedTaskContracts[stamp.taskId] = contract;
+        }
         {
             std::lock_guard lock(session.taskMutex);
             session.executingGoalStamp = stamp;
+            session.executingGoalAudience = contract->scope.audience;
         }
         session.goalRunner.SetExecutionStamp(stamp);
     }
@@ -7755,6 +7767,8 @@ ReviaSession::GoalTokenScope::~GoalTokenScope()
     {
         session.companionAuthority->EndTask(stamp);
         session.goalRunner.SetExecutionStamp({});
+        std::lock_guard lock(session.taskContractMutex);
+        session.ownedTaskContracts.erase(stamp.taskId);
     }
     std::lock_guard lock(session.taskMutex);
     session.executingGoalToken.reset();
@@ -7793,15 +7807,26 @@ bool ReviaSession::LaunchTask(const std::string& title, std::function<goals::Goa
     // A stop pressed while the task was being approved still applies to it.
     if (CurrentOperationToken().stop_requested())
         source.request_stop();
-    const auto taskAudience = Audience();
+    const RuntimeStamp origin = sessionIdentity.Stamp(actions::NewActionId(), actions::NewActionId(), companionAuthority->Revision());
+    if (!companionAuthority->RegisterTask(origin, {}))
+    {
+        outMessage = "This companion session cannot admit a new task.";
+        return false;
+    }
+    const auto contract = CaptureOwnedTaskContract(origin, title);
+    if (!contract)
+    {
+        companionAuthority->EndTask(origin);
+        outMessage = "The originating task context could not be captured.";
+        return false;
+    }
+    const auto taskAudience = contract->scope.audience;
     {
         std::lock_guard lock(taskMutex);
         taskStopSource = source;
-        const RuntimeStamp origin = sessionIdentity.Stamp(actions::NewActionId(), actions::NewActionId(), companionAuthority->Revision());
-        if (!companionAuthority->RegisterTask(origin, {}))
         {
-            outMessage = "This companion session cannot admit a new task.";
-            return false;
+            std::lock_guard contractLock(taskContractMutex);
+            ownedTaskContracts[origin.taskId] = contract;
         }
         activeTask = BackgroundTask{title, std::chrono::steady_clock::now(), "starting", origin};
         tasksLaunched.fetch_add(1);
@@ -7837,6 +7862,10 @@ bool ReviaSession::LaunchTask(const std::string& title, std::function<goals::Goa
 void ReviaSession::FinishTask(const goals::Goal& finished, const RuntimeStamp& origin, const identity::AudienceContext& audience)
 {
     companionAuthority->EndTask(origin);
+    {
+        std::lock_guard lock(taskContractMutex);
+        ownedTaskContracts.erase(origin.taskId);
+    }
     const std::string summary = FormatGoalSummary(finished);
     std::string title;
     {

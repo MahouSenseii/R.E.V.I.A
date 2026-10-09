@@ -3,6 +3,7 @@
 #include "Runtime/conversationRuntime.h"
 #include "cognitionLive.h"
 #include "observedLocalModel.h"
+#include "privateRuntimeEvaluation.h"
 #include "semanticReview.h"
 
 #include <filesystem>
@@ -114,6 +115,12 @@ int main(int argc, char** argv)
         std::ifstream corpusFile(corpusPath, std::ios::binary);
         const std::string corpusBytes((std::istreambuf_iterator<char>(corpusFile)), std::istreambuf_iterator<char>());
         const auto corpus = nlohmann::json::parse(corpusBytes);
+        const bool privateRuntime = corpus.is_object() && corpus.value("runtimePath", std::string{}) == "private";
+        if (privateRuntime && (!cognition || review))
+            throw std::runtime_error("Private runtime cohorts require cognition mode without optional AI review.");
+        std::optional<revia::quality::PrivateRuntimeEvaluation> privateEvaluation;
+        if (privateRuntime)
+            privateEvaluation.emplace(corpus);
         if (cognition && cognitionCampaign->fixtureDigest != revia::audit::ContentDigest(corpusBytes))
             throw std::runtime_error("Captured campaign fixtureDigest differs from the exact corpus bytes.");
         const auto capturedCorpusPath = runtimeDirectory / "corpus.json";
@@ -196,12 +203,32 @@ int main(int argc, char** argv)
             {
                 const int result = revia::quality::RunCognitionLive(
                     cognitionCases, cognitionSeeds, output, [&](const std::string& input, const std::vector<conversationMessage>& prior)
-                    { return runtime.EvaluateTurn(input, prior, profile, true); },
+                    {
+                        if (!privateEvaluation)
+                            return runtime.EvaluateTurn(input, prior, profile, true);
+                        privateEvaluation->Prepare(input, prior, history);
+                        const auto firstResponse = observed.Responses().size();
+                        const auto answer = privateEvaluation->Reply(router, history, input, profile);
+                        const auto responses = observed.Responses();
+                        std::string raw;
+                        if (responses.size() > firstResponse && responses.back().contains("body"))
+                        {
+                            const auto body = nlohmann::json::parse(responses.back().at("body").get<std::string>(), nullptr, false);
+                            if (!body.is_discarded() && body.contains("choices") && !body.at("choices").empty())
+                                raw = body.at("choices").front().at("message").value("content", std::string{});
+                        }
+                        return revia::evaluation::EvaluationReply{
+                            answer.succeeded && answer.fromAssistant && !answer.text.empty(), answer.text, raw, answer.reason,
+                            profile.answerObligation};
+                    },
                     providerObserved ? settings.modelName : "unverified requested:" + requestedProvider, observed, cognitionCampaign);
                 observed.Close();
                 observed.SaveTraffic(output);
+                if (privateEvaluation)
+                    WriteEvidence(output.string() + ".private-runtime.json", privateEvaluation->Observations().dump(2) + '\n');
                 WriteEvidence(output.string() + ".metadata.json",
                     nlohmann::json{{"schemaVersion", 1}, {"mode", "cognition"}, {"provider", settings.modelName},
+                        {"runtimePath", privateRuntime ? "private" : "evaluation"},
                         {"requestedProvider", requestedProvider}, {"observedProviderAvailable", providerObserved},
                         {"providerIdentityVerified", false}, {"providerObservation", output.string() + ".provider.json"},
                         {"upstreamPort", upstreamPort}, {"profileId", profile.id},

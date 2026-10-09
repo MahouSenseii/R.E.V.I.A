@@ -1105,17 +1105,25 @@ SessionResult ConversationRuntime::Generate(const std::string& policyInput, cons
         const std::string lookupQuery = resolvedQuery.query;
         const bool shouldLookup =
             access.enabled && revia::internet::InternetLookupPolicy::ShouldLookup(policyInput, access.automaticLookup);
+        const bool intentLimitReached = policyInput.size() > 65536 && revia::internet::SelectLookupRequest(policyInput).explicitRequest;
+        if (access.enabled && intentLimitReached)
+        {
+            result.succeeded = false;
+            result.reason = resolvedQuery.reason + " No external lookup ran.";
+            result.text = result.reason;
+            publishComponent("Internet", "Skipped", result.reason, -1.0, 0, currentTurn);
+            return admitted() ? result : revoked();
+        }
         if (shouldLookup && !resolvedQuery.resolved)
         {
             // Worth searching, but nothing to search for. Falling back to the raw
             // sentence is exactly the defect this replaced, and inventing a subject is
             // Curiosity's job rather than this turn's, so the lookup is skipped and the
             // turn continues without web grounding.
-            publishComponent("Internet", "Skipped",
-                "A lookup was warranted but the request named no subject to search "
-                "for. " +
-                    resolvedQuery.reason,
+            publishComponent("Internet", "Skipped", "The lookup request could not supply a bounded search subject. " + resolvedQuery.reason,
                 -1.0, 0, currentTurn);
+            internetGrounding = "Lookup limitation: " + resolvedQuery.reason +
+                                " No external lookup ran. Explain this limitation if the answer needs that lookup.";
         }
         if (shouldLookup && resolvedQuery.resolved)
         {

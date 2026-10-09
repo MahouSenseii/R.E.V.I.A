@@ -41,6 +41,67 @@ jobs:
           npm ci --ignore-scripts
           npm test
 
+  web-operator-windows:
+    name: Windows / WebDemo operator paths
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: Tools/Presence/WebDemo/package-lock.json
+      - name: Test real Windows script and config paths with spaces
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force build/operator-evidence | Out-Null
+          git rev-parse HEAD | Set-Content build/operator-evidence/source-head.txt
+          npm ci --prefix Tools/Presence/WebDemo --ignore-scripts --no-audit --no-fund
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm run test:operator --prefix Tools/Presence/WebDemo 2>&1 | Tee-Object build/operator-evidence/operator.tap
+          exit $LASTEXITCODE
+      - name: Retain Windows operator result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-operator-${{ github.sha }}
+          path: build/operator-evidence/
+          if-no-files-found: error
+
+  journal-linux:
+    name: Linux / isolated journal persistence
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and test the production journal owner
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p build/journal-evidence build/journal-deps
+          git rev-parse HEAD | tee build/journal-evidence/source-head.txt
+          g++ --version | tee build/journal-evidence/compiler.txt
+          curl --fail --location --retry 2 https://github.com/nlohmann/json/releases/download/v3.11.3/json.tar.xz -o build/journal-deps/json.tar.xz
+          tar -xf build/journal-deps/json.tar.xz -C build/journal-deps
+          json_include=$(find build/journal-deps -path '*/include/nlohmann/json.hpp' -printf '%h\n' | head -n 1)
+          test -n "$json_include"
+          g++ -std=c++20 -O0 -DREVIA_JOURNAL_STANDALONE -IPublic -I"${json_include%/nlohmann}" \
+            Tests/evidenceJournalTests.cpp Private/Audit/evidenceJournal.cpp \
+            Private/Audit/actionAuditLogger.cpp Private/Audit/contentDigest.cpp \
+            Private/Core/taskContract.cpp Private/Actions/actionTypes.cpp \
+            -o build/journal-evidence/journal-tests 2>&1 | tee build/journal-evidence/build.log
+          sha256sum build/journal-evidence/journal-tests | tee build/journal-evidence/binary.sha256
+          build/journal-evidence/journal-tests read 2>&1 | tee build/journal-evidence/read.log
+          build/journal-evidence/journal-tests all 2>&1 | tee build/journal-evidence/all.log
+      - name: Retain Linux journal evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-journal-${{ github.sha }}
+          path: build/journal-evidence/
+          if-no-files-found: error
+
   discord-voice:
     name: Discord voice / offline transport
     runs-on: windows-latest
@@ -62,21 +123,30 @@ jobs:
   windows:
     name: Windows / MinGW
     runs-on: windows-latest
-    timeout-minutes: 60
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
-
-      # Pinned to the toolchain the project is developed and tested with. MSVC is not a
-      # supported configuration here: the build uses -static with MinGW and the tests
-      # are calibrated against g++ 13.
+      - name: Record source identity and upload reserve
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force build/ci-evidence | Out-Null
+          git rev-parse HEAD | Set-Content build/ci-evidence/source-head.txt
+          git status --porcelain=v1 | Set-Content build/ci-evidence/source-status.txt
+          "REVIA_CI_DEADLINE_UTC=$([DateTime]::UtcNow.AddMinutes(80).ToString('o'))" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.15.0'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
       - name: Install Qt
+        timeout-minutes: 15
         uses: jurplel/install-qt-action@v4
         with:
           version: '6.8.3'
           arch: 'win64_mingw'
           tools: 'tools_mingw1310'
           cache: true
-
       - name: Select and verify Qt's MinGW 13.1 toolchain
         shell: pwsh
         run: |
@@ -87,69 +157,64 @@ jobs:
           if (-not (Test-Path -LiteralPath $compiler)) { throw "Missing compiler: $compiler" }
           $version = & $compiler -dumpfullversion
           if ($LASTEXITCODE -ne 0 -or $version -ne '13.1.0') { throw "Unexpected MinGW version: $version" }
-          & $compiler --version
-          "REVIA_COMPILER_BIN=$compilerBin" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          $compilerBin | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-
+          & $compiler --version | Tee-Object build/ci-evidence/compiler.txt
+          "REVIA_COMPILER_BIN=$compilerBin" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
+          $compilerBin | Out-File $env:GITHUB_PATH -Encoding utf8 -Append
       - name: Install Ninja
         uses: seanmiddleditch/gha-setup-ninja@v5
-
-      # FetchContent pulls cpp-httplib, nlohmann/json and the SQLite amalgamation on a
-      # cold tree. Cached on the lockfile-equivalent -- the CMakeLists that names the
-      # tags -- so an ordinary run does not re-download them.
       - name: Cache fetched dependencies
         uses: actions/cache@v4
         with:
           path: build/ci/_deps
           key: deps-${{ runner.os }}-${{ hashFiles('CMakeLists.txt') }}
-
-      - name: Configure
-        run: >
-          cmake -S . -B build/ci -G Ninja
-          -DCMAKE_BUILD_TYPE=Debug
-          -DBUILD_TESTING=ON
-          -DREVIA_REQUIRE_DESKTOP=ON
-          -DCMAKE_C_COMPILER="${env:REVIA_COMPILER_BIN}/gcc.exe"
-          -DCMAKE_CXX_COMPILER="${env:REVIA_COMPILER_BIN}/g++.exe"
-          -DREVIA_QT_ROOT="${env:QT_ROOT_DIR}"
-
-      - name: Build
-        run: cmake --build build/ci
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '24'
-
+      - name: Configure all native targets and complete inventory
+        timeout-minutes: 5
+        shell: pwsh
+        run: |
+          cmake -S . -B build/ci -G Ninja -DCMAKE_BUILD_TYPE=Debug "-DCMAKE_C_FLAGS_DEBUG=-Og -g1" "-DCMAKE_CXX_FLAGS_DEBUG=-Og -g1" -DBUILD_TESTING=ON -DREVIA_REQUIRE_DESKTOP=ON -DREVIA_COMPILE_JOBS=2 -DREVIA_LINK_JOBS=1 "-DCMAKE_C_COMPILER=$env:REVIA_COMPILER_BIN/gcc.exe" "-DCMAKE_CXX_COMPILER=$env:REVIA_COMPILER_BIN/g++.exe" "-DREVIA_QT_ROOT=$env:QT_ROOT_DIR" 2>&1 | Tee-Object build/ci-evidence/configure.log
+          exit $LASTEXITCODE
+      - name: Build every target with measured bounded concurrency
+        timeout-minutes: 50
+        shell: pwsh
+        run: |
+          $remaining = ([DateTime]::Parse($env:REVIA_CI_DEADLINE_UTC) - [DateTime]::UtcNow).TotalSeconds - 1500
+          if ($remaining -lt 1) { throw 'No build time remains after reserving relay, CTest and upload time.' }
+          $budget = [int][Math]::Min(2700, $remaining)
+          ./Tools/Build/InvokeMeasuredBuild.ps1 -BuildDirectory build/ci -Parallel 3 -TimeoutSeconds $budget -EvidenceDirectory build/ci-evidence/build
+          exit $LASTEXITCODE
       - name: Install pinned Live2D transport
+        timeout-minutes: 3
         run: npm ci --prefix Tools/Presence/Live2D --ignore-scripts --no-audit --no-fund
-
-      - name: Test relay through native public conversation with fake model
-        working-directory: Tools/Presence/WebDemo
+      - name: Test relay through native public conversation with controlled loopback model
+        timeout-minutes: 3
+        shell: pwsh
         env:
           REVIA_WEB_NATIVE_HOST: ${{ github.workspace }}/build/ci/ReviaWebGuestHost.exe
         run: |
-          Write-Output "Testing commit $env:GITHUB_SHA"
-          npm ci --ignore-scripts
+          npm ci --prefix Tools/Presence/WebDemo --ignore-scripts --no-audit --no-fund
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          npm run test:native
+          npm run test:native --prefix Tools/Presence/WebDemo 2>&1 | Tee-Object build/ci-evidence/native-relay.log
           exit $LASTEXITCODE
-
-      # The desktop smoke test opens a real window, so it needs the Windows platform
-      # plugin rather than the offscreen one.
-      - name: Test
-        working-directory: build/ci
+      - name: Execute the complete expected CTest inventory
+        timeout-minutes: 15
+        shell: pwsh
         env:
           QT_QPA_PLATFORM: windows
-        run: ctest --output-on-failure --timeout 600
-
-      - name: Upload test output on failure
-        if: failure()
+        run: |
+          ./Tools/Build/InvokeCheckedCTest.ps1 -BuildDirectory build/ci -EvidenceDirectory build/ci-evidence/tests
+          exit $LASTEXITCODE
+      - name: Retain source, build logs, resources, inventory and JUnit
+        if: always()
+        timeout-minutes: 5
         uses: actions/upload-artifact@v4
         with:
-          name: ctest-output
-          path: build/ci/Testing/
-          if-no-files-found: ignore
-
+          name: windows-native-${{ github.sha }}
+          path: |
+            build/ci-evidence/
+            build/ci/Testing/
+            build/ci/BuildDriverFixtures/
+            build/ci/CMakeFiles/CMakeConfigureLog.yaml
+          if-no-files-found: error
   # Cheap, fast, and catches the class of defect that has actually bitten this project:
   # a setup script that only works on the machine it was written on.
   scripts:

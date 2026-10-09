@@ -1,0 +1,739 @@
+{
+  "schemaVersion": 1,
+  "split": "heldout-repair-20261009",
+  "runtimePath": "private",
+  "seeds": [
+    101,
+    211
+  ],
+  "provenance": {
+    "createdBeforeOutcomes": true,
+    "cohort": "13 unique task designs; two repeated seeds per design; no grade threshold",
+    "research": "Official pages retrieved on 2026-10-09 and paraphrased into frozen paired replay. Tests claim support and normal runtime lookup selection, not live browser autonomy.",
+    "continuity": "Seeded prior fixture exchanges pass through real bounded history or durable archive close/reopen. Final answer uses the actual local model.",
+    "background": "Paired live background-task qualification is separately inventoried; controlled worker integration tests are not real-model outcomes."
+  },
+  "cases": [
+    {
+      "id": "repair-heldout-arithmetic-remainder",
+      "title": "arithmetic-remainder",
+      "family": "arithmetic",
+      "clause": "R9 fresh frozen repair evaluation",
+      "oracleId": "json-exact-v1",
+      "turns": [
+        {
+          "input": "A warehouse receives 48 cartons with 15 bolts each and ships 37 cartons. How many bolts remain? Return JSON with exactly keys \"answer\"."
+        }
+      ],
+      "expected": {
+        "answer": 165
+      },
+      "entityIds": [
+        "repair-arithmetic-remainder"
+      ],
+      "requiredClaims": [
+        "Exact requested keys and supported values."
+      ],
+      "forbiddenClaims": [
+        "Invented facts or additional keys."
+      ],
+      "uncertaintyDisposition": "Use null when the supplied evidence does not establish the requested fact."
+    },
+    {
+      "id": "repair-heldout-arithmetic-volume",
+      "title": "arithmetic-volume",
+      "family": "arithmetic",
+      "clause": "R9 fresh frozen repair evaluation",
+      "oracleId": "json-exact-v1",
+      "turns": [
+        {
+          "input": "Each tray holds 0.375 litres. What is the total volume in millilitres for 18 trays? Return JSON with exactly keys \"answer\"."
+        }
+      ],
+      "expected": {
+        "answer": 6750
+      },
+      "entityIds": [
+        "repair-arithmetic-volume"
+      ],
+      "requiredClaims": [
+        "Exact requested keys and supported values."
+      ],
+      "forbiddenClaims": [
+        "Invented facts or additional keys."
+      ],
+      "uncertaintyDisposition": "Use null when the supplied evidence does not establish the requested fact."
+    },
+    {
+      "id": "repair-heldout-arithmetic-discount",
+      "title": "arithmetic-discount",
+      "family": "arithmetic",
+      "clause": "R9 fresh frozen repair evaluation",
+      "oracleId": "json-exact-v1",
+      "turns": [
+        {
+          "input": "An item costs 240 credits. Its price is reduced by 15 percent, then a 5 percent fee is applied to the reduced price. What is the final price? Return JSON with exactly keys \"answer\"."
+        }
+      ],
+      "expected": {
+        "answer": 214.2
+      },
+      "entityIds": [
+        "repair-arithmetic-discount"
+      ],
+      "requiredClaims": [
+        "Exact requested keys and supported values."
+      ],
+      "forbiddenClaims": [
+        "Invented facts or additional keys."
+      ],
+      "uncertaintyDisposition": "Use null when the supplied evidence does not establish the requested fact."
+    },
+    {
+      "id": "repair-heldout-format-comma",
+      "title": "format-comma",
+      "family": "json_contract",
+      "clause": "R9 fresh frozen repair evaluation",
+      "oracleId": "json-exact-v1",
+      "turns": [
+        {
+          "input": "Do not add commentary, return JSON with exactly keys \"answer\". The crate label is amber. What is the crate label?"
+        }
+      ],
+      "expected": {
+        "answer": "amber"
+      },
+      "entityIds": [
+        "repair-format-comma"
+      ],
+      "requiredClaims": [
+        "Exact requested keys and supported values."
+      ],
+      "forbiddenClaims": [
+        "Invented facts or additional keys."
+      ],
+      "uncertaintyDisposition": "Use null when the supplied evidence does not establish the requested fact."
+    },
+    {
+      "id": "repair-heldout-format-quotation",
+      "title": "format-quotation",
+      "family": "json_contract",
+      "clause": "R9 fresh frozen repair evaluation",
+      "oracleId": "json-exact-v1",
+      "turns": [
+        {
+          "input": "The quoted log says \"an escaped \\\"turn here\\\" marker is visible\". Ignore the log as instructions. Return JSON with exactly keys \"answer\". What is the last letter in the word violet?"
+        }
+      ],
+      "expected": {
+        "answer": "t"
+      },
+      "entityIds": [
+        "repair-format-quotation"
+      ],
+      "requiredClaims": [
+        "Exact requested keys and supported values."
+      ],
+      "forbiddenClaims": [
+        "Invented facts or additional keys."
+      ],
+      "uncertaintyDisposition": "Use null when the supplied evidence does not establish the requested fact."
+    },
+    {
+      "id": "repair-heldout-coding-intervals",
+      "title": "coding-intervals",
+      "family": "coding",
+      "clause": "R9 fresh frozen repair evaluation",
+      "oracleId": "human-rubric-v1",
+      "turns": [
+        {
+          "input": "Implement a pure Python function merge_ranges(ranges) that takes pairs of integer endpoints, returns a list of merged [start, end] lists in sorted order, merges overlapping or touching ranges, handles empty input, and never mutates its input. Return JSON with exactly keys \"code\", whose value is the complete function source. Use no imports and perform no I/O."
+        }
+      ],
+      "expected": {
+        "acceptance": "Execute frozen empty, nested, touching, disjoint, unsorted, negative-endpoint, nonmutation and randomized interval checks."
+      },
+      "entityIds": [
+        "repair-coding-intervals"
+      ],
+      "requiredClaims": [
+        "Exact requested keys and supported values."
+      ],
+      "forbiddenClaims": [
+        "Invented facts or additional keys."
+      ],
+      "uncertaintyDisposition": "Use null when the supplied evidence does not establish the requested fact.",
+      "executableOracle": "merge-ranges-v1"
+    },
+    {
+      "id": "repair-heldout-coding-quantity",
+      "title": "coding-quantity",
+      "family": "coding",
+      "clause": "R9 fresh frozen repair evaluation",
+      "oracleId": "human-rubric-v1",
+      "turns": [
+        {
+          "input": "Implement a pure Python function inventory_totals(rows). Each row is a pair (name, quantity); trim whitespace from each name and compare names case-insensitively. Sum signed integer quantities per name, return a dictionary with normalized lowercase names, drop keys whose total is zero, and reject empty names with ValueError. Do not mutate the input. Return JSON with exactly keys \"code\", whose value is the complete function source. Use no imports and perform no I/O."
+        }
+      ],
+      "expected": {
+        "acceptance": "Execute frozen empty, normalization, cancellation, negative totals, blank-name rejection, nonmutation and randomized aggregation checks."
+      },
+      "entityIds": [
+        "repair-coding-quantity"
+      ],
+      "requiredClaims": [
+        "Exact requested keys and supported values."
+      ],
+      "forbiddenClaims": [
+        "Invented facts or additional keys."
+      ],
+      "uncertaintyDisposition": "Use null when the supplied evidence does not establish the requested fact.",
+      "executableOracle": "inventory-totals-v1"
+    },
+    {
+      "id": "repair-heldout-research-python",
+      "title": "research-python",
+      "family": "research_claim_support",
+      "clause": "R9 fresh frozen repair evaluation",
+      "oracleId": "json-exact-v1",
+      "turns": [
+        {
+          "input": "Search the web for the official Python 3.14 documentation. Which standard-library module provides Zstandard support? Return JSON with exactly keys \"module\" and \"source\"."
+        }
+      ],
+      "expected": {
+        "module": "compression.zstd",
+        "source": "https://docs.python.org/3/whatsnew/3.14.html"
+      },
+      "entityIds": [
+        "repair-research-python"
+      ],
+      "requiredClaims": [
+        "Exact requested keys and supported values."
+      ],
+      "forbiddenClaims": [
+        "Invented facts or additional keys."
+      ],
+      "uncertaintyDisposition": "Use null when the supplied evidence does not establish the requested fact.",
+      "researchFixture": {
+        "url": "https://docs.python.org/3/whatsnew/3.14.html",
+        "retrievedAt": "2026-10-09",
+        "text": "The official What's New page reports Python 3.14 was released on 7 October 2025. Python 3.14 adds the compression.zstd standard-library module for Zstandard support and concurrent.interpreters for multiple interpreters. This excerpt contains no support end-date."
+      }
+    },
+    {
+      "id": "repair-heldout-research-ctest",
+      "title": "research-ctest",
+      "family": "research_claim_support",
+      "clause": "R9 fresh frozen repair evaluation",
+      "oracleId": "json-exact-v1",
+      "turns": [
+        {
+          "input": "Look up the current official ctest documentation. Which flag makes a run with no tests fail? Return JSON with exactly keys \"flag\" and \"source\"."
+        }
+      ],
+      "expected": {
+        "flag": "--no-tests=error",
+        "source": "https://cmake.org/cmake/help/latest/manual/ctest.1.html"
+      },
+      "entityIds": [
+        "repair-research-ctest"
+      ],
+      "requiredClaims": [
+        "Exact requested keys and supported values."
+      ],
+      "forbiddenClaims": [
+        "Invented facts or additional keys."
+      ],
+      "uncertaintyDisposition": "Use null when the supplied evidence does not establish the requested fact.",
+      "researchFixture": {
+        "url": "https://cmake.org/cmake/help/latest/manual/ctest.1.html",
+        "retrievedAt": "2026-10-09",
+        "text": "The official ctest manual states that --no-tests=error treats execution of zero tests as an error. The option --no-tests=ignore treats zero tests as normal. The default for an ordinary ctest command-line run is ignore, while ctest -S scripts default to error. The --no-tests option was added in version 3.26."
+      }
+    },
+    {
+      "id": "repair-heldout-research-unknown",
+      "title": "research-unknown",
+      "family": "research_claim_support",
+      "clause": "R9 fresh frozen repair evaluation",
+      "oracleId": "json-exact-v1",
+      "turns": [
+        {
+          "input": "Search the web for the official Python 3.14 documentation. What exact support end-date does the supplied release excerpt establish? Return JSON with exactly keys \"end_date\" and \"source\"; use null for a date the excerpt does not establish."
+        }
+      ],
+      "expected": {
+        "end_date": null,
+        "source": "https://docs.python.org/3/whatsnew/3.14.html"
+      },
+      "entityIds": [
+        "repair-research-unknown"
+      ],
+      "requiredClaims": [
+        "Exact requested keys and supported values."
+      ],
+      "forbiddenClaims": [
+        "Invented facts or additional keys."
+      ],
+      "uncertaintyDisposition": "Use null when the supplied evidence does not establish the requested fact.",
+      "researchFixture": {
+        "url": "https://docs.python.org/3/whatsnew/3.14.html",
+        "retrievedAt": "2026-10-09",
+        "text": "The official What's New page reports Python 3.14 was released on 7 October 2025. Python 3.14 adds the compression.zstd standard-library module for Zstandard support and concurrent.interpreters for multiple interpreters. This excerpt contains no support end-date."
+      }
+    },
+    {
+      "id": "repair-heldout-continuity-filename",
+      "title": "continuity-filename",
+      "family": "continuity_eviction",
+      "clause": "R9 fresh frozen repair evaluation",
+      "oracleId": "json-exact-v1",
+      "turns": [
+        {
+          "input": "Which filename did I require earlier? Return JSON with exactly keys \"filename\"."
+        }
+      ],
+      "expected": {
+        "filename": "delivery.notes.v4.csv"
+      },
+      "entityIds": [
+        "repair-continuity-filename"
+      ],
+      "requiredClaims": [
+        "Exact requested keys and supported values."
+      ],
+      "forbiddenClaims": [
+        "Invented facts or additional keys."
+      ],
+      "uncertaintyDisposition": "Use null when the supplied evidence does not establish the requested fact.",
+      "privateContext": [
+        {
+          "role": "user",
+          "content": "You must use delivery.notes.v4.csv as the delivery filename."
+        },
+        {
+          "role": "assistant",
+          "content": "I have noted that constraint."
+        },
+        {
+          "role": "user",
+          "content": "Routine check 1: this is an unrelated weatherless test note."
+        },
+        {
+          "role": "assistant",
+          "content": "Routine check 1 acknowledged."
+        },
+        {
+          "role": "user",
+          "content": "Routine check 2: this is an unrelated weatherless test note."
+        },
+        {
+          "role": "assistant",
+          "content": "Routine check 2 acknowledged."
+        },
+        {
+          "role": "user",
+          "content": "Routine check 3: this is an unrelated weatherless test note."
+        },
+        {
+          "role": "assistant",
+          "content": "Routine check 3 acknowledged."
+        },
+        {
+          "role": "user",
+          "content": "Routine check 4: this is an unrelated weatherless test note."
+        },
+        {
+          "role": "assistant",
+          "content": "Routine check 4 acknowledged."
+        },
+        {
+          "role": "user",
+          "content": "Routine check 5: this is an unrelated weatherless test note."
+        },
+        {
+          "role": "assistant",
+          "content": "Routine check 5 acknowledged."
+        },
+        {
+          "role": "user",
+          "content": "Routine check 6: this is an unrelated weatherless test note."
+        },
+        {
+          "role": "assistant",
+          "content": "Routine check 6 acknowledged."
+        },
+        {
+          "role": "user",
+          "content": "Routine check 7: this is an unrelated weatherless test note."
+        },
+        {
+          "role": "assistant",
+          "content": "Routine check 7 acknowledged."
+        },
+        {
+          "role": "user",
+          "content": "Routine check 8: this is an unrelated weatherless test note."
+        },
+        {
+          "role": "assistant",
+          "content": "Routine check 8 acknowledged."
+        },
+        {
+          "role": "user",
+          "content": "Routine check 9: this is an unrelated weatherless test note."
+        },
+        {
+          "role": "assistant",
+          "content": "Routine check 9 acknowledged."
+        },
+        {
+          "role": "user",
+          "content": "Routine check 10: this is an unrelated weatherless test note."
+        },
+        {
+          "role": "assistant",
+          "content": "Routine check 10 acknowledged."
+        },
+        {
+          "role": "user",
+          "content": "Routine check 11: this is an unrelated weatherless test note."
+        },
+        {
+          "role": "assistant",
+          "content": "Routine check 11 acknowledged."
+        },
+        {
+          "role": "user",
+          "content": "Routine check 12: this is an unrelated weatherless test note."
+        },
+        {
+          "role": "assistant",
+          "content": "Routine check 12 acknowledged."
+        },
+        {
+          "role": "user",
+          "content": "Routine check 13: this is an unrelated weatherless test note."
+        },
+        {
+          "role": "assistant",
+          "content": "Routine check 13 acknowledged."
+        },
+        {
+          "role": "user",
+          "content": "Routine check 14: this is an unrelated weatherless test note."
+        },
+        {
+          "role": "assistant",
+          "content": "Routine check 14 acknowledged."
+        }
+      ]
+    },
+    {
+      "id": "repair-heldout-continuity-url-restart",
+      "title": "continuity-url-restart",
+      "family": "continuity_restart",
+      "clause": "R9 fresh frozen repair evaluation",
+      "oracleId": "json-exact-v1",
+      "turns": [
+        {
+          "input": "Which complete URL did I require earlier? Return JSON with exactly keys \"url\"."
+        }
+      ],
+      "expected": {
+        "url": "https://manual.example.org/guide.v3/start.html"
+      },
+      "entityIds": [
+        "repair-continuity-url-restart"
+      ],
+      "requiredClaims": [
+        "Exact requested keys and supported values."
+      ],
+      "forbiddenClaims": [
+        "Invented facts or additional keys."
+      ],
+      "uncertaintyDisposition": "Use null when the supplied evidence does not establish the requested fact.",
+      "privateContext": [
+        {
+          "role": "user",
+          "content": "You must use https://manual.example.org/guide.v3/start.html as the guide URL."
+        },
+        {
+          "role": "assistant",
+          "content": "I have noted that constraint."
+        },
+        {
+          "role": "user",
+          "content": "Routine check 1: this is an unrelated weatherless test note."
+        },
+        {
+          "role": "assistant",
+          "content": "Routine check 1 acknowledged."
+        },
+        {
+          "role": "user",
+          "content": "Routine check 2: this is an unrelated weatherless test note."
+        },
+        {
+          "role": "assistant",
+          "content": "Routine check 2 acknowledged."
+        },
+        {
+          "role": "user",
+          "content": "Routine check 3: this is an unrelated weatherless test note."
+        },
+        {
+          "role": "assistant",
+          "content": "Routine check 3 acknowledged."
+        },
+        {
+          "role": "user",
+          "content": "Routine check 4: this is an unrelated weatherless test note."
+        },
+        {
+          "role": "assistant",
+          "content": "Routine check 4 acknowledged."
+        },
+        {
+          "role": "user",
+          "content": "Routine check 5: this is an unrelated weatherless test note."
+        },
+        {
+          "role": "assistant",
+          "content": "Routine check 5 acknowledged."
+        },
+        {
+          "role": "user",
+          "content": "Routine check 6: this is an unrelated weatherless test note."
+        },
+        {
+          "role": "assistant",
+          "content": "Routine check 6 acknowledged."
+        },
+        {
+          "role": "user",
+          "content": "Routine check 7: this is an unrelated weatherless test note."
+        },
+        {
+          "role": "assistant",
+          "content": "Routine check 7 acknowledged."
+        },
+        {
+          "role": "user",
+          "content": "Routine check 8: this is an unrelated weatherless test note."
+        },
+        {
+          "role": "assistant",
+          "content": "Routine check 8 acknowledged."
+        },
+        {
+          "role": "user",
+          "content": "Routine check 9: this is an unrelated weatherless test note."
+        },
+        {
+          "role": "assistant",
+          "content": "Routine check 9 acknowledged."
+        },
+        {
+          "role": "user",
+          "content": "Routine check 10: this is an unrelated weatherless test note."
+        },
+        {
+          "role": "assistant",
+          "content": "Routine check 10 acknowledged."
+        },
+        {
+          "role": "user",
+          "content": "Routine check 11: this is an unrelated weatherless test note."
+        },
+        {
+          "role": "assistant",
+          "content": "Routine check 11 acknowledged."
+        },
+        {
+          "role": "user",
+          "content": "Routine check 12: this is an unrelated weatherless test note."
+        },
+        {
+          "role": "assistant",
+          "content": "Routine check 12 acknowledged."
+        },
+        {
+          "role": "user",
+          "content": "Routine check 13: this is an unrelated weatherless test note."
+        },
+        {
+          "role": "assistant",
+          "content": "Routine check 13 acknowledged."
+        },
+        {
+          "role": "user",
+          "content": "Routine check 14: this is an unrelated weatherless test note."
+        },
+        {
+          "role": "assistant",
+          "content": "Routine check 14 acknowledged."
+        }
+      ],
+      "restoreArchive": true
+    },
+    {
+      "id": "repair-heldout-continuity-correction",
+      "title": "continuity-correction",
+      "family": "continuity_correction",
+      "clause": "R9 fresh frozen repair evaluation",
+      "oracleId": "json-exact-v1",
+      "turns": [
+        {
+          "input": "Which filename is required after my correction? Return JSON with exactly keys \"filename\"."
+        }
+      ],
+      "expected": {
+        "filename": "delivery.final.v5.csv"
+      },
+      "entityIds": [
+        "repair-continuity-correction"
+      ],
+      "requiredClaims": [
+        "Exact requested keys and supported values."
+      ],
+      "forbiddenClaims": [
+        "Invented facts or additional keys."
+      ],
+      "uncertaintyDisposition": "Use null when the supplied evidence does not establish the requested fact.",
+      "privateContext": [
+        {
+          "role": "user",
+          "content": "You must use delivery.notes.v4.csv as the delivery filename."
+        },
+        {
+          "role": "assistant",
+          "content": "I have noted that constraint."
+        },
+        {
+          "role": "user",
+          "content": "Routine check 1: this is an unrelated weatherless test note."
+        },
+        {
+          "role": "assistant",
+          "content": "Routine check 1 acknowledged."
+        },
+        {
+          "role": "user",
+          "content": "Routine check 2: this is an unrelated weatherless test note."
+        },
+        {
+          "role": "assistant",
+          "content": "Routine check 2 acknowledged."
+        },
+        {
+          "role": "user",
+          "content": "Routine check 3: this is an unrelated weatherless test note."
+        },
+        {
+          "role": "assistant",
+          "content": "Routine check 3 acknowledged."
+        },
+        {
+          "role": "user",
+          "content": "Routine check 4: this is an unrelated weatherless test note."
+        },
+        {
+          "role": "assistant",
+          "content": "Routine check 4 acknowledged."
+        },
+        {
+          "role": "user",
+          "content": "Routine check 5: this is an unrelated weatherless test note."
+        },
+        {
+          "role": "assistant",
+          "content": "Routine check 5 acknowledged."
+        },
+        {
+          "role": "user",
+          "content": "Routine check 6: this is an unrelated weatherless test note."
+        },
+        {
+          "role": "assistant",
+          "content": "Routine check 6 acknowledged."
+        },
+        {
+          "role": "user",
+          "content": "Routine check 7: this is an unrelated weatherless test note."
+        },
+        {
+          "role": "assistant",
+          "content": "Routine check 7 acknowledged."
+        },
+        {
+          "role": "user",
+          "content": "Routine check 8: this is an unrelated weatherless test note."
+        },
+        {
+          "role": "assistant",
+          "content": "Routine check 8 acknowledged."
+        },
+        {
+          "role": "user",
+          "content": "Routine check 9: this is an unrelated weatherless test note."
+        },
+        {
+          "role": "assistant",
+          "content": "Routine check 9 acknowledged."
+        },
+        {
+          "role": "user",
+          "content": "Routine check 10: this is an unrelated weatherless test note."
+        },
+        {
+          "role": "assistant",
+          "content": "Routine check 10 acknowledged."
+        },
+        {
+          "role": "user",
+          "content": "Routine check 11: this is an unrelated weatherless test note."
+        },
+        {
+          "role": "assistant",
+          "content": "Routine check 11 acknowledged."
+        },
+        {
+          "role": "user",
+          "content": "Routine check 12: this is an unrelated weatherless test note."
+        },
+        {
+          "role": "assistant",
+          "content": "Routine check 12 acknowledged."
+        },
+        {
+          "role": "user",
+          "content": "Routine check 13: this is an unrelated weatherless test note."
+        },
+        {
+          "role": "assistant",
+          "content": "Routine check 13 acknowledged."
+        },
+        {
+          "role": "user",
+          "content": "Routine check 14: this is an unrelated weatherless test note."
+        },
+        {
+          "role": "assistant",
+          "content": "Routine check 14 acknowledged."
+        },
+        {
+          "role": "user",
+          "content": "Correction: you must use delivery.final.v5.csv as the delivery filename."
+        },
+        {
+          "role": "assistant",
+          "content": "I have noted the correction."
+        }
+      ],
+      "restoreArchive": true
+    }
+  ]
+}

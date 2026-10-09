@@ -31,11 +31,18 @@ std::size_t ClosingQuote(const std::string& input, std::size_t start, const Deli
 {
     auto end = input.find(delimiter.close, start + delimiter.open.size());
     // Apostrophes in contractions and possessives do not close single quotes.
-    while (end != std::string::npos && delimiter.close != "\"" &&
-        end > 0 && end + delimiter.close.size() < input.size() &&
-        std::isalnum(static_cast<unsigned char>(input[end - 1])) &&
-        std::isalnum(static_cast<unsigned char>(input[end + delimiter.close.size()])))
+    while (end != std::string::npos)
+    {
+        std::size_t slashes = 0;
+        for (auto before = end; before > 0 && input[before - 1] == '\\'; --before)
+            ++slashes;
+        const bool apostrophe = delimiter.close != "\"" && end > 0 && end + delimiter.close.size() < input.size() &&
+                                std::isalnum(static_cast<unsigned char>(input[end - 1])) &&
+                                std::isalnum(static_cast<unsigned char>(input[end + delimiter.close.size()]));
+        if (slashes % 2 == 0 && !apostrophe)
+            break;
         end = input.find(delimiter.close, end + delimiter.close.size());
+    }
     return end;
 }
 

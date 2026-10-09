@@ -8,6 +8,7 @@
 #include "Identity/reviaStatePacket.h"
 #include "Agents/conversationStylePolicy.h"
 #include "Memory/longTermMemory.h"
+#include "Memory/conversationArchive.h"
 #include "Runtime/conversationRuntime.h"
 
 #include <httplib.h>
@@ -85,7 +86,11 @@ void TestContinuityPreservesDecimalConstraintsAfterEvictionAndRestore()
 {
     const std::vector<std::string> constraints = {"The rover must fit a 0.75 m doorway.", "Keep the sensor offset at -0.25 m.",
         "Correction: the reserve is .75 credits.", "Keep the quoted margin at \"-.75 m\".",
-        "Keep the Unicode \u03BC sensor limit at +.75 m.", "Keep reserve=.75 credits.", "Keep reserve:.75 credits."};
+        "Keep the Unicode \u03BC sensor limit at +.75 m.", "Keep reserve=.75 credits.", "Keep reserve:.75 credits.",
+        "You must save the report as report.csv.", "You must use https://api.example.com/v1 for uploads.",
+        "You must use https://api.example.com/v1?mode=report.csv for uploads.", R"(You must save C:\reports\archive.csv.)",
+        "You must save report.2026.csv.", "You must save report.2026.", "You must save report.1.2026.csv.", "You must save archive.7z.",
+        "You must use https://api.2example.com/v1 for uploads.", "You must save ../archive/report.csv."};
     for (const auto& constraint : constraints)
     {
         std::vector<conversationMessage> archive = {
@@ -472,9 +477,23 @@ class ContextBackend
             [this, tokenization](const auto& request, auto& response)
             {
                 const int call = ++completionCalls;
+                const auto body = nlohmann::json::parse(request.body);
                 {
                     std::lock_guard lock(mutex);
-                    lastRequest = nlohmann::json::parse(request.body);
+                    lastRequest = body;
+                }
+                if (!body.value("stream", false))
+                {
+                    const bool classification =
+                        body.at("messages").front().value("content", "").find("shouldRemember") != std::string::npos;
+                    if (classification)
+                        ++memoryCalls;
+                    response.set_content(
+                        nlohmann::json{{"choices", nlohmann::json::array(
+                                                       {{{"message", {{"content", classification ? memoryReplyText : reviewReplyText}}}}})}}
+                            .dump(),
+                        "application/json");
+                    return;
                 }
                 if (tokenization == "overflow" && call == 1)
                 {
@@ -482,8 +501,8 @@ class ContextBackend
                     response.set_content(R"({"error":"exceed_context_size"})", "application/json");
                     return;
                 }
-                const nlohmann::json chunk = {{"choices",
-                    nlohmann::json::array({{{"delta", {{"content", "Controlled response completed."}}}, {"finish_reason", "stop"}}})}};
+                const nlohmann::json chunk = {
+                    {"choices", nlohmann::json::array({{{"delta", {{"content", replyText}}}, {"finish_reason", "stop"}}})}};
                 response.set_content("data: " + chunk.dump() + "\n\ndata: [DONE]\n\n", "text/event-stream");
             });
         server.new_task_queue = [] { return new httplib::ThreadPool(1); };
@@ -513,10 +532,15 @@ class ContextBackend
         return lastRequest;
     }
     int port = 0;
+    std::string replyText = "Controlled response completed.";
+    std::string reviewReplyText = R"({"verdict":"allow","reason":"Controlled allowance."})";
+    std::string memoryReplyText =
+        R"({"shouldRemember":true,"subject":"speaker","category":"preference","summary":"The user prefers hiking.","importance":"medium","reason":"Explicit fixture preference."})";
     std::atomic<bool> validTemplateRequest = false;
     std::atomic<bool> validTokenizerRequest = false;
     std::atomic<bool> templateThinking = false;
     std::atomic<int> completionCalls = 0;
+    std::atomic<int> memoryCalls = 0;
     std::stop_source cancellation;
 
   private:
@@ -576,16 +600,26 @@ void TestPrivateReplyRetainsEvictedDecimalConstraintsOnTheWire()
     scope.audience = {revia::identity::AudienceKind::Private, "decimal-private", 1, {scope.participantId}};
     scope.participantSource = revia::identity::SpeakerSource::ExplicitIntroduction;
     const std::vector<std::string> constraints = {"The rover must fit a 0.75 m doorway.", "Keep the sensor offset at -0.25 m.",
-        "Correction: the reserve is .75 credits.", "Keep reserve=.75 credits.", "Keep reserve:.75 credits."};
+        "Correction: the reserve is .75 credits.", "Keep reserve=.75 credits.", "Keep reserve:.75 credits.",
+        "You must save the report as report.csv.", "You must use https://api.example.com/v1 for uploads.",
+        "You must use https://api.example.com/v1?mode=report.csv for uploads.", R"(You must save C:\reports\archive.csv.)",
+        "You must save report.2026.csv.", "You must save report.2026.", "You must save report.1.2026.csv.", "You must save archive.7z.",
+        "You must use https://api.2example.com/v1 for uploads.", "You must save ../archive/report.csv."};
+    std::vector<conversationMessage> transcript;
+    const auto add = [&](const std::string& role, const std::string& text)
+    {
+        transcript.push_back({role, text, scope.participantId, scope});
+        history.AddMessage(transcript.back());
+    };
     for (const auto& constraint : constraints)
     {
-        history.AddMessage({"user", constraint, scope.participantId, scope});
-        history.AddMessage({"assistant", "The constraint is recorded.", scope.participantId, scope});
+        add("user", constraint);
+        add("assistant", "The constraint is recorded.");
     }
     for (int index = 0; index < 13; ++index)
     {
-        history.AddMessage({"user", "Routine observation " + std::to_string(index), scope.participantId, scope});
-        history.AddMessage({"assistant", "Routine acknowledgement " + std::to_string(index), scope.participantId, scope});
+        add("user", "Routine observation " + std::to_string(index));
+        add("assistant", "Routine acknowledgement " + std::to_string(index));
     }
     const auto recent = history.GetRecentMessages();
     for (const auto& constraint : constraints)
@@ -613,7 +647,249 @@ void TestPrivateReplyRetainsEvictedDecimalConstraintsOnTheWire()
             "The ordinary private reply lost an evicted decimal constraint before final transport: " + constraint);
     Check(wire.find("Working continuity:") != std::string::npos && wire.find("[source 1] User:") != std::string::npos,
         "The ordinary private reply lost source-linked working continuity.");
+    const auto archivePath = (directory.root / "continuity-archive.db").string();
+    {
+        revia::memory::ConversationArchive archive(archivePath);
+        std::string error;
+        Check(archive.BeginSession("before-restart", error), "Durable continuity session failed: " + error);
+        for (const auto& message : transcript)
+            Check(
+                archive.Record("before-restart", message.role, message.content, error, scope), "Durable continuity write failed: " + error);
+        Check(archive.EndSession("before-restart"), "Durable continuity session did not close.");
+    }
+    revia::memory::ConversationArchive reopened(archivePath);
+    const auto restored = reopened.LoadLatestCompatibleTail("after-restart", 200, scope);
+    Check(restored.size() == transcript.size(), "Durable restart did not restore its scoped transcript.");
+    std::vector<conversationMessage> restoredMessages;
+    for (const auto& message : restored)
+        restoredMessages.push_back({message.role, message.content, message.scope.participantId, message.scope});
+    history.RestoreMessages(restoredMessages, 2);
+    const auto restoredRecent = history.GetRecentMessages();
+    for (const auto& constraint : constraints)
+        Check(
+            std::none_of(restoredRecent.begin(), restoredRecent.end(), [&](const auto& message) { return message.content == constraint; }),
+            "Durable restart retained the original raw constraint.");
+    Check(runtime.ReplyForAudience(
+                     question, {}, scope.audience, {}, profile, true, false, {}, [] { return true; }, {}, {}, scope)
+              .succeeded,
+        "The restarted private reply failed.");
+    wire.clear();
+    const auto restoredRequest = backend.Last();
+    for (const auto& message : restoredRequest.at("messages"))
+        wire += message.at("content").get<std::string>() + '\n';
+    for (const auto& constraint : constraints)
+        Check(wire.find(constraint) != std::string::npos, "Durable restart lost an exact constraint on the private wire: " + constraint);
+    auto otherScope = scope;
+    otherScope.participantId = "local:other-participant";
+    otherScope.audience.recipientEntityIds = {otherScope.participantId};
+    Check(reopened.LoadLatestCompatibleTail("other-restart", 200, otherScope).empty(), "Durable restoration crossed participant scope.");
+    otherScope = scope;
+    otherScope.audience.kind = revia::identity::AudienceKind::Public;
+    Check(reopened.LoadLatestCompatibleTail("public-restart", 200, otherScope).empty(), "Durable restoration crossed audience scope.");
 }
+void TestLookupAndReplyAuthorityOnTheWire()
+{
+    revia::tests::ScopedTestDirectory directory;
+    ContextBackend backend;
+    const auto database = (directory.root / "authority-memory.db").string();
+    messageRouter router(database);
+    conversationContext history;
+    revia::agents::TurnCoordinator coordinator(database);
+    revia::speech::SpeechService speech;
+    revia::runtime::AffectController affect;
+    revia::emotion::EmotionRuntime emotions;
+    revia::runtime::RuntimeEventBus events;
+    logger log(directory.root / "Logs");
+    int lookups = 0;
+    std::string query;
+    bool review = false;
+    revia::runtime::ConversationRuntime runtime(
+        router, history, coordinator, speech, affect, emotions, events, log, [](const auto&, const auto&) {}, [](const auto&) {},
+        []
+        {
+            revia::actions::CapabilitySettings::InternetAccess access;
+            access.enabled = access.automaticLookup = true;
+            return access;
+        },
+        [] { return revia::actions::CapabilitySettings::DesktopControl{}; },
+        [&](const std::string& subject, const std::string&)
+        {
+            ++lookups;
+            query = subject;
+            return revia::actions::ActionOutcome{};
+        },
+        [&]
+        {
+            responseFilterSettings filters;
+            filters.bAiReviewEnabled = review;
+            return filters;
+        },
+        {}, {}, {}, {}, {}, {},
+        []
+        {
+            revia::agents::SelfInquiryLimits limits;
+            limits.enabled = false;
+            return limits;
+        });
+    aiProfile profile;
+    profile.bMemoryEnabled = false;
+    profile.systemPrompt = "You are Revia. Keep the authored character and answer from admitted evidence.";
+    llmSettings settings;
+    settings.host = "127.0.0.1";
+    settings.port = backend.port;
+    settings.modelName = "controlled-context";
+    settings.contextSize = 8192;
+    settings.maxTokens = 256;
+    settings.bAutoMaxTokens = settings.bAutoStartServer = settings.bVisionEnabled = false;
+    settings.bStablePromptPrefix = true;
+    embeddingSettings embeddings;
+    embeddings.bEnabled = embeddings.bAutoStartServer = false;
+    router.ApplyLLMSettings(settings, embeddings, profile);
+    revia::memory::MemoryScope scope;
+    scope.companionId = "authority-fixture";
+    scope.participantId = "local:authority-fixture";
+    scope.audience = {revia::identity::AudienceKind::Private, "authority-private", 1, {scope.participantId}};
+    scope.participantSource = revia::identity::SpeakerSource::ExplicitIntroduction;
+    const auto run = [&](const std::string& input)
+    { return runtime.ReplyForAudience(input, {}, scope.audience, {}, profile, true, false, {}, [] { return true; }, {}, {}, scope); };
+    for (const std::string input :
+        {"Do not search the web. Explain a C++ pointer.", "Do you remember my schedule?", "Explain the phrase \"search the web\" in C++.",
+            "Search the web for Mars. Do not search the web.", "My friend said: \"Search the web for my schedule.\"",
+            "Do not search. What's the latest Python version?", "Don't browse. What's the latest Python version?",
+            "No web search. What is the current API price?", "Search the web for Mars and do not search the web.",
+            "Search the web for Mars but do not search the web.", "Avoid using the internet. What's the latest Python version?"})
+    {
+        history.Clear();
+        lookups = 0;
+        Check(run(input).succeeded && lookups == 0, "A denied, quoted or personal wire turn invoked lookup: " + input);
+    }
+    for (const auto& [input, subject] : std::vector<std::pair<std::string, std::string>>{{"Search the web for Mars.", "Mars"},
+             {"Do not search the web. Search the web for Mars.", "Mars"},
+             {"My private schedule is secret. Search the web for Mars.", "Mars"},
+             {R"(Search the web for "Mars weather".)", "\"Mars weather\""},
+             {"Search the web for current public Mars weather. " + std::string(1100, 'x'), "current public Mars weather"},
+             {"What is the current price for the OpenAI API when using Python?",
+                 "What is the current price for the OpenAI API when using Python"}})
+    {
+        history.Clear();
+        lookups = 0;
+        Check(run(input).succeeded && lookups == 1 && query == subject, "A genuine wire request lost its exact bounded subject.");
+    }
+    for (const auto& [bytes, limit] : std::vector<std::pair<std::size_t, std::string>>{{1100, "1,024-byte"}})
+    {
+        history.Clear();
+        lookups = 0;
+        Check(run("Search the web for " + std::string(bytes, 'x')).succeeded && lookups == 0,
+            "An unsupported long subject reached external lookup.");
+        std::string requestText;
+        const auto request = backend.Last();
+        for (const auto& message : request.at("messages"))
+            requestText += message.at("content").get<std::string>();
+        Check(requestText.find(limit) != std::string::npos && requestText.find("No external lookup ran") != std::string::npos,
+            "A lookup admission limit silently became local-only on the final wire: " + limit + "; " +
+                requestText.substr(
+                    requestText.find("Lookup limitation") == std::string::npos ? 0 : requestText.find("Lookup limitation"), 250));
+    }
+    for (const auto& input : {"Search the web for " + std::string(66000, 'x'), "Search the web for " + std::string(66000, 'x') + ".",
+             "Search the web for Mars. " + std::string(66000, 'x')})
+    {
+        history.Clear();
+        lookups = 0;
+        const int beforeLimit = backend.completionCalls;
+        const auto limited = run(input);
+        Check(!limited.succeeded && limited.reason.find("65,536-byte") != std::string::npos &&
+                  limited.text.find("No external lookup ran") != std::string::npos && lookups == 0 &&
+                  backend.completionCalls == beforeLimit,
+            "An admitted request beyond the lookup bound did not receive an explicit refusal before provider execution.");
+    }
+    for (const auto& input : {std::string("Explain this local document: ") + std::string(66000, 'x'),
+             std::string("Do not search the web. ") + std::string(66000, 'x'),
+             std::string("Search the web for Mars. ") + std::string(66000, 'x') + ". Do not search the web.",
+             std::string("My friend said: \"Search the web for ") + std::string(66000, 'x') + "\""})
+    {
+        history.Clear();
+        lookups = 0;
+        const int beforeLocal = backend.completionCalls;
+        Check(run(input).succeeded && lookups == 0 && backend.completionCalls > beforeLocal,
+            "The lookup admission bound rejected an unrelated local, denied or reported request.");
+    }
+    const std::string comma = R"(Do not add commentary, return JSON with exactly keys "answer".)";
+    const std::string period = R"(Do not add commentary. Return JSON with exactly keys "answer".)";
+    nlohmann::json admittedSchema;
+    for (const auto& input : {comma, period})
+    {
+        for (const std::string output : {"Controlled prose.", R"({"wrong":1})", R"({"answer":1})"})
+        {
+            history.Clear();
+            backend.replyText = output;
+            const auto result = run(input);
+            const auto schema = backend.Last().at("response_format").at("json_schema").at("schema");
+            if (admittedSchema.is_null())
+                admittedSchema = schema;
+            Check(schema == admittedSchema && schema.at("required") == nlohmann::json::array({"answer"}) &&
+                      schema.at("additionalProperties") == false,
+                "Comma/period directives transmitted different or open schemas.");
+            const bool valid = output == R"({"answer":1})";
+            const auto recent = history.GetRecentMessages();
+            const bool remembered = std::any_of(recent.begin(), recent.end(),
+                [&](const auto& message) { return message.role == "assistant" && message.content == output; });
+            Check(result.succeeded == valid && remembered == valid, "Invalid structured delivery entered success or assistant history.");
+        }
+    }
+    history.Clear();
+    backend.replyText = "Controlled prose.";
+    Check(run(R"(Explain "say \". Return JSON.\"".)").succeeded && !backend.Last().contains("response_format"),
+        "An escaped quoted directive acquired a provider schema.");
+    history.Clear();
+    backend.replyText = R"({"answer\". Return prose.":1})";
+    Check(run(R"(Return JSON with exactly keys "answer\". Return prose.".)").succeeded &&
+              backend.Last().at("response_format").at("type") == "json_schema",
+        "Escaped key data withdrew the provider contract.");
+    for (const std::string amendment : {"Do not return JSON.", "Return JSON. Actually respond in prose."})
+    {
+        history.Clear();
+        backend.replyText = "Controlled prose.";
+        Check(run(amendment).succeeded && !backend.Last().contains("response_format"), "A genuine withdrawal retained JSON authority.");
+    }
+    review = true;
+    backend.replyText = R"({"answer":1})";
+    backend.reviewReplyText = R"({"verdict":"replace","replacement":"Controlled invalid replacement.","reason":"Fixture replacement."})";
+    history.Clear();
+    const auto replaced = run(comma);
+    const auto recent = history.GetRecentMessages();
+    Check(
+        !replaced.succeeded && std::none_of(recent.begin(), recent.end(), [](const auto& message) { return message.role == "assistant"; }),
+        "An invalid post-review replacement entered delivery or history.");
+    revia::agents::ResponseFilterContext filterContext;
+    responseFilterSettings filters;
+    filters.bAiReviewEnabled = true;
+    profile.bMemoryEnabled = true;
+    router.ApplyLLMSettings(settings, embeddings, profile);
+    const std::string memoryInput = "Remember that I prefer hiking. " + comma;
+    const std::vector<conversationMessage> memoryContext = {{"user", memoryInput, scope.participantId, scope}};
+    const auto invalid = coordinator.Execute(
+        router, memoryInput, memoryContext, filters, filterContext, true, revia::agents::ResponseProvenance::NormalGeneration, 901, {}, {},
+        {}, revia::llm::PrivateMemoryAccess::ProfileSetting, [] { return true; }, scope);
+    Check(!invalid.response.bSuccess && invalid.response.bAiFilterReviewed && invalid.response.bAiFilterChanged &&
+              invalid.response.reason.find("explicit turn-local reply contract") != std::string::npos &&
+              !invalid.response.bShouldRemember && !invalid.memoryQueued && coordinator.Memory().Depths().interactive == 0 &&
+              coordinator.DrainMemoryEvents().empty() && longTermMemory(database).Load().empty() && backend.memoryCalls == 0,
+        "Invalid final structure reached durable-memory admission.");
+    backend.reviewReplyText = R"({"verdict":"allow","reason":"Controlled allowance."})";
+    const auto valid = coordinator.Execute(
+        router, memoryInput, memoryContext, filters, filterContext, true, revia::agents::ResponseProvenance::NormalGeneration, 902, {}, {},
+        {}, revia::llm::PrivateMemoryAccess::ProfileSetting, [] { return true; }, scope);
+    Check(valid.response.bSuccess && valid.memoryQueued, "The memory admission control never accepted a valid final reply.");
+    longTermMemory savedMemory(database);
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+    while (savedMemory.LoadScoped(scope).empty() && std::chrono::steady_clock::now() < deadline)
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    coordinator.Stop();
+    const auto saved = savedMemory.LoadScoped(scope);
+    Check(backend.memoryCalls > 0 && saved.size() == 1 && saved.front().summary == "The user prefers hiking.",
+        "A valid structured reply did not reach controlled durable-memory persistence.");
+}
+
 void TestBackendTemplateCountPreservesFittingDialogue()
 {
     revia::tests::ScopedTestDirectory directory;
@@ -1054,6 +1330,7 @@ void RunContextFittingTests()
     TestContinuityPreservesDecimalConstraintsAfterEvictionAndRestore();
     TestContinuityKeepsNonnumericSentenceBoundaries();
     TestPrivateReplyRetainsEvictedDecimalConstraintsOnTheWire();
+    TestLookupAndReplyAuthorityOnTheWire();
     TestPronounRecallUsesTheLatestAdmittedTopic();
     TestContinuityRebuildAndRollbackStayBounded();
     TestBackendTemplateCountPreservesFittingDialogue();
