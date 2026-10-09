@@ -6,6 +6,7 @@ param(
     [Parameter(Mandatory = $true)][string]$EvidenceDirectory
 )
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'FileHash.ps1')
 if ($Parallel -lt 1 -or $TimeoutSeconds -lt 1) { throw 'Parallel and TimeoutSeconds must be positive.' }
 $buildPath = (Resolve-Path -LiteralPath $BuildDirectory).Path
 New-Item -ItemType Directory -Force -Path $EvidenceDirectory | Out-Null
@@ -23,7 +24,7 @@ function SaveSourceSnapshot([string]$Suffix)
     $files = & git -C $sourcePath ls-files --cached --others --exclude-standard
     $manifest = @($files | Where-Object { $_ -match '^(Public|Private|Desktop|Tests|Config|Tools|Assets)/|^CMakeLists.txt$|^\.github/workflows/build-and-test.yml$' } | Sort-Object | ForEach-Object {
         $filePath = Join-Path $sourcePath $_
-        if (Test-Path -LiteralPath $filePath -PathType Leaf) { [ordered]@{ path = $_; sha256 = (Get-FileHash -LiteralPath $filePath -Algorithm SHA256).Hash } }
+        if (Test-Path -LiteralPath $filePath -PathType Leaf) { [ordered]@{ path = $_; sha256 = (Get-ReviaFileHash -LiteralPath $filePath).Hash } }
     })
     $manifest | ConvertTo-Json -Depth 3 | Set-Content (Join-Path $evidencePath "source-inputs-$Suffix.json")
 }
@@ -86,7 +87,7 @@ finally
     $watch.Stop()
     SaveSourceSnapshot 'end'
     $sourceChanged = $false
-    if ($sourcePath) { $sourceChanged = (Get-FileHash (Join-Path $evidencePath 'source-inputs-start.json')).Hash -ne (Get-FileHash (Join-Path $evidencePath 'source-inputs-end.json')).Hash }
+    if ($sourcePath) { $sourceChanged = (Get-ReviaFileHash (Join-Path $evidencePath 'source-inputs-start.json')).Hash -ne (Get-ReviaFileHash (Join-Path $evidencePath 'source-inputs-end.json')).Hash }
     [ordered]@{ command = $command; startedUtc = $started.ToString('o'); finishedUtc = [DateTime]::UtcNow.ToString('o'); elapsedSeconds = $watch.Elapsed.TotalSeconds; exitCode = $exitCode; timedOut = $timedOut; sourceChangedDuringBuild = $sourceChanged; parallel = $Parallel; samplePeriodSeconds = 2; peakWorkingBytes = $peakWorkingBytes; peakPrivateBytes = $peakPrivateBytes; peakProcessCount = $peakProcesses; observedProcesses = @($observed.Values) } | ConvertTo-Json -Depth 6 | Set-Content (Join-Path $evidencePath 'build-result.json')
     foreach ($name in @('.ninja_log', 'CMakeCache.txt', 'compile_commands.json', 'build.ninja'))
     {

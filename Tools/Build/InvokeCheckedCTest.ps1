@@ -5,6 +5,7 @@ param(
     [int]$TimeoutSeconds = 600
 )
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'FileHash.ps1')
 New-Item -ItemType Directory -Force -Path $EvidenceDirectory | Out-Null
 $evidencePath = (Resolve-Path -LiteralPath $EvidenceDirectory).Path
 $buildPath = (Resolve-Path -LiteralPath $BuildDirectory).Path
@@ -37,6 +38,7 @@ try
     & ctest --test-dir $buildPath --output-on-failure --no-tests=error --timeout $TimeoutSeconds --output-junit $junitPath 2>&1 | Tee-Object (Join-Path $evidencePath 'ctest.log')
     $ctestExit = $LASTEXITCODE
     $ErrorActionPreference = 'Stop'
+
     if (-not (Test-Path -LiteralPath $junitPath)) { throw 'CTest did not produce JUnit results.' }
     [xml]$junit = Get-Content -LiteralPath $junitPath -Raw
     $cases = @($junit.SelectNodes('//testcase'))
@@ -82,7 +84,7 @@ finally
         if ($LASTEXITCODE -ne 0) { throw 'Cannot inventory source files.' }
         $manifest = @($sourceFiles | Where-Object { $_ -match '^(Public|Private|Desktop|Tests|Config|Tools|Assets)/|^CMakeLists.txt$|^\.gitignore$|^\.github/workflows/build-and-test.yml$' } | Sort-Object | ForEach-Object {
             $filePath = Join-Path $sourcePath $_
-            if (Test-Path -LiteralPath $filePath -PathType Leaf) { [ordered]@{ path = $_; sha256 = (Get-FileHash -LiteralPath $filePath -Algorithm SHA256).Hash } }
+            if (Test-Path -LiteralPath $filePath -PathType Leaf) { [ordered]@{ path = $_; sha256 = (Get-ReviaFileHash -LiteralPath $filePath).Hash } }
         })
         $manifest | ConvertTo-Json -Depth 3 | Set-Content (Join-Path $evidencePath 'source-inputs.json')
         foreach ($name in @('CMakeCache.txt', 'compile_commands.json', '.ninja_log'))
@@ -90,7 +92,7 @@ finally
             $path = Join-Path $buildPath $name
             if (Test-Path -LiteralPath $path) { Copy-Item -LiteralPath $path -Destination $evidencePath }
         }
-        @(Get-ChildItem -LiteralPath $buildPath -File | Where-Object { $_.Extension -in @('.exe', '.dll', '.a') } | Get-FileHash -Algorithm SHA256 | Select-Object Path,Hash) | ConvertTo-Json | Set-Content (Join-Path $evidencePath 'binary-hashes.json')
+        @(Get-ChildItem -LiteralPath $buildPath -File | Where-Object { $_.Extension -in @('.exe', '.dll', '.a') } | Get-ReviaFileHash | Select-Object Path,Hash) | ConvertTo-Json | Set-Content (Join-Path $evidencePath 'binary-hashes.json')
         $identityTrusted = $true
     }
     catch

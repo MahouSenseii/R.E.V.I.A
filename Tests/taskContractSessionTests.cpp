@@ -1,6 +1,7 @@
 #include "Core/taskContract.h"
 #include "Audit/contentDigest.h"
 #include "Core/evidenceRef.h"
+#include "Agents/agentToolWorker.h"
 #include "Runtime/reviaSession.h"
 #include "testSupport.h"
 #include <algorithm>
@@ -250,6 +251,8 @@ private:
     std::jthread worker;
 };
 
+#include "Fixture/taskContractLiveTests.inc"
+
 void WorkerAdmissionSurvivesOnlyItsOrigin(const std::string& change)
 {
     tests::ScopedTestDirectory directory;
@@ -334,9 +337,11 @@ void WorkerAdmissionSurvivesOnlyItsOrigin(const std::string& change)
     std::ifstream input(directory.root / "worker-journal.jsonl");
     std::string line;
     unsigned results = 0, succeeded = 0, denials = 0;
+    nlohmann::json records = nlohmann::json::array();
     while (std::getline(input, line))
     {
         const auto record = nlohmann::json::parse(line);
+        records.push_back(record);
         if (record.value("reason", "") == "contract_admission_refused")
         {
             ++denials;
@@ -372,6 +377,33 @@ void WorkerAdmissionSurvivesOnlyItsOrigin(const std::string& change)
             "worker lineage names only its admitted workflow parent: " + change);
         Check(contract.stamp.taskId != "unrelated-foreground" && contract.stamp.taskId == contract.stamp.attemptId,
             "worker retains actual attempt identity");
+    }
+    if (change == "participant")
+    {
+        nlohmann::json dispatchRecords = nlohmann::json::array();
+        for (const auto& action : dispatched)
+        {
+            std::string serialized;
+            Check(action.taskContract && core::SerializeTaskContract(*action.taskContract, serialized), "qualification dispatch contract");
+            dispatchRecords.push_back({{"id", action.id}, {"type", actions::ToString(action.type)},
+                {"contract", nlohmann::json::parse(serialized)}});
+        }
+        const auto snapshot = session.AgentWorkflowSnapshot();
+        std::ifstream workflowInput(session.Paths().Resolve("RuntimeData/Agents/workflow.json"));
+        const auto persistedWorkflow = nlohmann::json::parse(workflowInput);
+        Check(OriginalScopeDenials(dispatchRecords, records, original->scope, snapshot, persistedWorkflow) == 1,
+            "live scope qualification joins actual original dispatch, attempt diagnostic and durable refusal");
+        auto unrelated = records;
+        for (auto& record : unrelated)
+            record["action_id_digest"] = audit::ContentDigest("unrelated-action");
+        Check(OriginalScopeDenials(dispatchRecords, unrelated, original->scope, snapshot, persistedWorkflow) == 0,
+            "an unrelated denial cannot qualify the live scope case");
+        auto invalidAttempt = persistedWorkflow;
+        for (auto& node : invalidAttempt["nodes"])
+            for (auto& attempt : node["attempts"])
+                attempt["diagnostic"] = "The worker tool proposal failed its typed contract.";
+        Check(OriginalScopeDenials(dispatchRecords, records, original->scope, snapshot, invalidAttempt) == 0,
+            "invalid tool output cannot substitute for the original-scope refusal diagnostic");
     }
 }
 
@@ -453,7 +485,6 @@ void SessionShutdownFlushesRedactedLifecycle()
     Check(saved.find("private fixture content") == std::string::npos, "private event text cannot enter the lifecycle journal");
 }
 
-#include "Fixture/taskContractLiveTests.inc"
 }
 
 int main(int argc, char** argv)
@@ -487,6 +518,7 @@ int main(int argc, char** argv)
     run("session propagation", SessionContractPropagation);
     run("unknown background", UnknownBackgroundCannotBorrowForeground);
     run("registered goal", RegisteredGoalRetainsNativeSuccess);
+    run("live qualification controls", LiveWorkerQualificationControls);
     for (const auto* change : {"unchanged", "participant", "positive", "negative"})
         run(std::string("saved admission ") + change, [=] { SavedWorkflowAdmissionCannotChange(change); });
     for (const auto* change : {"unchanged", "foreground", "participant", "audience", "consent", "cancel", "parent", "final-effect"})

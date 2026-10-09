@@ -6,6 +6,8 @@ $buildDriver = Join-Path $repoPath 'Tools/Build/InvokeMeasuredBuild.ps1'
 $shell = (Get-Process -Id $PID).Path
 New-Item -ItemType Directory -Force -Path $EvidenceDirectory | Out-Null
 $evidencePath = (Resolve-Path $EvidenceDirectory).Path
+$fixtureRoot = Join-Path $evidencePath ('run-' + [guid]::NewGuid().ToString('N'))
+New-Item -ItemType Directory -Force -Path $fixtureRoot | Out-Null
 function RunDriver([string]$Script, [string[]]$Arguments, [string]$LogPath)
 {
     $values = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $Script) + $Arguments
@@ -13,10 +15,17 @@ function RunDriver([string]$Script, [string[]]$Arguments, [string]$LogPath)
     $process = Start-Process -FilePath $shell -ArgumentList $quoted -WindowStyle Hidden -PassThru -Wait -RedirectStandardOutput ($LogPath + '.stdout') -RedirectStandardError ($LogPath + '.stderr')
     return $process.ExitCode
 }
+. (Join-Path $repoPath 'Tools/Build/FileHash.ps1')
+$knownPath = Join-Path $fixtureRoot 'sha256-known-answer.txt'
+[IO.File]::WriteAllBytes($knownPath, [Text.Encoding]::UTF8.GetBytes('abc'))
+$knownHash = Get-ReviaFileHash -LiteralPath $knownPath
+$pipedHash = Get-Item -LiteralPath $knownPath | Get-ReviaFileHash
+if ($knownHash.Hash -ne 'BA7816BF8F01CFEA414140DE5DAE2223B00361A396177A9CB410FF61F20015AD' -or $pipedHash.Hash -ne $knownHash.Hash -or $pipedHash.Path -ne $knownHash.Path) { throw 'SHA256 known-answer or pipeline hash failed.' }
+$knownHash | ConvertTo-Json | Set-Content (Join-Path $fixtureRoot 'file-hash-known-answer.json')
 $results = @()
-foreach ($case in @('empty', 'missing', 'extra', 'failure', 'skipped', 'untrusted-source', 'success'))
+foreach ($case in @('empty', 'missing', 'extra', 'failure', 'skipped', 'untrusted-source', 'hash-command-unavailable', 'success'))
 {
-    $fixturePath = Join-Path $evidencePath $case
+    $fixturePath = Join-Path $fixtureRoot $case
     $sourcePath = $fixturePath
     if ($case -eq 'untrusted-source') { $sourcePath = Join-Path ([IO.Path]::GetTempPath()) ('revia-missing-source-' + [guid]::NewGuid().ToString('N')) }
     New-Item -ItemType Directory -Force -Path @($fixturePath, $sourcePath) | Out-Null
@@ -33,8 +42,15 @@ foreach ($case in @('empty', 'missing', 'extra', 'failure', 'skipped', 'untruste
     $expected | Set-Content (Join-Path $fixturePath 'expected.txt')
     & cmake -S $sourcePath -B (Join-Path $fixturePath 'build') -G Ninja *> (Join-Path $fixturePath 'configure.log')
     if ($LASTEXITCODE -ne 0) { throw "Fixture configure failed: $case" }
-    $actualExit = RunDriver $driver @('-BuildDirectory', (Join-Path $fixturePath 'build'), '-ExpectedInventory', (Join-Path $fixturePath 'expected.txt'), '-EvidenceDirectory', (Join-Path $fixturePath 'results')) (Join-Path $fixturePath 'driver.log')
-    $expectedExit = if ($case -eq 'success') { 0 } else { 1 }
+    $checkedDriver = $driver
+    if ($case -eq 'hash-command-unavailable')
+    {
+        $checkedDriver = Join-Path $fixturePath 'hash-command-unavailable.ps1'
+        $wrapper = "param([string]`$BuildDirectory, [string]`$ExpectedInventory, [string]`$EvidenceDirectory)`nfunction global:Get-FileHash { throw 'Get-FileHash unavailable fixture' }`n& '" + $driver.Replace("'", "''") + "' -BuildDirectory `$BuildDirectory -ExpectedInventory `$ExpectedInventory -EvidenceDirectory `$EvidenceDirectory`nexit `$LASTEXITCODE"
+        $wrapper | Set-Content $checkedDriver
+    }
+    $actualExit = RunDriver $checkedDriver @('-BuildDirectory', (Join-Path $fixturePath 'build'), '-ExpectedInventory', (Join-Path $fixturePath 'expected.txt'), '-EvidenceDirectory', (Join-Path $fixturePath 'results')) (Join-Path $fixturePath 'driver.log')
+    $expectedExit = if ($case -in @('success', 'hash-command-unavailable')) { 0 } else { 1 }
     if ($actualExit -ne $expectedExit) { throw "$case expected exit $expectedExit, got $actualExit" }
     $summary = Get-Content (Join-Path $fixturePath 'results/test-result.json') -Raw | ConvertFrom-Json
     if ($case -eq 'untrusted-source' -and ($summary.identityTrusted -or $summary.validationExitCode -eq 0)) { throw 'Unidentified source passed qualification.' }
@@ -43,7 +59,7 @@ foreach ($case in @('empty', 'missing', 'extra', 'failure', 'skipped', 'untruste
     if ($case -eq 'skipped' -and $summary.skippedCount -ne 1) { throw 'Skipped CTest was not retained.' }
     $results += [ordered]@{ case = $case; exitCode = $actualExit; expectedExitCode = $expectedExit; result = $summary }
 }
-$interruptPath = Join-Path $evidencePath 'interrupted-build'
+$interruptPath = Join-Path $fixtureRoot 'interrupted-build'
 New-Item -ItemType Directory -Force -Path $interruptPath | Out-Null
 $source = "cmake_minimum_required(VERSION 3.20)`nproject(InterruptedBuildFixture NONE)`n" + 'add_custom_target(wait ALL COMMAND "${CMAKE_COMMAND}" -E sleep 20)'
 $source | Set-Content (Join-Path $interruptPath 'CMakeLists.txt')
@@ -65,4 +81,4 @@ $interrupted = Get-Content (Join-Path $interruptPath 'results/build-result.json'
 if (-not $interrupted.timedOut -or -not (Test-Path (Join-Path $interruptPath 'results/build.stdout.log')) -or -not (Test-Path (Join-Path $interruptPath 'results/build.stderr.log'))) { throw 'Interrupted build did not preserve logs and state.' }
 $results += [ordered]@{ case = 'interrupted-build'; result = $interrupted }
 $results | ConvertTo-Json -Depth 7 | Set-Content (Join-Path $evidencePath 'results.json')
-Write-Output 'Passed 8 build-driver fixtures: empty, missing, extra, failed, skipped, untrusted source, complete inventory and duplicate-PATH interrupted build.'
+Write-Output 'Passed 9 build-driver fixtures: empty, missing, extra, failed, skipped, untrusted source, unavailable hash command, complete inventory and duplicate-PATH interrupted build.'

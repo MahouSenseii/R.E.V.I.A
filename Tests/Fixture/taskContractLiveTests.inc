@@ -1,4 +1,114 @@
 // Opt-in live evidence harness, included by taskContractSessionTests.cpp.
+struct LiveToolProposal
+{
+    bool any = false;
+    bool actionable = false;
+};
+
+LiveToolProposal InspectLiveToolProposal(const nlohmann::json& schema, const std::string& content)
+{
+    LiveToolProposal proposal;
+    try
+    {
+        const auto value = nlohmann::json::parse(content);
+        proposal.any = value.contains("tool") && value.at("tool").is_object();
+        for (const bool writes : {false, true})
+            for (const bool process : {false, true})
+                if (schema == nlohmann::json::parse(agents::WorkerToolSchema(writes, process)))
+                {
+                    std::optional<actions::ActionRequest> action;
+                    std::string error;
+                    proposal.actionable = agents::ParseWorkerToolResponse(content, writes, process, action, error) && action.has_value();
+                    return proposal;
+                }
+    }
+    catch (const nlohmann::json::exception&) {}
+    return proposal;
+}
+
+unsigned OriginalScopeDenials(const nlohmann::json& dispatches, const nlohmann::json& records,
+    const memory::MemoryScope& originalScope, const agents::WorkflowSnapshot& workflow, const nlohmann::json& persistedWorkflow)
+{
+    unsigned matches = 0;
+    if (persistedWorkflow.value("id", "") != workflow.id)
+        return matches;
+    for (const auto& dispatch : dispatches)
+    {
+        core::TaskContract contract;
+        if (!dispatch.contains("contract") || !core::DeserializeTaskContract(dispatch.at("contract").dump(), contract) ||
+            !core::SameMemoryScope(contract.scope, originalScope) || !contract.stamp.SameSession(workflow.stamp) ||
+            contract.cancellation.origin.taskId != workflow.id)
+            continue;
+        bool scopeRefused = false;
+        for (const auto& node : persistedWorkflow.value("nodes", nlohmann::json::array()))
+            for (const auto& attempt : node.value("attempts", nlohmann::json::array()))
+            {
+                const auto stamp = attempt.value("stamp", nlohmann::json::object());
+                scopeRefused = scopeRefused || (attempt.value("id", "") == contract.stamp.attemptId &&
+                    stamp.value("attempt", "") == contract.stamp.attemptId && stamp.value("task", "") == workflow.id &&
+                    stamp.value("session", "") == contract.stamp.sessionId && stamp.value("companion", "") == contract.stamp.companionId &&
+                    stamp.value("generation", 0ULL) == contract.stamp.generation &&
+                    attempt.value("toolCalls", 0U) > 0 &&
+                    attempt.value("diagnostic", "") == "The originating workflow context is no longer admitted.");
+            }
+        if (!scopeRefused)
+            continue;
+        for (const auto& record : records)
+        {
+            core::EvidenceRef evidence;
+            if (record.value("record_type", "") == "result" && record.value("reason", "") == "contract_admission_refused" &&
+                !record.value("attempted", true) && !record.value("succeeded", true) &&
+                record.value("action_id_digest", "") == audit::ContentDigest(dispatch.at("id").get<std::string>()) &&
+                record.value("action_type", "") == dispatch.at("type").get<std::string>() && record.contains("evidence") &&
+                core::DeserializeEvidenceRef(record.at("evidence").dump(), evidence) && evidence.stamp.SameSession(contract.stamp) &&
+                evidence.sourceId == "contract-admission" && evidence.scope.participantId.empty() &&
+                evidence.scope.audience.audienceId == "runtime-system")
+                ++matches;
+        }
+    }
+    return matches;
+}
+
+bool QualifiesLiveWorker(const nlohmann::json& observation)
+{
+    if (!observation.value("admitted", false) || !observation.value("typed_valid_proposal", false) ||
+        observation.value("timed_out", true))
+        return false;
+    if (observation.value("scenario", "") == "participant")
+        return observation.value("switched", false) && !observation.value("file_exists", true) &&
+            observation.value("native_attempted", 1U) == 0 && observation.value("original_scope_denials", 0U) > 0;
+    return observation.value("scenario", "") == "success" && observation.value("exact_content", false) &&
+        observation.value("state", "") == agents::ToString(agents::WorkflowState::Accepted);
+}
+
+void LiveWorkerQualificationControls()
+{
+    tests::ScopedTestDirectory directory;
+    const auto schema = nlohmann::json::parse(agents::WorkerToolSchema(true, false));
+    nlohmann::json tool = {{"tool", {{"action", "write_text_file"}, {"source", "host"},
+        {"content", "Quartz harbor 29\n"}, {"expected_digest", "missing"}}}};
+    const auto invalid = InspectLiveToolProposal(schema, tool.dump());
+    Check(invalid.any && !invalid.actionable, "historical relative-host proposal is invalid under production parsing");
+    Check(!InspectLiveToolProposal(schema, R"({"tool":null})").actionable, "tool:null is not an actionable proposal");
+    tool["tool"]["source"] = actions::PathToUtf8(directory.root / "result.txt");
+    const auto valid = InspectLiveToolProposal(schema, tool.dump());
+    Check(valid.any && valid.actionable, "valid absolute-path bounded write is actionable");
+    Check(!InspectLiveToolProposal(nlohmann::json::parse(agents::WorkerToolSchema(false, false)), tool.dump()).actionable,
+        "proposal validation respects the actual request's write permission");
+    nlohmann::json observation = {{"admitted", true}, {"typed_valid_proposal", valid.actionable}, {"timed_out", false},
+        {"scenario", "success"}, {"exact_content", true}, {"state", agents::ToString(agents::WorkflowState::Accepted)}};
+    Check(QualifiesLiveWorker(observation), "valid completed exact-content positive qualifies");
+    observation["state"] = agents::ToString(agents::WorkflowState::Paused);
+    Check(!QualifiesLiveWorker(observation), "native file success alone is not completed workflow success");
+    observation.update({{"scenario", "participant"}, {"switched", true}, {"file_exists", false},
+        {"native_attempted", 0}, {"original_scope_denials", 0}});
+    Check(!QualifiesLiveWorker(observation), "valid proposal with no effect and no scope denial does not qualify");
+    observation["original_scope_denials"] = 1;
+    Check(QualifiesLiveWorker(observation), "valid proposal with matched original-scope refusal qualifies");
+    observation["typed_valid_proposal"] = invalid.actionable;
+    Check(!QualifiesLiveWorker(observation), "invalid proposal cannot qualify even when other refusal fields are present");
+}
+
 class LiveWorkerProxy
 {
 public:
@@ -33,16 +143,20 @@ public:
                 return;
             }
             std::ofstream(prefix.string() + "-response.json") << result->body;
-            bool toolProposal = false;
+            LiveToolProposal proposal;
             try
             {
                 const auto envelope = nlohmann::json::parse(result->body);
-                const auto content = nlohmann::json::parse(envelope.at("choices").at(0).at("message").at("content").get<std::string>());
-                toolProposal = content.contains("tool") && content.at("tool").is_object();
+                proposal = InspectLiveToolProposal(forwarded.at("response_format").at("json_schema").at("schema"),
+                    envelope.at("choices").at(0).at("message").at("content").get<std::string>());
+                proposal.actionable = proposal.actionable && result->status == 200;
             }
             catch (const nlohmann::json::exception&) {}
+            if (proposal.any) anyProposals.fetch_add(1);
+            std::ofstream(prefix.string() + "-proposal.json") << nlohmann::json{{"any_tool_object", proposal.any},
+                {"typed_valid_action", proposal.actionable}}.dump(2);
             bool expected = false;
-            if (toolProposal)
+            if (proposal.actionable)
             {
                 if (proposed.compare_exchange_strong(expected, true))
                     firstProposal.store(call);
@@ -67,7 +181,7 @@ public:
 
     int port = 0;
     std::atomic<bool> proposed{false}, release{false};
-    std::atomic<unsigned> calls{0}, firstProposal{0};
+    std::atomic<unsigned> calls{0}, firstProposal{0}, anyProposals{0};
 
 private:
     void ForwardGet(const char* path, httplib::Response& response)
@@ -104,7 +218,7 @@ int RunLiveWorker(const std::filesystem::path& manifest, const std::filesystem::
     LiveWorkerProxy backend(configuration, evidence, seed);
     runtime::ReviaSession session(runtime::CompanionPaths(directory.root, {"live-worker", "Live worker", "assistant", false}));
     using Access = runtime::ReviaSessionTestAccess;
-    (void)Access::Admit(session, "local:alpha", "live-originating-turn");
+    const auto original = Access::Admit(session, "local:alpha", "live-originating-turn");
     std::mutex dispatchMutex;
     nlohmann::json dispatches = nlohmann::json::array();
     Access::ConfigureWorker(session, backend.port, directory.root, [&](const auto& action, bool before)
@@ -148,6 +262,9 @@ int RunLiveWorker(const std::filesystem::path& manifest, const std::filesystem::
         Access::JoinWorker(session);
     }
     const auto snapshot = session.AgentWorkflowSnapshot();
+    nlohmann::json persistedWorkflow = nlohmann::json::object();
+    std::ifstream workflowInput(session.Paths().Resolve("RuntimeData/Agents/workflow.json"));
+    if (workflowInput) workflowInput >> persistedWorkflow;
     const bool exists = std::filesystem::exists(file);
     std::ifstream output(file, std::ios::binary);
     const std::string contents((std::istreambuf_iterator<char>(output)), std::istreambuf_iterator<char>());
@@ -159,24 +276,28 @@ int RunLiveWorker(const std::filesystem::path& manifest, const std::filesystem::
         if (std::filesystem::exists(source))
             std::filesystem::copy_file(source, evidence / destination, std::filesystem::copy_options::overwrite_existing);
     unsigned attempted = 0, succeeded = 0;
+    nlohmann::json records = nlohmann::json::array();
     std::ifstream journal(directory.root / "worker-journal.jsonl");
     for (std::string line; std::getline(journal, line);)
     {
         const auto record = nlohmann::json::parse(line);
+        records.push_back(record);
         if (record.value("record_type", "") == "result")
         {
             attempted += record.value("attempted", false) ? 1 : 0;
             succeeded += record.value("succeeded", false) ? 1 : 0;
         }
     }
-    const bool passed = admitted && backend.proposed.load() && !timedOut &&
-        (scenario == "participant" ? switched && !exists && attempted == 0 : exact && snapshot.state == agents::WorkflowState::Accepted);
-    const nlohmann::json result = {{"passed", passed}, {"admitted", admitted}, {"admission_error", error},
+    nlohmann::json result = {{"qualification_version", 2}, {"admitted", admitted}, {"admission_error", error},
         {"scenario", scenario}, {"seed", seed}, {"proposed", backend.proposed.load()}, {"switched", switched},
+        {"any_tool_object_proposals", backend.anyProposals.load()}, {"typed_valid_proposal", backend.proposed.load()},
+        {"original_scope_denials", OriginalScopeDenials(dispatches, records, original->scope, snapshot, persistedWorkflow)},
         {"provider_calls", backend.calls.load()}, {"first_proposal_index", backend.firstProposal.load()},
         {"timed_out", timedOut}, {"state", agents::ToString(snapshot.state)}, {"file_exists", exists},
         {"exact_content", exact}, {"native_attempted", attempted}, {"native_succeeded", succeeded},
         {"elapsed_ms", std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - startedAt).count()}};
+    const bool passed = QualifiesLiveWorker(result);
+    result["passed"] = passed;
     std::ofstream(evidence / "dispatch-contracts.json") << dispatches.dump(2);
     std::ofstream(evidence / "result.json") << result.dump(2);
     std::ofstream(evidence / "artifact.txt") << session.AgentWorkflowResult();
