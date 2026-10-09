@@ -40,9 +40,15 @@ test('browser HTTP -> relay -> loopback WS bridge -> native ReplyPublic -> seria
   let stdout='',stderr='';native.stdout.on('data',b=>stdout+=b);native.stderr.on('data',b=>stderr+=b);
   const exited=once(native,'exit');
   let relay,bridge,lastNative;
+  let blockedEndSession=null,endHeld=false,releaseEnd;
+  const endBarrier=new Promise(resolve=>{releaseEnd=resolve;});
   const realFetch=globalThis.fetch;
-  globalThis.fetch=async (...args)=>{const result=await realFetch(...args);if(String(args[0]).endsWith('/web/v1/turn'))lastNative={status:result.status,body:await result.clone().json()};return result;};
+  globalThis.fetch=async (...args)=>{
+    if(String(args[0]).endsWith('/web/v1/end')&&JSON.parse(args[1].body).sessionId===blockedEndSession){endHeld=true;await endBarrier;}
+    const result=await realFetch(...args);if(String(args[0]).endsWith('/web/v1/turn'))lastNative={status:result.status,body:await result.clone().json()};return result;
+  };
   t.after(async()=>{
+    releaseEnd();
     await bridge?.stop();await relay?.close();
     globalThis.fetch=realFetch;
     if(native.exitCode===null){native.stdin.write('quit\n');const ended=await Promise.race([exited,pause(5000).then(()=>null)]);if(!ended)native.kill();}
@@ -52,7 +58,9 @@ test('browser HTTP -> relay -> loopback WS bridge -> native ReplyPublic -> seria
   const localPort=await until(()=>{const line=stdout.split('\n').find(s=>s.startsWith('{'));return line&&JSON.parse(line).port;},'native startup');
   relay=createRelay({mode:'development',bind:'127.0.0.1',origins:['http://127.0.0.1:9000'],hostId:'demo',hostToken,inviteCode,limits:{issuePerMinute:20}});
   await relay.listen(0);const base=`http://127.0.0.1:${relay.server.address().port}`;
-  bridge=createBridge({mode:'development',relayUrl:base.replace('http:','ws:')+'/v1/host',hostId:'demo',hostToken,localUrl:`http://127.0.0.1:${localPort}`,localToken,heartbeatMs:100});bridge.start();
+  let hostConnections=0,hostClosed=false;
+  relay.server.on('upgrade',(_request,socket)=>{++hostConnections;socket.once('close',()=>{hostClosed=true;});});
+  bridge=createBridge({mode:'development',relayUrl:base.replace('http:','ws:')+'/v1/host',hostId:'demo',hostToken,localUrl:`http://127.0.0.1:${localPort}`,localToken,heartbeatMs:100,reconnectMinMs:20,reconnectMaxMs:50});bridge.start();
   async function api(path,token,body,method=body?'POST':'GET'){
     const r=await fetch(base+path,{method,headers:{Origin:'http://127.0.0.1:9000',...(token?{Authorization:`Bearer ${token}`} : {}),...(body?{'Content-Type':'application/json'}:{})},...(body?{body:JSON.stringify(body)}:{})});
     return {status:r.status,body:r.status===204?null:await r.json()};
@@ -88,9 +96,28 @@ test('browser HTTP -> relay -> loopback WS bridge -> native ReplyPublic -> seria
     await until(async()=>{const r=await api('/v1/messages/'+turn.requestId,visitor.token);assert.notEqual(r.body.state,'failed','Ending guests must release native live capacity');return r.body.state==='completed';},'sequential guest '+i);
     await api('/v1/session',visitor.token,undefined,'DELETE');
   }
+  blockedEndSession=b.sessionId;
   const disabled=await fetch(`http://127.0.0.1:${localPort}/web/v1/control`,{method:'POST',headers:{Authorization:`Bearer ${localToken}`,'Content-Type':'application/json'},body:JSON.stringify({enabled:false,paused:false})});
   assert.equal((await disabled.json()).state,'offline');
-  await until(async()=>(await api('/v1/status')).body.state==='offline','owner disable stopped connector');
+  await until(()=>endHeld,'owner disable entered held native cleanup');
+  await until(async()=>(await api('/v1/status')).body.state==='offline','owner disable readiness propagated');
+  // Offline readiness closes admission; terminal polling remains until host loss.
+  assert.equal(hostClosed,false,'Native cleanup must hold the host connection open');
+  const retained=await api('/v1/messages/'+second.requestId,b.token);
+  assert.equal(retained.status,200);
+  assert.equal(retained.body.state,'completed');
+  assert.equal(retained.body.text,'A maple leaf has a striking branching pattern.');
+  const turnsBeforeDisable=requests.length;
+  assert.equal((await api('/v1/messages',b.token,{text:'Must not execute after disable.',idempotencyKey:randomUUID()})).status,401);
+  assert.equal(requests.length,turnsBeforeDisable);
+  releaseEnd();
+  await until(()=>hostClosed,'owner disable completed cleanup and closed the host socket');
   assert.equal((await api('/v1/messages/'+second.requestId,b.token)).status,401);
+  const enabled=await fetch(`http://127.0.0.1:${localPort}/web/v1/control`,{method:'POST',headers:{Authorization:`Bearer ${localToken}`,'Content-Type':'application/json'},body:JSON.stringify({enabled:true,paused:false})});
+  assert.equal((await enabled.json()).state,'online');
+  await pause(150);
+  assert.equal(hostConnections,1,'Owner disable must stop reconnects even after native is re-enabled');
+  assert.equal((await api('/v1/status')).body.state,'offline');
+  assert.equal(requests.length,turnsBeforeDisable);
   native.stdin.write('quit\n');const [code]=await exited;assert.equal(code,0);assert.equal(stderr,'');
 });
