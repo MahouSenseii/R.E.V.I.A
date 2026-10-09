@@ -7,6 +7,7 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'FileHash.ps1')
+. (Join-Path $PSScriptRoot 'ProcessTree.ps1')
 if ($Parallel -lt 1 -or $TimeoutSeconds -lt 1) { throw 'Parallel and TimeoutSeconds must be positive.' }
 $buildPath = (Resolve-Path -LiteralPath $BuildDirectory).Path
 New-Item -ItemType Directory -Force -Path $EvidenceDirectory | Out-Null
@@ -48,27 +49,23 @@ try
     while (-not $process.HasExited)
     {
         $snapshot = @(Get-CimInstance Win32_Process)
-        $descendants = @($process.Id)
-        do
-        {
-            $previousCount = $descendants.Count
-            $descendants += @($snapshot | Where-Object { $_.ParentProcessId -in $descendants -and $_.ProcessId -notin $descendants } | ForEach-Object { [int]$_.ProcessId })
-        } while ($descendants.Count -gt $previousCount)
+        $capturedUtc = [DateTime]::UtcNow
+        $descendants = @(Get-ReviaProcessTree $snapshot $process.Id $process.StartTime.ToUniversalTime())
         $workingBytes = 0L
         $privateBytes = 0L
         $samples = @()
-        foreach ($entry in $snapshot | Where-Object { $_.ProcessId -in $descendants })
+        foreach ($entry in $descendants)
         {
             $workingBytes += [long]$entry.WorkingSetSize
             $privateBytes += [long]$entry.PrivatePageCount
-            $sample = [ordered]@{ pid = $entry.ProcessId; parent = $entry.ParentProcessId; name = $entry.Name; workingBytes = $entry.WorkingSetSize; privateBytes = $entry.PrivatePageCount; kernel100ns = $entry.KernelModeTime; user100ns = $entry.UserModeTime; command = $entry.CommandLine }
+            $sample = [ordered]@{ pid = $entry.ProcessId; parent = $entry.ParentProcessId; createdUtc = ([DateTime]$entry.CreationDate).ToUniversalTime().ToString('o'); name = $entry.Name; workingBytes = $entry.WorkingSetSize; privateBytes = $entry.PrivatePageCount; kernel100ns = $entry.KernelModeTime; user100ns = $entry.UserModeTime; command = $entry.CommandLine }
             $samples += $sample
-            $observed["$($entry.ProcessId)"] = $sample
+            $observed["$($entry.ProcessId)/$($sample.createdUtc)"] = $sample
         }
         $peakWorkingBytes = [Math]::Max($peakWorkingBytes, $workingBytes)
         $peakPrivateBytes = [Math]::Max($peakPrivateBytes, $privateBytes)
         $peakProcesses = [Math]::Max($peakProcesses, $samples.Count)
-        [ordered]@{ elapsedSeconds = $watch.Elapsed.TotalSeconds; workingBytes = $workingBytes; privateBytes = $privateBytes; processes = $samples } | ConvertTo-Json -Depth 5 -Compress | Add-Content (Join-Path $evidencePath 'resources.jsonl')
+        [ordered]@{ capturedUtc = $capturedUtc.ToString('o'); elapsedSeconds = $watch.Elapsed.TotalSeconds; workingBytes = $workingBytes; privateBytes = $privateBytes; processes = $samples } | ConvertTo-Json -Depth 5 -Compress | Add-Content (Join-Path $evidencePath 'resources.jsonl')
         if ($watch.Elapsed.TotalSeconds -ge $TimeoutSeconds)
         {
             $timedOut = $true
@@ -88,7 +85,7 @@ finally
     SaveSourceSnapshot 'end'
     $sourceChanged = $false
     if ($sourcePath) { $sourceChanged = (Get-ReviaFileHash (Join-Path $evidencePath 'source-inputs-start.json')).Hash -ne (Get-ReviaFileHash (Join-Path $evidencePath 'source-inputs-end.json')).Hash }
-    [ordered]@{ command = $command; startedUtc = $started.ToString('o'); finishedUtc = [DateTime]::UtcNow.ToString('o'); elapsedSeconds = $watch.Elapsed.TotalSeconds; exitCode = $exitCode; timedOut = $timedOut; sourceChangedDuringBuild = $sourceChanged; parallel = $Parallel; samplePeriodSeconds = 2; peakWorkingBytes = $peakWorkingBytes; peakPrivateBytes = $peakPrivateBytes; peakProcessCount = $peakProcesses; observedProcesses = @($observed.Values) } | ConvertTo-Json -Depth 6 | Set-Content (Join-Path $evidencePath 'build-result.json')
+    [ordered]@{ command = $command; startedUtc = $started.ToString('o'); finishedUtc = [DateTime]::UtcNow.ToString('o'); elapsedSeconds = $watch.Elapsed.TotalSeconds; exitCode = $exitCode; timedOut = $timedOut; sourceChangedDuringBuild = $sourceChanged; parallel = $Parallel; samplePeriodSeconds = 2; samplingScope = 'instantaneous creation-matched process tree'; peakWorkingBytes = $peakWorkingBytes; peakPrivateBytes = $peakPrivateBytes; peakProcessCount = $peakProcesses; observedProcesses = @($observed.Values) } | ConvertTo-Json -Depth 6 | Set-Content (Join-Path $evidencePath 'build-result.json')
     foreach ($name in @('.ninja_log', 'CMakeCache.txt', 'compile_commands.json', 'build.ninja'))
     {
         $path = Join-Path $buildPath $name

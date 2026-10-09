@@ -7,14 +7,17 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cassert>
 #include <chrono>
 #include <condition_variable>
 #include <fstream>
+#include <functional>
 #include <httplib.h>
 #include <iostream>
 #include <mutex>
 #include <nlohmann/json.hpp>
 #include <set>
+#include <stdexcept>
 #include <thread>
 
 namespace
@@ -66,10 +69,77 @@ struct OnExit
     }
 };
 
+class ReservedServer : public httplib::Server
+{
+  public:
+    ReservedServer()
+    {
+        set_socket_options([](const socket_t socket)
+            {
+                const int enabled = 1;
+                if (setsockopt(socket, SOL_SOCKET, SO_EXCLUSIVEADDRUSE,
+                        reinterpret_cast<const char*>(&enabled), sizeof(enabled)) != 0)
+                {
+                    closesocket(socket);
+                    throw std::runtime_error("Could not exclusively reserve a cue fixture socket.");
+                }
+            });
+    }
+    ~ReservedServer()
+    {
+        ReleaseReservation();
+    }
+    void ReleaseReservation()
+    {
+        assert(!is_running());
+        // The pinned httplib stop/destructor leave pre-listen sockets open.
+        const auto socket = svr_sock_.exchange(INVALID_SOCKET);
+        if (socket != INVALID_SOCKET)
+            closesocket(socket);
+        stop();
+    }
+};
+
+using PortBinder = std::function<int(ReservedServer&, int)>;
+
+int BindCuePair(ReservedServer& server, ReservedServer& design, const PortBinder& bind = {}, const int attempts = 32)
+{
+    int port = -1;
+    std::string stage = "no attempts";
+    bool reserved = false;
+    OnExit rollback{[&]
+        {
+            if (!reserved)
+            {
+                server.ReleaseReservation();
+                design.ReleaseReservation();
+            }
+        }};
+    for (int attempt = 0; attempt < attempts; ++attempt)
+    {
+        server.ReleaseReservation();
+        design.ReleaseReservation();
+        port = bind ? bind(server, attempt) : server.bind_to_any_port("127.0.0.1");
+        if (port <= 0)
+            stage = "ordinary bind";
+        else if (port > 65503)
+            stage = "design port range";
+        else if (!design.bind_to_port("127.0.0.1", port + 32))
+            stage = "design bind";
+        else
+        {
+            reserved = true;
+            return port;
+        }
+    }
+    throw std::runtime_error("Could not bind cue fixture pair after " + std::to_string(attempts) +
+                             " attempts; last base=" + std::to_string(port) + "; stage=" + stage + ".");
+}
+
 class Backend
 {
   public:
-    Backend()
+    explicit Backend(const PortBinder& bind = {})
     {
         const auto health = [](const auto&, auto& response) { response.set_content("{}", "application/json"); };
         server.Get("/health", health);
@@ -158,8 +228,7 @@ class Backend
                     nlohmann::json{{"succeeded", false}, {"message", Sentinel}, {"device_name", Sentinel}}.dump(), "application/json");
             });
         server.new_task_queue = [] { return new httplib::ThreadPool(4); };
-        port = server.bind_to_any_port("127.0.0.1");
-        Check(port > 0 && port <= 65503 && design.bind_to_port("127.0.0.1", port + 32), "Could not bind cue fixture pair.");
+        port = BindCuePair(server, design, bind);
         thread = std::jthread([&] { server.listen_after_bind(); });
         designThread = std::jthread([&] { design.listen_after_bind(); });
         Check(WaitUntil([&] { return server.is_running() && design.is_running(); }), "Cue fixture pair did not start.");
@@ -203,7 +272,7 @@ class Backend
     Gate cueGate, ordinaryGate, preparationGate;
 
   private:
-    httplib::Server server, design;
+    ReservedServer server, design;
     std::jthread thread, designThread;
     std::mutex mutex;
     std::vector<std::string> order, cueTexts;
@@ -218,7 +287,7 @@ struct Fixture
     std::mutex eventMutex;
     std::vector<SpeechEvent> events;
     SpeechService service;
-    explicit Fixture(SpeechService::EventHandler callback = {})
+    explicit Fixture(SpeechService::EventHandler callback = {}, const PortBinder& bind = {}) : backend(bind)
     {
         settings.backend = "Qwen";
         settings.qwenHost = "127.0.0.1";
@@ -277,6 +346,92 @@ struct Fixture
         service.UseVoice(voice);
     }
 };
+
+void TestCuePairReservation()
+{
+    ReservedServer original, occupied;
+    const int blockedBase = BindCuePair(original, occupied);
+    original.ReleaseReservation();
+    int attempts = 0;
+    Fixture fixture({}, [&](ReservedServer& server, const int attempt)
+        {
+            ++attempts;
+            if (attempt == 0)
+                return server.bind_to_port("127.0.0.1", blockedBase) ? blockedBase : -1;
+            return server.bind_to_any_port("127.0.0.1");
+        });
+    Check(attempts >= 2 && fixture.backend.port != blockedBase, "Cue fixture did not retry an occupied design port.");
+    ReservedServer released;
+    Check(released.bind_to_port("127.0.0.1", blockedBase), "Failed cue pair leaked its ordinary reservation.");
+    released.ReleaseReservation();
+    fixture.backend.failManual = false;
+    const auto scratch = fixture.Bank().ScratchPath(SystemCueKind::Error);
+    Check(SpeechServiceTestAccess::VoicePool(fixture.service).TrySynthesizeSystemCue("Error.", fixture.voice, scratch.string()).succeeded &&
+              fixture.backend.cueRequests == 1,
+        "Recovered cue pair did not route real synthesis to its ordinary port.");
+    Check(fixture.service.CreateVoicePreset("Reserved pair", "Safe description", "Safe reference", "English").succeeded,
+        "Recovered cue pair did not route real voice design to its base plus 32 port.");
+
+    ReservedServer server, design;
+    int rejectedPort = 0;
+    const int recovered = BindCuePair(server, design, [&](ReservedServer& candidate, const int attempt)
+        {
+            if (attempt == 0)
+            {
+                rejectedPort = candidate.bind_to_any_port("127.0.0.1");
+                Check(rejectedPort > 0, "Could not reserve upper-bound control socket.");
+                // Exercise the range guard without requiring any particular high OS port to be free.
+                return 65504;
+            }
+            return candidate.bind_to_any_port("127.0.0.1");
+        });
+    Check(recovered > 0 && recovered <= 65503, "Cue fixture accepted an overflowing design port.");
+    server.ReleaseReservation();
+    design.ReleaseReservation();
+    Check(released.bind_to_port("127.0.0.1", rejectedPort), "Out-of-range cue pair leaked its ordinary reservation.");
+    released.ReleaseReservation();
+
+    int exhausted = 0;
+    std::string failure;
+    try
+    {
+        BindCuePair(server, design, [&](ReservedServer& candidate, const int)
+            {
+                ++exhausted;
+                Check(candidate.bind_to_port("127.0.0.1", blockedBase), "Exhaustion retry leaked its ordinary port.");
+                return blockedBase;
+            }, 3);
+    }
+    catch (const std::runtime_error& error)
+    {
+        failure = error.what();
+    }
+    Check(exhausted == 3 && failure.find("after 3 attempts") != std::string::npos &&
+              failure.find("last base=" + std::to_string(blockedBase)) != std::string::npos &&
+              failure.find("stage=design bind") != std::string::npos,
+        "Cue pair exhaustion lost its bounded attempts or allocation diagnostic.");
+    Check(released.bind_to_port("127.0.0.1", blockedBase), "Exhausted cue pair leaked its ordinary reservation.");
+    released.ReleaseReservation();
+    failure.clear();
+    try
+    {
+        BindCuePair(server, design, [&](ReservedServer& candidate, const int) -> int
+            {
+                Check(candidate.bind_to_port("127.0.0.1", blockedBase), "Could not reserve exception control socket.");
+                throw std::runtime_error("controlled allocation interruption");
+            });
+    }
+    catch (const std::runtime_error& error)
+    {
+        failure = error.what();
+    }
+    Check(failure == "controlled allocation interruption" && released.bind_to_port("127.0.0.1", blockedBase),
+        "Interrupted cue pair lost its exception or leaked its ordinary reservation.");
+    released.ReleaseReservation();
+    occupied.ReleaseReservation();
+    Check(server.bind_to_port("127.0.0.1", blockedBase) && design.bind_to_port("127.0.0.1", blockedBase + 32),
+        "Released cue pair was not reusable after bounded exhaustion.");
+}
 
 void CheckPrivateAbsent(const VoiceOperationResult& result)
 {
@@ -995,6 +1150,7 @@ void TestAttemptBudgetAndCachedSuccessDoesNotWarm()
 
 void RunSystemCueTests()
 {
+    TestCuePairReservation();
     TestManualDiagnostics();
     TestManualOperationsRetainOrigin();
     TestActiveVoiceReplacementInvalidatesRevision();
@@ -1010,5 +1166,5 @@ void RunSystemCueTests()
     TestCuePoolAndClientAreNonblocking();
     TestCueTotalDeadlineAndUnavailable();
     TestAttemptBudgetAndCachedSuccessDoesNotWarm();
-    std::cout << "System cue and manual diagnostics tests passed (15 fixtures).\n";
+    std::cout << "System cue and manual diagnostics tests passed (16 fixtures).\n";
 }

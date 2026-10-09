@@ -33,53 +33,53 @@
 
 Owner: policy worker. Files: Private/Internet/internetLookupPolicy.cpp, lookupQueryResolver.cpp and matching headers; Private/Agents/replyFormat.cpp; Private/Core/speechAttribution.cpp and conversationContext.cpp with matching headers if needed; Private/Runtime/conversationRuntime.cpp only for lookup/final-request integration; corresponding existing Tests/replyFormatTests.cpp, contextFittingTests.cpp and lookup/runtime fixtures.
 
-- [ ] Add retained red cases from the independent probes; run current production owners to record failures.
-- [ ] Implement clause/quote-aware lookup authority; retain personal locality, genuine freshness and bounded long-query handling.
-- [ ] Correct scoped JSON negation and escaped-quote masking; preserve genuine withdrawal and latest amendments.
-- [ ] Preserve dotted tokens in bounded source-linked continuity and durable restoration.
-- [ ] Verify real runtime lookup callback, actual provider schema, invalid response/history/memory gate, and exact private request after eviction with positive controls.
-- [ ] Save commands/results and changed-file report under build/repair-evidence/policy; hand off for fresh review.
+- [x] Add retained red cases from the independent probes; run current production owners to record failures.
+- [x] Implement clause/quote-aware lookup authority; retain personal locality, genuine freshness and bounded long-query handling.
+- [x] Correct scoped JSON negation and escaped-quote masking; preserve genuine withdrawal and latest amendments.
+- [x] Preserve dotted tokens in bounded source-linked continuity and durable restoration.
+- [x] Verify real runtime lookup callback, actual provider schema, invalid response/history/memory gate, and exact private request after eviction with positive controls.
+- [x] Save commands/results and changed-file report under build/repair-evidence/policy; hand off for fresh review.
 
 ## Task B — Workflow provenance and desktop diagnosis (R5/R11)
 
 Owner: scope worker. Files: Private/Runtime/sessionTaskContracts.cpp, agentStudioRuntime.cpp, audienceStudio.cpp; Public/Runtime/reviaSession.h and necessary workflow contract types; Private/Actions/actionRuntime.cpp only if needed for contract propagation; Tests/taskContract* and agentTool*; Tests/Fixture/desktopStopTests.cpp. Request shared file changes explicitly.
 
-- [ ] Reproduce a real worker proposal-to-dispatch participant/audience switch with native executor/receipt observations; include unchanged and cancelled controls.
-- [ ] Capture immutable originating host-approved context/contract at workflow admission and carry it into nodes/actions; use real ownership for parent lineage.
-- [ ] Validate retired scope/consent and cancellation at final native effect, without gaining authority from a newer turn.
-- [ ] Diagnose R11 with separate expected denial/allowance evidence before choosing production or fixture correction. Preserve original permission assertions.
-- [ ] Verify scoped receipts, unrelated foreground exclusion, cancellation and desktop companion-switch controls with fresh binaries.
-- [ ] Save evidence/report under build/repair-evidence/scope; hand off for review.
+- [x] Reproduce a real worker proposal-to-dispatch participant/audience switch with native executor/receipt observations; include unchanged and cancelled controls.
+- [x] Capture immutable originating host-approved context/contract at workflow admission and carry it into nodes/actions; use real ownership for parent lineage.
+- [x] Validate retired scope/consent and cancellation at final native effect, without gaining authority from a newer turn.
+- [x] Diagnose R11 with separate expected denial/allowance evidence before choosing production or fixture correction. Preserve original permission assertions.
+- [x] Verify scoped receipts, unrelated foreground exclusion, cancellation and desktop companion-switch controls with fresh binaries.
+- [x] Save evidence/report under build/repair-evidence/scope; hand off for review.
 
 ## Task C — Build, CI, packaging (R1/R7/R10)
 
 Owner: build worker, sole CMakeLists.txt/.github workflow editor. Files: CMakeLists.txt, .github/workflows/build-and-test.yml, focused Tools build/test drivers, Tools/Presence/WebDemo/test/operator.test.js and package scripts if needed.
 
-- [ ] Measure current supported compile/link behavior, resource/timing evidence and CLI loader/import failure before selecting changes. Retain all required targets.
-- [ ] Add bounded concurrency/target structure or other evidence-supported build remedy; preserve logs on failure/cancel with upload time reserved.
-- [ ] Enforce nonempty expected/discovered/executed CTest inventory and retain JUnit, exact SHA/build/counts/exits/timings.
-- [ ] Run operator suite in a cheap independent Windows job; force script/config paths containing spaces with credential-output controls.
-- [ ] Correct CLI-only runtime deployment; verify packaged launch with compiler paths removed and desktop disabled.
-- [ ] Save evidence/report under build/repair-evidence/build. Coordinate all full builds with root to avoid competing link storms.
+- [x] Measure current supported compile/link behavior, resource/timing evidence and CLI loader/import failure before selecting changes. Retain all required targets.
+- [x] Add bounded concurrency/target structure or other evidence-supported build remedy; preserve logs on failure/cancel with upload time reserved.
+- [x] Enforce nonempty expected/discovered/executed CTest inventory and retain JUnit, exact SHA/build/counts/exits/timings.
+- [x] Run operator suite in a cheap independent Windows job; force script/config paths containing spaces with credential-output controls.
+- [x] Correct CLI-only runtime deployment; verify packaged launch with compiler paths removed and desktop disabled.
+- [x] Save evidence/report under build/repair-evidence/build. Coordinate all full builds with root to avoid competing link storms.
 
 ## Task D — Journal reading (R6)
 
 Owner: root native implementation. Files: Private/Audit/evidenceJournal.cpp, Public/Audit/evidenceJournal.h only for a narrow existing I/O test seam if required, Tests/evidenceJournalTests.cpp. CMake registration goes to build worker.
 
-- [ ] Retain red production mid-read failure test; distinguish missing/empty/EOF/partial I/O.
-- [ ] Implement checked read through the same production owner, preserve conservative health/intent/receipt semantics.
-- [ ] Run fresh Windows journal read/scope/repair/crash controls; run Linux where available, otherwise record exact environment gap.
-- [ ] Save command/results and request independent review.
+- [x] Retain red production mid-read failure test; distinguish missing/empty/EOF/partial I/O.
+- [x] Implement checked read through the same production owner, preserve conservative health/intent/receipt semantics.
+- [x] Run fresh Windows journal read/scope/repair/crash controls; run Linux where available, otherwise record exact environment gap.
+- [x] Save command/results and request independent review.
 
 ## Task E — Integration, R8/R9, review and handoff
 
 Owner: root. Files: docs/REVIA_REPAIR_STATUS.md, docs/REVIA_REPAIR_HANDOFF.md, retained regression/evaluation evidence and manifest tooling only as needed.
 
-- [ ] Reuse/revalidate old-branch identities/divergence and capability inventory; do not merge/delete it.
-- [ ] Integrate independent patches, fresh-build all affected/native required targets, run full expected CTest and native relay plus operator checks.
-- [ ] Freeze candidate source/build and evaluation tasks/settings before collecting paired baseline/candidate results. Include all failed/missing slots and distinguish mechanics/value/semantics/personality.
-- [ ] Run available real-model evaluation across required families with reproducible manifests; unavailable model/platform/CI gates remain explicit. Do not reuse old scores as current.
-- [ ] Generate per-task/full diff packages; fresh reviewer checks spec, authority, assertions, source/build and evidence. Resolve supported findings and rerun affected checks.
+- [x] Reuse/revalidate old-branch identities/divergence and capability inventory; do not merge/delete it.
+- [x] Integrate independent patches, fresh-build all affected/native required targets, run full expected CTest and native relay plus operator checks.
+- [x] Freeze candidate source/build and evaluation tasks/settings before collecting paired baseline/candidate results. Include all failed/missing slots and distinguish mechanics/value/semantics/personality.
+- [x] Run available real-model evaluation across required families with reproducible manifests; unavailable model/platform/CI gates remain explicit. Do not reuse old scores as current.
+- [x] Generate per-task/full diff packages; fresh reviewer checks spec, authority, assertions, source/build and evidence. Resolve supported findings and rerun affected checks.
 - [ ] Commit the accessible candidate and write handoff with exact base/candidate/worktree, files, R1–R11 status, commands/results and limits. Preserve the candidate worktree for independent review.
 
 ## Preflight interface review
@@ -96,3 +96,7 @@ Owner: root. Files: docs/REVIA_REPAIR_STATUS.md, docs/REVIA_REPAIR_HANDOFF.md, r
 | C | tests/implementation | Required targets and test inventory are retained; packaging launch is independent of installed compiler PATH. |
 | D | tests/implementation | Mid-read injection exercises actual checked read owner, not copied stream idiom. |
 | E | tests/implementation | Grades depend on fresh relevant paired evidence, not infrastructure success. |
+
+## Verification boundary
+
+Code candidate f20193bc0a414df81bcb4cf82a0815053baaecb6 is committed and pushed. Local exact native inventory passed 93/93 with zero skips; relay, packaging controls, Linux journal and Windows operator gates passed. Both paired evaluation rounds are retained and independently reviewed. Hosted native Windows CI is the remaining final handoff dependency; see docs/REVIA_REPAIR_HANDOFF.md for current source and evidence identities. Only documentation is being edited after the tested code freeze.

@@ -15,6 +15,23 @@ function RunDriver([string]$Script, [string[]]$Arguments, [string]$LogPath)
     $process = Start-Process -FilePath $shell -ArgumentList $quoted -WindowStyle Hidden -PassThru -Wait -RedirectStandardOutput ($LogPath + '.stdout') -RedirectStandardError ($LogPath + '.stderr')
     return $process.ExitCode
 }
+. (Join-Path $repoPath 'Tools/Build/ProcessTree.ps1')
+$rootCreated = [DateTime]::Parse('2026-10-09T19:00:00Z').ToUniversalTime()
+$snapshot = @(
+    [pscustomobject]@{ ProcessId = 100; ParentProcessId = 1; CreationDate = $rootCreated },
+    [pscustomobject]@{ ProcessId = 102; ParentProcessId = 101; CreationDate = $rootCreated.AddSeconds(2) },
+    [pscustomobject]@{ ProcessId = 101; ParentProcessId = 100; CreationDate = $rootCreated.AddSeconds(1) },
+    [pscustomobject]@{ ProcessId = 200; ParentProcessId = 100; CreationDate = $rootCreated.AddDays(-1) },
+    [pscustomobject]@{ ProcessId = 201; ParentProcessId = 200; CreationDate = $rootCreated.AddDays(-1).AddSeconds(1) },
+    [pscustomobject]@{ ProcessId = 202; ParentProcessId = 101; CreationDate = $rootCreated.AddSeconds(-1) },
+    [pscustomobject]@{ ProcessId = 203; ParentProcessId = 101; CreationDate = $null }
+)
+$actual = @(Get-ReviaProcessTree $snapshot 100 $rootCreated | Sort-Object ProcessId | ForEach-Object ProcessId)
+$reusedRoot = @(Get-ReviaProcessTree $snapshot 100 $rootCreated.AddSeconds(-10))
+$missingRoot = @(Get-ReviaProcessTree $snapshot 999 $rootCreated)
+if (($actual -join ',') -ne '100,101,102' -or $reusedRoot.Count -ne 0 -or $missingRoot.Count -ne 0) { throw 'Process tree retained stale PID ancestry or lost genuine descendants.' }
+$processTreeResult = [ordered]@{ case = 'process-tree-identity'; retained = $actual; reusedRootCount = $reusedRoot.Count; missingRootCount = $missingRoot.Count }
+$processTreeResult | ConvertTo-Json | Set-Content (Join-Path $fixtureRoot 'process-tree-identity.json')
 . (Join-Path $repoPath 'Tools/Build/FileHash.ps1')
 $knownPath = Join-Path $fixtureRoot 'sha256-known-answer.txt'
 [IO.File]::WriteAllBytes($knownPath, [Text.Encoding]::UTF8.GetBytes('abc'))
@@ -22,7 +39,7 @@ $knownHash = Get-ReviaFileHash -LiteralPath $knownPath
 $pipedHash = Get-Item -LiteralPath $knownPath | Get-ReviaFileHash
 if ($knownHash.Hash -ne 'BA7816BF8F01CFEA414140DE5DAE2223B00361A396177A9CB410FF61F20015AD' -or $pipedHash.Hash -ne $knownHash.Hash -or $pipedHash.Path -ne $knownHash.Path) { throw 'SHA256 known-answer or pipeline hash failed.' }
 $knownHash | ConvertTo-Json | Set-Content (Join-Path $fixtureRoot 'file-hash-known-answer.json')
-$results = @()
+$results = @($processTreeResult)
 foreach ($case in @('empty', 'missing', 'extra', 'failure', 'skipped', 'untrusted-source', 'hash-command-unavailable', 'success'))
 {
     $fixturePath = Join-Path $fixtureRoot $case
@@ -79,6 +96,7 @@ finally
 if ($actualExit -ne 124) { throw "Interrupted build expected exit124, got $actualExit" }
 $interrupted = Get-Content (Join-Path $interruptPath 'results/build-result.json') -Raw | ConvertFrom-Json
 if (-not $interrupted.timedOut -or -not (Test-Path (Join-Path $interruptPath 'results/build.stdout.log')) -or -not (Test-Path (Join-Path $interruptPath 'results/build.stderr.log'))) { throw 'Interrupted build did not preserve logs and state.' }
+if ($interrupted.observedProcesses.Count -lt 2 -or @($interrupted.observedProcesses | Where-Object { -not $_.createdUtc }).Count -ne 0 -or 'cmake.exe' -notin $interrupted.observedProcesses.name -or 'ninja.exe' -notin $interrupted.observedProcesses.name) { throw 'Real build sampling lost root/child creation identities.' }
 $results += [ordered]@{ case = 'interrupted-build'; result = $interrupted }
 $results | ConvertTo-Json -Depth 7 | Set-Content (Join-Path $evidencePath 'results.json')
-Write-Output 'Passed 9 build-driver fixtures: empty, missing, extra, failed, skipped, untrusted source, unavailable hash command, complete inventory and duplicate-PATH interrupted build.'
+Write-Output 'Passed 10 build-driver fixtures: process creation identity, empty, missing, extra, failed, skipped, untrusted source, unavailable hash command, complete inventory and duplicate-PATH interrupted build.'
