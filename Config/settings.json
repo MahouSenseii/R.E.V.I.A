@@ -330,5 +330,10 @@
                             "datasetDirectory":  "ComputerExperience",
                             "captureDepth":  "structure",
                             "learnedArtifactPath":  ""
-                        }
+                        },
+    "mcp":  {
+                "servers":  [
+
+                            ]
+            }
 }

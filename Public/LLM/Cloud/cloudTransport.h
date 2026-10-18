@@ -36,6 +36,8 @@ struct CloudHttpRequest
     std::vector<std::pair<std::string, std::string>> headers;
     std::string body;
     int timeoutSeconds = 60;
+    // Response headers the caller needs back, by name; empty asks for none.
+    std::vector<std::string> responseHeaderNames;
 };
 
 struct CloudHttpResult
@@ -45,6 +47,8 @@ struct CloudHttpResult
     int status = 0;
     std::string error;
     std::size_t bytesReceived = 0;
+    // The requested response headers that were present, in the order asked for.
+    std::vector<std::pair<std::string, std::string>> responseHeaders;
 };
 
 // One POST whose response body is handed over as it arrives, so server-sent events can

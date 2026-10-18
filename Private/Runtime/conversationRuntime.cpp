@@ -1235,6 +1235,17 @@ SessionResult ConversationRuntime::Generate(const std::string& policyInput, cons
             };
         }
         agents::ToolRegistry registry = agents::ToolRegistry::Project(permissions, executors);
+        // Tools from the owner's MCP servers, each already behind its own confirmation and
+        // audit. They join only a turn the registry already gives tools to, and never take
+        // the name of a built-in tool.
+        if (!registry.Empty())
+        {
+            for (auto& tool : grant.mcpTools)
+            {
+                if (registry.Find(tool.definition.name) == nullptr)
+                    registry.Add(std::move(tool));
+            }
+        }
         if (!registry.Empty())
             toolLoop.emplace(std::move(registry));
     }

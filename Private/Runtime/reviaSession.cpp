@@ -442,6 +442,7 @@ ReviaSession::ReviaSession(CompanionPaths paths, std::shared_ptr<policy::Compani
                     return result.succeeded ? agents::ToolExecution::Ok(result.text) : agents::ToolExecution::Fail(result.text);
                 };
             }
+            grant.mcpTools = McpChatTools(handler, stopToken);
             return grant;
         });
     turnCoordinator.SetAdmissionGuard([this, origin]() { return sessionIdentity.IsCurrent(origin); });
@@ -680,6 +681,7 @@ bool ReviaSession::Start()
     // still defaults, so a configured decision mode or learned artifact would never
     // have reached the coordinator. This is the first moment the file has been read.
     computerTasks.ApplySettings(settings.computerControl);
+    mcpManager.Configure(settings.mcp);
     if (!settingsLoaded)
     {
         core::ExitReporter::Record(core::ExitReason::StartupFailure, "settings could not be loaded");
@@ -4474,6 +4476,7 @@ void ReviaSession::Stop()
     agentWorkflow.Join();
     if (auto guest = webGuestRuntime.exchange({}))
         guest->Stop();
+    mcpManager.Shutdown();
     // Order matters. The warmup is built to survive RequestStop, because stopping a reply
     // must not cost the session its voice. Shutdown is the one case where it must not
     // retry, so cancel it first, then let RequestStop kill the Qwen worker so an in-flight
@@ -9277,6 +9280,29 @@ bool ReviaSession::TryHandleActionInput(const std::string& input, SessionResult&
         result.succeeded = true;
         result.text = lastEvaluation.Detail();
         SetState(RuntimeState::Idle);
+        return true;
+    }
+
+    if (input == "/mcp" || input.rfind("/mcp ", 0) == 0)
+    {
+        const std::string argument = input.size() > 5 ? Trim(input.substr(5)) : std::string();
+        if (argument == "refresh")
+        {
+            // Starts each enabled server again and reads its tools; nothing is called.
+            mcpManager.Reconnect(CurrentOperationToken());
+            result.text = mcpManager.StatusText();
+        }
+        else if (argument.empty() || argument == "status")
+        {
+            result.text = mcpManager.StatusText();
+        }
+        else
+        {
+            result.succeeded = false;
+            result.text = "Usage: /mcp [status|refresh]";
+            result.reason = "Unrecognized MCP argument.";
+        }
+        SetState(result.succeeded ? RuntimeState::Idle : RuntimeState::Blocked, result.reason);
         return true;
     }
 

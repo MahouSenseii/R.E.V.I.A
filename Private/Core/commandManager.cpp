@@ -158,6 +158,7 @@ commandOutput commandManager::BuildHelpOutput() const
     stream << "/internet [on|off|auto|manual] - Set internet lookup behavior\n";
     stream << "/cloud [on|off|status] - Optional cloud model for this session (off unless set up)\n";
     stream << "/cloud ask [--screen] [--clipboard] [--memory] <question> - Ask the cloud model once\n";
+    stream << "/mcp [status|refresh] - Your MCP servers, their state and the tools offered to chat\n";
     stream << "/web \"query\" - Run one explicit internet lookup\n";
     stream << "/review   - Offer lessons drawn from recorded outcomes\n";
     stream << "/self-assessment - Show evidence-backed performance findings\n";

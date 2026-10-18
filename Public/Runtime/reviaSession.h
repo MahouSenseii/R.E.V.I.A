@@ -59,6 +59,7 @@
 #include "Performance/performanceRuntime.h"
 #include "Presence/presenceRuntime.h"
 #include "Presence/webGuestRuntime.h"
+#include "Mcp/mcpManager.h"
 #include "Presentation/avatarState.h"
 #include "Presentation/debugPresentationSink.h"
 #include "Presentation/presentationBus.h"
@@ -606,6 +607,9 @@ class ReviaSession
     [[nodiscard]] std::shared_ptr<const core::TaskContract> BuildActionTaskContract(const actions::ActionRequest& request,
         const RuntimeStamp& stamp, std::stop_token stopToken);
     [[nodiscard]] std::string TaskContractRefusal(const core::TaskContract& task, std::stop_token stopToken) const;
+    // The owner's allowlisted MCP tools for one private turn, behind the confirmation
+    // handler and the action audit. Empty when no server is enabled or the audit is down.
+    [[nodiscard]] std::vector<agents::ChatTool> McpChatTools(const ConfirmationHandler& handler, std::stop_token stopToken);
 
     agents::InputContext CaptureInputContext(agents::InputSource source, const identity::SpeakerObservation& speaker = {});
     [[nodiscard]] bool InputContextCurrent(const agents::InputContext& captured) const;
@@ -797,6 +801,9 @@ class ReviaSession
     performance::PerformanceRuntime performanceRuntime;
     presence::PresenceRuntime presenceRuntime;
     std::atomic<std::shared_ptr<presence::WebGuestRuntime>> webGuestRuntime;
+    // Connections to the owner's MCP servers. Nothing connects until a private turn or
+    // /mcp asks, and only enabled servers with allowlisted tools are ever offered.
+    mcp::McpManager mcpManager;
     // The boundary an avatar will eventually sit behind. Her core publishes what she is
     // doing; a renderer decides what that looks like. The debug sink is the proof the
     // boundary carries enough to draw from, before there is anything to draw.

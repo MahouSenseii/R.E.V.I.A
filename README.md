@@ -77,6 +77,7 @@ The design rule: **one Revia**. Reflex, Fast, Main, and Expert share one identit
   | `set_reminder` | Sets a reminder with the same parser and saved list as "remind me in 10 minutes to ..." | Always, in a private chat |
   | `calculator` | Exact arithmetic: `+ - * / **`, parentheses, decimals, simple units | Always, in a private chat |
   | `generate_image` | Makes a picture on the Canvas tab | Image generation is enabled |
+  | `mcp_<server>_<tool>` | A tool from one of your own [MCP servers](#mcp-servers) | You enabled the server and named the tool in its `allowedTools`; each call asks you first unless you turned that off for the server |
 
   Every tool runs through the same permissions an explicit command uses; none adds authority. Discord, stream, guest and other public conversations get **no** tools. A file action that needs your approval asks with the usual prompt; if no prompt is available she is told it "needs your approval" and nothing runs. At most 8 model steps per answer, with a time and size budget; tool results reach the model marked as untrusted data, never instructions. Her answer still streams through the same sentence filter as any reply, including anything she writes before calling a tool. Tools need a llama.cpp server with Jinja chat templates (`--jinja`, which Revia now passes) and a context of at least 16K tokens; the 8K Fast and Expert tiers, and any server that refuses tools, fall back to the phrase-based lookup, archive recall and arithmetic grounding exactly as before. `/operate` and `/goal` remain explicit commands.
 - **Bring things up on her own** when she has something specific to say: a reaction to what you're doing, a follow-up on something from earlier, or a question. At most four times an hour, at least 15 minutes apart. She waits for a pause in your typing and stays quiet over a full-screen game, video or presentation (`initiative.suppressWhenFullScreen`), and while another app is using the microphone (a call or meeting).
@@ -378,6 +379,7 @@ Type these in Chat or the CLI. `/help` lists everything, including direct file a
 | `/cloud`, `/cloud on`, `/cloud off` | Status of the [optional cloud model](#optional-cloud-model); switch it off (or back on) for this session |
 | `/cloud ask [--screen] [--clipboard] [--memory] <question>` | Ask the cloud model once (or say "ask the cloud ...") |
 | `/web "query"` | One web lookup |
+| `/mcp`, `/mcp refresh` | Your [MCP servers](#mcp-servers): state, tools offered and tools withheld; `refresh` restarts them and reads their tools again |
 | `/bargein`, `/bargein off` | Inspect or disable voice interruption |
 | `/improve`, `/improve review <file or area>`, `/improve show\|accept\|reject <id>` | Her proposals for improving her own code |
 | `/songs`, `/sing <name>`, `/sing status`, `/sing check <name>`, `/sing stop` | Karaoke (or just ask: "Revia, sing <name>") |
@@ -487,6 +489,50 @@ Measured in ten scripted live sessions on 23 Sep 2026 (RTF is generation time di
 - Deciding whether a turn is worth remembering (about 7.5 s on the Main GPU) waits until she has finished speaking, for at most 20 s, so it does not compete with her first sentence for the GPU. This is covered by automated tests; the gain has not been measured live yet.
 
 So the voice is quick per sentence, but long replies are still generated sentence by sentence, and it slows down when a card is also busy with chat or nearly full. The installed Qwen package cannot generate audio incrementally; Revia pipelines complete sentences instead. Benchmarks live in `RuntimeData/Benchmarks/` and [docs/TTS_PERFORMANCE.md](docs/TTS_PERFORMANCE.md).
+
+---
+
+## MCP servers
+
+Revia can use tools from [Model Context Protocol](https://modelcontextprotocol.io) servers you choose (protocol revision 2025-06-18; 2025-03-26 and 2024-11-05 servers are accepted too). Nothing is configured or enabled out of the box. Add servers to `Config\settings.json`:
+
+```json
+"mcp": {
+  "servers": [
+    {
+      "id": "notes",
+      "enabled": true,
+      "transport": "stdio",
+      "command": "C:\\Tools\\notes-mcp\\notes-mcp.exe",
+      "args": ["--root", "C:\\Users\\you\\Notes"],
+      "envAllowlist": ["NOTES_TOKEN"],
+      "timeoutSeconds": 30,
+      "allowedTools": ["search_notes", "read_note"],
+      "requireConfirmation": true
+    },
+    {
+      "id": "web",
+      "enabled": false,
+      "transport": "http",
+      "url": "https://mcp.example.com/mcp",
+      "allowedTools": []
+    }
+  ]
+}
+```
+
+- **Off until you say so, tool by tool.** A server is used only with `"enabled": true`, and only the tools named in `allowedTools` are offered; an empty list offers none. `/mcp` lists every tool a server has and why each one is or is not offered.
+- **Each call asks you first** (`requireConfirmation`, default `true`): the prompt names the server, the tool and the arguments. "Allow for this whole task" counts as once; an MCP call never earns a standing approval. Without an approval prompt (the CLI with no handler, for example) nothing is sent. Setting `requireConfirmation` to `false` lets that server's allowlisted tools run without asking; do that only for a server whose tools you would let her use unattended.
+- **Private chat only.** MCP tools join the [chat tools](#do-things) in an ordinary private conversation. Discord, stream, guest and API (shared) conversations never see them.
+- **Audit.** Every call writes an intent record to the action audit before anything is sent, then a result record: server, transport, tool, the SHA-256 of the arguments, whether you confirmed it, the result size and the outcome. Never the arguments or the result. If the record cannot be written, nothing is sent.
+- **Results are untrusted data.** Text is passed on, cut to 16 KB and then to the tool loop's own bound, and labelled as untrusted output with runtime markers neutralized, like every other tool result. Images and audio are noted but not decoded; resource links are listed by name and address.
+- **Strict schemas.** A tool's input schema is rewritten into a closed form (no arguments beyond the ones it names, every string and list bounded) and the model's arguments are checked against it before anything is sent. A schema that uses something that cannot be checked strictly (`anyOf`, `$ref`, `pattern`, open `additionalProperties`, a list of types, more than four levels of nesting) refuses that tool.
+- **Stdio servers** start directly from an absolute `command` path, never through a shell: `cmd.exe`, PowerShell, `wscript`, `mshta`, `rundll32` and the other programs Revia already treats as command surfaces are refused, and so are `.bat`/`.cmd` scripts, which Windows runs through `cmd.exe`. `node.exe` and `python.exe` with the server script as an argument are allowed, because you, not the model, write the whole command line; the model only sends JSON arguments to a running server. The child gets an empty environment apart from the Windows minimum and the variables you list in `envAllowlist`, runs in a kill-on-close job object with its whole process tree, and its unread output is bounded (a server that floods it is stopped).
+- **HTTP servers** use Streamable HTTP over the same WinHTTP transport as the cloud model: HTTPS, or plain `http://127.0.0.1` for a server on this PC; redirects are refused. Server-initiated messages are read only from the response stream of Revia's own requests (no separate listening stream), so a `list_changed` notice from an HTTP server may be seen late or not at all.
+- **A server never drives her.** Revia declares no client capabilities. A server's requests to sample her model, ask you something (elicitation) or list roots are answered "method not found"; `ping` is answered.
+- **Lifecycle.** Servers start on the first private chat turn that can use tools, or with `/mcp refresh`, not at startup, so a slow server can delay that first reply by up to its `timeoutSeconds`. A server that fails is left alone for a minute. A call that times out, or that you stop, sends `notifications/cancelled`. A `notifications/tools/list_changed` makes the next turn read the tool list again.
+
+Tested on Linux against a real stdio server program (`Tests/Fixture/mcpServerFixture.cpp`) started through the same process owner: handshake, paginated tool lists, calls, tool errors, timeouts and cancellation, `list_changed`, refused sampling and elicitation, mixed content, oversized results, schema refusal, the allowlist, confirmation (none, declined, granted), the audit record, and a full tool-loop turn against a fake model server. Streamable HTTP is tested with a loopback server through a stand-in for WinHTTP. The Windows job-object spawn path is only compiled (MinGW) here; **no real third-party MCP server has been tried**, on Windows or elsewhere.
 
 ---
 

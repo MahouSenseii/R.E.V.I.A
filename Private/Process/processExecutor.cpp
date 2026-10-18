@@ -11,6 +11,8 @@
 #include <vector>
 
 #ifdef _WIN32
+#include "windowsChildSupport.h"
+
 #include <windows.h>
 #endif
 
@@ -20,106 +22,13 @@ namespace
 {
 
 #ifdef _WIN32
-class Handle
-{
-  public:
-    explicit Handle(HANDLE value = nullptr) : value(value)
-    {
-    }
-    ~Handle()
-    {
-        Reset();
-    }
-    Handle(const Handle&) = delete;
-    Handle& operator=(const Handle&) = delete;
-    [[nodiscard]] HANDLE Get() const
-    {
-        return value;
-    }
-    [[nodiscard]] bool Valid() const
-    {
-        return value && value != INVALID_HANDLE_VALUE;
-    }
-    void Reset(HANDLE next = nullptr)
-    {
-        if (Valid())
-            CloseHandle(value);
-        value = next;
-    }
-
-  private:
-    HANDLE value;
-};
-
-std::wstring Wide(const std::string& value)
-{
-    return actions::Utf8ToPath(value).native();
-}
-
-std::wstring Quote(const std::wstring& value)
-{
-    std::wstring result = L"\"";
-    std::size_t slashes = 0;
-    for (const auto character : value)
-    {
-        if (character == L'\\')
-        {
-            ++slashes;
-            continue;
-        }
-        result.append(character == L'"' ? slashes * 2 + 1 : slashes, L'\\');
-        slashes = 0;
-        result.push_back(character);
-    }
-    result.append(slashes * 2, L'\\');
-    result.push_back(L'"');
-    return result;
-}
-
-struct EnvironmentOrder
-{
-    bool operator()(const std::wstring& left, const std::wstring& right) const
-    {
-        return _wcsicmp(left.c_str(), right.c_str()) < 0;
-    }
-};
-
-std::vector<wchar_t> Environment(const ProcessRequest& request)
-{
-    // Start from the minimum Windows runtime environment, never the parent's secrets.
-    std::map<std::wstring, std::wstring, EnvironmentOrder> values;
-    std::array<wchar_t, MAX_PATH + 1> windows{};
-    const auto count = GetWindowsDirectoryW(windows.data(), static_cast<UINT>(windows.size()));
-    if (count > 0 && count < windows.size())
-    {
-        values[L"SystemRoot"] = windows.data();
-        values[L"WINDIR"] = windows.data();
-    }
-    for (const auto& [name, value] : request.environment)
-        values[Wide(name)] = Wide(value);
-    std::vector<wchar_t> block;
-    for (const auto& [name, value] : values)
-    {
-        const auto entry = name + L"=" + value;
-        block.insert(block.end(), entry.begin(), entry.end());
-        block.push_back(L'\0');
-    }
-    block.push_back(L'\0');
-    if (block.size() == 1)
-        block.push_back(L'\0');
-    return block;
-}
+using windows::Handle;
+using windows::Quote;
+using windows::Wide;
 
 bool Pipe(Handle& reader, Handle& writer)
 {
-    SECURITY_ATTRIBUTES security{sizeof(SECURITY_ATTRIBUTES), nullptr, TRUE};
-    HANDLE read = nullptr;
-    HANDLE write = nullptr;
-    if (!CreatePipe(&read, &write, &security, 64U * 1024U))
-        return false;
-    reader.Reset(read);
-    writer.Reset(write);
-    return SetHandleInformation(read, HANDLE_FLAG_INHERIT, 0) != FALSE;
+    return windows::Pipe(reader, writer, true);
 }
 
 bool Drain(HANDLE pipe, std::string& destination, std::size_t& remaining, bool& truncated)
@@ -187,7 +96,7 @@ actions::ActionResult ProcessExecutor::Execute(const actions::ActionRequest& req
         result.message = "The native process argument vector exceeds Windows' command-line limit.";
         return result;
     }
-    auto environment = Environment(request.process);
+    auto environment = windows::MinimalEnvironment(request.process.environment);
     Handle outputRead, outputWrite, errorRead, errorWrite;
     SECURITY_ATTRIBUTES security{sizeof(SECURITY_ATTRIBUTES), nullptr, TRUE};
     Handle input(CreateFileW(L"NUL", GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, &security, OPEN_EXISTING, 0, nullptr));

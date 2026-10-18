@@ -131,6 +131,8 @@ public:
         bool archiveEnabled = false;
         bool remindersAvailable = false;
         bool imageGenerationEnabled = false;
+        // Allowlisted tools from the owner's MCP servers, gated by the MCP manager.
+        std::vector<agents::ChatTool> mcpTools;
     };
     // Called with the turn's admission and stop token, so every executor it returns is
     // bound to that turn and no other.

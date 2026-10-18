@@ -143,6 +143,43 @@ bool CheckValue(const Json& schema, const Json& value, const std::string& where,
         }
         return true;
     }
+    // Numbers and arrays come from MCP servers' schemas, rewritten into this subset with
+    // explicit bounds before any of them is registered.
+    if (type == "number")
+    {
+        if (!value.is_number())
+        {
+            error = where + " must be a number.";
+            return false;
+        }
+        const auto number = value.get<double>();
+        if ((schema.contains("minimum") && number < schema["minimum"].get<double>()) ||
+            (schema.contains("maximum") && number > schema["maximum"].get<double>()))
+        {
+            error = where + " is outside its allowed range.";
+            return false;
+        }
+        return true;
+    }
+    if (type == "array")
+    {
+        if (!value.is_array() || !schema.contains("items") || !schema.contains("maxItems"))
+        {
+            error = where + " must be a list.";
+            return false;
+        }
+        if (value.size() < schema.value("minItems", std::size_t{0}) || value.size() > schema["maxItems"].get<std::size_t>())
+        {
+            error = where + " has too few or too many items.";
+            return false;
+        }
+        for (const auto& item : value)
+        {
+            if (!CheckValue(schema["items"], item, where + " item", error))
+                return false;
+        }
+        return true;
+    }
     // A schema keyword this validator does not know is a schema it cannot vouch for.
     error = where + " has an unsupported schema type.";
     return false;

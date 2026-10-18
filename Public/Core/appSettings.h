@@ -8,6 +8,7 @@
 #include "Initiative/initiativeSettings.h"
 #include "Intelligence/intelligenceSettings.h"
 #include "LLM/endpointSettings.h"
+#include "Mcp/mcpSettings.h"
 #include "Perception/perceptionSettings.h"
 #include "Performance/performanceSettings.h"
 #include "Presence/presenceSettings.h"
@@ -42,4 +43,5 @@ struct appSettings
     imageSettings image;
     inputArbiterSettings inputArbiter;
     computerControlSettings computerControl;
+    mcpSettings mcp;
 };
