@@ -1,5 +1,6 @@
 #include "Agents/conversationQualityMonitor.h"
 #include "Agents/conversationStylePolicy.h"
+#include "Evaluation/goldenSet.h"
 #include "Evaluation/conversationEvaluation.h"
 #include "Core/utf8.h"
 #include "testSupport.h"
@@ -291,6 +292,97 @@ void TestExpressiveAnswersRetainTheirVoice()
         Check(policy.RefineReply("Explain the supplied facts.", {}, answer) == answer,
             "Answer obligations rewrote a grounded expressive answer.");
 }
+
+revia::evaluation::GoldenCase SingleCase(const std::string& checksJson)
+{
+    std::vector<revia::evaluation::GoldenCase> cases;
+    std::string error;
+    const std::string line = R"({"id":"t","category":"code","rubric":"r","turns":[{"input":"Question?","checks":)" + checksJson + "}]}";
+    Check(revia::evaluation::ParseGoldenSet(line, cases, error), "A valid golden case was refused: " + error);
+    return cases.front();
+}
+
+bool Holds(const std::string& checksJson, const std::string& reply)
+{
+    const auto item = SingleCase(checksJson);
+    return revia::evaluation::CheckGoldenTurn(item.turns.front(), reply).empty();
+}
+
+void TestGoldenChecksSeparateRightFromWrong()
+{
+    Check(Holds(R"([{"kind":"exact","value":"ananab"}])", "  Ananab.\n") && !Holds(R"([{"kind":"exact","value":"ananab"}])", "It's ananab."),
+        "Exact matching did not ignore case and a trailing full stop, or accepted extra words.");
+    Check(Holds(R"([{"kind":"exact","value":"CAT","caseSensitive":true}])", "CAT") &&
+              !Holds(R"([{"kind":"exact","value":"CAT","caseSensitive":true}])", "cat"),
+        "A case-sensitive exact check ignored case.");
+    Check(Holds(R"([{"kind":"regex","pattern":"^\\W*yes\\W*$"}])", "Yes!") && !Holds(R"([{"kind":"regex","pattern":"^\\W*yes\\W*$"}])", "Yes, mostly."),
+        "An anchored regular expression matched the wrong reply.");
+    Check(!Holds(R"([{"kind":"not_regex","pattern":"[A-Z]","caseSensitive":true}])", "the Pacific") &&
+              Holds(R"([{"kind":"not_regex","pattern":"[A-Z]","caseSensitive":true}])", "the pacific"),
+        "A forbidden pattern was not enforced.");
+    Check(Holds(R"([{"kind":"contains","values":["miso","tofu"]}])", "Miso and Tofu.") &&
+              !Holds(R"([{"kind":"contains","values":["miso","tofu"]}])", "Just Miso."),
+        "contains did not require every value.");
+    Check(Holds(R"([{"kind":"not_contains","values":["don't have a voice"]}])", "I have a voice.") &&
+              !Holds(R"([{"kind":"not_contains","values":["don't have a voice"]}])", "I don\xE2\x80\x99t have a voice."),
+        "A curly apostrophe escaped a forbidden phrase.");
+    Check(Holds(R"([{"kind":"max_sentences","limit":1}])", "One sentence only.") &&
+              !Holds(R"([{"kind":"max_sentences","limit":1}])", "One. Two."),
+        "The sentence ceiling was not enforced.");
+    Check(Holds(R"([{"kind":"exact_sentences","count":2}])", "One. Two.") && !Holds(R"([{"kind":"exact_sentences","count":2}])", "One."),
+        "An exact sentence count accepted too few sentences.");
+    Check(Holds(R"([{"kind":"max_words","limit":3}])", "Three short words.") && !Holds(R"([{"kind":"max_words","limit":3}])", "Four short words here."),
+        "The word ceiling was not enforced.");
+    Check(Holds(R"([{"kind":"list_items","count":3}])", "- Apple\n* Mango\n3) Pear") &&
+              !Holds(R"([{"kind":"list_items","count":3}])", "1. Apple\n2. Mango") && Holds(R"([{"kind":"list_items","min":2}])", "1. a\n2. b\n3. c"),
+        "List items were miscounted.");
+    Check(Holds(R"([{"kind":"json_valid","requiredKeys":["city"]}])", " {\"city\":\"Paris\"} ") &&
+              !Holds(R"([{"kind":"json_valid","requiredKeys":["city"]}])", "```json\n{\"city\":\"Paris\"}\n```") &&
+              !Holds(R"([{"kind":"json_valid","requiredKeys":["city"]}])", "{\"town\":\"Paris\"}") &&
+              !Holds(R"([{"kind":"json_valid"}])", "{\"a\":1,\"a\":2}"),
+        "JSON validity accepted a fenced, incomplete or duplicate-key reply.");
+    Check(Holds(R"([{"kind":"number","value":1102.5,"tolerance":0.01}])", "You end with $1,102.50.") &&
+              !Holds(R"([{"kind":"number","value":1102.5,"tolerance":0.01}])", "You end with $1,100.") &&
+              Holds(R"([{"kind":"number","value":-3}])", "It drops to -3 degrees.") &&
+              Holds(R"([{"kind":"number","value":7,"aliases":["seven"]}])", "Seven are left.") &&
+              !Holds(R"([{"kind":"number","value":10,"aliases":["ten"]}])", "That happens often."),
+        "Number matching mishandled grouping, tolerance, sign or a spelled-out alias.");
+    Check(!Holds(R"([{"kind":"number","value":4,"match":"last"}])", "Not 4, it's 5.") && Holds(R"([{"kind":"number","value":5,"match":"last"}])", "Not 4, it's 5."),
+        "match:last judged a number other than the final one.");
+    Check(!Holds(R"([{"kind":"contract","name":"no_stock_tail"}])", "Here it is. What's on your mind?") &&
+              Holds(R"([{"kind":"contract","name":"must_admit_unknown"}])", "You haven't told me that."),
+        "A contract check did not apply the existing conversation detector.");
+    const auto numbers = revia::evaluation::ExtractNumbers("It was 9:15, cost $4.50, rose 25% to 1,250 in 2020-2021.");
+    Check(numbers == std::vector<double>{9, 15, 4.5, 25, 1250, 2020, 2021}, "Numbers were not read as written.");
+}
+
+void TestGoldenSetRefusesSilentMistakes()
+{
+    const auto refused = [](const std::string& text)
+    {
+        std::vector<revia::evaluation::GoldenCase> cases;
+        std::string error;
+        return !revia::evaluation::ParseGoldenSet(text, cases, error) && !error.empty();
+    };
+    const std::string good = R"({"id":"a","category":"math","rubric":"r","turns":[{"input":"q","checks":[{"kind":"number","value":3}]}]})";
+    Check(!refused(good), "A valid case was refused.");
+    Check(refused(good + "\n" + good), "A duplicate case ID was accepted.");
+    Check(refused(R"({"id":"a","category":"poetry","rubric":"r","turns":[{"input":"q","checks":[{"kind":"number","value":3}]}]})"),
+        "An unknown category was accepted.");
+    Check(refused(R"({"id":"a","category":"math","turns":[{"input":"q","checks":[{"kind":"number","value":3}]}]})"), "A case without a rubric was accepted.");
+    Check(refused(R"({"id":"a","category":"math","rubric":"r","turns":[{"input":"q","checks":[{"kind":"numbr","value":3}]}]})"),
+        "An unknown check kind was skipped.");
+    Check(refused(R"({"id":"a","category":"math","rubric":"r","turns":[{"input":"q","checks":[{"kind":"number","value":3,"tolerence":1}]}]})"),
+        "A misspelled field was ignored.");
+    Check(refused(R"({"id":"a","category":"math","rubric":"r","turns":[{"input":"q","checks":[{"kind":"regex","pattern":"(unclosed"}]}]})"),
+        "An invalid regular expression was accepted.");
+    Check(refused(R"({"id":"a","category":"math","rubric":"r","turns":[{"input":"q"}]})"), "A final turn without a check was accepted.");
+    Check(refused(R"({"id":"a","id":"b","category":"math","rubric":"r","turns":[{"input":"q","checks":[{"kind":"number","value":3}]}]})"),
+        "A duplicate JSON key was resolved silently.");
+    Check(refused(R"({"id":"a","category":"math","rubric":"r","turns":[{"input":"q","checks":[{"kind":"contract","name":"max_sentences"}]}]})"),
+        "A contract check that needs a limit was accepted without one.");
+}
+
 }
 
 void RunAnswerQualityTests()
@@ -305,5 +397,7 @@ void RunAnswerQualityTests()
     TestSentenceRequestsIgnoreEarlierClauseNegation();
     TestExpressiveAnswersRetainTheirVoice();
     TestSemanticReviewCannotAcceptMechanicalSuccess();
+    TestGoldenChecksSeparateRightFromWrong();
+    TestGoldenSetRefusesSilentMistakes();
     std::cout << "Current-task, supplied-fact, correction, format and expressive-answer checks passed.\n";
 }
