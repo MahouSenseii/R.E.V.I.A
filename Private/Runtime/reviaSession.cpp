@@ -369,6 +369,11 @@ ReviaSession::ReviaSession(CompanionPaths paths, std::shared_ptr<policy::Compani
             { return ExecuteInvestigationCheck(actionRuntime, captured, kind, proposal, stopToken, admission, contract); };
         });
     turnCoordinator.SetAdmissionGuard([this, origin]() { return sessionIdentity.IsCurrent(origin); });
+    // Memory classification shares the GPU with the voice. Waiting while she speaks keeps
+    // it off the first phrase of the reply; the deferral's maximum keeps the memory.
+    agents::MemoryDeferral memoryDeferral;
+    memoryDeferral.busy = [this]() { return speechService.HasPendingSpeech(); };
+    turnCoordinator.Memory().SetDeferral(std::move(memoryDeferral));
     appLogger.SetSink(
         [this](const std::string& line)
         {
