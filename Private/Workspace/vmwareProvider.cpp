@@ -2,6 +2,7 @@
 
 #include "Actions/actionTypes.h"
 #include "Process/processExecutor.h"
+#include "Workspace/guestReceipt.h"
 
 #include <nlohmann/json.hpp>
 
@@ -292,7 +293,19 @@ class VmwareProvider final : public IVirtualMachineProvider
             if (!probe.succeeded || !data.value("ok", false) || !data.value("guestReady", false) ||
                 identity.environmentId != admitted.environmentId || identity.bootId != admitted.bootId || stop.stop_requested()) return result;
             current = identity;
-            return {VirtualMachineState::Ready, "ready", "The private Ubuntu workspace is ready.", identity};
+            VirtualMachineSnapshot ready{VirtualMachineState::Ready, "ready", "The private Ubuntu workspace is ready.", identity};
+            // What this guest's worker says it can do. A guest provisioned before the code tools
+            // existed is not upgraded, and its tools are then simply not offered.
+            if (data.contains("health") && data["health"].is_object())
+            {
+                const auto& health = data["health"];
+                if (health.contains("capabilities") && health["capabilities"].is_array() && health["capabilities"].size() <= 32)
+                    for (const auto& capability : health["capabilities"])
+                        if (capability.is_string() && capability.get_ref<const std::string&>().size() <= 64)
+                            ready.capabilities.push_back(capability.get<std::string>());
+                ready.sandboxReady = health.value("sandboxReady", false) == true;
+            }
+            return ready;
         }
         catch (...) { if (stop.stop_requested()) result.code = "cancelled"; return result; }
     }
@@ -302,7 +315,8 @@ class VmwareProvider final : public IVirtualMachineProvider
         GuestResult result;
         result.code = "guest_request_failed";
         if (!lease || !lease->Held()) { result.code = "enrollment_not_owned"; return result; }
-        const bool effect = request.operation == GuestOperation::WriteText || request.operation == GuestOperation::ExecuteProcess;
+        const bool effect = request.operation == GuestOperation::WriteText || request.operation == GuestOperation::ExecuteProcess ||
+            request.operation == GuestOperation::RunPython || request.operation == GuestOperation::ImportFiles;
         actions::ActionResult transport;
         bool submitted = false;
         bool transportReturned = false;
@@ -318,6 +332,9 @@ class VmwareProvider final : public IVirtualMachineProvider
             case GuestOperation::ReadText: operation = "read_text"; break;
             case GuestOperation::WriteText: operation = "write_text"; break;
             case GuestOperation::ExecuteProcess: operation = "execute"; break;
+            case GuestOperation::RunPython: operation = "run_python"; break;
+            case GuestOperation::SearchText: operation = "search_text"; break;
+            case GuestOperation::ImportFiles: operation = "import_files"; break;
             }
             if (!operation || !ValidIdentifier(request.expectedIdentity.environmentId) || !ValidIdentifier(request.expectedIdentity.bootId)) return result;
             json payload{{"schemaVersion", 1}, {"requestId", id}, {"environmentId", request.expectedIdentity.environmentId},
@@ -327,6 +344,26 @@ class VmwareProvider final : public IVirtualMachineProvider
                 {"limits", {{"maxReadBytes", limits.maxReadBytes}, {"maxWriteBytes", limits.maxWriteBytes},
                     {"maxOutputBytes", limits.maxOutputBytes}, {"maxEntries", limits.maxEntries}, {"maxTimeoutMs", limits.maxTimeoutMs},
                     {"approvedExecutables", limits.approvedExecutables}}}};
+            // The review text is for the person approving, never for the guest.
+            if (request.operation == GuestOperation::RunPython)
+            {
+                payload["runId"] = request.runId;
+                payload["code"] = request.code;
+            }
+            else if (request.operation == GuestOperation::SearchText)
+            {
+                payload["pattern"] = request.pattern;
+                payload["fixedStrings"] = request.fixedStrings;
+                payload["ignoreCase"] = request.ignoreCase;
+                payload["maxMatches"] = request.maxMatches;
+            }
+            else if (request.operation == GuestOperation::ImportFiles)
+            {
+                payload["files"] = json::array();
+                for (const auto& shared : request.files)
+                    payload["files"].push_back({{"path", shared.path}, {"content", shared.content}});
+                if (!request.publish.empty()) payload["publish"] = request.publish;
+            }
             PrivateRequest file(options.root, id, payload.dump());
             submitted = true;
             transport = Call("request", {"--request-file", actions::PathToUtf8(file.path)},
@@ -354,7 +391,23 @@ class VmwareProvider final : public IVirtualMachineProvider
             result.outputTruncated = data.value("outputTruncated", false);
             if (result.succeeded && (!data.value("ok", false) || !result.attempted || result.cancelled || result.timedOut ||
                 result.uncertainEffect || !transport.succeeded ||
-                (request.operation == GuestOperation::ExecuteProcess && result.exitCode != 0))) throw std::runtime_error("invalid_receipt");
+                ((request.operation == GuestOperation::ExecuteProcess || request.operation == GuestOperation::RunPython) &&
+                    result.exitCode != 0))) throw std::runtime_error("invalid_receipt");
+            result.networkIsolated = data.value("networkIsolated", false) == true;
+            if (request.operation == GuestOperation::RunPython)
+            {
+                if (!result.networkIsolated && result.attempted) throw std::runtime_error("invalid_receipt");
+                result.artifacts = ParseGuestArtifacts(data);
+                if (data.contains("artifactsOmitted"))
+                {
+                    if (!data["artifactsOmitted"].is_array() || data["artifactsOmitted"].size() > 65) throw std::runtime_error("invalid_receipt");
+                    for (const auto& item : data["artifactsOmitted"])
+                    {
+                        if (!item.is_object()) throw std::runtime_error("invalid_receipt");
+                        result.artifactsOmitted.push_back(Text(item, "name", 400) + ": " + Text(item, "reason", 64));
+                    }
+                }
+            }
             if (effect && result.attempted && (result.cancelled || result.timedOut)) result.uncertainEffect = true;
             if (data.contains("entries"))
             {

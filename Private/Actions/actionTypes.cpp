@@ -1,4 +1,5 @@
 #include "Actions/actionTypes.h"
+#include "Core/utf8.h"
 
 #include <algorithm>
 #include <atomic>
@@ -54,6 +55,9 @@ std::string ToString(ActionType value)
         case ActionType::VmReadTextFile: return "vm_read_text_file";
         case ActionType::VmWriteTextFile: return "vm_write_text_file";
         case ActionType::VmExecuteProcess: return "vm_execute_process";
+        case ActionType::VmRunPython: return "vm_run_python";
+        case ActionType::VmSearchFiles: return "vm_search_files";
+        case ActionType::VmShareProject: return "vm_share_project";
         case ActionType::CreateDirectory: return "create_directory";
         case ActionType::CopyFile: return "copy_file";
         case ActionType::MoveFile: return "move_file";
@@ -319,6 +323,8 @@ const std::vector<ActionType>& AllActionTypes()
         ActionType::TypeText, ActionType::WebSearch, ActionType::WriteTextFile, ActionType::ExecuteProcess, ActionType::GenerateImage,
         ActionType::BrowserNavigate, ActionType::BrowserObserve, ActionType::BrowserClick, ActionType::BrowserFill,
         ActionType::VmListDirectory, ActionType::VmReadTextFile, ActionType::VmWriteTextFile, ActionType::VmExecuteProcess};
+    // The chat code tools' types are deliberately absent: this list is the planner's
+    // vocabulary, and they are reachable only through their own chat tools.
     return types;
 }
 
@@ -353,7 +359,12 @@ bool AlwaysNeedsItsOwnConfirmation(const ActionType value)
 {
     // Deleting is the case where the mechanism and the consequence disagree, and the
     // consequence is what a person answering a prompt is thinking about.
+    // Each interpreter run asks on its own. The guest worker confines it (no network, fresh
+    // scratch, kernel limits), but the host only reads that from the guest's receipt and
+    // cannot verify it, so its risk stays that of any guest process. Sharing a project
+    // copies the owner's files into a machine that runs model-written code.
     return value == ActionType::MoveToRecycleBin || value == ActionType::ExecuteProcess || value == ActionType::VmExecuteProcess ||
+        value == ActionType::VmRunPython || value == ActionType::VmShareProject ||
         value == ActionType::BrowserClick || value == ActionType::BrowserFill;
 }
 
@@ -365,9 +376,10 @@ bool AlwaysNeedsItsOwnConfirmation(const ActionRequest& request)
 
 RiskLevel RiskForAction(ActionType value)
 {
-    if (value == ActionType::VmListDirectory || value == ActionType::VmReadTextFile) return RiskLevel::ReadOnly;
-    if (value == ActionType::VmWriteTextFile) return RiskLevel::ReversibleWrite;
-    if (value == ActionType::VmExecuteProcess) return RiskLevel::Destructive;
+    if (value == ActionType::VmListDirectory || value == ActionType::VmReadTextFile || value == ActionType::VmSearchFiles)
+        return RiskLevel::ReadOnly;
+    if (value == ActionType::VmWriteTextFile || value == ActionType::VmShareProject) return RiskLevel::ReversibleWrite;
+    if (value == ActionType::VmExecuteProcess || value == ActionType::VmRunPython) return RiskLevel::Destructive;
     if (value == ActionType::BrowserObserve) return RiskLevel::ReadOnly;
     if (value == ActionType::BrowserNavigate) return RiskLevel::ReversibleWrite;
     switch (value)
@@ -421,7 +433,10 @@ bool IsDesktopControlAction(const ActionType value)
 
 bool RepeatingCouldDuplicateAnEffect(const ActionType value)
 {
-    if (value == ActionType::VmWriteTextFile || value == ActionType::VmExecuteProcess) return true;
+    if (value == ActionType::VmWriteTextFile || value == ActionType::VmExecuteProcess || value == ActionType::VmRunPython ||
+        value == ActionType::VmShareProject)
+        return true;
+    if (value == ActionType::VmSearchFiles) return false;
     switch (value)
     {
         // Observation. Looking twice sees the same thing.
@@ -468,7 +483,65 @@ std::optional<workspace::GuestOperation> GuestOperationForAction(const ActionTyp
     case ActionType::VmReadTextFile: return workspace::GuestOperation::ReadText;
     case ActionType::VmWriteTextFile: return workspace::GuestOperation::WriteText;
     case ActionType::VmExecuteProcess: return workspace::GuestOperation::ExecuteProcess;
+    case ActionType::VmRunPython: return workspace::GuestOperation::RunPython;
+    case ActionType::VmSearchFiles: return workspace::GuestOperation::SearchText;
+    case ActionType::VmShareProject: return workspace::GuestOperation::ImportFiles;
     default: return std::nullopt;
+    }
+}
+
+std::string DescribeGuestPayload(const ActionRequest& request)
+{
+    constexpr std::size_t ShownLines = 60;
+    constexpr std::size_t ShownLineBytes = 200;
+    // The first lines of a text, each cut short, with a count of what was left out.
+    const auto excerpt = [](const std::string& text)
+    {
+        std::string shown;
+        std::size_t lines = 0;
+        std::size_t start = 0;
+        while (start < text.size())
+        {
+            const auto end = std::min(text.find('\n', start), text.size());
+            if (lines < ShownLines)
+            {
+                const std::string line = text.substr(start, end - start);
+                shown += (line.size() > ShownLineBytes ? utf8::Prefix(line, ShownLineBytes) + "..." : line) + "\n";
+            }
+            ++lines;
+            start = end + 1;
+        }
+        if (lines > ShownLines)
+            shown += "... (" + std::to_string(lines - ShownLines) + " more lines)\n";
+        return utf8::Sanitize(shown);
+    };
+    const auto& guest = request.guest;
+    switch (request.type)
+    {
+    case ActionType::VmRunPython:
+        return "Python program to run in the Ubuntu guest: no network, a fresh scratch folder deleted afterwards, CPU, memory "
+               "and process limits, at most " + std::to_string(guest.timeoutMs / 1000) + " s.\n\n" + excerpt(guest.code);
+    case ActionType::VmShareProject:
+        return "Copy the text files of " + PathToUtf8(request.source) + " into the Ubuntu guest as project \"" + guest.publish +
+               "\". The guest gets copies; nothing on this computer is mounted or changed. Version-control folders, build output, "
+               "binary files and files that look like credentials are left out.\n" + excerpt(guest.review);
+    case ActionType::VmExecuteProcess:
+    {
+        std::string command = guest.executable;
+        for (const auto& argument : guest.arguments)
+            command += " " + argument;
+        return "Command in the Ubuntu guest, folder " + guest.workingDirectory + ":\n" + excerpt(command);
+    }
+    case ActionType::VmWriteTextFile:
+        return "Guest file " + guest.path + (guest.expectedDigest == "missing" ? " (new)" : " (replaces the current version)") + ":\n" +
+               excerpt(guest.review.empty() ? guest.content : guest.review);
+    case ActionType::VmSearchFiles:
+        return "Search guest folder " + guest.path + " for: " + utf8::Prefix(utf8::Sanitize(guest.pattern), ShownLineBytes);
+    case ActionType::VmReadTextFile:
+    case ActionType::VmListDirectory:
+        return "Guest path " + guest.path;
+    default:
+        return {};
     }
 }
 

@@ -182,19 +182,39 @@ actions::PolicyDecision CapabilityPolicy::Evaluate(const actions::ActionRequest&
     }
     if (const auto operation = actions::GuestOperationForAction(request.type))
     {
-        if (request.guest.operation != *operation || !request.source.empty() || !request.destination.empty() ||
-            !request.process.executable.empty() || !request.application.empty())
+        // Sharing a project is the one guest action that names a host resource: the folder
+        // whose text files are copied in. Every other guest action stays host-free.
+        const bool sharing = *operation == workspace::GuestOperation::ImportFiles;
+        if (request.guest.operation != *operation || request.source.empty() == sharing || !request.destination.empty() ||
+            !request.process.executable.empty() || !request.application.empty() || (sharing && request.guest.publish.empty()))
         {
             decision.reason = "Guest actions must use their matching guest payload without host resources.";
             return decision;
+        }
+        if (sharing)
+        {
+            const auto lexical = AbsoluteLexical(request.source);
+            decision.canonicalSource = ResolveForPolicy(lexical);
+            std::error_code error;
+            if (lexical.empty() || decision.canonicalSource.empty() || !IsWithinApprovedRoot(lexical, decision.canonicalSource) ||
+                HasReparsePointBelowApprovedRoot(lexical) || !std::filesystem::is_directory(decision.canonicalSource, error) || error)
+            {
+                decision.reason = "Only an existing folder inside an approved root can be shared into the guest.";
+                return decision;
+            }
         }
         const auto guest = EvaluateGuestCapability(request.guest, settings.guest);
         decision.reason = guest.reason;
         decision.guestLimits = guest.limits;
         if (!guest.allowed) return decision;
-        if (request.dryRun || decision.risk <= automaticCeiling)
+        // Copying the owner's files out of this computer asks every time, whatever the
+        // automatic ceiling: it is a disclosure, not a reversible edit.
+        if (sharing && !request.dryRun)
+            decision.verdict = actions::PolicyVerdict::RequiresConfirmation;
+        else if (request.dryRun || decision.risk <= automaticCeiling)
             decision.verdict = actions::PolicyVerdict::Allowed;
-        else if (*operation == workspace::GuestOperation::ExecuteProcess || settings.mode != actions::ExecutionMode::ApprovedScope)
+        else if (*operation == workspace::GuestOperation::ExecuteProcess || *operation == workspace::GuestOperation::RunPython ||
+                 settings.mode != actions::ExecutionMode::ApprovedScope)
             decision.verdict = actions::PolicyVerdict::RequiresConfirmation;
         else
             decision.reason = "The guest operation exceeds this task's unattended risk ceiling.";

@@ -3,6 +3,7 @@
 #include "Workspace/guestTypes.h"
 
 #include <string>
+#include <string_view>
 
 namespace revia::policy
 {
@@ -31,6 +32,14 @@ struct GuestCapabilityDecision
 // Runtime admission separately checks the actual environment and boot identity.
 [[nodiscard]] GuestCapabilityDecision EvaluateGuestCapability(
     const workspace::GuestRequest& request, const GuestCapabilitySettings& settings);
+
+// The interpreter the sandboxed runs use; it must be on the approved executable list.
+inline constexpr const char* GuestPython = "/usr/bin/python3";
+
+// A normalized relative POSIX path: no empty, "." or ".." components, no backslash or drive.
+[[nodiscard]] bool IsGuestRelativePath(std::string_view path);
+// A shared project's folder name under projects/ in the guest.
+[[nodiscard]] bool IsGuestProjectName(std::string_view name);
 
 // Retains the captured task identity and can only reduce its authority and limits.
 [[nodiscard]] GuestCapabilitySettings IntersectGuestCapabilities(

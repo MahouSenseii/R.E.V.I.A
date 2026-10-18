@@ -57,6 +57,23 @@ bool ValidLimits(const workspace::GuestLimits& limits)
         limits.maxTimeoutMs > 0 && limits.maxTimeoutMs <= 120000;
 }
 
+bool Lowercase(const char c)
+{
+    return (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9');
+}
+
+// A host-chosen name: lowercase letters, digits and dashes, 8 to 64 long, as the worker requires.
+bool ValidRunId(const std::string_view value)
+{
+    return value.size() >= 8 && value.size() <= 64 && Lowercase(value.front()) &&
+        std::all_of(value.begin(), value.end(), [](const char c) { return Lowercase(c) || c == '-'; });
+}
+
+bool ValidText(const std::string& value, const std::size_t limit)
+{
+    return value.size() <= limit && value.find('\0') == std::string::npos && utf8::IsValid(value);
+}
+
 bool ValidDigest(const std::string& value)
 {
     return value == "missing" || (value.size() == 64 && std::all_of(value.begin(), value.end(),
@@ -122,13 +139,64 @@ GuestCapabilityDecision EvaluateGuestCapability(const workspace::GuestRequest& r
         }
         break;
     }
+    case GuestOperation::RunPython:
+        // The interpreter is the approved python3 run by the worker's own sandbox, so it needs
+        // the same execute permission and allowlist entry as running python3 directly.
+        if (!settings.execute) return refuse("guest_execute_disabled", "Guest process execution is disabled.");
+        if (std::find(settings.limits.approvedExecutables.begin(), settings.limits.approvedExecutables.end(), GuestPython) ==
+            settings.limits.approvedExecutables.end())
+            return refuse("guest_executable", "The guest interpreter /usr/bin/python3 is not an approved executable.");
+        if (!ValidRunId(request.runId)) return refuse("guest_run", "The run needs a fresh host-chosen scratch name.");
+        if (request.code.empty() || !ValidText(request.code, settings.limits.maxWriteBytes))
+            return refuse("guest_content", "The program must be valid UTF-8 within the configured write limit.");
+        if (request.timeoutMs <= 0 || request.timeoutMs > settings.limits.maxTimeoutMs)
+            return refuse("guest_timeout", "The run's timeout exceeds the configured guest limit.");
+        break;
+    case GuestOperation::SearchText:
+        if (!settings.read) return refuse("guest_read_disabled", "Guest reading is disabled.");
+        if (!ValidPath(request.path, false, true))
+            return refuse("guest_path", "The guest path must be a normalized relative POSIX workspace path.");
+        if (request.pattern.empty() || !ValidText(request.pattern, 512) || request.maxMatches < 1 || request.maxMatches > 500)
+            return refuse("guest_search", "The search needs a pattern of at most 512 bytes and 1 to 500 matches.");
+        if (request.timeoutMs <= 0 || request.timeoutMs > settings.limits.maxTimeoutMs)
+            return refuse("guest_timeout", "The search timeout exceeds the configured guest limit.");
+        break;
+    case GuestOperation::ImportFiles:
+    {
+        if (!settings.write) return refuse("guest_write_disabled", "Guest writing is disabled.");
+        constexpr std::string_view staging = "projects/.incoming-";
+        if (request.path.rfind(staging, 0) != 0 || !ValidRunId(std::string_view(request.path).substr(staging.size())))
+            return refuse("guest_path", "A shared project is staged only in its own projects/.incoming- folder.");
+        if (!request.publish.empty() && !IsGuestProjectName(request.publish))
+            return refuse("guest_project", "The project name must be 1 to 64 letters, digits, dots, dashes or underscores.");
+        if (request.files.size() > 512) return refuse("guest_import", "One import batch holds at most 512 files.");
+        for (const auto& file : request.files)
+        {
+            if (!ValidPath(file.path, false, false) || !ValidText(file.content, settings.limits.maxWriteBytes))
+                return refuse("guest_import", "Every shared file needs a relative path and UTF-8 text within the write limit.");
+        }
+        break;
+    }
     default:
         return refuse("guest_operation", "The guest operation is unsupported.");
     }
+    if (!ValidText(request.review, 65536)) return refuse("guest_review", "The review text is invalid or too long.");
     decision.allowed = true;
     decision.code = "guest_allowed";
     decision.reason = "The request fits the configured guest capabilities.";
     return decision;
+}
+
+bool IsGuestRelativePath(const std::string_view path)
+{
+    return ValidPath(path, false, false);
+}
+
+bool IsGuestProjectName(const std::string_view name)
+{
+    const auto allowed = [](const char c) { return (c >= 'A' && c <= 'Z') || Lowercase(c) || c == '.' || c == '_' || c == '-'; };
+    return !name.empty() && name.size() <= 64 && name.front() != '.' && name.front() != '-' && name.front() != '_' &&
+        std::all_of(name.begin(), name.end(), allowed);
 }
 
 GuestCapabilitySettings IntersectGuestCapabilities(const GuestCapabilitySettings& captured, const GuestCapabilitySettings& current)
