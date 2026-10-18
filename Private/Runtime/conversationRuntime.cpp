@@ -912,8 +912,15 @@ SessionResult ConversationRuntime::Generate(const std::string& policyInput, cons
         }
     };
     const auto speechAdmission = std::make_shared<const std::function<bool()>>(admitted);
-    const auto revoked = []()
+    const auto revoked = [this, stopToken]()
     {
+        // Every state change below is gated on admission, and a stop request withdraws
+        // it, so a stopped turn would otherwise stay at "Thinking" with Stop still lit.
+        // Only Stop settles the state: a turn retired by an audience change says nothing
+        // about what the companion is doing now. Turns run one at a time, so this cannot
+        // overwrite the turn that follows it.
+        if (stopToken.stop_requested())
+            setState(RuntimeState::Idle, "The response was stopped.");
         SessionResult discarded;
         discarded.succeeded = false;
         discarded.fromAssistant = true;
@@ -1200,19 +1207,6 @@ SessionResult ConversationRuntime::Generate(const std::string& policyInput, cons
         finished.audienceRevision = turnPolicy.audienceRevision;
         if (!admitted())
             return revoked();
-        if (!admitted())
-        {
-            speech.StopSpeaking();
-            // Nothing to undo: it never entered history.
-            undeliveredOpening.clear();
-            finished.succeeded = false;
-            finished.text.clear();
-            finished.reason = "The autonomous response was cancelled by newer input.";
-            finished.speechPending = false;
-            finished.spokenAsFragments = false;
-            updateState(RuntimeState::Idle, "The autonomous response was cancelled.");
-            return finished;
-        }
         if (!undeliveredOpening.empty())
         {
             context.AddMessage("assistant", undeliveredOpening);
@@ -1791,11 +1785,8 @@ SessionResult ConversationRuntime::Generate(const std::string& policyInput, cons
     result.wasStreamed = output.bWasStreamed;
     if (!output.bSuccess)
     {
-        if (!admitted())
-        {
-            updateState(RuntimeState::Idle, "The response was stopped.");
-        }
-        else
+        // A stopped generation is settled to Idle by finish, through revoked.
+        if (admitted())
         {
             log.Warning(output.reason);
             updateState(RuntimeState::Error, output.reason);

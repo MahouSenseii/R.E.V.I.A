@@ -166,7 +166,8 @@ class Fixture
         : cwd(directory.root), router((directory.root / "router.db").string()), coordinator((directory.root / "agent.db").string()),
           log(directory.root / "Logs"), runtime(
                                             router, context, coordinator, speech, affect, emotions, events, log,
-                                            [](RuntimeState, const std::string&) {}, [](const AffectSnapshot&) {}, {}, {}, {},
+                                            [this](RuntimeState state, const std::string&) { lastState.store(state); },
+                                            [](const AffectSnapshot&) {}, {}, {}, {},
                                             []
                                             {
                                                 responseFilterSettings filters;
@@ -239,6 +240,7 @@ class Fixture
     RuntimeEventBus::SubscriptionId subscription = 0;
     std::atomic<std::size_t> timingSummaries{0};
     std::atomic<std::uint64_t> cancelledTurn{0};
+    std::atomic<RuntimeState> lastState{RuntimeState::Idle};
 };
 
 void TestAcceptedInputOffsetReachesActualReply()
@@ -351,6 +353,26 @@ void TestHeldReplyCancellationRetiresTimingAndSpeechCorrelation()
         "Late audio from the cancelled utterance reentered actual runtime timing.");
 }
 
+// Stop withdraws the turn's admission, and every ordinary state change is gated on it.
+// The runtime still has to come back to Idle, or the shell keeps showing "Thinking" with
+// Stop lit and idle-only work never runs again.
+void TestAStoppedReplyReturnsToIdle()
+{
+    Fixture fixture;
+    fixture.backend.Hold();
+    std::stop_source cancellation;
+    SessionResult reply;
+    std::jthread worker([&] { reply = fixture.Reply(cancellation.get_token(), std::chrono::steady_clock::now()); });
+    const bool requested = fixture.backend.WaitForRequest();
+    const RuntimeState whileGenerating = fixture.lastState.load();
+    cancellation.request_stop();
+    fixture.backend.Release();
+    worker.join();
+    Check(requested && whileGenerating == RuntimeState::Thinking, "The stop fixture never reached a generating turn.");
+    Check(!reply.succeeded && reply.text.empty() && fixture.lastState.load() == RuntimeState::Idle,
+        "A stopped reply left the runtime in state " + ToString(fixture.lastState.load()) + " instead of Idle.");
+}
+
 void TestProactiveRepliesRetainProducerAdmission()
 {
     Fixture fixture;
@@ -443,6 +465,7 @@ void RunResponseLatencyRuntimeTests()
     TestAcceptedInputOffsetReachesActualReply();
     TestSharedSessionRetainsAcceptedInputOffset();
     TestHeldReplyCancellationRetiresTimingAndSpeechCorrelation();
+    TestAStoppedReplyReturnsToIdle();
     TestProactiveRepliesRetainProducerAdmission();
     TestATextOnlyReplyIsShownAsItIsGenerated();
     TestARefusedStreamIsReplacedInTheChat();
