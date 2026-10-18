@@ -8230,6 +8230,12 @@ std::string ReviaSession::ClipboardReference(const std::string& input)
         return reference + " it could not be read right now. Say so plainly and do not guess "
                            "what it holds.";
     }
+    if (copied->markedSecret)
+    {
+        PublishComponent("Clipboard", "Withheld", "The copying app marked the clipboard as a secret; it was not read.");
+        return reference + " the app that copied it marked it as a secret, such as a password, "
+                           "so it was not read. Tell the user that, and do not ask them to paste it.";
+    }
     if (copied->text.empty())
     {
         PublishComponent("Clipboard", "Empty", "The clipboard holds no text.");

@@ -247,4 +247,25 @@ test('missing, wrong and browser-origin host credentials cannot open the outboun
   assert.equal((await api('/v1/status')).body.state, 'offline');
 });
 
+test('strangers cannot use up the budgets that the real host, real invites and the API need', async t => {
+  const { api, host, session, url } = await setup(t, { issuePerMinute: 2, statusPerMinute: 3, maxRateKeys: 2 });
+  // Junk upgrades before the host connects: the host still gets in.
+  for (let n = 0; n < 15; n++) {
+    const status = await new Promise(resolve => {
+      const ws = new WebSocket(url.replace('http:', 'ws:') + '/v1/host', { headers: { Authorization: 'Bearer incorrect', 'X-Revia-Host': 'demo' } });
+      ws.on('error', () => {});
+      ws.on('unexpected-response', (request, response) => { resolve(response.statusCode); response.destroy(); request.destroy(); });
+    });
+    assert.equal(status, 403);
+  }
+  await host();
+  // Wrong invites run out on their own; a right one is still admitted.
+  for (let n = 0; n < 2; n++) assert.equal((await api('/v1/sessions', { method: 'POST', body: { inviteCode: 'wrong-invite-'.repeat(4) } })).status, 403);
+  assert.equal((await api('/v1/sessions', { method: 'POST', body: { inviteCode: 'wrong-invite-'.repeat(4) } })).status, 429);
+  const s = await session();
+  // Status polling hits its own limit without taking the session API down with it.
+  while ((await api('/v1/status')).status !== 429) { /* drain */ }
+  assert.equal((await api('/v1/messages', { method: 'POST', token: s.token, body: { text: 'Hi', idempotencyKey: randomUUID() } })).status, 202);
+});
+
 export { setup, until };

@@ -13,6 +13,9 @@ struct ClipboardText
     std::string text;
     // More was copied than was read.
     bool truncated = false;
+    // The app that copied it marked it as a secret (password managers do), so the text
+    // was not read at all.
+    bool markedSecret = false;
 };
 
 // The clipboard's text, at most `maxBytes` of it. Empty when the clipboard cannot be

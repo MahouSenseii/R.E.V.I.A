@@ -273,6 +273,31 @@ void TestRefusalsAreActionableAndCarryNoSecrets()
         "The refusal did not name the control and its effect: " + named.reason);
 }
 
+// Explorer is an ordinary approved application, but its address bar starts whatever is
+// typed into it. That is read from the target, the same as a button labelled Terminal.
+void TestExplorerAddressBarIsACommandSurface()
+{
+    TargetEvidence address = Control("Address Bar", "Documents");
+    address.executable = "C:\\Windows\\explorer.exe";
+    for (const DesktopOperation route : {DesktopOperation::SetValue, DesktopOperation::TextEntryWithActivation})
+    {
+        const auto decision = Decide(route, address, ConsequenceClass::UserContent, false);
+        Check(decision.verdict == AuthorizationVerdict::RequireApproval &&
+            HasEffect(decision.effects, DesktopEffect::CommandSurface),
+            "Explorer's address bar was not treated as running commands via " + ToString(route) + ".");
+    }
+
+    TargetEvidence run = Control("Open:", "Run");
+    run.executable = "explorer.exe";
+    Check(HasEffect(Decide(DesktopOperation::SetValue, run, ConsequenceClass::UserContent, false).effects,
+        DesktopEffect::CommandSurface), "The Run box was not treated as running commands.");
+
+    // The same label elsewhere is just a field.
+    TargetEvidence notepad = Control("Address Bar");
+    Check(!HasEffect(Decide(DesktopOperation::SetValue, notepad, ConsequenceClass::UserContent, false).effects,
+        DesktopEffect::CommandSurface), "An address field outside Explorer was treated as a shell.");
+}
+
 } // namespace
 
 // A control above the ceiling used to stop and stay stopped: RequireApproval meant a
@@ -438,6 +463,7 @@ void RunDesktopAuthorizationTests()
     TestUsefulAutonomyIsPreserved();
     TestTheCeilingExpandsCompatibly();
     TestRefusalsAreActionableAndCarryNoSecrets();
+    TestExplorerAddressBarIsACommandSurface();
     TestAnApprovableStepCanActuallyBeApproved();
     TestApprovalNeverWidensAnythingElse();
     TestTaskApprovalExpiresAndDoesNotEscapeItsGoal();

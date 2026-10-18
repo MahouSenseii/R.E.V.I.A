@@ -22,6 +22,11 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# Every job only reads the repository. The token the steps can see should not be able
+# to do more than that, because those steps run this repository's own code and tests.
+permissions:
+  contents: read
+
 jobs:
   web-text:
     name: Public text relay and connector
@@ -29,6 +34,8 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
@@ -47,6 +54,8 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
@@ -65,12 +74,14 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       # Pinned to the toolchain the project is developed and tested with. MSVC is not a
       # supported configuration here: the build uses -static with MinGW and the tests
       # are calibrated against g++ 13.
       - name: Install Qt
-        uses: jurplel/install-qt-action@v4
+        uses: jurplel/install-qt-action@a9c63c7c123f3069cff414e7e482d95dfa9d8125 # v4.4.1
         with:
           version: '6.8.3'
           arch: 'win64_mingw'
@@ -92,7 +103,7 @@ jobs:
           $compilerBin | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
       - name: Install Ninja
-        uses: seanmiddleditch/gha-setup-ninja@v5
+        uses: seanmiddleditch/gha-setup-ninja@96bed6edff20d1dd61ecff9b75cc519d516e6401 # v5
 
       # FetchContent pulls cpp-httplib, nlohmann/json and the SQLite amalgamation on a
       # cold tree. Cached on the lockfile-equivalent -- the CMakeLists that names the
@@ -158,6 +169,8 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       # Windows PowerShell 5.1, not PowerShell 7, because that is what setup.bat
       # launches. The two differ in ways that have already broken a fresh install:

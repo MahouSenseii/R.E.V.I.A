@@ -226,9 +226,18 @@ DesktopEffects AssessEffects(const AuthorizationRequest& request)
         return MatchesAny(label, phrases) || MatchesAny(context, phrases);
     };
 
+    // Explorer's address bar and the shell's Run box start whatever program is named in
+    // them. They are ordinary fields in an ordinary approved application, so neither the
+    // phrases above nor the shell executable list would otherwise see a command surface.
+    std::string executable = Lower(evidence.executable);
+    if (const auto slash = executable.find_last_of("/\\"); slash != std::string::npos)
+        executable.erase(0, slash + 1);
+    const bool shellField = executable == "explorer.exe" &&
+        (ContainsPhrase(label, "address") || context == "run");
+
     // Additive on purpose: a control can be more than one of these at once, and taking
     // only the highest would drop the rest.
-    if (either(commandSurface)) effects = effects | DesktopEffect::CommandSurface;
+    if (either(commandSurface) || shellField) effects = effects | DesktopEffect::CommandSurface;
     if (either(accountOrSecurity)) effects = effects | DesktopEffect::AccountOrSecurity;
     if (either(destructive)) effects = effects | DesktopEffect::Destructive;
     if (either(financial)) effects = effects | DesktopEffect::Financial;

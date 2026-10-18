@@ -139,17 +139,22 @@ function Get-ReviaVerifiedDownload {
     # Invoke-WebRequest's progress bar costs more time than the transfer itself
     # on large archives when the host is not a real console.
     $ProgressPreference = 'SilentlyContinue'
+    # Downloaded beside the destination and only moved into place once verified, so a
+    # mismatch never leaves an unverified file where the runtime will load it.
+    $partial = "$Destination.partial"
     try {
-        Invoke-WebRequest -Uri $Uri -OutFile $Destination
+        Invoke-WebRequest -Uri $Uri -OutFile $partial
     }
     finally {
         $ProgressPreference = $previousProgress
     }
 
-    $actual = (Get-FileHash -LiteralPath $Destination -Algorithm SHA256).Hash.ToLowerInvariant()
+    $actual = (Get-FileHash -LiteralPath $partial -Algorithm SHA256).Hash.ToLowerInvariant()
     if ($actual -ne $expected) {
+        Remove-Item -LiteralPath $partial -Force -ErrorAction SilentlyContinue
         throw "Checksum mismatch for $Destination. Expected $expected but received $actual."
     }
+    Move-Item -LiteralPath $partial -Destination $Destination -Force
 }
 
 function Save-ReviaJsonFile {

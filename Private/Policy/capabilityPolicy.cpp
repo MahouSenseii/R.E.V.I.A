@@ -111,6 +111,35 @@ bool TypedTextIsAcceptable(const std::string& value)
     });
 }
 
+// Opening a file hands it to whatever its type is registered to, and for these types
+// that is running it. Win32 drops trailing dots and spaces when it opens a name, so the
+// extension is read the way the shell will read it.
+bool OpensAsProgram(const std::filesystem::path& value)
+{
+    static const std::vector<std::string> runnable = {
+        ".exe", ".com", ".scr", ".pif", ".cpl", ".msi", ".msp", ".msc", ".bat", ".cmd",
+        ".ps1", ".psm1", ".psd1", ".vbs", ".vbe", ".js", ".jse", ".wsf", ".wsh", ".hta",
+        ".lnk", ".url", ".website", ".reg", ".inf", ".scf", ".chm", ".jar", ".py", ".pyw",
+        ".sh", ".application", ".appref-ms", ".appinstaller", ".appx", ".msix",
+        ".library-ms", ".search-ms", ".searchconnector-ms", ".settingcontent-ms", ".diagcab",
+        ".gadget", ".xll"};
+    std::string name = Lower(actions::PathToUtf8(value.filename()));
+    while (!name.empty() && (name.back() == '.' || name.back() == ' '))
+    {
+        name.pop_back();
+    }
+    const std::size_t dot = name.find_last_of('.');
+    return dot != std::string::npos &&
+        std::find(runnable.begin(), runnable.end(), name.substr(dot)) != runnable.end();
+}
+
+// A shell host opens a file by running its registered handler rather than reading it,
+// so the only thing it may be handed is a folder to show.
+bool IsShellHost(const std::string& application)
+{
+    return Lower(application) == "explorer.exe";
+}
+
 } // namespace
 
 CapabilityPolicy::CapabilityPolicy(actions::CapabilitySettings inputSettings)
@@ -413,6 +442,27 @@ actions::PolicyDecision CapabilityPolicy::Evaluate(const actions::ActionRequest&
                 if (HasReparsePointBelowApprovedRoot(lexical))
                 {
                     decision.reason = "The file to open crosses a symbolic link or reparse point.";
+                    return decision;
+                }
+                // A stream name ("notes.txt:run.bat") has no ordinary use here and is the
+                // easiest way to make a name say one type and open as another.
+                const auto namesAStream = [](const std::filesystem::path& value)
+                {
+                    return value.filename().wstring().find(L':') != std::wstring::npos;
+                };
+                if (namesAStream(lexical) || namesAStream(decision.canonicalSource) || OpensAsProgram(lexical) ||
+                    OpensAsProgram(decision.canonicalSource))
+                {
+                    decision.reason = "That file would run as a program when opened, and launching "
+                        "an application never runs a file.";
+                    return decision;
+                }
+                std::error_code error;
+                if (IsShellHost(request.application) &&
+                    !std::filesystem::is_directory(decision.canonicalSource, error))
+                {
+                    decision.reason = request.application + " only opens folders; open a file with "
+                        "the application that reads it.";
                     return decision;
                 }
             }

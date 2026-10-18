@@ -16,7 +16,12 @@ export function createRelay(input) {
   function rate(key, cap) {
     const now = Date.now(); let r = rates.get(key);
     if (!r || r.until <= now) {
-      if (!r && rates.size >= L.maxRateKeys) return false;
+      // A full table evicts rather than refuses: refusing new keys would let anyone with
+      // enough source addresses lock every later visitor out.
+      if (!r && rates.size >= L.maxRateKeys) {
+        for (const [k, v] of rates) if (v.until <= now) rates.delete(k);
+        if (rates.size >= L.maxRateKeys) rates.delete(rates.keys().next().value);
+      }
       r = { count: 0, until: now + 60000 }; rates.set(key, r);
     }
     return ++r.count <= cap;
@@ -92,7 +97,9 @@ export function createRelay(input) {
     }
     try { return JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(chunks))); } catch { throw { code: 400 }; }
   }
-  const server = http.createServer({ maxHeaderSize: 8192, requestTimeout: 10000, headersTimeout: 10000, keepAliveTimeout: 5000 }, async (req, res) => {
+  // Node only enforces the header and request timeouts when it checks connections, every
+  // 30 s by default, so half-open requests would otherwise outlive them threefold.
+  const server = http.createServer({ maxHeaderSize: 8192, requestTimeout: 10000, headersTimeout: 10000, keepAliveTimeout: 5000, connectionsCheckingInterval: 1000 }, async (req, res) => {
     res.setHeader('Cache-Control', 'no-store'); res.setHeader('Vary', 'Origin'); res.setHeader('X-Content-Type-Options', 'nosniff');
     const origin = req.headers.origin;
     if (origin && !config.origins.has(origin)) return fail(res, 403, 'forbidden');
@@ -105,18 +112,24 @@ export function createRelay(input) {
     const path = req.url;
     const source = hash(rateSalt + sourceAddress(req, config.proxyTrust));
     if (path === '/healthz' && req.method === 'GET') return reply(res, 200, { ok: true });
-    if (!rate('all:' + source, L.readsPerMinute)) return fail(res, 429, 'rate_limited');
-    sweep();
+    // Status has its own bucket, so polling it cannot use up the budget the API needs.
     if (path === '/v1/status' && req.method === 'GET') {
       if (!rate('status:' + source, L.statusPerMinute)) return fail(res, 429, 'rate_limited');
+      sweep();
       return reply(res, 200, { state: state() });
     }
+    if (!rate('all:' + source, L.readsPerMinute)) return fail(res, 429, 'rate_limited');
+    sweep();
     try {
       if (path === '/v1/sessions' && req.method === 'POST') {
-        if (!rate('issue:' + source, L.issuePerMinute)) return fail(res, 429, 'rate_limited');
+        // Wrong invites are counted apart from right ones. Behind a proxy every visitor can
+        // share one source, and guessing must not use up the budget real invites need.
         const b = await body(req);
         if (!sessionBody(b)) return fail(res, 400, 'invalid_request');
-        if (!secretMatches(b.inviteCode, config.inviteHash)) return fail(res, 403, 'admission_denied');
+        if (!secretMatches(b.inviteCode, config.inviteHash)) {
+          return rate('issue-denied:' + source, L.issuePerMinute) ? fail(res, 403, 'admission_denied') : fail(res, 429, 'rate_limited');
+        }
+        if (!rate('issue:' + source, L.issuePerMinute)) return fail(res, 429, 'rate_limited');
         if (!host || !['online', 'busy'].includes(state())) return fail(res, 503, 'unavailable');
         if (sessions.size >= L.maxSessions) {
           const closed = [...sessions.values()].find(s => s.closed);
@@ -163,9 +176,13 @@ export function createRelay(input) {
   server.maxConnections = 128;
   const wss = new WebSocketServer({ noServer: true, maxPayload: MAX_FRAME_BYTES, perMessageDeflate: false });
   server.on('upgrade', (req, socket, head) => {
-    const source = hash(rateSalt + sourceAddress(req, config.proxyTrust));
     const token = /^Bearer (.+)$/.exec(req.headers.authorization ?? '')?.[1];
-    if (closing || req.url !== '/v1/host' || req.headers.origin || req.headers['x-revia-host'] !== config.hostId || !rate('upgrade:' + source, 10) || !secretMatches(token, config.hostTokenHash) || host) {
+    // No rate bucket here: behind a proxy every visitor shares one source, so a bucket
+    // charged before the credential let strangers use up the real host's reconnects. The
+    // credential is a 32-byte secret compared as a digest, which needs no throttle.
+    const authentic = req.url === '/v1/host' && !req.headers.origin && req.headers['x-revia-host'] === config.hostId &&
+      secretMatches(token, config.hostTokenHash);
+    if (closing || !authentic || host) {
       socket.end('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n'); return;
     }
     wss.handleUpgrade(req, socket, head, ws => {

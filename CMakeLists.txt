@@ -72,12 +72,13 @@ set(HTTPLIB_USE_NON_BLOCKING_GETADDRINFO OFF CACHE BOOL "" FORCE)
 FetchContent_Declare(
         httplib
         GIT_REPOSITORY https://github.com/yhirose/cpp-httplib.git
-        GIT_TAG v0.18.1
+        GIT_TAG 5c1a34e766817cf0865ca8bc5af5edeb0f9b2df4 # v0.18.1; a tag can be moved, a commit cannot
 )
 
 FetchContent_Declare(
         json
         URL https://github.com/nlohmann/json/releases/download/v3.11.3/json.tar.xz
+        URL_HASH SHA256=d6c65aca6b1ed68e7a182f4757257b107ae403032760ed6ef121c9d55e81757d
         DOWNLOAD_EXTRACT_TIMESTAMP TRUE
 )
 

@@ -658,7 +658,18 @@ BuildRunner MakeScriptRunner(std::filesystem::path scriptPath, std::filesystem::
         {
             return L"\"" + value + L"\"";
         };
-        std::wstring command = L"powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File " +
+        // Named by its full path: a bare "powershell.exe" is looked up in Revia's own
+        // folder and working directory before System32.
+        wchar_t systemDirectory[MAX_PATH]{};
+        const UINT systemLength = GetSystemDirectoryW(systemDirectory, MAX_PATH);
+        if (systemLength == 0 || systemLength >= MAX_PATH)
+        {
+            outcome.failure = "The Windows system directory could not be found for the workbench build.";
+            return outcome;
+        }
+        const std::filesystem::path powershell = std::filesystem::path(std::wstring(systemDirectory, systemLength)) /
+            L"WindowsPowerShell" / L"v1.0" / L"powershell.exe";
+        std::wstring command = quote(powershell.wstring()) + L" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File " +
             quote(scriptPath.wstring()) +
             L" -SourceRoot " + quote(sourceRoot.wstring()) +
             L" -BuildRoot " + quote(buildRoot.wstring()) +
@@ -703,7 +714,7 @@ BuildRunner MakeScriptRunner(std::filesystem::path scriptPath, std::filesystem::
         mutableCommand.push_back(L'\0');
         // Below normal, and inherited by every compiler it starts: a proof is never
         // allowed to make her conversation or voice stutter.
-        const BOOL created = CreateProcessW(nullptr, mutableCommand.data(), nullptr, nullptr, TRUE,
+        const BOOL created = CreateProcessW(powershell.c_str(), mutableCommand.data(), nullptr, nullptr, TRUE,
             BELOW_NORMAL_PRIORITY_CLASS | CREATE_NO_WINDOW | CREATE_SUSPENDED, nullptr,
             sourceRoot.c_str(), &startup, &process);
         CloseHandle(log);

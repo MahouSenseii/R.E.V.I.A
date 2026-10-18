@@ -70,6 +70,9 @@ private:
     mutable std::mutex mutex;
     bargeInSettings configuration;
     int captureSampleRate = 16000;
+    // Playback begins and ends a watch for every utterance while settings can end one from
+    // another thread, so the handle is only ever swapped under this, and joined outside it.
+    std::mutex workerMutex;
     std::jthread worker;
     std::atomic<bool> watching = false;
     std::atomic<bool> triggered = false;
