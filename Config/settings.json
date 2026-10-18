@@ -238,7 +238,7 @@
                          "restoreTurns":  6,
                          "selfInquiryEnabled":  true,
                          "selfInquiryCooldownTurns":  0,
-                         "selfInquiryScope":  "questions"
+                         "selfInquiryScope":  "hard"
                      },
     "responseFilter":  {
                            "aiReviewEnabled":  false,

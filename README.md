@@ -14,7 +14,7 @@ The design rule: **one Revia**. Reflex, Fast, Main, and Expert share one identit
 
 | Feature | Status | Evidence / notes |
 |---|---|---|
-| Chat with streaming replies (Fast / Main / Expert routing) | **Verified live** | Every turn logs model choice, time to first token (~0.4–0.5 s), and decode time |
+| Chat with streaming replies (Fast / Main / Expert routing) | **Verified live** (routing); streamed display Tested | Every turn logs model choice, time to first token (~0.4–0.5 s), and decode time. Showing approved sentences while she is still writing is covered by automated tests and awaits a live session log |
 | Personality, persistent mood, likes/opinions, relationships | **Verified live** | Affect and identity are saved every turn (`Identity saved: N relationship(s)`) |
 | Long-term memory and conversation history (SQLite + embeddings) | **Verified live** | Memory retrieval and embedding saves are timed in every turn |
 | Continuous screen awareness across all monitors | **Verified live** | Local vision analysis every ~30 s or on window change, ~1.0–1.6 s each |
@@ -47,10 +47,11 @@ The design rule: **one Revia**. Reflex, Fast, Main, and Expert share one identit
 
 - **Answer instantly for simple things.** A built-in C++ Reflex lane handles "stop", "cancel", and "Revia?" without touching a model.
 - **Pick how hard to think.** Qwen3.5 4B handles conversation (including small talk, which it starts answering in about half a second on the GPU), and Qwen3-VL 8B handles hard debugging, architecture, and difficult vision. Qwen3.5 0.8B runs on the CPU and is only started as a fallback when the 4B model has no GPU or fails to start: on the CPU it needs 8-10 s just to read a prompt. The choice is made before she answers, and only one model answers each turn. If a model is unavailable she falls back and tells you.
-- **Think before answering, where you can see it.** When you ask a real question or give her a task, she first asks herself two to four questions, answers each one, and states what she concluded. A "Revia is thinking" block shows this in chat before her reply, and the reply's **Thought process** starts with the same steps. Small talk is answered directly. It adds one bounded Main-model call (a few seconds) to those turns. Set `conversation.selfInquiryScope` in `Config\settings.json` to `"hard"` to think only on turns the router sends to Expert or deep reasoning.
+- **Think before answering, where you can see it.** When the router judges a problem hard (it sends the turn to Expert or deep reasoning), she first asks herself two to four questions, answers each one, and states what she concluded. A "Revia is thinking" block shows this in chat before her reply, and the reply's **Thought process** starts with the same steps. Ordinary questions and small talk are answered directly, so they start replying seconds sooner. The deliberation adds one bounded Main-model call (a few seconds). Set `conversation.selfInquiryScope` in `Config\settings.json` to `"questions"` to have her think before every real question or task as well.
 - **Stay in character.** Personality, mood, recent conversation, relevant memories, and what is on your screen go into every turn. Her mood carries over between turns instead of resetting.
 - **Develop over time.** She forms durable likes, dislikes, opinions, and feelings about the people she talks to.
 - **Remember across restarts.** Useful facts go to `build/debug/Memory/revia_memory.db`; conversation goes to `build/debug/Memory/revia_conversations.db`. Turns that look sensitive (passwords, keys, and so on) are not saved at all.
+- **Answer as she writes.** On an ordinary turn each sentence appears in chat, and starts being spoken, as soon as it is complete and every deterministic filter leaves the reply so far unchanged; raw model text never shows. If the final check changes something already on screen, the chat shows the approved reply in its place. Replies the optional AI reviewer must read whole, and JSON answers, still arrive complete.
 - **Clean up her own output.** Leaked prompt text, control tokens, fake "User:" lines, repetitive loops, and cut-off endings are removed before anything is spoken or saved.
 
 ### See, listen, and speak
