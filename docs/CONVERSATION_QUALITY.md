@@ -88,6 +88,11 @@ runtime directory is refused so earlier evidence stays intact. The arguments are
 It does not queue speech or save synthetic dialogue as memory. Read the replies:
 phrase checks can miss wrong roles, unsupported agreement or omitted facts.
 
+The broader answer-quality gate lives in [EVALUATION_GATE.md](EVALUATION_GATE.md). It covers
+code, math, facts, instruction following, continuity, runtime honesty and persona, using a
+181-case golden set. Replies are scored with deterministic checks and a judge model, and the
+gate fails a run whose pass rate falls more than 3 points below the stored baseline.
+
 `Config/Evaluation/answer-quality-holdout.json` is a separate six-case, eight-turn
 set with explicit human review criteria. The live tool captures the corpus once
 in its disposable runtime directory, then uses that snapshot for mechanical

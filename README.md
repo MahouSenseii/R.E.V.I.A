@@ -591,6 +591,7 @@ Start with **Runtime → Activity**, **Pipelines**, and **Resources**, or `/stat
 - [Roadmap](docs/ROADMAP.md): what is working, what is next, what is intentionally later.
 - [Portability](docs/PORTABILITY.md): behavior on different hardware.
 - [Conversation quality](docs/CONVERSATION_QUALITY.md): the regression contract for her voice and behavior.
+- [Answer-quality gate](docs/EVALUATION_GATE.md): the golden set, the judge model, and the nightly regression gate.
 - [Voice performance](docs/TTS_PERFORMANCE.md): voice architecture and benchmarks.
 - [Computer control](docs/COMPUTER_CONTROL.md): desktop control design.
 - [Character design](docs/REVIA_CHARACTER_DESIGN.md): who Revia is.
