@@ -229,6 +229,8 @@ void ReviaSession::HandleSpeechEvent(const speech::SpeechEvent& speechEvent)
     {
         // Revoked playback ends without completing a newer conversation intent.
         speechRecognitionService.SetOutputActive(false);
+        if (speakingIntentId.load() == 0 && !speechService.HasQueuedSpeech())
+            speechCoordinator.ChannelMaybeFree();
     }
     else if (speechEvent.phase == "Ready" || speechEvent.phase == "Stopped" || speechEvent.phase == "Interrupted" ||
              speechEvent.phase == "Error" || speechEvent.phase == "Disabled" || speechEvent.phase == "Fallback")
@@ -240,6 +242,13 @@ void ReviaSession::HandleSpeechEvent(const speech::SpeechEvent& speechEvent)
         if (const std::uint64_t finished = speakingIntentId.exchange(0); finished != 0)
         {
             speechCoordinator.NotePlaybackFinished(finished);
+        }
+        else if ((speechEvent.phase == "Ready" || speechEvent.phase == "Stopped") && !speechService.HasQueuedSpeech())
+        {
+            // A streamed reply is not the coordinator's, so its end would otherwise never
+            // release a reminder or task report that queued behind it. Barge-in is left
+            // out because the user has the floor.
+            speechCoordinator.ChannelMaybeFree();
         }
     }
     if (speechEvent.phase == "Generated" && speechEvent.elapsedMilliseconds >= 0.0)

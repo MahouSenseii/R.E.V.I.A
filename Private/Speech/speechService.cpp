@@ -1075,6 +1075,12 @@ bool SpeechService::HasPendingSpeech() const
     return !playbackOrder.Empty() || activeUtteranceId.load() != 0;
 }
 
+bool SpeechService::HasQueuedSpeech() const
+{
+    std::lock_guard lock(mutex);
+    return !playbackOrder.Empty();
+}
+
 std::size_t SpeechService::PreferredFragmentCharacters() const
 {
     return configuration.bQwenParallelLongReplies

@@ -387,6 +387,36 @@ void TestSpeechTheCoordinatorDidNotStartStillHoldsTheFloor()
         "Untracked speech and coordinated speech overlapped.");
 }
 
+void TestQueuedSpeechStartsWhenAnUntrackedReplyEnds()
+{
+    // A reminder that falls due while a streamed reply is playing waits behind it. The
+    // reply was never the coordinator's, so no completion of its own wakes the queue:
+    // the session reports the reply draining instead.
+    Channel channel;
+    SpeechCoordinator coordinator;
+    coordinator.SetChannel(channel.Wire());
+    bool replyPlaying = true;
+    coordinator.SetBusyProbe([&]() { return replyPlaying; });
+
+    const SpeechSubmission reminder = coordinator.Submit(Intent(SpeechOwner::Research, SpeechBehavior::Queue));
+    Check(reminder.state == SpeechIntentState::Queued && channel.started.empty(), "A reminder was spoken over a streamed reply.");
+    // A completion for an intent the coordinator never started changes nothing.
+    coordinator.NotePlaybackFinished(0);
+    Check(channel.started.empty(), "An unrelated completion released queued speech.");
+
+    replyPlaying = false;
+    coordinator.ChannelMaybeFree();
+    Check(channel.started.size() == 1 && channel.started.front() == reminder.id, "The reminder queued behind a reply was never spoken.");
+    // Reporting the channel free again while the reminder speaks must not start anything
+    // else over it.
+    const SpeechSubmission later = coordinator.Submit(Intent(SpeechOwner::Research, SpeechBehavior::Queue));
+    coordinator.ChannelMaybeFree();
+    Check(later.state == SpeechIntentState::Queued && channel.started.size() == 1 && channel.mostAudibleAtOnce == 1,
+        "Freeing the channel started speech over the reminder.");
+    channel.Finished(coordinator, reminder.id);
+    Check(channel.started.size() == 2 && channel.started.back() == later.id, "The second queued report did not follow the first.");
+}
+
 void TestTracingCarriesNoSpeechContent()
 {
     // Diagnostics have to be safe to log. A trace that carries the sentence turns a
@@ -537,11 +567,12 @@ void RunSpeechCoordinatorTests()
     TestBargeInStopsCurrentSpeech();
     TestOwnersDoNotOverlap();
     TestSpeechTheCoordinatorDidNotStartStillHoldsTheFloor();
+    TestQueuedSpeechStartsWhenAnUntrackedReplyEnds();
     TestTracingCarriesNoSpeechContent();
     TestQueuedPrivateContextCannotBeRestamped();
     TestExplicitAdmissionOverridesFactoryAndCannotPreemptWhenStale();
     TestAdmissionExceptionsAndEmptyFactoryFailClosed();
     TestStartObserverRevocationPreventsActualChannelCall();
     TestLateProducerCannotBorrowNewDefaultContext();
-    std::cout << "Speech coordinator tests passed: 12 retained arbitration and 5 captured-context fixtures; no physical playback.\n";
+    std::cout << "Speech coordinator tests passed: 13 retained arbitration and 5 captured-context fixtures; no physical playback.\n";
 }

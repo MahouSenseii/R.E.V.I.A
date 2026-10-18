@@ -223,6 +223,13 @@ public:
     // waiting starts here.
     void NotePlaybackFinished(std::uint64_t id);
 
+    // Speech this coordinator did not start (a streamed reply) has finished with nothing
+    // queued behind it. Nothing else wakes the queue in that case, so a reminder that
+    // waited behind a reply would otherwise wait forever. The caller decides that the
+    // external speech has drained: the busy probe still reports the phrase that is
+    // finishing while its completion is being reported.
+    void ChannelMaybeFree();
+
     // The song took or released the channel. Called by whoever owns PerformanceRuntime.
     void NotePerformanceStarted(const std::string& songId);
     void NotePerformanceEnded();

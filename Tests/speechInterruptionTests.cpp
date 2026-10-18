@@ -168,6 +168,27 @@ void TestALongReplyIsNeverCutToMakeRoomForItself()
         "An earlier reply did not yield its oldest unspoken phrases to a newer one.");
 }
 
+// A reminder queued behind a streamed reply is released when the reply's last phrase
+// reports completion. That report arrives while the phrase is still marked active, so
+// the session asks what is queued after it, not whether anything is pending at all.
+void TestTheLastPhraseLeavesNothingQueuedBehindIt()
+{
+    ScopedTestDirectory directory;
+    SpeechService service;
+    SpeechServiceTestAccess::ConfigureWithoutWorkers(service, directory.root);
+    service.Speak("The first sentence.", {}, 301, true);
+    SpeechServiceTestAccess::TakeNext(service)();
+    service.Speak("The last sentence.", {}, 302, false);
+    SpeechServiceTestAccess::BeginPlayingNext(service);
+    Check(service.HasQueuedSpeech(), "A phrase still waiting behind the one playing was not reported as queued.");
+    SpeechServiceTestAccess::TakeNext(service)();
+    SpeechServiceTestAccess::BeginPlayingNext(service);
+    Check(service.HasPendingSpeech() && !service.HasQueuedSpeech(),
+        "While the last phrase finishes, the voice must read as busy but with nothing queued behind it.");
+    service.StopSpeaking();
+    Check(!service.HasQueuedSpeech(), "A stopped voice still reported queued speech.");
+}
+
 bool WaitFor(const std::function<bool()>& predicate, const std::chrono::milliseconds timeout)
 {
     const auto deadline = std::chrono::steady_clock::now() + timeout;
@@ -189,6 +210,7 @@ void RunSpeechInterruptionTests()
     TestBatchingWaitsForAFasterThanRealTimeCard();
     TestInterruptedBatchDoesNotDeadlockTheVoice();
     TestALongReplyIsNeverCutToMakeRoomForItself();
+    TestTheLastPhraseLeavesNothingQueuedBehindIt();
     std::cout << "Speech interruption preserves prepared bank assets, releases scratch audio, "
         "clears the real queues and rejects late preparation.\n";
 }

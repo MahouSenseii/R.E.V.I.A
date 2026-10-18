@@ -128,6 +128,10 @@ public:
     void SetEnabled(bool enabled);
     bool IsEnabled() const;
     [[nodiscard]] bool HasPendingSpeech() const;
+    // Phrases still to play after the one playing now. Speech events are reported from
+    // the playback thread while that phrase is still marked active, so this, not
+    // HasPendingSpeech, is what tells a completion handler that the voice has drained.
+    [[nodiscard]] bool HasQueuedSpeech() const;
     [[nodiscard]] std::size_t FirstFragmentCharacters() const;
     [[nodiscard]] std::size_t PreferredFragmentCharacters() const;
     // utteranceId correlates the resulting Speaking event back to the reply, so the shell
