@@ -56,6 +56,14 @@ public:
     [[nodiscard]] static RecallRequest Evaluate(const std::string& input, std::int64_t nowEpoch);
 };
 
+// The same typed request built from a chat tool call: a subject in words, an optional
+// time in words, and whether the question is when the subject first came up. The model
+// names a subject; the archive is still searched only by these extracted terms and the
+// parsed window, never by text the model wrote as a query. None when neither names
+// anything to look for.
+[[nodiscard]] RecallRequest BuildRecallRequest(
+    const std::string& topic, const std::string& when, bool earliest, std::int64_t nowEpoch);
+
 // Renders retrieved turns into the one bounded block a turn is allowed to carry.
 //
 // Bounded twice: each turn is truncated, and the block as a whole stops at
