@@ -10,6 +10,10 @@ struct latencySample
     std::string stage;
     double milliseconds = 0.0;
     bool bAggregate = false;
+    // Empty for a duration. Otherwise the sample is a count in this unit (for example
+    // "tok" for the backend's cached prompt tokens), held in `milliseconds` so the timing
+    // line can show it beside the stage it explains.
+    std::string unit{};
 };
 
 // Prompt spans use character counts; llama.cpp supplies the actual token total.

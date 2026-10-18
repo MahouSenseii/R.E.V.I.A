@@ -267,10 +267,20 @@ void conversationContext::TrimToBudget()
     {
         BoundRetainedMessage(messages[index]);
     }
+    if (messages.size() <= 1 || (messages.size() <= maxMessages && CharacterCount() <= maxCharacters))
+    {
+        return;
+    }
+    // Over budget, trim well below it rather than to just under it. Dropping one exchange
+    // every turn changed the start of the history on every request, so llama.cpp could
+    // reuse almost none of its cached prompt. Down to 60%, the retained history stays
+    // byte-identical for several turns before the next trim.
+    const std::size_t messageTarget = std::max<std::size_t>(2, maxMessages * 3 / 5);
+    const std::size_t characterTarget = maxCharacters * 3 / 5;
     // Keep the newest message even when it alone exceeds the soft character budget. The
     // current request must never be removed in order to preserve older context.
     while (messages.size() > 1 &&
-        (messages.size() > maxMessages || CharacterCount() > maxCharacters))
+        (messages.size() > messageTarget || CharacterCount() > characterTarget))
     {
         // Conversation normally alternates user/assistant. Evict a complete old exchange
         // when possible so the retained context never begins with an orphaned answer.

@@ -981,6 +981,77 @@ namespace
         }
     }
 
+    // One server-sent event of a streamed chat completion.
+    struct StreamEvent
+    {
+        std::string content;
+        std::string finishReason;
+        // Present only on the final chunk.
+        json timings;
+        json usage;
+    };
+
+    StreamEvent ParseStreamEvent(const std::string& line)
+    {
+        StreamEvent event;
+        if (line.rfind("data: ", 0) != 0)
+            return event;
+        const std::string payload = line.substr(6);
+        if (payload == "[DONE]")
+            return event;
+        try
+        {
+            const json chunk = json::parse(payload);
+            if (chunk.contains("timings") && chunk["timings"].is_object())
+                event.timings = chunk["timings"];
+            if (chunk.contains("usage") && chunk["usage"].is_object())
+                event.usage = chunk["usage"];
+            if (!chunk.contains("choices") || !chunk["choices"].is_array() || chunk["choices"].empty())
+                return event;
+            const auto& choice = chunk["choices"][0];
+            if (choice.contains("finish_reason") && choice["finish_reason"].is_string())
+                event.finishReason = choice["finish_reason"].get<std::string>();
+            if (!choice.contains("delta") || !choice["delta"].is_object())
+                return event;
+            const auto& delta = choice["delta"];
+            if (delta.contains("content") && delta["content"].is_string())
+                event.content = delta["content"].get<std::string>();
+        }
+        catch (...)
+        {
+            return {};
+        }
+        return event;
+    }
+
+    // What the server said about one streamed request in its final chunk. llama.cpp
+    // reports how much of the prompt it reused from its cache (cache_n) beside what it
+    // had to evaluate (prompt_n), which is the only direct evidence of prompt-cache reuse.
+    void AppendBackendTimings(std::vector<latencySample>& timings, const json& reported)
+    {
+        if (!reported.is_object())
+            return;
+        const auto number = [&reported](const char* key) -> std::optional<double>
+        {
+            if (!reported.contains(key) || !reported[key].is_number())
+                return std::nullopt;
+            const double value = reported[key].get<double>();
+            return value >= 0.0 ? std::optional<double>(value) : std::nullopt;
+        };
+        // Aggregate: these overlap the request's own wall-clock stages, so none of them
+        // may be named the slowest stage of the turn.
+        if (const auto value = number("cache_n"))
+            timings.push_back({"llama_cached_prompt", *value, true, "tok"});
+        if (const auto value = number("prompt_n"))
+            timings.push_back({"llama_evaluated_prompt", *value, true, "tok"});
+        if (const auto value = number("prompt_ms"))
+            timings.push_back({"llama_prompt_eval", *value, true});
+        if (const auto value = number("predicted_n"))
+            timings.push_back({"llama_generated", *value, true, "tok"});
+        if (const auto value = number("predicted_ms"))
+            timings.push_back({"llama_generation", *value, true});
+    }
+
     std::size_t ConservativePromptCost(const json& messages)
     {
         std::size_t tokens = 0;
@@ -1221,6 +1292,7 @@ responseOutput llamaCppService::GenerateResponse(const std::vector<conversationM
     std::string fullResponse;
     std::string buffer;
     std::string finishReason;
+    json backendTimings;
     size_t printedLength = 0;
     std::optional<std::chrono::steady_clock::time_point> firstTokenAt;
     int responseStatus = 0;
@@ -1281,7 +1353,12 @@ responseOutput llamaCppService::GenerateResponse(const std::vector<conversationM
             const std::string jsonStr = line.substr(6);
             if (jsonStr == "[DONE]") continue;
 
-            const std::string token = ParseStreamChunk(line, &finishReason);
+            StreamEvent event = ParseStreamEvent(line);
+            if (!event.finishReason.empty())
+                finishReason = event.finishReason;
+            if (event.timings.is_object())
+                backendTimings = std::move(event.timings);
+            const std::string& token = event.content;
             if (token.empty()) continue;
 
             if (!firstTokenAt)
@@ -1358,6 +1435,7 @@ responseOutput llamaCppService::GenerateResponse(const std::vector<conversationM
             buffer.clear();
             errorBody.clear();
             finishReason.clear();
+            backendTimings = json();
             responseStatus = 0;
             result = client.send(req);
         }
@@ -1372,6 +1450,7 @@ responseOutput llamaCppService::GenerateResponse(const std::vector<conversationM
         "llama_decode_after_first_token",
         std::max(0.0, requestMilliseconds - firstTokenMilliseconds)});
     output.timings.push_back({"llama_request_total", requestMilliseconds, true});
+    AppendBackendTimings(output.timings, backendTimings);
 
     std::string cleanedResponse = jsonReply ? TrimWhitespace(fullResponse) : VisibleReplyText(fullResponse, &output.reasoning);
 
@@ -2404,35 +2483,6 @@ std::string llamaCppService::RelatedMemories(
 embeddingOutput llamaCppService::EmbedMemory(const std::string& summary, const std::stop_token stopToken) const
 {
     return embeddings.EmbedDocument(summary, stopToken);
-}
-
-std::string llamaCppService::ParseStreamChunk(const std::string& line, std::string* outFinishReason)
-{
-    if (line.rfind("data: ", 0) != 0) return "";
-    const std::string json_str = line.substr(6);
-
-    if (json_str == "[DONE]") return "";
-    try
-    {
-        const json chunk = json::parse(json_str);
-
-        if (!chunk.contains("choices") || chunk["choices"].empty()) return "";
-
-        const auto& choice = chunk["choices"][0];
-        if (outFinishReason != nullptr && choice.contains("finish_reason") &&
-            choice["finish_reason"].is_string())
-        {
-            *outFinishReason = choice["finish_reason"].get<std::string>();
-        }
-
-        if (!choice.contains("delta") || !choice["delta"].is_object()) return "";
-        const auto& delta = choice["delta"];
-
-        if (!delta.contains("content")) return "";
-
-        return delta["content"].get<std::string>();
-    }
-    catch (...) { return ""; }
 }
 
 healthOutput llamaCppService::CheckHealth(const std::stop_token stopToken) const

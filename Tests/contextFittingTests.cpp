@@ -146,6 +146,50 @@ void TestContinuityKeepsNonnumericSentenceBoundaries()
         checkSummary(history.GetCompressedHistorySummary());
     }
 }
+// PERF-3: llama.cpp reuses a cached prompt only up to the first byte that changed. When
+// history dropped one exchange on every turn once full, the first retained message --
+// and so the whole prompt after the system message -- changed on every request.
+void TestHistoryTrimLeavesAStablePrefix()
+{
+    const auto exchangesBetweenChanges = [](conversationContext& history, const std::string& filler)
+    {
+        std::vector<std::string> fronts;
+        for (int index = 0; index < 40; ++index)
+        {
+            history.AddMessage("user", "Question " + std::to_string(index) + filler);
+            history.AddMessage("assistant", "Answer " + std::to_string(index) + filler);
+            fronts.push_back(history.GetRecentMessages().front().content);
+        }
+        std::vector<int> gaps;
+        int last = -1;
+        for (int index = 1; index < static_cast<int>(fronts.size()); ++index)
+        {
+            if (fronts[index] == fronts[index - 1])
+                continue;
+            if (last >= 0)
+                gaps.push_back(index - last);
+            last = index;
+        }
+        return gaps;
+    };
+
+    conversationContext byCount;
+    const auto countGaps = exchangesBetweenChanges(byCount, "");
+    Check(!countGaps.empty() && *std::min_element(countGaps.begin(), countGaps.end()) >= 5,
+        "Trimming by message count changed the start of the history every few turns, defeating the prompt cache.");
+    Check(byCount.GetRecentMessages().size() <= 24 && byCount.GetRecentMessages().back().content == "Answer 39",
+        "Hysteresis trimming exceeded the message budget or lost the newest message.");
+
+    conversationContext byCharacters;
+    const auto characterGaps = exchangesBetweenChanges(byCharacters, " " + Repeat("long detail ", 100));
+    Check(!characterGaps.empty() && *std::min_element(characterGaps.begin(), characterGaps.end()) >= 2,
+        "Trimming by characters changed the start of the history on consecutive turns.");
+    std::size_t retained = 0;
+    for (const auto& message : byCharacters.GetRecentMessages())
+        retained += message.content.size();
+    Check(retained <= 14000, "Hysteresis trimming exceeded the character budget.");
+}
+
 void TestPronounRecallUsesTheLatestAdmittedTopic()
 {
     revia::tests::ScopedTestDirectory directory;
@@ -1053,6 +1097,7 @@ void RunContextFittingTests()
     TestContinuityRetainsLateCorrectionsAndSourceOrder();
     TestContinuityPreservesDecimalConstraintsAfterEvictionAndRestore();
     TestContinuityKeepsNonnumericSentenceBoundaries();
+    TestHistoryTrimLeavesAStablePrefix();
     TestPrivateReplyRetainsEvictedDecimalConstraintsOnTheWire();
     TestPronounRecallUsesTheLatestAdmittedTopic();
     TestContinuityRebuildAndRollbackStayBounded();

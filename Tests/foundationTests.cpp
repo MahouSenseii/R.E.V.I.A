@@ -8082,11 +8082,13 @@ void TestConversationContextKeepsCoherentRecentTurns()
         context.AddMessage("user", "user turn " + std::to_string(turn));
         context.AddMessage("assistant", "assistant turn " + std::to_string(turn));
     }
+    // Trimmed with hysteresis: each time the 24-message budget is exceeded, history drops
+    // to 60% of it (here at the 25th and 37th messages), so it now holds the 16 newest.
     const std::vector<conversationMessage> recent = context.GetRecentMessages();
-    Check(recent.size() == 24,
-        "Conversation history did not keep twelve recent exchanges.");
+    Check(recent.size() == 16,
+        "Conversation history did not trim to 60% of its budget and then grow again.");
     Check(!recent.empty() && recent.front().role == "user" &&
-        recent.front().content == "user turn 8",
+        recent.front().content == "user turn 12",
         "Conversation trimming left an orphaned reply or removed the wrong turns.");
     Check(recent.back().content == "assistant turn 19",
         "Conversation trimming discarded the newest reply.");

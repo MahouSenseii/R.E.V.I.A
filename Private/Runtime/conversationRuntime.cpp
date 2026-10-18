@@ -1755,7 +1755,7 @@ SessionResult ConversationRuntime::Generate(const std::string& policyInput, cons
         trace << "\n\nTiming:";
         for (const latencySample& sample : output.timings)
         {
-            trace << "\n  " << sample.stage << ' ' << sample.milliseconds << "ms";
+            trace << "\n  " << sample.stage << ' ' << sample.milliseconds << (sample.unit.empty() ? "ms" : sample.unit);
         }
     }
     result.reasoning = trace.str();

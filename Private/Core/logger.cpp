@@ -96,6 +96,12 @@ void logger::Timing(const std::string& scope, const std::vector<latencySample>& 
         {
             message << " | ";
         }
+        if (!sample.unit.empty())
+        {
+            // A count, such as the prompt tokens llama.cpp reused from its cache.
+            message << sample.stage << '=' << static_cast<long long>(sample.milliseconds) << sample.unit;
+            continue;
+        }
         message << sample.stage << '=' << sample.milliseconds << "ms";
         if (!sample.bAggregate && (!slowest || sample.milliseconds > slowest->milliseconds))
         {

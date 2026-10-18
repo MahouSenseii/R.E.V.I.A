@@ -8,6 +8,7 @@
 #include <nlohmann/json.hpp>
 #include <mutex>
 #include <thread>
+#include <vector>
 
 namespace
 {
@@ -91,6 +92,80 @@ class ReplyBackend
     std::string reviewAnswer;
     nlohmann::json lastRequest;
 };
+
+// Serves exactly the server-sent events a test scripts, and records every request.
+// Streamed requests get the scripted events; a request with stream:false gets
+// `plainBody`, so a test can see which transport a call asked for.
+class WireBackend
+{
+  public:
+    WireBackend()
+    {
+        server.Get("/health", [](const auto&, auto& response) { response.set_content(R"({"status":"ok"})", "application/json"); });
+        server.Get("/v1/models", [](const auto&, auto& response)
+            { response.set_content(R"({"data":[{"id":"structured-reply-fixture"}]})", "application/json"); });
+        server.Post("/v1/chat/completions",
+            [this](const auto& request, auto& response)
+            {
+                std::lock_guard lock(mutex);
+                requests.push_back(nlohmann::json::parse(request.body));
+                if (!requests.back().value("stream", false))
+                {
+                    response.set_content(plainBody, "application/json");
+                    return;
+                }
+                std::string body;
+                for (const auto& event : events)
+                    body += "data: " + event.dump() + "\n\n";
+                response.set_content(body + "data: [DONE]\n\n", "text/event-stream");
+            });
+        server.new_task_queue = [] { return new httplib::ThreadPool(1); };
+        port = server.bind_to_any_port("127.0.0.1");
+        Check(port > 0, "Wire backend could not bind loopback.");
+        worker = std::jthread([this] { server.listen_after_bind(); });
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+        while (!server.is_running() && std::chrono::steady_clock::now() < deadline)
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        Check(server.is_running(), "Wire backend did not start.");
+    }
+    ~WireBackend()
+    {
+        server.stop();
+        worker.join();
+    }
+    // One streamed delta, as llama-server sends it.
+    static nlohmann::json Delta(const std::string& field, const std::string& text, const nlohmann::json& finish = nullptr)
+    {
+        return {{"choices", nlohmann::json::array({{{"delta", {{field, text}}}, {"finish_reason", finish}}})}};
+    }
+    void Script(std::vector<nlohmann::json> scripted, std::string plain = {})
+    {
+        std::lock_guard lock(mutex);
+        events = std::move(scripted);
+        plainBody = std::move(plain);
+    }
+    std::vector<nlohmann::json> Requests()
+    {
+        std::lock_guard lock(mutex);
+        return requests;
+    }
+    int port = 0;
+
+  private:
+    httplib::Server server;
+    std::jthread worker;
+    std::mutex mutex;
+    std::vector<nlohmann::json> events;
+    std::string plainBody;
+    std::vector<nlohmann::json> requests;
+};
+
+const latencySample* FindSample(const responseOutput& output, const std::string& stage)
+{
+    const auto found =
+        std::find_if(output.timings.begin(), output.timings.end(), [&stage](const auto& sample) { return sample.stage == stage; });
+    return found == output.timings.end() ? nullptr : &*found;
+}
 
 void Configure(llamaCppService& service, int port)
 {
@@ -487,6 +562,39 @@ void TestConversationRepliesStreamBySentence()
 }
 }
 
+// PERF-3: llama-server's final chunk says how much of the prompt it reused from its
+// cache. Without it, whether the prompt cache works at all could only be guessed.
+void TestBackendCacheTimingsReachTheTurnTimings()
+{
+    revia::tests::ScopedTestDirectory directory;
+    WireBackend backend;
+    llamaCppService service((directory.root / "timings.db").string());
+    Configure(service, backend.port);
+    auto last = WireBackend::Delta("content", " ready.", "stop");
+    last["timings"] = {{"cache_n", 2048}, {"prompt_n", 37}, {"prompt_ms", 12.5}, {"predicted_n", 9}, {"predicted_ms", 80.25}};
+    backend.Script({WireBackend::Delta("content", "The answer is"), last});
+    const auto result = service.GenerateResponse({{"user", "Is the cache working?"}});
+    Check(result.bSuccess && result.response == "The answer is ready.", "The timed reply did not complete: " + result.reason);
+    const auto* cached = FindSample(result, "llama_cached_prompt");
+    const auto* evaluated = FindSample(result, "llama_evaluated_prompt");
+    const auto* promptMs = FindSample(result, "llama_prompt_eval");
+    const auto* generated = FindSample(result, "llama_generated");
+    const auto* generationMs = FindSample(result, "llama_generation");
+    Check(cached != nullptr && cached->milliseconds == 2048 && cached->unit == "tok" && cached->bAggregate,
+        "The backend's reused prompt tokens (timings.cache_n) were not recorded.");
+    Check(evaluated != nullptr && evaluated->milliseconds == 37 && evaluated->unit == "tok",
+        "The backend's evaluated prompt tokens (timings.prompt_n) were not recorded.");
+    Check(promptMs != nullptr && promptMs->milliseconds == 12.5 && promptMs->unit.empty() && promptMs->bAggregate,
+        "The backend's prompt evaluation time was not recorded as an aggregate duration.");
+    Check(generated != nullptr && generated->milliseconds == 9 && generationMs != nullptr && generationMs->milliseconds == 80.25,
+        "The backend's generation count and time were not recorded.");
+
+    backend.Script({WireBackend::Delta("content", "No timings here.", "stop")});
+    const auto silent = service.GenerateResponse({{"user", "And without timings?"}});
+    Check(silent.bSuccess && FindSample(silent, "llama_cached_prompt") == nullptr,
+        "A backend that reported no timings was given invented ones.");
+}
+
 void RunStructuredReplyTests()
 {
     TestProviderContractAndDataPreservation();
@@ -496,4 +604,5 @@ void RunStructuredReplyTests()
     TestReviewerReplacementMustMatchFinalContract();
     TestIntroducedSchemaWireAndReaffirmation();
     TestConversationRepliesStreamBySentence();
+    TestBackendCacheTimingsReachTheTurnTimings();
 }

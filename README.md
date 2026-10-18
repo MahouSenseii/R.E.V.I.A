@@ -554,7 +554,7 @@ signatures, and short comments.
 
 Start with **Runtime → Activity**, **Pipelines**, and **Resources**, or `/status` and `/resources`. Logs are in `build\debug\Logs\`:
 
-- `revia.log`: startup, every turn, model placement, timings, shutdown
+- `revia.log`: startup, every turn, model placement, timings, shutdown. Each turn's `Timing` line also carries what llama.cpp reported for that reply: `llama_cached_prompt` (prompt tokens reused from its cache), `llama_evaluated_prompt` (tokens it had to read), `llama_prompt_eval` and `llama_generation` (milliseconds). A low cached count late in a conversation means the prompt cache is not being reused. Conversation history is trimmed to 60% of its budget when it overflows, rather than by one exchange per turn, so the start of the prompt stays identical for several turns. Unit-tested against a fake backend; the reuse it buys has not been measured live yet.
 - `llama-server-<port>.*.log`: one pair per language worker (8080 Main, 8082 Fast, 8083 Expert); `embedding-server.*.log`: memory worker
 - `qwen-tts-<port>.*.log`: one pair per voice GPU
 - `whisper-server.*.log`, `visible-browser.*.log`: speech recognition and browser

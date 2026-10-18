@@ -86,7 +86,6 @@ public:
     embeddingOutput EmbedMemory(const std::string& summary, std::stop_token stopToken = {}) const;
 
 private:
-    static std::string ParseStreamChunk(const std::string& line, std::string* outFinishReason = nullptr);
     int ResponseTokenLimit() const;
     // Shared by both planners: same low temperature, same JSON-object response format,
     // different contract and token ceiling.
