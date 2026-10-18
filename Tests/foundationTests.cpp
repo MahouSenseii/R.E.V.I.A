@@ -24,6 +24,7 @@
 #include "Agents/conversationStylePolicy.h"
 #include "Agents/conversationQualityMonitor.h"
 #include "Agents/replyFragmenter.h"
+#include "Agents/replyStreamGate.h"
 #include "Agents/selfInquiry.h"
 #include "Agents/responseFilter.h"
 #include "Core/localApiKey.h"
@@ -8942,6 +8943,73 @@ void TestStreamedReplyIsNeverTruncated()
         "The held-back tail never arrived, so the reply ended mid-word: " + spoken);
 }
 
+void TestStreamGateReleasesOnlyWhatTheFiltersKeep()
+{
+    using revia::agents::ReplyStreamGate;
+    const auto identity = [](const std::string& text) { return std::optional<std::string>(text); };
+
+    // Complete sentences pass as soon as whitespace confirms them; the open one waits.
+    ReplyStreamGate gate(identity);
+    std::string shown = gate.Consume("\n Hello there. How a");
+    Check(shown == "Hello there.", "The first confirmed sentence was not released alone: '" + shown + "'");
+    shown += gate.Consume("re you today? I am");
+    Check(shown == "Hello there. How are you today?" && shown == gate.Released(),
+        "A following sentence was not released as an exact extension: '" + shown + "'");
+    Check(gate.Consume(" fine").empty(), "An unfinished sentence was released.");
+
+    // A decimal point or an abbreviation is not the end of a sentence.
+    ReplyStreamGate numbers(identity);
+    Check(numbers.Consume("Pi is 3.").empty() && numbers.Consume("14, e.g. ").empty(),
+        "A sentence was cut at a decimal point or an abbreviation.");
+    Check(numbers.Consume("roughly. ") == "Pi is 3.14, e.g. roughly.", "The whole sentence was not released once it ended.");
+
+    // A sentence the filters would edit waits; the longest prefix they keep is released.
+    const auto stripsStockTail = [](const std::string& text)
+    {
+        const std::string tail = " Let me know if you need anything else.";
+        if (text.size() >= tail.size() && text.compare(text.size() - tail.size(), tail.size(), tail) == 0)
+            return std::optional<std::string>(text.substr(0, text.size() - tail.size()));
+        return std::optional<std::string>(text);
+    };
+    ReplyStreamGate tail(stripsStockTail);
+    Check(tail.Consume("It builds now. Let me know if you need anything else. ") == "It builds now.",
+        "A sentence the filters would remove was released, or the kept one was held back.");
+    Check(tail.Consume("One more thing. ") == " Let me know if you need anything else. One more thing.",
+        "A sentence that was only a tail while it was last was never released.");
+
+    // Text the filters would rewrite is never released, so nothing raw escapes.
+    ReplyStreamGate rewrite([](const std::string& text)
+        {
+            std::string out = text;
+            if (const auto at = out.find("colour"); at != std::string::npos) out.replace(at, 6, "color");
+            return std::optional<std::string>(out);
+        });
+    Check(rewrite.Consume("The colour is red. It is bright. ").empty() && rewrite.Released().empty(),
+        "Text the filters would rewrite was released.");
+
+    // A refusal, or a prompt marker in the text itself, stops the stream for good.
+    ReplyStreamGate refused([](const std::string& text)
+        { return text.find("secret") == std::string::npos ? std::optional<std::string>(text) : std::nullopt; });
+    Check(refused.Consume("Fine. ") == "Fine." && refused.Consume("The secret is out. ").empty() && refused.Halted() &&
+            refused.Consume("Later text. ").empty(),
+        "A refused reply kept releasing.");
+    ReplyStreamGate marked(identity);
+    Check(marked.Consume(std::string(revia::identity::markers::RuntimeTurnContext) + " leaked. ").empty() && marked.Halted(),
+        "A prompt marker in model text was released.");
+
+    // Released text ends on a sentence, so the fragmenter need not wait for the next one
+    // to confirm it; a sentence it holds back keeps the spacing the text really had.
+    revia::agents::ReplyFragmenter fragmenter(16);
+    const auto first = fragmenter.ConsumeSentences("Static linking copies code into the program.");
+    Check(first.size() == 1 && first.front() == "Static linking copies code into the program.",
+        "An approved sentence waited for the next one before it could be shown.");
+    revia::agents::ReplyFragmenter held(20);
+    Check(held.ConsumeSentences("Yes.").empty(), "A sentence below the minimum was released on its own.");
+    const auto joined = held.ConsumeSentences("\nIt resolves every symbol at build time.");
+    Check(joined.size() == 1 && joined.front() == "Yes.\nIt resolves every symbol at build time.",
+        "A held sentence lost or gained spacing: '" + (joined.empty() ? std::string() : joined.front()) + "'");
+}
+
 void TestArbiterMergesOneThought()
 {
     inputArbiterSettings settings;
@@ -9917,6 +9985,7 @@ int main(const int argc, char** argv)
         TestInferenceSchedulerPrioritizesConversation();
         TestInferenceSchedulerPreemptsBackgroundForConversation();
         TestStreamedReplyIsNeverTruncated();
+        TestStreamGateReleasesOnlyWhatTheFiltersKeep();
         TestArbiterMergesOneThought();
         TestTypedInputIsNeverTakenByTheVoiceDrain();
         TestArbiterIgnoresNoiseButNeverTypedInput();

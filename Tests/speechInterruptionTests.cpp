@@ -146,6 +146,28 @@ void TestInterruptedBatchDoesNotDeadlockTheVoice()
     Check(phase == "Stopped", "The discarded batch was not reported.");
 }
 
+// A streamed answer hands every sentence to speech while generation is still running.
+// The queue bound used to drop its oldest waiting phrase, which is the middle of that
+// same answer, while the chat showed all of it. Only an earlier reply may make room.
+void TestALongReplyIsNeverCutToMakeRoomForItself()
+{
+    ScopedTestDirectory directory;
+    SpeechService service;
+    SpeechServiceTestAccess::ConfigureWithoutWorkers(service, directory.root);
+    for (int index = 0; index < 24; ++index)
+        service.Speak("Sentence number " + std::to_string(index) + ".", {}, 100 + index, index == 0);
+    auto queued = SpeechServiceTestAccess::QueuedTexts(service);
+    Check(queued.size() == 24 && queued.front() == "Sentence number 0." && queued[12] == "Sentence number 12." &&
+            queued.back() == "Sentence number 23.",
+        "A long reply lost sentences to its own queue bound; " + std::to_string(queued.size()) + " remained.");
+
+    // A newer reply still takes priority over what is left of an older one.
+    service.Speak("A new reply starts.", {}, 200, true);
+    queued = SpeechServiceTestAccess::QueuedTexts(service);
+    Check(queued.size() == 16 && queued.back() == "A new reply starts." && queued.front() == "Sentence number 9.",
+        "An earlier reply did not yield its oldest unspoken phrases to a newer one.");
+}
+
 bool WaitFor(const std::function<bool()>& predicate, const std::chrono::milliseconds timeout)
 {
     const auto deadline = std::chrono::steady_clock::now() + timeout;
@@ -166,6 +188,7 @@ void RunSpeechInterruptionTests()
     TestLatePreparationAfterBargeInPreservesTheBank();
     TestBatchingWaitsForAFasterThanRealTimeCard();
     TestInterruptedBatchDoesNotDeadlockTheVoice();
+    TestALongReplyIsNeverCutToMakeRoomForItself();
     std::cout << "Speech interruption preserves prepared bank assets, releases scratch audio, "
         "clears the real queues and rejects late preparation.\n";
 }

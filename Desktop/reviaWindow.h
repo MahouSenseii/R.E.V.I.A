@@ -141,6 +141,9 @@ class ReviaWindow final : public QMainWindow
     // reasoning, when present, is rendered as a collapsed "Thought process" line that the
     // user can expand. It is kept out of the message body because it is not an answer.
     void AppendChat(const QString& speaker, const QString& message, bool userMessage = false, const QString& reasoning = QString());
+    // Shows the reply that was approved whole in place of the fragments streamed for the
+    // same turn, when the final filter pass changed text that had already appeared.
+    void ReplaceStreamedReply(std::uint64_t conversationTurnId, const QString& speaker, const QString& body);
     // Transcript entry kinds drive rendering independently of speaker names.
     // QTextBrowser collapses sections by rebuilding the transcript when a link is clicked.
     enum class EntryKind
@@ -265,6 +268,9 @@ class ReviaWindow final : public QMainWindow
     QString latestDisplayedAnswer;
     revia::learning::QualityFeedback displayedAnswerTarget;
     std::uint64_t displayedAnswerTurnId = 0;
+    // The transcript entries that one turn's streamed fragments occupy, in order.
+    std::uint64_t streamedReplyTurnId = 0;
+    std::vector<std::size_t> streamedReplyEntries;
     QTabWidget* tabs = nullptr;
     NavigationSidebar* navigationSidebar = nullptr;
     QPushButton* runtimeDetailsButton = nullptr;

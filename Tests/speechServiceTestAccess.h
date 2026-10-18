@@ -98,6 +98,13 @@ struct SpeechServiceTestAccess
         service.configuration.backend = "Qwen";
         service.activePreset = std::move(preset);
     }
+    static std::vector<std::string> QueuedTexts(SpeechService& service)
+    {
+        std::lock_guard lock(service.mutex);
+        std::vector<std::string> result;
+        for (const auto& item : service.queue) result.push_back(item.text);
+        return result;
+    }
     static std::vector<runtime::AffectSnapshot> PendingAffects(SpeechService& service)
     {
         std::lock_guard lock(service.mutex);

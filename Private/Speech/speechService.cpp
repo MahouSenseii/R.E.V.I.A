@@ -1133,6 +1133,7 @@ void SpeechService::Speak(std::string text, const runtime::AffectSnapshot affect
         // one: only the first fragment of a reply is latency critical.
         if (latencyCritical)
         {
+            replyFirstSequence = nextSequence.load();
             vocalizationPolicy.BeginReply();
             // A bank may have been installed after the preset was selected.
             // Refresh only at reply boundaries, keeping variant rotation intact
@@ -1147,11 +1148,21 @@ void SpeechService::Speak(std::string text, const runtime::AffectSnapshot affect
         {
             return;
         }
-        while (!queue.empty() && queue.size() + plan.size() > static_cast<std::size_t>(configuration.maxQueuedUtterances))
+        // Room comes from speech nobody is waiting for any more: a stopped generation, or
+        // a reply that a newer one has followed. Evicting the oldest phrase regardless cut
+        // the middle out of a long streamed answer while the chat still showed all of it.
+        // The reply in progress is bounded by the reply length limit instead.
+        const std::size_t limit = static_cast<std::size_t>(configuration.maxQueuedUtterances);
+        const std::uint64_t currentGeneration = generation.load();
+        for (auto queued = queue.begin(); queued != queue.end() && queue.size() + plan.size() > limit;)
         {
-            const std::uint64_t dropped = queue.front().sequence;
-            queue.pop_front();
-            playbackOrder.Remove(dropped);
+            if (replyFirstSequence != 0 && queued->generation == currentGeneration && queued->sequence >= replyFirstSequence)
+            {
+                ++queued;
+                continue;
+            }
+            playbackOrder.Remove(queued->sequence);
+            queued = queue.erase(queued);
         }
         bool firstOfReply = latencyCritical;
         for (const PlannedSegment& segment : plan)

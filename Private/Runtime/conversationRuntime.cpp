@@ -10,6 +10,7 @@
 #include "Identity/promptMarkers.h"
 
 #include "Agents/conversationStylePolicy.h"
+#include "Agents/replyFormat.h"
 #include "Agents/replyFragmenter.h"
 #include "Emotion/stimulusBuilder.h"
 #include "Identity/relationshipEvidence.h"
@@ -1418,10 +1419,14 @@ SessionResult ConversationRuntime::Generate(const std::string& policyInput, cons
         proactive ? "Generating a context-driven opening." : "Generating turn #" + std::to_string(currentTurn) + ".", -1.0, 0, currentTurn);
 
     const responseFilterSettings filters = filterSettingsProvider ? filterSettingsProvider() : responseFilterSettings{};
-    // ConversationAgent delivers only fully filtered output. This selects whether the
-    // approved answer is split into speech fragments, never whether raw text is safe.
-    const bool streamSpeech = !turnPolicy.publicAudience && !proactive && !routingContext.visionRequired && !filters.bAiReviewEnabled &&
-                              speech.IsEnabled() && shouldSpeak && conversationStyle.CanStreamReply(policyInput, promptContext);
+    // ConversationAgent delivers only approved text: sentence by sentence while it is
+    // generated on an ordinary turn, once when the reply must be reviewed whole. This
+    // selects whether that approved text is published as it arrives -- to the chat, and
+    // to speech when this turn speaks -- never whether raw text is safe.
+    const bool streamReply = !turnPolicy.publicAudience && !proactive && !routingContext.visionRequired && !filters.bAiReviewEnabled &&
+                             agents::RequestedReplyContract(policyInput).rootKind == agents::ReplyFormat::Conversation &&
+                             conversationStyle.CanStreamReply(policyInput, promptContext);
+    const bool streamSpeech = streamReply && speech.IsEnabled() && shouldSpeak;
     agents::ReplyFragmenter fragmenter(32, speech.PreferredFragmentCharacters(), 16, speech.FirstFragmentCharacters());
     std::string streamedText;
     std::vector<conversationMessage> spokenContext = promptContext;
@@ -1430,14 +1435,14 @@ SessionResult ConversationRuntime::Generate(const std::string& policyInput, cons
     std::string spokenSoFar;
     std::string heldFragment;
     bool streamingHalted = false;
-    const auto emitFragment = [&](const std::string& rawFragment)
+    const auto emitFragment = [&](const std::string& rawFragment, const bool speak = true)
     {
         if (!admitted() || streamingHalted)
             return;
-        // The complete answer has passed every enabled filter. Limit performance cues
-        // to one per fragment when preparing its approved text for the speech backend.
-        const revia::speech::VocalizationShaping shaped = revia::speech::ShapeVocalizations(rawFragment, 1);
-        const std::string& fragment = shaped.text;
+        // Approved text. Limit performance cues to one per fragment when it is prepared
+        // for the speech backend; the chat alone shows it as it was written.
+        const bool spoken = speak && streamSpeech;
+        const std::string fragment = spoken ? revia::speech::ShapeVocalizations(rawFragment, 1).text : rawFragment;
         // A fragment that was nothing but a stage direction has no sound left in it.
         if (fragment.empty())
             return;
@@ -1469,8 +1474,11 @@ SessionResult ConversationRuntime::Generate(const std::string& policyInput, cons
         spokenSoFar += candidate;
         if (!admitted())
             return;
-        publishLatency("SpeechQueued", utteranceId);
-        speech.Speak(candidate, emotions.ToAffectSnapshot(), utteranceId, firstSpeechFragment, speechAdmission);
+        if (spoken)
+        {
+            publishLatency("SpeechQueued", utteranceId);
+            speech.Speak(candidate, emotions.ToAffectSnapshot(), utteranceId, firstSpeechFragment, speechAdmission);
+        }
         RuntimeEvent partial;
         partial.kind = RuntimeEventKind::ReplyFragment;
         partial.audienceRevision = turnPolicy.audienceRevision;
@@ -1503,7 +1511,7 @@ SessionResult ConversationRuntime::Generate(const std::string& policyInput, cons
     };
 
     messageRouter::DeltaHandler onDelta;
-    if (streamSpeech)
+    if (streamReply)
     {
         onDelta = [&](const std::string& delta)
         {
@@ -1511,7 +1519,8 @@ SessionResult ConversationRuntime::Generate(const std::string& policyInput, cons
                 return;
             noteTextReady();
             streamedText += delta;
-            for (const std::string& fragment : fragmenter.Consume(delta))
+            // Approved text arrives in whole sentences, so each delta ends one.
+            for (const std::string& fragment : fragmenter.ConsumeSentences(delta))
             {
                 emitFragment(fragment);
             }
@@ -1560,11 +1569,25 @@ SessionResult ConversationRuntime::Generate(const std::string& policyInput, cons
         publishComponent("Conversation", "Stopped", result.reason, ElapsedMilliseconds(turnStarted), 0, currentTurn);
         return finish(std::move(result));
     }
-    if (streamSpeech && turnResult.response.bSuccess)
+    if (streamReply && turnResult.response.bSuccess)
     {
         const std::string& complete = turnResult.response.response;
+        // A tail Flush judges not worth speaking -- a list item, a smile, a link -- is still
+        // part of the answer, so the chat shows it even when the voice leaves it out.
+        // Flush also punctuates a short unfinished answer for the voice; the chat alone
+        // shows it as written.
+        const auto finishStream = [&]()
+        {
+            const std::string unfinished = fragmenter.Pending();
+            const std::string remainder = fragmenter.Flush();
+            if (streamSpeech && !remainder.empty())
+                emitFragment(remainder);
+            else if (!unfinished.empty())
+                emitFragment(unfinished, false);
+        };
         const bool finalExtendsStream =
             complete.size() >= streamedText.size() && complete.compare(0, streamedText.size(), streamedText) == 0;
+        bool superseded = streamingHalted && streamedUtterances > 0;
         if (finalExtendsStream && complete.size() > streamedText.size())
         {
             for (const std::string& fragment : fragmenter.Consume(complete.substr(streamedText.size())))
@@ -1574,10 +1597,9 @@ SessionResult ConversationRuntime::Generate(const std::string& policyInput, cons
         }
         if (!finalExtendsStream)
         {
-            // Final response repair can remove an unfinished token-limit tail, a
-            // generated User turn, or decoded repetition. Never flush that rejected raw
-            // tail into TTS. If nothing valid has spoken yet, replace it with the safe
-            // completed reply; otherwise the accepted earlier sentences already stand.
+            // The full pass changed text that had already been released. Never flush the
+            // rejected tail into TTS. If nothing valid was published yet, publish the safe
+            // completed reply; otherwise what was spoken stands and the chat is corrected.
             fragmenter.Reset();
             if (streamedUtterances == 0)
             {
@@ -1585,16 +1607,29 @@ SessionResult ConversationRuntime::Generate(const std::string& policyInput, cons
                 {
                     emitFragment(fragment);
                 }
-                const std::string replacement = fragmenter.Flush();
-                if (!replacement.empty())
-                    emitFragment(replacement);
+                finishStream();
+            }
+            else
+            {
+                superseded = true;
             }
         }
         else
         {
-            const std::string remainder = fragmenter.Flush();
-            if (!remainder.empty())
-                emitFragment(remainder);
+            finishStream();
+        }
+        if (superseded && admitted())
+        {
+            // The chat shows the reply that was actually approved in place of this turn's
+            // fragments. Speech has already said what it said and does not repeat it.
+            RuntimeEvent replacement;
+            replacement.kind = RuntimeEventKind::ReplyFragment;
+            replacement.phase = "Replace";
+            replacement.audienceRevision = turnPolicy.audienceRevision;
+            replacement.state = RuntimeState::Responding;
+            replacement.message = complete;
+            replacement.conversationTurnId = currentTurn;
+            events.Publish(std::move(replacement));
         }
     }
 
@@ -1708,8 +1743,8 @@ SessionResult ConversationRuntime::Generate(const std::string& policyInput, cons
     }
     if (streamedUtterances > 0)
     {
-        trace << "\n\nSpoken in " << streamedUtterances << (streamedUtterances == 1 ? " fragment" : " fragments")
-              << " as it was generated.";
+        trace << "\n\n" << (streamSpeech ? "Spoken" : "Shown") << " in " << streamedUtterances
+              << (streamedUtterances == 1 ? " fragment" : " fragments") << " as it was generated.";
     }
     if (!internetTrace.empty())
     {

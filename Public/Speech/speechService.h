@@ -305,6 +305,9 @@ private:
     mutable std::mutex mutex;
     std::condition_variable_any condition;
     std::deque<Utterance> queue;
+    // The first sequence of the reply now being queued. Phrases before it belong to
+    // earlier replies and may make room; the reply's own phrases never do.
+    std::uint64_t replyFirstSequence = 0;
     OrderedSpeechQueue playbackOrder;
     std::map<std::uint64_t, PreparedUtterance> prepared;
     std::size_t generatingCount = 0;

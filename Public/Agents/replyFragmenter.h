@@ -16,11 +16,20 @@ public:
 
     // Feeds newly generated text. Returns any fragments that are now complete.
     [[nodiscard]] std::vector<std::string> Consume(const std::string& incoming);
+    // Feeds text the caller knows ends a sentence, so its last sentence can be emitted
+    // without waiting for the whitespace that would otherwise confirm the boundary.
+    [[nodiscard]] std::vector<std::string> ConsumeSentences(const std::string& incoming);
     // Whatever is left when generation ends, if it is worth speaking.
     [[nodiscard]] std::string Flush();
+    // Text received but not emitted yet. Flush may judge it not worth speaking; it is
+    // still part of the reply.
+    [[nodiscard]] std::string Pending() const;
     void Reset();
 
     [[nodiscard]] static bool IsBoundary(const std::string& text, std::size_t index);
+    // Where the sentence whose terminal punctuation is at `index` ends, past any closing
+    // quote or bracket; npos when `index` is not a confirmed boundary.
+    [[nodiscard]] static std::size_t SentenceEnd(const std::string& text, std::size_t index);
 
 private:
     std::string pending;

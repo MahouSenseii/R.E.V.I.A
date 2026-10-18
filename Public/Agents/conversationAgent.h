@@ -15,9 +15,13 @@ namespace revia::agents
 class ConversationAgent
 {
 public:
-    // onDelta receives the completed, approved answer only after all enabled filters.
-    // Raw model chunks never reach a speech/display callback. Cancellation or failed
-    // generation delivers nothing; callers may fragment the approved text for speech.
+    // onDelta receives approved text only; raw model chunks never reach it. On an ordinary
+    // conversation turn with no AI reviewer, each complete sentence arrives as soon as the
+    // deterministic filters leave the reply so far unchanged, and the rest after the final
+    // pass. A reply that must be reviewed or validated whole arrives once, after every
+    // enabled filter. The deltas add up to the final reply unless the full pass changed
+    // text already released; callers compare them with the returned response. Cancellation
+    // or failed generation delivers nothing more.
     responseOutput Execute(const messageRouter& router, const std::string& input, const std::vector<conversationMessage>& context,
         const responseFilterSettings& filterSettings, const ResponseFilterContext& filterContext, std::stop_token stopToken = {},
         messageRouter::DeltaHandler onDelta = {}, const revia::intelligence::IntelligenceDecision& decision = {},

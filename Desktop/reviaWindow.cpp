@@ -1569,6 +1569,18 @@ void ReviaWindow::HandleRuntimeEvent(const revia::runtime::RuntimeEvent& event)
         // Publish ready sentences immediately, independently of audio generation.
         const QString speaker = QString::fromStdString(Session().DisplayName());
         const QString body = QString::fromStdString(event.message);
+        if (event.phase == "Replace")
+        {
+            ReplaceStreamedReply(event.conversationTurnId, speaker, body);
+            CaptureDisplayedAnswer(body, event.stamp, event.audienceRevision, event.conversationTurnId);
+            return;
+        }
+        if (event.conversationTurnId != streamedReplyTurnId)
+        {
+            streamedReplyTurnId = event.conversationTurnId;
+            streamedReplyEntries.clear();
+        }
+        streamedReplyEntries.push_back(chatEntries.size());
         AppendChat(speaker, body);
         CaptureDisplayedAnswer(body, event.stamp, event.audienceRevision, event.conversationTurnId, true);
         return;
@@ -1945,6 +1957,8 @@ void ReviaWindow::ResetConversationPresentation()
     latestDisplayedAnswer.clear();
     displayedAnswerTarget = {};
     displayedAnswerTurnId = 0;
+    streamedReplyTurnId = 0;
+    streamedReplyEntries.clear();
     conversationStatus->ResetForCompanion();
     for (const char* name : {"conversationPageScroll", "memoryPageScroll"})
     {
@@ -2029,6 +2043,37 @@ void ReviaWindow::AppendChat(const QString& speaker, const QString& message, con
 {
     chatEntries.push_back({speaker, message, reasoning, userMessage, false});
     RenderChat();
+}
+
+void ReviaWindow::ReplaceStreamedReply(const std::uint64_t conversationTurnId, const QString& speaker, const QString& body)
+{
+    // The first fragment keeps its place and takes the approved text; the rest stop
+    // drawing. Entries are blanked rather than removed so every later index stays valid.
+    bool placed = false;
+    if (conversationTurnId != 0 && conversationTurnId == streamedReplyTurnId)
+    {
+        for (const std::size_t index : streamedReplyEntries)
+        {
+            if (index >= chatEntries.size())
+                continue;
+            ChatEntry& entry = chatEntries[index];
+            if (!placed)
+            {
+                entry.body = body;
+                placed = true;
+            }
+            else
+            {
+                entry.speaker.clear();
+                entry.body.clear();
+            }
+        }
+    }
+    streamedReplyEntries.clear();
+    if (placed)
+        RenderChat();
+    else
+        AppendChat(speaker, body);
 }
 
 void ReviaWindow::AppendWorkEntry(const EntryKind kind, const QString& body, const QString& detail, const quint64 taskId, const int round)

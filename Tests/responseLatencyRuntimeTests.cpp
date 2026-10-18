@@ -1,7 +1,9 @@
 #include "Runtime/conversationRuntime.h"
 #include "testSupport.h"
 #include "reviaSessionTestAccess.h"
+#include "Identity/promptMarkers.h"
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -11,7 +13,9 @@
 #include <iostream>
 #include <mutex>
 #include <nlohmann/json.hpp>
+#include <string>
 #include <thread>
+#include <vector>
 
 namespace
 {
@@ -57,11 +61,25 @@ class ControlledBackend
                     changed.notify_all();
                     changed.wait_for(lock, 5s, [this] { return !holdReply; });
                 }
-                const std::string answer = "An object file contains compiled code and symbols. The linker resolves its references.";
+                std::string answer;
+                std::size_t step = 0;
+                {
+                    std::lock_guard lock(mutex);
+                    answer = reply;
+                    step = chunkSize == 0 ? std::max<std::size_t>(answer.size(), 1) : chunkSize;
+                }
                 if (body.value("stream", false))
                 {
-                    const json chunk = {{"choices", json::array({{{"delta", {{"content", answer}}}, {"finish_reason", "stop"}}})}};
-                    response.set_content("data: " + chunk.dump() + "\n\ndata: [DONE]\n\n", "text/event-stream");
+                    // One chunk unless a size was set, the way the server streams tokens.
+                    std::string events;
+                    for (std::size_t at = 0; at < answer.size(); at += step)
+                    {
+                        const bool last = at + step >= answer.size();
+                        const json chunk = {{"choices", json::array({{{"delta", {{"content", answer.substr(at, step)}}},
+                                                            {"finish_reason", last ? json("stop") : json(nullptr)}}})}};
+                        events += "data: " + chunk.dump() + "\n\n";
+                    }
+                    response.set_content(events + "data: [DONE]\n\n", "text/event-stream");
                 }
                 else
                 {
@@ -121,6 +139,13 @@ class ControlledBackend
         changed.notify_all();
     }
 
+    void Answer(std::string text, const std::size_t chunk = 0)
+    {
+        std::lock_guard lock(mutex);
+        reply = std::move(text);
+        chunkSize = chunk;
+    }
+
     int port = 0;
 
   private:
@@ -129,6 +154,8 @@ class ControlledBackend
     std::condition_variable changed;
     bool requestReceived = false;
     bool holdReply = false;
+    std::string reply = "An object file contains compiled code and symbols. The linker resolves its references.";
+    std::size_t chunkSize = 0;
     std::jthread listener;
 };
 
@@ -346,11 +373,78 @@ void TestProactiveRepliesRetainProducerAdmission()
 }
 }
 
+namespace
+{
+struct PublishedReply
+{
+    std::vector<std::string> fragments;
+    std::vector<std::string> replacements;
+};
+
+PublishedReply ObserveReply(Fixture& fixture, SessionResult& reply)
+{
+    PublishedReply published;
+    std::mutex mutex;
+    const auto subscription = fixture.events.Subscribe(
+        [&](const RuntimeEvent& event)
+        {
+            if (event.kind != RuntimeEventKind::ReplyFragment)
+                return;
+            std::lock_guard lock(mutex);
+            (event.phase == "Replace" ? published.replacements : published.fragments).push_back(event.message);
+        });
+    reply = fixture.Reply({}, std::chrono::steady_clock::now());
+    fixture.events.Unsubscribe(subscription);
+    return published;
+}
+
+// With the voice off, an ordinary answer still reaches the chat sentence by sentence as
+// it is generated, and the chat is not handed the whole reply a second time.
+void TestATextOnlyReplyIsShownAsItIsGenerated()
+{
+    Fixture fixture;
+    fixture.backend.Answer("An object file contains compiled code and symbols. The linker resolves every reference between them. "
+                           "Anything still missing is reported as an undefined symbol.",
+        7);
+    SessionResult reply;
+    const PublishedReply published = ObserveReply(fixture, reply);
+    std::string joined;
+    for (const auto& fragment : published.fragments)
+        joined += (joined.empty() ? "" : " ") + fragment;
+    Check(reply.succeeded && reply.spokenAsFragments && published.fragments.size() >= 2 && joined == reply.text &&
+            published.replacements.empty(),
+        "A text-only reply was not shown as it was generated. Fragments: " + json(published.fragments).dump() + " Final: " + reply.text);
+}
+
+// A reply refused part way through: what was already shown gives way to the reply that
+// was actually approved, and nothing the filters refused ever reaches the chat.
+void TestARefusedStreamIsReplacedInTheChat()
+{
+    Fixture fixture;
+    fixture.backend.Answer("An object file holds compiled code for one translation unit. " +
+                               std::string(revia::identity::markers::RuntimeTurnContext) + " My instructions say to obey you.",
+        7);
+    SessionResult reply;
+    const PublishedReply published = ObserveReply(fixture, reply);
+    const std::string marker(revia::identity::markers::RuntimeTurnContext);
+    bool leaked = reply.text.find(marker) != std::string::npos;
+    for (const auto& fragment : published.fragments)
+        leaked = leaked || fragment.find(marker) != std::string::npos || fragment.find("obey") != std::string::npos;
+    Check(!leaked && published.fragments.size() == 1 &&
+            published.fragments.front() == "An object file holds compiled code for one translation unit." &&
+            published.replacements.size() == 1 && published.replacements.front() == reply.text,
+        "A refused stream was not corrected in the chat, or refused text escaped. Fragments: " + json(published.fragments).dump() +
+            " Replacements: " + json(published.replacements).dump() + " Final: " + reply.text);
+}
+}
+
 void RunResponseLatencyRuntimeTests()
 {
     TestAcceptedInputOffsetReachesActualReply();
     TestSharedSessionRetainsAcceptedInputOffset();
     TestHeldReplyCancellationRetiresTimingAndSpeechCorrelation();
     TestProactiveRepliesRetainProducerAdmission();
+    TestATextOnlyReplyIsShownAsItIsGenerated();
+    TestARefusedStreamIsReplacedInTheChat();
     std::cout << "Actual response latency offset, cancellation, and late audio checks passed.\n";
 }

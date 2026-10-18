@@ -4,6 +4,7 @@
 #include "testSupport.h"
 
 #include <httplib.h>
+#include <algorithm>
 #include <nlohmann/json.hpp>
 #include <mutex>
 #include <thread>
@@ -34,9 +35,18 @@ class ReplyBackend
                         "application/json");
                     return;
                 }
-                const nlohmann::json chunk = {
-                    {"choices", nlohmann::json::array({{{"delta", {{"content", answer}}}, {"finish_reason", finishReason}}})}};
-                response.set_content("data: " + chunk.dump() + "\n\ndata: [DONE]\n\n", "text/event-stream");
+                // One chunk unless a chunk size was asked for, the way the server streams tokens.
+                std::string events;
+                const std::size_t step = chunkSize == 0 ? std::max<std::size_t>(answer.size(), 1) : chunkSize;
+                for (std::size_t at = 0; at < answer.size() || at == 0; at += step)
+                {
+                    const bool last = at + step >= answer.size();
+                    const nlohmann::json chunk = {{"choices",
+                        nlohmann::json::array({{{"delta", {{"content", answer.substr(at, step)}}},
+                            {"finish_reason", last ? nlohmann::json(finishReason) : nlohmann::json(nullptr)}}})}};
+                    events += "data: " + chunk.dump() + "\n\n";
+                }
+                response.set_content(events + "data: [DONE]\n\n", "text/event-stream");
             });
         server.new_task_queue = [] { return new httplib::ThreadPool(1); };
         port = server.bind_to_any_port("127.0.0.1");
@@ -52,11 +62,12 @@ class ReplyBackend
         server.stop();
         worker.join();
     }
-    void Reply(std::string text, std::string finish = "stop")
+    void Reply(std::string text, std::string finish = "stop", const std::size_t chunk = 0)
     {
         std::lock_guard lock(mutex);
         answer = std::move(text);
         finishReason = std::move(finish);
+        chunkSize = chunk;
     }
     nlohmann::json Request()
     {
@@ -76,6 +87,7 @@ class ReplyBackend
     std::mutex mutex;
     std::string answer;
     std::string finishReason;
+    std::size_t chunkSize = 0;
     std::string reviewAnswer;
     nlohmann::json lastRequest;
 };
@@ -421,6 +433,60 @@ void TestIntroducedSchemaWireAndReaffirmation()
 }
 }
 
+namespace
+{
+// An ordinary answer reaches the caller sentence by sentence while it is generated, every
+// piece of it approved, and adds up to exactly the final reply. A reply the AI reviewer
+// must read whole still arrives once.
+void TestConversationRepliesStreamBySentence()
+{
+    using namespace revia::agents;
+    revia::tests::ScopedTestDirectory directory;
+    ReplyBackend backend;
+    messageRouter router((directory.root / "stream.db").string());
+    llmSettings settings;
+    settings.host = "127.0.0.1";
+    settings.port = backend.port;
+    settings.modelName = "structured-reply-fixture";
+    settings.contextSize = 8192;
+    settings.maxTokens = 512;
+    settings.bAutoMaxTokens = settings.bAutoStartServer = settings.bVisionEnabled = false;
+    embeddingSettings embeddings;
+    embeddings.bEnabled = embeddings.bAutoStartServer = false;
+    aiProfile profile;
+    profile.bMemoryEnabled = false;
+    router.ApplyLLMSettings(settings, embeddings, profile);
+    Check(router.IsLLMAvailable(), "The streaming fixture failed its configured-model health admission.");
+
+    const std::string input = "How does static linking work?";
+    const std::string answer =
+        "Static linking copies the code a program uses into the program itself. The linker resolves every symbol "
+        "while it builds the file. Nothing else has to be found when the program starts. That makes the file larger, "
+        "and it makes deploying it simpler.";
+    responseFilterSettings filters;
+    filters.bAiReviewEnabled = false;
+    backend.Reply(answer, "stop", 6);
+    std::vector<std::string> deltas;
+    const auto streamed =
+        ConversationAgent{}.Execute(router, input, {{"user", input}}, filters, {}, {}, [&](const auto& text) { deltas.push_back(text); });
+    std::string joined;
+    for (const auto& delta : deltas)
+        joined += delta;
+    Check(streamed.bSuccess && streamed.bWasStreamed && deltas.size() > 1 &&
+            deltas.front() == "Static linking copies the code a program uses into the program itself." && joined == streamed.response,
+        "An ordinary reply was not released sentence by sentence as an exact prefix of the final reply. Deltas: " +
+            nlohmann::json(deltas).dump() + " Final: " + streamed.response);
+
+    filters.bAiReviewEnabled = true;
+    backend.Review(R"({"verdict":"allow","reason":"Fixture review."})");
+    deltas.clear();
+    const auto reviewed =
+        ConversationAgent{}.Execute(router, input, {{"user", input}}, filters, {}, {}, [&](const auto& text) { deltas.push_back(text); });
+    Check(reviewed.bSuccess && deltas.size() == 1 && deltas.front() == reviewed.response,
+        "A reply the AI reviewer had not read yet reached the caller early. Deltas: " + nlohmann::json(deltas).dump());
+}
+}
+
 void RunStructuredReplyTests()
 {
     TestProviderContractAndDataPreservation();
@@ -429,4 +495,5 @@ void RunStructuredReplyTests()
     TestTerminalDeliveryRetainsWireShape();
     TestReviewerReplacementMustMatchFinalContract();
     TestIntroducedSchemaWireAndReaffirmation();
+    TestConversationRepliesStreamBySentence();
 }
