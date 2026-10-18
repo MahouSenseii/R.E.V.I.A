@@ -5,6 +5,8 @@
 #include "developmentStudioPanel.h"
 #include "learningStudioPanel.h"
 #include "answerFeedbackDialog.h"
+#include "chatSessionsPanel.h"
+#include "Memory/conversationArchive.h"
 #include "memoryPanel.h"
 #include "Memory/longTermMemory.h"
 #include "Policy/desktopAuthorization.h"
@@ -19,10 +21,12 @@
 #include <QDir>
 #include <QElapsedTimer>
 #include <QFont>
+#include <QFile>
 #include <QFontDatabase>
 #include <QKeyEvent>
 #include <QLabel>
 #include <QLineEdit>
+#include <QListWidget>
 #include <QMessageBox>
 #include <QPixmap>
 #include <QPlainTextEdit>
@@ -1299,6 +1303,91 @@ struct ReviaWindowStopTests
         window.RenderChat();
     }
 
+    static void RunChatSessionsUi(ReviaWindow& window, int& failures)
+    {
+        const auto expect = [&](const bool condition, const char* message)
+        {
+            if (!condition)
+            {
+                std::cerr << "FAIL: " << message << '\n';
+                ++failures;
+            }
+        };
+        auto* panel = window.findChild<ChatSessionsPanel*>("chatSessionsPanel");
+        auto* list = window.findChild<QListWidget*>("chatSessionList");
+        auto* status = window.findChild<QLabel*>("chatSessionsStatus");
+        expect(panel && list && status && window.findChild<QPushButton*>("chatSidebarToggle"), "Chat has no chat list beside the transcript");
+        if (!panel || !list || !status)
+            return;
+        panel->Refresh();
+        expect(list->count() == 0 && status->text().contains("once Revia has started"), "the chat list did not explain why it is empty");
+
+        // With a started session and an archive holding one earlier chat.
+        QTemporaryDir archiveDirectory;
+        const auto path = std::filesystem::path(archiveDirectory.path().toStdWString()) / "conversations.db";
+        {
+            revia::memory::ConversationArchive seed(path.string());
+            std::string error;
+            seed.BeginSession("earlier-chat", error);
+            seed.Record("earlier-chat", "user", "Plan the sentinel_garden_7a beds.", error);
+            seed.Record("earlier-chat", "assistant", "Start with **sunny** corners.", error);
+        }
+        revia::runtime::ReviaSessionTestAccess::OpenConversationArchive(window.session, path, "current-chat");
+        revia::runtime::ReviaSessionTestAccess::MarkStudioStarted(window.session, true);
+        window.chatEntries.clear();
+        window.AppendChat("You", "Live question", true);
+        panel->Refresh();
+        QListWidgetItem* earlier = nullptr;
+        for (int row = 0; row < list->count(); ++row)
+            if (list->item(row)->data(Qt::UserRole).toString() == "earlier-chat")
+                earlier = list->item(row);
+        expect(list->count() == 2 && earlier && earlier->text().contains("sentinel_garden_7a"),
+            "the earlier chat and the current one were not both listed");
+        if (earlier)
+        {
+            earlier->setSelected(true);
+            QTemporaryDir exportDirectory;
+            QString error;
+            const QString markdownPath = exportDirectory.filePath("chat.md");
+            const QString jsonPath = exportDirectory.filePath("chat.json");
+            QFile markdown(markdownPath);
+            QFile json(jsonPath);
+            expect(panel->ExportSelected(markdownPath, false, error) && markdown.open(QIODevice::ReadOnly) &&
+                       QString::fromUtf8(markdown.readAll()).contains("**You:**\n\nPlan the sentinel_garden_7a beds."),
+                "Markdown export did not write the chat to the chosen file");
+            expect(panel->ExportSelected(jsonPath, true, error) && json.open(QIODevice::ReadOnly) &&
+                       QString::fromUtf8(json.readAll()).contains("\"role\": \"assistant\""),
+                "JSON export did not write the chat to the chosen file");
+
+            // Opening it shows it read-only; live entries keep collecting underneath.
+            window.OpenArchivedChat("earlier-chat");
+            const QString shown = window.chatHistory->toPlainText();
+            expect(!window.viewingArchivedChat.empty() && window.archivedChatBanner->isVisibleTo(&window) &&
+                       shown.contains("sentinel_garden_7a") && !shown.contains("Live question"),
+                "opening a saved chat did not show it in place of the live transcript");
+            window.AppendChat("System", "Arrived while reading", false);
+            expect(!window.chatHistory->toPlainText().contains("Arrived while reading"), "a live entry replaced the saved chat on screen");
+            window.CloseArchivedChat();
+            expect(window.chatHistory->toPlainText().contains("Arrived while reading") && !window.archivedChatBanner->isVisibleTo(&window),
+                "Back did not return to the live transcript");
+            window.OpenArchivedChat("earlier-chat");
+            window.ContinueArchivedChat();
+            expect(!window.viewingArchivedChat.empty() && !window.archivedChatLabel->text().isEmpty() &&
+                       window.Session().CurrentConversationId() == "current-chat",
+                "an unidentified typist continued a chat, or the refusal was not shown");
+            window.CloseArchivedChat();
+
+            std::string failure;
+            expect(window.DeleteChat("earlier-chat", failure) && (panel->Refresh(), list->count() == 1), "deleting a saved chat left it listed");
+        }
+        std::string failure;
+        expect(window.StartNewChat(failure) && window.chatEntries.empty() && window.Session().CurrentConversationId() != "current-chat",
+            "New chat did not start a fresh transcript and archive session");
+        revia::runtime::ReviaSessionTestAccess::MarkStudioStarted(window.session, false);
+        window.chatEntries.clear();
+        window.RenderChat();
+    }
+
     static void Run(ReviaWindow& window, int& failures)
     {
         using revia::runtime::RuntimeEvent;
@@ -1461,6 +1550,7 @@ int main(int argc, char** argv)
     ReviaWindow window(false, false);
     ReviaWindowStopTests::Run(window, failures);
     ReviaWindowStopTests::RunChatTranscriptUi(window, failures);
+    ReviaWindowStopTests::RunChatSessionsUi(window, failures);
     ReviaWindowStopTests::RunConfirmationAudienceUi(window, failures);
     ReviaWindowStopTests::RunConversationQualityUi(window, failures);
     ReviaWindowStopTests::RunMemoryRevisionUi(window, failures);

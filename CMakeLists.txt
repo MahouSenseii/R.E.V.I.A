@@ -193,6 +193,8 @@ if(REVIA_BUILD_DESKTOP)
                 "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/canvasPanel.cpp"
                 "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/chatMarkdown.cpp"
                 "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/chatMarkdown.h"
+                "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/chatSessionsPanel.cpp"
+                "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/chatSessionsPanel.h"
                 "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/agentStudioPanel.cpp"
                 "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/agentStudioPanel.h"
                 "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/companionStudio.cpp"

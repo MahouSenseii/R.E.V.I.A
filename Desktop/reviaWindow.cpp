@@ -20,6 +20,7 @@
 #include "internetActivityPanel.h"
 #include "resourcePanel.h"
 #include "chatMarkdown.h"
+#include "chatSessionsPanel.h"
 #include "ui_reviaWindow.h"
 
 #include <QApplication>
@@ -489,6 +490,7 @@ void ReviaWindow::BuildInterface()
     conversationStatus = new ConversationStatusPanel(ui->chatPage);
     ui->chatLayout->insertWidget(0, conversationStatus);
     connect(conversationStatus->ReviewButton(), &QPushButton::clicked, this, [this]() { ReviewDisplayedAnswer(); });
+    BuildChatSidebar();
     voiceHealth = new VoiceHealthPanel(false, ui->voicePage);
     ui->voiceLayout->insertWidget(0, voiceHealth);
     connect(chatVoiceHealth->DetailsButton(), &QPushButton::clicked, this,
@@ -543,7 +545,10 @@ void ReviaWindow::BuildInterface()
     connect(chatHistory, &QTextBrowser::anchorClicked, this,
         [this](const QUrl& link)
         {
-            // Every anchor here was written by RenderChat; reply text cannot add one.
+            // Every anchor here was written by RenderChat; reply text cannot add one. A
+            // saved chat on screen has none, and its indices would not be the live ones.
+            if (!viewingArchivedChat.empty())
+                return;
             const QString target = link.toString();
             const qsizetype colon = target.indexOf(QLatin1Char(':'));
             if (colon <= 0)
@@ -825,6 +830,7 @@ void ReviaWindow::StartRuntime()
                     {
                         visionPanel->Refresh();
                     }
+                    RefreshChatSidebar();
                     messageInput->setFocus();
                 },
                 Qt::QueuedConnection);
@@ -853,6 +859,8 @@ void ReviaWindow::SendMessage(const bool voiceInput)
         return;
     }
     messageInput->clear();
+    // A message always goes to the current chat, so that is what the window shows.
+    CloseArchivedChat();
 
     if (voiceInput)
     {
@@ -932,6 +940,7 @@ void ReviaWindow::SendMessage(const bool voiceInput)
                     PresentSessionResult(result);
                     sendButton->setEnabled(!result.shouldExit && Session().IsStarted());
                     RefreshStateBadge();
+                    RefreshChatSidebar();
                     if (result.shouldExit)
                     {
                         BeginShutdown(revia::core::ExitReason::UserCommand, "the conversation asked Revia to exit");
@@ -2040,6 +2049,9 @@ void ReviaWindow::ResetConversationPresentation()
     displayedAnswerTurnId = 0;
     streamedReplyTurnId = 0;
     streamedReplyEntries.clear();
+    viewingArchivedChat.clear();
+    if (archivedChatBanner)
+        archivedChatBanner->hide();
     conversationStatus->ResetForCompanion();
     for (const char* name : {"conversationPageScroll", "memoryPageScroll"})
     {
@@ -2237,6 +2249,10 @@ void ReviaWindow::AppendWorkEntry(const EntryKind kind, const QString& body, con
 
 void ReviaWindow::RenderChat()
 {
+    // A saved chat stays on screen, scrolled where the reader left it; the live entries
+    // keep collecting and are drawn again on the way back.
+    if (!viewingArchivedChat.empty())
+        return;
     // Rebuilt in full rather than appended, because expanding one entry changes the
     // document and QTextBrowser has no way to toggle a region in place.
     QString html;
@@ -2358,6 +2374,219 @@ void ReviaWindow::RenderChat()
 
     chatHistory->setHtml(html);
     chatHistory->verticalScrollBar()->setValue(chatHistory->verticalScrollBar()->maximum());
+}
+
+void ReviaWindow::BuildChatSidebar()
+{
+    ChatSessionControls controls;
+    controls.list = [this](const std::string& query, std::string& error) { return Session().BrowseConversations(query, 200, error); };
+    controls.current = [this]() { return Session().CurrentConversationId(); };
+    controls.startNew = [this](std::string& error) { return StartNewChat(error); };
+    controls.rename = [this](const std::string& id, const std::string& title, std::string& error)
+    { return Session().RenameConversation(id, title, error); };
+    controls.remove = [this](const std::string& id, std::string& error) { return DeleteChat(id, error); };
+    controls.exportText = [this](const std::string& id, const bool json, std::string& text, std::string& error)
+    { return Session().ExportConversation(id, json, text, error); };
+    controls.open = [this](const std::string& id) { OpenArchivedChat(id); };
+
+    // The transcript moves into a row beside the chat list; the composer stays full width.
+    auto* body = new QWidget(ui->chatPage);
+    body->setObjectName("chatBody");
+    auto* row = new QHBoxLayout(body);
+    row->setContentsMargins(0, 0, 0, 0);
+    row->setSpacing(10);
+    chatSessionsPanel = new ChatSessionsPanel(std::move(controls), body);
+    chatSessionsPanel->setFixedWidth(236);
+    row->addWidget(chatSessionsPanel);
+    auto* column = new QWidget(body);
+    auto* columnLayout = new QVBoxLayout(column);
+    columnLayout->setContentsMargins(0, 0, 0, 0);
+    columnLayout->setSpacing(6);
+    archivedChatBanner = new QWidget(column);
+    archivedChatBanner->setObjectName("archivedChatBanner");
+    archivedChatBanner->setAttribute(Qt::WA_StyledBackground, true);
+    auto* bannerLayout = new QHBoxLayout(archivedChatBanner);
+    bannerLayout->setContentsMargins(10, 6, 6, 6);
+    archivedChatLabel = new QLabel(archivedChatBanner);
+    archivedChatLabel->setObjectName("archivedChatLabel");
+    archivedChatLabel->setWordWrap(true);
+    bannerLayout->addWidget(archivedChatLabel, 1);
+    continueChatButton = new QPushButton(QStringLiteral("Continue this chat"), archivedChatBanner);
+    continueChatButton->setObjectName("continueChatButton");
+    continueChatButton->setToolTip(QStringLiteral("Make this the current chat. Revia gets back only your own turns from it."));
+    bannerLayout->addWidget(continueChatButton);
+    auto* back = new QPushButton(QStringLiteral("Back to current chat"), archivedChatBanner);
+    back->setObjectName("backToChatButton");
+    bannerLayout->addWidget(back);
+    archivedChatBanner->hide();
+    const int at = ui->chatLayout->indexOf(chatHistory);
+    ui->chatLayout->removeWidget(chatHistory);
+    columnLayout->addWidget(archivedChatBanner);
+    columnLayout->addWidget(chatHistory, 1);
+    row->addWidget(column, 1);
+    ui->chatLayout->insertWidget(at, body, 1);
+    connect(continueChatButton, &QPushButton::clicked, this, [this]() { ContinueArchivedChat(); });
+    connect(back, &QPushButton::clicked, this, [this]() { CloseArchivedChat(); });
+
+    chatSidebarToggle = new QPushButton(QStringLiteral("Chats"), ui->chatPage);
+    chatSidebarToggle->setObjectName("chatSidebarToggle");
+    chatSidebarToggle->setCheckable(true);
+    chatSidebarToggle->setToolTip(QStringLiteral("Show or hide the list of chats"));
+    ui->chatButtonLayout->insertWidget(0, chatSidebarToggle);
+    chatSidebarWanted = QSettings().value("chat/sidebarVisible", true).toBool();
+    chatSidebarToggle->setChecked(chatSidebarWanted);
+    connect(chatSidebarToggle, &QPushButton::toggled, this,
+        [this](const bool shown)
+        {
+            chatSidebarWanted = shown;
+            QSettings().setValue("chat/sidebarVisible", shown);
+            ApplyChatSidebarVisibility();
+            RefreshChatSidebar();
+        });
+    ApplyChatSidebarVisibility();
+    chatSessionsPanel->Refresh();
+}
+
+void ReviaWindow::ApplyChatSidebarVisibility()
+{
+    // On a narrow window the transcript needs the width more than the list does.
+    if (chatSessionsPanel)
+        chatSessionsPanel->setVisible(chatSidebarWanted && width() >= 900);
+}
+
+void ReviaWindow::RefreshChatSidebar()
+{
+    if (chatSessionsPanel && chatSessionsPanel->isVisible())
+        chatSessionsPanel->Refresh();
+}
+
+void ReviaWindow::ClearTranscript()
+{
+    chatEntries.clear();
+    streamedReplyTurnId = 0;
+    streamedReplyEntries.clear();
+    pendingUtterances.clear();
+    pendingSpeechTimer->stop();
+    RenderChat();
+}
+
+bool ReviaWindow::StartNewChat(std::string& outError)
+{
+    if (operationRunning.load())
+    {
+        outError = "Revia is still working on the previous request. Start a new chat once she has answered.";
+        return false;
+    }
+    if (!Session().StartNewConversation(outError))
+        return false;
+    CloseArchivedChat();
+    ClearTranscript();
+    messageInput->setFocus();
+    return true;
+}
+
+bool ReviaWindow::DeleteChat(const std::string& id, std::string& outError)
+{
+    const bool current = id == Session().CurrentConversationId();
+    if (current && operationRunning.load())
+    {
+        outError = "Revia is still working on the previous request. Delete this chat once she has answered.";
+        return false;
+    }
+    if (!Session().DeleteConversation(id, outError))
+        return false;
+    if (viewingArchivedChat == id)
+        CloseArchivedChat();
+    if (current)
+        ClearTranscript();
+    return true;
+}
+
+void ReviaWindow::OpenArchivedChat(const std::string& id)
+{
+    if (id.empty() || id == Session().CurrentConversationId())
+    {
+        CloseArchivedChat();
+        return;
+    }
+    std::string error;
+    const std::vector<revia::memory::ArchivedTurn> turns = Session().ConversationTranscript(id, error);
+    if (!error.empty())
+    {
+        chatSessionsPanel->SetStatus(QString::fromStdString(error));
+        return;
+    }
+    // Reply text from the archive is as untrusted as it was live.
+    const QString assistant = QString::fromStdString(Session().DisplayName());
+    QString html;
+    for (const revia::memory::ArchivedTurn& turn : turns)
+    {
+        const bool user = turn.role == "user";
+        html += QStringLiteral("<p style=\"margin-top:8px; margin-bottom:2px; text-align:%1;\"><b><span style=\"color:%2;\">%3</span></b></p>")
+                    .arg(user ? QStringLiteral("right") : QStringLiteral("left"), user ? QStringLiteral("#9dd7ff") : QStringLiteral("#70e0ca"),
+                        (user ? QStringLiteral("You") : assistant).toHtmlEscaped());
+        const QString body = QString::fromStdString(turn.content);
+        html += user ? QStringLiteral("<p style=\"margin-top:0px; margin-bottom:2px; text-align:right; color:#dce9f7;\">%1</p>")
+                           .arg(HtmlParagraph(body))
+                     : revia::desktop::RenderUntrustedMarkdown(body);
+    }
+    if (turns.empty())
+        html = QStringLiteral("<p style=\"color:#93a4bd;\">Nothing from this chat was kept in the archive.</p>");
+    viewingArchivedChat = id;
+    archivedChatLabel->setText(QStringLiteral("Reading a saved chat. It is not part of the current conversation."));
+    continueChatButton->setEnabled(!turns.empty());
+    archivedChatBanner->show();
+    chatHistory->setHtml(html);
+    chatHistory->verticalScrollBar()->setValue(0);
+}
+
+void ReviaWindow::CloseArchivedChat()
+{
+    if (viewingArchivedChat.empty())
+        return;
+    viewingArchivedChat.clear();
+    archivedChatBanner->hide();
+    RenderChat();
+}
+
+void ReviaWindow::ContinueArchivedChat()
+{
+    const std::string id = viewingArchivedChat;
+    if (id.empty())
+        return;
+    if (operationRunning.load())
+    {
+        archivedChatLabel->setText(QStringLiteral("Revia is still working on the previous request. Continue once she has answered."));
+        return;
+    }
+    std::string error;
+    if (!Session().ContinueConversation(id, error))
+    {
+        archivedChatLabel->setText(QString::fromStdString(error));
+        return;
+    }
+    // The whole saved chat is shown; Revia's working context holds only the current
+    // speaker's own turns from it.
+    const std::vector<revia::memory::ArchivedTurn> turns = Session().ConversationTranscript(id, error);
+    viewingArchivedChat.clear();
+    archivedChatBanner->hide();
+    chatEntries.clear();
+    streamedReplyTurnId = 0;
+    streamedReplyEntries.clear();
+    const QString assistant = QString::fromStdString(Session().DisplayName());
+    for (const revia::memory::ArchivedTurn& turn : turns)
+    {
+        ChatEntry entry;
+        entry.userMessage = turn.role == "user";
+        entry.speaker = entry.userMessage ? QStringLiteral("You") : assistant;
+        entry.body = QString::fromStdString(turn.content);
+        entry.markdown = !entry.userMessage;
+        chatEntries.push_back(std::move(entry));
+    }
+    TrimTranscript();
+    RenderChat();
+    RefreshChatSidebar();
+    messageInput->setFocus();
 }
 
 void ReviaWindow::AppendComponentActivity(const revia::runtime::RuntimeEvent& event, const QString& message)

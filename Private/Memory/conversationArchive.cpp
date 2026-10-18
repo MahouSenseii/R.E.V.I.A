@@ -2,6 +2,9 @@
 #include "Memory/conversationArchive.h"
 
 #include "Memory/sensitiveContent.h"
+#include "Memory/temporalQuery.h"
+
+#include <nlohmann/json.hpp>
 
 #include <algorithm>
 #include <chrono>
@@ -166,6 +169,33 @@ void BindScope(sqlite3_stmt* statement, const MemoryScope* scope)
     sqlite3_bind_text(statement, 13, scope->companionId.c_str(), -1, SQLITE_TRANSIENT);
 }
 
+// What Record keeps of a turn: the whole text, or both ends of an overlong one.
+std::string StoredForm(const std::string& content, const std::size_t maxCharacters)
+{
+    if (content.size() <= maxCharacters)
+        return content;
+    const std::string marker = " [truncated] ";
+    const std::size_t material = maxCharacters > marker.size() ? maxCharacters - marker.size() : 0;
+    const std::size_t head = material / 2;
+    std::size_t tail = content.size() - (material - head);
+    while (tail < content.size() && (static_cast<unsigned char>(content[tail]) & 0xc0) == 0x80)
+        ++tail;
+    return material ? revia::utf8::Prefix(content, head) + marker + content.substr(tail) : revia::utf8::Prefix(marker, maxCharacters);
+}
+
+bool MigrateSessionTitle(sqlite3* database)
+{
+    sqlite3_stmt* raw = nullptr;
+    if (sqlite3_prepare_v2(database, "PRAGMA table_info(conversation_sessions);", -1, &raw, nullptr) != SQLITE_OK)
+        return false;
+    Statement columns(raw);
+    bool found = false;
+    while (sqlite3_step(columns.get()) == SQLITE_ROW)
+        found = found || ColumnText(columns.get(), 1) == "title";
+    columns.reset();
+    return found || Execute(database, "ALTER TABLE conversation_sessions ADD COLUMN title TEXT NOT NULL DEFAULT '';");
+}
+
 Database OpenDatabase(const std::string& archivePath)
 {
     const std::filesystem::path path(archivePath);
@@ -235,7 +265,7 @@ Database OpenDatabase(const std::string& archivePath)
         "  INSERT INTO conversation_search(conversation_search, rowid, content) "
         "  VALUES ('delete', old.rowid, old.content);"
         "END;";
-    if (!Execute(database.get(), Schema) || !MigrateScope(database.get()))
+    if (!Execute(database.get(), Schema) || !MigrateScope(database.get()) || !MigrateSessionTitle(database.get()))
     {
         return {};
     }
@@ -455,19 +485,9 @@ bool ConversationArchive::Record(const std::string& sessionId, const std::string
         return false;
     }
 
-    std::string stored = content;
-    if (stored.size() > limits.maxContentCharacters)
-    {
-        const std::string marker = " [truncated] ";
-        const std::size_t material = limits.maxContentCharacters > marker.size() ? limits.maxContentCharacters - marker.size() : 0;
-        const std::size_t head = material / 2;
-        std::size_t tail = stored.size() - (material - head);
-        while (tail < stored.size() && (static_cast<unsigned char>(stored[tail]) & 0xc0) == 0x80)
-            ++tail;
-        stored = material ? revia::utf8::Prefix(stored, head) + marker + stored.substr(tail)
-                          : revia::utf8::Prefix(marker, limits.maxContentCharacters);
+    const std::string stored = StoredForm(content, limits.maxContentCharacters);
+    if (stored.size() != content.size())
         ++counters.truncated;
-    }
 
     sqlite3* const database = Acquire();
     if (database == nullptr)
@@ -702,7 +722,7 @@ std::vector<ArchivedSession> ConversationArchive::RecentSessions(const std::size
             "  (SELECT COUNT(*) FROM conversation_turns t WHERE t.session_id = s.session_id),"
             "  COALESCE((SELECT t.content FROM conversation_turns t "
             "     WHERE t.session_id = s.session_id AND t.role = 'user' "
-            "     ORDER BY t.turn_index ASC LIMIT 1), '') "
+            "     ORDER BY t.turn_index ASC LIMIT 1), ''), COALESCE(s.title, '') "
             "FROM conversation_sessions s "
             "ORDER BY CAST(s.started_at AS INTEGER) DESC LIMIT ?;",
             -1, &raw, nullptr) != SQLITE_OK)
@@ -719,6 +739,7 @@ std::vector<ArchivedSession> ConversationArchive::RecentSessions(const std::size
         session.endedAt = ColumnText(statement.get(), 2);
         session.turns = static_cast<std::size_t>(sqlite3_column_int64(statement.get(), 3));
         session.opening = ColumnText(statement.get(), 4);
+        session.title = ColumnText(statement.get(), 5);
         sessions.push_back(std::move(session));
     }
     return sessions;
@@ -925,7 +946,93 @@ std::size_t ConversationArchive::ForgetSession(const std::string& sessionId)
     }
     std::lock_guard writeLock(connectionMutex);
     std::size_t removed = 0;
-    return DeleteSession(database, sessionId, removed) ? removed : 0;
+    if (!DeleteSession(database, sessionId, removed))
+        return 0;
+    // A delete the user asked for reaches the search index and the log too. The deletes
+    // above only add tombstones to the index, and the log still holds the old frames;
+    // without these two steps the words stay recoverable from the files.
+    Execute(database, "INSERT INTO conversation_search(conversation_search) VALUES('optimize');");
+    Execute(database, "PRAGMA wal_checkpoint(TRUNCATE);");
+    return removed;
+}
+
+bool ConversationArchive::HasSession(const std::string& sessionId) const
+{
+    sqlite3* const database = Acquire();
+    if (database == nullptr || sessionId.empty())
+        return false;
+    sqlite3_stmt* raw = nullptr;
+    if (sqlite3_prepare_v2(database, "SELECT 1 FROM conversation_sessions WHERE session_id = ?;", -1, &raw, nullptr) != SQLITE_OK)
+        return false;
+    Statement statement(raw);
+    sqlite3_bind_text(statement.get(), 1, sessionId.c_str(), -1, SQLITE_TRANSIENT);
+    return sqlite3_step(statement.get()) == SQLITE_ROW;
+}
+
+bool ConversationArchive::RenameSession(const std::string& sessionId, const std::string& title, std::string& outError)
+{
+    std::string trimmed = title;
+    const auto first = trimmed.find_first_not_of(" \t\r\n");
+    trimmed = first == std::string::npos ? std::string() : trimmed.substr(first, trimmed.find_last_not_of(" \t\r\n") - first + 1);
+    std::replace(trimmed.begin(), trimmed.end(), '\n', ' ');
+    std::replace(trimmed.begin(), trimmed.end(), '\r', ' ');
+    if (!revia::utf8::IsValid(trimmed))
+    {
+        outError = "The title is not valid text.";
+        return false;
+    }
+    if (DetectSensitiveContent(trimmed))
+    {
+        outError = "The title looks like it contains a secret, so it was not saved.";
+        return false;
+    }
+    trimmed = revia::utf8::Prefix(trimmed, 120);
+    sqlite3* const database = Acquire();
+    if (database == nullptr)
+    {
+        outError = "The conversation archive could not be opened.";
+        return false;
+    }
+    std::lock_guard writeLock(connectionMutex);
+    sqlite3_stmt* raw = nullptr;
+    if (sqlite3_prepare_v2(database, "UPDATE conversation_sessions SET title = ? WHERE session_id = ?;", -1, &raw, nullptr) != SQLITE_OK)
+    {
+        outError = "The conversation archive rejected the new title.";
+        return false;
+    }
+    Statement statement(raw);
+    sqlite3_bind_text(statement.get(), 1, trimmed.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(statement.get(), 2, sessionId.c_str(), -1, SQLITE_TRANSIENT);
+    if (sqlite3_step(statement.get()) != SQLITE_DONE || sqlite3_changes64(database) == 0)
+    {
+        outError = "That conversation is no longer in the archive.";
+        return false;
+    }
+    return true;
+}
+
+std::vector<ArchivedTurn> ConversationArchive::LoadSessionTail(
+    const std::string& sessionId, const std::size_t maxTurns, const MemoryScope& scope) const
+{
+    std::vector<ArchivedTurn> turns;
+    if (!IsAttributedPrivateScope(scope) || maxTurns == 0)
+        return turns;
+    sqlite3* const database = Acquire();
+    if (database == nullptr)
+        return turns;
+    const std::string sql = std::string("SELECT ") + TurnColumns + " FROM conversation_turns WHERE session_id = ?1 " +
+                            ScopePredicate(&scope) + "ORDER BY turn_index DESC LIMIT ?2;";
+    sqlite3_stmt* raw = nullptr;
+    if (sqlite3_prepare_v2(database, sql.c_str(), -1, &raw, nullptr) != SQLITE_OK)
+        return turns;
+    Statement statement(raw);
+    sqlite3_bind_text(statement.get(), 1, sessionId.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_int64(statement.get(), 2, static_cast<sqlite3_int64>(maxTurns));
+    BindScope(statement.get(), &scope);
+    while (sqlite3_step(statement.get()) == SQLITE_ROW)
+        turns.push_back(ReadTurn(statement.get()));
+    std::reverse(turns.begin(), turns.end());
+    return turns;
 }
 
 std::size_t ConversationArchive::TotalTurns() const
@@ -994,6 +1101,53 @@ std::string ConversationArchive::Status() const
             << " older conversations were dropped at the retention ceiling.";
     }
     return stream.str();
+}
+
+namespace
+{
+std::string TranscriptSpeaker(const ArchivedTurn& turn, const std::string& assistantName)
+{
+    return turn.role == "user" ? std::string("You") : (turn.role == "assistant" ? assistantName : turn.role);
+}
+
+std::string TranscriptTitle(const ArchivedSession& session)
+{
+    if (!session.title.empty())
+        return session.title;
+    if (!session.opening.empty())
+        return revia::utf8::Prefix(session.opening, 80);
+    return "Conversation";
+}
+}
+
+std::string RenderTranscriptMarkdown(
+    const ArchivedSession& session, const std::vector<ArchivedTurn>& turns, const std::string& assistantName)
+{
+    std::ostringstream stream;
+    stream << "# " << TranscriptTitle(session) << "\n\n";
+    const std::int64_t now = CurrentEpoch();
+    if (!session.startedAt.empty())
+        stream << "_Started " << DescribeMoment(ParseEpochSecondsText(session.startedAt), now) << "._\n\n";
+    stream << "_Exported from the Revia conversation archive. Turns the archive withheld or never kept are not included._\n";
+    for (const ArchivedTurn& turn : turns)
+        stream << "\n**" << TranscriptSpeaker(turn, assistantName) << ":**\n\n" << turn.content << "\n";
+    return stream.str();
+}
+
+std::string RenderTranscriptJson(
+    const ArchivedSession& session, const std::vector<ArchivedTurn>& turns, const std::string& assistantName)
+{
+    nlohmann::json document;
+    document["id"] = session.id;
+    document["title"] = TranscriptTitle(session);
+    document["startedAt"] = ParseEpochSecondsText(session.startedAt);
+    document["note"] = "Exported from the Revia conversation archive. Turns the archive withheld or never kept are not included.";
+    document["messages"] = nlohmann::json::array();
+    for (const ArchivedTurn& turn : turns)
+        document["messages"].push_back({{"role", turn.role}, {"speaker", TranscriptSpeaker(turn, assistantName)},
+            {"content", turn.content}, {"createdAt", ParseEpochSecondsText(turn.createdAt)}, {"index", turn.turnIndex}});
+    // Replacement rather than an exception: an export must not fail on one bad byte.
+    return document.dump(2, ' ', false, nlohmann::json::error_handler_t::replace) + "\n";
 }
 
 } // namespace revia::memory

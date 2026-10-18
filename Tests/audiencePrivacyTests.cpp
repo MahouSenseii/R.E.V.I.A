@@ -4,7 +4,9 @@
 #include "Identity/developmentState.h"
 #include "Identity/preferenceState.h"
 #include "testSupport.h"
+#include "reviaSessionTestAccess.h"
 
+#include <algorithm>
 #include <chrono>
 #include <atomic>
 #include <filesystem>
@@ -50,12 +52,12 @@ class WorkingDirectory
 class Backend
 {
   public:
-    Backend()
+    explicit Backend(std::string model = "audience-fixture-main")
     {
         server.Get(
             "/health", [](const auto&, auto& response) { response.set_content(R"({"status":"ok","slots_idle":1})", "application/json"); });
-        server.Get("/v1/models",
-            [](const auto&, auto& response) { response.set_content(R"({"data":[{"id":"audience-fixture-main"}]})", "application/json"); });
+        server.Get("/v1/models", [model = std::move(model)](const auto&, auto& response)
+            { response.set_content(json{{"data", json::array({{{"id", model}}})}}.dump(), "application/json"); });
         server.Get("/props", [](const auto&, auto& response)
             { response.set_content(R"({"total_slots":1,"default_generation_settings":{"n_ctx":8192}})", "application/json"); });
         server.Post("/v1/chat/completions",
@@ -342,6 +344,43 @@ void TestDefaultPrivateWorkCapturesAudienceAdmission()
     const auto denied = fixture.runtime.StartConversation("A harmless fixture cue", "Fixture evidence", fixture.profile, true, false);
     Check(!denied.succeeded && fixture.backend.Requests().empty(), "Factory exception permitted private background work.");
 }
+
+void TestNewChatStartsAFreshContextAndKeepsTheOldOne()
+{
+    tests::ScopedTestDirectory directory;
+    WorkingDirectory cwd(directory.root);
+    Backend backend("fixture-main");
+    ReviaSession session(CompanionPaths(directory.root, {"new-chat-fixture", "Fixture Revia", "assistant", false}));
+    ReviaSessionTestAccess::ConfigureStartupBrains(session, backend.port);
+    ReviaSessionTestAccess::OpenConversationArchive(session, directory.root / "conversations.db", "first-chat");
+    ReviaSessionTestAccess::MarkStudioStarted(session, true);
+    Check(session.Submit("Remember the sentinel_old_chat_4c1 topic.").succeeded, "The first chat turn failed.");
+    std::string error;
+    Check(session.StartNewConversation(error), error);
+    const std::string fresh = session.CurrentConversationId();
+    Check(fresh != "first-chat" && !fresh.empty() && ReviaSessionTestAccess::WorkingContext(session).empty(),
+        "New chat kept the old working context or archive session.");
+    Check(session.Submit("Start something different.").succeeded, "The new chat turn failed.");
+    const auto lastWire = backend.Requests().back().dump();
+    Check(lastWire.find("sentinel_old_chat_4c1") == std::string::npos, "The previous chat was restored into the new one.");
+    const auto listed = session.BrowseConversations({}, 10, error);
+    Check(listed.size() == 2 && (listed.front().id == fresh || listed.back().id == fresh),
+        "Both chats should be listed: " + error);
+    Check(session.BrowseConversations("sentinel_old_chat_4c1", 10, error).size() == 1, "Search did not find the old chat.");
+    Check(session.RenameConversation("first-chat", "Old topic", error), error);
+    std::string exported;
+    Check(session.ExportConversation("first-chat", false, exported, error) && exported.rfind("# Old topic", 0) == 0 &&
+              exported.find("sentinel_old_chat_4c1") != std::string::npos,
+        "The Markdown export lost the title or the turn.");
+    Check(!session.ContinueConversation("first-chat", error) && !error.empty(),
+        "An unidentified typist continued a chat without an attributed scope.");
+    Check(session.DeleteConversation("first-chat", error) && session.BrowseConversations({}, 10, error).size() == 1,
+        "Deleting a past chat did not remove it.");
+    Check(session.DeleteConversation(fresh, error) && ReviaSessionTestAccess::WorkingContext(session).empty() &&
+              session.CurrentConversationId() == fresh,
+        "Deleting the current chat did not clear its working context.");
+    ReviaSessionTestAccess::MarkStudioStarted(session, false);
+}
 } // namespace
 
 void RunAudiencePrivacyTests()
@@ -352,5 +391,6 @@ void RunAudiencePrivacyTests()
     TestAudienceRoutesMinimizeAndKeepTrustedPrivateReference();
     TestRevokedContextDoesNotRequestOrDeliver();
     TestDefaultPrivateWorkCapturesAudienceAdmission();
-    std::cout << "Audience privacy tests passed (6 real provider-request fixtures).\n";
+    TestNewChatStartsAFreshContextAndKeepsTheOldOne();
+    std::cout << "Audience privacy tests passed (7 real provider-request fixtures).\n";
 }

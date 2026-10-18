@@ -363,6 +363,25 @@ class ReviaSession
     [[nodiscard]] std::vector<memory::ArchivedSession> RecentConversations(std::size_t maxSessions = 20) const;
     std::size_t ForgetConversations();
 
+    // The desktop chat list. Every call refuses outside a private audience, the same
+    // boundary /history sits behind, so past chats never appear on a shared screen. The
+    // calls that change the working context never wait for a running turn: they refuse
+    // and say so, because they are made from the window's own thread.
+    [[nodiscard]] bool ConversationBrowsingAdmitted(std::string& outReason) const;
+    [[nodiscard]] std::string CurrentConversationId() const;
+    // A non-empty query keeps the conversations with a matching turn, newest first.
+    [[nodiscard]] std::vector<memory::ArchivedSession> BrowseConversations(
+        const std::string& query, std::size_t maxSessions, std::string& outError) const;
+    [[nodiscard]] std::vector<memory::ArchivedTurn> ConversationTranscript(const std::string& sessionId, std::string& outError) const;
+    bool ExportConversation(const std::string& sessionId, bool json, std::string& outText, std::string& outError) const;
+    // A fresh working context and archive session. Long-term memory is not touched.
+    bool StartNewConversation(std::string& outError);
+    // Puts the speaker's own turns from an older chat back into the working context and
+    // archives later turns there. Only an attributed private speaker can continue.
+    bool ContinueConversation(const std::string& sessionId, std::string& outError);
+    bool RenameConversation(const std::string& sessionId, const std::string& title, std::string& outError);
+    bool DeleteConversation(const std::string& sessionId, std::string& outError);
+
     // Durable non-authority settings. The store cannot reach a capability, so nothing
     // here can widen what Revia is permitted to do.
     core::PreferenceResult SetPreference(const std::string& name, const std::string& value);
@@ -844,6 +863,8 @@ class ReviaSession
     // Declared after borrowed collaborators so it is destroyed first.
     DocumentWorkshop documentWorkshop;
     std::string conversationSessionId;
+    // Writers also hold operationMutex; this lets the window read the id without it.
+    mutable std::mutex conversationIdMutex;
 
     mutable std::mutex operationMutex;
     // Preference commands already run under operationMutex, while UI setters do not.

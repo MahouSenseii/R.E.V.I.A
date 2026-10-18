@@ -49,6 +49,7 @@ class LearningStudioPanel;
 class DevelopmentStudioPanel;
 class AudienceStudioPanel;
 class ConversationStatusPanel;
+class ChatSessionsPanel;
 class NavigationSidebar;
 class AnswerFeedbackDialog;
 namespace Ui
@@ -133,6 +134,18 @@ class ReviaWindow final : public QMainWindow
         std::uint64_t turnId = 0, bool fragment = false);
     void ReviewDisplayedAnswer();
     void ResetConversationPresentation();
+    // The chat list beside the transcript, backed by the conversation archive.
+    void BuildChatSidebar();
+    void ApplyChatSidebarVisibility();
+    void RefreshChatSidebar();
+    bool StartNewChat(std::string& outError);
+    bool DeleteChat(const std::string& id, std::string& outError);
+    // A past chat is shown read-only in place of the live transcript, which keeps
+    // updating underneath; Back returns to it and Continue makes the past chat current.
+    void OpenArchivedChat(const std::string& id);
+    void CloseArchivedChat();
+    void ContinueArchivedChat();
+    void ClearTranscript();
     void ConfigureMemoryRevisionControls();
     void UpdateState(revia::runtime::RuntimeState state, const QString& detail);
     // The runtime returns to Idle as soon as a turn finishes, but speech is generated and
@@ -288,6 +301,13 @@ class ReviaWindow final : public QMainWindow
     VoiceHealthPanel* chatVoiceHealth = nullptr;
     VoiceHealthPanel* voiceHealth = nullptr;
     ConversationStatusPanel* conversationStatus = nullptr;
+    ChatSessionsPanel* chatSessionsPanel = nullptr;
+    QPushButton* chatSidebarToggle = nullptr;
+    QWidget* archivedChatBanner = nullptr;
+    QLabel* archivedChatLabel = nullptr;
+    QPushButton* continueChatButton = nullptr;
+    std::string viewingArchivedChat;
+    bool chatSidebarWanted = true;
     QPointer<AnswerFeedbackDialog> answerFeedbackDialog;
     QString latestDisplayedAnswer;
     revia::learning::QualityFeedback displayedAnswerTarget;

@@ -341,6 +341,7 @@ Rebuilding does not overwrite your memory, voices, preferences, or live permissi
 - **Formatted replies.** Revia's replies are shown as Markdown: headings, lists, tables, and code in a monospace face. Reply text is never treated as HTML. A link in a reply shows its address but does nothing when clicked, and images are never loaded; only the window's own links act.
 - **Copy** under each reply puts its text (as she wrote it, Markdown included) on the clipboard.
 - The window keeps the newest 400 entries. Older ones are still in the conversation archive.
+- **Chats** (the list beside the transcript, shown or hidden with the **Chats** button) lists past conversations from the archive, newest first, with search. **New chat** starts an empty working context and a new archive session; what she remembers long term is not touched. Clicking a chat shows it read-only; **Continue this chat** makes it current again and gives Revia back only your own turns from it (only once she knows who you are; otherwise the chat can still be read). **Rename**, **Delete** and **Export .md / .json** (to a file you choose) work on the selected chat. The list is hidden whenever the audience is not private, the same rule `/history` follows, and on windows narrower than 900 pixels.
 - Thinking that arrives in pieces for one turn updates a single **Revia is thinking** block in place rather than adding a block per piece.
 
 These were checked by the desktop test fixture with Qt offscreen on Linux; the Windows build has not been tried by hand yet.

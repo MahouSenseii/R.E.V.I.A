@@ -6,6 +6,7 @@
 #include "Memory/memoryScope.h"
 
 #include <algorithm>
+#include <nlohmann/json.hpp>
 #include <sqlite3.h>
 
 namespace
@@ -184,6 +185,64 @@ void TestScopedArchiveRestart()
     Check(switchedBack.size() == 1 && switchedBack.front().content == "Alice current launch note.",
         "Switching back to a participant ignored compatible current-session history.");
 }
+
+void TestArchiveSessionManagement()
+{
+    revia::tests::ScopedTestDirectory fixture;
+    const auto path = (fixture.root / "sessions.db").string();
+    const auto alice = Scope("person-alice"), bob = Scope("person-bob");
+    std::string error;
+    {
+        // A database written before titles existed must open and gain the column.
+        sqlite3* database = nullptr;
+        Check(sqlite3_open(path.c_str(), &database) == SQLITE_OK, "Legacy archive fixture open failed.");
+        const int created = sqlite3_exec(database,
+            "CREATE TABLE conversation_sessions(session_id TEXT PRIMARY KEY, started_at TEXT NOT NULL, ended_at TEXT);"
+            "INSERT INTO conversation_sessions VALUES('legacy-session', '100', NULL);",
+            nullptr, nullptr, nullptr);
+        sqlite3_close(database);
+        Check(created == SQLITE_OK, "Legacy archive fixture schema failed.");
+    }
+    ConversationArchive archive(path, {200, 500, 64});
+    Check(archive.IsAvailable() && archive.HasSession("legacy-session"), "A pre-title archive did not open.");
+    Check(archive.BeginSession("chat-a", error), error);
+    Check(archive.Record("chat-a", "user", "Plan the garden beds.", error, alice), error);
+    Check(archive.Record("chat-a", "assistant", "Start with the sunniest corner.", error, alice), error);
+
+    Check(archive.RenameSession("chat-a", "  Garden\nplanning  ", error), error);
+    Check(!archive.RenameSession("missing-chat", "Nothing", error), "A rename reported success for a missing conversation.");
+    Check(!archive.RenameSession("chat-a", "password=hunter2-secret", error), "A secret-looking title was stored.");
+    const auto sessions = archive.RecentSessions(10);
+    const auto listed = std::find_if(sessions.begin(), sessions.end(), [](const ArchivedSession& session) { return session.id == "chat-a"; });
+    Check(listed != sessions.end() && listed->title == "Garden planning" && listed->turns == 2 &&
+              listed->opening == "Plan the garden beds.",
+        "The renamed conversation did not list with its title, turns and opening.");
+
+    // Continuing a chat restores only the attributed participant's own turns.
+    Check(archive.Record("chat-a", "user", "Alice asks about tomatoes.", error, alice), error);
+    Check(archive.Record("chat-a", "user", "Bob asks about beans.", error, bob), error);
+    const auto tail = archive.LoadSessionTail("chat-a", 10, alice);
+    Check(tail.size() == 3 && tail.back().content == "Alice asks about tomatoes." &&
+              std::none_of(tail.begin(), tail.end(), [](const ArchivedTurn& turn) { return turn.content == "Bob asks about beans."; }),
+        "A session tail crossed participants.");
+    auto shared = alice;
+    shared.audience.kind = revia::identity::AudienceKind::Shared;
+    Check(archive.LoadSessionTail("chat-a", 10, shared).empty(), "A shared audience received a private session tail.");
+
+    ArchivedSession described = *listed;
+    const auto turns = archive.LoadSession("chat-a");
+    const std::string markdown = RenderTranscriptMarkdown(described, turns, "Revia");
+    Check(markdown.rfind("# Garden planning\n", 0) == 0 && markdown.find("**You:**\n\nAlice asks about tomatoes.") != std::string::npos,
+        "The Markdown export lost the title or a turn.");
+    const auto json = nlohmann::json::parse(RenderTranscriptJson(described, turns, "Revia"));
+    Check(json["title"] == "Garden planning" && json["messages"].size() == 4 && json["messages"][0]["role"] == "user" &&
+              json["messages"][3]["content"] == "Bob asks about beans.",
+        "The JSON export lost the title or a message.");
+
+    Check(archive.ForgetSession("chat-a") == 4, "Deleting a conversation did not report its turns.");
+    Check(!archive.HasSession("chat-a") && archive.Search("tomatoes").empty() && archive.LoadSession("chat-a").empty(),
+        "A deleted conversation stayed listed or searchable.");
+}
 }
 
 void RunMemoryScopeTests()
@@ -191,4 +250,5 @@ void RunMemoryScopeTests()
     TestSubjectIsolationAndRevision();
     TestScopedArchiveRestart();
     TestLegacyMigrationRemainsUnattributed();
+    TestArchiveSessionManagement();
 }

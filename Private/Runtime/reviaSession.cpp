@@ -853,7 +853,10 @@ bool ReviaSession::Start()
 
     if (settings.conversation.bArchiveEnabled)
     {
-        conversationSessionId = actions::NewActionId();
+        {
+            std::lock_guard idLock(conversationIdMutex);
+            conversationSessionId = actions::NewActionId();
+        }
         conversationArchive = memory::ConversationArchive(companionPaths.Resolve("Memory/revia_conversations.db").string(),
             {static_cast<std::size_t>(std::max(1, settings.conversation.maxSessions)),
                 static_cast<std::size_t>(std::max(1, settings.conversation.maxTurnsPerSession)),
@@ -862,6 +865,7 @@ bool ReviaSession::Start()
         if (!conversationArchive.BeginSession(conversationSessionId, archiveError))
         {
             appLogger.Warning("Conversation history is unavailable: " + archiveError);
+            std::lock_guard idLock(conversationIdMutex);
             conversationSessionId.clear();
         }
         else

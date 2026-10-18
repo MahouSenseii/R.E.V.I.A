@@ -35,6 +35,9 @@ struct ArchivedSession
     std::size_t turns = 0;
     // The first thing the user said, which is a better handle than a timestamp.
     std::string opening;
+    // A name the user gave the conversation. Empty until renamed; callers fall back to
+    // the opening line.
+    std::string title;
 };
 
 // What the archive refused, kept so the cost of the filter is visible rather than
@@ -78,6 +81,13 @@ public:
     bool EndSession(const std::string& sessionId);
 
     [[nodiscard]] std::vector<ArchivedTurn> LoadSession(const std::string& sessionId, std::size_t maxTurns = 200) const;
+    // The tail of one named session, narrowed to the attributed private scope. Used to
+    // continue an older chat; an unattributed or shared scope gets nothing back.
+    [[nodiscard]] std::vector<ArchivedTurn> LoadSessionTail(
+        const std::string& sessionId, std::size_t maxTurns, const MemoryScope& scope) const;
+    [[nodiscard]] bool HasSession(const std::string& sessionId) const;
+    // Titles are bounded, valid UTF-8 and pass the same sensitive-content gate as turns.
+    bool RenameSession(const std::string& sessionId, const std::string& title, std::string& outError);
     // The tail of the most recent session that is not this one, for restoring continuity
     // across a restart.
     [[nodiscard]] std::vector<ArchivedTurn> LoadPreviousSessionTail(
@@ -130,5 +140,12 @@ private:
     mutable std::mutex connectionMutex;
     mutable std::shared_ptr<Connection> connection;
 };
+
+// Plain exports of one archived conversation for a file the user chose. Both carry only
+// what the archive kept: withheld turns are absent, and the text says so.
+[[nodiscard]] std::string RenderTranscriptMarkdown(
+    const ArchivedSession& session, const std::vector<ArchivedTurn>& turns, const std::string& assistantName);
+[[nodiscard]] std::string RenderTranscriptJson(
+    const ArchivedSession& session, const std::vector<ArchivedTurn>& turns, const std::string& assistantName);
 
 } // namespace revia::memory
