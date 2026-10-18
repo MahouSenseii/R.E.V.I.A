@@ -255,6 +255,38 @@ RecallRequest ConversationRecallPolicy::Evaluate(const std::string& input, const
     return request;
 }
 
+RecallRequest BuildRecallRequest(const std::string& topic, const std::string& when, const bool earliest, const std::int64_t nowEpoch)
+{
+    RecallRequest request;
+    if (nowEpoch <= 0)
+        return request;
+    const std::vector<std::string> terms = ExtractTopicTerms(Tokenize(topic));
+    const TimeWindow window = when.empty() ? TimeWindow{} : ParseTimeWindow(when, nowEpoch);
+    if (earliest && !terms.empty())
+    {
+        request.kind = RecallKind::Earliest;
+        request.terms = terms;
+        request.reason = "Looked for when " + DescribeTerms(terms) + " first came up.";
+        return request;
+    }
+    if (window.IsValid())
+    {
+        request.kind = RecallKind::Window;
+        request.window = window;
+        request.terms = terms;
+        request.reason = terms.empty() ? "Looked up what was said " + window.phrase + "."
+                                       : "Looked up what was said about " + DescribeTerms(terms) + " " + window.phrase + ".";
+        return request;
+    }
+    if (!terms.empty())
+    {
+        request.kind = RecallKind::Topic;
+        request.terms = terms;
+        request.reason = "Looked up what was said about " + DescribeTerms(terms) + ".";
+    }
+    return request;
+}
+
 std::string RenderRecallBlock(const RecallRequest& request, const std::vector<ArchivedTurn>& turns, const std::string& assistantName,
     const std::int64_t nowEpoch, const std::size_t maxCharacters)
 {

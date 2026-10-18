@@ -30,9 +30,13 @@ public:
     ~messageRouter();
 
     using DeltaHandler = std::function<void(const std::string&)>;
+    // `tools` offers this turn's tool definitions and replays its earlier tool steps. While
+    // it is set, the reasoning handler is kept for the turn's later steps instead of being
+    // used once.
     responseOutput RouteMessage(const std::string& message, const std::vector<conversationMessage>& context, std::stop_token stopToken = {},
         DeltaHandler onDelta = {}, const revia::intelligence::IntelligenceDecision& decision = {},
-        revia::llm::PrivateMemoryAccess memoryAccess = revia::llm::PrivateMemoryAccess::ProfileSetting) const;
+        revia::llm::PrivateMemoryAccess memoryAccess = revia::llm::PrivateMemoryAccess::ProfileSetting,
+        const revia::llm::ToolExchange* tools = nullptr) const;
     // SetPosture clears the reasoning handler with the rest of the turn's state.
     void SetPosture(std::string posture);
     using ReasoningHandler = llmService::ReasoningHandler;

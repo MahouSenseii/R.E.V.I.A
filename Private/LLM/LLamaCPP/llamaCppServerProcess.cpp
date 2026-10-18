@@ -249,6 +249,10 @@ std::vector<std::string> BuildLlamaServerArguments(
         add({"--batch-size", batch, "--ubatch-size", batch});
         return arguments;
     }
+    // The model's own Jinja chat template. Native tool calling and enable_thinking both
+    // depend on it; recent llama.cpp builds default to it, and saying so keeps a build
+    // with the older default from silently dropping tools.
+    add({"--jinja"});
     if (!settings.device.empty() && settings.device != "auto")
     {
         add({"--device", settings.device, "--split-mode", settings.splitMode});

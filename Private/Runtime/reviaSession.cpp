@@ -14,6 +14,7 @@
 #include "Identity/promptMarkers.h"
 #include "Runtime/publicContextCache.h"
 #include "Runtime/reviaSession.h"
+#include "Agents/chatTools.h"
 #include "Core/taskContract.h"
 #include "Browser/browserSession.h"
 #include "Policy/capabilityProjection.h"
@@ -372,6 +373,76 @@ ReviaSession::ReviaSession(CompanionPaths paths, std::shared_ptr<policy::Compani
             return [this, captured, contract, admission = std::move(admission), stopToken](
                        const agents::CheckKind kind, const std::string& proposal, const std::string&)
             { return ExecuteInvestigationCheck(actionRuntime, captured, kind, proposal, stopToken, admission, contract); };
+        });
+    conversationRuntime.SetChatToolProvider(
+        [this](const std::function<bool()>& admission, const std::stop_token stopToken)
+        {
+            // The session's own tools for one private chat turn. Each reaches the owner an
+            // explicit command would: ActionRuntime with its policy, confirmation and audit
+            // for files and pictures, the reminder book for reminders.
+            ConversationRuntime::ChatToolGrant grant;
+            grant.archiveEnabled = settings.conversation.bArchiveEnabled;
+            grant.remindersAvailable = true;
+            grant.executors.setReminder = [this](const std::string& text, const std::string& when, const agents::ToolCallContext& call)
+            {
+                if (!call.Admitted())
+                    return agents::ToolExecution::Fail("The turn ended before the reminder was set.");
+                return agents::AddChatReminder(reminders, text, when, planning::WallClock::now());
+            };
+            if (!actionRuntime.IsInitialized())
+                return grant;
+            const auto capabilities = actionRuntime.Settings();
+            grant.approvedRoots = capabilities.approvedRoots;
+            grant.imageGenerationEnabled = capabilities.image.enabled;
+            const auto origin = sessionIdentity.Stamp({}, {}, companionAuthority->Revision());
+            auto port = std::make_shared<agents::ChatActionPort>();
+            port->evaluate = [this](const actions::ActionRequest& request) { return actionRuntime.Evaluate(request); };
+            port->execute = [this, origin, stopToken](const actions::ActionRequest& request, const bool confirmed)
+            { return actionRuntime.ExecuteFor(origin, request, confirmed, stopToken); };
+            ConfirmationHandler handler;
+            {
+                std::lock_guard lock(confirmationMutex);
+                handler = confirmationHandler;
+            }
+            if (handler)
+            {
+                port->confirm = [this, handler](const actions::ActionRequest& request, const actions::PolicyDecision& decision)
+                {
+                    SetState(RuntimeState::WaitingForConfirmation, decision.reason);
+                    const auto choice = handler(request, decision);
+                    SetState(RuntimeState::Thinking, "Continuing the reply.");
+                    return choice;
+                };
+            }
+            const auto fileTool = [this, port, origin, stopToken](const actions::ActionType type)
+            {
+                return [this, port, origin, stopToken, type](const std::string& path, const agents::ToolCallContext& call)
+                {
+                    auto request = agents::ChatFileRequest(type, path);
+                    // The action inherits the admitted turn's task contract, as an
+                    // interactive action does.
+                    request.taskContract = BuildActionTaskContract(request, origin, stopToken);
+                    if (!request.taskContract)
+                        return agents::ToolExecution::Fail("The turn's task contract is no longer current.");
+                    return agents::RunChatAction(*port, std::move(request), call);
+                };
+            };
+            grant.executors.readFile = fileTool(actions::ActionType::ReadTextFile);
+            grant.executors.listDirectory = fileTool(actions::ActionType::ListDirectory);
+            if (grant.imageGenerationEnabled)
+            {
+                grant.executors.generateImage = [this, admission](const std::string& prompt, const agents::ToolCallContext& call)
+                {
+                    auto outcome = documentWorkshop.GenerateImage(prompt, call.stopToken, admission, Stamp());
+                    // The reply owns the turn's state; only the picture's own events are kept.
+                    std::erase_if(outcome.events, [](const TurnEvent& event) { return event.kind == TurnEvent::Kind::State; });
+                    if (!call.Admitted())
+                        return agents::ToolExecution::Fail("The turn ended while the picture was being made.");
+                    const SessionResult result = ApplyTurn(std::move(outcome));
+                    return result.succeeded ? agents::ToolExecution::Ok(result.text) : agents::ToolExecution::Fail(result.text);
+                };
+            }
+            return grant;
         });
     turnCoordinator.SetAdmissionGuard([this, origin]() { return sessionIdentity.IsCurrent(origin); });
     // Memory classification shares the GPU with the voice. Waiting while she speaks keeps

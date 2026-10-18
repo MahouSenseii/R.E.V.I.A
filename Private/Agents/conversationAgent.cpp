@@ -4,6 +4,7 @@
 #include "Agents/conversationAgent.h"
 #include "Agents/replyFormat.h"
 #include "Agents/replyStreamGate.h"
+#include "Agents/toolLoop.h"
 
 #include <chrono>
 #include <sstream>
@@ -14,7 +15,7 @@ namespace revia::agents
 responseOutput ConversationAgent::Execute(const messageRouter& router, const std::string& input,
     const std::vector<conversationMessage>& context, const responseFilterSettings& filterSettings,
     const ResponseFilterContext& filterContext, const std::stop_token stopToken, messageRouter::DeltaHandler onDelta,
-    const revia::intelligence::IntelligenceDecision& decision, const llm::PrivateMemoryAccess memoryAccess) const
+    const revia::intelligence::IntelligenceDecision& decision, const llm::PrivateMemoryAccess memoryAccess, const ToolLoop* tools) const
 {
     const auto replyContract = RequestedReplyContract(input);
     // Backend deltas are untrusted until the deterministic filter sequence has accepted
@@ -47,7 +48,9 @@ responseOutput ConversationAgent::Execute(const messageRouter& router, const std
     {
         backendDelta = [](const std::string&) {};
     }
-    responseOutput output = router.RouteMessage(input, context, stopToken, backendDelta, decision, memoryAccess);
+    responseOutput output = tools != nullptr && tools->Active()
+                                ? tools->Run(router, input, context, stopToken, backendDelta, decision, memoryAccess)
+                                : router.RouteMessage(input, context, stopToken, backendDelta, decision, memoryAccess);
     output.bWasStreamed = !gate.Released().empty();
     if (output.bSuccess)
     {

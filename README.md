@@ -22,6 +22,7 @@ The design rule: **one Revia**. Reflex, Fast, Main, and Expert share one identit
 | Windows SAPI voice fallback | **Verified live** | Used automatically when Qwen is not installed or not ready |
 | Speech recognition (push-to-talk and hands-free) | **Verified live** | whisper.cpp on GPU, ~0.3–1.0 s per utterance |
 | Web lookups in a visible browser | **Verified live** | Shows query and sources; ~11 s per lookup |
+| Choosing her own tools in chat (search, memory, history, files, reminders, calculator, pictures) | Tested | Covered by automated tests against a fake llama.cpp server that streams tool calls; **not yet run against the real server in a live session** |
 | Curiosity, initiative, self-directed reflection | **Verified live** | Logs show think/research/create decisions and when she chooses to stay quiet |
 | Startup of all local model workers | **Verified live** | ~10 s to ready (Expert loads on first use; the CPU Fast model is skipped when the 4B model is on a GPU), plus ~20 s for the voice model to warm in the background |
 | Profiles and Voice Studio (create a voice, assign it to a profile) | **Verified live** | Voice `revia-bright` exists and is in use |
@@ -65,6 +66,19 @@ The design rule: **one Revia**. Reflex, Fast, Main, and Expert share one identit
 ### Do things
 
 - **Look things up** in a visible, locked-down browser (Edge or Chrome) and show you the exact query and sources.
+- **Choose her own tools while you chat.** In an ordinary private conversation the model decides when it needs a tool, the way ChatGPT and Claude do, instead of a phrase list deciding before she answers. The chat's activity line shows each one as it runs ("Searching the web for ...", "Reading notes.txt"). The tools, and when each is offered:
+
+  | Tool | What it does | Offered when |
+  |---|---|---|
+  | `web_search` | One read-only search through the same provider and audit as `/web` | Internet is on and automatic lookup is on, or you explicitly asked her to search |
+  | `search_memory` | Searches her saved long-term memories | Memory is on for the profile |
+  | `recall_history` | Searches the archive of earlier conversations by subject and time ("yesterday", "last week") | The conversation archive is on |
+  | `read_file`, `list_dir` | Reads a text file or lists a folder | Only inside your approved folders, through the same policy, confirmation and audit as any file action |
+  | `set_reminder` | Sets a reminder with the same parser and saved list as "remind me in 10 minutes to ..." | Always, in a private chat |
+  | `calculator` | Exact arithmetic: `+ - * / **`, parentheses, decimals, simple units | Always, in a private chat |
+  | `generate_image` | Makes a picture on the Canvas tab | Image generation is enabled |
+
+  Every tool runs through the same permissions an explicit command uses; none adds authority. Discord, stream, guest and other public conversations get **no** tools. A file action that needs your approval asks with the usual prompt; if no prompt is available she is told it "needs your approval" and nothing runs. At most 8 model steps per answer, with a time and size budget; tool results reach the model marked as untrusted data, never instructions. Her answer still streams through the same sentence filter as any reply, including anything she writes before calling a tool. Tools need a llama.cpp server with Jinja chat templates (`--jinja`, which Revia now passes) and a context of at least 16K tokens; the 8K Fast and Expert tiers, and any server that refuses tools, fall back to the phrase-based lookup, archive recall and arithmetic grounding exactly as before. `/operate` and `/goal` remain explicit commands.
 - **Bring things up on her own** when she has something specific to say: a reaction to what you're doing, a follow-up on something from earlier, or a question. At most four times an hour, at least 15 minutes apart. She waits for a pause in your typing and stays quiet over a full-screen game, video or presentation (`initiative.suppressWhenFullScreen`), and while another app is using the microphone (a call or meeting).
 - **Work in the background.** `/goal` and "operate" tasks run while she keeps talking; ask how it's going, or say "cancel the task". Only Stop or that request ends one.
 - **Remind you.** "Remind me in 20 minutes to stretch", "remind me at 3pm to call Sam", "set a timer for 5 minutes". Saved across restarts; `/reminders` lists and cancels them. A reminder or task report that comes due while she is answering is spoken right after the answer (covered by automated tests; not yet checked live).
@@ -667,6 +681,7 @@ Start with **Runtime → Activity**, **Pipelines**, and **Resources**, or `/stat
 - Discord voice has not joined a live call yet, and cannot be interrupted while she speaks.
 - No avatar renderer, OBS, or streaming-platform connector exists yet.
 - A clean install on another PC, laptops, CPU-only machines, and long stress tests are not yet verified.
+- Tool calling in chat is tested against a scripted llama.cpp stand-in only. How well Qwen3.5 4B decides when to call a tool has not been measured in a live session.
 
 ## Project docs
 

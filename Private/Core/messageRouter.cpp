@@ -41,7 +41,7 @@ messageRouter::~messageRouter() = default;
 
 responseOutput messageRouter::RouteMessage(const std::string& message, const std::vector<conversationMessage>& context,
     const std::stop_token stopToken, DeltaHandler onDelta, const revia::intelligence::IntelligenceDecision& decision,
-    const revia::llm::PrivateMemoryAccess memoryAccess) const
+    const revia::llm::PrivateMemoryAccess memoryAccess, const revia::llm::ToolExchange* tools) const
 {
     responseOutput output;
 
@@ -59,7 +59,9 @@ responseOutput messageRouter::RouteMessage(const std::string& message, const std
     std::optional<revia::llm::cloud::CloudTurnRequest> cloudTurn;
     {
         std::lock_guard lock(reasoningMutex);
-        onReasoning = std::exchange(pendingReasoning, {});
+        // A tool loop asks several times for one answer, and every step may think. The
+        // runtime clears the handler itself when that turn ends.
+        onReasoning = tools != nullptr ? pendingReasoning : std::exchange(pendingReasoning, {});
         cloudTurn = std::exchange(pendingCloud, std::nullopt);
     }
     std::string cloudNote;
@@ -177,7 +179,8 @@ responseOutput messageRouter::RouteMessage(const std::string& message, const std
         std::move(onDelta),
         deepReasoning,
         memoryAccess,
-        onReasoning);
+        onReasoning,
+        tools);
     residency.EndInference(effectiveTier);
     const bool contextRejected = !routed.bSuccess &&
         routed.reason.find("HTTP status 400") != std::string::npos;
@@ -193,7 +196,8 @@ responseOutput messageRouter::RouteMessage(const std::string& message, const std
             std::move(retryDelta),
             deepReasoning,
             memoryAccess,
-            onReasoning);
+            onReasoning,
+            tools);
         residency.EndInference(revia::intelligence::IntelligenceTier::Main);
         selected = &llm;
         effectiveTier = revia::intelligence::IntelligenceTier::Main;

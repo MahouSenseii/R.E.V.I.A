@@ -905,7 +905,8 @@ namespace
     }
 
     std::optional<std::size_t> CountBackendPrompt(const std::string& host, const int port, const std::string& apiKey,
-        const std::string& model, const json& messages, const bool thinking, const std::stop_token stopToken)
+        const std::string& model, const json& messages, const bool thinking, const std::stop_token stopToken,
+        const json& tools = json::array())
     {
         if (!messages.is_array() || messages.empty() || stopToken.stop_requested())
             return std::nullopt;
@@ -957,8 +958,12 @@ namespace
         };
         try
         {
-            const auto rendered = post("/apply-template", {{"model", model}, {"messages", messages}, {"add_generation_prompt", true},
-                                                              {"chat_template_kwargs", {{"enable_thinking", thinking}}}});
+            json body = {{"model", model}, {"messages", messages}, {"add_generation_prompt", true},
+                {"chat_template_kwargs", {{"enable_thinking", thinking}}}};
+            // The template renders the tool list into the prompt, so it is counted too.
+            if (tools.is_array() && !tools.empty())
+                body["tools"] = tools;
+            const auto rendered = post("/apply-template", body);
             if (!rendered || !rendered->contains("prompt") || !(*rendered)["prompt"].is_string())
                 return std::nullopt;
             const auto& prompt = (*rendered)["prompt"].get_ref<const std::string&>();
@@ -982,10 +987,21 @@ namespace
         }
     }
 
+    // One fragment of a streamed tool call. The server sends the id and name once and the
+    // arguments in pieces, all keyed by the call's index within the reply.
+    struct ToolCallDelta
+    {
+        std::size_t index = 0;
+        std::string id;
+        std::string name;
+        std::string arguments;
+    };
+
     // One server-sent event of a streamed chat completion.
     struct StreamEvent
     {
         std::string content;
+        std::vector<ToolCallDelta> toolCalls;
         // llama.cpp's separated thinking, when the server parses it out of the reply.
         std::string reasoning;
         std::string finishReason;
@@ -1021,6 +1037,30 @@ namespace
                 event.content = delta["content"].get<std::string>();
             if (delta.contains("reasoning_content") && delta["reasoning_content"].is_string())
                 event.reasoning = delta["reasoning_content"].get<std::string>();
+            if (delta.contains("tool_calls") && delta["tool_calls"].is_array())
+            {
+                std::size_t position = 0;
+                for (const auto& call : delta["tool_calls"])
+                {
+                    if (!call.is_object())
+                        continue;
+                    ToolCallDelta fragment;
+                    fragment.index =
+                        call.contains("index") && call["index"].is_number_unsigned() ? call["index"].get<std::size_t>() : position;
+                    if (call.contains("id") && call["id"].is_string())
+                        fragment.id = call["id"].get<std::string>();
+                    if (call.contains("function") && call["function"].is_object())
+                    {
+                        const auto& function = call["function"];
+                        if (function.contains("name") && function["name"].is_string())
+                            fragment.name = function["name"].get<std::string>();
+                        if (function.contains("arguments") && function["arguments"].is_string())
+                            fragment.arguments = function["arguments"].get<std::string>();
+                    }
+                    event.toolCalls.push_back(std::move(fragment));
+                    ++position;
+                }
+            }
         }
         catch (...)
         {
@@ -1143,6 +1183,70 @@ namespace
             tokens += message["content"].get_ref<const std::string&>().size() + revia::llm::ChatTemplateTokensPerMessage;
         return tokens;
     }
+
+    // Tool definitions and the replayed steps take room in the template that the text
+    // budget never sees. Below this context a tier keeps the deterministic routers instead.
+    constexpr int MinimumToolContextTokens = 16384;
+    // Bounds on what the model may ask for in one reply; past them a call is cut and its
+    // arguments fail validation rather than growing without limit.
+    constexpr std::size_t MaximumToolCallsPerReply = 8;
+    constexpr std::size_t MaximumToolNameBytes = 64;
+    constexpr std::size_t MaximumToolArgumentBytes = 16 * 1024;
+
+    // The tool list in the OpenAI request shape. Empty when a schema does not parse,
+    // so a broken definition fails the request plainly instead of reaching the server.
+    json ToolDefinitionsJson(const revia::llm::ToolExchange& tools)
+    {
+        json definitions = json::array();
+        for (const auto& tool : tools.definitions)
+        {
+            json parameters = json::parse(tool.parametersSchema, nullptr, false);
+            if (!parameters.is_object())
+                return json::array();
+            definitions.push_back({{"type", "function"},
+                {"function", {{"name", tool.name}, {"description", tool.description}, {"parameters", std::move(parameters)}}}});
+        }
+        return definitions;
+    }
+
+    // The earlier steps of this turn, replayed after the prompt: each assistant message
+    // that asked for tools, then one role "tool" message per result.
+    json ToolTranscriptMessages(const revia::llm::ToolExchange& tools)
+    {
+        json messages = json::array();
+        for (const auto& round : tools.rounds)
+        {
+            json calls = json::array();
+            for (const auto& call : round.calls)
+                calls.push_back(
+                    {{"id", call.id}, {"type", "function"}, {"function", {{"name", call.name}, {"arguments", call.arguments}}}});
+            messages.push_back({{"role", "assistant"}, {"content", round.assistantText}, {"tool_calls", std::move(calls)}});
+            for (const auto& result : round.results)
+                messages.push_back({{"role", "tool"}, {"tool_call_id", result.callId}, {"content", result.content}});
+        }
+        return messages;
+    }
+
+    // Used only when the backend could not count the real prompt. Tool JSON and English
+    // text both average well over two bytes per token, so half the byte count keeps the
+    // reserve conservative without crowding a 32K context out by itself.
+    std::size_t ToolPromptReserve(const json& definitions, const json& transcript)
+    {
+        return (definitions.dump().size() + transcript.dump().size()) / 2 +
+               (transcript.size() + 1) * revia::llm::ChatTemplateTokensPerMessage;
+    }
+
+    // An error body that says the server could not take the tools, as opposed to any
+    // other failure of the same request.
+    bool RejectsTools(const int status, const std::string& body)
+    {
+        if (status != 400 && status != 500 && status != 501)
+            return false;
+        std::string lowered = body.substr(0, 4096);
+        std::transform(
+            lowered.begin(), lowered.end(), lowered.begin(), [](const unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+        return lowered.find("tool") != std::string::npos || lowered.find("jinja") != std::string::npos;
+    }
 }
 
 llamaCppService::llamaCppService() = default;
@@ -1168,6 +1272,8 @@ void llamaCppService::ApplySettings(const llmSettings& settings, const embedding
     ApplyProfile(settings, profile);
     effectiveContextTokens.store(configuredContextTokens);
     effectiveParallelSlots.store(0);
+    // New settings may name a different server; it gets its own chance to take tools.
+    toolsUnsupported.store(false);
     inferenceScheduler.SetCapacity(settings.parallelRequests);
 
     embeddings.ApplySettings(embeddingSettings);
@@ -1241,8 +1347,8 @@ bool llamaCppService::WarmUp(const std::stop_token stopToken, std::string& outEr
 }
 
 responseOutput llamaCppService::GenerateResponse(const std::vector<conversationMessage>& context, const std::stop_token stopToken,
-    DeltaHandler onDelta, const bool deepReasoning, const revia::llm::PrivateMemoryAccess memoryAccess,
-    ReasoningHandler onReasoning) const
+    DeltaHandler onDelta, const bool deepReasoning, const revia::llm::PrivateMemoryAccess memoryAccess, ReasoningHandler onReasoning,
+    const revia::llm::ToolExchange* tools) const
 {
     responseOutput output;
 
@@ -1275,6 +1381,18 @@ responseOutput llamaCppService::GenerateResponse(const std::vector<conversationM
     const auto replyFormat = replyContract.rootKind;
     const bool jsonReply = replyFormat != revia::agents::ReplyFormat::Conversation;
     const bool activeReasoning = deepReasoning && !jsonReply;
+    // Tools are offered only to an ordinary reply. A JSON-shaped reply already has its
+    // own response format, and the two cannot both decide what the model emits. Refused
+    // before any embedding or prompt work, so the caller's fallback starts at once.
+    const bool offerTools = tools != nullptr && !tools->definitions.empty() && !jsonReply;
+    const int servedContextTokens = effectiveContextTokens.load() > 0 ? effectiveContextTokens.load() : configuredContextTokens;
+    if (offerTools && (toolsUnsupported.load() || servedContextTokens < MinimumToolContextTokens))
+    {
+        output.bToolsRejected = true;
+        output.reason = toolsUnsupported.load() ? "This llama.cpp server refused tool definitions earlier in the session."
+                                                : "This tier's context is too small to carry tool definitions.";
+        return output;
+    }
     const bool briefSocial =
         !deepReasoning && latestUser != context.rend() && revia::agents::ConversationStylePolicy::IsBriefSocialTurn(latestUser->content);
     embeddingOutput queryEmbedding;
@@ -1319,15 +1437,37 @@ responseOutput llamaCppService::GenerateResponse(const std::vector<conversationM
     // allowance on top, and the prompt is fitted around both.
     const int thinkingAllowance = activeReasoning ? std::clamp(thinkingTokens, 0, std::max(0, contextTokens / 4)) : 0;
     const int responseTokens = answerTokens + thinkingAllowance;
+
+    const json toolDefinitions = offerTools ? ToolDefinitionsJson(*tools) : json::array();
+    if (offerTools && toolDefinitions.empty())
+    {
+        output.reason = "A tool definition carried an invalid parameter schema.";
+        return output;
+    }
+    const json toolTranscript = offerTools ? ToolTranscriptMessages(*tools) : json::array();
+    const auto withTranscript = [&toolTranscript](json base)
+    {
+        for (const auto& message : toolTranscript)
+            base.push_back(message);
+        return base;
+    };
+    // Only the text prompt is compacted. The replayed tool steps stay whole, because a
+    // result separated from the call that produced it means nothing to the model.
+    const int fittingReserve = offerTools ? static_cast<int>(std::min<std::size_t>(ToolPromptReserve(toolDefinitions, toolTranscript),
+                                                static_cast<std::size_t>(contextTokens)))
+                                          : 0;
+
     const json originalMessages = messages;
-    auto measured = CountBackendPrompt(host, port, apiKey, modelName, messages, activeReasoning, stopToken);
+    auto measured =
+        CountBackendPrompt(host, port, apiKey, modelName, withTranscript(messages), activeReasoning, stopToken, toolDefinitions);
     const auto usableTokens = static_cast<long long>(contextTokens) - responseTokens - ContextReserveTokens;
     if (!measured || usableTokens <= 0 || *measured > static_cast<std::size_t>(usableTokens))
     {
-        messages = BoundMessagesForContext(messages, contextTokens, responseTokens, priorityParagraphs);
+        messages = BoundMessagesForContext(messages, contextTokens, responseTokens + fittingReserve, priorityParagraphs);
         if (measured && !messages.empty())
         {
-            measured = CountBackendPrompt(host, port, apiKey, modelName, messages, activeReasoning, stopToken);
+            measured =
+                CountBackendPrompt(host, port, apiKey, modelName, withTranscript(messages), activeReasoning, stopToken, toolDefinitions);
             if (measured && *measured > static_cast<std::size_t>(std::max<long long>(0, usableTokens)))
                 messages = json::array();
         }
@@ -1350,7 +1490,15 @@ responseOutput llamaCppService::GenerateResponse(const std::vector<conversationM
         return output;
     }
     requestBody["model"] = modelName;
-    requestBody["messages"] = std::move(messages);
+    requestBody["messages"] = withTranscript(std::move(messages));
+    if (offerTools)
+    {
+        requestBody["tools"] = toolDefinitions;
+        requestBody["tool_choice"] = tools->allowCalls ? "auto" : "none";
+        // llama.cpp asks for one call at a time unless told otherwise. Read-only calls
+        // the model wants together can then run together.
+        requestBody["parallel_tool_calls"] = true;
+    }
     requestBody["temperature"] = temperature;
     requestBody["max_tokens"] = responseTokens;
     requestBody["stream"] = true;
@@ -1382,6 +1530,8 @@ responseOutput llamaCppService::GenerateResponse(const std::vector<conversationM
     }
 
     std::string fullResponse;
+    std::vector<revia::llm::ToolCall> requestedCalls;
+    std::vector<std::size_t> requestedIndexes;
     std::string buffer;
     std::string finishReason;
     json backendTimings;
@@ -1458,6 +1608,31 @@ responseOutput llamaCppService::GenerateResponse(const std::vector<conversationM
                 if (onReasoning)
                     onReasoning(event.reasoning);
             }
+            for (const auto& fragment : event.toolCalls)
+            {
+                if (!offerTools)
+                    break;
+                if (!firstTokenAt)
+                    firstTokenAt = std::chrono::steady_clock::now();
+                auto slot = std::find(requestedIndexes.begin(), requestedIndexes.end(), fragment.index);
+                if (slot == requestedIndexes.end())
+                {
+                    if (requestedCalls.size() >= MaximumToolCallsPerReply)
+                        continue;
+                    requestedIndexes.push_back(fragment.index);
+                    requestedCalls.emplace_back();
+                    slot = requestedIndexes.end() - 1;
+                }
+                auto& call = requestedCalls[static_cast<std::size_t>(slot - requestedIndexes.begin())];
+                if (!fragment.id.empty())
+                    call.id = revia::utf8::Prefix(fragment.id, 128);
+                if (call.name.size() + fragment.name.size() <= MaximumToolNameBytes)
+                    call.name += fragment.name;
+                // Past the bound the arguments are cut, which fails schema validation:
+                // the model is told its call was malformed instead of being trusted.
+                if (call.arguments.size() < MaximumToolArgumentBytes)
+                    call.arguments += fragment.arguments.substr(0, MaximumToolArgumentBytes - call.arguments.size());
+            }
             const std::string& token = event.content;
             if (token.empty()) continue;
 
@@ -1522,7 +1697,7 @@ responseOutput llamaCppService::GenerateResponse(const std::vector<conversationM
     }
     const auto requestStarted = std::chrono::steady_clock::now();
     auto result = client.send(req);
-    if (result && !stopToken.stop_requested() && fullResponse.empty() && printedLength == 0 &&
+    if (result && !stopToken.stop_requested() && fullResponse.empty() && printedLength == 0 && toolTranscript.empty() &&
         IsContextOverflow(result->status, errorBody.empty() ? result->body : errorBody))
     {
         // One smaller retry only, before any generated text has escaped. Keep the
@@ -1546,6 +1721,8 @@ responseOutput llamaCppService::GenerateResponse(const std::vector<conversationM
             finishReason.clear();
             backendTimings = json();
             nativeReasoning.clear();
+            requestedCalls.clear();
+            requestedIndexes.clear();
             responseStatus = 0;
             result = client.send(req);
         }
@@ -1583,6 +1760,16 @@ responseOutput llamaCppService::GenerateResponse(const std::vector<conversationM
         output.bSuccess = false;
         output.response = "My local llama.cpp backend returned an error.";
         const std::string boundedError = revia::utf8::Prefix(errorBody.empty() ? result->body : errorBody, MaximumErrorBodyBytes);
+        if (offerTools && RejectsTools(result->status, boundedError))
+        {
+            // A first request refused for its tools means this server cannot take them
+            // at all (a llama-server started without its Jinja chat templates, for one).
+            // A refusal part way through a turn may be about one replayed step, so it is
+            // not remembered past this turn.
+            if (toolTranscript.empty())
+                toolsUnsupported.store(true);
+            output.bToolsRejected = true;
+        }
         const std::string preview =
             revia::utf8::IsValid(boundedError) ? revia::utf8::Prefix(boundedError, 1024) : "[backend error body contained malformed UTF-8]";
         output.reason = "llama.cpp server returned HTTP status " + std::to_string(result->status) + ": " + preview;
@@ -1599,6 +1786,24 @@ responseOutput llamaCppService::GenerateResponse(const std::vector<conversationM
             output.reason += " " + replyContract.reason;
         output.bShouldSpeak = true;
         output.bShouldRemember = false;
+        return output;
+    }
+    if (offerTools && tools->allowCalls && !requestedCalls.empty())
+    {
+        // A reply that asked for tools is a step, not an answer. Its text, if any, has
+        // been streamed like any other and still passes the caller's gate; the calls go
+        // back unexecuted for the tool loop to validate.
+        for (std::size_t index = 0; index < requestedCalls.size(); ++index)
+            if (requestedCalls[index].id.empty())
+                requestedCalls[index].id = "call_" + std::to_string(index);
+        if (onDelta && cleanedResponse.size() > printedLength)
+            onDelta(cleanedResponse.substr(printedLength));
+        output.bSuccess = true;
+        output.response = cleanedResponse;
+        output.toolCalls = std::move(requestedCalls);
+        output.bShouldSpeak = true;
+        output.bShouldRemember = false;
+        output.bWasStreamed = static_cast<bool>(onDelta);
         return output;
     }
     if (finishReason == "length")
