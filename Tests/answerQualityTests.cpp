@@ -7,6 +7,7 @@
 #include "../Tools/Quality/semanticReview.h"
 
 #include <algorithm>
+#include <filesystem>
 #include <iostream>
 #include <string>
 #include <vector>
@@ -383,6 +384,36 @@ void TestGoldenSetRefusesSilentMistakes()
         "A contract check that needs a limit was accepted without one.");
 }
 
+std::filesystem::path FindSourceFile(const std::filesystem::path& relative)
+{
+    // CTest runs from the build tree; the source directory is known from this file's own path.
+    for (const auto& start : {std::filesystem::path(__FILE__).parent_path(), std::filesystem::current_path()})
+        for (auto directory = start; !directory.empty(); directory = directory.parent_path())
+        {
+            if (std::filesystem::exists(directory / relative))
+                return directory / relative;
+            if (directory == directory.parent_path())
+                break;
+        }
+    return relative;
+}
+
+void TestCheckedInGoldenSetIsComplete()
+{
+    std::vector<revia::evaluation::GoldenCase> cases;
+    std::string error;
+    Check(revia::evaluation::LoadGoldenSet(FindSourceFile("Config/Evaluation/golden-set.jsonl"), cases, error),
+        "The checked-in golden set does not load: " + error);
+    Check(cases.size() >= 150 && cases.size() <= 200, "The golden set must hold 150 to 200 cases.");
+    for (const auto& category : revia::evaluation::GoldenCategories())
+    {
+        const auto count = std::count_if(cases.begin(), cases.end(), [&](const auto& item) { return item.category == category; });
+        Check(count >= 15, "The golden set has too few " + category + " cases.");
+    }
+    const auto multiTurn = std::count_if(cases.begin(), cases.end(), [](const auto& item) { return item.turns.size() > 1; });
+    Check(multiTurn >= 15, "The golden set has too few multi-turn cases.");
+}
+
 }
 
 void RunAnswerQualityTests()
@@ -399,5 +430,6 @@ void RunAnswerQualityTests()
     TestSemanticReviewCannotAcceptMechanicalSuccess();
     TestGoldenChecksSeparateRightFromWrong();
     TestGoldenSetRefusesSilentMistakes();
+    TestCheckedInGoldenSetIsComplete();
     std::cout << "Current-task, supplied-fact, correction, format and expressive-answer checks passed.\n";
 }
