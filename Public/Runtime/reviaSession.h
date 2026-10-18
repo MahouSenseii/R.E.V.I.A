@@ -59,6 +59,7 @@
 #include "Performance/performanceRuntime.h"
 #include "Presence/presenceRuntime.h"
 #include "Presence/webGuestRuntime.h"
+#include "Presence/localApiRuntime.h"
 #include "Mcp/mcpManager.h"
 #include "Presentation/avatarState.h"
 #include "Presentation/debugPresentationSink.h"
@@ -655,6 +656,9 @@ class ReviaSession
     bool HandleImprovementCommand(const std::string& input, SessionResult& result);
     void SignalCuriosity(const std::string& reason);
     void StartExternalAdapterLoop();
+    // The local OpenAI-compatible API, when the owner enabled it; and what /api says.
+    void StartLocalApi();
+    [[nodiscard]] std::string LocalApiStatusText() const;
     void StopExternalAdapterLoop();
     void QueueExternalAdapterEvent(const presence::ExternalAdapterEvent& event);
     std::stop_token BeginOperation();
@@ -804,6 +808,9 @@ class ReviaSession
     // Connections to the owner's MCP servers. Nothing connects until a private turn or
     // /mcp asks, and only enabled servers with allowlisted tools are ever offered.
     mcp::McpManager mcpManager;
+    std::atomic<std::shared_ptr<presence::LocalApiRuntime>> localApiRuntime;
+    // Written once before localApiRuntime is published, and read only after it is.
+    std::string localApiToken;
     // The boundary an avatar will eventually sit behind. Her core publishes what she is
     // doing; a renderer decides what that looks like. The debug sink is the proof the
     // boundary carries enough to draw from, before there is anything to draw.

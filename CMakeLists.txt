@@ -148,7 +148,7 @@ target_link_libraries(ReviaFoundation PUBLIC
 if(WIN32)
     # Media Foundation (mfplat/mf/mfreadwrite/mfuuid) backs camera capture; shlwapi comes
     # with it. Screen capture continues to use GDI+, which also encodes the camera PNG.
-    target_link_libraries(ReviaFoundation PUBLIC shell32 dxgi sapi ole32 oleaut32 winmm gdiplus gdi32 bcrypt winhttp psapi pdh dbghelp mfplat mf mfreadwrite mfuuid shlwapi advapi32 dwmapi iphlpapi)
+    target_link_libraries(ReviaFoundation PUBLIC shell32 dxgi sapi ole32 oleaut32 winmm gdiplus gdi32 bcrypt crypt32 winhttp psapi pdh dbghelp mfplat mf mfreadwrite mfuuid shlwapi advapi32 dwmapi iphlpapi)
 endif()
 
 if(MSVC)
@@ -410,6 +410,8 @@ if(BUILD_TESTING)
     revia_add_studio_check(ReviaToolLoopTests Tests/toolLoopTests.cpp RunToolLoopTests)
     # The MCP suite drives a real stdio server, built below, and reads Config/settings.json.
     revia_add_studio_check(ReviaMcpClientTests Tests/mcpClientTests.cpp RunMcpClientTests)
+    revia_add_studio_check(ReviaLocalApiTests Tests/localApiTests.cpp RunLocalApiTests)
+    set_tests_properties(ReviaLocalApiTests PROPERTIES WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
     set_tests_properties(ReviaMcpClientTests PROPERTIES WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
     add_executable(ReviaTaskContractTests Tests/taskContractTests.cpp)
     revia_link_foundation(ReviaTaskContractTests)

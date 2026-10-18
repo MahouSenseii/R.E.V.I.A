@@ -1341,6 +1341,13 @@ bool configManager::LoadSettings(appSettings& outSettings) const
                 outSettings.mcp.servers.push_back(std::move(server));
             }
         }
+        if (data.contains("localApi"))
+        {
+            const json& apiData = data["localApi"];
+            outSettings.localApi.bEnabled = apiData.value("enabled", outSettings.localApi.bEnabled);
+            outSettings.localApi.port = apiData.value("port", outSettings.localApi.port);
+            outSettings.localApi.bTrustedPrivate = apiData.value("trustedPrivate", outSettings.localApi.bTrustedPrivate);
+        }
     }
     catch (const std::exception&)
     {
@@ -1381,6 +1388,9 @@ bool configManager::LoadSettings(appSettings& outSettings) const
         outSettings.llm.autoFitTargetMiB > 32768 ||
         outSettings.llm.startupTimeoutSeconds < 1 ||
         outSettings.llm.startupTimeoutSeconds > 600 ||
+        // The local API never shares a port with a model server it would then shadow.
+        outSettings.localApi.port < 1024 || outSettings.localApi.port > 65535 ||
+        outSettings.localApi.port == outSettings.llm.port || outSettings.localApi.port == outSettings.embedding.port ||
         (outSettings.llm.backend == "LLamaCpp" && outSettings.llm.bAutoStartServer &&
             (outSettings.llm.serverExecutable.empty() || outSettings.llm.modelPath.empty())) ||
         (outSettings.llm.bVisionEnabled &&

@@ -335,5 +335,10 @@
                 "servers":  [
 
                             ]
-            }
+            },
+    "localApi":  {
+                     "enabled":  false,
+                     "port":  17865,
+                     "trustedPrivate":  false
+                 }
 }

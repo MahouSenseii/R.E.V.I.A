@@ -379,6 +379,7 @@ Type these in Chat or the CLI. `/help` lists everything, including direct file a
 | `/cloud`, `/cloud on`, `/cloud off` | Status of the [optional cloud model](#optional-cloud-model); switch it off (or back on) for this session |
 | `/cloud ask [--screen] [--clipboard] [--memory] <question>` | Ask the cloud model once (or say "ask the cloud ...") |
 | `/web "query"` | One web lookup |
+| `/api` | The [local API](#local-openai-compatible-api): whether it runs, its address, mode and token |
 | `/mcp`, `/mcp refresh` | Your [MCP servers](#mcp-servers): state, tools offered and tools withheld; `refresh` restarts them and reads their tools again |
 | `/bargein`, `/bargein off` | Inspect or disable voice interruption |
 | `/improve`, `/improve review <file or area>`, `/improve show\|accept\|reject <id>` | Her proposals for improving her own code |
@@ -533,6 +534,31 @@ Revia can use tools from [Model Context Protocol](https://modelcontextprotocol.i
 - **Lifecycle.** Servers start on the first private chat turn that can use tools, or with `/mcp refresh`, not at startup, so a slow server can delay that first reply by up to its `timeoutSeconds`. A server that fails is left alone for a minute. A call that times out, or that you stop, sends `notifications/cancelled`. A `notifications/tools/list_changed` makes the next turn read the tool list again.
 
 Tested on Linux against a real stdio server program (`Tests/Fixture/mcpServerFixture.cpp`) started through the same process owner: handshake, paginated tool lists, calls, tool errors, timeouts and cancellation, `list_changed`, refused sampling and elicitation, mixed content, oversized results, schema refusal, the allowlist, confirmation (none, declined, granted), the audit record, and a full tool-loop turn against a fake model server. Streamable HTTP is tested with a loopback server through a stand-in for WinHTTP. The Windows job-object spawn path is only compiled (MinGW) here; **no real third-party MCP server has been tried**, on Windows or elsewhere.
+
+---
+
+## Local OpenAI-compatible API
+
+Other programs on this PC (an editor plugin, a script, a chat front end that speaks the OpenAI API) can talk to Revia through a loopback endpoint. It is off by default:
+
+```json
+"localApi": {
+  "enabled": true,
+  "port": 17865,
+  "trustedPrivate": false
+}
+```
+
+Restart Revia, then run `/api` for the address and the token, and point the program at `http://127.0.0.1:17865/v1` with that token as its API key.
+
+- **Endpoints:** `GET /v1/models` (one model, `revia`) and `POST /v1/chat/completions`, streamed (`"stream": true`, server-sent events ending in `data: [DONE]`) or not. Any `model` name is accepted and answered as `revia`. Text content only: images, tools, tool messages and `n` above 1 are refused with an OpenAI-style error rather than silently dropped. `system` and `developer` messages are ignored: Revia keeps her own instructions. `temperature`, `max_tokens` and similar fields are ignored. No `usage` counts are returned.
+- **Who can reach it:** only `127.0.0.1`, with the install's bearer token. The token is generated on first start and kept in `RuntimeData\LocalApi\api-token`, encrypted with Windows DPAPI for your user account; delete the file and restart to replace it. A request with a browser `Origin` header, a `Host` other than the loopback address, a chunked or length-less body, or a body over 64 KB is refused after its headers, before the body is read (the same pre-routing check as the web guest). The token is compared in constant time.
+- **What a request may touch (default, shared audience):** the same isolation as the web guest. Each request is answered by its own router with a fixed Revia persona, from only the turns the request carries (the last 8, at most 32 KB). No private memory, no conversation archive, no screen or clipboard, no tools, no identity or relationship writes, and nothing is added to your conversation. A reply that would show a local path or a credential-looking string is replaced, and a streamed reply stops before such text is sent.
+- **Your conversation comes first.** One request runs at a time; a second gets HTTP 429. When you type or speak, a shared request in flight is cancelled (HTTP 503, or an error event in a stream). A request also ends after two minutes.
+- **Streaming** releases text through the same sentence gate as the chat window, so only filtered sentences are sent. If the final pass changes text that was already sent, the stream ends with `finish_reason: "content_filter"` instead of the changed reply; nothing sent can be taken back.
+- **`trustedPrivate: true` (risky, off by default)** makes every request an owner turn: it is typed into your own conversation, uses your memories, may use her tools (asking your approval on screen as usual), may be spoken aloud, and is remembered. Any program that obtains the token can then speak to Revia as you. Commands (text starting with `/`, and the exit words `exit`, `quit`, `bye`) are refused through the API, and the request's earlier turns are ignored in favour of your real history. A trusted reply is sent as one chunk when it is finished, and a trusted request is not cancelled when you start typing (it waits like any turn; Stop cancels it).
+
+Tested on Linux with a cpp-httplib client against a fake llama-server: authentication, Origin, Host and method refusal, chunked, length-less and oversized bodies refused before the body, the model list, non-streamed and streamed replies, private-path withholding in both, busy and preempted requests, caller tools and images refused, and trusted mode reaching the owner-turn hook while refusing commands. The token file is tested on Linux (owner-only permissions); the DPAPI path is only compiled for Windows here. **It has not been tried with a real client application or on the Windows build.**
 
 ---
 

@@ -1393,6 +1393,7 @@ bool ReviaSession::Start()
         else
             PublishComponent("Web demo", "Disabled", "Web configuration is invalid or the local listener is unavailable.");
     }
+    StartLocalApi();
     StartInitiativeLoop();
     StartCuriosityLoop();
     StartSelfImprovement();
@@ -3857,6 +3858,8 @@ SessionResult ReviaSession::Submit(const std::string& input, const agents::Input
 {
     if (auto guest = webGuestRuntime.load())
         guest->Preempt();
+    if (auto api = localApiRuntime.load())
+        api->Preempt();
     SessionResult result;
     if (!started.load())
     {
@@ -4476,6 +4479,8 @@ void ReviaSession::Stop()
     agentWorkflow.Join();
     if (auto guest = webGuestRuntime.exchange({}))
         guest->Stop();
+    if (auto api = localApiRuntime.exchange({}))
+        api->Stop();
     mcpManager.Shutdown();
     // Order matters. The warmup is built to survive RequestStop, because stopping a reply
     // must not cost the session its voice. Shutdown is the one case where it must not
@@ -9283,6 +9288,13 @@ bool ReviaSession::TryHandleActionInput(const std::string& input, SessionResult&
         return true;
     }
 
+    if (input == "/api")
+    {
+        result.text = LocalApiStatusText();
+        SetState(RuntimeState::Idle);
+        return true;
+    }
+
     if (input == "/mcp" || input.rfind("/mcp ", 0) == 0)
     {
         const std::string argument = input.size() > 5 ? Trim(input.substr(5)) : std::string();
@@ -10140,6 +10152,8 @@ std::stop_token ReviaSession::BeginOperation()
 {
     if (auto guest = webGuestRuntime.load())
         guest->Preempt();
+    if (auto api = localApiRuntime.load())
+        api->Preempt();
     std::lock_guard lock(cancellationMutex);
     activeStopSource = std::stop_source{};
     return activeStopSource.get_token();

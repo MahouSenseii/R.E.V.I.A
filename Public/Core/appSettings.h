@@ -11,6 +11,7 @@
 #include "Mcp/mcpSettings.h"
 #include "Perception/perceptionSettings.h"
 #include "Performance/performanceSettings.h"
+#include "Presence/localApiSettings.h"
 #include "Presence/presenceSettings.h"
 #include "Resources/resourceSettings.h"
 #include "Runtime/channelSettings.h"
@@ -44,4 +45,5 @@ struct appSettings
     inputArbiterSettings inputArbiter;
     computerControlSettings computerControl;
     mcpSettings mcp;
+    localApiSettings localApi;
 };
