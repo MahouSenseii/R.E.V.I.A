@@ -21,6 +21,7 @@
 #include "resourcePanel.h"
 #include "chatMarkdown.h"
 #include "chatSessionsPanel.h"
+#include "documentsDialog.h"
 #include "ui_reviaWindow.h"
 
 #include <QApplication>
@@ -30,6 +31,10 @@
 #include <QComboBox>
 #include <QDateTime>
 #include <QDesktopServices>
+#include <QDragEnterEvent>
+#include <QDropEvent>
+#include <QFileDialog>
+#include <QFileInfo>
 #include <QDir>
 #include <QEvent>
 #include <QFile>
@@ -41,6 +46,7 @@
 #include <QMenu>
 #include <QMessageBox>
 #include <QMetaObject>
+#include <QMimeData>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPlainTextEdit>
@@ -63,6 +69,7 @@
 #include <QtMath>
 #include <QTextCharFormat>
 #include <QTextCursor>
+#include <QTextDocument>
 #include <QThread>
 #include <QTimer>
 #include <QToolButton>
@@ -117,6 +124,43 @@ class RunningFlag
   private:
     std::atomic<bool>& flag;
 };
+
+namespace
+{
+// What reading one attached file came to, carried from the worker to the GUI thread.
+struct AttachmentOutcome
+{
+    bool accepted = false;
+    QString message;
+    AttachmentChip chip;
+};
+
+AttachmentOutcome OutcomeOf(const revia::attachments::IntakeResult& result, const QImage& thumbnail)
+{
+    AttachmentOutcome outcome;
+    outcome.accepted = result.status == revia::attachments::IntakeStatus::Accepted;
+    outcome.message = QString::fromStdString(result.message);
+    if (outcome.accepted)
+    {
+        outcome.chip.id = result.attachment.id;
+        outcome.chip.name = QString::fromStdString(result.attachment.displayName);
+        outcome.chip.size = QString::fromStdString(revia::attachments::HumanSize(result.attachment.bytes));
+        outcome.chip.thumbnail = thumbnail;
+    }
+    return outcome;
+}
+
+QStringList LocalFiles(const QMimeData* data)
+{
+    QStringList files;
+    if (data == nullptr || !data->hasUrls())
+        return files;
+    for (const QUrl& url : data->urls())
+        if (url.isLocalFile())
+            files << url.toLocalFile();
+    return files;
+}
+} // namespace
 
 revia::speech::VoiceOperationResult FailedVoiceOperation(const std::string&)
 {
@@ -315,9 +359,30 @@ bool ReviaWindow::eventFilter(QObject* watched, QEvent* event)
         }
     }
 
+    if ((messageInput && watched == messageInput->viewport()) || (chatHistory && watched == chatHistory->viewport()))
+    {
+        if (HandleAttachmentDrag(event))
+            return true;
+    }
     if (watched == messageInput && event->type() == QEvent::KeyPress)
     {
         const auto* keyEvent = static_cast<QKeyEvent*>(event);
+        if (keyEvent->matches(QKeySequence::Paste))
+        {
+            // Copied files attach; copied text pastes as text even when the copying app
+            // also put a picture of it on the clipboard; a bare picture attaches.
+            const QMimeData* data = QApplication::clipboard()->mimeData();
+            if (const QStringList files = LocalFiles(data); !files.isEmpty())
+            {
+                AttachPaths(files);
+                return true;
+            }
+            if (data && data->hasImage() && data->text().trimmed().isEmpty())
+            {
+                AttachPastedImage(qvariant_cast<QImage>(data->imageData()));
+                return true;
+            }
+        }
         if ((keyEvent->key() == Qt::Key_Return || keyEvent->key() == Qt::Key_Enter) && !keyEvent->modifiers().testFlag(Qt::ShiftModifier))
         {
             SendMessage();
@@ -508,6 +573,7 @@ void ReviaWindow::BuildInterface()
     ui->titleIcon->setPixmap(CreateReviaIcon().pixmap(20, 20));
     titleBar->installEventFilter(this);
     messageInput->installEventFilter(this);
+    BuildAttachmentControls();
 
     pipelinePanel = new PipelinePanel(ui->pipelinePage);
     ui->pipelineHostLayout->addWidget(pipelinePanel);
@@ -867,8 +933,15 @@ void ReviaWindow::SendMessage(const bool voiceInput)
     }
 
     const QString text = messageInput->toPlainText().trimmed();
-    if (text.isEmpty())
+    // Typed messages only: a voice turn never picks up files waiting in the tray.
+    const bool withAttachments = !voiceInput && attachmentTray && !attachmentTray->IsEmpty();
+    if (text.isEmpty() && (!withAttachments || editingLastTurn))
     {
+        return;
+    }
+    if (withAttachments && attachmentRunning.load())
+    {
+        statusBar()->showMessage(QStringLiteral("Still reading an attachment. Send again in a moment."), 6000);
         return;
     }
     messageInput->clear();
@@ -905,6 +978,16 @@ void ReviaWindow::SendMessage(const bool voiceInput)
         messageInput->setPlainText(text);
         return;
     }
+    // Taken now: once the message is on its way the files belong to that turn.
+    std::vector<AttachmentChip> attached;
+    std::vector<std::string> attachmentIds;
+    if (withAttachments && !editingLastTurn)
+    {
+        attached = attachmentTray->Chips();
+        attachmentIds = attachmentTray->Ids();
+        attachmentTray->Clear();
+        attachmentTray->SetStatus(QString());
+    }
     if (studioOperationRunning.load())
     {
         // The turn waits for the studio operation's lock on its own worker; the window
@@ -912,13 +995,27 @@ void ReviaWindow::SendMessage(const bool voiceInput)
         statusBar()->showMessage(QStringLiteral("Your message will be answered when the current studio operation finishes."), 8000);
     }
     chatTurnInFlight = true;
-    AppendChat("You", text, true);
+    if (attached.empty())
+    {
+        AppendChat("You", text, true);
+    }
+    else
+    {
+        ChatEntry entry;
+        entry.speaker = QStringLiteral("You");
+        entry.body = text;
+        entry.userMessage = true;
+        entry.attachments = attached;
+        chatEntries.push_back(std::move(entry));
+        TrimTranscript();
+        RenderChat();
+    }
     sendButton->setEnabled(false);
     stopButton->setEnabled(true);
 
     operationWorker = std::jthread(
         [this, epoch = sessionUiEpoch.load(), input = text.toStdString(), voiceInput, origin = Session().Stamp(),
-            audienceRevision = Session().Audience().revision]()
+            audienceRevision = Session().Audience().revision, attachmentIds]()
         {
             const RunningFlag running(operationRunning);
             // Nothing thrown here may leave this thread.
@@ -934,7 +1031,9 @@ void ReviaWindow::SendMessage(const bool voiceInput)
             result.audienceRevision = audienceRevision;
             try
             {
-                result = Session().Submit(input, voiceInput ? revia::agents::InputSource::Voice : revia::agents::InputSource::Typed);
+                result = attachmentIds.empty()
+                             ? Session().Submit(input, voiceInput ? revia::agents::InputSource::Voice : revia::agents::InputSource::Typed)
+                             : Session().SubmitWithAttachments(input, attachmentIds);
             }
             catch (const std::exception& error)
             {
@@ -2373,6 +2472,25 @@ void ReviaWindow::RenderChat()
                                    "color:#dce9f7;\">%2</p>")
                         .arg(align, RenderedBody(entry));
         }
+        if (!entry.attachments.empty())
+        {
+            // Names and sizes only; a picture's thumbnail is an image resource of the
+            // document, registered under the attachment's id.
+            QString files;
+            for (const AttachmentChip& chip : entry.attachments)
+            {
+                if (!chip.thumbnail.isNull())
+                {
+                    const QUrl source(QStringLiteral("revia-attachment:") + QString::fromStdString(chip.id));
+                    chatHistory->document()->addResource(QTextDocument::ImageResource, source, chip.thumbnail);
+                    files += QStringLiteral("<img src=\"%1\" height=\"48\"> ").arg(source.toString());
+                }
+                files += QStringLiteral("%1 (%2)&nbsp;&nbsp;").arg(chip.name.toHtmlEscaped(), chip.size.toHtmlEscaped());
+            }
+            html += QStringLiteral("<p style=\"margin-top:0px; margin-bottom:2px; text-align:%1; color:#9fb3c8; font-size:11px;\">"
+                                   "Attached: %2</p>")
+                        .arg(align, files);
+        }
 
         if (EndsMessage(index))
         {
@@ -3192,4 +3310,185 @@ QIcon ReviaWindow::CreateReviaIcon()
     painter.setPen(QColor("#70e0ca"));
     painter.drawText(image.rect(), Qt::AlignCenter, "R");
     return QIcon(image);
+}
+
+
+void ReviaWindow::BuildAttachmentControls()
+{
+    attachmentTray = new AttachmentTray([this](const std::string& id) { RemoveAttachmentChip(id); }, ui->chatPage);
+    ui->chatLayout->insertWidget(ui->chatLayout->indexOf(messageInput), attachmentTray);
+    attachButton = new QPushButton(QStringLiteral("Attach"), ui->chatPage);
+    attachButton->setObjectName(QStringLiteral("attachButton"));
+    attachButton->setToolTip(QStringLiteral("Attach pictures, PDF, Word (.docx) or text files. You can also drag files onto the chat or "
+                                            "paste a picture. Files stay on this computer."));
+    documentsButton = new QPushButton(QStringLiteral("Documents"), ui->chatPage);
+    documentsButton->setObjectName(QStringLiteral("documentsButton"));
+    documentsButton->setToolTip(QStringLiteral("See, open or forget the files you have attached."));
+    ui->chatButtonLayout->insertWidget(2, attachButton);
+    ui->chatButtonLayout->insertWidget(3, documentsButton);
+    connect(attachButton, &QPushButton::clicked, this, [this]() { ChooseAttachments(); });
+    connect(documentsButton, &QPushButton::clicked, this, [this]() { ShowDocuments(); });
+    // Drops land on the viewports: QPlainTextEdit and QTextBrowser deliver drag events there.
+    messageInput->viewport()->installEventFilter(this);
+    chatHistory->viewport()->installEventFilter(this);
+    messageInput->viewport()->setAcceptDrops(true);
+    chatHistory->viewport()->setAcceptDrops(true);
+}
+
+void ReviaWindow::ChooseAttachments()
+{
+    const QStringList paths = QFileDialog::getOpenFileNames(this, QStringLiteral("Attach files"), QString(),
+        QStringLiteral("Supported files (*.png *.jpg *.jpeg *.gif *.webp *.bmp *.pdf *.docx *.txt *.md *.csv *.tsv *.json *.log *.xml "
+                       "*.yaml *.yml *.toml *.ini *.c *.cc *.cpp *.h *.hpp *.cs *.py *.js *.ts *.java *.rs *.go *.html *.css *.sql "
+                       "*.ps1 *.sh);;All files (*)"));
+    AttachPaths(paths);
+}
+
+void ReviaWindow::AttachPaths(const QStringList& paths)
+{
+    if (paths.isEmpty() || shuttingDown.load() || switchingCompanion)
+        return;
+    const std::size_t limit = revia::attachments::AttachmentLimits{}.maxAttachmentsPerTurn;
+    if (attachmentTray->Chips().size() + static_cast<std::size_t>(paths.size()) > limit)
+    {
+        attachmentTray->SetStatus(QStringLiteral("A message can carry at most %1 files.").arg(limit));
+        return;
+    }
+    if (attachmentRunning.exchange(true))
+    {
+        attachmentTray->SetStatus(QStringLiteral("Still reading the previous attachment. Try again in a moment."));
+        return;
+    }
+    // The previous worker has finished its body, so this join does not wait on work.
+    if (attachmentWorker.joinable())
+        attachmentWorker.join();
+    attachmentTray->SetStatus(paths.size() == 1 ? QStringLiteral("Reading %1...").arg(QFileInfo(paths.front()).fileName())
+                                                : QStringLiteral("Reading %1 files...").arg(paths.size()));
+    attachmentWorker = std::jthread(
+        [this, epoch = sessionUiEpoch.load(), paths]()
+        {
+            const RunningFlag running(attachmentRunning);
+            std::vector<AttachmentOutcome> outcomes;
+            for (const QString& path : paths)
+            {
+                try
+                {
+                    const std::filesystem::path native(path.toStdU16String());
+                    // Pictures are decoded and shrunk by Qt here; everything else is read by
+                    // the session's own intake. Neither opens the file in another program.
+                    std::optional<PreparedImage> prepared;
+                    if (LooksLikeImageFile(path))
+                        prepared = PrepareImageFileForAttachment(path, static_cast<int>(revia::attachments::DesktopImageSide));
+                    if (prepared && !prepared->png.isEmpty())
+                        outcomes.push_back(OutcomeOf(
+                            Session().AttachImageData(QFileInfo(path).fileName().toStdString(), prepared->png.toStdString()),
+                            prepared->thumbnail));
+                    else
+                        outcomes.push_back(OutcomeOf(Session().AttachFile(native), QImage()));
+                }
+                catch (const std::exception& error)
+                {
+                    AttachmentOutcome failed;
+                    failed.message = QStringLiteral("\"%1\" could not be attached: %2").arg(QFileInfo(path).fileName(), error.what());
+                    outcomes.push_back(failed);
+                }
+            }
+            QMetaObject::invokeMethod(
+                this,
+                [this, epoch, outcomes]()
+                {
+                    if (epoch != sessionUiEpoch.load() || shuttingDown.load())
+                        return;
+                    QStringList refused;
+                    for (const AttachmentOutcome& outcome : outcomes)
+                    {
+                        if (outcome.accepted)
+                            attachmentTray->Add(outcome.chip);
+                        else
+                            refused << outcome.message;
+                    }
+                    attachmentTray->SetStatus(refused.join(QStringLiteral(" ")));
+                    messageInput->setFocus();
+                },
+                Qt::QueuedConnection);
+        });
+}
+
+void ReviaWindow::AttachPastedImage(const QImage& image)
+{
+    if (attachmentTray->Chips().size() >= revia::attachments::AttachmentLimits{}.maxAttachmentsPerTurn)
+    {
+        attachmentTray->SetStatus(QStringLiteral("A message can carry at most %1 files.")
+                                      .arg(revia::attachments::AttachmentLimits{}.maxAttachmentsPerTurn));
+        return;
+    }
+    const PreparedImage prepared = PrepareImageForAttachment(image, static_cast<int>(revia::attachments::DesktopImageSide));
+    if (prepared.png.isEmpty())
+    {
+        attachmentTray->SetStatus(prepared.error);
+        return;
+    }
+    const QString name = QStringLiteral("pasted-image-%1.png").arg(QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd-HHmmss")));
+    const AttachmentOutcome outcome = OutcomeOf(Session().AttachImageData(name.toStdString(), prepared.png.toStdString()), prepared.thumbnail);
+    if (outcome.accepted)
+        attachmentTray->Add(outcome.chip);
+    attachmentTray->SetStatus(outcome.accepted ? QString() : outcome.message);
+}
+
+void ReviaWindow::RemoveAttachmentChip(const std::string& id)
+{
+    (void)Session().RemoveAttachment(id);
+    attachmentTray->Remove(id);
+    attachmentTray->SetStatus(QString());
+}
+
+bool ReviaWindow::HandleAttachmentDrag(QEvent* event)
+{
+    if (event->type() == QEvent::DragEnter || event->type() == QEvent::DragMove)
+    {
+        auto* drag = static_cast<QDragMoveEvent*>(event);
+        const QMimeData* data = drag->mimeData();
+        if (!LocalFiles(data).isEmpty() || (data && data->hasImage()))
+        {
+            drag->acceptProposedAction();
+            return true;
+        }
+        return false;
+    }
+    if (event->type() == QEvent::Drop)
+    {
+        auto* drop = static_cast<QDropEvent*>(event);
+        const QMimeData* data = drop->mimeData();
+        const QStringList files = LocalFiles(data);
+        if (!files.isEmpty())
+        {
+            drop->acceptProposedAction();
+            AttachPaths(files);
+            return true;
+        }
+        if (data && data->hasImage())
+        {
+            drop->acceptProposedAction();
+            AttachPastedImage(qvariant_cast<QImage>(data->imageData()));
+            return true;
+        }
+    }
+    return false;
+}
+
+void ReviaWindow::ShowDocuments()
+{
+    if (!documentsDialog)
+    {
+        DocumentControls controls;
+        controls.list = [this]() { return Session().Documents(); };
+        controls.preview = [this](const std::string& id) { return Session().DocumentPreview(id); };
+        controls.forget = [this](const std::string& id, std::string& error) { return Session().ForgetDocument(id, error); };
+        documentsDialog = new DocumentsDialog(std::move(controls), this);
+        documentsDialog->setAttribute(Qt::WA_DeleteOnClose);
+    }
+    documentsDialog->Refresh();
+    documentsDialog->show();
+    documentsDialog->raise();
+    documentsDialog->activateWindow();
 }

@@ -627,3 +627,16 @@ QWidget#archivedChatBanner {
     border: 1px solid rgba(255, 209, 102, 110);
     border-radius: 10px;
 }
+
+/* Attachments: chips above the message box and the Documents list. */
+QFrame#attachmentChip {
+    background: rgba(25, 36, 55, 200);
+    border: 1px solid #2f465f;
+    border-radius: 10px;
+}
+QLabel#attachmentChipLabel { color: #dce9f7; font-size: 11px; }
+QToolButton#attachmentChipRemove { color: #93a4bd; font-size: 13px; padding: 0 4px; border: none; }
+QToolButton#attachmentChipRemove:hover { color: #ff7b88; }
+QLabel#attachmentStatus, QLabel#documentsStatus { color: #b5c6de; font-size: 11px; }
+QPushButton#attachButton, QPushButton#documentsButton { padding: 5px 10px; }
+QDialog#documentsDialog { background: #111b2d; }

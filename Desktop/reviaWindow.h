@@ -1,12 +1,14 @@
 #pragma once
 
 #include "Core/exitReporter.h"
+#include "attachmentTray.h"
 #include "Core/questionRelay.h"
 #include "Learning/qualityFeedback.h"
 #include "Runtime/reviaSession.h"
 
 #include <QMainWindow>
 #include <QPointer>
+#include <QStringList>
 
 #include <atomic>
 #include <functional>
@@ -52,6 +54,7 @@ class AudienceStudioPanel;
 class ConversationStatusPanel;
 class ChatSessionsPanel;
 class NavigationSidebar;
+class DocumentsDialog;
 class AnswerFeedbackDialog;
 namespace Ui
 {
@@ -109,6 +112,16 @@ class ReviaWindow final : public QMainWindow
     // because joining a running one on this thread is what froze the window.
     bool ClaimOperationWorker();
     void SendMessage(bool voiceInput = false);
+    // Attachments: the button, drag and drop, and pasted pictures all end here. Files are
+    // read on a worker thread and staged in the session; the tray shows the result.
+    void BuildAttachmentControls();
+    void ChooseAttachments();
+    void AttachPaths(const QStringList& paths);
+    void AttachPastedImage(const QImage& image);
+    void RemoveAttachmentChip(const std::string& id);
+    // Accepts a drag of local files or a picture onto the chat; true when it handled the event.
+    bool HandleAttachmentDrag(QEvent* event);
+    void ShowDocuments();
     void ToggleListening();
     // Rebuilds the device list from what Windows reports and restores the saved
     // selection. Called at startup and from Refresh.
@@ -194,6 +207,8 @@ class ReviaWindow final : public QMainWindow
         // over the whole history.
         QString renderedSource;
         QString renderedBody;
+        // The files sent with a user message, shown under it.
+        std::vector<AttachmentChip> attachments;
     };
 
     // Appends one of Revia's working entries. `detail` is the supporting evidence, shown
@@ -336,6 +351,10 @@ class ReviaWindow final : public QMainWindow
     NavigationSidebar* navigationSidebar = nullptr;
     QPushButton* runtimeDetailsButton = nullptr;
     QPushButton* sendButton = nullptr;
+    QPushButton* attachButton = nullptr;
+    QPushButton* documentsButton = nullptr;
+    AttachmentTray* attachmentTray = nullptr;
+    QPointer<DocumentsDialog> documentsDialog;
     QPushButton* stopButton = nullptr;
     QPushButton* microphoneButton = nullptr;
     QPushButton* screenActionButton = nullptr;
@@ -387,6 +406,9 @@ class ReviaWindow final : public QMainWindow
     std::jthread deviceWorker;
     std::atomic<bool> shuttingDown = false;
     std::atomic<bool> voiceOperationRunning = false;
+    // Reads attached files off the GUI thread; a large PDF takes a moment to extract.
+    std::jthread attachmentWorker;
+    std::atomic<bool> attachmentRunning = false;
     // A reply that has been generated but is waiting for its audio to start, so the words
     // land with the voice. Released early on any speech failure, and by a timer, because
     // text that is never shown is a worse outcome than text shown slightly ahead.
