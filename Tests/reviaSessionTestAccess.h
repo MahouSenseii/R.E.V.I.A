@@ -46,6 +46,16 @@ struct ReviaSessionTestAccess
         session.router.ApplyLLMSettings(session.settings.llm, embedding, session.profile);
     }
     static void MarkStudioStarted(ReviaSession& session, bool value) { session.started.store(value); }
+    static attachments::AttachmentLibrary& Attachments(ReviaSession& session) { return session.Attachments(); }
+    // Main with or without its vision projector, and no embedding server, so document
+    // search is lexical and deterministic.
+    static void ConfigureAttachments(ReviaSession& session, bool vision)
+    {
+        session.settings.llm.bVisionEnabled = vision;
+        session.settings.embedding.bEnabled = false;
+        session.router.ApplyLLMSettings(session.settings.llm, session.fastLlmSettings, session.expertLlmSettings, embeddingSettings{},
+            aiProfile{}, true, true);
+    }
     static void UseVirtualMachine(ReviaSession& session, std::shared_ptr<workspace::VirtualMachineRuntime> machine)
     { session.virtualMachine = std::move(machine); }
     static void StartVirtualMachine(ReviaSession& session)
