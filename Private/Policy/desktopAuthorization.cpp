@@ -58,6 +58,16 @@ bool IsAmbiguousAffirmative(const std::string& lowered)
     return MatchesAny(lowered, affirmatives);
 }
 
+// A click or invoke on a control that carries no name and no automation id. Nothing at
+// all says what it does, so an icon-only "Post publicly" looks exactly like an icon-only
+// "Bold". A person asking for "the button" chose the step, not that particular control,
+// which a screen observation picked for them.
+bool CommitsOnAnUnidentifiedTarget(const AuthorizationRequest& request)
+{
+    const bool activates = request.operation == DesktopOperation::PointerActivate || request.operation == DesktopOperation::Invoke;
+    return activates && !request.evidence.isPassword && request.evidence.controlName.empty() && request.evidence.automationId.empty();
+}
+
 } // namespace
 
 bool IsCommittingOperation(const DesktopOperation operation)
@@ -226,9 +236,18 @@ DesktopEffects AssessEffects(const AuthorizationRequest& request)
         return MatchesAny(label, phrases) || MatchesAny(context, phrases);
     };
 
+    // Explorer's address bar and the shell's Run box start whatever program is named in
+    // them. They are ordinary fields in an ordinary approved application, so neither the
+    // phrases above nor the shell executable list would otherwise see a command surface.
+    std::string executable = Lower(evidence.executable);
+    if (const auto slash = executable.find_last_of("/\\"); slash != std::string::npos)
+        executable.erase(0, slash + 1);
+    const bool shellField = executable == "explorer.exe" &&
+        (ContainsPhrase(label, "address") || context == "run");
+
     // Additive on purpose: a control can be more than one of these at once, and taking
     // only the highest would drop the rest.
-    if (either(commandSurface)) effects = effects | DesktopEffect::CommandSurface;
+    if (either(commandSurface) || shellField) effects = effects | DesktopEffect::CommandSurface;
     if (either(accountOrSecurity)) effects = effects | DesktopEffect::AccountOrSecurity;
     if (either(destructive)) effects = effects | DesktopEffect::Destructive;
     if (either(financial)) effects = effects | DesktopEffect::Financial;
@@ -296,6 +315,16 @@ AuthorizationDecision AuthorizeDesktopEffect(const AuthorizationRequest& request
         decision.reason =
             "The target is unclear, but this is a disposable workspace where that is "
             "not a reason to stop.";
+        return decision;
+    }
+    if (!request.autonomousOrigin && CommitsOnAnUnidentifiedTarget(request))
+    {
+        // Before this, an unnamed control produced no effect and no keyword, so on a
+        // request the person made it went through on their behalf. Their request named
+        // a task, not this control, and the control says nothing about itself.
+        decision.verdict = AuthorizationVerdict::RequireApproval;
+        decision.reason = "Nothing identifies this control: it has no readable name or automation id, so what "
+                          "activating it would do is unknown.";
         return decision;
     }
     if (!request.autonomousOrigin)
@@ -411,8 +440,13 @@ bool AuthorizeOrExplain(const DesktopOperation operation, const TargetEvidence& 
     if (decision.verdict == AuthorizationVerdict::RequireApproval && gate != nullptr &&
         !ask.autonomousOrigin)
     {
-        if (const auto task = gate->TaskDecision(request.requestedBy, decision.effects))
+        if (auto task = gate->TaskDecision(request.requestedBy, decision.effects))
         {
+            // A task approval names the effects the person agreed to. An unidentified
+            // control has no known effect, so the approval cannot vouch for it, and a
+            // running task stops there just as it does at a command surface.
+            if (CommitsOnAnUnidentifiedTarget(ask))
+                task = false;
             outFailure = *task ? std::string{} :
                 "Refused: this effect is outside the approved task. " + decision.reason;
             return *task;

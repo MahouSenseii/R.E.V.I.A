@@ -79,9 +79,14 @@ ReplyFragmenter::ReplyFragmenter(const std::size_t minimumFragmentCharacters, co
 
 bool ReplyFragmenter::IsBoundary(const std::string& text, const std::size_t index)
 {
+    return SentenceEnd(text, index) != std::string::npos;
+}
+
+std::size_t ReplyFragmenter::SentenceEnd(const std::string& text, const std::size_t index)
+{
     if (index >= text.size() || !IsTerminal(text[index]))
     {
-        return false;
+        return std::string::npos;
     }
     // A decimal point, a version number, an IP address: digits either side is never a
     // sentence end.
@@ -89,11 +94,11 @@ bool ReplyFragmenter::IsBoundary(const std::string& text, const std::size_t inde
         std::isdigit(static_cast<unsigned char>(text[index - 1])) != 0 &&
         std::isdigit(static_cast<unsigned char>(text[index + 1])) != 0)
     {
-        return false;
+        return std::string::npos;
     }
     if (text[index] == '.' && EndsWithAbbreviation(text, index))
     {
-        return false;
+        return std::string::npos;
     }
 
     // Run past a closing quote or bracket so the punctuation stays with its sentence, and
@@ -111,8 +116,8 @@ bool ReplyFragmenter::IsBoundary(const std::string& text, const std::size_t inde
     }
     // The boundary is only real once whitespace confirms it. Mid-stream, a terminal at the
     // very end may still be an abbreviation whose next character has not arrived.
-    return after + 1 < text.size() &&
-        std::isspace(static_cast<unsigned char>(text[after + 1])) != 0;
+    return after + 1 < text.size() && std::isspace(static_cast<unsigned char>(text[after + 1])) != 0 ? after + 1
+                                                                                                     : std::string::npos;
 }
 
 std::vector<std::string> ReplyFragmenter::Consume(const std::string& incoming)
@@ -185,6 +190,22 @@ std::string ReplyFragmenter::Flush()
     if (emittedFragments > 0 || remainder.size() > 160) return {};
     remainder.push_back('.');
     return remainder;
+}
+
+std::vector<std::string> ReplyFragmenter::ConsumeSentences(const std::string& incoming)
+{
+    // A space stands in for the whitespace that has not arrived yet, and is taken back
+    // out if the sentence it confirmed is still held, so the spacing that follows is the
+    // text's own.
+    std::vector<std::string> fragments = Consume(incoming + ' ');
+    if (!pending.empty() && pending.back() == ' ')
+        pending.pop_back();
+    return fragments;
+}
+
+std::string ReplyFragmenter::Pending() const
+{
+    return Trim(pending);
 }
 
 void ReplyFragmenter::Reset()

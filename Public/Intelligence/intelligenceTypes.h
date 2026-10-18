@@ -24,10 +24,13 @@ enum class ReasoningMode
 };
 
 // Runtime routing inputs are assembled only by ConversationRuntime::BuildRoutingContext.
-// Every field must have a real producer; attachments and dispatched action turns supply no routing inputs.
+// Every field must have a real producer; dispatched action turns supply no routing inputs.
 struct RoutingContext
 {
     bool visionRequired = false;
+    // Pictures the user attached to this private message (the attachment boundary is the
+    // producer). Unlike visionRequired it never asks for a screen capture.
+    std::size_t attachedImageCount = 0;
     bool expertVisionPreferred = false;
     bool explicitResearch = false;
     // Whether the previous delivered answer in this conversation is one the runtime has

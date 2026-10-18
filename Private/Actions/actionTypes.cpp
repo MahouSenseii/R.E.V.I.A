@@ -357,6 +357,12 @@ bool AlwaysNeedsItsOwnConfirmation(const ActionType value)
         value == ActionType::BrowserClick || value == ActionType::BrowserFill;
 }
 
+bool AlwaysNeedsItsOwnConfirmation(const ActionRequest& request)
+{
+    return AlwaysNeedsItsOwnConfirmation(request.type) ||
+        (request.type == ActionType::LaunchApplication && !request.source.empty());
+}
+
 RiskLevel RiskForAction(ActionType value)
 {
     if (value == ActionType::VmListDirectory || value == ActionType::VmReadTextFile) return RiskLevel::ReadOnly;
@@ -623,9 +629,9 @@ bool IsApplicationSwitchingChord(const std::string& normalizedChord)
 bool IsCommandSurfaceChord(const std::string& normalizedChord)
 {
     // Each of these ends at a field that runs whatever is typed into it, which is the
-    // shell boundary wearing a different hat.
+    // shell boundary wearing a different hat. Task Manager's "Run new task" is one.
     static const std::vector<std::string> commandSurfaces = {
-        "win+r", "win+x", "win+s", "win+q", "win+i", "win+u"};
+        "win+r", "win+x", "win+s", "win+q", "win+i", "win+u", "ctrl+shift+escape"};
     return std::find(commandSurfaces.begin(), commandSurfaces.end(), normalizedChord) !=
         commandSurfaces.end();
 }
@@ -643,7 +649,11 @@ bool IsCommandSurfaceExecutable(const std::string& executableName)
         "cmd.exe", "powershell.exe", "pwsh.exe", "windowsterminal.exe", "wt.exe",
         "conhost.exe", "openconsole.exe", "bash.exe", "sh.exe", "zsh.exe", "wsl.exe",
         "wslhost.exe", "python.exe", "pythonw.exe", "wscript.exe", "cscript.exe",
-        "mshta.exe", "regedit.exe", "reg.exe", "mmc.exe", "taskmgr.exe"};
+        "mshta.exe", "regedit.exe", "reg.exe", "mmc.exe", "taskmgr.exe",
+        // Not shells by name, but each runs whatever file or command line it is given.
+        "rundll32.exe", "regsvr32.exe", "msiexec.exe", "cmstp.exe", "wmic.exe",
+        "forfiles.exe", "msbuild.exe", "installutil.exe", "schtasks.exe", "bitsadmin.exe",
+        "hh.exe", "control.exe", "pcalua.exe", "scriptrunner.exe"};
     std::string lowered = executableName;
     std::transform(lowered.begin(), lowered.end(), lowered.begin(),
         [](const unsigned char character)

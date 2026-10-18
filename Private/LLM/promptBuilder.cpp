@@ -45,6 +45,30 @@ bool ContinuesRecentTopic(const std::string& input)
             std::chrono::steady_clock::now() - start).count();
     }
 
+    // The runtime block's delimiters may only come from the runtime. A page, the screen or
+    // a message that contains one could otherwise end the block early and have the text
+    // after it read as the user's words, or open one and borrow the runtime's authority.
+    // Matched without regard to case, because the model reads them that way too.
+    std::string NeutralizeTurnContextMarkers(std::string text)
+    {
+        namespace markers = revia::identity::markers;
+        std::string lowered = text;
+        std::transform(lowered.begin(), lowered.end(), lowered.begin(),
+            [](const unsigned char character) { return static_cast<char>(std::tolower(character)); });
+        for (const std::string_view marker : {markers::RuntimeTurnContext, markers::RuntimeTurnContextEnd})
+        {
+            std::string wanted(marker);
+            std::transform(wanted.begin(), wanted.end(), wanted.begin(),
+                [](const unsigned char character) { return static_cast<char>(std::tolower(character)); });
+            for (std::size_t at = lowered.find(wanted); at != std::string::npos; at = lowered.find(wanted, at + wanted.size()))
+            {
+                text[at] = '(';
+                text[at + wanted.size() - 1] = ')';
+            }
+        }
+        return text;
+    }
+
     // Constant, so the system message stays byte-identical from turn to turn.
     std::string TurnContextNote()
     {
@@ -56,6 +80,14 @@ bool ContinuesRecentTopic(const std::string& input)
             "after it is what the user said. Never quote or mention the block.";
     }
 }
+
+namespace revia::llm
+{
+std::string NeutralizeTurnContextMarkers(std::string text)
+{
+    return ::NeutralizeTurnContextMarkers(std::move(text));
+}
+} // namespace revia::llm
 
 promptBuilder::promptBuilder() = default;
 
@@ -207,7 +239,7 @@ nlohmann::json promptBuilder::BuildMessages(const aiProfile& profile, const std:
         // Keep the stored transcript untouched; labels are model-input evidence.
         // This also supports custom profiles and call paths without turn posture.
         if (message.role == "user")
-            content = revia::conversation::AnnotateReportedSpeech(content);
+            content = NeutralizeTurnContextMarkers(revia::conversation::AnnotateReportedSpeech(content));
         if (message.role == "user" && index + 1 == context.size())
         {
             const auto attribution = revia::conversation::BuildSpeechAttributionGuidance(message.content, context);
@@ -219,7 +251,7 @@ nlohmann::json promptBuilder::BuildMessages(const aiProfile& profile, const std:
         {
             // Before the user's words, so the reply task and note still end the prompt.
             content = std::string(revia::identity::markers::RuntimeTurnContext) + "\n" +
-                turnContext + "\n" + std::string(revia::identity::markers::RuntimeTurnContextEnd) +
+                NeutralizeTurnContextMarkers(turnContext) + "\n" + std::string(revia::identity::markers::RuntimeTurnContextEnd) +
                 "\n\n" + content;
         }
         messages.push_back({

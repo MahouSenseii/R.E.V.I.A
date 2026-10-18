@@ -3,6 +3,8 @@
 #include "LLM/responseTypes.h"
 #include "Agents/conversationAgent.h"
 #include "Agents/replyFormat.h"
+#include "Agents/replyStreamGate.h"
+#include "Agents/toolLoop.h"
 
 #include <chrono>
 #include <sstream>
@@ -13,16 +15,43 @@ namespace revia::agents
 responseOutput ConversationAgent::Execute(const messageRouter& router, const std::string& input,
     const std::vector<conversationMessage>& context, const responseFilterSettings& filterSettings,
     const ResponseFilterContext& filterContext, const std::stop_token stopToken, messageRouter::DeltaHandler onDelta,
-    const revia::intelligence::IntelligenceDecision& decision, const llm::PrivateMemoryAccess memoryAccess) const
+    const revia::intelligence::IntelligenceDecision& decision, const llm::PrivateMemoryAccess memoryAccess, const ToolLoop* tools) const
 {
     const auto replyContract = RequestedReplyContract(input);
-    // Backend deltas are untrusted until the complete style/hard/optional AI filter
-    // sequence has accepted them. Preserve backend streaming and cancellation while
-    // keeping raw chunks private; irreversible delivery happens once, below.
-    const messageRouter::DeltaHandler bufferOnly =
-        onDelta ? messageRouter::DeltaHandler([](const std::string&) {}) : messageRouter::DeltaHandler{};
-    responseOutput output = router.RouteMessage(input, context, stopToken, bufferOnly, decision, memoryAccess);
-    output.bWasStreamed = false;
+    // Backend deltas are untrusted until the deterministic filter sequence has accepted
+    // them. When nothing still to come can change an accepted sentence -- no AI reviewer
+    // waits to read the whole reply, and no explicit shape must be validated complete --
+    // each one is released as soon as the filters leave the reply so far unchanged.
+    // Otherwise the backend still streams, for cancellation, and delivery happens once.
+    const bool releaseWhileGenerating =
+        onDelta && !filterSettings.bAiReviewEnabled && replyContract.rootKind == ReplyFormat::Conversation;
+    ReplyStreamGate gate([&](const std::string& reply) -> std::optional<std::string>
+        {
+            const HardFilterResult hard = responseFilter.ApplyHard(
+                input, stylePolicy.RefineReply(input, context, reply), filterContext, filterSettings.maxReplyCharacters);
+            if (hard.blocked)
+                return std::nullopt;
+            return hard.text;
+        });
+    messageRouter::DeltaHandler backendDelta;
+    if (releaseWhileGenerating)
+    {
+        backendDelta = [&](const std::string& delta)
+        {
+            if (stopToken.stop_requested())
+                return;
+            if (const std::string approved = gate.Consume(delta); !approved.empty())
+                onDelta(approved);
+        };
+    }
+    else if (onDelta)
+    {
+        backendDelta = [](const std::string&) {};
+    }
+    responseOutput output = tools != nullptr && tools->Active()
+                                ? tools->Run(router, input, context, stopToken, backendDelta, decision, memoryAccess)
+                                : router.RouteMessage(input, context, stopToken, backendDelta, decision, memoryAccess);
+    output.bWasStreamed = !gate.Released().empty();
     if (output.bSuccess)
     {
         output.rawResponse = output.response;
@@ -100,7 +129,14 @@ responseOutput ConversationAgent::Execute(const messageRouter& router, const std
         }
         if (onDelta && !stopToken.stop_requested())
         {
-            onDelta(output.response);
+            // What was released is already the start of the reply. Only the rest follows,
+            // and only when the final reply still begins with it; when the full pass
+            // changed released text, the caller sees the final reply and reconciles.
+            const std::string& released = gate.Released();
+            if (released.empty())
+                onDelta(output.response);
+            else if (output.response.size() > released.size() && output.response.compare(0, released.size(), released) == 0)
+                onDelta(output.response.substr(released.size()));
             output.bWasStreamed = true;
         }
     }

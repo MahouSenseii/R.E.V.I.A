@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Agents/answerObligation.h"
+#include "Attachments/attachmentLibrary.h"
 #include "Core/appSettings.h"
 #include "Core/conversationMessage.h"
 #include "Core/profile.h"
@@ -216,6 +217,23 @@ class ReviaSession
     [[nodiscard]] std::optional<improvement::DevelopmentSnapshot> DevelopmentStudio() const;
     SessionResult Submit(const std::string& input, agents::InputSource source = agents::InputSource::Typed);
 
+    // Files the user hands over in a private conversation: dropped, pasted or picked.
+    // Each is read once, checked, and copied into this companion's private store; it
+    // waits there until it is sent with a message or removed. A shared or public
+    // audience refuses them.
+    attachments::IntakeResult AttachFile(const std::filesystem::path& path);
+    attachments::IntakeResult AttachImageData(const std::string& name, const std::string& bytes);
+    bool RemoveAttachment(const std::string& id);
+    // Submit with the staged files the ids name. With no ids this is Submit.
+    SessionResult SubmitWithAttachments(const std::string& input, const std::vector<std::string>& attachmentIds);
+    // The documents kept from earlier messages, newest first.
+    [[nodiscard]] std::vector<attachments::StoredDocument> Documents();
+    [[nodiscard]] std::string DocumentPreview(const std::string& id);
+    bool ForgetDocument(const std::string& id, std::string& outError);
+    // The search_documents tool body: cited passages from kept documents, or why none.
+    // Refused for a shared or public audience.
+    [[nodiscard]] std::string SearchDocuments(const std::string& query, std::stop_token stopToken = {});
+
     // Merges input bursts; the completed turn arrives as an AssistantMessage event.
     agents::InputVerdict OfferInput(const std::string& text, agents::InputSource source);
     [[nodiscard]] identity::AudienceContext Audience() const;
@@ -362,6 +380,33 @@ class ReviaSession
         const memory::RecallRequest& request, const std::string& currentInput, const memory::MemoryScope& scope) const;
     [[nodiscard]] std::vector<memory::ArchivedSession> RecentConversations(std::size_t maxSessions = 20) const;
     std::size_t ForgetConversations();
+
+    // The desktop chat list. Every call refuses outside a private audience, the same
+    // boundary /history sits behind, so past chats never appear on a shared screen. The
+    // calls that change the working context never wait for a running turn: they refuse
+    // and say so, because they are made from the window's own thread.
+    [[nodiscard]] bool ConversationBrowsingAdmitted(std::string& outReason) const;
+    [[nodiscard]] std::string CurrentConversationId() const;
+    // A non-empty query keeps the conversations with a matching turn, newest first.
+    [[nodiscard]] std::vector<memory::ArchivedSession> BrowseConversations(
+        const std::string& query, std::size_t maxSessions, std::string& outError) const;
+    [[nodiscard]] std::vector<memory::ArchivedTurn> ConversationTranscript(const std::string& sessionId, std::string& outError) const;
+    bool ExportConversation(const std::string& sessionId, bool json, std::string& outText, std::string& outError) const;
+    // A fresh working context and archive session. Long-term memory is not touched.
+    bool StartNewConversation(std::string& outError);
+    // Puts the speaker's own turns from an older chat back into the working context and
+    // archives later turns there. Only an attributed private speaker can continue.
+    bool ContinueConversation(const std::string& sessionId, std::string& outError);
+    bool RenameConversation(const std::string& sessionId, const std::string& title, std::string& outError);
+    bool DeleteConversation(const std::string& sessionId, std::string& outError);
+    // Retract the latest conversational exchange from the working context and the
+    // archive, then run the same or the edited text through Submit, so the new turn
+    // passes every admission check a typed message does. outRetracted is false when
+    // nothing was removed: no eligible exchange, the audience changed, or the
+    // conversation has moved on. Facts the memory agent already took from the first
+    // reply are not undone here.
+    SessionResult RegenerateLast(bool& outRetracted);
+    SessionResult ReplaceLastUserTurn(const std::string& replacement, bool& outRetracted);
 
     // Durable non-authority settings. The store cannot reach a capability, so nothing
     // here can widen what Revia is permitted to do.
@@ -544,6 +589,22 @@ class ReviaSession
     [[nodiscard]] memory::MemoryScope CapturePrivateMemoryScope() const;
     std::string privateContextParticipant;
     std::string privateContextAudience;
+    // The newest typed or merged exchange as each store holds it, kept so a regenerate
+    // or edit retracts exactly that exchange and nothing older. Cleared at the start of
+    // every turn; guarded by operationMutex.
+    struct RetractableExchange
+    {
+        bool privateContext = false;
+        std::uint64_t audienceRevision = 0;
+        std::string participantId;
+        std::string input;
+        std::string contextUser;
+        std::string contextAssistant;
+        std::string archivedAssistant;
+    };
+    std::optional<RetractableExchange> lastExchange;
+    void RememberExchange(const agents::InputBatch& batch, const SessionResult& result, bool privateContext);
+    SessionResult RetryLastExchange(const std::string& replacement, bool& outRetracted);
     // Submit already holds operationMutex when /eval arrives; the public entry point locks.
     evaluation::EvaluationReport RunConversationEvaluationUnlocked(
         const std::vector<evaluation::EvaluationCase>& cases, std::stop_token stopToken);
@@ -643,6 +704,15 @@ class ReviaSession
     // What the user copied, for a turn that asks about it; empty for any other turn.
     // Bounded, marked as untrusted, never saved, and withheld if it holds a credential.
     [[nodiscard]] std::string ClipboardReference(const std::string& input);
+    // The attachment library, created on first use. AttachmentsIfPresent does not create
+    // one: a turn only searches documents when the user has attached some.
+    attachments::AttachmentLibrary& Attachments();
+    attachments::AttachmentLibrary* AttachmentsIfPresent();
+    [[nodiscard]] std::optional<std::string> AttachmentRefusal() const;
+    // This turn's attached files and any passages from earlier ones, as the turn
+    // reference and the pictures for the newest message.
+    attachments::TurnAttachments PrepareTurnAttachments(const std::string& input, std::vector<attachments::StagedAttachment> files,
+        std::stop_token stopToken);
     // The goal runner serves one goal at a time: work that needs it while a task holds
     // it is refused here, with a way out. Returns true when it refused.
     bool RefuseWhileTaskRuns(SessionResult& result);
@@ -844,6 +914,8 @@ class ReviaSession
     // Declared after borrowed collaborators so it is destroyed first.
     DocumentWorkshop documentWorkshop;
     std::string conversationSessionId;
+    // Writers also hold operationMutex; this lets the window read the id without it.
+    mutable std::mutex conversationIdMutex;
 
     mutable std::mutex operationMutex;
     // Preference commands already run under operationMutex, while UI setters do not.
@@ -919,6 +991,15 @@ class ReviaSession
     };
     planning::ReminderBook reminders;
     std::function<std::optional<perception::ClipboardText>()> clipboardReader = [] { return perception::ReadClipboardText(6000); };
+    std::mutex attachmentMutex;
+    // Before the library: its embedding worker calls this, so it must be destroyed after.
+    llamaCppEmbeddingService documentEmbeddings;
+    std::unique_ptr<attachments::AttachmentLibrary> attachmentLibrary;
+    // Files handed from SubmitWithAttachments to the typed turn it starts.
+    std::vector<attachments::StagedAttachment> pendingTurnAttachments;
+    // Documents attached a turn or two ago, which a short follow-up is probably about.
+    std::vector<std::string> recentDocumentIds;
+    int recentDocumentTurns = 0;
     // Serialises launching against launching and stopping. The worker never takes it.
     std::mutex taskLaunchMutex;
     mutable std::mutex taskMutex;

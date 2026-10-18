@@ -595,3 +595,48 @@ QPushButton#clearActivityButton:hover {
     border: 1px solid #3C547D;
     color: #DCE9F7;
 }
+
+/* The chat list beside the transcript: the same glass card as the navigation sidebar. */
+QWidget#chatSessionsPanel {
+    background: rgba(20, 29, 45, 205);
+    border: 1px solid #293d56;
+    border-radius: 12px;
+}
+QLabel#chatSessionsHeading { color: #91a7c4; font-size: 11px; font-weight: 600; padding: 0 2px; }
+QLabel#chatSessionsStatus, QLabel#archivedChatLabel { color: #b5c6de; font-size: 11px; }
+QListWidget#chatSessionList { font-size: 12px; }
+QListWidget#chatSessionList::item { padding: 6px 4px; }
+QPushButton#renameChatButton, QPushButton#deleteChatButton, QPushButton#exportChatButton,
+QPushButton#chatSidebarToggle, QPushButton#backToChatButton {
+    background: rgba(41, 59, 85, 140);
+    border: 1px solid #2E4062;
+    color: #A9BAD2;
+    padding: 5px 8px;
+    font-size: 12px;
+}
+QPushButton#renameChatButton:hover, QPushButton#deleteChatButton:hover, QPushButton#exportChatButton:hover,
+QPushButton#chatSidebarToggle:hover, QPushButton#backToChatButton:hover {
+    background: rgba(56, 78, 110, 170);
+    border: 1px solid #3C547D;
+    color: #DCE9F7;
+}
+QPushButton#chatSidebarToggle:checked { color: #89efdb; border-color: #417e85; }
+/* A saved chat is on screen instead of the live one; amber says "not current". */
+QWidget#archivedChatBanner {
+    background: rgba(255, 209, 102, 26);
+    border: 1px solid rgba(255, 209, 102, 110);
+    border-radius: 10px;
+}
+
+/* Attachments: chips above the message box and the Documents list. */
+QFrame#attachmentChip {
+    background: rgba(25, 36, 55, 200);
+    border: 1px solid #2f465f;
+    border-radius: 10px;
+}
+QLabel#attachmentChipLabel { color: #dce9f7; font-size: 11px; }
+QToolButton#attachmentChipRemove { color: #93a4bd; font-size: 13px; padding: 0 4px; border: none; }
+QToolButton#attachmentChipRemove:hover { color: #ff7b88; }
+QLabel#attachmentStatus, QLabel#documentsStatus { color: #b5c6de; font-size: 11px; }
+QPushButton#attachButton, QPushButton#documentsButton { padding: 5px 10px; }
+QDialog#documentsDialog { background: #111b2d; }

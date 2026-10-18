@@ -44,9 +44,19 @@ public:
     // onDelta receives visible text as it is generated, so a caller can begin speaking
     // the first sentence while the rest is still being produced.
     using DeltaHandler = std::function<void(const std::string&)>;
+    // onReasoning receives the model's thinking as it streams (llama.cpp's
+    // reasoning_content, or an inline <think> block), never the visible reply. The
+    // thinking is untrusted model text: it is shown as thinking, never spoken or stored
+    // as dialogue.
+    using ReasoningHandler = std::function<void(const std::string&)>;
+    // `tools`, when it has definitions, offers them with tool_choice "auto" (or "none" on
+    // a last step) and replays its earlier rounds after the prompt. Requested calls come
+    // back in responseOutput::toolCalls and are never executed here. A server that cannot
+    // take tools, or a context too small to hold them, returns bToolsRejected instead.
     responseOutput GenerateResponse(const std::vector<conversationMessage>& context, std::stop_token stopToken = {},
         DeltaHandler onDelta = {}, bool deepReasoning = false,
-        revia::llm::PrivateMemoryAccess memoryAccess = revia::llm::PrivateMemoryAccess::ProfileSetting) const;
+        revia::llm::PrivateMemoryAccess memoryAccess = revia::llm::PrivateMemoryAccess::ProfileSetting,
+        ReasoningHandler onReasoning = {}, const revia::llm::ToolExchange* tools = nullptr) const;
     responseOutput GenerateActionProposal(const std::string& userRequest) const;
     responseOutput GenerateCalculationProposal(const std::string& envelope, std::stop_token stopToken = {}) const;
     responseOutput ReviewConversationReply(const std::string& userInput, const std::string& candidateReply,
@@ -86,7 +96,6 @@ public:
     embeddingOutput EmbedMemory(const std::string& summary, std::stop_token stopToken = {}) const;
 
 private:
-    static std::string ParseStreamChunk(const std::string& line, std::string* outFinishReason = nullptr);
     int ResponseTokenLimit() const;
     // Shared by both planners: same low temperature, same JSON-object response format,
     // different contract and token ceiling.
@@ -103,15 +112,20 @@ private:
     int port = 8080;
     std::string modelName = "local-model";
     std::string apiKey;
+    bool bVerifyServerKey = false;
     float temperature = 0.7f;
     bool bAutoMaxTokens = true;
     bool bStablePromptPrefix = true;
     bool bAllowPromptCache = true;
     int maxTokens = 4096;
+    int thinkingTokens = 3072;
     bool bVisionExpected = false;
     int configuredContextTokens = 4096;
     mutable std::atomic<int> effectiveContextTokens = 0;
     mutable std::atomic<int> effectiveParallelSlots = 0;
+    // Set when this server refused a request for offering tools. Later turns then skip
+    // straight to the caller's fallback instead of sending a request that will fail.
+    mutable std::atomic<bool> toolsUnsupported = false;
 
     promptBuilder builder;
     llamaCppEmbeddingService embeddings;

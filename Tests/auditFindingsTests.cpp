@@ -834,6 +834,69 @@ void TestPreemptedClassificationIsRetriedThenGivenUp()
     agent.Stop();
 }
 
+// Memory classification waits while the voice is busy, so it does not compete with the
+// first spoken phrase for the GPU, but never past its maximum: a turn answered by a voice
+// that never falls quiet is still classified, and shutdown does not wait for the voice.
+void TestClassificationWaitsForTheVoiceButNeverLosesTheTurn()
+{
+    using namespace std::chrono_literals;
+    using Clock = std::chrono::steady_clock;
+    messageRouter router;
+    ConfigurePlaceholderRouter(router);
+    ScopedTestDirectory directory;
+    MemoryAgent agent((directory.root / "memory.db").string());
+    std::atomic<int> attempts{0};
+    revia::agents::MemoryAgentTestAccess::SetEvaluator(agent,
+        [&](const std::string&, const std::string&)
+        {
+            ++attempts;
+            memoryDecision decision;
+            decision.bSuccess = true;
+            decision.reason = "Nothing durable.";
+            return decision;
+        });
+    std::atomic<bool> speaking{true};
+    revia::agents::MemoryDeferral deferral;
+    deferral.busy = [&] { return speaking.load(); };
+    deferral.settle = 20ms;
+    deferral.maximum = 800ms;
+    deferral.recheck = 10ms;
+    agent.SetDeferral(deferral);
+    const auto awaitEvent = [&agent](const std::chrono::milliseconds limit)
+    {
+        const auto deadline = Clock::now() + limit;
+        std::vector<revia::agents::MemoryAgentEvent> drained;
+        while (drained.empty() && Clock::now() < deadline)
+        {
+            drained = agent.DrainEvents();
+            if (drained.empty())
+                std::this_thread::sleep_for(5ms);
+        }
+        return drained;
+    };
+
+    agent.Submit(router, "a turn answered aloud", "A spoken reply.", revia::agents::ResponseProvenance::NormalGeneration);
+    std::this_thread::sleep_for(300ms);
+    Check(attempts.load() == 0, "Memory classification started while the reply was still being spoken.");
+    speaking.store(false);
+    const auto quiet = Clock::now();
+    Check(awaitEvent(2s).size() == 1 && attempts.load() == 1, "A turn held back for the voice was never classified.");
+    Check(Clock::now() - quiet < 400ms, "Classification did not start soon after the voice fell quiet.");
+
+    // A voice that never stops only delays it, up to the maximum.
+    speaking.store(true);
+    const auto submitted = Clock::now();
+    agent.Submit(router, "a turn during a long song", "Another reply.", revia::agents::ResponseProvenance::NormalGeneration);
+    Check(awaitEvent(3s).size() == 1 && attempts.load() == 2, "A turn was lost because the voice never fell quiet.");
+    Check(Clock::now() - submitted >= 750ms, "Classification ran before its maximum while the voice was still busy.");
+
+    // Shutdown does not wait for a held-back turn.
+    agent.Submit(router, "a turn still held back", "A third reply.", revia::agents::ResponseProvenance::NormalGeneration);
+    const auto stopping = Clock::now();
+    agent.Stop();
+    Check(Clock::now() - stopping < 500ms && attempts.load() == 2, "Stopping waited on, or ran, a turn held back for the voice.");
+}
+
 // Exercises the documented production default (maximumPendingEvents == 512) directly,
 // with enough sustained Low-value pressure -- more submissions than the interactive
 // task queue's own bound, so every one of them actually reaches the worker and
@@ -1410,6 +1473,7 @@ void RunAuditFindingsTests()
     TestABurstOfApprovedFindingsUnderQueuePressureLosesNoneAndDuplicatesNone();
     TestEventPriorityClassificationMatchesWhatMustNeverBeLostSilently();
     TestPreemptedClassificationIsRetriedThenGivenUp();
+    TestClassificationWaitsForTheVoiceButNeverLosesTheTurn();
     TestEventQueueNeverExceedsTheDocumentedDefaultBoundUnderSustainedPressure();
     TestEventOverflowPreservesCriticalAndImportantEventsOverLowValueOnes();
 

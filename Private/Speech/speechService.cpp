@@ -4,6 +4,7 @@
 #include "Speech/speechService.h"
 
 #include "Speech/vocalization.h"
+#include "Speech/wavTiming.h"
 
 #include <algorithm>
 #include <array>
@@ -151,101 +152,6 @@ namespace
             case runtime::AffectState::Angry: return 1;
             default: return 0;
         }
-    }
-
-    double WavDurationMilliseconds(const std::filesystem::path& path)
-    {
-        std::ifstream file(path, std::ios::binary);
-        if (!file.is_open())
-        {
-            return 0.0;
-        }
-        char riff[12]{};
-        file.read(riff, sizeof(riff));
-        if (file.gcount() != sizeof(riff) || std::string_view(riff, 4) != "RIFF" ||
-            std::string_view(riff + 8, 4) != "WAVE")
-        {
-            return 0.0;
-        }
-        const auto decode32 = [](const unsigned char* bytes)
-        {
-            return static_cast<std::uint32_t>(bytes[0]) |
-                (static_cast<std::uint32_t>(bytes[1]) << 8U) |
-                (static_cast<std::uint32_t>(bytes[2]) << 16U) |
-                (static_cast<std::uint32_t>(bytes[3]) << 24U);
-        };
-        std::uint32_t byteRate = 0;
-        std::uint32_t dataSize = 0;
-        while (file && (byteRate == 0 || dataSize == 0))
-        {
-            char chunkHeader[8]{};
-            file.read(chunkHeader, sizeof(chunkHeader));
-            if (file.gcount() != sizeof(chunkHeader)) break;
-            const std::uint32_t chunkSize = decode32(
-                reinterpret_cast<const unsigned char*>(chunkHeader + 4));
-            if (std::string_view(chunkHeader, 4) == "fmt " && chunkSize >= 12)
-            {
-                std::vector<unsigned char> format(std::min<std::uint32_t>(chunkSize, 16));
-                file.read(reinterpret_cast<char*>(format.data()),
-                    static_cast<std::streamsize>(format.size()));
-                if (format.size() >= 12 && file.gcount() >= 12)
-                {
-                    byteRate = decode32(format.data() + 8);
-                }
-                if (chunkSize > format.size())
-                {
-                    file.seekg(static_cast<std::streamoff>(chunkSize - format.size()),
-                        std::ios::cur);
-                }
-            }
-            else
-            {
-                if (std::string_view(chunkHeader, 4) == "data") dataSize = chunkSize;
-                file.seekg(static_cast<std::streamoff>(chunkSize), std::ios::cur);
-            }
-            if ((chunkSize & 1U) != 0) file.seekg(1, std::ios::cur);
-        }
-        return byteRate == 0 ? 0.0 :
-            static_cast<double>(dataSize) * 1000.0 / static_cast<double>(byteRate);
-    }
-
-    double WavDurationMilliseconds(const std::vector<std::uint8_t>& bytes)
-    {
-        if (bytes.size() < 44 ||
-            std::string_view(reinterpret_cast<const char*>(bytes.data()), 4) != "RIFF" ||
-            std::string_view(reinterpret_cast<const char*>(bytes.data() + 8), 4) != "WAVE")
-        {
-            return 0.0;
-        }
-        const auto read32 = [&bytes](const std::size_t offset)
-        {
-            return static_cast<std::uint32_t>(bytes[offset]) |
-                (static_cast<std::uint32_t>(bytes[offset + 1]) << 8U) |
-                (static_cast<std::uint32_t>(bytes[offset + 2]) << 16U) |
-                (static_cast<std::uint32_t>(bytes[offset + 3]) << 24U);
-        };
-        std::uint32_t byteRate = 0;
-        std::uint32_t dataSize = 0;
-        std::size_t cursor = 12;
-        while (cursor + 8 <= bytes.size() && (byteRate == 0 || dataSize == 0))
-        {
-            const std::uint32_t chunkSize = read32(cursor + 4);
-            const std::size_t payload = cursor + 8;
-            if (payload + static_cast<std::size_t>(chunkSize) > bytes.size()) break;
-            const std::string_view id(
-                reinterpret_cast<const char*>(bytes.data() + cursor), 4);
-            if (id == "fmt " && chunkSize >= 12)
-            {
-                byteRate = read32(payload + 8);
-            }
-            else if (id == "data")
-            {
-                dataSize = chunkSize;
-            }
-            cursor = payload + static_cast<std::size_t>(chunkSize) + (chunkSize & 1U);
-        }
-        return byteRate == 0 ? 0.0 :
-            static_cast<double>(dataSize) * 1000.0 / static_cast<double>(byteRate);
     }
 #endif
 
@@ -1075,6 +981,12 @@ bool SpeechService::HasPendingSpeech() const
     return !playbackOrder.Empty() || activeUtteranceId.load() != 0;
 }
 
+bool SpeechService::HasQueuedSpeech() const
+{
+    std::lock_guard lock(mutex);
+    return !playbackOrder.Empty();
+}
+
 std::size_t SpeechService::PreferredFragmentCharacters() const
 {
     return configuration.bQwenParallelLongReplies
@@ -1133,6 +1045,7 @@ void SpeechService::Speak(std::string text, const runtime::AffectSnapshot affect
         // one: only the first fragment of a reply is latency critical.
         if (latencyCritical)
         {
+            replyFirstSequence = nextSequence.load();
             vocalizationPolicy.BeginReply();
             // A bank may have been installed after the preset was selected.
             // Refresh only at reply boundaries, keeping variant rotation intact
@@ -1147,11 +1060,21 @@ void SpeechService::Speak(std::string text, const runtime::AffectSnapshot affect
         {
             return;
         }
-        while (!queue.empty() && queue.size() + plan.size() > static_cast<std::size_t>(configuration.maxQueuedUtterances))
+        // Room comes from speech nobody is waiting for any more: a stopped generation, or
+        // a reply that a newer one has followed. Evicting the oldest phrase regardless cut
+        // the middle out of a long streamed answer while the chat still showed all of it.
+        // The reply in progress is bounded by the reply length limit instead.
+        const std::size_t limit = static_cast<std::size_t>(configuration.maxQueuedUtterances);
+        const std::uint64_t currentGeneration = generation.load();
+        for (auto queued = queue.begin(); queued != queue.end() && queue.size() + plan.size() > limit;)
         {
-            const std::uint64_t dropped = queue.front().sequence;
-            queue.pop_front();
-            playbackOrder.Remove(dropped);
+            if (replyFirstSequence != 0 && queued->generation == currentGeneration && queued->sequence >= replyFirstSequence)
+            {
+                ++queued;
+                continue;
+            }
+            playbackOrder.Remove(queued->sequence);
+            queued = queue.erase(queued);
         }
         bool firstOfReply = latencyCritical;
         for (const PlannedSegment& segment : plan)
@@ -2550,14 +2473,13 @@ bool SpeechService::PlayPreparedQwen(const PreparedUtterance& preparedUtterance,
         ActualQwenResource(generated)});
     Notify(std::move(playing));
     ArmBargeIn();
+    // PlaySound is asynchronous, so the clip is waited out here. The exact sample count
+    // and the reported length are both known; the longer one wins, so playback is never
+    // cut short and only a small tail of silence separates it from the next phrase.
     const double parsedDuration = inMemory ? WavDurationMilliseconds(generated.audioBytes) : WavDurationMilliseconds(output);
-    const double duration =
-        std::max(250.0, generated.audioDurationMilliseconds > 0.0 ? generated.audioDurationMilliseconds : parsedDuration);
     const auto deadline = std::chrono::steady_clock::now() +
-                          // PlaySound is asynchronous. Leave a small tail before the next ordered phrase
-                          // starts, otherwise timer granularity or a non-canonical WAV header can make the
-                          // next phrase cut the last word off the current one.
-                          std::chrono::milliseconds(static_cast<long long>(duration + 350.0));
+                          std::chrono::milliseconds(static_cast<long long>(
+                              PlaybackHoldMilliseconds(parsedDuration, generated.audioDurationMilliseconds)));
     bool cancelled = false;
     while (std::chrono::steady_clock::now() < deadline)
     {
@@ -2570,6 +2492,10 @@ bool SpeechService::PlayPreparedQwen(const PreparedUtterance& preparedUtterance,
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(30));
     }
+    // SND_MEMORY plays straight from the generated buffer, which is freed when this
+    // returns. Stop the device first so it can never read freed memory.
+    if (inMemory && !player && !cancelled)
+        PlaySoundW(nullptr, nullptr, 0);
     const bool interrupted = bargeInMonitor.Triggered();
     DisarmBargeIn();
     if (!inMemory)

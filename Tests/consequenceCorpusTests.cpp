@@ -273,6 +273,23 @@ void RunConsequenceCorpusTests()
         }
     }
 
+    // The corpus runs as unprompted work, where missing evidence always asks. A request
+    // the person made used to let a click on a control with no name through as well,
+    // which is how an icon-only "Post publicly" escaped every gate (ACT-3b). The unnamed
+    // cases are therefore also run as user-directed, where they must still not proceed.
+    for (const Case& item : Corpus())
+    {
+        if (item.label[0] != '\0')
+            continue;
+        AuthorizationRequest request = Ask(item);
+        request.autonomousOrigin = false;
+        if (AuthorizeDesktopEffect(request, settings).verdict == AuthorizationVerdict::Allow)
+        {
+            criticalFalseNegatives.push_back(std::string("\"\" in \"") + item.window +
+                "\" (user-directed click on an unidentified control)");
+        }
+    }
+
     const std::size_t total = Corpus().size();
     std::cout << "\nConsequence corpus: " << total << " cases ("
               << consequentialCases << " expected consequential, " << ordinaryCases

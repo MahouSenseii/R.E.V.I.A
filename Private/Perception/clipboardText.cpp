@@ -30,6 +30,29 @@ std::optional<ClipboardText> ReadClipboardText(const std::size_t maxBytes)
     } closer;
 
     ClipboardText copied;
+    // Password managers mark a copied secret as not for clipboard monitors or history.
+    // That is the copying app saying what the text is, which no pattern match can beat.
+    static const UINT excludeFromMonitors = RegisterClipboardFormatW(L"ExcludeClipboardContentFromMonitorProcessing");
+    static const UINT historyAllowed = RegisterClipboardFormatW(L"CanIncludeInClipboardHistory");
+    if (excludeFromMonitors != 0 && IsClipboardFormatAvailable(excludeFromMonitors) != FALSE)
+    {
+        copied.markedSecret = true;
+        return copied;
+    }
+    if (historyAllowed != 0 && IsClipboardFormatAvailable(historyAllowed) != FALSE)
+    {
+        if (const HANDLE flag = GetClipboardData(historyAllowed); flag != nullptr)
+        {
+            const auto* value = static_cast<const DWORD*>(GlobalLock(flag));
+            const bool denied = value != nullptr && GlobalSize(flag) >= sizeof(DWORD) && *value == 0;
+            if (value != nullptr) GlobalUnlock(flag);
+            if (denied)
+            {
+                copied.markedSecret = true;
+                return copied;
+            }
+        }
+    }
     if (IsClipboardFormatAvailable(CF_UNICODETEXT) == FALSE) return copied;
     const HANDLE data = GetClipboardData(CF_UNICODETEXT);
     if (data == nullptr) return copied;

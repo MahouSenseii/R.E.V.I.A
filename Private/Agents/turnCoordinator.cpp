@@ -23,7 +23,8 @@ TurnAgentResult TurnCoordinator::Execute(const messageRouter& router, const std:
     const std::vector<conversationMessage>& context, const responseFilterSettings& filterSettings,
     const ResponseFilterContext& filterContext, const bool evaluateMemory, const ResponseProvenance provenance, const std::uint64_t turnId,
     const std::stop_token stopToken, messageRouter::DeltaHandler onDelta, const revia::intelligence::IntelligenceDecision& decision,
-    const llm::PrivateMemoryAccess memoryAccess, std::function<bool()> contextAdmission, const memory::MemoryScope& scope) const
+    const llm::PrivateMemoryAccess memoryAccess, std::function<bool()> contextAdmission, const memory::MemoryScope& scope,
+    const ToolLoop* tools) const
 {
     TurnAgentResult result;
     const auto admitted = [&contextAdmission]()
@@ -48,7 +49,7 @@ TurnAgentResult TurnCoordinator::Execute(const messageRouter& router, const std:
     result.response =
         conversationAgent.Execute(
             router, input, context, filterSettings, filterContext, stopToken,
-            std::move(guardedDelta), decision, memoryAccess);
+            std::move(guardedDelta), decision, memoryAccess, tools);
 
     if (!admitted())
     {

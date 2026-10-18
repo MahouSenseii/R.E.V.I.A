@@ -165,6 +165,12 @@ file reads go through the action path and come back as a result rather than as c
 and `/show` puts a picture on a canvas. There was no authoritative origin to connect it
 to, so it was removed rather than fabricated.
 
+*Later:* an attachment boundary now exists (`Private/Attachments`, see the README's
+Attachments section). It produces one routing input, `attachedImageCount`: pictures the
+user attached to a private message, which route to Main's vision projector without
+asking for a screen capture. A document count is still not a routing input, because no
+router rule would use it.
+
 `toolUseRequested` — a resolved tool or action request never reaches the router.
 `ReviaSession::TryHandleCommand` dispatches those turns and returns before any generation
 happens, so at routing time the answer is always no. A keyword guess would have been a

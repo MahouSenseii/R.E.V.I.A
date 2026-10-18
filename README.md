@@ -1,6 +1,6 @@
 # R.E.V.I.A
 
-R.E.V.I.A stands for **Reactive Emotional Virtual Interactive Assistant**. She is a local-first Windows desktop companion written in C++: one persistent character with conversation, memory, mood, voice, vision, curiosity, and carefully supervised computer actions. Everything that thinks, listens, or speaks runs on your own PC.
+R.E.V.I.A stands for **Reactive Emotional Virtual Interactive Assistant**. She is a local-first Windows desktop companion written in C++: one persistent character with conversation, memory, mood, voice, vision, curiosity, and carefully supervised computer actions. Everything that thinks, listens, or speaks runs on your own PC; an [optional cloud model](#optional-cloud-model) exists but is off unless you set it up.
 
 This is an active personal project, not a finished consumer app. This README says plainly what works, what has only been tested in code, and what is not done yet, then walks through getting her running from a clean Windows machine.
 
@@ -14,7 +14,7 @@ The design rule: **one Revia**. Reflex, Fast, Main, and Expert share one identit
 
 | Feature | Status | Evidence / notes |
 |---|---|---|
-| Chat with streaming replies (Fast / Main / Expert routing) | **Verified live** | Every turn logs model choice, time to first token (~0.4–0.5 s), and decode time |
+| Chat with streaming replies (Fast / Main / Expert routing) | **Verified live** (routing); streamed display Tested | Every turn logs model choice, time to first token (~0.4–0.5 s), and decode time. Showing approved sentences while she is still writing is covered by automated tests and awaits a live session log |
 | Personality, persistent mood, likes/opinions, relationships | **Verified live** | Affect and identity are saved every turn (`Identity saved: N relationship(s)`) |
 | Long-term memory and conversation history (SQLite + embeddings) | **Verified live** | Memory retrieval and embedding saves are timed in every turn |
 | Continuous screen awareness across all monitors | **Verified live** | Local vision analysis every ~30 s or on window change, ~1.0–1.6 s each |
@@ -22,6 +22,7 @@ The design rule: **one Revia**. Reflex, Fast, Main, and Expert share one identit
 | Windows SAPI voice fallback | **Verified live** | Used automatically when Qwen is not installed or not ready |
 | Speech recognition (push-to-talk and hands-free) | **Verified live** | whisper.cpp on GPU, ~0.3–1.0 s per utterance |
 | Web lookups in a visible browser | **Verified live** | Shows query and sources; ~11 s per lookup |
+| Choosing her own tools in chat (search, memory, history, files, reminders, calculator, pictures) | Tested | Covered by automated tests against a fake llama.cpp server that streams tool calls; **not yet run against the real server in a live session** |
 | Curiosity, initiative, self-directed reflection | **Verified live** | Logs show think/research/create decisions and when she chooses to stay quiet |
 | Startup of all local model workers | **Verified live** | ~10 s to ready (Expert loads on first use; the CPU Fast model is skipped when the 4B model is on a GPU), plus ~20 s for the voice model to warm in the background |
 | Profiles and Voice Studio (create a voice, assign it to a profile) | **Verified live** | Voice `revia-bright` exists and is in use |
@@ -29,7 +30,7 @@ The design rule: **one Revia**. Reflex, Fast, Main, and Expert share one identit
 | Filesystem actions and Windows UI Automation | Tested | Confined to `Documents\ReviaSandbox` and approved apps by default |
 | Driving the desktop (pointer, keyboard, app launch) | Tested | **Off by default**; exercised against a desktop test fixture |
 | Karaoke from your own WAV files | Tested | You must supply the songs |
-| Reviewing her own code and proving her suggestions (`/improve`) | Tested | Covered by automated tests with a scripted model; see [Self-improvement](#self-improvement) |
+| Reviewing her own code and suggesting patches (`/improve`) | Tested | Covered by automated tests with a scripted model. Building and testing a suggestion in a copy is switched off in this build; see [Self-improvement](#self-improvement) |
 | Camera (one still frame) | Tested | **Off by default** |
 | Image generation (`/imagine`, SD-Turbo) | Tested | **Off by default**; needs `Tools\InstallImageModel.ps1` |
 | Voice interruption (barge-in) | Tested | Enabled in settings; not confirmed in recent logs |
@@ -47,30 +48,46 @@ The design rule: **one Revia**. Reflex, Fast, Main, and Expert share one identit
 
 - **Answer instantly for simple things.** A built-in C++ Reflex lane handles "stop", "cancel", and "Revia?" without touching a model.
 - **Pick how hard to think.** Qwen3.5 4B handles conversation (including small talk, which it starts answering in about half a second on the GPU), and Qwen3-VL 8B handles hard debugging, architecture, and difficult vision. Qwen3.5 0.8B runs on the CPU and is only started as a fallback when the 4B model has no GPU or fails to start: on the CPU it needs 8-10 s just to read a prompt. The choice is made before she answers, and only one model answers each turn. If a model is unavailable she falls back and tells you.
-- **Think before answering, where you can see it.** When you ask a real question or give her a task, she first asks herself two to four questions, answers each one, and states what she concluded. A "Revia is thinking" block shows this in chat before her reply, and the reply's **Thought process** starts with the same steps. Small talk is answered directly. It adds one bounded Main-model call (a few seconds) to those turns. Set `conversation.selfInquiryScope` in `Config\settings.json` to `"hard"` to think only on turns the router sends to Expert or deep reasoning.
+- **Think before answering, where you can see it.** When the router judges a problem hard (it sends the turn to Expert or deep reasoning), she thinks before she answers. By default (`conversation.deliberation: "native"`) this is the model's own thinking mode on the answer itself: her thinking streams into "Revia is thinking" blocks in chat as it is written, the answer follows in the same model call, and the reply's **Thought process** keeps the full reasoning. Thinking has its own token allowance (`llm.thinkingTokens`, default 3,072, capped at a quarter of the context), so it no longer eats the answer's `maxTokens`; a long think still delays the first word of the answer. With `"selfInquiry"` she instead runs the older separate pass: two to four questions she asks and answers herself, shown before her reply, at the cost of one extra bounded model call. Ordinary questions and small talk are answered directly. Set `conversation.selfInquiryScope` to `"questions"` to have her think before every real question or task as well. Native thinking is unit-tested against a fake backend that streams `reasoning_content`; it has not been run live yet.
 - **Stay in character.** Personality, mood, recent conversation, relevant memories, and what is on your screen go into every turn. Her mood carries over between turns instead of resetting.
-- **Develop over time.** She forms durable likes, dislikes, opinions, and feelings about the people she talks to.
+- **Develop over time.** She forms durable likes, dislikes, opinions, and feelings about the people she talks to. Only local conversation shapes her own personality and tastes; Discord, stream and Presence messages change only that sender's relationship with her, and a public sender's name comes from the platform, not from what they type (tested, not yet checked live).
 - **Remember across restarts.** Useful facts go to `build/debug/Memory/revia_memory.db`; conversation goes to `build/debug/Memory/revia_conversations.db`. Turns that look sensitive (passwords, keys, and so on) are not saved at all.
+- **Answer as she writes.** On an ordinary turn each sentence appears in chat, and starts being spoken, as soon as it is complete and every deterministic filter leaves the reply so far unchanged; raw model text never shows. If the final check changes something already on screen, the chat shows the approved reply in its place. Replies the optional AI reviewer must read whole, and JSON answers, still arrive complete.
 - **Clean up her own output.** Leaked prompt text, control tokens, fake "User:" lines, repetitive loops, and cut-off endings are removed before anything is spoken or saved.
 
 ### See, listen, and speak
 
 - **Watch your screens.** She notices what you are doing across every monitor, with no "Analyze screen" button. Screenshots are deleted immediately; only a short summary stays in memory. Text on screen is treated as information, never as instructions.
-- **Listen.** Hold **Ctrl+Space** (or the mic button) to talk, or turn on **Hands-free local conversation** in the Presence tab. Hands-free answers only when you say "Revia" or reply within 20 seconds of talking with her (`speechRecognition.requireWakeWord`, `wakeWords`, `followUpSeconds`).
-- **Speak in her own voice.** Qwen3-TTS starts speaking after the first complete sentence and spreads later sentences across both GPUs. Windows SAPI is the fallback.
+- **Listen.** Hold **Ctrl+Space** (or the mic button) to talk, or turn on **Hands-free local conversation** in the Presence tab. Hands-free answers only when you say "Revia" or reply within 20 seconds of talking with her, counted from when she stops speaking (`speechRecognition.requireWakeWord`, `wakeWords`, `followUpSeconds`).
+- **Speak in her own voice.** Qwen3-TTS starts speaking after the first complete sentence and spreads later sentences across both GPUs. The end of an answer is spoken even without a full stop, such as a last list item, a link or an emoji. Windows SAPI is the fallback.
 - **Be interrupted.** Start talking while she speaks and she stops.
 - **Look through the camera (optional).** One still frame, only with permission, and the camera light is on only while the frame is taken.
 
 ### Do things
 
 - **Look things up** in a visible, locked-down browser (Edge or Chrome) and show you the exact query and sources.
+- **Choose her own tools while you chat.** In an ordinary private conversation the model decides when it needs a tool, the way ChatGPT and Claude do, instead of a phrase list deciding before she answers. The chat's activity line shows each one as it runs ("Searching the web for ...", "Reading notes.txt"). The tools, and when each is offered:
+
+  | Tool | What it does | Offered when |
+  |---|---|---|
+  | `web_search` | One read-only search through the same provider and audit as `/web` | Internet is on and automatic lookup is on, or you explicitly asked her to search |
+  | `search_memory` | Searches her saved long-term memories | Memory is on for the profile |
+  | `recall_history` | Searches the archive of earlier conversations by subject and time ("yesterday", "last week") | The conversation archive is on |
+  | `search_documents` | Searches the [documents you attached](#attachments-and-your-documents) for passages | You have kept documents and the main model runs on this PC |
+  | `read_file`, `list_dir` | Reads a text file or lists a folder | Only inside your approved folders, through the same policy, confirmation and audit as any file action |
+  | `set_reminder` | Sets a reminder with the same parser and saved list as "remind me in 10 minutes to ..." | Always, in a private chat |
+  | `calculator` | Exact arithmetic: `+ - * / **`, parentheses, decimals, simple units | Always, in a private chat |
+  | `generate_image` | Makes a picture on the Canvas tab | Image generation is enabled |
+
+  Every tool runs through the same permissions an explicit command uses; none adds authority. Discord, stream, guest and other public conversations get **no** tools. A file action that needs your approval asks with the usual prompt; if no prompt is available she is told it "needs your approval" and nothing runs. At most 8 model steps per answer, with a time and size budget; tool results reach the model marked as untrusted data, never instructions. Her answer still streams through the same sentence filter as any reply, including anything she writes before calling a tool. Tools need a llama.cpp server with Jinja chat templates (`--jinja`, which Revia now passes) and a context of at least 16K tokens; the 8K Fast and Expert tiers, and any server that refuses tools, fall back to the phrase-based lookup, archive recall and arithmetic grounding exactly as before. `/operate` and `/goal` remain explicit commands.
 - **Bring things up on her own** when she has something specific to say: a reaction to what you're doing, a follow-up on something from earlier, or a question. At most four times an hour, at least 15 minutes apart. She waits for a pause in your typing and stays quiet over a full-screen game, video or presentation (`initiative.suppressWhenFullScreen`), and while another app is using the microphone (a call or meeting).
 - **Work in the background.** `/goal` and "operate" tasks run while she keeps talking; ask how it's going, or say "cancel the task". Only Stop or that request ends one.
-- **Remind you.** "Remind me in 20 minutes to stretch", "remind me at 3pm to call Sam", "set a timer for 5 minutes". Saved across restarts; `/reminders` lists and cancels them.
+- **Remind you.** "Remind me in 20 minutes to stretch", "remind me at 3pm to call Sam", "set a timer for 5 minutes". Saved across restarts; `/reminders` lists and cancels them. A reminder or task report that comes due while she is answering is spoken right after the answer (covered by automated tests; not yet checked live).
+- **Read what you hand her.** Drop or paste pictures, PDFs, Word documents and text files into the chat, or use **Attach**. She sees pictures through the local vision model, reads short documents whole and long ones by their most relevant passages with page citations, and can search what you attached earlier. Private conversations only; see [Attachments](#attachments-and-your-documents).
 - **Help with what you copied.** Ask about "the code I just copied" or "what's on my clipboard" and she reads it for that one question. It is not saved, and text that looks like a password or key is withheld.
 - **Draw diagrams, keep a working document, generate images** (images need the optional installer).
 - **Sing** recordings you put in `RuntimeData/Songs/` (karaoke playback of your WAV files, not generated singing). Ask "Revia, sing <name>" or use `/sing`.
-- **Review her own code** and suggest one improvement at a time, with the problem, the reason, and a patch that she has already built and tested in a separate copy. She never edits her real source; you apply what you agree with (see [Self-improvement](#self-improvement)).
+- **Review her own code** and suggest one improvement at a time, with the problem, the reason, and a patch. She never edits her real source; you review every patch and apply only what you agree with. Building and testing a patch in a separate copy exists but is switched off in this build (see [Self-improvement](#self-improvement)).
 - **Work with files and apps** inside the folders and applications you approve, with confirmation and an audit log.
 - **Drive the mouse and keyboard** only after you turn it on, with an emergency stop (**hold Ctrl+Alt+Shift**).
 - **Join a Discord voice channel** through a small separate connector (see [Discord](#8-optional-put-her-in-a-discord-voice-channel)).
@@ -92,6 +109,8 @@ She never gets an unrestricted shell, and model text never becomes a shell comma
 | `Minimal` | ~3.7 GB | Chat, memory, speech recognition. Runs on one modest GPU or CPU. |
 | `Standard` | ~4.4 GB | Minimal + screen vision on the Main model. |
 | `Full` | ~10.7 GB | Everything, including the 8B Expert model. Best with 12 GB+ VRAM total. |
+| `Standard9B` (optional) | ~7.6 GB | Standard with Qwen3.5-9B as Main instead of the 4B. Not benchmarked here; see [Trying Qwen3.5-9B](#trying-qwen35-9b-optional). |
+| `Full9B` (optional) | ~11.4 GB | Full with Qwen3.5-9B as Expert instead of the Qwen3-VL 8B. Not benchmarked here. |
 
 Qwen voice adds a ~5 GB Python/PyTorch environment plus ~2–5 GB of voice models downloaded on first use. NVIDIA GPUs get CUDA; AMD/Intel GPUs get Vulkan for the language models; everything can fall back to CPU (slowly). Two GPUs are not required. Leave **30 GB free** for a Full install.
 
@@ -149,7 +168,7 @@ memory. Optional custom voice and vision can be installed later.
 .\setup.bat -Profile Full
 ```
 
-Swap `Full` for `Standard` or `Minimal` on a smaller machine. This runs six steps and writes everything to `Logs\setup.log`:
+Swap `Full` for `Standard` or `Minimal` on a smaller machine (or for the optional, unbenchmarked `Full9B` / `Standard9B`, see [Trying Qwen3.5-9B](#trying-qwen35-9b-optional)). This runs six steps and writes everything to `Logs\setup.log`:
 
 1. **Qt / compiler toolchain.** Installs Qt 6.8.3 MinGW, CMake, and Ninja under `ThirdParty\`.
 2. **llama.cpp.** Detects your hardware and downloads the CUDA, Vulkan, or CPU build.
@@ -231,8 +250,8 @@ Voices are stored in `build\debug\RuntimeData\Voices\`.
 
 ### 5. Talk to her
 
-- **Push-to-talk:** hold **Ctrl+Space** (or the mic button), speak, release.
-- **Hands-free:** turn on **Hands-free local conversation** in the **Presence** tab. If she does not hear you, use **Test microphone** and pick the right microphone.
+- **Push-to-talk:** hold **Ctrl+Space** (or the mic button), speak, release. Releasing ends what you said, so the turn starts as soon as the transcript arrives.
+- **Hands-free:** turn on **Hands-free local conversation** in the **Presence** tab. If she does not hear you, use **Test microphone** and pick the right microphone. Speech is merged into one turn until you pause: 150 ms after a finished sentence, 350 ms otherwise (`inputArbiter.punctuatedMergeWindowMs`, `inputArbiter.mergeWindowMs`).
 - **Send what I say automatically** sends the transcript without pressing Send.
 - **Let me interrupt Revia while she speaks** turns barge-in on or off.
 
@@ -279,7 +298,7 @@ This is a separate small Node program in `Tools\Presence\DiscordVoice\`. It list
    notepad config.json
    ```
 
-   Fill in `guildId`, `channelId`, and the **absolute** `inbox`/`outbox` paths of the Revia you are running, for example `C:/Users/you/Documents/R.E.V.I.A/build/debug/RuntimeData/Presence/Inbox` and `.../Outbox`. Leave `whisperUrl` as `http://127.0.0.1:8094`. Keep `replyMode: "addressed"` so she answers only when someone says "Revia", or use `"conversation"` to let her answer anyone.
+   Fill in `guildId`, `channelId`, and the **absolute** `inbox`/`outbox` paths of the Revia you are running, for example `C:/Users/you/Documents/R.E.V.I.A/build/debug/RuntimeData/Presence/Inbox` and `.../Outbox`. Set `whisperEndpointFile` to the absolute path of `RuntimeData/Speech/whisper-endpoint.json` in the same runtime folder (for example `C:/Users/you/Documents/R.E.V.I.A/build/debug/RuntimeData/Speech/whisper-endpoint.json`). Revia starts whisper.cpp under a new random URL prefix each time and writes the full address there once it has checked the server is its own, so a fixed `whisperUrl` no longer reaches it. Keep `replyMode: "addressed"` so she answers only when someone says "Revia", or use `"conversation"` to let her answer anyone.
 
 5. **Check it offline** (no Discord login, no microphone):
 
@@ -335,6 +354,52 @@ Rebuilding does not overwrite your memory, voices, preferences, or live permissi
 | **Settings** | Microphone, speech, conversation behavior, initiative |
 | **Runtime** | Activity log, Pipelines (every worker), Resources (GPU/CPU/RAM), Diagnostics |
 
+### In the Chat tab
+
+- **Formatted replies.** Revia's replies are shown as Markdown: headings, lists, tables, and code in a monospace face. Reply text is never treated as HTML. A link in a reply shows its address but does nothing when clicked, and images are never loaded; only the window's own links act.
+- **Copy** under each reply puts its text (as she wrote it, Markdown included) on the clipboard.
+- **Regenerate** under her latest reply asks again; **Edit** under your latest message puts it back in the box, and sending it replaces that exchange (Esc cancels). Both remove the old exchange from her working context and the archive and then send the text the normal way, so the same audience and privacy checks apply. Either is refused, and the transcript left as it was, if the audience changed or the conversation moved on since. Anything the memory agent already learned from the first reply stays until you revise it under **Memory**.
+- The window keeps the newest 400 entries. Older ones are still in the conversation archive.
+- **Chats** (the list beside the transcript, shown or hidden with the **Chats** button) lists past conversations from the archive, newest first, with search. **New chat** starts an empty working context and a new archive session; what she remembers long term is not touched. Clicking a chat shows it read-only; **Continue this chat** makes it current again and gives Revia back only your own turns from it (only once she knows who you are; otherwise the chat can still be read). **Rename**, **Delete** and **Export** (Markdown or JSON, to a file you choose) work on the selected chat. The list is hidden whenever the audience is not private, the same rule `/history` follows, and on windows narrower than 900 pixels.
+- Thinking that arrives in pieces for one turn updates a single **Revia is thinking** block in place rather than adding a block per piece.
+
+- **Attach** and **Documents** sit beside **Send**; see [Attachments](#attachments-and-your-documents).
+
+These were checked by the desktop test fixture with Qt offscreen on Linux; the Windows build has not been tried by hand yet.
+
+---
+
+## Attachments and your documents
+
+Drop files onto the chat, paste a picture (Ctrl+V), or use **Attach** beside **Send**. Each file shows as a chip above the message box with its name and size (and a thumbnail for pictures); the × removes it, and its copy is deleted. The files go with your next message and are shown under it in the transcript.
+
+| Kind | What she gets | Limits |
+|---|---|---|
+| Pictures: PNG, JPEG, GIF (first frame), WebP, BMP | The picture itself, as an `image_url` part of your message, read by the Main model's vision projector. The window decodes it with Qt, shrinks it to 1024 pixels on the long side and sends PNG. | 8 MB; at most 4 pictures per message. WebP needs Qt's WebP image plugin. |
+| Text: `.txt`, `.md`, `.csv`, `.json`, source code and other UTF-8 text (UTF-16 with a byte-order mark is converted) | The text | 2 MB file. Binary files and other encodings are refused. |
+| PDF | The text layer, page by page, with page numbers for citations | 20 MB file, 4 MB of text. Encrypted PDFs and scanned pages without a text layer are refused with that reason: there is no OCR. Fonts with no text mapping are left out, and she says so. |
+| Word `.docx` | The body text (paragraphs, tabs, line breaks, table cells) | 20 MB file. Old `.doc`, other Office formats and ZIP archives are refused. |
+
+A message carries at most 8 files. How each document reaches her:
+
+- **Short documents** (up to about 6,000 characters of text) go into that turn whole.
+- **Longer documents** are split into overlapping chunks of roughly 800-1,200 tokens, indexed in `Memory\revia_documents.db` with the same ranking long-term memory uses (SQLite FTS5 keyword match plus embedding similarity from the local embedding server, fused by reciprocal rank), and only the passages most relevant to your message are shown to her. Vectors are added in the background; until they are, search is by keyword.
+- **Later messages** search your kept documents when they mention a document, file, PDF or attachment, name one of your files, or are one of the two messages right after you attached it. In other private messages she can search them herself with the `search_documents` tool. Passages carry labels such as `[report.pdf, p. 3]` or `[notes.md, part 2]`, and she is told to cite them.
+- **Documents** (beside **Attach**) lists what she has kept: view the start of a document or a picture, or **Forget** it. Forgetting deletes the stored copy, its passages and their vectors, then optimizes the search index and vacuums the database so the text is not left in the file.
+
+What stays the same:
+
+- **Private only.** Attaching, sending and the Documents list are refused when the audience is shared or public, and a file staged in private is deleted, not sent, if the audience changes before you send it. Document search never runs on a shared or public turn.
+- **On this computer only.** Files are copied into the companion's private folder (`RuntimeData\Attachments\Files`) under random names with a SHA-256 digest, never opened with another program and never read from where you dropped them again. They are sent only to a local model: if the main model endpoint is not on this computer, the files are not sent and she says so. Document text is embedded only by a local embedding server. Attachments are a separate act from the approved folders under **Permissions**; they do not widen what she may read.
+- **Untrusted.** File text is marked as reference data, not instructions, and any runtime prompt marker or block delimiter inside it is broken before it reaches her.
+- **Secrets.** A document whose text looks like it carries a credential (an API key, private key, token, card number and so on) is withheld and not attached, with the reason. Talking about passwords is fine.
+- **Audited without content.** `Audit\attachments.jsonl` records each file staged, sent, removed, refused, withheld or forgotten: its name, kind, size and digest, never its content.
+- **No picture support, no picture.** When the Main model runs without its vision projector (`llm.visionEnabled` is `false`, as in the checked-in settings), pictures are not sent; she is told she cannot see them and says so. Turn it on, with `llm.multimodalProjectorPath` pointing at the projector, to have her look. A picture is sent with its own message only, not again on later turns.
+
+Not done: the model cannot call a `search_documents` tool yet, because the tool registry is not on this branch; its body exists (`ReviaSession::SearchDocuments`, refused for shared audiences) for registration when the two are merged. Regenerate and Edit resend only the text, not the files.
+
+How this was checked: intake limits, type detection, PDF and DOCX extraction (on small fixtures in `Tests/Fixtures/Attachments`, cross-checked with poppler's `pdftotext`), chunking, storage, ranking, forgetting, the prompt blocks, marker neutralization, the picture request against a fake llama.cpp server, and the shared-audience refusal are covered by tests run on Linux, and the window's attach, remove and Documents flows by the Qt offscreen desktop test. None of it has been run live on Windows or against the real vision model yet.
+
 ---
 
 ## Commands
@@ -347,6 +412,8 @@ Type these in Chat or the CLI. `/help` lists everything, including direct file a
 | `/perception`, `/perception pause`, `resume`, `forget` | Screen awareness state and control |
 | `/history <words>`, `/history forget` | Search or clear conversation history |
 | `/internet on`, `manual`, `off` | Automatic, only-when-asked, or no web lookups |
+| `/cloud`, `/cloud on`, `/cloud off` | Status of the [optional cloud model](#optional-cloud-model); switch it off (or back on) for this session |
+| `/cloud ask [--screen] [--clipboard] [--memory] <question>` | Ask the cloud model once (or say "ask the cloud ...") |
 | `/web "query"` | One web lookup |
 | `/bargein`, `/bargein off` | Inspect or disable voice interruption |
 | `/improve`, `/improve review <file or area>`, `/improve show\|accept\|reject <id>` | Her proposals for improving her own code |
@@ -381,11 +448,69 @@ Having a file in `Models\` does not mean it is used. This is the live map:
 | Reply voice | `Qwen3-TTS-12Hz-0.6B-Base` | RTX 5070 (BF16) + RTX 2070 Super (FP32) |
 | Voice creation | `Qwen3-TTS-12Hz-1.7B-VoiceDesign` | Loaded only while creating a voice |
 
+Main runs with a 32,768-token context and a q8_0 KV cache (`llm.contextSize`, `llm.kvCacheType`); Fast and Expert keep 8,192 tokens. How much recent conversation she keeps follows Main's context: about 60 messages at 32K, 24 at 8K. Set `llm.contextSize` back to `8192` on a GPU with little free memory. See [docs/CONTEXT_BENCHMARK.md](docs/CONTEXT_BENCHMARK.md) for what has and has not been measured at 32K.
+
+The embedding worker keeps its last 64 embeddings, so text embedded for the reply, the self-inquiry and the memory check is computed once. It runs with a 2,048-token batch so long recall queries are not refused, and when Main fits entirely on its GPU, the planner moves up to half of Main's CPU threads to it (embeddings get at most eight).
+
 The Qwen2.5-Omni and Llama 3.1 8B files that may sit in `Models\` are not used. `/models` shows exactly what is loaded this session.
 
-All workers are separate local processes bound to `127.0.0.1` so each GPU gets its own CUDA context and a crash cannot take Revia down. Nothing is sent to a cloud model.
+### Trying Qwen3.5-9B (optional)
+
+Qwen3.5-9B (`unsloth/Qwen3.5-9B-GGUF`, Q4_K_M, 5.68 GB, plus its own 0.92 GB vision projector) is pinned in `Config/model_manifest.json` like every other model: exact commit, size and SHA-256. It is a newer generation than the Expert's Qwen3-VL 8B, it can see images through its projector, and it is the stock model rather than an "abliterated" one. **Nobody has benchmarked it in Revia yet**, so it is not the default. Two profiles use it:
+
+- `Full9B` is the recommended way to try it: Main stays the 4B and the 9B replaces the Qwen3-VL 8B as Expert (loaded on demand for hard turns and difficult vision).
+- `Standard9B` makes the 9B the Main model for every turn, with no Expert.
+
+```powershell
+.\Tools\DownloadRuntimeModels.ps1 -Profile Full9B    # or Standard9B; .\setup.bat -Profile Full9B also works
+.\Tools\HealthCheck.ps1 -Profile Full9B
+```
+
+The download step writes the model paths into `Config\settings.json` (`llm.*` for Main, `intelligence.expert.*` for Expert). Restart Revia afterwards. To switch back, run the same command with `-Profile Full` (or `Standard`); no file is deleted, so switching again does not download anything. The 9B projector is saved as `Models\Qwen3.5-9B-mmproj-F16.gguf` so it cannot overwrite the 4B's `mmproj-F16.gguf`.
+
+What to expect on the dev PC (RTX 5070 12 GB + RTX 2070 Super 8 GB). These are **estimates from file sizes and the model's published layout, not measurements**:
+
+- The 9B has the same attention layout as the 4B (8 full-attention layers, 4 KV heads), so its KV cache is the same size: about 0.5 GiB at 32K with q8_0. The difference is the weights: about 5.3 GiB instead of 2.6 GiB.
+- As Main (`Standard9B`): roughly 6.5 GiB without vision, 7.5 GiB with it, against about 4.6 GiB for the 4B. Together with the voice worker on the 5070 (about 3.4 GiB peak, and it wants 4.6 GiB free) that is at the card's limit, so expect the voice to move to the 2070 Super, or set `llm.contextSize` to `16384`. Replies will also start and stream more slowly than with the 4B; by how much is not measured.
+- As Expert (`Full9B`): roughly 7 GiB at the Expert's 8K context with the projector, about 0.8 GiB more than the current Expert. Neither card has 7 GiB free once Main, Whisper and the voice workers are loaded, so llama.cpp's fitting will put some layers in system RAM and the Expert will be slower than a model that fits. It is unloaded again after `intelligence.expert.idleGraceSeconds`.
+
+Turn logs and the router still name the old models ("Qwen3-VL 8B") in a few places; the worker that actually runs is the one in `Config\settings.json`, which `/models` shows.
+
+All workers are separate local processes bound to `127.0.0.1` so each GPU gets its own CUDA context and a crash cannot take Revia down. Nothing is sent to a cloud model unless you set up the [optional cloud model](#optional-cloud-model).
 
 On one GPU, or none, the resource planner moves work to what is available instead of switching features off.
+
+### Optional cloud model
+
+Off by default, and nothing below happens until you change `Config\settings.json`. Revia can send some turns to an OpenAI-compatible chat-completions endpoint (OpenAI, OpenRouter, a vLLM server, ...) or to the Anthropic Messages API. Local models still answer everything else, and all her other work (memory decisions, reviews, planning, vision, tools) stays local.
+
+```json
+"llm": {
+  "cloud": {
+    "enabled": true,
+    "provider": "anthropic",
+    "baseUrl": "https://api.anthropic.com",
+    "model": "<model id from your provider>",
+    "apiKeyEnvironmentVariable": "ANTHROPIC_API_KEY",
+    "useFor": "ask",
+    "maxTokens": 1024,
+    "timeoutSeconds": 60
+  }
+}
+```
+
+For an OpenAI-compatible provider use `"provider": "openai-compatible"` and a base URL that ends where `/chat/completions` should be added, for example `https://api.openai.com/v1`.
+
+- **The key** is read from the environment variable you name, when a request is made. It is never a setting, never written to a file by Revia, and never logged. Set it for your user (`setx ANTHROPIC_API_KEY ...`) and restart Revia. An `apiKey` field in the cloud block is ignored.
+- **When it is used** (`useFor`): `"never"` (not even when asked); `"ask"`, only when you ask for it with `/cloud ask <question>` or a message that starts with "ask the cloud"; `"hardTurns"`, also the turns the router would have sent to the Expert model. A hard turn the cloud cannot take (switched off, no key, refused) is answered locally as usual. An explicit ask is never quietly answered locally: if the cloud cannot take it, she tells you why.
+- **What leaves the PC** in a request: the profile's persona prompt, one fixed sentence saying it is a cloud turn, and the recent conversation turns (your messages and her replies, as typed and said). Her internal state lines, saved memories, recalled conversations, page text, the screen summary, the clipboard, attached files, passages from your documents and pictures are removed; there is no option to send attachments. You can send the screen summary, the clipboard or related saved memories for one question with `--screen`, `--clipboard`, `--memory` on `/cloud ask`; there is no spoken way to do that. The provider sees your IP address and whatever its own terms say it keeps.
+- **What stays local, always**: any turn from Discord, a stream, or an unknown speaker (public audiences never reach the cloud); any request in which the sensitive-content detector finds a credential, a private key, a card or ID number, or text that names a credential such as "password" (then the whole request stays local and she says what was found, without repeating it); her own unprompted remarks.
+- **Audit**: every request writes an intent record to the action audit before anything is sent, and a result record afterwards: provider, host, model, request and response byte counts, HTTP status and the SHA-256 of the exact request body. No conversation text and no key. If the record cannot be written, nothing is sent.
+- **Transport**: HTTPS through Windows' WinHTTP, redirects refused. Plain `http://` is refused except to `127.0.0.1`, which exists for testing.
+- `/cloud off` stops all cloud use for the session immediately; `/cloud on` allows it again (it cannot enable what the settings file leaves off); `/cloud` shows the status and why it is unavailable.
+- Replies stream into the chat and pass the same filters as local ones. Tool calling is not offered to cloud models.
+
+Tested with fake transports on Linux (request shape for both providers, event-stream parsing, key handling, every refusal, stripping and the audit record). The WinHTTP code is only compiled for Windows here; **it has not been run against a real provider**.
 
 ### Voice speed: what to expect
 
@@ -395,6 +520,8 @@ Measured in ten scripted live sessions on 23 Sep 2026 (RTF is generation time di
 - **Batched**, the 5070 slowed to RTF 1.1-2.7, and nothing in a batch plays until the whole batch is done, which left 20-30 s silences mid-reply. Reply batching is therefore **off** (`speech.qwenBatchReplyPhrases: false`); sentences are spread one at a time across both cards instead.
 - The first sentence goes to the planner's card until both cards have been measured, then to whichever is measurably faster.
 - A repeated short Reflex phrase ("Okay.") is cached and plays in under 0.1 s.
+- Between sentences she waits for the clip's exact length (read from the WAV header) plus 60 ms, instead of an extra 350 ms. The timing helper is covered by automated tests; the shorter gap has not been heard live yet.
+- Deciding whether a turn is worth remembering (about 7.5 s on the Main GPU) waits until she has finished speaking, for at most 20 s, so it does not compete with her first sentence for the GPU. This is covered by automated tests; the gain has not been measured live yet.
 
 So the voice is quick per sentence, but long replies are still generated sentence by sentence, and it slows down when a card is also busy with chat or nearly full. The installed Qwen package cannot generate audio incrementally; Revia pipelines complete sentences instead. Benchmarks live in `RuntimeData/Benchmarks/` and [docs/TTS_PERFORMANCE.md](docs/TTS_PERFORMANCE.md).
 
@@ -438,7 +565,7 @@ She stops singing to answer you (set `performance.interruptSongToSpeak` to `fals
 
 ## Self-improvement
 
-Revia reads her own source, suggests one concrete improvement at a time, and proves it before you hear about it. She never changes her real code: every proposal is a patch you choose to apply.
+Revia reads her own source and suggests one concrete improvement at a time. She never changes her real code: every proposal is a patch you review and choose to apply.
 
 **What makes her look**
 
@@ -449,23 +576,24 @@ Revia reads her own source, suggests one concrete improvement at a time, and pro
 **What a suggestion has to survive**
 
 - The model (the 8B Expert when it can be loaded, otherwise Main) is shown about 220 lines and asked for at most one change, with the problem, the reason, and her own benefit and risk estimates. "Nothing worth changing" is the normal answer.
-- The change must match exactly one place in the file, stay under about 60 lines, touch only product code (`Private/`, `Public/`, `Desktop/`, the Python voice worker; never tests, build files, scripts, or settings), and must not *add* anything that starts programs, uses the network, deletes files, or touches the registry.
+- The change must match exactly one place in the file, stay under about 60 lines, and touch only product code (`Private/`, `Public/`, `Desktop/`, the Python voice worker; never tests, build files, scripts, or settings).
+- **Screening, not a guarantee.** A change is refused if the code it replaces or the code it adds touches anything that starts programs, loads code at run time, uses the network or the registry, writes or deletes files, or uses the preprocessor (`#define`, `#include`, `#pragma`, `##`) or inline assembly; in the Python worker, any import, `__import__`, `getattr`, `exec`/`eval`, `subprocess`, `os`, `socket` and similar. This is a word list. A change can still reach those effects through code it calls, so **review every patch before you apply it**.
 - If the code she means to replace isn't in the file as she wrote it, she gets one second look, told which line isn't there. Code copied without the indentation every line shared still matches, and the replacement gets that indentation back.
 - Found on her own it needs an estimated benefit of 0.6 or more; aimed at a measured problem, 0.4. Risk must be 0.5 or less. The same change is never proposed twice, and a new idea about code that already has a proposal waiting for your decision is held back until you decide.
 - The Expert is loaded for the review and put away as soon as it ends, so the rest of what she does isn't left waiting on a full GPU.
-- **Proof:** the change is applied to a private copy of the source in `%LOCALAPPDATA%\Revia\ImprovementWorkbench`, then built and run through all test suites. If a suite fails, the unchanged copy is tested too, so a failure that already existed is not blamed on the change. If it doesn't compile, she gets one attempt to fix it from the compiler's own errors.
-- Builds she decides on alone wait until you've been away for 10 minutes, run at below-normal priority on half your cores, and stop the moment you come back. The first proof is a full build of the copy (about 9 minutes on the development PC); after that only what changed is rebuilt, and a proof takes about 7 minutes, most of it relinking and the ~90 s of test suites.
+- **Proof (switched off in this build).** The workbench can apply a change to a private copy of the source in `%LOCALAPPDATA%\Revia\ImprovementWorkbench`, build it, and run all test suites; if a suite fails, the unchanged copy is tested too, and a change that doesn't compile gets one repair attempt from the compiler's errors. Building runs the proposed code, so it stays off until it can run in an isolated sandbox: the session installs no candidate admission, every proposal stays "not yet proven", and none is announced in chat. The workbench itself is covered by tests with scripted builds.
+- When enabled, builds she decides on alone wait until you've been away for 10 minutes, run at below-normal priority on half your cores, and stop the moment you come back. The first proof is a full build of the copy (about 9 minutes on the development PC); after that only what changed is rebuilt, and a proof takes about 7 minutes, most of it relinking and the ~90 s of test suites.
 
 **What you see and do**
 
-When a proposal is proven she tells you in chat. Then:
+Proposals are listed with `/improve list`; with proof switched off, none is announced in chat. Then:
 
 | Command | What it does |
 |---|---|
 | `/improve` | Status, and proven proposals waiting for you |
 | `/improve list` | Every proposal and what became of it |
 | `/improve show <id>` | The write-up: problem, why, evidence, verification, and the diff |
-| `/improve accept <id> [why]` | Records your yes; prints the `git apply` command for its patch |
+| `/improve accept <id> [why]` | Records your yes; prints the `git apply` command for its patch. Read the patch first with `/improve show <id>` |
 | `/improve reject <id> <why>` | Records your no, and why |
 | `/improve review <file or area>` | Reviews something now, and proves it straight away |
 
@@ -503,19 +631,26 @@ Pointer, keyboard, and application launch are **off** by default and each is tur
 
 `launch_application` starts an approved app with no arguments or one approved file. After each pointer action she reports what is under the pointer, which is description only and never permission.
 
+A click or invoke on a control with no readable name and no automation id (an icon-only button, or nothing identifiable at a coordinate) asks for your approval even when you asked for the task, because nothing says what it does; inside a running task it stops instead. Observation, navigation and the disposable workspace are unchanged. This is covered by the authorization tests, not yet checked live.
+
 The capability `mode` can be `supervised` (default) or `owner_full_access`. The latter only stops asking for confirmation on reversible, in-scope work; every approved root, app, control, and desktop switch still applies.
+
+**Approving a task.** "Allow for this whole task" covers one *kind* of action: the same action type in the same application (typing in Notepad, say), no riskier than the step you saw, until the task ends. A different kind asks again. In an `/operate` task, approving the task starts it, and then the first step of each kind asks once in `supervised` mode; `owner_full_access` answers those per-kind questions itself for routine kinds. Opening a file with an application (`launch_application` with a file), deleting, running commands and browser clicks are never covered by a standing approval: a planned goal asks each time, and an `/operate` task stops instead. This is covered by the goal-runner tests; it has not been checked in a live session.
 
 ---
 
 ## Privacy and safety
 
-- Everything runs locally. Only web lookups send data out (the query), and they can be turned off with `/internet off`.
+- Everything runs locally. Only web lookups send data out (the query), and they can be turned off with `/internet off`. The [optional cloud model](#optional-cloud-model) sends conversation text out, but only after you set it up, and `/cloud off` stops it.
+- The language-model and embedding servers Revia starts get a fresh random API key each launch, run without `/slots` or a media directory, and must prove they hold that key before she sends them anything. If another program is already answering on one of their ports, she refuses it and says so (`Another process is answering on Revia's language-model port`) instead of using it. A server you run yourself (`autoStartServer: false`) is still trusted as before, with `apiKey` sent if you set one. Tested against fake servers; not yet run against a real squatter on Windows.
 - Screenshots are deleted immediately; only short summaries are kept in memory. Excluding an app (password managers are excluded by default) hides it from **activity records**, not from screenshots sent to local vision.
 - Files are limited to `Documents\ReviaSandbox` unless you approve more. Writes need confirmation.
 - Approving an app allows inspecting it. Pressing a control also needs that exact control approved.
 - Anything she does because of what she saw must map back to an approved UI element that is re-checked right before acting.
 - Action logs record typed text by length, not content.
+- The goal database (`Goals/revia_goals.db`) stores typed and filled-in text, guest file content and process environments as a length and a digest keyed with a per-run secret, never the text, and withholds a goal title the sensitive-content detector flags. A goal can still be resumed within the same run; after a restart a step whose text was withheld is refused rather than replayed. Goal records older than 30 days are deleted at startup. Step observations (what a check read back) are still stored. Tested with the goal-store tests.
 - She cannot edit her own source, change her models or settings, or widen her own permissions.
+- The whisper.cpp server is started under a new random URL prefix each launch (`--request-path`), so web pages and other programs cannot reach its routes, including its unauthenticated `/load`, without learning it. Microphone audio goes only to a server that answers under that prefix, not outside it, and, on Windows, owns the listening port by process ID. A program squatting on the port gets no audio; recognition falls back to the command-line runner. The pinned v1.9.2 server has no `--no-prints` option (an unknown option makes it exit), and it writes no transcript text to its log unless `--print-realtime` is passed, which Revia does not. The probe is tested against local fixture servers; the Windows ownership check is compiled for Windows but not yet run live.
 
 The live permissions file is `build\debug\RuntimeData\Capabilities\capabilities.json`, seeded once from `Config\capabilities.json` and never overwritten by builds. Use the **Permissions** tab rather than editing it.
 
@@ -542,6 +677,8 @@ signatures, and short comments.
 | `%LOCALAPPDATA%\Revia\ImprovementWorkbench\` | The private copy of her source where proposals are built and tested |
 | `build\debug\Memory\revia_memory.db` | Long-term memory |
 | `build\debug\Memory\revia_conversations.db` | Conversation history |
+| `build\debug\Memory\revia_documents.db` | Passages and search vectors of the documents you attached |
+| `build\debug\RuntimeData\Attachments\Files\` | Private copies of the files you attached |
 | `Models\` | Model files |
 | `ThirdParty\` | Qt, llama.cpp, whisper.cpp, Qwen3-TTS environment |
 | `build\debug\Logs\` | Runtime logs |
@@ -553,7 +690,7 @@ signatures, and short comments.
 
 Start with **Runtime → Activity**, **Pipelines**, and **Resources**, or `/status` and `/resources`. Logs are in `build\debug\Logs\`:
 
-- `revia.log`: startup, every turn, model placement, timings, shutdown
+- `revia.log`: startup, every turn, model placement, timings, shutdown. Each turn's `Timing` line also carries what llama.cpp reported for that reply: `llama_cached_prompt` (prompt tokens reused from its cache), `llama_evaluated_prompt` (tokens it had to read), `llama_prompt_eval` and `llama_generation` (milliseconds). A low cached count late in a conversation means the prompt cache is not being reused. Conversation history is trimmed to 60% of its budget when it overflows, rather than by one exchange per turn, so the start of the prompt stays identical for several turns. Unit-tested against a fake backend; the reuse it buys has not been measured live yet.
 - `llama-server-<port>.*.log`: one pair per language worker (8080 Main, 8082 Fast, 8083 Expert); `embedding-server.*.log`: memory worker
 - `qwen-tts-<port>.*.log`: one pair per voice GPU
 - `whisper-server.*.log`, `visible-browser.*.log`: speech recognition and browser
@@ -583,6 +720,7 @@ Start with **Runtime → Activity**, **Pipelines**, and **Resources**, or `/stat
 - Discord voice has not joined a live call yet, and cannot be interrupted while she speaks.
 - No avatar renderer, OBS, or streaming-platform connector exists yet.
 - A clean install on another PC, laptops, CPU-only machines, and long stress tests are not yet verified.
+- Tool calling in chat is tested against a scripted llama.cpp stand-in only. How well Qwen3.5 4B decides when to call a tool has not been measured in a live session.
 
 ## Project docs
 
@@ -590,6 +728,7 @@ Start with **Runtime → Activity**, **Pipelines**, and **Resources**, or `/stat
 - [Roadmap](docs/ROADMAP.md): what is working, what is next, what is intentionally later.
 - [Portability](docs/PORTABILITY.md): behavior on different hardware.
 - [Conversation quality](docs/CONVERSATION_QUALITY.md): the regression contract for her voice and behavior.
+- [Answer-quality gate](docs/EVALUATION_GATE.md): the golden set, the judge model, and the nightly regression gate.
 - [Voice performance](docs/TTS_PERFORMANCE.md): voice architecture and benchmarks.
 - [Computer control](docs/COMPUTER_CONTROL.md): desktop control design.
 - [Character design](docs/REVIA_CHARACTER_DESIGN.md): who Revia is.

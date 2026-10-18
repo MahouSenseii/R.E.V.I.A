@@ -72,12 +72,13 @@ set(HTTPLIB_USE_NON_BLOCKING_GETADDRINFO OFF CACHE BOOL "" FORCE)
 FetchContent_Declare(
         httplib
         GIT_REPOSITORY https://github.com/yhirose/cpp-httplib.git
-        GIT_TAG v0.18.1
+        GIT_TAG 5c1a34e766817cf0865ca8bc5af5edeb0f9b2df4 # v0.18.1; a tag can be moved, a commit cannot
 )
 
 FetchContent_Declare(
         json
         URL https://github.com/nlohmann/json/releases/download/v3.11.3/json.tar.xz
+        URL_HASH SHA256=d6c65aca6b1ed68e7a182f4757257b107ae403032760ed6ef121c9d55e81757d
         DOWNLOAD_EXTRACT_TIMESTAMP TRUE
 )
 
@@ -147,7 +148,7 @@ target_link_libraries(ReviaFoundation PUBLIC
 if(WIN32)
     # Media Foundation (mfplat/mf/mfreadwrite/mfuuid) backs camera capture; shlwapi comes
     # with it. Screen capture continues to use GDI+, which also encodes the camera PNG.
-    target_link_libraries(ReviaFoundation PUBLIC shell32 dxgi sapi ole32 oleaut32 winmm gdiplus gdi32 bcrypt winhttp psapi pdh dbghelp mfplat mf mfreadwrite mfuuid shlwapi advapi32 dwmapi)
+    target_link_libraries(ReviaFoundation PUBLIC shell32 dxgi sapi ole32 oleaut32 winmm gdiplus gdi32 bcrypt winhttp psapi pdh dbghelp mfplat mf mfreadwrite mfuuid shlwapi advapi32 dwmapi iphlpapi)
 endif()
 
 if(MSVC)
@@ -189,7 +190,15 @@ if(REVIA_BUILD_DESKTOP)
                 "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/conversationStatusPanel.h"
                 "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/answerFeedbackDialog.cpp"
                 "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/answerFeedbackDialog.h"
+                "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/attachmentTray.cpp"
+                "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/attachmentTray.h"
+                "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/documentsDialog.cpp"
+                "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/documentsDialog.h"
                 "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/canvasPanel.cpp"
+                "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/chatMarkdown.cpp"
+                "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/chatMarkdown.h"
+                "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/chatSessionsPanel.cpp"
+                "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/chatSessionsPanel.h"
                 "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/agentStudioPanel.cpp"
                 "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/agentStudioPanel.h"
                 "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/companionStudio.cpp"
@@ -385,6 +394,8 @@ if(BUILD_TESTING)
     revia_add_studio_check(ReviaImprovementAgentTests Tests/improvementAgentTests.cpp RunImprovementAgentTests)
     revia_add_studio_check(ReviaContextFittingTests Tests/contextFittingTests.cpp RunContextFittingTests)
     set_tests_properties(ReviaContextFittingTests PROPERTIES WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+    revia_add_studio_check(ReviaCloudModelTests Tests/cloudModelTests.cpp RunCloudModelTests)
+    set_tests_properties(ReviaCloudModelTests PROPERTIES WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
     revia_add_studio_check(ReviaRoutingProductionTests Tests/routingProductionTests.cpp RunRoutingProductionTests)
     revia_add_studio_check(ReviaProcessExecutionTests Tests/processExecutionTests.cpp RunProcessExecutionTests)
     revia_add_studio_check(ReviaProcessOwnerTests Tests/processOwnerTests.cpp RunProcessOwnerTests)
@@ -400,6 +411,7 @@ if(BUILD_TESTING)
     revia_add_studio_check(ReviaAgentToolBudgetTests Tests/agentToolBudgetTests.cpp RunAgentToolBudgetTests)
     revia_add_studio_check(ReviaAgentToolWorkerTests Tests/agentToolWorkerTests.cpp RunAgentToolWorkerTests)
     revia_add_studio_check(ReviaAgentToolActionTests Tests/agentToolActionTests.cpp RunAgentToolActionTests)
+    revia_add_studio_check(ReviaToolLoopTests Tests/toolLoopTests.cpp RunToolLoopTests)
     add_executable(ReviaTaskContractTests Tests/taskContractTests.cpp)
     revia_link_foundation(ReviaTaskContractTests)
     add_test(NAME Revia.TaskContracts COMMAND ReviaTaskContractTests "${CMAKE_CURRENT_SOURCE_DIR}/Tests/Fixtures/TaskContracts")
@@ -523,6 +535,14 @@ if(BUILD_TESTING)
         target_compile_options(ReviaAnswerQualityLive PRIVATE -Wa,-mbig-obj)
         target_link_options(ReviaAnswerQualityLive PRIVATE -static-libgcc -static-libstdc++)
     endif()
+    # The answer-quality gate needs a running model, so it is built here but never
+    # registered with CTest. docs/EVALUATION_GATE.md describes how it is run.
+    add_executable(ReviaAnswerGateLive Tools/Quality/answerGateLive.cpp)
+    revia_link_foundation(ReviaAnswerGateLive)
+    if(MINGW)
+        target_compile_options(ReviaAnswerGateLive PRIVATE -Wa,-mbig-obj)
+        target_link_options(ReviaAnswerGateLive PRIVATE -static-libgcc -static-libstdc++)
+    endif()
     target_include_directories(ReviaStudioLive PRIVATE Tests)
     revia_link_foundation(ReviaStudioLive)
     if(MINGW)
@@ -544,9 +564,10 @@ if(BUILD_TESTING)
                 Tests/Fixture/archiveWriterTests.cpp
                 Private/Memory/conversationArchive.cpp
                 Private/Memory/memoryScope.cpp
-                Private/Memory/sensitiveContent.cpp)
+                Private/Memory/sensitiveContent.cpp
+                Private/Memory/temporalQuery.cpp)
         target_include_directories(ReviaArchiveWriterTests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/Public")
-        target_link_libraries(ReviaArchiveWriterTests PRIVATE sqlite3)
+        target_link_libraries(ReviaArchiveWriterTests PRIVATE sqlite3 nlohmann_json::nlohmann_json)
         target_compile_options(ReviaArchiveWriterTests PRIVATE -Wall -Wextra -Wpedantic)
         target_link_options(ReviaArchiveWriterTests PRIVATE -static-libgcc -static-libstdc++
                 -Wl,--wrap=sqlite3_prepare_v2 -Wl,--wrap=sqlite3_step)
@@ -578,6 +599,7 @@ if(BUILD_TESTING)
     endif()
     # Split test suites include testSupport.h from the Tests directory.
     target_include_directories(ReviaTests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/Tests")
+    target_compile_definitions(ReviaTests PRIVATE REVIA_ATTACHMENT_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/Tests/Fixtures/Attachments")
     revia_link_foundation(ReviaTests)
     if(MINGW)
         target_compile_options(ReviaTests PRIVATE -Wa,-mbig-obj)

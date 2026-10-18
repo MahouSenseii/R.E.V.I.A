@@ -619,6 +619,12 @@ void TestSwitchingChordsFollowTheScope()
     attention.application.clear();
     Check(policy.Evaluate(attention).verdict == PolicyVerdict::Blocked,
         "The secure attention sequence was accepted on the whole desktop.");
+    // Task Manager is a window switch by shape, but its "Run new task" box starts any
+    // program, so it stays with the other command surfaces.
+    ActionRequest taskManager = KeyRequest("ctrl+shift+esc");
+    taskManager.application.clear();
+    Check(policy.Evaluate(taskManager).verdict == PolicyVerdict::Blocked,
+        "Task Manager was reachable by chord on the whole desktop.");
 }
 
 void TestKeyChordNormalization()
@@ -683,6 +689,46 @@ void TestLaunchArgumentStaysInsideApprovedRoots()
     Check(outside.verdict == PolicyVerdict::Blocked &&
         outside.reason.find("outside every approved root") != std::string::npos,
         "A launch argument escaped the approved roots.");
+}
+
+// Inside an approved root is not the same as safe to open. A file the model wrote can be
+// a script, and an application handed a script by the shell runs it.
+void TestLaunchNeverRunsAFile()
+{
+    PolicyFixture fixture;
+    fixture.Allow(false, false, true);
+    fixture.settings["approvedApplications"] = {"notepad.exe", "explorer.exe"};
+    fixture.settings["approvedControls"]["explorer.exe"] = {"View"};
+    const auto policy = fixture.Policy();
+    ActionRequest request;
+    request.id = NewActionId();
+    request.type = ActionType::LaunchApplication;
+    request.application = "notepad.exe";
+
+    for (const std::string name : {"run.bat", "RUN.CMD", "tidy.ps1", "go.vbs", "x.hta", "y.lnk", "z.url",
+             "trailing.bat.", "trailing.js ", "notes.txt:run.bat"})
+    {
+        request.source = fixture.directory.root / name;
+        const auto decision = policy.Evaluate(request);
+        Check(decision.verdict == PolicyVerdict::Blocked &&
+            decision.reason.find("run as a program") != std::string::npos,
+            "Launching with " + name + " was not refused: " + decision.reason);
+    }
+
+    // Explorer opens a file with its registered handler, so it is only given folders.
+    request.application = "explorer.exe";
+    request.source = fixture.directory.root / "notes.txt";
+    const auto file = policy.Evaluate(request);
+    Check(file.verdict == PolicyVerdict::Blocked && file.reason.find("only opens folders") != std::string::npos,
+        "Explorer was handed a file to open: " + file.reason);
+    request.source = fixture.directory.root;
+    Check(policy.Evaluate(request).verdict == PolicyVerdict::RequiresConfirmation,
+        "Explorer could not open an approved folder.");
+
+    for (const std::string host : {"rundll32.exe", "regsvr32.exe", "msiexec.exe", "control.exe"})
+    {
+        Check(IsCommandSurfaceExecutable(host), host + " was not treated as a command surface.");
+    }
 }
 
 void TestConfinedInputNeedsAnApplication()
@@ -1293,6 +1339,7 @@ void RunDesktopControlTests()
     TestTheCeilingOnlyEverAddsRefusals();
     TestTypedTextIsBounded();
     TestLaunchArgumentStaysInsideApprovedRoots();
+    TestLaunchNeverRunsAFile();
     TestOwnerFullAccessRaisesOnlyTheCeiling();
     TestStopGuardLatchesUntilResumed();
     TestExecutorRefusesWithoutAStopPath();

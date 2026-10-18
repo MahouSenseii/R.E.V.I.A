@@ -89,7 +89,15 @@ commandOutput commandManager::HandleCommand(const std::string& input, const appS
 
 bool commandManager::IsCommand(const std::string &input) const
 {
-    return !input.empty() && input[0] == '/';
+    return !input.empty() && input[0] == '/' && !IsCloudQuestion(input);
+}
+
+bool commandManager::IsCloudQuestion(const std::string& input)
+{
+    if (input.rfind("/cloud ask", 0) != 0)
+        return false;
+    const revia::llm::cloud::CloudAsk ask = revia::llm::cloud::ParseCloudAsk(input);
+    return ask.bExplicit && !ask.question.empty();
 }
 
 std::string commandManager::StatusToString(systemStatus status)
@@ -148,6 +156,8 @@ commandOutput commandManager::BuildHelpOutput() const
     stream << "/quality  - Conversation-quality counters for this session's real turns\n";
     stream << "/eval [list|last] - Run the conversation contract corpus against the model\n";
     stream << "/internet [on|off|auto|manual] - Set internet lookup behavior\n";
+    stream << "/cloud [on|off|status] - Optional cloud model for this session (off unless set up)\n";
+    stream << "/cloud ask [--screen] [--clipboard] [--memory] <question> - Ask the cloud model once\n";
     stream << "/web \"query\" - Run one explicit internet lookup\n";
     stream << "/review   - Offer lessons drawn from recorded outcomes\n";
     stream << "/self-assessment - Show evidence-backed performance findings\n";

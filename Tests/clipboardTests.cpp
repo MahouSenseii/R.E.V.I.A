@@ -79,6 +79,12 @@ void TestItReachesHerAsBoundedUntrustedReference()
     copied = ClipboardText{"first part", true};
     Check(Contains(Access::ClipboardReference(session, "what's on my clipboard"), "only the start"),
         "A cut-off clipboard was presented as complete.");
+
+    // A password manager's mark is believed even when the text looks like nothing at all.
+    copied = ClipboardText{"x7#Kp9!qLm2$vB4z", false, true};
+    const std::string marked = Access::ClipboardReference(session, "what's on my clipboard");
+    Check(!Contains(marked, "x7#Kp9") && Contains(marked, "marked it as a secret"),
+        "A clipboard its app marked as a secret was put into the prompt: " + marked);
 }
 
 } // namespace

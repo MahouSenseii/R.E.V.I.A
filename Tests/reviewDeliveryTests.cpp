@@ -42,7 +42,8 @@ public:
                 return;
             }
             const json body = json::parse(request.body);
-            if (!body.value("stream", false))
+            // Only the conversation reply carries stop markers; background calls stream too.
+            if (!body.contains("stop"))
             {
                 response.set_content(json{{"choices", json::array({{
                     {"message", {{"content", answer}}}, {"finish_reason", "stop"}}})}}.dump(), "application/json");
@@ -99,7 +100,8 @@ class AnswerReviewBackend
                 }
                 const bool reviewing =
                     body["messages"][0]["content"].get<std::string>().find("post-generation response reviewer") != std::string::npos;
-                if (body.value("stream", false))
+                // Only the conversation reply carries stop markers; background calls stream too.
+                if (body.contains("stop"))
                 {
                     const json chunk = {{"choices", json::array({{{"delta", {{"content", candidate}}}, {"finish_reason", "stop"}}})}};
                     const std::string data = "data: " + chunk.dump() + "\n\ndata: [DONE]\n\n";
@@ -243,17 +245,17 @@ void TestReviewDeliveryFiltering()
         context.screenObservationAvailable = observationAvailable;
         responseFilterSettings filters; filters.bAiReviewEnabled = false;
         std::string delivered;
-        bool earlyDelivery = false;
         const std::string input = "Describe what happened.";
         const auto result = ConversationAgent{}.Execute(router, input, {{"user", input}},
-            filters, context, {}, [&](const std::string& delta)
-            {
-                earlyDelivery = earlyDelivery || !backend.generationFinished.load();
-                delivered += delta;
-            });
+            filters, context, {}, [&](const std::string& delta) { delivered += delta; });
         Check(result.bSuccess, "Delivery fixture failed: " + result.reason);
-        Check(!earlyDelivery, "Unvalidated model output reached the delivery callback before completion.");
-        Check(delivered == result.response, "Speech delivery differed from the fully approved answer.");
+        // Approved sentences may arrive while the model is still writing. Everything
+        // delivered is the start of the final answer, unless the full pass refused the
+        // whole reply after harmless sentences had already been approved; the caller then
+        // shows the refusal in their place.
+        Check(delivered == result.response || (result.bHardFilterBlocked && !delivered.empty() &&
+                                                  !result.response.starts_with(delivered) && answer.starts_with(delivered)),
+            "Speech delivery was neither the approved answer nor approved sentences before a refusal.");
         Check(!delivered.empty(), "No approved speech callback was delivered.");
         const bool claimsScreenSight = answer.starts_with("I can see");
         const bool forbidden = claimsScreenSight ? !observationAvailable : !desktopAllowed;

@@ -133,11 +133,14 @@ void GoalRunner::ClearStandingApproval()
 {
     // Whatever the last run ended with is dropped; whatever this one was handed is taken
     // up, once. A seed that is never used by a run does not survive into a later one.
-    blanketApproval = seededApproval;
-    blanketRiskCeiling = seededCeiling;
+    approvedKinds.clear();
+    taskApproved = seededApproval;
+    taskRiskCeiling = seededCeiling;
     refuseAdditionalApproval = seededRefuseEscalation;
+    approveKindsWithoutAsking = seededApproval && seededApproveKinds;
     seededApproval = false;
     seededRefuseEscalation = false;
+    seededApproveKinds = false;
     seededCeiling = actions::RiskLevel::ReadOnly;
     processDelegation = seededProcessDelegation;
     browserDelegation = seededBrowserDelegation;
@@ -151,11 +154,12 @@ void GoalRunner::SeedToolDelegation(const bool process, const bool browser)
     seededBrowserDelegation = browser;
 }
 
-void GoalRunner::SeedStandingApproval(const actions::RiskLevel ceiling, const bool refuseEscalation)
+void GoalRunner::SeedStandingApproval(const actions::RiskLevel ceiling, const bool refuseEscalation, const bool approveKinds)
 {
     seededApproval = true;
     seededCeiling = ceiling;
     seededRefuseEscalation = refuseEscalation;
+    seededApproveKinds = approveKinds;
 }
 
 void GoalRunner::SetConfirmationHandler(ConfirmationHandler handler)
@@ -165,6 +169,17 @@ void GoalRunner::SetConfirmationHandler(ConfirmationHandler handler)
 
 namespace
 {
+
+// What a standing yes is given for: the kind of action and the application it acts in.
+// A yes for typing in Notepad is not a yes for writing files or for typing in a browser,
+// because steps are chosen from what is on screen and the person only saw the first one.
+std::string ActionKind(const actions::ActionRequest& action)
+{
+    std::string application = ToLower(action.application);
+    if (const auto slash = application.find_last_of("/\\"); slash != std::string::npos)
+        application.erase(0, slash + 1);
+    return actions::ToString(action.type) + '|' + application;
+}
 
 // Enough of an action to tell "she is doing the same thing again" from "she is doing
 // something new". Deliberately covers the target as well as the verb: clicking twice in
@@ -761,7 +776,7 @@ bool GoalRunner::RunStep(Goal& goal, GoalStep& step, const policy::CapabilityPol
                 return admitted ? std::string() : std::string("The explicit task tool delegation was withdrawn.");
             };
         }
-        if (refuseAdditionalApproval && actions::AlwaysNeedsItsOwnConfirmation(action.type) && !delegated)
+        if (refuseAdditionalApproval && actions::AlwaysNeedsItsOwnConfirmation(action) && !delegated)
         {
             decision.verdict = actions::PolicyVerdict::Blocked;
             decision.reason = "This consequential tool requires its own approval or an explicit current task delegation.";
@@ -781,27 +796,45 @@ bool GoalRunner::RunStep(Goal& goal, GoalStep& step, const policy::CapabilityPol
         bool confirmationGranted = false;
         if (decision.verdict == actions::PolicyVerdict::RequiresConfirmation)
         {
-            // A standing yes covers only what it was given for: this run, and work no
-            // riskier than the action the person actually saw. A step that escalates
-            // asks again, which is the difference between answering once and signing a
-            // blank cheque.
+            // A standing yes covers only what it was given for: this run, this kind of
+            // action in this application, and work no riskier than the step the person
+            // actually saw. A new kind asks again, and so does a step that escalates,
+            // which is the difference between answering once and signing a blank cheque.
+            const std::string kind = ActionKind(action);
+            const bool ownConfirmation = actions::AlwaysNeedsItsOwnConfirmation(action);
+            const bool withinTask = !taskApproved || static_cast<int>(decision.risk) <= static_cast<int>(taskRiskCeiling);
+            const auto approved = approvedKinds.find(kind);
             if (delegated)
             {
                 confirmationGranted = true;
             }
-            else if (blanketApproval && !actions::AlwaysNeedsItsOwnConfirmation(action.type) &&
-                static_cast<int>(decision.risk) <= static_cast<int>(blanketRiskCeiling))
+            else if (!ownConfirmation && approved != approvedKinds.end() &&
+                static_cast<int>(decision.risk) <= static_cast<int>(approved->second))
             {
                 confirmationGranted = true;
             }
-            else if (confirmationHandler && !refuseAdditionalApproval)
+            else if (!ownConfirmation && approveKindsWithoutAsking && withinTask)
             {
-                const actions::ConfirmationChoice choice = confirmationHandler(action, decision);
-                confirmationGranted = actions::Granted(choice);
-                if (choice == actions::ConfirmationChoice::AllowForThisTask)
+                confirmationGranted = true;
+            }
+            else if (confirmationHandler && withinTask && !(refuseAdditionalApproval && ownConfirmation))
+            {
+                actions::PolicyDecision shown = decision;
+                if (taskApproved && !ownConfirmation)
                 {
-                    blanketApproval = true;
-                    blanketRiskCeiling = decision.risk;
+                    shown.reason = "First " + actions::ToString(action.type) + " step" +
+                        (action.application.empty() ? std::string() : " in " + action.application) +
+                        " for this task. Approving covers later steps of this same kind in this application until the "
+                        "task ends; a different kind of action asks again.\n" + decision.reason;
+                }
+                const actions::ConfirmationChoice choice = confirmationHandler(action, shown);
+                confirmationGranted = actions::Granted(choice);
+                // Inside a task the person already approved, the question was about this
+                // kind, so any yes answers for it. Elsewhere only "for this task" does.
+                if (!ownConfirmation &&
+                    (choice == actions::ConfirmationChoice::AllowForThisTask || (taskApproved && confirmationGranted)))
+                {
+                    approvedKinds[kind] = decision.risk;
                 }
             }
             if (cancelled())

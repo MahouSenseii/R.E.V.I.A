@@ -98,6 +98,13 @@ struct SpeechServiceTestAccess
         service.configuration.backend = "Qwen";
         service.activePreset = std::move(preset);
     }
+    static std::vector<std::string> QueuedTexts(SpeechService& service)
+    {
+        std::lock_guard lock(service.mutex);
+        std::vector<std::string> result;
+        for (const auto& item : service.queue) result.push_back(item.text);
+        return result;
+    }
     static std::vector<runtime::AffectSnapshot> PendingAffects(SpeechService& service)
     {
         std::lock_guard lock(service.mutex);
@@ -187,6 +194,21 @@ struct SpeechServiceTestAccess
         worker.join();
         phase = *seen;
         return true;
+    }
+
+    // What the playback worker does when it takes the next ready phrase: it leaves the
+    // ordered queue and becomes the active utterance until its completion is reported.
+    static void BeginPlayingNext(SpeechService& service)
+    {
+        std::lock_guard lock(service.mutex);
+        const auto sequence = service.playbackOrder.PopFrontReady();
+        tests::Check(sequence.has_value(), "No ready phrase to play.");
+        const auto found = service.prepared.find(*sequence);
+        tests::Check(found != service.prepared.end(), "The ready phrase was not prepared.");
+        service.activeUtteranceId.store(found->second.utterance.utteranceId);
+        service.bufferedAudioBytes -= found->second.bufferedBytes;
+        SpeechService::ReleaseAudio(found->second.audioPath, found->second.lifetime);
+        service.prepared.erase(found);
     }
 
     static std::function<void()> TakeNext(SpeechService& service)

@@ -17,9 +17,13 @@ if ((Test-Path -LiteralPath $destination -PathType Leaf) -and -not $Force) {
 }
 
 New-Item -ItemType Directory -Path (Split-Path -Parent $destination) -Force | Out-Null
-Invoke-WebRequest -Uri $uri -OutFile $destination
-$actual = (Get-FileHash -LiteralPath $destination -Algorithm SHA256).Hash.ToLowerInvariant()
+# Verified before it is moved to where llama-server loads it.
+$partial = "$destination.partial"
+Invoke-WebRequest -Uri $uri -OutFile $partial
+$actual = (Get-FileHash -LiteralPath $partial -Algorithm SHA256).Hash.ToLowerInvariant()
 if ($actual -ne $sha256) {
+    Remove-Item -LiteralPath $partial -Force -ErrorAction SilentlyContinue
     throw "Vision projector checksum mismatch. Expected $sha256 but received $actual."
 }
+Move-Item -LiteralPath $partial -Destination $destination -Force
 Write-Host "Vision projector ready: $destination"

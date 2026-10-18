@@ -136,6 +136,15 @@ void MemoryAgent::SetQueueLimits(const MemoryQueueLimits newLimits)
     limits = newLimits;
 }
 
+void MemoryAgent::SetDeferral(MemoryDeferral newDeferral)
+{
+    {
+        std::lock_guard lock(mutex);
+        deferral = std::move(newDeferral);
+    }
+    taskAvailable.notify_all();
+}
+
 MemoryAgent::QueueDepths MemoryAgent::Depths() const
 {
     std::lock_guard lock(mutex);
@@ -304,6 +313,7 @@ bool MemoryAgent::Enqueue(const MemoryTaskClass taskClass, Task task)
                     report = "[MemoryAgent] overflow | type=turn | dropped=oldest | "
                         "depth=" + std::to_string(interactiveTasks.size() + 1);
                 }
+                task.queuedAt = std::chrono::steady_clock::now();
                 interactiveTasks.push_front(std::move(task));
                 break;
             }
@@ -549,6 +559,38 @@ void MemoryAgent::StopEmbeddingBackfill()
     taskAvailable.notify_all();
 }
 
+bool MemoryAgent::InteractiveDueLocked(
+    const std::chrono::steady_clock::time_point now, std::chrono::steady_clock::time_point& wakeAt) const
+{
+    if (interactiveTasks.empty())
+        return false;
+    if (!deferral.busy)
+        return true;
+    // The front is the task taken next: the newest turn, or a retry when nothing newer waits.
+    const auto queuedAt = interactiveTasks.front().queuedAt;
+    const auto latest = queuedAt + deferral.maximum;
+    if (now >= latest)
+        return true;
+    if (now < queuedAt + deferral.settle)
+    {
+        wakeAt = queuedAt + deferral.settle;
+        return false;
+    }
+    bool busy = true;
+    try
+    {
+        busy = deferral.busy();
+    }
+    catch (...)
+    {
+        // An unreadable probe only delays the work; the maximum still bounds it.
+    }
+    if (!busy)
+        return true;
+    wakeAt = std::min(latest, now + deferral.recheck);
+    return false;
+}
+
 bool MemoryAgent::BackfillDueLocked() const
 {
     return backfill && backfill->pending == 0 &&
@@ -695,15 +737,22 @@ void MemoryAgent::Run(const std::stop_token stopToken)
                 backfill->cancellation.request_stop();
                 backfill.reset();
             }
+            // A held-back turn has its own wake time. A newly queued turn changes it, so
+            // the wait also ends when the interactive queue changes and is recomputed.
+            const auto now = std::chrono::steady_clock::now();
+            auto interactiveWake = std::chrono::steady_clock::time_point::max();
+            const bool interactiveDue = InteractiveDueLocked(now, interactiveWake);
+            const std::size_t interactiveSeen = interactiveTasks.size();
             const auto ready = [&]()
-            { return !interactiveTasks.empty() || !learningTasks.empty() || !backfillTasks.empty() || BackfillDueLocked(); };
-            if (backfill)
             {
-                // A profile change can replace the subscription while the wait
-                // releases the mutex; its deadline must remain a local value.
-                const auto deadline = backfill->nextScan;
+                return interactiveDue || interactiveTasks.size() != interactiveSeen || !learningTasks.empty() || !backfillTasks.empty() ||
+                       BackfillDueLocked();
+            };
+            // A profile change can replace the subscription while the wait releases the
+            // mutex; its deadline must remain a local value.
+            const auto deadline = std::min(backfill ? backfill->nextScan : std::chrono::steady_clock::time_point::max(), interactiveWake);
+            if (deadline != std::chrono::steady_clock::time_point::max())
                 taskAvailable.wait_until(lock, stopToken, deadline, ready);
-            }
             else
                 taskAvailable.wait(lock, stopToken, ready);
             if (stopToken.stop_requested())
@@ -718,8 +767,9 @@ void MemoryAgent::Run(const std::stop_token stopToken)
             }
 
             bool hasWork = false;
+            auto unusedWake = std::chrono::steady_clock::time_point::max();
             const QueueDepths depths{
-                interactiveTasks.size(), learningTasks.size(),
+                InteractiveDueLocked(std::chrono::steady_clock::now(), unusedWake) ? interactiveTasks.size() : 0U, learningTasks.size(),
                 backfillTasks.size() + (BackfillDueLocked() ? 1U : 0U)};
             const MemoryTaskClass chosen =
                 NextClass(depths, roundPosition, hasWork);

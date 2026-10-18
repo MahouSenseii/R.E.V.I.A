@@ -2,8 +2,11 @@
 #include "testSupport.h"
 
 #include "speechServiceTestAccess.h"
+#include "Speech/wavTiming.h"
 
 #include <chrono>
+#include <cmath>
+#include <cstdint>
 #include <fstream>
 #include <functional>
 #include <iostream>
@@ -146,6 +149,114 @@ void TestInterruptedBatchDoesNotDeadlockTheVoice()
     Check(phase == "Stopped", "The discarded batch was not reported.");
 }
 
+// A streamed answer hands every sentence to speech while generation is still running.
+// The queue bound used to drop its oldest waiting phrase, which is the middle of that
+// same answer, while the chat showed all of it. Only an earlier reply may make room.
+void TestALongReplyIsNeverCutToMakeRoomForItself()
+{
+    ScopedTestDirectory directory;
+    SpeechService service;
+    SpeechServiceTestAccess::ConfigureWithoutWorkers(service, directory.root);
+    for (int index = 0; index < 24; ++index)
+        service.Speak("Sentence number " + std::to_string(index) + ".", {}, 100 + index, index == 0);
+    auto queued = SpeechServiceTestAccess::QueuedTexts(service);
+    Check(queued.size() == 24 && queued.front() == "Sentence number 0." && queued[12] == "Sentence number 12." &&
+            queued.back() == "Sentence number 23.",
+        "A long reply lost sentences to its own queue bound; " + std::to_string(queued.size()) + " remained.");
+
+    // A newer reply still takes priority over what is left of an older one.
+    service.Speak("A new reply starts.", {}, 200, true);
+    queued = SpeechServiceTestAccess::QueuedTexts(service);
+    Check(queued.size() == 16 && queued.back() == "A new reply starts." && queued.front() == "Sentence number 9.",
+        "An earlier reply did not yield its oldest unspoken phrases to a newer one.");
+}
+
+// A reminder queued behind a streamed reply is released when the reply's last phrase
+// reports completion. That report arrives while the phrase is still marked active, so
+// the session asks what is queued after it, not whether anything is pending at all.
+void TestTheLastPhraseLeavesNothingQueuedBehindIt()
+{
+    ScopedTestDirectory directory;
+    SpeechService service;
+    SpeechServiceTestAccess::ConfigureWithoutWorkers(service, directory.root);
+    service.Speak("The first sentence.", {}, 301, true);
+    SpeechServiceTestAccess::TakeNext(service)();
+    service.Speak("The last sentence.", {}, 302, false);
+    SpeechServiceTestAccess::BeginPlayingNext(service);
+    Check(service.HasQueuedSpeech(), "A phrase still waiting behind the one playing was not reported as queued.");
+    SpeechServiceTestAccess::TakeNext(service)();
+    SpeechServiceTestAccess::BeginPlayingNext(service);
+    Check(service.HasPendingSpeech() && !service.HasQueuedSpeech(),
+        "While the last phrase finishes, the voice must read as busy but with nothing queued behind it.");
+    service.StopSpeaking();
+    Check(!service.HasQueuedSpeech(), "A stopped voice still reported queued speech.");
+}
+
+std::vector<std::uint8_t> Wav(const std::uint32_t sampleRate, const std::uint16_t channels, const std::uint32_t frames,
+    const bool extraChunk = false, const std::uint32_t declaredData = 0)
+{
+    std::vector<std::uint8_t> bytes;
+    const auto put = [&bytes](const std::uint32_t value, const int width)
+    {
+        for (int shift = 0; shift < width * 8; shift += 8)
+            bytes.push_back(static_cast<std::uint8_t>(value >> shift));
+    };
+    const auto tag = [&bytes](const char* name) { bytes.insert(bytes.end(), name, name + 4); };
+    const std::uint32_t blockAlign = channels * 2U;
+    const std::uint32_t dataBytes = frames * blockAlign;
+    tag("RIFF");
+    put(0, 4);
+    tag("WAVE");
+    tag("fmt ");
+    put(16, 4);
+    put(1, 2);
+    put(channels, 2);
+    put(sampleRate, 4);
+    put(sampleRate * blockAlign, 4);
+    put(blockAlign, 2);
+    put(16, 2);
+    if (extraChunk)
+    {
+        // An odd-sized chunk the reader must skip, padding byte included.
+        tag("LIST");
+        put(3, 4);
+        bytes.insert(bytes.end(), {'a', 'b', 'c', 0});
+    }
+    tag("data");
+    put(declaredData != 0 ? declaredData : dataBytes, 4);
+    bytes.resize(bytes.size() + dataBytes, 0);
+    return bytes;
+}
+
+// After a phrase starts, the playback thread holds the channel for the clip's exact
+// length plus a short tail. It used to add 350 ms of silence after every phrase, and to
+// trust a reported length that could be shorter than the audio, which freed an
+// in-memory buffer while it was still playing.
+void TestPlaybackIsHeldForTheClipAndBarelyLonger()
+{
+    Check(std::abs(WavDurationMilliseconds(Wav(24000, 1, 2400)) - 100.0) < 0.001, "A canonical WAV was mistimed.");
+    Check(std::abs(WavDurationMilliseconds(Wav(48000, 2, 24000, true)) - 500.0) < 0.001,
+        "A WAV with an extra chunk before its data was mistimed.");
+    Check(std::abs(WavDurationMilliseconds(Wav(24000, 1, 2400, false, 0xFFFFFFFFU)) - 100.0) < 0.001,
+        "A streamed WAV with a placeholder data size was mistimed.");
+    Check(std::abs(WavDurationMilliseconds(Wav(24000, 1, 2400, false, 96000)) - 100.0) < 0.001,
+        "A data size larger than the audio present was not clamped to what is there.");
+    const std::vector<std::uint8_t> garbage(64, 7);
+    Check(WavDurationMilliseconds(garbage) == 0.0, "An unreadable header was given a length.");
+
+    ScopedTestDirectory directory;
+    const auto longClip = Wav(24000, 1, 48000);
+    const auto path = directory.root / "phrase.wav";
+    WriteBytes(path, std::string(longClip.begin(), longClip.end()));
+    Check(std::abs(WavDurationMilliseconds(path) - 2000.0) < 0.001, "A WAV file larger than the header read was mistimed.");
+
+    Check(PlaybackHoldMilliseconds(1000.0, 900.0) == 1000.0 + PlaybackTailMilliseconds,
+        "A short reported length ended the hold before the audio did.");
+    Check(PlaybackHoldMilliseconds(1000.0, 1200.0) == 1200.0 + PlaybackTailMilliseconds, "A longer reported length was ignored.");
+    Check(PlaybackTailMilliseconds <= 80.0, "More than a short tail of silence follows each phrase.");
+    Check(PlaybackHoldMilliseconds(0.0, 0.0) >= 250.0, "A clip of unknown length was not held at all.");
+}
+
 bool WaitFor(const std::function<bool()>& predicate, const std::chrono::milliseconds timeout)
 {
     const auto deadline = std::chrono::steady_clock::now() + timeout;
@@ -166,6 +277,9 @@ void RunSpeechInterruptionTests()
     TestLatePreparationAfterBargeInPreservesTheBank();
     TestBatchingWaitsForAFasterThanRealTimeCard();
     TestInterruptedBatchDoesNotDeadlockTheVoice();
+    TestALongReplyIsNeverCutToMakeRoomForItself();
+    TestTheLastPhraseLeavesNothingQueuedBehindIt();
+    TestPlaybackIsHeldForTheClipAndBarelyLonger();
     std::cout << "Speech interruption preserves prepared bank assets, releases scratch audio, "
         "clears the real queues and rejects late preparation.\n";
 }

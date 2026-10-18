@@ -41,7 +41,7 @@ messageRouter::~messageRouter() = default;
 
 responseOutput messageRouter::RouteMessage(const std::string& message, const std::vector<conversationMessage>& context,
     const std::stop_token stopToken, DeltaHandler onDelta, const revia::intelligence::IntelligenceDecision& decision,
-    const revia::llm::PrivateMemoryAccess memoryAccess) const
+    const revia::llm::PrivateMemoryAccess memoryAccess, const revia::llm::ToolExchange* tools) const
 {
     responseOutput output;
 
@@ -53,6 +53,38 @@ responseOutput messageRouter::RouteMessage(const std::string& message, const std
         return output;
     }
 
+    // Taken once, here, so the cloud attempt and the local route share them and neither
+    // is left behind for a later request.
+    ReasoningHandler onReasoning;
+    std::optional<revia::llm::cloud::CloudTurnRequest> cloudTurn;
+    {
+        std::lock_guard lock(reasoningMutex);
+        // A tool loop asks several times for one answer, and every step may think. The
+        // runtime clears the handler itself when that turn ends.
+        onReasoning = tools != nullptr ? pendingReasoning : std::exchange(pendingReasoning, {});
+        cloudTurn = std::exchange(pendingCloud, std::nullopt);
+    }
+    std::string cloudNote;
+    if (cloudTurn)
+    {
+        responseOutput answered = cloud.GenerateResponse(context, *cloudTurn, stopToken, onDelta, onReasoning);
+        // An explicit request is answered by the cloud or refused in plain words. A reply
+        // that already streamed cannot be replaced either. Only an automatic attempt that
+        // produced nothing falls through to the local route.
+        if (answered.bSuccess || cloudTurn->bExplicit || answered.bWasStreamed || stopToken.stop_requested())
+        {
+            answered.requestedTier = revia::intelligence::ToString(decision.requestedTier);
+            answered.selectedTier = "Cloud";
+            answered.selectedModel = "cloud:" + cloud.Settings().model;
+            answered.routingReason = decision.reason +
+                (cloudTurn->bExplicit ? " The user asked the optional cloud model." : " This hard turn went to the optional cloud model.");
+            answered.routingConfidence = decision.confidence;
+            answered.reasoningMode = revia::intelligence::ToString(decision.mode);
+            return answered;
+        }
+        cloudNote = "Cloud model not used: " + answered.reason;
+    }
+
     const llmService* selected = &llm;
     // Declared here so it lives until the end of this call. A lease released at the end
     // of the switch would free the model while it is still generating.
@@ -62,10 +94,17 @@ responseOutput messageRouter::RouteMessage(const std::string& message, const std
     std::string selectedTier = "Main";
     std::string fallbackReason;
     std::string routingNote;
+    // Pictures attached to the message need a projector, which the Fast brain never has.
+    const bool carriesImages =
+        std::any_of(context.begin(), context.end(), [](const conversationMessage& entry) { return !entry.images.empty(); });
     switch (decision.selectedTier)
     {
         case revia::intelligence::IntelligenceTier::Fast:
-            if (FastIsSlowerThanMain() && llm.IsBackendAvailable())
+            if (carriesImages)
+            {
+                routingNote = " The message carries pictures, which only Main's vision projector can read.";
+            }
+            else if (FastIsSlowerThanMain() && llm.IsBackendAvailable())
             {
                 // Small is not fast when small is on the CPU. Every reply carries the
                 // system prompt and her state -- about 2,500 tokens -- and the CPU
@@ -125,7 +164,7 @@ responseOutput messageRouter::RouteMessage(const std::string& message, const std
             break;
     }
 
-    if (fastConfigured && selected != &fastLlm &&
+    if (fastConfigured && selected != &fastLlm && !carriesImages &&
         !selected->IsBackendAvailable(stopToken) && fastLlm.IsBackendAvailable(stopToken))
     {
         selected = &fastLlm;
@@ -146,7 +185,9 @@ responseOutput messageRouter::RouteMessage(const std::string& message, const std
         stopToken,
         std::move(onDelta),
         deepReasoning,
-        memoryAccess);
+        memoryAccess,
+        onReasoning,
+        tools);
     residency.EndInference(effectiveTier);
     const bool contextRejected = !routed.bSuccess &&
         routed.reason.find("HTTP status 400") != std::string::npos;
@@ -161,7 +202,9 @@ responseOutput messageRouter::RouteMessage(const std::string& message, const std
             stopToken,
             std::move(retryDelta),
             deepReasoning,
-            memoryAccess);
+            memoryAccess,
+            onReasoning,
+            tools);
         residency.EndInference(revia::intelligence::IntelligenceTier::Main);
         selected = &llm;
         effectiveTier = revia::intelligence::IntelligenceTier::Main;
@@ -174,6 +217,8 @@ responseOutput messageRouter::RouteMessage(const std::string& message, const std
     routed.selectedModel = ConfiguredModelName(*selected);
     routed.routingReason = decision.reason + routingNote;
     routed.routingConfidence = decision.confidence;
+    if (!cloudNote.empty())
+        fallbackReason = fallbackReason.empty() ? cloudNote : cloudNote + " " + fallbackReason;
     routed.bRoutingFallback = !fallbackReason.empty();
     routed.routingFallbackReason = std::move(fallbackReason);
     routed.reasoningMode = revia::intelligence::ToString(decision.mode);
@@ -243,8 +288,19 @@ bool messageRouter::FastIsSlowerThanMain() const
         !mainConfiguration.device.empty() && !onCpu(mainConfiguration.device);
 }
 
+void messageRouter::SetReasoningHandler(ReasoningHandler handler)
+{
+    std::lock_guard lock(reasoningMutex);
+    pendingReasoning = std::move(handler);
+}
+
 void messageRouter::SetPosture(std::string posture)
 {
+    {
+        std::lock_guard lock(reasoningMutex);
+        pendingReasoning = {};
+        pendingCloud.reset();
+    }
     llm.SetPosture(posture);
     if (fastConfigured) fastLlm.SetPosture(posture);
     if (expertConfigured) expertLlm.SetPosture(std::move(posture));
@@ -254,6 +310,12 @@ std::string messageRouter::RelatedMemories(
     const std::string& query, const std::stop_token stopToken, const revia::memory::MemoryScope& scope) const
 {
     return llm.RelatedMemories(query, stopToken, scope);
+}
+
+void messageRouter::SetCloudTurn(revia::llm::cloud::CloudTurnRequest request)
+{
+    std::lock_guard lock(reasoningMutex);
+    pendingCloud = std::move(request);
 }
 
 void messageRouter::SetReplyNote(std::string note)
@@ -609,6 +671,9 @@ void messageRouter::ApplyLLMSettings(const llmSettings& settings, const llmSetti
     fastConfiguration = fastSettings;
     expertConfiguration = expertSettings;
     embeddingConfiguration = embeddingSettings;
+    // Main's cloud block is the only one read; the persona is what a cloud reply keeps.
+    cloud.ApplySettings(settings.cloud);
+    cloud.SetPersona(profile.systemPrompt);
     llm.ApplySettings(settings, embeddingSettings, profile);
     fastConfigured = fastEnabled;
     expertConfigured = expertEnabled;
@@ -655,6 +720,7 @@ void messageRouter::ApplyProfile(const aiProfile& profile)
 {
     // Profile changes do not reconfigure transports read by the memory worker.
     llm.ApplyProfile(mainConfiguration, profile);
+    cloud.SetPersona(profile.systemPrompt);
     if (fastConfigured) fastLlm.ApplyProfile(fastConfiguration, profile);
     if (expertConfigured) expertLlm.ApplyProfile(expertConfiguration, profile);
 }

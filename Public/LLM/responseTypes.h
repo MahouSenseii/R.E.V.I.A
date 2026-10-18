@@ -1,5 +1,7 @@
 #pragma once
 
+#include "LLM/toolCall.h"
+
 #include <cstddef>
 #include <cstdint>
 #include <string>
@@ -10,6 +12,10 @@ struct latencySample
     std::string stage;
     double milliseconds = 0.0;
     bool bAggregate = false;
+    // Empty for a duration. Otherwise the sample is a count in this unit (for example
+    // "tok" for the backend's cached prompt tokens), held in `milliseconds` so the timing
+    // line can show it beside the stage it explains.
+    std::string unit{};
 };
 
 // Prompt spans use character counts; llama.cpp supplies the actual token total.
@@ -74,6 +80,14 @@ struct responseOutput
     std::uint32_t completionTokens = 0;
     bool bTokensReported = false;
     promptFitReport contextFit;
+    // Calls the model asked for on a request that offered tools. Nothing has run them:
+    // the tool loop validates and executes them, or the reply simply ends.
+    std::vector<revia::llm::ToolCall> toolCalls;
+    // The backend refused a request because it offered tools (a server without tool
+    // support). The caller falls back to a request without them.
+    bool bToolsRejected = false;
+    // Tool calls the host actually executed for this reply, across every step.
+    std::size_t toolCallsExecuted = 0;
 
     [[nodiscard]] std::uint32_t TotalTokens() const
     {

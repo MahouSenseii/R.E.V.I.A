@@ -71,6 +71,9 @@ The heldout corpus has 12 families, 240 unique episodes and seeds 11, 29 and 47:
 for source/entity overlap. `json-exact-v1` compares strict JSON with independently
 authored expected answers. Mechanical checks, oracle decisions, unavailable or
 unbound outputs, and human semantic/personality judgments have separate counters.
+A case may name `model-judge-v1` to be judged by a configured judge model instead of a
+deterministic oracle. Its verdict carries `model:<judge>` provenance and `modelJudged`.
+A bound human review may overrule it; see [EVALUATION_GATE.md](EVALUATION_GATE.md).
 Live samples admit typed campaign/task contracts and immutable source/output bundles;
 mixed build/provider cohorts cannot count. Human reviews also bind campaign identity.
 

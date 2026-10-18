@@ -144,7 +144,8 @@ healthOutput llmService::CheckBackendHealth(const std::stop_token stopToken) con
 }
 
 responseOutput llmService::GenerateResponse(const std::vector<conversationMessage>& context, const std::stop_token stopToken,
-    DeltaHandler onDelta, const bool deepReasoning, const revia::llm::PrivateMemoryAccess memoryAccess) const
+    DeltaHandler onDelta, const bool deepReasoning, const revia::llm::PrivateMemoryAccess memoryAccess,
+    ReasoningHandler onReasoning, const revia::llm::ToolExchange* tools) const
 {
     if (!bIsReady)
     {
@@ -161,7 +162,17 @@ responseOutput llmService::GenerateResponse(const std::vector<conversationMessag
     switch (backendType)
     {
         case llmBackendType::Placeholder:
+        {
+            // The placeholder cannot call tools; saying so lets the caller fall back.
+            if (tools != nullptr && !tools->definitions.empty())
+            {
+                responseOutput output;
+                output.bToolsRejected = true;
+                output.reason = "The placeholder backend has no tool calling.";
+                return output;
+            }
             return GeneratePlaceholderResponse(context);
+        }
 
         case llmBackendType::LLamaCpp:
         {
@@ -177,7 +188,7 @@ responseOutput llmService::GenerateResponse(const std::vector<conversationMessag
                 return output;
             }
             return llamaCpp.GenerateResponse(
-                context, stopToken, std::move(onDelta), deepReasoning, memoryAccess);
+                context, stopToken, std::move(onDelta), deepReasoning, memoryAccess, std::move(onReasoning), tools);
         }
 
         case llmBackendType::None:

@@ -10,7 +10,8 @@
                 "modelPath":  "Models/Qwen3.5-4B-Q4_K_M.gguf",
                 "autoTune":  true,
                 "autoFitTargetMiB":  2048,
-                "contextSize":  8192,
+                "contextSize":  32768,
+                "kvCacheType":  "q8_0",
                 "parallelRequests":  1,
                 "startupTimeoutSeconds":  120,
                 "shutdownServerOnExit":  true,
@@ -20,7 +21,18 @@
                 "temperature":  0.8,
                 "autoMaxTokens":  true,
                 "maxTokens":  1024,
-                "stablePromptPrefix":  true
+                "thinkingTokens":  3072,
+                "stablePromptPrefix":  true,
+                "cloud":  {
+                              "enabled":  false,
+                              "provider":  "openai-compatible",
+                              "baseUrl":  "",
+                              "model":  "",
+                              "apiKeyEnvironmentVariable":  "",
+                              "useFor":  "never",
+                              "maxTokens":  1024,
+                              "timeoutSeconds":  60
+                          }
             },
     "intelligence":  {
                          "enabled":  true,
@@ -238,7 +250,8 @@
                          "restoreTurns":  6,
                          "selfInquiryEnabled":  true,
                          "selfInquiryCooldownTurns":  0,
-                         "selfInquiryScope":  "questions"
+                         "selfInquiryScope":  "hard",
+                         "deliberation":  "native"
                      },
     "responseFilter":  {
                            "aiReviewEnabled":  false,
@@ -303,6 +316,7 @@
                    },
     "inputArbiter":  {
                          "mergeWindowMs":  350,
+                         "punctuatedMergeWindowMs":  150,
                          "minimumMeaningfulCharacters":  3,
                          "maxQueuedInputs":  8,
                          "ignoredFragments":  [

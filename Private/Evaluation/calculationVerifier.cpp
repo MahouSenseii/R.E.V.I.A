@@ -185,10 +185,42 @@ class ExpressionParser
             else
                 break;
         }
-        auto value = Primary();
+        auto value = Power();
         if (negative)
             value.value = -value.value;
         return value;
+    }
+
+    // "**" binds tighter than a sign on its left and is right-associative, as in Python:
+    // -2 ** 2 is -4, 2 ** -1 is 0.5 and 2 ** 3 ** 2 is 2 ** 9.
+    bool TakePower()
+    {
+        SkipSpace();
+        if (text.compare(position, 2, "**") != 0)
+            return false;
+        position += 2;
+        return true;
+    }
+
+    Quantity Power()
+    {
+        auto base = Primary();
+        if (!TakePower())
+            return base;
+        CountOperation();
+        if (++depth > 32)
+            throw std::runtime_error("Arithmetic nesting budget exceeded.");
+        const auto exponent = Unary();
+        --depth;
+        if (base.dimension != Dimension::Scalar || exponent.dimension != Dimension::Scalar)
+            throw std::runtime_error("Powers of measured quantities are unsupported.");
+        if (base.value == 0 && exponent.value < 0)
+            throw std::runtime_error("Division by zero.");
+        if (base.value < 0 && exponent.value != std::floor(exponent.value))
+            throw std::runtime_error("A negative number has no real fractional power.");
+        base.value = std::pow(base.value, exponent.value);
+        RequireFinite(base.value);
+        return base;
     }
 
     Quantity Primary()

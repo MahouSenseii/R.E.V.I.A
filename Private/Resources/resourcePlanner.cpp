@@ -1,6 +1,7 @@
 #include "Core/appSettings.h"
 #include "Resources/resourceSettings.h"
 #include "Resources/resourcePlanner.h"
+#include "LLM/LLamaCPP/llamaCppServerProcess.h"
 
 #include <algorithm>
 #include <cctype>
@@ -588,6 +589,13 @@ ResourceRequirements EstimateResourceRequirements(const appSettings& settings, c
         // Planning must remain useful before models are installed and in synthetic runs.
         requirements.chatWorkingSetMiB = 7000;
     }
+    // The GiB above covers the KV cache up to 8,192 tokens. Beyond that the cache grows
+    // with the context: on the configured Qwen3.5-4B, 32K took about 589 MiB more GPU
+    // memory than 16K with an f16 cache (docs/CONTEXT_BENCHMARK.md), about 37 MiB per
+    // thousand tokens. Rounded up to 40, and halved for a q8_0 cache.
+    const int extraContextTokens = std::max(0, settings.llm.contextSize - 8192);
+    const std::uint64_t kvMiBPerThousand = IsQuantizedKvCacheType(settings.llm.kvCacheType) ? 20 : 40;
+    requirements.chatWorkingSetMiB += static_cast<std::uint64_t>(extraContextTokens) * kvMiBPerThousand / 1024;
     requirements.voiceExpected = voiceExpected;
     requirements.speechRecognitionGpuEnabled = settings.speechRecognition.bUseGpu;
     requirements.voiceMayShareChatGpu =
@@ -901,6 +909,29 @@ ResourcePlan PlanResources(const HardwareInventory& hardware, const resourceSett
     plan.embeddingDevice = policy.embeddings == "cpu" || embedding == nullptr
         ? "none"
         : embedding->backendId;
+
+    // With the whole chat model on one GPU, its CPU threads mostly wait on the GPU, while
+    // the CPU embedding server computes every recall query on the threads it has: 11
+    // chat threads beside 3 for embeddings on a 24-thread host. Move up to half of the
+    // chat threads to embeddings, never leaving chat fewer than four or giving embeddings
+    // more than eight, which is past where a small embedding model stops scaling.
+    const bool chatFullyOnGpu = primary != nullptr && plan.chatSplitMode == "none" &&
+        requirements.chatWorkingSetMiB <=
+            UsableGpuMiB(*primary, static_cast<std::uint64_t>(std::max(0, requirements.baseGpuReserveMiB)));
+    const bool voiceTookCpuThreads = requirements.voiceExpected && plan.voiceDevice == "cpu" && usableCores >= 8;
+    if (chatFullyOnGpu && plan.embeddingDevice == "none" && !voiceTookCpuThreads)
+    {
+        const int chatKeeps = std::max(4, (plan.chatCpuThreads + 1) / 2);
+        const int moved = std::clamp(std::min(plan.chatCpuThreads - chatKeeps, 8 - plan.embeddingCpuThreads), 0, plan.chatCpuThreads);
+        if (moved > 0)
+        {
+            plan.chatCpuThreads -= moved;
+            plan.chatBatchThreads = plan.chatCpuThreads;
+            plan.embeddingCpuThreads += moved;
+            plan.notes.push_back("Chat runs fully on the GPU, so " + std::to_string(moved) +
+                                 " of its CPU threads went to the CPU embedding server.");
+        }
+    }
 
     const GpuDevice* stt = FindDevice(ranked, policy.speechRecognition, 1);
     constexpr std::uint64_t SpeechRecognitionWorkingSetMiB = 1024;

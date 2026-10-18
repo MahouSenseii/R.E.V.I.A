@@ -176,6 +176,7 @@ class BootstrapTests(unittest.TestCase):
 
     def test_provision_is_idempotent_and_publishes_readiness_only_after_health(self):
         calls = []
+        seeds = []
         powered = [False]
         installed = {name: name for name in ("vmrun", "vmcli", "disk", "iso", "keygen", "ssh")}
         vmx = self.root / "machine/revia.vmx"
@@ -185,6 +186,7 @@ class BootstrapTests(unittest.TestCase):
             if argv[0] == "keygen":
                 key = Path(argv[-1]); key.write_text("fixture-private"); key.with_suffix(".pub").write_text("ssh-ed25519 AAAA fixture")
             elif argv[0] == "iso":
+                seeds.append((Path(argv[-1]) / "user-data").read_text())
                 Path(argv[argv.index("-output") + 1]).write_bytes(b"seed")
             elif argv[0] == "disk" and argv[1] == "-r":
                 Path(argv[-1]).write_bytes(b"disk")
@@ -217,6 +219,63 @@ class BootstrapTests(unittest.TestCase):
         self.assertEqual(sum(call[:3] == ["vmcli", "VM", "Create"] for call in calls), 1)
         self.assertEqual(sum(call[0] == "disk" and call[1] == "-n" for call in calls), 1)
         self.assertEqual(sum(call[0] == "vmrun" and call[3] == "start" for call in calls), 1)
+        # First boot needs the guest host key in the seed, but the host keeps only the
+        # pinned public half and no plaintext copy of the seed.
+        self.assertEqual(len(seeds), 1)
+        self.assertIn("fixture-private", seeds[0])
+        self.assertFalse((self.root / "keys/host").exists())
+        self.assertTrue((self.root / "keys/host.pub").exists())
+        self.assertTrue((self.root / "keys/client").exists())
+        self.assertFalse((self.root / "seed/user-data").exists())
+
+    def test_seed_drops_the_guest_host_private_key_after_first_boot(self):
+        manifest = self.api.enroll(self.root, "companion-one")
+        (self.root / "keys").mkdir()
+        (self.root / "keys/client.pub").write_text("ssh-ed25519 AAAA fixture")
+        seeds = []
+        def fake_command(argv, timeout=60, input_data=None, keep_stdin=False):
+            argv = [str(item) for item in argv]
+            if argv[0] == "iso":
+                seeds.append((Path(argv[-1]) / "user-data").read_text())
+                Path(argv[argv.index("-output") + 1]).write_bytes(b"scrubbed")
+            return ""
+        installed = {"iso": "iso"}
+        with mock.patch.object(self.api, "command", side_effect=fake_command):
+            self.api.scrub_seed(self.root, manifest, installed)
+            self.assertEqual(seeds, [], "The seed was rebuilt before the guest had booted with its host key.")
+            self.api.record(self.root, "guest-ready.json", manifest)
+            self.api.scrub_seed(self.root, manifest, installed)
+            self.api.scrub_seed(self.root, manifest, installed)
+        self.assertEqual(len(seeds), 1)
+        self.assertNotIn("ssh_keys", seeds[0])
+        self.assertNotIn("ed25519_private", seeds[0])
+        self.assertIn("restrict,command=", seeds[0])
+        self.assertEqual((self.root / "seed.iso").read_bytes(), b"scrubbed")
+        self.assertFalse((self.root / "seed/user-data").exists())
+
+    def test_interrupted_setup_never_reuses_an_unpaired_host_key(self):
+        self.api.enroll(self.root, "companion-one")
+        (self.root / "keys").mkdir()
+        (self.root / "keys/host.pub").write_text("ssh-ed25519 STALE fixture")
+        installed = {name: name for name in ("vmrun", "vmcli", "disk", "iso", "keygen", "ssh")}
+        generated = []
+        def fake_command(argv, timeout=60, input_data=None, keep_stdin=False):
+            argv = [str(item) for item in argv]
+            if argv[0] == "keygen":
+                generated.append(Path(argv[-1]).name)
+                key = Path(argv[-1]); key.write_text("fixture-private"); key.with_suffix(".pub").write_text("ssh-ed25519 FRESH fixture")
+            elif argv[0] == "iso":
+                raise self.api.BootstrapError("cancelled")
+            return ""
+        with mock.patch.object(self.api, "command", side_effect=fake_command), \
+             mock.patch.object(self.api, "download_verified", side_effect=lambda url, path, digest: path.write_bytes(b"image")), \
+             mock.patch.object(self.api, "secure_directory"), \
+             mock.patch.object(self.api.shutil, "disk_usage", return_value=type("Disk", (), {"free": 100 * 1024 ** 3})()):
+            with self.assertRaises(self.api.BootstrapError):
+                self.api.ensure(self.root, "companion-one", installed)
+        self.assertEqual(sorted(generated), ["client", "host"])
+        self.assertNotIn("STALE", (self.root / "keys/known_hosts").read_text())
+        self.assertFalse((self.root / "seed/user-data").exists())
 
     def test_ssh_input_stays_open_until_response(self):
         script = "import sys; value=sys.stdin.buffer.readline(); print(value.decode().strip(), flush=True)"

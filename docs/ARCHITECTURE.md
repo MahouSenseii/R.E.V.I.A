@@ -706,6 +706,82 @@ exclusion, cooldown, dismissal, hourly-budget, and measured-precision gates. Ord
 conversation openings enter `ConversationRuntime` and the next natural user reply
 continues them; action-backed proposals retain explicit accept/dismiss handling.
 
+## Tools in chat
+
+On an ordinary private reply the model chooses its own tools. Nothing about this adds
+authority: every tool is a thin binding to the owner that already does the work, and
+the turn's permissions decide which tools exist at all.
+
+```mermaid
+flowchart LR
+    CR["ConversationRuntime"] --> P["ToolPermissions from settings, audience, profile"]
+    S["ReviaSession ChatToolProvider"] --> X["ToolExecutors bound to existing owners"]
+    P --> REG["ToolRegistry::Project"]
+    X --> REG
+    REG --> L["ToolLoop in ConversationAgent"]
+    L -->|"tools + earlier rounds"| B["llama.cpp: tools, tool_choice, streamed tool_calls"]
+    B -->|"tool calls"| V["Strict schema validation"]
+    V --> E["Executor: lookup, memory, archive, ActionRuntime, reminders, calculator"]
+    E -->|"bounded, untrusted, markers neutralized"| L
+    B -->|"text"| G["ReplyStreamGate and the final filter pass"]
+```
+
+- **Values.** `LLM/toolCall.h` holds backend-neutral definitions, calls, results and the
+  per-turn exchange. A backend only transports them; `responseOutput::toolCalls` returns
+  calls unexecuted, and `bToolsRejected` reports a backend that cannot take tools.
+- **Registry.** `Agents/toolRegistry` projects the turn's `ToolPermissions` into
+  OpenAI-style definitions with closed schemas. Public, guest and channel audiences, JSON
+  replies, proactive openings and evaluation turns get none. `web_search` needs internet
+  on plus automatic lookup or an explicit search request; `search_memory` needs profile
+  memory and an attributed private scope; `recall_history` needs the archive;
+  `search_documents` needs kept documents and a main model endpoint on this computer;
+  `read_file`/`list_dir` need approved roots, which their descriptions name; `set_reminder`
+  and `calculator` are private-chat tools; `generate_image` needs image generation on. A
+  tool without a bound executor is not offered.
+- **Owners.** Search uses the same typed `WebSearch` action, requester name and audit as the
+  phrase-routed lookup. Memory search uses the existing related-memory retrieval with the
+  turn's captured scope. History builds a typed `RecallRequest` (`BuildRecallRequest`):
+  the archive is searched by extracted terms and a parsed window, never by model text.
+  Files go through `RunChatAction`: `ActionRuntime::Evaluate`, the session's confirmation
+  handler when policy asks, then `ExecuteFor` with the turn's stamp and the task contract
+  the session builds for any interactive action. With no handler, or when the owner
+  declines, the request never reaches the runtime and the tool returns "needs your
+  approval". Reminders use `ParseReminderRequest` and the `ReminderBook`; the calculator is
+  `calculationVerifier`; pictures use `DocumentWorkshop::GenerateImage`.
+- **Loop.** `Agents/toolLoop` asks, validates each call strictly (known name, object
+  arguments, no unknown or duplicate keys, typed and length-bounded values, at most 8 KB
+  and four levels), executes, replays the assistant `tool_calls` and one role `tool`
+  message per result, and asks again: at most 8 requests, 4 calls per step, a 90 s budget
+  and a 12 KB result transcript. Results carry an untrusted-data label and have the runtime
+  block's delimiters neutralized (`NeutralizeTurnContextMarkers`). Read-only, overlap-safe
+  calls run together; effects and anything that may ask for approval run one at a time in
+  the model's order. The step a budget ends sends `tool_choice: "none"`, and a call made
+  anyway is ignored. Admission and the stop token are checked before every request and
+  call; every call, run or refused, gets an audit line with its argument digest in the
+  session log, and actions are also in the action audit. Activity reaches the chat as
+  `ComponentStatus` events from the `Tools` component, and searches also publish the
+  existing internet activity.
+- **Gate.** Text from every step reaches `ConversationAgent`'s `ReplyStreamGate` as one
+  reply, joined by blank lines, so text written beside a tool call is released only when
+  the gate approves it, and the final filter pass judges the joined answer whole.
+- **llama.cpp.** Chat requests carry `tools`, `tool_choice` and `parallel_tool_calls`;
+  streamed `delta.tool_calls` fragments are assembled per index under count, name and
+  argument bounds, and `finish_reason: "tool_calls"` ends a step. The prompt is fitted with
+  the tools and replayed rounds counted (`/apply-template` with `tools`), compacting only
+  the text prompt. The chat server is launched with `--jinja`. A tier below 16K context
+  refuses tools before any request; a server that refuses a first request for its tools is
+  remembered for the session.
+- **Fallback.** When tools are offered, the phrase-routed web lookup and archive recall are
+  skipped and the arithmetic grounding keeps only literal expressions. If the backend turns
+  tools down before any text was shown, the runtime runs exactly those skipped steps,
+  rebuilds the posture and reply note as a turn without tools has them, and the loop
+  answers with a plain request. `/operate`, `/goal` and the other explicit commands are
+  unchanged.
+
+Status: covered by unit and runtime tests against a scripted llama.cpp stand-in
+(`Tests/toolLoopTests.cpp`, `TestToolCallsStreamAndReplayOnTheWire`). It has not been run
+against the real server, and the 4B model's tool choices have not been measured live.
+
 ## Single-purpose construction rule
 
 ConversationStylePolicy emits the current turn purpose before lower-priority
@@ -964,8 +1040,8 @@ See [structured answer ownership and verification](ANSWER_QUALITY_STRUCTURED_REP
 `Evaluation/calculationVerifier` is the pure native arithmetic owner shared by
 conversation grounding and the existing Calculation investigation adapter. It
 accepts bounded typed JSON containing an expression and optional unit, with decimal
-literals, unary signs, parentheses and addition, subtraction, multiplication and
-division. It uses finite double precision and a fixed scalar/time/length/mass unit
+literals, unary signs, parentheses, addition, subtraction, multiplication, division and
+`**` powers of dimensionless values (Python's binding: `-2 ** 2` is -4). It uses finite double precision and a fixed scalar/time/length/mass unit
 table: seconds/minutes/hours, mm/cm/m/km and g/kg. Dimension checks, depth and
 operation budgets, overflow, zero division and cancellation bound the work. Names,
 code execution, external facts and composite units are unsupported. A successful

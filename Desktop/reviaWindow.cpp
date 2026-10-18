@@ -19,14 +19,22 @@
 #include "canvasPanel.h"
 #include "internetActivityPanel.h"
 #include "resourcePanel.h"
+#include "chatMarkdown.h"
+#include "chatSessionsPanel.h"
+#include "documentsDialog.h"
 #include "ui_reviaWindow.h"
 
 #include <QApplication>
 #include <QCheckBox>
+#include <QClipboard>
 #include <QCloseEvent>
 #include <QComboBox>
 #include <QDateTime>
 #include <QDesktopServices>
+#include <QDragEnterEvent>
+#include <QDropEvent>
+#include <QFileDialog>
+#include <QFileInfo>
 #include <QDir>
 #include <QEvent>
 #include <QFile>
@@ -38,6 +46,7 @@
 #include <QMenu>
 #include <QMessageBox>
 #include <QMetaObject>
+#include <QMimeData>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPlainTextEdit>
@@ -60,6 +69,7 @@
 #include <QtMath>
 #include <QTextCharFormat>
 #include <QTextCursor>
+#include <QTextDocument>
 #include <QThread>
 #include <QTimer>
 #include <QToolButton>
@@ -97,6 +107,60 @@ template <typename Result, typename Operation, typename Failure> Result RunOrFai
         return failure(std::string("the failure did not say why"));
     }
 }
+
+// Clears a running flag when a worker body ends, however it ends, so the GUI thread
+// can tell a finished worker from one it would have to wait for.
+class RunningFlag
+{
+  public:
+    explicit RunningFlag(std::atomic<bool>& flag) : flag(flag) {}
+    ~RunningFlag()
+    {
+        flag.store(false);
+    }
+    RunningFlag(const RunningFlag&) = delete;
+    RunningFlag& operator=(const RunningFlag&) = delete;
+
+  private:
+    std::atomic<bool>& flag;
+};
+
+namespace
+{
+// What reading one attached file came to, carried from the worker to the GUI thread.
+struct AttachmentOutcome
+{
+    bool accepted = false;
+    QString message;
+    AttachmentChip chip;
+};
+
+AttachmentOutcome OutcomeOf(const revia::attachments::IntakeResult& result, const QImage& thumbnail)
+{
+    AttachmentOutcome outcome;
+    outcome.accepted = result.status == revia::attachments::IntakeStatus::Accepted;
+    outcome.message = QString::fromStdString(result.message);
+    if (outcome.accepted)
+    {
+        outcome.chip.id = result.attachment.id;
+        outcome.chip.name = QString::fromStdString(result.attachment.displayName);
+        outcome.chip.size = QString::fromStdString(revia::attachments::HumanSize(result.attachment.bytes));
+        outcome.chip.thumbnail = thumbnail;
+    }
+    return outcome;
+}
+
+QStringList LocalFiles(const QMimeData* data)
+{
+    QStringList files;
+    if (data == nullptr || !data->hasUrls())
+        return files;
+    for (const QUrl& url : data->urls())
+        if (url.isLocalFile())
+            files << url.toLocalFile();
+    return files;
+}
+} // namespace
 
 revia::speech::VoiceOperationResult FailedVoiceOperation(const std::string&)
 {
@@ -295,12 +359,38 @@ bool ReviaWindow::eventFilter(QObject* watched, QEvent* event)
         }
     }
 
+    if ((messageInput && watched == messageInput->viewport()) || (chatHistory && watched == chatHistory->viewport()))
+    {
+        if (HandleAttachmentDrag(event))
+            return true;
+    }
     if (watched == messageInput && event->type() == QEvent::KeyPress)
     {
         const auto* keyEvent = static_cast<QKeyEvent*>(event);
+        if (keyEvent->matches(QKeySequence::Paste))
+        {
+            // Copied files attach; copied text pastes as text even when the copying app
+            // also put a picture of it on the clipboard; a bare picture attaches.
+            const QMimeData* data = QApplication::clipboard()->mimeData();
+            if (const QStringList files = LocalFiles(data); !files.isEmpty())
+            {
+                AttachPaths(files);
+                return true;
+            }
+            if (data && data->hasImage() && data->text().trimmed().isEmpty())
+            {
+                AttachPastedImage(qvariant_cast<QImage>(data->imageData()));
+                return true;
+            }
+        }
         if ((keyEvent->key() == Qt::Key_Return || keyEvent->key() == Qt::Key_Enter) && !keyEvent->modifiers().testFlag(Qt::ShiftModifier))
         {
             SendMessage();
+            return true;
+        }
+        if (keyEvent->key() == Qt::Key_Escape && editingLastTurn)
+        {
+            CancelEditLastTurn();
             return true;
         }
     }
@@ -470,6 +560,7 @@ void ReviaWindow::BuildInterface()
     conversationStatus = new ConversationStatusPanel(ui->chatPage);
     ui->chatLayout->insertWidget(0, conversationStatus);
     connect(conversationStatus->ReviewButton(), &QPushButton::clicked, this, [this]() { ReviewDisplayedAnswer(); });
+    BuildChatSidebar();
     voiceHealth = new VoiceHealthPanel(false, ui->voicePage);
     ui->voiceLayout->insertWidget(0, voiceHealth);
     connect(chatVoiceHealth->DetailsButton(), &QPushButton::clicked, this,
@@ -482,6 +573,7 @@ void ReviaWindow::BuildInterface()
     ui->titleIcon->setPixmap(CreateReviaIcon().pixmap(20, 20));
     titleBar->installEventFilter(this);
     messageInput->installEventFilter(this);
+    BuildAttachmentControls();
 
     pipelinePanel = new PipelinePanel(ui->pipelinePage);
     ui->pipelineHostLayout->addWidget(pipelinePanel);
@@ -524,17 +616,36 @@ void ReviaWindow::BuildInterface()
     connect(chatHistory, &QTextBrowser::anchorClicked, this,
         [this](const QUrl& link)
         {
-            const QString target = link.toString();
-            if (!target.startsWith(QStringLiteral("thought:")))
-            {
+            // Every anchor here was written by RenderChat; reply text cannot add one. A
+            // saved chat on screen has none, and its indices would not be the live ones.
+            if (!viewingArchivedChat.empty())
                 return;
-            }
+            const QString target = link.toString();
+            const qsizetype colon = target.indexOf(QLatin1Char(':'));
+            if (colon <= 0)
+                return;
+            const QString action = target.left(colon);
             bool parsed = false;
-            const std::size_t index = static_cast<std::size_t>(target.mid(8).toULongLong(&parsed));
-            if (parsed && index < chatEntries.size())
+            const std::size_t index = static_cast<std::size_t>(target.mid(colon + 1).toULongLong(&parsed));
+            if (!parsed || index >= chatEntries.size())
+                return;
+            if (action == QStringLiteral("thought"))
             {
                 chatEntries[index].expanded = !chatEntries[index].expanded;
                 RenderChat();
+            }
+            else if (action == QStringLiteral("copy"))
+            {
+                QApplication::clipboard()->setText(MessageText(index));
+                statusBar()->showMessage(QStringLiteral("Copied to the clipboard."), 3000);
+            }
+            else if (action == QStringLiteral("regen") && RegenerableReply() == index)
+            {
+                RetryLastExchange(QString());
+            }
+            else if (action == QStringLiteral("edit") && LastUserEntry() == index)
+            {
+                BeginEditLastTurn();
             }
         });
 
@@ -721,15 +832,29 @@ void ReviaWindow::BuildTray()
     trayIcon->show();
 }
 
+bool ReviaWindow::ClaimOperationWorker()
+{
+    if (operationRunning.exchange(true))
+    {
+        statusBar()->showMessage(QStringLiteral("Revia is still working on the previous request. Send again once she has answered."), 8000);
+        return false;
+    }
+    // Finished: its own last act was clearing the flag, so this returns at once.
+    if (operationWorker.joinable())
+        operationWorker.join();
+    return true;
+}
+
 void ReviaWindow::StartRuntime()
 {
-    if (switchingCompanion || shuttingDown.load())
+    if (switchingCompanion || shuttingDown.load() || !ClaimOperationWorker())
         return;
     sendButton->setEnabled(false);
     stopButton->setEnabled(true);
     operationWorker = std::jthread(
         [this, epoch = sessionUiEpoch.load()]()
         {
+            const RunningFlag running(operationRunning);
             std::string failure;
             const bool started = RunOrFail<bool>([this]() { return Session().Start(); },
                 [&failure](const std::string& why)
@@ -784,6 +909,7 @@ void ReviaWindow::StartRuntime()
                     {
                         visionPanel->Refresh();
                     }
+                    RefreshChatSidebar();
                     messageInput->setFocus();
                 },
                 Qt::QueuedConnection);
@@ -794,18 +920,39 @@ void ReviaWindow::SendMessage(const bool voiceInput)
 {
     // Voice may arrive while Revia is still replying; that is what the merge window is
     // for. Typed input still waits, because pressing Enter mid-reply and having it
-    // silently queue would be surprising.
-    if (switchingCompanion || shuttingDown.load() || (!voiceInput && Session().IsBusy()))
+    // silently queue would be surprising. The text stays in the box and the status line
+    // says why, since Enter reaches here even while the Send button is disabled.
+    if (switchingCompanion || shuttingDown.load())
     {
+        return;
+    }
+    if (!voiceInput && (operationRunning.load() || Session().IsBusy()))
+    {
+        statusBar()->showMessage(QStringLiteral("Revia is still working on the previous request. Send again once she has answered."), 8000);
         return;
     }
 
     const QString text = messageInput->toPlainText().trimmed();
-    if (text.isEmpty())
+    // Typed messages only: a voice turn never picks up files waiting in the tray.
+    const bool withAttachments = !voiceInput && attachmentTray && !attachmentTray->IsEmpty();
+    if (text.isEmpty() && (!withAttachments || editingLastTurn))
     {
         return;
     }
+    if (withAttachments && attachmentRunning.load())
+    {
+        statusBar()->showMessage(QStringLiteral("Still reading an attachment. Send again in a moment."), 6000);
+        return;
+    }
     messageInput->clear();
+    // A message always goes to the current chat, so that is what the window shows.
+    CloseArchivedChat();
+    if (!voiceInput && editingLastTurn)
+    {
+        editingLastTurn = false;
+        RetryLastExchange(text);
+        return;
+    }
 
     if (voiceInput)
     {
@@ -826,18 +973,51 @@ void ReviaWindow::SendMessage(const bool voiceInput)
         return;
     }
 
-    AppendChat("You", text, true);
+    if (!ClaimOperationWorker())
+    {
+        messageInput->setPlainText(text);
+        return;
+    }
+    // Taken now: once the message is on its way the files belong to that turn.
+    std::vector<AttachmentChip> attached;
+    std::vector<std::string> attachmentIds;
+    if (withAttachments && !editingLastTurn)
+    {
+        attached = attachmentTray->Chips();
+        attachmentIds = attachmentTray->Ids();
+        attachmentTray->Clear();
+        attachmentTray->SetStatus(QString());
+    }
+    if (studioOperationRunning.load())
+    {
+        // The turn waits for the studio operation's lock on its own worker; the window
+        // stays responsive and says what the message is waiting for.
+        statusBar()->showMessage(QStringLiteral("Your message will be answered when the current studio operation finishes."), 8000);
+    }
+    chatTurnInFlight = true;
+    if (attached.empty())
+    {
+        AppendChat("You", text, true);
+    }
+    else
+    {
+        ChatEntry entry;
+        entry.speaker = QStringLiteral("You");
+        entry.body = text;
+        entry.userMessage = true;
+        entry.attachments = attached;
+        chatEntries.push_back(std::move(entry));
+        TrimTranscript();
+        RenderChat();
+    }
     sendButton->setEnabled(false);
     stopButton->setEnabled(true);
 
-    if (operationWorker.joinable())
-    {
-        operationWorker.join();
-    }
     operationWorker = std::jthread(
         [this, epoch = sessionUiEpoch.load(), input = text.toStdString(), voiceInput, origin = Session().Stamp(),
-            audienceRevision = Session().Audience().revision]()
+            audienceRevision = Session().Audience().revision, attachmentIds]()
         {
+            const RunningFlag running(operationRunning);
             // Nothing thrown here may leave this thread.
             //
             // An exception escaping a std::jthread body calls std::terminate, so a single
@@ -851,7 +1031,9 @@ void ReviaWindow::SendMessage(const bool voiceInput)
             result.audienceRevision = audienceRevision;
             try
             {
-                result = Session().Submit(input, voiceInput ? revia::agents::InputSource::Voice : revia::agents::InputSource::Typed);
+                result = attachmentIds.empty()
+                             ? Session().Submit(input, voiceInput ? revia::agents::InputSource::Voice : revia::agents::InputSource::Typed)
+                             : Session().SubmitWithAttachments(input, attachmentIds);
             }
             catch (const std::exception& error)
             {
@@ -874,9 +1056,12 @@ void ReviaWindow::SendMessage(const bool voiceInput)
                 {
                     if (epoch != sessionUiEpoch.load() || shuttingDown.load())
                         return;
+                    chatTurnInFlight = false;
                     PresentSessionResult(result);
+                    RenderChat();
                     sendButton->setEnabled(!result.shouldExit && Session().IsStarted());
                     RefreshStateBadge();
+                    RefreshChatSidebar();
                     if (result.shouldExit)
                     {
                         BeginShutdown(revia::core::ExitReason::UserCommand, "the conversation asked Revia to exit");
@@ -1150,7 +1335,7 @@ void ReviaWindow::BeginShutdown(const revia::core::ExitReason reason, const std:
 
 void ReviaWindow::UseVisibleScreen()
 {
-    if (switchingCompanion || shuttingDown.load() || Session().IsBusy())
+    if (switchingCompanion || shuttingDown.load() || Session().IsBusy() || operationRunning.load())
     {
         return;
     }
@@ -1174,19 +1359,18 @@ void ReviaWindow::UseVisibleScreen()
         return;
     }
 
+    if (!ClaimOperationWorker())
+        return;
     messageInput->clear();
     AppendChat("You", instruction, true);
     showMinimized();
     sendButton->setEnabled(false);
     screenActionButton->setEnabled(false);
     stopButton->setEnabled(true);
-    if (operationWorker.joinable())
-    {
-        operationWorker.join();
-    }
     operationWorker = std::jthread(
         [this, epoch = sessionUiEpoch.load(), request = instruction.toStdString()]()
         {
+            const RunningFlag running(operationRunning);
             std::this_thread::sleep_for(std::chrono::milliseconds(400));
             const auto result = RunOrFail<revia::runtime::SessionResult>([this, &request]() { return Session().ActOnScreen(request); },
                 [](const std::string& why)
@@ -1569,6 +1753,18 @@ void ReviaWindow::HandleRuntimeEvent(const revia::runtime::RuntimeEvent& event)
         // Publish ready sentences immediately, independently of audio generation.
         const QString speaker = QString::fromStdString(Session().DisplayName());
         const QString body = QString::fromStdString(event.message);
+        if (event.phase == "Replace")
+        {
+            ReplaceStreamedReply(event.conversationTurnId, speaker, body);
+            CaptureDisplayedAnswer(body, event.stamp, event.audienceRevision, event.conversationTurnId);
+            return;
+        }
+        if (event.conversationTurnId != streamedReplyTurnId)
+        {
+            streamedReplyTurnId = event.conversationTurnId;
+            streamedReplyEntries.clear();
+        }
+        streamedReplyEntries.push_back(chatEntries.size());
         AppendChat(speaker, body);
         CaptureDisplayedAnswer(body, event.stamp, event.audienceRevision, event.conversationTurnId, true);
         return;
@@ -1597,8 +1793,35 @@ void ReviaWindow::HandleRuntimeEvent(const revia::runtime::RuntimeEvent& event)
         // Shown in the transcript rather than collapsed behind "Thought process". These
         // are the questions Revia put to herself on a hard turn, and the point of them is
         // that the user sees what she was actually wondering before the answer arrives.
-        AppendWorkEntry(
-            EntryKind::SelfInquiry, QString::fromStdString(event.message), QString::fromStdString(event.detail), event.turnId, 0);
+        const QString message = QString::fromStdString(event.message);
+        const QString phase = QString::fromStdString(event.phase);
+        if (event.turnId != 0)
+        {
+            // Streamed thinking arrives as many events for one turn and updates a single
+            // entry in place: a message that extends the shown text replaces it (a
+            // snapshot), anything else is appended (a delta), and a new phase of the same
+            // turn starts a new paragraph.
+            for (std::size_t index = chatEntries.size(); index-- > 0;)
+            {
+                ChatEntry& entry = chatEntries[index];
+                if (entry.kind != EntryKind::SelfInquiry || entry.taskId != event.turnId)
+                    continue;
+                if (entry.phase != phase && !entry.body.isEmpty())
+                    entry.body += QStringLiteral("\n\n") + message;
+                else if (message.startsWith(entry.body))
+                    entry.body = message;
+                else
+                    entry.body += message;
+                if (!event.detail.empty())
+                    entry.reasoning = QString::fromStdString(event.detail);
+                entry.phase = phase;
+                RenderChat();
+                return;
+            }
+        }
+        AppendWorkEntry(EntryKind::SelfInquiry, message, QString::fromStdString(event.detail), event.turnId, 0);
+        if (!chatEntries.empty())
+            chatEntries.back().phase = phase;
         AppendActivity(QStringLiteral("Self-inquiry: ") + QString::fromStdString(event.detail));
         return;
     }
@@ -1945,6 +2168,13 @@ void ReviaWindow::ResetConversationPresentation()
     latestDisplayedAnswer.clear();
     displayedAnswerTarget = {};
     displayedAnswerTurnId = 0;
+    streamedReplyTurnId = 0;
+    streamedReplyEntries.clear();
+    viewingArchivedChat.clear();
+    if (archivedChatBanner)
+        archivedChatBanner->hide();
+    editingLastTurn = false;
+    chatTurnInFlight = false;
     conversationStatus->ResetForCompanion();
     for (const char* name : {"conversationPageScroll", "memoryPageScroll"})
     {
@@ -2027,8 +2257,103 @@ void ReviaWindow::RefreshStateBadge()
 
 void ReviaWindow::AppendChat(const QString& speaker, const QString& message, const bool userMessage, const QString& reasoning)
 {
-    chatEntries.push_back({speaker, message, reasoning, userMessage, false});
+    ChatEntry entry;
+    entry.speaker = speaker;
+    entry.body = message;
+    entry.reasoning = reasoning;
+    entry.userMessage = userMessage;
+    entry.markdown = !userMessage && !speaker.isEmpty() && speaker == QString::fromStdString(Session().DisplayName());
+    chatEntries.push_back(std::move(entry));
+    TrimTranscript();
     RenderChat();
+}
+
+void ReviaWindow::TrimTranscript()
+{
+    if (chatEntries.size() <= MaximumChatEntries)
+        return;
+    const std::size_t dropped = chatEntries.size() - MaximumChatEntries;
+    chatEntries.erase(chatEntries.begin(), chatEntries.begin() + static_cast<std::ptrdiff_t>(dropped));
+    chatEntriesDropped += dropped;
+    std::vector<std::size_t> kept;
+    for (const std::size_t index : streamedReplyEntries)
+        if (index >= dropped)
+            kept.push_back(index - dropped);
+    streamedReplyEntries = std::move(kept);
+}
+
+bool ReviaWindow::EndsMessage(const std::size_t index) const
+{
+    const ChatEntry& entry = chatEntries[index];
+    if (entry.kind != EntryKind::Message || entry.userMessage || entry.speaker.isEmpty() || entry.body.isEmpty())
+        return false;
+    for (std::size_t next = index + 1; next < chatEntries.size(); ++next)
+    {
+        const ChatEntry& following = chatEntries[next];
+        // A blanked fragment or a reasoning-only line belongs to the message around it.
+        if (following.kind == EntryKind::Message && following.speaker.isEmpty() && following.body.isEmpty())
+            continue;
+        return !(following.kind == EntryKind::Message && !following.userMessage && following.speaker == entry.speaker &&
+                 !following.body.isEmpty());
+    }
+    return true;
+}
+
+QString ReviaWindow::MessageText(const std::size_t last) const
+{
+    const QString speaker = chatEntries[last].speaker;
+    QStringList parts;
+    for (std::size_t index = last + 1; index-- > 0;)
+    {
+        const ChatEntry& entry = chatEntries[index];
+        if (entry.kind == EntryKind::Message && entry.speaker.isEmpty() && entry.body.isEmpty())
+            continue;
+        if (entry.kind != EntryKind::Message || entry.userMessage || entry.speaker != speaker)
+            break;
+        parts.prepend(entry.body);
+    }
+    return parts.join(QStringLiteral("\n\n"));
+}
+
+const QString& ReviaWindow::RenderedBody(ChatEntry& entry)
+{
+    if (entry.renderedBody.isNull() || entry.renderedSource != entry.body)
+    {
+        entry.renderedSource = entry.body;
+        entry.renderedBody = entry.markdown ? revia::desktop::RenderUntrustedMarkdown(entry.body) : HtmlParagraph(entry.body);
+    }
+    return entry.renderedBody;
+}
+
+void ReviaWindow::ReplaceStreamedReply(const std::uint64_t conversationTurnId, const QString& speaker, const QString& body)
+{
+    // The first fragment keeps its place and takes the approved text; the rest stop
+    // drawing. Entries are blanked rather than removed so every later index stays valid.
+    bool placed = false;
+    if (conversationTurnId != 0 && conversationTurnId == streamedReplyTurnId)
+    {
+        for (const std::size_t index : streamedReplyEntries)
+        {
+            if (index >= chatEntries.size())
+                continue;
+            ChatEntry& entry = chatEntries[index];
+            if (!placed)
+            {
+                entry.body = body;
+                placed = true;
+            }
+            else
+            {
+                entry.speaker.clear();
+                entry.body.clear();
+            }
+        }
+    }
+    streamedReplyEntries.clear();
+    if (placed)
+        RenderChat();
+    else
+        AppendChat(speaker, body);
 }
 
 void ReviaWindow::AppendWorkEntry(const EntryKind kind, const QString& body, const QString& detail, const quint64 taskId, const int round)
@@ -2042,20 +2367,27 @@ void ReviaWindow::AppendWorkEntry(const EntryKind kind, const QString& body, con
     entry.taskId = taskId;
     entry.round = round;
     chatEntries.push_back(std::move(entry));
+    TrimTranscript();
     RenderChat();
 }
 
 void ReviaWindow::RenderChat()
 {
+    // A saved chat stays on screen, scrolled where the reader left it; the live entries
+    // keep collecting and are drawn again on the way back.
+    if (!viewingArchivedChat.empty())
+        return;
     // Rebuilt in full rather than appended, because expanding one entry changes the
     // document and QTextBrowser has no way to toggle a region in place.
     QString html;
     html.reserve(4096);
     QString previousSpeaker;
     bool previousSpeakerWasUser = false;
+    const std::optional<std::size_t> editable = chatTurnInFlight ? std::nullopt : LastUserEntry();
+    const std::optional<std::size_t> regenerable = chatTurnInFlight ? std::nullopt : RegenerableReply();
     for (std::size_t index = 0; index < chatEntries.size(); ++index)
     {
-        const ChatEntry& entry = chatEntries[index];
+        ChatEntry& entry = chatEntries[index];
         const bool working = entry.kind != EntryKind::Message;
         if (working && !showWorkSummaries)
             continue;
@@ -2129,11 +2461,53 @@ void ReviaWindow::RenderChat()
             previousSpeakerWasUser = entry.userMessage;
         }
 
-        if (!entry.body.isEmpty())
+        if (!entry.body.isEmpty() && entry.markdown)
+        {
+            // Block-level HTML from the Markdown conversion, so it cannot sit inside a <p>.
+            html += RenderedBody(entry);
+        }
+        else if (!entry.body.isEmpty())
         {
             html += QStringLiteral("<p style=\"margin-top:0px; margin-bottom:2px; text-align:%1; "
                                    "color:#dce9f7;\">%2</p>")
-                        .arg(align, HtmlParagraph(entry.body));
+                        .arg(align, RenderedBody(entry));
+        }
+        if (!entry.attachments.empty())
+        {
+            // Names and sizes only; a picture's thumbnail is an image resource of the
+            // document, registered under the attachment's id.
+            QString files;
+            for (const AttachmentChip& chip : entry.attachments)
+            {
+                if (!chip.thumbnail.isNull())
+                {
+                    const QUrl source(QStringLiteral("revia-attachment:") + QString::fromStdString(chip.id));
+                    chatHistory->document()->addResource(QTextDocument::ImageResource, source, chip.thumbnail);
+                    files += QStringLiteral("<img src=\"%1\" height=\"48\"> ").arg(source.toString());
+                }
+                files += QStringLiteral("%1 (%2)&nbsp;&nbsp;").arg(chip.name.toHtmlEscaped(), chip.size.toHtmlEscaped());
+            }
+            html += QStringLiteral("<p style=\"margin-top:0px; margin-bottom:2px; text-align:%1; color:#9fb3c8; font-size:11px;\">"
+                                   "Attached: %2</p>")
+                        .arg(align, files);
+        }
+
+        if (EndsMessage(index))
+        {
+            const QString regenerate =
+                regenerable == index ? QStringLiteral("&nbsp;&nbsp;&middot;&nbsp;&nbsp;<a href=\"regen:%1\" style=\"color:#6f8fb0; "
+                                                      "text-decoration:none; font-size:11px;\">Regenerate</a>")
+                                           .arg(QString::number(index))
+                                     : QString();
+            html += QStringLiteral("<p style=\"margin-top:0px; margin-bottom:4px; text-align:left;\">"
+                                   "<a href=\"copy:%1\" style=\"color:#6f8fb0; text-decoration:none; font-size:11px;\">Copy</a>%2</p>")
+                        .arg(QString::number(index), regenerate);
+        }
+        if (editable == index)
+        {
+            html += QStringLiteral("<p style=\"margin-top:0px; margin-bottom:4px; text-align:right;\">"
+                                   "<a href=\"edit:%1\" style=\"color:#6f8fb0; text-decoration:none; font-size:11px;\">Edit</a></p>")
+                        .arg(QString::number(index));
         }
 
         if (entry.reasoning.isEmpty())
@@ -2156,6 +2530,363 @@ void ReviaWindow::RenderChat()
 
     chatHistory->setHtml(html);
     chatHistory->verticalScrollBar()->setValue(chatHistory->verticalScrollBar()->maximum());
+}
+
+std::optional<std::size_t> ReviaWindow::LastUserEntry() const
+{
+    for (std::size_t index = chatEntries.size(); index-- > 0;)
+    {
+        const ChatEntry& entry = chatEntries[index];
+        if (entry.kind == EntryKind::Message && entry.userMessage)
+        {
+            // Typed lines only; an external adapter's line is not the owner's to edit.
+            if (entry.speaker == QStringLiteral("You"))
+                return index;
+            return std::nullopt;
+        }
+    }
+    return std::nullopt;
+}
+
+std::optional<std::size_t> ReviaWindow::RegenerableReply() const
+{
+    const std::optional<std::size_t> user = LastUserEntry();
+    if (!user)
+        return std::nullopt;
+    const QString assistant = QString::fromStdString(Session().DisplayName());
+    // The newest message with a speaker must be Revia's reply to that line: a System
+    // result (a command) or a Memory notice after it means there is nothing to regenerate.
+    for (std::size_t index = chatEntries.size(); index-- > *user + 1;)
+    {
+        const ChatEntry& entry = chatEntries[index];
+        if (entry.kind != EntryKind::Message || entry.speaker.isEmpty() || entry.body.isEmpty())
+            continue;
+        if (entry.userMessage || entry.speaker != assistant || !EndsMessage(index))
+            return std::nullopt;
+        return index;
+    }
+    return std::nullopt;
+}
+
+void ReviaWindow::BeginEditLastTurn()
+{
+    const std::optional<std::size_t> user = LastUserEntry();
+    if (!user)
+        return;
+    editingLastTurn = true;
+    messageInput->setPlainText(chatEntries[*user].body);
+    messageInput->moveCursor(QTextCursor::End);
+    messageInput->setFocus();
+    statusBar()->showMessage(
+        QStringLiteral("Editing your last message. Send replaces it and Revia answers again; Esc cancels."), 15000);
+}
+
+void ReviaWindow::CancelEditLastTurn()
+{
+    editingLastTurn = false;
+    messageInput->clear();
+    statusBar()->showMessage(QStringLiteral("Edit cancelled. Your last message is unchanged."), 5000);
+}
+
+void ReviaWindow::RetryLastExchange(const QString& replacement)
+{
+    const bool editing = !replacement.isEmpty();
+    const std::optional<std::size_t> user = LastUserEntry();
+    if (switchingCompanion || shuttingDown.load() || !user || (!editing && !RegenerableReply()))
+        return;
+    if (!ClaimOperationWorker())
+    {
+        if (editing)
+        {
+            messageInput->setPlainText(replacement);
+            editingLastTurn = true;
+        }
+        return;
+    }
+    CloseArchivedChat();
+    // What is replaced is kept, so a refusal can put the transcript back exactly. The
+    // position is absolute because the transcript may be trimmed while this runs.
+    const std::size_t keepFrom = *user + (editing ? 0 : 1);
+    auto replaced = std::make_shared<std::vector<ChatEntry>>(
+        chatEntries.begin() + static_cast<std::ptrdiff_t>(keepFrom), chatEntries.end());
+    const std::size_t absoluteKeepFrom = keepFrom + chatEntriesDropped;
+    chatEntries.resize(keepFrom);
+    streamedReplyTurnId = 0;
+    streamedReplyEntries.clear();
+    chatTurnInFlight = true;
+    if (editing)
+        AppendChat("You", replacement, true);
+    else
+        RenderChat();
+    sendButton->setEnabled(false);
+    stopButton->setEnabled(true);
+
+    operationWorker = std::jthread(
+        [this, epoch = sessionUiEpoch.load(), text = replacement.toStdString(), editing, replaced, absoluteKeepFrom]()
+        {
+            const RunningFlag running(operationRunning);
+            bool retracted = false;
+            const auto result = RunOrFail<revia::runtime::SessionResult>(
+                [this, &text, editing, &retracted]()
+                { return editing ? Session().ReplaceLastUserTurn(text, retracted) : Session().RegenerateLast(retracted); },
+                [](const std::string& why)
+                {
+                    revia::runtime::SessionResult failed;
+                    failed.succeeded = false;
+                    failed.text = "That reply could not be replaced: " + why;
+                    failed.reason = failed.text;
+                    return failed;
+                });
+            QMetaObject::invokeMethod(
+                this,
+                [this, epoch, result, retracted, editing, replaced, absoluteKeepFrom, text]()
+                {
+                    if (epoch != sessionUiEpoch.load() || shuttingDown.load())
+                        return;
+                    chatTurnInFlight = false;
+                    if (retracted)
+                    {
+                        PresentSessionResult(result);
+                    }
+                    else
+                    {
+                        // The session changed nothing, so neither does the transcript.
+                        if (absoluteKeepFrom >= chatEntriesDropped && absoluteKeepFrom - chatEntriesDropped <= chatEntries.size())
+                        {
+                            const auto at = chatEntries.begin() + static_cast<std::ptrdiff_t>(absoluteKeepFrom - chatEntriesDropped);
+                            const bool newLine = editing && at != chatEntries.end() && at->userMessage &&
+                                                 at->body == QString::fromStdString(text);
+                            const auto insertAt = newLine ? chatEntries.erase(at) : at;
+                            chatEntries.insert(insertAt, replaced->begin(), replaced->end());
+                            streamedReplyTurnId = 0;
+                            streamedReplyEntries.clear();
+                            TrimTranscript();
+                        }
+                        const QString why = QString::fromStdString(result.text.empty() ? result.reason : result.text);
+                        statusBar()->showMessage(why, 12000);
+                        AppendActivity((editing ? QStringLiteral("Edit not applied: ") : QStringLiteral("Regenerate not applied: ")) + why);
+                    }
+                    RenderChat();
+                    sendButton->setEnabled(Session().IsStarted());
+                    RefreshStateBadge();
+                    RefreshChatSidebar();
+                    messageInput->setFocus();
+                },
+                Qt::QueuedConnection);
+        });
+}
+
+void ReviaWindow::BuildChatSidebar()
+{
+    ChatSessionControls controls;
+    controls.list = [this](const std::string& query, std::string& error) { return Session().BrowseConversations(query, 200, error); };
+    controls.current = [this]() { return Session().CurrentConversationId(); };
+    controls.startNew = [this](std::string& error) { return StartNewChat(error); };
+    controls.rename = [this](const std::string& id, const std::string& title, std::string& error)
+    { return Session().RenameConversation(id, title, error); };
+    controls.remove = [this](const std::string& id, std::string& error) { return DeleteChat(id, error); };
+    controls.exportText = [this](const std::string& id, const bool json, std::string& text, std::string& error)
+    { return Session().ExportConversation(id, json, text, error); };
+    controls.open = [this](const std::string& id) { OpenArchivedChat(id); };
+
+    // The transcript moves into a row beside the chat list; the composer stays full width.
+    auto* body = new QWidget(ui->chatPage);
+    body->setObjectName("chatBody");
+    auto* row = new QHBoxLayout(body);
+    row->setContentsMargins(0, 0, 0, 0);
+    row->setSpacing(10);
+    chatSessionsPanel = new ChatSessionsPanel(std::move(controls), body);
+    chatSessionsPanel->setFixedWidth(236);
+    row->addWidget(chatSessionsPanel);
+    auto* column = new QWidget(body);
+    auto* columnLayout = new QVBoxLayout(column);
+    columnLayout->setContentsMargins(0, 0, 0, 0);
+    columnLayout->setSpacing(6);
+    archivedChatBanner = new QWidget(column);
+    archivedChatBanner->setObjectName("archivedChatBanner");
+    archivedChatBanner->setAttribute(Qt::WA_StyledBackground, true);
+    auto* bannerLayout = new QHBoxLayout(archivedChatBanner);
+    bannerLayout->setContentsMargins(10, 6, 6, 6);
+    archivedChatLabel = new QLabel(archivedChatBanner);
+    archivedChatLabel->setObjectName("archivedChatLabel");
+    archivedChatLabel->setWordWrap(true);
+    bannerLayout->addWidget(archivedChatLabel, 1);
+    continueChatButton = new QPushButton(QStringLiteral("Continue this chat"), archivedChatBanner);
+    continueChatButton->setObjectName("continueChatButton");
+    continueChatButton->setToolTip(QStringLiteral("Make this the current chat. Revia gets back only your own turns from it."));
+    bannerLayout->addWidget(continueChatButton);
+    auto* back = new QPushButton(QStringLiteral("Back to current chat"), archivedChatBanner);
+    back->setObjectName("backToChatButton");
+    bannerLayout->addWidget(back);
+    archivedChatBanner->hide();
+    const int at = ui->chatLayout->indexOf(chatHistory);
+    ui->chatLayout->removeWidget(chatHistory);
+    columnLayout->addWidget(archivedChatBanner);
+    columnLayout->addWidget(chatHistory, 1);
+    row->addWidget(column, 1);
+    ui->chatLayout->insertWidget(at, body, 1);
+    connect(continueChatButton, &QPushButton::clicked, this, [this]() { ContinueArchivedChat(); });
+    connect(back, &QPushButton::clicked, this, [this]() { CloseArchivedChat(); });
+
+    chatSidebarToggle = new QPushButton(QStringLiteral("Chats"), ui->chatPage);
+    chatSidebarToggle->setObjectName("chatSidebarToggle");
+    chatSidebarToggle->setCheckable(true);
+    chatSidebarToggle->setToolTip(QStringLiteral("Show or hide the list of chats"));
+    ui->chatButtonLayout->insertWidget(0, chatSidebarToggle);
+    chatSidebarWanted = QSettings().value("chat/sidebarVisible", true).toBool();
+    chatSidebarToggle->setChecked(chatSidebarWanted);
+    connect(chatSidebarToggle, &QPushButton::toggled, this,
+        [this](const bool shown)
+        {
+            chatSidebarWanted = shown;
+            QSettings().setValue("chat/sidebarVisible", shown);
+            ApplyChatSidebarVisibility();
+            RefreshChatSidebar();
+        });
+    ApplyChatSidebarVisibility();
+    chatSessionsPanel->Refresh();
+}
+
+void ReviaWindow::ApplyChatSidebarVisibility()
+{
+    // On a narrow window the transcript needs the width more than the list does.
+    if (chatSessionsPanel)
+        chatSessionsPanel->setVisible(chatSidebarWanted && width() >= 900);
+}
+
+void ReviaWindow::RefreshChatSidebar()
+{
+    if (chatSessionsPanel && chatSessionsPanel->isVisible())
+        chatSessionsPanel->Refresh();
+}
+
+void ReviaWindow::ClearTranscript()
+{
+    chatEntries.clear();
+    streamedReplyTurnId = 0;
+    streamedReplyEntries.clear();
+    pendingUtterances.clear();
+    pendingSpeechTimer->stop();
+    RenderChat();
+}
+
+bool ReviaWindow::StartNewChat(std::string& outError)
+{
+    if (operationRunning.load())
+    {
+        outError = "Revia is still working on the previous request. Start a new chat once she has answered.";
+        return false;
+    }
+    if (!Session().StartNewConversation(outError))
+        return false;
+    CloseArchivedChat();
+    ClearTranscript();
+    messageInput->setFocus();
+    return true;
+}
+
+bool ReviaWindow::DeleteChat(const std::string& id, std::string& outError)
+{
+    const bool current = id == Session().CurrentConversationId();
+    if (current && operationRunning.load())
+    {
+        outError = "Revia is still working on the previous request. Delete this chat once she has answered.";
+        return false;
+    }
+    if (!Session().DeleteConversation(id, outError))
+        return false;
+    if (viewingArchivedChat == id)
+        CloseArchivedChat();
+    if (current)
+        ClearTranscript();
+    return true;
+}
+
+void ReviaWindow::OpenArchivedChat(const std::string& id)
+{
+    if (id.empty() || id == Session().CurrentConversationId())
+    {
+        CloseArchivedChat();
+        return;
+    }
+    std::string error;
+    const std::vector<revia::memory::ArchivedTurn> turns = Session().ConversationTranscript(id, error);
+    if (!error.empty())
+    {
+        chatSessionsPanel->SetStatus(QString::fromStdString(error));
+        return;
+    }
+    // Reply text from the archive is as untrusted as it was live.
+    const QString assistant = QString::fromStdString(Session().DisplayName());
+    QString html;
+    for (const revia::memory::ArchivedTurn& turn : turns)
+    {
+        const bool user = turn.role == "user";
+        html += QStringLiteral("<p style=\"margin-top:8px; margin-bottom:2px; text-align:%1;\"><b><span style=\"color:%2;\">%3</span></b></p>")
+                    .arg(user ? QStringLiteral("right") : QStringLiteral("left"), user ? QStringLiteral("#9dd7ff") : QStringLiteral("#70e0ca"),
+                        (user ? QStringLiteral("You") : assistant).toHtmlEscaped());
+        const QString body = QString::fromStdString(turn.content);
+        html += user ? QStringLiteral("<p style=\"margin-top:0px; margin-bottom:2px; text-align:right; color:#dce9f7;\">%1</p>")
+                           .arg(HtmlParagraph(body))
+                     : revia::desktop::RenderUntrustedMarkdown(body);
+    }
+    if (turns.empty())
+        html = QStringLiteral("<p style=\"color:#93a4bd;\">Nothing from this chat was kept in the archive.</p>");
+    viewingArchivedChat = id;
+    archivedChatLabel->setText(QStringLiteral("Reading a saved chat. It is not part of the current conversation."));
+    continueChatButton->setEnabled(!turns.empty());
+    archivedChatBanner->show();
+    chatHistory->setHtml(html);
+    chatHistory->verticalScrollBar()->setValue(0);
+}
+
+void ReviaWindow::CloseArchivedChat()
+{
+    if (viewingArchivedChat.empty())
+        return;
+    viewingArchivedChat.clear();
+    archivedChatBanner->hide();
+    RenderChat();
+}
+
+void ReviaWindow::ContinueArchivedChat()
+{
+    const std::string id = viewingArchivedChat;
+    if (id.empty())
+        return;
+    if (operationRunning.load())
+    {
+        archivedChatLabel->setText(QStringLiteral("Revia is still working on the previous request. Continue once she has answered."));
+        return;
+    }
+    std::string error;
+    if (!Session().ContinueConversation(id, error))
+    {
+        archivedChatLabel->setText(QString::fromStdString(error));
+        return;
+    }
+    // The whole saved chat is shown; Revia's working context holds only the current
+    // speaker's own turns from it.
+    const std::vector<revia::memory::ArchivedTurn> turns = Session().ConversationTranscript(id, error);
+    viewingArchivedChat.clear();
+    archivedChatBanner->hide();
+    chatEntries.clear();
+    streamedReplyTurnId = 0;
+    streamedReplyEntries.clear();
+    const QString assistant = QString::fromStdString(Session().DisplayName());
+    for (const revia::memory::ArchivedTurn& turn : turns)
+    {
+        ChatEntry entry;
+        entry.userMessage = turn.role == "user";
+        entry.speaker = entry.userMessage ? QStringLiteral("You") : assistant;
+        entry.body = QString::fromStdString(turn.content);
+        entry.markdown = !entry.userMessage;
+        chatEntries.push_back(std::move(entry));
+    }
+    TrimTranscript();
+    RenderChat();
+    RefreshChatSidebar();
+    messageInput->setFocus();
 }
 
 void ReviaWindow::AppendComponentActivity(const revia::runtime::RuntimeEvent& event, const QString& message)
@@ -2526,9 +3257,10 @@ revia::actions::ConfirmationChoice ReviaWindow::ConfirmAction(
         QPushButton* everything = prompt.addButton("Allow for this whole task", QMessageBox::AcceptRole);
         QPushButton* refuse = prompt.addButton("No", QMessageBox::RejectRole);
         everything->setToolTip(wholeTask ? "Approve the task described above. Work outside its scope stops; approval ends with the task."
-                                         : "Stops asking for the rest of this one task, for work no riskier than this. "
-                                           "Anything riskier still asks, and so does anything that sends, buys or "
-                                           "deletes. It is forgotten when the task ends and changes no permission.");
+                                         : "Stops asking for the rest of this one task, for this same kind of action in "
+                                           "this same application, no riskier than this. A different kind of action asks "
+                                           "again, and so does anything that sends, buys, deletes or opens a file with an "
+                                           "application. It is forgotten when the task ends and changes no permission.");
         prompt.setDefaultButton(refuse);
         prompt.setEscapeButton(refuse);
         if (!RunAdmittedQuestion(prompt, admitted))
@@ -2578,4 +3310,185 @@ QIcon ReviaWindow::CreateReviaIcon()
     painter.setPen(QColor("#70e0ca"));
     painter.drawText(image.rect(), Qt::AlignCenter, "R");
     return QIcon(image);
+}
+
+
+void ReviaWindow::BuildAttachmentControls()
+{
+    attachmentTray = new AttachmentTray([this](const std::string& id) { RemoveAttachmentChip(id); }, ui->chatPage);
+    ui->chatLayout->insertWidget(ui->chatLayout->indexOf(messageInput), attachmentTray);
+    attachButton = new QPushButton(QStringLiteral("Attach"), ui->chatPage);
+    attachButton->setObjectName(QStringLiteral("attachButton"));
+    attachButton->setToolTip(QStringLiteral("Attach pictures, PDF, Word (.docx) or text files. You can also drag files onto the chat or "
+                                            "paste a picture. Files stay on this computer."));
+    documentsButton = new QPushButton(QStringLiteral("Documents"), ui->chatPage);
+    documentsButton->setObjectName(QStringLiteral("documentsButton"));
+    documentsButton->setToolTip(QStringLiteral("See, open or forget the files you have attached."));
+    ui->chatButtonLayout->insertWidget(2, attachButton);
+    ui->chatButtonLayout->insertWidget(3, documentsButton);
+    connect(attachButton, &QPushButton::clicked, this, [this]() { ChooseAttachments(); });
+    connect(documentsButton, &QPushButton::clicked, this, [this]() { ShowDocuments(); });
+    // Drops land on the viewports: QPlainTextEdit and QTextBrowser deliver drag events there.
+    messageInput->viewport()->installEventFilter(this);
+    chatHistory->viewport()->installEventFilter(this);
+    messageInput->viewport()->setAcceptDrops(true);
+    chatHistory->viewport()->setAcceptDrops(true);
+}
+
+void ReviaWindow::ChooseAttachments()
+{
+    const QStringList paths = QFileDialog::getOpenFileNames(this, QStringLiteral("Attach files"), QString(),
+        QStringLiteral("Supported files (*.png *.jpg *.jpeg *.gif *.webp *.bmp *.pdf *.docx *.txt *.md *.csv *.tsv *.json *.log *.xml "
+                       "*.yaml *.yml *.toml *.ini *.c *.cc *.cpp *.h *.hpp *.cs *.py *.js *.ts *.java *.rs *.go *.html *.css *.sql "
+                       "*.ps1 *.sh);;All files (*)"));
+    AttachPaths(paths);
+}
+
+void ReviaWindow::AttachPaths(const QStringList& paths)
+{
+    if (paths.isEmpty() || shuttingDown.load() || switchingCompanion)
+        return;
+    const std::size_t limit = revia::attachments::AttachmentLimits{}.maxAttachmentsPerTurn;
+    if (attachmentTray->Chips().size() + static_cast<std::size_t>(paths.size()) > limit)
+    {
+        attachmentTray->SetStatus(QStringLiteral("A message can carry at most %1 files.").arg(limit));
+        return;
+    }
+    if (attachmentRunning.exchange(true))
+    {
+        attachmentTray->SetStatus(QStringLiteral("Still reading the previous attachment. Try again in a moment."));
+        return;
+    }
+    // The previous worker has finished its body, so this join does not wait on work.
+    if (attachmentWorker.joinable())
+        attachmentWorker.join();
+    attachmentTray->SetStatus(paths.size() == 1 ? QStringLiteral("Reading %1...").arg(QFileInfo(paths.front()).fileName())
+                                                : QStringLiteral("Reading %1 files...").arg(paths.size()));
+    attachmentWorker = std::jthread(
+        [this, epoch = sessionUiEpoch.load(), paths]()
+        {
+            const RunningFlag running(attachmentRunning);
+            std::vector<AttachmentOutcome> outcomes;
+            for (const QString& path : paths)
+            {
+                try
+                {
+                    const std::filesystem::path native(path.toStdU16String());
+                    // Pictures are decoded and shrunk by Qt here; everything else is read by
+                    // the session's own intake. Neither opens the file in another program.
+                    std::optional<PreparedImage> prepared;
+                    if (LooksLikeImageFile(path))
+                        prepared = PrepareImageFileForAttachment(path, static_cast<int>(revia::attachments::DesktopImageSide));
+                    if (prepared && !prepared->png.isEmpty())
+                        outcomes.push_back(OutcomeOf(
+                            Session().AttachImageData(QFileInfo(path).fileName().toStdString(), prepared->png.toStdString()),
+                            prepared->thumbnail));
+                    else
+                        outcomes.push_back(OutcomeOf(Session().AttachFile(native), QImage()));
+                }
+                catch (const std::exception& error)
+                {
+                    AttachmentOutcome failed;
+                    failed.message = QStringLiteral("\"%1\" could not be attached: %2").arg(QFileInfo(path).fileName(), error.what());
+                    outcomes.push_back(failed);
+                }
+            }
+            QMetaObject::invokeMethod(
+                this,
+                [this, epoch, outcomes]()
+                {
+                    if (epoch != sessionUiEpoch.load() || shuttingDown.load())
+                        return;
+                    QStringList refused;
+                    for (const AttachmentOutcome& outcome : outcomes)
+                    {
+                        if (outcome.accepted)
+                            attachmentTray->Add(outcome.chip);
+                        else
+                            refused << outcome.message;
+                    }
+                    attachmentTray->SetStatus(refused.join(QStringLiteral(" ")));
+                    messageInput->setFocus();
+                },
+                Qt::QueuedConnection);
+        });
+}
+
+void ReviaWindow::AttachPastedImage(const QImage& image)
+{
+    if (attachmentTray->Chips().size() >= revia::attachments::AttachmentLimits{}.maxAttachmentsPerTurn)
+    {
+        attachmentTray->SetStatus(QStringLiteral("A message can carry at most %1 files.")
+                                      .arg(revia::attachments::AttachmentLimits{}.maxAttachmentsPerTurn));
+        return;
+    }
+    const PreparedImage prepared = PrepareImageForAttachment(image, static_cast<int>(revia::attachments::DesktopImageSide));
+    if (prepared.png.isEmpty())
+    {
+        attachmentTray->SetStatus(prepared.error);
+        return;
+    }
+    const QString name = QStringLiteral("pasted-image-%1.png").arg(QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd-HHmmss")));
+    const AttachmentOutcome outcome = OutcomeOf(Session().AttachImageData(name.toStdString(), prepared.png.toStdString()), prepared.thumbnail);
+    if (outcome.accepted)
+        attachmentTray->Add(outcome.chip);
+    attachmentTray->SetStatus(outcome.accepted ? QString() : outcome.message);
+}
+
+void ReviaWindow::RemoveAttachmentChip(const std::string& id)
+{
+    (void)Session().RemoveAttachment(id);
+    attachmentTray->Remove(id);
+    attachmentTray->SetStatus(QString());
+}
+
+bool ReviaWindow::HandleAttachmentDrag(QEvent* event)
+{
+    if (event->type() == QEvent::DragEnter || event->type() == QEvent::DragMove)
+    {
+        auto* drag = static_cast<QDragMoveEvent*>(event);
+        const QMimeData* data = drag->mimeData();
+        if (!LocalFiles(data).isEmpty() || (data && data->hasImage()))
+        {
+            drag->acceptProposedAction();
+            return true;
+        }
+        return false;
+    }
+    if (event->type() == QEvent::Drop)
+    {
+        auto* drop = static_cast<QDropEvent*>(event);
+        const QMimeData* data = drop->mimeData();
+        const QStringList files = LocalFiles(data);
+        if (!files.isEmpty())
+        {
+            drop->acceptProposedAction();
+            AttachPaths(files);
+            return true;
+        }
+        if (data && data->hasImage())
+        {
+            drop->acceptProposedAction();
+            AttachPastedImage(qvariant_cast<QImage>(data->imageData()));
+            return true;
+        }
+    }
+    return false;
+}
+
+void ReviaWindow::ShowDocuments()
+{
+    if (!documentsDialog)
+    {
+        DocumentControls controls;
+        controls.list = [this]() { return Session().Documents(); };
+        controls.preview = [this](const std::string& id) { return Session().DocumentPreview(id); };
+        controls.forget = [this](const std::string& id, std::string& error) { return Session().ForgetDocument(id, error); };
+        documentsDialog = new DocumentsDialog(std::move(controls), this);
+        documentsDialog->setAttribute(Qt::WA_DeleteOnClose);
+    }
+    documentsDialog->Refresh();
+    documentsDialog->show();
+    documentsDialog->raise();
+    documentsDialog->activateWindow();
 }

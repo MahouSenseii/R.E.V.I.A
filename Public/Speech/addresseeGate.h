@@ -48,6 +48,10 @@ class AddresseeGate
     void NoteExchange(Clock::time_point now);
     void NoteExchange(
         Clock::time_point now, const std::string& participantId, const std::string& audienceId, std::uint64_t audienceRevision);
+    // She is still answering: keeps an open follow-up window open for the same person and
+    // audience. Speech events carry no speaker, so this must not replace who the window
+    // belongs to, and it does not reopen a window that has already closed.
+    void RefreshExchange(Clock::time_point now);
     void Reset();
 
   private:

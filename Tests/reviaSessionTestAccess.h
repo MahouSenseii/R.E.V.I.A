@@ -46,6 +46,16 @@ struct ReviaSessionTestAccess
         session.router.ApplyLLMSettings(session.settings.llm, embedding, session.profile);
     }
     static void MarkStudioStarted(ReviaSession& session, bool value) { session.started.store(value); }
+    static attachments::AttachmentLibrary& Attachments(ReviaSession& session) { return session.Attachments(); }
+    // Main with or without its vision projector, and no embedding server, so document
+    // search is lexical and deterministic.
+    static void ConfigureAttachments(ReviaSession& session, bool vision)
+    {
+        session.settings.llm.bVisionEnabled = vision;
+        session.settings.embedding.bEnabled = false;
+        session.router.ApplyLLMSettings(session.settings.llm, session.fastLlmSettings, session.expertLlmSettings, embeddingSettings{},
+            aiProfile{}, true, true);
+    }
     static void UseVirtualMachine(ReviaSession& session, std::shared_ptr<workspace::VirtualMachineRuntime> machine)
     { session.virtualMachine = std::move(machine); }
     static void StartVirtualMachine(ReviaSession& session)
@@ -100,6 +110,21 @@ struct ReviaSessionTestAccess
     static agents::NodeResult RunAgentProvider(ReviaSession& session, const agents::NodeRequest& request)
     {
         return session.AgentProvider(AgentProviderMode::Local)(request, {});
+    }
+    static void OpenConversationArchive(ReviaSession& session, const std::filesystem::path& path, const std::string& sessionId)
+    {
+        std::lock_guard lock(session.operationMutex);
+        session.settings.conversation.bArchiveEnabled = true;
+        session.conversationArchive = memory::ConversationArchive(path.string());
+        std::string error;
+        tests::Check(session.conversationArchive.BeginSession(sessionId, error), error);
+        std::lock_guard idLock(session.conversationIdMutex);
+        session.conversationSessionId = sessionId;
+    }
+    static std::vector<conversationMessage> WorkingContext(ReviaSession& session)
+    {
+        std::lock_guard lock(session.operationMutex);
+        return session.context.GetRecentMessages();
     }
     static void ConfigureStartupBrains(ReviaSession& session, int port, bool fastWarm = true, bool expertWarm = true)
     {
@@ -190,6 +215,9 @@ struct ReviaSessionTestAccess
 
     static float PendingDevelopment(ReviaSession& session, identity::Trait trait)
     { return session.developmentEngine.PendingEvidence(trait); }
+    static void RecordRelationship(ReviaSession& session, const std::string& entityId, const std::string& input,
+        const std::string& reply, const bool succeeded)
+    { session.RecordRelationshipEvidence(entityId, input, reply, succeeded); }
 
     static void SampleLoad(ReviaSession& session, const resources::UsageSnapshot& usage)
     { session.UpdateResourceLoad(usage); }

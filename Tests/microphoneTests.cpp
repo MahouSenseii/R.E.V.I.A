@@ -3,6 +3,9 @@
 #include "Speech/speechRecognitionService.h"
 #include "Speech/transcriptRouting.h"
 
+#include <httplib.h>
+#include <nlohmann/json.hpp>
+
 #include <iostream>
 #include <string>
 #include <string_view>
@@ -50,6 +53,8 @@ using revia::speech::SelectMicrophone;
 using revia::speech::SpeechRecognitionService;
 using revia::speech::TranscriptRouting;
 using revia::speech::DecideTranscriptRouting;
+using revia::speech::ProbeWhisperServer;
+using revia::speech::WhisperServerAnswer;
 
 bool Contains(const std::string& haystack, const std::string& needle)
 {
@@ -313,6 +318,60 @@ void TestAnEmptyTranscriptNeverClearsWhatWasTyped()
     }
 }
 
+// NET-5. Readiness used to be any HTTP 200 on GET /, so a program that took the
+// whisper.cpp port first heard the microphone and had its transcripts taken as the
+// owner's words. Each case is a real local HTTP server standing in for one listener.
+void TestOnlyTheServerReviaStartedIsTrusted()
+{
+    const std::string prefix = "/0123456789abcdef0123456789abcdef";
+    const auto serve = [](httplib::Server& server)
+    {
+        const int port = server.bind_to_any_port("127.0.0.1");
+        Check(port > 0, "The fixture server could not bind.");
+        return std::pair<int, std::thread>(port, std::thread([&server] { server.listen_after_bind(); }));
+    };
+    const auto health = [](const std::string& status, const int code)
+    {
+        return [status, code](const httplib::Request&, httplib::Response& response)
+        {
+            response.status = code;
+            response.set_content(nlohmann::json{{"status", status}}.dump(), "application/json");
+        };
+    };
+
+    // The genuine shape: routes only under the prefix, healthy once loaded.
+    httplib::Server genuine;
+    genuine.Get(prefix + "/health", health("ok", 200));
+    auto [genuinePort, genuineThread] = serve(genuine);
+    Check(ProbeWhisperServer("127.0.0.1", genuinePort, prefix, [] { return true; }) == WhisperServerAnswer::Ours,
+        "The server Revia started, owning its socket, was not trusted.");
+    Check(ProbeWhisperServer("127.0.0.1", genuinePort, prefix, [] { return false; }) == WhisperServerAnswer::Foreign,
+        "A listener owned by another process was trusted because it answered correctly.");
+    Check(ProbeWhisperServer("127.0.0.1", genuinePort, "/ffffffffffffffffffffffffffffffff", [] { return true; }) ==
+            WhisperServerAnswer::NotReady,
+        "A server started with a different request path was trusted.");
+    genuine.stop();
+    genuineThread.join();
+
+    // Still loading: upstream answers 503 until the model is in memory.
+    httplib::Server loading;
+    loading.Get(prefix + "/health", health("loading model", 503));
+    auto [loadingPort, loadingThread] = serve(loading);
+    Check(ProbeWhisperServer("127.0.0.1", loadingPort, prefix, [] { return true; }) == WhisperServerAnswer::NotReady,
+        "A server still loading its model was reported ready.");
+    loading.stop();
+    loadingThread.join();
+
+    // A squatter that says yes to every path, including the old readiness probe.
+    httplib::Server squatter;
+    squatter.Get(R"(/.*)", health("ok", 200));
+    auto [squatterPort, squatterThread] = serve(squatter);
+    Check(ProbeWhisperServer("127.0.0.1", squatterPort, prefix, [] { return true; }) == WhisperServerAnswer::Foreign,
+        "A listener answering every path was trusted with microphone audio.");
+    squatter.stop();
+    squatterThread.join();
+}
+
 } // namespace
 
 void RunMicrophoneTests()
@@ -332,6 +391,7 @@ void RunMicrophoneTests()
     TestAutoSendSendsOnlyWhenEnabledAndFree();
     TestHandsFreeDoesNotAlsoFillTheBox();
     TestAnEmptyTranscriptNeverClearsWhatWasTyped();
+    TestOnlyTheServerReviaStartedIsTrusted();
     std::cout << "Listening refuses with a reason, never latches the microphone off "
                  "after a refusal, and resolves a saved\nmicrophone by name -- falling "
                  "back to the default only out loud.\n";

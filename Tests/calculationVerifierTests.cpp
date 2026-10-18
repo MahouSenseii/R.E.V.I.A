@@ -39,6 +39,14 @@ void RunCalculationVerifierTests()
     ExpectValue("1 m + 2 m", "3", "m");
     ExpectValue(std::string(32, '(') + "1" + std::string(32, ')'), "1");
     ExpectValue(std::string(128, '-') + "1", "1");
+    // Powers, for the chat calculator tool: Python's binding and associativity.
+    ExpectValue("2 ** 10", "1024");
+    ExpectValue("-2 ** 2", "-4");
+    ExpectValue("2 ** -1", "0.5");
+    ExpectValue("2 ** 3 ** 2", "512");
+    ExpectValue("(1 + 2) ** 2 * 2", "18");
+    for (const auto expression : {"(-8) ** 0.5", "0 ** -1", "2 m ** 2", "2 ** 1 s", "10 ** 400", "2 *** 3", "2 ** ", "** 2"})
+        ExpectRefusal(expression);
     for (const auto expression : {"1 / 0", "1e309", "1e308 * 10", "nan", "sqrt(4)", "1 s + 1 m", "2 m * 3 m", "1 / 2 s", "2 m / 1 s",
              "1;system(1)", "1 2", "()", "1 +", "1e", ".", "1 m + 1", "1 m / 0 m", "1e308 km", "2 m s"})
     {

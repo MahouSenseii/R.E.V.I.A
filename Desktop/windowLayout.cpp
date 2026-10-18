@@ -52,6 +52,7 @@ void ReviaWindow::ApplyResponsiveLayout()
         return;
     if (navigationSidebar)
         navigationSidebar->SetNarrow(width() < 1000);
+    ApplyChatSidebarVisibility();
     const int contentWidth = width() - ui->rootLayout->contentsMargins().left() - ui->rootLayout->contentsMargins().right() -
                              (navigationSidebar ? navigationSidebar->width() + 16 : 0);
     const bool compact = contentWidth < 850;

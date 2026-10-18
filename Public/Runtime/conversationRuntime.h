@@ -9,6 +9,7 @@
 #include "Agents/turnCoordinator.h"
 #include "Agents/conversationQualityMonitor.h"
 #include "Agents/selfInquiry.h"
+#include "Agents/toolRegistry.h"
 #include "Core/conversationContext.h"
 #include "Core/logger.h"
 #include "Core/messageRouter.h"
@@ -50,6 +51,8 @@ struct RoutingInputs
     // The runtime already fetched research for this turn.
     bool groundingAlreadyRetrieved = false;
     std::size_t recentContextCharacters = 0;
+    // Pictures attached to the newest user message.
+    std::size_t attachedImageCount = 0;
     std::optional<intelligence::IntelligenceTier> previousDeliveredTier;
     bool previousTurnWasUnreliable = false;
 };
@@ -119,6 +122,22 @@ public:
     // answered "can you sing?" from the model's guess -- that she is text and cannot --
     // while a folder of songs sat ready to play.
     using SongListProvider = std::function<std::string()>;
+    // The tools the session owns for one private turn -- file reads through ActionRuntime
+    // with its confirmation handler, the reminder book, the image provider -- and the
+    // settings that decide whether each is offered. The runtime adds the tools whose
+    // owners it already calls (web search, memory, the archive, the calculator).
+    struct ChatToolGrant
+    {
+        agents::ToolExecutors executors;
+        std::vector<std::filesystem::path> approvedRoots;
+        bool archiveEnabled = false;
+        bool documentsAvailable = false;
+        bool remindersAvailable = false;
+        bool imageGenerationEnabled = false;
+    };
+    // Called with the turn's admission and stop token, so every executor it returns is
+    // bound to that turn and no other.
+    using ChatToolProvider = std::function<ChatToolGrant(const std::function<bool()>& admission, std::stop_token stopToken)>;
 
     ConversationRuntime(messageRouter& router, conversationContext& context, agents::TurnCoordinator& coordinator,
         speech::SpeechService& speech, AffectController& affect, emotion::EmotionRuntime& emotions, RuntimeEventBus& events, logger& log,
@@ -135,6 +154,8 @@ public:
 
     // Set once at startup, before the first turn.
     void SetSongListProvider(SongListProvider provider);
+    // Set once at startup. Without it, chat still offers the runtime-owned tools.
+    void SetChatToolProvider(ChatToolProvider provider);
     void ResetParticipantContinuity();
     void SetPrivateAdmissionFactory(std::function<std::function<bool()>()> factory);
     using InvestigationExecutorFactory = std::function<agents::CheckExecutor(std::function<bool()>, std::stop_token)>;
@@ -156,7 +177,7 @@ public:
         const identity::AudienceContext& audience, const identity::RelationshipState& relationship, const aiProfile& profile,
         bool llmAvailable, bool shouldSpeak, std::stop_token stopToken = {}, std::function<bool()> admission = {},
         const std::string& turnReference = {}, std::chrono::steady_clock::time_point acceptedAt = {},
-        const memory::MemoryScope& memoryScope = {});
+        const memory::MemoryScope& memoryScope = {}, std::vector<conversationImage> turnImages = {});
 
     // Guest overload: the caller owns an isolated router with PublicGuestProfile(),
     // never the desktop router. No instance state, provider, logger or event bus is
@@ -202,6 +223,9 @@ private:
         std::chrono::steady_clock::time_point acceptedAt{};
         std::uint64_t audienceRevision = 0;
         memory::MemoryScope memoryScope;
+        // Set when the user explicitly asked the cloud model for this turn, with the
+        // per-turn sharing flags they gave.
+        std::optional<llm::cloud::CloudAsk> cloudAsk;
     };
 
     // Canonical state and posture for replies, proactive openings and evaluation.
@@ -245,11 +269,19 @@ private:
         std::uint64_t audienceRevision);
     [[nodiscard]] agents::ResponseFilterContext BuildResponseFilterContext(const std::string& policyInput,
         const std::vector<conversationMessage>& promptContext) const;
+    // `literalOnly` skips the model's word-problem proposal: a turn with the calculator
+    // tool lets the model ask for the arithmetic it needs, and only literal expressions
+    // are still grounded before generation.
     [[nodiscard]] std::string BuildArithmeticGrounding(const std::string& input, const std::vector<conversationMessage>& promptContext,
-        std::stop_token stopToken, const std::function<bool()>& admission = {}) const;
+        std::stop_token stopToken, const std::function<bool()>& admission = {}, bool literalOnly = false) const;
     SessionResult Generate(const std::string& policyInput, const std::vector<conversationMessage>& promptContext, const aiProfile& profile,
         bool llmAvailable, bool shouldSpeak, bool evaluateMemory, bool proactive, const std::string& proactiveInstruction,
         const std::string& precomputedInternetGrounding, std::stop_token stopToken, const TurnPolicy& turnPolicy);
+    // Decides whether this turn may try the optional cloud model and, if so, hands the
+    // router the request with only the private pieces the user opted into.
+    void PrepareCloudTurn(const std::string& policyInput, const aiProfile& profile, const intelligence::IntelligenceDecision& decision,
+        bool proactive, const TurnPolicy& turnPolicy, const agents::ResponseFilterContext& filterContext, std::stop_token stopToken,
+        std::uint64_t turnId);
     void PublishComponent(const std::string& component, const std::string& phase, const std::string& message, double elapsedMilliseconds,
         int queueDepth, std::uint64_t turnId, std::uint64_t audienceRevision = 0) const;
     void PublishInternetActivity(const std::string& phase, const std::string& query, const std::string& provider, const std::string& detail,
@@ -284,6 +316,7 @@ private:
     ConversationRecallHandler conversationRecall;
     AutonomyContextProvider autonomyContextProvider;
     SongListProvider songListProvider;
+    ChatToolProvider chatToolProvider;
     agents::ConversationQualityMonitor qualityMonitor;
     intelligence::HumanizationController humanization;
     intelligence::IntelligenceRouter intelligenceRouter;

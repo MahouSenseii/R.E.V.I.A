@@ -8,6 +8,8 @@
 #include "LLM/responseTypes.h"
 #include "Memory/memoryTypes.h"
 #include "Agents/responseProvenance.h"
+#include <mutex>
+#include <optional>
 #include <string>
 #include <filesystem>
 #include <stop_token>
@@ -15,6 +17,7 @@
 
 #include "LLM/llmService.h"
 #include "LLM/privateMemoryAccess.h"
+#include "LLM/Cloud/cloudChatService.h"
 #include "Intelligence/intelligenceTypes.h"
 #include "Intelligence/modelLifetime.h"
 #include "Intelligence/modelResidencyManager.h"
@@ -27,13 +30,30 @@ public:
     ~messageRouter();
 
     using DeltaHandler = std::function<void(const std::string&)>;
+    // `tools` offers this turn's tool definitions and replays its earlier tool steps. While
+    // it is set, the reasoning handler is kept for the turn's later steps instead of being
+    // used once.
     responseOutput RouteMessage(const std::string& message, const std::vector<conversationMessage>& context, std::stop_token stopToken = {},
         DeltaHandler onDelta = {}, const revia::intelligence::IntelligenceDecision& decision = {},
-        revia::llm::PrivateMemoryAccess memoryAccess = revia::llm::PrivateMemoryAccess::ProfileSetting) const;
+        revia::llm::PrivateMemoryAccess memoryAccess = revia::llm::PrivateMemoryAccess::ProfileSetting,
+        const revia::llm::ToolExchange* tools = nullptr) const;
+    // SetPosture clears the reasoning handler with the rest of the turn's state.
     void SetPosture(std::string posture);
+    using ReasoningHandler = llmService::ReasoningHandler;
+    // Receives this turn's thinking as it streams. Used by the next RouteMessage only.
+    void SetReasoningHandler(ReasoningHandler handler);
     // Set after SetPosture, which clears it: the lines this turn's answer must follow,
     // placed at the end of the prompt rather than in the system message.
     void SetReplyNote(std::string note);
+    // Set after SetPosture, which clears it: asks the next RouteMessage to try the
+    // optional cloud model. An explicit request is answered by the cloud or refused; an
+    // automatic one (a hard turn) falls back to the local route when the cloud says no.
+    void SetCloudTurn(revia::llm::cloud::CloudTurnRequest request);
+    // The cloud backend's own switches and status, for /cloud and the session wiring.
+    [[nodiscard]] revia::llm::cloud::CloudChatService& Cloud()
+    { return cloud; }
+    [[nodiscard]] const revia::llm::cloud::CloudChatService& Cloud() const
+    { return cloud; }
     // The saved memories related to `query`, for work that happens before the reply's
     // own prompt is built -- the self-inquiry.
     std::string RelatedMemories(
@@ -127,4 +147,8 @@ private:
     llmSettings expertConfiguration;
     embeddingSettings embeddingConfiguration;
     mutable revia::intelligence::ModelResidencyManager residency;
+    mutable std::mutex reasoningMutex;
+    mutable ReasoningHandler pendingReasoning;
+    mutable std::optional<revia::llm::cloud::CloudTurnRequest> pendingCloud;
+    revia::llm::cloud::CloudChatService cloud;
 };

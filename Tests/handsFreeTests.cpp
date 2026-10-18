@@ -58,6 +58,34 @@ void TestFollowUpsNeedNoNameButOthersAreIgnored()
         "requireWakeWord=false no longer answers everything it hears.");
 }
 
+// Her own speech keeps the follow-up window open for the person she is answering. It
+// used to stamp the window with a placeholder speaker, so the window closed for the real
+// one as soon as her first phrase ended.
+void TestHerSpeechKeepsTheFollowUpWindowOpen()
+{
+    AddresseeGate gate;
+    const auto start = AddresseeGate::Clock::now();
+    Check(gate.Accept("Revia, read me the build log", start, false, "owner", "private", 3, true), "Speech naming her was ignored.");
+    gate.NoteExchange(start + 2s, "owner", "private", 3);
+    gate.RefreshExchange(start + 6s);
+    Check(gate.Accept("and the warnings too", start + 7s, false, "owner", "private", 3, true),
+        "A follow-up after her first spoken phrase was ignored.");
+    // A long answer keeps the window open phrase by phrase.
+    gate.RefreshExchange(start + 20s);
+    gate.RefreshExchange(start + 35s);
+    Check(gate.Accept("thanks, and the errors", start + 50s, false, "owner", "private", 3, true),
+        "A follow-up shortly after a long spoken answer was ignored.");
+    // It still belongs to that person and that audience only.
+    gate.RefreshExchange(start + 52s);
+    Check(!gate.Accept("what about me", start + 53s, false, "guest", "private", 3, true) &&
+              !gate.Accept("and now", start + 53s, false, "owner", "private", 4, true),
+        "Her speech handed the follow-up window to someone else.");
+    // And speech long after the window closed does not reopen it.
+    gate.RefreshExchange(start + 120s);
+    Check(!gate.Accept("one more thing", start + 121s, false, "owner", "private", 3, true),
+        "Her speech reopened a follow-up window that had already closed.");
+}
+
 revia::speech::RecognitionEvent Heard(const std::string& phase, const std::string& transcript = {})
 {
     revia::speech::RecognitionEvent event{phase, "", transcript};
@@ -114,6 +142,7 @@ void RunHandsFreeTests()
 {
     TestHerNameIsMatchedAsAWholeWord();
     TestFollowUpsNeedNoNameButOthersAreIgnored();
+    TestHerSpeechKeepsTheFollowUpWindowOpen();
     TestVoicesInTheRoomNeitherInterruptNorReachHer();
     TestACallKeepsHerQuiet();
     std::cout << "Hands-free answers only speech meant for Revia; other voices neither reach "

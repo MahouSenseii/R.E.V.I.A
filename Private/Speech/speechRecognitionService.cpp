@@ -1,5 +1,6 @@
 #include "Speech/recognitionSettings.h"
 #include "Speech/speechRecognitionService.h"
+#include "Core/runtimePath.h"
 
 #include <httplib.h>
 #include <nlohmann/json.hpp>
@@ -29,6 +30,60 @@ namespace revia::speech
 
 namespace
 {
+// Where the verified server's full URL, prefix included, is published for local tools
+// such as the Discord voice connector. Removed when the server stops.
+std::filesystem::path ServerEndpointPath()
+{
+    return core::ResolveRuntimeWritePath(std::string("RuntimeData/Speech/whisper-endpoint.json"));
+}
+
+void PublishServerEndpoint(const speechRecognitionSettings& settings, const std::string& requestPath)
+{
+    const std::string host = settings.serverHost.find(':') != std::string::npos ? "[" + settings.serverHost + "]" : settings.serverHost;
+    const std::filesystem::path path = ServerEndpointPath();
+    std::error_code error;
+    std::filesystem::create_directories(path.parent_path(), error);
+    const std::filesystem::path partial = path.string() + ".partial";
+    {
+        std::ofstream output(partial, std::ios::binary | std::ios::trunc);
+        output << nlohmann::json{{"url", "http://" + host + ":" + std::to_string(settings.serverPort) + requestPath}}.dump();
+        if (!output) return;
+    }
+    std::filesystem::rename(partial, path, error);
+}
+
+void WithdrawServerEndpoint()
+{
+    std::error_code error;
+    std::filesystem::remove(ServerEndpointPath(), error);
+}
+} // namespace
+
+WhisperServerAnswer ProbeWhisperServer(
+    const std::string& host, const int port, const std::string& requestPath, const std::function<bool()>& ownsListener)
+{
+    if (requestPath.size() < 2 || requestPath.front() != '/')
+        return WhisperServerAnswer::NotReady;
+    httplib::Client client(host, port);
+    client.set_connection_timeout(1);
+    client.set_read_timeout(1);
+    const auto health = client.Get(requestPath + "/health");
+    if (!health || health->status != 200)
+        return WhisperServerAnswer::NotReady;
+    const nlohmann::json body = nlohmann::json::parse(health->body, nullptr, false);
+    if (!body.is_object() || body.value("status", std::string()) != "ok")
+        return WhisperServerAnswer::NotReady;
+    // whisper-server started with --request-path registers nothing outside the prefix,
+    // so a 200 here is something that answers every path.
+    const auto outside = client.Get("/health");
+    if (outside && outside->status == 200)
+        return WhisperServerAnswer::Foreign;
+    return ownsListener && ownsListener() ? WhisperServerAnswer::Ours : WhisperServerAnswer::Foreign;
+}
+
+namespace
+{
+
 std::filesystem::path CaptureDirectory(const speechRecognitionSettings& settings, std::error_code& error)
 {
     if (!settings.dataDirectory.empty())
@@ -772,6 +827,7 @@ void SpeechRecognitionService::Shutdown()
     Cancel();
     serverProcess.Stop();
     serverReady.store(false);
+    WithdrawServerEndpoint();
     if (handsFreeWorker.joinable())
     {
         handsFreeWorker.join();
@@ -1168,34 +1224,51 @@ bool SpeechRecognitionService::EnsureServerReady(const std::stop_token stopToken
         {
             return false;
         }
+        // A new launch has a new request path, so the published endpoint is renewed
+        // once this one is verified.
+        serverReady.store(false);
         Notify({"Starting", "The persistent whisper.cpp service is loading its model."});
     }
 
+    // An answer on the port is not evidence that the answer is ours: any program can
+    // listen on a loopback port first, and it would then hear the microphone and have
+    // its transcripts taken as the owner's words. Ours answers its health route under
+    // the random prefix it was started with, answers nothing outside it, and on Windows
+    // is the process that owns the listening socket.
+    const std::string requestPath = serverProcess.RequestPath();
+    bool foreignListener = false;
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(configuration.serverStartupTimeoutSeconds);
-    while (!stopToken.stop_requested() && !transcriptionCancelled.load() && std::chrono::steady_clock::now() < deadline)
+    while (!requestPath.empty() && !stopToken.stop_requested() && !transcriptionCancelled.load() &&
+        std::chrono::steady_clock::now() < deadline)
     {
-        httplib::Client client(configuration.serverHost, configuration.serverPort);
-        client.set_connection_timeout(1);
-        client.set_read_timeout(1);
-        if (const auto response = client.Get("/"); response && response->status == 200)
+        const WhisperServerAnswer answer = ProbeWhisperServer(configuration.serverHost, configuration.serverPort, requestPath,
+            [this] { return serverProcess.OwnsListener(configuration.serverPort); });
+        if (answer == WhisperServerAnswer::Ours)
         {
             if (!serverReady.exchange(true))
             {
+                PublishServerEndpoint(configuration, requestPath);
                 Notify({"Ready", "The persistent whisper.cpp model is loaded and ready."});
             }
             return true;
         }
+        foreignListener = foreignListener || answer == WhisperServerAnswer::Foreign;
         if (!serverProcess.IsRunning())
         {
-            outError = "The persistent whisper.cpp service exited while loading.";
+            outError = foreignListener
+                ? "Another program is answering on the whisper.cpp port " + std::to_string(configuration.serverPort) +
+                    "; no audio is sent to it."
+                : "The persistent whisper.cpp service exited while loading.";
             serverReady.store(false);
             return false;
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
-    outError = stopToken.stop_requested() || transcriptionCancelled.load()
-                   ? "Speech transcription was stopped."
-                   : "The persistent whisper.cpp service did not become ready before its startup timeout.";
+    outError = stopToken.stop_requested() || transcriptionCancelled.load() ? "Speech transcription was stopped."
+        : requestPath.empty() ? "The persistent whisper.cpp service has no request path."
+        : foreignListener ? "Another program is answering on the whisper.cpp port " + std::to_string(configuration.serverPort) +
+              "; no audio is sent to it."
+                          : "The persistent whisper.cpp service did not become ready before its startup timeout.";
     serverReady.store(false);
     return false;
 }
@@ -1226,7 +1299,13 @@ std::optional<std::string> SpeechRecognitionService::TranscribeWithServer(
     client.set_write_timeout(10);
     const httplib::MultipartFormDataItems items{{"file", wave, wavePath.filename().string(), "audio/wav"},
         {"response_format", "json", {}, {}}, {"language", configuration.language, {}, {}}};
-    const auto response = client.Post("/inference", items);
+    const std::string requestPath = serverProcess.RequestPath();
+    if (requestPath.empty())
+    {
+        outError = "The persistent whisper.cpp service stopped before transcription.";
+        return std::nullopt;
+    }
+    const auto response = client.Post(requestPath + "/inference", items);
     if (stopToken.stop_requested() || transcriptionCancelled.load())
     {
         outError = "Speech transcription was stopped.";

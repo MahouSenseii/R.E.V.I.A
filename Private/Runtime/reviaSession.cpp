@@ -14,6 +14,7 @@
 #include "Identity/promptMarkers.h"
 #include "Runtime/publicContextCache.h"
 #include "Runtime/reviaSession.h"
+#include "Agents/chatTools.h"
 #include "Core/taskContract.h"
 #include "Browser/browserSession.h"
 #include "Policy/capabilityProjection.h"
@@ -190,6 +191,9 @@ llmSettings BuildTierSettings(const llmSettings& base, const modelTierSettings& 
     output.bVisionEnabled = tier.bVisionEnabled;
     output.multimodalProjectorPath = tier.multimodalProjectorPath;
     output.contextSize = tier.contextSize;
+    // The quantized KV cache was chosen for Main's 32K context. Fast and Expert keep
+    // llama.cpp's default cache at their own smaller contexts.
+    output.kvCacheType.clear();
     output.parallelRequests = 1;
     output.maxTokens = tier.maxTokens;
     output.temperature = tier.temperature;
@@ -203,6 +207,7 @@ llmSettings BuildTierSettings(const llmSettings& base, const modelTierSettings& 
     output.ramCacheMiB = 0;
     output.bAutoTune = true;
     output.bAutoStartServer = true;
+    output.bVerifyServerKey = true;
     return output;
 }
 
@@ -309,6 +314,7 @@ ReviaSession::ReviaSession(CompanionPaths paths, std::shared_ptr<policy::Compani
               limits.investigationBudget = std::chrono::milliseconds(std::max(1000, settings.conversation.investigationBudgetMilliseconds));
               limits.cooldownTurns = static_cast<std::size_t>(std::max(0, settings.conversation.selfInquiryCooldownTurns));
               limits.includeOrdinaryQuestions = settings.conversation.selfInquiryScope == "questions";
+              limits.nativeDeliberation = settings.conversation.deliberation == "native";
               return limits;
           },
           [this](const memory::RecallRequest& request, const std::string& currentInput, const memory::MemoryScope& scope)
@@ -368,7 +374,95 @@ ReviaSession::ReviaSession(CompanionPaths paths, std::shared_ptr<policy::Compani
                        const agents::CheckKind kind, const std::string& proposal, const std::string&)
             { return ExecuteInvestigationCheck(actionRuntime, captured, kind, proposal, stopToken, admission, contract); };
         });
+    conversationRuntime.SetChatToolProvider(
+        [this](const std::function<bool()>& admission, const std::stop_token stopToken)
+        {
+            // The session's own tools for one private chat turn. Each reaches the owner an
+            // explicit command would: ActionRuntime with its policy, confirmation and audit
+            // for files and pictures, the reminder book for reminders.
+            ConversationRuntime::ChatToolGrant grant;
+            grant.archiveEnabled = settings.conversation.bArchiveEnabled;
+            grant.remindersAvailable = true;
+            grant.executors.setReminder = [this](const std::string& text, const std::string& when, const agents::ToolCallContext& call)
+            {
+                if (!call.Admitted())
+                    return agents::ToolExecution::Fail("The turn ended before the reminder was set.");
+                return agents::AddChatReminder(reminders, text, when, planning::WallClock::now());
+            };
+            // Passages go to the main model, so only when it runs on this computer, as
+            // attachments themselves do.
+            if (attachments::AttachmentLibrary* library = AttachmentsIfPresent();
+                library && library->HasDocuments() && attachments::IsLocalEndpoint(settings.llm.host))
+            {
+                grant.documentsAvailable = true;
+                grant.executors.searchDocuments = [this](const std::string& query, const agents::ToolCallContext& call)
+                {
+                    if (!call.Admitted())
+                        return agents::ToolExecution::Fail("The turn ended before the documents were searched.");
+                    return agents::ToolExecution::Ok(SearchDocuments(query, call.stopToken));
+                };
+            }
+            if (!actionRuntime.IsInitialized())
+                return grant;
+            const auto capabilities = actionRuntime.Settings();
+            grant.approvedRoots = capabilities.approvedRoots;
+            grant.imageGenerationEnabled = capabilities.image.enabled;
+            const auto origin = sessionIdentity.Stamp({}, {}, companionAuthority->Revision());
+            auto port = std::make_shared<agents::ChatActionPort>();
+            port->evaluate = [this](const actions::ActionRequest& request) { return actionRuntime.Evaluate(request); };
+            port->execute = [this, origin, stopToken](const actions::ActionRequest& request, const bool confirmed)
+            { return actionRuntime.ExecuteFor(origin, request, confirmed, stopToken); };
+            ConfirmationHandler handler;
+            {
+                std::lock_guard lock(confirmationMutex);
+                handler = confirmationHandler;
+            }
+            if (handler)
+            {
+                port->confirm = [this, handler](const actions::ActionRequest& request, const actions::PolicyDecision& decision)
+                {
+                    SetState(RuntimeState::WaitingForConfirmation, decision.reason);
+                    const auto choice = handler(request, decision);
+                    SetState(RuntimeState::Thinking, "Continuing the reply.");
+                    return choice;
+                };
+            }
+            const auto fileTool = [this, port, origin, stopToken](const actions::ActionType type)
+            {
+                return [this, port, origin, stopToken, type](const std::string& path, const agents::ToolCallContext& call)
+                {
+                    auto request = agents::ChatFileRequest(type, path);
+                    // The action inherits the admitted turn's task contract, as an
+                    // interactive action does.
+                    request.taskContract = BuildActionTaskContract(request, origin, stopToken);
+                    if (!request.taskContract)
+                        return agents::ToolExecution::Fail("The turn's task contract is no longer current.");
+                    return agents::RunChatAction(*port, std::move(request), call);
+                };
+            };
+            grant.executors.readFile = fileTool(actions::ActionType::ReadTextFile);
+            grant.executors.listDirectory = fileTool(actions::ActionType::ListDirectory);
+            if (grant.imageGenerationEnabled)
+            {
+                grant.executors.generateImage = [this, admission](const std::string& prompt, const agents::ToolCallContext& call)
+                {
+                    auto outcome = documentWorkshop.GenerateImage(prompt, call.stopToken, admission, Stamp());
+                    // The reply owns the turn's state; only the picture's own events are kept.
+                    std::erase_if(outcome.events, [](const TurnEvent& event) { return event.kind == TurnEvent::Kind::State; });
+                    if (!call.Admitted())
+                        return agents::ToolExecution::Fail("The turn ended while the picture was being made.");
+                    const SessionResult result = ApplyTurn(std::move(outcome));
+                    return result.succeeded ? agents::ToolExecution::Ok(result.text) : agents::ToolExecution::Fail(result.text);
+                };
+            }
+            return grant;
+        });
     turnCoordinator.SetAdmissionGuard([this, origin]() { return sessionIdentity.IsCurrent(origin); });
+    // Memory classification shares the GPU with the voice. Waiting while she speaks keeps
+    // it off the first phrase of the reply; the deferral's maximum keeps the memory.
+    agents::MemoryDeferral memoryDeferral;
+    memoryDeferral.busy = [this]() { return speechService.HasPendingSpeech(); };
+    turnCoordinator.Memory().SetDeferral(std::move(memoryDeferral));
     appLogger.SetSink(
         [this](const std::string& line)
         {
@@ -664,6 +758,10 @@ bool ReviaSession::Start()
     {
         settings.embedding.apiKey = core::GenerateLocalApiKey();
     }
+    // A server Revia starts is launched with this key, so a responder on its port that
+    // does not hold it is refused. A server the user runs themselves stays trusted.
+    settings.llm.bVerifyServerKey = settings.llm.bAutoStartServer;
+    settings.embedding.bVerifyServerKey = settings.embedding.bAutoStartServer;
 
     stageStarted = std::chrono::steady_clock::now();
     aiProfile startupProfile;
@@ -755,6 +853,13 @@ bool ReviaSession::Start()
                 "; quarantined records: " + std::to_string(health.quarantinedRecords) +
                 "; persistence diagnostic present: " + std::string(health.error.empty() ? "no" : "yes"));
         });
+        // Cloud requests go into the same action audit, the intent before any byte leaves.
+        // Without this sink the cloud backend sends nothing.
+        if (const std::shared_ptr<audit::EvidenceJournal> journal = actionRuntime.EvidenceJournalOwner())
+        {
+            router.Cloud().SetAuditSink(
+                [journal](const audit::CloudRequestAuditEntry& entry) { return audit::AppendCloudRequestAudit(*journal, entry); });
+        }
         // Queue pressure and overflow reach the log rather than only the queue. A
         // memory evaluation that was dropped or delayed is otherwise invisible.
         turnCoordinator.Memory().SetDiagnosticSink([this](const std::string& line) { appLogger.Log(line); });
@@ -798,6 +903,9 @@ bool ReviaSession::Start()
     // Goals are reported, never auto-resumed. Restarting into unattended execution of
     // work the user has not re-approved belongs to Stage 5, behind its own job contract.
     stageStarted = std::chrono::steady_clock::now();
+    // Goal records name what she was asked to do. Kept for 30 days, then gone.
+    if (const std::size_t pruned = goalStore.PruneOlderThan(std::chrono::hours(24 * 30)); pruned > 0)
+        appLogger.Log("Removed " + std::to_string(pruned) + " goal record(s) older than 30 days.");
     const std::vector<goals::Goal> resumable = goalStore.LoadResumable();
     if (!resumable.empty())
     {
@@ -853,7 +961,10 @@ bool ReviaSession::Start()
 
     if (settings.conversation.bArchiveEnabled)
     {
-        conversationSessionId = actions::NewActionId();
+        {
+            std::lock_guard idLock(conversationIdMutex);
+            conversationSessionId = actions::NewActionId();
+        }
         conversationArchive = memory::ConversationArchive(companionPaths.Resolve("Memory/revia_conversations.db").string(),
             {static_cast<std::size_t>(std::max(1, settings.conversation.maxSessions)),
                 static_cast<std::size_t>(std::max(1, settings.conversation.maxTurnsPerSession)),
@@ -862,6 +973,7 @@ bool ReviaSession::Start()
         if (!conversationArchive.BeginSession(conversationSessionId, archiveError))
         {
             appLogger.Warning("Conversation history is unavailable: " + archiveError);
+            std::lock_guard idLock(conversationIdMutex);
             conversationSessionId.clear();
         }
         else
@@ -1088,6 +1200,9 @@ bool ReviaSession::Start()
     stageStarted = std::chrono::steady_clock::now();
     router.ApplyLLMSettings(
         settings.llm, fastLlmSettings, expertLlmSettings, settings.embedding, profile, fastBrainConfigured, expertBrainConfigured);
+    // Retained history follows Main's context window: 32K keeps far more of the
+    // conversation than 8K, and a small context keeps the old, safe caps.
+    context.SetContextTokens(settings.llm.contextSize);
     mainPreparation.Reset();
     fastPreparation.Reset();
     expertPreparation.Reset();
@@ -1338,13 +1453,17 @@ void ReviaSession::StartInputDrain()
         {
             while (!stopToken.stop_requested())
             {
-                std::this_thread::sleep_for(std::chrono::milliseconds(200));
-                if (stopToken.stop_requested() || !started.load() || busy.load())
+                // Wakes when voice input arrives and again the moment its merge window
+                // closes, rather than finding it on a 200 ms poll.
+                if (!inputArbiter.WaitUntilReady(stopToken, std::chrono::seconds(1)) || stopToken.stop_requested())
                 {
                     continue;
                 }
-                if (!inputArbiter.IsReady(std::chrono::system_clock::now()))
+                if (!started.load() || busy.load())
                 {
+                    // Nothing signals the arbiter when a turn clears busy, so ready input
+                    // checks back shortly; a barged-in reply usually ends within this.
+                    std::this_thread::sleep_for(std::chrono::milliseconds(started.load() ? 50 : 200));
                     continue;
                 }
 
@@ -1836,7 +1955,11 @@ void ReviaSession::QueueExternalAdapterEvent(const presence::ExternalAdapterEven
 
 agents::InputVerdict ReviaSession::OfferInput(const std::string& text, const agents::InputSource source)
 {
-    const agents::InputVerdict verdict = inputArbiter.Offer(text, source, std::chrono::system_clock::now(), CaptureInputContext(source));
+    // The shell offers voice here only for a push-to-talk transcript, whose end the user
+    // marked by releasing the key, so it skips the merge window. Hands-free speech is
+    // offered by the recognition handler and still waits for a pause.
+    const agents::InputVerdict verdict = inputArbiter.Offer(
+        text, source, std::chrono::system_clock::now(), CaptureInputContext(source), source == agents::InputSource::Voice);
     if (verdict != agents::InputVerdict::Queued)
     {
         // Reported rather than silently dropped, so a filter that is too aggressive is
@@ -4047,7 +4170,26 @@ SessionResult ReviaSession::RunTurnUnguarded(const agents::InputBatch& batch)
         result.reason = "The captured input is no longer current.";
         return result;
     }
+    // Files that came with a typed message. Whatever this turn does not hand to the
+    // model is deleted when it ends, so a refused or redirected turn keeps nothing.
+    std::vector<attachments::StagedAttachment> turnFiles;
+    if (batch.source == agents::InputSource::Typed)
+    {
+        std::lock_guard lock(attachmentMutex);
+        turnFiles = std::exchange(pendingTurnAttachments, {});
+    }
+    struct UnusedFiles
+    {
+        ReviaSession& session;
+        std::vector<attachments::StagedAttachment>& files;
+        ~UnusedFiles()
+        {
+            if (!files.empty())
+                session.Attachments().DiscardTaken(files, "the message was not answered as a conversation turn");
+        }
+    } unusedFiles{*this, turnFiles};
     busy.store(true);
+    lastExchange.reset();
     const std::stop_token stopToken = BeginOperation();
     const auto taskContract = BuildTurnTaskContract(batch);
     if (!taskContract || !TaskContractRefusal(*taskContract, stopToken).empty())
@@ -4081,6 +4223,14 @@ SessionResult ReviaSession::RunTurnUnguarded(const agents::InputBatch& batch)
 
     if (!privateAudience)
     {
+        if (!turnFiles.empty())
+        {
+            result.succeeded = false;
+            result.text = "Attachments are private: Revia only reads files in a private conversation, and this one has a shared or "
+                          "public audience. The files were not read or kept.";
+            result.reason = result.text;
+            return finish(std::move(result));
+        }
         std::vector<conversationMessage> history;
         { std::lock_guard lock(audienceMutex); history = audienceHistory; }
         identity::RelationshipState presentation;
@@ -4098,6 +4248,7 @@ SessionResult ReviaSession::RunTurnUnguarded(const agents::InputBatch& batch)
                 audienceHistory.push_back({"user", acceptedInput});
                 audienceHistory.push_back({"assistant", result.text});
                 if (audienceHistory.size() > 32) audienceHistory.erase(audienceHistory.begin(), audienceHistory.begin() + 2);
+                RememberExchange(batch, result, false);
             }
         }
         return finish(std::move(result));
@@ -4193,8 +4344,12 @@ SessionResult ReviaSession::RunTurnUnguarded(const agents::InputBatch& batch)
         return finish(std::move(drawn));
     }
     const std::string speakerForTurn = captured.participantId;
+    attachments::TurnAttachments attached = PrepareTurnAttachments(acceptedInput, std::exchange(turnFiles, {}), stopToken);
+    std::string turnReference = ClipboardReference(acceptedInput);
+    if (!attached.reference.empty())
+        turnReference += (turnReference.empty() ? "" : "\n\n") + attached.reference;
     result = conversationRuntime.ReplyForAudience(acceptedInput, {}, captured.audience, CurrentRelationship(), profile, llmAvailable,
-        ShouldSpeakOnCurrentChannel(), stopToken, admission, ClipboardReference(acceptedInput), batch.acceptedAt, memoryScope);
+        ShouldSpeakOnCurrentChannel(), stopToken, admission, turnReference, batch.acceptedAt, memoryScope, std::move(attached.images));
     if (!admission())
     {
         result = {};
@@ -4207,6 +4362,7 @@ SessionResult ReviaSession::RunTurnUnguarded(const agents::InputBatch& batch)
     {
         ArchiveTurn("assistant", result.text, memoryScope, admission);
     }
+    RememberExchange(batch, result, true);
     if (!result.succeeded)
     {
         // A request can be the event that exposes a crashed external server. Remember
@@ -5760,14 +5916,24 @@ void ReviaSession::RecordRelationshipEvidence(
     const identity::ConversationSignals signals = identity::ReadConversationSignals(userInput, reply, succeeded);
     identity::RelationshipEvent event = identity::BuildRelationshipEvent(entityId, signals);
     event.evidenceId = actions::NewActionId();
-    // The local entry point resolves introductions before generation. An adapter
-    // supplies its stable platform entity. Recording evidence never changes which
-    // person the local session is addressing.
-    if (const std::string stated = identity::ReadStatedName(userInput); !stated.empty())
+    // Strangers on Discord, a stream or Presence move only their own relationship. Her
+    // development and preferences are global and shape owner chats, so public messages
+    // must not be able to spend the lifetime drift budget or plant tastes. Their display
+    // name comes from the platform, not from what they type.
+    const bool publicAdapter = identity::IsAdapterEntity(entityId);
+    // The local entry point resolves introductions before generation. Recording
+    // evidence never changes which person the local session is addressing.
+    if (const std::string stated = publicAdapter ? std::string() : identity::ReadStatedName(userInput); !stated.empty())
     {
         relationships.SetDisplayName(entityId, stated);
     }
     const identity::RelationshipState updated = relationships.Apply(event);
+    if (publicAdapter)
+    {
+        PublishComponent("Relationship", "Updated",
+            updated.entityId + ": " + event.description + " (" + std::to_string(updated.interactionCount) + " exchanges)");
+        return;
+    }
 
     // Conversation supplies social/correction evidence, not proof of independent
     // work. That evidence comes from confirmed execution outcomes.
@@ -7636,12 +7802,13 @@ bool ReviaSession::RunOperateGoal(const std::string& request, SessionResult& res
                       std::to_string(goal.budget.maxActions) + " actions, " + std::to_string(goal.budget.maxTotalRetries) +
                       " retries and " + std::to_string(goal.budget.maxDurationMs / 1000) +
                       " seconds.\n"
-                      "Approve this task once. Routine steps and content editing will continue "
-                      "within your existing permissions. Each step must be checked before continuing.\n" +
+                      "Approving starts the task. The first step of each kind of action in each application "
+                      "(typing in one app, clicking in another, writing a file) asks you once; later steps "
+                      "of that same kind are covered until the task ends. Each step must be checked before continuing.\n" +
                       std::string(messaging ? "This includes composing and sending the message you requested.\n"
                                             : "This does not include sending or publishing messages.\n") +
-                      "Purchases, deletion, account changes and commands outside existing grants "
-                      "stop the task instead of opening more prompts.";
+                      "Opening a file with an application, purchases, deletion, account changes and commands "
+                      "outside existing grants stop the task instead of opening more prompts.";
     actions::ConfirmationChoice goalChoice = actions::ConfirmationChoice::AllowForThisTask;
     if (!freeMode)
     {
@@ -7673,7 +7840,11 @@ bool ReviaSession::RunOperateGoal(const std::string& request, SessionResult& res
 goals::Goal ReviaSession::ExecuteOperate(
     goals::Goal goal, const std::string& request, const bool messaging, const std::stop_token stopToken, const bool reportState)
 {
-    goalRunner.SeedStandingApproval(actions::RiskLevel::ReversibleWrite, true);
+    // Owner full access answers the per-kind questions itself, for routine kinds only; the
+    // kinds that always need their own confirmation still stop the task.
+    const bool ownerFullAccess = actionRuntime.Settings().mode == actions::ExecutionMode::OwnerFullAccess &&
+        goal.scope.mode == actions::ExecutionMode::OwnerFullAccess;
+    goalRunner.SeedStandingApproval(actions::RiskLevel::ReversibleWrite, true, ownerFullAccess);
     const auto tools = policy::ProjectCapabilityScope(goal.scope, actionRuntime.Settings());
     goalRunner.SeedToolDelegation(
         tools.process.enabled && tools.process.allowTaskExecution, tools.browser.enabled && tools.browser.allowTaskInteraction);
@@ -8220,7 +8391,8 @@ void ReviaSession::DeliverDueReminders(const planning::WallClock::time_point now
 
 std::string ReviaSession::ClipboardReference(const std::string& input)
 {
-    if (!clipboardReader || !perception::AsksAboutClipboard(input))
+    // "/cloud ask --clipboard ..." is an explicit request to share it, whatever the words.
+    if (!clipboardReader || (!perception::AsksAboutClipboard(input) && !llm::cloud::ParseCloudAsk(input).bIncludeClipboard))
         return {};
     const std::optional<perception::ClipboardText> copied = clipboardReader();
     const std::string reference(identity::markers::ClipboardGrounding);
@@ -8229,6 +8401,12 @@ std::string ReviaSession::ClipboardReference(const std::string& input)
         PublishComponent("Clipboard", "Unavailable", "The clipboard could not be read.");
         return reference + " it could not be read right now. Say so plainly and do not guess "
                            "what it holds.";
+    }
+    if (copied->markedSecret)
+    {
+        PublishComponent("Clipboard", "Withheld", "The copying app marked the clipboard as a secret; it was not read.");
+        return reference + " the app that copied it marked it as a secret, such as a password, "
+                           "so it was not read. Tell the user that, and do not ask them to paste it.";
     }
     if (copied->text.empty())
     {
@@ -8260,6 +8438,214 @@ std::string ReviaSession::ClipboardReference(const std::string& input)
            "what you need." +
            (copied->truncated ? std::string(" It was long, so this is only the start of it; say so if it matters.") : std::string()) +
            "\n<<<CLIPBOARD\n" + text + "\n" + closing;
+}
+
+attachments::AttachmentLibrary& ReviaSession::Attachments()
+{
+    std::lock_guard lock(attachmentMutex);
+    if (!attachmentLibrary)
+    {
+        attachmentLibrary = std::make_unique<attachments::AttachmentLibrary>(companionPaths.Resolve("RuntimeData/Attachments/Files"),
+            companionPaths.Resolve("Memory/revia_documents.db"), companionPaths.Resolve("Audit/attachments.jsonl"));
+        // Document text is embedded only by a local embedding server; anywhere else,
+        // search stays lexical rather than send the text away.
+        if (settings.embedding.bEnabled && attachments::IsLocalEndpoint(settings.embedding.host))
+        {
+            documentEmbeddings.ApplySettings(settings.embedding);
+            attachmentLibrary->SetEmbedder([this](const std::string& text, const bool query, const std::stop_token stopToken)
+                { return query ? documentEmbeddings.EmbedQuery(text, stopToken) : documentEmbeddings.EmbedDocument(text, stopToken); });
+        }
+    }
+    return *attachmentLibrary;
+}
+
+attachments::AttachmentLibrary* ReviaSession::AttachmentsIfPresent()
+{
+    {
+        std::lock_guard lock(attachmentMutex);
+        if (attachmentLibrary)
+            return attachmentLibrary.get();
+    }
+    std::error_code error;
+    return std::filesystem::exists(companionPaths.Resolve("Memory/revia_documents.db"), error) ? &Attachments() : nullptr;
+}
+
+std::optional<std::string> ReviaSession::AttachmentRefusal() const
+{
+    if (Audience().kind != identity::AudienceKind::Private)
+        return std::string("Attachments are private: Revia only reads files in a private conversation, and this one has a shared or "
+                           "public audience. Nothing was read or kept.");
+    return std::nullopt;
+}
+
+attachments::IntakeResult ReviaSession::AttachFile(const std::filesystem::path& path)
+{
+    if (const auto refusal = AttachmentRefusal())
+    {
+        attachments::IntakeResult refused;
+        refused.message = *refusal;
+        return refused;
+    }
+    attachments::IntakeResult result = Attachments().Stage(path);
+    appLogger.Log("[Attachments] " + std::string(result.status == attachments::IntakeStatus::Accepted ? "staged" : "not attached") + ": " +
+                  result.message);
+    return result;
+}
+
+attachments::IntakeResult ReviaSession::AttachImageData(const std::string& name, const std::string& bytes)
+{
+    if (const auto refusal = AttachmentRefusal())
+    {
+        attachments::IntakeResult refused;
+        refused.message = *refusal;
+        return refused;
+    }
+    attachments::IntakeResult result = Attachments().StageBytes(name, bytes);
+    appLogger.Log("[Attachments] " + std::string(result.status == attachments::IntakeStatus::Accepted ? "staged" : "not attached") + ": " +
+                  result.message);
+    return result;
+}
+
+bool ReviaSession::RemoveAttachment(const std::string& id)
+{
+    return Attachments().Unstage(id);
+}
+
+SessionResult ReviaSession::SubmitWithAttachments(const std::string& input, const std::vector<std::string>& attachmentIds)
+{
+    if (attachmentIds.empty())
+        return Submit(input, agents::InputSource::Typed);
+    std::vector<attachments::StagedAttachment> files = Attachments().TakeStaged(attachmentIds);
+    if (const auto refusal = AttachmentRefusal())
+    {
+        Attachments().DiscardTaken(files, "shared or public audience");
+        SessionResult refused;
+        refused.succeeded = false;
+        refused.text = *refusal;
+        refused.reason = *refusal;
+        return refused;
+    }
+    std::string text = input;
+    if (text.empty())
+    {
+        text = "I attached ";
+        for (std::size_t index = 0; index < files.size(); ++index)
+            text += (index == 0 ? "\"" : index + 1 == files.size() ? " and \"" : ", \"") + files[index].displayName + "\"";
+        text += ".";
+    }
+    {
+        std::lock_guard lock(attachmentMutex);
+        pendingTurnAttachments = std::move(files);
+    }
+    SessionResult result = Submit(text, agents::InputSource::Typed);
+    // A message Submit turned away before its turn ran leaves its files here.
+    std::vector<attachments::StagedAttachment> unused;
+    {
+        std::lock_guard lock(attachmentMutex);
+        unused = std::exchange(pendingTurnAttachments, {});
+    }
+    if (!unused.empty())
+        Attachments().DiscardTaken(unused, "the message was not sent");
+    return result;
+}
+
+std::vector<attachments::StoredDocument> ReviaSession::Documents()
+{
+    // Like past chats, the document list is not shown to a shared audience.
+    if (AttachmentRefusal())
+        return {};
+    attachments::AttachmentLibrary* library = AttachmentsIfPresent();
+    return library ? library->List() : std::vector<attachments::StoredDocument>{};
+}
+
+std::string ReviaSession::DocumentPreview(const std::string& id)
+{
+    if (AttachmentRefusal())
+        return {};
+    attachments::AttachmentLibrary* library = AttachmentsIfPresent();
+    return library ? library->PreviewText(id) : std::string();
+}
+
+bool ReviaSession::ForgetDocument(const std::string& id, std::string& outError)
+{
+    if (const auto refusal = AttachmentRefusal())
+    {
+        outError = *refusal;
+        return false;
+    }
+    attachments::AttachmentLibrary* library = AttachmentsIfPresent();
+    if (!library)
+    {
+        outError = "There are no stored documents.";
+        return false;
+    }
+    if (!library->Forget(id, outError))
+        return false;
+    recentDocumentIds.erase(std::remove(recentDocumentIds.begin(), recentDocumentIds.end(), id), recentDocumentIds.end());
+    PublishComponent("Documents", "Forgotten", "A stored document, its passages and its search vectors were deleted.");
+    return true;
+}
+
+std::string ReviaSession::SearchDocuments(const std::string& query, const std::stop_token stopToken)
+{
+    if (const auto refusal = AttachmentRefusal())
+        return *refusal;
+    return attachments::ExecuteDocumentSearch(AttachmentsIfPresent(), query, stopToken);
+}
+
+attachments::TurnAttachments ReviaSession::PrepareTurnAttachments(
+    const std::string& input, std::vector<attachments::StagedAttachment> files, const std::stop_token stopToken)
+{
+    attachments::TurnAttachments prepared;
+    if (!files.empty())
+    {
+        // Attachments go to a model on this computer or nowhere.
+        if (!attachments::IsLocalEndpoint(settings.llm.host))
+        {
+            Attachments().DiscardTaken(files, "the main model endpoint is not on this computer");
+            PublishComponent("Attachments", "Withheld", "The files were not sent: the main model endpoint is not on this computer.");
+            prepared.reference = std::string(identity::markers::AttachmentGrounding) +
+                                 " none were read. The user attached files, but the main model endpoint is not on this computer and "
+                                 "attachments are only ever sent to a local model. Tell the user plainly that the files were not read.";
+            return prepared;
+        }
+        attachments::ImagePolicy images;
+        images.visionAvailable = settings.llm.bVisionEnabled;
+        images.unavailableReason = "image understanding is off in this setup: the main model was started without its vision projector "
+                                   "(llm.visionEnabled in Config/settings.json).";
+        std::vector<std::string> documentIds;
+        for (const attachments::StagedAttachment& file : files)
+            if (attachments::IsDocument(file.kind))
+                documentIds.push_back(file.id);
+        const std::size_t count = files.size();
+        prepared = Attachments().PrepareTurn(input, std::move(files), images, stopToken);
+        for (const std::string& notice : prepared.notices)
+            PublishComponent("Attachments", "Notice", notice);
+        PublishComponent("Attachments", "Read",
+            "Read " + std::to_string(count) + (count == 1 ? " file" : " files") + " for this message; they stay on this computer.");
+        if (!documentIds.empty())
+        {
+            recentDocumentIds = std::move(documentIds);
+            recentDocumentTurns = 2;
+        }
+        return prepared;
+    }
+
+    // No files on this message: passages from earlier ones, when it is about them or is
+    // a short follow-up to the message that attached them.
+    const int followUps = recentDocumentTurns;
+    if (recentDocumentTurns > 0)
+        --recentDocumentTurns;
+    attachments::AttachmentLibrary* library = AttachmentsIfPresent();
+    if (!library || agents::ConversationStylePolicy::IsBriefSocialTurn(input) || !library->HasDocuments())
+        return prepared;
+    const bool mentions = attachments::AttachmentLibrary::MentionsDocuments(input, library->DocumentNames());
+    if (!mentions && (followUps == 0 || recentDocumentIds.empty()))
+        return prepared;
+    prepared.reference = library->SearchReference(input, mentions ? std::vector<std::string>{} : recentDocumentIds, stopToken);
+    if (!prepared.reference.empty())
+        PublishComponent("Documents", "Searched", "Passages from your documents were added to this turn, with citations.");
+    return prepared;
 }
 
 std::string ReviaSession::DescribeReminders() const
@@ -9142,6 +9528,33 @@ bool ReviaSession::TryHandleActionInput(const std::string& input, SessionResult&
         result.succeeded = true;
         result.text = lastEvaluation.Detail();
         SetState(RuntimeState::Idle);
+        return true;
+    }
+
+    // "/cloud ask <question>" is a conversation turn, not a command: it is left to the
+    // reply path, which strips the prefix and routes the turn to the cloud model.
+    if ((input == "/cloud" || input.rfind("/cloud ", 0) == 0) && !commandManager::IsCloudQuestion(input))
+    {
+        const std::string argument = input.size() > 7 ? Trim(input.substr(7)) : std::string();
+        if (argument == "on" || argument == "off")
+        {
+            // A session switch on top of llm.cloud.enabled, like /internet off: it can
+            // stop cloud use at once, but "on" cannot enable what settings leave off.
+            router.Cloud().SetSessionEnabled(argument == "on");
+            result.text = argument == "off" ? "Cloud model is OFF for this session. Every turn stays on this PC."
+                                            : "Cloud model is allowed again for this session. " + router.Cloud().StatusText();
+        }
+        else if (argument.empty() || argument == "status")
+        {
+            result.text = router.Cloud().StatusText();
+        }
+        else
+        {
+            result.succeeded = false;
+            result.text = "Usage: /cloud [on|off|status], or /cloud ask [--screen] [--clipboard] [--memory] <question>";
+            result.reason = "Unrecognized cloud argument.";
+        }
+        SetState(result.succeeded ? RuntimeState::Idle : RuntimeState::Blocked, result.reason);
         return true;
     }
 

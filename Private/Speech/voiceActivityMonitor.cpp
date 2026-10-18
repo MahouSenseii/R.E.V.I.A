@@ -109,10 +109,24 @@ void VoiceActivityMonitor::Begin(InterruptHandler handler)
         return;
     }
     triggered.store(false);
-    worker = std::jthread([this, handler = std::move(handler)](const std::stop_token stopToken)
+    std::jthread started([this, handler = std::move(handler)](const std::stop_token stopToken)
     {
         Run(stopToken, handler);
     });
+    std::jthread previous;
+    {
+        std::lock_guard workerLock(workerMutex);
+        previous = std::exchange(worker, std::move(started));
+    }
+    // Only when two watches began at once: the older one is stopped here, outside the lock.
+    if (previous.joinable())
+    {
+        previous.request_stop();
+        if (previous.get_id() == std::this_thread::get_id())
+            previous.detach();
+        else
+            previous.join();
+    }
 }
 
 void VoiceActivityMonitor::Run(const std::stop_token stopToken, InterruptHandler handler)
@@ -218,10 +232,19 @@ void VoiceActivityMonitor::Run(const std::stop_token stopToken, InterruptHandler
 
 void VoiceActivityMonitor::End()
 {
-    if (worker.joinable())
+    std::jthread finished;
     {
-        worker.request_stop();
-        worker.join();
+        std::lock_guard workerLock(workerMutex);
+        finished = std::move(worker);
+    }
+    if (finished.joinable())
+    {
+        finished.request_stop();
+        // A handler that ends its own watch cannot wait for itself to return.
+        if (finished.get_id() == std::this_thread::get_id())
+            finished.detach();
+        else
+            finished.join();
     }
     watching.store(false);
 }
