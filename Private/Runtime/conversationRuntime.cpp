@@ -320,9 +320,17 @@ SessionResult ConversationRuntime::ReplyForAudience(const std::string& input, co
     policy.relationship = audience.kind == identity::AudienceKind::Unknown ? identity::RelationshipState{} : relationship;
     aiProfile scopedProfile = profile;
     std::vector<conversationMessage> promptContext;
+    std::string turnInput = input;
     if (!policy.publicAudience)
     {
-        context.AddMessage({"user", input, memoryScope.participantId, memoryScope});
+        // "ask the cloud ..." or "/cloud ask ...": the model is asked the question, not the
+        // prefix. A shared audience never gets here, so its words stay exactly as typed.
+        if (llm::cloud::CloudAsk ask = llm::cloud::ParseCloudAsk(input); ask.bExplicit && !ask.question.empty())
+        {
+            turnInput = ask.question;
+            policy.cloudAsk = std::move(ask);
+        }
+        context.AddMessage({"user", turnInput, memoryScope.participantId, memoryScope});
         promptContext = context.GetRecentMessages();
         policy.instruction = turnReference;
     }
@@ -340,7 +348,7 @@ SessionResult ConversationRuntime::ReplyForAudience(const std::string& input, co
         promptContext.push_back({"user", input});
     }
     return Generate(
-        input, promptContext, scopedProfile, llmAvailable, shouldSpeak, scopedProfile.bMemoryEnabled, false, {}, {}, stopToken, policy);
+        turnInput, promptContext, scopedProfile, llmAvailable, shouldSpeak, scopedProfile.bMemoryEnabled, false, {}, {}, stopToken, policy);
 }
 
 aiProfile ConversationRuntime::PublicGuestProfile()
@@ -1594,6 +1602,7 @@ SessionResult ConversationRuntime::Generate(const std::string& policyInput, cons
         // opinion, however exactly they resemble one.
         const agents::ResponseProvenance provenance =
             proactive ? agents::ResponseProvenance::NormalGeneration : agents::ClassifyRequestedProvenance(policyInput);
+        PrepareCloudTurn(policyInput, profile, answerDecision, proactive, turnPolicy, filterContext, stopToken, currentTurn);
         turnResult = coordinator.Execute(router, policyInput, promptContext, filters, filterContext, evaluateMemory, provenance,
             currentTurn, stopToken, onDelta, answerDecision,
             turnPolicy.publicAudience ? llm::PrivateMemoryAccess::Denied : llm::PrivateMemoryAccess::ProfileSetting,
@@ -1922,6 +1931,50 @@ SessionResult ConversationRuntime::Generate(const std::string& policyInput, cons
 agents::ConversationQualitySnapshot ConversationRuntime::QualitySnapshot() const
 {
     return qualityMonitor.Snapshot();
+}
+
+void ConversationRuntime::PrepareCloudTurn(const std::string& policyInput, const aiProfile& profile,
+    const intelligence::IntelligenceDecision& decision, const bool proactive, const TurnPolicy& turnPolicy,
+    const agents::ResponseFilterContext& filterContext, const std::stop_token stopToken, const std::uint64_t turnId)
+{
+    llm::cloud::CloudRouteInputs inputs;
+    inputs.use = router.Cloud().Use();
+    inputs.bPublicAudience = turnPolicy.publicAudience;
+    inputs.bProactive = proactive;
+    inputs.bExplicitAsk = turnPolicy.cloudAsk.has_value();
+    inputs.bRouterChoseExpert = decision.selectedTier == intelligence::IntelligenceTier::Expert ||
+        decision.selectedTier == intelligence::IntelligenceTier::ExpertVision;
+    const llm::cloud::CloudRouteDecision route = llm::cloud::DecideCloudRoute(inputs);
+    if (!route.bUseCloud)
+        return;
+    // A hard turn is only a candidate while the cloud is usable; asking the service first
+    // keeps "not configured" out of every hard turn's routing note.
+    if (!route.bExplicit && !router.Cloud().Availability().bAvailable)
+        return;
+
+    llm::cloud::CloudTurnRequest request;
+    request.bExplicit = route.bExplicit;
+    request.bPublicAudience = turnPolicy.publicAudience;
+    if (turnPolicy.cloudAsk)
+    {
+        // Each private piece goes only when its flag was typed for this turn.
+        const llm::cloud::CloudAsk& ask = *turnPolicy.cloudAsk;
+        request.bIncludeScreen = ask.bIncludeScreen && turnPolicy.allowScreenContext;
+        request.bIncludeClipboard = ask.bIncludeClipboard;
+        request.bIncludeMemories = ask.bIncludeMemories && profile.bMemoryEnabled;
+        if (request.bIncludeScreen)
+        {
+            request.screenObservation = filterContext.screenObservation;
+            if (request.screenObservation.empty() && screenContextProvider)
+                request.screenObservation = screenContextProvider();
+        }
+        if (request.bIncludeClipboard)
+            request.clipboardText = turnPolicy.instruction;
+        if (request.bIncludeMemories)
+            request.privateMemories = router.RelatedMemories(policyInput, stopToken, turnPolicy.memoryScope);
+    }
+    router.SetCloudTurn(std::move(request));
+    PublishComponent("Cloud model", route.bExplicit ? "Asked" : "Hard turn", route.reason, -1.0, 0, turnId, turnPolicy.audienceRevision);
 }
 
 void ConversationRuntime::PublishComponent(const std::string& component, const std::string& phase, const std::string& message,

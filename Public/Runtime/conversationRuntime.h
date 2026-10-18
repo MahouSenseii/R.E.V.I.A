@@ -202,6 +202,9 @@ private:
         std::chrono::steady_clock::time_point acceptedAt{};
         std::uint64_t audienceRevision = 0;
         memory::MemoryScope memoryScope;
+        // Set when the user explicitly asked the cloud model for this turn, with the
+        // per-turn sharing flags they gave.
+        std::optional<llm::cloud::CloudAsk> cloudAsk;
     };
 
     // Canonical state and posture for replies, proactive openings and evaluation.
@@ -250,6 +253,11 @@ private:
     SessionResult Generate(const std::string& policyInput, const std::vector<conversationMessage>& promptContext, const aiProfile& profile,
         bool llmAvailable, bool shouldSpeak, bool evaluateMemory, bool proactive, const std::string& proactiveInstruction,
         const std::string& precomputedInternetGrounding, std::stop_token stopToken, const TurnPolicy& turnPolicy);
+    // Decides whether this turn may try the optional cloud model and, if so, hands the
+    // router the request with only the private pieces the user opted into.
+    void PrepareCloudTurn(const std::string& policyInput, const aiProfile& profile, const intelligence::IntelligenceDecision& decision,
+        bool proactive, const TurnPolicy& turnPolicy, const agents::ResponseFilterContext& filterContext, std::stop_token stopToken,
+        std::uint64_t turnId);
     void PublishComponent(const std::string& component, const std::string& phase, const std::string& message, double elapsedMilliseconds,
         int queueDepth, std::uint64_t turnId, std::uint64_t audienceRevision = 0) const;
     void PublishInternetActivity(const std::string& phase, const std::string& query, const std::string& provider, const std::string& detail,

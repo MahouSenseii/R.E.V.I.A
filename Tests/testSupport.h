@@ -122,6 +122,7 @@ int RunImprovementWorkbenchLive();
 void RunMemoryDedupLimitsTests();
 void RunQuotedPayloadTests();
 void RunContextFittingTests();
+void RunCloudModelTests();
 void RunAiPipelineLive();
 void RunSpeechInterruptionTests();
 void RunInvestigationTests();

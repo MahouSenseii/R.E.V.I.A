@@ -245,6 +245,23 @@ bool configManager::LoadSettings(appSettings& outSettings) const
             {
                 outSettings.llm.bStablePromptPrefix = llmData["stablePromptPrefix"].get<bool>();
             }
+
+            if (llmData.contains("cloud") && llmData["cloud"].is_object())
+            {
+                // There is deliberately no key field: the key is read from the named
+                // environment variable when a request is made, and an "apiKey" written
+                // here is ignored.
+                const json& cloudData = llmData["cloud"];
+                auto& cloud = outSettings.llm.cloud;
+                cloud.bEnabled = cloudData.value("enabled", cloud.bEnabled);
+                cloud.provider = cloudData.value("provider", cloud.provider);
+                cloud.baseUrl = cloudData.value("baseUrl", cloud.baseUrl);
+                cloud.model = cloudData.value("model", cloud.model);
+                cloud.apiKeyEnvironmentVariable = cloudData.value("apiKeyEnvironmentVariable", cloud.apiKeyEnvironmentVariable);
+                cloud.useFor = cloudData.value("useFor", cloud.useFor);
+                cloud.maxTokens = cloudData.value("maxTokens", cloud.maxTokens);
+                cloud.timeoutSeconds = cloudData.value("timeoutSeconds", cloud.timeoutSeconds);
+            }
         }
 
         if (data.contains("intelligence"))
@@ -1315,6 +1332,11 @@ bool configManager::LoadSettings(appSettings& outSettings) const
         outSettings.llm.temperature > 2.0f || outSettings.llm.maxTokens < 1 ||
         outSettings.llm.maxTokens > 32768 ||
         outSettings.llm.thinkingTokens < 0 || outSettings.llm.thinkingTokens > 32768 ||
+        (outSettings.llm.cloud.provider != "openai-compatible" && outSettings.llm.cloud.provider != "anthropic") ||
+        (outSettings.llm.cloud.useFor != "never" && outSettings.llm.cloud.useFor != "ask" &&
+            outSettings.llm.cloud.useFor != "hardTurns") ||
+        outSettings.llm.cloud.maxTokens < 1 || outSettings.llm.cloud.maxTokens > 128000 ||
+        outSettings.llm.cloud.timeoutSeconds < 1 || outSettings.llm.cloud.timeoutSeconds > 600 ||
         outSettings.llm.contextSize < 512 || outSettings.llm.contextSize > 1048576 ||
         !IsKvCacheType(outSettings.llm.kvCacheType) ||
         outSettings.llm.parallelRequests < 1 || outSettings.llm.parallelRequests > 16 ||

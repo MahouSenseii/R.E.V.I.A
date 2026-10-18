@@ -9,6 +9,7 @@
 #include "Memory/memoryTypes.h"
 #include "Agents/responseProvenance.h"
 #include <mutex>
+#include <optional>
 #include <string>
 #include <filesystem>
 #include <stop_token>
@@ -16,6 +17,7 @@
 
 #include "LLM/llmService.h"
 #include "LLM/privateMemoryAccess.h"
+#include "LLM/Cloud/cloudChatService.h"
 #include "Intelligence/intelligenceTypes.h"
 #include "Intelligence/modelLifetime.h"
 #include "Intelligence/modelResidencyManager.h"
@@ -39,6 +41,15 @@ public:
     // Set after SetPosture, which clears it: the lines this turn's answer must follow,
     // placed at the end of the prompt rather than in the system message.
     void SetReplyNote(std::string note);
+    // Set after SetPosture, which clears it: asks the next RouteMessage to try the
+    // optional cloud model. An explicit request is answered by the cloud or refused; an
+    // automatic one (a hard turn) falls back to the local route when the cloud says no.
+    void SetCloudTurn(revia::llm::cloud::CloudTurnRequest request);
+    // The cloud backend's own switches and status, for /cloud and the session wiring.
+    [[nodiscard]] revia::llm::cloud::CloudChatService& Cloud()
+    { return cloud; }
+    [[nodiscard]] const revia::llm::cloud::CloudChatService& Cloud() const
+    { return cloud; }
     // The saved memories related to `query`, for work that happens before the reply's
     // own prompt is built -- the self-inquiry.
     std::string RelatedMemories(
@@ -134,4 +145,6 @@ private:
     mutable revia::intelligence::ModelResidencyManager residency;
     mutable std::mutex reasoningMutex;
     mutable ReasoningHandler pendingReasoning;
+    mutable std::optional<revia::llm::cloud::CloudTurnRequest> pendingCloud;
+    revia::llm::cloud::CloudChatService cloud;
 };

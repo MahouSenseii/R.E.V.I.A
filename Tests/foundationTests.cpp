@@ -10198,6 +10198,7 @@ int main(const int argc, char** argv)
         RunMemoryDedupLimitsTests();
         RunQuotedPayloadTests();
         RunContextFittingTests();
+        RunCloudModelTests();
         std::cout << "All Revia foundation tests passed.\n";
         return 0;
     }

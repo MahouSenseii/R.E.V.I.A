@@ -1,6 +1,6 @@
 # R.E.V.I.A
 
-R.E.V.I.A stands for **Reactive Emotional Virtual Interactive Assistant**. She is a local-first Windows desktop companion written in C++: one persistent character with conversation, memory, mood, voice, vision, curiosity, and carefully supervised computer actions. Everything that thinks, listens, or speaks runs on your own PC.
+R.E.V.I.A stands for **Reactive Emotional Virtual Interactive Assistant**. She is a local-first Windows desktop companion written in C++: one persistent character with conversation, memory, mood, voice, vision, curiosity, and carefully supervised computer actions. Everything that thinks, listens, or speaks runs on your own PC; an [optional cloud model](#optional-cloud-model) exists but is off unless you set it up.
 
 This is an active personal project, not a finished consumer app. This README says plainly what works, what has only been tested in code, and what is not done yet, then walks through getting her running from a clean Windows machine.
 
@@ -350,6 +350,8 @@ Type these in Chat or the CLI. `/help` lists everything, including direct file a
 | `/perception`, `/perception pause`, `resume`, `forget` | Screen awareness state and control |
 | `/history <words>`, `/history forget` | Search or clear conversation history |
 | `/internet on`, `manual`, `off` | Automatic, only-when-asked, or no web lookups |
+| `/cloud`, `/cloud on`, `/cloud off` | Status of the [optional cloud model](#optional-cloud-model); switch it off (or back on) for this session |
+| `/cloud ask [--screen] [--clipboard] [--memory] <question>` | Ask the cloud model once (or say "ask the cloud ...") |
 | `/web "query"` | One web lookup |
 | `/bargein`, `/bargein off` | Inspect or disable voice interruption |
 | `/improve`, `/improve review <file or area>`, `/improve show\|accept\|reject <id>` | Her proposals for improving her own code |
@@ -412,9 +414,41 @@ What to expect on the dev PC (RTX 5070 12 GB + RTX 2070 Super 8 GB). These are *
 
 Turn logs and the router still name the old models ("Qwen3-VL 8B") in a few places; the worker that actually runs is the one in `Config\settings.json`, which `/models` shows.
 
-All workers are separate local processes bound to `127.0.0.1` so each GPU gets its own CUDA context and a crash cannot take Revia down. Nothing is sent to a cloud model.
+All workers are separate local processes bound to `127.0.0.1` so each GPU gets its own CUDA context and a crash cannot take Revia down. Nothing is sent to a cloud model unless you set up the [optional cloud model](#optional-cloud-model).
 
 On one GPU, or none, the resource planner moves work to what is available instead of switching features off.
+
+### Optional cloud model
+
+Off by default, and nothing below happens until you change `Config\settings.json`. Revia can send some turns to an OpenAI-compatible chat-completions endpoint (OpenAI, OpenRouter, a vLLM server, ...) or to the Anthropic Messages API. Local models still answer everything else, and all her other work (memory decisions, reviews, planning, vision, tools) stays local.
+
+```json
+"llm": {
+  "cloud": {
+    "enabled": true,
+    "provider": "anthropic",
+    "baseUrl": "https://api.anthropic.com",
+    "model": "<model id from your provider>",
+    "apiKeyEnvironmentVariable": "ANTHROPIC_API_KEY",
+    "useFor": "ask",
+    "maxTokens": 1024,
+    "timeoutSeconds": 60
+  }
+}
+```
+
+For an OpenAI-compatible provider use `"provider": "openai-compatible"` and a base URL that ends where `/chat/completions` should be added, for example `https://api.openai.com/v1`.
+
+- **The key** is read from the environment variable you name, when a request is made. It is never a setting, never written to a file by Revia, and never logged. Set it for your user (`setx ANTHROPIC_API_KEY ...`) and restart Revia. An `apiKey` field in the cloud block is ignored.
+- **When it is used** (`useFor`): `"never"` (not even when asked); `"ask"`, only when you ask for it with `/cloud ask <question>` or a message that starts with "ask the cloud"; `"hardTurns"`, also the turns the router would have sent to the Expert model. A hard turn the cloud cannot take (switched off, no key, refused) is answered locally as usual. An explicit ask is never quietly answered locally: if the cloud cannot take it, she tells you why.
+- **What leaves the PC** in a request: the profile's persona prompt, one fixed sentence saying it is a cloud turn, and the recent conversation turns (your messages and her replies, as typed and said). Her internal state lines, saved memories, recalled conversations, page text, the screen summary and the clipboard are removed. You can send the screen summary, the clipboard or related saved memories for one question with `--screen`, `--clipboard`, `--memory` on `/cloud ask`; there is no spoken way to do that. The provider sees your IP address and whatever its own terms say it keeps.
+- **What stays local, always**: any turn from Discord, a stream, or an unknown speaker (public audiences never reach the cloud); any request in which the sensitive-content detector finds a credential, a private key, a card or ID number, or text that names a credential such as "password" (then the whole request stays local and she says what was found, without repeating it); her own unprompted remarks.
+- **Audit**: every request writes an intent record to the action audit before anything is sent, and a result record afterwards: provider, host, model, request and response byte counts, HTTP status and the SHA-256 of the exact request body. No conversation text and no key. If the record cannot be written, nothing is sent.
+- **Transport**: HTTPS through Windows' WinHTTP, redirects refused. Plain `http://` is refused except to `127.0.0.1`, which exists for testing.
+- `/cloud off` stops all cloud use for the session immediately; `/cloud on` allows it again (it cannot enable what the settings file leaves off); `/cloud` shows the status and why it is unavailable.
+- Replies stream into the chat and pass the same filters as local ones. Tool calling is not offered to cloud models.
+
+Tested with fake transports on Linux (request shape for both providers, event-stream parsing, key handling, every refusal, stripping and the audit record). The WinHTTP code is only compiled for Windows here; **it has not been run against a real provider**.
 
 ### Voice speed: what to expect
 
@@ -540,7 +574,7 @@ The capability `mode` can be `supervised` (default) or `owner_full_access`. The 
 
 ## Privacy and safety
 
-- Everything runs locally. Only web lookups send data out (the query), and they can be turned off with `/internet off`.
+- Everything runs locally. Only web lookups send data out (the query), and they can be turned off with `/internet off`. The [optional cloud model](#optional-cloud-model) sends conversation text out, but only after you set it up, and `/cloud off` stops it.
 - The language-model and embedding servers Revia starts get a fresh random API key each launch, run without `/slots` or a media directory, and must prove they hold that key before she sends them anything. If another program is already answering on one of their ports, she refuses it and says so (`Another process is answering on Revia's language-model port`) instead of using it. A server you run yourself (`autoStartServer: false`) is still trusted as before, with `apiKey` sent if you set one. Tested against fake servers; not yet run against a real squatter on Windows.
 - Screenshots are deleted immediately; only short summaries are kept in memory. Excluding an app (password managers are excluded by default) hides it from **activity records**, not from screenshots sent to local vision.
 - Files are limited to `Documents\ReviaSandbox` unless you approve more. Writes need confirmation.
