@@ -13,6 +13,7 @@
 
 #include <QApplication>
 #include <QCheckBox>
+#include <QClipboard>
 #include <QComboBox>
 #include <QEvent>
 #include <QDir>
@@ -1231,6 +1232,49 @@ struct ReviaWindowStopTests
         release.store(true);
         window.operationWorker.join();
         window.messageInput->clear();
+
+        // Replies render as Markdown, and nothing in reply text is interpreted as markup
+        // or becomes a working link. A user line first, so Copy covers this reply only.
+        window.AppendChat("You", "Show me the build command.", true);
+        const auto before = window.chatEntries.size();
+        const QString reply = "Use `make` here <b>raw</b><script>alert(1)</script> [regen](copy:0) ![x](file:///C:/secret.png)\n\n"
+                              "```\nint value = 1;\n```";
+        RuntimeEvent answer{RuntimeEventKind::AssistantMessage, RuntimeState::Idle, reply.toStdString()};
+        answer.audienceRevision = window.Session().Audience().revision;
+        window.HandleRuntimeEvent(answer);
+        expect(window.chatEntries.size() == before + 1 && window.chatEntries.back().markdown, "the reply was not kept as Markdown");
+        const QString shown = window.chatHistory->toHtml();
+        expect(!shown.contains("<script") && shown.contains("&lt;script&gt;") && !shown.contains("<b>raw"),
+            "reply HTML was interpreted instead of shown as text");
+        expect(!shown.contains("file:///C:/secret.png\"") && shown.contains("[image: file:///C:/secret.png]"),
+            "a reply image was loaded instead of shown as its address");
+        const QString copyLink = QString("copy:%1").arg(window.chatEntries.size() - 1);
+        expect(shown.count("href=\"copy:") >= 1 && shown.contains("href=\"" + copyLink + "\"") && !shown.contains("href=\"copy:0\""),
+            "the reply has no Copy link of its own, or its text added one");
+        expect(shown.contains("Consolas") && shown.contains("int value = 1;"), "code was not set in a monospace face");
+        emit window.chatHistory->anchorClicked(QUrl(copyLink));
+        expect(QApplication::clipboard()->text() == reply, "Copy did not place the reply's own text on the clipboard");
+
+        // The transcript is capped, and streamed fragments still replace the right entry.
+        RuntimeEvent fragment{RuntimeEventKind::ReplyFragment, RuntimeState::Responding, "Streamed first sentence."};
+        fragment.audienceRevision = window.Session().Audience().revision;
+        fragment.conversationTurnId = 7707;
+        window.HandleRuntimeEvent(fragment);
+        for (int index = 0; index < 450; ++index)
+            window.AppendChat("System", QString("filler %1").arg(index));
+        expect(window.chatEntries.size() == ReviaWindow::MaximumChatEntries, "the transcript grew past its cap");
+        RuntimeEvent replace = fragment;
+        replace.phase = "Replace";
+        replace.message = "Approved whole reply after trimming.";
+        window.HandleRuntimeEvent(replace);
+        expect(window.chatEntries.back().body == "Approved whole reply after trimming.",
+            "a replacement for a fragment that scrolled away was lost");
+        expect(std::count_if(window.chatEntries.begin(), window.chatEntries.end(),
+                   [](const auto& entry) { return entry.body.startsWith("filler"); }) == static_cast<long>(ReviaWindow::MaximumChatEntries) - 1,
+            "trimming removed the wrong entries");
+        window.chatEntries.clear();
+        window.ResetConversationPresentation();
+        window.RenderChat();
     }
 
     static void Run(ReviaWindow& window, int& failures)

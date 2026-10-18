@@ -170,6 +170,13 @@ class ReviaWindow final : public QMainWindow
         // never be drawn under a later one.
         quint64 taskId = 0;
         int round = 0;
+        // Revia's own replies are Markdown; everything else is shown as plain text.
+        bool markdown = false;
+        // The body as last rendered and the text it came from. A re-render only converts
+        // entries whose text changed, so a streamed sentence does not re-run Markdown
+        // over the whole history.
+        QString renderedSource;
+        QString renderedBody;
     };
 
     // Appends one of Revia's working entries. `detail` is the supporting evidence, shown
@@ -179,6 +186,16 @@ class ReviaWindow final : public QMainWindow
     // the investigation runs -- enablement lives in the runtime settings, not here.
     bool showWorkSummaries = true;
     void RenderChat();
+    // The cached body HTML of one entry, converted again only when its text changed.
+    const QString& RenderedBody(ChatEntry& entry);
+    // Consecutive entries from one non-user speaker read as one message: streamed speech
+    // arrives sentence by sentence. These find where such a message ends and its text.
+    [[nodiscard]] bool EndsMessage(std::size_t index) const;
+    [[nodiscard]] QString MessageText(std::size_t last) const;
+    // The transcript keeps the newest entries only. Indices held elsewhere (streamed
+    // fragments) are shifted, or forgotten when their entry scrolled away.
+    static constexpr std::size_t MaximumChatEntries = 400;
+    void TrimTranscript();
     std::vector<ChatEntry> chatEntries;
     enum class ActivitySeverity
     {

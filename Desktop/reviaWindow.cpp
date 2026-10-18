@@ -19,10 +19,12 @@
 #include "canvasPanel.h"
 #include "internetActivityPanel.h"
 #include "resourcePanel.h"
+#include "chatMarkdown.h"
 #include "ui_reviaWindow.h"
 
 #include <QApplication>
 #include <QCheckBox>
+#include <QClipboard>
 #include <QCloseEvent>
 #include <QComboBox>
 #include <QDateTime>
@@ -541,17 +543,25 @@ void ReviaWindow::BuildInterface()
     connect(chatHistory, &QTextBrowser::anchorClicked, this,
         [this](const QUrl& link)
         {
+            // Every anchor here was written by RenderChat; reply text cannot add one.
             const QString target = link.toString();
-            if (!target.startsWith(QStringLiteral("thought:")))
-            {
+            const qsizetype colon = target.indexOf(QLatin1Char(':'));
+            if (colon <= 0)
                 return;
-            }
+            const QString action = target.left(colon);
             bool parsed = false;
-            const std::size_t index = static_cast<std::size_t>(target.mid(8).toULongLong(&parsed));
-            if (parsed && index < chatEntries.size())
+            const std::size_t index = static_cast<std::size_t>(target.mid(colon + 1).toULongLong(&parsed));
+            if (!parsed || index >= chatEntries.size())
+                return;
+            if (action == QStringLiteral("thought"))
             {
                 chatEntries[index].expanded = !chatEntries[index].expanded;
                 RenderChat();
+            }
+            else if (action == QStringLiteral("copy"))
+            {
+                QApplication::clipboard()->setText(MessageText(index));
+                statusBar()->showMessage(QStringLiteral("Copied to the clipboard."), 3000);
             }
         });
 
@@ -2085,8 +2095,71 @@ void ReviaWindow::RefreshStateBadge()
 
 void ReviaWindow::AppendChat(const QString& speaker, const QString& message, const bool userMessage, const QString& reasoning)
 {
-    chatEntries.push_back({speaker, message, reasoning, userMessage, false});
+    ChatEntry entry;
+    entry.speaker = speaker;
+    entry.body = message;
+    entry.reasoning = reasoning;
+    entry.userMessage = userMessage;
+    entry.markdown = !userMessage && !speaker.isEmpty() && speaker == QString::fromStdString(Session().DisplayName());
+    chatEntries.push_back(std::move(entry));
+    TrimTranscript();
     RenderChat();
+}
+
+void ReviaWindow::TrimTranscript()
+{
+    if (chatEntries.size() <= MaximumChatEntries)
+        return;
+    const std::size_t dropped = chatEntries.size() - MaximumChatEntries;
+    chatEntries.erase(chatEntries.begin(), chatEntries.begin() + static_cast<std::ptrdiff_t>(dropped));
+    std::vector<std::size_t> kept;
+    for (const std::size_t index : streamedReplyEntries)
+        if (index >= dropped)
+            kept.push_back(index - dropped);
+    streamedReplyEntries = std::move(kept);
+}
+
+bool ReviaWindow::EndsMessage(const std::size_t index) const
+{
+    const ChatEntry& entry = chatEntries[index];
+    if (entry.kind != EntryKind::Message || entry.userMessage || entry.speaker.isEmpty() || entry.body.isEmpty())
+        return false;
+    for (std::size_t next = index + 1; next < chatEntries.size(); ++next)
+    {
+        const ChatEntry& following = chatEntries[next];
+        // A blanked fragment or a reasoning-only line belongs to the message around it.
+        if (following.kind == EntryKind::Message && following.speaker.isEmpty() && following.body.isEmpty())
+            continue;
+        return !(following.kind == EntryKind::Message && !following.userMessage && following.speaker == entry.speaker &&
+                 !following.body.isEmpty());
+    }
+    return true;
+}
+
+QString ReviaWindow::MessageText(const std::size_t last) const
+{
+    const QString speaker = chatEntries[last].speaker;
+    QStringList parts;
+    for (std::size_t index = last + 1; index-- > 0;)
+    {
+        const ChatEntry& entry = chatEntries[index];
+        if (entry.kind == EntryKind::Message && entry.speaker.isEmpty() && entry.body.isEmpty())
+            continue;
+        if (entry.kind != EntryKind::Message || entry.userMessage || entry.speaker != speaker)
+            break;
+        parts.prepend(entry.body);
+    }
+    return parts.join(QStringLiteral("\n\n"));
+}
+
+const QString& ReviaWindow::RenderedBody(ChatEntry& entry)
+{
+    if (entry.renderedBody.isNull() || entry.renderedSource != entry.body)
+    {
+        entry.renderedSource = entry.body;
+        entry.renderedBody = entry.markdown ? revia::desktop::RenderUntrustedMarkdown(entry.body) : HtmlParagraph(entry.body);
+    }
+    return entry.renderedBody;
 }
 
 void ReviaWindow::ReplaceStreamedReply(const std::uint64_t conversationTurnId, const QString& speaker, const QString& body)
@@ -2131,6 +2204,7 @@ void ReviaWindow::AppendWorkEntry(const EntryKind kind, const QString& body, con
     entry.taskId = taskId;
     entry.round = round;
     chatEntries.push_back(std::move(entry));
+    TrimTranscript();
     RenderChat();
 }
 
@@ -2144,7 +2218,7 @@ void ReviaWindow::RenderChat()
     bool previousSpeakerWasUser = false;
     for (std::size_t index = 0; index < chatEntries.size(); ++index)
     {
-        const ChatEntry& entry = chatEntries[index];
+        ChatEntry& entry = chatEntries[index];
         const bool working = entry.kind != EntryKind::Message;
         if (working && !showWorkSummaries)
             continue;
@@ -2218,11 +2292,23 @@ void ReviaWindow::RenderChat()
             previousSpeakerWasUser = entry.userMessage;
         }
 
-        if (!entry.body.isEmpty())
+        if (!entry.body.isEmpty() && entry.markdown)
+        {
+            // Block-level HTML from the Markdown conversion, so it cannot sit inside a <p>.
+            html += RenderedBody(entry);
+        }
+        else if (!entry.body.isEmpty())
         {
             html += QStringLiteral("<p style=\"margin-top:0px; margin-bottom:2px; text-align:%1; "
                                    "color:#dce9f7;\">%2</p>")
-                        .arg(align, HtmlParagraph(entry.body));
+                        .arg(align, RenderedBody(entry));
+        }
+
+        if (EndsMessage(index))
+        {
+            html += QStringLiteral("<p style=\"margin-top:0px; margin-bottom:4px; text-align:left;\">"
+                                   "<a href=\"copy:%1\" style=\"color:#6f8fb0; text-decoration:none; font-size:11px;\">Copy</a></p>")
+                        .arg(QString::number(index));
         }
 
         if (entry.reasoning.isEmpty())

@@ -336,6 +336,14 @@ Rebuilding does not overwrite your memory, voices, preferences, or live permissi
 | **Settings** | Microphone, speech, conversation behavior, initiative |
 | **Runtime** | Activity log, Pipelines (every worker), Resources (GPU/CPU/RAM), Diagnostics |
 
+### In the Chat tab
+
+- **Formatted replies.** Revia's replies are shown as Markdown: headings, lists, tables, and code in a monospace face. Reply text is never treated as HTML. A link in a reply shows its address but does nothing when clicked, and images are never loaded; only the window's own links act.
+- **Copy** under each reply puts its text (as she wrote it, Markdown included) on the clipboard.
+- The window keeps the newest 400 entries. Older ones are still in the conversation archive.
+
+These were checked by the desktop test fixture with Qt offscreen on Linux; the Windows build has not been tried by hand yet.
+
 ---
 
 ## Commands
