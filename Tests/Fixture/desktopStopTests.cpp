@@ -1591,6 +1591,111 @@ struct ReviaWindowStopTests
         window.RenderChat();
     }
 
+    static void RunDelegationCardUi(ReviaWindow& window, int& failures)
+    {
+        using namespace revia::runtime;
+        const auto expect = [&](const bool condition, const char* message)
+        {
+            if (!condition)
+            {
+                std::cerr << "FAIL: " << message << '\n';
+                ++failures;
+            }
+        };
+        // Synthetic session events only: no model runs, and this session never started, so
+        // it reports on no delegated task.
+        const auto delegation = [&](const std::string& phase, const std::string& id, const std::uint64_t turn, const std::string& message)
+        {
+            RuntimeEvent event{RuntimeEventKind::AgentWorkflow, RuntimeState::Thinking, message};
+            event.component = "Delegation";
+            event.phase = phase;
+            event.detail = id;
+            event.conversationTurnId = turn;
+            window.HandleRuntimeEvent(event);
+        };
+        const auto cards = [&]()
+        {
+            return std::count_if(window.chatEntries.begin(), window.chatEntries.end(),
+                [](const auto& entry) { return entry.kind == ReviaWindow::EntryKind::DelegatedTask; });
+        };
+        window.chatEntries.clear();
+        window.ResetConversationPresentation();
+        window.AppendChat("You", "Find out why the build is slow.", true);
+
+        // The submission arrives mid-turn, before the reply it belongs under.
+        delegation("Submitted", "fixture-task-a", 5101, "Find why the <b>build</b> is slow");
+        expect(window.heldTaskCard.has_value() && cards() == 0, "a delegation card was drawn before the reply that delegated");
+        RuntimeEvent reply{RuntimeEventKind::AssistantMessage, RuntimeState::Idle, "I handed that to my agents."};
+        reply.audienceRevision = window.Session().Audience().revision;
+        window.HandleRuntimeEvent(reply);
+        expect(!window.heldTaskCard && window.chatEntries.size() == 3 && window.chatEntries[1].body == "I handed that to my agents." &&
+                   window.chatEntries.back().kind == ReviaWindow::EntryKind::DelegatedTask,
+            "the held delegation card was not appended directly beneath the reply");
+        delegation("Submitted", "fixture-task-a", 5101, "Find why the build is slow");
+        expect(cards() == 1, "a repeated submission added a second card for one task");
+
+        // Hiding work summaries must not hide the card, and a card whose task the session no
+        // longer reports on says so and offers no Cancel.
+        window.showWorkSummaries = false;
+        window.RenderChat();
+        const QString html = window.chatHistory->toHtml();
+        const QString text = window.chatHistory->toPlainText();
+        window.showWorkSummaries = true;
+        expect(text.contains("Revia's agents") && text.contains("No longer tracked") && !text.contains("Revia is thinking"),
+            "the task card was hidden, mislabelled, or claimed a task the session does not report");
+        expect(html.contains("href=\"task-details:2\"") && !html.contains("href=\"task-cancel:"),
+            "a card whose task is not current offered Cancel");
+        expect(text.contains("<b>build</b>") && !html.contains("<b>build"), "the delegated objective was interpreted as markup");
+        expect(html.contains("href=\"copy:1\"") && html.contains("href=\"regen:1\"") && html.contains("href=\"edit:0\""),
+            "the card broke Copy, Regenerate or Edit for the exchange above it");
+
+        // A task link acts only on a card, and a card's Cancel names its own task.
+        window.statusBar()->clearMessage();
+        emit window.chatHistory->anchorClicked(QUrl("task-cancel:1"));
+        expect(window.statusBar()->currentMessage().isEmpty(), "a task link acted on an entry that is not a task card");
+        emit window.chatHistory->anchorClicked(QUrl("task-cancel:2"));
+        expect(window.statusBar()->currentMessage().contains("No delegated task"), "a stale card's Cancel was not refused by its task id");
+        emit window.chatHistory->anchorClicked(QUrl("task-details:2"));
+        auto* studio = window.findChild<QScrollArea*>("agentStudioScroll");
+        auto* studioSection = window.findChild<QTabWidget*>("studioTabs");
+        expect(studio && studioSection && studioSection->currentWidget() == studio && window.tabs->currentWidget()->isAncestorOf(studio),
+            "the card's Details did not open Agent Studio");
+        window.tabs->setCurrentIndex(0);
+
+        // A streamed reply is already on screen when its turn ends; the card goes beneath it.
+        delegation("Submitted", "fixture-task-b", 5102, "Second objective");
+        RuntimeEvent fragment{RuntimeEventKind::ReplyFragment, RuntimeState::Responding, "Streamed hand-off reply."};
+        fragment.audienceRevision = window.Session().Audience().revision;
+        fragment.conversationTurnId = 5102;
+        window.HandleRuntimeEvent(fragment);
+        expect(window.heldTaskCard.has_value(), "a card was placed before its streamed turn ended");
+        RuntimeEvent ended{RuntimeEventKind::ComponentStatus, RuntimeState::Thinking, "Turn #5102 completed."};
+        ended.component = "Conversation";
+        ended.phase = "Ready";
+        ended.turnId = 5102;
+        window.HandleRuntimeEvent(ended);
+        expect(!window.heldTaskCard && window.chatEntries.back().delegated.workflowId == "fixture-task-b" &&
+                   window.chatEntries[window.chatEntries.size() - 2].body == "Streamed hand-off reply.",
+            "the card was not placed beneath the streamed reply when its turn ended");
+        // A submission seen only after its turn ended has no reply left to wait for.
+        delegation("Submitted", "fixture-task-c", 5102, "Late objective");
+        expect(!window.heldTaskCard && window.chatEntries.back().delegated.workflowId == "fixture-task-c",
+            "a submission after its turn ended was held instead of shown");
+        delegation("Submitted", "fixture-task-d", 5200, "Discarded objective");
+        window.ResetConversationPresentation();
+        expect(!window.heldTaskCard, "a held card outlived the conversation presentation it belonged to");
+
+        auto* origin = window.findChild<QLabel*>("agentDelegation");
+        auto* mode = window.findChild<QComboBox*>("delegationModeCombo");
+        expect(origin && origin->isHidden(), "Agent Studio claimed a chat origin with no delegated task");
+        expect(mode && mode->count() == 3 && mode->itemData(0).toString() == "off" && mode->itemData(1).toString() == "on_request" &&
+                   mode->itemData(2).toString() == "auto" && !mode->toolTip().isEmpty(),
+            "the delegation mode control is missing its three exact settings or its explanation");
+        window.chatEntries.clear();
+        window.ResetConversationPresentation();
+        window.RenderChat();
+    }
+
     static void Run(ReviaWindow& window, int& failures)
     {
         using revia::runtime::RuntimeEvent;
@@ -1755,6 +1860,7 @@ int main(int argc, char** argv)
     ReviaWindowStopTests::RunChatTranscriptUi(window, failures);
     ReviaWindowStopTests::RunChatSessionsUi(window, failures);
     ReviaWindowStopTests::RunRegenerateAndEditUi(window, failures);
+    ReviaWindowStopTests::RunDelegationCardUi(window, failures);
     ReviaWindowStopTests::RunAttachmentUi(window, failures);
     ReviaWindowStopTests::RunConfirmationAudienceUi(window, failures);
     ReviaWindowStopTests::RunConversationQualityUi(window, failures);

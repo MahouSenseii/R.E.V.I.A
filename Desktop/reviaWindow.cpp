@@ -209,6 +209,105 @@ QString EventTime(const revia::runtime::RuntimeEvent& event)
     const auto milliseconds = std::chrono::duration_cast<std::chrono::milliseconds>(event.occurredAt.time_since_epoch()).count();
     return QDateTime::fromMSecsSinceEpoch(milliseconds).toString("HH:mm:ss.zzz");
 }
+
+// The statuses in which a delegated task is still running and can be cancelled.
+bool ActiveDelegation(const revia::runtime::DelegatedTaskStatus status)
+{
+    using revia::runtime::DelegatedTaskStatus;
+    return status == DelegatedTaskStatus::Working || status == DelegatedTaskStatus::Reviewing ||
+           status == DelegatedTaskStatus::Reporting;
+}
+
+// What a Delegation event's phase says about its task, in the session's own terms.
+std::optional<revia::runtime::DelegatedTaskStatus> DelegationPhaseStatus(const std::string& phase)
+{
+    using revia::runtime::DelegatedTaskStatus;
+    if (phase == "Submitted" || phase == "Reopened")
+        return DelegatedTaskStatus::Working;
+    if (phase == "Reviewed" || phase == "Unverified")
+        return DelegatedTaskStatus::Reporting;
+    if (phase == "Reported")
+        return DelegatedTaskStatus::Reported;
+    if (phase == "NotEstablished")
+        return DelegatedTaskStatus::NotEstablished;
+    if (phase == "Cancelled")
+        return DelegatedTaskStatus::Cancelled;
+    if (phase == "Rejected")
+        return DelegatedTaskStatus::Rejected;
+    if (phase == "Replaced")
+        return DelegatedTaskStatus::Replaced;
+    if (phase == "ReportFailed")
+        return DelegatedTaskStatus::ReportFailed;
+    return std::nullopt;
+}
+
+// How a task ended, from its event, for a card the session no longer reports on. A report
+// event carries the whole reply, which is already in the transcript, so it is not repeated.
+QString PublishedDelegationDetail(const revia::runtime::DelegatedTaskStatus status, const std::string& message)
+{
+    using revia::runtime::DelegatedTaskStatus;
+    switch (status)
+    {
+    case DelegatedTaskStatus::Reported:
+        return QStringLiteral("Revia reported the reviewed result in this chat.");
+    case DelegatedTaskStatus::NotEstablished:
+        return QStringLiteral("Revia reported that the review did not establish an answer.");
+    case DelegatedTaskStatus::Cancelled:
+    case DelegatedTaskStatus::Rejected:
+    case DelegatedTaskStatus::Replaced:
+    case DelegatedTaskStatus::ReportFailed:
+        return QString::fromStdString(message).left(300);
+    default:
+        return QString();
+    }
+}
+
+// Time since the task was handed off, read now. The card shows it as of its last update
+// rather than ticking, so a poll never has to rebuild the transcript just for a clock.
+QString HandOffAge(const revia::runtime::DelegatedTaskView& task)
+{
+    using namespace std::chrono;
+    long long elapsed = 0;
+    if (task.submittedSteady != steady_clock::time_point{})
+        elapsed = duration_cast<seconds>(steady_clock::now() - task.submittedSteady).count();
+    else if (task.submittedAt != system_clock::time_point{})
+        elapsed = duration_cast<seconds>(system_clock::now() - task.submittedAt).count();
+    elapsed = std::max(0LL, elapsed);
+    if (elapsed < 60)
+        return QStringLiteral("%1 s").arg(QString::number(elapsed));
+    return QStringLiteral("%1 min %2 s").arg(QString::number(elapsed / 60), QString::number(elapsed % 60));
+}
+
+// Which workers are active, which is waiting next, and where the active one hands off,
+// from the same snapshot Agent Studio shows.
+QString WorkerStage(const revia::agents::WorkflowSnapshot& snapshot)
+{
+    using revia::agents::WorkflowState;
+    QStringList running;
+    QString next;
+    QString handoff;
+    for (const auto& node : snapshot.nodes)
+    {
+        if (node.state == WorkflowState::Running)
+        {
+            running.push_back(QString::fromStdString(node.workingOn));
+            if (handoff.isEmpty())
+                handoff = QString::fromStdString(node.nextHandoff);
+        }
+        else if (node.state == WorkflowState::Waiting && next.isEmpty())
+        {
+            next = QString::fromStdString(node.workingOn);
+        }
+    }
+    QStringList parts;
+    if (!running.isEmpty())
+        parts.push_back(running.join(QStringLiteral(" and ")) + (running.size() == 1 ? QStringLiteral(" is working") : QStringLiteral(" are working")));
+    if (!next.isEmpty())
+        parts.push_back(next + QStringLiteral(" is next"));
+    if (!handoff.isEmpty())
+        parts.push_back(QStringLiteral("next handoff: ") + handoff);
+    return parts.isEmpty() ? QString::fromStdString(revia::agents::ToString(snapshot.state)) : parts.join(QStringLiteral(" · "));
+}
 }
 
 ReviaWindow::ReviaWindow(const bool startRuntime, const bool buildSystemTray, QWidget* parent)
@@ -271,8 +370,7 @@ ReviaWindow::ReviaWindow(const bool startRuntime, const bool buildSystemTray, QW
             if (switchingCompanion)
                 return;
             Session().PollBackgroundEvents();
-            if (agentStudioPanel)
-                agentStudioPanel->SetSnapshot(Session().AgentWorkflowSnapshot());
+            RefreshAgentWorkflowViews();
         });
     pollTimer->start();
 
@@ -647,6 +745,27 @@ void ReviaWindow::BuildInterface()
             {
                 BeginEditLastTurn();
             }
+            else if (action == QStringLiteral("task-details") || action == QStringLiteral("task-cancel"))
+            {
+                // Only a task card's own links act, and never while the session behind
+                // the card is being replaced or shut down.
+                if (switchingCompanion || shuttingDown.load() || chatEntries[index].kind != EntryKind::DelegatedTask)
+                    return;
+                if (action == QStringLiteral("task-details"))
+                {
+                    if (tabs->isEnabled())
+                        revia::desktop::SelectNavigationPage(findChild<QScrollArea*>("agentStudioScroll"));
+                    return;
+                }
+                // By the card's own task id: a card left over from earlier work can only
+                // be refused, never stop whatever runs now.
+                std::string error;
+                const bool cancelled = Session().CancelDelegatedTask(chatEntries[index].delegated.workflowId, error);
+                statusBar()->showMessage(cancelled ? QStringLiteral("Cancelled the delegated task. Nothing more from it will be reported.")
+                                                   : QString::fromStdString(error),
+                    8000);
+                RefreshAgentWorkflowViews();
+            }
         });
 
     QSettings shellSettings;
@@ -766,6 +885,33 @@ void ReviaWindow::BuildInterface()
         { ShowPreferenceResult(Session().SetPreference("responseFilter.aiReviewEnabled", enabled ? "on" : "off")); });
     connect(initiativeMaxSpin, &QSpinBox::editingFinished, this,
         [this]() { ShowPreferenceResult(Session().SetPreference("initiative.maxPerHour", std::to_string(initiativeMaxSpin->value()))); });
+    // Made here rather than in the .ui file. Added to the same grid before the first
+    // responsive reflow, so it keeps its place beside the other conversation settings.
+    auto* delegationLabel = new QLabel(QStringLiteral("Use agents from chat"), ui->conversationBehaviorGroup);
+    delegationLabel->setObjectName("delegationModeLabel");
+    delegationModeCombo = new QComboBox(ui->conversationBehaviorGroup);
+    delegationModeCombo->setObjectName("delegationModeCombo");
+    delegationModeCombo->addItem(QStringLiteral("Off"), QStringLiteral("off"));
+    delegationModeCombo->addItem(QStringLiteral("On request"), QStringLiteral("on_request"));
+    delegationModeCombo->addItem(QStringLiteral("Auto"), QStringLiteral("auto"));
+    delegationModeCombo->setCurrentIndex(delegationModeCombo->findData(QStringLiteral("on_request")));
+    const QString delegationHelp = QStringLiteral(
+        "Whether Revia may hand a bounded investigation from chat to her Agent Studio workers: never, only when you ask, or "
+        "when she judges it worth it. This decides when, never what: delegated workers only read inside the folders approved "
+        "under Permissions and cannot change anything.");
+    delegationLabel->setToolTip(delegationHelp);
+    delegationModeCombo->setToolTip(delegationHelp);
+    delegationLabel->setBuddy(delegationModeCombo);
+    ui->conversationBehaviorControls->addWidget(delegationLabel, 5, 0);
+    ui->conversationBehaviorControls->addWidget(delegationModeCombo, 5, 1);
+    connect(delegationModeCombo, &QComboBox::currentIndexChanged, this,
+        [this](const int index)
+        {
+            if (index < 0)
+                return;
+            ShowPreferenceResult(
+                Session().SetPreference("conversation.delegation", delegationModeCombo->itemData(index).toString().toStdString()));
+        });
     connect(resourceSampleSpin, &QSpinBox::editingFinished, this, [this]()
         { ShowPreferenceResult(Session().SetPreference("resources.usageSampleSeconds", std::to_string(resourceSampleSpin->value()))); });
     connect(createVoiceButton, &QPushButton::clicked, this, [this]() { CreateVoicePreset(); });
@@ -994,6 +1140,9 @@ void ReviaWindow::SendMessage(const bool voiceInput)
         // stays responsive and says what the message is waiting for.
         statusBar()->showMessage(QStringLiteral("Your message will be answered when the current studio operation finishes."), 8000);
     }
+    // As AppendChat does before a line from the person, and before this turn is in flight,
+    // so a card from an earlier turn never waits for this turn's reply instead.
+    PlaceHeldTaskCard();
     chatTurnInFlight = true;
     if (attached.empty())
     {
@@ -1058,6 +1207,10 @@ void ReviaWindow::SendMessage(const bool voiceInput)
                         return;
                     chatTurnInFlight = false;
                     PresentSessionResult(result);
+                    // The turn's reply is on screen now, so a task it handed off goes
+                    // directly beneath it.
+                    if (PlaceHeldTaskCard())
+                        TrimTranscript();
                     RenderChat();
                     sendButton->setEnabled(!result.shouldExit && Session().IsStarted());
                     RefreshStateBadge();
@@ -1695,8 +1848,8 @@ void ReviaWindow::HandleRuntimeEvent(const revia::runtime::RuntimeEvent& event)
         conversationStatus->Observe(event);
     if (event.kind == revia::runtime::RuntimeEventKind::AgentWorkflow)
     {
-        if (agentStudioPanel)
-            agentStudioPanel->SetSnapshot(Session().AgentWorkflowSnapshot());
+        const bool placed = event.component == "Delegation" && ObserveDelegation(event);
+        RefreshAgentWorkflowViews(placed);
         RefreshStateBadge();
         return;
     }
@@ -2053,6 +2206,18 @@ void ReviaWindow::HandleRuntimeEvent(const revia::runtime::RuntimeEvent& event)
                 detail += QStringLiteral(" queue=") + QString::number(event.queueDepth);
             }
             AppendComponentActivity(event, detail);
+            if (event.component == "Conversation" && (event.phase == "Ready" || event.phase == "Stopped" || event.phase == "Error"))
+            {
+                lastFinishedConversationTurn = std::max(lastFinishedConversationTurn, event.turnId);
+                // A streamed reply is already on screen when its turn ends. One that was
+                // not streamed arrives after this, and places the card itself.
+                if (!chatTurnInFlight && heldTaskCard && event.turnId != 0 && heldTaskCard->delegated.originTurnId == event.turnId &&
+                    streamedReplyTurnId == event.turnId && PlaceHeldTaskCard())
+                {
+                    TrimTranscript();
+                    RenderChat();
+                }
+            }
         }
         return;
     }
@@ -2065,6 +2230,13 @@ void ReviaWindow::HandleRuntimeEvent(const revia::runtime::RuntimeEvent& event)
         const QString reasoning = QString::fromStdString(event.detail);
         AppendChat(speaker, body, false, reasoning);
         CaptureDisplayedAnswer(body, event.stamp, event.audienceRevision, event.turnId);
+        // The reply of a voice turn: a task that turn handed off goes beneath it. A typed
+        // turn places its card when its own result is shown.
+        if (!chatTurnInFlight && PlaceHeldTaskCard())
+        {
+            TrimTranscript();
+            RenderChat();
+        }
         return;
     }
 
@@ -2170,6 +2342,8 @@ void ReviaWindow::ResetConversationPresentation()
     displayedAnswerTurnId = 0;
     streamedReplyTurnId = 0;
     streamedReplyEntries.clear();
+    heldTaskCard.reset();
+    lastFinishedConversationTurn = 0;
     viewingArchivedChat.clear();
     if (archivedChatBanner)
         archivedChatBanner->hide();
@@ -2257,6 +2431,12 @@ void ReviaWindow::RefreshStateBadge()
 
 void ReviaWindow::AppendChat(const QString& speaker, const QString& message, const bool userMessage, const QString& reasoning)
 {
+    // A card still waiting for its reply goes in before the next line from the person, so
+    // it can never end up under a later exchange, or be lost waiting for one. Not while a
+    // typed turn is in flight: a voice line arriving then must not put that turn's card
+    // above its own reply, and the typed result places the card when it is shown.
+    if (userMessage && !chatTurnInFlight)
+        PlaceHeldTaskCard();
     ChatEntry entry;
     entry.speaker = speaker;
     entry.body = message;
@@ -2371,6 +2551,188 @@ void ReviaWindow::AppendWorkEntry(const EntryKind kind, const QString& body, con
     RenderChat();
 }
 
+void ReviaWindow::RefreshAgentWorkflowViews(const bool transcriptChanged)
+{
+    // Read once and given to both views, so the card and Agent Studio always describe the
+    // same moment. Both reads are plain on a session that never started.
+    const revia::agents::WorkflowSnapshot snapshot = Session().AgentWorkflowSnapshot();
+    const std::optional<revia::runtime::DelegatedTaskView> task = Session().DelegatedTask();
+    if (agentStudioPanel)
+    {
+        agentStudioPanel->SetSnapshot(snapshot);
+        QString origin;
+        if (task && !snapshot.id.empty() && task->taskId == snapshot.id)
+        {
+            origin = QStringLiteral("Delegated from chat · %1 · revision %2 · %3\n%4")
+                         .arg(QString::fromStdString(revia::runtime::ToString(task->status)), QString::number(task->revision),
+                             QString::fromStdString(task->access), QString::fromStdString(task->objective));
+        }
+        agentStudioPanel->SetDelegation(origin);
+    }
+    // Kept current while held, so it shows what Agent Studio shows from the moment it lands.
+    if (heldTaskCard)
+        UpdateTaskCard(*heldTaskCard, snapshot, task);
+    bool changed = transcriptChanged;
+    for (ChatEntry& entry : chatEntries)
+    {
+        if (entry.kind == EntryKind::DelegatedTask && UpdateTaskCard(entry, snapshot, task))
+            changed = true;
+    }
+    // RenderChat rebuilds the whole transcript and scrolls it, so only for a visible change.
+    if (changed)
+        RenderChat();
+}
+
+bool ReviaWindow::UpdateTaskCard(ChatEntry& entry, const revia::agents::WorkflowSnapshot& snapshot,
+    const std::optional<revia::runtime::DelegatedTaskView>& task)
+{
+    using revia::runtime::DelegatedTaskStatus;
+    DelegatedCard& card = entry.delegated;
+    const bool liveTask = task && task->taskId == card.workflowId;
+    const bool liveFlow = liveTask && !snapshot.id.empty() && snapshot.id == card.workflowId;
+    // Only what changes the shown text goes into the basis. The elapsed time does not, so a
+    // poll that finds nothing new leaves the transcript alone.
+    const QString basis =
+        liveTask ? QStringLiteral("live|%1|%2|%3|%4")
+                       .arg(QString::number(static_cast<int>(task->status)), QString::number(task->revision),
+                           liveFlow ? QString::number(snapshot.sequence) : QString(),
+                           liveFlow ? QString::number(static_cast<int>(snapshot.state)) : QString())
+                 : QStringLiteral("kept|%1|%2")
+                       .arg(card.published ? QString::number(static_cast<int>(*card.published)) : QString(),
+                           task ? QStringLiteral("other") : QStringLiteral("none"));
+    if (basis == card.basis)
+        return false;
+    card.basis = basis;
+    const QString asOf = QDateTime::currentDateTime().toString(QStringLiteral("HH:mm:ss"));
+    if (!liveTask)
+    {
+        // The session reports on another task now, or on none. The card keeps how its own
+        // task last stood, and never again offers to cancel what it can no longer see.
+        card.active = false;
+        if (card.published && !ActiveDelegation(*card.published))
+        {
+            card.status = QString::fromStdString(revia::runtime::ToString(*card.published));
+            card.progress = card.publishedDetail;
+        }
+        else if (task)
+        {
+            card.status = QString::fromStdString(revia::runtime::ToString(DelegatedTaskStatus::Replaced));
+            card.progress = QStringLiteral("Another delegated task took its place; nothing more from this one is shown.");
+        }
+        else
+        {
+            card.status = QStringLiteral("No longer tracked");
+            card.progress = QStringLiteral("The session that ran this task no longer reports on it.");
+        }
+        card.progress += (card.progress.isEmpty() ? QString() : QStringLiteral("\n")) + QStringLiteral("Updated ") + asOf;
+        return true;
+    }
+    card.objective = QString::fromStdString(task->objective);
+    card.status = QString::fromStdString(revia::runtime::ToString(task->status));
+    card.active = ActiveDelegation(task->status);
+    const QString age = HandOffAge(*task);
+    if (!card.active)
+    {
+        card.progress = (task->detail.empty() ? QString() : QString::fromStdString(task->detail) + QStringLiteral("\n")) +
+                        QStringLiteral("Updated %1, %2 after it was handed off").arg(asOf, age);
+        return true;
+    }
+    QString stage;
+    if (task->status == DelegatedTaskStatus::Reviewing)
+        stage = QStringLiteral("Revia's acceptance check is reviewing their work");
+    else if (task->status == DelegatedTaskStatus::Reporting)
+        stage = QStringLiteral("The review is done; Revia reports the outcome here when the conversation is free");
+    else
+        stage = liveFlow ? WorkerStage(snapshot) : QStringLiteral("Starting");
+    QString timing = QStringLiteral("%1 since it was handed off, as of %2").arg(age, asOf);
+    if (liveFlow)
+    {
+        timing += QStringLiteral(" · %1 of %2 requests · %3 of %4 model calls")
+                      .arg(QString::number(snapshot.requests), QString::number(task->budget.maximumRequests),
+                          QString::number(snapshot.providerCalls), QString::number(task->budget.maximumProviderCalls));
+    }
+    card.progress = stage + QStringLiteral("\n") + timing;
+    return true;
+}
+
+bool ReviaWindow::ObserveDelegation(const revia::runtime::RuntimeEvent& event)
+{
+    // The task id is the workflow id; the card is found by it, never by position.
+    const std::string& id = event.detail;
+    if (id.empty())
+        return false;
+    const std::optional<revia::runtime::DelegatedTaskStatus> published = DelegationPhaseStatus(event.phase);
+    const auto record = [&](ChatEntry& entry)
+    {
+        if (!published)
+            return;
+        entry.delegated.published = published;
+        entry.delegated.publishedDetail = PublishedDelegationDetail(*published, event.message);
+    };
+    if (const auto index = FindTaskCard(id))
+    {
+        record(chatEntries[*index]);
+        return false;
+    }
+    if (heldTaskCard && heldTaskCard->delegated.workflowId == id)
+    {
+        record(*heldTaskCard);
+        return false;
+    }
+    // Only a submission starts a card. A later phase of a task whose card has scrolled away
+    // is left to Agent Studio.
+    if (event.phase != "Submitted")
+        return false;
+    // There is one workforce, so a card still held belongs to work that is over by now. It
+    // is placed rather than dropped.
+    const bool placed = PlaceHeldTaskCard();
+    ChatEntry entry;
+    entry.kind = EntryKind::DelegatedTask;
+    entry.delegated.workflowId = id;
+    entry.delegated.originTurnId = event.conversationTurnId;
+    entry.delegated.objective = QString::fromStdString(event.message);
+    entry.delegated.status = QString::fromStdString(revia::runtime::ToString(revia::runtime::DelegatedTaskStatus::Working));
+    record(entry);
+    // Normally the reply this belongs under is still to come. If its turn already ended
+    // here, nothing more is coming to place it, so it goes in now.
+    if (!chatTurnInFlight && event.conversationTurnId != 0 && event.conversationTurnId <= lastFinishedConversationTurn)
+    {
+        chatEntries.push_back(std::move(entry));
+        TrimTranscript();
+        return true;
+    }
+    heldTaskCard = std::move(entry);
+    if (placed)
+        TrimTranscript();
+    return placed;
+}
+
+bool ReviaWindow::PlaceHeldTaskCard()
+{
+    if (!heldTaskCard)
+        return false;
+    ChatEntry card = std::move(*heldTaskCard);
+    heldTaskCard.reset();
+    // Already on screen: placed by an earlier path, or put back with a restored exchange.
+    if (FindTaskCard(card.delegated.workflowId))
+        return false;
+    // Always at the end. Indices into the transcript are held elsewhere, so nothing is
+    // ever inserted before them.
+    chatEntries.push_back(std::move(card));
+    return true;
+}
+
+std::optional<std::size_t> ReviaWindow::FindTaskCard(const std::string& workflowId) const
+{
+    for (std::size_t index = chatEntries.size(); index-- > 0;)
+    {
+        const ChatEntry& entry = chatEntries[index];
+        if (entry.kind == EntryKind::DelegatedTask && entry.delegated.workflowId == workflowId)
+            return index;
+    }
+    return std::nullopt;
+}
+
 void ReviaWindow::RenderChat()
 {
     // A saved chat stays on screen, scrolled where the reader left it; the live entries
@@ -2388,6 +2750,44 @@ void ReviaWindow::RenderChat()
     for (std::size_t index = 0; index < chatEntries.size(); ++index)
     {
         ChatEntry& entry = chatEntries[index];
+        if (entry.kind == EntryKind::DelegatedTask)
+        {
+            // Ahead of the working entries on purpose: hiding Revia's thinking must not hide
+            // work still running on her behalf, and this is not her thinking either. Muted
+            // like them all the same, because it is not her reply.
+            const DelegatedCard& card = entry.delegated;
+            html += QStringLiteral("<p style=\"margin-top:8px; margin-bottom:1px; text-align:left;\">"
+                                   "<b><span style=\"color:#7f8c9e;\">Revia's agents &middot; %1</span></b></p>")
+                        .arg(HtmlParagraph(card.status));
+            if (!card.objective.isEmpty())
+            {
+                html += QStringLiteral("<p style=\"margin-top:0px; margin-bottom:2px; text-align:left; "
+                                       "color:#a9b6c6;\">%1</p>")
+                            .arg(HtmlParagraph(card.objective));
+            }
+            if (!card.progress.isEmpty())
+            {
+                html += QStringLiteral("<p style=\"margin-top:0px; margin-bottom:2px; text-align:left; color:#8390a3; "
+                                       "font-size:11px;\">%1</p>")
+                            .arg(HtmlParagraph(card.progress));
+            }
+            // Cancel only while the session still reports this very task as running. The
+            // link names the card, and the card names its task, so it never stops other work.
+            const QString cancel =
+                card.active ? QStringLiteral("&nbsp;&nbsp;&middot;&nbsp;&nbsp;<a href=\"task-cancel:%1\" style=\"color:#6f8fb0; "
+                                             "text-decoration:none; font-size:11px;\">Cancel</a>")
+                                  .arg(QString::number(index))
+                            : QString();
+            html += QStringLiteral("<p style=\"margin-top:0px; margin-bottom:4px; text-align:left;\">"
+                                   "<a href=\"task-details:%1\" style=\"color:#6f8fb0; text-decoration:none; "
+                                   "font-size:11px;\">Details</a>%2</p>")
+                        .arg(QString::number(index), cancel);
+            // The next message prints its speaker again, so a report that arrives under the
+            // card is not read as more of the reply above it.
+            previousSpeaker.clear();
+            previousSpeakerWasUser = false;
+            continue;
+        }
         const bool working = entry.kind != EntryKind::Message;
         if (working && !showWorkSummaries)
             continue;
@@ -2604,12 +3004,23 @@ void ReviaWindow::RetryLastExchange(const QString& replacement)
         return;
     }
     CloseArchivedChat();
+    // A card still held belongs to the exchange already on screen, so it joins that exchange
+    // first and is replaced, or kept, along with it.
+    PlaceHeldTaskCard();
     // What is replaced is kept, so a refusal can put the transcript back exactly. The
     // position is absolute because the transcript may be trimmed while this runs.
     const std::size_t keepFrom = *user + (editing ? 0 : 1);
     auto replaced = std::make_shared<std::vector<ChatEntry>>(
         chatEntries.begin() + static_cast<std::ptrdiff_t>(keepFrom), chatEntries.end());
     const std::size_t absoluteKeepFrom = keepFrom + chatEntriesDropped;
+    // A task that is still running is not part of the reply being replaced. Its card is held
+    // and goes back under the new reply, so regenerating never hides work in progress.
+    std::optional<ChatEntry> runningCard;
+    for (const ChatEntry& entry : *replaced)
+    {
+        if (entry.kind == EntryKind::DelegatedTask && entry.delegated.active)
+            runningCard = entry;
+    }
     chatEntries.resize(keepFrom);
     streamedReplyTurnId = 0;
     streamedReplyEntries.clear();
@@ -2618,6 +3029,8 @@ void ReviaWindow::RetryLastExchange(const QString& replacement)
         AppendChat("You", replacement, true);
     else
         RenderChat();
+    if (runningCard)
+        heldTaskCard = std::move(runningCard);
     sendButton->setEnabled(false);
     stopButton->setEnabled(true);
 
@@ -2653,6 +3066,15 @@ void ReviaWindow::RetryLastExchange(const QString& replacement)
                         // The session changed nothing, so neither does the transcript.
                         if (absoluteKeepFrom >= chatEntriesDropped && absoluteKeepFrom - chatEntriesDropped <= chatEntries.size())
                         {
+                            // A running task's card may be back on screen already, placed
+                            // before a line from the person; it is restored once, not twice.
+                            replaced->erase(std::remove_if(replaced->begin(), replaced->end(),
+                                                [this](const ChatEntry& entry)
+                                                {
+                                                    return entry.kind == EntryKind::DelegatedTask &&
+                                                           FindTaskCard(entry.delegated.workflowId).has_value();
+                                                }),
+                                replaced->end());
                             const auto at = chatEntries.begin() + static_cast<std::ptrdiff_t>(absoluteKeepFrom - chatEntriesDropped);
                             const bool newLine = editing && at != chatEntries.end() && at->userMessage &&
                                                  at->body == QString::fromStdString(text);
@@ -2666,6 +3088,10 @@ void ReviaWindow::RetryLastExchange(const QString& replacement)
                         statusBar()->showMessage(why, 12000);
                         AppendActivity((editing ? QStringLiteral("Edit not applied: ") : QStringLiteral("Regenerate not applied: ")) + why);
                     }
+                    // The new reply, or the restored one, is on screen: a held card goes
+                    // beneath it, unless the restore already brought it back.
+                    if (PlaceHeldTaskCard())
+                        TrimTranscript();
                     RenderChat();
                     sendButton->setEnabled(Session().IsStarted());
                     RefreshStateBadge();
@@ -2765,6 +3191,8 @@ void ReviaWindow::ClearTranscript()
     chatEntries.clear();
     streamedReplyTurnId = 0;
     streamedReplyEntries.clear();
+    // Its reply belonged to the chat that is gone; the task itself stays in Agent Studio.
+    heldTaskCard.reset();
     pendingUtterances.clear();
     pendingSpeechTimer->stop();
     RenderChat();
@@ -2873,6 +3301,7 @@ void ReviaWindow::ContinueArchivedChat()
     chatEntries.clear();
     streamedReplyTurnId = 0;
     streamedReplyEntries.clear();
+    heldTaskCard.reset();
     const QString assistant = QString::fromStdString(Session().DisplayName());
     for (const revia::memory::ArchivedTurn& turn : turns)
     {
@@ -3090,6 +3519,7 @@ void ReviaWindow::ApplyUserPreferences()
     const QSignalBlocker aiFilterBlocker(aiFilterCheck);
     const QSignalBlocker initiativeMaxBlocker(initiativeMaxSpin);
     const QSignalBlocker sampleBlocker(resourceSampleSpin);
+    const QSignalBlocker delegationBlocker(delegationModeCombo);
     speechCheck->setChecked(snapshot.speechEnabled);
     bargeInCheck->setChecked(snapshot.bargeInEnabled);
     handsFreeCheck->setChecked(snapshot.handsFreeEnabled);
@@ -3107,6 +3537,8 @@ void ReviaWindow::ApplyUserPreferences()
     spontaneousSpeechCheck->setEnabled(snapshot.initiativeEnabled && snapshot.curiosityEnabled);
     speakWhenAwayCheck->setEnabled(snapshot.initiativeEnabled && snapshot.curiosityEnabled);
     resourceSampleSpin->setValue(snapshot.resourceSampleSeconds);
+    if (const int delegation = delegationModeCombo->findData(QString::fromStdString(snapshot.delegation)); delegation >= 0)
+        delegationModeCombo->setCurrentIndex(delegation);
     RefreshPresenceUi();
 }
 

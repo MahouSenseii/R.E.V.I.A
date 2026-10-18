@@ -444,7 +444,7 @@ void ReviaWindow::SwitchCompanion(const std::string& id)
                     createCompanionButton->setEnabled(true);
                     agentStudioPanel->setEnabled(true);
                     tabs->setEnabled(true);
-                    agentStudioPanel->SetSnapshot(Session().AgentWorkflowSnapshot());
+                    RefreshAgentWorkflowViews();
                     RefreshStudioPanels();
                     if (restart)
                         StartRuntime();

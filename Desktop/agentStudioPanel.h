@@ -31,6 +31,9 @@ class AgentStudioPanel final : public QWidget
 
     explicit AgentStudioPanel(Controls controls, QWidget* parent = nullptr);
     void SetSnapshot(const revia::agents::WorkflowSnapshot& snapshot);
+    // Where the current workflow came from when Revia handed it off from chat, as plain
+    // text; empty hides the line.
+    void SetDelegation(const QString& line);
     void ResetForCompanion();
 
   private:
@@ -42,6 +45,7 @@ class AgentStudioPanel final : public QWidget
     QElapsedTimer observationAge;
     QString observedUtc;
     QLabel* summary = nullptr;
+    QLabel* delegation = nullptr;
     QLabel* feedback = nullptr;
     QLabel* details = nullptr;
     QComboBox* provider = nullptr;
