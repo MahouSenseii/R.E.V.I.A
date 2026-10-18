@@ -910,6 +910,29 @@ ResourcePlan PlanResources(const HardwareInventory& hardware, const resourceSett
         ? "none"
         : embedding->backendId;
 
+    // With the whole chat model on one GPU, its CPU threads mostly wait on the GPU, while
+    // the CPU embedding server computes every recall query on the threads it has: 11
+    // chat threads beside 3 for embeddings on a 24-thread host. Move up to half of the
+    // chat threads to embeddings, never leaving chat fewer than four or giving embeddings
+    // more than eight, which is past where a small embedding model stops scaling.
+    const bool chatFullyOnGpu = primary != nullptr && plan.chatSplitMode == "none" &&
+        requirements.chatWorkingSetMiB <=
+            UsableGpuMiB(*primary, static_cast<std::uint64_t>(std::max(0, requirements.baseGpuReserveMiB)));
+    const bool voiceTookCpuThreads = requirements.voiceExpected && plan.voiceDevice == "cpu" && usableCores >= 8;
+    if (chatFullyOnGpu && plan.embeddingDevice == "none" && !voiceTookCpuThreads)
+    {
+        const int chatKeeps = std::max(4, (plan.chatCpuThreads + 1) / 2);
+        const int moved = std::clamp(std::min(plan.chatCpuThreads - chatKeeps, 8 - plan.embeddingCpuThreads), 0, plan.chatCpuThreads);
+        if (moved > 0)
+        {
+            plan.chatCpuThreads -= moved;
+            plan.chatBatchThreads = plan.chatCpuThreads;
+            plan.embeddingCpuThreads += moved;
+            plan.notes.push_back("Chat runs fully on the GPU, so " + std::to_string(moved) +
+                                 " of its CPU threads went to the CPU embedding server.");
+        }
+    }
+
     const GpuDevice* stt = FindDevice(ranked, policy.speechRecognition, 1);
     constexpr std::uint64_t SpeechRecognitionWorkingSetMiB = 1024;
     const bool sttFits = stt != nullptr && UsableGpuMiB(

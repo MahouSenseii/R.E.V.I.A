@@ -44,6 +44,9 @@ void llamaCppEmbeddingService::ApplySettings(const embeddingSettings& settings)
     apiKey = settings.apiKey;
     queryPrefix = settings.queryPrefix;
     documentPrefix = settings.documentPrefix;
+    std::lock_guard lock(cacheMutex);
+    cache.clear();
+    cacheIndex.clear();
 }
 
 bool llamaCppEmbeddingService::IsEnabled() const
@@ -171,6 +174,37 @@ embeddingOutput llamaCppEmbeddingService::Embed(const std::string& text, const s
         return FinishEmbedding(std::move(output), started);
     }
 
+    // Keyed by endpoint, model and the prefixed input: a query and a document embedding
+    // of the same words are different vectors.
+    const std::string cacheKey = host + ':' + std::to_string(port) + '\n' + modelName + '\n' + prefix + text;
+    {
+        std::lock_guard lock(cacheMutex);
+        if (const auto found = cacheIndex.find(cacheKey); found != cacheIndex.end())
+        {
+            cache.splice(cache.begin(), cache, found->second);
+            embeddingOutput cached = found->second->second;
+            return FinishEmbedding(std::move(cached), started);
+        }
+    }
+    const auto remember = [this, &cacheKey](embeddingOutput finished)
+    {
+        if (finished.bSuccess)
+        {
+            std::lock_guard lock(cacheMutex);
+            if (cacheIndex.find(cacheKey) == cacheIndex.end())
+            {
+                cache.emplace_front(cacheKey, finished);
+                cacheIndex.emplace(cacheKey, cache.begin());
+                if (cache.size() > CacheCapacity)
+                {
+                    cacheIndex.erase(cache.back().first);
+                    cache.pop_back();
+                }
+            }
+        }
+        return finished;
+    };
+
     revia::llm::CancellableHttpClient client(host, port, stopToken);
     ApplyApiKey(client, apiKey);
     client.set_connection_timeout(2);
@@ -245,7 +279,7 @@ embeddingOutput llamaCppEmbeddingService::Embed(const std::string& text, const s
             value *= inverseLength;
         }
         output.bSuccess = true;
-        return FinishEmbedding(std::move(output), started);
+        return remember(FinishEmbedding(std::move(output), started));
     }
     catch (const std::exception& error)
     {

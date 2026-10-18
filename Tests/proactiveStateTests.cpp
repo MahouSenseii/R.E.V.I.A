@@ -9,6 +9,7 @@
 #include "testSupport.h"
 #include "promptLayoutTestSupport.h"
 #include "Runtime/conversationRuntime.h"
+#include "LLM/LLamaCPP/llamaCppEmbeddingService.h"
 
 #include <algorithm>
 #include <atomic>
@@ -741,8 +742,38 @@ void TestTurnReferenceStaysInItsTurn()
         "Text fetched for one turn was sent again with the next.");
 }
 
+// PERF-7: the same text was embedded for the reply's recall, again for self-inquiry,
+// and again for the memory classifier, each time a CPU embedding call.
+void TestRepeatedEmbeddingsAreCached()
+{
+    Backend backend;
+    llamaCppEmbeddingService embeddings;
+    embeddings.ApplySettings(MetadataEmbeddings(backend.port, true));
+    const auto first = embeddings.EmbedQuery("What was the rover called?");
+    const auto repeat = embeddings.EmbedQuery("What was the rover called?");
+    Check(first.bSuccess && repeat.bSuccess && repeat.values == first.values && backend.embeddingRequests == 1,
+        "Embedding the same query twice called the embedding server twice.");
+    Check(embeddings.EmbedDocument("What was the rover called?").bSuccess && backend.embeddingRequests == 2,
+        "A document embedding reused a query embedding of the same words.");
+
+    // Bounded: the oldest entry is evicted once 64 newer ones arrive.
+    for (int index = 0; index < 64; ++index)
+        (void)embeddings.EmbedQuery("Filler query " + std::to_string(index));
+    const int afterFill = backend.embeddingRequests.load();
+    (void)embeddings.EmbedQuery("Filler query 63");
+    Check(backend.embeddingRequests == afterFill, "A recent embedding was evicted early.");
+    (void)embeddings.EmbedQuery("What was the rover called?");
+    Check(backend.embeddingRequests == afterFill + 1, "The embedding cache grew beyond its bound instead of evicting.");
+
+    // New settings may name another model, so nothing cached survives them.
+    embeddings.ApplySettings(MetadataEmbeddings(backend.port, true));
+    (void)embeddings.EmbedQuery("Filler query 63");
+    Check(backend.embeddingRequests == afterFill + 2, "Cached embeddings survived a settings change.");
+}
+
 void RunProactiveStateTests()
 {
+    TestRepeatedEmbeddingsAreCached();
     TestMainResponseReportsItsConfiguredModel();
     TestConfiguredModelMetadataFollowsAvailabilityFallbacks();
     TestConfiguredModelMetadataForReviewCuriosityAndDeliberation();

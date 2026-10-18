@@ -239,6 +239,11 @@ std::vector<std::string> BuildLlamaServerArguments(
     if (embeddingMode)
     {
         add({"--embedding", "--pooling", pooling, "--device", device});
+        // An embedding input must fit one physical batch. The 512-token default refused
+        // long recall queries (up to about 4,000 characters), so the batch matches the
+        // embedding context instead.
+        const std::string batch = std::to_string(std::max(512, settings.contextSize));
+        add({"--batch-size", batch, "--ubatch-size", batch});
         return arguments;
     }
     if (!settings.device.empty() && settings.device != "auto")

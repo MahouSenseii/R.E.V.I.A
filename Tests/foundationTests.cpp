@@ -8165,6 +8165,16 @@ void TestServerArgumentsQuantizeTheKvCacheWithFlashAttention()
     Check(std::find(embedding.begin(), embedding.end(), "--embedding") != embedding.end() &&
               std::find(embedding.begin(), embedding.end(), "--flash-attn") == embedding.end(),
         "The embedding server received chat-only launch flags.");
+    llmSettings embeddingLaunch;
+    embeddingLaunch.contextSize = 2048;
+    const auto batched = BuildLlamaServerArguments(embeddingLaunch, true, "mean", "none");
+    const auto batchValue = [&batched](const std::string& flag)
+    {
+        const auto found = std::find(batched.begin(), batched.end(), flag);
+        return found == batched.end() || found + 1 == batched.end() ? std::string("<absent>") : *(found + 1);
+    };
+    Check(batchValue("--batch-size") == "2048" && batchValue("--ubatch-size") == "2048",
+        "The embedding server kept the 512-token physical batch, which refuses long recall queries.");
     Check(IsQuantizedKvCacheType("q8_0") && IsQuantizedKvCacheType("iq4_nl") && !IsQuantizedKvCacheType("f16") &&
               !IsQuantizedKvCacheType(""),
         "Quantized KV cache types were not recognized.");
@@ -8702,11 +8712,14 @@ void TestResourcePlannerSeparatesUnequalGpus()
         "Embeddings unexpectedly contended with an interactive GPU pipeline.");
     Check(plan.llamaPromptCacheMiB == 4096 && plan.sqliteCacheMiB == 256,
         "A 64-GiB host did not receive bounded llama and SQLite RAM-cache budgets.");
-    Check(plan.chatCpuThreads == 9 && plan.embeddingCpuThreads == 3 &&
+    // Chat fits the RTX 5070 whole, so four of its nine threads go to the CPU embedding
+    // server; the total is unchanged.
+    Check(plan.chatCpuThreads == 5 && plan.chatBatchThreads == 5 && plan.embeddingCpuThreads == 7 &&
         plan.speechRecognitionThreads == 3 && plan.voiceCpuThreads == 3 &&
         plan.chatCpuThreads + plan.embeddingCpuThreads +
             plan.speechRecognitionThreads + plan.voiceCpuThreads == 18,
-        "Independent CPU thread caps exceeded the processors left after the OS reserve.");
+        "Independent CPU thread caps exceeded the processors left after the OS reserve, or a fully "
+        "GPU-resident chat model kept CPU threads the embedding server needed.");
 
     appSettings applied;
     revia::resources::ApplyResourcePlan(plan, applied);
@@ -8714,6 +8727,24 @@ void TestResourcePlannerSeparatesUnequalGpus()
         applied.speechRecognition.device == "cuda:1" &&
         applied.llm.ramCacheMiB == 4096 && applied.speech.qwenCpuThreads == 3,
         "The resolved resource plan was not passed to all service owners.");
+}
+
+void TestEmbeddingThreadsStayWhenChatNeedsTheCpu()
+{
+    revia::resources::HardwareInventory hardware;
+    hardware.gpus = {{"CUDA0", "NVIDIA GeForce RTX 3060", 0, 8192, 7600, {}}};
+    hardware.exactBackendDevices = true;
+    hardware.totalSystemMemoryMiB = 65536;
+    hardware.availableSystemMemoryMiB = 48000;
+    hardware.logicalProcessors = 20;
+    resourceSettings policy;
+    revia::resources::ResourceRequirements requirements;
+    // Larger than the GPU: llama.cpp will offload layers to the CPU, which needs its threads.
+    requirements.chatWorkingSetMiB = 9000;
+    requirements.baseGpuReserveMiB = 1536;
+    const auto plan = revia::resources::PlanResources(hardware, policy, requirements);
+    Check(plan.chatCpuThreads == 9 && plan.embeddingCpuThreads == 3,
+        "Chat threads were moved to embeddings although the chat model does not fit its GPU.");
 }
 
 void TestResourcePlannerSplitsOnlyForCapacity()
@@ -10025,6 +10056,7 @@ int main(const int argc, char** argv)
         TestUnmeasurableResourcesSaySoRatherThanReportingZero();
         TestUsageOverItsBudgetIsVisible();
         TestResourcePlannerSeparatesUnequalGpus();
+        TestEmbeddingThreadsStayWhenChatNeedsTheCpu();
         TestResourcePlannerSplitsOnlyForCapacity();
         TestResourcePlannerPreservesAutoFallbackAndFreeVram();
         TestManualResourcePlanResolvesSymbolicDefaults();
