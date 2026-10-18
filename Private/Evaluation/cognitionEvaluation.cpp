@@ -115,6 +115,8 @@ void ClearCognitionJudgments(CognitionVerdict& verdict)
     verdict.oraclePassed.reset();
     verdict.personalityPassed.reset();
     verdict.reviewerId.clear();
+    verdict.modelJudged = false;
+    verdict.judgeScore = 0;
     ClearStructuredDiagnostics(verdict);
 }
 }
@@ -187,25 +189,91 @@ OracleRegistry::OracleRegistry()
                 return false;
             }
         });
+    // Human rubric verdicts arrive only through ApplyCognitionReview.
     Register("human-rubric-v1", [](const CognitionCase&, const CaseOutcome&) -> std::optional<bool> { return std::nullopt; });
+}
+
+OracleRegistry::OracleRegistry(std::shared_ptr<const AnswerJudge> configuredJudge) : OracleRegistry()
+{
+    judge = std::move(configuredJudge);
+}
+
+bool OracleRegistry::IsModelOracle(const std::string& id) const
+{
+    return id == ModelJudgeOracleId;
+}
+
+JudgeVerdict OracleRegistry::JudgeWithModel(const CognitionCase& item, const CaseOutcome& output) const
+{
+    JudgeVerdict verdict;
+    if (!judge)
+    {
+        verdict.error = "No judge model is configured.";
+        return verdict;
+    }
+    if (output.turns.empty() || output.turns.size() != item.conversation.turns.size())
+    {
+        verdict.error = "Only a complete conversation can be judged.";
+        return verdict;
+    }
+    JudgeInput input;
+    input.caseId = item.id;
+    input.category = item.family;
+    input.rubric = CognitionJudgeRubric(item);
+    for (std::size_t index = 0; index + 1 < output.turns.size(); ++index)
+    {
+        input.priorTurns.push_back({"user", output.turns[index].input});
+        input.priorTurns.push_back({"assistant", output.turns[index].reply});
+    }
+    input.finalInput = output.turns.back().input;
+    input.candidate = output.turns.back().reply;
+    return judge->Judge(input);
+}
+
+std::string CognitionJudgeRubric(const CognitionCase& item)
+{
+    std::string rubric;
+    if (!item.expectedJson.empty() && item.expectedJson != "null")
+        rubric += "The independently authored expected answer is " + item.expectedJson + ". ";
+    const auto list = [&rubric](const char* label, const std::vector<std::string>& claims)
+    {
+        if (claims.empty())
+            return;
+        rubric += label;
+        for (std::size_t index = 0; index < claims.size(); ++index)
+            rubric += (index == 0 ? " " : "; ") + claims[index];
+        rubric += ". ";
+    };
+    list("The reply must establish:", item.requiredClaims);
+    list("The reply must not claim:", item.forbiddenClaims);
+    if (!item.uncertaintyDisposition.empty())
+        rubric += "Where the facts are uncertain, the reply should " + item.uncertaintyDisposition + ". ";
+    if (rubric.empty())
+        rubric = "The reply answers the final request correctly and without unsupported claims.";
+    return rubric;
 }
 
 bool OracleRegistry::Register(std::string id, Checker checker)
 {
-    if (id.empty() || !checker)
+    if (id.empty() || !checker || IsModelOracle(id))
         return false;
     return checkers.emplace(std::move(id), std::move(checker)).second;
 }
 
 std::optional<bool> OracleRegistry::Judge(const CognitionCase& item, const CaseOutcome& output) const
 {
+    if (IsModelOracle(item.oracleId))
+    {
+        const auto verdict = JudgeWithModel(item, output);
+        return verdict.available ? std::optional<bool>(verdict.pass) : std::nullopt;
+    }
     const auto found = checkers.find(item.oracleId);
     return found == checkers.end() ? std::nullopt : found->second(item, output);
 }
 
 bool OracleRegistry::Contains(const std::string& id) const
 {
-    return checkers.contains(id);
+    return checkers.contains(id) || IsModelOracle(id);
 }
 
 CognitionVerdict EvaluateCognitionCase(
@@ -237,6 +305,23 @@ CognitionVerdict EvaluateCognitionCase(
         return verdict;
     }
     verdict.mechanicalPassed = std::all_of(output.turns.begin(), output.turns.end(), [](const TurnOutcome& turn) { return turn.Passed(); });
+    if (oracles.IsModelOracle(item.oracleId))
+    {
+        // A model verdict keeps its own provenance, so nobody mistakes it for a deterministic oracle or a human review.
+        const auto judged = oracles.JudgeWithModel(item, output);
+        if (!judged.available)
+        {
+            verdict.diagnostic = "Model judge unavailable: " + judged.error;
+            return verdict;
+        }
+        verdict.semanticPassed = judged.pass;
+        verdict.oraclePassed = judged.pass;
+        verdict.modelJudged = true;
+        verdict.judgeScore = judged.score;
+        verdict.reviewerId = "model:" + judged.judgeId;
+        verdict.diagnostic = judged.reason;
+        return verdict;
+    }
     verdict.semanticPassed = oracles.Judge(item, output);
     verdict.oraclePassed = verdict.semanticPassed;
     if (item.oracleId == "json-exact-v1")
@@ -345,7 +430,7 @@ bool ApplyCognitionReview(CognitionVerdict& verdict, const CognitionReview& revi
         error = "Review criterionDigest differs.";
     else if (review.campaignDigest != verdict.campaignDigest)
         error = "Review campaignDigest differs.";
-    else if (verdict.oraclePassed == false && review.semanticPassed == true)
+    else if (verdict.oraclePassed == false && review.semanticPassed == true && !verdict.modelJudged)
         error = "A human review cannot erase a deterministic contradiction.";
     else if (!review.semanticPassed && !review.personalityPassed)
         error = "Review contains no judged criteria.";
@@ -565,7 +650,8 @@ std::string CognitionReportJson(const CognitionReport& report, const std::vector
             {"answerValuesPassed", admitted ? OptionalVerdict(run.answerValuesPassed) : Json(nullptr)},
             {"rawAnswerValuesPassed", admitted ? OptionalVerdict(run.rawAnswerValuesPassed) : Json(nullptr)},
             {"repairIntroducedFailure", admitted && run.repairIntroducedFailure},
-            {"repairRescuedAnswer", admitted && run.repairRescuedAnswer}, {"outputDigest", run.outputDigest},
+            {"repairRescuedAnswer", admitted && run.repairRescuedAnswer}, {"modelJudged", admitted && run.modelJudged},
+            {"judgeScore", admitted ? run.judgeScore : 0}, {"outputDigest", run.outputDigest},
             {"sourceDigest", run.sourceDigest}, {"criterionDigest", run.criterionDigest}, {"campaignDigest", run.campaignDigest},
             {"evidence", evidence}, {"diagnostic", run.diagnostic}});
     }

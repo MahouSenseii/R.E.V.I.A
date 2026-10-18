@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Evaluation/answerJudge.h"
 #include "Evaluation/conversationEvaluation.h"
 #include "Evaluation/campaignManifest.h"
 #include "Core/evidenceBundle.h"
@@ -60,6 +61,10 @@ struct CognitionVerdict
     std::optional<bool> rawAnswerValuesPassed;
     bool repairIntroducedFailure = false;
     bool repairRescuedAnswer = false;
+    // Set when the semantic verdict came from a judge model. A human review may overrule
+    // it, which it may not do to a deterministic contradiction.
+    bool modelJudged = false;
+    int judgeScore = 0;
 };
 
 struct CognitionReview
@@ -75,18 +80,29 @@ struct CognitionReview
     std::string campaignDigest;
 };
 
+// The semantic judge model's oracle ID. Without a configured judge it gives no verdict.
+inline constexpr const char* ModelJudgeOracleId = "model-judge-v1";
+
 class OracleRegistry
 {
   public:
     using Checker = std::function<std::optional<bool>(const CognitionCase&, const CaseOutcome&)>;
     OracleRegistry();
+    explicit OracleRegistry(std::shared_ptr<const AnswerJudge> judge);
     bool Register(std::string id, Checker checker);
     [[nodiscard]] std::optional<bool> Judge(const CognitionCase& item, const CaseOutcome& output) const;
     [[nodiscard]] bool Contains(const std::string& id) const;
+    [[nodiscard]] bool IsModelOracle(const std::string& id) const;
+    // The full verdict, with score and reason, for a case that names the model oracle.
+    [[nodiscard]] JudgeVerdict JudgeWithModel(const CognitionCase& item, const CaseOutcome& output) const;
 
   private:
     std::map<std::string, Checker> checkers;
+    std::shared_ptr<const AnswerJudge> judge;
 };
+
+// The rubric the judge receives for a cognition case: its expected answer and claims.
+[[nodiscard]] std::string CognitionJudgeRubric(const CognitionCase& item);
 
 struct CognitionReport
 {

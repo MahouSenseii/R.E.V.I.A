@@ -2,6 +2,7 @@
 #include "Audit/contentDigest.h"
 
 #include <iostream>
+#include <memory>
 #include <fstream>
 #include <set>
 #include <stdexcept>
@@ -111,6 +112,65 @@ void TestStructuredDiagnostics()
     retained = SerializedVerdict(human, EvaluateCognitionCase(human, Output(human, item.expectedJson), 11, oracles));
     Check(retained.at("finalAnswerDiagnostic") == "unjudged" && retained.at("answerValuesPassed").is_null(),
         "A human-rubric case inherited an unrequested structured oracle.");
+}
+
+class CannedJudge final : public JudgeBackend
+{
+  public:
+    explicit CannedJudge(std::string cannedReply) : reply(std::move(cannedReply)) {}
+    JudgeCompletion Complete(const JudgeRequest& request, std::stop_token) const override
+    {
+        lastUser = request.user;
+        return {true, reply, {}};
+    }
+    std::string Identity() const override { return "fake:judge"; }
+
+    std::string reply;
+    mutable std::string lastUser;
+};
+
+void TestModelJudgeOracle()
+{
+    auto item = MakeCase(0);
+    item.oracleId = ModelJudgeOracleId;
+    item.requiredClaims = {"the build produces 10 objects"};
+    const auto output = Output(item, "Ten objects, obviously.");
+
+    const OracleRegistry unconfigured;
+    const auto pending = EvaluateCognitionCase(item, output, 11, unconfigured);
+    Check(!pending.semanticPassed.has_value() && pending.reviewerId.empty() && pending.diagnostic.find("No judge model") != std::string::npos,
+        "The model oracle invented a verdict without a configured judge.");
+
+    const auto passing = std::make_shared<CannedJudge>(R"({"reason":"States ten objects.","score":5,"pass":true})");
+    const OracleRegistry judged(std::make_shared<AnswerJudge>(passing));
+    const auto verdict = EvaluateCognitionCase(item, output, 11, judged);
+    Check(verdict.semanticPassed == true && verdict.oraclePassed == true && verdict.modelJudged && verdict.judgeScore == 5 &&
+              verdict.reviewerId == "model:fake:judge",
+        "A judge verdict was not recorded with model provenance.");
+    const auto packet = nlohmann::json::parse(passing->lastUser);
+    Check(packet.at("candidateReply") == "Ten objects, obviously." &&
+              packet.at("rubric").get<std::string>().find("the build produces 10 objects") != std::string::npos,
+        "The judge did not receive the reply and the case's required claims.");
+    const auto retained = SerializedVerdict(item, verdict);
+    Check(retained.at("semanticPassed") == true && retained.at("modelJudged") == true && retained.at("reviewerId") == "model:fake:judge",
+        "The report lost the model verdict's provenance.");
+
+    // A model failure is a judgment a human may overrule; a deterministic contradiction is not.
+    const OracleRegistry failing(std::make_shared<AnswerJudge>(std::make_shared<CannedJudge>(R"({"reason":"Wrong count.","score":2,"pass":false})")));
+    auto rejected = EvaluateCognitionCase(item, output, 11, failing);
+    Check(rejected.semanticPassed == false && rejected.modelJudged, "A failing judge verdict was not recorded.");
+    CognitionReview review{item.id, 11, "owner", rejected.outputDigest, rejected.sourceDigest, true, std::nullopt, rejected.criterionDigest, {}};
+    std::string error;
+    Check(ApplyCognitionReview(rejected, review, error) && rejected.semanticPassed == true && rejected.reviewerId == "owner",
+        "A bound human review could not overrule a model verdict.");
+    review.reviewerId = "model:other";
+    auto modelReview = EvaluateCognitionCase(item, output, 11, failing);
+    Check(!ApplyCognitionReview(modelReview, review, error), "A model was accepted as a human reviewer.");
+
+    const OracleRegistry malformed(std::make_shared<AnswerJudge>(std::make_shared<CannedJudge>("Ten out of ten.")));
+    const auto unparsed = EvaluateCognitionCase(item, output, 11, malformed);
+    Check(!unparsed.semanticPassed.has_value() && !unparsed.modelJudged && unparsed.diagnostic.find("schema") != std::string::npos,
+        "A judge reply outside the schema became a verdict.");
 }
 
 void TestDiagnosticAccounting()
@@ -444,6 +504,7 @@ int main(int argc, char** argv)
             TestDiagnosticAccounting();
             TestWrongAndUnreviewed();
             TestCampaignEvidenceAdmission();
+            TestModelJudgeOracle();
         }
         if (selected == "all" || selected == "B")
         {
