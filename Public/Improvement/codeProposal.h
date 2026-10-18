@@ -96,8 +96,11 @@ struct ChangeCheck
     bool notFound = false;
 };
 
-// Requires one exact small replacement; rejects newly added process, network, deletion or registry access.
-// Existing such code may be edited; this gate precedes executing the proposed code in verification.
+// Requires one exact small replacement, and refuses any change whose find or replace text
+// touches process launch, dynamic loading, network, registry, file writing or deletion, the
+// preprocessor or inline assembly (Python: imports and name-based access). Best-effort
+// screening, not a guarantee: every proposal is still a patch a person reviews.
+// Existing such code may not be edited either; this gate precedes executing the proposed code in verification.
 [[nodiscard]] ChangeCheck CheckChange(const CodeChange& change, const std::string& currentContent);
 
 // The first line of `find` that appears nowhere in the file, ignoring indentation: where

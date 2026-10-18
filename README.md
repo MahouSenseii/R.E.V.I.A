@@ -29,7 +29,7 @@ The design rule: **one Revia**. Reflex, Fast, Main, and Expert share one identit
 | Filesystem actions and Windows UI Automation | Tested | Confined to `Documents\ReviaSandbox` and approved apps by default |
 | Driving the desktop (pointer, keyboard, app launch) | Tested | **Off by default**; exercised against a desktop test fixture |
 | Karaoke from your own WAV files | Tested | You must supply the songs |
-| Reviewing her own code and proving her suggestions (`/improve`) | Tested | Covered by automated tests with a scripted model; see [Self-improvement](#self-improvement) |
+| Reviewing her own code and suggesting patches (`/improve`) | Tested | Covered by automated tests with a scripted model. Building and testing a suggestion in a copy is switched off in this build; see [Self-improvement](#self-improvement) |
 | Camera (one still frame) | Tested | **Off by default** |
 | Image generation (`/imagine`, SD-Turbo) | Tested | **Off by default**; needs `Tools\InstallImageModel.ps1` |
 | Voice interruption (barge-in) | Tested | Enabled in settings; not confirmed in recent logs |
@@ -71,7 +71,7 @@ The design rule: **one Revia**. Reflex, Fast, Main, and Expert share one identit
 - **Help with what you copied.** Ask about "the code I just copied" or "what's on my clipboard" and she reads it for that one question. It is not saved, and text that looks like a password or key is withheld.
 - **Draw diagrams, keep a working document, generate images** (images need the optional installer).
 - **Sing** recordings you put in `RuntimeData/Songs/` (karaoke playback of your WAV files, not generated singing). Ask "Revia, sing <name>" or use `/sing`.
-- **Review her own code** and suggest one improvement at a time, with the problem, the reason, and a patch that she has already built and tested in a separate copy. She never edits her real source; you apply what you agree with (see [Self-improvement](#self-improvement)).
+- **Review her own code** and suggest one improvement at a time, with the problem, the reason, and a patch. She never edits her real source; you review every patch and apply only what you agree with. Building and testing a patch in a separate copy exists but is switched off in this build (see [Self-improvement](#self-improvement)).
 - **Work with files and apps** inside the folders and applications you approve, with confirmation and an audit log.
 - **Drive the mouse and keyboard** only after you turn it on, with an emergency stop (**hold Ctrl+Alt+Shift**).
 - **Join a Discord voice channel** through a small separate connector (see [Discord](#8-optional-put-her-in-a-discord-voice-channel)).
@@ -439,7 +439,7 @@ She stops singing to answer you (set `performance.interruptSongToSpeak` to `fals
 
 ## Self-improvement
 
-Revia reads her own source, suggests one concrete improvement at a time, and proves it before you hear about it. She never changes her real code: every proposal is a patch you choose to apply.
+Revia reads her own source and suggests one concrete improvement at a time. She never changes her real code: every proposal is a patch you review and choose to apply.
 
 **What makes her look**
 
@@ -450,23 +450,24 @@ Revia reads her own source, suggests one concrete improvement at a time, and pro
 **What a suggestion has to survive**
 
 - The model (the 8B Expert when it can be loaded, otherwise Main) is shown about 220 lines and asked for at most one change, with the problem, the reason, and her own benefit and risk estimates. "Nothing worth changing" is the normal answer.
-- The change must match exactly one place in the file, stay under about 60 lines, touch only product code (`Private/`, `Public/`, `Desktop/`, the Python voice worker; never tests, build files, scripts, or settings), and must not *add* anything that starts programs, uses the network, deletes files, or touches the registry.
+- The change must match exactly one place in the file, stay under about 60 lines, and touch only product code (`Private/`, `Public/`, `Desktop/`, the Python voice worker; never tests, build files, scripts, or settings).
+- **Screening, not a guarantee.** A change is refused if the code it replaces or the code it adds touches anything that starts programs, loads code at run time, uses the network or the registry, writes or deletes files, or uses the preprocessor (`#define`, `#include`, `#pragma`, `##`) or inline assembly; in the Python worker, any import, `__import__`, `getattr`, `exec`/`eval`, `subprocess`, `os`, `socket` and similar. This is a word list. A change can still reach those effects through code it calls, so **review every patch before you apply it**.
 - If the code she means to replace isn't in the file as she wrote it, she gets one second look, told which line isn't there. Code copied without the indentation every line shared still matches, and the replacement gets that indentation back.
 - Found on her own it needs an estimated benefit of 0.6 or more; aimed at a measured problem, 0.4. Risk must be 0.5 or less. The same change is never proposed twice, and a new idea about code that already has a proposal waiting for your decision is held back until you decide.
 - The Expert is loaded for the review and put away as soon as it ends, so the rest of what she does isn't left waiting on a full GPU.
-- **Proof:** the change is applied to a private copy of the source in `%LOCALAPPDATA%\Revia\ImprovementWorkbench`, then built and run through all test suites. If a suite fails, the unchanged copy is tested too, so a failure that already existed is not blamed on the change. If it doesn't compile, she gets one attempt to fix it from the compiler's own errors.
-- Builds she decides on alone wait until you've been away for 10 minutes, run at below-normal priority on half your cores, and stop the moment you come back. The first proof is a full build of the copy (about 9 minutes on the development PC); after that only what changed is rebuilt, and a proof takes about 7 minutes, most of it relinking and the ~90 s of test suites.
+- **Proof (switched off in this build).** The workbench can apply a change to a private copy of the source in `%LOCALAPPDATA%\Revia\ImprovementWorkbench`, build it, and run all test suites; if a suite fails, the unchanged copy is tested too, and a change that doesn't compile gets one repair attempt from the compiler's errors. Building runs the proposed code, so it stays off until it can run in an isolated sandbox: the session installs no candidate admission, every proposal stays "not yet proven", and none is announced in chat. The workbench itself is covered by tests with scripted builds.
+- When enabled, builds she decides on alone wait until you've been away for 10 minutes, run at below-normal priority on half your cores, and stop the moment you come back. The first proof is a full build of the copy (about 9 minutes on the development PC); after that only what changed is rebuilt, and a proof takes about 7 minutes, most of it relinking and the ~90 s of test suites.
 
 **What you see and do**
 
-When a proposal is proven she tells you in chat. Then:
+Proposals are listed with `/improve list`; with proof switched off, none is announced in chat. Then:
 
 | Command | What it does |
 |---|---|
 | `/improve` | Status, and proven proposals waiting for you |
 | `/improve list` | Every proposal and what became of it |
 | `/improve show <id>` | The write-up: problem, why, evidence, verification, and the diff |
-| `/improve accept <id> [why]` | Records your yes; prints the `git apply` command for its patch |
+| `/improve accept <id> [why]` | Records your yes; prints the `git apply` command for its patch. Read the patch first with `/improve show <id>` |
 | `/improve reject <id> <why>` | Records your no, and why |
 | `/improve review <file or area>` | Reviews something now, and proves it straight away |
 

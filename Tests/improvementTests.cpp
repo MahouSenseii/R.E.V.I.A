@@ -141,13 +141,14 @@ void TestSuggestionsAreParsedAndCheckedBeforeAnythingCompiles()
     Check(!check("    return a + a;\n", "    system(\"del *\");\n    return a + a;\n").ok,
         "A change that adds a shell command was accepted.");
 
-    // Existing code that already reaches outside may still be edited, as long as the
-    // change does not add a new way to.
+    // Code that already reaches outside may not be edited either. This used to be allowed
+    // as long as no new launch was added, which let a change rewrite the arguments of an
+    // existing CreateProcessW line (IMP-1). Touching such a line is now refused.
     const std::string launcher = "void Start()\n{\n    CreateProcessW(nullptr, nullptr);\n    int tries = 1;\n}\n";
-    Check(CheckChange({"Private/Speech/x.cpp", "    CreateProcessW(nullptr, nullptr);\n    int tries = 1;\n",
+    Check(!CheckChange({"Private/Speech/x.cpp", "    CreateProcessW(nullptr, nullptr);\n    int tries = 1;\n",
             "    CreateProcessW(nullptr, nullptr);\n    int tries = 3;\n"}, launcher).ok,
-        "Editing code that already launched a process was refused.");
-    // ...but one launch in the edited lines does not license a second.
+        "Editing code that already launched a process was accepted.");
+    // ...and one launch in the edited lines certainly does not license a second.
     Check(!CheckChange({"Private/Speech/x.cpp", "    CreateProcessW(nullptr, nullptr);\n    int tries = 1;\n",
             "    CreateProcessW(nullptr, nullptr);\n    CreateProcessW(nullptr, nullptr);\n    int tries = 1;\n"},
             launcher).ok,
@@ -155,6 +156,37 @@ void TestSuggestionsAreParsedAndCheckedBeforeAnythingCompiles()
     // Spacing before the parenthesis is still a call.
     Check(!check("    return a + a;\n", "    std::system (\"del *\");\n    return a + a;\n").ok,
         "A shell command spelled with a space before its parenthesis was accepted.");
+
+    // Each of these passed the old token count (IMP-1).
+    const std::string plain = "int F()\n{\n    return 1;\n}\n";
+    const auto screened = [&](const std::string& path, const std::string& replace)
+    {
+        return CheckChange({path, "    return 1;\n", replace}, plain);
+    };
+    for (const std::string& bypass : {
+             std::string("#define CALL(a, b) a##b\n    CALL(Create, ProcessW)(nullptr, nullptr);\n    return 1;\n"),
+             std::string("    std::remove(\"settings.json\");\n    return 1;\n"),
+             std::string("    RegSetKeyValueW(nullptr, nullptr, nullptr, 0, nullptr, 0);\n    return 1;\n"),
+             std::string("#include \"//host/share/payload.h\"\n    return 1;\n"),
+             std::string("    Create\\\nProcessW(nullptr, nullptr);\n    return 1;\n"),
+             std::string("    std::ofstream(\"x.bat\") << \"payload\";\n    return 1;\n"),
+             std::string("    # pragma comment(lib, \"payload\")\n    return 1;\n"),
+             std::string("    return system (\"del *\");\n")})
+    {
+        Check(!screened("Private/Core/x.cpp", bypass).ok, "A change reaching outside the process passed screening:\n" + bypass);
+    }
+    for (const std::string& bypass : {std::string("    import os\n    return 1\n"),
+             std::string("    __import__('os').system('x')\n    return 1\n"),
+             std::string("    return getattr(module, name)()\n"),
+             std::string("    exec(source)\n    return 1\n"),
+             std::string("    return open(path, 'w').write(x)\n")})
+    {
+        Check(!screened("Tools/Speech/qwen_tts_service.py", bypass).ok, "A Python change reaching outside passed screening:\n" + bypass);
+    }
+    // Words that merely contain a screened name are not refused.
+    Check(screened("Private/Core/x.cpp", "    const int subsystem(1);\n    return subsystem;\n").ok &&
+            screened("Tools/Speech/qwen_tts_service.py", "    important = reopen_count + 1\n    return important\n").ok,
+        "Ordinary names that contain a screened word were refused.");
 
     // A model drops trailing spaces; that alone must not lose the edit.
     const std::string trailing = "int F()\n{\n    return 1;   \n}\n";
