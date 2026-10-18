@@ -42,7 +42,8 @@ public:
                 return;
             }
             const json body = json::parse(request.body);
-            if (!body.value("stream", false))
+            // Only the conversation reply carries stop markers; background calls stream too.
+            if (!body.contains("stop"))
             {
                 response.set_content(json{{"choices", json::array({{
                     {"message", {{"content", answer}}}, {"finish_reason", "stop"}}})}}.dump(), "application/json");
@@ -99,7 +100,8 @@ class AnswerReviewBackend
                 }
                 const bool reviewing =
                     body["messages"][0]["content"].get<std::string>().find("post-generation response reviewer") != std::string::npos;
-                if (body.value("stream", false))
+                // Only the conversation reply carries stop markers; background calls stream too.
+                if (body.contains("stop"))
                 {
                     const json chunk = {{"choices", json::array({{{"delta", {{"content", candidate}}}, {"finish_reason", "stop"}}})}};
                     const std::string data = "data: " + chunk.dump() + "\n\ndata: [DONE]\n\n";

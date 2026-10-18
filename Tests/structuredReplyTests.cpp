@@ -1,13 +1,18 @@
 #include "Agents/conversationStylePolicy.h"
 #include "Agents/conversationAgent.h"
+#include "Agents/reasoningRelay.h"
 #include "LLM/LLamaCPP/llamaCppService.h"
+#include "Runtime/conversationRuntime.h"
+#include "Core/conversationContext.h"
 #include "testSupport.h"
 
 #include <httplib.h>
 #include <algorithm>
+#include <fstream>
 #include <nlohmann/json.hpp>
 #include <mutex>
 #include <thread>
+#include <vector>
 
 namespace
 {
@@ -26,7 +31,8 @@ class ReplyBackend
             {
                 std::lock_guard lock(mutex);
                 lastRequest = nlohmann::json::parse(request.body);
-                if (!lastRequest.value("stream", false))
+                // Only the conversation reply carries stop markers; background calls stream too.
+                if (!lastRequest.contains("stop"))
                 {
                     response.set_content(
                         nlohmann::json{
@@ -91,6 +97,80 @@ class ReplyBackend
     std::string reviewAnswer;
     nlohmann::json lastRequest;
 };
+
+// Serves exactly the server-sent events a test scripts, and records every request.
+// Streamed requests get the scripted events; a request with stream:false gets
+// `plainBody`, so a test can see which transport a call asked for.
+class WireBackend
+{
+  public:
+    WireBackend()
+    {
+        server.Get("/health", [](const auto&, auto& response) { response.set_content(R"({"status":"ok"})", "application/json"); });
+        server.Get("/v1/models", [](const auto&, auto& response)
+            { response.set_content(R"({"data":[{"id":"structured-reply-fixture"}]})", "application/json"); });
+        server.Post("/v1/chat/completions",
+            [this](const auto& request, auto& response)
+            {
+                std::lock_guard lock(mutex);
+                requests.push_back(nlohmann::json::parse(request.body));
+                if (!requests.back().value("stream", false))
+                {
+                    response.set_content(plainBody, "application/json");
+                    return;
+                }
+                std::string body;
+                for (const auto& event : events)
+                    body += "data: " + event.dump() + "\n\n";
+                response.set_content(body + "data: [DONE]\n\n", "text/event-stream");
+            });
+        server.new_task_queue = [] { return new httplib::ThreadPool(1); };
+        port = server.bind_to_any_port("127.0.0.1");
+        Check(port > 0, "Wire backend could not bind loopback.");
+        worker = std::jthread([this] { server.listen_after_bind(); });
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+        while (!server.is_running() && std::chrono::steady_clock::now() < deadline)
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        Check(server.is_running(), "Wire backend did not start.");
+    }
+    ~WireBackend()
+    {
+        server.stop();
+        worker.join();
+    }
+    // One streamed delta, as llama-server sends it.
+    static nlohmann::json Delta(const std::string& field, const std::string& text, const nlohmann::json& finish = nullptr)
+    {
+        return {{"choices", nlohmann::json::array({{{"delta", {{field, text}}}, {"finish_reason", finish}}})}};
+    }
+    void Script(std::vector<nlohmann::json> scripted, std::string plain = {})
+    {
+        std::lock_guard lock(mutex);
+        events = std::move(scripted);
+        plainBody = std::move(plain);
+    }
+    std::vector<nlohmann::json> Requests()
+    {
+        std::lock_guard lock(mutex);
+        return requests;
+    }
+    int port = 0;
+
+  private:
+    httplib::Server server;
+    std::jthread worker;
+    std::mutex mutex;
+    std::vector<nlohmann::json> events;
+    std::string plainBody;
+    std::vector<nlohmann::json> requests;
+};
+
+const latencySample* FindSample(const responseOutput& output, const std::string& stage)
+{
+    const auto found =
+        std::find_if(output.timings.begin(), output.timings.end(), [&stage](const auto& sample) { return sample.stage == stage; });
+    return found == output.timings.end() ? nullptr : &*found;
+}
 
 void Configure(llamaCppService& service, int port)
 {
@@ -487,6 +567,371 @@ void TestConversationRepliesStreamBySentence()
 }
 }
 
+// PERF-3: llama-server's final chunk says how much of the prompt it reused from its
+// cache. Without it, whether the prompt cache works at all could only be guessed.
+void TestBackendCacheTimingsReachTheTurnTimings()
+{
+    revia::tests::ScopedTestDirectory directory;
+    WireBackend backend;
+    llamaCppService service((directory.root / "timings.db").string());
+    Configure(service, backend.port);
+    auto last = WireBackend::Delta("content", " ready.", "stop");
+    last["timings"] = {{"cache_n", 2048}, {"prompt_n", 37}, {"prompt_ms", 12.5}, {"predicted_n", 9}, {"predicted_ms", 80.25}};
+    backend.Script({WireBackend::Delta("content", "The answer is"), last});
+    const auto result = service.GenerateResponse({{"user", "Is the cache working?"}});
+    Check(result.bSuccess && result.response == "The answer is ready.", "The timed reply did not complete: " + result.reason);
+    const auto* cached = FindSample(result, "llama_cached_prompt");
+    const auto* evaluated = FindSample(result, "llama_evaluated_prompt");
+    const auto* promptMs = FindSample(result, "llama_prompt_eval");
+    const auto* generated = FindSample(result, "llama_generated");
+    const auto* generationMs = FindSample(result, "llama_generation");
+    Check(cached != nullptr && cached->milliseconds == 2048 && cached->unit == "tok" && cached->bAggregate,
+        "The backend's reused prompt tokens (timings.cache_n) were not recorded.");
+    Check(evaluated != nullptr && evaluated->milliseconds == 37 && evaluated->unit == "tok",
+        "The backend's evaluated prompt tokens (timings.prompt_n) were not recorded.");
+    Check(promptMs != nullptr && promptMs->milliseconds == 12.5 && promptMs->unit.empty() && promptMs->bAggregate,
+        "The backend's prompt evaluation time was not recorded as an aggregate duration.");
+    Check(generated != nullptr && generated->milliseconds == 9 && generationMs != nullptr && generationMs->milliseconds == 80.25,
+        "The backend's generation count and time were not recorded.");
+
+    backend.Script({WireBackend::Delta("content", "No timings here.", "stop")});
+    const auto silent = service.GenerateResponse({{"user", "And without timings?"}});
+    Check(silent.bSuccess && FindSample(silent, "llama_cached_prompt") == nullptr,
+        "A backend that reported no timings was given invented ones.");
+}
+
+// PERF-4: background calls used stream:false, and llama-server notices a client that
+// left a non-streamed request only at its periodic disconnect check, so cancelling one
+// for a user's turn kept the turn waiting. They now stream, assemble the text locally,
+// and keep their response formats and validation exactly as before.
+void TestBackgroundCallsStreamWithUnchangedContracts()
+{
+    revia::tests::ScopedTestDirectory directory;
+    WireBackend backend;
+    llamaCppService service((directory.root / "background.db").string());
+    Configure(service, backend.port);
+    const auto streamed = [&backend](const std::string& text, const std::string& finish = "stop")
+    {
+        // Split mid-token, the way a server streams, with usage on the final chunk.
+        const std::size_t half = text.size() / 2;
+        auto last = WireBackend::Delta("content", text.substr(half), finish);
+        last["usage"] = {{"prompt_tokens", 40}, {"completion_tokens", 12}};
+        backend.Script({WireBackend::Delta("content", text.substr(0, half)), last}, R"({"choices":[]})");
+    };
+
+    const std::string thought = R"({"steps":[{"question":"What is asked?","answer":"A sum."}],"settled":"It is a sum."})";
+    streamed(thought);
+    const auto inquiry = service.Deliberate(R"({"problem":"add two numbers"})");
+    auto request = backend.Requests().back();
+    Check(request.value("stream", false), "Self-inquiry still asked for a non-streamed completion.");
+    Check(request.at("response_format").at("type") == "json_schema" &&
+              request.at("response_format").at("json_schema").at("name") == "bounded_planning" &&
+              request.at("response_format").at("json_schema").at("strict") == true &&
+              !request.at("chat_template_kwargs").at("enable_thinking").get<bool>(),
+        "Streaming the self-inquiry changed its JSON-schema response format or thinking setting.");
+    Check(inquiry.bSuccess && inquiry.response == thought && inquiry.bTokensReported && inquiry.promptTokens == 40 &&
+              inquiry.completionTokens == 12,
+        "The streamed self-inquiry was not assembled into the same decision and usage: " + inquiry.reason);
+
+    streamed(R"({"action":"silence","topic":"","query":"","rationale":"Nothing new.","confidence":0.4})");
+    const auto plan = service.GenerateCuriosityPlan(R"({"recent":[]})", {"think", "silence"});
+    request = backend.Requests().back();
+    Check(request.value("stream", false) && request.at("response_format").at("json_schema").at("schema").at("properties").contains("action"),
+        "Curiosity planning did not stream with its schema intact.");
+    Check(plan.bSuccess && plan.response.find("\"silence\"") != std::string::npos, "The streamed curiosity plan was lost.");
+
+    streamed(R"({"shouldRemember":true,"category":"preference","summary":"The user prefers concise answers.","subject":"speaker","reason":"Stated."})");
+    const auto memory = service.EvaluateMemory("I prefer concise answers from now on.", "Understood.",
+        revia::agents::ResponseProvenance::NormalGeneration);
+    request = backend.Requests().back();
+    Check(request.value("stream", false) && request.at("response_format").at("type") == "json_object",
+        "Memory classification did not stream with its JSON-object format.");
+    Check(memory.bSuccess && memory.bShouldRemember && memory.summary == "The user prefers concise answers.",
+        "The streamed memory classification did not reach the same verdict: " + memory.reason);
+
+    // Validation is unchanged: a classifier cut off before its JSON is still a completed
+    // "remember nothing", and says why.
+    streamed("{\"shouldRemember\":tr", "length");
+    const auto truncated = service.EvaluateMemory("I prefer tea to coffee in the mornings.", "Noted.",
+        revia::agents::ResponseProvenance::NormalGeneration);
+    Check(truncated.bSuccess && !truncated.bShouldRemember && truncated.reason.find("exhausted its response budget") != std::string::npos,
+        "A truncated streamed classification was not handled as before: " + truncated.reason);
+
+    const auto image = directory.root / "frame.png";
+    std::ofstream(image, std::ios::binary) << "not really a png";
+    streamed("A code editor with a failing build.");
+    const auto vision = service.AnalyzeImage(image, "What is on screen?", 128);
+    request = backend.Requests().back();
+    Check(request.value("stream", false) && vision.bSuccess && vision.response == "A code editor with a failing build.",
+        "Vision did not stream, or its streamed description was lost: " + vision.reason);
+}
+
+// Native thinking: reasoning_content was ignored, and thinking shared the answer's
+// max_tokens, so a long deliberation could end the turn before the answer began.
+void TestNativeThinkingStreamsReasoningWithItsOwnBudget()
+{
+    revia::tests::ScopedTestDirectory directory;
+    WireBackend backend;
+    llamaCppService service((directory.root / "thinking.db").string());
+    Configure(service, backend.port);
+    backend.Script({WireBackend::Delta("reasoning_content", "The user wants a sum. "),
+        WireBackend::Delta("reasoning_content", "Two plus two is four."), WireBackend::Delta("content", "It is "),
+        WireBackend::Delta("content", "four.", "stop")});
+    std::string thought;
+    std::string shown;
+    const auto deep = service.GenerateResponse({{"user", "What is two plus two, carefully?"}}, {},
+        [&](const std::string& delta) { shown += delta; }, true, revia::llm::PrivateMemoryAccess::ProfileSetting,
+        [&](const std::string& delta) { thought += delta; });
+    auto request = backend.Requests().back();
+    Check(deep.bSuccess && deep.response == "It is four." && shown == "It is four.",
+        "Native thinking leaked into the visible reply, or the answer after it was lost: " + deep.response);
+    Check(thought == "The user wants a sum. Two plus two is four." && deep.reasoning == thought,
+        "The streamed reasoning_content was not delivered live and kept as the reply's reasoning.");
+    // Configure: 512 answer tokens at 8,192 context; thinking adds min(3072, 8192 / 4).
+    Check(request.at("chat_template_kwargs").at("enable_thinking").get<bool>() && request.at("max_tokens") == 512 + 2048,
+        "Thinking did not get its own token allowance on top of the answer's: max_tokens=" + request.at("max_tokens").dump());
+
+    const auto plain = service.GenerateResponse({{"user", "What is two plus two?"}});
+    request = backend.Requests().back();
+    Check(!request.at("chat_template_kwargs").at("enable_thinking").get<bool>() && request.at("max_tokens") == 512 &&
+              plain.response == "It is four.",
+        "A turn without thinking changed its token budget or reply.");
+
+    // A model that writes its thinking inline is shown the same way, and as today the
+    // block never reaches the reply.
+    backend.Script({WireBackend::Delta("content", "<think>Check the units "), WireBackend::Delta("content", "first.</think>"),
+        WireBackend::Delta("content", "Four metres.", "stop")});
+    thought.clear();
+    const auto inline_ = service.GenerateResponse({{"user", "How long is it, carefully?"}}, {}, {}, true,
+        revia::llm::PrivateMemoryAccess::ProfileSetting, [&](const std::string& delta) { thought += delta; });
+    Check(inline_.response == "Four metres." && inline_.reasoning == "Check the units first." && thought == "Check the units first.",
+        "Inline <think> reasoning was not streamed and kept out of the reply.");
+}
+
+// conversation.deliberation = "native": a turn that would have run the separate
+// self-inquiry call instead answers once with native thinking, and that thinking reaches
+// the window as the same SelfInquiry events "Revia is thinking" already shows.
+void TestNativeDeliberationReplacesTheSeparateInquiry()
+{
+    const auto run = [](const bool native, std::vector<revia::runtime::RuntimeEvent>& thinking, std::vector<nlohmann::json>& requests,
+                         revia::runtime::SessionResult& result)
+    {
+        revia::tests::ScopedTestDirectory directory;
+        WireBackend backend;
+        const std::string paragraph = "I should check whether this is a cold start. " + std::string(220, 'x') + ".\n\n";
+        backend.Script({WireBackend::Delta("reasoning_content", paragraph),
+                           WireBackend::Delta("reasoning_content", "So the first run loads everything from disk."),
+                           WireBackend::Delta("content", "The first run reads everything from disk. "),
+                           WireBackend::Delta("content", "Later runs find it cached.", "stop")},
+            R"({"choices":[{"message":{"content":"{\"steps\":[{\"question\":\"What is slow?\",\"answer\":\"The first run.\"}],\"settled\":\"Disk.\"}"},"finish_reason":"stop"}]})");
+        const auto database = (directory.root / "native.db").string();
+        messageRouter router(database);
+        conversationContext history;
+        revia::agents::TurnCoordinator coordinator(database);
+        revia::speech::SpeechService speech;
+        revia::runtime::AffectController affect;
+        revia::emotion::EmotionRuntime emotions;
+        revia::runtime::RuntimeEventBus events;
+        logger log(directory.root / "Logs");
+        revia::runtime::ConversationRuntime runtime(
+            router, history, coordinator, speech, affect, emotions, events, log, [](const auto&, const auto&) {}, [](const auto&) {},
+            [] { return revia::actions::CapabilitySettings::InternetAccess{}; },
+            [] { return revia::actions::CapabilitySettings::DesktopControl{}; }, {},
+            []
+            {
+                responseFilterSettings filters;
+                filters.bAiReviewEnabled = false;
+                return filters;
+            },
+            {}, {}, {}, {}, {}, {},
+            [native]
+            {
+                revia::agents::SelfInquiryLimits limits;
+                limits.enabled = true;
+                limits.cooldownTurns = 0;
+                limits.includeOrdinaryQuestions = true;
+                limits.nativeDeliberation = native;
+                return limits;
+            });
+        std::mutex eventsMutex;
+        const auto subscription = events.Subscribe(
+            [&](const revia::runtime::RuntimeEvent& event)
+            {
+                if (event.kind != revia::runtime::RuntimeEventKind::SelfInquiry)
+                    return;
+                std::lock_guard lock(eventsMutex);
+                thinking.push_back(event);
+            });
+        aiProfile profile;
+        profile.bMemoryEnabled = false;
+        profile.systemPrompt = "You are Revia.";
+        llmSettings settings;
+        settings.host = "127.0.0.1";
+        settings.port = backend.port;
+        settings.modelName = "structured-reply-fixture";
+        settings.maxTokens = 256;
+        settings.bAutoMaxTokens = settings.bAutoStartServer = settings.bVisionEnabled = false;
+        embeddingSettings embeddings;
+        embeddings.bEnabled = embeddings.bAutoStartServer = false;
+        router.ApplyLLMSettings(settings, embeddings, profile);
+        result = runtime.Reply("Why does my program run so much slower the first time I start it?", profile, true, false);
+        events.Unsubscribe(subscription);
+        requests = backend.Requests();
+    };
+
+    std::vector<revia::runtime::RuntimeEvent> thinking;
+    std::vector<nlohmann::json> requests;
+    revia::runtime::SessionResult result;
+    run(true, thinking, requests, result);
+    Check(result.succeeded && result.text == "The first run reads everything from disk. Later runs find it cached.",
+        "The natively thinking turn did not deliver its answer: " + result.reason);
+    Check(requests.size() == 1 && requests.front().contains("stop") &&
+              requests.front().at("chat_template_kwargs").at("enable_thinking").get<bool>(),
+        "Native deliberation still ran a separate inquiry call, or answered without thinking: " + std::to_string(requests.size()) +
+            " requests.");
+    std::string shown;
+    for (const auto& event : thinking)
+    {
+        Check(event.phase == "Thinking" && event.component == "Self-inquiry", "Streamed thinking was published under another name.");
+        shown += event.message + "\n";
+    }
+    Check(thinking.size() == 2 && shown.find("cold start") != std::string::npos && shown.find("loads everything from disk") != std::string::npos,
+        "The streamed reasoning did not reach the \"Revia is thinking\" view in readable pieces: " + std::to_string(thinking.size()) +
+            " events.");
+    Check(result.text.find("cold start") == std::string::npos && result.reasoning.find("Thought it through while answering") != std::string::npos &&
+              result.reasoning.find("loads everything from disk") != std::string::npos,
+        "Native reasoning leaked into the reply or was missing from the Thought process.");
+
+    // The separate inquiry is still there for conversation.deliberation = "selfInquiry".
+    thinking.clear();
+    run(false, thinking, requests, result);
+    Check(requests.size() == 2 && !requests.front().contains("stop") && !requests.back().at("chat_template_kwargs").at("enable_thinking").get<bool>(),
+        "deliberation=selfInquiry no longer ran its inquiry and a non-thinking answer.");
+}
+
+// The thinking arrives a few characters at a time and each published piece becomes its
+// own "Revia is thinking" block, so it is released in readable pieces.
+void TestReasoningRelayReleasesReadablePieces()
+{
+    std::vector<std::string> released;
+    revia::agents::ReasoningRelay relay([&](const std::string& text) { released.push_back(text); });
+    const std::string first(250, 'a');
+    for (const char character : first + "\n\nShort.\n\n")
+        relay.Add(std::string(1, character));
+    Check(released.size() == 1 && released.front() == first, "A paragraph long enough to show was not released at its break.");
+    relay.Add(std::string(1300, 'b') + " tail");
+    Check(released.size() == 2 && released.back().size() <= revia::agents::ReasoningRelay::MaximumCharacters &&
+              released.back().starts_with("Short."),
+        "Thinking with no paragraph break was held past the maximum piece size.");
+    relay.Flush();
+    Check(released.size() == 3 && released.back().ends_with("tail"), "Flush did not release the last of the thinking.");
+    relay.Flush();
+    Check(released.size() == 3 && relay.ReceivedCharacters() == 250 + 10 + 1305, "An empty flush published an empty block.");
+}
+
+// A local server that either enforces one API key, the way llama-server started with
+// --api-key does, or accepts every key, the way one started without it does.
+class KeyedBackend
+{
+  public:
+    explicit KeyedBackend(std::string enforcedKey) : key(std::move(enforcedKey))
+    {
+        const auto authorized = [this](const httplib::Request& request, httplib::Response& response)
+        {
+            if (key.empty() || request.get_header_value("Authorization") == "Bearer " + key)
+                return true;
+            response.status = 401;
+            response.set_content(R"({"error":{"code":401,"message":"Invalid API Key"}})", "application/json");
+            return false;
+        };
+        server.Get("/health", [](const auto&, auto& response) { response.set_content(R"({"status":"ok"})", "application/json"); });
+        server.Get("/v1/models", [](const auto&, auto& response)
+            { response.set_content(R"({"data":[{"id":"structured-reply-fixture"},{"id":"keyed-embedding"}]})", "application/json"); });
+        for (const char* path : {"/v1/chat/completions", "/v1/embeddings"})
+            server.Post(path, [authorized](const auto& request, auto& response)
+                {
+                    if (!authorized(request, response))
+                        return;
+                    response.status = 400;
+                    response.set_content(R"({"error":{"code":400,"message":"missing input"}})", "application/json");
+                });
+        server.new_task_queue = [] { return new httplib::ThreadPool(1); };
+        port = server.bind_to_any_port("127.0.0.1");
+        Check(port > 0, "Keyed backend could not bind loopback.");
+        worker = std::jthread([this] { server.listen_after_bind(); });
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+        while (!server.is_running() && std::chrono::steady_clock::now() < deadline)
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        Check(server.is_running(), "Keyed backend did not start.");
+    }
+    ~KeyedBackend()
+    {
+        server.stop();
+        worker.join();
+    }
+    int port = 0;
+
+  private:
+    std::string key;
+    httplib::Server server;
+    std::jthread worker;
+};
+
+// NET-6: a healthy answer on 127.0.0.1:8080 was trusted, so any local process that took
+// the port first was sent every private prompt. A server Revia starts holds this
+// session's key, and the health check now proves it.
+void TestOnlyTheKeyedServerReviaStartedIsTrusted()
+{
+    revia::tests::ScopedTestDirectory directory;
+    const std::string sessionKey = "revia-session-key";
+    const auto health = [&](const int port, const bool verify)
+    {
+        llamaCppService service((directory.root / "keyed.db").string());
+        llmSettings settings;
+        settings.host = "127.0.0.1";
+        settings.port = port;
+        settings.modelName = "structured-reply-fixture";
+        settings.apiKey = sessionKey;
+        settings.bVerifyServerKey = verify;
+        settings.bAutoMaxTokens = settings.bAutoStartServer = settings.bVisionEnabled = false;
+        embeddingSettings embeddings;
+        embeddings.bEnabled = embeddings.bAutoStartServer = false;
+        service.ApplySettings(settings, embeddings, aiProfile{});
+        return service.CheckHealth();
+    };
+    KeyedBackend ours(sessionKey);
+    KeyedBackend squatter("");
+    KeyedBackend stranger("someone-else's-key");
+    const auto trusted = health(ours.port, true);
+    Check(trusted.bIsAvailable && trusted.status == systemStatus::Green,
+        "The server holding this session's key was refused: " + trusted.reason);
+    const auto open = health(squatter.port, true);
+    Check(!open.bIsAvailable && open.status == systemStatus::Yellow && open.reason.find("accepts a wrong key") != std::string::npos,
+        "A server that accepts any key was trusted with the conversation.");
+    const auto foreign = health(stranger.port, true);
+    Check(!foreign.bIsAvailable && foreign.reason.find("refused this session's key") != std::string::npos,
+        "A server holding a different key was trusted with the conversation.");
+    // A server the user runs (and every test fixture) is not launched with Revia's key.
+    Check(health(squatter.port, false).bIsAvailable, "Key proof was enforced for a server Revia did not start.");
+
+    const auto embeddingHealth = [&](const int port)
+    {
+        llamaCppEmbeddingService embeddings;
+        embeddingSettings settings;
+        settings.host = "127.0.0.1";
+        settings.port = port;
+        settings.modelName = "keyed-embedding";
+        settings.apiKey = sessionKey;
+        settings.bVerifyServerKey = true;
+        embeddings.ApplySettings(settings);
+        return embeddings.CheckHealth();
+    };
+    Check(embeddingHealth(ours.port).bIsAvailable, "The keyed embedding server Revia started was refused.");
+    const auto openEmbedding = embeddingHealth(squatter.port);
+    Check(!openEmbedding.bIsAvailable && openEmbedding.status == systemStatus::Yellow,
+        "An embedding server that accepts any key was trusted with memory queries.");
+}
+
 void RunStructuredReplyTests()
 {
     TestProviderContractAndDataPreservation();
@@ -496,4 +941,10 @@ void RunStructuredReplyTests()
     TestReviewerReplacementMustMatchFinalContract();
     TestIntroducedSchemaWireAndReaffirmation();
     TestConversationRepliesStreamBySentence();
+    TestBackendCacheTimingsReachTheTurnTimings();
+    TestBackgroundCallsStreamWithUnchangedContracts();
+    TestOnlyTheKeyedServerReviaStartedIsTrusted();
+    TestNativeThinkingStreamsReasoningWithItsOwnBudget();
+    TestNativeDeliberationReplacesTheSeparateInquiry();
+    TestReasoningRelayReleasesReadablePieces();
 }

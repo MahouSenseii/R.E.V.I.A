@@ -5,6 +5,7 @@
 #include <filesystem>
 #include <algorithm>
 #include <cstdint>
+#include <initializer_list>
 #include <string>
 #include <system_error>
 #include <vector>
@@ -210,6 +211,71 @@ int AutomaticContextSize(const std::uint64_t videoMemory, const std::uint64_t sy
 
 } // namespace
 
+bool IsQuantizedKvCacheType(const std::string& type)
+{
+    return type.size() > 1 && (type[0] == 'q' || type.starts_with("iq"));
+}
+
+std::vector<std::string> BuildLlamaServerArguments(
+    const llmSettings& settings, const bool embeddingMode, const std::string& pooling, const std::string& device)
+{
+    // Context is an explicit budget, not a prize to maximize. The resource plan still
+    // decides fitting and placement, while each role keeps the bounded context selected
+    // for it.
+    std::vector<std::string> arguments = {"--host", settings.host, "--port", std::to_string(settings.port), "--ctx-size",
+        std::to_string(settings.contextSize), "--parallel", std::to_string(settings.parallelRequests)};
+    const auto add = [&arguments](std::initializer_list<std::string> values)
+    { arguments.insert(arguments.end(), values.begin(), values.end()); };
+    if (settings.cpuThreads > 0)
+        add({"--threads", std::to_string(settings.cpuThreads)});
+    if (settings.cpuBatchThreads > 0)
+        add({"--threads-batch", std::to_string(settings.cpuBatchThreads)});
+    if (settings.ramCacheMiB >= 0)
+        add({"--cache-ram", std::to_string(settings.ramCacheMiB)});
+    if (!settings.modelLoadMode.empty() && settings.modelLoadMode != "auto")
+        add({"--load-mode", settings.modelLoadMode});
+    if (!settings.apiKey.empty())
+        add({"--api-key", settings.apiKey});
+    // /slots shows every slot's prompt text to any caller that holds the key. Revia
+    // never reads it.
+    add({"--no-slots"});
+    if (embeddingMode)
+    {
+        add({"--embedding", "--pooling", pooling, "--device", device});
+        // An embedding input must fit one physical batch. The 512-token default refused
+        // long recall queries (up to about 4,000 characters), so the batch matches the
+        // embedding context instead.
+        const std::string batch = std::to_string(std::max(512, settings.contextSize));
+        add({"--batch-size", batch, "--ubatch-size", batch});
+        return arguments;
+    }
+    if (!settings.device.empty() && settings.device != "auto")
+    {
+        add({"--device", settings.device, "--split-mode", settings.splitMode});
+        if (!settings.tensorSplit.empty())
+            add({"--tensor-split", settings.tensorSplit});
+    }
+    if (settings.bAutoTune)
+    {
+        // Anything still waiting to load into VRAM is added to the fit target so
+        // llama.cpp leaves room for it rather than claiming it first.
+        const int fitTarget = settings.autoFitTargetMiB + (settings.reservedVramMiB > 0 ? settings.reservedVramMiB : 0);
+        add({"--n-gpu-layers", "auto", "--fit", "on", "--fit-target",
+            settings.fitTargetMiB.empty() ? std::to_string(fitTarget) : settings.fitTargetMiB});
+    }
+    else
+    {
+        add({"--fit", "off"});
+    }
+    // A quantized V cache cannot run without flash attention, and "auto" may resolve to
+    // off on a device without support, which fails the context outright. Ask for it.
+    const bool quantizedCache = IsQuantizedKvCacheType(settings.kvCacheType);
+    add({"--flash-attn", quantizedCache ? "on" : "auto"});
+    if (!settings.kvCacheType.empty())
+        add({"--cache-type-k", settings.kvCacheType, "--cache-type-v", settings.kvCacheType});
+    return arguments;
+}
+
 llamaHardwareMemory DetectLlamaHardwareMemory()
 {
 #ifdef _WIN32
@@ -352,130 +418,32 @@ bool llamaCppServerProcess::StartInternal(const llmSettings& settings,
         return false;
     }
 
-    // Context is an explicit budget, not a prize to maximize. The resource plan still
-    // decides fitting and placement, while each role keeps the bounded context selected
-    // for it (conversation defaults to 8192 tokens so the shared identity packet and a
-    // useful answer allowance coexist without truncating either one).
-    const int contextSize = settings.contextSize;
-    const int parallelRequests = settings.parallelRequests;
-    std::wstring commandLine = QuoteWindowsArgument(executableWide) +
-        L" --model " + QuoteWindowsArgument(modelWide) +
-        L" --host " + QuoteWindowsArgument(hostWide) +
-        L" --port " + std::to_wstring(settings.port) +
-        L" --ctx-size " + std::to_wstring(contextSize) +
-        L" --parallel " + std::to_wstring(parallelRequests);
-    if (settings.cpuThreads > 0)
+    std::wstring commandLine = QuoteWindowsArgument(executableWide) + L" --model " + QuoteWindowsArgument(modelWide);
+    std::string option;
+    for (const std::string& argument : BuildLlamaServerArguments(settings, embeddingMode, pooling, device))
     {
-        commandLine += L" --threads " + std::to_wstring(settings.cpuThreads);
-    }
-    if (settings.cpuBatchThreads > 0)
-    {
-        commandLine += L" --threads-batch " + std::to_wstring(settings.cpuBatchThreads);
-    }
-    if (settings.ramCacheMiB >= 0)
-    {
-        commandLine += L" --cache-ram " + std::to_wstring(settings.ramCacheMiB);
-    }
-    if (!settings.modelLoadMode.empty() && settings.modelLoadMode != "auto")
-    {
-        const std::wstring loadMode = Utf8ToWide(settings.modelLoadMode);
-        if (loadMode.empty())
+        const std::wstring wide = Utf8ToWide(argument);
+        if (wide.empty() && !argument.empty())
         {
-            outError = "The llama.cpp model load mode could not be encoded by Windows.";
+            // Names the option, never the value: one of them is the API key.
+            outError = "The llama.cpp startup value for " + option + " could not be encoded by Windows.";
             return false;
         }
-        commandLine += L" --load-mode " + QuoteWindowsArgument(loadMode);
+        if (argument.starts_with("--"))
+            option = argument;
+        commandLine += L" " + QuoteWindowsArgument(wide);
     }
-    if (!settings.apiKey.empty())
+    if (!embeddingMode && settings.bVisionEnabled)
     {
-        const std::wstring apiKey = Utf8ToWide(settings.apiKey);
-        if (apiKey.empty())
+        const std::filesystem::path projector = ResolveRuntimePath(settings.multimodalProjectorPath);
+        if (!std::filesystem::is_regular_file(projector, pathError))
         {
-            outError = "The local llama.cpp API key could not be encoded by Windows.";
+            outError = "The configured multimodal projector was not found: " + settings.multimodalProjectorPath;
             return false;
         }
-        commandLine += L" --api-key " + QuoteWindowsArgument(apiKey);
-    }
-    if (!embeddingMode)
-    {
-        if (!settings.device.empty() && settings.device != "auto")
-        {
-            const std::wstring deviceWide = Utf8ToWide(settings.device);
-            const std::wstring splitModeWide = Utf8ToWide(settings.splitMode);
-            if (deviceWide.empty() || splitModeWide.empty())
-            {
-                outError = "The planned llama.cpp device assignment could not be encoded.";
-                return false;
-            }
-            commandLine += L" --device " + QuoteWindowsArgument(deviceWide) +
-                L" --split-mode " + QuoteWindowsArgument(splitModeWide);
-            if (!settings.tensorSplit.empty())
-            {
-                const std::wstring tensorSplitWide = Utf8ToWide(settings.tensorSplit);
-                if (tensorSplitWide.empty())
-                {
-                    outError = "The planned llama.cpp tensor split could not be encoded.";
-                    return false;
-                }
-                commandLine += L" --tensor-split " + QuoteWindowsArgument(tensorSplitWide);
-            }
-        }
-        if (settings.bVisionEnabled)
-        {
-            const std::filesystem::path projector =
-                ResolveRuntimePath(settings.multimodalProjectorPath);
-            if (!std::filesystem::is_regular_file(projector, pathError))
-            {
-                outError = "The configured multimodal projector was not found: " +
-                    settings.multimodalProjectorPath;
-                return false;
-            }
-            const std::filesystem::path media = ResolveRuntimePath(settings.mediaPath);
-            pathError.clear();
-            std::filesystem::create_directories(media, pathError);
-            if (pathError)
-            {
-                outError = "The configured vision media directory could not be created: " +
-                    pathError.message();
-                return false;
-            }
-            commandLine += L" --mmproj " + QuoteWindowsArgument(projector.wstring()) +
-                L" --media-path " + QuoteWindowsArgument(media.wstring());
-        }
-        if (settings.bAutoTune)
-        {
-            // Anything still waiting to load into VRAM is added to the fit target so
-            // llama.cpp leaves room for it rather than claiming it first.
-            const int fitTarget = settings.autoFitTargetMiB +
-                (settings.reservedVramMiB > 0 ? settings.reservedVramMiB : 0);
-            const std::wstring fitTargetWide = settings.fitTargetMiB.empty()
-                ? std::to_wstring(fitTarget)
-                : Utf8ToWide(settings.fitTargetMiB);
-            commandLine += L" --n-gpu-layers auto --fit on --fit-target " +
-                QuoteWindowsArgument(fitTargetWide) +
-                L" --flash-attn auto";
-        }
-        else
-        {
-            commandLine += L" --fit off --flash-attn auto";
-        }
-    }
-    if (embeddingMode)
-    {
-        const std::wstring poolingWide = Utf8ToWide(pooling);
-        if (poolingWide.empty())
-        {
-            outError = "The embedding pooling setting could not be encoded by Windows.";
-            return false;
-        }
-        commandLine += L" --embedding --pooling " + QuoteWindowsArgument(poolingWide);
-        const std::wstring deviceWide = Utf8ToWide(device);
-        if (deviceWide.empty())
-        {
-            outError = "The embedding device setting could not be encoded by Windows.";
-            return false;
-        }
-        commandLine += L" --device " + QuoteWindowsArgument(deviceWide);
+        // No --media-path: Revia sends every image inline as a base64 data URL, and the
+        // flag would let any request read local files from that directory by name.
+        commandLine += L" --mmproj " + QuoteWindowsArgument(projector.wstring());
     }
     std::vector<wchar_t> mutableCommandLine(commandLine.begin(), commandLine.end());
     mutableCommandLine.push_back(L'\0');

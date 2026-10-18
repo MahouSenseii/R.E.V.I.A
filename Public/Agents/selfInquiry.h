@@ -34,6 +34,9 @@ struct SelfInquiryResult
     // Why the gate opened, or why nothing ran. Always populated.
     std::string reason;
     double elapsedMilliseconds = 0.0;
+    // The gate opened and the answer will think with the model's native thinking instead
+    // of a separate inquiry pass. No questions are produced; the reasoning is streamed.
+    bool nativeThinking = false;
 
     [[nodiscard]] bool HasQuestions() const { return ran && !questions.empty(); }
     // The answer she gave herself to question `index`, or empty.
@@ -73,6 +76,10 @@ struct SelfInquiryLimits
     // hard. Off here so the library default stays the original behaviour; the settings
     // file turns it on with conversation.selfInquiryScope = "questions".
     bool includeOrdinaryQuestions = false;
+    // Think with the model's own thinking mode on the answer itself instead of running
+    // the separate inquiry call. Off here so the library default stays the original
+    // behaviour; conversation.deliberation = "native" turns it on.
+    bool nativeDeliberation = false;
     // An ordinary question is shorter than a hard problem statement: "why does my build
     // fail?" is worth working out and is well under the hard-turn threshold.
     std::size_t minimumQuestionCharacters = 16;

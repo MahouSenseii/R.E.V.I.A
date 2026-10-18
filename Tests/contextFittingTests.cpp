@@ -2,6 +2,8 @@
 
 #include "LLM/tokenEstimate.h"
 #include "Core/conversationContext.h"
+#include "Core/configManager.h"
+#include "Core/appSettings.h"
 #include "Core/utf8.h"
 #include "LLM/LLamaCPP/llamaCppService.h"
 #include "Identity/promptMarkers.h"
@@ -146,6 +148,130 @@ void TestContinuityKeepsNonnumericSentenceBoundaries()
         checkSummary(history.GetCompressedHistorySummary());
     }
 }
+// PERF-3: llama.cpp reuses a cached prompt only up to the first byte that changed. When
+// history dropped one exchange on every turn once full, the first retained message --
+// and so the whole prompt after the system message -- changed on every request.
+void TestHistoryTrimLeavesAStablePrefix()
+{
+    const auto exchangesBetweenChanges = [](conversationContext& history, const std::string& filler)
+    {
+        std::vector<std::string> fronts;
+        for (int index = 0; index < 40; ++index)
+        {
+            history.AddMessage("user", "Question " + std::to_string(index) + filler);
+            history.AddMessage("assistant", "Answer " + std::to_string(index) + filler);
+            fronts.push_back(history.GetRecentMessages().front().content);
+        }
+        std::vector<int> gaps;
+        int last = -1;
+        for (int index = 1; index < static_cast<int>(fronts.size()); ++index)
+        {
+            if (fronts[index] == fronts[index - 1])
+                continue;
+            if (last >= 0)
+                gaps.push_back(index - last);
+            last = index;
+        }
+        return gaps;
+    };
+
+    conversationContext byCount;
+    const auto countGaps = exchangesBetweenChanges(byCount, "");
+    Check(!countGaps.empty() && *std::min_element(countGaps.begin(), countGaps.end()) >= 5,
+        "Trimming by message count changed the start of the history every few turns, defeating the prompt cache.");
+    Check(byCount.GetRecentMessages().size() <= 24 && byCount.GetRecentMessages().back().content == "Answer 39",
+        "Hysteresis trimming exceeded the message budget or lost the newest message.");
+
+    conversationContext byCharacters;
+    const auto characterGaps = exchangesBetweenChanges(byCharacters, " " + Repeat("long detail ", 100));
+    Check(!characterGaps.empty() && *std::min_element(characterGaps.begin(), characterGaps.end()) >= 2,
+        "Trimming by characters changed the start of the history on consecutive turns.");
+    std::size_t retained = 0;
+    for (const auto& message : byCharacters.GetRecentMessages())
+        retained += message.content.size();
+    Check(retained <= 14000, "Hysteresis trimming exceeded the character budget.");
+}
+
+// A 32K context kept the 8K history caps: 24 messages, 14,000 characters, and older
+// messages cut to 3,500 characters. The caps now follow the configured context.
+void TestHistoryCapsFollowTheContextWindow()
+{
+    const auto fill = [](conversationContext& history, const int exchanges, const int first = 0)
+    {
+        for (int index = first; index < first + exchanges; ++index)
+        {
+            history.AddMessage("user", "Question " + std::to_string(index));
+            history.AddMessage("assistant", "Answer " + std::to_string(index));
+        }
+    };
+    const std::string longMessage = "HEAD " + Repeat("detail ", 2500) + " TAIL";
+
+    conversationContext large;
+    large.SetContextTokens(32768);
+    large.AddMessage("user", longMessage);
+    fill(large, 29);
+    auto recent = large.GetRecentMessages();
+    Check(recent.size() == 59 && recent.front().content.size() > 11000 && recent.front().content.size() <= 12000 &&
+              recent.front().content.starts_with("HEAD") && recent.front().content.ends_with("TAIL"),
+        "A 32K context did not keep about 60 messages with older messages bounded near 12,000 characters.");
+    fill(large, 1, 29);
+    Check(large.GetRecentMessages().size() <= 60 && large.GetRecentMessages().back().content == "Answer 29",
+        "A 32K context exceeded its message budget or lost the newest message.");
+
+    conversationContext standard;
+    standard.AddMessage("user", longMessage);
+    standard.AddMessage("assistant", "Noted.");
+    Check(standard.GetRecentMessages().front().content.size() <= 3500,
+        "The default 8K caps changed for a context that was never configured.");
+    standard.SetContextTokens(8192);
+    fill(standard, 20);
+    Check(standard.GetRecentMessages().size() <= 24, "An 8K context gained a larger history than it had before.");
+
+    conversationContext small;
+    small.SetContextTokens(4096);
+    fill(small, 20);
+    std::size_t characters = 0;
+    for (const auto& message : small.GetRecentMessages())
+        characters += message.content.size();
+    Check(small.GetRecentMessages().size() <= 12 && characters <= 7000,
+        "A 4K context kept more history than its window can safely hold.");
+
+    // Shrinking the window applies at once, so a profile switch to a small model cannot
+    // inherit a history sized for a large one.
+    large.SetContextTokens(4096);
+    Check(large.GetRecentMessages().size() <= 12 && large.GetRecentMessages().back().content == "Answer 29",
+        "Reducing the context did not trim the history already held.");
+}
+
+// The shipped settings select a 32K Main context with a q8_0 KV cache, and validation
+// accepts it while still refusing a cache type llama-server would reject at launch.
+void TestShippedSettingsSelectA32KMainContext()
+{
+    revia::tests::ScopedTestDirectory directory;
+    appSettings shipped;
+    Check(configManager("Config/settings.json", "Profiles").LoadSettings(shipped),
+        "The shipped Config/settings.json no longer passes validation.");
+    Check(shipped.llm.contextSize == 32768 && shipped.llm.kvCacheType == "q8_0",
+        "The shipped Main context is not 32K with a q8_0 KV cache.");
+
+    std::ifstream source("Config/settings.json");
+    nlohmann::json document = nlohmann::json::parse(source);
+    document["llm"]["kvCacheType"] = "q9_9";
+    const auto invalid = directory.root / "settings.json";
+    std::ofstream(invalid) << document.dump(2);
+    appSettings rejected;
+    Check(!configManager(invalid.string(), "Profiles").LoadSettings(rejected),
+        "An unknown KV cache type passed validation and would only fail when llama-server starts.");
+
+    // Native thinking: its own token budget, and it replaces the separate inquiry by default.
+    Check(shipped.llm.thinkingTokens == 3072 && shipped.conversation.deliberation == "native",
+        "The shipped settings do not give thinking its own budget or default to native deliberation.");
+    document["llm"]["kvCacheType"] = "q8_0";
+    document["conversation"]["deliberation"] = "ponder";
+    std::ofstream(invalid) << document.dump(2);
+    Check(!configManager(invalid.string(), "Profiles").LoadSettings(rejected), "An unknown deliberation mode passed validation.");
+}
+
 void TestPronounRecallUsesTheLatestAdmittedTopic()
 {
     revia::tests::ScopedTestDirectory directory;
@@ -641,8 +767,10 @@ void TestBackendTemplateCountPreservesFittingDialogue()
         "Byte fitting discarded dialogue that the loaded backend measured inside its token budget.");
     Check(backend.validTemplateRequest && backend.validTokenizerRequest && backend.templateThinking,
         "Token accounting omitted matching template options or special-token handling.");
+    // A thinking turn reserves the answer's 512 tokens plus its own thinking allowance
+    // (the default 3,072 capped at a quarter of the 8,192-token context).
     Check(result.contextFit.available && result.contextFit.backendCounted && result.contextFit.promptTokens == 500 &&
-              result.contextFit.responseReserve == 512 && result.contextFit.retainedMessages == 4,
+              result.contextFit.responseReserve == 512 + 2048 && result.contextFit.retainedMessages == 4,
         "Backend token accounting was not reported with its actual reservation and retained messages.");
 }
 
@@ -1053,6 +1181,9 @@ void RunContextFittingTests()
     TestContinuityRetainsLateCorrectionsAndSourceOrder();
     TestContinuityPreservesDecimalConstraintsAfterEvictionAndRestore();
     TestContinuityKeepsNonnumericSentenceBoundaries();
+    TestHistoryTrimLeavesAStablePrefix();
+    TestHistoryCapsFollowTheContextWindow();
+    TestShippedSettingsSelectA32KMainContext();
     TestPrivateReplyRetainsEvictedDecimalConstraintsOnTheWire();
     TestPronounRecallUsesTheLatestAdmittedTopic();
     TestContinuityRebuildAndRollbackStayBounded();

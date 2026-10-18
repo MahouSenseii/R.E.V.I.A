@@ -8092,11 +8092,13 @@ void TestConversationContextKeepsCoherentRecentTurns()
         context.AddMessage("user", "user turn " + std::to_string(turn));
         context.AddMessage("assistant", "assistant turn " + std::to_string(turn));
     }
+    // Trimmed with hysteresis: each time the 24-message budget is exceeded, history drops
+    // to 60% of it (here at the 25th and 37th messages), so it now holds the 16 newest.
     const std::vector<conversationMessage> recent = context.GetRecentMessages();
-    Check(recent.size() == 24,
-        "Conversation history did not keep twelve recent exchanges.");
+    Check(recent.size() == 16,
+        "Conversation history did not trim to 60% of its budget and then grow again.");
     Check(!recent.empty() && recent.front().role == "user" &&
-        recent.front().content == "user turn 8",
+        recent.front().content == "user turn 12",
         "Conversation trimming left an orphaned reply or removed the wrong turns.");
     Check(recent.back().content == "assistant turn 19",
         "Conversation trimming discarded the newest reply.");
@@ -8145,6 +8147,71 @@ void TestOneLongPasteDoesNotEraseTheConversation()
     Check(retained != after.end() && retained->content.size() < 5000 &&
         retained->content.ends_with("ERROR-AT-END"),
         "An earlier long paste was neither bounded nor kept with both of its ends.");
+}
+
+void TestServerArgumentsQuantizeTheKvCacheWithFlashAttention()
+{
+    llmSettings settings;
+    settings.contextSize = 32768;
+    settings.kvCacheType = "q8_0";
+    const auto arguments = BuildLlamaServerArguments(settings, false, "", "");
+    const auto valueOf = [&arguments](const std::string& flag) -> std::string
+    {
+        const auto found = std::find(arguments.begin(), arguments.end(), flag);
+        return found == arguments.end() || found + 1 == arguments.end() ? std::string("<absent>") : *(found + 1);
+    };
+    Check(valueOf("--ctx-size") == "32768" && valueOf("--cache-type-k") == "q8_0" && valueOf("--cache-type-v") == "q8_0",
+        "A 32K context with a q8_0 KV cache did not reach llama-server.");
+    Check(valueOf("--flash-attn") == "on",
+        "A quantized V cache was launched without forcing flash attention, which llama.cpp requires for it.");
+
+    settings.kvCacheType.clear();
+    const auto plain = BuildLlamaServerArguments(settings, false, "", "");
+    Check(std::find(plain.begin(), plain.end(), "--cache-type-k") == plain.end() &&
+              std::find(plain.begin(), plain.end(), "auto") != plain.end(),
+        "An unset KV cache type changed llama.cpp's default cache or flash-attention choice.");
+
+    const auto embedding = BuildLlamaServerArguments(settings, true, "mean", "none");
+    Check(std::find(embedding.begin(), embedding.end(), "--embedding") != embedding.end() &&
+              std::find(embedding.begin(), embedding.end(), "--flash-attn") == embedding.end(),
+        "The embedding server received chat-only launch flags.");
+    llmSettings embeddingLaunch;
+    embeddingLaunch.contextSize = 2048;
+    const auto batched = BuildLlamaServerArguments(embeddingLaunch, true, "mean", "none");
+    const auto batchValue = [&batched](const std::string& flag)
+    {
+        const auto found = std::find(batched.begin(), batched.end(), flag);
+        return found == batched.end() || found + 1 == batched.end() ? std::string("<absent>") : *(found + 1);
+    };
+    Check(batchValue("--batch-size") == "2048" && batchValue("--ubatch-size") == "2048",
+        "The embedding server kept the 512-token physical batch, which refuses long recall queries.");
+    settings.apiKey = embeddingLaunch.apiKey = "revia-launch-key";
+    for (const auto& launched :
+        {BuildLlamaServerArguments(settings, false, "", ""), BuildLlamaServerArguments(embeddingLaunch, true, "mean", "none")})
+    {
+        const auto key = std::find(launched.begin(), launched.end(), "--api-key");
+        Check(key != launched.end() && key + 1 != launched.end() && *(key + 1) == "revia-launch-key",
+            "A server Revia starts was launched without this session's key.");
+        Check(std::find(launched.begin(), launched.end(), "--no-slots") != launched.end() &&
+                  std::find(launched.begin(), launched.end(), "--media-path") == launched.end(),
+            "A server Revia starts exposes /slots or a local media directory.");
+    }
+    Check(IsQuantizedKvCacheType("q8_0") && IsQuantizedKvCacheType("iq4_nl") && !IsQuantizedKvCacheType("f16") &&
+              !IsQuantizedKvCacheType(""),
+        "Quantized KV cache types were not recognized.");
+}
+
+void TestChatWorkingSetCountsALargerKvCache()
+{
+    appSettings settings;
+    settings.llm.contextSize = 8192;
+    const auto baseline = revia::resources::EstimateResourceRequirements(settings, false).chatWorkingSetMiB;
+    settings.llm.contextSize = 32768;
+    const auto f16 = revia::resources::EstimateResourceRequirements(settings, false).chatWorkingSetMiB;
+    settings.llm.kvCacheType = "q8_0";
+    const auto q8 = revia::resources::EstimateResourceRequirements(settings, false).chatWorkingSetMiB;
+    Check(f16 == baseline + 960 && q8 == baseline + 480,
+        "The chat VRAM estimate did not grow with a 32K KV cache, or ignored its q8_0 quantization.");
 }
 
 void TestHardwarePlanScalesParallelLanesConservatively()
@@ -8666,11 +8733,14 @@ void TestResourcePlannerSeparatesUnequalGpus()
         "Embeddings unexpectedly contended with an interactive GPU pipeline.");
     Check(plan.llamaPromptCacheMiB == 4096 && plan.sqliteCacheMiB == 256,
         "A 64-GiB host did not receive bounded llama and SQLite RAM-cache budgets.");
-    Check(plan.chatCpuThreads == 9 && plan.embeddingCpuThreads == 3 &&
+    // Chat fits the RTX 5070 whole, so four of its nine threads go to the CPU embedding
+    // server; the total is unchanged.
+    Check(plan.chatCpuThreads == 5 && plan.chatBatchThreads == 5 && plan.embeddingCpuThreads == 7 &&
         plan.speechRecognitionThreads == 3 && plan.voiceCpuThreads == 3 &&
         plan.chatCpuThreads + plan.embeddingCpuThreads +
             plan.speechRecognitionThreads + plan.voiceCpuThreads == 18,
-        "Independent CPU thread caps exceeded the processors left after the OS reserve.");
+        "Independent CPU thread caps exceeded the processors left after the OS reserve, or a fully "
+        "GPU-resident chat model kept CPU threads the embedding server needed.");
 
     appSettings applied;
     revia::resources::ApplyResourcePlan(plan, applied);
@@ -8678,6 +8748,24 @@ void TestResourcePlannerSeparatesUnequalGpus()
         applied.speechRecognition.device == "cuda:1" &&
         applied.llm.ramCacheMiB == 4096 && applied.speech.qwenCpuThreads == 3,
         "The resolved resource plan was not passed to all service owners.");
+}
+
+void TestEmbeddingThreadsStayWhenChatNeedsTheCpu()
+{
+    revia::resources::HardwareInventory hardware;
+    hardware.gpus = {{"CUDA0", "NVIDIA GeForce RTX 3060", 0, 8192, 7600, {}}};
+    hardware.exactBackendDevices = true;
+    hardware.totalSystemMemoryMiB = 65536;
+    hardware.availableSystemMemoryMiB = 48000;
+    hardware.logicalProcessors = 20;
+    resourceSettings policy;
+    revia::resources::ResourceRequirements requirements;
+    // Larger than the GPU: llama.cpp will offload layers to the CPU, which needs its threads.
+    requirements.chatWorkingSetMiB = 9000;
+    requirements.baseGpuReserveMiB = 1536;
+    const auto plan = revia::resources::PlanResources(hardware, policy, requirements);
+    Check(plan.chatCpuThreads == 9 && plan.embeddingCpuThreads == 3,
+        "Chat threads were moved to embeddings although the chat model does not fit its GPU.");
 }
 
 void TestResourcePlannerSplitsOnlyForCapacity()
@@ -10043,6 +10131,8 @@ int main(const int argc, char** argv)
         TestConversationContextKeepsCoherentRecentTurns();
         TestOneLongPasteDoesNotEraseTheConversation();
         TestHardwarePlanScalesParallelLanesConservatively();
+        TestServerArgumentsQuantizeTheKvCacheWithFlashAttention();
+        TestChatWorkingSetCountsALargerKvCache();
         TestPresenceRuntimePublishesAvatarStateAndBoundsAdapters();
         TestResourcePlannerKeepsAutomaticVoiceOffTheChatGpu();
         TestResourcePlannerUsesBothGpusForParallelLongVoice();
@@ -10051,6 +10141,7 @@ int main(const int argc, char** argv)
         TestUnmeasurableResourcesSaySoRatherThanReportingZero();
         TestUsageOverItsBudgetIsVisible();
         TestResourcePlannerSeparatesUnequalGpus();
+        TestEmbeddingThreadsStayWhenChatNeedsTheCpu();
         TestResourcePlannerSplitsOnlyForCapacity();
         TestResourcePlannerPreservesAutoFallbackAndFreeVram();
         TestManualResourcePlanResolvesSymbolicDefaults();

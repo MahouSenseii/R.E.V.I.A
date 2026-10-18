@@ -9,6 +9,11 @@ struct llmSettings
     int port = 8080;
     std::string modelName = "local-model";
     std::string apiKey;
+    // Set for a server Revia starts itself. Its health check then requires the server
+    // to refuse a wrong key and accept apiKey, so a process already listening on the port
+    // that does not hold this session's key is never sent a conversation. Off for a
+    // server the user runs (autoStartServer false) and for test fixtures.
+    bool bVerifyServerKey = false;
 
     bool bAutoStartServer = false;
     std::string serverExecutable;
@@ -30,6 +35,10 @@ struct llmSettings
     int ramCacheMiB = -1;
     std::string modelLoadMode = "auto";
     int contextSize = 8192;
+    // K and V cache element type passed to llama-server, for example "q8_0". Empty keeps
+    // llama.cpp's f16 default. A quantized V cache requires flash attention, so a
+    // quantized type also switches flash attention from "auto" to "on".
+    std::string kvCacheType;
     int parallelRequests = 2;
     int startupTimeoutSeconds = 120;
     bool bShutdownServerOnExit = true;
@@ -42,6 +51,10 @@ struct llmSettings
     float temperature = 0.7f;
     bool bAutoMaxTokens = true;
     int maxTokens = 4096;
+    // Extra output tokens a reply may spend thinking when native thinking is on, so the
+    // thinking does not eat the answer's own maxTokens budget. Capped at a quarter of
+    // the context.
+    int thinkingTokens = 3072;
     // Places per-turn state in the newest user message to preserve the cached system prefix.
     bool bStablePromptPrefix = true;
     bool bAllowPromptCache = true;
@@ -54,6 +67,8 @@ struct embeddingSettings
     int port = 8081;
     std::string modelName = "nomic-embed-text-v1.5.Q4_K_M.gguf";
     std::string apiKey;
+    // As llmSettings::bVerifyServerKey, for the embedding server.
+    bool bVerifyServerKey = false;
 
     bool bAutoStartServer = true;
     std::string serverExecutable;

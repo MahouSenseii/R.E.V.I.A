@@ -10,7 +10,8 @@
                 "modelPath":  "Models/Qwen3.5-4B-Q4_K_M.gguf",
                 "autoTune":  true,
                 "autoFitTargetMiB":  2048,
-                "contextSize":  8192,
+                "contextSize":  32768,
+                "kvCacheType":  "q8_0",
                 "parallelRequests":  1,
                 "startupTimeoutSeconds":  120,
                 "shutdownServerOnExit":  true,
@@ -20,6 +21,7 @@
                 "temperature":  0.8,
                 "autoMaxTokens":  true,
                 "maxTokens":  1024,
+                "thinkingTokens":  3072,
                 "stablePromptPrefix":  true
             },
     "intelligence":  {
@@ -238,7 +240,8 @@
                          "restoreTurns":  6,
                          "selfInquiryEnabled":  true,
                          "selfInquiryCooldownTurns":  0,
-                         "selfInquiryScope":  "hard"
+                         "selfInquiryScope":  "hard",
+                         "deliberation":  "native"
                      },
     "responseFilter":  {
                            "aiReviewEnabled":  false,

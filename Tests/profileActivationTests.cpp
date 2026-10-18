@@ -105,7 +105,8 @@ public:
         std::lock_guard lock(mutex);
         for (auto it = requests.rbegin(); it != requests.rend(); ++it)
         {
-            if (!it->value("stream", false)) continue;
+            // Only the conversation reply carries stop markers; background calls stream too.
+            if (!it->contains("stop")) continue;
             const auto& messages = it->at("messages");
             for (auto message = messages.rbegin(); message != messages.rend(); ++message)
             {

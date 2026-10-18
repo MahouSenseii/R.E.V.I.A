@@ -7,6 +7,7 @@
 #include "Memory/memoryTypes.h"
 #include "LLM/LLamaCPP/llamaCppService.h"
 #include "cancellableHttpClient.h"
+#include "serverKeyProof.h"
 #include "Core/utf8.h"
 #include "Identity/promptMarkers.h"
 
@@ -981,6 +982,160 @@ namespace
         }
     }
 
+    // One server-sent event of a streamed chat completion.
+    struct StreamEvent
+    {
+        std::string content;
+        // llama.cpp's separated thinking, when the server parses it out of the reply.
+        std::string reasoning;
+        std::string finishReason;
+        // Present only on the final chunk.
+        json timings;
+        json usage;
+    };
+
+    StreamEvent ParseStreamEvent(const std::string& line)
+    {
+        StreamEvent event;
+        if (line.rfind("data: ", 0) != 0)
+            return event;
+        const std::string payload = line.substr(6);
+        if (payload == "[DONE]")
+            return event;
+        try
+        {
+            const json chunk = json::parse(payload);
+            if (chunk.contains("timings") && chunk["timings"].is_object())
+                event.timings = chunk["timings"];
+            if (chunk.contains("usage") && chunk["usage"].is_object())
+                event.usage = chunk["usage"];
+            if (!chunk.contains("choices") || !chunk["choices"].is_array() || chunk["choices"].empty())
+                return event;
+            const auto& choice = chunk["choices"][0];
+            if (choice.contains("finish_reason") && choice["finish_reason"].is_string())
+                event.finishReason = choice["finish_reason"].get<std::string>();
+            if (!choice.contains("delta") || !choice["delta"].is_object())
+                return event;
+            const auto& delta = choice["delta"];
+            if (delta.contains("content") && delta["content"].is_string())
+                event.content = delta["content"].get<std::string>();
+            if (delta.contains("reasoning_content") && delta["reasoning_content"].is_string())
+                event.reasoning = delta["reasoning_content"].get<std::string>();
+        }
+        catch (...)
+        {
+            return {};
+        }
+        return event;
+    }
+
+    // A completed background request, in the shape the non-streamed API returns.
+    struct CompletionResult
+    {
+        bool sent = false;
+        httplib::Error error = httplib::Error::Success;
+        int status = 0;
+        // The equivalent non-streamed JSON body on success, or the error body.
+        std::string body;
+    };
+
+    // Background requests ask for a stream and assemble it here, delivering nothing
+    // anywhere. Streamed, llama-server notices a closed connection at its next token
+    // and frees the slot; non-streamed, it noticed only at its periodic disconnect
+    // check, so cancelling one for a user's turn kept that turn waiting about a second.
+    // A body that is not a stream (a proxy or fixture ignoring the flag) passes through.
+    CompletionResult PostCompletion(httplib::ClientImpl& client, const std::string& encodedRequest)
+    {
+        constexpr std::size_t MaximumResponseBytes = 16 * 1024 * 1024;
+        CompletionResult output;
+        std::string raw;
+        httplib::Request request;
+        request.method = "POST";
+        request.path = "/v1/chat/completions";
+        request.set_header("Content-Type", "application/json");
+        request.body = encodedRequest;
+        request.content_receiver = [&raw](const char* data, const std::size_t length, std::uint64_t, std::uint64_t)
+        {
+            if (length > MaximumResponseBytes - raw.size())
+                return false;
+            raw.append(data, length);
+            return true;
+        };
+        const auto result = client.send(request);
+        if (!result)
+        {
+            output.error = result.error();
+            return output;
+        }
+        output.sent = true;
+        output.status = result->status;
+        const std::size_t first = raw.find_first_not_of(" \t\r\n");
+        if (output.status != 200 || first == std::string::npos || raw.compare(first, 5, "data:") != 0)
+        {
+            output.body = std::move(raw);
+            return output;
+        }
+
+        std::string content;
+        std::string finishReason;
+        json usage;
+        std::size_t begin = 0;
+        while (begin < raw.size())
+        {
+            std::size_t end = raw.find('\n', begin);
+            if (end == std::string::npos)
+                end = raw.size();
+            std::string line = raw.substr(begin, end - begin);
+            begin = end + 1;
+            if (!line.empty() && line.back() == '\r')
+                line.pop_back();
+            if (line.rfind("data:", 0) == 0 && line.rfind("data: ", 0) != 0)
+                line.insert(5, " ");
+            StreamEvent event = ParseStreamEvent(line);
+            content += event.content;
+            if (!event.finishReason.empty())
+                finishReason = event.finishReason;
+            if (event.usage.is_object())
+                usage = std::move(event.usage);
+        }
+        json choice = {{"message", {{"role", "assistant"}, {"content", content}}}};
+        if (!finishReason.empty())
+            choice["finish_reason"] = finishReason;
+        json assembled = {{"choices", json::array({std::move(choice)})}};
+        if (usage.is_object())
+            assembled["usage"] = std::move(usage);
+        output.body = assembled.dump(-1, ' ', false, json::error_handler_t::replace);
+        return output;
+    }
+
+    // What the server said about one streamed request in its final chunk. llama.cpp
+    // reports how much of the prompt it reused from its cache (cache_n) beside what it
+    // had to evaluate (prompt_n), which is the only direct evidence of prompt-cache reuse.
+    void AppendBackendTimings(std::vector<latencySample>& timings, const json& reported)
+    {
+        if (!reported.is_object())
+            return;
+        const auto number = [&reported](const char* key) -> std::optional<double>
+        {
+            if (!reported.contains(key) || !reported[key].is_number())
+                return std::nullopt;
+            const double value = reported[key].get<double>();
+            return value >= 0.0 ? std::optional<double>(value) : std::nullopt;
+        };
+        // Aggregate: these overlap the request's own wall-clock stages, so none of them
+        // may be named the slowest stage of the turn.
+        if (const auto value = number("cache_n"))
+            timings.push_back({"llama_cached_prompt", *value, true, "tok"});
+        if (const auto value = number("prompt_n"))
+            timings.push_back({"llama_evaluated_prompt", *value, true, "tok"});
+        if (const auto value = number("prompt_ms"))
+            timings.push_back({"llama_prompt_eval", *value, true});
+        if (const auto value = number("predicted_n"))
+            timings.push_back({"llama_generated", *value, true, "tok"});
+        if (const auto value = number("predicted_ms"))
+            timings.push_back({"llama_generation", *value, true});
+    }
+
     std::size_t ConservativePromptCost(const json& messages)
     {
         std::size_t tokens = 0;
@@ -1004,6 +1159,7 @@ void llamaCppService::ApplySettings(const llmSettings& settings, const embedding
     port = settings.port;
     modelName = settings.modelName;
     apiKey = settings.apiKey;
+    bVerifyServerKey = settings.bVerifyServerKey;
     bVisionExpected = settings.bVisionEnabled;
     bStablePromptPrefix = settings.bStablePromptPrefix;
     bAllowPromptCache = settings.bAllowPromptCache;
@@ -1022,6 +1178,7 @@ void llamaCppService::ApplyProfile(const llmSettings& settings, const aiProfile&
     activeProfile = profile;
     temperature = profile.bHasTemperatureOverride ? profile.temperature : settings.temperature;
     maxTokens = profile.bHasMaxTokensOverride ? profile.maxTokens : settings.maxTokens;
+    thinkingTokens = std::max(0, settings.thinkingTokens);
     bAutoMaxTokens = settings.bAutoMaxTokens && !profile.bHasMaxTokensOverride;
 }
 
@@ -1084,7 +1241,8 @@ bool llamaCppService::WarmUp(const std::stop_token stopToken, std::string& outEr
 }
 
 responseOutput llamaCppService::GenerateResponse(const std::vector<conversationMessage>& context, const std::stop_token stopToken,
-    DeltaHandler onDelta, const bool deepReasoning, const revia::llm::PrivateMemoryAccess memoryAccess) const
+    DeltaHandler onDelta, const bool deepReasoning, const revia::llm::PrivateMemoryAccess memoryAccess,
+    ReasoningHandler onReasoning) const
 {
     responseOutput output;
 
@@ -1155,7 +1313,12 @@ responseOutput llamaCppService::GenerateResponse(const std::vector<conversationM
     const int activeContextTokens = effectiveContextTokens.load();
     const int contextTokens = activeContextTokens > 0 ? activeContextTokens : configuredContextTokens;
     const int requestedResponse = briefSocial ? std::min(128, ResponseTokenLimit()) : ResponseTokenLimit();
-    const int responseTokens = std::clamp(requestedResponse, 1, std::max(1, contextTokens / 4));
+    const int answerTokens = std::clamp(requestedResponse, 1, std::max(1, contextTokens / 4));
+    // Thinking tokens count against max_tokens. Sharing the answer's budget let a long
+    // deliberation end the turn before the answer began, so thinking gets its own
+    // allowance on top, and the prompt is fitted around both.
+    const int thinkingAllowance = activeReasoning ? std::clamp(thinkingTokens, 0, std::max(0, contextTokens / 4)) : 0;
+    const int responseTokens = answerTokens + thinkingAllowance;
     const json originalMessages = messages;
     auto measured = CountBackendPrompt(host, port, apiKey, modelName, messages, activeReasoning, stopToken);
     const auto usableTokens = static_cast<long long>(contextTokens) - responseTokens - ContextReserveTokens;
@@ -1221,6 +1384,9 @@ responseOutput llamaCppService::GenerateResponse(const std::vector<conversationM
     std::string fullResponse;
     std::string buffer;
     std::string finishReason;
+    json backendTimings;
+    std::string nativeReasoning;
+    std::string inlineReasoningSent;
     size_t printedLength = 0;
     std::optional<std::chrono::steady_clock::time_point> firstTokenAt;
     int responseStatus = 0;
@@ -1281,7 +1447,18 @@ responseOutput llamaCppService::GenerateResponse(const std::vector<conversationM
             const std::string jsonStr = line.substr(6);
             if (jsonStr == "[DONE]") continue;
 
-            const std::string token = ParseStreamChunk(line, &finishReason);
+            StreamEvent event = ParseStreamEvent(line);
+            if (!event.finishReason.empty())
+                finishReason = event.finishReason;
+            if (event.timings.is_object())
+                backendTimings = std::move(event.timings);
+            if (!event.reasoning.empty())
+            {
+                nativeReasoning += event.reasoning;
+                if (onReasoning)
+                    onReasoning(event.reasoning);
+            }
+            const std::string& token = event.content;
             if (token.empty()) continue;
 
             if (!firstTokenAt)
@@ -1295,7 +1472,16 @@ responseOutput llamaCppService::GenerateResponse(const std::vector<conversationM
 
             // An unterminated <think> keeps its content out of visibleResponse, so nothing
             // inside one is ever emitted, spoken, or shown while it is still open.
-            const std::string visibleResponse = VisibleReplyText(fullResponse);
+            std::string inlineReasoning;
+            const std::string visibleResponse = VisibleReplyText(fullResponse, onReasoning ? &inlineReasoning : nullptr);
+            // A model that writes its thinking inline, inside <think>, is shown the same
+            // way as one whose thinking the server separates.
+            if (onReasoning && inlineReasoning.size() > inlineReasoningSent.size() &&
+                inlineReasoning.compare(0, inlineReasoningSent.size(), inlineReasoningSent) == 0)
+            {
+                onReasoning(inlineReasoning.substr(inlineReasoningSent.size()));
+                inlineReasoningSent = std::move(inlineReasoning);
+            }
             const size_t safeLength = visibleResponse.size() > StreamHoldbackChars
                 ? visibleResponse.size() - StreamHoldbackChars
                 : 0;
@@ -1358,6 +1544,8 @@ responseOutput llamaCppService::GenerateResponse(const std::vector<conversationM
             buffer.clear();
             errorBody.clear();
             finishReason.clear();
+            backendTimings = json();
+            nativeReasoning.clear();
             responseStatus = 0;
             result = client.send(req);
         }
@@ -1372,8 +1560,11 @@ responseOutput llamaCppService::GenerateResponse(const std::vector<conversationM
         "llama_decode_after_first_token",
         std::max(0.0, requestMilliseconds - firstTokenMilliseconds)});
     output.timings.push_back({"llama_request_total", requestMilliseconds, true});
+    AppendBackendTimings(output.timings, backendTimings);
 
     std::string cleanedResponse = jsonReply ? TrimWhitespace(fullResponse) : VisibleReplyText(fullResponse, &output.reasoning);
+    if (const std::string separated = TrimWhitespace(nativeReasoning); !separated.empty())
+        output.reasoning = output.reasoning.empty() ? separated : separated + "\n" + output.reasoning;
 
     if (!result)
     {
@@ -1816,7 +2007,10 @@ responseOutput llamaCppService::GeneratePlannerResponse(const std::string& syste
         })},
         {"temperature", std::clamp(requestTemperature, 0.0F, 2.0F)},
         {"max_tokens", std::clamp(maxTokens, 32, 4096)},
-        {"stream", false}
+        // Streamed only so a cancelled request frees the server at once; the text is
+        // assembled locally and nothing is delivered until it is complete.
+        {"stream", true},
+        {"stream_options", {{"include_usage", true}}}
     };
     if (operation == "private creation")
         requestBody["chat_template_kwargs"] = {{"enable_thinking", false}};
@@ -1871,14 +2065,11 @@ responseOutput llamaCppService::GeneratePlannerResponse(const std::string& syste
     std::stop_callback cancelRequest(stopToken, [&]() { requestCancellation.request_stop(); client.stop(); });
     std::stop_callback preemptRequest(preemptionToken, [&]() { requestCancellation.request_stop(); client.stop(); });
     const auto requestStarted = std::chrono::steady_clock::now();
-    const auto result = client.Post(
-        "/v1/chat/completions",
-        encodedRequest,
-        "application/json");
+    const CompletionResult result = PostCompletion(client, encodedRequest);
     output.timings.push_back({
         "planner_request_total", ElapsedMilliseconds(requestStarted), true});
     inferenceLease = {};
-    if (!result)
+    if (!result.sent)
     {
         if (stopToken.stop_requested() || preemptionToken.stop_requested())
         {
@@ -1891,20 +2082,20 @@ responseOutput llamaCppService::GeneratePlannerResponse(const std::string& syste
             // Named, because "could not connect" was reported for a reply that was
             // simply still being written when the read timed out.
             output.reason = operation + " failed talking to llama.cpp at " + host + ":" +
-                std::to_string(port) + ": " + httplib::to_string(result.error()) + ".";
+                std::to_string(port) + ": " + httplib::to_string(result.error) + ".";
         }
         return output;
     }
-    if (result->status != 200)
+    if (result.status != 200)
     {
         output.reason = operation + " returned HTTP " +
-            std::to_string(result->status) + ".";
+            std::to_string(result.status) + ".";
         return output;
     }
 
     try
     {
-        const json response = json::parse(result->body);
+        const json response = json::parse(result.body);
         if (!response.contains("choices") || response["choices"].empty() ||
             !response["choices"][0].contains("message") ||
             !response["choices"][0]["message"].contains("content"))
@@ -1984,7 +2175,9 @@ responseOutput llamaCppService::AnalyzeImage(const std::filesystem::path& imageP
         {"temperature", 0.2},
         {"max_tokens", std::clamp(maxResponseTokens, backgroundAwareness ? 192 : 64, 4096)},
         {"chat_template_kwargs", {{"enable_thinking", false}}},
-        {"stream", false}
+        // Streamed so background awareness yields to a user's turn at once.
+        {"stream", true},
+        {"stream_options", {{"include_usage", true}}}
     };
     if (backgroundAwareness)
     {
@@ -2014,8 +2207,7 @@ responseOutput llamaCppService::AnalyzeImage(const std::filesystem::path& imageP
     const std::stop_token preemptionToken = inferenceLease.PreemptionToken();
     std::stop_callback preemptRequest(preemptionToken, [&]() { requestCancellation.request_stop(); client.stop(); });
     const auto requestStarted = std::chrono::steady_clock::now();
-    const auto result = client.Post(
-        "/v1/chat/completions", requestBody.dump(), "application/json");
+    const CompletionResult result = PostCompletion(client, requestBody.dump());
     output.timings.push_back({"vision_request_total", ElapsedMilliseconds(requestStarted), true});
     inferenceLease = {};
 
@@ -2027,26 +2219,26 @@ responseOutput llamaCppService::AnalyzeImage(const std::filesystem::path& imageP
         return output;
     }
 
-    if (!result)
+    if (!result.sent)
     {
         output.response = stopToken.stop_requested()
             ? "I stopped looking at the screen."
             : "My local vision request did not complete.";
         output.reason = stopToken.stop_requested()
             ? "Vision analysis was cancelled."
-            : "llama.cpp vision request failed: " + httplib::to_string(result.error()) + ".";
+            : "llama.cpp vision request failed: " + httplib::to_string(result.error) + ".";
         return output;
     }
-    if (result->status != 200)
+    if (result.status != 200)
     {
         output.response = "My local vision backend returned an error.";
         output.reason = "llama.cpp vision request returned HTTP " +
-            std::to_string(result->status) + ": " + result->body;
+            std::to_string(result.status) + ": " + result.body;
         return output;
     }
     try
     {
-        output.response = StripSpecialTokens(ExtractResponseContent(json::parse(result->body)));
+        output.response = StripSpecialTokens(ExtractResponseContent(json::parse(result.body)));
     }
     catch (const std::exception& error)
     {
@@ -2211,15 +2403,14 @@ memoryDecision llamaCppService::EvaluateMemory(const std::string& userMessage, c
             {"dry_multiplier", 0.8},
             {"dry_penalty_last_n", 4096},
             {"max_tokens", 256},
-            {"stream", false},
+            // Streamed so a user's turn preempts classification at once.
+            {"stream", true},
+            {"stream_options", {{"include_usage", true}}},
             {"response_format", {{"type", "json_object"}}},
             {"chat_template_kwargs", {{"enable_thinking", false}}}
         };
-        const auto result = client.Post(
-            "/v1/chat/completions",
-            requestBody.dump(),
-            "application/json");
-        if (!result)
+        const CompletionResult result = PostCompletion(client, requestBody.dump());
+        if (!result.sent)
         {
             verdict.bSuccess = preemptionToken.stop_requested();
             verdict.bPreempted = preemptionToken.stop_requested();
@@ -2228,13 +2419,13 @@ memoryDecision llamaCppService::EvaluateMemory(const std::string& userMessage, c
                 : stopToken.stop_requested()
                 ? "Memory evaluation was cancelled."
                 : "llama.cpp memory request failed: " +
-                    std::string(httplib::to_string(result.error())) + ".";
+                    std::string(httplib::to_string(result.error)) + ".";
             return false;
         }
-        if (result->status != 200)
+        if (result.status != 200)
         {
             verdict.reason = "Memory evaluation returned HTTP status " +
-                std::to_string(result->status) + ".";
+                std::to_string(result.status) + ".";
             return false;
         }
 
@@ -2244,7 +2435,7 @@ memoryDecision llamaCppService::EvaluateMemory(const std::string& userMessage, c
         verdict.bShouldRemember = false;
         try
         {
-            const json response = json::parse(result->body);
+            const json response = json::parse(result.body);
             if (!response.contains("choices") || response["choices"].empty() ||
                 !response["choices"][0].contains("message") ||
                 !response["choices"][0]["message"].contains("content") ||
@@ -2406,35 +2597,6 @@ embeddingOutput llamaCppService::EmbedMemory(const std::string& summary, const s
     return embeddings.EmbedDocument(summary, stopToken);
 }
 
-std::string llamaCppService::ParseStreamChunk(const std::string& line, std::string* outFinishReason)
-{
-    if (line.rfind("data: ", 0) != 0) return "";
-    const std::string json_str = line.substr(6);
-
-    if (json_str == "[DONE]") return "";
-    try
-    {
-        const json chunk = json::parse(json_str);
-
-        if (!chunk.contains("choices") || chunk["choices"].empty()) return "";
-
-        const auto& choice = chunk["choices"][0];
-        if (outFinishReason != nullptr && choice.contains("finish_reason") &&
-            choice["finish_reason"].is_string())
-        {
-            *outFinishReason = choice["finish_reason"].get<std::string>();
-        }
-
-        if (!choice.contains("delta") || !choice["delta"].is_object()) return "";
-        const auto& delta = choice["delta"];
-
-        if (!delta.contains("content")) return "";
-
-        return delta["content"].get<std::string>();
-    }
-    catch (...) { return ""; }
-}
-
 healthOutput llamaCppService::CheckHealth(const std::stop_token stopToken) const
 {
     healthOutput output;
@@ -2463,6 +2625,19 @@ healthOutput llamaCppService::CheckHealth(const std::stop_token stopToken) const
         output.status = systemStatus::Red;
         output.message = "llama.cpp server responded with an error.";
         output.reason = "HTTP status: " + std::to_string(result->status);
+        return output;
+    }
+
+    // Revia started this server with this session's key; anything else on the port is
+    // refused rather than trusted with the conversation.
+    std::string keyProblem;
+    if (bVerifyServerKey &&
+        !revia::llm::ProvesServerKey(host, port, apiKey, "/v1/chat/completions", stopToken, keyProblem))
+    {
+        output.bIsAvailable = false;
+        output.status = systemStatus::Yellow;
+        output.message = "Another process is answering on Revia's language-model port.";
+        output.reason = keyProblem + " Revia will not send it the conversation. Close that process, then restart Revia.";
         return output;
     }
 

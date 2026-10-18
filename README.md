@@ -47,7 +47,7 @@ The design rule: **one Revia**. Reflex, Fast, Main, and Expert share one identit
 
 - **Answer instantly for simple things.** A built-in C++ Reflex lane handles "stop", "cancel", and "Revia?" without touching a model.
 - **Pick how hard to think.** Qwen3.5 4B handles conversation (including small talk, which it starts answering in about half a second on the GPU), and Qwen3-VL 8B handles hard debugging, architecture, and difficult vision. Qwen3.5 0.8B runs on the CPU and is only started as a fallback when the 4B model has no GPU or fails to start: on the CPU it needs 8-10 s just to read a prompt. The choice is made before she answers, and only one model answers each turn. If a model is unavailable she falls back and tells you.
-- **Think before answering, where you can see it.** When the router judges a problem hard (it sends the turn to Expert or deep reasoning), she first asks herself two to four questions, answers each one, and states what she concluded. A "Revia is thinking" block shows this in chat before her reply, and the reply's **Thought process** starts with the same steps. Ordinary questions and small talk are answered directly, so they start replying seconds sooner. The deliberation adds one bounded Main-model call (a few seconds). Set `conversation.selfInquiryScope` in `Config\settings.json` to `"questions"` to have her think before every real question or task as well.
+- **Think before answering, where you can see it.** When the router judges a problem hard (it sends the turn to Expert or deep reasoning), she thinks before she answers. By default (`conversation.deliberation: "native"`) this is the model's own thinking mode on the answer itself: her thinking streams into "Revia is thinking" blocks in chat as it is written, the answer follows in the same model call, and the reply's **Thought process** keeps the full reasoning. Thinking has its own token allowance (`llm.thinkingTokens`, default 3,072, capped at a quarter of the context), so it no longer eats the answer's `maxTokens`; a long think still delays the first word of the answer. With `"selfInquiry"` she instead runs the older separate pass: two to four questions she asks and answers herself, shown before her reply, at the cost of one extra bounded model call. Ordinary questions and small talk are answered directly. Set `conversation.selfInquiryScope` to `"questions"` to have her think before every real question or task as well. Native thinking is unit-tested against a fake backend that streams `reasoning_content`; it has not been run live yet.
 - **Stay in character.** Personality, mood, recent conversation, relevant memories, and what is on your screen go into every turn. Her mood carries over between turns instead of resetting.
 - **Develop over time.** She forms durable likes, dislikes, opinions, and feelings about the people she talks to.
 - **Remember across restarts.** Useful facts go to `build/debug/Memory/revia_memory.db`; conversation goes to `build/debug/Memory/revia_conversations.db`. Turns that look sensitive (passwords, keys, and so on) are not saved at all.
@@ -382,6 +382,10 @@ Having a file in `Models\` does not mean it is used. This is the live map:
 | Reply voice | `Qwen3-TTS-12Hz-0.6B-Base` | RTX 5070 (BF16) + RTX 2070 Super (FP32) |
 | Voice creation | `Qwen3-TTS-12Hz-1.7B-VoiceDesign` | Loaded only while creating a voice |
 
+Main runs with a 32,768-token context and a q8_0 KV cache (`llm.contextSize`, `llm.kvCacheType`); Fast and Expert keep 8,192 tokens. How much recent conversation she keeps follows Main's context: about 60 messages at 32K, 24 at 8K. Set `llm.contextSize` back to `8192` on a GPU with little free memory. See [docs/CONTEXT_BENCHMARK.md](docs/CONTEXT_BENCHMARK.md) for what has and has not been measured at 32K.
+
+The embedding worker keeps its last 64 embeddings, so text embedded for the reply, the self-inquiry and the memory check is computed once. It runs with a 2,048-token batch so long recall queries are not refused, and when Main fits entirely on its GPU, the planner moves up to half of Main's CPU threads to it (embeddings get at most eight).
+
 The Qwen2.5-Omni and Llama 3.1 8B files that may sit in `Models\` are not used. `/models` shows exactly what is loaded this session.
 
 All workers are separate local processes bound to `127.0.0.1` so each GPU gets its own CUDA context and a crash cannot take Revia down. Nothing is sent to a cloud model.
@@ -513,6 +517,7 @@ The capability `mode` can be `supervised` (default) or `owner_full_access`. The 
 ## Privacy and safety
 
 - Everything runs locally. Only web lookups send data out (the query), and they can be turned off with `/internet off`.
+- The language-model and embedding servers Revia starts get a fresh random API key each launch, run without `/slots` or a media directory, and must prove they hold that key before she sends them anything. If another program is already answering on one of their ports, she refuses it and says so (`Another process is answering on Revia's language-model port`) instead of using it. A server you run yourself (`autoStartServer: false`) is still trusted as before, with `apiKey` sent if you set one. Tested against fake servers; not yet run against a real squatter on Windows.
 - Screenshots are deleted immediately; only short summaries are kept in memory. Excluding an app (password managers are excluded by default) hides it from **activity records**, not from screenshots sent to local vision.
 - Files are limited to `Documents\ReviaSandbox` unless you approve more. Writes need confirmation.
 - Approving an app allows inspecting it. Pressing a control also needs that exact control approved.
@@ -556,7 +561,7 @@ signatures, and short comments.
 
 Start with **Runtime → Activity**, **Pipelines**, and **Resources**, or `/status` and `/resources`. Logs are in `build\debug\Logs\`:
 
-- `revia.log`: startup, every turn, model placement, timings, shutdown
+- `revia.log`: startup, every turn, model placement, timings, shutdown. Each turn's `Timing` line also carries what llama.cpp reported for that reply: `llama_cached_prompt` (prompt tokens reused from its cache), `llama_evaluated_prompt` (tokens it had to read), `llama_prompt_eval` and `llama_generation` (milliseconds). A low cached count late in a conversation means the prompt cache is not being reused. Conversation history is trimmed to 60% of its budget when it overflows, rather than by one exchange per turn, so the start of the prompt stays identical for several turns. Unit-tested against a fake backend; the reuse it buys has not been measured live yet.
 - `llama-server-<port>.*.log`: one pair per language worker (8080 Main, 8082 Fast, 8083 Expert); `embedding-server.*.log`: memory worker
 - `qwen-tts-<port>.*.log`: one pair per voice GPU
 - `whisper-server.*.log`, `visible-browser.*.log`: speech recognition and browser

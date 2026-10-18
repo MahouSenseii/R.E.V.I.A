@@ -102,6 +102,23 @@ needs held-out natural conversations, pronoun-only and multilingual follow-ups,
 actual Revia compaction/recall, restart and fallback, subjective personality
 review, and concurrent speech/vision/art measurements.
 
+## Default changed on 2026-10-18
+
+`Config/settings.json` now gives Main `llm.contextSize: 32768` with
+`llm.kvCacheType: "q8_0"` (passed as `--cache-type-k q8_0 --cache-type-v q8_0`,
+which also switches `--flash-attn` from `auto` to `on`, because llama.cpp needs flash
+attention for a quantized V cache). Fast and Expert keep their 8,192-token contexts and
+the default f16 cache. The retained conversation history scales with Main's context:
+about 60 messages and 60,000 characters at 32K, older messages kept up to about 12,000
+characters, and the old caps at 8K and below. The resource planner adds about 40 MiB per
+thousand tokens above 8K to the chat VRAM estimate (half that for q8_0), from the 16K and
+32K readings above; llama.cpp's `--fit` still makes the final placement.
+
+The run above used an f16 cache. The q8_0 cache at 32K has **not** been benchmarked with
+this tool yet, and the change has only been unit-tested (launch arguments, history caps,
+planner estimate, settings validation), not run live. To measure it, rerun the tool with
+`--cache-type-k q8_0 --cache-type-v q8_0` in `server_arguments`.
+
 ## Quality observation proxy and checks
 
 `Tools/Quality/observedLocalModel.h` now forwards the two accounting POST endpoints

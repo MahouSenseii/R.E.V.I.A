@@ -190,6 +190,9 @@ llmSettings BuildTierSettings(const llmSettings& base, const modelTierSettings& 
     output.bVisionEnabled = tier.bVisionEnabled;
     output.multimodalProjectorPath = tier.multimodalProjectorPath;
     output.contextSize = tier.contextSize;
+    // The quantized KV cache was chosen for Main's 32K context. Fast and Expert keep
+    // llama.cpp's default cache at their own smaller contexts.
+    output.kvCacheType.clear();
     output.parallelRequests = 1;
     output.maxTokens = tier.maxTokens;
     output.temperature = tier.temperature;
@@ -203,6 +206,7 @@ llmSettings BuildTierSettings(const llmSettings& base, const modelTierSettings& 
     output.ramCacheMiB = 0;
     output.bAutoTune = true;
     output.bAutoStartServer = true;
+    output.bVerifyServerKey = true;
     return output;
 }
 
@@ -309,6 +313,7 @@ ReviaSession::ReviaSession(CompanionPaths paths, std::shared_ptr<policy::Compani
               limits.investigationBudget = std::chrono::milliseconds(std::max(1000, settings.conversation.investigationBudgetMilliseconds));
               limits.cooldownTurns = static_cast<std::size_t>(std::max(0, settings.conversation.selfInquiryCooldownTurns));
               limits.includeOrdinaryQuestions = settings.conversation.selfInquiryScope == "questions";
+              limits.nativeDeliberation = settings.conversation.deliberation == "native";
               return limits;
           },
           [this](const memory::RecallRequest& request, const std::string& currentInput, const memory::MemoryScope& scope)
@@ -669,6 +674,10 @@ bool ReviaSession::Start()
     {
         settings.embedding.apiKey = core::GenerateLocalApiKey();
     }
+    // A server Revia starts is launched with this key, so a responder on its port that
+    // does not hold it is refused. A server the user runs themselves stays trusted.
+    settings.llm.bVerifyServerKey = settings.llm.bAutoStartServer;
+    settings.embedding.bVerifyServerKey = settings.embedding.bAutoStartServer;
 
     stageStarted = std::chrono::steady_clock::now();
     aiProfile startupProfile;
@@ -1093,6 +1102,9 @@ bool ReviaSession::Start()
     stageStarted = std::chrono::steady_clock::now();
     router.ApplyLLMSettings(
         settings.llm, fastLlmSettings, expertLlmSettings, settings.embedding, profile, fastBrainConfigured, expertBrainConfigured);
+    // Retained history follows Main's context window: 32K keeps far more of the
+    // conversation than 8K, and a small context keeps the old, safe caps.
+    context.SetContextTokens(settings.llm.contextSize);
     mainPreparation.Reset();
     fastPreparation.Reset();
     expertPreparation.Reset();
