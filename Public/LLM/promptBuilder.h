@@ -9,6 +9,13 @@
 #include <nlohmann/json.hpp>
 #include <vector>
 
+namespace revia::llm
+{
+// Defuses the runtime block's delimiters inside text that did not come from the runtime:
+// a page, a file or a tool result could otherwise close the block early or open one.
+[[nodiscard]] std::string NeutralizeTurnContextMarkers(std::string text);
+} // namespace revia::llm
+
 class promptBuilder
 {
 public:

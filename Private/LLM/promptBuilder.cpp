@@ -81,6 +81,14 @@ bool ContinuesRecentTopic(const std::string& input)
     }
 }
 
+namespace revia::llm
+{
+std::string NeutralizeTurnContextMarkers(std::string text)
+{
+    return ::NeutralizeTurnContextMarkers(std::move(text));
+}
+} // namespace revia::llm
+
 promptBuilder::promptBuilder() = default;
 
 promptBuilder::promptBuilder(std::string memoryDatabasePath)

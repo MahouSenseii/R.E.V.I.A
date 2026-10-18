@@ -31,7 +31,7 @@ public:
         ResponseProvenance provenance, std::uint64_t turnId = 0, std::stop_token stopToken = {}, messageRouter::DeltaHandler onDelta = {},
         const revia::intelligence::IntelligenceDecision& decision = {},
         llm::PrivateMemoryAccess memoryAccess = llm::PrivateMemoryAccess::ProfileSetting, std::function<bool()> contextAdmission = {},
-        const memory::MemoryScope& scope = {}) const;
+        const memory::MemoryScope& scope = {}, const ToolLoop* tools = nullptr) const;
     std::vector<MemoryAgentEvent> DrainMemoryEvents();
     [[nodiscard]] LearnedFindingResult SubmitLearnedFinding(const messageRouter& router, memoryDecision decision, std::uint64_t turnId = 0);
     [[nodiscard]] LearnedFindingResult SubmitLearnedFinding(const messageRouter& router, memoryDecision decision, std::uint64_t turnId,
