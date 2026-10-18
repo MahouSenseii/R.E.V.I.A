@@ -1,4 +1,5 @@
 #include "testSupport.h"
+#include "actionRuntimeTestAccess.h"
 
 #include "Actions/actionRuntime.h"
 #include "Goals/goalRunner.h"
@@ -8,8 +9,10 @@
 
 #include <fstream>
 #include <iostream>
+#include <iterator>
 #include <nlohmann/json.hpp>
 #include <sqlite3.h>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -593,6 +596,72 @@ void TestAFailedActionStillRetries()
         "A repeatable action stopped as though its outcome were unknown.");
     Check(finished.steps.front().attempts.size() == 2,
         "The retry budget was not spent on an action that commits nothing.");
+}
+
+void TestAPartialFailedEffectIsNotRepeated(const bool throwsAfterEffect)
+{
+    using namespace revia::actions;
+    class PartialCopyExecutor final : public IActionExecutor
+    {
+      public:
+        explicit PartialCopyExecutor(const bool shouldThrow) : throwsAfterEffect(shouldThrow) {}
+        bool Handles(const ActionType type) const override { return type == ActionType::CopyFile; }
+        ActionResult Execute(const ActionRequest& request, const PolicyDecision&) override
+        {
+            {
+                std::ofstream output(request.destination, std::ios::app);
+                output << "effect\n";
+                Check(output.good(), "Could not record the fixture's partial effect.");
+            }
+            if (throwsAfterEffect) throw std::runtime_error("Failure after a partial effect.");
+            ActionResult result;
+            result.attempted = true;
+            result.message = "The action stopped after applying a partial effect.";
+            return result;
+        }
+      private:
+        bool throwsAfterEffect;
+    };
+    LoopFixture fixture;
+    const auto source = fixture.approved / "source.txt";
+    const auto destination = fixture.approved / "partial.txt";
+    {
+        std::ofstream input(source);
+        input << "fixture input";
+    }
+    ActionRuntimeTestAccess::ReplaceExecutor(fixture.runtime, ActionType::CopyFile,
+        std::make_unique<PartialCopyExecutor>(throwsAfterEffect));
+    std::uint32_t providerCalls = 0;
+    fixture.runner.SetStepProvider([&](const Goal&, std::uint32_t)
+    {
+        ++providerCalls;
+        GoalStep step;
+        step.description = "Copy the requested fixture";
+        step.action.type = ActionType::CopyFile;
+        step.action.source = source;
+        step.action.destination = destination;
+        step.check.type = ActionType::ListDirectory;
+        step.check.source = fixture.approved;
+        step.expected = "partial.txt";
+        return Take(step);
+    });
+    Goal goal = fixture.NewGoal("Do not repeat a failed partial effect");
+    goal.budget.maxRetriesPerStep = 3;
+    const auto result = fixture.runner.Operate(goal);
+    std::ifstream input(destination);
+    const std::string effects((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
+    Check(effects == "effect\n", "The runner repeated an effect after its executor failed partway through.");
+    Check(result.status == GoalStatus::Failed && result.stopReason == StopReason::UnverifiedEffect &&
+        !result.stopDetail.empty() && result.steps.size() == 1 && result.steps.front().attempts.size() == 1 &&
+        result.steps.front().attempts.front().executed && !result.steps.front().attempts.front().verified &&
+        !result.steps.front().attempts.front().failure.empty() && result.spend.actions == 1 && result.spend.retries == 0 &&
+        providerCalls == 1, "A failed partial effect lost its attempted truth or continued/retried the goal.");
+    const auto saved = fixture.store.Load(result.id);
+    Check(saved && saved->status == result.status && saved->stopReason == result.stopReason &&
+        saved->stopDetail == result.stopDetail && saved->steps.size() == 1 && saved->steps.front().attempts.size() == 1 &&
+        saved->steps.front().attempts.front().executed && !saved->steps.front().attempts.front().verified &&
+        saved->spend.actions == 1 && saved->spend.retries == 0,
+        "A failed partial effect was not persisted as a terminal uncertain outcome.");
 }
 
 // The process died between acting and observing. From here that is indistinguishable
@@ -1695,8 +1764,115 @@ void TestATypedFailureIsCarriedEvenWhenUncorroborated()
         "is what turns a safe retry into a refusal to continue.");
 }
 
+void TestCallbackFailureKeepsTheGoalRecord(
+    const std::string& stage, const bool nonStandardException, const bool cancelBeforeFailure)
+{
+    LoopFixture fixture;
+    std::stop_source stop;
+    std::uint32_t providerCalls = 0;
+    std::uint32_t failedCalls = 0;
+    const auto fail = [&]()
+    {
+        ++failedCalls;
+        if (cancelBeforeFailure) stop.request_stop();
+        if (nonStandardException) throw 42;
+        throw std::runtime_error("private-exception-payload-do-not-persist");
+    };
+    fixture.runner.SetStepProvider([&](const Goal&, const std::uint32_t iteration)
+    {
+        ++providerCalls;
+        if (iteration == 0)
+        {
+            auto next = Take(fixture.MakeDirectory("before-failure"));
+            next.tokens = 17;
+            next.costReported = true;
+            return next;
+        }
+        if (iteration > 1) return Take(fixture.MakeDirectory("after-failure"));
+        if (stage == "planning") fail();
+        NextStep next;
+        next.tokens = 23;
+        next.costReported = true;
+        next.finished = stage == "completion";
+        if (stage == "recovery") next.recovery = NextStep::Recovery::Reobserve;
+        return next;
+    });
+    fixture.runner.SetRecoveryHandler([&](NextStep::Recovery, const Goal&, std::stop_token, std::string&)
+    {
+        fail();
+        return true;
+    });
+    fixture.runner.SetCompletionVerifier([&](const Goal&, std::stop_token)
+    {
+        fail();
+        return CompletionEvidence{true, "This result must never be accepted."};
+    });
+    Goal goal = fixture.NewGoal("Preserve completed work when " + stage + " fails");
+    goal.id = NewGoalId();
+    goal.spend.elapsedMs = 321;
+    goal.spend.retries = 1;
+    Goal result;
+    bool escaped = false;
+    try
+    {
+        result = fixture.runner.Operate(goal, stop.get_token());
+    }
+    catch (...)
+    {
+        escaped = true;
+    }
+    const auto saved = fixture.store.Load(goal.id);
+    Check(!escaped, "An exception during " + stage + " escaped instead of returning and persisting the failed goal.");
+    const auto expectedStatus = cancelBeforeFailure ? GoalStatus::Cancelled : GoalStatus::Failed;
+    Check(result.id == goal.id && result.title == goal.title && result.status == expectedStatus &&
+        result.stopReason != StopReason::None && result.stopReason != StopReason::Completed,
+        "A callback failure lost the original goal identity or its terminal failure state.");
+    Check(!cancelBeforeFailure || result.stopReason == StopReason::Cancelled,
+        "A callback failure overrode cancellation requested during the callback.");
+    Check(!result.stopDetail.empty() && result.stopDetail.size() <= 1024 &&
+        result.stopDetail.find(stage) != std::string::npos &&
+        result.stopDetail.find("private-exception-payload") == std::string::npos,
+        "A callback failure lost its bounded stage diagnostic or exposed an arbitrary exception payload.");
+    Check(result.steps.size() == 1 && result.steps.front().status == StepStatus::Succeeded &&
+        result.steps.front().attempts.size() == 1 && result.steps.front().attempts.front().verified &&
+        !result.steps.front().attempts.front().observation.empty() &&
+        std::filesystem::is_directory(fixture.approved / "before-failure"),
+        "A callback failure discarded the executed and verified step or its evidence.");
+    Check(result.spend.actions == 2 && result.spend.retries == 1 && result.spend.plannerRequests == 2 &&
+        result.spend.tokens == (stage == "planning" ? 17u : 40u) &&
+        result.spend.unreportedRequests == (stage == "planning" ? 1u : 0u) && result.spend.elapsedMs >= 321,
+        "A callback failure lost completed spend or failed to charge the attempted planner request.");
+    Check(providerCalls == 2 && failedCalls == 1 && !std::filesystem::exists(fixture.approved / "after-failure"),
+        "A failed callback was retried or allowed a later action to execute.");
+    Check(saved && saved->id == result.id && saved->title == result.title && saved->status == result.status &&
+        saved->stopReason == result.stopReason && saved->stopDetail == result.stopDetail &&
+        saved->spend.actions == result.spend.actions && saved->spend.retries == result.spend.retries &&
+        saved->spend.plannerRequests == result.spend.plannerRequests && saved->spend.tokens == result.spend.tokens &&
+        saved->spend.unreportedRequests == result.spend.unreportedRequests && saved->spend.elapsedMs == result.spend.elapsedMs &&
+        saved->steps.size() == 1 && saved->steps.front().attempts.size() == 1 &&
+        saved->steps.front().attempts.front().verified &&
+        saved->steps.front().attempts.front().observation == result.steps.front().attempts.front().observation,
+        "The persisted goal disagreed with the terminal result or lost its completed evidence and spend.");
+}
+
 void RunOperatorLoopTests()
 {
+    std::string callbackFailures;
+    const auto probe = [&](const std::string& label, const auto& test)
+    {
+        try { test(); }
+        catch (const std::exception& error) { callbackFailures += "\n" + label + ": " + error.what(); }
+        catch (...) { callbackFailures += "\n" + label + ": non-standard exception escaped the regression."; }
+    };
+    probe("partial effect / failed result", [] { TestAPartialFailedEffectIsNotRepeated(false); });
+    probe("partial effect / executor exception", [] { TestAPartialFailedEffectIsNotRepeated(true); });
+    for (const auto* stage : {"planning", "recovery", "completion"})
+        for (const bool nonStandardException : {false, true})
+            for (const bool cancelBeforeFailure : {false, true})
+                probe(std::string(stage) + (nonStandardException ? " / non-standard" : " / standard") +
+                    (cancelBeforeFailure ? " / cancelled" : " / failed"),
+                    [&] { TestCallbackFailureKeepsTheGoalRecord(stage, nonStandardException, cancelBeforeFailure); });
+    Check(callbackFailures.empty(), "Goal failure regressions:" + callbackFailures);
     TestADeletionIsProvedByItsAbsence();
     TestATypedPassAboutSomethingElseProvesNothing();
     TestTheLegacyVerificationContractIsPreserved();

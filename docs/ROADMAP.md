@@ -27,6 +27,7 @@ The north star is a coherent companion: fast when a task is easy, thoughtful whe
 | Internet research | ✅ | Opt-in visible browser with restricted navigation and source trace. |
 | Curiosity and initiative | ✅ | Evidence-based proposals, bounded read-only research, and persisted evidence-threshold self-assessment tasks are live. |
 | Files and desktop actions | ✅ | Typed, supervised operations behind permission, confirmation, rate, and audit gates. |
+| Private Ubuntu workspace | 🟡 | Opt-in background VMware provisioning and typed guest file/process actions are implemented with separate permissions and boot-bound receipts. See [startup and limits](UBUNTU_WORKSPACE.md); guest GUI/browser control and model-driven coding acceptance remain open. |
 | Multi-step goals | 🟡 | Rehearsal, budgets, verification, confirmation, and resume exist; unattended delivery remains deliberately narrow. |
 | Hardware adaptation | 🟡 | Startup planning supports CPU, one GPU, and multiple GPUs; physical single-GPU/CPU test coverage is incomplete. |
 | One-command clean setup | 🧪 | `setup.bat` implements profile selection, pinned manifests, install/build/test/health orchestration, and reuse; a genuinely fresh physical PC run remains unverified. |

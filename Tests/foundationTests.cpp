@@ -9429,6 +9429,27 @@ int main(const int argc, char** argv)
             RunActionAuditTests();
             return 0;
         }
+        if (argc > 1 && std::string(argv[1]) == "--background-tasks")
+        {
+            RunBackgroundTaskTests();
+            return 0;
+        }
+        if (argc > 1 && std::string(argv[1]) == "--vm-session")
+        {
+            RunVirtualMachineSessionTests();
+            return 0;
+        }
+        if (argc > 1 && std::string(argv[1]) == "--guest-runtime")
+        {
+            RunGuestRuntimeTests();
+            return 0;
+        }
+        if (argc > 1 && std::string(argv[1]) == "--guest-live")
+        {
+            if (argc != 4) throw std::runtime_error("Usage: --guest-live <runtimeRoot> <pythonExecutable>");
+            RunGuestLiveTests(argv[2], argv[3]);
+            return 0;
+        }
         if (argc > 1 && std::string(argv[1]) == "--desktop-control")
         {
             RunDesktopControlTests();
@@ -9884,6 +9905,8 @@ int main(const int argc, char** argv)
         RunAuditFindingsTests();
         RunHandsFreeTests();
         RunBackgroundTaskTests();
+        RunVirtualMachineSessionTests();
+        RunGuestRuntimeTests();
         RunCompanionTests();
         RunCompanionAuthorityTests();
         RunAgentWorkflowTests();

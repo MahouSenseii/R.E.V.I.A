@@ -10,6 +10,8 @@
 #include "Windows/desktopControlExecutor.h"
 #include "Windows/windowsAutomationExecutor.h"
 #include "Visual/imageExecutor.h"
+#include "Workspace/virtualMachineExecutor.h"
+#include "Policy/guestCapabilityJson.h"
 
 #include <algorithm>
 #include <chrono>
@@ -21,6 +23,35 @@ namespace revia::actions
 {
 namespace
 {
+// Retain one observer for the pair even when a callback replaces runtime observers.
+// Notification code is an extension boundary: it cannot escape or hide a real effect.
+class DispatchObservation final
+{
+  public:
+    DispatchObservation(ActionRuntime::DispatchObserver input, const ActionRequest& action)
+        : observer(std::move(input)), request(action) {}
+    ~DispatchObservation() { Finish(); }
+    bool Begin() noexcept
+    {
+        if (!observer) return true;
+        try { observer(request, true); return true; }
+        catch (...) { return false; }
+    }
+    bool Finish() noexcept
+    {
+        if (finished || !observer) return !endFailed;
+        finished = true;
+        try { observer(request, false); }
+        catch (...) { endFailed = true; }
+        return !endFailed;
+    }
+  private:
+    ActionRuntime::DispatchObserver observer;
+    const ActionRequest& request;
+    bool finished = false;
+    bool endFailed = false;
+};
+
 bool RecordContractDenial(audit::ActionAuditLogger& logger, const ActionRequest& request, runtime::RuntimeStamp host)
 {
     const auto id = audit::NewJournalEventId();
@@ -93,6 +124,7 @@ bool ActionRuntime::InitializeUnlocked(
     dispatcher.Clear();
     dispatcher.Register(std::make_unique<process::ProcessExecutor>());
     dispatcher.Register(std::make_unique<browser::BrowserExecutor>(browserSession));
+    dispatcher.Register(std::make_unique<workspace::VirtualMachineExecutor>(guestRuntime));
     if (imageProvider)
         dispatcher.Register(std::make_unique<visual::ImageExecutor>(*imageProvider, imageAccess.outputRoot));
     desktopRateLimiter.Configure(settings.maxDesktopActionsPerMinute, settings.minimumDesktopActionIntervalMs,
@@ -286,12 +318,29 @@ void ActionRuntime::BindImageProvider(
         policy = std::make_unique<policy::CapabilityPolicy>(Settings());
 }
 
+void ActionRuntime::BindGuestRuntime(std::shared_ptr<workspace::VirtualMachineRuntime> runtime)
+{
+    std::lock_guard lock(mutex);
+    guestRuntime = std::move(runtime);
+    dispatcher.Unregister(ActionType::VmListDirectory);
+    dispatcher.Register(std::make_unique<workspace::VirtualMachineExecutor>(guestRuntime));
+}
+
 ActionOutcome ActionRuntime::ExecuteWithPolicy(const ActionRequest& inputRequest, const policy::CapabilityPolicy* scopedPolicy,
     const bool confirmationGranted, const std::stop_token stopToken, const runtime::RuntimeStamp* subject)
 {
     const auto executionStarted = std::chrono::steady_clock::now();
     ActionRequest request = inputRequest;
     request.authorityStamp = {};
+    request.executionStop = stopToken;
+    const auto capturedGuestRuntime = guestRuntime;
+    if (IsGuestAction(request.type) && !scopedPolicy && guestRuntime &&
+        request.guest.expectedIdentity.environmentId.empty() && request.guest.expectedIdentity.bootId.empty())
+    {
+        const auto snapshot = guestRuntime->Snapshot();
+        if (snapshot.state == workspace::VirtualMachineState::Ready)
+            request.guest.expectedIdentity = snapshot.identity;
+    }
     ActionOutcome outcome;
     outcome.policy = scopedPolicy ? EvaluateScoped(request, *scopedPolicy) : Evaluate(request);
     const auto capturedAuthority = authority;
@@ -406,8 +455,13 @@ ActionOutcome ActionRuntime::ExecuteWithPolicy(const ActionRequest& inputRequest
     // Bracketed so the observer sees the action end on every path, including the
     // blocked and refused ones -- a scope that only closes on success is how a session
     // gets stuck in a state an aborted action put it in.
-    if (dispatchObserver)
-        dispatchObserver(request, true);
+    DispatchObservation observation(dispatchObserver, request);
+    if (!observation.Begin())
+    {
+        outcome.runtimeError = "The dispatch observer failed before execution.";
+        outcome.policy.verdict = PolicyVerdict::Blocked;
+        outcome.policy.reason = outcome.runtimeError;
+    }
     if (outcome.policy.verdict != PolicyVerdict::Blocked)
         outcome.policy = applyContract(applyAuthority(scopedPolicy ? EvaluateScoped(request, *scopedPolicy) : Evaluate(request)));
     if (outcome.policy.verdict != PolicyVerdict::Blocked && request.taskContract && auditLogger &&
@@ -444,7 +498,7 @@ ActionOutcome ActionRuntime::ExecuteWithPolicy(const ActionRequest& inputRequest
         const auto priorEffect = request.beforeEffect;
         const auto canonicalDecision = outcome.policy;
         guardedRequest.beforeEffect = [this, request, priorEffect, capturedAuthority, capturedStamp, stopToken, canonicalDecision,
-                                          scopedPolicy, confirmationGranted, contractRefusal](const std::string& resource)
+                                          scopedPolicy, confirmationGranted, contractRefusal, capturedGuestRuntime](const std::string& resource)
         {
             if (stopToken.stop_requested())
                 return std::string("Action cancellation was requested.");
@@ -469,6 +523,16 @@ ActionOutcome ActionRuntime::ExecuteWithPolicy(const ActionRequest& inputRequest
                 return std::string("The canonical action resource changed before its effect.");
             if (request.type == ActionType::ExecuteProcess && current.processOutputLimitBytes < canonicalDecision.processOutputLimitBytes)
                 return std::string("The process output allowance was reduced during execution.");
+            if (IsGuestAction(request.type))
+            {
+                const auto& previous = canonicalDecision.guestLimits;
+                const auto& now = current.guestLimits;
+                if (guestRuntime != capturedGuestRuntime || now.maxReadBytes < previous.maxReadBytes ||
+                    now.maxWriteBytes < previous.maxWriteBytes || now.maxOutputBytes < previous.maxOutputBytes ||
+                    now.maxEntries < previous.maxEntries || now.maxTimeoutMs < previous.maxTimeoutMs ||
+                    now.approvedExecutables != previous.approvedExecutables)
+                    return std::string("The guest owner or capability limits changed before submission.");
+            }
             if (IsBrowserAction(request.type))
             {
                 const auto& previous = canonicalDecision.browser;
@@ -496,13 +560,18 @@ ActionOutcome ActionRuntime::ExecuteWithPolicy(const ActionRequest& inputRequest
         };
         outcome.result = dispatcher.Dispatch(guardedRequest, outcome.policy, confirmationGranted);
     }
-    if (dispatchObserver)
-        dispatchObserver(request, false);
+    if (!observation.Finish())
+    {
+        if (!outcome.runtimeError.empty()) outcome.runtimeError += " ";
+        outcome.runtimeError += "The dispatch observer failed after execution; the executor result is retained.";
+    }
     if (auditLogger && contractAdmitted)
     {
         const double elapsedMilliseconds =
             std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - executionStarted).count();
-        if (!auditLogger->Record(request, outcome.policy, outcome.result, elapsedMilliseconds, transactionId))
+        auto auditedResult = outcome.result;
+        auditedResult.message = outcome.Message();
+        if (!auditLogger->Record(request, outcome.policy, auditedResult, elapsedMilliseconds, transactionId))
         {
             if (!outcome.auditError.empty())
                 outcome.auditError += " ";
@@ -555,6 +624,10 @@ PolicyDecision MoreRestrictive(const PolicyDecision& first, const PolicyDecision
     combined.risk = std::max(first.risk, second.risk);
     combined.processOutputLimitBytes = std::min(first.processOutputLimitBytes, second.processOutputLimitBytes);
     combined.browser = browser::IntersectSettings(first.browser, second.browser);
+    policy::GuestCapabilitySettings firstGuest, secondGuest;
+    firstGuest.limits = first.guestLimits;
+    secondGuest.limits = second.guestLimits;
+    combined.guestLimits = policy::IntersectGuestCapabilities(firstGuest, secondGuest).limits;
     return combined;
 }
 
@@ -567,6 +640,14 @@ PolicyDecision ActionRuntime::EvaluateScoped(const ActionRequest& request, const
     if (globalDecision.verdict == PolicyVerdict::Blocked)
     {
         return globalDecision;
+    }
+    if (IsGuestAction(request.type) &&
+        (scopedPolicy.Settings().guest.expectedIdentity.environmentId.empty() || scopedPolicy.Settings().guest.expectedIdentity.bootId.empty()))
+    {
+        auto refused = globalDecision;
+        refused.verdict = PolicyVerdict::Blocked;
+        refused.reason = "The goal has no captured guest environment and boot identity; it requires fresh admission.";
+        return refused;
     }
     const auto scopedDecision = scopedPolicy.Evaluate(request);
     if (request.type == ActionType::GenerateImage && scopedDecision.verdict != PolicyVerdict::Blocked &&
@@ -605,6 +686,7 @@ std::string ActionRuntime::StatusJson() const
     nlohmann::json controls = settings.approvedControls;
     return nlohmann::json(
         {{"initialized", true}, {"mode", ToString(settings.mode)}, {"approved_roots", roots}, {"approved_applications", applications},
+            {"guest", policy::GuestCapabilitiesToJson(settings.guest)},
             {"approved_controls", controls}, {"auto_approve_risk_through", ToString(settings.autoApproveRiskThrough)},
             {"max_read_bytes", settings.maxReadBytes}, {"max_directory_entries", settings.maxDirectoryEntries},
             {"max_affected_entries", settings.maxAffectedEntries}, {"max_desktop_actions_per_minute", settings.maxDesktopActionsPerMinute},

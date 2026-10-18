@@ -203,6 +203,7 @@ std::string ToString(const PostconditionKind value)
         case PostconditionKind::DirectoryHasEntry: return "directory_has_entry";
         case PostconditionKind::DirectoryLacksEntry: return "directory_lacks_entry";
         case PostconditionKind::FileContains: return "file_contains";
+        case PostconditionKind::GuestFileContentIs: return "guest_file_content_is";
         case PostconditionKind::ForegroundApplicationIs: return "foreground_application_is";
         case PostconditionKind::ControlValueIs: return "control_value_is";
         case PostconditionKind::BrowserControlValueIs: return "browser_control_value_is";
@@ -221,6 +222,7 @@ PostconditionKind PostconditionKindFromString(const std::string& value)
     if (name == "directory_has_entry") return PostconditionKind::DirectoryHasEntry;
     if (name == "directory_lacks_entry") return PostconditionKind::DirectoryLacksEntry;
     if (name == "file_contains") return PostconditionKind::FileContains;
+    if (name == "guest_file_content_is") return PostconditionKind::GuestFileContentIs;
     if (name == "foreground_application_is") return PostconditionKind::ForegroundApplicationIs;
     if (name == "control_value_is") return PostconditionKind::ControlValueIs;
     if (name == "browser_control_value_is") return PostconditionKind::BrowserControlValueIs;
@@ -365,6 +367,15 @@ VerificationOutcome EvaluatePostcondition(const Postcondition& postcondition, co
 
     switch (postcondition.kind)
     {
+        case PostconditionKind::GuestFileContentIs:
+        {
+            if (!result.guest || !result.guest->receiptVerified || !result.guest->succeeded || result.guest->outputTruncated ||
+                postcondition.guestIdentity.environmentId.empty() || postcondition.guestIdentity.bootId.empty() ||
+                result.guest->identity.environmentId != postcondition.guestIdentity.environmentId ||
+                result.guest->identity.bootId != postcondition.guestIdentity.bootId)
+                return VerificationOutcome::Unknown;
+            return result.content == postcondition.value ? VerificationOutcome::Verified : VerificationOutcome::Failed;
+        }
         case PostconditionKind::DirectoryHasEntry:
         case PostconditionKind::DirectoryLacksEntry:
         {
@@ -504,6 +515,7 @@ namespace
     switch (postcondition.kind)
     {
         case PostconditionKind::FileContains:
+        case PostconditionKind::GuestFileContentIs:
             return true;
         case PostconditionKind::DirectoryHasEntry:
         case PostconditionKind::DirectoryLacksEntry:
@@ -625,6 +637,17 @@ Postcondition DerivePostcondition(const GoalStep& step)
     Postcondition legacy;
     legacy.kind = PostconditionKind::TextObserved;
     legacy.value = step.expected;
+
+    if (step.action.type == ActionType::VmWriteTextFile && step.check.type == ActionType::VmReadTextFile &&
+        step.action.guest.path == step.check.guest.path && !step.action.guest.path.empty())
+    {
+        Postcondition derived;
+        derived.kind = PostconditionKind::GuestFileContentIs;
+        derived.subject = step.action.guest.path;
+        derived.value = step.action.guest.content;
+        derived.guestIdentity = step.action.guest.expectedIdentity;
+        return derived;
+    }
 
     const auto filename = [](const std::filesystem::path& path)
     {

@@ -1,5 +1,6 @@
 #include "reviaWindow.h"
 #include "tabNavigation.h"
+#include "runtimeRootArgument.h"
 
 #include "Core/crashDiagnostics.h"
 #include "Core/exitReporter.h"
@@ -17,6 +18,7 @@
 
 #include <exception>
 #include <filesystem>
+#include <iostream>
 #include <memory>
 #include <string>
 #include <system_error>
@@ -39,8 +41,24 @@ int main(int argc, char** argv)
     // initiative and autonomy loops actually run needs the process to outlive their
     // debounce, and doing that by hand is not a check anyone will repeat.
     int holdSeconds = 0;
+    revia::desktop::RuntimeRootArgument runtimeRoot;
     for (int index = 1; index < argc; ++index)
     {
+        if (std::string(argv[index]) == "--runtime-root")
+        {
+            if (index + 1 >= argc ||
+                !runtimeRoot.Accept(QString::fromLocal8Bit(argv[++index]).toUtf8().toStdString()))
+            {
+                std::cerr << runtimeRoot.Error() << '\n';
+                return 2;
+            }
+            continue;
+        }
+        if (std::string(argv[index]).rfind("--runtime-root=", 0) == 0)
+        {
+            std::cerr << runtimeRoot.Error() << '\n';
+            return 2;
+        }
         smokeTest = smokeTest || std::string(argv[index]) == "--ui-smoke-test";
         isolatedUiSmokeTest = isolatedUiSmokeTest || std::string(argv[index]) == "--ui-smoke-test";
         runtimeSmokeTest = runtimeSmokeTest ||
@@ -90,13 +108,18 @@ int main(int argc, char** argv)
     runtimeSmokeTest = runtimeSmokeTest || runtimeReadySmokeTest;
 
     if (const std::filesystem::path directory =
-            revia::core::ProgramDirectory(argc > 0 ? argv[0] : nullptr);
+            runtimeRoot.Directory(revia::core::ProgramDirectory(argc > 0 ? argv[0] : nullptr));
         !directory.empty())
     {
         // A failure is left to the runtime, which surfaces missing configuration through
         // its normal error state.
         std::error_code error;
         std::filesystem::current_path(directory, error);
+        if (error && runtimeRoot.Specified())
+        {
+            std::cerr << "The explicit runtime root could not be opened.\n";
+            return 2;
+        }
     }
 
     std::unique_ptr<QTemporaryDir> smokeDirectory;

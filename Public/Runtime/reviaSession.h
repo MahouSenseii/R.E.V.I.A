@@ -84,6 +84,7 @@
 #include "Visual/imageGenerator.h"
 #include "Visual/svgCanvas.h"
 #include "Windows/applicationControlDiscovery.h"
+#include "Workspace/virtualMachineRuntime.h"
 
 #include <atomic>
 #include <chrono>
@@ -494,6 +495,9 @@ class ReviaSession
     void PersistIdentity();
     void StartStateMaintenance();
     void StopStateMaintenance();
+    // Called under operationMutex; preparation itself runs on the VM owner's worker.
+    void StartVirtualMachine();
+    void StopVirtualMachine();
     void RefreshMemoryBackfill();
     // Requires consistent evidence before changing development.
     void RecordDevelopmentEvidence(const identity::TurnObservation& observation);
@@ -615,7 +619,14 @@ class ReviaSession
     // Background tasks. One runs at a time on its own thread with its own stop source,
     // so she can keep talking while she works and a new message never cancels it.
     bool LaunchTask(const std::string& title, std::function<goals::Goal(std::stop_token)> execute, std::string& outMessage);
-    void FinishTask(const goals::Goal& finished, const RuntimeStamp& origin, const identity::AudienceContext& audience);
+    struct TaskContext
+    {
+        identity::AudienceContext audience;
+        std::string participantId;
+    };
+    [[nodiscard]] TaskContext CaptureTaskContext() const;
+    [[nodiscard]] bool CanDiscloseTask(const TaskContext& captured, const RuntimeStamp& origin, const TaskContext& current) const;
+    void FinishTask(const goals::Goal& finished, const RuntimeStamp& origin, const TaskContext& context);
     // Returns false when no task was running.
     bool CancelTask(const std::string& because);
     void StopTaskWorker();
@@ -873,6 +884,9 @@ class ReviaSession
     // Loads the assigned Qwen3-TTS voice alongside the remaining startup stages.
     std::jthread voiceWarmupWorker;
     std::atomic<bool> voiceWarmupFinished = true;
+    // Failed client attempts may leave remote preparation running; only verified
+    // preparation success admits additional startup allocations.
+    std::atomic<bool> voiceWarmupSucceeded = true;
     // Warmup starts before started=true; this flag tracks whether loading is still wanted.
     std::atomic<bool> voiceWarmupWanted = false;
     // The session owns the worker; this object owns its schedule and last observation.
@@ -893,6 +907,7 @@ class ReviaSession
         std::chrono::steady_clock::time_point startedAt;
         std::string progress;
         RuntimeStamp stamp;
+        TaskContext context;
     };
     struct TaskReport
     {
@@ -900,6 +915,7 @@ class ReviaSession
         goals::GoalStatus status = goals::GoalStatus::Planned;
         std::chrono::steady_clock::time_point finishedAt;
         RuntimeStamp stamp;
+        TaskContext context;
     };
     planning::ReminderBook reminders;
     std::function<std::optional<perception::ClipboardText>()> clipboardReader = [] { return perception::ReadClipboardText(6000); };
@@ -916,6 +932,7 @@ class ReviaSession
     bool operatorNeedsVision = false;
     std::shared_ptr<browser::BrowserSession> interactiveBrowser;
     std::jthread taskWorker;
+    std::shared_ptr<workspace::VirtualMachineRuntime> virtualMachine;
     // Counts launches, so a caller can tell whether its request started a task.
     std::atomic<std::uint64_t> tasksLaunched{0};
     struct GoalTokenScope

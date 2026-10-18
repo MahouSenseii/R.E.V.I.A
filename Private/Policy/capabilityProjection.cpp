@@ -130,6 +130,7 @@ actions::CapabilitySettings ProjectCapabilityScope(const actions::CapabilitySett
     result.image.autonomous &= current.image.autonomous;
     result.camera.autonomousCapture &= current.camera.autonomousCapture;
     result.browser = browser::IntersectSettings(captured.browser, current.browser);
+    result.guest = IntersectGuestCapabilities(captured.guest, current.guest);
     return result;
 }
 }

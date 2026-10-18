@@ -6,6 +6,7 @@
 #include <iostream>
 #include <iterator>
 #include <nlohmann/json.hpp>
+#include <stdexcept>
 #ifdef _WIN32
 #include <Windows.h>
 #undef CreateDirectory
@@ -277,21 +278,149 @@ void TestAnExclusiveWriterBlocksAdmission()
 #endif
 }
 
+void TestObserverFailureRetainsActionAndAudit(const bool scoped, const bool onCompletion, const bool unknownError)
+{
+    AuditFixture fixture;
+    int beginnings = 0;
+    int endings = 0;
+    fixture.runtime.SetDispatchObserver([&](const ActionRequest&, const bool beginning)
+    {
+        beginning ? ++beginnings : ++endings;
+        if (beginning == !onCompletion)
+        {
+            if (unknownError) throw 7;
+            throw std::runtime_error("private observer payload must not be exposed");
+        }
+    });
+    ActionOutcome outcome;
+    bool escaped = false;
+    try { outcome = fixture.Execute(scoped); }
+    catch (...) { escaped = true; }
+    Check(!escaped, "Dispatch observer exception escaped the action result boundary.");
+    Check(beginnings == 1 && endings == 1, "An observer failure left the dispatch lifecycle unbalanced.");
+    Check(outcome.result.attempted == onCompletion && outcome.result.succeeded == onCompletion &&
+        std::filesystem::exists(fixture.Request().source) == onCompletion,
+        "Observer failure changed execution truth or permitted an action after failed preparation.");
+    Check(!outcome.Succeeded() && outcome.Message().find("observer") != std::string::npos &&
+        outcome.Message().find("private observer payload") == std::string::npos,
+        "Observer failure was hidden or leaked callback content.");
+    const auto records = Records(fixture.audit);
+    Check(records.size() == (onCompletion ? 2U : 1U) && records.back().at("record_type") == "result" &&
+        records.back().at("attempted") == onCompletion && records.back().at("succeeded") == onCompletion,
+        "Observer failure skipped the durable result or changed its execution facts.");
+    fixture.runtime.SetDispatchObserver({});
+    Check(fixture.Execute(scoped).Succeeded(), "Observer failure poisoned a later independent action.");
+}
+
+void TestObserverReplacementKeepsOneLifecycle()
+{
+    AuditFixture fixture;
+    int endings = 0;
+    int replacementCalls = 0;
+    fixture.runtime.SetDispatchObserver([&](const ActionRequest&, const bool beginning)
+    {
+        if (beginning)
+            fixture.runtime.SetDispatchObserver([&](const ActionRequest&, bool) { ++replacementCalls; });
+        else ++endings;
+    });
+    Check(fixture.Execute(false).Succeeded(), "Replacing an observer changed the action outcome.");
+    Check(endings == 1 && replacementCalls == 0, "A replacement observer closed another observer's lifecycle.");
+}
+
+void TestGoalStopsAfterObserverFailure(const bool onCompletion, const bool onCheck)
+{
+    AuditFixture fixture;
+    const GoalStore store((fixture.directory.root / "goals.db").string());
+    GoalRunner runner(fixture.runtime, store);
+    runner.SetConfirmationHandler([](const ActionRequest&, const PolicyDecision&) { return ConfirmationChoice::Allow; });
+    int beginnings = 0;
+    fixture.runtime.SetDispatchObserver([&](const ActionRequest& request, const bool beginning)
+    {
+        if (beginning) ++beginnings;
+        if ((request.type == ActionType::ListDirectory) == onCheck && beginning == !onCompletion)
+            throw std::runtime_error("private observer detail");
+    });
+    Goal goal;
+    goal.title = "Retain the effect when lifecycle reporting fails";
+    goal.scope = fixture.runtime.Settings();
+    GoalStep step;
+    step.action = fixture.Request();
+    step.check.type = ActionType::ListDirectory;
+    step.check.source = fixture.directory.root;
+    step.expected = "created";
+    goal.steps.push_back(step);
+    const auto result = runner.Run(goal);
+    Check(result.status == GoalStatus::Failed && beginnings == (onCheck ? 2 : 1) && result.spend.retries == 0,
+        "The goal retried or verified an action after observer failure.");
+    const auto saved = store.Load(result.id);
+    Check(saved && saved->status == GoalStatus::Failed && saved->steps.size() == 1 && saved->steps.front().attempts.size() == 1 &&
+        saved->steps.front().attempts.front().executed == (onCheck || onCompletion) &&
+        !saved->steps.front().attempts.front().verified &&
+        saved->steps.front().attempts.front().failure.find("observer") != std::string::npos,
+        "The goal lost durable execution and observer failure evidence.");
+}
+
+void TestObserverAndAuditFailureBothRemainVisible()
+{
+    AuditFixture fixture;
+    fixture.runtime.SetDispatchObserver([&](const ActionRequest&, const bool beginning)
+    {
+        if (beginning) return;
+        BreakCompletionAudit(fixture.audit);
+        throw std::runtime_error("private completion detail");
+    });
+    const auto outcome = fixture.Execute(false);
+    Check(outcome.result.attempted && outcome.result.succeeded && !outcome.Succeeded() &&
+        std::filesystem::is_directory(fixture.Request().source),
+        "Combined reporting failures discarded the completed effect.");
+    Check(outcome.Message().find("observer") != std::string::npos &&
+        outcome.Message().find("Audit error:") != std::string::npos &&
+        outcome.Message().find("private completion detail") == std::string::npos,
+        "One reporting failure hid the other or exposed exception content.");
+}
+
+void TestSessionReportsObserverFailure(const bool onCompletion)
+{
+    AuditFixture fixture;
+    revia::runtime::ReviaSession session;
+    ReviaSessionTestAccess::PrepareActions(session, fixture.directory.root);
+    session.SetConfirmationHandler([](const ActionRequest&, const PolicyDecision&) { return ConfirmationChoice::Allow; });
+    ReviaSessionTestAccess::ObserveActions(session, [&](const ActionRequest&, const bool beginning)
+    {
+        if (beginning == !onCompletion) throw std::runtime_error("private session callback detail");
+    });
+    const auto result = ReviaSessionTestAccess::Execute(session, fixture.Request());
+    Check(!result.succeeded && result.text.find("observer") != std::string::npos &&
+        result.reason.find("observer") != std::string::npos && session.State() == revia::runtime::RuntimeState::Blocked,
+        "The session did not expose observer failure as a blocked action.");
+    Check(std::filesystem::exists(fixture.Request().source) == onCompletion &&
+        (result.text.find("Action completed; runtime reporting failed:") != std::string::npos) == onCompletion,
+        "Session observer error reporting disagrees with the actual effect.");
+}
+
 } // namespace
 
 void RunActionAuditTests()
 {
     for (const bool scoped : {false, true})
     {
+        for (const bool onCompletion : {false, true})
+            for (const bool unknownError : {false, true})
+                TestObserverFailureRetainsActionAndAudit(scoped, onCompletion, unknownError);
         TestUnavailableAuditPreventsExecution(scoped);
         TestIntentAndResultAreRecorded(scoped);
         TestCompletionFailurePreservesExecutionTruth(scoped);
     }
+    TestObserverReplacementKeepsOneLifecycle();
+    TestObserverAndAuditFailureBothRemainVisible();
     TestPartialAuditIsRecoveredNotReplayed();
     TestLegacyResultRecordsRemainIntact();
     TestAnExclusiveWriterBlocksAdmission();
     for (const bool afterExecution : {false, true})
     {
+        TestSessionReportsObserverFailure(afterExecution);
+        TestGoalStopsAfterObserverFailure(afterExecution, false);
+        TestGoalStopsAfterObserverFailure(afterExecution, true);
         TestSessionReportsTheAuditBoundary(afterExecution);
         TestGoalStopsWithoutVerificationOrRetry(afterExecution);
     }

@@ -1,5 +1,6 @@
 #include "Goals/goalStore.h"
 #include "Planning/structuredActionParser.h"
+#include "Policy/guestCapabilityJson.h"
 
 #include <chrono>
 #include <exception>
@@ -187,6 +188,20 @@ nlohmann::json ActionToJson(const actions::ActionRequest& request)
     if (actions::IsBrowserAction(request.type))
         action["browser"] = {{"action", actions::ToString(request.type)}, {"url", request.browser.url},
             {"session", request.browser.session}, {"generation", request.browser.generation}, {"element", request.browser.element}, {"value", request.browser.value}};
+    if (actions::IsGuestAction(request.type))
+    {
+        auto& guest = action["guest"];
+        guest = {{"action", actions::ToString(request.type)}};
+        if (request.type == actions::ActionType::VmExecuteProcess)
+            guest.update({{"executable", request.guest.executable}, {"working_directory", request.guest.workingDirectory},
+                {"arguments", request.guest.arguments}, {"timeout_ms", request.guest.timeoutMs}});
+        else
+        {
+            guest["path"] = request.guest.path;
+            if (request.type == actions::ActionType::VmWriteTextFile)
+                guest.update({{"content", request.guest.content}, {"expected_digest", request.guest.expectedDigest}});
+        }
+    }
     if (actions::IsSynthesizedInputAction(request.type))
     {
         action["input"] = nlohmann::json{
@@ -222,6 +237,12 @@ actions::ActionRequest ActionFromJson(const nlohmann::json& value)
     request.control = value.value("control", std::string());
     request.value = value.value("value", std::string());
     request.expectedDigest = value.value("expected_digest", std::string());
+    if (actions::IsGuestAction(request.type))
+    {
+        const auto parsed = planning::StructuredActionParser::ParseObject(value.value("guest", nlohmann::json::object()));
+        if (!parsed.succeeded || parsed.request.type != request.type) request.type = actions::ActionType::Unknown;
+        else request.guest = parsed.request.guest;
+    }
     if (actions::IsBrowserAction(request.type))
     {
         const auto parsed = planning::StructuredActionParser::ParseObject(value.value("browser", nlohmann::json::object()));
@@ -363,6 +384,7 @@ nlohmann::json ScopeToJson(const actions::CapabilitySettings& scope)
         {"max_affected_entries", scope.maxAffectedEntries},
         {"max_desktop_actions_per_minute", scope.maxDesktopActionsPerMinute},
         {"minimum_desktop_action_interval_ms", scope.minimumDesktopActionIntervalMs},
+        {"guest", policy::GuestCapabilitiesToJson(scope.guest, true)},
         {"process", [&]
             {
                 nlohmann::json executables = nlohmann::json::array();
@@ -410,6 +432,11 @@ actions::CapabilitySettings ScopeFromJson(const nlohmann::json& value)
         return scope;
     }
     scope.mode = actions::ExecutionModeFromString(value.value("mode", std::string()));
+    if (value.contains("guest"))
+    {
+        try { scope.guest = policy::GuestCapabilitiesFromJson(value.at("guest"), true); }
+        catch (...) { scope.guest = {}; }
+    }
     if (value.contains("approved_roots") && value.at("approved_roots").is_array())
     {
         for (const auto& root : value.at("approved_roots"))

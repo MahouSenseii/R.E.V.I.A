@@ -121,6 +121,48 @@ ParsedAction StructuredActionParser::ParseObject(const nlohmann::json& data)
         result.request.id = actions::NewActionId();
         result.request.dryRun = data.value("dry_run", false);
         result.request.requestedBy = "user";
+        if (const auto operation = actions::GuestOperationForAction(result.request.type))
+        {
+            auto& guest = result.request.guest;
+            guest.operation = *operation;
+            const bool process = *operation == workspace::GuestOperation::ExecuteProcess;
+            const bool write = *operation == workspace::GuestOperation::WriteText;
+            for (const auto& entry : data.items())
+            {
+                const auto& key = entry.key();
+                const bool payload = process ? key == "executable" || key == "arguments" || key == "working_directory" || key == "timeout_ms"
+                    : key == "path" || (write && (key == "content" || key == "expected_digest"));
+                if (key != "action" && key != "dry_run" && !payload)
+                    return Error(true, "Unknown guest request field: " + key);
+            }
+            if (process)
+            {
+                guest.executable = data.at("executable").get<std::string>();
+                guest.arguments = data.at("arguments").get<std::vector<std::string>>();
+                guest.workingDirectory = data.at("working_directory").get<std::string>();
+                if (data.contains("timeout_ms") && !data.at("timeout_ms").is_number_integer())
+                    return Error(true, "Guest timeout must be an integer.");
+                guest.timeoutMs = data.value("timeout_ms", 30000);
+            }
+            else
+            {
+                guest.path = data.at("path").get<std::string>();
+                if (write)
+                {
+                    guest.content = data.at("content").get<std::string>();
+                    guest.expectedDigest = data.at("expected_digest").get<std::string>();
+                }
+            }
+            // Shape validation uses the protocol ceiling, never grants live authority.
+            policy::GuestCapabilitySettings shape;
+            shape.enabled = shape.read = shape.write = shape.execute = true;
+            shape.limits.maxWriteBytes = 262144;
+            shape.limits.approvedExecutables = {guest.executable};
+            const auto decision = policy::EvaluateGuestCapability(guest, shape);
+            if (!decision.allowed) return Error(true, decision.reason);
+            result.succeeded = true;
+            return result;
+        }
         if (actions::IsBrowserAction(result.request.type))
         {
             for (const auto& entry : data.items())

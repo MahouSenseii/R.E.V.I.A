@@ -3,6 +3,7 @@
 #include "Browser/browserTypes.h"
 #include "Runtime/runtimeStamp.h"
 #include "Process/processTypes.h"
+#include "Policy/guestCapabilityPolicy.h"
 #include "Visual/imageTypes.h"
 
 #include <cstddef>
@@ -13,6 +14,7 @@
 #include <memory>
 #include <map>
 #include <optional>
+#include <stop_token>
 #include <string>
 #include <vector>
 
@@ -55,7 +57,11 @@ enum class ActionType
     BrowserNavigate,
     BrowserObserve,
     BrowserClick,
-    BrowserFill
+    BrowserFill,
+    VmListDirectory,
+    VmReadTextFile,
+    VmWriteTextFile,
+    VmExecuteProcess
 };
 
 // UiaElement is re-found by runtime identity and current bounds. VisualRegion requires
@@ -274,6 +280,7 @@ struct ActionRequest
     // "missing" permits creation only; an existing file requires its exact SHA256.
     std::string expectedDigest;
     process::ProcessRequest process;
+    workspace::GuestRequest guest;
     browser::BrowserRequest browser;
     // Present only after the vision-to-UIA resolver has produced a typed element
     // reference. Execution re-finds this exact runtime id and fails closed if it changed.
@@ -305,6 +312,8 @@ struct ActionRequest
     runtime::RuntimeStamp authorityStamp;
     // Host admission metadata; model action JSON never supplies this envelope.
     std::shared_ptr<const core::TaskContract> taskContract;
+    // Bound by ActionRuntime; never accepted from or written into proposal JSON.
+    std::stop_token executionStop;
 };
 
 struct PolicyDecision
@@ -317,6 +326,7 @@ struct PolicyDecision
     std::filesystem::path canonicalExecutable;
     std::size_t processOutputLimitBytes = 0;
     browser::BrowserSettings browser;
+    workspace::GuestLimits guestLimits;
 };
 
 struct ActionResult
@@ -333,6 +343,7 @@ struct ActionResult
     std::optional<process::ProcessResult> process;
     std::optional<visual::ImageResult> image;
     std::optional<browser::BrowserReceipt> browser;
+    std::optional<workspace::GuestResult> guest;
 };
 
 struct ActionOutcome
@@ -342,8 +353,10 @@ struct ActionOutcome
     // Execution may already have succeeded when recording its result fails.
     // Keep that fact in result; callers must stop dependent work on auditError.
     std::string auditError;
+    // Lifecycle notification failure does not erase an executor's actual effect.
+    std::string runtimeError;
 
-    [[nodiscard]] bool Succeeded() const { return result.succeeded && auditError.empty(); }
+    [[nodiscard]] bool Succeeded() const { return result.succeeded && auditError.empty() && runtimeError.empty(); }
     [[nodiscard]] std::string Message() const;
 };
 
@@ -473,6 +486,7 @@ struct CapabilitySettings
     CameraAccess camera;
     DesktopControl desktopControl;
     process::ProcessSettings process;
+    policy::GuestCapabilitySettings guest;
     browser::BrowserSettings browser;
     ImageGeneration image;
 };
@@ -505,6 +519,8 @@ struct CapabilitySettings
 
 [[nodiscard]] RiskLevel RiskForAction(ActionType value);
 [[nodiscard]] bool IsBrowserAction(ActionType value);
+[[nodiscard]] bool IsGuestAction(ActionType value);
+[[nodiscard]] std::optional<workspace::GuestOperation> GuestOperationForAction(ActionType value);
 // Requires individual confirmation even with standing approval, including recycling.
 // All capability, consequence, rate, and audit checks still apply.
 [[nodiscard]] bool AlwaysNeedsItsOwnConfirmation(ActionType value);
@@ -513,7 +529,7 @@ struct CapabilitySettings
 [[nodiscard]] bool IsUiAutomationAction(ActionType value);
 [[nodiscard]] bool IsDesktopControlAction(ActionType value);
 [[nodiscard]] bool IsSynthesizedInputAction(ActionType value);
-// Classifies duplicate-effect risk when execution succeeded but verification is unknown.
+// Classifies duplicate-effect risk after attempted execution with an uncertain outcome.
 // Repeat-safe state changes return false; potentially duplicate commits require user review.
 // Classification uses action type, independently of risk and target consequence.
 [[nodiscard]] bool RepeatingCouldDuplicateAnEffect(ActionType value);

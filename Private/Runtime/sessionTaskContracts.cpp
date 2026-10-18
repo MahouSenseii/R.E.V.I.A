@@ -69,6 +69,15 @@ std::shared_ptr<const core::TaskContract> ReviaSession::BuildActionTaskContract(
 {
     if (stopToken.stop_requested())
         return nullptr;
+    bool goalAction = false;
+    {
+        std::lock_guard lock(taskMutex);
+        goalAction = executingGoalStamp && core::SameRuntimeStamp(*executingGoalStamp, stamp);
+    }
+    // A background goal keeps its original admission. A newer conversation cannot
+    // supply a replacement disclosure scope or revive its permission to act.
+    if (goalAction && !OperatorAdmitted(stopToken))
+        return nullptr;
     std::shared_ptr<const core::TaskContract> foreground;
     std::optional<agents::InputContext> input;
     {
@@ -88,6 +97,7 @@ std::shared_ptr<const core::TaskContract> ReviaSession::BuildActionTaskContract(
     task.sourceKind = "action";
     task.sourceId = request.id;
     const bool sameForeground = foreground && foreground->stamp.SameSession(stamp) &&
+                                (stamp.taskId.empty() || foreground->stamp.taskId == stamp.taskId) &&
                                 foreground->stamp.policyVersion == stamp.policyVersion &&
                                 core::SameMemoryScope(foreground->scope, task.scope);
     CompleteLegacyIdentity(task, sameForeground ? &foreground->stamp : nullptr);
@@ -109,6 +119,13 @@ std::shared_ptr<const core::TaskContract> ReviaSession::BuildActionTaskContract(
 
 std::string ReviaSession::TaskContractRefusal(const core::TaskContract& task, const std::stop_token stopToken) const
 {
+    bool goalAction = false;
+    {
+        std::lock_guard lock(taskMutex);
+        goalAction = executingGoalStamp && core::SameRuntimeStamp(*executingGoalStamp, task.stamp);
+    }
+    if (goalAction && !OperatorAdmitted(stopToken))
+        return "captured_goal_context_changed";
     std::optional<agents::InputContext> input;
     {
         std::lock_guard lock(taskContractMutex);

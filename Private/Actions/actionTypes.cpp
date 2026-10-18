@@ -13,7 +13,10 @@ namespace revia::actions
 
 std::string ActionOutcome::Message() const
 {
-    return auditError.empty() ? result.message : result.message + "\nAudit error: " + auditError;
+    std::string message = result.message;
+    if (!runtimeError.empty()) message += "\nRuntime error: " + runtimeError;
+    if (!auditError.empty()) message += "\nAudit error: " + auditError;
+    return message;
 }
 
 namespace
@@ -47,6 +50,10 @@ std::string ToString(ActionType value)
         case ActionType::BrowserObserve: return "browser_observe";
         case ActionType::BrowserClick: return "browser_click";
         case ActionType::BrowserFill: return "browser_fill";
+        case ActionType::VmListDirectory: return "vm_list_directory";
+        case ActionType::VmReadTextFile: return "vm_read_text_file";
+        case ActionType::VmWriteTextFile: return "vm_write_text_file";
+        case ActionType::VmExecuteProcess: return "vm_execute_process";
         case ActionType::CreateDirectory: return "create_directory";
         case ActionType::CopyFile: return "copy_file";
         case ActionType::MoveFile: return "move_file";
@@ -237,6 +244,10 @@ ActionType ActionTypeFromString(const std::string& value)
 {
     const std::string normalized = NormalizeName(value);
     if (normalized == "execute_process") return ActionType::ExecuteProcess;
+    if (normalized == "vm_list_directory") return ActionType::VmListDirectory;
+    if (normalized == "vm_read_text_file") return ActionType::VmReadTextFile;
+    if (normalized == "vm_write_text_file") return ActionType::VmWriteTextFile;
+    if (normalized == "vm_execute_process") return ActionType::VmExecuteProcess;
     if (normalized == "generate_image") return ActionType::GenerateImage;
     if (normalized == "browser_navigate") return ActionType::BrowserNavigate;
     if (normalized == "browser_observe") return ActionType::BrowserObserve;
@@ -306,7 +317,8 @@ const std::vector<ActionType>& AllActionTypes()
         ActionType::LaunchApplication, ActionType::MoveCursor, ActionType::ClickPointer,
         ActionType::DragPointer, ActionType::ScrollPointer, ActionType::PressKeys,
         ActionType::TypeText, ActionType::WebSearch, ActionType::WriteTextFile, ActionType::ExecuteProcess, ActionType::GenerateImage,
-        ActionType::BrowserNavigate, ActionType::BrowserObserve, ActionType::BrowserClick, ActionType::BrowserFill};
+        ActionType::BrowserNavigate, ActionType::BrowserObserve, ActionType::BrowserClick, ActionType::BrowserFill,
+        ActionType::VmListDirectory, ActionType::VmReadTextFile, ActionType::VmWriteTextFile, ActionType::VmExecuteProcess};
     return types;
 }
 
@@ -341,11 +353,15 @@ bool AlwaysNeedsItsOwnConfirmation(const ActionType value)
 {
     // Deleting is the case where the mechanism and the consequence disagree, and the
     // consequence is what a person answering a prompt is thinking about.
-    return value == ActionType::MoveToRecycleBin || value == ActionType::ExecuteProcess || value == ActionType::BrowserClick || value == ActionType::BrowserFill;
+    return value == ActionType::MoveToRecycleBin || value == ActionType::ExecuteProcess || value == ActionType::VmExecuteProcess ||
+        value == ActionType::BrowserClick || value == ActionType::BrowserFill;
 }
 
 RiskLevel RiskForAction(ActionType value)
 {
+    if (value == ActionType::VmListDirectory || value == ActionType::VmReadTextFile) return RiskLevel::ReadOnly;
+    if (value == ActionType::VmWriteTextFile) return RiskLevel::ReversibleWrite;
+    if (value == ActionType::VmExecuteProcess) return RiskLevel::Destructive;
     if (value == ActionType::BrowserObserve) return RiskLevel::ReadOnly;
     if (value == ActionType::BrowserNavigate) return RiskLevel::ReversibleWrite;
     switch (value)
@@ -399,6 +415,7 @@ bool IsDesktopControlAction(const ActionType value)
 
 bool RepeatingCouldDuplicateAnEffect(const ActionType value)
 {
+    if (value == ActionType::VmWriteTextFile || value == ActionType::VmExecuteProcess) return true;
     switch (value)
     {
         // Observation. Looking twice sees the same thing.
@@ -435,6 +452,23 @@ bool RepeatingCouldDuplicateAnEffect(const ActionType value)
         default:
             return true;
     }
+}
+
+std::optional<workspace::GuestOperation> GuestOperationForAction(const ActionType value)
+{
+    switch (value)
+    {
+    case ActionType::VmListDirectory: return workspace::GuestOperation::ListDirectory;
+    case ActionType::VmReadTextFile: return workspace::GuestOperation::ReadText;
+    case ActionType::VmWriteTextFile: return workspace::GuestOperation::WriteText;
+    case ActionType::VmExecuteProcess: return workspace::GuestOperation::ExecuteProcess;
+    default: return std::nullopt;
+    }
+}
+
+bool IsGuestAction(const ActionType value)
+{
+    return GuestOperationForAction(value).has_value();
 }
 
 bool IsBrowserAction(const ActionType value)

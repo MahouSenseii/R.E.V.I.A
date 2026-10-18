@@ -523,8 +523,11 @@ void TestTaskObserverCannotChangeReportAudience()
     ReviaSessionTestAccess::MarkStudioStarted(session, false);
     Check(audienceChanged.load() && session.Audience().kind == revia::identity::AudienceKind::Public,
         "The actual task completion observer did not switch the audience: " + audienceError);
-    Check(!session.HasRunningTask() && ReviaSessionTestAccess::FinishedTask(session).find(sentinel) != std::string::npos,
-        "The task did not settle or retain its private completion receipt.");
+    Check(!session.HasRunningTask() && ReviaSessionTestAccess::FinishedTask(session).empty(),
+        "The task did not settle or exposed its private receipt to the public audience.");
+    Check(session.SetAudience({revia::identity::AudienceKind::Private, "local-desktop", 0, {}}, error), error);
+    Check(ReviaSessionTestAccess::FinishedTask(session).find(sentinel) != std::string::npos,
+        "The original private audience lost its completion receipt.");
     std::cout << "Task completion observer changed the audience; later private events: " << leakedReports.load() << ".\n";
     Check(leakedReports.load() == 0, "A task observer changed the audience but later private state or report content was published.");
 }

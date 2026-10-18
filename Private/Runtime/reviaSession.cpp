@@ -38,6 +38,8 @@
 #include "Visual/drawingRequestPolicy.h"
 #include "Vision/screenAwarenessAssessment.h"
 #include "Windows/disposableApplicationFixtures.h"
+#include "Workspace/virtualMachineSettings.h"
+#include "Workspace/vmwareProvider.h"
 
 #include <algorithm>
 #include <array>
@@ -462,6 +464,94 @@ ReviaSession::ReviaSession(CompanionPaths paths, std::shared_ptr<policy::Compani
 ReviaSession::~ReviaSession()
 {
     Stop();
+}
+
+void ReviaSession::StartVirtualMachine()
+{
+    try
+    {
+        const auto configured = workspace::LoadVirtualMachineSettings(
+            companionPaths.Resolve("RuntimeData/VirtualMachine/settings.json"), companionPaths.Descriptor().id);
+        if (!configured.succeeded || !configured.settings.enabled)
+        {
+            StopVirtualMachine();
+            virtualMachine.reset();
+            PublishComponent("Virtual machine", configured.succeeded ? "Disabled" : "Blocked", configured.message);
+            return;
+        }
+        if (!virtualMachine)
+        {
+            workspace::VmwareProviderOptions options;
+            options.root = companionPaths.Resolve("RuntimeData/VirtualMachine/Guest");
+            options.ownerId = companionPaths.Descriptor().id;
+            options.pythonExecutable = settings.speech.pythonExecutable;
+            options.bootstrapScript = core::FindInstalledArtifact(companionPaths.InstallRoot(), "Tools/Guest/vmware_ubuntu.py");
+            virtualMachine = std::make_shared<workspace::VirtualMachineRuntime>(workspace::CreateVmwareProvider(std::move(options)));
+        }
+        const auto origin = sessionIdentity.Stamp();
+        virtualMachine->SetObserver([this, origin](const workspace::VirtualMachineSnapshot& snapshot)
+        {
+            if (!sessionIdentity.IsCurrent(origin)) return;
+            const char* message = "The private virtual machine is unavailable; conversation remains available.";
+            switch (snapshot.state)
+            {
+            case workspace::VirtualMachineState::Disabled: message = "Virtual machine startup is disabled."; break;
+            case workspace::VirtualMachineState::Preparing: message = "Preparing the private Ubuntu workspace in the background."; break;
+            case workspace::VirtualMachineState::Ready: message = "The private Ubuntu workspace is ready."; break;
+            case workspace::VirtualMachineState::Stopping: message = "Stopping the private Ubuntu workspace."; break;
+            case workspace::VirtualMachineState::Stopped: message = "The private Ubuntu workspace stopped."; break;
+            case workspace::VirtualMachineState::Blocked:
+                // Provider diagnostics may contain private details; publish only fixed host explanations.
+                if (snapshot.code == "insufficient_memory")
+                    message = "The Ubuntu workspace needs at least 3 GiB of available host memory. "
+                              "Close other applications and relaunch Revia.";
+                else if (snapshot.code == "insufficient_disk")
+                    message = "The Ubuntu workspace needs at least 6 GiB of free disk space to start, or 12 GiB for first setup. "
+                              "Free space and relaunch Revia.";
+                else if (snapshot.code == "missing_tool")
+                    message = "The Ubuntu workspace needs VMware Workstation and Windows OpenSSH client tools. "
+                              "Install the missing tools and relaunch Revia.";
+                else if (snapshot.code == "readiness_unverified" || snapshot.code == "guest_bootstrap_pending")
+                    message = "The Ubuntu workspace setup could not be verified. Revia will retry on the next launch.";
+                else if (snapshot.code == "startup_prerequisite_failed")
+                    message = "The Ubuntu workspace could not finish waiting for Revia's voice preparation. "
+                              "Relaunch Revia to retry.";
+                else if (snapshot.code == "enrollment_in_use")
+                    message = "Another Revia session is using this Ubuntu workspace. "
+                              "Close that session and relaunch Revia.";
+                break;
+            }
+            PublishComponent("Virtual machine", workspace::ToString(snapshot.state), message, -1.0, 0, 0, {}, 0, origin);
+        });
+        // Permissions remain owned by the capability store. Startup supplies only a transport.
+        actionRuntime.BindGuestRuntime(virtualMachine);
+        virtualMachine->Start([this, origin](std::stop_token stop)
+        {
+            // Voice keeps its selected model and device. Wait on this existing VM
+            // worker so the provider checks available RAM after warmup settles.
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(180);
+            while (!voiceWarmupFinished.load() && !stop.stop_requested() && sessionIdentity.IsCurrent(origin) &&
+                std::chrono::steady_clock::now() < deadline)
+                std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            return voiceWarmupFinished.load() && voiceWarmupSucceeded.load() && !stop.stop_requested() &&
+                sessionIdentity.IsCurrent(origin);
+        });
+    }
+    catch (...)
+    {
+        actionRuntime.BindGuestRuntime({});
+        PublishComponent("Virtual machine", "Blocked", "The private virtual machine could not start; conversation remains available.");
+    }
+}
+
+void ReviaSession::StopVirtualMachine()
+{
+    if (virtualMachine)
+    {
+        virtualMachine->Stop();
+        virtualMachine->SetObserver({});
+    }
+    actionRuntime.BindGuestRuntime({});
 }
 
 bool ReviaSession::Start()
@@ -1025,9 +1115,14 @@ bool ReviaSession::Start()
 
     // Load voice after chat layer fitting, then overlap the remaining startup stages.
     // Earlier voice allocation would invalidate the GPU fit measurement.
+    voiceWarmupSucceeded.store(!deferredVoiceLoad);
     if (deferredVoiceLoad)
     {
         StartVoiceWarmup();
+    }
+    else
+    {
+        voiceWarmupFinished.store(true);
     }
 
     stageStarted = std::chrono::steady_clock::now();
@@ -1134,6 +1229,9 @@ bool ReviaSession::Start()
     }
 
     started.store(true);
+    // Guest preparation waits asynchronously for the remaining voice warmup before
+    // measuring available RAM; conversation does not wait for either worker.
+    StartVirtualMachine();
     // Launching her is an interaction. The clock started at zero, so the quiet window
     // measured the machine's uptime instead: every launch looked like the user had been
     // away for days, and she researched and spoke unprompted within seconds of starting.
@@ -3551,6 +3649,7 @@ void ReviaSession::StartVoiceWarmup()
 {
     StopVoiceWarmup();
     voiceWarmupWanted.store(true);
+    voiceWarmupSucceeded.store(false);
     voiceWarmupFinished.store(false);
     voiceWarmupWorker = std::jthread(
         [this](const std::stop_token stopToken)
@@ -3590,6 +3689,7 @@ void ReviaSession::StartVoiceWarmup()
                 }
                 if (prepared.succeeded)
                 {
+                    voiceWarmupSucceeded.store(true);
                     appLogger.Timing("voice_warmup", {{"qwen_voice_model_load", ElapsedMilliseconds(startedAt), true}});
                     appLogger.Log("Background voice load finished: " + prepared.message);
                     ReportVoiceBackend(prepared);
@@ -3618,6 +3718,7 @@ void ReviaSession::StartVoiceWarmup()
 void ReviaSession::StopVoiceWarmup()
 {
     voiceWarmupWanted.store(false);
+    voiceWarmupSucceeded.store(false);
     if (!voiceWarmupWorker.joinable())
     {
         return;
@@ -3637,6 +3738,7 @@ void ReviaSession::StopVoiceWarmup()
         appLogger.Warning("The background voice load did not stop; waiting for it to finish.");
     }
     voiceWarmupWorker.join();
+    voiceWarmupSucceeded.store(false);
 }
 
 SessionResult ReviaSession::Submit(const std::string& input, const agents::InputSource source)
@@ -4293,6 +4395,7 @@ void ReviaSession::Stop()
     // Under the lock, so no turn can launch another task after this. The task worker
     // never takes operationMutex, so joining it here cannot deadlock.
     StopTaskWorker();
+    StopVirtualMachine();
     // Start also holds operationMutex: join here so startup cannot create a
     // save worker after shutdown has already tried to stop it.
     StopStateMaintenance();
@@ -7730,7 +7833,7 @@ ReviaSession::GoalTokenScope::GoalTokenScope(ReviaSession& owner, std::stop_toke
         std::lock_guard lock(session.taskMutex);
         session.executingGoalToken = std::move(token);
         session.executingGoalStamp = stamp;
-        session.executingGoalAudience = session.Audience();
+        session.executingGoalAudience = session.activeTask ? session.activeTask->context.audience : session.Audience();
         session.operatorNeedsVision = false;
         if (session.activeTask)
             parentTask = session.activeTask->stamp.taskId;
@@ -7775,12 +7878,15 @@ std::stop_token ReviaSession::GoalToken() const
 bool ReviaSession::LaunchTask(const std::string& title, std::function<goals::Goal(std::stop_token)> execute, std::string& outMessage)
 {
     std::lock_guard launching(taskLaunchMutex);
+    const auto taskContext = CaptureTaskContext();
     std::jthread previous;
     {
         std::lock_guard lock(taskMutex);
         if (activeTask)
         {
-            outMessage = "I'm still working on '" + activeTask->title + "'. Say /task cancel if you want me to drop it first.";
+            const auto visibleTitle = CanDiscloseTask(activeTask->context, activeTask->stamp, taskContext)
+                ? activeTask->title : std::string("another task");
+            outMessage = "I'm still working on '" + visibleTitle + "'. Say /task cancel if you want me to drop it first.";
             return false;
         }
         previous = std::move(taskWorker);
@@ -7793,7 +7899,7 @@ bool ReviaSession::LaunchTask(const std::string& title, std::function<goals::Goa
     // A stop pressed while the task was being approved still applies to it.
     if (CurrentOperationToken().stop_requested())
         source.request_stop();
-    const auto taskAudience = Audience();
+    const auto& taskAudience = taskContext.audience;
     {
         std::lock_guard lock(taskMutex);
         taskStopSource = source;
@@ -7803,10 +7909,10 @@ bool ReviaSession::LaunchTask(const std::string& title, std::function<goals::Goa
             outMessage = "This companion session cannot admit a new task.";
             return false;
         }
-        activeTask = BackgroundTask{title, std::chrono::steady_clock::now(), "starting", origin};
+        activeTask = BackgroundTask{title, std::chrono::steady_clock::now(), "starting", origin, taskContext};
         tasksLaunched.fetch_add(1);
         taskWorker = std::jthread(
-            [this, source, origin, taskAudience, execute = std::move(execute)](const std::stop_token workerStop) mutable
+            [this, source, origin, taskContext, execute = std::move(execute)](const std::stop_token workerStop) mutable
             {
                 std::stop_callback stopWithWorker(workerStop, [source]() mutable { source.request_stop(); });
                 goals::Goal finished;
@@ -7824,7 +7930,7 @@ bool ReviaSession::LaunchTask(const std::string& title, std::function<goals::Goa
                     finished.status = goals::GoalStatus::Failed;
                     finished.stopDetail = "The task stopped on an internal error.";
                 }
-                FinishTask(finished, origin, taskAudience);
+                FinishTask(finished, origin, taskContext);
             });
     }
     PublishComponent("Task", "Started", "Working on '" + title + "' in the background.", -1.0, 0, 0, {}, taskAudience.revision);
@@ -7834,8 +7940,9 @@ bool ReviaSession::LaunchTask(const std::string& title, std::function<goals::Goa
     return true;
 }
 
-void ReviaSession::FinishTask(const goals::Goal& finished, const RuntimeStamp& origin, const identity::AudienceContext& audience)
+void ReviaSession::FinishTask(const goals::Goal& finished, const RuntimeStamp& origin, const TaskContext& context)
 {
+    const auto& audience = context.audience;
     companionAuthority->EndTask(origin);
     const std::string summary = FormatGoalSummary(finished);
     std::string title;
@@ -7843,7 +7950,7 @@ void ReviaSession::FinishTask(const goals::Goal& finished, const RuntimeStamp& o
         std::lock_guard lock(taskMutex);
         if (activeTask)
             title = activeTask->title;
-        lastTaskReport = TaskReport{summary, finished.status, std::chrono::steady_clock::now(), origin};
+        lastTaskReport = TaskReport{summary, finished.status, std::chrono::steady_clock::now(), origin, context};
         activeTask.reset();
     }
     const auto admission = CaptureSpeechAdmission(audience, origin);
@@ -7944,8 +8051,10 @@ void ReviaSession::StopTaskWorker()
 
 std::string ReviaSession::RunningTaskTitle() const
 {
+    const auto current = CaptureTaskContext();
     std::lock_guard lock(taskMutex);
-    return activeTask ? activeTask->title : std::string();
+    if (!activeTask) return {};
+    return CanDiscloseTask(activeTask->context, activeTask->stamp, current) ? activeTask->title : "another task";
 }
 
 bool ReviaSession::RefuseWhileTaskRuns(SessionResult& result)
@@ -8169,10 +8278,30 @@ std::string ReviaSession::DescribeReminders() const
     return described;
 }
 
+ReviaSession::TaskContext ReviaSession::CaptureTaskContext() const
+{
+    const std::scoped_lock lock(speakerMutex, audienceMutex);
+    TaskContext context;
+    context.audience = configuredAudience;
+    context.audience.kind = lastInputAudience;
+    context.participantId = lastInputParticipant.empty() ? currentSpeakerId : lastInputParticipant;
+    return context;
+}
+
+bool ReviaSession::CanDiscloseTask(const TaskContext& captured, const RuntimeStamp& origin, const TaskContext& current) const
+{
+    return sessionIdentity.IsCurrent(origin) && captured.audience.kind == identity::AudienceKind::Private &&
+        current.audience.kind == captured.audience.kind && current.audience.audienceId == captured.audience.audienceId &&
+        !captured.participantId.empty() && current.participantId == captured.participantId &&
+        std::is_permutation(captured.audience.recipientEntityIds.begin(), captured.audience.recipientEntityIds.end(),
+            current.audience.recipientEntityIds.begin(), current.audience.recipientEntityIds.end());
+}
+
 std::string ReviaSession::DescribeRunningTask() const
 {
+    const auto current = CaptureTaskContext();
     std::lock_guard lock(taskMutex);
-    if (!activeTask)
+    if (!activeTask || !CanDiscloseTask(activeTask->context, activeTask->stamp, current))
         return {};
     const auto minutes = std::chrono::duration_cast<std::chrono::minutes>(std::chrono::steady_clock::now() - activeTask->startedAt).count();
     return "'" + activeTask->title + "', started " + (minutes < 1 ? std::string("under a minute") : std::to_string(minutes) + " min") +
@@ -8181,8 +8310,10 @@ std::string ReviaSession::DescribeRunningTask() const
 
 std::string ReviaSession::DescribeFinishedTask() const
 {
+    const auto current = CaptureTaskContext();
     std::lock_guard lock(taskMutex);
-    if (activeTask || !lastTaskReport || std::chrono::steady_clock::now() - lastTaskReport->finishedAt > std::chrono::minutes{15})
+    if (activeTask || !lastTaskReport || !CanDiscloseTask(lastTaskReport->context, lastTaskReport->stamp, current) ||
+        std::chrono::steady_clock::now() - lastTaskReport->finishedAt > std::chrono::minutes{15})
     {
         return {};
     }
@@ -8191,15 +8322,22 @@ std::string ReviaSession::DescribeFinishedTask() const
 
 void ReviaSession::PublishGoalProgress(const goals::GoalProgress& progress)
 {
+    const auto current = CaptureTaskContext();
+    RuntimeStamp origin = sessionIdentity.Stamp();
     {
         std::lock_guard lock(taskMutex);
-        if (activeTask && !progress.message.empty())
+        if (activeTask)
         {
-            activeTask->progress = "step " + std::to_string(progress.ordinal + 1) + ": " + utf8::Prefix(progress.message, 160);
+            if (!progress.message.empty())
+                activeTask->progress = "step " + std::to_string(progress.ordinal + 1) + ": " + utf8::Prefix(progress.message, 160);
+            if (!CanDiscloseTask(activeTask->context, activeTask->stamp, current)) return;
+            origin = activeTask->stamp;
         }
     }
     RuntimeEvent event;
     event.kind = RuntimeEventKind::ComponentStatus;
+    event.stamp = origin;
+    event.audienceRevision = current.audience.revision;
     event.state = state.load();
     event.component = "Goal";
     event.phase = goals::ToString(progress.stepStatus);
@@ -8234,7 +8372,16 @@ actions::CapabilitySettings ReviaSession::DeriveGoalScope() const
     // ExecuteScoped already takes the more restrictive of the global policy and this one,
     // so a goal cannot reach anything the profile could not. Narrowing here on top of that
     // keeps a long unattended-looking run from also being a broad one.
-    return goals::NarrowScopeForGoal(actionRuntime.Settings());
+    auto scope = goals::NarrowScopeForGoal(actionRuntime.Settings());
+    const auto guest = virtualMachine ? virtualMachine->Snapshot() : workspace::VirtualMachineSnapshot{};
+    if (scope.guest.enabled && guest.state == workspace::VirtualMachineState::Ready)
+        scope.guest.expectedIdentity = guest.identity;
+    else
+    {
+        scope.guest.enabled = false;
+        scope.guest.expectedIdentity = {};
+    }
+    return scope;
 }
 
 bool ReviaSession::TryHandleGoalInput(const std::string& input, SessionResult& result)
@@ -8636,6 +8783,7 @@ bool ReviaSession::TryHandleActionInput(const std::string& input, SessionResult&
             const std::string finished = DescribeFinishedTask();
             result.text = !running.empty()    ? "Working on " + running + "."
                           : !finished.empty() ? "Last task: " + finished
+                          : HasRunningTask()  ? "I'm working on a task from another conversation."
                                               : "I'm not working on a task right now.";
         }
         else
@@ -9753,7 +9901,7 @@ SessionResult ReviaSession::ExecuteAction(actions::ActionRequest request)
         result.reason = outcome.Message();
     }
 
-    if (!outcome.auditError.empty() || outcome.policy.verdict == actions::PolicyVerdict::Blocked ||
+    if (!outcome.auditError.empty() || !outcome.runtimeError.empty() || outcome.policy.verdict == actions::PolicyVerdict::Blocked ||
         (outcome.policy.verdict == actions::PolicyVerdict::RequiresConfirmation && !confirmed))
     {
         SetState(RuntimeState::Blocked, outcome.Message(), capturedAudience.revision, origin);
@@ -9770,7 +9918,25 @@ SessionResult ReviaSession::ExecuteAction(actions::ActionRequest request)
 std::string ReviaSession::FormatActionOutcome(const actions::ActionOutcome& outcome)
 {
     std::ostringstream stream;
-    stream << (outcome.result.succeeded ? "Action succeeded: " : "Action stopped: ") << outcome.Message() << '\n';
+    const char* summary = !outcome.result.succeeded ? "Action stopped: " : outcome.runtimeError.empty()
+        ? "Action succeeded: " : "Action completed; runtime reporting failed: ";
+    stream << summary << outcome.Message() << '\n';
+    if (outcome.result.guest)
+    {
+        const auto& receipt = *outcome.result.guest;
+        const auto output = utf8::Prefix(receipt.standardOutput, 4096);
+        const auto error = utf8::Prefix(receipt.standardError, 4096);
+        const bool truncated = receipt.outputTruncated || output.size() < receipt.standardOutput.size() ||
+            error.size() < receipt.standardError.size();
+        const auto truth = [](const bool value) { return value ? "true" : "false"; };
+        stream << "Guest receipt: attempted=" << truth(receipt.attempted) << ", succeeded=" << truth(receipt.succeeded);
+        if (receipt.exitCode != -1) stream << ", exit=" << receipt.exitCode;
+        stream << ", timed_out=" << truth(receipt.timedOut) << ", cancelled=" << truth(receipt.cancelled)
+               << ", uncertain_effect=" << truth(receipt.uncertainEffect) << ", receipt_verified=" << truth(receipt.receiptVerified)
+               << ", output_truncated=" << truth(truncated) << '\n';
+        if (!output.empty()) stream << "----- standard output -----\n" << output << "\n----- end standard output -----\n";
+        if (!error.empty()) stream << "----- standard error -----\n" << error << "\n----- end standard error -----\n";
+    }
     for (const std::string& entry : outcome.result.entries)
     {
         stream << "  " << entry << '\n';

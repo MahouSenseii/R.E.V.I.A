@@ -1,4 +1,5 @@
 #include "Policy/permissionStore.h"
+#include "Policy/guestCapabilityJson.h"
 
 #include <algorithm>
 #include <cctype>
@@ -168,6 +169,7 @@ bool PermissionStore::Load(const std::filesystem::path& path, actions::Capabilit
 
         if (data.contains("process") && !ReadProcessSettings(data["process"], settings.process, outError))
             return false;
+        if (data.contains("guest")) settings.guest = GuestCapabilitiesFromJson(data.at("guest"));
 
         if (data.contains("browser"))
         {

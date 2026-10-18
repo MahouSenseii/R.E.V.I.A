@@ -51,6 +51,9 @@ bool Matches(const AuthorityPermissions& permissions, const actions::ActionReque
         return true;
     if (std::find(permissions.operations.begin(), permissions.operations.end(), request.type) == permissions.operations.end())
         return false;
+    // Legacy roots/applications describe host resources. They cannot name a guest
+    // instance; only the machine-ceiling grant can reach its separately checked policy.
+    if (actions::IsGuestAction(request.type)) return false;
     if (request.type == actions::ActionType::GenerateImage)
         return !decision.canonicalDestination.empty() && (permissions.roots.empty() ||
             std::any_of(permissions.roots.begin(), permissions.roots.end(),

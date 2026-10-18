@@ -74,6 +74,12 @@ std::string FormatLegacyContext(const ComputerTaskContext& context)
             using actions::ActionType;
             bool enabled = true;
             if (action == ActionType::GenerateImage) enabled = context.scope.image.enabled;
+            else if (actions::IsGuestAction(action))
+                enabled = context.scope.guest.enabled && !context.scope.guest.expectedIdentity.environmentId.empty() &&
+                    !context.scope.guest.expectedIdentity.bootId.empty() &&
+                    ((action == ActionType::VmExecuteProcess && context.scope.guest.execute && !context.scope.guest.limits.approvedExecutables.empty()) ||
+                        (action == ActionType::VmWriteTextFile && context.scope.guest.write) ||
+                        ((action == ActionType::VmReadTextFile || action == ActionType::VmListDirectory) && context.scope.guest.read));
             else if (action == ActionType::ExecuteProcess)
                 enabled = context.scope.process.enabled && !executables.empty() && !roots.empty();
             else if (actions::IsBrowserAction(action)) enabled = context.scope.browser.enabled && !context.scope.browser.approvedOrigins.empty() &&
@@ -207,6 +213,10 @@ std::string FormatLegacyContext(const ComputerTaskContext& context)
         {"retries_left", context.retriesLeft},
         {"scope", {
             {"image", {{"enabled", context.scope.image.enabled}}},
+            {"guest", {{"enabled", context.scope.guest.enabled}, {"read", context.scope.guest.read},
+                {"write", context.scope.guest.write}, {"execute", context.scope.guest.execute},
+                {"workspace", "/home/revia/workspace"}, {"approved_executables", context.scope.guest.limits.approvedExecutables},
+                {"max_timeout_ms", context.scope.guest.limits.maxTimeoutMs}, {"max_write_bytes", context.scope.guest.limits.maxWriteBytes}}},
             {"browser", {{"enabled", context.scope.browser.enabled}, {"approved_origins", context.scope.browser.approvedOrigins}}},
             {"available_actions", available},
             {"roots", roots},

@@ -29,6 +29,15 @@ std::string ToLower(std::string value)
 // diagnosable afterwards rather than only visible in its consequences.
 std::string SummarizeResult(const actions::ActionResult& result, const std::string& expected)
 {
+    if (result.guest)
+    {
+        const auto& receipt = *result.guest;
+        if (!receipt.standardOutput.empty() || !receipt.standardError.empty() || receipt.exitCode >= 0 || receipt.uncertainEffect)
+            return "Guest process exit=" + std::to_string(receipt.exitCode) + " timeout=" + (receipt.timedOut ? "true" : "false") +
+                " cancelled=" + (receipt.cancelled ? "true" : "false") + " uncertain=" + (receipt.uncertainEffect ? "true" : "false") +
+                " truncated=" + (receipt.outputTruncated ? "true" : "false") + " stdout=" + utf8::Prefix(receipt.standardOutput, 384) +
+                " stderr=" + utf8::Prefix(receipt.standardError, 384);
+    }
     if (result.process)
     {
         const auto& receipt = *result.process;
@@ -37,6 +46,7 @@ std::string SummarizeResult(const actions::ActionResult& result, const std::stri
             " stdout=" + utf8::Prefix(receipt.standardOutput, 128) + " stderr=" + utf8::Prefix(receipt.standardError, 128);
     }
     std::string summary = result.message;
+    if (result.guest && !result.guest->digest.empty()) summary += " | SHA256: " + result.guest->digest;
     const auto append = [&summary](const std::string& value)
     {
         if (value.empty())
@@ -173,6 +183,14 @@ std::string ActionFingerprint(const actions::ActionRequest& action)
     fingerprint += '|' + actions::PathToUtf8(action.process.workingDirectory);
     for (const auto& argument : action.process.arguments)
         fingerprint += '|' + std::to_string(argument.size()) + ':' + argument;
+    if (actions::IsGuestAction(action.type))
+    {
+        for (const auto& value : {action.guest.path, action.guest.content, action.guest.expectedDigest,
+                 action.guest.executable, action.guest.workingDirectory})
+            fingerprint += '|' + std::to_string(value.size()) + ':' + value;
+        for (const auto& argument : action.guest.arguments)
+            fingerprint += '|' + std::to_string(argument.size()) + ':' + argument;
+    }
     if (action.input.hasPoint)
     {
         fingerprint += '|' + std::to_string(action.input.x) + ',' + std::to_string(action.input.y);
@@ -222,6 +240,23 @@ Goal GoalRunner::Operate(Goal goal, std::stop_token stopToken)
         return goal;
     }
 
+    const auto callbackFailed = [&](const char* stage, const StopReason reason)
+    {
+        const bool cancelled = stopToken.stop_requested();
+        goal.status = cancelled ? GoalStatus::Cancelled : GoalStatus::Failed;
+        goal.stopReason = cancelled ? StopReason::Cancelled : reason;
+        // Provider exceptions can contain prompts or private observations. Preserve the
+        // failing stage and existing evidence without persisting arbitrary payloads.
+        goal.stopDetail = std::string("The ") + stage + " callback failed; the goal stopped without retrying it.";
+        goal.spend.elapsedMs = priorElapsed + ElapsedMilliseconds(startedAt);
+        if (!Persist(goal))
+        {
+            goal.status = GoalStatus::Failed;
+            goal.stopReason = StopReason::StoreError;
+            goal.stopDetail += " Its terminal checkpoint could not be saved.";
+        }
+    };
+
     std::string lastFingerprint;
     std::uint32_t repeats = 0;
     for (std::uint32_t iteration = 0;; ++iteration)
@@ -252,12 +287,22 @@ Goal GoalRunner::Operate(Goal goal, std::stop_token stopToken)
             static_cast<void>(Persist(goal));
             return goal;
         }
-        const NextStep next = stepProvider(goal, iteration);
+        NextStep next;
+        ++goal.spend.plannerRequests;
+        try
+        {
+            next = stepProvider(goal, iteration);
+        }
+        catch (...)
+        {
+            ++goal.spend.unreportedRequests;
+            callbackFailed("planning", StopReason::InvalidPlan);
+            return goal;
+        }
         // Charged before the answer is used, so a decision costs its budget whether or
         // not it turns out to be usable. Planning that produces nothing is still
         // planning that was paid for, and a loop that only charged for successful
         // answers could ask forever (ISSUE-REVIA-0068).
-        ++goal.spend.plannerRequests;
         if (next.costReported)
             goal.spend.tokens += next.tokens;
         else
@@ -291,8 +336,17 @@ Goal GoalRunner::Operate(Goal goal, std::stop_token stopToken)
                     std::condition_variable_any delay;
                     delay.wait_for(lock, stopToken, std::chrono::milliseconds(200), [] { return false; });
                 }
-                const bool recovered = !stopToken.stop_requested() && recoveryHandler &&
-                    recoveryHandler(next.recovery, goal, stopToken, evidence);
+                bool recovered = false;
+                try
+                {
+                    recovered = !stopToken.stop_requested() && recoveryHandler &&
+                        recoveryHandler(next.recovery, goal, stopToken, evidence);
+                }
+                catch (...)
+                {
+                    callbackFailed("recovery", StopReason::Undecided);
+                    return goal;
+                }
                 goal.spend.elapsedMs = priorElapsed + ElapsedMilliseconds(startedAt);
                 goal.stopDetail = revia::utf8::Prefix(evidence.empty() ? "The requested recovery has no admitted observation adapter." : evidence,
                     MaxObservationCharacters);
@@ -311,8 +365,17 @@ Goal GoalRunner::Operate(Goal goal, std::stop_token stopToken)
             }
             else if (next.finished)
             {
-                const auto evidence = completionVerifier ? completionVerifier(goal, stopToken)
-                    : CompletionEvidence{false, "Completion was proposed, but no independent runtime acceptance check is installed."};
+                CompletionEvidence evidence;
+                try
+                {
+                    evidence = completionVerifier ? completionVerifier(goal, stopToken)
+                        : CompletionEvidence{false, "Completion was proposed, but no independent runtime acceptance check is installed."};
+                }
+                catch (...)
+                {
+                    callbackFailed("completion", StopReason::VerificationFailed);
+                    return goal;
+                }
                 goal.spend.elapsedMs = priorElapsed + ElapsedMilliseconds(startedAt);
                 if (const auto spent = CheckBudget(goal); spent != StopReason::None && !stopToken.stop_requested())
                 {
@@ -414,6 +477,17 @@ Goal GoalRunner::Operate(Goal goal, std::stop_token stopToken)
 bool GoalRunner::ValidateStep(const GoalStep& step, std::string& outError)
 {
     const std::string label = "Step " + std::to_string(step.ordinal);
+    if (step.action.type == actions::ActionType::VmWriteTextFile &&
+        (step.check.type != actions::ActionType::VmReadTextFile || step.check.guest.path != step.action.guest.path))
+    {
+        outError = label + " must verify a guest write by reading the exact same guest file.";
+        return false;
+    }
+    if (actions::IsGuestAction(step.action.type) != actions::IsGuestAction(step.check.type))
+    {
+        outError = label + " cannot use evidence from a different host or guest environment.";
+        return false;
+    }
     if (step.action.type == actions::ActionType::Unknown)
     {
         outError = label + " has no action.";
@@ -539,6 +613,8 @@ bool GoalRunner::Persist(Goal& goal) const
 
 bool GoalRunner::RunStep(Goal& goal, GoalStep& step, const policy::CapabilityPolicy& scopedPolicy, std::stop_token stopToken)
 {
+    if (actions::IsGuestAction(step.action.type)) step.action.guest.expectedIdentity = goal.scope.guest.expectedIdentity;
+    if (actions::IsGuestAction(step.check.type)) step.check.guest.expectedIdentity = goal.scope.guest.expectedIdentity;
     // Derived here, from the step's own action and check, and never read from what
     // proposed the step. A postcondition supplied from outside would be the actor
     // grading itself, which is the one thing a check exists not to be.
@@ -579,15 +655,18 @@ bool GoalRunner::RunStep(Goal& goal, GoalStep& step, const policy::CapabilityPol
             Publish(goal, step, message);
             return true;
         };
-        const auto auditFailed = [&](const actions::ActionOutcome& outcome)
+        const auto runtimeFailed = [&](const actions::ActionOutcome& outcome)
         {
-            if (outcome.auditError.empty())
+            if (outcome.auditError.empty() && outcome.runtimeError.empty())
                 return false;
             record.failure = outcome.Message();
             const std::string message = record.failure;
+            const bool attempted = record.executed;
             step.attempts.push_back(std::move(record));
             step.status = StepStatus::Failed;
-            goal.stopReason = StopReason::StoreError;
+            goal.stopReason = !outcome.auditError.empty() ? StopReason::StoreError :
+                attempted ? StopReason::UnverifiedEffect : StopReason::Undecided;
+            goal.stopDetail = revia::utf8::Prefix(message, MaxObservationCharacters);
             Publish(goal, step, message);
             return true;
         };
@@ -633,7 +712,7 @@ bool GoalRunner::RunStep(Goal& goal, GoalStep& step, const policy::CapabilityPol
             {
                 ++goal.spend.actions;
             }
-            if (auditFailed(baselineOutcome))
+            if (runtimeFailed(baselineOutcome))
                 return false;
             // An unreadable baseline leaves the value empty, which evaluates to
             // Unknown. The step still runs; it simply cannot be verified this way, and
@@ -661,11 +740,14 @@ bool GoalRunner::RunStep(Goal& goal, GoalStep& step, const policy::CapabilityPol
         const bool delegatedBrowser = (action.type == actions::ActionType::BrowserClick || action.type == actions::ActionType::BrowserFill) &&
             browserDelegation && machine.browser.enabled && machine.browser.interact && machine.browser.allowTaskInteraction &&
             scope.browser.enabled && scope.browser.interact && scope.browser.allowTaskInteraction;
-        const bool delegated = delegatedProcess || delegatedBrowser;
+        const bool delegatedGuest = action.type == actions::ActionType::VmExecuteProcess &&
+            machine.guest.enabled && machine.guest.execute && machine.guest.allowTaskExecution &&
+            scope.guest.enabled && scope.guest.execute && scope.guest.allowTaskExecution;
+        const bool delegated = delegatedProcess || delegatedBrowser || delegatedGuest;
         if (delegated)
         {
             const auto prior = action.beforeEffect;
-            action.beforeEffect = [this, prior, delegatedProcess](const std::string& resource)
+            action.beforeEffect = [this, prior, delegatedProcess, delegatedGuest](const std::string& resource)
             {
                 if (prior)
                 {
@@ -673,7 +755,8 @@ bool GoalRunner::RunStep(Goal& goal, GoalStep& step, const policy::CapabilityPol
                     if (!refusal.empty()) return refusal;
                 }
                 const auto current = actionRuntime.Settings();
-                const bool admitted = delegatedProcess ? current.process.enabled && current.process.allowTaskExecution
+                const bool admitted = delegatedGuest ? current.guest.enabled && current.guest.execute && current.guest.allowTaskExecution
+                    : delegatedProcess ? current.process.enabled && current.process.allowTaskExecution
                     : current.browser.enabled && current.browser.interact && current.browser.allowTaskInteraction;
                 return admitted ? std::string() : std::string("The explicit task tool delegation was withdrawn.");
             };
@@ -745,8 +828,8 @@ bool GoalRunner::RunStep(Goal& goal, GoalStep& step, const policy::CapabilityPol
             ++goal.spend.actions;
         record.executed = outcome.result.attempted;
         actionResult = outcome.Message();
-        if (outcome.result.process) record.observation = SummarizeResult(outcome.result, {});
-        if (auditFailed(outcome))
+        if (outcome.result.process || outcome.result.guest) record.observation = SummarizeResult(outcome.result, {});
+        if (runtimeFailed(outcome))
             return false;
         if (cancelled())
             return false;
@@ -769,7 +852,7 @@ bool GoalRunner::RunStep(Goal& goal, GoalStep& step, const policy::CapabilityPol
             const auto checkSummary = SummarizeResult(checkOutcome.result, step.expected);
             record.observation = record.observation.empty() ? checkSummary
                 : utf8::Prefix(record.observation + " | Check: " + checkSummary, MaxObservationCharacters);
-            if (auditFailed(checkOutcome))
+            if (runtimeFailed(checkOutcome))
                 return false;
             // Judged under the goal's own contract, not the build's. A goal resumed
             // from a database written by an older build keeps the rule it was written
@@ -804,24 +887,17 @@ bool GoalRunner::RunStep(Goal& goal, GoalStep& step, const policy::CapabilityPol
             record.failure = outcome.result.message.empty() ? std::string("The action did not succeed.") : outcome.result.message;
         }
 
-        // The action ran, said it worked, and the check could not confirm it. That is
-        // an unknown outcome, not a failed one, and for an action that commits
-        // something the two readings are opposite: if nothing landed, retrying is the
-        // recovery; if something landed and only the evidence is missing, retrying does
-        // it twice. So the run stops with a reason that says so rather than sending the
-        // message again on the chance that the first one did not arrive
-        // (ISSUE-REVIA-0062).
-        //
-        // Two things are not this case. An action that failed outright committed
-        // nothing and retries exactly as before. And a typed postcondition that
-        // positively answered "no" is a real answer -- the effect demonstrably did not
-        // land, so doing it again does it once rather than twice. TextObserved can
-        // never reach that branch, because not finding a substring is not a finding,
-        // and that is precisely what a typed postcondition buys here.
-        const bool processMayHaveMutated = (action.type == actions::ActionType::ExecuteProcess ||
+        // A failed executor can already have produced a partial effect. Preserve that
+        // uncertainty for non-repeatable actions just as for a successful action whose
+        // effect could not be verified. Repeat-safe actions retain their bounded retry.
+        // A successful action with a typed negative check still has evidence that its
+        // intended effect did not land (ISSUE-REVIA-0062).
+        const bool processMayHaveMutated = (action.type == actions::ActionType::ExecuteProcess || action.type == actions::ActionType::VmExecuteProcess ||
+            (outcome.result.guest && outcome.result.guest->uncertainEffect) ||
             (outcome.result.browser && outcome.result.browser->uncertainEffect)) && outcome.result.attempted;
-        const bool effectMayHaveLanded = processMayHaveMutated || (outcome.result.succeeded &&
-            actions::RepeatingCouldDuplicateAnEffect(action.type) && record.outcome != VerificationOutcome::Failed);
+        const bool effectMayHaveLanded = processMayHaveMutated || (actions::RepeatingCouldDuplicateAnEffect(action.type) &&
+            ((outcome.result.succeeded && record.outcome != VerificationOutcome::Failed) ||
+                (outcome.result.attempted && !outcome.result.succeeded)));
 
         const std::string failure = record.failure;
         step.attempts.push_back(std::move(record));
@@ -834,8 +910,7 @@ bool GoalRunner::RunStep(Goal& goal, GoalStep& step, const policy::CapabilityPol
             const auto detail = processMayHaveMutated
                 ? "The process was attempted and may have changed state even though its result was not verified. Reobserve before retrying."
                 : "Stopped without repeating it: " + actions::ToString(action.type) +
-                    " reported success but could not be verified, and doing it again could "
-                    "do it twice.";
+                    " may have produced an effect that was not verified, and doing it again could do it twice.";
             goal.stopDetail = detail;
             Publish(goal, step, detail);
             return false;

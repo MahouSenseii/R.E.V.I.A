@@ -68,7 +68,7 @@ enum class StopReason
     // The loop asked what to do next and got no usable answer. Also distinct from
     // failure: nothing went wrong, she just could not see a next move.
     Undecided,
-    // The action succeeded but its effect is unknown; retry could duplicate it.
+    // The action may have produced an effect; retry could duplicate it.
     // Stop for user review rather than treating missing evidence as failure.
     UnverifiedEffect,
     // Requires user input, such as missing exact content; never invents a substitute.
@@ -140,7 +140,8 @@ enum class PostconditionKind
     // Compares runtime observations before/after a press to prove window change.
     // Supports target-selection evidence only, not that the intended effect occurred.
     ControlStateChanged,
-    BrowserControlValueIs
+    BrowserControlValueIs,
+    GuestFileContentIs
 };
 
 struct Postcondition
@@ -156,6 +157,7 @@ struct Postcondition
     std::string browserSession;
     std::string browserUrl;
     std::uint64_t browserGeneration = 0;
+    workspace::GuestIdentity guestIdentity;
 
     // Whether this condition can be trusted to have said "no" rather than "I could not
     // tell". Only a derived condition can: TextObserved failing to find a substring is

@@ -26,6 +26,7 @@
 namespace revia::browser { class BrowserSession; }
 
 namespace revia::visual { class ImageGenerator; }
+namespace revia::workspace { class VirtualMachineRuntime; }
 
 namespace revia::actions
 {
@@ -66,6 +67,7 @@ class ActionRuntime
     void SetBrowserSession(std::shared_ptr<browser::BrowserSession> session);
     // The provider outlives this binding; its configured destination must match this private root.
     void BindImageProvider(visual::ImageGenerator& provider, const std::filesystem::path& ownedOutputRoot, bool allowAutonomous);
+    void BindGuestRuntime(std::shared_ptr<workspace::VirtualMachineRuntime> runtime);
 
     // Scoped evaluation for the goal runner. A goal carries its own, narrower
     // CapabilitySettings; the result is the more restrictive of the global
@@ -169,6 +171,7 @@ class ActionRuntime
     std::filesystem::path browserLogDirectory;
     visual::ImageGenerator* imageProvider = nullptr;
     CapabilitySettings::ImageGeneration imageAccess;
+    std::shared_ptr<workspace::VirtualMachineRuntime> guestRuntime;
     std::uint64_t taskContractBindingRevision = 0;
 };
 

@@ -41,6 +41,19 @@
     "maxEnvironmentBytes": 16384,
     "approvedEnvironmentNames": []
   },
+  "guest": {
+    "enabled": false,
+    "read": false,
+    "write": false,
+    "execute": false,
+    "allowTaskExecution": false,
+    "approvedExecutables": [],
+    "maxReadBytes": 65536,
+    "maxWriteBytes": 65536,
+    "maxOutputBytes": 65536,
+    "maxEntries": 256,
+    "maxTimeoutMs": 120000
+  },
   "browser": {
     "enabled": false,
     "navigate": false,

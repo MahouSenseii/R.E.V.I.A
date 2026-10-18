@@ -47,4 +47,8 @@ void RunAgentToolWorkerTests()
     outcome.auditError = "failed";
     Check(nlohmann::json::parse(agents::WorkerToolReceipt(read, outcome)).at("succeeded") == false,
         "Audit failure became verified tool success.");
+    outcome.auditError.clear();
+    outcome.runtimeError = "observer failed";
+    Check(nlohmann::json::parse(agents::WorkerToolReceipt(read, outcome)).at("succeeded") == false,
+        "A runtime reporting failure became verified tool success.");
 }

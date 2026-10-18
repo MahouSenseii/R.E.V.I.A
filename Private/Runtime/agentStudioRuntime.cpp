@@ -375,7 +375,7 @@ agents::AgentWorkflow::Provider ReviaSession::AgentProvider(const AgentProviderM
                     "\nHost receipt " + action->id + " " + actions::ToString(action->type) + " " +
                     (outcome.Succeeded() ? "succeeded" : "failed") + " sha256=" + audit::ContentDigest(receipt) + ": " +
                     utf8::Prefix(utf8::Sanitize(outcome.result.content.empty() ? outcome.Message() : outcome.result.content), 180);
-                if (!outcome.auditError.empty() || stop.stop_requested())
+                if (!outcome.auditError.empty() || !outcome.runtimeError.empty() || stop.stop_requested())
                     return result;
                 if (action->type == actions::ActionType::ExecuteProcess && outcome.result.attempted && !outcome.Succeeded())
                     break;

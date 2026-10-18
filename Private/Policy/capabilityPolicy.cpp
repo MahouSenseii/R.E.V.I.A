@@ -151,6 +151,26 @@ actions::PolicyDecision CapabilityPolicy::Evaluate(const actions::ActionRequest&
         decision.reason = "Unknown actions are never executable.";
         return decision;
     }
+    if (const auto operation = actions::GuestOperationForAction(request.type))
+    {
+        if (request.guest.operation != *operation || !request.source.empty() || !request.destination.empty() ||
+            !request.process.executable.empty() || !request.application.empty())
+        {
+            decision.reason = "Guest actions must use their matching guest payload without host resources.";
+            return decision;
+        }
+        const auto guest = EvaluateGuestCapability(request.guest, settings.guest);
+        decision.reason = guest.reason;
+        decision.guestLimits = guest.limits;
+        if (!guest.allowed) return decision;
+        if (request.dryRun || decision.risk <= automaticCeiling)
+            decision.verdict = actions::PolicyVerdict::Allowed;
+        else if (*operation == workspace::GuestOperation::ExecuteProcess || settings.mode != actions::ExecutionMode::ApprovedScope)
+            decision.verdict = actions::PolicyVerdict::RequiresConfirmation;
+        else
+            decision.reason = "The guest operation exceeds this task's unattended risk ceiling.";
+        return decision;
+    }
     if (actions::IsBrowserAction(request.type))
     {
         if (!browser::ValidateSettings(settings.browser, decision.reason) || !browser::IsApprovedUrl(request.browser.url, settings.browser))

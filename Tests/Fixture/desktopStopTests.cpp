@@ -132,8 +132,23 @@ struct ReviaWindowStopTests
             request.id = revia::actions::NewActionId();
             request.type = revia::actions::ActionType::CreateDirectory;
             request.source = owner.Paths().InstallRoot() / name;
-            const auto outcome = runtime.Execute(request, true);
-            expect(outcome.Succeeded() == allowed && std::filesystem::exists(request.source) == allowed,
+            const auto outcome = [&]()
+            {
+                // Admit only this fixture action without starting model or device services.
+                struct RestoreAdmission
+                {
+                    ReviaSession& owner;
+                    bool wasStarted;
+                    ~RestoreAdmission() { ReviaSessionTestAccess::MarkStudioStarted(owner, wasStarted); }
+                } restore{owner, owner.IsStarted()};
+                ReviaSessionTestAccess::MarkStudioStarted(owner, true);
+                return runtime.Execute(request, true);
+            }();
+            const bool matched = outcome.Succeeded() == allowed && std::filesystem::exists(request.source) == allowed;
+            if (!matched)
+                std::cerr << "Companion action " << name << ": attempted=" << outcome.result.attempted
+                          << ", succeeded=" << outcome.Succeeded() << ", reason=" << outcome.Message() << '\n';
+            expect(matched,
                 "companion selection lost its denial or narrowed the other companion");
         };
         const auto cwd = QDir::currentPath();

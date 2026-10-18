@@ -147,6 +147,25 @@ bool ActionAuditLogger::WriteRecord(const actions::ActionRequest& request, const
                     {"stdout_digest", ContentDigest(receipt.standardOutput)}, {"stderr_digest", ContentDigest(receipt.standardError)}};
             }
         }
+        if (actions::IsGuestAction(request.type))
+        {
+            const auto& guest = request.guest;
+            entry["guest"] = {{"environment_id", guest.expectedIdentity.environmentId}, {"boot_id", guest.expectedIdentity.bootId},
+                {"path_digest", ContentDigest(guest.path)}, {"content_digest", ContentDigest(guest.content)}, {"content_bytes", guest.content.size()},
+                {"expected_digest", guest.expectedDigest}, {"executable", guest.executable},
+                {"working_directory_digest", ContentDigest(guest.workingDirectory)},
+                {"arguments_digest", ContentDigest(nlohmann::json(guest.arguments).dump())},
+                {"argument_count", guest.arguments.size()}, {"timeout_ms", guest.timeoutMs}};
+            if (result.guest)
+            {
+                const auto& receipt = *result.guest;
+                entry["guest"]["receipt"] = {{"environment_id", receipt.identity.environmentId}, {"boot_id", receipt.identity.bootId},
+                    {"receipt_verified", receipt.receiptVerified}, {"uncertain_effect", receipt.uncertainEffect}, {"code", receipt.code}, {"exit_code", receipt.exitCode},
+                    {"cancelled", receipt.cancelled}, {"timed_out", receipt.timedOut}, {"output_truncated", receipt.outputTruncated},
+                    {"content_digest", receipt.digest}, {"stdout_digest", ContentDigest(receipt.standardOutput)},
+                    {"stderr_digest", ContentDigest(receipt.standardError)}};
+            }
+        }
         if (actions::IsBrowserAction(request.type))
         {
             entry["browser"] = {{"url_digest", ContentDigest(request.browser.url)}, {"session", request.browser.session},

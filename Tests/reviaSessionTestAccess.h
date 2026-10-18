@@ -46,6 +46,34 @@ struct ReviaSessionTestAccess
         session.router.ApplyLLMSettings(session.settings.llm, embedding, session.profile);
     }
     static void MarkStudioStarted(ReviaSession& session, bool value) { session.started.store(value); }
+    static void UseVirtualMachine(ReviaSession& session, std::shared_ptr<workspace::VirtualMachineRuntime> machine)
+    { session.virtualMachine = std::move(machine); }
+    static void StartVirtualMachine(ReviaSession& session)
+    { std::lock_guard lock(session.operationMutex); session.StartVirtualMachine(); }
+    static void SetVoiceWarmupFinished(ReviaSession& session, bool value)
+    { session.voiceWarmupFinished.store(value); }
+    static void SetVoiceWarmupSucceeded(ReviaSession& session, bool value)
+    { session.voiceWarmupSucceeded.store(value); }
+    static actions::CapabilitySettings GoalScope(const ReviaSession& session)
+    { return session.DeriveGoalScope(); }
+    static void WithGoalAdmission(ReviaSession& session, const std::function<void(const RuntimeStamp&, bool)>& examine)
+    {
+        ReviaSession::GoalTokenScope scope(session, {});
+        tests::Check(scope.admitted, "The contract fixture could not register its goal.");
+        examine(scope.stamp, session.OperatorAdmitted({}));
+    }
+    static std::shared_ptr<const core::TaskContract> ActionContract(ReviaSession& session,
+        const actions::ActionRequest& request, const RuntimeStamp& stamp)
+    { return session.BuildActionTaskContract(request, stamp, {}); }
+    static std::string ContractRefusal(const ReviaSession& session, const core::TaskContract& contract)
+    { return session.TaskContractRefusal(contract, {}); }
+    static std::shared_ptr<const core::TaskContract> ForegroundContract(ReviaSession& session)
+    {
+        agents::InputBatch batch;
+        batch.context = session.CaptureInputContext(agents::InputSource::Typed);
+        batch.text = "Foreground contract fixture";
+        return session.BuildTurnTaskContract(batch);
+    }
     static agents::InputContext StudioInput(ReviaSession& session, agents::InputSource source, identity::SpeakerObservation speaker = {})
     { return session.CaptureInputContext(source, speaker); }
     static bool StudioInputCurrent(const ReviaSession& session, const agents::InputContext& context)
@@ -126,6 +154,13 @@ struct ReviaSessionTestAccess
     }
     static std::string RunningTask(const ReviaSession& session) { return session.DescribeRunningTask(); }
     static std::string FinishedTask(const ReviaSession& session) { return session.DescribeFinishedTask(); }
+    static std::string IntroduceTaskSpeaker(ReviaSession& session, const std::string& name)
+    {
+        auto captured = session.CaptureInputContext(agents::InputSource::Typed);
+        return session.ResolveLocalSpeaker("my name is " + name, captured);
+    }
+    static void TaskProgress(ReviaSession& session, const goals::GoalProgress& progress)
+    { session.PublishGoalProgress(progress); }
     static void DeliverReminders(ReviaSession& session, planning::WallClock::time_point now)
     { session.DeliverDueReminders(now); }
     static bool InitializeReminders(ReviaSession& session, const std::filesystem::path& path, std::string& error) { return session.reminders.Initialize(path, error); }
