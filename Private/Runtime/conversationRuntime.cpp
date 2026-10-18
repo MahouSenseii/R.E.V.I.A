@@ -12,6 +12,7 @@
 #include "Agents/conversationStylePolicy.h"
 #include "Agents/replyFormat.h"
 #include "Agents/replyFragmenter.h"
+#include "Agents/reasoningRelay.h"
 #include "Emotion/stimulusBuilder.h"
 #include "Identity/relationshipEvidence.h"
 #include "Identity/preferenceState.h"
@@ -25,6 +26,7 @@
 #include <algorithm>
 #include <cctype>
 #include <chrono>
+#include <memory>
 #include <sstream>
 #include <string_view>
 #include <utility>
@@ -726,6 +728,17 @@ agents::SelfInquiryResult ConversationRuntime::RunSelfInquiry(const std::string&
         inquiry.reason = "There is no local brain available to think with.";
         return inquiry;
     }
+    if (selfInquiryPolicy.Limits().nativeDeliberation)
+    {
+        // The answer itself thinks, in the model's own thinking mode, and the thinking is
+        // shown as it is written: one model call instead of an inquiry and then an answer.
+        // Recorded now, so the cooldown governs both ways of thinking alike.
+        selfInquiryPolicy.RecordInquiry(turnId);
+        inquiry.nativeThinking = true;
+        inquiry.reason = decision.reason;
+        PublishComponent("Self-inquiry", "Thinking", "Thinking while answering: " + decision.reason, -1.0, 0, turnId, audienceRevision);
+        return inquiry;
+    }
 
     setState(RuntimeState::Thinking, "Stopping to think about turn #" + std::to_string(turnId) + ".");
     PublishComponent("Self-inquiry", "Thinking", decision.reason, -1.0, 0, turnId, audienceRevision);
@@ -1410,8 +1423,40 @@ SessionResult ConversationRuntime::Generate(const std::string& policyInput, cons
         router.SetPosture(std::move(posture));
     }
 
-    const intelligence::IntelligenceDecision answerDecision =
+    intelligence::IntelligenceDecision answerDecision =
         agents::SelfInquiryPolicy::FinalAnswerRouting(routeDecision, inquiry.HasQuestions());
+    if (inquiry.nativeThinking)
+    {
+        answerDecision.mode = intelligence::ReasoningMode::Deep;
+        answerDecision.reason += (answerDecision.reason.empty() ? "" : " ") +
+                                 std::string("Native thinking replaced the separate self-inquiry.");
+    }
+    // Thinking on a private turn is shown as it streams, in the same "Revia is thinking"
+    // blocks the self-inquiry uses. It is model text: shown, never spoken or remembered.
+    std::shared_ptr<agents::ReasoningRelay> reasoningRelay;
+    if (!proactive && !reflex.matched && turnPolicy.allowSelfInquiry && answerDecision.mode == intelligence::ReasoningMode::Deep)
+    {
+        reasoningRelay = std::make_shared<agents::ReasoningRelay>(
+            [this, admitted, turn = currentTurn, revision = turnPolicy.audienceRevision,
+                why = inquiry.nativeThinking ? inquiry.reason : std::string("This turn was routed to deep reasoning.")](
+                const std::string& text)
+            {
+                if (!admitted())
+                    return;
+                RuntimeEvent thinking;
+                thinking.kind = RuntimeEventKind::SelfInquiry;
+                thinking.audienceRevision = revision;
+                thinking.state = RuntimeState::Thinking;
+                thinking.message = text;
+                thinking.detail = why;
+                thinking.component = "Self-inquiry";
+                thinking.phase = "Thinking";
+                thinking.initiator = "conversation turn #" + std::to_string(turn);
+                thinking.turnId = turn;
+                events.Publish(std::move(thinking));
+            });
+        router.SetReasoningHandler([reasoningRelay](const std::string& delta) { reasoningRelay->Add(delta); });
+    }
 
     updateState(RuntimeState::Thinking,
         proactive ? "Preparing a context-driven conversation opening." : "Thinking about turn #" + std::to_string(currentTurn) + ".");
@@ -1559,6 +1604,12 @@ SessionResult ConversationRuntime::Generate(const std::string& policyInput, cons
             currentTurn, stopToken, onDelta, answerDecision,
             turnPolicy.publicAudience ? llm::PrivateMemoryAccess::Denied : llm::PrivateMemoryAccess::ProfileSetting,
             turnPolicy.deliveryAdmission, turnPolicy.memoryScope);
+        if (reasoningRelay)
+        {
+            // Not left for a later request, and the last thought is shown.
+            router.SetReasoningHandler({});
+            reasoningRelay->Flush();
+        }
         // Generation is finished, so anything held back for fear of a marker is safe.
         flushHeldFragment();
     }
@@ -1706,6 +1757,11 @@ SessionResult ConversationRuntime::Generate(const std::string& policyInput, cons
         {
             trace << "\n\nConclusion: " << inquiry.settled;
         }
+    }
+    else if (inquiry.nativeThinking)
+    {
+        trace << "Thought it through while answering (" << inquiry.reason << ")"
+              << (output.reasoning.empty() ? ", but the model returned no reasoning." : "; her reasoning follows.");
     }
     else
     {

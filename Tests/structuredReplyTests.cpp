@@ -1,6 +1,9 @@
 #include "Agents/conversationStylePolicy.h"
 #include "Agents/conversationAgent.h"
+#include "Agents/reasoningRelay.h"
 #include "LLM/LLamaCPP/llamaCppService.h"
+#include "Runtime/conversationRuntime.h"
+#include "Core/conversationContext.h"
 #include "testSupport.h"
 
 #include <httplib.h>
@@ -663,6 +666,169 @@ void TestBackgroundCallsStreamWithUnchangedContracts()
         "Vision did not stream, or its streamed description was lost: " + vision.reason);
 }
 
+// Native thinking: reasoning_content was ignored, and thinking shared the answer's
+// max_tokens, so a long deliberation could end the turn before the answer began.
+void TestNativeThinkingStreamsReasoningWithItsOwnBudget()
+{
+    revia::tests::ScopedTestDirectory directory;
+    WireBackend backend;
+    llamaCppService service((directory.root / "thinking.db").string());
+    Configure(service, backend.port);
+    backend.Script({WireBackend::Delta("reasoning_content", "The user wants a sum. "),
+        WireBackend::Delta("reasoning_content", "Two plus two is four."), WireBackend::Delta("content", "It is "),
+        WireBackend::Delta("content", "four.", "stop")});
+    std::string thought;
+    std::string shown;
+    const auto deep = service.GenerateResponse({{"user", "What is two plus two, carefully?"}}, {},
+        [&](const std::string& delta) { shown += delta; }, true, revia::llm::PrivateMemoryAccess::ProfileSetting,
+        [&](const std::string& delta) { thought += delta; });
+    auto request = backend.Requests().back();
+    Check(deep.bSuccess && deep.response == "It is four." && shown == "It is four.",
+        "Native thinking leaked into the visible reply, or the answer after it was lost: " + deep.response);
+    Check(thought == "The user wants a sum. Two plus two is four." && deep.reasoning == thought,
+        "The streamed reasoning_content was not delivered live and kept as the reply's reasoning.");
+    // Configure: 512 answer tokens at 8,192 context; thinking adds min(3072, 8192 / 4).
+    Check(request.at("chat_template_kwargs").at("enable_thinking").get<bool>() && request.at("max_tokens") == 512 + 2048,
+        "Thinking did not get its own token allowance on top of the answer's: max_tokens=" + request.at("max_tokens").dump());
+
+    const auto plain = service.GenerateResponse({{"user", "What is two plus two?"}});
+    request = backend.Requests().back();
+    Check(!request.at("chat_template_kwargs").at("enable_thinking").get<bool>() && request.at("max_tokens") == 512 &&
+              plain.response == "It is four.",
+        "A turn without thinking changed its token budget or reply.");
+
+    // A model that writes its thinking inline is shown the same way, and as today the
+    // block never reaches the reply.
+    backend.Script({WireBackend::Delta("content", "<think>Check the units "), WireBackend::Delta("content", "first.</think>"),
+        WireBackend::Delta("content", "Four metres.", "stop")});
+    thought.clear();
+    const auto inline_ = service.GenerateResponse({{"user", "How long is it, carefully?"}}, {}, {}, true,
+        revia::llm::PrivateMemoryAccess::ProfileSetting, [&](const std::string& delta) { thought += delta; });
+    Check(inline_.response == "Four metres." && inline_.reasoning == "Check the units first." && thought == "Check the units first.",
+        "Inline <think> reasoning was not streamed and kept out of the reply.");
+}
+
+// conversation.deliberation = "native": a turn that would have run the separate
+// self-inquiry call instead answers once with native thinking, and that thinking reaches
+// the window as the same SelfInquiry events "Revia is thinking" already shows.
+void TestNativeDeliberationReplacesTheSeparateInquiry()
+{
+    const auto run = [](const bool native, std::vector<revia::runtime::RuntimeEvent>& thinking, std::vector<nlohmann::json>& requests,
+                         revia::runtime::SessionResult& result)
+    {
+        revia::tests::ScopedTestDirectory directory;
+        WireBackend backend;
+        const std::string paragraph = "I should check whether this is a cold start. " + std::string(220, 'x') + ".\n\n";
+        backend.Script({WireBackend::Delta("reasoning_content", paragraph),
+                           WireBackend::Delta("reasoning_content", "So the first run loads everything from disk."),
+                           WireBackend::Delta("content", "The first run reads everything from disk. "),
+                           WireBackend::Delta("content", "Later runs find it cached.", "stop")},
+            R"({"choices":[{"message":{"content":"{\"steps\":[{\"question\":\"What is slow?\",\"answer\":\"The first run.\"}],\"settled\":\"Disk.\"}"},"finish_reason":"stop"}]})");
+        const auto database = (directory.root / "native.db").string();
+        messageRouter router(database);
+        conversationContext history;
+        revia::agents::TurnCoordinator coordinator(database);
+        revia::speech::SpeechService speech;
+        revia::runtime::AffectController affect;
+        revia::emotion::EmotionRuntime emotions;
+        revia::runtime::RuntimeEventBus events;
+        logger log(directory.root / "Logs");
+        revia::runtime::ConversationRuntime runtime(
+            router, history, coordinator, speech, affect, emotions, events, log, [](const auto&, const auto&) {}, [](const auto&) {},
+            [] { return revia::actions::CapabilitySettings::InternetAccess{}; },
+            [] { return revia::actions::CapabilitySettings::DesktopControl{}; }, {},
+            []
+            {
+                responseFilterSettings filters;
+                filters.bAiReviewEnabled = false;
+                return filters;
+            },
+            {}, {}, {}, {}, {}, {},
+            [native]
+            {
+                revia::agents::SelfInquiryLimits limits;
+                limits.enabled = true;
+                limits.cooldownTurns = 0;
+                limits.includeOrdinaryQuestions = true;
+                limits.nativeDeliberation = native;
+                return limits;
+            });
+        std::mutex eventsMutex;
+        const auto subscription = events.Subscribe(
+            [&](const revia::runtime::RuntimeEvent& event)
+            {
+                if (event.kind != revia::runtime::RuntimeEventKind::SelfInquiry)
+                    return;
+                std::lock_guard lock(eventsMutex);
+                thinking.push_back(event);
+            });
+        aiProfile profile;
+        profile.bMemoryEnabled = false;
+        profile.systemPrompt = "You are Revia.";
+        llmSettings settings;
+        settings.host = "127.0.0.1";
+        settings.port = backend.port;
+        settings.modelName = "structured-reply-fixture";
+        settings.maxTokens = 256;
+        settings.bAutoMaxTokens = settings.bAutoStartServer = settings.bVisionEnabled = false;
+        embeddingSettings embeddings;
+        embeddings.bEnabled = embeddings.bAutoStartServer = false;
+        router.ApplyLLMSettings(settings, embeddings, profile);
+        result = runtime.Reply("Why does my program run so much slower the first time I start it?", profile, true, false);
+        events.Unsubscribe(subscription);
+        requests = backend.Requests();
+    };
+
+    std::vector<revia::runtime::RuntimeEvent> thinking;
+    std::vector<nlohmann::json> requests;
+    revia::runtime::SessionResult result;
+    run(true, thinking, requests, result);
+    Check(result.succeeded && result.text == "The first run reads everything from disk. Later runs find it cached.",
+        "The natively thinking turn did not deliver its answer: " + result.reason);
+    Check(requests.size() == 1 && requests.front().contains("stop") &&
+              requests.front().at("chat_template_kwargs").at("enable_thinking").get<bool>(),
+        "Native deliberation still ran a separate inquiry call, or answered without thinking: " + std::to_string(requests.size()) +
+            " requests.");
+    std::string shown;
+    for (const auto& event : thinking)
+    {
+        Check(event.phase == "Thinking" && event.component == "Self-inquiry", "Streamed thinking was published under another name.");
+        shown += event.message + "\n";
+    }
+    Check(thinking.size() == 2 && shown.find("cold start") != std::string::npos && shown.find("loads everything from disk") != std::string::npos,
+        "The streamed reasoning did not reach the \"Revia is thinking\" view in readable pieces: " + std::to_string(thinking.size()) +
+            " events.");
+    Check(result.text.find("cold start") == std::string::npos && result.reasoning.find("Thought it through while answering") != std::string::npos &&
+              result.reasoning.find("loads everything from disk") != std::string::npos,
+        "Native reasoning leaked into the reply or was missing from the Thought process.");
+
+    // The separate inquiry is still there for conversation.deliberation = "selfInquiry".
+    thinking.clear();
+    run(false, thinking, requests, result);
+    Check(requests.size() == 2 && !requests.front().contains("stop") && !requests.back().at("chat_template_kwargs").at("enable_thinking").get<bool>(),
+        "deliberation=selfInquiry no longer ran its inquiry and a non-thinking answer.");
+}
+
+// The thinking arrives a few characters at a time and each published piece becomes its
+// own "Revia is thinking" block, so it is released in readable pieces.
+void TestReasoningRelayReleasesReadablePieces()
+{
+    std::vector<std::string> released;
+    revia::agents::ReasoningRelay relay([&](const std::string& text) { released.push_back(text); });
+    const std::string first(250, 'a');
+    for (const char character : first + "\n\nShort.\n\n")
+        relay.Add(std::string(1, character));
+    Check(released.size() == 1 && released.front() == first, "A paragraph long enough to show was not released at its break.");
+    relay.Add(std::string(1300, 'b') + " tail");
+    Check(released.size() == 2 && released.back().size() <= revia::agents::ReasoningRelay::MaximumCharacters &&
+              released.back().starts_with("Short."),
+        "Thinking with no paragraph break was held past the maximum piece size.");
+    relay.Flush();
+    Check(released.size() == 3 && released.back().ends_with("tail"), "Flush did not release the last of the thinking.");
+    relay.Flush();
+    Check(released.size() == 3 && relay.ReceivedCharacters() == 250 + 10 + 1305, "An empty flush published an empty block.");
+}
+
 // A local server that either enforces one API key, the way llama-server started with
 // --api-key does, or accepts every key, the way one started without it does.
 class KeyedBackend
@@ -778,4 +944,7 @@ void RunStructuredReplyTests()
     TestBackendCacheTimingsReachTheTurnTimings();
     TestBackgroundCallsStreamWithUnchangedContracts();
     TestOnlyTheKeyedServerReviaStartedIsTrusted();
+    TestNativeThinkingStreamsReasoningWithItsOwnBudget();
+    TestNativeDeliberationReplacesTheSeparateInquiry();
+    TestReasoningRelayReleasesReadablePieces();
 }

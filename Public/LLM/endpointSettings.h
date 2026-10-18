@@ -51,6 +51,10 @@ struct llmSettings
     float temperature = 0.7f;
     bool bAutoMaxTokens = true;
     int maxTokens = 4096;
+    // Extra output tokens a reply may spend thinking when native thinking is on, so the
+    // thinking does not eat the answer's own maxTokens budget. Capped at a quarter of
+    // the context.
+    int thinkingTokens = 3072;
     // Places per-turn state in the newest user message to preserve the cached system prefix.
     bool bStablePromptPrefix = true;
     bool bAllowPromptCache = true;

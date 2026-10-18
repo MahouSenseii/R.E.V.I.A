@@ -21,6 +21,7 @@
                 "temperature":  0.8,
                 "autoMaxTokens":  true,
                 "maxTokens":  1024,
+                "thinkingTokens":  3072,
                 "stablePromptPrefix":  true
             },
     "intelligence":  {
@@ -239,7 +240,8 @@
                          "restoreTurns":  6,
                          "selfInquiryEnabled":  true,
                          "selfInquiryCooldownTurns":  0,
-                         "selfInquiryScope":  "hard"
+                         "selfInquiryScope":  "hard",
+                         "deliberation":  "native"
                      },
     "responseFilter":  {
                            "aiReviewEnabled":  false,

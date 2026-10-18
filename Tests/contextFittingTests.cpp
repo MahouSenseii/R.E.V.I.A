@@ -262,6 +262,14 @@ void TestShippedSettingsSelectA32KMainContext()
     appSettings rejected;
     Check(!configManager(invalid.string(), "Profiles").LoadSettings(rejected),
         "An unknown KV cache type passed validation and would only fail when llama-server starts.");
+
+    // Native thinking: its own token budget, and it replaces the separate inquiry by default.
+    Check(shipped.llm.thinkingTokens == 3072 && shipped.conversation.deliberation == "native",
+        "The shipped settings do not give thinking its own budget or default to native deliberation.");
+    document["llm"]["kvCacheType"] = "q8_0";
+    document["conversation"]["deliberation"] = "ponder";
+    std::ofstream(invalid) << document.dump(2);
+    Check(!configManager(invalid.string(), "Profiles").LoadSettings(rejected), "An unknown deliberation mode passed validation.");
 }
 
 void TestPronounRecallUsesTheLatestAdmittedTopic()
@@ -759,8 +767,10 @@ void TestBackendTemplateCountPreservesFittingDialogue()
         "Byte fitting discarded dialogue that the loaded backend measured inside its token budget.");
     Check(backend.validTemplateRequest && backend.validTokenizerRequest && backend.templateThinking,
         "Token accounting omitted matching template options or special-token handling.");
+    // A thinking turn reserves the answer's 512 tokens plus its own thinking allowance
+    // (the default 3,072 capped at a quarter of the 8,192-token context).
     Check(result.contextFit.available && result.contextFit.backendCounted && result.contextFit.promptTokens == 500 &&
-              result.contextFit.responseReserve == 512 && result.contextFit.retainedMessages == 4,
+              result.contextFit.responseReserve == 512 + 2048 && result.contextFit.retainedMessages == 4,
         "Backend token accounting was not reported with its actual reservation and retained messages.");
 }
 

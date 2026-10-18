@@ -33,9 +33,11 @@ public:
         const std::string& query, std::stop_token stopToken = {}, const revia::memory::MemoryScope& scope = {}) const;
     healthOutput CheckBackendHealth(std::stop_token stopToken = {}) const;
     using DeltaHandler = std::function<void(const std::string&)>;
+    using ReasoningHandler = llamaCppService::ReasoningHandler;
     responseOutput GenerateResponse(const std::vector<conversationMessage>& context, std::stop_token stopToken = {},
         DeltaHandler onDelta = {}, bool deepReasoning = false,
-        revia::llm::PrivateMemoryAccess memoryAccess = revia::llm::PrivateMemoryAccess::ProfileSetting) const;
+        revia::llm::PrivateMemoryAccess memoryAccess = revia::llm::PrivateMemoryAccess::ProfileSetting,
+        ReasoningHandler onReasoning = {}) const;
     responseOutput GenerateActionProposal(const std::string& userRequest) const;
     responseOutput ReviewConversationReply(const std::string& userInput, const std::string& candidateReply,
         const std::string& runtimeGroundTruth, int maxReviewTokens, std::stop_token stopToken = {},

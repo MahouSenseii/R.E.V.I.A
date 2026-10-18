@@ -136,6 +136,11 @@ responseOutput messageRouter::RouteMessage(const std::string& message, const std
 
     residency.BeginInference(effectiveTier, "interactive");
     DeltaHandler retryDelta = onDelta;
+    ReasoningHandler onReasoning;
+    {
+        std::lock_guard lock(reasoningMutex);
+        onReasoning = std::exchange(pendingReasoning, {});
+    }
     // IntelligenceRouter owns the reasoning mode. In particular, a completed visible
     // self-inquiry changes the final-answer decision to Fast so the model does not spend
     // the same response allowance on a second, hidden deliberation.
@@ -146,7 +151,8 @@ responseOutput messageRouter::RouteMessage(const std::string& message, const std
         stopToken,
         std::move(onDelta),
         deepReasoning,
-        memoryAccess);
+        memoryAccess,
+        onReasoning);
     residency.EndInference(effectiveTier);
     const bool contextRejected = !routed.bSuccess &&
         routed.reason.find("HTTP status 400") != std::string::npos;
@@ -161,7 +167,8 @@ responseOutput messageRouter::RouteMessage(const std::string& message, const std
             stopToken,
             std::move(retryDelta),
             deepReasoning,
-            memoryAccess);
+            memoryAccess,
+            onReasoning);
         residency.EndInference(revia::intelligence::IntelligenceTier::Main);
         selected = &llm;
         effectiveTier = revia::intelligence::IntelligenceTier::Main;
@@ -243,8 +250,18 @@ bool messageRouter::FastIsSlowerThanMain() const
         !mainConfiguration.device.empty() && !onCpu(mainConfiguration.device);
 }
 
+void messageRouter::SetReasoningHandler(ReasoningHandler handler)
+{
+    std::lock_guard lock(reasoningMutex);
+    pendingReasoning = std::move(handler);
+}
+
 void messageRouter::SetPosture(std::string posture)
 {
+    {
+        std::lock_guard lock(reasoningMutex);
+        pendingReasoning = {};
+    }
     llm.SetPosture(posture);
     if (fastConfigured) fastLlm.SetPosture(posture);
     if (expertConfigured) expertLlm.SetPosture(std::move(posture));

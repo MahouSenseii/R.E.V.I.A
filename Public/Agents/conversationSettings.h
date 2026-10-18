@@ -21,6 +21,10 @@ struct conversationSettings
     int selfInquiryCooldownTurns = 3;
     // "hard" covers Expert/deep-reasoning turns; "questions" also covers ordinary questions and tasks.
     std::string selfInquiryScope = "hard";
+    // How a turn that should think does it. "native": the answer itself runs with the
+    // model's own thinking, streamed to "Revia is thinking", and no separate inquiry
+    // call is made. "selfInquiry": the separate bounded question-and-answer pass.
+    std::string deliberation = "native";
     // Allow further verification rounds when inquiry leaves material questions unsettled.
     // This controls work independently of whether summaries are displayed.
     bool bIterativeInvestigationEnabled = false;

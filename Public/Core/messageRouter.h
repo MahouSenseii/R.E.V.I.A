@@ -8,6 +8,7 @@
 #include "LLM/responseTypes.h"
 #include "Memory/memoryTypes.h"
 #include "Agents/responseProvenance.h"
+#include <mutex>
 #include <string>
 #include <filesystem>
 #include <stop_token>
@@ -30,7 +31,11 @@ public:
     responseOutput RouteMessage(const std::string& message, const std::vector<conversationMessage>& context, std::stop_token stopToken = {},
         DeltaHandler onDelta = {}, const revia::intelligence::IntelligenceDecision& decision = {},
         revia::llm::PrivateMemoryAccess memoryAccess = revia::llm::PrivateMemoryAccess::ProfileSetting) const;
+    // SetPosture clears the reasoning handler with the rest of the turn's state.
     void SetPosture(std::string posture);
+    using ReasoningHandler = llmService::ReasoningHandler;
+    // Receives this turn's thinking as it streams. Used by the next RouteMessage only.
+    void SetReasoningHandler(ReasoningHandler handler);
     // Set after SetPosture, which clears it: the lines this turn's answer must follow,
     // placed at the end of the prompt rather than in the system message.
     void SetReplyNote(std::string note);
@@ -127,4 +132,6 @@ private:
     llmSettings expertConfiguration;
     embeddingSettings embeddingConfiguration;
     mutable revia::intelligence::ModelResidencyManager residency;
+    mutable std::mutex reasoningMutex;
+    mutable ReasoningHandler pendingReasoning;
 };

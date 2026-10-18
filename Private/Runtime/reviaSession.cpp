@@ -313,6 +313,7 @@ ReviaSession::ReviaSession(CompanionPaths paths, std::shared_ptr<policy::Compani
               limits.investigationBudget = std::chrono::milliseconds(std::max(1000, settings.conversation.investigationBudgetMilliseconds));
               limits.cooldownTurns = static_cast<std::size_t>(std::max(0, settings.conversation.selfInquiryCooldownTurns));
               limits.includeOrdinaryQuestions = settings.conversation.selfInquiryScope == "questions";
+              limits.nativeDeliberation = settings.conversation.deliberation == "native";
               return limits;
           },
           [this](const memory::RecallRequest& request, const std::string& currentInput, const memory::MemoryScope& scope)

@@ -986,6 +986,8 @@ namespace
     struct StreamEvent
     {
         std::string content;
+        // llama.cpp's separated thinking, when the server parses it out of the reply.
+        std::string reasoning;
         std::string finishReason;
         // Present only on the final chunk.
         json timings;
@@ -1017,6 +1019,8 @@ namespace
             const auto& delta = choice["delta"];
             if (delta.contains("content") && delta["content"].is_string())
                 event.content = delta["content"].get<std::string>();
+            if (delta.contains("reasoning_content") && delta["reasoning_content"].is_string())
+                event.reasoning = delta["reasoning_content"].get<std::string>();
         }
         catch (...)
         {
@@ -1174,6 +1178,7 @@ void llamaCppService::ApplyProfile(const llmSettings& settings, const aiProfile&
     activeProfile = profile;
     temperature = profile.bHasTemperatureOverride ? profile.temperature : settings.temperature;
     maxTokens = profile.bHasMaxTokensOverride ? profile.maxTokens : settings.maxTokens;
+    thinkingTokens = std::max(0, settings.thinkingTokens);
     bAutoMaxTokens = settings.bAutoMaxTokens && !profile.bHasMaxTokensOverride;
 }
 
@@ -1236,7 +1241,8 @@ bool llamaCppService::WarmUp(const std::stop_token stopToken, std::string& outEr
 }
 
 responseOutput llamaCppService::GenerateResponse(const std::vector<conversationMessage>& context, const std::stop_token stopToken,
-    DeltaHandler onDelta, const bool deepReasoning, const revia::llm::PrivateMemoryAccess memoryAccess) const
+    DeltaHandler onDelta, const bool deepReasoning, const revia::llm::PrivateMemoryAccess memoryAccess,
+    ReasoningHandler onReasoning) const
 {
     responseOutput output;
 
@@ -1307,7 +1313,12 @@ responseOutput llamaCppService::GenerateResponse(const std::vector<conversationM
     const int activeContextTokens = effectiveContextTokens.load();
     const int contextTokens = activeContextTokens > 0 ? activeContextTokens : configuredContextTokens;
     const int requestedResponse = briefSocial ? std::min(128, ResponseTokenLimit()) : ResponseTokenLimit();
-    const int responseTokens = std::clamp(requestedResponse, 1, std::max(1, contextTokens / 4));
+    const int answerTokens = std::clamp(requestedResponse, 1, std::max(1, contextTokens / 4));
+    // Thinking tokens count against max_tokens. Sharing the answer's budget let a long
+    // deliberation end the turn before the answer began, so thinking gets its own
+    // allowance on top, and the prompt is fitted around both.
+    const int thinkingAllowance = activeReasoning ? std::clamp(thinkingTokens, 0, std::max(0, contextTokens / 4)) : 0;
+    const int responseTokens = answerTokens + thinkingAllowance;
     const json originalMessages = messages;
     auto measured = CountBackendPrompt(host, port, apiKey, modelName, messages, activeReasoning, stopToken);
     const auto usableTokens = static_cast<long long>(contextTokens) - responseTokens - ContextReserveTokens;
@@ -1374,6 +1385,8 @@ responseOutput llamaCppService::GenerateResponse(const std::vector<conversationM
     std::string buffer;
     std::string finishReason;
     json backendTimings;
+    std::string nativeReasoning;
+    std::string inlineReasoningSent;
     size_t printedLength = 0;
     std::optional<std::chrono::steady_clock::time_point> firstTokenAt;
     int responseStatus = 0;
@@ -1439,6 +1452,12 @@ responseOutput llamaCppService::GenerateResponse(const std::vector<conversationM
                 finishReason = event.finishReason;
             if (event.timings.is_object())
                 backendTimings = std::move(event.timings);
+            if (!event.reasoning.empty())
+            {
+                nativeReasoning += event.reasoning;
+                if (onReasoning)
+                    onReasoning(event.reasoning);
+            }
             const std::string& token = event.content;
             if (token.empty()) continue;
 
@@ -1453,7 +1472,16 @@ responseOutput llamaCppService::GenerateResponse(const std::vector<conversationM
 
             // An unterminated <think> keeps its content out of visibleResponse, so nothing
             // inside one is ever emitted, spoken, or shown while it is still open.
-            const std::string visibleResponse = VisibleReplyText(fullResponse);
+            std::string inlineReasoning;
+            const std::string visibleResponse = VisibleReplyText(fullResponse, onReasoning ? &inlineReasoning : nullptr);
+            // A model that writes its thinking inline, inside <think>, is shown the same
+            // way as one whose thinking the server separates.
+            if (onReasoning && inlineReasoning.size() > inlineReasoningSent.size() &&
+                inlineReasoning.compare(0, inlineReasoningSent.size(), inlineReasoningSent) == 0)
+            {
+                onReasoning(inlineReasoning.substr(inlineReasoningSent.size()));
+                inlineReasoningSent = std::move(inlineReasoning);
+            }
             const size_t safeLength = visibleResponse.size() > StreamHoldbackChars
                 ? visibleResponse.size() - StreamHoldbackChars
                 : 0;
@@ -1517,6 +1545,7 @@ responseOutput llamaCppService::GenerateResponse(const std::vector<conversationM
             errorBody.clear();
             finishReason.clear();
             backendTimings = json();
+            nativeReasoning.clear();
             responseStatus = 0;
             result = client.send(req);
         }
@@ -1534,6 +1563,8 @@ responseOutput llamaCppService::GenerateResponse(const std::vector<conversationM
     AppendBackendTimings(output.timings, backendTimings);
 
     std::string cleanedResponse = jsonReply ? TrimWhitespace(fullResponse) : VisibleReplyText(fullResponse, &output.reasoning);
+    if (const std::string separated = TrimWhitespace(nativeReasoning); !separated.empty())
+        output.reasoning = output.reasoning.empty() ? separated : separated + "\n" + output.reasoning;
 
     if (!result)
     {
