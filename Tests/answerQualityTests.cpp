@@ -1,7 +1,6 @@
 #include "Agents/conversationQualityMonitor.h"
 #include "Agents/conversationStylePolicy.h"
-#include "Evaluation/answerJudge.h"
-#include "Evaluation/goldenSet.h"
+#include "Evaluation/answerGate.h"
 #include "Evaluation/conversationEvaluation.h"
 #include "Core/utf8.h"
 #include "testSupport.h"
@@ -9,6 +8,7 @@
 
 #include <algorithm>
 #include <filesystem>
+#include <map>
 #include <memory>
 #include <iostream>
 #include <string>
@@ -510,6 +510,104 @@ void TestJudgeUsesItsBackendAndReportsUnavailability()
     Check(!AnswerJudge(nullptr).Judge(input).available, "A missing judge produced a verdict.");
 }
 
+std::vector<revia::evaluation::GoldenCaseResult> RunGoldenFixture(
+    const std::vector<revia::evaluation::GoldenCase>& cases, const std::map<std::string, std::string>& replies, bool unreachable = false)
+{
+    using namespace revia::evaluation;
+    std::vector<EvaluationCase> converted;
+    for (const auto& item : cases)
+        converted.push_back(ToEvaluationCase(item));
+    const auto report = ConversationEvaluator::Run(converted,
+        [&](const std::string& input, const std::vector<conversationMessage>&)
+        {
+            EvaluationReply reply;
+            reply.succeeded = !unreachable;
+            reply.text = replies.at(input);
+            return reply;
+        });
+    return ScoreGoldenReplies(cases, report);
+}
+
+void TestGateComparesAgainstTheBaseline()
+{
+    using namespace revia::evaluation;
+    std::string text;
+    std::map<std::string, std::string> right;
+    for (int index = 0; index < 40; ++index)
+    {
+        const auto input = "q" + std::to_string(index);
+        text += R"({"id":"m)" + std::to_string(index) + R"(","category":")" + (index % 2 ? "math" : "code") + R"(","rubric":"r","turns":[{"input":")" +
+                input + R"(","checks":[{"kind":"number","value":)" + std::to_string(index + 100) + "}]}]}\n";
+        right[input] = "It is " + std::to_string(index + 100) + ".";
+    }
+    std::vector<GoldenCase> cases;
+    std::string error;
+    Check(ParseGoldenSet(text, cases, error), error);
+
+    const auto baselineResults = RunGoldenFixture(cases, right);
+    const auto summary = SummarizeGoldenResults(baselineResults);
+    Check(summary.overall.passed == 40 && summary.categories.at("math").cases == 20 && summary.overall.PassRate() == 100.0,
+        "Per-category and overall counts are wrong.");
+    GateOptions options;
+    options.judgeEnabled = false;
+    Check(DecideGate(baselineResults, nullptr, options).outcome == GateOutcome::NoBaseline &&
+              DecideGate(baselineResults, nullptr, options).ExitCode() == 0,
+        "A first run without a baseline did not pass with a clear no-baseline outcome.");
+
+    GateBaseline baseline;
+    Check(ParseGateBaseline(GateBaselineJson(baselineResults, summary).dump(), baseline, error) && baseline.cases.size() == 40 &&
+              baseline.cases.at("m3").finalReply == "It is 103.",
+        "A written baseline did not read back: " + error);
+
+    // One failure in 40 is a 2.5-point drop: inside the default 3-point allowance.
+    auto current = baselineResults;
+    current[0].turns.back().failures.push_back("number: wrong");
+    auto decision = DecideGate(current, &baseline, options);
+    Check(decision.outcome == GateOutcome::Passed && decision.dropPoints == 2.5 && decision.ExitCode() == 0,
+        "A drop inside the allowance failed the gate.");
+    // Two failures are a 5-point drop.
+    current[1].turns.back().failures.push_back("number: wrong");
+    decision = DecideGate(current, &baseline, options);
+    Check(decision.outcome == GateOutcome::Regressed && decision.dropPoints == 5.0 && decision.ExitCode() == 1,
+        "A drop beyond the allowance did not fail the gate.");
+
+    const auto down = RunGoldenFixture(cases, right, true);
+    Check(!down.front().available && DecideGate(down, &baseline, options).outcome == GateOutcome::Incomplete &&
+              DecideGate(down, &baseline, options).ExitCode() == 2,
+        "An unreachable model was scored instead of reported as incomplete.");
+    auto partial = baselineResults;
+    partial[0].available = partial[1].available = partial[2].available = false;
+    Check(DecideGate(partial, &baseline, options).outcome == GateOutcome::Incomplete, "Too many unjudged cases still produced a comparison.");
+
+    // Judge verdicts count when both sides have them; a missing judge makes the run incomplete.
+    options.judgeEnabled = true;
+    Check(DecideGate(baselineResults, &baseline, options).outcome == GateOutcome::Incomplete, "A judged gate ran without judge verdicts.");
+    auto judged = baselineResults;
+    for (auto& result : judged)
+    {
+        result.judge.available = true;
+        result.judge.score = 4;
+        result.judge.pass = true;
+    }
+    GateBaseline judgedBaseline;
+    Check(ParseGateBaseline(GateBaselineJson(judged, SummarizeGoldenResults(judged)).dump(), judgedBaseline, error), error);
+    for (int index = 0; index < 2; ++index)
+    {
+        judged[index].judge.score = 2;
+        judged[index].judge.pass = false;
+    }
+    const auto judgedDecision = DecideGate(judged, &judgedBaseline, options);
+    Check(judgedDecision.outcome == GateOutcome::Regressed && SummarizeGoldenResults(judged).overall.MeanJudgeScore() == 3.9,
+        "Judge failures did not count against the baseline or the mean score is wrong.");
+
+    // Cases added after the baseline are reported, not compared.
+    GateBaseline smaller = baseline;
+    smaller.cases.erase("m39");
+    options.judgeEnabled = false;
+    const auto added = DecideGate(baselineResults, &smaller, options);
+    Check(added.comparedCases == 39 && added.outcome == GateOutcome::Passed && !added.notes.empty(),
+        "A case missing from the baseline changed the comparison.");
+}
 }
 
 void RunAnswerQualityTests()
@@ -530,5 +628,6 @@ void RunAnswerQualityTests()
     TestJudgePromptKeepsTheReplyAsData();
     TestJudgeVerdictsAreStrict();
     TestJudgeUsesItsBackendAndReportsUnavailability();
+    TestGateComparesAgainstTheBaseline();
     std::cout << "Current-task, supplied-fact, correction, format and expressive-answer checks passed.\n";
 }
