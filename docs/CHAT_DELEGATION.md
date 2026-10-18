@@ -47,7 +47,8 @@ The workers see the objective Revia wrote, not the conversation or her private m
 | `cancel_task <id>`, the card's Cancel, `/task cancel`, "cancel the task" | Cancels exactly that task; another id is refused |
 | Stop | Cancels it, as Stop cancels every background task |
 | Agent Studio starts or resumes another workflow | The chat task is marked Replaced and never reports |
-| Agent Studio retries the same task | A new revision, reported afresh |
+| Agent Studio retries or resumes the same task | A new revision, reported afresh. Only these explicit restarts reopen a task; a workflow merely seen running again never does |
+| A new chat, continuing or deleting one, or forgetting chats | The task keeps running, but its outcome is never reported into another conversation: it is left in Agent Studio (Report unavailable) |
 | The companion session ends | Its workflow is cancelled and joined; nothing is reported later |
 
 Statuses (`DelegatedTaskStatus`): Working, Reviewing, Reporting, Reported, Not established, Cancelled, Rejected, Replaced, Report unavailable. The record, with its origin turn, conversation id, access, budget and revision, is saved to `RuntimeData/Agents/delegation.json`.
@@ -62,7 +63,7 @@ The budget is the workflow's own, with five minutes of active time instead of tw
 4. Under the conversation lock it checks again that the task, its revision and the exact artifact are still current, then runs a report turn through `ConversationRuntime::ReportDelegatedTask`. This is her normal reply path, with her identity, history, filters and voice, no tools and no screen context. The person's own words and the reviewed deliverable, with the hosts' receipts, are its grounding, marked as untrusted data.
 5. Only after that reply is delivered is the workflow accepted, and only with the artifact she examined (`AgentWorkflow::AcceptCandidate`).
 
-Work the review did not verify, including work that ran out of budget, is reported as *not established*, with the stage that stopped and its safe diagnostic. It is never accepted. Quiet mode keeps the report from being spoken but still shows it.
+Work the review did not verify, including work that spent its budget before the acceptance check could run, is reported as *not established*, with the stage that stopped and its safe diagnostic. It is never accepted. Quiet mode keeps the report from being spoken but still shows it. Once delivered, the report keeps its voice while the task is marked reported; only a stale outcome (cancelled, replaced, another revision, the session or chat gone) stops it.
 
 ## Shared task view
 
@@ -78,7 +79,10 @@ The chat card under the delegating reply and Agent Studio read the same `AgentWo
 |---|---|
 | Offering rules, cue reading, schema bounds, setting validation and preference | Tested (`Tests/delegationTests.cpp`, `Tests/contextFittingTests.cpp`) |
 | Non-blocking submission, one task for repeated calls, talking during the work, report through her reply, acceptance only after it and only of the examined artifact | Tested against a llama-server stand-in that holds the workers mid-task |
-| Cancel by id, stale outcomes (cancelled or replaced) never reported, unverified work reported as not established | Tested |
+| Cancel by id (including `/task cancel` while the report waits), stale outcomes (cancelled or replaced) never reported, unverified work and a budget spent before review reported as not established | Tested |
+| An outcome is never reported into a different chat; a Studio retry reopens the task as a new revision | Tested |
+| Workers yield to her replies on one model slot and ask again | Tested; the check fails if the retry is removed |
+| The spoken report is not cut off once the task is marked reported | Fixed after review; not covered by an automated test (no speech output in the test harness) |
 | Read-only capture with write-capable settings; announcing reply survives tool workers | Tested; the reply check fails if the revision change is reverted |
 | Chat card and Agent Studio origin line | Compiled; checked only with the desktop fixture where noted |
 | Real local model choosing `delegate_task` well, report quality, benefit over a direct answer, latency on the target machine | **Not yet measured** |
@@ -86,7 +90,7 @@ The chat card under the delegating reply and Agent Studio read the same `AgentWo
 
 ## Known limits
 
-- One workflow at a time: the existing owner holds one workflow, so a second delegation waits until the first is over.
+- One workflow at a time: the existing owner holds one workflow, so a second delegation is refused until the first is over. Nothing is queued.
 - Workers get the objective only, not scoped conversation context or memory.
 - After a restart the saved record identifies an earlier chat task, but its outcome is not reported into the new session; it stays in Agent Studio.
 - The report turn is a proactive turn. If its delivery is revoked after the reply was added to working history, that line can stay in history without having been shown (a pre-existing property of proactive turns).

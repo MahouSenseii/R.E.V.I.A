@@ -654,8 +654,10 @@ bool ReviaSession::ResumeAgentWorkflow(std::string& outError)
     if (!agentWorkflow.Resume(stamp, AgentProvider(mode), outError,
             [this, mode](const agents::WorkflowSnapshot& snapshot) { ObserveAgentWorkflow(snapshot, mode); }))
         return false;
-    // A saved workflow loaded over a chat task takes the workers from it.
+    // A saved workflow loaded over a chat task takes the workers from it; resuming that same
+    // task deliberately restarts it.
     RetireDelegationFor(stamp.taskId);
+    ReopenDelegationFor(stamp.taskId);
     return true;
 }
 
@@ -664,6 +666,8 @@ bool ReviaSession::RetryAgentNode(
 {
     if (!agentWorkflow.Retry(nodeId, changedInput, evidence, outError))
         return false;
+    // Retrying a chat task with changed evidence makes its next outcome a new revision.
+    ReopenDelegationFor(agentWorkflow.Snapshot().id);
     const auto mode = workflowProviderMode.load();
     return agentWorkflow.Resume(sessionIdentity.Stamp(agentWorkflow.Snapshot().id), AgentProvider(mode), outError,
         [this, mode](const agents::WorkflowSnapshot& snapshot) { ObserveAgentWorkflow(snapshot, mode); });

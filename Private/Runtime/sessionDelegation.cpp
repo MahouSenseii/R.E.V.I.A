@@ -141,12 +141,23 @@ std::string DeliverableEvidence(const agents::WorkflowArtifact& artifact, const 
     return text;
 }
 
+// The parent check is refused once the run has spent its budget, and the workflow then
+// waits for acceptance it can never get. Such a run has ended without verified work.
+bool BudgetSpent(const agents::WorkflowSnapshot& snapshot, const agents::WorkflowBudget& budget)
+{
+    std::uint64_t active = 0;
+    for (const auto& node : snapshot.nodes)
+        active += node.activeMilliseconds;
+    return snapshot.requests >= budget.maximumRequests || snapshot.reportedTokens >= budget.maximumReportedTokens ||
+           active >= budget.maximumActiveMilliseconds;
+}
+
 // An outcome without a verified deliverable: which stage stopped and the host's safe reason,
 // so she can say plainly that nothing was established instead of inventing a finding.
-std::string UnverifiedEvidence(const agents::WorkflowSnapshot& snapshot)
+std::string UnverifiedEvidence(const agents::WorkflowSnapshot& snapshot, const bool budgetSpent)
 {
-    std::string text = snapshot.state == agents::WorkflowState::Exhausted
-                           ? "The workflow stopped at its budget before the work was verified.\n"
+    std::string text = snapshot.state == agents::WorkflowState::Exhausted || budgetSpent
+                           ? "The workflow spent its budget before the work was verified; the acceptance check never ran.\n"
                            : "The workflow stopped before the work was verified.\n";
     for (const auto& node : snapshot.nodes)
     {
@@ -319,6 +330,7 @@ agents::ToolExecution ReviaSession::DelegateFromChat(const agents::DelegationSub
     record.origin = sessionIdentity.Stamp(id, {}, companionAuthority->Revision());
     record.context = asker;
     record.memoryScope = CapturePrivateMemoryScope();
+    record.conversationEpoch = conversationEpoch.load();
     // Recorded before the start, so the first snapshot the workflow publishes already
     // belongs to a chat task and never takes Agent Studio's automatic acceptance.
     std::optional<DelegationRecord> previous;
@@ -338,6 +350,19 @@ agents::ToolExecution ReviaSession::DelegateFromChat(const agents::DelegationSub
         }
         return agents::ToolExecution::Fail(
             error.empty() ? "The turn ended before anything was handed off." : "Nothing was handed off; the agents could not start: " + error);
+    }
+    // Stop pressed while the workflow was starting cancelled the record but reached only the
+    // previous workflow's cancellation; the one just started is stopped here instead.
+    bool stopped = false;
+    {
+        std::lock_guard lock(delegationMutex);
+        stopped = delegation && delegation->view.taskId == id && delegation->view.status == DelegatedTaskStatus::Cancelled;
+    }
+    if (stopped)
+    {
+        agentWorkflow.RequestCancel();
+        PersistDelegation();
+        return agents::ToolExecution::Fail("Stop was pressed while the agents were starting, so nothing was handed off.");
     }
     StartDelegationWorker();
     PersistDelegation();
@@ -464,39 +489,35 @@ bool ReviaSession::AdvanceDelegatedWorkflow(const agents::WorkflowSnapshot& snap
             return false;
         auto& record = *delegation;
         auto& view = record.view;
-        const auto state = snapshot.state;
-        const auto reopen = [&]()
-        {
-            // Agent Studio restarted this same task (a retry with changed evidence, or a
-            // resume): its next outcome is a new revision, reported afresh.
-            ++view.revision;
-            view.status = DelegatedTaskStatus::Working;
-            view.detail.clear();
-            view.reportedArtifact.reset();
-            record.reportDue = false;
-            record.verifiedOutcome = false;
-            record.candidate.reset();
-            record.outcomeEvidence.clear();
-            record.reportAttempts = 0;
-            phase = "Reopened";
-            message = "Agent Studio restarted this task as revision " + std::to_string(view.revision) + ".";
-        };
-        switch (view.status)
-        {
-        case DelegatedTaskStatus::Reported:
-        case DelegatedTaskStatus::Rejected:
-        case DelegatedTaskStatus::Replaced:
+        // Over, whatever the workflow does next. Only an explicit restart from Agent Studio
+        // reopens it (ReopenDelegationFor), and it never takes the automatic acceptance.
+        if (view.status != DelegatedTaskStatus::Working && view.status != DelegatedTaskStatus::Reviewing &&
+            view.status != DelegatedTaskStatus::Reporting)
             return true;
-        case DelegatedTaskStatus::NotEstablished:
-        case DelegatedTaskStatus::Cancelled:
-        case DelegatedTaskStatus::ReportFailed:
-            if (state != agents::WorkflowState::Running)
-                return true;
-            reopen();
-            break;
-        default:
-            break;
-        }
+        const auto state = snapshot.state;
+        const auto outcome = [&](const bool verified, std::string evidence)
+        {
+            record.verifiedOutcome = verified;
+            record.outcomeEvidence = std::move(evidence);
+            if (record.conversationEpoch != conversationEpoch.load())
+            {
+                // The chat it was handed off from is gone; a report would land in a
+                // conversation that never asked for it.
+                view.status = DelegatedTaskStatus::ReportFailed;
+                view.detail = "The chat it was handed off from was closed, so Revia did not report it there; its outcome is in Agent "
+                              "Studio.";
+                record.reportDue = false;
+                phase = "ReportFailed";
+                message = view.detail;
+                return;
+            }
+            record.reportDue = true;
+            view.status = DelegatedTaskStatus::Reporting;
+            notify = true;
+            phase = verified ? "Reviewed" : "Unverified";
+            message = verified ? "The review verified the deliverable; Revia reports it when the conversation is free."
+                               : "The workflow stopped without verified evidence; Revia reports that when the conversation is free.";
+        };
         if (state == agents::WorkflowState::Cancelled)
         {
             view.status = DelegatedTaskStatus::Cancelled;
@@ -513,56 +534,47 @@ bool ReviaSession::AdvanceDelegatedWorkflow(const agents::WorkflowSnapshot& snap
             phase = "Rejected";
             message = view.detail;
         }
+        else if (view.status == DelegatedTaskStatus::Reporting)
+        {
+            // Waiting for the conversation; the report worker owns it from here.
+        }
         else if (state == agents::WorkflowState::Running || state == agents::WorkflowState::Queued)
         {
-            if (view.status == DelegatedTaskStatus::Reporting && !record.verifiedOutcome)
-                reopen();
-            else if (view.status == DelegatedTaskStatus::Reviewing)
-                view.status = DelegatedTaskStatus::Working;
+            view.status = DelegatedTaskStatus::Working;
         }
         else if (state == agents::WorkflowState::AwaitingAcceptance || state == agents::WorkflowState::Accepted)
         {
-            if (view.status != DelegatedTaskStatus::Reporting)
+            const auto* parent = Parent(snapshot);
+            if (state == agents::WorkflowState::AwaitingAcceptance && parent && parent->attempts.empty())
             {
-                const auto* parent = Parent(snapshot);
-                if (state == agents::WorkflowState::AwaitingAcceptance && parent && parent->attempts.empty())
+                if (BudgetSpent(snapshot, view.budget))
+                {
+                    record.candidate.reset();
+                    outcome(false, UnverifiedEvidence(snapshot, true));
+                }
+                else
                 {
                     // The native acceptance check, exactly as Agent Studio runs it. It is the
                     // gate; her report afterwards is what makes the work accepted.
                     view.status = DelegatedTaskStatus::Reviewing;
                     evaluate = true;
                 }
-                else if (const auto candidate = state == agents::WorkflowState::Accepted ? agentWorkflow.AcceptedArtifact()
-                                                                                          : agentWorkflow.CandidateArtifact())
-                {
-                    record.candidate = candidate;
-                    record.verifiedOutcome = true;
-                    record.outcomeEvidence = DeliverableEvidence(*candidate, snapshot);
-                    record.reportDue = true;
-                    view.status = DelegatedTaskStatus::Reporting;
-                    notify = true;
-                    phase = "Reviewed";
-                    message = "The review verified the deliverable; Revia reports it when the conversation is free.";
-                }
-                else
-                {
-                    view.status = DelegatedTaskStatus::Reviewing;
-                }
+            }
+            else if (const auto candidate = state == agents::WorkflowState::Accepted ? agentWorkflow.AcceptedArtifact()
+                                                                                      : agentWorkflow.CandidateArtifact())
+            {
+                record.candidate = candidate;
+                outcome(true, DeliverableEvidence(*candidate, snapshot));
+            }
+            else
+            {
+                view.status = DelegatedTaskStatus::Reviewing;
             }
         }
         else if (state == agents::WorkflowState::Paused || state == agents::WorkflowState::Exhausted)
         {
-            if (view.status != DelegatedTaskStatus::Reporting)
-            {
-                record.candidate.reset();
-                record.verifiedOutcome = false;
-                record.outcomeEvidence = UnverifiedEvidence(snapshot);
-                record.reportDue = true;
-                view.status = DelegatedTaskStatus::Reporting;
-                notify = true;
-                phase = "Unverified";
-                message = "The workflow stopped without verified evidence; Revia reports that when the conversation is free.";
-            }
+            record.candidate.reset();
+            outcome(false, UnverifiedEvidence(snapshot, false));
         }
     }
     if (evaluate)
@@ -580,6 +592,43 @@ bool ReviaSession::AdvanceDelegatedWorkflow(const agents::WorkflowSnapshot& snap
         PublishDelegation(phase, message);
     }
     return true;
+}
+
+void ReviaSession::ReopenDelegationFor(const std::string& workflowId)
+{
+    std::uint32_t revision = 0;
+    {
+        std::lock_guard lock(delegationMutex);
+        if (!delegation || delegation->view.taskId != workflowId || !sessionIdentity.IsCurrent(delegation->origin))
+            return;
+        auto& record = *delegation;
+        auto& view = record.view;
+        const bool reopenable = view.status == DelegatedTaskStatus::NotEstablished || view.status == DelegatedTaskStatus::Cancelled ||
+                                view.status == DelegatedTaskStatus::ReportFailed ||
+                                (view.status == DelegatedTaskStatus::Reporting && !record.verifiedOutcome);
+        if (!reopenable)
+            return;
+        ++view.revision;
+        view.status = DelegatedTaskStatus::Working;
+        view.detail.clear();
+        view.reportedArtifact.reset();
+        record.reportDue = false;
+        record.verifiedOutcome = false;
+        record.candidate.reset();
+        record.outcomeEvidence.clear();
+        record.reportAttempts = 0;
+        revision = view.revision;
+    }
+    delegationCondition.notify_all();
+    PersistDelegation();
+    PublishDelegation("Reopened", "Agent Studio restarted this task as revision " + std::to_string(revision) + ".");
+}
+
+bool ReviaSession::DelegationDisclosed() const
+{
+    const auto asker = CaptureTaskContext();
+    std::lock_guard lock(delegationMutex);
+    return delegation && sessionIdentity.IsCurrent(delegation->origin) && CanDiscloseTask(delegation->context, delegation->origin, asker);
 }
 
 void ReviaSession::RetireDelegationFor(const std::string& newWorkflowId)
@@ -749,14 +798,28 @@ void ReviaSession::RunDelegationReport(const std::stop_token stopToken)
             return delegation && delegation->view.taskId == taskId && delegation->view.revision == revision &&
                    delegation->view.status == DelegatedTaskStatus::Reporting && sessionIdentity.IsCurrent(delegation->origin);
         };
+        // Delivery and speech outlive the claim: once the report is out the task is Reported,
+        // and her voice must not be cut off by that. Only a stale outcome revokes them: another
+        // task or revision, a cancel or replacement, the session or the chat having gone.
+        const std::uint64_t epoch = claimed.conversationEpoch;
+        const auto deliverable = [this, taskId, revision, epoch]()
+        {
+            std::lock_guard lock(delegationMutex);
+            return delegation && delegation->view.taskId == taskId && delegation->view.revision == revision &&
+                   (delegation->view.status == DelegatedTaskStatus::Reporting || delegation->view.status == DelegatedTaskStatus::Reported ||
+                       delegation->view.status == DelegatedTaskStatus::NotEstablished) &&
+                   sessionIdentity.IsCurrent(delegation->origin) && conversationEpoch.load() == epoch;
+        };
         // And the workflow still holds exactly what she is about to examine.
         const auto outcomeCurrent = [this, taskId, verified, expected]()
         {
             const auto snapshot = agentWorkflow.Snapshot();
             if (snapshot.id != taskId)
                 return false;
+            // Unverified: stopped, out of budget, or awaiting a parent check it can no longer run.
             if (!verified)
-                return snapshot.state == agents::WorkflowState::Paused || snapshot.state == agents::WorkflowState::Exhausted;
+                return snapshot.state == agents::WorkflowState::Paused || snapshot.state == agents::WorkflowState::Exhausted ||
+                       snapshot.state == agents::WorkflowState::AwaitingAcceptance;
             const auto candidate = snapshot.state == agents::WorkflowState::Accepted ? agentWorkflow.AcceptedArtifact()
                                                                                       : agentWorkflow.CandidateArtifact();
             return candidate && Same(ReferenceTo("parent", *candidate), *expected);
@@ -787,10 +850,30 @@ void ReviaSession::RunDelegationReport(const std::stop_token stopToken)
             }
         };
 
+        // The chat it came from closed while the outcome waited: nothing is said in another one.
+        const auto abandonIfChatClosed = [this, taskId, revision, epoch]()
+        {
+            if (conversationEpoch.load() == epoch)
+                return false;
+            {
+                std::lock_guard lock(delegationMutex);
+                if (!delegation || delegation->view.taskId != taskId || delegation->view.revision != revision ||
+                    delegation->view.status != DelegatedTaskStatus::Reporting)
+                    return true;
+                delegation->view.status = DelegatedTaskStatus::ReportFailed;
+                delegation->view.detail =
+                    "The chat it was handed off from was closed, so Revia did not report it there; its outcome is in Agent Studio.";
+                delegation->reportDue = false;
+            }
+            PersistDelegation();
+            PublishDelegation("ReportFailed", "The chat it was handed off from was closed; its outcome is in Agent Studio.");
+            return true;
+        };
+
         // Her own conversation always comes first: wait for the turn in progress to finish,
         // for her to stop speaking, and for the person to stop talking.
         std::unique_lock operationLock(operationMutex, std::defer_lock);
-        while (!stopToken.stop_requested() && current() && outcomeCurrent())
+        while (!stopToken.stop_requested() && !abandonIfChatClosed() && current() && outcomeCurrent())
         {
             if (started.load() && !busy.load() && !speechService.HasPendingSpeech() && !speechRecognitionService.IsRecording() &&
                 CanDiscloseTask(claimed.context, claimed.origin, CaptureTaskContext()) && operationLock.try_lock())
@@ -799,10 +882,11 @@ void ReviaSession::RunDelegationReport(const std::stop_token stopToken)
         }
         if (!operationLock.owns_lock())
             continue;
-        // Rechecked under the conversation lane, which the wait did not hold.
+        // Rechecked under the conversation lane, which the wait did not hold. A chat switch
+        // also takes this lane, so the conversation cannot change while the report is written.
         const auto audience = Audience();
-        if (!started.load() || busy.load() || !current() || !outcomeCurrent() || audience.kind != identity::AudienceKind::Private ||
-            !CanDiscloseTask(claimed.context, claimed.origin, CaptureTaskContext()))
+        if (!started.load() || busy.load() || abandonIfChatClosed() || !current() || !outcomeCurrent() ||
+            audience.kind != identity::AudienceKind::Private || !CanDiscloseTask(claimed.context, claimed.origin, CaptureTaskContext()))
         {
             operationLock.unlock();
             if (current() && outcomeCurrent())
@@ -813,11 +897,11 @@ void ReviaSession::RunDelegationReport(const std::stop_token stopToken)
         // exact outcome all stay current. Quiet mode keeps her voice down, not the answer
         // the person asked for.
         const RuntimeStamp origin = claimed.origin;
-        const std::function<bool()> admission = [this, origin, revision = audience.revision, current, outcomeCurrent]()
+        const std::function<bool()> admission = [this, origin, revision = audience.revision, deliverable, outcomeCurrent]()
         {
             const auto now = Audience();
             return started.load() && Admits(origin) && now.kind == identity::AudienceKind::Private && now.revision == revision &&
-                   current() && outcomeCurrent();
+                   deliverable() && outcomeCurrent();
         };
         const bool speak = ShouldSpeakOnCurrentChannel() && !initiativeController.IsQuiet();
         bool preempted = false;

@@ -2435,7 +2435,9 @@ void ReviaWindow::AppendChat(const QString& speaker, const QString& message, con
     // it can never end up under a later exchange, or be lost waiting for one. Not while a
     // typed turn is in flight: a voice line arriving then must not put that turn's card
     // above its own reply, and the typed result places the card when it is shown.
-    if (userMessage && !chatTurnInFlight)
+    // Only the local person's own lines: an adapter line arriving during a voice turn must not
+    // put that turn's card above its reply.
+    if (userMessage && !chatTurnInFlight && speaker != QStringLiteral("External"))
         PlaceHeldTaskCard();
     ChatEntry entry;
     entry.speaker = speaker;
@@ -2578,9 +2580,10 @@ void ReviaWindow::RefreshAgentWorkflowViews(const bool transcriptChanged)
         if (entry.kind == EntryKind::DelegatedTask && UpdateTaskCard(entry, snapshot, task))
             changed = true;
     }
-    // RenderChat rebuilds the whole transcript and scrolls it, so only for a visible change.
+    // RenderChat rebuilds the whole transcript, so only for a visible change, and a card
+    // update alone leaves a reader who scrolled up where they were.
     if (changed)
-        RenderChat();
+        RenderChat(!transcriptChanged);
 }
 
 bool ReviaWindow::UpdateTaskCard(ChatEntry& entry, const revia::agents::WorkflowSnapshot& snapshot,
@@ -2590,13 +2593,16 @@ bool ReviaWindow::UpdateTaskCard(ChatEntry& entry, const revia::agents::Workflow
     DelegatedCard& card = entry.delegated;
     const bool liveTask = task && task->taskId == card.workflowId;
     const bool liveFlow = liveTask && !snapshot.id.empty() && snapshot.id == card.workflowId;
-    // Only what changes the shown text goes into the basis. The elapsed time does not, so a
-    // poll that finds nothing new leaves the transcript alone.
+    // Only what changes the shown text goes into the basis: not the snapshot's sequence,
+    // which also moves on every reserved call, and not the elapsed time, so a poll that finds
+    // nothing new leaves the transcript alone.
     const QString basis =
         liveTask ? QStringLiteral("live|%1|%2|%3|%4")
                        .arg(QString::number(static_cast<int>(task->status)), QString::number(task->revision),
-                           liveFlow ? QString::number(snapshot.sequence) : QString(),
-                           liveFlow ? QString::number(static_cast<int>(snapshot.state)) : QString())
+                           liveFlow ? QString::number(static_cast<int>(snapshot.state)) + QStringLiteral("|") + WorkerStage(snapshot)
+                                    : QString(),
+                           liveFlow ? QString::number(snapshot.requests) + QStringLiteral("|") + QString::number(snapshot.providerCalls)
+                                    : QString())
                  : QStringLiteral("kept|%1|%2")
                        .arg(card.published ? QString::number(static_cast<int>(*card.published)) : QString(),
                            task ? QStringLiteral("other") : QStringLiteral("none"));
@@ -2733,7 +2739,7 @@ std::optional<std::size_t> ReviaWindow::FindTaskCard(const std::string& workflow
     return std::nullopt;
 }
 
-void ReviaWindow::RenderChat()
+void ReviaWindow::RenderChat(const bool keepReaderPosition)
 {
     // A saved chat stays on screen, scrolled where the reader left it; the live entries
     // keep collecting and are drawn again on the way back.
@@ -2928,8 +2934,11 @@ void ReviaWindow::RenderChat()
         }
     }
 
+    QScrollBar* scroll = chatHistory->verticalScrollBar();
+    const int previous = scroll->value();
+    const bool following = previous >= scroll->maximum() - 4;
     chatHistory->setHtml(html);
-    chatHistory->verticalScrollBar()->setValue(chatHistory->verticalScrollBar()->maximum());
+    scroll->setValue(keepReaderPosition && !following ? previous : scroll->maximum());
 }
 
 std::optional<std::size_t> ReviaWindow::LastUserEntry() const

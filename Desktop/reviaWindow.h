@@ -262,7 +262,9 @@ class ReviaWindow final : public QMainWindow
     // Display only. Turning this off hides the blocks and changes nothing about whether
     // the investigation runs -- enablement lives in the runtime settings, not here.
     bool showWorkSummaries = true;
-    void RenderChat();
+    // `keepReaderPosition` leaves a reader who scrolled up where they were; otherwise the
+    // transcript follows its newest line, as it always has.
+    void RenderChat(bool keepReaderPosition = false);
     // The cached body HTML of one entry, converted again only when its text changed.
     const QString& RenderedBody(ChatEntry& entry);
     // Consecutive entries from one non-user speaker read as one message: streamed speech

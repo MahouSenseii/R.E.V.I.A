@@ -17,6 +17,7 @@
 #include <fstream>
 #include <functional>
 #include <iostream>
+#include <map>
 #include <mutex>
 #include <optional>
 #include <thread>
@@ -174,6 +175,25 @@ class DelegationBackend
         std::lock_guard lock(mutex);
         workersVerified = verified;
     }
+    // Reported usage on the reviewer's answer, enough to spend the token budget before the
+    // parent check can run.
+    void SetReviewerTokens(const unsigned tokens)
+    {
+        std::lock_guard lock(mutex);
+        reviewerTokens = tokens;
+    }
+    // How often the most-asked worker objective reached the model: above one means a
+    // worker asked again after yielding.
+    unsigned MostRepeatedWorker()
+    {
+        std::lock_guard lock(mutex);
+        std::map<std::string, unsigned> counts;
+        unsigned most = 0;
+        for (const auto& [seen, wire] : requests)
+            if (seen == Kind::Worker)
+                most = std::max(most, ++counts[Material(wire).value("objective", std::string{})]);
+        return most;
+    }
     void HoldWorkers()
     {
         std::lock_guard lock(mutex);
@@ -252,6 +272,7 @@ class DelegationBackend
         ChatScript script;
         std::string reportText;
         bool verified = true;
+        unsigned tokens = 0;
         {
             std::unique_lock lock(mutex);
             requests.emplace_back(kind, wire);
@@ -265,11 +286,14 @@ class DelegationBackend
             script = chat;
             reportText = report;
             verified = workersVerified || kind != Kind::Worker;
+            tokens = kind == Kind::Reviewer ? reviewerTokens : 0;
         }
-        const auto plain = [&response](const std::string& content)
+        const auto plain = [&response, tokens](const std::string& content)
         {
-            response.set_content(
-                Json{{"choices", Json::array({{{"message", {{"content", content}}}, {"finish_reason", "stop"}}})}}.dump(), "application/json");
+            Json answer = {{"choices", Json::array({{{"message", {{"content", content}}}, {"finish_reason", "stop"}}})}};
+            if (tokens > 0)
+                answer["usage"] = {{"prompt_tokens", tokens}, {"completion_tokens", 1}};
+            response.set_content(answer.dump(), "application/json");
         };
         const auto stream = [&response](const std::vector<Json>& events)
         {
@@ -305,6 +329,7 @@ class DelegationBackend
     ChatScript chat;
     std::string report = "My agents traced it: fixture/service.conf sets port 8125, and the review confirmed it.";
     bool workersVerified = true;
+    unsigned reviewerTokens = 0;
     bool holding = false;
     unsigned held = 0;
 };
@@ -674,11 +699,19 @@ void TestChatDelegationReportsThroughHerReply()
     const auto accepted = std::find_if(events.begin(), events.end(),
         [](const auto& event) { return event.kind == RuntimeEventKind::AgentWorkflow && event.component == "Agent Studio" && event.phase == "Accepted"; });
     Check(reported != events.end() && accepted != events.end() && reported < accepted, "The work was accepted before she reported it.");
-    std::ifstream record(fixture.session.Paths().Resolve("RuntimeData/Agents/delegation.json"));
-    const auto persisted = Json::parse(record, nullptr, false);
+    // Saved just after the status changes, so read once the file itself says so.
+    Json persisted;
+    (void)fixture.PollUntil(
+        [&]
+        {
+            std::ifstream record(fixture.session.Paths().Resolve("RuntimeData/Agents/delegation.json"));
+            persisted = Json::parse(record, nullptr, false);
+            return persisted.is_object() && persisted.value("status", "") == "Reported";
+        },
+        10s);
     Check(persisted.is_object() && persisted.value("taskId", "") == task->taskId && persisted.value("status", "") == "Reported" &&
               persisted.value("originTurnId", 0ULL) == task->originTurnId && persisted.contains("budget"),
-        "The task's identity, origin, budget and outcome were not recorded.");
+        "The task's identity, origin, budget and outcome were not recorded: " + persisted.dump());
 }
 
 // Cancelling names the task: another id is refused, and a cancelled task never reports.
@@ -802,6 +835,15 @@ void TestToolWorkersAreReadOnlyAndKeepTheReply()
     Check(ReviaSessionTestAccess::Actions(fixture.session)
               .Initialize(fixture.temporary.root / "capabilities.json", fixture.temporary.root / "action-audit.jsonl", error),
         error);
+    // The owner also allows a process and command interpreters; delegation must take neither.
+    const auto tool = approved / "fixture-tool.exe";
+    std::ofstream(tool) << "fixture";
+    revia::process::ProcessSettings process;
+    process.enabled = process.allowTaskExecution = process.allowCommandInterpreters = true;
+    process.approvedExecutables = {tool};
+    process.maxTimeoutMs = 1000;
+    process.maxOutputBytes = 512;
+    Check(ReviaSessionTestAccess::Actions(fixture.session).SetProcessSettings(process, error), error);
     fixture.backend.HoldWorkers();
     fixture.backend.SetChat(
         [](const Json& wire)
@@ -849,14 +891,118 @@ void TestWorkersYieldToTheConversation()
         });
     Check(fixture.Say("Use your agents to check the fixture port.").succeeded, "The delegating turn failed on one slot.");
     Check(fixture.backend.WaitForHeldWorkers(1, 10s), "No worker reached the model.");
-    const auto before = fixture.backend.Requests(DelegationBackend::Kind::Worker).size();
     Check(fixture.Say("How is it going?").succeeded && fixture.Status() == DelegatedTaskStatus::Working,
         "Talking during the work failed, or ended it.");
     fixture.backend.ReleaseWorkers();
     const bool settled = fixture.PollUntil([&] { return fixture.Status() == DelegatedTaskStatus::Reported; });
     Check(settled, "Workers preempted by the conversation did not resume; " + fixture.Describe());
-    Check(fixture.backend.Requests(DelegationBackend::Kind::Worker).size() > before && before >= 1,
-        "No preempted worker request was asked again.");
+    Check(fixture.backend.MostRepeatedWorker() >= 2, "No worker asked again after yielding to the conversation.");
+}
+
+// A run that spends its budget before the acceptance check can never be accepted; it is
+// reported as not established instead of waiting in review forever.
+void TestSpentBudgetIsReportedAsNotEstablished()
+{
+    SessionFixture fixture("delegation-budget");
+    fixture.backend.SetReviewerTokens(30000);
+    fixture.backend.SetReport("My agents ran out of budget before anything could be verified.");
+    fixture.backend.SetChat(
+        [](const Json& wire)
+        {
+            if (ToolMessages(wire).empty() && Offers(wire, "delegate_task"))
+                return std::vector<Json>{Call(0, "d", "delegate_task", {{"objective", "Check the fixture port."}, {"reason", "Separate check."}}, true)};
+            return std::vector<Json>{Text("Handed off.")};
+        });
+    Check(fixture.Say("Use your agents to check the fixture port.").succeeded, "The delegating turn failed.");
+    const bool settled = fixture.PollUntil([&] { return fixture.Status() == DelegatedTaskStatus::NotEstablished; });
+    Check(settled, "A run out of budget before its acceptance check was never reported; " + fixture.Describe());
+    const auto report = fixture.backend.Requests(DelegationBackend::Kind::Report);
+    Check(report.size() == 1 && report[0].dump().find("spent its budget") != std::string::npos &&
+              fixture.backend.Requests(DelegationBackend::Kind::Parent).empty() &&
+              fixture.session.AgentWorkflowSnapshot().state != revia::agents::WorkflowState::Accepted,
+        "The budget outcome was not reported honestly, or the parent check still ran.");
+}
+
+// The outcome belongs to the chat it came from: after a new chat it is left in Agent Studio
+// rather than reported into a conversation that never asked for it.
+void TestOutcomeStaysOutOfAnotherChat()
+{
+    SessionFixture fixture("delegation-new-chat");
+    fixture.backend.HoldWorkers();
+    fixture.backend.SetChat(
+        [](const Json& wire)
+        {
+            if (ToolMessages(wire).empty() && Offers(wire, "delegate_task"))
+                return std::vector<Json>{Call(0, "d", "delegate_task", {{"objective", "Check the fixture port."}, {"reason", "Separate check."}}, true)};
+            return std::vector<Json>{Text("Handed off.")};
+        });
+    Check(fixture.Say("Use your agents to check the fixture port.").succeeded, "The delegating turn failed.");
+    Check(fixture.backend.WaitForHeldWorkers(2, 10s), "The workers did not start.");
+    std::string error;
+    Check(fixture.session.StartNewConversation(error), "A new chat could not start: " + error);
+    fixture.backend.ReleaseWorkers();
+    const bool settled = fixture.PollUntil([&] { return fixture.Status() == DelegatedTaskStatus::ReportFailed; });
+    Check(settled, "An outcome from a closed chat was not left in Agent Studio; " + fixture.Describe());
+    (void)fixture.PollUntil([] { return false; }, 1s);
+    Check(fixture.Reports().empty() && fixture.backend.Requests(DelegationBackend::Kind::Report).empty() &&
+              fixture.session.AgentWorkflowSnapshot().state == revia::agents::WorkflowState::AwaitingAcceptance,
+        "An outcome was reported into a chat that did not ask for it, or was accepted without her report.");
+}
+
+// "Cancel the task" reaches a task whose outcome is waiting for the conversation, and that
+// outcome is then never reported.
+void TestTaskCommandCancelsAWaitingReport()
+{
+    SessionFixture fixture("delegation-task-command");
+    fixture.backend.SetChat(
+        [](const Json& wire)
+        {
+            if (ToolMessages(wire).empty() && Offers(wire, "delegate_task"))
+                return std::vector<Json>{Call(0, "d", "delegate_task", {{"objective", "Check the fixture port."}, {"reason", "Separate check."}}, true)};
+            return std::vector<Json>{Text("Handed off.")};
+        });
+    Check(fixture.Say("Use your agents to check the fixture port.").succeeded, "The delegating turn failed.");
+    auto foreground = ReviaSessionTestAccess::HoldForeground(fixture.session);
+    Check(fixture.PollUntil([&] { return fixture.Status() == DelegatedTaskStatus::Reporting; }), "The outcome never became ready.");
+    const auto cancelled = ReviaSessionTestAccess::HandleCommand(fixture.session, "/task cancel");
+    Check(cancelled.succeeded && cancelled.text == "Stopping the task." && fixture.Status() == DelegatedTaskStatus::Cancelled,
+        "/task cancel did not reach a task waiting to report: " + cancelled.text);
+    foreground.unlock();
+    (void)fixture.PollUntil([] { return false; }, 1500ms);
+    Check(fixture.Reports().empty(), "A task cancelled while its report waited was reported anyway.");
+}
+
+// Agent Studio retrying a task she reported as not established makes a new revision, and
+// that revision's verified result is reported and accepted.
+void TestStudioRetryReopensTheTask()
+{
+    SessionFixture fixture("delegation-retry");
+    fixture.backend.SetWorkersVerified(false);
+    fixture.backend.SetChat(
+        [](const Json& wire)
+        {
+            if (ToolMessages(wire).empty() && Offers(wire, "delegate_task"))
+                return std::vector<Json>{Call(0, "d", "delegate_task", {{"objective", "Check the fixture port."}, {"reason", "Separate check."}}, true)};
+            return std::vector<Json>{Text("Handed off.")};
+        });
+    Check(fixture.Say("Use your agents to check the fixture port.").succeeded, "The delegating turn failed.");
+    bool settled = fixture.PollUntil([&] { return fixture.Status() == DelegatedTaskStatus::NotEstablished; });
+    Check(settled, "The unverified first run was not reported; " + fixture.Describe());
+    ReviaSessionTestAccess::JoinWorkflow(fixture.session);
+    fixture.backend.SetWorkersVerified(true);
+    std::string error;
+    Check(fixture.session.RetryAgentNode("analysis", "Check fixture/service.conf for the port.", "fixture-retry-evidence", error) &&
+              fixture.session.DelegatedTask()->revision == 2,
+        "A Studio retry did not reopen the task as a new revision: " + error);
+    settled = fixture.PollUntil(
+        [&]
+        {
+            const auto task = fixture.session.DelegatedTask();
+            return task && task->status == DelegatedTaskStatus::NotEstablished && task->revision == 2;
+        });
+    // The other worker failed too and was not retried, so revision 2 stops unverified again;
+    // what matters is that it was reported afresh, once more, and never as revision 1.
+    Check(settled && fixture.Reports().size() == 2, "The retried revision was not reported afresh; " + fixture.Describe());
 }
 
 // Simple conversation stays as fast as it was: On request offers nothing new, and a turn
@@ -866,7 +1012,15 @@ void TestOrdinaryConversationIsUnchanged()
     SessionFixture fixture("delegation-ordinary");
     const auto answered = fixture.Say("What do you think of that character?");
     const auto chat = fixture.backend.Requests(DelegationBackend::Kind::Chat);
-    Check(answered.succeeded && chat.size() == 1 && !Offers(chat[0], "delegate_task") && !fixture.session.DelegatedTask(),
+    // Besides the reply itself, only the JSON review and memory checks every ordinary turn
+    // already makes: no warmup, no classifier, no workflow and no report.
+    const bool nothingElse = fixture.backend.Requests(DelegationBackend::Kind::Plain).empty() &&
+                             fixture.backend.Requests(DelegationBackend::Kind::Report).empty() &&
+                             fixture.backend.Requests(DelegationBackend::Kind::Worker).empty() &&
+                             fixture.backend.Requests(DelegationBackend::Kind::Reviewer).empty() &&
+                             fixture.backend.Requests(DelegationBackend::Kind::Parent).empty() &&
+                             fixture.backend.Requests(DelegationBackend::Kind::ToolProposal).empty();
+    Check(answered.succeeded && chat.size() == 1 && nothingElse && !Offers(chat[0], "delegate_task") && !fixture.session.DelegatedTask(),
         "An ordinary turn in On request mode was offered delegation or made extra model requests.");
     ReviaSessionTestAccess::SetDelegationMode(fixture.session, DelegationMode::Auto);
     Check(fixture.Say("Why does the audio keep cutting out?").succeeded &&
@@ -897,6 +1051,10 @@ void RunDelegationTests()
     TestUnverifiedWorkIsReportedAsNotEstablished();
     TestToolWorkersAreReadOnlyAndKeepTheReply();
     TestWorkersYieldToTheConversation();
+    TestSpentBudgetIsReportedAsNotEstablished();
+    TestOutcomeStaysOutOfAnotherChat();
+    TestTaskCommandCancelsAWaitingReport();
+    TestStudioRetryReopensTheTask();
     TestOrdinaryConversationIsUnchanged();
     std::cout << "Chat delegation checks passed.\n";
 }

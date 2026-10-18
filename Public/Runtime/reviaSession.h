@@ -840,6 +840,12 @@ class ReviaSession
     bool AdvanceDelegatedWorkflow(const agents::WorkflowSnapshot& snapshot);
     // Agent Studio started a different workflow, so a chat task can never report later.
     void RetireDelegationFor(const std::string& newWorkflowId);
+    // Agent Studio deliberately restarted this same task (a retry with changed evidence, or a
+    // resume): its next outcome is a new revision, reported afresh. Only an explicit restart
+    // reopens a task; a workflow merely seen running again never does.
+    void ReopenDelegationFor(const std::string& workflowId);
+    // Whether the person in the conversation now is the one the task was delegated for.
+    [[nodiscard]] bool DelegationDisclosed() const;
     // Stop and companion retirement: no delegated outcome may be reported afterwards.
     void CancelDelegation(const std::string& because);
     [[nodiscard]] std::string DescribeDelegatedRunning() const;
@@ -1020,6 +1026,10 @@ class ReviaSession
     std::string conversationSessionId;
     // Writers also hold operationMutex; this lets the window read the id without it.
     mutable std::mutex conversationIdMutex;
+    // Advanced whenever the chat on screen stops being the one it was: a new chat, continuing
+    // or deleting one, forgetting them all. Even with archiving off, so a delegated task can
+    // tell that the conversation it came from has gone.
+    std::atomic<std::uint64_t> conversationEpoch{0};
 
     mutable std::mutex operationMutex;
     // Preference commands already run under operationMutex, while UI setters do not.
@@ -1154,6 +1164,8 @@ class ReviaSession
         RuntimeStamp origin;
         TaskContext context;
         memory::MemoryScope memoryScope;
+        // The chat it came from. Its outcome is reported there or not in chat at all.
+        std::uint64_t conversationEpoch = 0;
         // Set by AdvanceDelegatedWorkflow, claimed by the report worker.
         bool reportDue = false;
         bool verifiedOutcome = false;

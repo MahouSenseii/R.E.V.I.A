@@ -105,6 +105,14 @@ struct ReviaSessionTestAccess
     }
     static void JoinWorkflow(ReviaSession& session) { session.agentWorkflow.Join(); }
     static void SetDelegationMode(ReviaSession& session, agents::DelegationMode mode) { session.delegationMode.store(mode); }
+    // A typed command as a turn would handle it, for a caller that already holds the lane.
+    static SessionResult HandleCommand(ReviaSession& session, const std::string& input)
+    {
+        SessionResult result;
+        result.succeeded = true;
+        (void)session.TryHandleActionInput(input, result);
+        return result;
+    }
     static void Log(ReviaSession& session, const std::string& text) { session.appLogger.Log(text); }
     static bool LoadConfiguredProfile(const ReviaSession& session, const std::string& id, aiProfile& profile)
     { return session.config.LoadProfile(id, profile); }

@@ -3380,6 +3380,7 @@ std::size_t ReviaSession::ForgetConversations()
     // The live context is cleared too. Forgetting the file while the current prompt still
     // carries the same turns would be a forget in name only.
     context.Clear();
+    conversationEpoch.fetch_add(1);
     if (!conversationSessionId.empty())
     {
         std::string error;
@@ -9245,9 +9246,11 @@ bool ReviaSession::TryHandleActionInput(const std::string& input, SessionResult&
             result.succeeded = CancelTask("you asked");
             if (!result.succeeded)
             {
+                // Any task still under way, including one waiting to report, when it is this
+                // person's; CancelDelegatedTask refuses one that is already over.
                 const auto delegated = DelegatedTask();
                 std::string error;
-                result.succeeded = delegated && !DescribeDelegatedRunning().empty() && CancelDelegatedTask(delegated->taskId, error);
+                result.succeeded = delegated && DelegationDisclosed() && CancelDelegatedTask(delegated->taskId, error);
             }
             result.text = result.succeeded ? "Stopping the task." : "I'm not working on a task right now.";
         }
