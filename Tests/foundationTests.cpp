@@ -10188,6 +10188,7 @@ int main(const int argc, char** argv)
         RunAgentWorkflowTests();
         RunReminderTests();
         RunClipboardTests();
+        RunAttachmentTests();
         RunQuestionRelayTests();
         RunSelfAssessmentTests();
         RunSecretDetectionTests();

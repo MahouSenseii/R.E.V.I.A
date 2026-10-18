@@ -87,6 +87,13 @@ IntelligenceDecision IntelligenceRouter::Route(const std::string& input, const R
             "An exact immediate-interruption or attention phrase needs no model.", 0.99F);
     }
 
+    if (context.attachedImageCount > 0)
+    {
+        return Decision(
+            IntelligenceTier::Vision, ReasoningMode::Fast, "Qwen3.5-4B-Q4_K_M.gguf",
+            "The user attached pictures, which the Main brain's vision projector reads.", 0.92F);
+    }
+
     if (context.visionRequired)
     {
         const bool expert = context.expertVisionPreferred || context.previousUncertainty;

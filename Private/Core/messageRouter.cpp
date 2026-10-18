@@ -62,10 +62,17 @@ responseOutput messageRouter::RouteMessage(const std::string& message, const std
     std::string selectedTier = "Main";
     std::string fallbackReason;
     std::string routingNote;
+    // Pictures attached to the message need a projector, which the Fast brain never has.
+    const bool carriesImages =
+        std::any_of(context.begin(), context.end(), [](const conversationMessage& entry) { return !entry.images.empty(); });
     switch (decision.selectedTier)
     {
         case revia::intelligence::IntelligenceTier::Fast:
-            if (FastIsSlowerThanMain() && llm.IsBackendAvailable())
+            if (carriesImages)
+            {
+                routingNote = " The message carries pictures, which only Main's vision projector can read.";
+            }
+            else if (FastIsSlowerThanMain() && llm.IsBackendAvailable())
             {
                 // Small is not fast when small is on the CPU. Every reply carries the
                 // system prompt and her state -- about 2,500 tokens -- and the CPU
@@ -125,7 +132,7 @@ responseOutput messageRouter::RouteMessage(const std::string& message, const std
             break;
     }
 
-    if (fastConfigured && selected != &fastLlm &&
+    if (fastConfigured && selected != &fastLlm && !carriesImages &&
         !selected->IsBackendAvailable(stopToken) && fastLlm.IsBackendAvailable(stopToken))
     {
         selected = &fastLlm;

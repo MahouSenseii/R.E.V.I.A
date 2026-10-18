@@ -183,6 +183,7 @@ void RunGuestRuntimeTests();
 void RunGuestLiveTests(const std::filesystem::path& runtimeRoot, const std::filesystem::path& python);
 void RunReminderTests();
 void RunClipboardTests();
+void RunAttachmentTests();
 void RunQuestionRelayTests();
 void RunSpeakerContinuityTests();
 void RunSpeechAttributionTests();

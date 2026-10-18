@@ -188,6 +188,8 @@ intelligence::RoutingContext BuildRoutingContext(const RoutingInputs& inputs)
     // retrieved is a research turn whether or not the sentence said so.
     context.explicitResearch = inputs.allowInternetLookup && (inputs.groundingAlreadyRetrieved || MentionsInternet(inputs.input));
     context.recentContextCharacters = inputs.recentContextCharacters;
+    // Attachments are private-only; a public turn never carries a picture to route.
+    context.attachedImageCount = inputs.publicAudience ? 0 : inputs.attachedImageCount;
 
     // Only the local thread carries continuity, in either direction. A public-audience
     // turn answers a different conversation and does not record a tier or an outcome
@@ -293,7 +295,8 @@ void ConversationRuntime::ResetParticipantContinuity()
 SessionResult ConversationRuntime::ReplyForAudience(const std::string& input, const std::vector<conversationMessage>& channelHistory,
     const identity::AudienceContext& audience, const identity::RelationshipState& relationship, const aiProfile& profile,
     const bool llmAvailable, const bool shouldSpeak, const std::stop_token stopToken, std::function<bool()> admission,
-    const std::string& turnReference, const std::chrono::steady_clock::time_point acceptedAt, const memory::MemoryScope& memoryScope)
+    const std::string& turnReference, const std::chrono::steady_clock::time_point acceptedAt, const memory::MemoryScope& memoryScope,
+    std::vector<conversationImage> turnImages)
 {
     const auto denied = []()
     {
@@ -325,6 +328,10 @@ SessionResult ConversationRuntime::ReplyForAudience(const std::string& input, co
         context.AddMessage({"user", input, memoryScope.participantId, memoryScope});
         promptContext = context.GetRecentMessages();
         policy.instruction = turnReference;
+        // Pictures ride on this turn's copy of the newest message only. History keeps the
+        // words, so a picture is not resent on every later turn.
+        if (!turnImages.empty() && !promptContext.empty() && promptContext.back().role == "user")
+            promptContext.back().images = std::move(turnImages);
     }
     else
     {
@@ -1077,6 +1084,7 @@ SessionResult ConversationRuntime::Generate(const std::string& policyInput, cons
     routingInputs.publicAudience = turnPolicy.publicAudience;
     routingInputs.groundingAlreadyRetrieved = !precomputedInternetGrounding.empty();
     routingInputs.recentContextCharacters = ContextCharacters(promptContext);
+    routingInputs.attachedImageCount = promptContext.empty() ? 0 : promptContext.back().images.size();
     routingInputs.previousDeliveredTier = previousDeliveredTier;
     routingInputs.previousTurnWasUnreliable = previousTurnWasUnreliable;
     const intelligence::RoutingContext routingContext = BuildRoutingContext(routingInputs);

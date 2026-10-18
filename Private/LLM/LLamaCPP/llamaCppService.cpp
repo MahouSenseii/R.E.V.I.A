@@ -82,7 +82,8 @@ namespace
     {
         namespace markers = revia::identity::markers;
         constexpr std::string_view headers[] = {markers::RetrievedMemoryBlock, markers::RetrievedConversationBlock,
-            markers::LivePageGrounding, markers::VisibleBrowserGrounding, markers::ClipboardGrounding};
+            markers::LivePageGrounding, markers::VisibleBrowserGrounding, markers::ClipboardGrounding, markers::AttachmentGrounding,
+            markers::DocumentGrounding};
         return std::any_of(std::begin(headers), std::end(headers), [paragraph](const std::string_view header)
             { return paragraph.starts_with(header) || paragraph.find("\n" + std::string(header)) != std::string_view::npos; });
     }
@@ -828,20 +829,16 @@ namespace
         return RemoveGeneratedConversationTurns(std::move(text));
     }
 
-    std::string ImageDataUrl(const std::filesystem::path& path)
+    std::string ImageDataUrl(const std::string& mimeType, const std::string_view bytes)
     {
-        std::ifstream file(path, std::ios::binary);
-        if (!file)
-        {
-            return {};
-        }
         constexpr char Alphabet[] =
             "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-        std::string encoded = "data:image/png;base64,";
+        const std::string prefix = "data:" + mimeType + ";base64,";
+        std::string encoded = prefix;
+        encoded.reserve(prefix.size() + (bytes.size() + 2) / 3 * 4);
         std::uint32_t value = 0;
         int bits = -6;
-        char character = 0;
-        while (file.get(character))
+        for (const char character : bytes)
         {
             value = (value << 8) + static_cast<unsigned char>(character);
             bits += 8;
@@ -855,11 +852,59 @@ namespace
         {
             encoded.push_back(Alphabet[((value << 8) >> (bits + 8)) & 0x3f]);
         }
-        while ((encoded.size() - std::string("data:image/png;base64,").size()) % 4 != 0)
+        while ((encoded.size() - prefix.size()) % 4 != 0)
         {
             encoded.push_back('=');
         }
         return encoded;
+    }
+
+    std::string ImageDataUrl(const std::filesystem::path& path)
+    {
+        std::ifstream file(path, std::ios::binary);
+        if (!file)
+        {
+            return {};
+        }
+        const std::string bytes((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+        return ImageDataUrl("image/png", bytes);
+    }
+
+    // Tokens a picture costs the vision projector, from its size: Qwen-VL projectors
+    // spend one token per 28x28 patch after merging. An estimate, used to keep room in
+    // the context; the server still reports a real overflow.
+    std::size_t ImageTokenAllowance(const conversationImage& image)
+    {
+        const std::size_t width = std::max<std::uint32_t>(image.width, 28);
+        const std::size_t height = std::max<std::uint32_t>(image.height, 28);
+        return std::min<std::size_t>(((width + 27) / 28) * ((height + 27) / 28) + 16, 4096);
+    }
+
+    // The newest user message carries this turn's pictures as image_url parts beside
+    // its text, the way AnalyzeImage sends a screen capture. Fitting and token counting
+    // run on the text-only messages first; the pictures are attached last.
+    json WithImageParts(json messages, const std::vector<conversationImage>& images, const std::string& unsentNote)
+    {
+        for (auto message = messages.rbegin(); message != messages.rend(); ++message)
+        {
+            if (!message->is_object() || message->value("role", "") != "user" || !(*message)["content"].is_string())
+                continue;
+            std::string text = (*message)["content"].get<std::string>();
+            if (!unsentNote.empty())
+                text += "\n\n" + unsentNote;
+            if (images.empty())
+            {
+                (*message)["content"] = text;
+                break;
+            }
+            json parts = json::array({{{"type", "text"}, {"text", text}}});
+            for (const conversationImage& image : images)
+                if (image.bytes && !image.bytes->empty())
+                    parts.push_back({{"type", "image_url"}, {"image_url", {{"url", ImageDataUrl(image.mimeType, *image.bytes)}}}});
+            (*message)["content"] = std::move(parts);
+            break;
+        }
+        return messages;
     }
 
     std::string ExtractResponseContent(const json& body)
@@ -1293,6 +1338,23 @@ responseOutput llamaCppService::GenerateResponse(const std::vector<conversationM
     }
 
     const auto priorityParagraphs = CaptureTurnPriorityParagraphs(posture);
+    // Pictures attached to this message. An endpoint started without a projector would
+    // reject them, so they are left out with a note the model must pass on instead.
+    std::vector<conversationImage> turnImages;
+    std::string unsentImageNote;
+    if (latestUser != context.rend() && !latestUser->images.empty())
+    {
+        if (bVisionExpected)
+            turnImages = latestUser->images;
+        else
+            unsentImageNote = "[The user attached " + std::to_string(latestUser->images.size()) +
+                              (latestUser->images.size() == 1 ? " picture" : " pictures") +
+                              ", but this model was not started with image support, so it was not sent. Say so plainly and do not "
+                              "guess what it shows.]";
+    }
+    int imageTokens = 0;
+    for (const conversationImage& image : turnImages)
+        imageTokens += static_cast<int>(ImageTokenAllowance(image));
     json requestBody;
     json messages = builder.BuildMessages(
         activeProfile,
@@ -1311,7 +1373,8 @@ responseOutput llamaCppService::GenerateResponse(const std::vector<conversationM
     // Fast-tier settings already carry their own small ceiling. Main and Expert should
     // use their configured budget so a normal answer is not chopped off at 256 tokens.
     const int activeContextTokens = effectiveContextTokens.load();
-    const int contextTokens = activeContextTokens > 0 ? activeContextTokens : configuredContextTokens;
+    // Room for the pictures is taken from the text's share of the context.
+    const int contextTokens = std::max(1, (activeContextTokens > 0 ? activeContextTokens : configuredContextTokens) - imageTokens);
     const int requestedResponse = briefSocial ? std::min(128, ResponseTokenLimit()) : ResponseTokenLimit();
     const int answerTokens = std::clamp(requestedResponse, 1, std::max(1, contextTokens / 4));
     // Thinking tokens count against max_tokens. Sharing the answer's budget let a long
@@ -1349,8 +1412,10 @@ responseOutput llamaCppService::GenerateResponse(const std::vector<conversationM
         output.reason = "No text prompt fits after reserving generation and chat-template overhead.";
         return output;
     }
+    const json textMessages = messages;
     requestBody["model"] = modelName;
-    requestBody["messages"] = std::move(messages);
+    requestBody["messages"] = turnImages.empty() && unsentImageNote.empty() ? std::move(messages)
+                                                                            : WithImageParts(std::move(messages), turnImages, unsentImageNote);
     requestBody["temperature"] = temperature;
     requestBody["max_tokens"] = responseTokens;
     requestBody["stream"] = true;
@@ -1528,16 +1593,19 @@ responseOutput llamaCppService::GenerateResponse(const std::vector<conversationM
         // One smaller retry only, before any generated text has escaped. Keep the
         // generation reservation unchanged and halve the already bounded prompt.
         std::size_t promptCost = 0;
-        for (const auto& message : requestBody["messages"])
+        for (const auto& message : textMessages)
             promptCost += message["content"].get_ref<const std::string&>().size() +
                 revia::llm::ChatTemplateTokensPerMessage;
         auto retryMessages =
-            BoundMessagesForContext(requestBody["messages"], contextTokens, responseTokens, priorityParagraphs, promptCost / 2);
+            BoundMessagesForContext(textMessages, contextTokens, responseTokens, priorityParagraphs, promptCost / 2);
         if (!retryMessages.empty())
         {
-            requestBody["messages"] = std::move(retryMessages);
+            const std::size_t retryCost = ConservativePromptCost(retryMessages);
+            requestBody["messages"] = turnImages.empty() && unsentImageNote.empty()
+                                          ? std::move(retryMessages)
+                                          : WithImageParts(std::move(retryMessages), turnImages, unsentImageNote);
             output.contextFit.backendCounted = false;
-            output.contextFit.promptTokens = ConservativePromptCost(requestBody["messages"]);
+            output.contextFit.promptTokens = retryCost;
             output.contextFit.retainedMessages = requestBody["messages"].size();
             output.contextFit.reason = "Backend context overflow; one smaller byte-conservative retry.";
             req.body = requestBody.dump(); // Valid UTF-8 was established by the first serialization.

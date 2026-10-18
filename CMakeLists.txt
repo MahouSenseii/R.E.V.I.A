@@ -591,6 +591,7 @@ if(BUILD_TESTING)
     endif()
     # Split test suites include testSupport.h from the Tests directory.
     target_include_directories(ReviaTests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/Tests")
+    target_compile_definitions(ReviaTests PRIVATE REVIA_ATTACHMENT_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/Tests/Fixtures/Attachments")
     revia_link_foundation(ReviaTests)
     if(MINGW)
         target_compile_options(ReviaTests PRIVATE -Wa,-mbig-obj)
