@@ -9038,6 +9038,70 @@ void TestArbiterMergesOneThought()
     Check(arbiter.Size() == 0, "Taking the merged turn did not empty the queue.");
 }
 
+// Push-to-talk ends when the key is released, so there is nothing to merge with and no
+// reason to wait. A hands-free fragment that ends a sentence waits a shorter window than
+// one cut off mid-thought.
+void TestVoiceInputWaitsOnlyAsLongAsItsEndingNeeds()
+{
+    using revia::agents::InputSource;
+    using revia::agents::InputVerdict;
+    const auto start = std::chrono::system_clock::now();
+
+    revia::agents::InputArbiter pushToTalk(inputArbiterSettings{});
+    Check(pushToTalk.Offer("can you check the build", InputSource::Voice, start, {}, true) == InputVerdict::Queued &&
+              pushToTalk.IsReady(start),
+        "Push-to-talk input waited out a merge window after the user released the key.");
+
+    revia::agents::InputArbiter handsFree(inputArbiterSettings{});
+    Check(handsFree.Offer("Can you check the build?", InputSource::Voice, start) == InputVerdict::Queued,
+        "A finished hands-free sentence was rejected.");
+    Check(!handsFree.IsReady(start + std::chrono::milliseconds(100)) && handsFree.IsReady(start + std::chrono::milliseconds(150)),
+        "A hands-free sentence with closing punctuation did not use the shorter window.");
+    (void)handsFree.Take();
+    Check(handsFree.Offer("and then maybe the", InputSource::Voice, start) == InputVerdict::Queued,
+        "An unfinished hands-free fragment was rejected.");
+    Check(!handsFree.IsReady(start + std::chrono::milliseconds(300)) && handsFree.IsReady(start + std::chrono::milliseconds(350)),
+        "An unfinished hands-free fragment did not wait the full merge window.");
+
+    // A configured window shorter than the punctuated one is never lengthened by it.
+    inputArbiterSettings quick;
+    quick.mergeWindowMs = 80;
+    revia::agents::InputArbiter brief(quick);
+    (void)brief.Offer("Is it done yet?", InputSource::Voice, start);
+    Check(brief.IsReady(start + std::chrono::milliseconds(80)), "The punctuated window lengthened a shorter configured one.");
+}
+
+// The voice drain sleeps until input can be taken instead of polling for it.
+void TestTheVoiceDrainWakesWhenTheWindowCloses()
+{
+    using namespace std::chrono_literals;
+    using Clock = std::chrono::steady_clock;
+    revia::agents::InputArbiter arbiter(inputArbiterSettings{});
+    std::stop_source stop;
+    const auto started = Clock::now();
+    std::jthread speaker(
+        [&arbiter]
+        {
+            std::this_thread::sleep_for(50ms);
+            (void)arbiter.Offer("and then maybe the", revia::agents::InputSource::Voice, std::chrono::system_clock::now());
+        });
+    const bool ready = arbiter.WaitUntilReady(stop.get_token(), 3s);
+    const auto waited = Clock::now() - started;
+    Check(ready && waited >= 390ms && waited < 700ms,
+        "The drain did not wake when the merge window closed: waited " +
+            std::to_string(std::chrono::duration_cast<std::chrono::milliseconds>(waited).count()) + " ms.");
+    (void)arbiter.Take();
+
+    const auto stopping = Clock::now();
+    std::jthread stopper(
+        [&stop]
+        {
+            std::this_thread::sleep_for(50ms);
+            stop.request_stop();
+        });
+    Check(!arbiter.WaitUntilReady(stop.get_token(), 5s) && Clock::now() - stopping < 1s, "Stopping did not wake the idle voice drain.");
+}
+
 void TestTypedInputIsNeverTakenByTheVoiceDrain()
 {
     inputArbiterSettings settings;
@@ -9988,6 +10052,8 @@ int main(const int argc, char** argv)
         TestStreamGateReleasesOnlyWhatTheFiltersKeep();
         TestArbiterMergesOneThought();
         TestTypedInputIsNeverTakenByTheVoiceDrain();
+        TestVoiceInputWaitsOnlyAsLongAsItsEndingNeeds();
+        TestTheVoiceDrainWakesWhenTheWindowCloses();
         TestArbiterIgnoresNoiseButNeverTypedInput();
         TestArbiterDropsRepeatsAndOverflow();
         // Split suites, per the testing refactor. New subsystems get their own file

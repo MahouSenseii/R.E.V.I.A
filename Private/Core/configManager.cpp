@@ -1237,6 +1237,11 @@ bool configManager::LoadSettings(appSettings& outSettings) const
                 outSettings.inputArbiter.mergeWindowMs =
                     arbiterData["mergeWindowMs"].get<int>();
             }
+            if (arbiterData.contains("punctuatedMergeWindowMs"))
+            {
+                outSettings.inputArbiter.punctuatedMergeWindowMs =
+                    arbiterData["punctuatedMergeWindowMs"].get<int>();
+            }
             if (arbiterData.contains("minimumMeaningfulCharacters"))
             {
                 outSettings.inputArbiter.minimumMeaningfulCharacters =
@@ -1491,6 +1496,8 @@ bool configManager::LoadSettings(appSettings& outSettings) const
         outSettings.vision.maxResolverElements > 5000 ||
         outSettings.inputArbiter.mergeWindowMs < 0 ||
         outSettings.inputArbiter.mergeWindowMs > 10000 ||
+        outSettings.inputArbiter.punctuatedMergeWindowMs < 0 ||
+        outSettings.inputArbiter.punctuatedMergeWindowMs > 10000 ||
         outSettings.inputArbiter.minimumMeaningfulCharacters < 1 ||
         outSettings.inputArbiter.minimumMeaningfulCharacters > 64 ||
         outSettings.inputArbiter.maxQueuedInputs < 1 ||

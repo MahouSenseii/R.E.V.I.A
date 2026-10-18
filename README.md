@@ -232,8 +232,8 @@ Voices are stored in `build\debug\RuntimeData\Voices\`.
 
 ### 5. Talk to her
 
-- **Push-to-talk:** hold **Ctrl+Space** (or the mic button), speak, release.
-- **Hands-free:** turn on **Hands-free local conversation** in the **Presence** tab. If she does not hear you, use **Test microphone** and pick the right microphone.
+- **Push-to-talk:** hold **Ctrl+Space** (or the mic button), speak, release. Releasing ends what you said, so the turn starts as soon as the transcript arrives.
+- **Hands-free:** turn on **Hands-free local conversation** in the **Presence** tab. If she does not hear you, use **Test microphone** and pick the right microphone. Speech is merged into one turn until you pause: 150 ms after a finished sentence, 350 ms otherwise (`inputArbiter.punctuatedMergeWindowMs`, `inputArbiter.mergeWindowMs`).
 - **Send what I say automatically** sends the transcript without pressing Send.
 - **Let me interrupt Revia while she speaks** turns barge-in on or off.
 

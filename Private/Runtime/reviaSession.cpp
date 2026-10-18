@@ -1343,13 +1343,17 @@ void ReviaSession::StartInputDrain()
         {
             while (!stopToken.stop_requested())
             {
-                std::this_thread::sleep_for(std::chrono::milliseconds(200));
-                if (stopToken.stop_requested() || !started.load() || busy.load())
+                // Wakes when voice input arrives and again the moment its merge window
+                // closes, rather than finding it on a 200 ms poll.
+                if (!inputArbiter.WaitUntilReady(stopToken, std::chrono::seconds(1)) || stopToken.stop_requested())
                 {
                     continue;
                 }
-                if (!inputArbiter.IsReady(std::chrono::system_clock::now()))
+                if (!started.load() || busy.load())
                 {
+                    // Nothing signals the arbiter when a turn clears busy, so ready input
+                    // checks back shortly; a barged-in reply usually ends within this.
+                    std::this_thread::sleep_for(std::chrono::milliseconds(started.load() ? 50 : 200));
                     continue;
                 }
 
@@ -1841,7 +1845,11 @@ void ReviaSession::QueueExternalAdapterEvent(const presence::ExternalAdapterEven
 
 agents::InputVerdict ReviaSession::OfferInput(const std::string& text, const agents::InputSource source)
 {
-    const agents::InputVerdict verdict = inputArbiter.Offer(text, source, std::chrono::system_clock::now(), CaptureInputContext(source));
+    // The shell offers voice here only for a push-to-talk transcript, whose end the user
+    // marked by releasing the key, so it skips the merge window. Hands-free speech is
+    // offered by the recognition handler and still waits for a pause.
+    const agents::InputVerdict verdict = inputArbiter.Offer(
+        text, source, std::chrono::system_clock::now(), CaptureInputContext(source), source == agents::InputSource::Voice);
     if (verdict != agents::InputVerdict::Queued)
     {
         // Reported rather than silently dropped, so a filter that is too aggressive is

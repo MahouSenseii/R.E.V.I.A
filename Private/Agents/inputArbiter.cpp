@@ -40,11 +40,15 @@ InputArbiter::InputArbiter(inputArbiterSettings settings)
 
 void InputArbiter::Configure(inputArbiterSettings settings)
 {
-    std::lock_guard lock(mutex);
-    configuration = std::move(settings);
-    queued.clear();
-    lastAccepted.clear();
-    lastAcceptedAt = {};
+    {
+        std::lock_guard lock(mutex);
+        configuration = std::move(settings);
+        queued.clear();
+        lastAccepted.clear();
+        lastAcceptedAt = {};
+        ++revision;
+    }
+    changed.notify_all();
 }
 
 std::string InputArbiter::Normalize(const std::string& text)
@@ -149,9 +153,9 @@ InputVerdict InputArbiter::Offer(const std::string& text, const InputSource sour
 }
 
 InputVerdict InputArbiter::Offer(const std::string& text, const InputSource source,
-    const std::chrono::system_clock::time_point now, InputContext context)
+    const std::chrono::system_clock::time_point now, InputContext context, const bool complete)
 {
-    std::lock_guard lock(mutex);
+    std::unique_lock lock(mutex);
     const std::string normalized = Normalize(text);
     if (normalized.empty())
     {
@@ -188,19 +192,69 @@ InputVerdict InputArbiter::Offer(const std::string& text, const InputSource sour
         return InputVerdict::DroppedOverflow;
     }
 
-    queued.push_back({text, source, now, context, std::chrono::steady_clock::now()});
+    queued.push_back({text, source, now, context, std::chrono::steady_clock::now(), complete});
     lastAccepted = normalized;
     lastAcceptedAt = now;
     lastAcceptedContext = std::move(context);
+    ++revision;
+    lock.unlock();
+    changed.notify_all();
     return InputVerdict::Queued;
+}
+
+std::chrono::milliseconds InputArbiter::MergeWindowFor(const inputArbiterSettings& settings, const PendingInput& input)
+{
+    if (input.complete)
+        return std::chrono::milliseconds(0);
+    const std::chrono::milliseconds full(std::max(0, settings.mergeWindowMs));
+    // Closing quotes and brackets can follow the sentence's own punctuation.
+    const auto end = input.text.find_last_not_of(" \t\r\n\"')]");
+    const bool endsSentence = end != std::string::npos && (input.text[end] == '.' || input.text[end] == '!' || input.text[end] == '?');
+    if (!endsSentence)
+        return full;
+    return std::min(full, std::chrono::milliseconds(std::max(0, settings.punctuatedMergeWindowMs)));
 }
 
 bool InputArbiter::IsReady(const std::chrono::system_clock::time_point now) const
 {
     std::lock_guard lock(mutex);
+    const auto readyAt = ReadyAtLocked();
+    return readyAt.has_value() && now >= *readyAt;
+}
+
+std::optional<std::chrono::system_clock::time_point> InputArbiter::ReadyAt() const
+{
+    std::lock_guard lock(mutex);
+    return ReadyAtLocked();
+}
+
+bool InputArbiter::WaitUntilReady(const std::stop_token stopToken, const std::chrono::milliseconds limit)
+{
+    std::unique_lock lock(mutex);
+    const auto giveUp = std::chrono::steady_clock::now() + limit;
+    while (!stopToken.stop_requested())
+    {
+        const auto now = std::chrono::system_clock::now();
+        const auto readyAt = ReadyAtLocked();
+        if (readyAt.has_value() && now >= *readyAt)
+            return true;
+        auto wait = std::chrono::duration_cast<std::chrono::milliseconds>(giveUp - std::chrono::steady_clock::now());
+        if (wait <= std::chrono::milliseconds(0))
+            return false;
+        if (readyAt.has_value())
+            wait = std::min(wait, std::chrono::ceil<std::chrono::milliseconds>(*readyAt - now));
+        const std::uint64_t seen = revision;
+        // Anything offered or taken in the meantime moves the ready time, so it is recomputed.
+        (void)changed.wait_for(lock, stopToken, wait, [&] { return revision != seen; });
+    }
+    return false;
+}
+
+std::optional<std::chrono::system_clock::time_point> InputArbiter::ReadyAtLocked() const
+{
     if (queued.empty())
     {
-        return false;
+        return std::nullopt;
     }
     // Typed input belongs to the Submit call that offered it, which takes the queue as
     // soon as it holds the conversation lock. Reporting it ready here let the drain
@@ -210,12 +264,11 @@ bool InputArbiter::IsReady(const std::chrono::system_clock::time_point now) cons
     if (std::any_of(queued.begin(), queued.end(),
             [](const PendingInput& pending) { return pending.source == InputSource::Typed; }))
     {
-        return false;
+        return std::nullopt;
     }
     // Ready once nothing new has arrived for the merge window. Someone speaking in bursts
     // gets one reply to the whole thought rather than one per pause.
-    return now - queued.back().receivedAt >=
-        std::chrono::milliseconds(configuration.mergeWindowMs);
+    return queued.back().receivedAt + MergeWindowFor(configuration, queued.back());
 }
 
 std::string InputArbiter::Take()
@@ -257,6 +310,7 @@ InputBatch InputArbiter::TakeBatch()
         stream << text;
     }
     queued.clear();
+    ++revision;
     batch.text = batch.contextMatched ? stream.str() : std::string{};
     return batch;
 }
@@ -269,8 +323,12 @@ std::size_t InputArbiter::Size() const
 
 void InputArbiter::Clear()
 {
-    std::lock_guard lock(mutex);
-    queued.clear();
+    {
+        std::lock_guard lock(mutex);
+        queued.clear();
+        ++revision;
+    }
+    changed.notify_all();
 }
 
 } // namespace revia::agents
