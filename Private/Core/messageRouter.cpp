@@ -41,7 +41,7 @@ messageRouter::~messageRouter() = default;
 
 responseOutput messageRouter::RouteMessage(const std::string& message, const std::vector<conversationMessage>& context,
     const std::stop_token stopToken, DeltaHandler onDelta, const revia::intelligence::IntelligenceDecision& decision,
-    const revia::llm::PrivateMemoryAccess memoryAccess) const
+    const revia::llm::PrivateMemoryAccess memoryAccess, const revia::llm::ToolExchange* tools) const
 {
     responseOutput output;
 
@@ -138,8 +138,10 @@ responseOutput messageRouter::RouteMessage(const std::string& message, const std
     DeltaHandler retryDelta = onDelta;
     ReasoningHandler onReasoning;
     {
+        // A tool loop asks several times for one answer, and every step may think. The
+        // runtime clears the handler itself when the turn ends.
         std::lock_guard lock(reasoningMutex);
-        onReasoning = std::exchange(pendingReasoning, {});
+        onReasoning = tools != nullptr ? pendingReasoning : std::exchange(pendingReasoning, {});
     }
     // IntelligenceRouter owns the reasoning mode. In particular, a completed visible
     // self-inquiry changes the final-answer decision to Fast so the model does not spend
@@ -152,7 +154,8 @@ responseOutput messageRouter::RouteMessage(const std::string& message, const std
         std::move(onDelta),
         deepReasoning,
         memoryAccess,
-        onReasoning);
+        onReasoning,
+        tools);
     residency.EndInference(effectiveTier);
     const bool contextRejected = !routed.bSuccess &&
         routed.reason.find("HTTP status 400") != std::string::npos;
@@ -168,7 +171,8 @@ responseOutput messageRouter::RouteMessage(const std::string& message, const std
             std::move(retryDelta),
             deepReasoning,
             memoryAccess,
-            onReasoning);
+            onReasoning,
+            tools);
         residency.EndInference(revia::intelligence::IntelligenceTier::Main);
         selected = &llm;
         effectiveTier = revia::intelligence::IntelligenceTier::Main;

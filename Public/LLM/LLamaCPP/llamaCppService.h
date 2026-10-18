@@ -49,10 +49,14 @@ public:
     // thinking is untrusted model text: it is shown as thinking, never spoken or stored
     // as dialogue.
     using ReasoningHandler = std::function<void(const std::string&)>;
+    // `tools`, when it has definitions, offers them with tool_choice "auto" (or "none" on
+    // a last step) and replays its earlier rounds after the prompt. Requested calls come
+    // back in responseOutput::toolCalls and are never executed here. A server that cannot
+    // take tools, or a context too small to hold them, returns bToolsRejected instead.
     responseOutput GenerateResponse(const std::vector<conversationMessage>& context, std::stop_token stopToken = {},
         DeltaHandler onDelta = {}, bool deepReasoning = false,
         revia::llm::PrivateMemoryAccess memoryAccess = revia::llm::PrivateMemoryAccess::ProfileSetting,
-        ReasoningHandler onReasoning = {}) const;
+        ReasoningHandler onReasoning = {}, const revia::llm::ToolExchange* tools = nullptr) const;
     responseOutput GenerateActionProposal(const std::string& userRequest) const;
     responseOutput GenerateCalculationProposal(const std::string& envelope, std::stop_token stopToken = {}) const;
     responseOutput ReviewConversationReply(const std::string& userInput, const std::string& candidateReply,
@@ -119,6 +123,9 @@ private:
     int configuredContextTokens = 4096;
     mutable std::atomic<int> effectiveContextTokens = 0;
     mutable std::atomic<int> effectiveParallelSlots = 0;
+    // Set when this server refused a request for offering tools. Later turns then skip
+    // straight to the caller's fallback instead of sending a request that will fail.
+    mutable std::atomic<bool> toolsUnsupported = false;
 
     promptBuilder builder;
     llamaCppEmbeddingService embeddings;

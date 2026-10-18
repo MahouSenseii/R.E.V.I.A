@@ -37,7 +37,7 @@ public:
     responseOutput GenerateResponse(const std::vector<conversationMessage>& context, std::stop_token stopToken = {},
         DeltaHandler onDelta = {}, bool deepReasoning = false,
         revia::llm::PrivateMemoryAccess memoryAccess = revia::llm::PrivateMemoryAccess::ProfileSetting,
-        ReasoningHandler onReasoning = {}) const;
+        ReasoningHandler onReasoning = {}, const revia::llm::ToolExchange* tools = nullptr) const;
     responseOutput GenerateActionProposal(const std::string& userRequest) const;
     responseOutput ReviewConversationReply(const std::string& userInput, const std::string& candidateReply,
         const std::string& runtimeGroundTruth, int maxReviewTokens, std::stop_token stopToken = {},

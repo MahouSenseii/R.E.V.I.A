@@ -666,6 +666,88 @@ void TestBackgroundCallsStreamWithUnchangedContracts()
         "Vision did not stream, or its streamed description was lost: " + vision.reason);
 }
 
+// Native tool calling: the chat request had no `tools`, and the stream parser read only
+// text, so the model could never ask for a tool. Tools now go on the wire, earlier steps
+// are replayed in the OpenAI shape, and streamed tool_calls fragments come back whole.
+void TestToolCallsStreamAndReplayOnTheWire()
+{
+    revia::tests::ScopedTestDirectory directory;
+    WireBackend backend;
+    llamaCppService service((directory.root / "tools.db").string());
+    llmSettings settings;
+    settings.host = "127.0.0.1";
+    settings.port = backend.port;
+    settings.modelName = "structured-reply-fixture";
+    settings.contextSize = 32768;
+    settings.maxTokens = 512;
+    settings.bAutoMaxTokens = settings.bAutoStartServer = settings.bVisionEnabled = false;
+    embeddingSettings embeddings;
+    embeddings.bEnabled = embeddings.bAutoStartServer = false;
+    aiProfile profile;
+    profile.bMemoryEnabled = false;
+    service.ApplySettings(settings, embeddings, profile);
+
+    revia::llm::ToolExchange exchange;
+    exchange.definitions.push_back({"web_search", "Search the web.",
+        R"({"type":"object","properties":{"query":{"type":"string"}},"required":["query"],"additionalProperties":false})"});
+    exchange.rounds.push_back({"Let me check.", {{"call_a", "web_search", R"({"query":"llama.cpp release"})"}},
+        {{"call_a", "web_search", "[Tool result] b10453", false}}});
+    const auto call = [](const nlohmann::json& fragments, const nlohmann::json& finish = nullptr)
+    { return nlohmann::json{{"choices", nlohmann::json::array({{{"delta", {{"tool_calls", fragments}}}, {"finish_reason", finish}}})}}; };
+    backend.Script({WireBackend::Delta("content", "Checking both. "),
+        call({{{"index", 0}, {"id", "call_1"}, {"type", "function"}, {"function", {{"name", "web_search"}, {"arguments", "{\"que"}}}}}),
+        call(
+            {{{"index", 1}, {"id", "call_2"}, {"type", "function"}, {"function", {{"name", "web_search"}, {"arguments", "{\"query\":"}}}}}),
+        call({{{"index", 0}, {"function", {{"arguments", "ry\":\"weather Paris\"}"}}}}}),
+        call({{{"index", 1}, {"function", {{"arguments", "\"weather Rome\"}"}}}}}, "tool_calls")});
+    std::string shown;
+    const auto step = service.GenerateResponse(
+        {{"user", "Weather in Paris and Rome?"}}, {}, [&](const std::string& delta) { shown += delta; }, false,
+        revia::llm::PrivateMemoryAccess::ProfileSetting, {}, &exchange);
+    auto request = backend.Requests().back();
+    Check(request.contains("tools") && request.at("tools").size() == 1 && request.at("tools")[0].at("type") == "function" &&
+              request.at("tools")[0].at("function").at("name") == "web_search" &&
+              request.at("tools")[0].at("function").at("parameters").at("required")[0] == "query" && request.at("tool_choice") == "auto" &&
+              request.at("parallel_tool_calls") == true,
+        "The chat request did not offer the turn's tools in the OpenAI shape: " + request.dump());
+    const auto& messages = request.at("messages");
+    Check(messages.size() >= 3 && messages[messages.size() - 2].at("role") == "assistant" &&
+              messages[messages.size() - 2].at("content") == "Let me check." &&
+              messages[messages.size() - 2].at("tool_calls")[0].at("function").at("arguments") == R"({"query":"llama.cpp release"})" &&
+              messages.back().at("role") == "tool" && messages.back().at("tool_call_id") == "call_a" &&
+              messages.back().at("content") == "[Tool result] b10453",
+        "The earlier tool step was not replayed after the prompt: " + messages.dump());
+    Check(step.bSuccess && step.toolCalls.size() == 2 && step.toolCalls[0].id == "call_1" && step.toolCalls[0].name == "web_search" &&
+              step.toolCalls[0].arguments == R"({"query":"weather Paris"})" && step.toolCalls[1].id == "call_2" &&
+              step.toolCalls[1].arguments == R"({"query":"weather Rome"})",
+        "Streamed tool_calls fragments were not assembled per index: " + nlohmann::json(step.toolCalls.size()).dump());
+    Check(step.response == "Checking both." && shown == "Checking both.",
+        "The text beside the tool calls was lost or changed: " + step.response);
+
+    // On a last step the model is asked for text, and calls it makes anyway are dropped.
+    exchange.allowCalls = false;
+    const auto last = service.GenerateResponse(
+        {{"user", "Weather in Paris and Rome?"}}, {}, {}, false, revia::llm::PrivateMemoryAccess::ProfileSetting, {}, &exchange);
+    Check(backend.Requests().back().at("tool_choice") == "none" && last.toolCalls.empty() && last.response == "Checking both.",
+        "A last step still allowed or returned tool calls.");
+
+    // Without a tool exchange the request is exactly what it was.
+    backend.Script({WireBackend::Delta("content", "Plain.", "stop")});
+    const auto plain = service.GenerateResponse({{"user", "Hello there"}});
+    request = backend.Requests().back();
+    Check(plain.bSuccess && !request.contains("tools") && !request.contains("tool_choice") && plain.toolCalls.empty(),
+        "A reply without tools carried tool fields.");
+
+    // A tier whose context cannot hold the definitions refuses them before any request.
+    llamaCppService small((directory.root / "small.db").string());
+    Configure(small, backend.port);
+    const auto before = backend.Requests().size();
+    const auto refused = small.GenerateResponse(
+        {{"user", "Weather in Paris?"}}, {}, {}, false, revia::llm::PrivateMemoryAccess::ProfileSetting, {}, &exchange);
+    Check(refused.bToolsRejected && !refused.bSuccess && backend.Requests().size() == before,
+        "An 8K tier was sent tool definitions it cannot hold, or did not report the refusal.");
+}
+
 // Native thinking: reasoning_content was ignored, and thinking shared the answer's
 // max_tokens, so a long deliberation could end the turn before the answer began.
 void TestNativeThinkingStreamsReasoningWithItsOwnBudget()
@@ -945,6 +1027,7 @@ void RunStructuredReplyTests()
     TestBackgroundCallsStreamWithUnchangedContracts();
     TestOnlyTheKeyedServerReviaStartedIsTrusted();
     TestNativeThinkingStreamsReasoningWithItsOwnBudget();
+    TestToolCallsStreamAndReplayOnTheWire();
     TestNativeDeliberationReplacesTheSeparateInquiry();
     TestReasoningRelayReleasesReadablePieces();
 }

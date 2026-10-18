@@ -8173,8 +8173,11 @@ void TestServerArgumentsQuantizeTheKvCacheWithFlashAttention()
 
     const auto embedding = BuildLlamaServerArguments(settings, true, "mean", "none");
     Check(std::find(embedding.begin(), embedding.end(), "--embedding") != embedding.end() &&
-              std::find(embedding.begin(), embedding.end(), "--flash-attn") == embedding.end(),
+              std::find(embedding.begin(), embedding.end(), "--flash-attn") == embedding.end() &&
+              std::find(embedding.begin(), embedding.end(), "--jinja") == embedding.end(),
         "The embedding server received chat-only launch flags.");
+    Check(std::find(plain.begin(), plain.end(), "--jinja") != plain.end(),
+        "The chat server was launched without its Jinja chat template, which native tool calling requires.");
     llmSettings embeddingLaunch;
     embeddingLaunch.contextSize = 2048;
     const auto batched = BuildLlamaServerArguments(embeddingLaunch, true, "mean", "none");
