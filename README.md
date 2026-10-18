@@ -23,6 +23,7 @@ The design rule: **one Revia**. Reflex, Fast, Main, and Expert share one identit
 | Speech recognition (push-to-talk and hands-free) | **Verified live** | whisper.cpp on GPU, ~0.3–1.0 s per utterance |
 | Web lookups in a visible browser | **Verified live** | Shows query and sources; ~11 s per lookup |
 | Choosing her own tools in chat (search, memory, history, files, reminders, calculator, pictures) | Tested | Covered by automated tests against a fake llama.cpp server that streams tool calls; **not yet run against the real server in a live session** |
+| Code interpreter and coding tools in the Ubuntu guest (`run_python`, `share_project`, `repo_grep`, `read_file_range`, `apply_patch`, `run_tests`, `export_patch`) | Tested | **Off by default.** The guest worker's sandbox (no network, limits, fresh folder, file copy-back) is tested on Linux; the host side is tested against a fake guest. **Not yet run in a real VMware guest.** See [the Ubuntu workspace guide](docs/UBUNTU_WORKSPACE.md#code-interpreter-and-coding-tools) |
 | Curiosity, initiative, self-directed reflection | **Verified live** | Logs show think/research/create decisions and when she chooses to stay quiet |
 | Startup of all local model workers | **Verified live** | ~10 s to ready (Expert loads on first use; the CPU Fast model is skipped when the 4B model is on a GPU), plus ~20 s for the voice model to warm in the background |
 | Profiles and Voice Studio (create a voice, assign it to a profile) | **Verified live** | Voice `revia-bright` exists and is in use |
@@ -78,6 +79,15 @@ The design rule: **one Revia**. Reflex, Fast, Main, and Expert share one identit
   | `set_reminder` | Sets a reminder with the same parser and saved list as "remind me in 10 minutes to ..." | Always, in a private chat |
   | `calculator` | Exact arithmetic: `+ - * / **`, parentheses, decimals, simple units | Always, in a private chat |
   | `generate_image` | Makes a picture on the Canvas tab | Image generation is enabled |
+  | `mcp_<server>_<tool>` | A tool from one of your own [MCP servers](#mcp-servers) | You enabled the server and named the tool in its `allowedTools`; each call asks you first unless you turned that off for the server |
+  | `run_python` | Runs Python in the Ubuntu guest: no network, a fresh empty folder deleted afterwards, CPU, memory and time limits. numpy, matplotlib and sympy are installed. Up to 4 files saved under `out/` come back (pictures appear on the Canvas). **Asks you before every run.** | The guest permission allows execution with `/usr/bin/python3` approved, and the Ubuntu workspace is running and reports a working sandbox |
+  | `share_project` | Copies the text files of a project folder into the guest (never mounts it). **Asks you every time**, showing the folder | Guest read and write are allowed, the workspace is running, and you have an approved folder |
+  | `repo_grep`, `read_file_range` | Search a shared project, read numbered lines | Guest read is allowed |
+  | `apply_patch` | Applies a unified diff to the guest copy. Each file's diff is shown in the activity log, and is what the prompt shows when a guest write needs your approval (supervised mode) | Guest read and write are allowed |
+  | `run_tests` | Runs the test command you approved when sharing, in the guest copy. **Asks you before every run** | Guest execution is allowed |
+  | `export_patch` | Saves all changes as a `.patch` file in Revia's own folder and gives you the `git apply` command. Your files are never changed | Guest read and write are allowed |
+
+  **Code runs only in the guest VM, never on this computer.** The coding tools change only the guest's copy of a project; results come back as a patch file for you to review and apply. With the guest permission off (the default) or the workspace not running, these tools are not offered and the activity view says why ("Code sandbox: Off ..."). The calculator stays for simple arithmetic; she may use `run_python` for heavier math.
 
   Every tool runs through the same permissions an explicit command uses; none adds authority. Discord, stream, guest and other public conversations get **no** tools. A file action that needs your approval asks with the usual prompt; if no prompt is available she is told it "needs your approval" and nothing runs. At most 8 model steps per answer, with a time and size budget; tool results reach the model marked as untrusted data, never instructions. Her answer still streams through the same sentence filter as any reply, including anything she writes before calling a tool. Tools need a llama.cpp server with Jinja chat templates (`--jinja`, which Revia now passes) and a context of at least 16K tokens; the 8K Fast and Expert tiers, and any server that refuses tools, fall back to the phrase-based lookup, archive recall and arithmetic grounding exactly as before. `/operate` and `/goal` remain explicit commands.
 - **Bring things up on her own** when she has something specific to say: a reaction to what you're doing, a follow-up on something from earlier, or a question. At most four times an hour, at least 15 minutes apart. She waits for a pause in your typing and stays quiet over a full-screen game, video or presentation (`initiative.suppressWhenFullScreen`), and while another app is using the microphone (a call or meeting).
@@ -415,6 +425,8 @@ Type these in Chat or the CLI. `/help` lists everything, including direct file a
 | `/cloud`, `/cloud on`, `/cloud off` | Status of the [optional cloud model](#optional-cloud-model); switch it off (or back on) for this session |
 | `/cloud ask [--screen] [--clipboard] [--memory] <question>` | Ask the cloud model once (or say "ask the cloud ...") |
 | `/web "query"` | One web lookup |
+| `/api` | The [local API](#local-openai-compatible-api): whether it runs, its address, mode and token |
+| `/mcp`, `/mcp refresh` | Your [MCP servers](#mcp-servers): state, tools offered and tools withheld; `refresh` restarts them and reads their tools again |
 | `/bargein`, `/bargein off` | Inspect or disable voice interruption |
 | `/improve`, `/improve review <file or area>`, `/improve show\|accept\|reject <id>` | Her proposals for improving her own code |
 | `/songs`, `/sing <name>`, `/sing status`, `/sing check <name>`, `/sing stop` | Karaoke (or just ask: "Revia, sing <name>") |
@@ -524,6 +536,75 @@ Measured in ten scripted live sessions on 23 Sep 2026 (RTF is generation time di
 - Deciding whether a turn is worth remembering (about 7.5 s on the Main GPU) waits until she has finished speaking, for at most 20 s, so it does not compete with her first sentence for the GPU. This is covered by automated tests; the gain has not been measured live yet.
 
 So the voice is quick per sentence, but long replies are still generated sentence by sentence, and it slows down when a card is also busy with chat or nearly full. The installed Qwen package cannot generate audio incrementally; Revia pipelines complete sentences instead. Benchmarks live in `RuntimeData/Benchmarks/` and [docs/TTS_PERFORMANCE.md](docs/TTS_PERFORMANCE.md).
+
+---
+
+## MCP servers
+
+Revia can use tools from [Model Context Protocol](https://modelcontextprotocol.io) servers you choose (protocol revision 2025-06-18; 2025-03-26 and 2024-11-05 servers are accepted too). Nothing is configured or enabled out of the box. Add servers to `Config\settings.json`:
+
+```json
+"mcp": {
+  "servers": [
+    {
+      "id": "notes",
+      "enabled": true,
+      "transport": "stdio",
+      "command": "C:\\Tools\\notes-mcp\\notes-mcp.exe",
+      "args": ["--root", "C:\\Users\\you\\Notes"],
+      "envAllowlist": ["NOTES_TOKEN"],
+      "timeoutSeconds": 30,
+      "allowedTools": ["search_notes", "read_note"],
+      "requireConfirmation": true
+    },
+    {
+      "id": "web",
+      "enabled": false,
+      "transport": "http",
+      "url": "https://mcp.example.com/mcp",
+      "allowedTools": []
+    }
+  ]
+}
+```
+
+- **Off until you say so, tool by tool.** A server is used only with `"enabled": true`, and only the tools named in `allowedTools` are offered; an empty list offers none. `/mcp` lists every tool a server has and why each one is or is not offered.
+- **Each call asks you first** (`requireConfirmation`, default `true`): the prompt names the server, the tool and the arguments. "Allow for this whole task" counts as once; an MCP call never earns a standing approval. Without an approval prompt (the CLI with no handler, for example) nothing is sent. Setting `requireConfirmation` to `false` lets that server's allowlisted tools run without asking; do that only for a server whose tools you would let her use unattended.
+- **Private chat only.** MCP tools join the [chat tools](#do-things) in an ordinary private conversation. Discord, stream, guest and API (shared) conversations never see them.
+- **Audit.** Every call writes an intent record to the action audit before anything is sent, then a result record: server, transport, tool, the SHA-256 of the arguments, whether you confirmed it, the result size and the outcome. Never the arguments or the result. If the record cannot be written, nothing is sent.
+- **Results are untrusted data.** Text is passed on, cut to 16 KB and then to the tool loop's own bound, and labelled as untrusted output with runtime markers neutralized, like every other tool result. Images and audio are noted but not decoded; resource links are listed by name and address.
+- **Strict schemas.** A tool's input schema is rewritten into a closed form (no arguments beyond the ones it names, every string and list bounded) and the model's arguments are checked against it before anything is sent. A schema that uses something that cannot be checked strictly (`anyOf`, `$ref`, `pattern`, open `additionalProperties`, a list of types, more than four levels of nesting) refuses that tool.
+- **Stdio servers** start directly from an absolute `command` path, never through a shell: `cmd.exe`, PowerShell, `wscript`, `mshta`, `rundll32` and the other programs Revia already treats as command surfaces are refused, and so are `.bat`/`.cmd` scripts, which Windows runs through `cmd.exe`. `node.exe` and `python.exe` with the server script as an argument are allowed, because you, not the model, write the whole command line; the model only sends JSON arguments to a running server. The child gets an empty environment apart from the Windows minimum and the variables you list in `envAllowlist`, runs in a kill-on-close job object with its whole process tree, and its unread output is bounded (a server that floods it is stopped).
+- **HTTP servers** use Streamable HTTP over the same WinHTTP transport as the cloud model: HTTPS, or plain `http://127.0.0.1` for a server on this PC; redirects are refused. Server-initiated messages are read only from the response stream of Revia's own requests (no separate listening stream), so a `list_changed` notice from an HTTP server may be seen late or not at all.
+- **A server never drives her.** Revia declares no client capabilities. A server's requests to sample her model, ask you something (elicitation) or list roots are answered "method not found"; `ping` is answered.
+- **Lifecycle.** Servers start on the first private chat turn that can use tools, or with `/mcp refresh`, not at startup, so a slow server can delay that first reply by up to its `timeoutSeconds`. A server that fails is left alone for a minute. A call that times out, or that you stop, sends `notifications/cancelled`. A `notifications/tools/list_changed` makes the next turn read the tool list again.
+
+Tested on Linux against a real stdio server program (`Tests/Fixture/mcpServerFixture.cpp`) started through the same process owner: handshake, paginated tool lists, calls, tool errors, timeouts and cancellation, `list_changed`, refused sampling and elicitation, mixed content, oversized results, schema refusal, the allowlist, confirmation (none, declined, granted), the audit record, and a full tool-loop turn against a fake model server. Streamable HTTP is tested with a loopback server through a stand-in for WinHTTP. The Windows job-object spawn path is only compiled (MinGW) here; **no real third-party MCP server has been tried**, on Windows or elsewhere.
+
+---
+
+## Local OpenAI-compatible API
+
+Other programs on this PC (an editor plugin, a script, a chat front end that speaks the OpenAI API) can talk to Revia through a loopback endpoint. It is off by default:
+
+```json
+"localApi": {
+  "enabled": true,
+  "port": 17865,
+  "trustedPrivate": false
+}
+```
+
+Restart Revia, then run `/api` for the address and the token, and point the program at `http://127.0.0.1:17865/v1` with that token as its API key.
+
+- **Endpoints:** `GET /v1/models` (one model, `revia`) and `POST /v1/chat/completions`, streamed (`"stream": true`, server-sent events ending in `data: [DONE]`) or not. Any `model` name is accepted and answered as `revia`. Text content only: images, tools, tool messages and `n` above 1 are refused with an OpenAI-style error rather than silently dropped. `system` and `developer` messages are ignored: Revia keeps her own instructions. `temperature`, `max_tokens` and similar fields are ignored. No `usage` counts are returned.
+- **Who can reach it:** only `127.0.0.1`, with the install's bearer token. The token is generated on first start and kept in `RuntimeData\LocalApi\api-token`, encrypted with Windows DPAPI for your user account; delete the file and restart to replace it. A request with a browser `Origin` header, a `Host` other than the loopback address, a chunked or length-less body, or a body over 64 KB is refused after its headers, before the body is read (the same pre-routing check as the web guest). The token is compared in constant time.
+- **What a request may touch (default, shared audience):** the same isolation as the web guest. Each request is answered by its own router with a fixed Revia persona, from only the turns the request carries (the last 8, at most 32 KB). No private memory, no conversation archive, no screen or clipboard, no tools, no identity or relationship writes, and nothing is added to your conversation. A reply that would show a local path or a credential-looking string is replaced, and a streamed reply stops before such text is sent.
+- **Your conversation comes first.** One request runs at a time; a second gets HTTP 429. When you type or speak, a shared request in flight is cancelled (HTTP 503, or an error event in a stream). A request also ends after two minutes.
+- **Streaming** releases text through the same sentence gate as the chat window, so only filtered sentences are sent. If the final pass changes text that was already sent, the stream ends with `finish_reason: "content_filter"` instead of the changed reply; nothing sent can be taken back.
+- **`trustedPrivate: true` (risky, off by default)** makes every request an owner turn: it is typed into your own conversation, uses your memories, may use her tools (asking your approval on screen as usual), may be spoken aloud, and is remembered. Any program that obtains the token can then speak to Revia as you. Commands (text starting with `/`, and the exit words `exit`, `quit`, `bye`) are refused through the API, and the request's earlier turns are ignored in favour of your real history. A trusted reply is sent as one chunk when it is finished, and a trusted request is not cancelled when you start typing (it waits like any turn; Stop cancels it).
+
+Tested on Linux with a cpp-httplib client against a fake llama-server: authentication, Origin, Host and method refusal, chunked, length-less and oversized bodies refused before the body, the model list, non-streamed and streamed replies, private-path withholding in both, busy and preempted requests, caller tools and images refused, and trusted mode reaching the owner-turn hook while refusing commands. The token file is tested on Linux (owner-only permissions); the DPAPI path is only compiled for Windows here. **It has not been tried with a real client application or on the Windows build.**
 
 ---
 

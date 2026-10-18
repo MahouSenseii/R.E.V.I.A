@@ -57,6 +57,47 @@ struct ChatTool
     // "Searching the web for X", from validated arguments.
     std::function<std::string(const nlohmann::json&)> describe;
     std::function<ToolExecution(const nlohmann::json&, const ToolCallContext&)> execute;
+    // Arguments larger than this are refused before validation. Code and patches need more
+    // room than a query; every other tool keeps the default.
+    std::size_t maxArgumentBytes = 8192;
+};
+
+// The guest code tools (sandboxTools.cpp): a network-less Python interpreter and coding
+// tools over projects copied into the Ubuntu guest. Kept in their own structs so other tool
+// families can be added beside them without touching these.
+struct SandboxToolPermissions
+{
+    // run_python: guest execute permission, python3 approved, and a guest whose worker
+    // advertised the sandbox and proved it could isolate a process.
+    bool interpreter = false;
+    // share_project: guest read and write, an approved host root to share from.
+    bool share = false;
+    // repo_grep and read_file_range on a shared project.
+    bool projectRead = false;
+    // apply_patch and export_patch.
+    bool projectWrite = false;
+    // run_tests: the command configured when the project was shared.
+    bool projectRun = false;
+    std::vector<std::filesystem::path> shareRoots;
+    // Projects shared earlier in this session, named in the descriptions.
+    std::vector<std::string> projects;
+    // Why the interpreter is not offered, for the turn's status line. Empty when it is.
+    std::string unavailableReason;
+};
+
+struct SandboxToolExecutors
+{
+    std::function<ToolExecution(const std::string& code, int timeoutSeconds, const ToolCallContext&)> runPython;
+    std::function<ToolExecution(const std::string& folder, const std::string& name, const std::string& testCommand, const ToolCallContext&)>
+        shareProject;
+    std::function<ToolExecution(const std::string& project, const std::string& pattern, bool fixedStrings, bool ignoreCase,
+        const ToolCallContext&)>
+        repoGrep;
+    std::function<ToolExecution(const std::string& project, const std::string& path, int firstLine, int lastLine, const ToolCallContext&)>
+        readFileRange;
+    std::function<ToolExecution(const std::string& project, const std::string& patch, const ToolCallContext&)> applyPatch;
+    std::function<ToolExecution(const std::string& project, const ToolCallContext&)> runTests;
+    std::function<ToolExecution(const std::string& project, const ToolCallContext&)> exportPatch;
 };
 
 // The effective permissions for one turn, read from the same settings and audience that
@@ -80,6 +121,7 @@ struct ToolPermissions
     std::vector<std::filesystem::path> approvedRoots;
     bool remindersAvailable = false;
     bool imageGenerationEnabled = false;
+    SandboxToolPermissions sandbox;
 };
 
 // Bound to the existing owners: the internet lookup, memory retrieval, the conversation
@@ -95,6 +137,7 @@ struct ToolExecutors
     std::function<ToolExecution(const std::string& path, const ToolCallContext&)> listDirectory;
     std::function<ToolExecution(const std::string& text, const std::string& when, const ToolCallContext&)> setReminder;
     std::function<ToolExecution(const std::string& prompt, const ToolCallContext&)> generateImage;
+    SandboxToolExecutors sandbox;
 };
 
 // The tools one turn may offer the model, projected from that turn's permissions.
@@ -114,13 +157,17 @@ class ToolRegistry
     std::vector<ChatTool> tools;
 };
 
+// Adds the guest code tools whose permission holds and whose executor exists.
+void AddSandboxTools(ToolRegistry& registry, const SandboxToolPermissions& permissions, const SandboxToolExecutors& executors);
+
 inline constexpr std::size_t MaximumToolArgumentBytes = 8192;
 
 // Parses `arguments` and checks it strictly against the subset of JSON Schema the
 // registry writes: an object with typed properties, required keys and no others;
-// strings with length bounds, integers with ranges, booleans. Duplicate keys, nesting
-// past four levels, invalid UTF-8 and anything over MaximumToolArgumentBytes fail.
-[[nodiscard]] bool ValidateToolArguments(
-    const std::string& schemaJson, const std::string& arguments, nlohmann::json& outArguments, std::string& outError);
+// strings with length bounds, integers and numbers with ranges, booleans, and arrays of
+// one item type with a maximum length (written for MCP tools). Duplicate keys, nesting
+// past four levels, invalid UTF-8 and anything over `maximumBytes` fail.
+[[nodiscard]] bool ValidateToolArguments(const std::string& schemaJson, const std::string& arguments, nlohmann::json& outArguments,
+    std::string& outError, std::size_t maximumBytes = MaximumToolArgumentBytes);
 
 } // namespace revia::agents

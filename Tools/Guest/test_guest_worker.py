@@ -1,6 +1,7 @@
 """Exercises real confined files; Linux process-group tests run inside the VM."""
 import importlib.util
 import os
+import socket
 from pathlib import Path
 import tempfile
 import threading
@@ -139,6 +140,189 @@ class GuestWorkerTests(unittest.TestCase):
             self.api.handle({"operation": "execute", "executable": "/bin/sh", "arguments": ["-c", "whoami"], "workingDirectory": "."}, self.root)
         with self.assertRaises(self.api.RequestError):
             self.api.handle({"operation": "execute", "executable": "/usr/bin/python3", "arguments": "-c print(1)", "workingDirectory": "."}, self.root)
+
+    def run_python(self, code, timeout=10000, **limits):
+        request = {"operation": "run_python", "runId": "run-" + os.urandom(6).hex(), "code": code, "timeoutMs": timeout}
+        if limits:
+            request["limits"] = limits
+        return self.api.handle(request, self.root)
+
+    @unittest.skipUnless(os.name == "posix", "The interpreter sandbox requires the Linux guest.")
+    def test_interpreter_has_no_network(self):
+        listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.addCleanup(listener.close)
+        listener.bind(("127.0.0.1", 0))
+        listener.listen(1)
+        listener.settimeout(0.2)
+        port = listener.getsockname()[1]
+        code = ("import socket\n"
+                "interfaces = sorted(l.split(':')[0].strip() for l in open('/proc/self/net/dev').read().splitlines()[2:])\n"
+                "print('interfaces', interfaces)\n"
+                f"for address in (('127.0.0.1', {port}), ('10.0.2.2', 80), ('1.1.1.1', 443)):\n"
+                "    try:\n"
+                "        socket.create_connection(address, timeout=2).close()\n"
+                "        print('connected', address)\n"
+                "    except OSError as error:\n"
+                "        print('blocked', type(error).__name__)\n")
+        result = self.run_python(code)
+        self.assertTrue(result["succeeded"], result)
+        self.assertTrue(result["networkIsolated"])
+        self.assertIn("interfaces ['lo']", result["standardOutput"])
+        self.assertEqual(result["standardOutput"].count("blocked"), 3, result["standardOutput"])
+        self.assertNotIn("connected", result["standardOutput"])
+        with self.assertRaises(socket.timeout):
+            listener.accept()
+
+    @unittest.skipUnless(os.name == "posix", "The interpreter sandbox requires the Linux guest.")
+    def test_interpreter_runs_under_kernel_limits(self):
+        code = ("import resource\n"
+                "for name in ('RLIMIT_AS', 'RLIMIT_CPU', 'RLIMIT_FSIZE', 'RLIMIT_NPROC', 'RLIMIT_CORE'):\n"
+                "    print(name, resource.getrlimit(getattr(resource, name)))\n"
+                "try:\n"
+                "    block = bytearray(2 << 30)\n"
+                "    print('allocated')\n"
+                "except MemoryError:\n"
+                "    print('memory refused')\n")
+        result = self.run_python(code, timeout=3000)
+        self.assertTrue(result["succeeded"], result)
+        output = result["standardOutput"]
+        self.assertIn(f"RLIMIT_AS ({1 << 30}, {1 << 30})", output)
+        self.assertIn("RLIMIT_CPU (3, 4)", output)
+        self.assertIn(f"RLIMIT_FSIZE ({16 << 20}, {16 << 20})", output)
+        self.assertIn("RLIMIT_CORE (0, 0)", output)
+        self.assertIn("memory refused", output)
+        self.assertNotIn("allocated", output)
+        start = time.monotonic()
+        spin = self.run_python("while True:\n    pass\n", timeout=1500)
+        self.assertFalse(spin["succeeded"])
+        self.assertTrue(spin["timedOut"] or spin["exitCode"] < 0, spin)
+        self.assertTrue(spin["cleanupConfirmed"])
+        self.assertLess(time.monotonic() - start, 6)
+
+    @unittest.skipUnless(os.name == "posix", "The interpreter sandbox requires the Linux guest.")
+    def test_each_run_gets_a_fresh_scratch_directory_that_is_removed(self):
+        first = self.run_python("import os, pathlib\npathlib.Path('left-behind.txt').write_text('x')\nprint(os.getcwd())\n")
+        self.assertTrue(first["succeeded"], first)
+        self.assertIn("/sandbox/" + first["runId"], first["standardOutput"])
+        second = self.run_python("import os\nprint(sorted(os.listdir('.')), os.environ['HOME'] == os.getcwd())\n")
+        self.assertIn("['main.py', 'out', 'tmp'] True", second["standardOutput"])
+        self.assertEqual(list((self.root / "sandbox").iterdir()), [], "A run's scratch directory outlived it.")
+        (self.root / "sandbox" / "run-existing1").mkdir()
+        (self.root / "sandbox" / "run-existing1" / "keep.txt").write_text("keep")
+        with self.assertRaisesRegex(self.api.RequestError, "run_scratch_exists"):
+            self.api.handle({"operation": "run_python", "runId": "run-existing1", "code": "print(1)"}, self.root)
+        self.assertEqual((self.root / "sandbox" / "run-existing1" / "keep.txt").read_text(), "keep")
+        for bad in ("../escape", "UPPER-case1", "short", "a/b-cdefgh"):
+            with self.assertRaisesRegex(self.api.RequestError, "invalid_run_id"):
+                self.api.handle({"operation": "run_python", "runId": bad, "code": "print(1)"}, self.root)
+
+    @unittest.skipUnless(os.name == "posix", "The interpreter sandbox requires the Linux guest.")
+    def test_interpreter_output_is_bounded(self):
+        result = self.run_python("import sys\nprint('x' * 200000)\nprint('y' * 5000, file=sys.stderr)\n", maxOutputBytes=1000)
+        self.assertTrue(result["outputTruncated"])
+        self.assertLessEqual(len(result["standardOutput"].encode()) + len(result["standardError"].encode()), 1000)
+        with self.assertRaisesRegex(self.api.RequestError, "code_too_large_or_invalid"):
+            self.run_python("print(1)\n" * 100, maxWriteBytes=50)
+
+    @unittest.skipUnless(os.name == "posix", "The interpreter sandbox requires the Linux guest.")
+    def test_generated_files_come_back_bounded_and_typed(self):
+        code = ("import os, struct, zlib\n"
+                "def chunk(kind, data):\n"
+                "    return struct.pack('>I', len(data)) + kind + data + struct.pack('>I', zlib.crc32(kind + data))\n"
+                "png = b'\\x89PNG\\r\\n\\x1a\\n' + chunk(b'IHDR', struct.pack('>IIBBBBB', 1, 1, 8, 2, 0, 0, 0))"
+                " + chunk(b'IDAT', zlib.compress(b'\\x00\\xff\\x00\\x00')) + chunk(b'IEND', b'')\n"
+                "open('out/plot.png', 'wb').write(png)\n"
+                "open('out/data.csv', 'w').write('x,y\\n1,2\\n')\n"
+                "open('out/run.sh', 'w').write('echo no')\n"
+                "os.symlink('/etc/passwd', 'out/link.txt')\n"
+                "open('out/large.png', 'wb').write(b'0' * 600000)\n")
+        result = self.run_python(code)
+        self.assertTrue(result["succeeded"], result)
+        artifacts = {item["name"]: item for item in result["artifacts"]}
+        self.assertEqual(set(artifacts), {"data.csv", "plot.png"})
+        import base64
+        import hashlib
+        png = base64.b64decode(artifacts["plot.png"]["contentBase64"])
+        self.assertTrue(png.startswith(b"\x89PNG\r\n\x1a\n"))
+        self.assertEqual(hashlib.sha256(png).hexdigest(), artifacts["plot.png"]["sha256"])
+        self.assertEqual(base64.b64decode(artifacts["data.csv"]["contentBase64"]), b"x,y\n1,2\n")
+        omitted = {item["name"]: item["reason"] for item in result["artifactsOmitted"]}
+        self.assertEqual(omitted["run.sh"], "unsupported_name_or_type")
+        self.assertEqual(omitted["link.txt"], "not_a_bounded_regular_file")
+        self.assertEqual(omitted["large.png"], "not_a_bounded_regular_file")
+        self.assertLessEqual(sum(item["bytes"] for item in result["artifacts"]), self.api.MAX_ARTIFACT_BYTES)
+
+    def test_interpreter_never_runs_when_isolation_fails(self):
+        marker = Path(self.temporary.name) / "ran.txt"
+        with mock.patch.object(self.api, "unshare", side_effect=OSError("namespaces unavailable")):
+            with self.assertRaisesRegex(self.api.RequestError, "sandbox_unavailable|linux_guest_required"):
+                self.run_python(f"open({str(marker)!r}, 'w').write('ran')\n")
+        self.assertFalse(marker.exists(), "Code ran without its network isolation.")
+        with self.assertRaisesRegex(self.api.RequestError, "executable_or_arguments_not_allowed"):
+            self.run_python("print(1)", approvedExecutables=["/usr/bin/git"])
+
+    @unittest.skipUnless(os.name == "posix", "Health probes the Linux sandbox.")
+    def test_health_probe_reports_whether_runs_can_be_isolated(self):
+        self.assertTrue(self.api.sandbox_probe())
+        with mock.patch.object(self.api, "unshare", side_effect=OSError("namespaces unavailable")):
+            self.assertFalse(self.api.sandbox_probe())
+
+    @unittest.skipUnless(os.name == "posix", "Search runs in the Linux sandbox.")
+    def test_search_finds_lines_and_meets_its_deadline(self):
+        project = self.root / "projects" / "demo"
+        (project / "src").mkdir(parents=True)
+        (project / "src" / "main.py").write_text("def add(a, b):\n    return a + b\n# TODO: subtract\n")
+        (project / ".hidden").mkdir()
+        (project / ".hidden" / "secret.py").write_text("TODO hidden\n")
+        (project / "blob.bin").write_bytes(b"TODO\x00binary")
+        found = self.api.handle({"operation": "search_text", "path": "projects/demo", "pattern": "TODO"}, self.root)
+        self.assertTrue(found["succeeded"], found)
+        self.assertIn("src/main.py:3:# TODO: subtract", found["standardOutput"])
+        self.assertNotIn("hidden", found["standardOutput"])
+        self.assertNotIn("blob.bin", found["standardOutput"])
+        fixed = self.api.handle({"operation": "search_text", "path": "projects/demo", "pattern": "a + b", "fixedStrings": True}, self.root)
+        self.assertIn("src/main.py:2:", fixed["standardOutput"])
+        invalid = self.api.handle({"operation": "search_text", "path": "projects/demo", "pattern": "("}, self.root)
+        self.assertFalse(invalid["succeeded"])
+        self.assertIn("invalid pattern", invalid["standardError"])
+        (project / "slow.txt").write_text("a" * 40 + "!\n")
+        start = time.monotonic()
+        slow = self.api.handle({"operation": "search_text", "path": "projects/demo", "pattern": "(a+)+$", "timeoutMs": 800}, self.root)
+        self.assertTrue(slow["timedOut"] or slow["exitCode"] < 0, slow)
+        self.assertLess(time.monotonic() - start, 5)
+        with self.assertRaisesRegex(self.api.RequestError, "invalid_search"):
+            self.api.handle({"operation": "search_text", "path": "projects/demo", "pattern": "x", "maxMatches": 0}, self.root)
+
+    @unittest.skipUnless(os.name == "posix", "Imports use Linux directory descriptors.")
+    def test_shared_project_is_staged_then_replaces_the_previous_copy(self):
+        def batch(share, files, publish=None):
+            request = {"operation": "import_files", "path": "projects/.incoming-" + share, "files": files}
+            if publish:
+                request["publish"] = publish
+            return self.api.handle(request, self.root)
+        batch("share-00000001", [{"path": "src/a.py", "content": "old\n"}, {"path": "stale.txt", "content": "stale"}], "demo")
+        batch("share-00000002", [{"path": "src/a.py", "content": "new\n"}])
+        self.assertEqual((self.root / "projects/demo/src/a.py").read_text(), "old\n", "A share was visible before it was published.")
+        result = batch("share-00000002", [{"path": "README.md", "content": "hello"}], "demo")
+        self.assertTrue(result["succeeded"])
+        self.assertEqual((self.root / "projects/demo/src/a.py").read_text(), "new\n")
+        self.assertFalse((self.root / "projects/demo/stale.txt").exists())
+        self.assertEqual(sorted(path.name for path in (self.root / "projects").iterdir()), ["demo"])
+        for bad in ("../escape.txt", "/etc/passwd", "a/../../b", "a\\b", "c:x"):
+            with self.assertRaisesRegex(self.api.RequestError, "invalid_guest_path"):
+                batch("share-00000003", [{"path": bad, "content": "x"}])
+        with self.assertRaisesRegex(self.api.RequestError, "guest_file_exists"):
+            batch("share-00000004", [{"path": "same.txt", "content": "1"}, {"path": "same.txt", "content": "2"}])
+        with self.assertRaisesRegex(self.api.RequestError, "invalid_project_name"):
+            batch("share-00000005", [], "../outside")
+        with self.assertRaisesRegex(self.api.RequestError, "invalid_import_path"):
+            self.api.handle({"operation": "import_files", "path": "projects/demo", "files": []}, self.root)
+        outside = Path(self.temporary.name) / "outside"
+        outside.mkdir()
+        (self.root / "projects" / ".incoming-share-00000006").symlink_to(outside, target_is_directory=True)
+        with self.assertRaisesRegex(self.api.RequestError, "invalid_guest_directory"):
+            batch("share-00000006", [{"path": "x.txt", "content": "x"}])
+        self.assertEqual(list(outside.iterdir()), [])
 
     def test_symlink_escape_is_rejected(self):
         outside = Path(self.temporary.name) / "outside"

@@ -177,7 +177,8 @@ GuestResult VirtualMachineRuntime::Execute(const GuestRequest& request, const Gu
         result.cancelled = true;
         return result;
     }
-    const bool effect = request.operation == GuestOperation::WriteText || request.operation == GuestOperation::ExecuteProcess;
+    const bool effect = request.operation == GuestOperation::WriteText || request.operation == GuestOperation::ExecuteProcess ||
+        request.operation == GuestOperation::RunPython || request.operation == GuestOperation::ImportFiles;
     GuestResult result;
     try { result = provider->Execute(request, limits, cancellation.get_token()); }
     catch (...)

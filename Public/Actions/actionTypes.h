@@ -61,7 +61,12 @@ enum class ActionType
     VmListDirectory,
     VmReadTextFile,
     VmWriteTextFile,
-    VmExecuteProcess
+    VmExecuteProcess,
+    // The chat code tools. They are typed for chat only: no planner vocabulary names them,
+    // so a goal or /operate step can never propose one.
+    VmRunPython,
+    VmSearchFiles,
+    VmShareProject
 };
 
 // UiaElement is re-found by runtime identity and current bounds. VisualRegion requires
@@ -522,6 +527,9 @@ struct CapabilitySettings
 [[nodiscard]] bool IsBrowserAction(ActionType value);
 [[nodiscard]] bool IsGuestAction(ActionType value);
 [[nodiscard]] std::optional<workspace::GuestOperation> GuestOperationForAction(ActionType value);
+// What a person approving a guest action needs to read: the program, the command, the file
+// and its diff, or the folder to copy. Bounded, plain text. Empty for host actions.
+[[nodiscard]] std::string DescribeGuestPayload(const ActionRequest& request);
 // Requires individual confirmation even with standing approval, including recycling.
 // All capability, consequence, rate, and audit checks still apply.
 [[nodiscard]] bool AlwaysNeedsItsOwnConfirmation(ActionType value);

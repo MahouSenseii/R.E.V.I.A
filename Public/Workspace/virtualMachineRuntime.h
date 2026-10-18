@@ -8,6 +8,7 @@
 #include <stop_token>
 #include <string>
 #include <thread>
+#include <vector>
 
 namespace revia::workspace
 {
@@ -20,6 +21,10 @@ struct VirtualMachineSnapshot
     std::string message;
     GuestIdentity identity;
     bool notificationFailed = false;
+    // Operations the guest worker advertised at readiness, and whether its sandbox started an
+    // isolated process then. Reported by the guest; the host uses them only to decide what to offer.
+    std::vector<std::string> capabilities{};
+    bool sandboxReady = false;
 };
 
 class IVirtualMachineProvider

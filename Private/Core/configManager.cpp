@@ -1304,6 +1304,50 @@ bool configManager::LoadSettings(appSettings& outSettings) const
                 }
             }
         }
+        if (data.contains("mcp"))
+        {
+            // Every server starts disabled, confirmed and offering nothing; the owner turns
+            // each part on by name. A malformed entry fails the whole load, like any other
+            // setting, rather than being skipped into a half-configured server.
+            const json& mcpData = data["mcp"];
+            outSettings.mcp.servers.clear();
+            const json servers = mcpData.value("servers", json::array());
+            if (!servers.is_array() || servers.size() > 16)
+                return false;
+            const auto texts = [](const json& value)
+            {
+                std::vector<std::string> list;
+                for (const auto& entry : value)
+                    list.push_back(entry.get<std::string>());
+                return list;
+            };
+            for (const auto& entry : servers)
+            {
+                mcpServerSettings server;
+                server.id = entry.at("id").get<std::string>();
+                server.bEnabled = entry.value("enabled", server.bEnabled);
+                server.transport = entry.value("transport", server.transport);
+                server.command = entry.value("command", server.command);
+                server.args = texts(entry.value("args", json::array()));
+                server.envAllowlist = texts(entry.value("envAllowlist", json::array()));
+                server.url = entry.value("url", server.url);
+                server.timeoutSeconds = entry.value("timeoutSeconds", server.timeoutSeconds);
+                server.allowedTools = texts(entry.value("allowedTools", json::array()));
+                server.bRequireConfirmation = entry.value("requireConfirmation", server.bRequireConfirmation);
+                if (!ValidateMcpServerSettings(server).empty() ||
+                    std::any_of(outSettings.mcp.servers.begin(), outSettings.mcp.servers.end(),
+                        [&server](const mcpServerSettings& existing) { return existing.id == server.id; }))
+                    return false;
+                outSettings.mcp.servers.push_back(std::move(server));
+            }
+        }
+        if (data.contains("localApi"))
+        {
+            const json& apiData = data["localApi"];
+            outSettings.localApi.bEnabled = apiData.value("enabled", outSettings.localApi.bEnabled);
+            outSettings.localApi.port = apiData.value("port", outSettings.localApi.port);
+            outSettings.localApi.bTrustedPrivate = apiData.value("trustedPrivate", outSettings.localApi.bTrustedPrivate);
+        }
     }
     catch (const std::exception&)
     {
@@ -1344,6 +1388,9 @@ bool configManager::LoadSettings(appSettings& outSettings) const
         outSettings.llm.autoFitTargetMiB > 32768 ||
         outSettings.llm.startupTimeoutSeconds < 1 ||
         outSettings.llm.startupTimeoutSeconds > 600 ||
+        // The local API never shares a port with a model server it would then shadow.
+        outSettings.localApi.port < 1024 || outSettings.localApi.port > 65535 ||
+        outSettings.localApi.port == outSettings.llm.port || outSettings.localApi.port == outSettings.embedding.port ||
         (outSettings.llm.backend == "LLamaCpp" && outSettings.llm.bAutoStartServer &&
             (outSettings.llm.serverExecutable.empty() || outSettings.llm.modelPath.empty())) ||
         (outSettings.llm.bVisionEnabled &&

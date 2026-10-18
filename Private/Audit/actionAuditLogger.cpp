@@ -155,7 +155,9 @@ bool ActionAuditLogger::WriteRecord(const actions::ActionRequest& request, const
                 {"expected_digest", guest.expectedDigest}, {"executable", guest.executable},
                 {"working_directory_digest", ContentDigest(guest.workingDirectory)},
                 {"arguments_digest", ContentDigest(nlohmann::json(guest.arguments).dump())},
-                {"argument_count", guest.arguments.size()}, {"timeout_ms", guest.timeoutMs}};
+                {"argument_count", guest.arguments.size()}, {"timeout_ms", guest.timeoutMs}, {"run_id", guest.runId},
+                {"code_digest", ContentDigest(guest.code)}, {"code_bytes", guest.code.size()}, {"pattern_digest", ContentDigest(guest.pattern)},
+                {"publish", guest.publish}, {"file_count", guest.files.size()}, {"review_digest", ContentDigest(guest.review)}};
             if (result.guest)
             {
                 const auto& receipt = *result.guest;
@@ -163,7 +165,11 @@ bool ActionAuditLogger::WriteRecord(const actions::ActionRequest& request, const
                     {"receipt_verified", receipt.receiptVerified}, {"uncertain_effect", receipt.uncertainEffect}, {"code", receipt.code}, {"exit_code", receipt.exitCode},
                     {"cancelled", receipt.cancelled}, {"timed_out", receipt.timedOut}, {"output_truncated", receipt.outputTruncated},
                     {"content_digest", receipt.digest}, {"stdout_digest", ContentDigest(receipt.standardOutput)},
-                    {"stderr_digest", ContentDigest(receipt.standardError)}};
+                    {"stderr_digest", ContentDigest(receipt.standardError)}, {"network_isolated", receipt.networkIsolated}};
+                auto artifacts = nlohmann::json::array();
+                for (const auto& artifact : receipt.artifacts)
+                    artifacts.push_back({{"name", artifact.name}, {"sha256", artifact.sha256}, {"bytes", artifact.bytes.size()}});
+                entry["guest"]["receipt"]["artifacts"] = std::move(artifacts);
             }
         }
         if (actions::IsBrowserAction(request.type))

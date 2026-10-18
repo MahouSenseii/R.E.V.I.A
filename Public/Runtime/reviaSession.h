@@ -24,6 +24,7 @@
 #include "Core/configManager.h"
 #include "Core/conversationContext.h"
 #include "Content/workingDocument.h"
+#include "Agents/sandboxTools.h"
 #include "Runtime/documentWorkshop.h"
 #include "Runtime/turnContext.h"
 #include "Core/preferenceStore.h"
@@ -60,6 +61,8 @@
 #include "Performance/performanceRuntime.h"
 #include "Presence/presenceRuntime.h"
 #include "Presence/webGuestRuntime.h"
+#include "Presence/localApiRuntime.h"
+#include "Mcp/mcpManager.h"
 #include "Presentation/avatarState.h"
 #include "Presentation/debugPresentationSink.h"
 #include "Presentation/presentationBus.h"
@@ -624,6 +627,9 @@ class ReviaSession
     [[nodiscard]] std::shared_ptr<const core::TaskContract> BuildActionTaskContract(const actions::ActionRequest& request,
         const RuntimeStamp& stamp, std::stop_token stopToken);
     [[nodiscard]] std::string TaskContractRefusal(const core::TaskContract& task, std::stop_token stopToken) const;
+    // The owner's allowlisted MCP tools for one private turn, behind the confirmation
+    // handler and the action audit. Empty when no server is enabled or the audit is down.
+    [[nodiscard]] std::vector<agents::ChatTool> McpChatTools(const ConfirmationHandler& handler, std::stop_token stopToken);
 
     agents::InputContext CaptureInputContext(agents::InputSource source, const identity::SpeakerObservation& speaker = {});
     [[nodiscard]] bool InputContextCurrent(const agents::InputContext& captured) const;
@@ -669,6 +675,9 @@ class ReviaSession
     bool HandleImprovementCommand(const std::string& input, SessionResult& result);
     void SignalCuriosity(const std::string& reason);
     void StartExternalAdapterLoop();
+    // The local OpenAI-compatible API, when the owner enabled it; and what /api says.
+    void StartLocalApi();
+    [[nodiscard]] std::string LocalApiStatusText() const;
     void StopExternalAdapterLoop();
     void QueueExternalAdapterEvent(const presence::ExternalAdapterEvent& event);
     std::stop_token BeginOperation();
@@ -824,6 +833,12 @@ class ReviaSession
     performance::PerformanceRuntime performanceRuntime;
     presence::PresenceRuntime presenceRuntime;
     std::atomic<std::shared_ptr<presence::WebGuestRuntime>> webGuestRuntime;
+    // Connections to the owner's MCP servers. Nothing connects until a private turn or
+    // /mcp asks, and only enabled servers with allowlisted tools are ever offered.
+    mcp::McpManager mcpManager;
+    std::atomic<std::shared_ptr<presence::LocalApiRuntime>> localApiRuntime;
+    // Written once before localApiRuntime is published, and read only after it is.
+    std::string localApiToken;
     // The boundary an avatar will eventually sit behind. Her core publishes what she is
     // doing; a renderer decides what that looks like. The debug sink is the proof the
     // boundary carries enough to draw from, before there is anything to draw.
@@ -913,6 +928,8 @@ class ReviaSession
     visual::ImageGenerator imageGenerator;
     // Declared after borrowed collaborators so it is destroyed first.
     DocumentWorkshop documentWorkshop;
+    // The guest code tools' projects and generated files. Outlives every turn's tool executors.
+    agents::SandboxWorkspace sandboxWorkspace;
     std::string conversationSessionId;
     // Writers also hold operationMutex; this lets the window read the id without it.
     mutable std::mutex conversationIdMutex;

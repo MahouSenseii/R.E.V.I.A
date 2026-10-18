@@ -98,6 +98,17 @@ class BootstrapTests(unittest.TestCase):
                         commands.index("touch /var/lib/revia/bootstrap-ready"))
         self.assertIn("systemctl is-active --quiet open-vm-tools", commands)
 
+    def test_cloud_init_prepares_the_interpreter_sandbox(self):
+        manifest = self.api.enroll(self.root, "companion-one")
+        config = self.api.cloud_config(manifest, "ssh-ed25519 AAAA fixture", "private", "ssh-ed25519 BBBB host")
+        packages = next(line for line in config.splitlines() if line.startswith("packages: "))
+        for package in ("python3-numpy", "python3-matplotlib", "python3-sympy"):
+            self.assertIn(package, packages)
+        self.assertIn("kernel.apparmor_restrict_unprivileged_userns = 0", config)
+        commands = config.split("\nruncmd:\n", 1)[1]
+        self.assertLess(commands.index("[sysctl, --system]"), commands.index("touch /var/lib/revia/bootstrap-ready"))
+        self.assertNotIn("sudo", config)
+
     def test_ready_requires_matching_environment_and_valid_boot_epoch(self):
         manifest = self.api.enroll(self.root, "companion-one")
         good = {"schemaVersion": 1, "ok": True, "ready": True,

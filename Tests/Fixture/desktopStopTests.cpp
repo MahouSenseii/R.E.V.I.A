@@ -1320,7 +1320,7 @@ struct ReviaWindowStopTests
                 ++failures;
             }
         };
-        auto* panel = window.findChild<ChatSessionsPanel*>("chatSessionsPanel");
+        auto* panel = dynamic_cast<ChatSessionsPanel*>(window.findChild<QWidget*>("chatSessionsPanel"));
         auto* list = window.findChild<QListWidget*>("chatSessionList");
         auto* status = window.findChild<QLabel*>("chatSessionsStatus");
         expect(panel && list && status && window.findChild<QPushButton*>("chatSidebarToggle"), "Chat has no chat list beside the transcript");
@@ -1432,7 +1432,7 @@ struct ReviaWindowStopTests
                 count += entry.is_regular_file() ? 1 : 0;
             return count;
         };
-        auto* tray = window.findChild<AttachmentTray*>("attachmentTray");
+        auto* tray = dynamic_cast<AttachmentTray*>(window.findChild<QWidget*>("attachmentTray"));
         auto* attach = window.findChild<QPushButton*>("attachButton");
         auto* documents = window.findChild<QPushButton*>("documentsButton");
         expect(tray && attach && documents, "The composer has no attachment tray, Attach or Documents button");

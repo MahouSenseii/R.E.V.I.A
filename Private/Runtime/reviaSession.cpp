@@ -345,7 +345,8 @@ ReviaSession::ReviaSession(CompanionPaths paths, std::shared_ptr<policy::Compani
           }),
       preferenceStore(companionPaths.Resolve("RuntimeData/Preferences/preferences.json")),
       relationships(companionPaths.Resolve("RuntimeData/Identity/identity.json")),
-      diagramStore(companionPaths.Resolve("RuntimeData/Diagrams")), documentWorkshop(router, actionRuntime, diagramStore, appLogger)
+      diagramStore(companionPaths.Resolve("RuntimeData/Diagrams")), documentWorkshop(router, actionRuntime, diagramStore, appLogger),
+      sandboxWorkspace(companionPaths.Resolve("RuntimeData/Sandbox"))
 {
     const RuntimeStamp origin = sessionIdentity.Stamp();
     if (!authority)
@@ -442,6 +443,47 @@ ReviaSession::ReviaSession(CompanionPaths paths, std::shared_ptr<policy::Compani
             };
             grant.executors.readFile = fileTool(actions::ActionType::ReadTextFile);
             grant.executors.listDirectory = fileTool(actions::ActionType::ListDirectory);
+            // The guest code tools: offered only with the guest permission and a ready VM whose
+            // worker advertised its sandbox. Code never runs on this computer; each tool is a
+            // typed guest action through the same port, policy, confirmation and audit.
+            const auto machine = virtualMachine;
+            const auto guestState = machine ? std::optional<workspace::VirtualMachineSnapshot>(machine->Snapshot()) : std::nullopt;
+            grant.sandbox = agents::ProjectSandboxTools(
+                capabilities.guest, guestState ? &*guestState : nullptr, capabilities.approvedRoots, sandboxWorkspace.Projects());
+            agents::SandboxWorkspace::Binding binding;
+            binding.port = *port;
+            binding.maxTimeoutMs = capabilities.guest.limits.maxTimeoutMs;
+            binding.prepare = [this, origin, stopToken](actions::ActionRequest& request)
+            {
+                request.taskContract = BuildActionTaskContract(request, origin, stopToken);
+                return request.taskContract != nullptr;
+            };
+            binding.showImage = [this, origin](const std::filesystem::path& path)
+            {
+                // The same Canvas event /show publishes; the file is Revia's own artifact.
+                RuntimeEvent event;
+                event.kind = RuntimeEventKind::Diagram;
+                event.state = state.load();
+                event.component = "Canvas";
+                event.phase = "Image";
+                event.message = actions::PathToUtf8(path.filename());
+                event.resource = actions::PathToUtf8(path);
+                event.stamp = origin;
+                eventBus.Publish(std::move(event));
+            };
+            binding.showPatch = [this, origin](const std::string& title, const std::string& diff)
+            {
+                RuntimeEvent event;
+                event.kind = RuntimeEventKind::Activity;
+                event.state = state.load();
+                event.component = "Code sandbox";
+                // The activity log shows the message, so the diff travels in it, bounded.
+                event.message = title + ":\n" + utf8::Prefix(diff, 6000) + (diff.size() > 6000 ? "\n[... the rest is in the patch]" : "");
+                event.detail = utf8::Prefix(diff, 16000);
+                event.stamp = origin;
+                eventBus.Publish(std::move(event));
+            };
+            grant.executors.sandbox = sandboxWorkspace.Bind(std::move(binding));
             if (grant.imageGenerationEnabled)
             {
                 grant.executors.generateImage = [this, admission](const std::string& prompt, const agents::ToolCallContext& call)
@@ -455,6 +497,7 @@ ReviaSession::ReviaSession(CompanionPaths paths, std::shared_ptr<policy::Compani
                     return result.succeeded ? agents::ToolExecution::Ok(result.text) : agents::ToolExecution::Fail(result.text);
                 };
             }
+            grant.mcpTools = McpChatTools(handler, stopToken);
             return grant;
         });
     turnCoordinator.SetAdmissionGuard([this, origin]() { return sessionIdentity.IsCurrent(origin); });
@@ -693,6 +736,7 @@ bool ReviaSession::Start()
     // still defaults, so a configured decision mode or learned artifact would never
     // have reached the coordinator. This is the first moment the file has been read.
     computerTasks.ApplySettings(settings.computerControl);
+    mcpManager.Configure(settings.mcp);
     if (!settingsLoaded)
     {
         core::ExitReporter::Record(core::ExitReason::StartupFailure, "settings could not be loaded");
@@ -1404,6 +1448,7 @@ bool ReviaSession::Start()
         else
             PublishComponent("Web demo", "Disabled", "Web configuration is invalid or the local listener is unavailable.");
     }
+    StartLocalApi();
     StartInitiativeLoop();
     StartCuriosityLoop();
     StartSelfImprovement();
@@ -3868,6 +3913,8 @@ SessionResult ReviaSession::Submit(const std::string& input, const agents::Input
 {
     if (auto guest = webGuestRuntime.load())
         guest->Preempt();
+    if (auto api = localApiRuntime.load())
+        api->Preempt();
     SessionResult result;
     if (!started.load())
     {
@@ -4517,6 +4564,9 @@ void ReviaSession::Stop()
     agentWorkflow.Join();
     if (auto guest = webGuestRuntime.exchange({}))
         guest->Stop();
+    if (auto api = localApiRuntime.exchange({}))
+        api->Stop();
+    mcpManager.Shutdown();
     // Order matters. The warmup is built to survive RequestStop, because stopping a reply
     // must not cost the session its voice. Shutdown is the one case where it must not
     // retry, so cancel it first, then let RequestStop kill the Qwen worker so an in-flight
@@ -9531,6 +9581,36 @@ bool ReviaSession::TryHandleActionInput(const std::string& input, SessionResult&
         return true;
     }
 
+    if (input == "/api")
+    {
+        result.text = LocalApiStatusText();
+        SetState(RuntimeState::Idle);
+        return true;
+    }
+
+    if (input == "/mcp" || input.rfind("/mcp ", 0) == 0)
+    {
+        const std::string argument = input.size() > 5 ? Trim(input.substr(5)) : std::string();
+        if (argument == "refresh")
+        {
+            // Starts each enabled server again and reads its tools; nothing is called.
+            mcpManager.Reconnect(CurrentOperationToken());
+            result.text = mcpManager.StatusText();
+        }
+        else if (argument.empty() || argument == "status")
+        {
+            result.text = mcpManager.StatusText();
+        }
+        else
+        {
+            result.succeeded = false;
+            result.text = "Usage: /mcp [status|refresh]";
+            result.reason = "Unrecognized MCP argument.";
+        }
+        SetState(result.succeeded ? RuntimeState::Idle : RuntimeState::Blocked, result.reason);
+        return true;
+    }
+
     // "/cloud ask <question>" is a conversation turn, not a command: it is left to the
     // reply path, which strips the prefix and routes the turn to the cloud model.
     if ((input == "/cloud" || input.rfind("/cloud ", 0) == 0) && !commandManager::IsCloudQuestion(input))
@@ -10365,6 +10445,8 @@ std::stop_token ReviaSession::BeginOperation()
 {
     if (auto guest = webGuestRuntime.load())
         guest->Preempt();
+    if (auto api = localApiRuntime.load())
+        api->Preempt();
     std::lock_guard lock(cancellationMutex);
     activeStopSource = std::stop_source{};
     return activeStopSource.get_token();

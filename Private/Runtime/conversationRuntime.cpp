@@ -396,6 +396,13 @@ aiProfile ConversationRuntime::PublicGuestProfile()
 SessionResult ConversationRuntime::ReplyPublic(messageRouter& isolatedRouter, const std::string& input,
     const std::vector<conversationMessage>& guestHistory, const std::stop_token stopToken)
 {
+    return ReplyIsolated(isolatedRouter, input, guestHistory, stopToken, {}, "I can't share private local details on a public channel.");
+}
+
+SessionResult ConversationRuntime::ReplyIsolated(messageRouter& isolatedRouter, const std::string& input,
+    const std::vector<conversationMessage>& guestHistory, const std::stop_token stopToken, const messageRouter::DeltaHandler& onApprovedDelta,
+    const std::string& refusal)
+{
     SessionResult result;
     result.succeeded = false;
     result.fromAssistant = true;
@@ -409,16 +416,36 @@ SessionResult ConversationRuntime::ReplyPublic(messageRouter& isolatedRouter, co
     facts.privateHistoryExcluded = true;
     responseFilterSettings filters;
     filters.maxReplyCharacters = 8192;
+    // Approved deltas pass on only while the text so far shows no local path or
+    // credential; once one would, nothing more is released and the final reply decides.
+    messageRouter::DeltaHandler guarded;
+    std::string released;
+    bool withheld = false;
+    if (onApprovedDelta)
+    {
+        guarded = [&](const std::string& delta)
+        {
+            if (withheld || delta.empty() || stopToken.stop_requested())
+                return;
+            if (ContainsPublicSecretPattern(released + delta))
+            {
+                withheld = true;
+                return;
+            }
+            released += delta;
+            onApprovedDelta(delta);
+        };
+    }
     // This coordinator never receives memory work and is local to the guest turn.
     agents::TurnCoordinator publicCoordinator;
     auto output = publicCoordinator
                       .Execute(isolatedRouter, input, messages, filters, facts, false, agents::ClassifyRequestedProvenance(input), 0,
-                          stopToken, {}, {}, llm::PrivateMemoryAccess::Denied)
+                          stopToken, guarded, {}, llm::PrivateMemoryAccess::Denied)
                       .response;
     if (stopToken.stop_requested() || !output.bSuccess)
         return result;
-    result.text = ContainsPublicSecretPattern(output.response) ? "I can't share private local details on a public channel."
-                                                               : std::move(output.response);
+    result.text = ContainsPublicSecretPattern(output.response) ? refusal : std::move(output.response);
+    result.wasStreamed = !released.empty();
     if (result.text.size() > 8192)
         revia::utf8::Truncate(result.text, 8192);
     result.succeeded = !result.text.empty();
@@ -1186,6 +1213,13 @@ SessionResult ConversationRuntime::Generate(const std::string& policyInput, cons
         permissions.approvedRoots = grant.approvedRoots;
         permissions.remindersAvailable = grant.remindersAvailable;
         permissions.imageGenerationEnabled = grant.imageGenerationEnabled;
+        permissions.sandbox = grant.sandbox;
+        // Whether code can run this turn, and if not, why: the one place this is said.
+        if (permissions.sandbox.interpreter && grant.executors.sandbox.runPython)
+            publishComponent("Code sandbox", "Ready", "run_python runs in the Ubuntu guest without network, one approval per run.", -1.0, 0,
+                currentTurn);
+        else if (!permissions.sandbox.unavailableReason.empty())
+            publishComponent("Code sandbox", "Off", permissions.sandbox.unavailableReason, -1.0, 0, currentTurn);
         agents::ToolExecutors executors = grant.executors;
         if (internetLookup)
         {
@@ -1244,6 +1278,17 @@ SessionResult ConversationRuntime::Generate(const std::string& policyInput, cons
             };
         }
         agents::ToolRegistry registry = agents::ToolRegistry::Project(permissions, executors);
+        // Tools from the owner's MCP servers, each already behind its own confirmation and
+        // audit. They join only a turn the registry already gives tools to, and never take
+        // the name of a built-in tool.
+        if (!registry.Empty())
+        {
+            for (auto& tool : grant.mcpTools)
+            {
+                if (registry.Find(tool.definition.name) == nullptr)
+                    registry.Add(std::move(tool));
+            }
+        }
         if (!registry.Empty())
             toolLoop.emplace(std::move(registry));
     }
