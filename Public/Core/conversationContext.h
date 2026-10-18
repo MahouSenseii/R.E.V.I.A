@@ -22,6 +22,11 @@ public:
     // The caller admits archive scope before reconstruction; this owner never reads disk.
     void RestoreMessages(const std::vector<conversationMessage>& source, std::size_t recentMessages);
 
+    // Scales the retained-history caps to the conversation model's context window. The
+    // defaults match 8,192 tokens; 32,768 keeps about 60 messages and 60,000 characters,
+    // and a smaller window keeps proportionally less.
+    void SetContextTokens(int contextTokens);
+
     std::vector<conversationMessage> GetRecentMessages() const;
     [[nodiscard]] std::string GetCompressedHistorySummary() const;
 
@@ -45,5 +50,7 @@ private:
     std::uint64_t nextSource = 1;
     std::size_t maxMessages = 24;
     std::size_t maxCharacters = 14000;
+    // Older messages longer than this keep only their head and tail.
+    std::size_t maxRetainedMessageCharacters = 3500;
     std::size_t maxSummaryCharacters = 2400;
 };

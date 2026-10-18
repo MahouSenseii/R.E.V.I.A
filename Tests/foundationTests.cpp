@@ -8139,6 +8139,50 @@ void TestOneLongPasteDoesNotEraseTheConversation()
         "An earlier long paste was neither bounded nor kept with both of its ends.");
 }
 
+void TestServerArgumentsQuantizeTheKvCacheWithFlashAttention()
+{
+    llmSettings settings;
+    settings.contextSize = 32768;
+    settings.kvCacheType = "q8_0";
+    const auto arguments = BuildLlamaServerArguments(settings, false, "", "");
+    const auto valueOf = [&arguments](const std::string& flag) -> std::string
+    {
+        const auto found = std::find(arguments.begin(), arguments.end(), flag);
+        return found == arguments.end() || found + 1 == arguments.end() ? std::string("<absent>") : *(found + 1);
+    };
+    Check(valueOf("--ctx-size") == "32768" && valueOf("--cache-type-k") == "q8_0" && valueOf("--cache-type-v") == "q8_0",
+        "A 32K context with a q8_0 KV cache did not reach llama-server.");
+    Check(valueOf("--flash-attn") == "on",
+        "A quantized V cache was launched without forcing flash attention, which llama.cpp requires for it.");
+
+    settings.kvCacheType.clear();
+    const auto plain = BuildLlamaServerArguments(settings, false, "", "");
+    Check(std::find(plain.begin(), plain.end(), "--cache-type-k") == plain.end() &&
+              std::find(plain.begin(), plain.end(), "auto") != plain.end(),
+        "An unset KV cache type changed llama.cpp's default cache or flash-attention choice.");
+
+    const auto embedding = BuildLlamaServerArguments(settings, true, "mean", "none");
+    Check(std::find(embedding.begin(), embedding.end(), "--embedding") != embedding.end() &&
+              std::find(embedding.begin(), embedding.end(), "--flash-attn") == embedding.end(),
+        "The embedding server received chat-only launch flags.");
+    Check(IsQuantizedKvCacheType("q8_0") && IsQuantizedKvCacheType("iq4_nl") && !IsQuantizedKvCacheType("f16") &&
+              !IsQuantizedKvCacheType(""),
+        "Quantized KV cache types were not recognized.");
+}
+
+void TestChatWorkingSetCountsALargerKvCache()
+{
+    appSettings settings;
+    settings.llm.contextSize = 8192;
+    const auto baseline = revia::resources::EstimateResourceRequirements(settings, false).chatWorkingSetMiB;
+    settings.llm.contextSize = 32768;
+    const auto f16 = revia::resources::EstimateResourceRequirements(settings, false).chatWorkingSetMiB;
+    settings.llm.kvCacheType = "q8_0";
+    const auto q8 = revia::resources::EstimateResourceRequirements(settings, false).chatWorkingSetMiB;
+    Check(f16 == baseline + 960 && q8 == baseline + 480,
+        "The chat VRAM estimate did not grow with a 32K KV cache, or ignored its q8_0 quantization.");
+}
+
 void TestHardwarePlanScalesParallelLanesConservatively()
 {
     const llamaHardwarePlan laptop = PlanLlamaHardware(8192, 16384, 4600);
@@ -9971,6 +10015,8 @@ int main(const int argc, char** argv)
         TestConversationContextKeepsCoherentRecentTurns();
         TestOneLongPasteDoesNotEraseTheConversation();
         TestHardwarePlanScalesParallelLanesConservatively();
+        TestServerArgumentsQuantizeTheKvCacheWithFlashAttention();
+        TestChatWorkingSetCountsALargerKvCache();
         TestPresenceRuntimePublishesAvatarStateAndBoundsAdapters();
         TestResourcePlannerKeepsAutomaticVoiceOffTheChatGpu();
         TestResourcePlannerUsesBothGpusForParallelLongVoice();

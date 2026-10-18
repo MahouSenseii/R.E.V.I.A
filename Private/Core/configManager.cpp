@@ -43,6 +43,14 @@ namespace
             (!cudaOnly && std::regex_match(value, Backend));
     }
 
+    // The cache types llama-server's --cache-type-k/--cache-type-v accept. Empty keeps
+    // its f16 default.
+    bool IsKvCacheType(const std::string& value)
+    {
+        static const std::regex Types(R"(^(|f32|f16|bf16|q8_0|q4_0|q4_1|iq4_nl|q5_0|q5_1)$)");
+        return std::regex_match(value, Types);
+    }
+
     void ReadModelTier(const json& data, modelTierSettings& output)
     {
         if (data.contains("enabled")) output.bEnabled = data["enabled"].get<bool>();
@@ -178,6 +186,11 @@ bool configManager::LoadSettings(appSettings& outSettings) const
             if (llmData.contains("contextSize"))
             {
                 outSettings.llm.contextSize = llmData["contextSize"].get<int>();
+            }
+
+            if (llmData.contains("kvCacheType"))
+            {
+                outSettings.llm.kvCacheType = llmData["kvCacheType"].get<std::string>();
             }
 
             if (llmData.contains("parallelRequests"))
@@ -1288,6 +1301,7 @@ bool configManager::LoadSettings(appSettings& outSettings) const
         outSettings.llm.temperature > 2.0f || outSettings.llm.maxTokens < 1 ||
         outSettings.llm.maxTokens > 32768 ||
         outSettings.llm.contextSize < 512 || outSettings.llm.contextSize > 1048576 ||
+        !IsKvCacheType(outSettings.llm.kvCacheType) ||
         outSettings.llm.parallelRequests < 1 || outSettings.llm.parallelRequests > 16 ||
         outSettings.llm.autoFitTargetMiB < 256 ||
         outSettings.llm.autoFitTargetMiB > 32768 ||

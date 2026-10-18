@@ -190,6 +190,9 @@ llmSettings BuildTierSettings(const llmSettings& base, const modelTierSettings& 
     output.bVisionEnabled = tier.bVisionEnabled;
     output.multimodalProjectorPath = tier.multimodalProjectorPath;
     output.contextSize = tier.contextSize;
+    // The quantized KV cache was chosen for Main's 32K context. Fast and Expert keep
+    // llama.cpp's default cache at their own smaller contexts.
+    output.kvCacheType.clear();
     output.parallelRequests = 1;
     output.maxTokens = tier.maxTokens;
     output.temperature = tier.temperature;
@@ -1088,6 +1091,9 @@ bool ReviaSession::Start()
     stageStarted = std::chrono::steady_clock::now();
     router.ApplyLLMSettings(
         settings.llm, fastLlmSettings, expertLlmSettings, settings.embedding, profile, fastBrainConfigured, expertBrainConfigured);
+    // Retained history follows Main's context window: 32K keeps far more of the
+    // conversation than 8K, and a small context keeps the old, safe caps.
+    context.SetContextTokens(settings.llm.contextSize);
     mainPreparation.Reset();
     fastPreparation.Reset();
     expertPreparation.Reset();

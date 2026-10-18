@@ -30,6 +30,10 @@ struct llmSettings
     int ramCacheMiB = -1;
     std::string modelLoadMode = "auto";
     int contextSize = 8192;
+    // K and V cache element type passed to llama-server, for example "q8_0". Empty keeps
+    // llama.cpp's f16 default. A quantized V cache requires flash attention, so a
+    // quantized type also switches flash attention from "auto" to "on".
+    std::string kvCacheType;
     int parallelRequests = 2;
     int startupTimeoutSeconds = 120;
     bool bShutdownServerOnExit = true;

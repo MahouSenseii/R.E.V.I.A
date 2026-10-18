@@ -2,6 +2,8 @@
 
 #include "LLM/tokenEstimate.h"
 #include "Core/conversationContext.h"
+#include "Core/configManager.h"
+#include "Core/appSettings.h"
 #include "Core/utf8.h"
 #include "LLM/LLamaCPP/llamaCppService.h"
 #include "Identity/promptMarkers.h"
@@ -188,6 +190,78 @@ void TestHistoryTrimLeavesAStablePrefix()
     for (const auto& message : byCharacters.GetRecentMessages())
         retained += message.content.size();
     Check(retained <= 14000, "Hysteresis trimming exceeded the character budget.");
+}
+
+// A 32K context kept the 8K history caps: 24 messages, 14,000 characters, and older
+// messages cut to 3,500 characters. The caps now follow the configured context.
+void TestHistoryCapsFollowTheContextWindow()
+{
+    const auto fill = [](conversationContext& history, const int exchanges, const int first = 0)
+    {
+        for (int index = first; index < first + exchanges; ++index)
+        {
+            history.AddMessage("user", "Question " + std::to_string(index));
+            history.AddMessage("assistant", "Answer " + std::to_string(index));
+        }
+    };
+    const std::string longMessage = "HEAD " + Repeat("detail ", 2500) + " TAIL";
+
+    conversationContext large;
+    large.SetContextTokens(32768);
+    large.AddMessage("user", longMessage);
+    fill(large, 29);
+    auto recent = large.GetRecentMessages();
+    Check(recent.size() == 59 && recent.front().content.size() > 11000 && recent.front().content.size() <= 12000 &&
+              recent.front().content.starts_with("HEAD") && recent.front().content.ends_with("TAIL"),
+        "A 32K context did not keep about 60 messages with older messages bounded near 12,000 characters.");
+    fill(large, 1, 29);
+    Check(large.GetRecentMessages().size() <= 60 && large.GetRecentMessages().back().content == "Answer 29",
+        "A 32K context exceeded its message budget or lost the newest message.");
+
+    conversationContext standard;
+    standard.AddMessage("user", longMessage);
+    standard.AddMessage("assistant", "Noted.");
+    Check(standard.GetRecentMessages().front().content.size() <= 3500,
+        "The default 8K caps changed for a context that was never configured.");
+    standard.SetContextTokens(8192);
+    fill(standard, 20);
+    Check(standard.GetRecentMessages().size() <= 24, "An 8K context gained a larger history than it had before.");
+
+    conversationContext small;
+    small.SetContextTokens(4096);
+    fill(small, 20);
+    std::size_t characters = 0;
+    for (const auto& message : small.GetRecentMessages())
+        characters += message.content.size();
+    Check(small.GetRecentMessages().size() <= 12 && characters <= 7000,
+        "A 4K context kept more history than its window can safely hold.");
+
+    // Shrinking the window applies at once, so a profile switch to a small model cannot
+    // inherit a history sized for a large one.
+    large.SetContextTokens(4096);
+    Check(large.GetRecentMessages().size() <= 12 && large.GetRecentMessages().back().content == "Answer 29",
+        "Reducing the context did not trim the history already held.");
+}
+
+// The shipped settings select a 32K Main context with a q8_0 KV cache, and validation
+// accepts it while still refusing a cache type llama-server would reject at launch.
+void TestShippedSettingsSelectA32KMainContext()
+{
+    revia::tests::ScopedTestDirectory directory;
+    appSettings shipped;
+    Check(configManager("Config/settings.json", "Profiles").LoadSettings(shipped),
+        "The shipped Config/settings.json no longer passes validation.");
+    Check(shipped.llm.contextSize == 32768 && shipped.llm.kvCacheType == "q8_0",
+        "The shipped Main context is not 32K with a q8_0 KV cache.");
+
+    std::ifstream source("Config/settings.json");
+    nlohmann::json document = nlohmann::json::parse(source);
+    document["llm"]["kvCacheType"] = "q9_9";
+    const auto invalid = directory.root / "settings.json";
+    std::ofstream(invalid) << document.dump(2);
+    appSettings rejected;
+    Check(!configManager(invalid.string(), "Profiles").LoadSettings(rejected),
+        "An unknown KV cache type passed validation and would only fail when llama-server starts.");
 }
 
 void TestPronounRecallUsesTheLatestAdmittedTopic()
@@ -1098,6 +1172,8 @@ void RunContextFittingTests()
     TestContinuityPreservesDecimalConstraintsAfterEvictionAndRestore();
     TestContinuityKeepsNonnumericSentenceBoundaries();
     TestHistoryTrimLeavesAStablePrefix();
+    TestHistoryCapsFollowTheContextWindow();
+    TestShippedSettingsSelectA32KMainContext();
     TestPrivateReplyRetainsEvictedDecimalConstraintsOnTheWire();
     TestPronounRecallUsesTheLatestAdmittedTopic();
     TestContinuityRebuildAndRollbackStayBounded();

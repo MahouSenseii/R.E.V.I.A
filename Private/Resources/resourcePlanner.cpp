@@ -1,6 +1,7 @@
 #include "Core/appSettings.h"
 #include "Resources/resourceSettings.h"
 #include "Resources/resourcePlanner.h"
+#include "LLM/LLamaCPP/llamaCppServerProcess.h"
 
 #include <algorithm>
 #include <cctype>
@@ -588,6 +589,13 @@ ResourceRequirements EstimateResourceRequirements(const appSettings& settings, c
         // Planning must remain useful before models are installed and in synthetic runs.
         requirements.chatWorkingSetMiB = 7000;
     }
+    // The GiB above covers the KV cache up to 8,192 tokens. Beyond that the cache grows
+    // with the context: on the configured Qwen3.5-4B, 32K took about 589 MiB more GPU
+    // memory than 16K with an f16 cache (docs/CONTEXT_BENCHMARK.md), about 37 MiB per
+    // thousand tokens. Rounded up to 40, and halved for a q8_0 cache.
+    const int extraContextTokens = std::max(0, settings.llm.contextSize - 8192);
+    const std::uint64_t kvMiBPerThousand = IsQuantizedKvCacheType(settings.llm.kvCacheType) ? 20 : 40;
+    requirements.chatWorkingSetMiB += static_cast<std::uint64_t>(extraContextTokens) * kvMiBPerThousand / 1024;
     requirements.voiceExpected = voiceExpected;
     requirements.speechRecognitionGpuEnabled = settings.speechRecognition.bUseGpu;
     requirements.voiceMayShareChatGpu =

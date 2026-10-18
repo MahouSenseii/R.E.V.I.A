@@ -382,6 +382,8 @@ Having a file in `Models\` does not mean it is used. This is the live map:
 | Reply voice | `Qwen3-TTS-12Hz-0.6B-Base` | RTX 5070 (BF16) + RTX 2070 Super (FP32) |
 | Voice creation | `Qwen3-TTS-12Hz-1.7B-VoiceDesign` | Loaded only while creating a voice |
 
+Main runs with a 32,768-token context and a q8_0 KV cache (`llm.contextSize`, `llm.kvCacheType`); Fast and Expert keep 8,192 tokens. How much recent conversation she keeps follows Main's context: about 60 messages at 32K, 24 at 8K. Set `llm.contextSize` back to `8192` on a GPU with little free memory. See [docs/CONTEXT_BENCHMARK.md](docs/CONTEXT_BENCHMARK.md) for what has and has not been measured at 32K.
+
 The Qwen2.5-Omni and Llama 3.1 8B files that may sit in `Models\` are not used. `/models` shows exactly what is loaded this session.
 
 All workers are separate local processes bound to `127.0.0.1` so each GPU gets its own CUDA context and a crash cannot take Revia down. Nothing is sent to a cloud model.

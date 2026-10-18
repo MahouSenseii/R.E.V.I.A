@@ -238,7 +238,31 @@ std::size_t conversationContext::CharacterCount() const
 
 std::size_t conversationContext::MaximumRetainedMessageCharacters() const
 {
-    return std::max<std::size_t>(512, maxCharacters / 4);
+    return std::max<std::size_t>(512, maxRetainedMessageCharacters);
+}
+
+void conversationContext::SetContextTokens(const int contextTokens)
+{
+    // Anchored at two points: the 8,192-token caps the conversation was tuned with, and
+    // about 60 messages, 60,000 characters and 12,000 characters per older message at
+    // 32,768. Linear between them and beyond, proportional below. These are soft bounds
+    // on what is kept; the prompt is still fitted to the real context before each request.
+    const double tokens = std::clamp(contextTokens, 2048, 131072);
+    if (tokens <= 8192.0)
+    {
+        const double scale = tokens / 8192.0;
+        maxMessages = std::max<std::size_t>(8, static_cast<std::size_t>(24.0 * scale));
+        maxCharacters = std::max<std::size_t>(4000, static_cast<std::size_t>(14000.0 * scale));
+        maxRetainedMessageCharacters = std::max<std::size_t>(1000, static_cast<std::size_t>(3500.0 * scale));
+    }
+    else
+    {
+        const double step = (tokens - 8192.0) / (32768.0 - 8192.0);
+        maxMessages = std::min<std::size_t>(120, static_cast<std::size_t>(24.0 + 36.0 * step));
+        maxCharacters = std::min<std::size_t>(120000, static_cast<std::size_t>(14000.0 + 46000.0 * step));
+        maxRetainedMessageCharacters = std::min<std::size_t>(24000, static_cast<std::size_t>(3500.0 + 8500.0 * step));
+    }
+    TrimToBudget();
 }
 
 void conversationContext::BoundRetainedMessage(conversationMessage& message) const
