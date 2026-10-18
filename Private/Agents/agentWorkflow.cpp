@@ -1034,6 +1034,48 @@ std::optional<WorkflowArtifact> AgentWorkflow::AcceptedArtifact() const
         return std::nullopt;
     return parent->artifact;
 }
+std::optional<WorkflowArtifact> AgentWorkflow::CandidateArtifact() const
+{
+    std::lock_guard lock(impl->mutex);
+    if (impl->summary.state != WorkflowState::AwaitingAcceptance || impl->cancellation.stop_requested())
+        return std::nullopt;
+    const auto parent =
+        std::find_if(impl->nodes.begin(), impl->nodes.end(), [](const auto& node) { return node.spec.role == WorkflowRole::Parent; });
+    // Succeeded, not merely AwaitingAcceptance: right after EvaluateParent the summary still
+    // awaits acceptance while the parent attempt is only waiting to run.
+    if (parent == impl->nodes.end() || parent->view.state != WorkflowState::Succeeded || !parent->artifact || parent->history.empty() ||
+        !parent->history.back().view.verified || !parent->history.back().artifact)
+        return std::nullopt;
+    return parent->history.back().artifact;
+}
+bool AgentWorkflow::AcceptCandidate(const ArtifactReference& expected, std::string& error)
+{
+    {
+        std::lock_guard lock(impl->mutex);
+        const auto parent = std::find_if(
+            impl->nodes.begin(), impl->nodes.end(), [](const auto& node) { return node.spec.role == WorkflowRole::Parent; });
+        if (impl->summary.state != WorkflowState::AwaitingAcceptance || impl->cancellation.stop_requested() ||
+            parent == impl->nodes.end() || parent->view.state != WorkflowState::Succeeded || !parent->artifact ||
+            parent->history.empty() || !parent->history.back().view.verified)
+        {
+            error = "A verified parent deliverable is required before acceptance.";
+            return false;
+        }
+        if (expected.nodeId != parent->spec.id || expected.id != parent->artifact->id || expected.version != parent->artifact->version ||
+            expected.hash != parent->artifact->hash)
+        {
+            error = "The examined deliverable is no longer the workflow's current candidate.";
+            return false;
+        }
+        impl->summary.parentDecision = ParentDecision::Accept;
+        impl->summary.state = WorkflowState::Accepted;
+        impl->Transition(*parent, WorkflowState::Accepted);
+        impl->ObserveLocked();
+    }
+    error.clear();
+    impl->Drain();
+    return true;
+}
 bool AgentWorkflow::Start(WorkflowSpec spec, runtime::RuntimeStamp stamp, Provider provider, std::string& error, Observer observer)
 {
     if (!Validate(spec, error) || !StampValid(stamp, spec.id) || !provider)

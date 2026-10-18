@@ -25,6 +25,11 @@ struct conversationSettings
     // model's own thinking, streamed to "Revia is thinking", and no separate inquiry
     // call is made. "selfInquiry": the separate bounded question-and-answer pass.
     std::string deliberation = "native";
+    // Whether Revia may hand a bounded, read-only investigation from chat to her Agent Studio
+    // workers. "off": no delegation tools. "on_request": only when the person asks her to
+    // ("use your agents to check this"). "auto": she may also choose to on her own. Choosing
+    // to delegate never grants the workers more than reading inside approved folders.
+    std::string delegation = "on_request";
     // Allow further verification rounds when inquiry leaves material questions unsettled.
     // This controls work independently of whether summaries are displayed.
     bool bIterativeInvestigationEnabled = false;

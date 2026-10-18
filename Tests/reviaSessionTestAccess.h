@@ -104,6 +104,7 @@ struct ReviaSessionTestAccess
         return session.ExecuteAction(std::move(request));
     }
     static void JoinWorkflow(ReviaSession& session) { session.agentWorkflow.Join(); }
+    static void SetDelegationMode(ReviaSession& session, agents::DelegationMode mode) { session.delegationMode.store(mode); }
     static void Log(ReviaSession& session, const std::string& text) { session.appLogger.Log(text); }
     static bool LoadConfiguredProfile(const ReviaSession& session, const std::string& id, aiProfile& profile)
     { return session.config.LoadProfile(id, profile); }
@@ -137,6 +138,14 @@ struct ReviaSessionTestAccess
         session.fastLlmSettings = session.expertLlmSettings = session.settings.llm;
         session.settings.intelligence.fast.bWarmAtStartup = fastWarm;
         session.settings.intelligence.expert.bWarmAtStartup = expertWarm;
+        session.router.ApplyLLMSettings(session.settings.llm, session.fastLlmSettings,
+            session.expertLlmSettings, embeddingSettings{}, aiProfile{}, true, true);
+    }
+    // As the shipped settings run: no Expert, so background reviews share Main's slots with chat.
+    static void ConfigureMainOnly(ReviaSession& session, int port)
+    {
+        ConfigureStartupBrains(session, port);
+        session.expertLlmSettings.port = 1;
         session.router.ApplyLLMSettings(session.settings.llm, session.fastLlmSettings,
             session.expertLlmSettings, embeddingSettings{}, aiProfile{}, true, true);
     }

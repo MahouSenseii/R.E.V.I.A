@@ -151,6 +151,11 @@ const std::vector<PreferenceKey>& PreferenceStore::Writable()
             0, 0, {}},
         {"conversation.archiveEnabled", PreferenceType::Boolean,
             "Keep a durable, searchable record of conversations.", 0, 0, {}},
+        // Pacing, not permission: it decides whether she may reach for her workers, never
+        // what they may touch, which stays read-only inside the approved folders.
+        {"conversation.delegation", PreferenceType::Text,
+            "When Revia may hand an investigation to her agents from chat: off, on_request or auto.",
+            0, 0, {"off", "on_request", "auto"}},
         {"responseFilter.aiReviewEnabled", PreferenceType::Boolean,
             "Run the AI response review after the always-on hard filter.", 0, 0, {}},
         {"activeProfile", PreferenceType::Text,
@@ -459,6 +464,11 @@ void PreferenceStore::Apply(appSettings& settings) const
     if (temperature != values.end() && ParseNumber(temperature->second, parsedTemperature))
     {
         settings.llm.temperature = static_cast<float>(parsedTemperature);
+    }
+    const auto delegation = values.find("conversation.delegation");
+    if (delegation != values.end() && !delegation->second.empty())
+    {
+        settings.conversation.delegation = delegation->second;
     }
     const auto profile = values.find("activeProfile");
     if (profile != values.end() && !profile->second.empty())

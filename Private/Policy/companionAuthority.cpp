@@ -182,14 +182,16 @@ void CompanionAuthority::EndSession(const runtime::RuntimeStamp& stamp)
     }
 }
 
-bool CompanionAuthority::RegisterTask(const runtime::RuntimeStamp& stamp, const std::string& parentTaskId, AuthorityPermissions restriction)
+bool CompanionAuthority::RegisterTask(
+    const runtime::RuntimeStamp& stamp, const std::string& parentTaskId, AuthorityPermissions restriction, const bool advancesRevision)
 {
     std::lock_guard lock(mutex);
     auto session = sessions.find(SessionKey(stamp));
     if (session == sessions.end() || stamp.taskId.empty() || (!parentTaskId.empty() && !session->second.tasks.contains(parentTaskId)))
         return false;
-    const bool inserted = session->second.tasks.emplace(stamp.taskId, Task{parentTaskId, std::move(restriction)}).second;
-    if (inserted)
+    const bool inserted =
+        session->second.tasks.emplace(stamp.taskId, Task{parentTaskId, std::move(restriction), advancesRevision}).second;
+    if (inserted && advancesRevision)
         ++revision;
     return inserted;
 }
@@ -209,10 +211,15 @@ void CompanionAuthority::EndTask(const runtime::RuntimeStamp& stamp)
                 if (ended.contains(task.parent))
                     added = ended.insert(id).second || added;
         }
+        // Ending only narrowing tasks that never advanced the revision leaves every other
+        // subject's authority exactly as it was.
+        const bool advances = std::any_of(session->second.tasks.begin(), session->second.tasks.end(),
+            [&](const auto& entry) { return ended.contains(entry.first) && entry.second.advancesRevision; });
         std::erase_if(session->second.tasks, [&](const auto& entry) { return ended.contains(entry.first); });
         std::erase_if(records, [&](const auto& entry)
             { return entry.second.scope.subject.SameSession(stamp) && ended.contains(entry.second.scope.subject.taskId); });
-        ++revision;
+        if (advances)
+            ++revision;
     }
 }
 

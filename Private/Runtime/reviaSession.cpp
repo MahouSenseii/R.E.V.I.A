@@ -384,6 +384,17 @@ ReviaSession::ReviaSession(CompanionPaths paths, std::shared_ptr<policy::Compani
             ConversationRuntime::ChatToolGrant grant;
             grant.archiveEnabled = settings.conversation.bArchiveEnabled;
             grant.remindersAvailable = true;
+            // Delegation to the Agent Studio workers. Submitting returns at once; the work
+            // runs on the workflow's own threads, never on this turn's stop token, so the
+            // next message does not cancel it. Cancelling names the task it cancels.
+            grant.delegationMode = delegationMode.load();
+            grant.delegatedTaskKnown = DelegatedTaskKnown();
+            grant.executors.delegateTask = [this](const agents::DelegationSubmission& submission, const agents::ToolCallContext& call)
+            { return DelegateFromChat(submission, call); };
+            grant.executors.taskStatus = [this](const std::string& taskId, const agents::ToolCallContext& call)
+            { return DelegatedTaskStatusForChat(taskId, call); };
+            grant.executors.cancelTask = [this](const std::string& taskId, const agents::ToolCallContext& call)
+            { return CancelDelegatedTaskForChat(taskId, call); };
             grant.executors.setReminder = [this](const std::string& text, const std::string& when, const agents::ToolCallContext& call)
             {
                 if (!call.Admitted())
@@ -786,6 +797,7 @@ bool ReviaSession::Start()
         settings.activeProfile = companionPaths.Descriptor().profileId;
     }
     responseAiReviewEnabled.store(settings.responseFilter.bAiReviewEnabled);
+    delegationMode.store(agents::DelegationModeFromString(settings.conversation.delegation));
     responseAiMaxReviewTokens = settings.responseFilter.aiMaxReviewTokens;
     responseMaxReplyCharacters = settings.responseFilter.maxReplyCharacters;
     PublishComponent("Response filters", settings.responseFilter.bAiReviewEnabled ? "Ready" : "Hard only",
@@ -3453,6 +3465,8 @@ core::PreferenceResult ReviaSession::ClearPreference(const std::string& name)
         updated.resources.voice = defaults.resources.voice;
     else if (lowered == "conversation.archiveenabled")
         updated.conversation.bArchiveEnabled = defaults.conversation.bArchiveEnabled;
+    else if (lowered == "conversation.delegation")
+        updated.conversation.delegation = defaults.conversation.delegation;
     else if (lowered == "responsefilter.aireviewenabled")
         updated.responseFilter.bAiReviewEnabled = defaults.responseFilter.bAiReviewEnabled;
     else if (lowered == "activeprofile")
@@ -3524,6 +3538,12 @@ core::PreferenceResult ReviaSession::ApplyPreferenceUpdate(const std::string& na
             StartResourceMonitor();
         }
     }
+    else if (lowered == "conversation.delegation")
+    {
+        // Read by the next turn's tool grant. A task already handed off keeps running and
+        // stays cancellable from chat; the mode only decides whether new work is offered.
+        delegationMode.store(agents::DelegationModeFromString(updated.conversation.delegation));
+    }
     else if (lowered == "responsefilter.aireviewenabled")
     {
         responseAiReviewEnabled.store(updated.responseFilter.bAiReviewEnabled);
@@ -3570,6 +3590,7 @@ UserPreferenceSnapshot ReviaSession::UserPreferences() const
     snapshot.aiResponseReviewEnabled = responseAiReviewEnabled.load();
     snapshot.initiativeMaxPerHour = settings.initiative.maxUtterancesPerHour;
     snapshot.resourceSampleSeconds = settings.resources.usageSampleSeconds;
+    snapshot.delegation = agents::ToString(delegationMode.load());
     return snapshot;
 }
 
@@ -4520,6 +4541,7 @@ void ReviaSession::RequestStop()
         interactiveBrowser->Stop();
     imageGenerator.Cancel();
     CancelSpeakerEnrollment();
+    CancelDelegation("stop was requested");
     agentWorkflow.RequestCancel();
     PreemptAutonomousActivity("stop was requested");
     // Synthesized input keeps producing consequences while it is being noticed, so the
@@ -4588,6 +4610,8 @@ void ReviaSession::Stop()
     StopSelfImprovement();
     StopCuriosityLoop();
     StopInitiativeLoop();
+    // Before operationMutex below: a report in flight holds it for its turn.
+    StopDelegationWorker();
     StopVoiceWarmup();
     // Stopped before the children are torn down, so a sample cannot open a handle to a
     // process that is being killed underneath it.
@@ -8736,9 +8760,13 @@ bool ReviaSession::CanDiscloseTask(const TaskContext& captured, const RuntimeSta
 std::string ReviaSession::DescribeRunningTask() const
 {
     const auto current = CaptureTaskContext();
-    std::lock_guard lock(taskMutex);
+    std::unique_lock lock(taskMutex);
     if (!activeTask || !CanDiscloseTask(activeTask->context, activeTask->stamp, current))
-        return {};
+    {
+        lock.unlock();
+        // Work her agents are doing for this person is hers to know about too.
+        return DescribeDelegatedRunning();
+    }
     const auto minutes = std::chrono::duration_cast<std::chrono::minutes>(std::chrono::steady_clock::now() - activeTask->startedAt).count();
     return "'" + activeTask->title + "', started " + (minutes < 1 ? std::string("under a minute") : std::to_string(minutes) + " min") +
            " ago; latest " + activeTask->progress;
@@ -8747,11 +8775,13 @@ std::string ReviaSession::DescribeRunningTask() const
 std::string ReviaSession::DescribeFinishedTask() const
 {
     const auto current = CaptureTaskContext();
-    std::lock_guard lock(taskMutex);
+    std::unique_lock lock(taskMutex);
     if (activeTask || !lastTaskReport || !CanDiscloseTask(lastTaskReport->context, lastTaskReport->stamp, current) ||
         std::chrono::steady_clock::now() - lastTaskReport->finishedAt > std::chrono::minutes{15})
     {
-        return {};
+        const bool goalRunning = activeTask.has_value();
+        lock.unlock();
+        return goalRunning ? std::string{} : DescribeDelegatedFinished();
     }
     return lastTaskReport->summary;
 }
@@ -9210,7 +9240,15 @@ bool ReviaSession::TryHandleActionInput(const std::string& input, SessionResult&
         const std::string argument = taskCommand && input.size() > 5 ? Trim(input.substr(5)) : std::string();
         if (!taskCommand || argument == "cancel" || argument == "stop")
         {
+            // The goal task first, as before; otherwise the task her agents are working on,
+            // when it is this person's to cancel.
             result.succeeded = CancelTask("you asked");
+            if (!result.succeeded)
+            {
+                const auto delegated = DelegatedTask();
+                std::string error;
+                result.succeeded = delegated && !DescribeDelegatedRunning().empty() && CancelDelegatedTask(delegated->taskId, error);
+            }
             result.text = result.succeeded ? "Stopping the task." : "I'm not working on a task right now.";
         }
         else if (argument.empty())

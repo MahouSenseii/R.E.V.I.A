@@ -49,8 +49,13 @@ class CompanionAuthority
     void SetCompanionDefaults(const std::string& companionId, AuthorityPermissions permissions);
     [[nodiscard]] bool RegisterSession(const runtime::RuntimeStamp& stamp);
     void EndSession(const runtime::RuntimeStamp& stamp);
+    // A task only ever narrows its session or parent: its restriction can block, never grant.
+    // `advancesRevision` false keeps registering and ending it from advancing the shared
+    // revision, so a background worker starting an attempt cannot invalidate unrelated work
+    // in flight, such as the chat reply being written while it runs. The task's own stamps
+    // are still refused once it ends, by the active-subject check.
     [[nodiscard]] bool RegisterTask(const runtime::RuntimeStamp& stamp, const std::string& parentTaskId,
-        AuthorityPermissions restriction = AuthorityPermissions::WithinMachineCeiling());
+        AuthorityPermissions restriction = AuthorityPermissions::WithinMachineCeiling(), bool advancesRevision = true);
     void EndTask(const runtime::RuntimeStamp& stamp);
     [[nodiscard]] bool GrantAuthenticated(const AuthorityGrantRequest& request, std::string& outId, std::string& outError);
     // A companion-only subject denies across sessions; grants always require a live session.
@@ -67,6 +72,7 @@ class CompanionAuthority
     {
         std::string parent;
         AuthorityPermissions restriction;
+        bool advancesRevision = true;
     };
     struct Session
     {

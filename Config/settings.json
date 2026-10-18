@@ -251,7 +251,8 @@
                          "selfInquiryEnabled":  true,
                          "selfInquiryCooldownTurns":  0,
                          "selfInquiryScope":  "hard",
-                         "deliberation":  "native"
+                         "deliberation":  "native",
+                         "delegation":  "on_request"
                      },
     "responseFilter":  {
                            "aiReviewEnabled":  false,
