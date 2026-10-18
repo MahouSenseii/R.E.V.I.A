@@ -236,8 +236,9 @@ void ReviaSession::HandleSpeechEvent(const speech::SpeechEvent& speechEvent)
              speechEvent.phase == "Error" || speechEvent.phase == "Disabled" || speechEvent.phase == "Fallback")
     {
         speechRecognitionService.SetOutputActive(false);
-        // Keep the conversational follow-up window open after speech.
-        addresseeGate.NoteExchange(speech::AddresseeGate::Clock::now());
+        // Keep the conversational follow-up window open after speech, for whoever it was
+        // opened for. Replacing the participant here closed it after her first phrase.
+        addresseeGate.RefreshExchange(speech::AddresseeGate::Clock::now());
         // Exchange the active intent once so a completed report cannot release it twice.
         if (const std::uint64_t finished = speakingIntentId.exchange(0); finished != 0)
         {

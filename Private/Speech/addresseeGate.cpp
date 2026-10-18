@@ -91,6 +91,14 @@ void AddresseeGate::NoteExchange(
     followUpRevision = audienceRevision;
 }
 
+void AddresseeGate::RefreshExchange(const Clock::time_point now)
+{
+    std::lock_guard lock(mutex);
+    if (!lastExchange.has_value() || now < *lastExchange || now - *lastExchange > std::chrono::seconds(settings.followUpSeconds))
+        return;
+    lastExchange = now;
+}
+
 void AddresseeGate::Reset()
 {
     std::lock_guard lock(mutex);
