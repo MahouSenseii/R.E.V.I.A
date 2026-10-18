@@ -1,11 +1,16 @@
 #include "Goals/goalStore.h"
+#include "Audit/contentDigest.h"
+#include "Core/localApiKey.h"
+#include "Memory/sensitiveContent.h"
 #include "Planning/structuredActionParser.h"
 #include "Policy/guestCapabilityJson.h"
 
 #include <chrono>
 #include <exception>
 #include <filesystem>
+#include <map>
 #include <memory>
+#include <mutex>
 #include <nlohmann/json.hpp>
 #include <sqlite3.h>
 #include <string>
@@ -13,6 +18,119 @@
 
 namespace revia::goals
 {
+
+namespace
+{
+
+// What the database never holds: text she typed or filled in, file content written into
+// the guest, a process environment, and a request the sensitive-content detector flags.
+// The database used to keep all of it, verbatim and forever. Each value is written as
+// its length and a digest keyed with a secret that exists only in this process, so the
+// row says that something was there without saying what, and a short value such as a PIN
+// cannot be recovered by hashing guesses. The full action stays in memory for as long as
+// the goal can still run here, which is what an in-process resume needs; after a restart
+// a step whose payload was withheld cannot be replayed, and is refused rather than run
+// with nothing in it.
+constexpr const char* WithheldTitle = "[Withheld: the request looked sensitive]";
+
+const std::string& ProcessKey()
+{
+    static const std::string key = core::GenerateLocalApiKey();
+    return key;
+}
+
+nlohmann::json Withheld(const std::string& text)
+{
+    return nlohmann::json{{"length", text.size()}, {"digest", audit::ContentDigest(ProcessKey() + text)}};
+}
+
+bool MatchesWithheld(const nlohmann::json& marker, const std::string& text)
+{
+    return marker.is_object() && marker.value("length", std::size_t{0}) == text.size() &&
+        marker.value("digest", std::string()) == audit::ContentDigest(ProcessKey() + text);
+}
+
+// Where each withheld field lives in an action's JSON: the object holding it (empty for
+// the top level) and its key.
+struct WithheldField
+{
+    const char* object;
+    const char* key;
+};
+constexpr WithheldField WithheldFields[] = {{"", "value"}, {"browser", "value"}, {"guest", "content"}, {"process", "environment"}};
+
+nlohmann::json* FieldOwner(nlohmann::json& action, const WithheldField& field)
+{
+    if (*field.object == '\0') return &action;
+    return action.contains(field.object) && action.at(field.object).is_object() ? &action.at(field.object) : nullptr;
+}
+
+std::string FieldText(const nlohmann::json& value)
+{
+    return value.is_string() ? value.get<std::string>() : value.dump();
+}
+
+// The copy that is written to disk. Returns true when anything was withheld.
+bool RedactAction(nlohmann::json& action)
+{
+    bool redacted = false;
+    for (const WithheldField& field : WithheldFields)
+    {
+        nlohmann::json* owner = FieldOwner(action, field);
+        if (owner == nullptr || !owner->contains(field.key)) continue;
+        nlohmann::json& value = owner->at(field.key);
+        if ((value.is_string() && value.get<std::string>().empty()) || (value.is_object() && value.empty()) || value.is_null()) continue;
+        (*owner)[std::string(field.key) + "_withheld"] = Withheld(FieldText(value));
+        value = value.is_object() ? nlohmann::json::object() : nlohmann::json(std::string());
+        redacted = true;
+    }
+    return redacted;
+}
+
+bool HasWithheld(const nlohmann::json& action)
+{
+    for (const WithheldField& field : WithheldFields)
+    {
+        const nlohmann::json* owner = *field.object == '\0' ? &action
+            : (action.contains(field.object) && action.at(field.object).is_object() ? &action.at(field.object) : nullptr);
+        if (owner != nullptr && owner->contains(std::string(field.key) + "_withheld")) return true;
+    }
+    return false;
+}
+
+// Whether the in-memory full action is the one the stored row stands for.
+bool FullActionMatches(nlohmann::json stored, nlohmann::json full)
+{
+    for (const WithheldField& field : WithheldFields)
+    {
+        nlohmann::json* storedOwner = FieldOwner(stored, field);
+        const std::string marker = std::string(field.key) + "_withheld";
+        if (storedOwner == nullptr || !storedOwner->contains(marker)) continue;
+        nlohmann::json* fullOwner = FieldOwner(full, field);
+        if (fullOwner == nullptr || !fullOwner->contains(field.key) || !MatchesWithheld(storedOwner->at(marker), FieldText(fullOwner->at(field.key))))
+            return false;
+    }
+    return true;
+}
+
+struct HeldGoal
+{
+    std::string title;
+    // Step id -> the full action and check JSON, as they were before redaction.
+    std::map<std::string, std::pair<nlohmann::json, nlohmann::json>> steps;
+};
+
+std::mutex heldMutex;
+// Keyed by store path and goal id, so every GoalStore on the same file in this process
+// sees the same live payloads, and nothing outlives the process.
+std::map<std::string, HeldGoal> heldGoals;
+
+std::string HeldKey(const std::string& storePath, const std::string& goalId)
+{
+    return storePath + '\n' + goalId;
+}
+
+} // namespace
 
 namespace
 {
@@ -145,12 +263,12 @@ actions::ActionRequest::DesktopInput::PointerButton PointerButtonFromJson(const 
     return Button::Left;
 }
 
-// The goal store keeps the literal control text of a SetControlText step
-// because resuming after a restart has to replay the same action. The action
-// audit log still records only its length, so the redaction guarantee there is
-// unchanged.
+// This is the full action. What reaches the database is RedactAction's copy of it: typed
+// text, filled values, guest file content and process environments are withheld there
+// and kept only in memory for a goal that can still run in this process.
 //
-// The keyboard and pointer payload is kept for the same reason and only for the
+// The keyboard and pointer payload is kept because resuming has to replay the same
+// action, and only for the
 // actions that carry one: a PressKeys step reloaded without its chord is not the step
 // that was saved, it is a different and emptier one that reports success for having
 // pressed nothing.
@@ -765,8 +883,17 @@ bool WriteAttempt(sqlite3* database, const std::string& stepId, const StepAttemp
     return sqlite3_step(insert.get()) == SQLITE_DONE;
 }
 
-bool WriteStep(sqlite3* database, const std::string& goalId, const GoalStep& step)
+bool WriteStep(sqlite3* database, const std::string& goalId, const GoalStep& step, HeldGoal& held)
 {
+    const nlohmann::json fullAction = ActionToJson(step.action);
+    const nlohmann::json fullCheck = ActionToJson(step.check);
+    nlohmann::json storedAction = fullAction;
+    nlohmann::json storedCheck = fullCheck;
+    const bool redactedAction = RedactAction(storedAction);
+    const bool redactedCheck = RedactAction(storedCheck);
+    if (redactedAction || redactedCheck)
+        held.steps[step.id] = {fullAction, fullCheck};
+
     Statement insert = Prepare(database,
         "INSERT OR REPLACE INTO goal_steps "
         "(id, goal_id, ordinal, description, status, action, check_action, expected) "
@@ -781,8 +908,8 @@ bool WriteStep(sqlite3* database, const std::string& goalId, const GoalStep& ste
     BindInt(insert.get(), 3, step.ordinal);
     BindText(insert.get(), 4, step.description);
     BindText(insert.get(), 5, ToString(step.status));
-    BindText(insert.get(), 6, ActionToJson(step.action).dump());
-    BindText(insert.get(), 7, ActionToJson(step.check).dump());
+    BindText(insert.get(), 6, storedAction.dump());
+    BindText(insert.get(), 7, storedCheck.dump());
     BindText(insert.get(), 8, step.expected);
     if (sqlite3_step(insert.get()) != SQLITE_DONE)
     {
@@ -799,8 +926,11 @@ bool WriteStep(sqlite3* database, const std::string& goalId, const GoalStep& ste
     return true;
 }
 
-bool WriteGoal(sqlite3* database, const Goal& goal)
+bool WriteGoal(sqlite3* database, const Goal& goal, HeldGoal& held)
 {
+    const bool sensitiveTitle = memory::ContainsSensitiveContent(goal.title);
+    if (sensitiveTitle)
+        held.title = goal.title;
     Statement insert = Prepare(database,
         "INSERT OR REPLACE INTO goals "
         "(id, title, status, stop_reason, current_step, budget, spend, scope, "
@@ -812,7 +942,7 @@ bool WriteGoal(sqlite3* database, const Goal& goal)
     }
 
     BindText(insert.get(), 1, goal.id);
-    BindText(insert.get(), 2, goal.title);
+    BindText(insert.get(), 2, sensitiveTitle ? std::string(WithheldTitle) : goal.title);
     BindText(insert.get(), 3, ToString(goal.status));
     BindText(insert.get(), 4, ToString(goal.stopReason));
     BindInt(insert.get(), 5, goal.currentStep);
@@ -845,7 +975,7 @@ bool WriteGoal(sqlite3* database, const Goal& goal)
 
     for (const GoalStep& step : goal.steps)
     {
-        if (!WriteStep(database, goal.id, step))
+        if (!WriteStep(database, goal.id, step, held))
         {
             return false;
         }
@@ -892,7 +1022,27 @@ std::vector<StepAttempt> ReadAttempts(sqlite3* database, const std::string& step
     return attempts;
 }
 
-std::vector<GoalStep> ReadSteps(sqlite3* database, const std::string& goalId)
+// The stored action, or the full one held in memory when it is the same action. Sets
+// `outLost` when the row withheld a payload this process no longer holds.
+actions::ActionRequest RestoreAction(const std::string& text, const nlohmann::json* full, bool& outLost)
+{
+    const nlohmann::json stored = ParseJson(text);
+    if (!HasWithheld(stored))
+        return ActionFromJson(stored);
+    if (full != nullptr && FullActionMatches(stored, *full))
+        return ActionFromJson(*full);
+    outLost = true;
+    // The markers are not action fields, and the strict parsers would refuse them.
+    nlohmann::json record = stored;
+    for (const WithheldField& field : WithheldFields)
+    {
+        if (nlohmann::json* owner = FieldOwner(record, field))
+            owner->erase(std::string(field.key) + "_withheld");
+    }
+    return ActionFromJson(record);
+}
+
+std::vector<GoalStep> ReadSteps(sqlite3* database, const std::string& goalId, const HeldGoal* held)
 {
     std::vector<GoalStep> steps;
     Statement select = Prepare(database,
@@ -911,8 +1061,22 @@ std::vector<GoalStep> ReadSteps(sqlite3* database, const std::string& goalId)
         step.ordinal = static_cast<std::uint32_t>(ColumnInt(select.get(), 1));
         step.description = ColumnText(select.get(), 2);
         step.status = StepStatusFromString(ColumnText(select.get(), 3));
-        step.action = ActionFromJson(ParseJson(ColumnText(select.get(), 4)));
-        step.check = ActionFromJson(ParseJson(ColumnText(select.get(), 5)));
+        const std::pair<nlohmann::json, nlohmann::json>* full = nullptr;
+        if (held != nullptr)
+        {
+            if (const auto found = held->steps.find(step.id); found != held->steps.end())
+                full = &found->second;
+        }
+        bool lost = false;
+        step.action = RestoreAction(ColumnText(select.get(), 4), full != nullptr ? &full->first : nullptr, lost);
+        step.check = RestoreAction(ColumnText(select.get(), 5), full != nullptr ? &full->second : nullptr, lost);
+        // A step that may still run must not run without the text it was going to type:
+        // that would be a different, emptier step reporting success. Unknown fails closed.
+        if (lost && step.status != StepStatus::Succeeded && step.status != StepStatus::Skipped)
+        {
+            step.action.type = actions::ActionType::Unknown;
+            step.check.type = actions::ActionType::Unknown;
+        }
         step.expected = ColumnText(select.get(), 6);
         steps.push_back(std::move(step));
     }
@@ -924,11 +1088,19 @@ std::vector<GoalStep> ReadSteps(sqlite3* database, const std::string& goalId)
     return steps;
 }
 
-Goal ReadGoal(sqlite3* database, sqlite3_stmt* statement)
+Goal ReadGoal(sqlite3* database, sqlite3_stmt* statement, const std::string& storePath)
 {
     Goal goal;
     goal.id = ColumnText(statement, 0);
     goal.title = ColumnText(statement, 1);
+    std::optional<HeldGoal> held;
+    {
+        std::lock_guard lock(heldMutex);
+        if (const auto found = heldGoals.find(HeldKey(storePath, goal.id)); found != heldGoals.end())
+            held = found->second;
+    }
+    if (held && goal.title == WithheldTitle && !held->title.empty())
+        goal.title = held->title;
     goal.status = GoalStatusFromString(ColumnText(statement, 2));
     goal.stopReason = StopReasonFromString(ColumnText(statement, 3));
     goal.currentStep = static_cast<std::uint32_t>(ColumnInt(statement, 4));
@@ -944,7 +1116,7 @@ Goal ReadGoal(sqlite3* database, sqlite3_stmt* statement)
     goal.verificationSchema = static_cast<std::uint32_t>(ColumnInt(statement, 11));
     // Older iterative records predate the flag; only the operator charges planner requests.
     goal.iterative = ColumnInt(statement, 12) != 0 || goal.spend.plannerRequests > 0;
-    goal.steps = ReadSteps(database, goal.id);
+    goal.steps = ReadSteps(database, goal.id, held ? &*held : nullptr);
     return goal;
 }
 
@@ -976,12 +1148,21 @@ bool GoalStore::Save(const Goal& goal) const
     {
         return false;
     }
-    if (!WriteGoal(database.get(), goal))
+    HeldGoal held;
+    if (!WriteGoal(database.get(), goal, held))
     {
         static_cast<void>(Execute(database.get(), "ROLLBACK;"));
         return false;
     }
-    return Execute(database.get(), "COMMIT;");
+    if (!Execute(database.get(), "COMMIT;"))
+        return false;
+    // A finished goal will not run again, so nothing it withheld is kept even in memory.
+    std::lock_guard lock(heldMutex);
+    if (IsTerminal(goal.status) || (held.title.empty() && held.steps.empty()))
+        heldGoals.erase(HeldKey(storePath, goal.id));
+    else
+        heldGoals[HeldKey(storePath, goal.id)] = std::move(held);
+    return true;
 }
 
 std::optional<Goal> GoalStore::Load(const std::string& goalId) const
@@ -1009,7 +1190,7 @@ std::optional<Goal> GoalStore::Load(const std::string& goalId) const
     {
         return std::nullopt;
     }
-    return ReadGoal(database.get(), select.get());
+    return ReadGoal(database.get(), select.get(), storePath);
 }
 
 std::vector<Goal> GoalStore::LoadResumable() const
@@ -1031,7 +1212,7 @@ std::vector<Goal> GoalStore::LoadResumable() const
 
     while (sqlite3_step(select.get()) == SQLITE_ROW)
     {
-        goals.push_back(ReadGoal(database.get(), select.get()));
+        goals.push_back(ReadGoal(database.get(), select.get(), storePath));
     }
     return goals;
 }
@@ -1060,7 +1241,7 @@ std::vector<Goal> GoalStore::LoadRecent(const std::size_t maxGoals) const
     BindInt(select.get(), 1, static_cast<std::int64_t>(maxGoals));
     while (sqlite3_step(select.get()) == SQLITE_ROW)
     {
-        goals.push_back(ReadGoal(database.get(), select.get()));
+        goals.push_back(ReadGoal(database.get(), select.get(), storePath));
     }
     return goals;
 }
@@ -1084,7 +1265,34 @@ bool GoalStore::Remove(const std::string& goalId) const
         return false;
     }
     BindText(remove.get(), 1, goalId);
+    {
+        std::lock_guard lock(heldMutex);
+        heldGoals.erase(HeldKey(storePath, goalId));
+    }
     return sqlite3_step(remove.get()) == SQLITE_DONE;
+}
+
+std::size_t GoalStore::PruneOlderThan(const std::chrono::hours age) const
+{
+    Database database = OpenDatabase(storePath);
+    if (!database)
+    {
+        return 0;
+    }
+    // Steps and attempts go with their goal (ON DELETE CASCADE). Anything this old is far
+    // past the 24-hour window in which an unfinished goal is offered for resuming.
+    Statement remove = Prepare(database.get(), "DELETE FROM goals WHERE CAST(updated_at AS INTEGER) < ?;");
+    if (!remove)
+    {
+        return 0;
+    }
+    const auto cutoff = std::chrono::system_clock::now() - age;
+    BindInt(remove.get(), 1, std::chrono::duration_cast<std::chrono::seconds>(cutoff.time_since_epoch()).count());
+    if (sqlite3_step(remove.get()) != SQLITE_DONE)
+    {
+        return 0;
+    }
+    return static_cast<std::size_t>(sqlite3_changes(database.get()));
 }
 
 const std::string& GoalStore::Path() const

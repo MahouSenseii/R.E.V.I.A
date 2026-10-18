@@ -2,6 +2,7 @@
 
 #include "Goals/goalTypes.h"
 
+#include <chrono>
 #include <cstddef>
 #include <optional>
 #include <string>
@@ -22,6 +23,10 @@ public:
     [[nodiscard]] std::vector<Goal> LoadResumable() const;
     [[nodiscard]] std::vector<Goal> LoadRecent(std::size_t maxGoals = 25) const;
     [[nodiscard]] bool Remove(const std::string& goalId) const;
+    // Deletes every goal, finished or not, last updated longer ago than `age`. Run at
+    // startup so the history of what she was asked to do does not grow forever.
+    // Returns how many goals were removed.
+    std::size_t PruneOlderThan(std::chrono::hours age) const;
     [[nodiscard]] const std::string& Path() const;
 
 private:

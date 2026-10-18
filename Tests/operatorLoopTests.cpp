@@ -340,6 +340,110 @@ void TestASavedDesktopGoalKeepsItsPayloadAndScope()
 // The same store, reading rows written before either field existed. They have to keep
 // loading, and they have to keep loading narrow: an absent scope is no hands, not
 // every hand.
+// PRIV-1. The goal database used to keep sensitive requests, typed text and process
+// environments verbatim and forever. Now the file keeps lengths and keyed digests, the
+// live process can still resume from memory, and old goals are pruned.
+void TestTheGoalStoreKeepsNoTypedText()
+{
+    using revia::actions::ActionType;
+    LoopFixture fixture;
+    const std::string token = "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+    Goal goal = fixture.NewGoal("Paste " + token + " into the settings page");
+    goal.id = NewGoalId();
+    goal.status = GoalStatus::Running;
+
+    GoalStep typed;
+    typed.id = NewStepId();
+    typed.description = "Type the reply";
+    typed.status = StepStatus::Succeeded;
+    typed.action.type = ActionType::TypeText;
+    typed.action.application = "notepad.exe";
+    typed.action.value = "TYPED_TEXT_CANARY";
+    typed.check.type = ActionType::InspectWindow;
+    typed.check.application = "notepad.exe";
+    typed.expected = "reply";
+    goal.steps.push_back(typed);
+
+    GoalStep pending = typed;
+    pending.id = NewStepId();
+    pending.ordinal = 1;
+    pending.status = StepStatus::Pending;
+    pending.action.type = ActionType::SetControlText;
+    pending.action.control = "body";
+    pending.action.value = "PENDING_TEXT_CANARY";
+    goal.steps.push_back(pending);
+
+    GoalStep process;
+    process.id = NewStepId();
+    process.ordinal = 2;
+    process.status = StepStatus::Pending;
+    process.action.type = ActionType::ExecuteProcess;
+    process.action.process.executable = fixture.approved / "tool.exe";
+    process.action.process.workingDirectory = fixture.approved;
+    process.action.process.arguments = {"--sync"};
+    process.action.process.environment = {{"API_TOKEN", "ENVIRONMENT_CANARY"}};
+    process.check.type = ActionType::ListDirectory;
+    process.check.source = fixture.approved;
+    process.expected = "tool";
+    goal.steps.push_back(process);
+
+    Check(fixture.store.Save(goal), "The sensitive goal could not be saved.");
+    std::string onDisk;
+    for (const auto& entry : std::filesystem::directory_iterator(fixture.directory.root))
+    {
+        if (entry.path().filename().string().rfind("goals.db", 0) != 0) continue;
+        std::ifstream file(entry.path(), std::ios::binary);
+        onDisk.append(std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>());
+    }
+    for (const std::string& canary : {token, std::string("TYPED_TEXT_CANARY"), std::string("PENDING_TEXT_CANARY"),
+             std::string("ENVIRONMENT_CANARY")})
+    {
+        Check(!onDisk.empty() && onDisk.find(canary) == std::string::npos, "The goal database stored " + canary + " verbatim.");
+    }
+    Check(onDisk.find("--sync") != std::string::npos, "Process arguments, which are not withheld, were lost.");
+
+    // The same process resumes with everything it had.
+    const auto live = fixture.store.Load(goal.id);
+    Check(live && live->title == goal.title && live->steps.size() == 3 && live->steps[1].action.value == "PENDING_TEXT_CANARY" &&
+            live->steps[1].action.type == ActionType::SetControlText &&
+            live->steps[2].action.process.environment == process.action.process.environment,
+        "A goal still running in this process lost its own payloads.");
+
+    // A copy of the file is what a restart sees: the payloads are not there to replay, so
+    // a step that may still run fails closed and a finished one stays a record.
+    const auto copy = fixture.directory.root / "restart.db";
+    std::filesystem::copy_file(fixture.directory.root / "goals.db", copy);
+    for (const char* suffix : {"-wal", "-shm"})
+    {
+        const auto side = fixture.directory.root / (std::string("goals.db") + suffix);
+        if (std::filesystem::exists(side)) std::filesystem::copy_file(side, copy.string() + suffix);
+    }
+    const auto restarted = GoalStore(copy.string()).Load(goal.id);
+    Check(restarted && restarted->title.find(token) == std::string::npos && restarted->title.find("Withheld") != std::string::npos,
+        "A sensitive request title survived a restart.");
+    Check(restarted->steps[0].action.type == ActionType::TypeText && restarted->steps[0].action.value.empty(),
+        "A finished step was not kept as a record without its text.");
+    Check(restarted->steps[1].action.type == ActionType::Unknown && restarted->steps[2].action.type == ActionType::Unknown,
+        "A pending step whose payload was withheld could be replayed after a restart.");
+
+    // A finished goal keeps nothing in memory either.
+    goal.status = GoalStatus::Succeeded;
+    Check(fixture.store.Save(goal), "The finished goal could not be saved.");
+    const auto finished = fixture.store.Load(goal.id);
+    Check(finished && finished->steps[1].action.value.empty() && finished->title.find(token) == std::string::npos,
+        "A finished goal kept its withheld payloads in memory.");
+
+    // Old records go at startup; recent ones stay.
+    Goal old = fixture.NewGoal("an old task");
+    old.id = NewGoalId();
+    old.status = GoalStatus::Succeeded;
+    old.updatedAt = std::chrono::system_clock::now() - std::chrono::hours(24 * 40);
+    Check(fixture.store.Save(old), "The old goal could not be saved.");
+    Check(fixture.store.PruneOlderThan(std::chrono::hours(24 * 30)) == 1 && !fixture.store.Load(old.id) &&
+            fixture.store.Load(goal.id).has_value(),
+        "Pruning did not remove exactly the goal older than the bound.");
+}
+
 void TestLegacyGoalRowsStayNarrow()
 {
     LoopFixture fixture;
@@ -2002,6 +2106,7 @@ void RunOperatorLoopTests()
     TestPostconditionsAreDerivedFromTheStep();
     TestMalformedNextStepFieldsFailBounded();
     TestASavedDesktopGoalKeepsItsPayloadAndScope();
+    TestTheGoalStoreKeepsNoTypedText();
     TestLegacyGoalRowsStayNarrow();
     TestOldGoalDatabaseRetainsItsRecords();
     TestTheVerificationContractRoundTrips();

@@ -798,6 +798,9 @@ bool ReviaSession::Start()
     // Goals are reported, never auto-resumed. Restarting into unattended execution of
     // work the user has not re-approved belongs to Stage 5, behind its own job contract.
     stageStarted = std::chrono::steady_clock::now();
+    // Goal records name what she was asked to do. Kept for 30 days, then gone.
+    if (const std::size_t pruned = goalStore.PruneOlderThan(std::chrono::hours(24 * 30)); pruned > 0)
+        appLogger.Log("Removed " + std::to_string(pruned) + " goal record(s) older than 30 days.");
     const std::vector<goals::Goal> resumable = goalStore.LoadResumable();
     if (!resumable.empty())
     {
