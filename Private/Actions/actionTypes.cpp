@@ -357,6 +357,12 @@ bool AlwaysNeedsItsOwnConfirmation(const ActionType value)
         value == ActionType::BrowserClick || value == ActionType::BrowserFill;
 }
 
+bool AlwaysNeedsItsOwnConfirmation(const ActionRequest& request)
+{
+    return AlwaysNeedsItsOwnConfirmation(request.type) ||
+        (request.type == ActionType::LaunchApplication && !request.source.empty());
+}
+
 RiskLevel RiskForAction(ActionType value)
 {
     if (value == ActionType::VmListDirectory || value == ActionType::VmReadTextFile) return RiskLevel::ReadOnly;

@@ -108,7 +108,8 @@ enum class PolicyVerdict
     Blocked
 };
 
-// AllowForThisTask lasts one run, is never stored, and covers only the shown risk.
+// AllowForThisTask lasts one run, is never stored, and covers only the shown kind of action
+// (its type and application) at no more than the shown risk.
 // It raises no permission or consequence ceiling; consequential effects still ask separately.
 enum class ConfirmationChoice
 {
@@ -524,6 +525,9 @@ struct CapabilitySettings
 // Requires individual confirmation even with standing approval, including recycling.
 // All capability, consequence, rate, and audit checks still apply.
 [[nodiscard]] bool AlwaysNeedsItsOwnConfirmation(ActionType value);
+// The same, for a whole request: launching an application with a file to open is also
+// never covered by a standing approval, because the file decides what actually runs.
+[[nodiscard]] bool AlwaysNeedsItsOwnConfirmation(const ActionRequest& request);
 // UI Automation and desktop operation both drive an application, but only the second
 // synthesizes input or starts a process, so they are gated separately.
 [[nodiscard]] bool IsUiAutomationAction(ActionType value);

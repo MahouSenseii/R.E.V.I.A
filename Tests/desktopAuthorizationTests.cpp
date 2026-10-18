@@ -217,11 +217,34 @@ void TestUsefulAutonomyIsPreserved()
             /*autonomous=*/true, /*scratch=*/true).verdict == AuthorizationVerdict::Allow,
         "Scratch work was blocked by an unreadable label.");
 
-    // Someone asked for this specific thing, and their judgement is the evidence the
-    // label failed to supply. Refusing here would make her useless when asked for help.
-    Check(Decide(DesktopOperation::PointerActivate, unreadable, ConsequenceClass::Routine,
+    // Someone asked for this, and their judgement is the evidence a vague or missing label
+    // failed to supply -- as long as something still identifies the control. This used to
+    // allow a click on a control with no name and no automation id as well, which meant
+    // an icon-only "Post publicly" was never gated on a task the person started. Their
+    // request named the task, not that control, so a click or invoke there now needs
+    // approval (ACT-3b). Typing into an unnamed field is still weighed by its effect.
+    const auto unidentified = Decide(DesktopOperation::PointerActivate, unreadable, ConsequenceClass::Routine,
+        /*autonomous=*/false);
+    Check(unidentified.verdict == AuthorizationVerdict::RequireApproval &&
+            unidentified.reason.find("no readable name or automation id") != std::string::npos,
+        "A user-directed click on a control with no name and no automation id was allowed: " + unidentified.reason);
+    Check(Decide(DesktopOperation::Invoke, Control(""), ConsequenceClass::Routine, /*autonomous=*/false).verdict ==
+            AuthorizationVerdict::RequireApproval,
+        "A user-directed invoke on an unnamed control was allowed.");
+    TargetEvidence automationOnly = Control("");
+    automationOnly.automationId = "PostButton";
+    Check(Decide(DesktopOperation::PointerActivate, automationOnly, ConsequenceClass::Routine,
             /*autonomous=*/false).verdict == AuthorizationVerdict::Allow,
-        "A user-directed click on an unlabelled control was refused.");
+        "A user-directed click on a control identified by its automation id was refused.");
+    Check(Decide(DesktopOperation::PointerActivate, Control("Bold"), ConsequenceClass::Routine,
+            /*autonomous=*/false).verdict == AuthorizationVerdict::Allow,
+        "A user-directed click on a named ordinary control was refused.");
+    Check(Decide(DesktopOperation::TextEntry, unreadable, ConsequenceClass::UserContent,
+            /*autonomous=*/false).verdict == AuthorizationVerdict::Allow,
+        "Typing the person asked for into an unnamed field inside the content ceiling was refused.");
+    Check(Decide(DesktopOperation::PointerActivate, unreadable, ConsequenceClass::Routine,
+            /*autonomous=*/false, /*scratch=*/true).verdict == AuthorizationVerdict::Allow,
+        "A click in the disposable workspace was gated by a missing label.");
 
     // Ordinary named work inside the ceiling proceeds without ceremony.
     Check(Decide(DesktopOperation::TextEntry, Control("Document body"),
@@ -445,6 +468,19 @@ void TestTaskApprovalExpiresAndDoesNotEscapeItsGoal()
         request.requestedBy = "goal:message-task";
     }
     Check(!attempt("Send") && prompts == 2, "Approval survived the end of the task.");
+    {
+        // An approved task covers the effects the person agreed to. A control with no
+        // name and no automation id has no known effect, so the task stops there
+        // instead of vouching for it, and opens no extra modal while doing so.
+        const auto grant = gate.ApproveTask("message-task", true);
+        TargetEvidence icon = Control("", "Messenger");
+        Check(!AuthorizeOrExplain(DesktopOperation::PointerActivate, icon, settings, request, refusal, &gate) &&
+                refusal.find("outside the approved task") != std::string::npos && prompts == 2,
+            "An approved task clicked a control nothing identifies: " + refusal);
+        icon.automationId = "FormatBold";
+        Check(AuthorizeOrExplain(DesktopOperation::PointerActivate, icon, settings, request, refusal, &gate) && prompts == 2,
+            "An approved task could not click a control identified by its automation id: " + refusal);
+    }
     {
         const auto navigation = gate.ApproveTask("message-task", false);
         Check(!attempt("Send") && prompts == 2,

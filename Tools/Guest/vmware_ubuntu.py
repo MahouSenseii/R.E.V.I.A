@@ -295,15 +295,23 @@ def download_verified(url, target: Path, expected_hash, opener=None):
         temporary.unlink(missing_ok=True)
 
 
-def cloud_config(manifest, public_key, host_private, host_public):
+def cloud_config(manifest, public_key, host_private=None, host_public=None):
+    """The guest's first-boot configuration.
+
+    The guest's SSH host key pair is generated on the host so its public half can be pinned in
+    known_hosts before the guest ever answers; cloud-init installs it on first boot. That makes the
+    private half part of the seed. It is deleted from the host's key folder as soon as the seed is
+    built, and the seed is rebuilt without it (host_private=None) once the guest has booted with it.
+    """
     helper = Path(__file__).with_name("guest_worker.py").read_text(encoding="utf-8")
     forced_key = 'restrict,command="/usr/bin/python3 -I -B /opt/revia/guest_worker.py" ' + public_key.strip()
     # JSON scalars are valid YAML scalars, so names, keys and program text never become YAML instructions.
     def scalar(value):
         return json.dumps(value, ensure_ascii=True)
+    host_key = [] if host_private is None else [
+        "ssh_keys:", "  ed25519_private: " + scalar(host_private), "  ed25519_public: " + scalar(host_public.strip())]
     return "\n".join([
-        "#cloud-config", "ssh_pwauth: false", "disable_root: true", "ssh_deletekeys: false", "ssh_keys:",
-        "  ed25519_private: " + scalar(host_private), "  ed25519_public: " + scalar(host_public.strip()),
+        "#cloud-config", "ssh_pwauth: false", "disable_root: true", "ssh_deletekeys: false", *host_key,
         "users:", "  - name: revia", "    lock_passwd: true", "    shell: /bin/sh", "    ssh_authorized_keys:",
         "      - " + scalar(forced_key), "package_update: true",
         "packages: [open-vm-tools, openssh-server, build-essential, cmake, ninja-build, git, python3-pytest, python3-venv, nodejs, npm]",
@@ -317,6 +325,37 @@ def cloud_config(manifest, public_key, host_private, host_public):
         "  - [systemctl, enable, --now, open-vm-tools]",
         "  - [systemctl, restart, ssh]",
         "  - [sh, -c, 'systemctl is-active --quiet open-vm-tools && test -x /usr/bin/cmake && test -x /usr/bin/ninja && test -x /usr/bin/node && touch /var/lib/revia/bootstrap-ready']", ""])
+
+
+def write_seed(root, manifest, installed, config):
+    """Builds seed.iso from config; the plaintext copy is removed once the image exists."""
+    seed = safe_path(root / "seed")
+    seed.mkdir(exist_ok=True)
+    (seed / "user-data").write_text(config, encoding="utf-8", newline="\n")
+    (seed / "meta-data").write_text("instance-id: " + manifest["environmentId"] + "\nlocal-hostname: revia-workspace\n", encoding="utf-8", newline="\n")
+    try:
+        command([installed["iso"], "-quiet", "-output", root / "seed.new.iso", "-volid", "CIDATA", "-joliet", "-rock", seed])
+        os.replace(root / "seed.new.iso", root / "seed.iso")
+    finally:
+        (seed / "user-data").unlink(missing_ok=True)
+
+
+def scrub_seed(root, manifest, installed):
+    """Rebuilds the seed without the guest's SSH host private key once the guest has booted with it.
+
+    Only while the VM is stopped (Workstation holds the attached image open). cloud-init has already
+    run its once-per-instance modules for this instance-id, so the rebuilt seed changes nothing in the
+    guest; it only stops the host keeping a copy of the guest's private host key.
+    """
+    if not recorded(root, "guest-ready.json", manifest) or recorded(root, "seed-scrubbed.json", manifest):
+        return
+    try:
+        write_seed(root, manifest, installed, cloud_config(manifest, (root / "keys/client.pub").read_text()))
+    except (BootstrapError, OSError, KeyError):
+        # Not a reason to fail a start or a stop: the old seed stays and this is retried
+        # the next time the VM is stopped.
+        return
+    record(root, "seed-scrubbed.json", manifest)
 
 
 def vm_entries(root, manifest):
@@ -475,6 +514,10 @@ def status(root, owner_id, installed):
             "environmentId": manifest["environmentId"], "operation": "health"})
     except BootstrapError as error:
         return {**result, "state": "booting", "code": error.code}
+    if valid_health(health, manifest) and not recorded(root, "guest-ready.json", manifest):
+        # The guest answered with the pinned host key, so it has installed it; the seed's
+        # copy can go the next time the VM is stopped.
+        record(root, "guest-ready.json", manifest)
     return {**result, "state": "ready" if valid_health(health, manifest) else "bootstrapping",
             "code": "ready" if valid_health(health, manifest) else "guest_bootstrap_pending",
             "guestReady": valid_health(health, manifest), "bootId": health.get("bootId", ""), "health": health}
@@ -517,6 +560,7 @@ def stop_guest(root, owner_id, installed):
             command([installed["vmrun"], "-T", "ws", "stop", vmx, "soft"], 120)
         if running(vmx, installed):
             raise BootstrapError("vm_still_running")
+        scrub_seed(root, manifest, installed)
         return {"ok": True, "state": "stopped", "code": "stopped"}
 
 
@@ -537,6 +581,12 @@ def ensure(root, owner_id, installed, wait_seconds=0, start_vm=True):
             atomic_json(root / "progress.json", {"stage": "downloading_image"})
             cached = root / "cache" / IMAGE_NAME
             download_verified(IMAGE_URL, cached, IMAGE_SHA256)
+            # The guest host key's private half is deleted once it is in the seed, so an
+            # interrupted setup that finds only its public half makes a fresh pair. The VM
+            # has not booted before provisioned.json exists, so nothing has pinned the old one.
+            host_key = safe_path(root / "keys/host")
+            if not host_key.exists() and host_key.with_suffix(".pub").exists():
+                host_key.with_suffix(".pub").unlink()
             for key in ("client", "host"):
                 path = root / "keys" / key
                 if not path.exists() and not path.with_suffix(".pub").exists():
@@ -545,12 +595,11 @@ def ensure(root, owner_id, installed, wait_seconds=0, start_vm=True):
                     raise BootstrapError("incomplete_key_pair", "A key operation was interrupted; preserve the enrollment for repair.")
             host_public = (root / "keys/host.pub").read_text().strip()
             (root / "keys/known_hosts").write_text(manifest["environmentId"] + " " + host_public + "\n", encoding="utf-8")
-            config = cloud_config(manifest, (root / "keys/client.pub").read_text(), (root / "keys/host").read_text(), host_public)
-            (root / "seed/user-data").write_text(config, encoding="utf-8", newline="\n")
-            (root / "seed/meta-data").write_text("instance-id: " + manifest["environmentId"] + "\nlocal-hostname: revia-workspace\n", encoding="utf-8", newline="\n")
+            config = cloud_config(manifest, (root / "keys/client.pub").read_text(), host_key.read_text(), host_public)
             atomic_json(root / "progress.json", {"stage": "creating_seed"})
-            command([installed["iso"], "-quiet", "-output", root / "seed.new.iso", "-volid", "CIDATA", "-joliet", "-rock", root / "seed"])
-            os.replace(root / "seed.new.iso", root / "seed.iso")
+            write_seed(root, manifest, installed, config)
+            # Only the pinned public half is needed from here on.
+            host_key.unlink()
             disk = root / "machine/workspace.vmdk"
             safe_path(disk)
             if disk.exists() and not recorded(root, "disk-created.json", manifest):
@@ -583,6 +632,7 @@ def ensure(root, owner_id, installed, wait_seconds=0, start_vm=True):
             return {"state": "provisioned", "code": "provisioned", "guestReady": False,
                     "environmentId": manifest["environmentId"], "vmx": str(vmx)}
         if not running(vmx, installed):
+            scrub_seed(root, manifest, installed)
             check_start_resources(root)
             atomic_json(root / "progress.json", {"stage": "starting_vm"})
             command([installed["vmrun"], "-T", "ws", "start", vmx, "nogui"], 120)

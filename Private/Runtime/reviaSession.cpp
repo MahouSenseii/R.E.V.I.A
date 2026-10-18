@@ -812,6 +812,9 @@ bool ReviaSession::Start()
     // Goals are reported, never auto-resumed. Restarting into unattended execution of
     // work the user has not re-approved belongs to Stage 5, behind its own job contract.
     stageStarted = std::chrono::steady_clock::now();
+    // Goal records name what she was asked to do. Kept for 30 days, then gone.
+    if (const std::size_t pruned = goalStore.PruneOlderThan(std::chrono::hours(24 * 30)); pruned > 0)
+        appLogger.Log("Removed " + std::to_string(pruned) + " goal record(s) older than 30 days.");
     const std::vector<goals::Goal> resumable = goalStore.LoadResumable();
     if (!resumable.empty())
     {
@@ -5785,14 +5788,24 @@ void ReviaSession::RecordRelationshipEvidence(
     const identity::ConversationSignals signals = identity::ReadConversationSignals(userInput, reply, succeeded);
     identity::RelationshipEvent event = identity::BuildRelationshipEvent(entityId, signals);
     event.evidenceId = actions::NewActionId();
-    // The local entry point resolves introductions before generation. An adapter
-    // supplies its stable platform entity. Recording evidence never changes which
-    // person the local session is addressing.
-    if (const std::string stated = identity::ReadStatedName(userInput); !stated.empty())
+    // Strangers on Discord, a stream or Presence move only their own relationship. Her
+    // development and preferences are global and shape owner chats, so public messages
+    // must not be able to spend the lifetime drift budget or plant tastes. Their display
+    // name comes from the platform, not from what they type.
+    const bool publicAdapter = identity::IsAdapterEntity(entityId);
+    // The local entry point resolves introductions before generation. Recording
+    // evidence never changes which person the local session is addressing.
+    if (const std::string stated = publicAdapter ? std::string() : identity::ReadStatedName(userInput); !stated.empty())
     {
         relationships.SetDisplayName(entityId, stated);
     }
     const identity::RelationshipState updated = relationships.Apply(event);
+    if (publicAdapter)
+    {
+        PublishComponent("Relationship", "Updated",
+            updated.entityId + ": " + event.description + " (" + std::to_string(updated.interactionCount) + " exchanges)");
+        return;
+    }
 
     // Conversation supplies social/correction evidence, not proof of independent
     // work. That evidence comes from confirmed execution outcomes.
@@ -7661,12 +7674,13 @@ bool ReviaSession::RunOperateGoal(const std::string& request, SessionResult& res
                       std::to_string(goal.budget.maxActions) + " actions, " + std::to_string(goal.budget.maxTotalRetries) +
                       " retries and " + std::to_string(goal.budget.maxDurationMs / 1000) +
                       " seconds.\n"
-                      "Approve this task once. Routine steps and content editing will continue "
-                      "within your existing permissions. Each step must be checked before continuing.\n" +
+                      "Approving starts the task. The first step of each kind of action in each application "
+                      "(typing in one app, clicking in another, writing a file) asks you once; later steps "
+                      "of that same kind are covered until the task ends. Each step must be checked before continuing.\n" +
                       std::string(messaging ? "This includes composing and sending the message you requested.\n"
                                             : "This does not include sending or publishing messages.\n") +
-                      "Purchases, deletion, account changes and commands outside existing grants "
-                      "stop the task instead of opening more prompts.";
+                      "Opening a file with an application, purchases, deletion, account changes and commands "
+                      "outside existing grants stop the task instead of opening more prompts.";
     actions::ConfirmationChoice goalChoice = actions::ConfirmationChoice::AllowForThisTask;
     if (!freeMode)
     {
@@ -7698,7 +7712,11 @@ bool ReviaSession::RunOperateGoal(const std::string& request, SessionResult& res
 goals::Goal ReviaSession::ExecuteOperate(
     goals::Goal goal, const std::string& request, const bool messaging, const std::stop_token stopToken, const bool reportState)
 {
-    goalRunner.SeedStandingApproval(actions::RiskLevel::ReversibleWrite, true);
+    // Owner full access answers the per-kind questions itself, for routine kinds only; the
+    // kinds that always need their own confirmation still stop the task.
+    const bool ownerFullAccess = actionRuntime.Settings().mode == actions::ExecutionMode::OwnerFullAccess &&
+        goal.scope.mode == actions::ExecutionMode::OwnerFullAccess;
+    goalRunner.SeedStandingApproval(actions::RiskLevel::ReversibleWrite, true, ownerFullAccess);
     const auto tools = policy::ProjectCapabilityScope(goal.scope, actionRuntime.Settings());
     goalRunner.SeedToolDelegation(
         tools.process.enabled && tools.process.allowTaskExecution, tools.browser.enabled && tools.browser.allowTaskInteraction);

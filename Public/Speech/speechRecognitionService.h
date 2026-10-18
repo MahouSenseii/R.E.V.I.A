@@ -115,6 +115,22 @@ struct MicrophoneTestResult
 
 struct MicrophoneTestAccess;
 
+enum class WhisperServerAnswer
+{
+    // Nothing healthy under our prefix yet: still loading, or nothing listening.
+    NotReady,
+    Ours,
+    // Something answers that is not the server Revia started. No audio goes to it.
+    Foreign
+};
+
+// Whether the server on host:port is the whisper-server started with `requestPath`: its
+// health route under that prefix reports ok, it does not answer outside the prefix, and
+// `ownsListener` (the owning-process check) agrees. Any program can listen on a loopback
+// port first, so an HTTP 200 alone proves nothing.
+[[nodiscard]] WhisperServerAnswer ProbeWhisperServer(
+    const std::string& host, int port, const std::string& requestPath, const std::function<bool()>& ownsListener);
+
 class SpeechRecognitionService
 {
     // The refusal states are reached from hardware and worker threads, and the defect

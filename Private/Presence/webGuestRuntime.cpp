@@ -143,6 +143,23 @@ struct WebGuestRuntime::Impl {
         server.set_payload_max_length(16384);server.set_read_timeout(2);server.set_write_timeout(2);
         server.set_keep_alive_max_count(4);
         server.new_task_queue=[] {return new httplib::ThreadPool(4,16);};
+        // cpp-httplib 0.18.1 reads the whole request body before any route runs, and a
+        // chunked or length-less body ignores set_payload_max_length, so any local
+        // process could make Revia buffer gigabytes without a token. This runs after the
+        // headers and before the body: it authenticates, and admits only a declared,
+        // bounded Content-Length. Every other method would have its body read as well.
+        server.set_pre_routing_handler([this](const httplib::Request& req,httplib::Response& res){
+            using Outcome=httplib::Server::HandlerResponse;
+            if(req.method!="GET"&&req.method!="POST"){Error(res,"method_not_allowed",405);return Outcome::Handled;}
+            if(!Authenticate(req,res))return Outcome::Handled;
+            if(req.method=="POST"){
+                if(req.has_header("Transfer-Encoding")||!req.has_header("Content-Length")){Error(res,"invalid_request",400);return Outcome::Handled;}
+                const std::string length=req.get_header_value("Content-Length");
+                const bool digits=!length.empty()&&length.size()<=6&&std::all_of(length.begin(),length.end(),[](unsigned char c){return c>='0'&&c<='9';});
+                if(!digits||std::stoul(length)>16384){Error(res,"payload_too_large",413);return Outcome::Handled;}
+            }
+            return Outcome::Unhandled;
+        });
         server.Get("/web/v1/status",[this](const auto& req,auto& res){if(Authenticate(req,res))Respond(res,{{"state",State()}});});
         auto post=[this](const std::string& path,auto handler){server.Post(path,[this,handler](const auto& req,auto& res){
             if(!Authenticate(req,res))return;

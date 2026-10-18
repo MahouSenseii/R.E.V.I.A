@@ -25,7 +25,8 @@ routes, including when the speaker uses the local user's display name.
 - Speech enabled and a Qwen voice assigned to Revia's active profile. Audio render
   failure is reported in Revia's adapter status; there is no Windows SAPI fallback.
 - Revia's persistent whisper.cpp service running at its configured loopback host
-  and port (default `http://127.0.0.1:8094`). The connector does not launch or
+  and port (default `127.0.0.1:8094`), under the random URL prefix Revia gives it
+  each launch and publishes in `RuntimeData/Speech/whisper-endpoint.json`. The connector does not launch or
   reconfigure that service. Select the server recognition backend in Revia and
   check that recognition is ready before starting the connector.
 
@@ -52,8 +53,13 @@ Edit `config.json`:
   executable you are running**. A source checkout and a packaged build may have
   different runtime roots. Custom `presence.inboxPath`/`outboxPath` settings must
   match. Start Revia first; it creates these directories.
-- Set `whisperUrl` to Revia's loopback recognition server origin. Remote hosts and
-  redirects are rejected so captured audio cannot silently go to another service.
+- Set `whisperEndpointFile` to the absolute path of `RuntimeData/Speech/whisper-endpoint.json`
+  in the same runtime root. Revia writes the server's full loopback address there,
+  random prefix included, only after checking the server is the one it started, and
+  removes it when recognition stops; the connector reads it for every utterance.
+  (`whisperUrl` still accepts a loopback origin, optionally with such a prefix, for a
+  whisper-server you run yourself.) Remote hosts and redirects are rejected so captured
+  audio cannot silently go to another service.
 - Keep `replyMode: "addressed"` to answer only transcripts containing the name
   **Revia**. Set `"conversation"` to accept other human speech in this channel.
   Recognition must transcribe the name correctly for addressed mode to trigger.

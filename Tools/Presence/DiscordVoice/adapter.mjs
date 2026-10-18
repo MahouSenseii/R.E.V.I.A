@@ -5,6 +5,16 @@ import { setTimeout as delay } from 'node:timers/promises';
 
 const snowflake = /^\d{17,20}$/;
 const maxAudioBytes = 24 * 1024 * 1024;
+// Revia starts whisper-server under a fresh random prefix ("/<32 hex>") each launch.
+const whisperPrefix = /^\/[0-9a-f]{32}$/;
+
+function checkWhisperUrl(value) {
+  const url = new URL(value);
+  if (url.protocol !== 'http:' || !['127.0.0.1', '[::1]'].includes(url.hostname) ||
+      url.username || url.password || url.search || url.hash || !(url.pathname === '/' || whisperPrefix.test(url.pathname)))
+    throw new Error('Whisper must use a loopback HTTP server origin.');
+  return url;
+}
 
 export function validateConfig(input) {
   const c = { replyMode: 'addressed', maxUtteranceSeconds: 20, replyTimeoutSeconds: 180,
@@ -12,10 +22,11 @@ export function validateConfig(input) {
   if (!snowflake.test(c.guildId) || !snowflake.test(c.channelId)) throw new Error('Configure guildId and channelId as Discord IDs.');
   if (!path.isAbsolute(c.inbox ?? '') || !path.isAbsolute(c.outbox ?? '') || c.inbox === c.outbox)
     throw new Error('Configure distinct absolute Presence inbox and outbox paths.');
-  const url = new URL(c.whisperUrl);
-  if (url.protocol !== 'http:' || !['127.0.0.1', '[::1]'].includes(url.hostname) ||
-      url.username || url.password || url.search || url.hash || url.pathname !== '/')
-    throw new Error('Whisper must use a loopback HTTP server origin.');
+  if (c.whisperEndpointFile !== undefined && (typeof c.whisperEndpointFile !== 'string' || !path.isAbsolute(c.whisperEndpointFile)))
+    throw new Error('whisperEndpointFile must be an absolute path.');
+  if (c.whisperEndpointFile === undefined && c.whisperUrl === undefined)
+    throw new Error("Configure whisperEndpointFile (Revia's published endpoint) or whisperUrl.");
+  if (c.whisperUrl !== undefined) checkWhisperUrl(c.whisperUrl);
   if (!['addressed', 'conversation'].includes(c.replyMode)) throw new Error('Unknown replyMode.');
   if (!Number.isInteger(c.maxUtteranceSeconds) || c.maxUtteranceSeconds < 1 || c.maxUtteranceSeconds > 30)
     throw new Error('maxUtteranceSeconds must be 1–30.');
@@ -133,10 +144,22 @@ export class DiscordVoiceAdapter {
     return task;
   }
 
+  // Read on every transcription: the prefix changes whenever Revia restarts its server,
+  // and the file only exists while a server Revia verified as its own is running.
+  async #whisperBase() {
+    if (this.config.whisperEndpointFile === undefined) return checkWhisperUrl(this.config.whisperUrl);
+    let endpoint;
+    try { endpoint = JSON.parse((await readBounded(this.config.whisperEndpointFile, 4096)).toString('utf8')); }
+    catch { throw new Error("Revia's whisper endpoint is not published; check that speech recognition is ready."); }
+    if (typeof endpoint?.url !== 'string') throw new Error("Revia's whisper endpoint file is invalid.");
+    return checkWhisperUrl(endpoint.url);
+  }
+
   async #transcribe(wav, signal) {
+    const base = await this.#whisperBase();
     const form = new FormData(); form.append('file', new Blob([wav], { type: 'audio/wav' }), 'discord.wav');
     form.append('response_format', 'json'); form.append('language', this.config.language);
-    const response = await fetch(new URL('/inference', this.config.whisperUrl), {
+    const response = await fetch(new URL(base.pathname.replace(/\/$/, '') + '/inference', base), {
       method: 'POST', body: form, redirect: 'error', signal: AbortSignal.any([signal, AbortSignal.timeout(60000)]),
     });
     if (!response.ok) throw new Error(`Whisper returned HTTP ${response.status}.`);

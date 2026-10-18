@@ -29,7 +29,7 @@ The design rule: **one Revia**. Reflex, Fast, Main, and Expert share one identit
 | Filesystem actions and Windows UI Automation | Tested | Confined to `Documents\ReviaSandbox` and approved apps by default |
 | Driving the desktop (pointer, keyboard, app launch) | Tested | **Off by default**; exercised against a desktop test fixture |
 | Karaoke from your own WAV files | Tested | You must supply the songs |
-| Reviewing her own code and proving her suggestions (`/improve`) | Tested | Covered by automated tests with a scripted model; see [Self-improvement](#self-improvement) |
+| Reviewing her own code and suggesting patches (`/improve`) | Tested | Covered by automated tests with a scripted model. Building and testing a suggestion in a copy is switched off in this build; see [Self-improvement](#self-improvement) |
 | Camera (one still frame) | Tested | **Off by default** |
 | Image generation (`/imagine`, SD-Turbo) | Tested | **Off by default**; needs `Tools\InstallImageModel.ps1` |
 | Voice interruption (barge-in) | Tested | Enabled in settings; not confirmed in recent logs |
@@ -49,7 +49,7 @@ The design rule: **one Revia**. Reflex, Fast, Main, and Expert share one identit
 - **Pick how hard to think.** Qwen3.5 4B handles conversation (including small talk, which it starts answering in about half a second on the GPU), and Qwen3-VL 8B handles hard debugging, architecture, and difficult vision. Qwen3.5 0.8B runs on the CPU and is only started as a fallback when the 4B model has no GPU or fails to start: on the CPU it needs 8-10 s just to read a prompt. The choice is made before she answers, and only one model answers each turn. If a model is unavailable she falls back and tells you.
 - **Think before answering, where you can see it.** When the router judges a problem hard (it sends the turn to Expert or deep reasoning), she thinks before she answers. By default (`conversation.deliberation: "native"`) this is the model's own thinking mode on the answer itself: her thinking streams into "Revia is thinking" blocks in chat as it is written, the answer follows in the same model call, and the reply's **Thought process** keeps the full reasoning. Thinking has its own token allowance (`llm.thinkingTokens`, default 3,072, capped at a quarter of the context), so it no longer eats the answer's `maxTokens`; a long think still delays the first word of the answer. With `"selfInquiry"` she instead runs the older separate pass: two to four questions she asks and answers herself, shown before her reply, at the cost of one extra bounded model call. Ordinary questions and small talk are answered directly. Set `conversation.selfInquiryScope` to `"questions"` to have her think before every real question or task as well. Native thinking is unit-tested against a fake backend that streams `reasoning_content`; it has not been run live yet.
 - **Stay in character.** Personality, mood, recent conversation, relevant memories, and what is on your screen go into every turn. Her mood carries over between turns instead of resetting.
-- **Develop over time.** She forms durable likes, dislikes, opinions, and feelings about the people she talks to.
+- **Develop over time.** She forms durable likes, dislikes, opinions, and feelings about the people she talks to. Only local conversation shapes her own personality and tastes; Discord, stream and Presence messages change only that sender's relationship with her, and a public sender's name comes from the platform, not from what they type (tested, not yet checked live).
 - **Remember across restarts.** Useful facts go to `build/debug/Memory/revia_memory.db`; conversation goes to `build/debug/Memory/revia_conversations.db`. Turns that look sensitive (passwords, keys, and so on) are not saved at all.
 - **Answer as she writes.** On an ordinary turn each sentence appears in chat, and starts being spoken, as soon as it is complete and every deterministic filter leaves the reply so far unchanged; raw model text never shows. If the final check changes something already on screen, the chat shows the approved reply in its place. Replies the optional AI reviewer must read whole, and JSON answers, still arrive complete.
 - **Clean up her own output.** Leaked prompt text, control tokens, fake "User:" lines, repetitive loops, and cut-off endings are removed before anything is spoken or saved.
@@ -71,7 +71,7 @@ The design rule: **one Revia**. Reflex, Fast, Main, and Expert share one identit
 - **Help with what you copied.** Ask about "the code I just copied" or "what's on my clipboard" and she reads it for that one question. It is not saved, and text that looks like a password or key is withheld.
 - **Draw diagrams, keep a working document, generate images** (images need the optional installer).
 - **Sing** recordings you put in `RuntimeData/Songs/` (karaoke playback of your WAV files, not generated singing). Ask "Revia, sing <name>" or use `/sing`.
-- **Review her own code** and suggest one improvement at a time, with the problem, the reason, and a patch that she has already built and tested in a separate copy. She never edits her real source; you apply what you agree with (see [Self-improvement](#self-improvement)).
+- **Review her own code** and suggest one improvement at a time, with the problem, the reason, and a patch. She never edits her real source; you review every patch and apply only what you agree with. Building and testing a patch in a separate copy exists but is switched off in this build (see [Self-improvement](#self-improvement)).
 - **Work with files and apps** inside the folders and applications you approve, with confirmation and an audit log.
 - **Drive the mouse and keyboard** only after you turn it on, with an emergency stop (**hold Ctrl+Alt+Shift**).
 - **Join a Discord voice channel** through a small separate connector (see [Discord](#8-optional-put-her-in-a-discord-voice-channel)).
@@ -280,7 +280,7 @@ This is a separate small Node program in `Tools\Presence\DiscordVoice\`. It list
    notepad config.json
    ```
 
-   Fill in `guildId`, `channelId`, and the **absolute** `inbox`/`outbox` paths of the Revia you are running, for example `C:/Users/you/Documents/R.E.V.I.A/build/debug/RuntimeData/Presence/Inbox` and `.../Outbox`. Leave `whisperUrl` as `http://127.0.0.1:8094`. Keep `replyMode: "addressed"` so she answers only when someone says "Revia", or use `"conversation"` to let her answer anyone.
+   Fill in `guildId`, `channelId`, and the **absolute** `inbox`/`outbox` paths of the Revia you are running, for example `C:/Users/you/Documents/R.E.V.I.A/build/debug/RuntimeData/Presence/Inbox` and `.../Outbox`. Set `whisperEndpointFile` to the absolute path of `RuntimeData/Speech/whisper-endpoint.json` in the same runtime folder (for example `C:/Users/you/Documents/R.E.V.I.A/build/debug/RuntimeData/Speech/whisper-endpoint.json`). Revia starts whisper.cpp under a new random URL prefix each time and writes the full address there once it has checked the server is its own, so a fixed `whisperUrl` no longer reaches it. Keep `replyMode: "addressed"` so she answers only when someone says "Revia", or use `"conversation"` to let her answer anyone.
 
 5. **Check it offline** (no Discord login, no microphone):
 
@@ -445,7 +445,7 @@ She stops singing to answer you (set `performance.interruptSongToSpeak` to `fals
 
 ## Self-improvement
 
-Revia reads her own source, suggests one concrete improvement at a time, and proves it before you hear about it. She never changes her real code: every proposal is a patch you choose to apply.
+Revia reads her own source and suggests one concrete improvement at a time. She never changes her real code: every proposal is a patch you review and choose to apply.
 
 **What makes her look**
 
@@ -456,23 +456,24 @@ Revia reads her own source, suggests one concrete improvement at a time, and pro
 **What a suggestion has to survive**
 
 - The model (the 8B Expert when it can be loaded, otherwise Main) is shown about 220 lines and asked for at most one change, with the problem, the reason, and her own benefit and risk estimates. "Nothing worth changing" is the normal answer.
-- The change must match exactly one place in the file, stay under about 60 lines, touch only product code (`Private/`, `Public/`, `Desktop/`, the Python voice worker; never tests, build files, scripts, or settings), and must not *add* anything that starts programs, uses the network, deletes files, or touches the registry.
+- The change must match exactly one place in the file, stay under about 60 lines, and touch only product code (`Private/`, `Public/`, `Desktop/`, the Python voice worker; never tests, build files, scripts, or settings).
+- **Screening, not a guarantee.** A change is refused if the code it replaces or the code it adds touches anything that starts programs, loads code at run time, uses the network or the registry, writes or deletes files, or uses the preprocessor (`#define`, `#include`, `#pragma`, `##`) or inline assembly; in the Python worker, any import, `__import__`, `getattr`, `exec`/`eval`, `subprocess`, `os`, `socket` and similar. This is a word list. A change can still reach those effects through code it calls, so **review every patch before you apply it**.
 - If the code she means to replace isn't in the file as she wrote it, she gets one second look, told which line isn't there. Code copied without the indentation every line shared still matches, and the replacement gets that indentation back.
 - Found on her own it needs an estimated benefit of 0.6 or more; aimed at a measured problem, 0.4. Risk must be 0.5 or less. The same change is never proposed twice, and a new idea about code that already has a proposal waiting for your decision is held back until you decide.
 - The Expert is loaded for the review and put away as soon as it ends, so the rest of what she does isn't left waiting on a full GPU.
-- **Proof:** the change is applied to a private copy of the source in `%LOCALAPPDATA%\Revia\ImprovementWorkbench`, then built and run through all test suites. If a suite fails, the unchanged copy is tested too, so a failure that already existed is not blamed on the change. If it doesn't compile, she gets one attempt to fix it from the compiler's own errors.
-- Builds she decides on alone wait until you've been away for 10 minutes, run at below-normal priority on half your cores, and stop the moment you come back. The first proof is a full build of the copy (about 9 minutes on the development PC); after that only what changed is rebuilt, and a proof takes about 7 minutes, most of it relinking and the ~90 s of test suites.
+- **Proof (switched off in this build).** The workbench can apply a change to a private copy of the source in `%LOCALAPPDATA%\Revia\ImprovementWorkbench`, build it, and run all test suites; if a suite fails, the unchanged copy is tested too, and a change that doesn't compile gets one repair attempt from the compiler's errors. Building runs the proposed code, so it stays off until it can run in an isolated sandbox: the session installs no candidate admission, every proposal stays "not yet proven", and none is announced in chat. The workbench itself is covered by tests with scripted builds.
+- When enabled, builds she decides on alone wait until you've been away for 10 minutes, run at below-normal priority on half your cores, and stop the moment you come back. The first proof is a full build of the copy (about 9 minutes on the development PC); after that only what changed is rebuilt, and a proof takes about 7 minutes, most of it relinking and the ~90 s of test suites.
 
 **What you see and do**
 
-When a proposal is proven she tells you in chat. Then:
+Proposals are listed with `/improve list`; with proof switched off, none is announced in chat. Then:
 
 | Command | What it does |
 |---|---|
 | `/improve` | Status, and proven proposals waiting for you |
 | `/improve list` | Every proposal and what became of it |
 | `/improve show <id>` | The write-up: problem, why, evidence, verification, and the diff |
-| `/improve accept <id> [why]` | Records your yes; prints the `git apply` command for its patch |
+| `/improve accept <id> [why]` | Records your yes; prints the `git apply` command for its patch. Read the patch first with `/improve show <id>` |
 | `/improve reject <id> <why>` | Records your no, and why |
 | `/improve review <file or area>` | Reviews something now, and proves it straight away |
 
@@ -510,7 +511,11 @@ Pointer, keyboard, and application launch are **off** by default and each is tur
 
 `launch_application` starts an approved app with no arguments or one approved file. After each pointer action she reports what is under the pointer, which is description only and never permission.
 
+A click or invoke on a control with no readable name and no automation id (an icon-only button, or nothing identifiable at a coordinate) asks for your approval even when you asked for the task, because nothing says what it does; inside a running task it stops instead. Observation, navigation and the disposable workspace are unchanged. This is covered by the authorization tests, not yet checked live.
+
 The capability `mode` can be `supervised` (default) or `owner_full_access`. The latter only stops asking for confirmation on reversible, in-scope work; every approved root, app, control, and desktop switch still applies.
+
+**Approving a task.** "Allow for this whole task" covers one *kind* of action: the same action type in the same application (typing in Notepad, say), no riskier than the step you saw, until the task ends. A different kind asks again. In an `/operate` task, approving the task starts it, and then the first step of each kind asks once in `supervised` mode; `owner_full_access` answers those per-kind questions itself for routine kinds. Opening a file with an application (`launch_application` with a file), deleting, running commands and browser clicks are never covered by a standing approval: a planned goal asks each time, and an `/operate` task stops instead. This is covered by the goal-runner tests; it has not been checked in a live session.
 
 ---
 
@@ -523,7 +528,9 @@ The capability `mode` can be `supervised` (default) or `owner_full_access`. The 
 - Approving an app allows inspecting it. Pressing a control also needs that exact control approved.
 - Anything she does because of what she saw must map back to an approved UI element that is re-checked right before acting.
 - Action logs record typed text by length, not content.
+- The goal database (`Goals/revia_goals.db`) stores typed and filled-in text, guest file content and process environments as a length and a digest keyed with a per-run secret, never the text, and withholds a goal title the sensitive-content detector flags. A goal can still be resumed within the same run; after a restart a step whose text was withheld is refused rather than replayed. Goal records older than 30 days are deleted at startup. Step observations (what a check read back) are still stored. Tested with the goal-store tests.
 - She cannot edit her own source, change her models or settings, or widen her own permissions.
+- The whisper.cpp server is started under a new random URL prefix each launch (`--request-path`), so web pages and other programs cannot reach its routes, including its unauthenticated `/load`, without learning it. Microphone audio goes only to a server that answers under that prefix, not outside it, and, on Windows, owns the listening port by process ID. A program squatting on the port gets no audio; recognition falls back to the command-line runner. The pinned v1.9.2 server has no `--no-prints` option (an unknown option makes it exit), and it writes no transcript text to its log unless `--print-realtime` is passed, which Revia does not. The probe is tested against local fixture servers; the Windows ownership check is compiled for Windows but not yet run live.
 
 The live permissions file is `build\debug\RuntimeData\Capabilities\capabilities.json`, seeded once from `Config\capabilities.json` and never overwritten by builds. Use the **Permissions** tab rather than editing it.
 

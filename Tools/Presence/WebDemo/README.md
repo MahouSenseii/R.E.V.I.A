@@ -52,6 +52,8 @@ Generate independent, cryptographically random credentials of at least 32 bytes 
 | Connector | `REVIA_WEB_LOCAL_URL` | Default `http://127.0.0.1:17864`; only a literal loopback HTTP origin is accepted |
 | Portfolio | `data/revia-demo.json` | Public relay HTTPS origin and enabled flag only; leave disabled until deployed |
 
+The native loopback API checks the bearer token right after the request headers, before any body is read, and accepts only GET and POST; a POST must declare a `Content-Length` of at most 16 KiB and must not be chunked. This closes a memory exhaustion path in cpp-httplib 0.18.1, which buffers chunked bodies past its size limit. Tested on Linux with a raw socket client.
+
 The `.env.relay.example`, `.env.bridge.example`, and `.env.revia.example` templates contain no valid credentials. Keep real local files outside the repository, preferably in `%LOCALAPPDATA%\Revia\WebDemo`, restricted to your account. Local `.env.*` files inside WebDemo are ignored by Git, but the native build copies Tools into build output, another reason to keep secrets outside the source tree. The Windows helper reads `.env.revia` and shares its native token/port with the connector; manual bridge commands must also load that file. Node reads an environment file only when explicitly passed `--env-file`; `npm start` uses the process environment supplied by the hosting platform. No dotenv package is needed.
 
 The checks below validate locally and make **no network connection**:

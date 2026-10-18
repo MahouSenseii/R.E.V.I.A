@@ -16,6 +16,13 @@ test('configuration refuses remote transcription, invalid identity, and relative
     { guildId: '../x' }, { inbox: './Inbox' }, { replyMode: 'always-execute' }, { maxUtteranceSeconds: 1000 }]) {
     assert.throws(() => validateConfig({ ...c, ...patch }));
   }
+  // Revia's server sits under a random 32-hex prefix; nothing else may follow the origin.
+  assert.doesNotThrow(() => validateConfig({ ...c, whisperUrl: 'http://127.0.0.1:8094/0123456789abcdef0123456789abcdef' }));
+  for (const patch of [{ whisperUrl: 'http://127.0.0.1:8094/load' }, { whisperUrl: undefined },
+    { whisperUrl: undefined, whisperEndpointFile: 'whisper-endpoint.json' }]) {
+    assert.throws(() => validateConfig({ ...c, ...patch }));
+  }
+  assert.doesNotThrow(() => validateConfig({ ...c, whisperUrl: undefined, whisperEndpointFile: path.join(tmpdir(), 'whisper-endpoint.json') }));
 });
 
 test('stereo capture becomes 16 kHz mono WAV and playback becomes 48 kHz stereo PCM', () => {
@@ -155,4 +162,28 @@ test('loopback Whisper receives a multipart 16 kHz WAV and transcript uses the s
     assert.equal(captured.body.readUInt32LE(offset + 24), 16000);
     assert.equal(captured.body.readUInt16LE(offset + 22), 1);
   } finally { adapter.close(); await new Promise(resolve => server.close(resolve)); }
+}));
+
+test("Revia's published endpoint supplies the request prefix, and only a loopback one is used", () => fixture(async root => {
+  const requests = [];
+  const server = createServer(async (request, response) => {
+    for await (const _ of request) { /* drain */ }
+    requests.push(request.url);
+    response.writeHead(200, { 'Content-Type': 'application/json' }); response.end(JSON.stringify({ text: 'hello there' }));
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const prefix = '/0123456789abcdef0123456789abcdef';
+  const endpointFile = path.join(root, 'whisper-endpoint.json');
+  let adapter;
+  try {
+    adapter = new DiscordVoiceAdapter({ ...config(root), whisperUrl: undefined, whisperEndpointFile: endpointFile }, {
+      play: async () => assert.fail('unexpected playback') });
+    await assert.rejects(adapter.transcribe(pcmToWhisperWav(Buffer.alloc(4800)), new AbortController().signal), /not published/);
+    await writeFile(endpointFile, JSON.stringify({ url: `http://127.0.0.1:${server.address().port}${prefix}` }));
+    assert.equal(await adapter.transcribe(pcmToWhisperWav(Buffer.alloc(4800)), new AbortController().signal), 'hello there');
+    assert.deepEqual(requests, [`${prefix}/inference`]);
+    await writeFile(endpointFile, JSON.stringify({ url: `http://evil.example:${server.address().port}${prefix}` }));
+    await assert.rejects(adapter.transcribe(pcmToWhisperWav(Buffer.alloc(4800)), new AbortController().signal));
+    assert.equal(requests.length, 1);
+  } finally { adapter?.close(); await new Promise(resolve => server.close(resolve)); }
 }));

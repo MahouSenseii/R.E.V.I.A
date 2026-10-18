@@ -22,6 +22,9 @@ namespace revia::identity
 // Anonymous local identity records history before an introduction.
 [[nodiscard]] std::string LocalUserEntityId();
 [[nodiscard]] std::string AdapterEntityId(const std::string& source, const std::string& author);
+// True for an entity a public adapter (Discord, stream, Presence) speaks for. Their
+// exchanges shape only that entity's relationship, never her own development or tastes.
+[[nodiscard]] bool IsAdapterEntity(const std::string& entityId);
 
 // Thread-safe per-entity relationship state updated only through runtime-observed RelationshipEvent.
 // Does not infer evidence, appraise emotion or call a model.

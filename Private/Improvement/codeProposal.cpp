@@ -5,7 +5,9 @@
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
+#include <cctype>
 #include <cstdio>
+#include <optional>
 #include <sstream>
 #include <string_view>
 #include <utility>
@@ -166,50 +168,106 @@ std::optional<Location> LocateUnique(const std::string& content, const std::stri
     return Location{lineStarts[matchLine], end, matchIndent};
 }
 
-// Calls that reach outside the process. Checked only on what a change adds, so editing
-// code that already starts the voice worker is fine and adding a new launch is not.
-constexpr std::string_view OutsideReach[] = {
-    // Programs.
-    "system(", "popen(", "_wsystem", "CreateProcess", "ShellExecute", "WinExec",
-    "QProcess", "execv", "execl", "execvp", "spawnl", "_spawn",
-    // Code loaded at run time.
-    "LoadLibrary", "GetProcAddress", "dlopen", "__asm", "asm(", "asm volatile",
-    // Files and folders destroyed.
-    "remove_all", "filesystem::remove", "DeleteFile", "RemoveDirectory", "SHFileOperation",
-    // The registry and the process itself.
-    "RegSetValue", "RegCreateKey", "RegDeleteKey", "ExitProcess", "TerminateProcess",
-    // The network.
-    "httplib::Client", "httplib::SSLClient", "WSAStartup", "URLDownload", "InternetOpen",
-    "WinHttp",
-    // The same, in the Python the voice worker is written in.
-    "subprocess", "os.system", "os.popen", "os.remove", "os.unlink", "shutil.rmtree",
-    "eval(", "exec(", "__import__", "urllib"};
-
-// Whitespace removed, so "std::system (" and "asm  volatile" read as the tokens above.
-std::string WithoutWhitespace(std::string_view text)
+// What a proposal may not touch at all, in the find text or the replace text. This is
+// best-effort screening, not a guarantee: a change can still reach these effects through
+// code it calls, which is why every proposal is a patch a person reviews before applying.
+// It used to count tokens and refuse only a change that added one, and token pasting,
+// editing an existing launch line, std::remove or RegSetKeyValueW all passed. Touching
+// is now enough, so editing code that already launches a process is refused as well.
+struct ReachToken
 {
-    std::string compact;
-    compact.reserve(text.size());
-    for (const char character : text)
-    {
-        if (character != ' ' && character != '\t' && character != '\n' && character != '\r' &&
-            character != '\v' && character != '\f')
-        {
-            compact.push_back(character);
-        }
-    }
-    return compact;
+    std::string_view text;
+    // Also needs an identifier boundary after it: "import" must not match "important".
+    bool wholeWord = false;
+};
+
+constexpr ReachToken NativeReach[] = {
+    // Programs and other processes.
+    {"system("}, {"_wsystem"}, {"popen"}, {"_popen"}, {"CreateProcess"}, {"ShellExecute"}, {"WinExec"}, {"QProcess"},
+    {"execv"}, {"execl"}, {"execle"}, {"execlp"}, {"execvp"}, {"execve"}, {"spawnl"}, {"spawnv"}, {"_spawn"}, {"_wspawn"},
+    {"posix_spawn"}, {"fork("}, {"vfork"}, {"CoCreateInstance"}, {"CoGetObject"}, {"OpenProcess"}, {"CreateRemoteThread"},
+    {"WriteProcessMemory"}, {"VirtualAlloc"}, {"VirtualProtect"}, {"SetWindowsHookEx"}, {"ExitProcess"}, {"TerminateProcess"},
+    // Code loaded at run time.
+    {"LoadLibrary"}, {"LoadPackagedLibrary"}, {"GetProcAddress"}, {"dlopen"}, {"dlsym"}, {"LdrLoadDll"},
+    // Files written, moved or deleted.
+    {"remove("}, {"_wremove"}, {"remove_all"}, {"rename("}, {"_wrename"}, {"unlink("}, {"_unlink"}, {"rmdir"}, {"DeleteFile"},
+    {"RemoveDirectory"}, {"SHFileOperation"}, {"IFileOperation"}, {"MoveFile"}, {"CopyFile"}, {"ReplaceFile"},
+    {"CreateFile"}, {"WriteFile"}, {"SetFileAttributes"}, {"ofstream"}, {"fstream"}, {"fopen"}, {"_wfopen"}, {"freopen"},
+    {"fwrite"}, {"copy_file"}, {"filesystem::copy"}, {"create_directory"}, {"create_symlink"}, {"create_hard_link"},
+    {"resize_file"}, {"permissions("},
+    // The registry.
+    {"RegSetValue"}, {"RegSetKeyValue"}, {"RegCreateKey"}, {"RegDeleteKey"}, {"RegDeleteValue"}, {"RegDeleteTree"},
+    {"RegOpenKey"}, {"RegLoadKey"}, {"RegRestoreKey"}, {"RegReplaceKey"}, {"SHSetValue"}, {"SHDeleteKey"},
+    {"SHDeleteValue"}, {"QSettings"},
+    // The network.
+    {"httplib"}, {"WSAStartup"}, {"WSASocket"}, {"socket("}, {"::connect("}, {"getaddrinfo"}, {"gethostbyname"},
+    {"URLDownload"}, {"InternetOpen"}, {"InternetConnect"}, {"HttpOpenRequest"}, {"WinHttp"}, {"curl_"}, {"QNetwork"},
+    {"QTcpSocket"}, {"QUdpSocket"}, {"QWebSocket"}, {"asio::"},
+    // The preprocessor and inline assembly, which can spell any of the above without
+    // writing it: token pasting, a macro, an include from a share, a pragma.
+    {"#define"}, {"#undef"}, {"#include"}, {"#import"}, {"#pragma"}, {"#line"}, {"##"}, {"%:"}, {"?\?="}, {"_Pragma"},
+    {"__pragma"}, {"__asm"}, {"asm(", true}, {"asm volatile", true}, {"asm goto", true}};
+
+// The Python voice worker. Any new import is refused, along with the ways of reaching a
+// module or a callable by name.
+constexpr ReachToken PythonReach[] = {
+    {"import", true}, {"__import__"}, {"importlib"}, {"getattr"}, {"setattr"}, {"delattr"}, {"exec(", true},
+    {"eval(", true}, {"compile(", true}, {"subprocess"}, {"os.", true}, {"socket"}, {"ctypes"}, {"open(", true},
+    {"shutil"}, {"pathlib"}, {"__builtins__"}, {"builtins"}, {"globals(", true}, {"vars(", true}, {"sys.modules"},
+    {"pickle"}, {"marshal"}, {"urllib"}, {"requests", true}, {"http.client"}};
+
+bool IdentifierCharacter(const char character)
+{
+    return std::isalnum(static_cast<unsigned char>(character)) != 0 || character == '_';
 }
 
-std::size_t CountOccurrences(const std::string& text, const std::string& token)
+// What the compiler sees, as far as matching needs: backslash-newline continuations
+// joined (it splices them before reading a token, so "Create\<newline>ProcessW" is
+// CreateProcessW), whitespace collapsed, and a space kept only between two identifier
+// characters, so "std :: system (" reads "std::system(" and "asm volatile" keeps its space.
+std::string NormalizeForScreening(std::string_view text)
 {
-    std::size_t count = 0;
-    for (std::size_t at = text.find(token); at != std::string::npos;
-        at = text.find(token, at + token.size()))
+    std::string spliced;
+    spliced.reserve(text.size());
+    for (std::size_t index = 0; index < text.size(); ++index)
     {
-        ++count;
+        if (text[index] == '\\' && index + 1 < text.size() && text[index + 1] == '\n')
+        {
+            ++index;
+            continue;
+        }
+        spliced.push_back(text[index]);
     }
-    return count;
+    std::string normalized;
+    normalized.reserve(spliced.size());
+    bool pendingSpace = false;
+    for (const char character : spliced)
+    {
+        if (std::isspace(static_cast<unsigned char>(character)) != 0)
+        {
+            pendingSpace = true;
+            continue;
+        }
+        if (pendingSpace && !normalized.empty() && IdentifierCharacter(normalized.back()) && IdentifierCharacter(character))
+            normalized.push_back(' ');
+        pendingSpace = false;
+        normalized.push_back(character);
+    }
+    return normalized;
+}
+
+bool Touches(const std::string& normalized, const ReachToken& token)
+{
+    const std::string_view text = token.text;
+    for (std::size_t at = normalized.find(text); at != std::string::npos; at = normalized.find(text, at + 1))
+    {
+        const bool startsClean = !IdentifierCharacter(text.front()) || at == 0 || !IdentifierCharacter(normalized[at - 1]);
+        const std::size_t after = at + text.size();
+        const bool endsClean = !token.wholeWord || !IdentifierCharacter(text.back()) || after >= normalized.size() ||
+            !IdentifierCharacter(normalized[after]);
+        if (startsClean && endsClean) return true;
+    }
+    return false;
 }
 
 std::string Hex(const std::uint64_t value)
@@ -444,19 +502,24 @@ ChangeCheck CheckChange(const CodeChange& change, const std::string& currentCont
         return {false, "The code to replace is not in the file exactly once, so the edit "
             "would land somewhere unintended or nowhere.", true};
     }
-    // Counted, not merely present: code that already launches one process must not gain a
-    // second launch just because the first is inside the edited lines.
-    const std::string compactFind = WithoutWhitespace(find);
-    const std::string compactReplace = WithoutWhitespace(replace);
-    for (const std::string_view token : OutsideReach)
+    const bool python = change.path.size() >= 3 && change.path.compare(change.path.size() - 3, 3, ".py") == 0;
+    const std::string normalizedFind = NormalizeForScreening(find);
+    const std::string normalizedReplace = NormalizeForScreening(replace);
+    const auto check = [&](const auto& tokens) -> std::optional<ChangeCheck>
     {
-        const std::string compactToken = WithoutWhitespace(token);
-        if (CountOccurrences(compactReplace, compactToken) >
-            CountOccurrences(compactFind, compactToken))
+        for (const ReachToken& token : tokens)
         {
-            return {false, "The change adds '" + std::string(token) + "', which reaches "
-                "outside the process; proposals may not introduce that."};
+            if (Touches(normalizedFind, token) || Touches(normalizedReplace, token))
+            {
+                return ChangeCheck{false, "The change touches '" + std::string(token.text) + "', which can start programs, "
+                    "load code, reach the network or registry, or write or delete files; proposals may not touch that."};
+            }
         }
+        return std::nullopt;
+    };
+    if (const auto refused = python ? check(PythonReach) : check(NativeReach))
+    {
+        return *refused;
     }
     return {true, {}};
 }

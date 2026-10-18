@@ -1,5 +1,6 @@
 #include "Speech/recognitionSettings.h"
 #include "Speech/whisperServerProcess.h"
+#include "Core/localApiKey.h"
 #include "Core/logger.h"
 
 #include "Speech/speechRecognitionService.h"
@@ -11,7 +12,9 @@
 #include <vector>
 
 #ifdef _WIN32
+#include <winsock2.h>
 #include <windows.h>
+#include <iphlpapi.h>
 #endif
 
 namespace revia::speech
@@ -59,6 +62,40 @@ namespace
         MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, value.data(),
             static_cast<int>(value.size()), output.data(), count);
         return output;
+    }
+
+    // Every listener on `port`, for one address family, must belong to `processId`. More
+    // than one listener on a port is how a squatter on the wildcard address and the real
+    // server on loopback coexist, so any foreign listener fails the check.
+    bool ListenersBelongTo(const DWORD processId, const int port, const ULONG family, bool& outFound)
+    {
+        std::vector<unsigned char> buffer;
+        DWORD size = 0;
+        DWORD status = ERROR_INSUFFICIENT_BUFFER;
+        for (int attempt = 0; attempt < 4 && status == ERROR_INSUFFICIENT_BUFFER; ++attempt)
+        {
+            buffer.resize(size);
+            status = GetExtendedTcpTable(buffer.empty() ? nullptr : buffer.data(), &size, FALSE, family, TCP_TABLE_OWNER_PID_LISTENER, 0);
+        }
+        if (status != NO_ERROR || buffer.empty()) return status == NO_ERROR;
+        const auto matches = [&](const DWORD localPort, const DWORD owner)
+        {
+            // The port is in network byte order in the low 16 bits.
+            if (static_cast<int>(((localPort & 0xFFu) << 8) | ((localPort >> 8) & 0xFFu)) != port) return true;
+            outFound = true;
+            return owner == processId;
+        };
+        if (family == AF_INET)
+        {
+            const auto* table = reinterpret_cast<const MIB_TCPTABLE_OWNER_PID*>(buffer.data());
+            for (DWORD index = 0; index < table->dwNumEntries; ++index)
+                if (!matches(table->table[index].dwLocalPort, table->table[index].dwOwningPid)) return false;
+            return true;
+        }
+        const auto* table = reinterpret_cast<const MIB_TCP6TABLE_OWNER_PID*>(buffer.data());
+        for (DWORD index = 0; index < table->dwNumEntries; ++index)
+            if (!matches(table->table[index].dwLocalPort, table->table[index].dwOwningPid)) return false;
+        return true;
     }
 
     std::optional<int> CudaOrdinal(std::string device)
@@ -111,10 +148,14 @@ bool WhisperServerProcess::Start(const speechRecognitionSettings& settings, std:
         outError = "whisper-server.exe or its model is missing.";
         return false;
     }
+    // Fresh per launch, so a prefix learned from an earlier run is worth nothing. The
+    // pinned v1.9.2 server has no --no-prints flag (an unknown flag makes it print usage
+    // and exit), and it prints no transcript text unless --print-realtime is given.
+    requestPath = "/" + core::GenerateLocalApiKey().substr(6, 32);
     std::wstring command = Quote(executable.wstring()) + L" -m " + Quote(model.wstring()) +
         L" --host " + Quote(Wide(settings.serverHost)) + L" --port " +
         std::to_wstring(settings.serverPort) + L" -l " + Quote(Wide(settings.language)) +
-        L" -t " + std::to_wstring(settings.threads) + L" --no-timestamps";
+        L" -t " + std::to_wstring(settings.threads) + L" --no-timestamps --request-path " + Wide(requestPath);
     const std::optional<int> device = CudaOrdinal(settings.device);
     if (!settings.bUseGpu || settings.device == "cpu") command += L" -ng";
     else if (device.has_value()) command += L" -dev " + std::to_wstring(*device);
@@ -217,6 +258,30 @@ bool WhisperServerProcess::IsRunningLocked() const
 #endif
 }
 
+std::string WhisperServerProcess::RequestPath() const
+{
+    std::lock_guard lock(processMutex);
+    return requestPath;
+}
+
+bool WhisperServerProcess::OwnsListener(const int port) const
+{
+    std::lock_guard lock(processMutex);
+#ifndef _WIN32
+    (void)port;
+    return false;
+#else
+    if (!IsRunningLocked() || port <= 0 || port > 65535) return false;
+    const DWORD processId = GetProcessId(static_cast<HANDLE>(processHandle));
+    if (processId == 0) return false;
+    // Both families, whatever the configured host: "localhost" can resolve to either, and
+    // a foreign listener on the same port in the other family could still be reached.
+    // Any foreign listener on the port fails, whichever address it bound.
+    bool found = false;
+    return ListenersBelongTo(processId, port, AF_INET, found) && ListenersBelongTo(processId, port, AF_INET6, found) && found;
+#endif
+}
+
 void WhisperServerProcess::Stop()
 {
     std::lock_guard lock(processMutex);
@@ -240,6 +305,7 @@ void WhisperServerProcess::StopLocked()
     WaitForSingleObject(process, 3000);
     CloseHandle(process);
     processHandle = nullptr;
+    requestPath.clear();
 #endif
 }
 

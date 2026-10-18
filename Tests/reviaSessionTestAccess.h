@@ -190,6 +190,9 @@ struct ReviaSessionTestAccess
 
     static float PendingDevelopment(ReviaSession& session, identity::Trait trait)
     { return session.developmentEngine.PendingEvidence(trait); }
+    static void RecordRelationship(ReviaSession& session, const std::string& entityId, const std::string& input,
+        const std::string& reply, const bool succeeded)
+    { session.RecordRelationshipEvidence(entityId, input, reply, succeeded); }
 
     static void SampleLoad(ReviaSession& session, const resources::UsageSnapshot& usage)
     { session.UpdateResourceLoad(usage); }
