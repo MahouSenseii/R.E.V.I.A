@@ -5760,14 +5760,24 @@ void ReviaSession::RecordRelationshipEvidence(
     const identity::ConversationSignals signals = identity::ReadConversationSignals(userInput, reply, succeeded);
     identity::RelationshipEvent event = identity::BuildRelationshipEvent(entityId, signals);
     event.evidenceId = actions::NewActionId();
-    // The local entry point resolves introductions before generation. An adapter
-    // supplies its stable platform entity. Recording evidence never changes which
-    // person the local session is addressing.
-    if (const std::string stated = identity::ReadStatedName(userInput); !stated.empty())
+    // Strangers on Discord, a stream or Presence move only their own relationship. Her
+    // development and preferences are global and shape owner chats, so public messages
+    // must not be able to spend the lifetime drift budget or plant tastes. Their display
+    // name comes from the platform, not from what they type.
+    const bool publicAdapter = identity::IsAdapterEntity(entityId);
+    // The local entry point resolves introductions before generation. Recording
+    // evidence never changes which person the local session is addressing.
+    if (const std::string stated = publicAdapter ? std::string() : identity::ReadStatedName(userInput); !stated.empty())
     {
         relationships.SetDisplayName(entityId, stated);
     }
     const identity::RelationshipState updated = relationships.Apply(event);
+    if (publicAdapter)
+    {
+        PublishComponent("Relationship", "Updated",
+            updated.entityId + ": " + event.description + " (" + std::to_string(updated.interactionCount) + " exchanges)");
+        return;
+    }
 
     // Conversation supplies social/correction evidence, not proof of independent
     // work. That evidence comes from confirmed execution outcomes.

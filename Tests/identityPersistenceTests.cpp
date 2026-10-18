@@ -138,6 +138,46 @@ void TestConversationDoesNotEarnCompetence()
     restarted.Stop();
 }
 
+// NET-4. Discord, stream and Presence turns used to feed the same development and
+// preference evidence as the owner's own conversation, so strangers could spend her
+// lifetime drift budget and plant tastes that then shaped owner chats. They now move
+// only their own relationship.
+void TestPublicAdaptersShapeOnlyTheirOwnRelationship()
+{
+    ScopedTestDirectory temporary;
+    Configure(temporary.root);
+    WorkingDirectory cwd(temporary.root);
+    ReviaSession session;
+    Check(session.Start(), "Adapter evidence fixture did not start.");
+    auto& people = Access::People(session);
+    // Appreciation, a repeated correction and a kind of work: every signal that moves
+    // development and preferences when the owner says it.
+    const std::string message = "Thanks, that was perfect, but you keep getting this debugging wrong. My name is Mallory";
+    const std::string viewer = AdapterEntityId("discord", "323456789012345678");
+    people.SetDisplayName(viewer, "Viewer");
+    const auto preferencesBefore = people.Preferences().size();
+    const auto developmentBefore = session.CurrentDevelopment();
+    Access::RecordRelationship(session, viewer, message, "Glad it helped.", true);
+
+    const auto relationship = people.Find(viewer);
+    Check(relationship && relationship->interactionCount == 1, "The viewer's own relationship did not record the exchange.");
+    Check(relationship->displayName == "Viewer", "A public message renamed its sender: " + relationship->displayName);
+    for (const Trait trait : {Trait::Sociability, Trait::Patience})
+    {
+        Check(Access::PendingDevelopment(session, trait) == 0.0F && session.CurrentDevelopment().delta[trait] == developmentBefore.delta[trait],
+            "A public adapter message produced development evidence for her global personality.");
+    }
+    Check(people.Preferences().size() == preferencesBefore, "A public adapter message planted a global preference.");
+
+    // The same words from the owner still count, which is what makes the check above
+    // about the source and not about the message.
+    Access::RecordRelationship(session, LocalUserEntityId(), message, "Glad it helped.", true);
+    Check(Access::PendingDevelopment(session, Trait::Sociability) > 0.0F && Access::PendingDevelopment(session, Trait::Patience) > 0.0F,
+        "The owner's own exchange no longer produced development evidence.");
+    Check(people.Preferences().size() > preferencesBefore, "The owner's own exchange no longer shaped her preferences.");
+    session.Stop();
+}
+
 void TestIndependentExecutionEarnsCompetence()
 {
     ScopedTestDirectory temporary;
@@ -455,6 +495,7 @@ void RunIdentityPersistenceTests()
     TestTextThatIsNotUtf8StillSaves();
     TestAMistypedFieldFailsWithoutThrowingOrLosingTheFile();
     TestConversationDoesNotEarnCompetence();
+    TestPublicAdaptersShapeOnlyTheirOwnRelationship();
     TestIndependentExecutionEarnsCompetence();
     TestAutosaveAndLateShutdown();
     TestFailedLoadAndReplacement();

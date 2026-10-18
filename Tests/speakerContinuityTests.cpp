@@ -159,8 +159,11 @@ void TestSessionPeopleAndAdapterIsolation()
         std::ifstream replyFile(replyPath);
         const auto adapterReply = json::parse(replyFile);
         Check(adapterReply.value("succeeded", false), "The isolated public turn failed.");
-        Check(Person(session, viewer).interactionCount == 1 && Person(session, viewer).displayName == "Sam" &&
-            !HasPerson(session, sam), "A public introduction escaped its platform entity.");
+        // The viewer keeps the platform's author name. A public sender used to be renamed
+        // by whatever introduction they typed; that is no longer read from adapter text
+        // at all (NET-4), so "my name is Sam" neither renames the viewer nor creates Sam.
+        Check(Person(session, viewer).interactionCount == 1 && Person(session, viewer).displayName == "Quentin" &&
+            !HasPerson(session, sam), "A public introduction escaped its platform entity or renamed its sender.");
         Check(session.CurrentRelationship().entityId == quentin && Person(session, quentin).interactionCount == 3,
             "An adapter replaced the local person or changed their history.");
         // Voice uses this same public route. A spoken desktop instruction must not

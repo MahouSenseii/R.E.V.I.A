@@ -99,6 +99,11 @@ std::string AdapterEntityId(const std::string& source, const std::string& author
     return "adapter:" + (cleanSource.empty() ? "unknown" : cleanSource) + ":" + cleanAuthor;
 }
 
+bool IsAdapterEntity(const std::string& entityId)
+{
+    return entityId.starts_with("adapter:");
+}
+
 RelationshipRegistry::RelationshipRegistry(std::filesystem::path path) : store(std::move(path))
 {
 }
