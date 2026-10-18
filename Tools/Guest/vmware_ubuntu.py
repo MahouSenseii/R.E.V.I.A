@@ -314,16 +314,23 @@ def cloud_config(manifest, public_key, host_private=None, host_public=None):
         "#cloud-config", "ssh_pwauth: false", "disable_root: true", "ssh_deletekeys: false", *host_key,
         "users:", "  - name: revia", "    lock_passwd: true", "    shell: /bin/sh", "    ssh_authorized_keys:",
         "      - " + scalar(forced_key), "package_update: true",
-        "packages: [open-vm-tools, openssh-server, build-essential, cmake, ninja-build, git, python3-pytest, python3-venv, nodejs, npm]",
+        "packages: [open-vm-tools, openssh-server, build-essential, cmake, ninja-build, git, python3-pytest, python3-venv, nodejs, npm, "
+        "python3-numpy, python3-matplotlib, python3-sympy]",
         "write_files:", "  - path: /etc/revia-environment-id", "    permissions: '0644'",
         "    content: " + scalar(manifest["environmentId"] + "\n"),
         "  - path: /opt/revia/guest_worker.py", "    permissions: '0755'", "    content: " + scalar(helper),
+        # The interpreter sandbox gives each run its own network namespace through an unprivileged
+        # user namespace, which Ubuntu 24.04 restricts by default. The guest is the isolation
+        # boundary, so allowing it here only lets the worker take the network away from a run.
+        "  - path: /etc/sysctl.d/60-revia-sandbox.conf", "    permissions: '0644'",
+        "    content: " + scalar("kernel.apparmor_restrict_unprivileged_userns = 0\n"),
         "  - path: /etc/ssh/sshd_config.d/20-revia.conf", "    permissions: '0644'",
         "    content: " + scalar("PasswordAuthentication no\nKbdInteractiveAuthentication no\nPermitRootLogin no\nAllowUsers revia\nAllowTcpForwarding no\nX11Forwarding no\nPermitTunnel no\nPermitUserEnvironment no\nPermitUserRC no\nForceCommand /usr/bin/python3 -I -B /opt/revia/guest_worker.py\n"),
         "runcmd:", "  - [install, -d, -o, revia, -g, revia, -m, '0700', /home/revia/workspace]",
         "  - [install, -d, -m, '0755', /var/lib/revia]",
         "  - [systemctl, enable, --now, open-vm-tools]",
         "  - [systemctl, restart, ssh]",
+        "  - [sysctl, --system]",
         "  - [sh, -c, 'systemctl is-active --quiet open-vm-tools && test -x /usr/bin/cmake && test -x /usr/bin/ninja && test -x /usr/bin/node && touch /var/lib/revia/bootstrap-ready']", ""])
 
 
@@ -453,7 +460,8 @@ def guest_request(root, manifest, installed, request):
     timeout = request.get("timeoutMs", 30000)
     if isinstance(timeout, bool) or not isinstance(timeout, int) or not 1 <= timeout <= 120000:
         raise BootstrapError("invalid_timeout")
-    if request.get("operation") not in ("health", "read_text", "write_text", "list_directory", "execute"):
+    if request.get("operation") not in ("health", "read_text", "write_text", "list_directory", "execute", "run_python", "search_text",
+                                        "import_files"):
         raise BootstrapError("unsupported_operation")
     vmx = validate_vmx(root, manifest)
     if not running(vmx, installed):
@@ -480,7 +488,7 @@ def guest_request(root, manifest, installed, request):
         # Once sent, a missing receipt cannot establish whether code or a write took effect.
         code = error.code if isinstance(error, BootstrapError) else "transport_failed"
         return {"schemaVersion": 1, "ok": False, "attempted": True, "succeeded": False,
-                "uncertainEffect": request["operation"] in ("execute", "write_text"), "receiptVerified": False,
+                "uncertainEffect": request["operation"] in ("execute", "write_text", "run_python", "import_files"), "receiptVerified": False,
                 "environmentId": manifest["environmentId"], "bootId": request.get("bootId", ""),
                 "requestId": request["requestId"], "code": code, "message": "Guest receipt unavailable; the operation was not retried.",
                 "cancelled": code == "cancelled", "timedOut": code == "command_timeout"}

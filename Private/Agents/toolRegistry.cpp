@@ -381,6 +381,7 @@ ToolRegistry ToolRegistry::Project(const ToolPermissions& permissions, const Too
     registry.Add(CalculatorTool());
     if (permissions.imageGenerationEnabled && executors.generateImage)
         registry.Add(ImageTool(executors));
+    AddSandboxTools(registry, permissions.sandbox, executors.sandbox);
     return registry;
 }
 
@@ -414,7 +415,8 @@ void ToolRegistry::Add(ChatTool tool)
     tools.push_back(std::move(tool));
 }
 
-bool ValidateToolArguments(const std::string& schemaJson, const std::string& arguments, Json& outArguments, std::string& outError)
+bool ValidateToolArguments(
+    const std::string& schemaJson, const std::string& arguments, Json& outArguments, std::string& outError, const std::size_t maximumBytes)
 {
     outArguments = Json::object();
     outError.clear();
@@ -425,7 +427,7 @@ bool ValidateToolArguments(const std::string& schemaJson, const std::string& arg
         return false;
     }
     const std::string text = arguments.find_first_not_of(" \t\r\n") == std::string::npos ? std::string("{}") : arguments;
-    if (text.size() > MaximumToolArgumentBytes || text.find('\0') != std::string::npos || !utf8::IsValid(text))
+    if (text.size() > maximumBytes || text.find('\0') != std::string::npos || !utf8::IsValid(text))
     {
         outError = "The arguments are too long or not valid text.";
         return false;

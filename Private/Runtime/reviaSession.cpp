@@ -345,7 +345,8 @@ ReviaSession::ReviaSession(CompanionPaths paths, std::shared_ptr<policy::Compani
           }),
       preferenceStore(companionPaths.Resolve("RuntimeData/Preferences/preferences.json")),
       relationships(companionPaths.Resolve("RuntimeData/Identity/identity.json")),
-      diagramStore(companionPaths.Resolve("RuntimeData/Diagrams")), documentWorkshop(router, actionRuntime, diagramStore, appLogger)
+      diagramStore(companionPaths.Resolve("RuntimeData/Diagrams")), documentWorkshop(router, actionRuntime, diagramStore, appLogger),
+      sandboxWorkspace(companionPaths.Resolve("RuntimeData/Sandbox"))
 {
     const RuntimeStamp origin = sessionIdentity.Stamp();
     if (!authority)
@@ -442,6 +443,47 @@ ReviaSession::ReviaSession(CompanionPaths paths, std::shared_ptr<policy::Compani
             };
             grant.executors.readFile = fileTool(actions::ActionType::ReadTextFile);
             grant.executors.listDirectory = fileTool(actions::ActionType::ListDirectory);
+            // The guest code tools: offered only with the guest permission and a ready VM whose
+            // worker advertised its sandbox. Code never runs on this computer; each tool is a
+            // typed guest action through the same port, policy, confirmation and audit.
+            const auto machine = virtualMachine;
+            const auto guestState = machine ? std::optional<workspace::VirtualMachineSnapshot>(machine->Snapshot()) : std::nullopt;
+            grant.sandbox = agents::ProjectSandboxTools(
+                capabilities.guest, guestState ? &*guestState : nullptr, capabilities.approvedRoots, sandboxWorkspace.Projects());
+            agents::SandboxWorkspace::Binding binding;
+            binding.port = *port;
+            binding.maxTimeoutMs = capabilities.guest.limits.maxTimeoutMs;
+            binding.prepare = [this, origin, stopToken](actions::ActionRequest& request)
+            {
+                request.taskContract = BuildActionTaskContract(request, origin, stopToken);
+                return request.taskContract != nullptr;
+            };
+            binding.showImage = [this, origin](const std::filesystem::path& path)
+            {
+                // The same Canvas event /show publishes; the file is Revia's own artifact.
+                RuntimeEvent event;
+                event.kind = RuntimeEventKind::Diagram;
+                event.state = state.load();
+                event.component = "Canvas";
+                event.phase = "Image";
+                event.message = actions::PathToUtf8(path.filename());
+                event.resource = actions::PathToUtf8(path);
+                event.stamp = origin;
+                eventBus.Publish(std::move(event));
+            };
+            binding.showPatch = [this, origin](const std::string& title, const std::string& diff)
+            {
+                RuntimeEvent event;
+                event.kind = RuntimeEventKind::Activity;
+                event.state = state.load();
+                event.component = "Code sandbox";
+                // The activity log shows the message, so the diff travels in it, bounded.
+                event.message = title + ":\n" + utf8::Prefix(diff, 6000) + (diff.size() > 6000 ? "\n[... the rest is in the patch]" : "");
+                event.detail = utf8::Prefix(diff, 16000);
+                event.stamp = origin;
+                eventBus.Publish(std::move(event));
+            };
+            grant.executors.sandbox = sandboxWorkspace.Bind(std::move(binding));
             if (grant.imageGenerationEnabled)
             {
                 grant.executors.generateImage = [this, admission](const std::string& prompt, const agents::ToolCallContext& call)

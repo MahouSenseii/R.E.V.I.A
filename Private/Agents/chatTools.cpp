@@ -5,12 +5,19 @@
 namespace revia::agents
 {
 
-ToolExecution RunChatAction(const ChatActionPort& port, actions::ActionRequest request, const ToolCallContext& context)
+std::optional<actions::ActionOutcome> SubmitChatAction(
+    const ChatActionPort& port, actions::ActionRequest request, const ToolCallContext& context, std::string& refusal)
 {
+    refusal.clear();
+    const auto refuse = [&refusal](std::string reason)
+    {
+        refusal = std::move(reason);
+        return std::optional<actions::ActionOutcome>{};
+    };
     if (!port.evaluate || !port.execute)
-        return ToolExecution::Fail("The action runtime is not available.");
+        return refuse("The action runtime is not available.");
     if (!context.Admitted())
-        return ToolExecution::Fail("The turn ended before this tool ran.");
+        return refuse("The turn ended before this tool ran.");
     request.requestedBy = "conversation_tool";
     // Rechecked at the executor's own effect boundary, after any approval wait.
     request.beforeEffect = [context, earlier = std::move(request.beforeEffect)](const std::string& target)
@@ -26,19 +33,32 @@ ToolExecution RunChatAction(const ChatActionPort& port, actions::ActionRequest r
     {
         if (!port.confirm)
         {
-            return ToolExecution::Fail("This needs your approval, and no approval prompt is available in this conversation, so nothing "
-                                       "was done. Policy said: " +
-                                       decision.reason);
+            return refuse("This needs your approval, and no approval prompt is available in this conversation, so nothing "
+                          "was done. Policy said: " +
+                          decision.reason);
         }
         if (!actions::Granted(port.confirm(request, decision)))
-            return ToolExecution::Fail("The owner declined this action, so nothing was done.");
+            return refuse("The owner declined this action, so nothing was done.");
         if (!context.Admitted())
-            return ToolExecution::Fail("The turn ended while approval was being asked for.");
+            return refuse("The turn ended while approval was being asked for.");
         confirmed = true;
     }
     // A blocked request still goes to the runtime: it refuses before any executor and
     // records the refusal in the action audit, as every rejected action must be.
-    const actions::ActionOutcome outcome = port.execute(request, confirmed);
+    actions::ActionOutcome outcome = port.execute(request, confirmed);
+    if (outcome.policy.reason.empty())
+        outcome.policy.reason = decision.reason;
+    return outcome;
+}
+
+ToolExecution RunChatAction(const ChatActionPort& port, actions::ActionRequest request, const ToolCallContext& context)
+{
+    std::string refusal;
+    const auto submitted = SubmitChatAction(port, std::move(request), context, refusal);
+    if (!submitted)
+        return ToolExecution::Fail(refusal);
+    const actions::ActionOutcome& outcome = *submitted;
+    const actions::PolicyDecision& decision = outcome.policy;
     if (!outcome.Succeeded())
         return ToolExecution::Fail(outcome.Message().empty() ? decision.reason : outcome.Message());
     std::string content;

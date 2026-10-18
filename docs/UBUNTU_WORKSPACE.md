@@ -112,7 +112,8 @@ clipboard sharing, or drag-and-drop integration. Networking uses VMware NAT.
 ## Typed operations and limits
 
 `vm_list_directory`, `vm_read_text_file`, `vm_write_text_file`, and
-`vm_execute_process` are distinct from host actions. File paths are relative POSIX
+`vm_execute_process` are distinct from host actions (the chat code tools add
+`vm_run_python`, `vm_search_files` and `vm_share_project`; see below). File paths are relative POSIX
 paths within `/home/revia/workspace`; the host does not reinterpret them as Windows
 paths. Requests and receipts bind to the enrolled environment and current boot ID.
 A guest failure never selects a host executor as fallback.
@@ -141,6 +142,93 @@ lowercase SHA256. Failures before publication preserve the original; a failure
 after publication can leave an uncertain effect. Helper requests are serialized,
 but an independently running guest process can race the final digest check and replacement; this is not kernel-atomic
 compare-and-swap.
+
+## Code interpreter and coding tools
+
+The chat tools `run_python`, `share_project`, `repo_grep`, `read_file_range`,
+`apply_patch`, `run_tests` and `export_patch` run in this guest, through the
+same typed guest actions, capability policy, confirmation and audit as every
+other guest action. A host working directory is not a sandbox, so none of
+them ever runs code on Windows; a guest failure never falls back to the host.
+
+**Status:** tested, not live. The guest worker's sandbox is exercised by
+`Tools/Guest/test_guest_worker.py` on Linux, as root and as an unprivileged
+user. The host side (tool offering, policy, approvals, patching, export) is
+exercised by the guest-runtime and tool-loop suites against a fake guest. No
+run has been made in a real VMware guest yet.
+
+### Enabling
+
+1. Start the workspace as described above
+   (`RuntimeData/VirtualMachine/settings.json`).
+2. In the runtime root's `RuntimeData/Capabilities/capabilities.json`, set
+   `guest.enabled` and the permissions you want, and approve the interpreter:
+
+   ```json
+   "guest": { "enabled": true, "read": true, "write": true, "execute": true,
+              "allowTaskExecution": false, "approvedExecutables": ["/usr/bin/python3"] }
+   ```
+
+   `run_python` needs `execute` and `/usr/bin/python3`. `share_project` needs
+   `read`, `write` and at least one approved host folder. `run_tests` needs
+   `execute` and its command's executable on the list.
+3. Guests provisioned before this change are **not upgraded**: their worker
+   does not advertise `run_python` and lacks the sandbox packages, so the
+   tools are not offered and the activity view says to re-provision. Create a
+   new enrollment to get the new worker, numpy, matplotlib and sympy.
+
+Each private turn reports "Code sandbox: Ready" or "Code sandbox: Off" with
+the reason (permission off, workspace not ready, old guest, or a sandbox that
+could not isolate a process).
+
+### What runs where
+
+| Step | Where | Approval |
+| --- | --- | --- |
+| `run_python` | A new `sandbox/<run>` folder in the guest, deleted after the run | Every run (its own confirmation, even in owner full access) |
+| `share_project` | Host reads text files from an approved folder; the guest receives copies under `projects/<name>` | Every share, showing the folder and the test command |
+| `repo_grep`, `read_file_range` | Guest copy | Read-only; follows the automatic ceiling |
+| `apply_patch` | Guest copy; each file's diff is the review text | Guest writes follow the ceiling (asks in supervised mode) |
+| `run_tests` | Guest copy, the command approved at share time | Every run |
+| `export_patch` | Reads the guest copy, writes a `.patch` under the companion's `RuntimeData/Sandbox/patches` | None needed: Revia's own folder |
+
+Never touched on the host: your project's files (sharing reads them once;
+nothing is mounted, and a patch is never applied for you), any approved root
+other than reading the shared folder, and anything else outside the
+companion's `RuntimeData/Sandbox`. Generated files land in
+`RuntimeData/Sandbox/runs/<run>/` (the newest 20 runs are kept) after their
+names, types and digests are checked; pictures must have the bytes of their
+type before they are shown on the Canvas. Interpreter output reaches the
+model as bounded, labelled untrusted data.
+
+`vm_run_python` stays at the same risk as `vm_execute_process`. The guest
+worker confines the run, but the host can only read that from the guest's
+receipt, so it does not lower the approval on the guest's word.
+
+### Sandbox limits (guest-side constants)
+
+| Resource | Limit |
+| --- | --- |
+| Network | None: a new user and network namespace with only a loopback device that is down. If it cannot be set up, the code does not run |
+| Wall clock | 1–120 s per run (default 30), within `guest.maxTimeoutMs` |
+| CPU time | The wall-clock limit in seconds, then the kernel kills the run |
+| Address space | 1 GiB |
+| File size | 16 MiB per file |
+| Processes | 64 for the user |
+| Output | `guest.maxOutputBytes` (default 64 KiB); the model sees about 4 KB |
+| Program size | 30,000 characters, and `guest.maxWriteBytes` |
+| Files back | 4 files, 512 KiB in all: png, jpg, gif, csv, txt, json |
+
+Sharing copies at most 2,000 text files, 8 MiB in all, each within
+`guest.maxWriteBytes`; larger folders are refused rather than partly shared.
+Version-control and build folders, binary files, links, and files named like
+or containing credentials are left out and listed.
+
+Limits of this isolation: a run is not jailed from the rest of the guest's
+workspace (it can read projects you shared into the guest), and guest
+provisioning allows unprivileged user namespaces, which Ubuntu 24.04 restricts
+by default, so the worker can create the network namespace. The VM remains
+the isolation boundary.
 
 ## Failure, cancellation, and resuming
 

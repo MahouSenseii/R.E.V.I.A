@@ -24,6 +24,7 @@
 #include "Core/configManager.h"
 #include "Core/conversationContext.h"
 #include "Content/workingDocument.h"
+#include "Agents/sandboxTools.h"
 #include "Runtime/documentWorkshop.h"
 #include "Runtime/turnContext.h"
 #include "Core/preferenceStore.h"
@@ -927,6 +928,8 @@ class ReviaSession
     visual::ImageGenerator imageGenerator;
     // Declared after borrowed collaborators so it is destroyed first.
     DocumentWorkshop documentWorkshop;
+    // The guest code tools' projects and generated files. Outlives every turn's tool executors.
+    agents::SandboxWorkspace sandboxWorkspace;
     std::string conversationSessionId;
     // Writers also hold operationMutex; this lets the window read the id without it.
     mutable std::mutex conversationIdMutex;

@@ -136,6 +136,8 @@ public:
         bool imageGenerationEnabled = false;
         // Allowlisted tools from the owner's MCP servers, gated by the MCP manager.
         std::vector<agents::ChatTool> mcpTools;
+        // The guest code tools, projected by the session from the guest permission and VM state.
+        agents::SandboxToolPermissions sandbox;
     };
     // Called with the turn's admission and stop token, so every executor it returns is
     // bound to that turn and no other.

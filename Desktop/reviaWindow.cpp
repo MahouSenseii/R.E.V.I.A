@@ -3236,6 +3236,10 @@ revia::actions::ConfirmationChoice ReviaWindow::ConfirmAction(
         {
             description += "\nDestination: " + QString::fromStdString(revia::actions::PathToUtf8(request.destination));
         }
+        // A guest action names no host source; what is approved is its program, command,
+        // file or folder, so that is what the prompt shows.
+        if (revia::actions::IsGuestAction(request.type))
+            description += "\n\n" + QString::fromStdString(revia::actions::DescribeGuestPayload(request));
         description += "\n\nPolicy: " + QString::fromStdString(decision.reason);
         if (request.resolution.IsUiaElementTarget())
         {
