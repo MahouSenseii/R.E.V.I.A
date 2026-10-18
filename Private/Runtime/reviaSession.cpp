@@ -4157,6 +4157,24 @@ SessionResult ReviaSession::RunTurnUnguarded(const agents::InputBatch& batch)
         result.reason = "The captured input is no longer current.";
         return result;
     }
+    // Files that came with a typed message. Whatever this turn does not hand to the
+    // model is deleted when it ends, so a refused or redirected turn keeps nothing.
+    std::vector<attachments::StagedAttachment> turnFiles;
+    if (batch.source == agents::InputSource::Typed)
+    {
+        std::lock_guard lock(attachmentMutex);
+        turnFiles = std::exchange(pendingTurnAttachments, {});
+    }
+    struct UnusedFiles
+    {
+        ReviaSession& session;
+        std::vector<attachments::StagedAttachment>& files;
+        ~UnusedFiles()
+        {
+            if (!files.empty())
+                session.Attachments().DiscardTaken(files, "the message was not answered as a conversation turn");
+        }
+    } unusedFiles{*this, turnFiles};
     busy.store(true);
     lastExchange.reset();
     const std::stop_token stopToken = BeginOperation();
@@ -4192,6 +4210,14 @@ SessionResult ReviaSession::RunTurnUnguarded(const agents::InputBatch& batch)
 
     if (!privateAudience)
     {
+        if (!turnFiles.empty())
+        {
+            result.succeeded = false;
+            result.text = "Attachments are private: Revia only reads files in a private conversation, and this one has a shared or "
+                          "public audience. The files were not read or kept.";
+            result.reason = result.text;
+            return finish(std::move(result));
+        }
         std::vector<conversationMessage> history;
         { std::lock_guard lock(audienceMutex); history = audienceHistory; }
         identity::RelationshipState presentation;
@@ -4305,8 +4331,12 @@ SessionResult ReviaSession::RunTurnUnguarded(const agents::InputBatch& batch)
         return finish(std::move(drawn));
     }
     const std::string speakerForTurn = captured.participantId;
+    attachments::TurnAttachments attached = PrepareTurnAttachments(acceptedInput, std::exchange(turnFiles, {}), stopToken);
+    std::string turnReference = ClipboardReference(acceptedInput);
+    if (!attached.reference.empty())
+        turnReference += (turnReference.empty() ? "" : "\n\n") + attached.reference;
     result = conversationRuntime.ReplyForAudience(acceptedInput, {}, captured.audience, CurrentRelationship(), profile, llmAvailable,
-        ShouldSpeakOnCurrentChannel(), stopToken, admission, ClipboardReference(acceptedInput), batch.acceptedAt, memoryScope);
+        ShouldSpeakOnCurrentChannel(), stopToken, admission, turnReference, batch.acceptedAt, memoryScope, std::move(attached.images));
     if (!admission())
     {
         result = {};
@@ -8395,6 +8425,214 @@ std::string ReviaSession::ClipboardReference(const std::string& input)
            "what you need." +
            (copied->truncated ? std::string(" It was long, so this is only the start of it; say so if it matters.") : std::string()) +
            "\n<<<CLIPBOARD\n" + text + "\n" + closing;
+}
+
+attachments::AttachmentLibrary& ReviaSession::Attachments()
+{
+    std::lock_guard lock(attachmentMutex);
+    if (!attachmentLibrary)
+    {
+        attachmentLibrary = std::make_unique<attachments::AttachmentLibrary>(companionPaths.Resolve("RuntimeData/Attachments/Files"),
+            companionPaths.Resolve("Memory/revia_documents.db"), companionPaths.Resolve("Audit/attachments.jsonl"));
+        // Document text is embedded only by a local embedding server; anywhere else,
+        // search stays lexical rather than send the text away.
+        if (settings.embedding.bEnabled && attachments::IsLocalEndpoint(settings.embedding.host))
+        {
+            documentEmbeddings.ApplySettings(settings.embedding);
+            attachmentLibrary->SetEmbedder([this](const std::string& text, const bool query, const std::stop_token stopToken)
+                { return query ? documentEmbeddings.EmbedQuery(text, stopToken) : documentEmbeddings.EmbedDocument(text, stopToken); });
+        }
+    }
+    return *attachmentLibrary;
+}
+
+attachments::AttachmentLibrary* ReviaSession::AttachmentsIfPresent()
+{
+    {
+        std::lock_guard lock(attachmentMutex);
+        if (attachmentLibrary)
+            return attachmentLibrary.get();
+    }
+    std::error_code error;
+    return std::filesystem::exists(companionPaths.Resolve("Memory/revia_documents.db"), error) ? &Attachments() : nullptr;
+}
+
+std::optional<std::string> ReviaSession::AttachmentRefusal() const
+{
+    if (Audience().kind != identity::AudienceKind::Private)
+        return std::string("Attachments are private: Revia only reads files in a private conversation, and this one has a shared or "
+                           "public audience. Nothing was read or kept.");
+    return std::nullopt;
+}
+
+attachments::IntakeResult ReviaSession::AttachFile(const std::filesystem::path& path)
+{
+    if (const auto refusal = AttachmentRefusal())
+    {
+        attachments::IntakeResult refused;
+        refused.message = *refusal;
+        return refused;
+    }
+    attachments::IntakeResult result = Attachments().Stage(path);
+    appLogger.Log("[Attachments] " + std::string(result.status == attachments::IntakeStatus::Accepted ? "staged" : "not attached") + ": " +
+                  result.message);
+    return result;
+}
+
+attachments::IntakeResult ReviaSession::AttachImageData(const std::string& name, const std::string& bytes)
+{
+    if (const auto refusal = AttachmentRefusal())
+    {
+        attachments::IntakeResult refused;
+        refused.message = *refusal;
+        return refused;
+    }
+    attachments::IntakeResult result = Attachments().StageBytes(name, bytes);
+    appLogger.Log("[Attachments] " + std::string(result.status == attachments::IntakeStatus::Accepted ? "staged" : "not attached") + ": " +
+                  result.message);
+    return result;
+}
+
+bool ReviaSession::RemoveAttachment(const std::string& id)
+{
+    return Attachments().Unstage(id);
+}
+
+SessionResult ReviaSession::SubmitWithAttachments(const std::string& input, const std::vector<std::string>& attachmentIds)
+{
+    if (attachmentIds.empty())
+        return Submit(input, agents::InputSource::Typed);
+    std::vector<attachments::StagedAttachment> files = Attachments().TakeStaged(attachmentIds);
+    if (const auto refusal = AttachmentRefusal())
+    {
+        Attachments().DiscardTaken(files, "shared or public audience");
+        SessionResult refused;
+        refused.succeeded = false;
+        refused.text = *refusal;
+        refused.reason = *refusal;
+        return refused;
+    }
+    std::string text = input;
+    if (text.empty())
+    {
+        text = "I attached ";
+        for (std::size_t index = 0; index < files.size(); ++index)
+            text += (index == 0 ? "\"" : index + 1 == files.size() ? " and \"" : ", \"") + files[index].displayName + "\"";
+        text += ".";
+    }
+    {
+        std::lock_guard lock(attachmentMutex);
+        pendingTurnAttachments = std::move(files);
+    }
+    SessionResult result = Submit(text, agents::InputSource::Typed);
+    // A message Submit turned away before its turn ran leaves its files here.
+    std::vector<attachments::StagedAttachment> unused;
+    {
+        std::lock_guard lock(attachmentMutex);
+        unused = std::exchange(pendingTurnAttachments, {});
+    }
+    if (!unused.empty())
+        Attachments().DiscardTaken(unused, "the message was not sent");
+    return result;
+}
+
+std::vector<attachments::StoredDocument> ReviaSession::Documents()
+{
+    // Like past chats, the document list is not shown to a shared audience.
+    if (AttachmentRefusal())
+        return {};
+    attachments::AttachmentLibrary* library = AttachmentsIfPresent();
+    return library ? library->List() : std::vector<attachments::StoredDocument>{};
+}
+
+std::string ReviaSession::DocumentPreview(const std::string& id)
+{
+    if (AttachmentRefusal())
+        return {};
+    attachments::AttachmentLibrary* library = AttachmentsIfPresent();
+    return library ? library->PreviewText(id) : std::string();
+}
+
+bool ReviaSession::ForgetDocument(const std::string& id, std::string& outError)
+{
+    if (const auto refusal = AttachmentRefusal())
+    {
+        outError = *refusal;
+        return false;
+    }
+    attachments::AttachmentLibrary* library = AttachmentsIfPresent();
+    if (!library)
+    {
+        outError = "There are no stored documents.";
+        return false;
+    }
+    if (!library->Forget(id, outError))
+        return false;
+    recentDocumentIds.erase(std::remove(recentDocumentIds.begin(), recentDocumentIds.end(), id), recentDocumentIds.end());
+    PublishComponent("Documents", "Forgotten", "A stored document, its passages and its search vectors were deleted.");
+    return true;
+}
+
+std::string ReviaSession::SearchDocuments(const std::string& query, const std::stop_token stopToken)
+{
+    if (const auto refusal = AttachmentRefusal())
+        return *refusal;
+    return attachments::ExecuteDocumentSearch(AttachmentsIfPresent(), query, stopToken);
+}
+
+attachments::TurnAttachments ReviaSession::PrepareTurnAttachments(
+    const std::string& input, std::vector<attachments::StagedAttachment> files, const std::stop_token stopToken)
+{
+    attachments::TurnAttachments prepared;
+    if (!files.empty())
+    {
+        // Attachments go to a model on this computer or nowhere.
+        if (!attachments::IsLocalEndpoint(settings.llm.host))
+        {
+            Attachments().DiscardTaken(files, "the main model endpoint is not on this computer");
+            PublishComponent("Attachments", "Withheld", "The files were not sent: the main model endpoint is not on this computer.");
+            prepared.reference = std::string(identity::markers::AttachmentGrounding) +
+                                 " none were read. The user attached files, but the main model endpoint is not on this computer and "
+                                 "attachments are only ever sent to a local model. Tell the user plainly that the files were not read.";
+            return prepared;
+        }
+        attachments::ImagePolicy images;
+        images.visionAvailable = settings.llm.bVisionEnabled;
+        images.unavailableReason = "image understanding is off in this setup: the main model was started without its vision projector "
+                                   "(llm.visionEnabled in Config/settings.json).";
+        std::vector<std::string> documentIds;
+        for (const attachments::StagedAttachment& file : files)
+            if (attachments::IsDocument(file.kind))
+                documentIds.push_back(file.id);
+        const std::size_t count = files.size();
+        prepared = Attachments().PrepareTurn(input, std::move(files), images, stopToken);
+        for (const std::string& notice : prepared.notices)
+            PublishComponent("Attachments", "Notice", notice);
+        PublishComponent("Attachments", "Read",
+            "Read " + std::to_string(count) + (count == 1 ? " file" : " files") + " for this message; they stay on this computer.");
+        if (!documentIds.empty())
+        {
+            recentDocumentIds = std::move(documentIds);
+            recentDocumentTurns = 2;
+        }
+        return prepared;
+    }
+
+    // No files on this message: passages from earlier ones, when it is about them or is
+    // a short follow-up to the message that attached them.
+    const int followUps = recentDocumentTurns;
+    if (recentDocumentTurns > 0)
+        --recentDocumentTurns;
+    attachments::AttachmentLibrary* library = AttachmentsIfPresent();
+    if (!library || agents::ConversationStylePolicy::IsBriefSocialTurn(input) || !library->HasDocuments())
+        return prepared;
+    const bool mentions = attachments::AttachmentLibrary::MentionsDocuments(input, library->DocumentNames());
+    if (!mentions && (followUps == 0 || recentDocumentIds.empty()))
+        return prepared;
+    prepared.reference = library->SearchReference(input, mentions ? std::vector<std::string>{} : recentDocumentIds, stopToken);
+    if (!prepared.reference.empty())
+        PublishComponent("Documents", "Searched", "Passages from your documents were added to this turn, with citations.");
+    return prepared;
 }
 
 std::string ReviaSession::DescribeReminders() const

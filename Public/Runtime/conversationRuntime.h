@@ -51,6 +51,8 @@ struct RoutingInputs
     // The runtime already fetched research for this turn.
     bool groundingAlreadyRetrieved = false;
     std::size_t recentContextCharacters = 0;
+    // Pictures attached to the newest user message.
+    std::size_t attachedImageCount = 0;
     std::optional<intelligence::IntelligenceTier> previousDeliveredTier;
     bool previousTurnWasUnreliable = false;
 };
@@ -174,7 +176,7 @@ public:
         const identity::AudienceContext& audience, const identity::RelationshipState& relationship, const aiProfile& profile,
         bool llmAvailable, bool shouldSpeak, std::stop_token stopToken = {}, std::function<bool()> admission = {},
         const std::string& turnReference = {}, std::chrono::steady_clock::time_point acceptedAt = {},
-        const memory::MemoryScope& memoryScope = {});
+        const memory::MemoryScope& memoryScope = {}, std::vector<conversationImage> turnImages = {});
 
     // Guest overload: the caller owns an isolated router with PublicGuestProfile(),
     // never the desktop router. No instance state, provider, logger or event bus is

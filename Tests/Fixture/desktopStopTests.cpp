@@ -5,7 +5,9 @@
 #include "developmentStudioPanel.h"
 #include "learningStudioPanel.h"
 #include "answerFeedbackDialog.h"
+#include "attachmentTray.h"
 #include "chatSessionsPanel.h"
+#include "documentsDialog.h"
 #include "Memory/conversationArchive.h"
 #include "memoryPanel.h"
 #include "Memory/longTermMemory.h"
@@ -27,6 +29,10 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
+#include <QMimeData>
+#include <QDropEvent>
+#include <QDragEnterEvent>
+#include <QImage>
 #include <QMessageBox>
 #include <QPixmap>
 #include <QPlainTextEdit>
@@ -1398,6 +1404,132 @@ struct ReviaWindowStopTests
         window.RenderChat();
     }
 
+    static void RunAttachmentUi(ReviaWindow& window, int& failures)
+    {
+        const auto expect = [&](const bool condition, const char* message)
+        {
+            if (!condition)
+            {
+                std::cerr << "FAIL: " << message << '\n';
+                ++failures;
+            }
+        };
+        const auto settle = [&]()
+        {
+            if (window.attachmentWorker.joinable())
+                window.attachmentWorker.join();
+            if (window.operationWorker.joinable())
+                window.operationWorker.join();
+            QCoreApplication::sendPostedEvents(&window, QEvent::MetaCall);
+            QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+        };
+        const auto storedFiles = [&]()
+        {
+            const auto directory = window.Session().Paths().Resolve("RuntimeData/Attachments/Files");
+            std::error_code error;
+            std::size_t count = 0;
+            for (const auto& entry : std::filesystem::directory_iterator(directory, error))
+                count += entry.is_regular_file() ? 1 : 0;
+            return count;
+        };
+        auto* tray = window.findChild<AttachmentTray*>("attachmentTray");
+        auto* attach = window.findChild<QPushButton*>("attachButton");
+        auto* documents = window.findChild<QPushButton*>("documentsButton");
+        expect(tray && attach && documents, "The composer has no attachment tray, Attach or Documents button");
+        if (!tray || !attach || !documents)
+            return;
+        std::string audienceError;
+        window.Session().SetAudience({revia::identity::AudienceKind::Private, "attach-private", 0, {}}, audienceError);
+        window.chatEntries.clear();
+        window.RenderChat();
+
+        QTemporaryDir files;
+        const QString notes = files.filePath("notes.txt");
+        {
+            QFile file(notes);
+            file.open(QIODevice::WriteOnly);
+            file.write("The garage code is sentinel_ui_attach_8c.\n");
+        }
+        const QString photo = files.filePath("photo.jpg");
+        QImage big(2400, 1200, QImage::Format_RGB32);
+        big.fill(Qt::darkCyan);
+        big.save(photo, "JPG");
+
+        // The Attach button's path: files are read on the worker and appear as chips.
+        window.AttachPaths({notes, photo});
+        settle();
+        expect(tray->Chips().size() == 2 && tray->Chips()[0].name == "notes.txt" && !tray->Chips()[1].thumbnail.isNull(),
+            "attached files did not appear as chips with a picture thumbnail");
+        expect(window.findChildren<QFrame*>("attachmentChip").size() == 2 && storedFiles() == 2, "the chips or the private copies are missing");
+
+        // Removing a chip deletes its private copy.
+        const auto chips = window.findChildren<QToolButton*>("attachmentChipRemove");
+        if (!chips.isEmpty())
+            chips.front()->click();
+        settle();
+        expect(tray->Chips().size() == 1 && storedFiles() == 1, "removing a chip left it or its copy behind");
+
+        // A picture pasted from the clipboard, and a file dropped on the message box.
+        QImage pasted(64, 32, QImage::Format_RGB32);
+        pasted.fill(Qt::magenta);
+        QApplication::clipboard()->setImage(pasted);
+        QKeyEvent paste(QEvent::KeyPress, Qt::Key_V, Qt::ControlModifier);
+        QCoreApplication::sendEvent(window.messageInput, &paste);
+        settle();
+        expect(tray->Chips().size() == 2 && tray->Chips().back().name.startsWith("pasted-image-"), "a pasted picture was not attached");
+        QMimeData dropped;
+        dropped.setUrls({QUrl::fromLocalFile(notes)});
+        QDropEvent drop(QPointF(5, 5), Qt::CopyAction, &dropped, Qt::LeftButton, Qt::NoModifier);
+        // As a real drag does: the drop target first accepts the drag, then receives the drop.
+        QDragEnterEvent enter(QPoint(5, 5), Qt::CopyAction, &dropped, Qt::LeftButton, Qt::NoModifier);
+        QCoreApplication::sendEvent(window.messageInput->viewport(), &enter);
+        QCoreApplication::sendEvent(window.messageInput->viewport(), &drop);
+        settle();
+        expect(tray->Chips().size() == 3 && window.messageInput->toPlainText().isEmpty(),
+            "a dropped file was not attached, or its path was pasted as text");
+
+        // Sending shows the files under the message. The session is not started, so the
+        // turn is refused, and a message that was never answered keeps no files.
+        window.messageInput->setPlainText("What do these say?");
+        window.SendMessage();
+        settle();
+        const QString shown = window.chatHistory->toPlainText();
+        expect(tray->IsEmpty() && shown.contains("Attached:") && shown.contains("notes.txt") && shown.contains("pasted-image-"),
+            "the sent message does not list its attachments");
+        expect(storedFiles() == 0, "files of a message that was never answered were kept");
+
+        // A shared audience cannot attach.
+        window.Session().SetAudience({revia::identity::AudienceKind::Shared, "attach-room", 0, {"viewer"}}, audienceError);
+        window.AttachPaths({notes});
+        settle();
+        expect(tray->IsEmpty() && window.findChild<QLabel*>("attachmentStatus")->text().contains("private"),
+            "a shared audience could attach a file, or was not told why not");
+        window.Session().SetAudience({revia::identity::AudienceKind::Private, "attach-private", 0, {}}, audienceError);
+        tray->SetStatus(QString());
+
+        // The Documents list: view, then forget, a document kept from an earlier message.
+        auto& library = revia::runtime::ReviaSessionTestAccess::Attachments(window.session);
+        const auto kept = library.StageBytes("plan.md", "Plan: sentinel_ui_document_3e.\n");
+        (void)library.PrepareTurn("plan", library.TakeStaged({kept.attachment.id}), {});
+        window.ShowDocuments();
+        DocumentsDialog* dialog = window.documentsDialog;
+        expect(dialog && dialog->RowCount() == 1, "the Documents list did not show the kept document");
+        if (dialog)
+        {
+            dialog->Select(kept.attachment.id);
+            dialog->ViewSelected();
+            expect(dialog->PreviewText().contains("sentinel_ui_document_3e"), "View did not show the document's text");
+            QString error;
+            expect(dialog->ForgetDocument(kept.attachment.id, error) && dialog->RowCount() == 0 && storedFiles() == 0 &&
+                       window.Session().Documents().empty(),
+                "Forget left the document, its copy or its list entry");
+            dialog->close();
+        }
+        settle();
+        window.chatEntries.clear();
+        window.RenderChat();
+    }
+
     static void RunRegenerateAndEditUi(ReviaWindow& window, int& failures)
     {
         const auto expect = [&](const bool condition, const char* message)
@@ -1623,6 +1755,7 @@ int main(int argc, char** argv)
     ReviaWindowStopTests::RunChatTranscriptUi(window, failures);
     ReviaWindowStopTests::RunChatSessionsUi(window, failures);
     ReviaWindowStopTests::RunRegenerateAndEditUi(window, failures);
+    ReviaWindowStopTests::RunAttachmentUi(window, failures);
     ReviaWindowStopTests::RunConfirmationAudienceUi(window, failures);
     ReviaWindowStopTests::RunConversationQualityUi(window, failures);
     ReviaWindowStopTests::RunMemoryRevisionUi(window, failures);

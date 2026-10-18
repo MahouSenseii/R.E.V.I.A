@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Agents/answerObligation.h"
+#include "Attachments/attachmentLibrary.h"
 #include "Core/appSettings.h"
 #include "Core/conversationMessage.h"
 #include "Core/profile.h"
@@ -215,6 +216,23 @@ class ReviaSession
     bool ReviewPresentationChange(bool validate, std::string& outError, std::stop_token stopToken = {});
     [[nodiscard]] std::optional<improvement::DevelopmentSnapshot> DevelopmentStudio() const;
     SessionResult Submit(const std::string& input, agents::InputSource source = agents::InputSource::Typed);
+
+    // Files the user hands over in a private conversation: dropped, pasted or picked.
+    // Each is read once, checked, and copied into this companion's private store; it
+    // waits there until it is sent with a message or removed. A shared or public
+    // audience refuses them.
+    attachments::IntakeResult AttachFile(const std::filesystem::path& path);
+    attachments::IntakeResult AttachImageData(const std::string& name, const std::string& bytes);
+    bool RemoveAttachment(const std::string& id);
+    // Submit with the staged files the ids name. With no ids this is Submit.
+    SessionResult SubmitWithAttachments(const std::string& input, const std::vector<std::string>& attachmentIds);
+    // The documents kept from earlier messages, newest first.
+    [[nodiscard]] std::vector<attachments::StoredDocument> Documents();
+    [[nodiscard]] std::string DocumentPreview(const std::string& id);
+    bool ForgetDocument(const std::string& id, std::string& outError);
+    // The search_documents tool body: cited passages from kept documents, or why none.
+    // Refused for a shared or public audience.
+    [[nodiscard]] std::string SearchDocuments(const std::string& query, std::stop_token stopToken = {});
 
     // Merges input bursts; the completed turn arrives as an AssistantMessage event.
     agents::InputVerdict OfferInput(const std::string& text, agents::InputSource source);
@@ -686,6 +704,15 @@ class ReviaSession
     // What the user copied, for a turn that asks about it; empty for any other turn.
     // Bounded, marked as untrusted, never saved, and withheld if it holds a credential.
     [[nodiscard]] std::string ClipboardReference(const std::string& input);
+    // The attachment library, created on first use. AttachmentsIfPresent does not create
+    // one: a turn only searches documents when the user has attached some.
+    attachments::AttachmentLibrary& Attachments();
+    attachments::AttachmentLibrary* AttachmentsIfPresent();
+    [[nodiscard]] std::optional<std::string> AttachmentRefusal() const;
+    // This turn's attached files and any passages from earlier ones, as the turn
+    // reference and the pictures for the newest message.
+    attachments::TurnAttachments PrepareTurnAttachments(const std::string& input, std::vector<attachments::StagedAttachment> files,
+        std::stop_token stopToken);
     // The goal runner serves one goal at a time: work that needs it while a task holds
     // it is refused here, with a way out. Returns true when it refused.
     bool RefuseWhileTaskRuns(SessionResult& result);
@@ -964,6 +991,15 @@ class ReviaSession
     };
     planning::ReminderBook reminders;
     std::function<std::optional<perception::ClipboardText>()> clipboardReader = [] { return perception::ReadClipboardText(6000); };
+    std::mutex attachmentMutex;
+    // Before the library: its embedding worker calls this, so it must be destroyed after.
+    llamaCppEmbeddingService documentEmbeddings;
+    std::unique_ptr<attachments::AttachmentLibrary> attachmentLibrary;
+    // Files handed from SubmitWithAttachments to the typed turn it starts.
+    std::vector<attachments::StagedAttachment> pendingTurnAttachments;
+    // Documents attached a turn or two ago, which a short follow-up is probably about.
+    std::vector<std::string> recentDocumentIds;
+    int recentDocumentTurns = 0;
     // Serialises launching against launching and stopping. The worker never takes it.
     std::mutex taskLaunchMutex;
     mutable std::mutex taskMutex;

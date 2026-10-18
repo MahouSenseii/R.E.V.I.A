@@ -82,6 +82,7 @@ The design rule: **one Revia**. Reflex, Fast, Main, and Expert share one identit
 - **Bring things up on her own** when she has something specific to say: a reaction to what you're doing, a follow-up on something from earlier, or a question. At most four times an hour, at least 15 minutes apart. She waits for a pause in your typing and stays quiet over a full-screen game, video or presentation (`initiative.suppressWhenFullScreen`), and while another app is using the microphone (a call or meeting).
 - **Work in the background.** `/goal` and "operate" tasks run while she keeps talking; ask how it's going, or say "cancel the task". Only Stop or that request ends one.
 - **Remind you.** "Remind me in 20 minutes to stretch", "remind me at 3pm to call Sam", "set a timer for 5 minutes". Saved across restarts; `/reminders` lists and cancels them. A reminder or task report that comes due while she is answering is spoken right after the answer (covered by automated tests; not yet checked live).
+- **Read what you hand her.** Drop or paste pictures, PDFs, Word documents and text files into the chat, or use **Attach**. She sees pictures through the local vision model, reads short documents whole and long ones by their most relevant passages with page citations, and can search what you attached earlier. Private conversations only; see [Attachments](#attachments-and-your-documents).
 - **Help with what you copied.** Ask about "the code I just copied" or "what's on my clipboard" and she reads it for that one question. It is not saved, and text that looks like a password or key is withheld.
 - **Draw diagrams, keep a working document, generate images** (images need the optional installer).
 - **Sing** recordings you put in `RuntimeData/Songs/` (karaoke playback of your WAV files, not generated singing). Ask "Revia, sing <name>" or use `/sing`.
@@ -361,7 +362,42 @@ Rebuilding does not overwrite your memory, voices, preferences, or live permissi
 - **Chats** (the list beside the transcript, shown or hidden with the **Chats** button) lists past conversations from the archive, newest first, with search. **New chat** starts an empty working context and a new archive session; what she remembers long term is not touched. Clicking a chat shows it read-only; **Continue this chat** makes it current again and gives Revia back only your own turns from it (only once she knows who you are; otherwise the chat can still be read). **Rename**, **Delete** and **Export** (Markdown or JSON, to a file you choose) work on the selected chat. The list is hidden whenever the audience is not private, the same rule `/history` follows, and on windows narrower than 900 pixels.
 - Thinking that arrives in pieces for one turn updates a single **Revia is thinking** block in place rather than adding a block per piece.
 
+- **Attach** and **Documents** sit beside **Send**; see [Attachments](#attachments-and-your-documents).
+
 These were checked by the desktop test fixture with Qt offscreen on Linux; the Windows build has not been tried by hand yet.
+
+---
+
+## Attachments and your documents
+
+Drop files onto the chat, paste a picture (Ctrl+V), or use **Attach** beside **Send**. Each file shows as a chip above the message box with its name and size (and a thumbnail for pictures); the × removes it, and its copy is deleted. The files go with your next message and are shown under it in the transcript.
+
+| Kind | What she gets | Limits |
+|---|---|---|
+| Pictures: PNG, JPEG, GIF (first frame), WebP, BMP | The picture itself, as an `image_url` part of your message, read by the Main model's vision projector. The window decodes it with Qt, shrinks it to 1024 pixels on the long side and sends PNG. | 8 MB; at most 4 pictures per message. WebP needs Qt's WebP image plugin. |
+| Text: `.txt`, `.md`, `.csv`, `.json`, source code and other UTF-8 text (UTF-16 with a byte-order mark is converted) | The text | 2 MB file. Binary files and other encodings are refused. |
+| PDF | The text layer, page by page, with page numbers for citations | 20 MB file, 4 MB of text. Encrypted PDFs and scanned pages without a text layer are refused with that reason: there is no OCR. Fonts with no text mapping are left out, and she says so. |
+| Word `.docx` | The body text (paragraphs, tabs, line breaks, table cells) | 20 MB file. Old `.doc`, other Office formats and ZIP archives are refused. |
+
+A message carries at most 8 files. How each document reaches her:
+
+- **Short documents** (up to about 6,000 characters of text) go into that turn whole.
+- **Longer documents** are split into overlapping chunks of roughly 800-1,200 tokens, indexed in `Memory\revia_documents.db` with the same ranking long-term memory uses (SQLite FTS5 keyword match plus embedding similarity from the local embedding server, fused by reciprocal rank), and only the passages most relevant to your message are shown to her. Vectors are added in the background; until they are, search is by keyword.
+- **Later messages** search your kept documents when they mention a document, file, PDF or attachment, name one of your files, or are one of the two messages right after you attached it. Passages carry labels such as `[report.pdf, p. 3]` or `[notes.md, part 2]`, and she is told to cite them.
+- **Documents** (beside **Attach**) lists what she has kept: view the start of a document or a picture, or **Forget** it. Forgetting deletes the stored copy, its passages and their vectors, then optimizes the search index and vacuums the database so the text is not left in the file.
+
+What stays the same:
+
+- **Private only.** Attaching, sending and the Documents list are refused when the audience is shared or public, and a file staged in private is deleted, not sent, if the audience changes before you send it. Document search never runs on a shared or public turn.
+- **On this computer only.** Files are copied into the companion's private folder (`RuntimeData\Attachments\Files`) under random names with a SHA-256 digest, never opened with another program and never read from where you dropped them again. They are sent only to a local model: if the main model endpoint is not on this computer, the files are not sent and she says so. Document text is embedded only by a local embedding server. Attachments are a separate act from the approved folders under **Permissions**; they do not widen what she may read.
+- **Untrusted.** File text is marked as reference data, not instructions, and any runtime prompt marker or block delimiter inside it is broken before it reaches her.
+- **Secrets.** A document whose text looks like it carries a credential (an API key, private key, token, card number and so on) is withheld and not attached, with the reason. Talking about passwords is fine.
+- **Audited without content.** `Audit\attachments.jsonl` records each file staged, sent, removed, refused, withheld or forgotten: its name, kind, size and digest, never its content.
+- **No picture support, no picture.** When the Main model runs without its vision projector (`llm.visionEnabled` is `false`, as in the checked-in settings), pictures are not sent; she is told she cannot see them and says so. Turn it on, with `llm.multimodalProjectorPath` pointing at the projector, to have her look. A picture is sent with its own message only, not again on later turns.
+
+Not done: the model cannot call a `search_documents` tool yet, because the tool registry is not on this branch; its body exists (`ReviaSession::SearchDocuments`, refused for shared audiences) for registration when the two are merged. Regenerate and Edit resend only the text, not the files.
+
+How this was checked: intake limits, type detection, PDF and DOCX extraction (on small fixtures in `Tests/Fixtures/Attachments`, cross-checked with poppler's `pdftotext`), chunking, storage, ranking, forgetting, the prompt blocks, marker neutralization, the picture request against a fake llama.cpp server, and the shared-audience refusal are covered by tests run on Linux, and the window's attach, remove and Documents flows by the Qt offscreen desktop test. None of it has been run live on Windows or against the real vision model yet.
 
 ---
 
@@ -640,6 +676,8 @@ signatures, and short comments.
 | `%LOCALAPPDATA%\Revia\ImprovementWorkbench\` | The private copy of her source where proposals are built and tested |
 | `build\debug\Memory\revia_memory.db` | Long-term memory |
 | `build\debug\Memory\revia_conversations.db` | Conversation history |
+| `build\debug\Memory\revia_documents.db` | Passages and search vectors of the documents you attached |
+| `build\debug\RuntimeData\Attachments\Files\` | Private copies of the files you attached |
 | `Models\` | Model files |
 | `ThirdParty\` | Qt, llama.cpp, whisper.cpp, Qwen3-TTS environment |
 | `build\debug\Logs\` | Runtime logs |

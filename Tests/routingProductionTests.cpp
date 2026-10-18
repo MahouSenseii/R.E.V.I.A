@@ -33,9 +33,10 @@ using revia::tests::Check;
 void TestEveryRoutingInputHasAProducer()
 {
     RoutingContext context;
-    auto& [visionRequired, expertVisionPreferred, explicitResearch, previousUncertainty,
+    auto& [visionRequired, attachedImageCount, expertVisionPreferred, explicitResearch, previousUncertainty,
            recentContextCharacters, previousAssistantTier] = context;
     static_cast<void>(visionRequired);
+    static_cast<void>(attachedImageCount);
     static_cast<void>(expertVisionPreferred);
     static_cast<void>(explicitResearch);
     static_cast<void>(previousUncertainty);
@@ -47,6 +48,12 @@ void TestEveryRoutingInputHasAProducer()
     screen.input = "What is on my screen right now?";
     Check(BuildRoutingContext(screen).visionRequired,
         "A screen question did not set visionRequired.");
+
+    RoutingInputs pictures;
+    pictures.input = "What is this?";
+    pictures.attachedImageCount = 1;
+    Check(BuildRoutingContext(pictures).attachedImageCount == 1 && !BuildRoutingContext(pictures).visionRequired,
+        "Attached pictures did not reach routing, or asked for a screen capture.");
 
     RoutingInputs blueprint;
     blueprint.input = "Look at my screen and explain this blueprint graph.";

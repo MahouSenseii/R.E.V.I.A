@@ -2,6 +2,7 @@
 #include "Memory/longTermMemory.h"
 
 #include "Identity/promptMarkers.h"
+#include "Memory/hybridRanking.h"
 #include "Memory/sensitiveContent.h"
 #include "Audit/contentDigest.h"
 
@@ -26,6 +27,9 @@
 
 namespace
 {
+using revia::memory::BuildFtsQuery;
+using revia::memory::IsValidEmbedding;
+
 std::atomic<int> ConfiguredCacheMiB = 64;
 std::atomic<int> ConfiguredMmapMiB = 64;
 
@@ -227,17 +231,6 @@ bool InsertEntry(sqlite3* database, const memoryEntry& entry, std::string* outIn
         return false;
     if (outInsertedId) *outInsertedId = std::move(insertedId);
     return true; // Legacy import also accepts a successfully ignored duplicate.
-}
-
-bool IsValidEmbedding(const std::vector<float>& embedding)
-{
-    return !embedding.empty() && std::all_of(
-        embedding.begin(),
-        embedding.end(),
-        [](const float value)
-        {
-            return std::isfinite(value);
-        });
 }
 
 bool UpsertEmbedding(sqlite3* database, const std::string& memoryId, const std::string& model, const std::vector<float>& embedding)
@@ -511,52 +504,6 @@ memoryEntry ReadEntry(sqlite3_stmt* statement)
             entry.subject.entityId = text(column);
     }
     return entry;
-}
-
-std::string BuildFtsQuery(const std::string& query)
-{
-    static const std::unordered_set<std::string> StopWords = {
-        "a", "an", "and", "are", "about", "can", "could", "did", "do", "does", "for",
-        "how", "i", "in", "is", "it", "me", "my", "of", "on", "or", "should", "that",
-        "the", "this", "to", "user", "what", "when", "where", "which", "who", "why", "with",
-        "would", "you", "your"
-    };
-
-    std::vector<std::string> tokens;
-    std::unordered_set<std::string> seen;
-    std::string token;
-    const auto finishToken = [&]()
-    {
-        if (token.size() >= 2 && !StopWords.contains(token) && seen.insert(token).second)
-        {
-            tokens.push_back(token);
-        }
-        token.clear();
-    };
-
-    for (const unsigned char character : query)
-    {
-        if (std::isalnum(character))
-        {
-            token.push_back(static_cast<char>(std::tolower(character)));
-        }
-        else
-        {
-            finishToken();
-        }
-    }
-    finishToken();
-
-    std::ostringstream expression;
-    for (std::size_t index = 0; index < tokens.size(); ++index)
-    {
-        if (index > 0)
-        {
-            expression << " OR ";
-        }
-        expression << '"' << tokens[index] << "\"*";
-    }
-    return expression.str();
 }
 
 void BindScope(sqlite3_stmt* statement, const revia::memory::MemoryScope* scope)
@@ -1125,49 +1072,20 @@ std::vector<memoryEntry> longTermMemory::Search(const std::string& queryText, co
                               "AND (?4 IS NULL OR (memories.subject_kind = 2 AND memories.subject_id = ?5) OR (memories.subject_kind = 1 "
                               "AND memories.subject_id = ?4));");
         // The query vector does not change between rows, so its norm is computed once
-        // here rather than recomputed inside the per-row scoring loop, and the scratch
-        // buffer is reused instead of allocating a vector per candidate.
-        double queryLength = 0.0;
-        for (const float value : queryEmbedding)
-        {
-            queryLength += static_cast<double>(value) * value;
-        }
-        const double queryNorm = std::sqrt(queryLength);
-        std::vector<float> stored(queryEmbedding.size());
+        // here rather than recomputed inside the per-row scoring loop.
+        const double queryNorm = revia::memory::VectorNorm(queryEmbedding);
         if (semanticQuery && queryNorm > 0.0)
         {
             BindText(semanticQuery.get(), 1, embeddingModel);
             BindScope(semanticQuery.get(), scope);
             while (sqlite3_step(semanticQuery.get()) == SQLITE_ROW)
             {
-                const sqlite3_int64 dimensions = sqlite3_column_int64(semanticQuery.get(), 5);
-                const int byteCount = sqlite3_column_bytes(semanticQuery.get(), 6);
-                const void* blob = sqlite3_column_blob(semanticQuery.get(), 6);
-                if (dimensions != static_cast<sqlite3_int64>(queryEmbedding.size()) ||
-                    byteCount != static_cast<int>(queryEmbedding.size() * sizeof(float)) ||
-                    blob == nullptr)
+                const std::optional<float> similarity = revia::memory::CosineSimilarity(queryEmbedding, queryNorm,
+                    sqlite3_column_blob(semanticQuery.get(), 6), sqlite3_column_bytes(semanticQuery.get(), 6),
+                    sqlite3_column_int64(semanticQuery.get(), 5));
+                if (similarity && *similarity >= revia::memory::MinimumSemanticSimilarity)
                 {
-                    continue;
-                }
-
-                std::memcpy(stored.data(), blob, static_cast<std::size_t>(byteCount));
-                double dot = 0.0;
-                double storedLength = 0.0;
-                for (std::size_t index = 0; index < queryEmbedding.size(); ++index)
-                {
-                    dot += static_cast<double>(queryEmbedding[index]) * stored[index];
-                    storedLength += static_cast<double>(stored[index]) * stored[index];
-                }
-                if (storedLength <= 0.0)
-                {
-                    continue;
-                }
-
-                const float similarity = static_cast<float>(
-                    dot / (queryNorm * std::sqrt(storedLength)));
-                if (std::isfinite(similarity) && similarity >= 0.35f)
-                {
-                    semanticEntries.push_back({ReadEntry(semanticQuery.get()), similarity});
+                    semanticEntries.push_back({ReadEntry(semanticQuery.get()), *similarity});
                 }
             }
         }
@@ -1218,46 +1136,39 @@ std::vector<memoryEntry> longTermMemory::Search(const std::string& queryText, co
         }
     }
 
+    // Reciprocal rank fusion, shared with the document store. The semantic list is
+    // weighted a little above the lexical one, and time above both: naming a moment is
+    // an explicit instruction about which memories are wanted, where a word match is
+    // only a guess. Time stays a ranked list rather than a filter so a phrase read
+    // wrongly -- "I will do it today" is not a request to recall today -- degrades to
+    // the previous ranking instead of emptying the result.
+    std::unordered_map<std::string, memoryEntry> entriesById;
+    const auto keysOf = [&entriesById](const auto& entries, const auto& entryOf)
+    {
+        std::vector<std::string> keys;
+        keys.reserve(entries.size());
+        for (const auto& item : entries)
+        {
+            const memoryEntry& entry = entryOf(item);
+            entriesById.try_emplace(entry.id, entry);
+            keys.push_back(entry.id);
+        }
+        return keys;
+    };
+    const auto self = [](const memoryEntry& entry) -> const memoryEntry& { return entry; };
+    const auto lexicalKeys = keysOf(lexicalEntries, self);
+    const auto semanticKeys = keysOf(semanticEntries, [](const SemanticCandidate& candidate) -> const memoryEntry& { return candidate.entry; });
+    const auto temporalKeys = keysOf(temporalEntries, self);
     struct CombinedCandidate
     {
         memoryEntry entry;
         double score = 0.0;
     };
     std::vector<CombinedCandidate> combined;
-    std::unordered_map<std::string, std::size_t> positions;
-    const auto addCandidate = [&](const memoryEntry& entry, const double score)
+    for (revia::memory::FusedRank& fused :
+        revia::memory::FuseReciprocalRanks({{lexicalKeys, 1.0}, {semanticKeys, 1.25}, {temporalKeys, 1.5}}))
     {
-        const auto existing = positions.find(entry.id);
-        if (existing == positions.end())
-        {
-            positions.emplace(entry.id, combined.size());
-            combined.push_back({entry, score});
-        }
-        else
-        {
-            combined[existing->second].score += score;
-        }
-    };
-
-    constexpr double RrfConstant = 60.0;
-    for (std::size_t rank = 0; rank < lexicalEntries.size(); ++rank)
-    {
-        addCandidate(lexicalEntries[rank], 1.0 / (RrfConstant + rank + 1.0));
-    }
-    for (std::size_t rank = 0; rank < semanticEntries.size(); ++rank)
-    {
-        addCandidate(
-            semanticEntries[rank].entry,
-            1.25 / (RrfConstant + rank + 1.0));
-    }
-    // Weighted above the other two lists because naming a time is an explicit
-    // instruction about which memories are wanted, where a word match is only a guess.
-    // It stays a ranked list rather than a filter so a phrase read wrongly -- "I will do
-    // it today" is not a request to recall today -- degrades to the previous ranking
-    // instead of emptying the result.
-    for (std::size_t rank = 0; rank < temporalEntries.size(); ++rank)
-    {
-        addCandidate(temporalEntries[rank], 1.5 / (RrfConstant + rank + 1.0));
+        combined.push_back({std::move(entriesById.at(fused.key)), fused.score});
     }
 
     std::sort(

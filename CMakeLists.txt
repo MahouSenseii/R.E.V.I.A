@@ -190,6 +190,10 @@ if(REVIA_BUILD_DESKTOP)
                 "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/conversationStatusPanel.h"
                 "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/answerFeedbackDialog.cpp"
                 "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/answerFeedbackDialog.h"
+                "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/attachmentTray.cpp"
+                "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/attachmentTray.h"
+                "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/documentsDialog.cpp"
+                "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/documentsDialog.h"
                 "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/canvasPanel.cpp"
                 "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/chatMarkdown.cpp"
                 "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/chatMarkdown.h"
@@ -595,6 +599,7 @@ if(BUILD_TESTING)
     endif()
     # Split test suites include testSupport.h from the Tests directory.
     target_include_directories(ReviaTests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/Tests")
+    target_compile_definitions(ReviaTests PRIVATE REVIA_ATTACHMENT_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/Tests/Fixtures/Attachments")
     revia_link_foundation(ReviaTests)
     if(MINGW)
         target_compile_options(ReviaTests PRIVATE -Wa,-mbig-obj)
