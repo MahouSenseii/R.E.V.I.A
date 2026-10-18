@@ -20,6 +20,8 @@ using revia::tests::Check;
 class ReplyBackend
 {
   public:
+    static constexpr std::size_t WordByWord = static_cast<std::size_t>(-1);
+
     ReplyBackend()
     {
         server.Get(
@@ -42,15 +44,21 @@ class ReplyBackend
                     return;
                 }
                 // One chunk unless a chunk size was asked for, the way the server streams tokens.
+                // Word by word, each piece carries the space in front of it, as llama.cpp's do.
                 std::string events;
                 const std::size_t step = chunkSize == 0 ? std::max<std::size_t>(answer.size(), 1) : chunkSize;
-                for (std::size_t at = 0; at < answer.size() || at == 0; at += step)
+                for (std::size_t at = 0; at < answer.size() || at == 0;)
                 {
-                    const bool last = at + step >= answer.size();
+                    std::size_t next = at + step;
+                    if (chunkSize == WordByWord)
+                        next = std::min(answer.find(' ', at + 1), answer.size());
+                    next = std::max(next, at + 1);
+                    const bool last = next >= answer.size();
                     const nlohmann::json chunk = {{"choices",
-                        nlohmann::json::array({{{"delta", {{"content", answer.substr(at, step)}}},
+                        nlohmann::json::array({{{"delta", {{"content", answer.substr(at, next - at)}}},
                             {"finish_reason", last ? nlohmann::json(finishReason) : nlohmann::json(nullptr)}}})}};
                     events += "data: " + chunk.dump() + "\n\n";
+                    at = next;
                 }
                 response.set_content(events + "data: [DONE]\n\n", "text/event-stream");
             });
@@ -565,6 +573,76 @@ void TestConversationRepliesStreamBySentence()
     Check(reviewed.bSuccess && deltas.size() == 1 && deltas.front() == reviewed.response,
         "A reply the AI reviewer had not read yet reached the caller early. Deltas: " + nlohmann::json(deltas).dump());
 }
+
+// A full stop that starts a token -- a path, a dotfile, a framework name -- is part of
+// the answer, not the end of a sentence. Streamed word by word through the path the
+// answer-quality gate measures, the delivered reply is exactly what the model wrote, and
+// the text the stream gate released adds up to it too (code-023: "run it as./script.sh").
+void TestPunctuationLedTokensKeepTheirSpace()
+{
+    using namespace revia::agents;
+    revia::tests::ScopedTestDirectory directory;
+    ReplyBackend backend;
+    messageRouter router((directory.root / "router.db").string());
+    conversationContext context;
+    TurnCoordinator coordinator((directory.root / "agent.db").string());
+    revia::speech::SpeechService speech;
+    revia::runtime::AffectController affect;
+    revia::emotion::EmotionRuntime emotions;
+    revia::runtime::RuntimeEventBus events;
+    logger log{directory.root / "Logs"};
+    const auto filterSettings = []
+    {
+        responseFilterSettings filters;
+        filters.bAiReviewEnabled = false;
+        return filters;
+    };
+    revia::runtime::ConversationRuntime runtime{router, context, coordinator, speech, affect, emotions, events, log,
+        [](auto, const auto&) {}, [](const auto&) {}, {}, {}, {}, filterSettings, {}, {}, {}, {}, {}, {},
+        []
+        {
+            SelfInquiryLimits limits;
+            limits.enabled = false;
+            return limits;
+        }};
+    aiProfile profile;
+    profile.id = "structured-reply-fixture";
+    profile.systemPrompt = "You are Revia. Answer the actual question.";
+    profile.bMemoryEnabled = false;
+    llmSettings settings;
+    settings.host = "127.0.0.1";
+    settings.port = backend.port;
+    settings.modelName = "structured-reply-fixture";
+    settings.contextSize = 8192;
+    settings.maxTokens = 512;
+    settings.bAutoMaxTokens = settings.bAutoStartServer = settings.bVisionEnabled = false;
+    embeddingSettings embeddings;
+    embeddings.bEnabled = embeddings.bAutoStartServer = false;
+    router.ApplyLLMSettings(settings, embeddings, profile);
+    Check(router.IsLLMAvailable(), "The punctuation fixture failed its configured-model health admission.");
+
+    const std::pair<std::string, std::string> cases[] = {
+        {"What does chmod +x script.sh do?", "It adds execute permission to script.sh, so you can run it as ./script.sh."},
+        {"How do I start the build?", "Make the script executable first, then run ./build.sh from the project root."},
+        {"Where do ignored files go?", "List them in the ignore file at the root of the repository; see .gitignore for the format."},
+        {"Which runtime does the service need?", "The service targets version .NET 8, so install that SDK before building it."},
+        {"How do I get to the sources from docs?", "From the docs folder, run cd ../src and build from there."},
+    };
+    for (const auto& [input, raw] : cases)
+    {
+        backend.Reply(raw, "stop", ReplyBackend::WordByWord);
+        const auto evaluated = runtime.EvaluateTurn(input, {}, profile, true);
+        Check(evaluated.succeeded && evaluated.rawText == raw && evaluated.text == raw,
+            "The evaluated turn did not deliver the model's own spacing. Raw: " + evaluated.rawText +
+                " Delivered: " + evaluated.text + " Reason: " + evaluated.reason);
+
+        std::string released;
+        const auto streamed = ConversationAgent{}.Execute(router, input, {{"user", input}}, filterSettings(), {}, {},
+            [&](const auto& text) { released += text; });
+        Check(streamed.bSuccess && streamed.response == raw && released == raw,
+            "The streamed reply did not keep the model's own spacing. Released: " + released + " Final: " + streamed.response);
+    }
+}
 }
 
 // PERF-3: llama-server's final chunk says how much of the prompt it reused from its
@@ -1023,6 +1101,7 @@ void RunStructuredReplyTests()
     TestReviewerReplacementMustMatchFinalContract();
     TestIntroducedSchemaWireAndReaffirmation();
     TestConversationRepliesStreamBySentence();
+    TestPunctuationLedTokensKeepTheirSpace();
     TestBackendCacheTimingsReachTheTurnTimings();
     TestBackgroundCallsStreamWithUnchangedContracts();
     TestOnlyTheKeyedServerReviaStartedIsTrusted();
