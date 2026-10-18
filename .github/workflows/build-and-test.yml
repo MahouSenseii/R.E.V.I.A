@@ -71,7 +71,9 @@ jobs:
   windows:
     name: Windows / MinGW
     runs-on: windows-latest
-    timeout-minutes: 60
+    # A cold build alone takes close to an hour on a hosted runner, so a 60-minute limit
+    # kept cancelling runs before any test could report.
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
         with:
