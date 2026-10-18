@@ -396,6 +396,7 @@ Measured in ten scripted live sessions on 23 Sep 2026 (RTF is generation time di
 - **Batched**, the 5070 slowed to RTF 1.1-2.7, and nothing in a batch plays until the whole batch is done, which left 20-30 s silences mid-reply. Reply batching is therefore **off** (`speech.qwenBatchReplyPhrases: false`); sentences are spread one at a time across both cards instead.
 - The first sentence goes to the planner's card until both cards have been measured, then to whichever is measurably faster.
 - A repeated short Reflex phrase ("Okay.") is cached and plays in under 0.1 s.
+- Between sentences she waits for the clip's exact length (read from the WAV header) plus 60 ms, instead of an extra 350 ms. The timing helper is covered by automated tests; the shorter gap has not been heard live yet.
 - Deciding whether a turn is worth remembering (about 7.5 s on the Main GPU) waits until she has finished speaking, for at most 20 s, so it does not compete with her first sentence for the GPU. This is covered by automated tests; the gain has not been measured live yet.
 
 So the voice is quick per sentence, but long replies are still generated sentence by sentence, and it slows down when a card is also busy with chat or nearly full. The installed Qwen package cannot generate audio incrementally; Revia pipelines complete sentences instead. Benchmarks live in `RuntimeData/Benchmarks/` and [docs/TTS_PERFORMANCE.md](docs/TTS_PERFORMANCE.md).
