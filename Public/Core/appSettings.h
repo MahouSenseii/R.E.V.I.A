@@ -8,8 +8,10 @@
 #include "Initiative/initiativeSettings.h"
 #include "Intelligence/intelligenceSettings.h"
 #include "LLM/endpointSettings.h"
+#include "Mcp/mcpSettings.h"
 #include "Perception/perceptionSettings.h"
 #include "Performance/performanceSettings.h"
+#include "Presence/localApiSettings.h"
 #include "Presence/presenceSettings.h"
 #include "Resources/resourceSettings.h"
 #include "Runtime/channelSettings.h"
@@ -42,4 +44,6 @@ struct appSettings
     imageSettings image;
     inputArbiterSettings inputArbiter;
     computerControlSettings computerControl;
+    mcpSettings mcp;
+    localApiSettings localApi;
 };

@@ -118,7 +118,8 @@ inline constexpr std::size_t MaximumToolArgumentBytes = 8192;
 
 // Parses `arguments` and checks it strictly against the subset of JSON Schema the
 // registry writes: an object with typed properties, required keys and no others;
-// strings with length bounds, integers with ranges, booleans. Duplicate keys, nesting
+// strings with length bounds, integers and numbers with ranges, booleans, and arrays of
+// one item type with a maximum length (written for MCP tools). Duplicate keys, nesting
 // past four levels, invalid UTF-8 and anything over MaximumToolArgumentBytes fail.
 [[nodiscard]] bool ValidateToolArguments(
     const std::string& schemaJson, const std::string& arguments, nlohmann::json& outArguments, std::string& outError);

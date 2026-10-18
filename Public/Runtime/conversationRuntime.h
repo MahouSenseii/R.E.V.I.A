@@ -134,6 +134,8 @@ public:
         bool documentsAvailable = false;
         bool remindersAvailable = false;
         bool imageGenerationEnabled = false;
+        // Allowlisted tools from the owner's MCP servers, gated by the MCP manager.
+        std::vector<agents::ChatTool> mcpTools;
     };
     // Called with the turn's admission and stop token, so every executor it returns is
     // bound to that turn and no other.
@@ -185,6 +187,13 @@ public:
     [[nodiscard]] static aiProfile PublicGuestProfile();
     [[nodiscard]] static SessionResult ReplyPublic(messageRouter& isolatedRouter, const std::string& input,
         const std::vector<conversationMessage>& guestHistory, std::stop_token stopToken);
+    // The same isolated turn, streamed: `onApprovedDelta` receives only text the reply
+    // gate has released, and stops receiving it before any text that would show a local
+    // path or credential. `refusal` replaces a final reply that would show one. The
+    // caller compares what it received with the returned text, which is final.
+    [[nodiscard]] static SessionResult ReplyIsolated(messageRouter& isolatedRouter, const std::string& input,
+        const std::vector<conversationMessage>& history, std::stop_token stopToken, const messageRouter::DeltaHandler& onApprovedDelta,
+        const std::string& refusal);
 
     // Generates an unprompted but evidence-grounded opening. The cue is never stored as
     // a user message and never enters automatic memory classification; only Revia's

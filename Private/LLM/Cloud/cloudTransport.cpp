@@ -1,6 +1,7 @@
 #include "LLM/Cloud/cloudTransport.h"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cctype>
 #include <chrono>
@@ -195,6 +196,22 @@ public:
             &statusBytes, WINHTTP_NO_HEADER_INDEX);
         result.bReceived = true;
         result.status = static_cast<int>(status);
+        for (const auto& name : request.responseHeaderNames)
+        {
+            const std::wstring wideName = Wide(name);
+            std::array<wchar_t, 512> value{};
+            DWORD valueBytes = static_cast<DWORD>(value.size() * sizeof(wchar_t));
+            if (!wideName.empty() && WinHttpQueryHeaders(handle.load(), WINHTTP_QUERY_CUSTOM, wideName.c_str(), value.data(), &valueBytes,
+                                         WINHTTP_NO_HEADER_INDEX))
+            {
+                const std::wstring text(value.data(), valueBytes / sizeof(wchar_t));
+                const int length = WideCharToMultiByte(CP_UTF8, 0, text.data(), static_cast<int>(text.size()), nullptr, 0, nullptr, nullptr);
+                std::string narrow(static_cast<std::size_t>(std::max(length, 0)), '\0');
+                if (length > 0)
+                    WideCharToMultiByte(CP_UTF8, 0, text.data(), static_cast<int>(text.size()), narrow.data(), length, nullptr, nullptr);
+                result.responseHeaders.emplace_back(name, std::move(narrow));
+            }
+        }
 
         std::string chunk;
         while (!stopToken.stop_requested())
