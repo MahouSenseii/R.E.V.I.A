@@ -288,8 +288,25 @@ void TestTimeoutCancellationAndListChanged()
     // A revision Revia does not speak, and a server that dies at once.
     mcp::McpClient wrong(mcp::MakeStdioTransport(FixtureServer({"--version", "1999-01-01"})), 2000ms);
     Check(!wrong.Initialize({}, error) && Contains(error, "1999-01-01"), "A server with an unknown revision was accepted.");
+    // Evaluated before the message is built, which would otherwise show the last error.
+    error.clear();
     mcp::McpClient dead(mcp::MakeStdioTransport(FixtureServer({"--exit-on-start"})), 2000ms);
-    Check(!dead.Initialize({}, error) && Contains(error, "fixture refused to start"), "A server that exited was not diagnosed: " + error);
+    const bool deadStarted = dead.Initialize({}, error);
+    Check(!deadStarted && Contains(error, "fixture refused to start"), "A server that exited was not diagnosed: " + error);
+    // Standard error is read apart from standard output, so the end of a server's output
+    // can be seen before its last words. They are still in the diagnosis, and in what a
+    // failed write reports.
+    auto gone = mcp::MakeStdioTransport(FixtureServer({"--exit-on-start"}));
+    Check(gone->Open(error), "The exiting fixture did not start: " + error);
+    for (int attempt = 0; attempt < 500 && !gone->Closed(); ++attempt)
+        std::this_thread::sleep_for(2ms);
+    const std::string goneDiagnosis = gone->Diagnostics();
+    Check(gone->Closed() && Contains(goneDiagnosis, "fixture refused to start"),
+        "A server seen closing lost its last error output: " + goneDiagnosis);
+    error.clear();
+    const bool sentToGone = gone->Send("{}", {}, error);
+    Check(!sentToGone && Contains(gone->Diagnostics(), "fixture refused to start"),
+        "A failed write lost the server's last error output: " + error);
     mcpServerSettings missing = FixtureServer();
     missing.command = actions::PathToUtf8(FixturePath().parent_path() / "no-such-mcp-server");
     mcp::McpClient absent(mcp::MakeStdioTransport(missing), 2000ms);

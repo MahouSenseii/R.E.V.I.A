@@ -50,6 +50,11 @@ class OwnedProcess
     [[nodiscard]] bool Running() const;
     // The newest standard error, bounded, for a status line.
     [[nodiscard]] std::string ErrorOutput() const;
+    // The same once the child has gone, after its standard error has been read to the end
+    // or `wait` has passed. Standard error is read apart from standard output, so the end
+    // of one says nothing about the other: a child that has just exited may still have
+    // its last words in the pipe.
+    [[nodiscard]] std::string FinalErrorOutput(std::chrono::milliseconds wait) const;
     // A reason when the owner stopped the child itself, such as unread output overflowing.
     [[nodiscard]] std::string StopReason() const;
     void Terminate();

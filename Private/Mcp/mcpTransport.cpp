@@ -17,6 +17,9 @@ namespace
 {
 using Clock = std::chrono::steady_clock;
 
+// How long a diagnosis waits for the last error output of a server that has gone.
+constexpr std::chrono::milliseconds FinalErrorWait{500};
+
 class StdioTransport final : public McpTransport
 {
   public:
@@ -51,7 +54,12 @@ class StdioTransport final : public McpTransport
             error = "A stdio message may not contain a newline.";
             return false;
         }
-        return child.Write(message + "\n", error);
+        if (child.Write(message + "\n", error))
+            return true;
+        // A server that stopped reading has almost always exited, possibly before its
+        // closed output has been noticed.
+        writeFailed = true;
+        return false;
     }
 
     std::optional<std::string> Receive(const std::chrono::milliseconds wait) override
@@ -61,11 +69,16 @@ class StdioTransport final : public McpTransport
         {
             if (auto line = NextLine())
                 return line;
-            if (overflowed)
+            if (overflowed || !child.Running())
                 return std::nullopt;
             const auto now = Clock::now();
-            if (now >= deadline || !child.Running())
-                return std::nullopt;
+            if (now >= deadline)
+            {
+                // What has already arrived is still taken, so a zero wait (a poll for
+                // notifications) sees a message that came after the last answer.
+                buffer += child.Read(std::chrono::milliseconds(0));
+                return NextLine();
+            }
             buffer += child.Read(std::chrono::duration_cast<std::chrono::milliseconds>(deadline - now));
         }
     }
@@ -78,7 +91,8 @@ class StdioTransport final : public McpTransport
     std::string Diagnostics() const override
     {
         std::string reason = overflowed ? std::string("The server sent a message larger than Revia accepts.") : child.StopReason();
-        const std::string errors = child.ErrorOutput();
+        const bool gone = writeFailed || !child.Running();
+        const std::string errors = gone ? child.FinalErrorOutput(FinalErrorWait) : child.ErrorOutput();
         if (!errors.empty())
             reason += (reason.empty() ? "" : " ") + std::string("Its last error output: ") + errors.substr(errors.size() > 400 ? errors.size() - 400 : 0);
         return reason;
@@ -127,6 +141,7 @@ class StdioTransport final : public McpTransport
     process::OwnedProcess child;
     std::string buffer;
     bool overflowed = false;
+    bool writeFailed = false;
 };
 
 // Collects whole JSON-RPC messages from a response body that is either one JSON value

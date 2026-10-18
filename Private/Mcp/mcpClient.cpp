@@ -39,6 +39,14 @@ std::string ErrorText(const Json& error)
         message += " (code " + std::to_string(error["code"].get<long long>()) + ")";
     return "The server returned an error: " + message;
 }
+
+// The transport's own account of why the server went away, such as its last error output.
+void AddDiagnostics(const McpTransport& transport, std::string& error)
+{
+    const std::string detail = transport.Diagnostics();
+    if (!detail.empty())
+        error += " " + detail;
+}
 } // namespace
 
 McpClient::McpClient(std::unique_ptr<McpTransport> inputTransport, const std::chrono::milliseconds inputTimeout)
@@ -226,16 +234,21 @@ bool McpClient::Request(const std::string& method, const Json& params, const std
     if (!transport || transport->Closed())
     {
         error = "The server is not running.";
+        if (transport)
+            AddDiagnostics(*transport, error);
         return false;
     }
     const std::int64_t id = nextId++;
     Json request = {{"jsonrpc", "2.0"}, {"id", id}, {"method", method}};
     if (!params.is_null())
         request["params"] = params;
-    if (!transport->Send(request.dump(-1, ' ', false, Json::error_handler_t::replace), stopToken, error))
+    // Its own string, so a transport that says nothing never leaves the caller's last error
+    // standing as this one.
+    std::string sendError;
+    if (!transport->Send(request.dump(-1, ' ', false, Json::error_handler_t::replace), stopToken, sendError))
     {
-        if (error.empty())
-            error = "The request could not be sent to the server.";
+        error = sendError.empty() ? "The request could not be sent to the server." : sendError;
+        AddDiagnostics(*transport, error);
         return false;
     }
     const auto deadline = Clock::now() + timeout;
@@ -264,9 +277,7 @@ bool McpClient::Request(const std::string& method, const Json& params, const std
             {
                 connected = false;
                 error = "The server closed the connection.";
-                const std::string detail = transport->Diagnostics();
-                if (!detail.empty())
-                    error += " " + detail;
+                AddDiagnostics(*transport, error);
                 return false;
             }
             continue;

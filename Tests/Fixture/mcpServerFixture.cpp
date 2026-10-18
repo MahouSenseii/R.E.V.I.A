@@ -6,9 +6,11 @@
 //   ReviaMcpServerFixture [--log <file>] [--version <revision>] [--page-size <n>] [--exit-on-start]
 #include <nlohmann/json.hpp>
 
+#include <chrono>
 #include <fstream>
 #include <iostream>
 #include <string>
+#include <thread>
 #include <vector>
 
 using Json = nlohmann::json;
@@ -101,6 +103,9 @@ void Call(const Json& id, const std::string& name, const Json& arguments)
     {
         added = true;
         Send({{"jsonrpc", "2.0"}, {"id", id}, {"result", Text("changed")}});
+        // Apart from the answer, so the client must notice it by polling rather than
+        // find it in the same read.
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
         Send({{"jsonrpc", "2.0"}, {"method", "notifications/tools/list_changed"}});
     }
     else if (name == "fail")
