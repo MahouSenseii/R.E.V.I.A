@@ -1663,8 +1663,35 @@ void ReviaWindow::HandleRuntimeEvent(const revia::runtime::RuntimeEvent& event)
         // Shown in the transcript rather than collapsed behind "Thought process". These
         // are the questions Revia put to herself on a hard turn, and the point of them is
         // that the user sees what she was actually wondering before the answer arrives.
-        AppendWorkEntry(
-            EntryKind::SelfInquiry, QString::fromStdString(event.message), QString::fromStdString(event.detail), event.turnId, 0);
+        const QString message = QString::fromStdString(event.message);
+        const QString phase = QString::fromStdString(event.phase);
+        if (event.turnId != 0)
+        {
+            // Streamed thinking arrives as many events for one turn and updates a single
+            // entry in place: a message that extends the shown text replaces it (a
+            // snapshot), anything else is appended (a delta), and a new phase of the same
+            // turn starts a new paragraph.
+            for (std::size_t index = chatEntries.size(); index-- > 0;)
+            {
+                ChatEntry& entry = chatEntries[index];
+                if (entry.kind != EntryKind::SelfInquiry || entry.taskId != event.turnId)
+                    continue;
+                if (entry.phase != phase && !entry.body.isEmpty())
+                    entry.body += QStringLiteral("\n\n") + message;
+                else if (message.startsWith(entry.body))
+                    entry.body = message;
+                else
+                    entry.body += message;
+                if (!event.detail.empty())
+                    entry.reasoning = QString::fromStdString(event.detail);
+                entry.phase = phase;
+                RenderChat();
+                return;
+            }
+        }
+        AppendWorkEntry(EntryKind::SelfInquiry, message, QString::fromStdString(event.detail), event.turnId, 0);
+        if (!chatEntries.empty())
+            chatEntries.back().phase = phase;
         AppendActivity(QStringLiteral("Self-inquiry: ") + QString::fromStdString(event.detail));
         return;
     }

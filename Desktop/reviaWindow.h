@@ -172,6 +172,9 @@ class ReviaWindow final : public QMainWindow
         int round = 0;
         // Revia's own replies are Markdown; everything else is shown as plain text.
         bool markdown = false;
+        // The event phase that last wrote a working entry, so streamed thinking can tell
+        // a continuation from a new stage of the same turn.
+        QString phase;
         // The body as last rendered and the text it came from. A re-render only converts
         // entries whose text changed, so a streamed sentence does not re-run Markdown
         // over the whole history.

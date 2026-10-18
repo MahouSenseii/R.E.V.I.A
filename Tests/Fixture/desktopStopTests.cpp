@@ -1272,6 +1272,28 @@ struct ReviaWindowStopTests
         expect(std::count_if(window.chatEntries.begin(), window.chatEntries.end(),
                    [](const auto& entry) { return entry.body.startsWith("filler"); }) == static_cast<long>(ReviaWindow::MaximumChatEntries) - 1,
             "trimming removed the wrong entries");
+
+        // Streamed thinking for one turn updates one working entry instead of adding one
+        // per delta; a different turn still gets its own.
+        window.chatEntries.clear();
+        const auto thinking = [&](std::uint64_t turn, const char* phase, const char* text)
+        {
+            RuntimeEvent event{RuntimeEventKind::SelfInquiry, RuntimeState::Thinking, text};
+            event.turnId = turn;
+            event.phase = phase;
+            event.detail = "fixture inquiry";
+            window.HandleRuntimeEvent(event);
+        };
+        thinking(9101, "Thinking", "First I check");
+        thinking(9101, "Thinking", "First I check the inputs.");
+        thinking(9101, "Thinking", " Then the units.");
+        thinking(9101, "Asking", "Q1: is the unit metric?");
+        thinking(9102, "Thinking", "A separate turn.");
+        const auto inquiries = std::count_if(window.chatEntries.begin(), window.chatEntries.end(),
+            [](const auto& entry) { return entry.kind == ReviaWindow::EntryKind::SelfInquiry; });
+        expect(inquiries == 2 && window.chatEntries.front().body == "First I check the inputs. Then the units.\n\nQ1: is the unit metric?" &&
+                   window.chatEntries.back().body == "A separate turn.",
+            "streamed self-inquiry for one turn did not update a single entry in place");
         window.chatEntries.clear();
         window.ResetConversationPresentation();
         window.RenderChat();
