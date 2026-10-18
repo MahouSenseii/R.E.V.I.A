@@ -5,6 +5,7 @@
 
 #include <httplib.h>
 #include <algorithm>
+#include <fstream>
 #include <nlohmann/json.hpp>
 #include <mutex>
 #include <thread>
@@ -27,7 +28,8 @@ class ReplyBackend
             {
                 std::lock_guard lock(mutex);
                 lastRequest = nlohmann::json::parse(request.body);
-                if (!lastRequest.value("stream", false))
+                // Only the conversation reply carries stop markers; background calls stream too.
+                if (!lastRequest.contains("stop"))
                 {
                     response.set_content(
                         nlohmann::json{
@@ -595,6 +597,72 @@ void TestBackendCacheTimingsReachTheTurnTimings()
         "A backend that reported no timings was given invented ones.");
 }
 
+// PERF-4: background calls used stream:false, and llama-server notices a client that
+// left a non-streamed request only at its periodic disconnect check, so cancelling one
+// for a user's turn kept the turn waiting. They now stream, assemble the text locally,
+// and keep their response formats and validation exactly as before.
+void TestBackgroundCallsStreamWithUnchangedContracts()
+{
+    revia::tests::ScopedTestDirectory directory;
+    WireBackend backend;
+    llamaCppService service((directory.root / "background.db").string());
+    Configure(service, backend.port);
+    const auto streamed = [&backend](const std::string& text, const std::string& finish = "stop")
+    {
+        // Split mid-token, the way a server streams, with usage on the final chunk.
+        const std::size_t half = text.size() / 2;
+        auto last = WireBackend::Delta("content", text.substr(half), finish);
+        last["usage"] = {{"prompt_tokens", 40}, {"completion_tokens", 12}};
+        backend.Script({WireBackend::Delta("content", text.substr(0, half)), last}, R"({"choices":[]})");
+    };
+
+    const std::string thought = R"({"steps":[{"question":"What is asked?","answer":"A sum."}],"settled":"It is a sum."})";
+    streamed(thought);
+    const auto inquiry = service.Deliberate(R"({"problem":"add two numbers"})");
+    auto request = backend.Requests().back();
+    Check(request.value("stream", false), "Self-inquiry still asked for a non-streamed completion.");
+    Check(request.at("response_format").at("type") == "json_schema" &&
+              request.at("response_format").at("json_schema").at("name") == "bounded_planning" &&
+              request.at("response_format").at("json_schema").at("strict") == true &&
+              !request.at("chat_template_kwargs").at("enable_thinking").get<bool>(),
+        "Streaming the self-inquiry changed its JSON-schema response format or thinking setting.");
+    Check(inquiry.bSuccess && inquiry.response == thought && inquiry.bTokensReported && inquiry.promptTokens == 40 &&
+              inquiry.completionTokens == 12,
+        "The streamed self-inquiry was not assembled into the same decision and usage: " + inquiry.reason);
+
+    streamed(R"({"action":"silence","topic":"","query":"","rationale":"Nothing new.","confidence":0.4})");
+    const auto plan = service.GenerateCuriosityPlan(R"({"recent":[]})", {"think", "silence"});
+    request = backend.Requests().back();
+    Check(request.value("stream", false) && request.at("response_format").at("json_schema").at("schema").at("properties").contains("action"),
+        "Curiosity planning did not stream with its schema intact.");
+    Check(plan.bSuccess && plan.response.find("\"silence\"") != std::string::npos, "The streamed curiosity plan was lost.");
+
+    streamed(R"({"shouldRemember":true,"category":"preference","summary":"The user prefers concise answers.","subject":"speaker","reason":"Stated."})");
+    const auto memory = service.EvaluateMemory("I prefer concise answers from now on.", "Understood.",
+        revia::agents::ResponseProvenance::NormalGeneration);
+    request = backend.Requests().back();
+    Check(request.value("stream", false) && request.at("response_format").at("type") == "json_object",
+        "Memory classification did not stream with its JSON-object format.");
+    Check(memory.bSuccess && memory.bShouldRemember && memory.summary == "The user prefers concise answers.",
+        "The streamed memory classification did not reach the same verdict: " + memory.reason);
+
+    // Validation is unchanged: a classifier cut off before its JSON is still a completed
+    // "remember nothing", and says why.
+    streamed("{\"shouldRemember\":tr", "length");
+    const auto truncated = service.EvaluateMemory("I prefer tea to coffee in the mornings.", "Noted.",
+        revia::agents::ResponseProvenance::NormalGeneration);
+    Check(truncated.bSuccess && !truncated.bShouldRemember && truncated.reason.find("exhausted its response budget") != std::string::npos,
+        "A truncated streamed classification was not handled as before: " + truncated.reason);
+
+    const auto image = directory.root / "frame.png";
+    std::ofstream(image, std::ios::binary) << "not really a png";
+    streamed("A code editor with a failing build.");
+    const auto vision = service.AnalyzeImage(image, "What is on screen?", 128);
+    request = backend.Requests().back();
+    Check(request.value("stream", false) && vision.bSuccess && vision.response == "A code editor with a failing build.",
+        "Vision did not stream, or its streamed description was lost: " + vision.reason);
+}
+
 void RunStructuredReplyTests()
 {
     TestProviderContractAndDataPreservation();
@@ -605,4 +673,5 @@ void RunStructuredReplyTests()
     TestIntroducedSchemaWireAndReaffirmation();
     TestConversationRepliesStreamBySentence();
     TestBackendCacheTimingsReachTheTurnTimings();
+    TestBackgroundCallsStreamWithUnchangedContracts();
 }

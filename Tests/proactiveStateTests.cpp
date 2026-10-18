@@ -78,7 +78,8 @@ public:
                 response.set_content(R"({"error":"fixture context rejection"})", "application/json");
                 return;
             }
-            if (!body.value("stream", false))
+            // Only the conversation reply carries stop markers; background calls stream too.
+            if (!body.contains("stop"))
             {
                 response.set_content(R"({"choices":[{"message":{"content":"A metadata fixture response."},"finish_reason":"stop"}]})", "application/json");
                 return;
