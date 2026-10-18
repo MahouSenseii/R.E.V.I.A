@@ -85,8 +85,12 @@ void TestApprovalReachesExecution(const std::string& input, const bool approve, 
     if (mode == "owner_full_access") session.SetConfirmationHandler({});
 
     const auto result = ReviaSessionTestAccess::SubmitOperator(session, input);
-    Check(confirmations == (mode == "owner_full_access" ? 0 : 1),
-        "An operator task repeated approval or free mode asked for approval.");
+    // Approving the task covers its read-only steps. In supervised mode the first step of a
+    // new kind of write asks once more (approvals are kept per kind of action); owner mode
+    // answers routine kinds itself.
+    const bool stepAsks = write && mode == "supervised";
+    Check(confirmations == (mode == "owner_full_access" ? 0 : stepAsks ? 2 : 1),
+        "An operator task asked the wrong number of times, or free mode asked for approval.");
     Check(!session.IsBusy(), "The completed operator command left the session busy.");
     Check(!waitingDuringDispatch, "An approved action still displayed Waiting during execution.");
     const auto goals = session.RecentGoals();
@@ -101,7 +105,7 @@ void TestApprovalReachesExecution(const std::string& input, const bool approve, 
             goals.front().status == GoalStatus::Cancelled && goals.front().steps.empty(),
             "Approval erased Stop and started operator actions anyway.");
     }
-    else if (!inScope || remove || (write && mode == "approved_scope"))
+    else if (!inScope || remove || (write && mode == "approved_scope") || (stepAsks && !approveStep))
     {
         Check(!result.succeeded && goals.size() == 1 &&
             goals.front().stopReason == StopReason::PolicyBlocked,
