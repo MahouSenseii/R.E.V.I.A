@@ -559,9 +559,10 @@ if(BUILD_TESTING)
                 Tests/Fixture/archiveWriterTests.cpp
                 Private/Memory/conversationArchive.cpp
                 Private/Memory/memoryScope.cpp
-                Private/Memory/sensitiveContent.cpp)
+                Private/Memory/sensitiveContent.cpp
+                Private/Memory/temporalQuery.cpp)
         target_include_directories(ReviaArchiveWriterTests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/Public")
-        target_link_libraries(ReviaArchiveWriterTests PRIVATE sqlite3)
+        target_link_libraries(ReviaArchiveWriterTests PRIVATE sqlite3 nlohmann_json::nlohmann_json)
         target_compile_options(ReviaArchiveWriterTests PRIVATE -Wall -Wextra -Wpedantic)
         target_link_options(ReviaArchiveWriterTests PRIVATE -static-libgcc -static-libstdc++
                 -Wl,--wrap=sqlite3_prepare_v2 -Wl,--wrap=sqlite3_step)
