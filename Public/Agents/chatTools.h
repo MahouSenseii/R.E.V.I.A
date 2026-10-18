@@ -5,6 +5,7 @@
 #include "Planning/reminders.h"
 
 #include <functional>
+#include <optional>
 #include <string>
 
 namespace revia::agents
@@ -28,6 +29,12 @@ struct ChatActionPort
 // audit. An action that needs approval with no handler to ask, or that the person
 // declines, is never sent to the runtime; the tool returns an error saying so.
 [[nodiscard]] ToolExecution RunChatAction(const ChatActionPort& port, actions::ActionRequest request, const ToolCallContext& context);
+
+// The same steps, returning the runtime's whole outcome for a tool that reads more than its
+// text, such as a guest receipt. When nothing was sent to the runtime, it returns nothing
+// and `refusal` says why.
+[[nodiscard]] std::optional<actions::ActionOutcome> SubmitChatAction(
+    const ChatActionPort& port, actions::ActionRequest request, const ToolCallContext& context, std::string& refusal);
 
 // A read_file or list_dir request for `path`, typed exactly as the structured parser
 // would type it. The path is resolved and checked against approved roots by policy.

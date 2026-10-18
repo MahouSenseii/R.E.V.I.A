@@ -1177,6 +1177,13 @@ SessionResult ConversationRuntime::Generate(const std::string& policyInput, cons
         permissions.approvedRoots = grant.approvedRoots;
         permissions.remindersAvailable = grant.remindersAvailable;
         permissions.imageGenerationEnabled = grant.imageGenerationEnabled;
+        permissions.sandbox = grant.sandbox;
+        // Whether code can run this turn, and if not, why: the one place this is said.
+        if (permissions.sandbox.interpreter && grant.executors.sandbox.runPython)
+            publishComponent("Code sandbox", "Ready", "run_python runs in the Ubuntu guest without network, one approval per run.", -1.0, 0,
+                currentTurn);
+        else if (!permissions.sandbox.unavailableReason.empty())
+            publishComponent("Code sandbox", "Off", permissions.sandbox.unavailableReason, -1.0, 0, currentTurn);
         agents::ToolExecutors executors = grant.executors;
         if (internetLookup)
         {

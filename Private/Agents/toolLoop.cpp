@@ -154,7 +154,8 @@ std::vector<llm::ToolResult> ToolLoop::Execute(
             error = "Too many tool calls in one step; at most " + std::to_string(limits.maxCallsPerStep) + " run at a time.";
         else if ((entry.tool = registry.Find(call.name)) == nullptr)
             error = "There is no tool named \"" + utf8::Prefix(utf8::Sanitize(call.name), 64) + "\" this turn.";
-        else if (!ValidateToolArguments(entry.tool->definition.parametersSchema, call.arguments, entry.arguments, error))
+        else if (!ValidateToolArguments(
+                     entry.tool->definition.parametersSchema, call.arguments, entry.arguments, error, entry.tool->maxArgumentBytes))
             error = "Invalid arguments: " + error;
         if (!error.empty())
         {

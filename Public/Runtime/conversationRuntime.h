@@ -131,6 +131,8 @@ public:
         bool archiveEnabled = false;
         bool remindersAvailable = false;
         bool imageGenerationEnabled = false;
+        // The guest code tools, projected by the session from the guest permission and VM state.
+        agents::SandboxToolPermissions sandbox;
     };
     // Called with the turn's admission and stop token, so every executor it returns is
     // bound to that turn and no other.
