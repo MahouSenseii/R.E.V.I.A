@@ -146,3 +146,56 @@ test('Windows PowerShell health check reports missing prerequisites and exits no
     rmSync(directory, { recursive: true, force: true });
   }
 });
+
+function readManifest() {
+  return JSON.parse(readFileSync(new URL('../Config/model_manifest.json', import.meta.url), 'utf8'));
+}
+
+test('every model profile names pinned artifacts that land on distinct files', () => {
+  const manifest = readManifest();
+  const byId = new Map(manifest.artifacts.map((entry) => [entry.id, entry]));
+  assert.equal(byId.size, manifest.artifacts.length, 'artifact ids must be unique');
+  for (const entry of manifest.artifacts) {
+    assert.match(entry.revision, /^[0-9a-f]{40}$/, `${entry.id} revision must be a commit`);
+    assert.match(entry.sha256, /^[0-9a-f]{64}$/, `${entry.id} sha256`);
+    assert.ok(Number.isSafeInteger(entry.bytes) && entry.bytes > 0, `${entry.id} bytes`);
+  }
+  // Each Qwen3.5 repository calls its projector mmproj-F16.gguf. Two of them in one
+  // Models folder would overwrite each other and then fail verification forever.
+  const localNames = manifest.artifacts.map((entry) => (entry.localFile ?? entry.file).toLowerCase());
+  assert.equal(new Set(localNames).size, localNames.length, `duplicate local file: ${localNames}`);
+  for (const [name, ids] of Object.entries(manifest.profiles)) {
+    assert.ok(ids.length > 0, `${name} is empty`);
+    for (const id of ids) assert.ok(byId.has(id), `${name} names missing artifact ${id}`);
+  }
+});
+
+test('optional 9B profiles put Qwen3.5-9B in one seat and leave the defaults alone', () => {
+  const manifest = readManifest();
+  const roles = manifest.profileRoles;
+  for (const name of ['Minimal', 'Standard', 'Full']) {
+    assert.equal(roles[name], undefined, `${name} must keep the default seats`);
+  }
+  assert.deepEqual(roles.Standard9B, { main: 'qwen3.5-9b', mainVision: 'qwen3.5-9b-vision' });
+  assert.deepEqual(roles.Full9B, { expert: 'qwen3.5-9b', expertVision: 'qwen3.5-9b-vision' });
+  for (const [name, seats] of Object.entries(roles)) {
+    for (const [seat, id] of Object.entries(seats)) {
+      assert.ok(['main', 'mainVision', 'expert', 'expertVision'].includes(seat), `${name}.${seat}`);
+      assert.ok(manifest.profiles[name].includes(id), `${name}.${seat} names ${id}, which it does not download`);
+    }
+  }
+  const projector = manifest.artifacts.find((entry) => entry.id === 'qwen3.5-9b-vision');
+  assert.equal(projector.projectorFor, 'qwen3.5-9b');
+  assert.equal(projector.repository, manifest.artifacts.find((entry) => entry.id === 'qwen3.5-9b').repository);
+});
+
+test('setup, download and health check scripts accept exactly the manifest profiles', () => {
+  const profiles = Object.keys(readManifest().profiles).sort();
+  for (const script of ['Setup-Revia.ps1', 'DownloadRuntimeModels.ps1', 'HealthCheck.ps1']) {
+    const text = readFileSync(new URL(`../Tools/${script}`, import.meta.url), 'utf8');
+    const set = text.match(/\[ValidateSet\(([^)]*)\)\]\s*\[string\]\$Profile/);
+    assert.ok(set, `${script} has a profile ValidateSet`);
+    const accepted = [...set[1].matchAll(/'([^']+)'/g)].map((match) => match[1]).sort();
+    assert.deepEqual(accepted, profiles, script);
+  }
+});

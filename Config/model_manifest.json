@@ -3,7 +3,13 @@
   "profiles": {
     "Minimal": ["fast", "main", "memory", "stt-primary"],
     "Standard": ["fast", "main", "main-vision", "memory", "stt-primary"],
-    "Full": ["fast", "main", "main-vision", "expert", "expert-vision", "memory", "stt-primary", "stt-fallback"]
+    "Full": ["fast", "main", "main-vision", "expert", "expert-vision", "memory", "stt-primary", "stt-fallback"],
+    "Standard9B": ["fast", "qwen3.5-9b", "qwen3.5-9b-vision", "memory", "stt-primary"],
+    "Full9B": ["fast", "main", "main-vision", "qwen3.5-9b", "qwen3.5-9b-vision", "memory", "stt-primary", "stt-fallback"]
+  },
+  "profileRoles": {
+    "Standard9B": { "main": "qwen3.5-9b", "mainVision": "qwen3.5-9b-vision" },
+    "Full9B": { "expert": "qwen3.5-9b", "expertVision": "qwen3.5-9b-vision" }
   },
   "artifacts": [
     {
@@ -70,6 +76,33 @@
       "quantization": "Q8_0",
       "recommendedVramMiB": 800,
       "projectorFor": "expert"
+    },
+    {
+      "id": "qwen3.5-9b",
+      "role": "Optional Qwen3.5 9B brain (Main or Expert, chosen by profile)",
+      "file": "Qwen3.5-9B-Q4_K_M.gguf",
+      "repository": "unsloth/Qwen3.5-9B-GGUF",
+      "revision": "3885219b6810b007914f3a7950a8d1b469d598a5",
+      "sha256": "03b74727a860a56338e042c4420bb3f04b2fec5734175f4cb9fa853daf52b7e8",
+      "bytes": 5680522464,
+      "license": "apache-2.0",
+      "quantization": "Q4_K_M",
+      "recommendedVramMiB": 7600,
+      "projectorFor": null
+    },
+    {
+      "id": "qwen3.5-9b-vision",
+      "role": "Qwen3.5 9B vision projector",
+      "file": "mmproj-F16.gguf",
+      "localFile": "Qwen3.5-9B-mmproj-F16.gguf",
+      "repository": "unsloth/Qwen3.5-9B-GGUF",
+      "revision": "3885219b6810b007914f3a7950a8d1b469d598a5",
+      "sha256": "f70dc3509053962b0d0d3ee8a7eacebf5d60aa560cad78254ae8698516ae029f",
+      "bytes": 918166080,
+      "license": "apache-2.0",
+      "quantization": "F16",
+      "recommendedVramMiB": 950,
+      "projectorFor": "qwen3.5-9b"
     },
     {
       "id": "memory",

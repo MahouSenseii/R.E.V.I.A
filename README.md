@@ -93,6 +93,8 @@ She never gets an unrestricted shell, and model text never becomes a shell comma
 | `Minimal` | ~3.7 GB | Chat, memory, speech recognition. Runs on one modest GPU or CPU. |
 | `Standard` | ~4.4 GB | Minimal + screen vision on the Main model. |
 | `Full` | ~10.7 GB | Everything, including the 8B Expert model. Best with 12 GB+ VRAM total. |
+| `Standard9B` (optional) | ~7.6 GB | Standard with Qwen3.5-9B as Main instead of the 4B. Not benchmarked here; see [Trying Qwen3.5-9B](#trying-qwen35-9b-optional). |
+| `Full9B` (optional) | ~11.4 GB | Full with Qwen3.5-9B as Expert instead of the Qwen3-VL 8B. Not benchmarked here. |
 
 Qwen voice adds a ~5 GB Python/PyTorch environment plus ~2–5 GB of voice models downloaded on first use. NVIDIA GPUs get CUDA; AMD/Intel GPUs get Vulkan for the language models; everything can fall back to CPU (slowly). Two GPUs are not required. Leave **30 GB free** for a Full install.
 
@@ -150,7 +152,7 @@ memory. Optional custom voice and vision can be installed later.
 .\setup.bat -Profile Full
 ```
 
-Swap `Full` for `Standard` or `Minimal` on a smaller machine. This runs six steps and writes everything to `Logs\setup.log`:
+Swap `Full` for `Standard` or `Minimal` on a smaller machine (or for the optional, unbenchmarked `Full9B` / `Standard9B`, see [Trying Qwen3.5-9B](#trying-qwen35-9b-optional)). This runs six steps and writes everything to `Logs\setup.log`:
 
 1. **Qt / compiler toolchain.** Installs Qt 6.8.3 MinGW, CMake, and Ninja under `ThirdParty\`.
 2. **llama.cpp.** Detects your hardware and downloads the CUDA, Vulkan, or CPU build.
@@ -387,6 +389,28 @@ Main runs with a 32,768-token context and a q8_0 KV cache (`llm.contextSize`, `l
 The embedding worker keeps its last 64 embeddings, so text embedded for the reply, the self-inquiry and the memory check is computed once. It runs with a 2,048-token batch so long recall queries are not refused, and when Main fits entirely on its GPU, the planner moves up to half of Main's CPU threads to it (embeddings get at most eight).
 
 The Qwen2.5-Omni and Llama 3.1 8B files that may sit in `Models\` are not used. `/models` shows exactly what is loaded this session.
+
+### Trying Qwen3.5-9B (optional)
+
+Qwen3.5-9B (`unsloth/Qwen3.5-9B-GGUF`, Q4_K_M, 5.68 GB, plus its own 0.92 GB vision projector) is pinned in `Config/model_manifest.json` like every other model: exact commit, size and SHA-256. It is a newer generation than the Expert's Qwen3-VL 8B, it can see images through its projector, and it is the stock model rather than an "abliterated" one. **Nobody has benchmarked it in Revia yet**, so it is not the default. Two profiles use it:
+
+- `Full9B` is the recommended way to try it: Main stays the 4B and the 9B replaces the Qwen3-VL 8B as Expert (loaded on demand for hard turns and difficult vision).
+- `Standard9B` makes the 9B the Main model for every turn, with no Expert.
+
+```powershell
+.\Tools\DownloadRuntimeModels.ps1 -Profile Full9B    # or Standard9B; .\setup.bat -Profile Full9B also works
+.\Tools\HealthCheck.ps1 -Profile Full9B
+```
+
+The download step writes the model paths into `Config\settings.json` (`llm.*` for Main, `intelligence.expert.*` for Expert). Restart Revia afterwards. To switch back, run the same command with `-Profile Full` (or `Standard`); no file is deleted, so switching again does not download anything. The 9B projector is saved as `Models\Qwen3.5-9B-mmproj-F16.gguf` so it cannot overwrite the 4B's `mmproj-F16.gguf`.
+
+What to expect on the dev PC (RTX 5070 12 GB + RTX 2070 Super 8 GB). These are **estimates from file sizes and the model's published layout, not measurements**:
+
+- The 9B has the same attention layout as the 4B (8 full-attention layers, 4 KV heads), so its KV cache is the same size: about 0.5 GiB at 32K with q8_0. The difference is the weights: about 5.3 GiB instead of 2.6 GiB.
+- As Main (`Standard9B`): roughly 6.5 GiB without vision, 7.5 GiB with it, against about 4.6 GiB for the 4B. Together with the voice worker on the 5070 (about 3.4 GiB peak, and it wants 4.6 GiB free) that is at the card's limit, so expect the voice to move to the 2070 Super, or set `llm.contextSize` to `16384`. Replies will also start and stream more slowly than with the 4B; by how much is not measured.
+- As Expert (`Full9B`): roughly 7 GiB at the Expert's 8K context with the projector, about 0.8 GiB more than the current Expert. Neither card has 7 GiB free once Main, Whisper and the voice workers are loaded, so llama.cpp's fitting will put some layers in system RAM and the Expert will be slower than a model that fits. It is unloaded again after `intelligence.expert.idleGraceSeconds`.
+
+Turn logs and the router still name the old models ("Qwen3-VL 8B") in a few places; the worker that actually runs is the one in `Config\settings.json`, which `/models` shows.
 
 All workers are separate local processes bound to `127.0.0.1` so each GPU gets its own CUDA context and a crash cannot take Revia down. Nothing is sent to a cloud model.
 
