@@ -303,6 +303,7 @@
                    },
     "inputArbiter":  {
                          "mergeWindowMs":  350,
+                         "punctuatedMergeWindowMs":  150,
                          "minimumMeaningfulCharacters":  3,
                          "maxQueuedInputs":  8,
                          "ignoredFragments":  [

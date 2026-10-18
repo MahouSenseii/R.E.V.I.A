@@ -57,8 +57,8 @@ The design rule: **one Revia**. Reflex, Fast, Main, and Expert share one identit
 ### See, listen, and speak
 
 - **Watch your screens.** She notices what you are doing across every monitor, with no "Analyze screen" button. Screenshots are deleted immediately; only a short summary stays in memory. Text on screen is treated as information, never as instructions.
-- **Listen.** Hold **Ctrl+Space** (or the mic button) to talk, or turn on **Hands-free local conversation** in the Presence tab. Hands-free answers only when you say "Revia" or reply within 20 seconds of talking with her (`speechRecognition.requireWakeWord`, `wakeWords`, `followUpSeconds`).
-- **Speak in her own voice.** Qwen3-TTS starts speaking after the first complete sentence and spreads later sentences across both GPUs. Windows SAPI is the fallback.
+- **Listen.** Hold **Ctrl+Space** (or the mic button) to talk, or turn on **Hands-free local conversation** in the Presence tab. Hands-free answers only when you say "Revia" or reply within 20 seconds of talking with her, counted from when she stops speaking (`speechRecognition.requireWakeWord`, `wakeWords`, `followUpSeconds`).
+- **Speak in her own voice.** Qwen3-TTS starts speaking after the first complete sentence and spreads later sentences across both GPUs. The end of an answer is spoken even without a full stop, such as a last list item, a link or an emoji. Windows SAPI is the fallback.
 - **Be interrupted.** Start talking while she speaks and she stops.
 - **Look through the camera (optional).** One still frame, only with permission, and the camera light is on only while the frame is taken.
 
@@ -67,7 +67,7 @@ The design rule: **one Revia**. Reflex, Fast, Main, and Expert share one identit
 - **Look things up** in a visible, locked-down browser (Edge or Chrome) and show you the exact query and sources.
 - **Bring things up on her own** when she has something specific to say: a reaction to what you're doing, a follow-up on something from earlier, or a question. At most four times an hour, at least 15 minutes apart. She waits for a pause in your typing and stays quiet over a full-screen game, video or presentation (`initiative.suppressWhenFullScreen`), and while another app is using the microphone (a call or meeting).
 - **Work in the background.** `/goal` and "operate" tasks run while she keeps talking; ask how it's going, or say "cancel the task". Only Stop or that request ends one.
-- **Remind you.** "Remind me in 20 minutes to stretch", "remind me at 3pm to call Sam", "set a timer for 5 minutes". Saved across restarts; `/reminders` lists and cancels them.
+- **Remind you.** "Remind me in 20 minutes to stretch", "remind me at 3pm to call Sam", "set a timer for 5 minutes". Saved across restarts; `/reminders` lists and cancels them. A reminder or task report that comes due while she is answering is spoken right after the answer (covered by automated tests; not yet checked live).
 - **Help with what you copied.** Ask about "the code I just copied" or "what's on my clipboard" and she reads it for that one question. It is not saved, and text that looks like a password or key is withheld.
 - **Draw diagrams, keep a working document, generate images** (images need the optional installer).
 - **Sing** recordings you put in `RuntimeData/Songs/` (karaoke playback of your WAV files, not generated singing). Ask "Revia, sing <name>" or use `/sing`.
@@ -232,8 +232,8 @@ Voices are stored in `build\debug\RuntimeData\Voices\`.
 
 ### 5. Talk to her
 
-- **Push-to-talk:** hold **Ctrl+Space** (or the mic button), speak, release.
-- **Hands-free:** turn on **Hands-free local conversation** in the **Presence** tab. If she does not hear you, use **Test microphone** and pick the right microphone.
+- **Push-to-talk:** hold **Ctrl+Space** (or the mic button), speak, release. Releasing ends what you said, so the turn starts as soon as the transcript arrives.
+- **Hands-free:** turn on **Hands-free local conversation** in the **Presence** tab. If she does not hear you, use **Test microphone** and pick the right microphone. Speech is merged into one turn until you pause: 150 ms after a finished sentence, 350 ms otherwise (`inputArbiter.punctuatedMergeWindowMs`, `inputArbiter.mergeWindowMs`).
 - **Send what I say automatically** sends the transcript without pressing Send.
 - **Let me interrupt Revia while she speaks** turns barge-in on or off.
 
@@ -396,6 +396,8 @@ Measured in ten scripted live sessions on 23 Sep 2026 (RTF is generation time di
 - **Batched**, the 5070 slowed to RTF 1.1-2.7, and nothing in a batch plays until the whole batch is done, which left 20-30 s silences mid-reply. Reply batching is therefore **off** (`speech.qwenBatchReplyPhrases: false`); sentences are spread one at a time across both cards instead.
 - The first sentence goes to the planner's card until both cards have been measured, then to whichever is measurably faster.
 - A repeated short Reflex phrase ("Okay.") is cached and plays in under 0.1 s.
+- Between sentences she waits for the clip's exact length (read from the WAV header) plus 60 ms, instead of an extra 350 ms. The timing helper is covered by automated tests; the shorter gap has not been heard live yet.
+- Deciding whether a turn is worth remembering (about 7.5 s on the Main GPU) waits until she has finished speaking, for at most 20 s, so it does not compete with her first sentence for the GPU. This is covered by automated tests; the gain has not been measured live yet.
 
 So the voice is quick per sentence, but long replies are still generated sentence by sentence, and it slows down when a card is also busy with chat or nearly full. The installed Qwen package cannot generate audio incrementally; Revia pipelines complete sentences instead. Benchmarks live in `RuntimeData/Benchmarks/` and [docs/TTS_PERFORMANCE.md](docs/TTS_PERFORMANCE.md).
 

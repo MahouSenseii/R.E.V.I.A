@@ -386,6 +386,12 @@ void SpeechCoordinator::NotePlaybackFinished(const std::uint64_t id)
     StartNextLocked();
 }
 
+void SpeechCoordinator::ChannelMaybeFree()
+{
+    const std::lock_guard<std::mutex> lock(mutex);
+    StartNextLocked();
+}
+
 void SpeechCoordinator::NotePerformanceStarted(const std::string& songId)
 {
     const std::lock_guard<std::mutex> lock(mutex);

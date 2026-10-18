@@ -912,8 +912,15 @@ SessionResult ConversationRuntime::Generate(const std::string& policyInput, cons
         }
     };
     const auto speechAdmission = std::make_shared<const std::function<bool()>>(admitted);
-    const auto revoked = []()
+    const auto revoked = [this, stopToken]()
     {
+        // Every state change below is gated on admission, and a stop request withdraws
+        // it, so a stopped turn would otherwise stay at "Thinking" with Stop still lit.
+        // Only Stop settles the state: a turn retired by an audience change says nothing
+        // about what the companion is doing now. Turns run one at a time, so this cannot
+        // overwrite the turn that follows it.
+        if (stopToken.stop_requested())
+            setState(RuntimeState::Idle, "The response was stopped.");
         SessionResult discarded;
         discarded.succeeded = false;
         discarded.fromAssistant = true;
@@ -1200,19 +1207,6 @@ SessionResult ConversationRuntime::Generate(const std::string& policyInput, cons
         finished.audienceRevision = turnPolicy.audienceRevision;
         if (!admitted())
             return revoked();
-        if (!admitted())
-        {
-            speech.StopSpeaking();
-            // Nothing to undo: it never entered history.
-            undeliveredOpening.clear();
-            finished.succeeded = false;
-            finished.text.clear();
-            finished.reason = "The autonomous response was cancelled by newer input.";
-            finished.speechPending = false;
-            finished.spokenAsFragments = false;
-            updateState(RuntimeState::Idle, "The autonomous response was cancelled.");
-            return finished;
-        }
         if (!undeliveredOpening.empty())
         {
             context.AddMessage("assistant", undeliveredOpening);
@@ -1572,10 +1566,14 @@ SessionResult ConversationRuntime::Generate(const std::string& policyInput, cons
     if (streamReply && turnResult.response.bSuccess)
     {
         const std::string& complete = turnResult.response.response;
-        // A tail Flush judges not worth speaking -- a list item, a smile, a link -- is still
-        // part of the answer, so the chat shows it even when the voice leaves it out.
-        // Flush also punctuates a short unfinished answer for the voice; the chat alone
-        // shows it as written.
+        // Flush drops a tail without closing punctuation -- a list item, a smile, a link --
+        // because on a raw stream that is usually a thought cut off mid-way. This tail is
+        // part of the approved final reply, and the model layer has already removed one
+        // cut off by the token limit, so it is the end of the answer: the chat shows it,
+        // and the voice says it when the turn speaks. Only a tail that is nothing but a
+        // stage direction stays silent, because shaping it for speech would leave nothing
+        // to show. Flush also punctuates a short unfinished answer for the voice; the chat
+        // alone shows it as written.
         const auto finishStream = [&]()
         {
             const std::string unfinished = fragmenter.Pending();
@@ -1583,7 +1581,7 @@ SessionResult ConversationRuntime::Generate(const std::string& policyInput, cons
             if (streamSpeech && !remainder.empty())
                 emitFragment(remainder);
             else if (!unfinished.empty())
-                emitFragment(unfinished, false);
+                emitFragment(unfinished, streamSpeech && !revia::speech::ShapeVocalizations(unfinished, 1).text.empty());
         };
         const bool finalExtendsStream =
             complete.size() >= streamedText.size() && complete.compare(0, streamedText.size(), streamedText) == 0;
@@ -1791,11 +1789,8 @@ SessionResult ConversationRuntime::Generate(const std::string& policyInput, cons
     result.wasStreamed = output.bWasStreamed;
     if (!output.bSuccess)
     {
-        if (!admitted())
-        {
-            updateState(RuntimeState::Idle, "The response was stopped.");
-        }
-        else
+        // A stopped generation is settled to Idle by finish, through revoked.
+        if (admitted())
         {
             log.Warning(output.reason);
             updateState(RuntimeState::Error, output.reason);

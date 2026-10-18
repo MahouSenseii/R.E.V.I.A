@@ -229,17 +229,27 @@ void ReviaSession::HandleSpeechEvent(const speech::SpeechEvent& speechEvent)
     {
         // Revoked playback ends without completing a newer conversation intent.
         speechRecognitionService.SetOutputActive(false);
+        if (speakingIntentId.load() == 0 && !speechService.HasQueuedSpeech())
+            speechCoordinator.ChannelMaybeFree();
     }
     else if (speechEvent.phase == "Ready" || speechEvent.phase == "Stopped" || speechEvent.phase == "Interrupted" ||
              speechEvent.phase == "Error" || speechEvent.phase == "Disabled" || speechEvent.phase == "Fallback")
     {
         speechRecognitionService.SetOutputActive(false);
-        // Keep the conversational follow-up window open after speech.
-        addresseeGate.NoteExchange(speech::AddresseeGate::Clock::now());
+        // Keep the conversational follow-up window open after speech, for whoever it was
+        // opened for. Replacing the participant here closed it after her first phrase.
+        addresseeGate.RefreshExchange(speech::AddresseeGate::Clock::now());
         // Exchange the active intent once so a completed report cannot release it twice.
         if (const std::uint64_t finished = speakingIntentId.exchange(0); finished != 0)
         {
             speechCoordinator.NotePlaybackFinished(finished);
+        }
+        else if ((speechEvent.phase == "Ready" || speechEvent.phase == "Stopped") && !speechService.HasQueuedSpeech())
+        {
+            // A streamed reply is not the coordinator's, so its end would otherwise never
+            // release a reminder or task report that queued behind it. Barge-in is left
+            // out because the user has the floor.
+            speechCoordinator.ChannelMaybeFree();
         }
     }
     if (speechEvent.phase == "Generated" && speechEvent.elapsedMilliseconds >= 0.0)

@@ -98,6 +98,24 @@ struct MemoryQueueLimits
     std::size_t maximumPendingEvents = 512;
 };
 
+// When a turn's memory classification may start.
+//
+// Classification is a long model call on the same GPU that voices the reply. Started the
+// moment the reply is approved, it competes with the first spoken phrase, which is the
+// moment the user is actually waiting on. It is held back while `busy` reports the voice
+// at work, never longer than `maximum`, so a memory is delayed but never lost.
+struct MemoryDeferral
+{
+    // Empty runs classification as soon as it is queued.
+    std::function<bool()> busy;
+    // Always waited first, so a reply whose speech is queued just after the reply is
+    // approved is seen as speaking.
+    std::chrono::milliseconds settle{1000};
+    std::chrono::milliseconds maximum{20000};
+    // How often `busy` is asked again while classification is held back.
+    std::chrono::milliseconds recheck{100};
+};
+
 class MemoryAgent
 {
 public:
@@ -142,6 +160,8 @@ public:
     // Side-effect-free session admission; each task retains its submission guard.
     void SetAdmissionGuard(std::function<bool()> guard);
     void SetQueueLimits(MemoryQueueLimits limits);
+    // `busy` is called on the worker under the agent's lock and must not call back into it.
+    void SetDeferral(MemoryDeferral deferral);
 
     // Queue depth per class, for tests and for the resources panel.
     struct QueueDepths
@@ -191,6 +211,8 @@ private:
         // How many times this evaluation has already yielded to an interactive turn.
         // Bounded so a candidate cannot cycle forever against sustained conversation.
         int preemptionRetries = 0;
+        // When it was queued, which bounds how long MemoryDeferral may hold it back.
+        std::chrono::steady_clock::time_point queuedAt{};
     };
 
     // A preempted evaluation is retried, but not indefinitely: a memory candidate is
@@ -209,6 +231,8 @@ private:
     void ScanBackfill(std::stop_token stopToken);
     void FinishEmbeddingTask(const Task& task, bool failed);
     bool BackfillDueLocked() const;
+    // Whether the next interactive task may run now; otherwise `wakeAt` says when to ask again.
+    bool InteractiveDueLocked(std::chrono::steady_clock::time_point now, std::chrono::steady_clock::time_point& wakeAt) const;
     std::chrono::milliseconds BackfillRetryDelay(int failures) const;
     void Report(const std::string& line) const;
     // Returns false when the queue is full and the task could not be admitted.
@@ -253,6 +277,7 @@ private:
     std::vector<PendingEvent> events;
     std::function<bool()> admissionGuard;
     MemoryQueueLimits limits;
+    MemoryDeferral deferral;
     DiagnosticSink diagnostics;
     // Guarded by `mutex`, same as `events`.
     std::size_t droppedLowPriorityEvents = 0;
