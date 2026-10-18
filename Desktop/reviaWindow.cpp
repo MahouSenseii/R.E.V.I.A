@@ -98,6 +98,23 @@ template <typename Result, typename Operation, typename Failure> Result RunOrFai
     }
 }
 
+// Clears a running flag when a worker body ends, however it ends, so the GUI thread
+// can tell a finished worker from one it would have to wait for.
+class RunningFlag
+{
+  public:
+    explicit RunningFlag(std::atomic<bool>& flag) : flag(flag) {}
+    ~RunningFlag()
+    {
+        flag.store(false);
+    }
+    RunningFlag(const RunningFlag&) = delete;
+    RunningFlag& operator=(const RunningFlag&) = delete;
+
+  private:
+    std::atomic<bool>& flag;
+};
+
 revia::speech::VoiceOperationResult FailedVoiceOperation(const std::string&)
 {
     return {false, "The voice operation failed. The cause is unknown.", {}, -1.0};
@@ -721,15 +738,29 @@ void ReviaWindow::BuildTray()
     trayIcon->show();
 }
 
+bool ReviaWindow::ClaimOperationWorker()
+{
+    if (operationRunning.exchange(true))
+    {
+        statusBar()->showMessage(QStringLiteral("Revia is still working on the previous request. Send again once she has answered."), 8000);
+        return false;
+    }
+    // Finished: its own last act was clearing the flag, so this returns at once.
+    if (operationWorker.joinable())
+        operationWorker.join();
+    return true;
+}
+
 void ReviaWindow::StartRuntime()
 {
-    if (switchingCompanion || shuttingDown.load())
+    if (switchingCompanion || shuttingDown.load() || !ClaimOperationWorker())
         return;
     sendButton->setEnabled(false);
     stopButton->setEnabled(true);
     operationWorker = std::jthread(
         [this, epoch = sessionUiEpoch.load()]()
         {
+            const RunningFlag running(operationRunning);
             std::string failure;
             const bool started = RunOrFail<bool>([this]() { return Session().Start(); },
                 [&failure](const std::string& why)
@@ -794,9 +825,15 @@ void ReviaWindow::SendMessage(const bool voiceInput)
 {
     // Voice may arrive while Revia is still replying; that is what the merge window is
     // for. Typed input still waits, because pressing Enter mid-reply and having it
-    // silently queue would be surprising.
-    if (switchingCompanion || shuttingDown.load() || (!voiceInput && Session().IsBusy()))
+    // silently queue would be surprising. The text stays in the box and the status line
+    // says why, since Enter reaches here even while the Send button is disabled.
+    if (switchingCompanion || shuttingDown.load())
     {
+        return;
+    }
+    if (!voiceInput && (operationRunning.load() || Session().IsBusy()))
+    {
+        statusBar()->showMessage(QStringLiteral("Revia is still working on the previous request. Send again once she has answered."), 8000);
         return;
     }
 
@@ -826,18 +863,26 @@ void ReviaWindow::SendMessage(const bool voiceInput)
         return;
     }
 
+    if (!ClaimOperationWorker())
+    {
+        messageInput->setPlainText(text);
+        return;
+    }
+    if (studioOperationRunning.load())
+    {
+        // The turn waits for the studio operation's lock on its own worker; the window
+        // stays responsive and says what the message is waiting for.
+        statusBar()->showMessage(QStringLiteral("Your message will be answered when the current studio operation finishes."), 8000);
+    }
     AppendChat("You", text, true);
     sendButton->setEnabled(false);
     stopButton->setEnabled(true);
 
-    if (operationWorker.joinable())
-    {
-        operationWorker.join();
-    }
     operationWorker = std::jthread(
         [this, epoch = sessionUiEpoch.load(), input = text.toStdString(), voiceInput, origin = Session().Stamp(),
             audienceRevision = Session().Audience().revision]()
         {
+            const RunningFlag running(operationRunning);
             // Nothing thrown here may leave this thread.
             //
             // An exception escaping a std::jthread body calls std::terminate, so a single
@@ -1150,7 +1195,7 @@ void ReviaWindow::BeginShutdown(const revia::core::ExitReason reason, const std:
 
 void ReviaWindow::UseVisibleScreen()
 {
-    if (switchingCompanion || shuttingDown.load() || Session().IsBusy())
+    if (switchingCompanion || shuttingDown.load() || Session().IsBusy() || operationRunning.load())
     {
         return;
     }
@@ -1174,19 +1219,18 @@ void ReviaWindow::UseVisibleScreen()
         return;
     }
 
+    if (!ClaimOperationWorker())
+        return;
     messageInput->clear();
     AppendChat("You", instruction, true);
     showMinimized();
     sendButton->setEnabled(false);
     screenActionButton->setEnabled(false);
     stopButton->setEnabled(true);
-    if (operationWorker.joinable())
-    {
-        operationWorker.join();
-    }
     operationWorker = std::jthread(
         [this, epoch = sessionUiEpoch.load(), request = instruction.toStdString()]()
         {
+            const RunningFlag running(operationRunning);
             std::this_thread::sleep_for(std::chrono::milliseconds(400));
             const auto result = RunOrFail<revia::runtime::SessionResult>([this, &request]() { return Session().ActOnScreen(request); },
                 [](const std::string& why)

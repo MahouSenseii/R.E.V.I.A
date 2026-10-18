@@ -102,6 +102,10 @@ class ReviaWindow final : public QMainWindow
     void BuildNavigationSidebar();
     void BuildTray();
     void StartRuntime();
+    // Takes operationWorker for a new foreground operation. Refuses, with a status line,
+    // while the previous one is still running, and only ever joins a finished worker,
+    // because joining a running one on this thread is what froze the window.
+    bool ClaimOperationWorker();
     void SendMessage(bool voiceInput = false);
     void ToggleListening();
     // Rebuilds the device list from what Windows reports and restores the saved
@@ -316,6 +320,8 @@ class ReviaWindow final : public QMainWindow
     QTimer* pollTimer = nullptr;
 
     std::jthread operationWorker;
+    // Set by ClaimOperationWorker, cleared by the worker itself as its body ends.
+    std::atomic<bool> operationRunning = false;
     std::jthread shutdownWorker;
     std::jthread voiceWorker;
     std::jthread capabilityWorker;

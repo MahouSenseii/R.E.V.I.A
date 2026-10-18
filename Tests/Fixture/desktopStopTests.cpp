@@ -19,6 +19,7 @@
 #include <QElapsedTimer>
 #include <QFont>
 #include <QFontDatabase>
+#include <QKeyEvent>
 #include <QLabel>
 #include <QLineEdit>
 #include <QMessageBox>
@@ -1194,6 +1195,44 @@ struct ReviaWindowStopTests
         }
     }
 
+    static void RunChatTranscriptUi(ReviaWindow& window, int& failures)
+    {
+        using namespace revia::runtime;
+        const auto expect = [&](const bool condition, const char* message)
+        {
+            if (!condition)
+            {
+                std::cerr << "FAIL: " << message << '\n';
+                ++failures;
+            }
+        };
+        // A second Enter while the foreground worker still runs must return at once. It
+        // used to join that worker on this thread and freeze the window until it ended.
+        if (window.operationWorker.joinable())
+            window.operationWorker.join();
+        std::atomic<bool> release = false;
+        window.operationRunning.store(true);
+        window.operationWorker = std::jthread(
+            [&]()
+            {
+                QElapsedTimer held;
+                held.start();
+                while (!release.load() && held.elapsed() < 4000)
+                    std::this_thread::sleep_for(std::chrono::milliseconds(2));
+                window.operationRunning.store(false);
+            });
+        window.messageInput->setPlainText("second enter sentinel");
+        QKeyEvent enter(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
+        QElapsedTimer pressed;
+        pressed.start();
+        QCoreApplication::sendEvent(window.messageInput, &enter);
+        expect(pressed.elapsed() < 1500 && window.messageInput->toPlainText() == "second enter sentinel",
+            "Enter during a running operation waited on the worker or discarded the typed text");
+        release.store(true);
+        window.operationWorker.join();
+        window.messageInput->clear();
+    }
+
     static void Run(ReviaWindow& window, int& failures)
     {
         using revia::runtime::RuntimeEvent;
@@ -1355,6 +1394,7 @@ int main(int argc, char** argv)
     int failures = 0;
     ReviaWindow window(false, false);
     ReviaWindowStopTests::Run(window, failures);
+    ReviaWindowStopTests::RunChatTranscriptUi(window, failures);
     ReviaWindowStopTests::RunConfirmationAudienceUi(window, failures);
     ReviaWindowStopTests::RunConversationQualityUi(window, failures);
     ReviaWindowStopTests::RunMemoryRevisionUi(window, failures);
