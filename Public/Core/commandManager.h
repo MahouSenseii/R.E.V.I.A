@@ -18,6 +18,9 @@ public:
     using ProfileActivator = std::function<commandOutput(const std::string&)>;
     commandOutput HandleCommand(const std::string& input, const appSettings& settings, const aiProfile& profile, messageRouter& router,
         const ProfileActivator& activateProfile) const;
+    // "/cloud ask <question>": typed with a slash, but a conversation turn for the cloud
+    // model rather than a command, so it is not answered with "Unknown command".
+    [[nodiscard]] static bool IsCloudQuestion(const std::string& input);
 private:
 
     bool IsCommand(const std::string& input) const;

@@ -769,6 +769,13 @@ bool ReviaSession::Start()
                 "; quarantined records: " + std::to_string(health.quarantinedRecords) +
                 "; persistence diagnostic present: " + std::string(health.error.empty() ? "no" : "yes"));
         });
+        // Cloud requests go into the same action audit, the intent before any byte leaves.
+        // Without this sink the cloud backend sends nothing.
+        if (const std::shared_ptr<audit::EvidenceJournal> journal = actionRuntime.EvidenceJournalOwner())
+        {
+            router.Cloud().SetAuditSink(
+                [journal](const audit::CloudRequestAuditEntry& entry) { return audit::AppendCloudRequestAudit(*journal, entry); });
+        }
         // Queue pressure and overflow reach the log rather than only the queue. A
         // memory evaluation that was dropped or delayed is otherwise invisible.
         turnCoordinator.Memory().SetDiagnosticSink([this](const std::string& line) { appLogger.Log(line); });
@@ -8270,7 +8277,8 @@ void ReviaSession::DeliverDueReminders(const planning::WallClock::time_point now
 
 std::string ReviaSession::ClipboardReference(const std::string& input)
 {
-    if (!clipboardReader || !perception::AsksAboutClipboard(input))
+    // "/cloud ask --clipboard ..." is an explicit request to share it, whatever the words.
+    if (!clipboardReader || (!perception::AsksAboutClipboard(input) && !llm::cloud::ParseCloudAsk(input).bIncludeClipboard))
         return {};
     const std::optional<perception::ClipboardText> copied = clipboardReader();
     const std::string reference(identity::markers::ClipboardGrounding);
@@ -9198,6 +9206,33 @@ bool ReviaSession::TryHandleActionInput(const std::string& input, SessionResult&
         result.succeeded = true;
         result.text = lastEvaluation.Detail();
         SetState(RuntimeState::Idle);
+        return true;
+    }
+
+    // "/cloud ask <question>" is a conversation turn, not a command: it is left to the
+    // reply path, which strips the prefix and routes the turn to the cloud model.
+    if ((input == "/cloud" || input.rfind("/cloud ", 0) == 0) && !commandManager::IsCloudQuestion(input))
+    {
+        const std::string argument = input.size() > 7 ? Trim(input.substr(7)) : std::string();
+        if (argument == "on" || argument == "off")
+        {
+            // A session switch on top of llm.cloud.enabled, like /internet off: it can
+            // stop cloud use at once, but "on" cannot enable what settings leave off.
+            router.Cloud().SetSessionEnabled(argument == "on");
+            result.text = argument == "off" ? "Cloud model is OFF for this session. Every turn stays on this PC."
+                                            : "Cloud model is allowed again for this session. " + router.Cloud().StatusText();
+        }
+        else if (argument.empty() || argument == "status")
+        {
+            result.text = router.Cloud().StatusText();
+        }
+        else
+        {
+            result.succeeded = false;
+            result.text = "Usage: /cloud [on|off|status], or /cloud ask [--screen] [--clipboard] [--memory] <question>";
+            result.reason = "Unrecognized cloud argument.";
+        }
+        SetState(result.succeeded ? RuntimeState::Idle : RuntimeState::Blocked, result.reason);
         return true;
     }
 

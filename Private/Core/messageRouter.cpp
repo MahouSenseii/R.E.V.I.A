@@ -53,6 +53,36 @@ responseOutput messageRouter::RouteMessage(const std::string& message, const std
         return output;
     }
 
+    // Taken once, here, so the cloud attempt and the local route share them and neither
+    // is left behind for a later request.
+    ReasoningHandler onReasoning;
+    std::optional<revia::llm::cloud::CloudTurnRequest> cloudTurn;
+    {
+        std::lock_guard lock(reasoningMutex);
+        onReasoning = std::exchange(pendingReasoning, {});
+        cloudTurn = std::exchange(pendingCloud, std::nullopt);
+    }
+    std::string cloudNote;
+    if (cloudTurn)
+    {
+        responseOutput answered = cloud.GenerateResponse(context, *cloudTurn, stopToken, onDelta, onReasoning);
+        // An explicit request is answered by the cloud or refused in plain words. A reply
+        // that already streamed cannot be replaced either. Only an automatic attempt that
+        // produced nothing falls through to the local route.
+        if (answered.bSuccess || cloudTurn->bExplicit || answered.bWasStreamed || stopToken.stop_requested())
+        {
+            answered.requestedTier = revia::intelligence::ToString(decision.requestedTier);
+            answered.selectedTier = "Cloud";
+            answered.selectedModel = "cloud:" + cloud.Settings().model;
+            answered.routingReason = decision.reason +
+                (cloudTurn->bExplicit ? " The user asked the optional cloud model." : " This hard turn went to the optional cloud model.");
+            answered.routingConfidence = decision.confidence;
+            answered.reasoningMode = revia::intelligence::ToString(decision.mode);
+            return answered;
+        }
+        cloudNote = "Cloud model not used: " + answered.reason;
+    }
+
     const llmService* selected = &llm;
     // Declared here so it lives until the end of this call. A lease released at the end
     // of the switch would free the model while it is still generating.
@@ -136,11 +166,6 @@ responseOutput messageRouter::RouteMessage(const std::string& message, const std
 
     residency.BeginInference(effectiveTier, "interactive");
     DeltaHandler retryDelta = onDelta;
-    ReasoningHandler onReasoning;
-    {
-        std::lock_guard lock(reasoningMutex);
-        onReasoning = std::exchange(pendingReasoning, {});
-    }
     // IntelligenceRouter owns the reasoning mode. In particular, a completed visible
     // self-inquiry changes the final-answer decision to Fast so the model does not spend
     // the same response allowance on a second, hidden deliberation.
@@ -181,6 +206,8 @@ responseOutput messageRouter::RouteMessage(const std::string& message, const std
     routed.selectedModel = ConfiguredModelName(*selected);
     routed.routingReason = decision.reason + routingNote;
     routed.routingConfidence = decision.confidence;
+    if (!cloudNote.empty())
+        fallbackReason = fallbackReason.empty() ? cloudNote : cloudNote + " " + fallbackReason;
     routed.bRoutingFallback = !fallbackReason.empty();
     routed.routingFallbackReason = std::move(fallbackReason);
     routed.reasoningMode = revia::intelligence::ToString(decision.mode);
@@ -261,6 +288,7 @@ void messageRouter::SetPosture(std::string posture)
     {
         std::lock_guard lock(reasoningMutex);
         pendingReasoning = {};
+        pendingCloud.reset();
     }
     llm.SetPosture(posture);
     if (fastConfigured) fastLlm.SetPosture(posture);
@@ -271,6 +299,12 @@ std::string messageRouter::RelatedMemories(
     const std::string& query, const std::stop_token stopToken, const revia::memory::MemoryScope& scope) const
 {
     return llm.RelatedMemories(query, stopToken, scope);
+}
+
+void messageRouter::SetCloudTurn(revia::llm::cloud::CloudTurnRequest request)
+{
+    std::lock_guard lock(reasoningMutex);
+    pendingCloud = std::move(request);
 }
 
 void messageRouter::SetReplyNote(std::string note)
@@ -626,6 +660,9 @@ void messageRouter::ApplyLLMSettings(const llmSettings& settings, const llmSetti
     fastConfiguration = fastSettings;
     expertConfiguration = expertSettings;
     embeddingConfiguration = embeddingSettings;
+    // Main's cloud block is the only one read; the persona is what a cloud reply keeps.
+    cloud.ApplySettings(settings.cloud);
+    cloud.SetPersona(profile.systemPrompt);
     llm.ApplySettings(settings, embeddingSettings, profile);
     fastConfigured = fastEnabled;
     expertConfigured = expertEnabled;
@@ -672,6 +709,7 @@ void messageRouter::ApplyProfile(const aiProfile& profile)
 {
     // Profile changes do not reconfigure transports read by the memory worker.
     llm.ApplyProfile(mainConfiguration, profile);
+    cloud.SetPersona(profile.systemPrompt);
     if (fastConfigured) fastLlm.ApplyProfile(fastConfiguration, profile);
     if (expertConfigured) expertLlm.ApplyProfile(expertConfiguration, profile);
 }

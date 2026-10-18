@@ -22,7 +22,17 @@
                 "autoMaxTokens":  true,
                 "maxTokens":  1024,
                 "thinkingTokens":  3072,
-                "stablePromptPrefix":  true
+                "stablePromptPrefix":  true,
+                "cloud":  {
+                              "enabled":  false,
+                              "provider":  "openai-compatible",
+                              "baseUrl":  "",
+                              "model":  "",
+                              "apiKeyEnvironmentVariable":  "",
+                              "useFor":  "never",
+                              "maxTokens":  1024,
+                              "timeoutSeconds":  60
+                          }
             },
     "intelligence":  {
                          "enabled":  true,

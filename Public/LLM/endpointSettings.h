@@ -1,5 +1,7 @@
 #pragma once
 
+#include "LLM/Cloud/cloudSettings.h"
+
 #include <string>
 
 struct llmSettings
@@ -58,6 +60,8 @@ struct llmSettings
     // Places per-turn state in the newest user message to preserve the cached system prefix.
     bool bStablePromptPrefix = true;
     bool bAllowPromptCache = true;
+    // Optional cloud model, off by default. Only Main's copy is read.
+    revia::llm::cloud::CloudModelSettings cloud;
 };
 
 struct embeddingSettings

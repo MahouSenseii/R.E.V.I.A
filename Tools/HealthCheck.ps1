@@ -1,5 +1,5 @@
 param(
-    [ValidateSet('Minimal', 'Standard', 'Full')]
+    [ValidateSet('Minimal', 'Standard', 'Full', 'Standard9B', 'Full9B')]
     [string]$Profile = 'Full',
     [switch]$SkipVoice,
     [switch]$SkipHashes
@@ -46,9 +46,11 @@ try {
                 Write-ReviaCheck "Model $id" $false 'Manifest entry is missing or duplicated.'
                 continue
             }
-            $path = Join-Path $repoRoot ('Models\' + $artifact[0].file)
+            # localFile is the name in Models when two upstream files share one.
+            $file = if ($artifact[0].localFile) { [string]$artifact[0].localFile } else { [string]$artifact[0].file }
+            $path = Join-Path $repoRoot ('Models\' + $file)
             if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
-                Write-ReviaCheck "Model $id" $false "Missing $($artifact[0].file)."
+                Write-ReviaCheck "Model $id" $false "Missing $file."
                 continue
             }
             $item = Get-Item -LiteralPath $path

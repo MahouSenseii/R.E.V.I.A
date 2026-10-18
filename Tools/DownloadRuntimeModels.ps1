@@ -1,5 +1,5 @@
 param(
-    [ValidateSet('Minimal', 'Standard', 'Full')]
+    [ValidateSet('Minimal', 'Standard', 'Full', 'Standard9B', 'Full9B')]
     [string]$Profile = 'Standard',
     [switch]$IncludeBackgroundModel,
     [switch]$Force,
@@ -10,6 +10,8 @@ param(
 # Every URL is pinned to a repository commit and every completed file is checked against
 # the upstream LFS SHA-256 before it can replace a runtime artifact. Existing legacy
 # models are deliberately left alone.
+# Standard9B and Full9B are opt-in: they put Qwen3.5-9B in the Main or the Expert seat.
+# Running again with another profile switches back; downloaded files are never deleted.
 
 $ErrorActionPreference = 'Stop'
 $repoRoot = Split-Path -Parent $PSScriptRoot
@@ -31,8 +33,12 @@ if ($profileIds.Count -eq 0) {
 $artifacts = @(
     foreach ($entry in $manifest.artifacts) {
         if ($profileIds -contains $entry.id) {
+            # localFile keeps two upstream files with the same name (each Qwen3.5 repository
+            # ships its projector as mmproj-F16.gguf) from overwriting each other in Models.
+            $localName = if ($entry.localFile) { [string]$entry.localFile } else { [string]$entry.file }
             @{
                 Name = [string]$entry.file
+                LocalName = $localName
                 Repository = [string]$entry.repository
                 Commit = [string]$entry.revision
                 Sha256 = [string]$entry.sha256
@@ -82,9 +88,9 @@ function Receive-ReviaArtifact {
 
     $models = Join-Path $repoRoot 'Models'
     New-Item -ItemType Directory -Path $models -Force | Out-Null
-    $destination = Join-Path $models $Artifact.Name
+    $destination = Join-Path $models $Artifact.LocalName
     if (Test-ReviaArtifact -Path $destination -Sha256 $Artifact.Sha256) {
-        Write-Host "Verified: $($Artifact.Name)"
+        Write-Host "Verified: $($Artifact.LocalName)"
         return
     }
     if ((Test-Path -LiteralPath $destination -PathType Leaf) -and -not $Force) {
@@ -184,33 +190,52 @@ foreach ($artifact in $artifacts) {
     Receive-ReviaArtifact -Artifact $artifact
 }
 
+# Which artifact sits in each seat. A profile without a profileRoles entry uses the default
+# ids, so Minimal, Standard and Full write exactly the settings they always have.
+function Get-ReviaRoleFile {
+    param([string]$Role, [string]$DefaultId)
+    $id = $DefaultId
+    $roles = $manifest.profileRoles
+    if ($null -ne $roles -and $null -ne $roles.$Profile -and $roles.$Profile.$Role) {
+        $id = [string]$roles.$Profile.$Role
+    }
+    $entry = @($manifest.artifacts | Where-Object { $_.id -eq $id })
+    if ($entry.Count -ne 1) {
+        throw "The $Role role of the $Profile profile names a missing artifact: $id"
+    }
+    $name = if ($entry[0].localFile) { [string]$entry[0].localFile } else { [string]$entry[0].file }
+    return @{ Id = $id; File = $name; Selected = ($profileIds -contains $id) }
+}
+
 if (-not $SkipConfigUpdate) {
+    $mainModel = Get-ReviaRoleFile -Role 'main' -DefaultId 'main'
+    $mainProjector = Get-ReviaRoleFile -Role 'mainVision' -DefaultId 'main-vision'
+    $expertModel = Get-ReviaRoleFile -Role 'expert' -DefaultId 'expert'
+    $expertProjector = Get-ReviaRoleFile -Role 'expertVision' -DefaultId 'expert-vision'
+    $visionSelected = [bool]$mainProjector.Selected
     $settingsPath = Join-Path $repoRoot 'Config\settings.json'
     $settings = Get-Content -LiteralPath $settingsPath -Raw | ConvertFrom-Json
-    $settings.llm.modelName = 'Qwen3.5-4B-Q4_K_M.gguf'
-    $settings.llm.modelPath = 'Models/Qwen3.5-4B-Q4_K_M.gguf'
-    $settings.llm.multimodalProjectorPath = 'Models/mmproj-F16.gguf'
-    $settings.llm.visionEnabled = $Profile -ne 'Minimal'
+    $settings.llm.modelName = $mainModel.File
+    $settings.llm.modelPath = 'Models/' + $mainModel.File
+    $settings.llm.multimodalProjectorPath = 'Models/' + $mainProjector.File
+    $settings.llm.visionEnabled = $visionSelected
     if ($null -ne $settings.vision) {
-        $settings.vision.enabled = $Profile -ne 'Minimal'
-        $settings.vision.continuousAwareness = $Profile -ne 'Minimal'
+        $settings.vision.enabled = $visionSelected
+        $settings.vision.continuousAwareness = $visionSelected
     }
     if ($null -ne $settings.intelligence) {
         $settings.intelligence.fast.modelName = 'Qwen3.5-0.8B-Q4_K_M.gguf'
         $settings.intelligence.fast.modelPath = 'Models/Qwen3.5-0.8B-Q4_K_M.gguf'
-        $settings.intelligence.expert.modelName =
-            'Qwen3-VL-8B-Instruct-Unredacted-MAX.Q4_K_M.gguf'
-        $settings.intelligence.expert.modelPath =
-            'Models/Qwen3-VL-8B-Instruct-Unredacted-MAX.Q4_K_M.gguf'
-        $settings.intelligence.expert.multimodalProjectorPath =
-            'Models/Qwen3-VL-8B-Instruct-Unredacted-MAX.mmproj-q8_0.gguf'
-        $settings.intelligence.fast.enabled = $Profile -in @('Minimal', 'Standard', 'Full')
-        $settings.intelligence.expert.enabled = $Profile -eq 'Full'
+        $settings.intelligence.expert.modelName = $expertModel.File
+        $settings.intelligence.expert.modelPath = 'Models/' + $expertModel.File
+        $settings.intelligence.expert.multimodalProjectorPath = 'Models/' + $expertProjector.File
+        $settings.intelligence.fast.enabled = $true
+        $settings.intelligence.expert.enabled = [bool]$expertModel.Selected
     }
     $settings.embedding.modelPath = 'Models/nomic-embed-text-v1.5.Q4_K_M.gguf'
     $settings.speechRecognition.modelPath = 'Models/ggml-distil-small.en.bin'
     Save-ReviaJsonFile -Path $settingsPath -Value $settings
-    Write-Host 'Updated Config/settings.json to the verified runtime stack.'
+    Write-Host "Updated Config/settings.json: Main $($mainModel.File), Expert $($expertModel.File) (enabled: $($expertModel.Selected))."
 }
 
 Write-Host 'Legacy model files were preserved.'
