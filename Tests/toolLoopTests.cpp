@@ -6,6 +6,7 @@
 #include "Memory/conversationRecall.h"
 #include "Planning/reminders.h"
 #include "Identity/promptMarkers.h"
+#include "Runtime/conversationRuntime.h"
 #include "testSupport.h"
 
 #include <httplib.h>
@@ -668,6 +669,155 @@ void TestServerWithoutToolsFallsBack()
     Check(second.bSuccess && fallbacks == 2 && requests.size() == 3 && !requests[2].contains("tools"),
         "A server that refused tools was sent them again on the next turn.");
 }
+
+// The runtime around the loop: a private turn lets the model search instead of the
+// phrase router, shows the search in the activity view, and keeps public turns tool-free.
+// When the backend cannot take tools, the phrase router runs exactly as before.
+struct RuntimeToolFixture
+{
+    explicit RuntimeToolFixture(const int contextSize)
+    {
+        std::filesystem::current_path(directory.root);
+        profile.systemPrompt = "You are Revia. Answer the actual question.";
+        profile.id = "tool-runtime-fixture";
+        profile.bMemoryEnabled = false;
+        llmSettings settings;
+        settings.host = "127.0.0.1";
+        settings.port = backend.port;
+        settings.modelName = "tool-loop-fixture";
+        settings.contextSize = contextSize;
+        settings.bAutoStartServer = settings.bAutoMaxTokens = settings.bVisionEnabled = false;
+        settings.maxTokens = 256;
+        embeddingSettings embeddings;
+        embeddings.bEnabled = embeddings.bAutoStartServer = false;
+        router.ApplyLLMSettings(settings, embeddings, profile);
+        subscription = events.Subscribe(
+            [this](const revia::runtime::RuntimeEvent& event)
+            {
+                if (event.kind != revia::runtime::RuntimeEventKind::ComponentStatus)
+                    return;
+                std::lock_guard lock(mutex);
+                components.push_back(event.component + "|" + event.phase + "|" + event.message);
+            });
+    }
+    ~RuntimeToolFixture()
+    {
+        events.Unsubscribe(subscription);
+        std::filesystem::current_path(previous);
+    }
+    std::vector<std::string> Components()
+    {
+        std::lock_guard lock(mutex);
+        return components;
+    }
+
+    revia::tests::ScopedTestDirectory directory;
+    std::filesystem::path previous = std::filesystem::current_path();
+    ScriptedBackend backend;
+    messageRouter router{(directory.root / "router.db").string()};
+    conversationContext context;
+    TurnCoordinator coordinator{(directory.root / "agent.db").string()};
+    revia::speech::SpeechService speech;
+    revia::runtime::AffectController affect;
+    revia::emotion::EmotionRuntime emotions;
+    revia::runtime::RuntimeEventBus events;
+    logger log{directory.root / "Logs"};
+    std::vector<std::string> lookups;
+    revia::runtime::ConversationRuntime runtime{router, context, coordinator, speech, affect, emotions, events, log,
+        [](auto, const auto&) {}, [](const auto&) {},
+        []
+        {
+            revia::actions::CapabilitySettings::InternetAccess access;
+            access.enabled = true;
+            access.automaticLookup = true;
+            return access;
+        },
+        {},
+        [this](const std::string& query, const std::string& requestedBy)
+        {
+            lookups.push_back(query);
+            revia::actions::ActionOutcome outcome;
+            outcome.result.attempted = outcome.result.succeeded = true;
+            outcome.result.content = "Source: https://example.org/release\nThe newest release is b10453.";
+            outcome.result.entries = {"https://example.org/release"};
+            outcome.result.message = "One bounded lookup for " + requestedBy + ".";
+            return outcome;
+        },
+        []
+        {
+            responseFilterSettings filters;
+            filters.bAiReviewEnabled = false;
+            return filters;
+        },
+        {}, {}, {}, {}, {}, {},
+        []
+        {
+            revia::agents::SelfInquiryLimits limits;
+            limits.enabled = false;
+            return limits;
+        }};
+    aiProfile profile;
+    std::mutex mutex;
+    std::vector<std::string> components;
+    revia::runtime::RuntimeEventBus::SubscriptionId subscription = 0;
+};
+
+void TestRuntimeLetsTheModelSearchInPrivateChat()
+{
+    RuntimeToolFixture fixture(32768);
+    fixture.backend.Then({ScriptedBackend::Call(0, "w", "web_search", R"({"query":"llama.cpp newest release"})", "tool_calls")});
+    fixture.backend.Then({ScriptedBackend::Text("The newest llama.cpp release is b10453.", "stop")});
+    const auto reply = fixture.runtime.Reply("Search the web for the newest llama.cpp release.", fixture.profile, true, false);
+    const auto requests = fixture.backend.Requests();
+    Check(reply.succeeded && reply.text == "The newest llama.cpp release is b10453.", "The private tool turn failed: " + reply.reason);
+    Check(fixture.lookups == std::vector<std::string>{"llama.cpp newest release"},
+        "The phrase router searched before generation, or the model's own search did not run through the lookup owner: " +
+            Json(fixture.lookups).dump());
+    std::vector<std::string> offered;
+    for (const auto& tool : requests.front().at("tools"))
+        offered.push_back(tool.at("function").at("name"));
+    Check(requests.size() == 2 && offered == std::vector<std::string>{"web_search", "calculator"},
+        "The private turn did not offer exactly the permitted tools: " + Json(offered).dump());
+    Check(requests.front().dump().find("Tools are offered with this request") != std::string::npos,
+        "The prompt did not tell the model that tools are available.");
+    const auto components = fixture.Components();
+    Check(std::find(components.begin(), components.end(), "Tools|Running|Searching the web for \"llama.cpp newest release\"") !=
+              components.end(),
+        "The chat activity did not show the model's search: " + Json(components).dump());
+
+    revia::identity::RelationshipState viewer;
+    viewer.entityId = "adapter:fixture:viewer";
+    const auto before = fixture.backend.Requests().size();
+    fixture.backend.Then({ScriptedBackend::Text("Public answer.", "stop")});
+    const auto publicReply = fixture.runtime.ReplyPublic("Search the web for the newest llama.cpp release.", {},
+        "This is a public fixture conversation.", viewer, fixture.profile, true, false);
+    const auto after = fixture.backend.Requests();
+    Check(publicReply.succeeded && after.size() == before + 1 && !after.back().contains("tools") && fixture.lookups.size() == 1,
+        "A public turn was offered tools or searched.");
+}
+
+void TestRuntimeFallsBackToThePhraseRouterWithoutTools()
+{
+    // An 8K tier cannot carry the definitions: the turn runs as it did before tools.
+    RuntimeToolFixture fixture(8192);
+    fixture.backend.Then({ScriptedBackend::Text("The newest release is b10453.", "stop")});
+    const auto reply = fixture.runtime.Reply("Search the web for the newest llama.cpp release.", fixture.profile, true, false);
+    auto requests = fixture.backend.Requests();
+    Check(reply.succeeded && fixture.lookups.size() == 1 && requests.size() == 1 && !requests.front().contains("tools") &&
+              requests.front().dump().find("b10453") != std::string::npos,
+        "Without tools the phrase-routed lookup did not ground the answer: " + Json(fixture.lookups).dump());
+
+    // A server that refuses tools: the lookup the turn skipped runs, then a plain request.
+    RuntimeToolFixture refused(32768);
+    refused.backend.ThenError(400, R"({"error":{"code":400,"message":"tools param requires --jinja flag"}})");
+    refused.backend.Then({ScriptedBackend::Text("The newest release is b10453.", "stop")});
+    const auto fallback = refused.runtime.Reply("Search the web for the newest llama.cpp release.", refused.profile, true, false);
+    requests = refused.backend.Requests();
+    Check(fallback.succeeded && refused.lookups.size() == 1 && requests.size() == 2 && requests[0].contains("tools") &&
+              !requests[1].contains("tools") && requests[1].dump().find("b10453") != std::string::npos &&
+              requests[1].dump().find("Tools are offered") == std::string::npos,
+        "A server without tool support did not get the phrase-routed answer: " + fallback.reason);
+}
 }
 
 void RunToolLoopTests()
@@ -683,4 +833,6 @@ void RunToolLoopTests()
     TestConfirmationRequiredActionWithoutHandlerIsNotExecuted();
     TestFinalAnswerIsStillGated();
     TestServerWithoutToolsFallsBack();
+    TestRuntimeLetsTheModelSearchInPrivateChat();
+    TestRuntimeFallsBackToThePhraseRouterWithoutTools();
 }
