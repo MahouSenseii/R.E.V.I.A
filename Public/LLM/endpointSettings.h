@@ -9,6 +9,11 @@ struct llmSettings
     int port = 8080;
     std::string modelName = "local-model";
     std::string apiKey;
+    // Set for a server Revia starts itself. Its health check then requires the server
+    // to refuse a wrong key and accept apiKey, so a process already listening on the port
+    // that does not hold this session's key is never sent a conversation. Off for a
+    // server the user runs (autoStartServer false) and for test fixtures.
+    bool bVerifyServerKey = false;
 
     bool bAutoStartServer = false;
     std::string serverExecutable;
@@ -58,6 +63,8 @@ struct embeddingSettings
     int port = 8081;
     std::string modelName = "nomic-embed-text-v1.5.Q4_K_M.gguf";
     std::string apiKey;
+    // As llmSettings::bVerifyServerKey, for the embedding server.
+    bool bVerifyServerKey = false;
 
     bool bAutoStartServer = true;
     std::string serverExecutable;

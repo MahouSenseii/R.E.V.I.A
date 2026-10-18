@@ -663,6 +663,109 @@ void TestBackgroundCallsStreamWithUnchangedContracts()
         "Vision did not stream, or its streamed description was lost: " + vision.reason);
 }
 
+// A local server that either enforces one API key, the way llama-server started with
+// --api-key does, or accepts every key, the way one started without it does.
+class KeyedBackend
+{
+  public:
+    explicit KeyedBackend(std::string enforcedKey) : key(std::move(enforcedKey))
+    {
+        const auto authorized = [this](const httplib::Request& request, httplib::Response& response)
+        {
+            if (key.empty() || request.get_header_value("Authorization") == "Bearer " + key)
+                return true;
+            response.status = 401;
+            response.set_content(R"({"error":{"code":401,"message":"Invalid API Key"}})", "application/json");
+            return false;
+        };
+        server.Get("/health", [](const auto&, auto& response) { response.set_content(R"({"status":"ok"})", "application/json"); });
+        server.Get("/v1/models", [](const auto&, auto& response)
+            { response.set_content(R"({"data":[{"id":"structured-reply-fixture"},{"id":"keyed-embedding"}]})", "application/json"); });
+        for (const char* path : {"/v1/chat/completions", "/v1/embeddings"})
+            server.Post(path, [authorized](const auto& request, auto& response)
+                {
+                    if (!authorized(request, response))
+                        return;
+                    response.status = 400;
+                    response.set_content(R"({"error":{"code":400,"message":"missing input"}})", "application/json");
+                });
+        server.new_task_queue = [] { return new httplib::ThreadPool(1); };
+        port = server.bind_to_any_port("127.0.0.1");
+        Check(port > 0, "Keyed backend could not bind loopback.");
+        worker = std::jthread([this] { server.listen_after_bind(); });
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+        while (!server.is_running() && std::chrono::steady_clock::now() < deadline)
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        Check(server.is_running(), "Keyed backend did not start.");
+    }
+    ~KeyedBackend()
+    {
+        server.stop();
+        worker.join();
+    }
+    int port = 0;
+
+  private:
+    std::string key;
+    httplib::Server server;
+    std::jthread worker;
+};
+
+// NET-6: a healthy answer on 127.0.0.1:8080 was trusted, so any local process that took
+// the port first was sent every private prompt. A server Revia starts holds this
+// session's key, and the health check now proves it.
+void TestOnlyTheKeyedServerReviaStartedIsTrusted()
+{
+    revia::tests::ScopedTestDirectory directory;
+    const std::string sessionKey = "revia-session-key";
+    const auto health = [&](const int port, const bool verify)
+    {
+        llamaCppService service((directory.root / "keyed.db").string());
+        llmSettings settings;
+        settings.host = "127.0.0.1";
+        settings.port = port;
+        settings.modelName = "structured-reply-fixture";
+        settings.apiKey = sessionKey;
+        settings.bVerifyServerKey = verify;
+        settings.bAutoMaxTokens = settings.bAutoStartServer = settings.bVisionEnabled = false;
+        embeddingSettings embeddings;
+        embeddings.bEnabled = embeddings.bAutoStartServer = false;
+        service.ApplySettings(settings, embeddings, aiProfile{});
+        return service.CheckHealth();
+    };
+    KeyedBackend ours(sessionKey);
+    KeyedBackend squatter("");
+    KeyedBackend stranger("someone-else's-key");
+    const auto trusted = health(ours.port, true);
+    Check(trusted.bIsAvailable && trusted.status == systemStatus::Green,
+        "The server holding this session's key was refused: " + trusted.reason);
+    const auto open = health(squatter.port, true);
+    Check(!open.bIsAvailable && open.status == systemStatus::Yellow && open.reason.find("accepts a wrong key") != std::string::npos,
+        "A server that accepts any key was trusted with the conversation.");
+    const auto foreign = health(stranger.port, true);
+    Check(!foreign.bIsAvailable && foreign.reason.find("refused this session's key") != std::string::npos,
+        "A server holding a different key was trusted with the conversation.");
+    // A server the user runs (and every test fixture) is not launched with Revia's key.
+    Check(health(squatter.port, false).bIsAvailable, "Key proof was enforced for a server Revia did not start.");
+
+    const auto embeddingHealth = [&](const int port)
+    {
+        llamaCppEmbeddingService embeddings;
+        embeddingSettings settings;
+        settings.host = "127.0.0.1";
+        settings.port = port;
+        settings.modelName = "keyed-embedding";
+        settings.apiKey = sessionKey;
+        settings.bVerifyServerKey = true;
+        embeddings.ApplySettings(settings);
+        return embeddings.CheckHealth();
+    };
+    Check(embeddingHealth(ours.port).bIsAvailable, "The keyed embedding server Revia started was refused.");
+    const auto openEmbedding = embeddingHealth(squatter.port);
+    Check(!openEmbedding.bIsAvailable && openEmbedding.status == systemStatus::Yellow,
+        "An embedding server that accepts any key was trusted with memory queries.");
+}
+
 void RunStructuredReplyTests()
 {
     TestProviderContractAndDataPreservation();
@@ -674,4 +777,5 @@ void RunStructuredReplyTests()
     TestConversationRepliesStreamBySentence();
     TestBackendCacheTimingsReachTheTurnTimings();
     TestBackgroundCallsStreamWithUnchangedContracts();
+    TestOnlyTheKeyedServerReviaStartedIsTrusted();
 }

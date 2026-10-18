@@ -102,6 +102,7 @@ private:
     int port = 8080;
     std::string modelName = "local-model";
     std::string apiKey;
+    bool bVerifyServerKey = false;
     float temperature = 0.7f;
     bool bAutoMaxTokens = true;
     bool bStablePromptPrefix = true;

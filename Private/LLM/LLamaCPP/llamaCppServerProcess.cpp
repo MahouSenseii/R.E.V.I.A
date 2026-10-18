@@ -236,6 +236,9 @@ std::vector<std::string> BuildLlamaServerArguments(
         add({"--load-mode", settings.modelLoadMode});
     if (!settings.apiKey.empty())
         add({"--api-key", settings.apiKey});
+    // /slots shows every slot's prompt text to any caller that holds the key. Revia
+    // never reads it.
+    add({"--no-slots"});
     if (embeddingMode)
     {
         add({"--embedding", "--pooling", pooling, "--device", device});
@@ -438,15 +441,9 @@ bool llamaCppServerProcess::StartInternal(const llmSettings& settings,
             outError = "The configured multimodal projector was not found: " + settings.multimodalProjectorPath;
             return false;
         }
-        const std::filesystem::path media = ResolveRuntimePath(settings.mediaPath);
-        pathError.clear();
-        std::filesystem::create_directories(media, pathError);
-        if (pathError)
-        {
-            outError = "The configured vision media directory could not be created: " + pathError.message();
-            return false;
-        }
-        commandLine += L" --mmproj " + QuoteWindowsArgument(projector.wstring()) + L" --media-path " + QuoteWindowsArgument(media.wstring());
+        // No --media-path: Revia sends every image inline as a base64 data URL, and the
+        // flag would let any request read local files from that directory by name.
+        commandLine += L" --mmproj " + QuoteWindowsArgument(projector.wstring());
     }
     std::vector<wchar_t> mutableCommandLine(commandLine.begin(), commandLine.end());
     mutableCommandLine.push_back(L'\0');

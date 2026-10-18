@@ -39,6 +39,7 @@ private:
     int port = 8081;
     std::string modelName;
     std::string apiKey;
+    bool bVerifyServerKey = false;
     std::string queryPrefix = "search_query: ";
     std::string documentPrefix = "search_document: ";
 };

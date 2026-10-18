@@ -3,6 +3,7 @@
 #include "LLM/endpointSettings.h"
 #include "LLM/LLamaCPP/llamaCppEmbeddingService.h"
 #include "cancellableHttpClient.h"
+#include "serverKeyProof.h"
 
 #include <algorithm>
 #include <chrono>
@@ -42,6 +43,7 @@ void llamaCppEmbeddingService::ApplySettings(const embeddingSettings& settings)
     port = settings.port;
     modelName = settings.modelName;
     apiKey = settings.apiKey;
+    bVerifyServerKey = settings.bVerifyServerKey;
     queryPrefix = settings.queryPrefix;
     documentPrefix = settings.documentPrefix;
     std::lock_guard lock(cacheMutex);
@@ -94,6 +96,15 @@ healthOutput llamaCppEmbeddingService::CheckHealth(std::stop_token stopToken) co
     if (stopToken.stop_requested())
     {
         output.reason = "Embedding health check was cancelled.";
+        return output;
+    }
+    // As for the language model: only the server Revia started with this key is used.
+    std::string keyProblem;
+    if (bVerifyServerKey && !revia::llm::ProvesServerKey(host, port, apiKey, "/v1/embeddings", stopToken, keyProblem))
+    {
+        output.status = systemStatus::Yellow;
+        output.message = "Another process is answering on Revia's embedding port.";
+        output.reason = keyProblem + " Revia will not send it memory queries.";
         return output;
     }
     const auto models = client.Get("/v1/models");

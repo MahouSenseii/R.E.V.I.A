@@ -7,6 +7,7 @@
 #include "Memory/memoryTypes.h"
 #include "LLM/LLamaCPP/llamaCppService.h"
 #include "cancellableHttpClient.h"
+#include "serverKeyProof.h"
 #include "Core/utf8.h"
 #include "Identity/promptMarkers.h"
 
@@ -1154,6 +1155,7 @@ void llamaCppService::ApplySettings(const llmSettings& settings, const embedding
     port = settings.port;
     modelName = settings.modelName;
     apiKey = settings.apiKey;
+    bVerifyServerKey = settings.bVerifyServerKey;
     bVisionExpected = settings.bVisionEnabled;
     bStablePromptPrefix = settings.bStablePromptPrefix;
     bAllowPromptCache = settings.bAllowPromptCache;
@@ -2592,6 +2594,19 @@ healthOutput llamaCppService::CheckHealth(const std::stop_token stopToken) const
         output.status = systemStatus::Red;
         output.message = "llama.cpp server responded with an error.";
         output.reason = "HTTP status: " + std::to_string(result->status);
+        return output;
+    }
+
+    // Revia started this server with this session's key; anything else on the port is
+    // refused rather than trusted with the conversation.
+    std::string keyProblem;
+    if (bVerifyServerKey &&
+        !revia::llm::ProvesServerKey(host, port, apiKey, "/v1/chat/completions", stopToken, keyProblem))
+    {
+        output.bIsAvailable = false;
+        output.status = systemStatus::Yellow;
+        output.message = "Another process is answering on Revia's language-model port.";
+        output.reason = keyProblem + " Revia will not send it the conversation. Close that process, then restart Revia.";
         return output;
     }
 

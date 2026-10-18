@@ -206,6 +206,7 @@ llmSettings BuildTierSettings(const llmSettings& base, const modelTierSettings& 
     output.ramCacheMiB = 0;
     output.bAutoTune = true;
     output.bAutoStartServer = true;
+    output.bVerifyServerKey = true;
     return output;
 }
 
@@ -667,6 +668,10 @@ bool ReviaSession::Start()
     {
         settings.embedding.apiKey = core::GenerateLocalApiKey();
     }
+    // A server Revia starts is launched with this key, so a responder on its port that
+    // does not hold it is refused. A server the user runs themselves stays trusted.
+    settings.llm.bVerifyServerKey = settings.llm.bAutoStartServer;
+    settings.embedding.bVerifyServerKey = settings.embedding.bAutoStartServer;
 
     stageStarted = std::chrono::steady_clock::now();
     aiProfile startupProfile;

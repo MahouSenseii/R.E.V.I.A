@@ -515,6 +515,7 @@ The capability `mode` can be `supervised` (default) or `owner_full_access`. The 
 ## Privacy and safety
 
 - Everything runs locally. Only web lookups send data out (the query), and they can be turned off with `/internet off`.
+- The language-model and embedding servers Revia starts get a fresh random API key each launch, run without `/slots` or a media directory, and must prove they hold that key before she sends them anything. If another program is already answering on one of their ports, she refuses it and says so (`Another process is answering on Revia's language-model port`) instead of using it. A server you run yourself (`autoStartServer: false`) is still trusted as before, with `apiKey` sent if you set one. Tested against fake servers; not yet run against a real squatter on Windows.
 - Screenshots are deleted immediately; only short summaries are kept in memory. Excluding an app (password managers are excluded by default) hides it from **activity records**, not from screenshots sent to local vision.
 - Files are limited to `Documents\ReviaSandbox` unless you approve more. Writes need confirmation.
 - Approving an app allows inspecting it. Pressing a control also needs that exact control approved.

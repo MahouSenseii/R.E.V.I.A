@@ -8175,6 +8175,17 @@ void TestServerArgumentsQuantizeTheKvCacheWithFlashAttention()
     };
     Check(batchValue("--batch-size") == "2048" && batchValue("--ubatch-size") == "2048",
         "The embedding server kept the 512-token physical batch, which refuses long recall queries.");
+    settings.apiKey = embeddingLaunch.apiKey = "revia-launch-key";
+    for (const auto& launched :
+        {BuildLlamaServerArguments(settings, false, "", ""), BuildLlamaServerArguments(embeddingLaunch, true, "mean", "none")})
+    {
+        const auto key = std::find(launched.begin(), launched.end(), "--api-key");
+        Check(key != launched.end() && key + 1 != launched.end() && *(key + 1) == "revia-launch-key",
+            "A server Revia starts was launched without this session's key.");
+        Check(std::find(launched.begin(), launched.end(), "--no-slots") != launched.end() &&
+                  std::find(launched.begin(), launched.end(), "--media-path") == launched.end(),
+            "A server Revia starts exposes /slots or a local media directory.");
+    }
     Check(IsQuantizedKvCacheType("q8_0") && IsQuantizedKvCacheType("iq4_nl") && !IsQuantizedKvCacheType("f16") &&
               !IsQuantizedKvCacheType(""),
         "Quantized KV cache types were not recognized.");
