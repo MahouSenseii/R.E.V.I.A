@@ -606,16 +606,16 @@ QLabel#chatSessionsHeading { color: #91a7c4; font-size: 11px; font-weight: 600; 
 QLabel#chatSessionsStatus, QLabel#archivedChatLabel { color: #b5c6de; font-size: 11px; }
 QListWidget#chatSessionList { font-size: 12px; }
 QListWidget#chatSessionList::item { padding: 6px 4px; }
-QPushButton#renameChatButton, QPushButton#deleteChatButton, QPushButton#exportChatMarkdownButton,
-QPushButton#exportChatJsonButton, QPushButton#chatSidebarToggle, QPushButton#backToChatButton {
+QPushButton#renameChatButton, QPushButton#deleteChatButton, QPushButton#exportChatButton,
+QPushButton#chatSidebarToggle, QPushButton#backToChatButton {
     background: rgba(41, 59, 85, 140);
     border: 1px solid #2E4062;
     color: #A9BAD2;
     padding: 5px 8px;
     font-size: 12px;
 }
-QPushButton#renameChatButton:hover, QPushButton#deleteChatButton:hover, QPushButton#exportChatMarkdownButton:hover,
-QPushButton#exportChatJsonButton:hover, QPushButton#chatSidebarToggle:hover, QPushButton#backToChatButton:hover {
+QPushButton#renameChatButton:hover, QPushButton#deleteChatButton:hover, QPushButton#exportChatButton:hover,
+QPushButton#chatSidebarToggle:hover, QPushButton#backToChatButton:hover {
     background: rgba(56, 78, 110, 170);
     border: 1px solid #3C547D;
     color: #DCE9F7;

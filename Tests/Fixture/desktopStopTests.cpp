@@ -1322,6 +1322,15 @@ struct ReviaWindowStopTests
             return;
         panel->Refresh();
         expect(list->count() == 0 && status->text().contains("once Revia has started"), "the chat list did not explain why it is empty");
+        // Beside the transcript, the list must not make the chat page taller than the
+        // window: that scrolled the message box out of view.
+        revia::desktop::SelectNavigationPage(window.findChild<QWidget*>("chatPage"));
+        window.resize(1040, 720);
+        window.show();
+        SettleLayouts();
+        auto* chatScroll = window.findChild<QScrollArea*>("conversationPageScroll");
+        expect(panel->isVisible() && chatScroll && chatScroll->verticalScrollBar()->maximum() == 0,
+            "the chat list pushed the message box below the window");
 
         // With a started session and an archive holding one earlier chat.
         QTemporaryDir archiveDirectory;

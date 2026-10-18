@@ -1,14 +1,16 @@
 #include "chatSessionsPanel.h"
 
+#include <QAction>
 #include <QDateTime>
 #include <QDir>
 #include <QFile>
 #include <QFileDialog>
-#include <QGridLayout>
+#include <QHBoxLayout>
 #include <QInputDialog>
 #include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
+#include <QMenu>
 #include <QMessageBox>
 #include <QPushButton>
 #include <QTimer>
@@ -60,23 +62,29 @@ ChatSessionsPanel::ChatSessionsPanel(ChatSessionControls inputControls, QWidget*
     list->setWordWrap(true);
     list->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     list->setToolTip(QStringLiteral("Open a chat to read it. Past chats are read-only unless you continue one."));
+    // The list gives up height first, so the panel never makes the chat page taller
+    // than the window and pushes the message box out of view.
+    list->setMinimumHeight(36);
+    setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Ignored);
     layout->addWidget(list, 1);
 
-    auto* actions = new QGridLayout();
+    auto* actions = new QHBoxLayout();
     actions->setSpacing(6);
     rename = new QPushButton(QStringLiteral("Rename"), this);
     rename->setObjectName("renameChatButton");
     remove = new QPushButton(QStringLiteral("Delete"), this);
     remove->setObjectName("deleteChatButton");
     remove->setToolTip(QStringLiteral("Delete this chat from the archive. Long-term memory is not touched."));
-    exportMarkdown = new QPushButton(QStringLiteral("Export .md"), this);
-    exportMarkdown->setObjectName("exportChatMarkdownButton");
-    exportJson = new QPushButton(QStringLiteral("Export .json"), this);
-    exportJson->setObjectName("exportChatJsonButton");
-    actions->addWidget(rename, 0, 0);
-    actions->addWidget(remove, 0, 1);
-    actions->addWidget(exportMarkdown, 1, 0);
-    actions->addWidget(exportJson, 1, 1);
+    exportChat = new QPushButton(QStringLiteral("Export"), this);
+    exportChat->setObjectName("exportChatButton");
+    exportChat->setToolTip(QStringLiteral("Save this chat to a file you choose"));
+    auto* exportMenu = new QMenu(exportChat);
+    connect(exportMenu->addAction(QStringLiteral("Markdown (.md)")), &QAction::triggered, this, [this]() { ChooseExport(false); });
+    connect(exportMenu->addAction(QStringLiteral("JSON (.json)")), &QAction::triggered, this, [this]() { ChooseExport(true); });
+    exportChat->setMenu(exportMenu);
+    actions->addWidget(rename);
+    actions->addWidget(remove);
+    actions->addWidget(exportChat);
     layout->addLayout(actions);
 
     status = new QLabel(this);
@@ -119,8 +127,6 @@ ChatSessionsPanel::ChatSessionsPanel(ChatSessionControls inputControls, QWidget*
         });
     connect(rename, &QPushButton::clicked, this, [this]() { RenameSelected(); });
     connect(remove, &QPushButton::clicked, this, [this]() { DeleteSelected(); });
-    connect(exportMarkdown, &QPushButton::clicked, this, [this]() { ChooseExport(false); });
-    connect(exportJson, &QPushButton::clicked, this, [this]() { ChooseExport(true); });
     UpdateButtons();
 }
 
@@ -165,7 +171,7 @@ void ChatSessionsPanel::SetStatus(const QString& text)
 void ChatSessionsPanel::UpdateButtons()
 {
     const bool chosen = !SelectedId().empty();
-    for (QPushButton* button : {rename, remove, exportMarkdown, exportJson})
+    for (QPushButton* button : {rename, remove, exportChat})
         button->setEnabled(chosen);
 }
 

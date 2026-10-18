@@ -38,6 +38,13 @@ class ChatSessionsPanel final : public QWidget
     bool ExportSelected(const QString& path, bool json, QString& error);
     [[nodiscard]] std::string SelectedId() const;
     void SetStatus(const QString& text);
+    // The panel takes whatever height the transcript beside it gets. Its wrapped status
+    // line would otherwise report a height for its width, and the scrolled chat page
+    // would grow past the window and push the message box out of view.
+    [[nodiscard]] bool hasHeightForWidth() const override
+    {
+        return false;
+    }
 
   private:
     void UpdateButtons();
@@ -51,8 +58,7 @@ class ChatSessionsPanel final : public QWidget
     QPushButton* newChat = nullptr;
     QPushButton* rename = nullptr;
     QPushButton* remove = nullptr;
-    QPushButton* exportMarkdown = nullptr;
-    QPushButton* exportJson = nullptr;
+    QPushButton* exportChat = nullptr;
     QLabel* status = nullptr;
     QTimer* searchDelay = nullptr;
 };
