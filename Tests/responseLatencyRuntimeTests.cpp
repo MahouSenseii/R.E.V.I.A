@@ -1,6 +1,7 @@
 #include "Runtime/conversationRuntime.h"
 #include "testSupport.h"
 #include "reviaSessionTestAccess.h"
+#include "speechServiceTestAccess.h"
 #include "Identity/promptMarkers.h"
 
 #include <algorithm>
@@ -214,12 +215,13 @@ class Fixture
         events.Unsubscribe(subscription);
     }
 
-    SessionResult Reply(const std::stop_token stopToken, const std::chrono::steady_clock::time_point acceptedAt)
+    SessionResult Reply(
+        const std::stop_token stopToken, const std::chrono::steady_clock::time_point acceptedAt, const bool shouldSpeak = false)
     {
         identity::AudienceContext audience;
         audience.kind = identity::AudienceKind::Private;
         return runtime.ReplyForAudience(
-            "Explain what an object file contains and how the linker uses it.", {}, audience, {}, profile, true, false, stopToken,
+            "Explain what an object file contains and how the linker uses it.", {}, audience, {}, profile, true, shouldSpeak, stopToken,
             [] { return true; }, {}, acceptedAt);
     }
 
@@ -403,7 +405,7 @@ struct PublishedReply
     std::vector<std::string> replacements;
 };
 
-PublishedReply ObserveReply(Fixture& fixture, SessionResult& reply)
+PublishedReply ObserveReply(Fixture& fixture, SessionResult& reply, const bool shouldSpeak = false)
 {
     PublishedReply published;
     std::mutex mutex;
@@ -415,7 +417,7 @@ PublishedReply ObserveReply(Fixture& fixture, SessionResult& reply)
             std::lock_guard lock(mutex);
             (event.phase == "Replace" ? published.replacements : published.fragments).push_back(event.message);
         });
-    reply = fixture.Reply({}, std::chrono::steady_clock::now());
+    reply = fixture.Reply({}, std::chrono::steady_clock::now(), shouldSpeak);
     fixture.events.Unsubscribe(subscription);
     return published;
 }
@@ -436,6 +438,28 @@ void TestATextOnlyReplyIsShownAsItIsGenerated()
     Check(reply.succeeded && reply.spokenAsFragments && published.fragments.size() >= 2 && joined == reply.text &&
             published.replacements.empty(),
         "A text-only reply was not shown as it was generated. Fragments: " + json(published.fragments).dump() + " Final: " + reply.text);
+}
+
+// With the voice on, the end of an approved reply is spoken even when it has no closing
+// punctuation. It used to reach the chat only, so the last items of a list went unsaid.
+void TestASpokenReplySaysItsUnpunctuatedTail()
+{
+    Fixture fixture;
+    speech::SpeechServiceTestAccess::ConfigureWithoutWorkers(fixture.speech, fixture.directory.root / "Voice");
+    fixture.backend.Answer("An object file holds compiled code and a symbol table. The linker reads three parts of it:\n"
+                           "1. The code\n2. The symbols\n3. The relocations",
+        7);
+    SessionResult reply;
+    const PublishedReply published = ObserveReply(fixture, reply, true);
+    const std::vector<std::string> spoken = speech::SpeechServiceTestAccess::QueuedTexts(fixture.speech);
+    std::string said;
+    for (const auto& phrase : spoken)
+        said += phrase + ' ';
+    Check(reply.succeeded && reply.spokenAsFragments && !published.fragments.empty() &&
+              published.fragments.back().find("The relocations") != std::string::npos,
+        "The reply's tail did not reach the chat. Fragments: " + json(published.fragments).dump() + " Final: " + reply.text);
+    Check(said.find("The relocations") != std::string::npos,
+        "The unpunctuated end of a spoken reply was shown but not said. Spoken: " + json(spoken).dump());
 }
 
 // A reply refused part way through: what was already shown gives way to the reply that
@@ -468,6 +492,7 @@ void RunResponseLatencyRuntimeTests()
     TestAStoppedReplyReturnsToIdle();
     TestProactiveRepliesRetainProducerAdmission();
     TestATextOnlyReplyIsShownAsItIsGenerated();
+    TestASpokenReplySaysItsUnpunctuatedTail();
     TestARefusedStreamIsReplacedInTheChat();
     std::cout << "Actual response latency offset, cancellation, and late audio checks passed.\n";
 }

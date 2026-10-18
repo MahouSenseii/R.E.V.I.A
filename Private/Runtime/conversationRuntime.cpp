@@ -1566,10 +1566,14 @@ SessionResult ConversationRuntime::Generate(const std::string& policyInput, cons
     if (streamReply && turnResult.response.bSuccess)
     {
         const std::string& complete = turnResult.response.response;
-        // A tail Flush judges not worth speaking -- a list item, a smile, a link -- is still
-        // part of the answer, so the chat shows it even when the voice leaves it out.
-        // Flush also punctuates a short unfinished answer for the voice; the chat alone
-        // shows it as written.
+        // Flush drops a tail without closing punctuation -- a list item, a smile, a link --
+        // because on a raw stream that is usually a thought cut off mid-way. This tail is
+        // part of the approved final reply, and the model layer has already removed one
+        // cut off by the token limit, so it is the end of the answer: the chat shows it,
+        // and the voice says it when the turn speaks. Only a tail that is nothing but a
+        // stage direction stays silent, because shaping it for speech would leave nothing
+        // to show. Flush also punctuates a short unfinished answer for the voice; the chat
+        // alone shows it as written.
         const auto finishStream = [&]()
         {
             const std::string unfinished = fragmenter.Pending();
@@ -1577,7 +1581,7 @@ SessionResult ConversationRuntime::Generate(const std::string& policyInput, cons
             if (streamSpeech && !remainder.empty())
                 emitFragment(remainder);
             else if (!unfinished.empty())
-                emitFragment(unfinished, false);
+                emitFragment(unfinished, streamSpeech && !revia::speech::ShapeVocalizations(unfinished, 1).text.empty());
         };
         const bool finalExtendsStream =
             complete.size() >= streamedText.size() && complete.compare(0, streamedText.size(), streamedText) == 0;
