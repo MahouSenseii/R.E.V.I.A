@@ -243,6 +243,33 @@ void TestArchiveSessionManagement()
     Check(!archive.HasSession("chat-a") && archive.Search("tomatoes").empty() && archive.LoadSession("chat-a").empty(),
         "A deleted conversation stayed listed or searchable.");
 }
+
+void TestArchiveRetractsOnlyTheNewestTurn()
+{
+    revia::tests::ScopedTestDirectory fixture;
+    const auto path = (fixture.root / "retract.db").string();
+    const auto alice = Scope("person-alice");
+    std::string error;
+    ConversationArchive archive(path, {200, 500, 64});
+    Check(archive.BeginSession("chat-r", error), error);
+    Check(archive.Record("chat-r", "user", "Where is the lantern?", error, alice), error);
+    Check(archive.Record("chat-r", "assistant", "The lantern is in the shed.", error, alice), error);
+    Check(!archive.RemoveLastTurnIf("chat-r", "assistant", "Some other reply."), "A mismatched reply was retracted.");
+    Check(!archive.RemoveLastTurnIf("chat-r", "user", "Where is the lantern?"), "A turn that is not the newest was retracted.");
+    Check(!archive.RemoveLastTurnIf("other-chat", "assistant", "The lantern is in the shed."), "Another session's turn was retracted.");
+    Check(archive.RemoveLastTurnIf("chat-r", "assistant", "The lantern is in the shed."), "The newest reply was not retracted.");
+    Check(archive.RemoveLastTurnIf("chat-r", "user", "Where is the lantern?"), "The newest question was not retracted.");
+    Check(archive.LoadSession("chat-r").empty() && archive.Search("lantern").empty(), "A retracted turn stayed readable or searchable.");
+    // An overlong turn is stored truncated; its original text still identifies it.
+    const std::string longReply = std::string(100, 'a') + " the end of a long reply";
+    Check(archive.Record("chat-r", "assistant", longReply, error, alice), error);
+    Check(archive.RemoveLastTurnIf("chat-r", "assistant", longReply), "A truncated turn could not be retracted by its original text.");
+    // A withheld turn was never written, so retracting it touches nothing older.
+    Check(archive.Record("chat-r", "user", "Keep this question.", error, alice), error);
+    Check(!archive.Record("chat-r", "assistant", "password=hunter2-secret", error, alice), "A secret reply was archived.");
+    Check(!archive.RemoveLastTurnIf("chat-r", "assistant", "password=hunter2-secret") && archive.LoadSession("chat-r").size() == 1,
+        "Retracting a withheld reply removed an older turn.");
+}
 }
 
 void RunMemoryScopeTests()
@@ -251,4 +278,5 @@ void RunMemoryScopeTests()
     TestScopedArchiveRestart();
     TestLegacyMigrationRemainsUnattributed();
     TestArchiveSessionManagement();
+    TestArchiveRetractsOnlyTheNewestTurn();
 }

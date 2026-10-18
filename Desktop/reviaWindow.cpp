@@ -323,6 +323,11 @@ bool ReviaWindow::eventFilter(QObject* watched, QEvent* event)
             SendMessage();
             return true;
         }
+        if (keyEvent->key() == Qt::Key_Escape && editingLastTurn)
+        {
+            CancelEditLastTurn();
+            return true;
+        }
     }
     return QMainWindow::eventFilter(watched, event);
 }
@@ -567,6 +572,14 @@ void ReviaWindow::BuildInterface()
             {
                 QApplication::clipboard()->setText(MessageText(index));
                 statusBar()->showMessage(QStringLiteral("Copied to the clipboard."), 3000);
+            }
+            else if (action == QStringLiteral("regen") && RegenerableReply() == index)
+            {
+                RetryLastExchange(QString());
+            }
+            else if (action == QStringLiteral("edit") && LastUserEntry() == index)
+            {
+                BeginEditLastTurn();
             }
         });
 
@@ -861,6 +874,12 @@ void ReviaWindow::SendMessage(const bool voiceInput)
     messageInput->clear();
     // A message always goes to the current chat, so that is what the window shows.
     CloseArchivedChat();
+    if (!voiceInput && editingLastTurn)
+    {
+        editingLastTurn = false;
+        RetryLastExchange(text);
+        return;
+    }
 
     if (voiceInput)
     {
@@ -892,6 +911,7 @@ void ReviaWindow::SendMessage(const bool voiceInput)
         // stays responsive and says what the message is waiting for.
         statusBar()->showMessage(QStringLiteral("Your message will be answered when the current studio operation finishes."), 8000);
     }
+    chatTurnInFlight = true;
     AppendChat("You", text, true);
     sendButton->setEnabled(false);
     stopButton->setEnabled(true);
@@ -937,7 +957,9 @@ void ReviaWindow::SendMessage(const bool voiceInput)
                 {
                     if (epoch != sessionUiEpoch.load() || shuttingDown.load())
                         return;
+                    chatTurnInFlight = false;
                     PresentSessionResult(result);
+                    RenderChat();
                     sendButton->setEnabled(!result.shouldExit && Session().IsStarted());
                     RefreshStateBadge();
                     RefreshChatSidebar();
@@ -2052,6 +2074,8 @@ void ReviaWindow::ResetConversationPresentation()
     viewingArchivedChat.clear();
     if (archivedChatBanner)
         archivedChatBanner->hide();
+    editingLastTurn = false;
+    chatTurnInFlight = false;
     conversationStatus->ResetForCompanion();
     for (const char* name : {"conversationPageScroll", "memoryPageScroll"})
     {
@@ -2151,6 +2175,7 @@ void ReviaWindow::TrimTranscript()
         return;
     const std::size_t dropped = chatEntries.size() - MaximumChatEntries;
     chatEntries.erase(chatEntries.begin(), chatEntries.begin() + static_cast<std::ptrdiff_t>(dropped));
+    chatEntriesDropped += dropped;
     std::vector<std::size_t> kept;
     for (const std::size_t index : streamedReplyEntries)
         if (index >= dropped)
@@ -2259,6 +2284,8 @@ void ReviaWindow::RenderChat()
     html.reserve(4096);
     QString previousSpeaker;
     bool previousSpeakerWasUser = false;
+    const std::optional<std::size_t> editable = chatTurnInFlight ? std::nullopt : LastUserEntry();
+    const std::optional<std::size_t> regenerable = chatTurnInFlight ? std::nullopt : RegenerableReply();
     for (std::size_t index = 0; index < chatEntries.size(); ++index)
     {
         ChatEntry& entry = chatEntries[index];
@@ -2349,8 +2376,19 @@ void ReviaWindow::RenderChat()
 
         if (EndsMessage(index))
         {
+            const QString regenerate =
+                regenerable == index ? QStringLiteral("&nbsp;&nbsp;&middot;&nbsp;&nbsp;<a href=\"regen:%1\" style=\"color:#6f8fb0; "
+                                                      "text-decoration:none; font-size:11px;\">Regenerate</a>")
+                                           .arg(QString::number(index))
+                                     : QString();
             html += QStringLiteral("<p style=\"margin-top:0px; margin-bottom:4px; text-align:left;\">"
-                                   "<a href=\"copy:%1\" style=\"color:#6f8fb0; text-decoration:none; font-size:11px;\">Copy</a></p>")
+                                   "<a href=\"copy:%1\" style=\"color:#6f8fb0; text-decoration:none; font-size:11px;\">Copy</a>%2</p>")
+                        .arg(QString::number(index), regenerate);
+        }
+        if (editable == index)
+        {
+            html += QStringLiteral("<p style=\"margin-top:0px; margin-bottom:4px; text-align:right;\">"
+                                   "<a href=\"edit:%1\" style=\"color:#6f8fb0; text-decoration:none; font-size:11px;\">Edit</a></p>")
                         .arg(QString::number(index));
         }
 
@@ -2374,6 +2412,150 @@ void ReviaWindow::RenderChat()
 
     chatHistory->setHtml(html);
     chatHistory->verticalScrollBar()->setValue(chatHistory->verticalScrollBar()->maximum());
+}
+
+std::optional<std::size_t> ReviaWindow::LastUserEntry() const
+{
+    for (std::size_t index = chatEntries.size(); index-- > 0;)
+    {
+        const ChatEntry& entry = chatEntries[index];
+        if (entry.kind == EntryKind::Message && entry.userMessage)
+        {
+            // Typed lines only; an external adapter's line is not the owner's to edit.
+            if (entry.speaker == QStringLiteral("You"))
+                return index;
+            return std::nullopt;
+        }
+    }
+    return std::nullopt;
+}
+
+std::optional<std::size_t> ReviaWindow::RegenerableReply() const
+{
+    const std::optional<std::size_t> user = LastUserEntry();
+    if (!user)
+        return std::nullopt;
+    const QString assistant = QString::fromStdString(Session().DisplayName());
+    // The newest message with a speaker must be Revia's reply to that line: a System
+    // result (a command) or a Memory notice after it means there is nothing to regenerate.
+    for (std::size_t index = chatEntries.size(); index-- > *user + 1;)
+    {
+        const ChatEntry& entry = chatEntries[index];
+        if (entry.kind != EntryKind::Message || entry.speaker.isEmpty() || entry.body.isEmpty())
+            continue;
+        if (entry.userMessage || entry.speaker != assistant || !EndsMessage(index))
+            return std::nullopt;
+        return index;
+    }
+    return std::nullopt;
+}
+
+void ReviaWindow::BeginEditLastTurn()
+{
+    const std::optional<std::size_t> user = LastUserEntry();
+    if (!user)
+        return;
+    editingLastTurn = true;
+    messageInput->setPlainText(chatEntries[*user].body);
+    messageInput->moveCursor(QTextCursor::End);
+    messageInput->setFocus();
+    statusBar()->showMessage(
+        QStringLiteral("Editing your last message. Send replaces it and Revia answers again; Esc cancels."), 15000);
+}
+
+void ReviaWindow::CancelEditLastTurn()
+{
+    editingLastTurn = false;
+    messageInput->clear();
+    statusBar()->showMessage(QStringLiteral("Edit cancelled. Your last message is unchanged."), 5000);
+}
+
+void ReviaWindow::RetryLastExchange(const QString& replacement)
+{
+    const bool editing = !replacement.isEmpty();
+    const std::optional<std::size_t> user = LastUserEntry();
+    if (switchingCompanion || shuttingDown.load() || !user || (!editing && !RegenerableReply()))
+        return;
+    if (!ClaimOperationWorker())
+    {
+        if (editing)
+        {
+            messageInput->setPlainText(replacement);
+            editingLastTurn = true;
+        }
+        return;
+    }
+    CloseArchivedChat();
+    // What is replaced is kept, so a refusal can put the transcript back exactly. The
+    // position is absolute because the transcript may be trimmed while this runs.
+    const std::size_t keepFrom = *user + (editing ? 0 : 1);
+    auto replaced = std::make_shared<std::vector<ChatEntry>>(
+        chatEntries.begin() + static_cast<std::ptrdiff_t>(keepFrom), chatEntries.end());
+    const std::size_t absoluteKeepFrom = keepFrom + chatEntriesDropped;
+    chatEntries.resize(keepFrom);
+    streamedReplyTurnId = 0;
+    streamedReplyEntries.clear();
+    chatTurnInFlight = true;
+    if (editing)
+        AppendChat("You", replacement, true);
+    else
+        RenderChat();
+    sendButton->setEnabled(false);
+    stopButton->setEnabled(true);
+
+    operationWorker = std::jthread(
+        [this, epoch = sessionUiEpoch.load(), text = replacement.toStdString(), editing, replaced, absoluteKeepFrom]()
+        {
+            const RunningFlag running(operationRunning);
+            bool retracted = false;
+            const auto result = RunOrFail<revia::runtime::SessionResult>(
+                [this, &text, editing, &retracted]()
+                { return editing ? Session().ReplaceLastUserTurn(text, retracted) : Session().RegenerateLast(retracted); },
+                [](const std::string& why)
+                {
+                    revia::runtime::SessionResult failed;
+                    failed.succeeded = false;
+                    failed.text = "That reply could not be replaced: " + why;
+                    failed.reason = failed.text;
+                    return failed;
+                });
+            QMetaObject::invokeMethod(
+                this,
+                [this, epoch, result, retracted, editing, replaced, absoluteKeepFrom, text]()
+                {
+                    if (epoch != sessionUiEpoch.load() || shuttingDown.load())
+                        return;
+                    chatTurnInFlight = false;
+                    if (retracted)
+                    {
+                        PresentSessionResult(result);
+                    }
+                    else
+                    {
+                        // The session changed nothing, so neither does the transcript.
+                        if (absoluteKeepFrom >= chatEntriesDropped && absoluteKeepFrom - chatEntriesDropped <= chatEntries.size())
+                        {
+                            const auto at = chatEntries.begin() + static_cast<std::ptrdiff_t>(absoluteKeepFrom - chatEntriesDropped);
+                            const bool newLine = editing && at != chatEntries.end() && at->userMessage &&
+                                                 at->body == QString::fromStdString(text);
+                            const auto insertAt = newLine ? chatEntries.erase(at) : at;
+                            chatEntries.insert(insertAt, replaced->begin(), replaced->end());
+                            streamedReplyTurnId = 0;
+                            streamedReplyEntries.clear();
+                            TrimTranscript();
+                        }
+                        const QString why = QString::fromStdString(result.text.empty() ? result.reason : result.text);
+                        statusBar()->showMessage(why, 12000);
+                        AppendActivity((editing ? QStringLiteral("Edit not applied: ") : QStringLiteral("Regenerate not applied: ")) + why);
+                    }
+                    RenderChat();
+                    sendButton->setEnabled(Session().IsStarted());
+                    RefreshStateBadge();
+                    RefreshChatSidebar();
+                    messageInput->setFocus();
+                },
+                Qt::QueuedConnection);
+        });
 }
 
 void ReviaWindow::BuildChatSidebar()

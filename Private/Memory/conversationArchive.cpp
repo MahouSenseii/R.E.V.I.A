@@ -169,7 +169,8 @@ void BindScope(sqlite3_stmt* statement, const MemoryScope* scope)
     sqlite3_bind_text(statement, 13, scope->companionId.c_str(), -1, SQLITE_TRANSIENT);
 }
 
-// What Record keeps of a turn: the whole text, or both ends of an overlong one.
+// What Record keeps of a turn: the whole text, or both ends of an overlong one. Shared
+// with RemoveLastTurnIf so a retraction compares against exactly what was written.
 std::string StoredForm(const std::string& content, const std::size_t maxCharacters)
 {
     if (content.size() <= maxCharacters)
@@ -1009,6 +1010,37 @@ bool ConversationArchive::RenameSession(const std::string& sessionId, const std:
         return false;
     }
     return true;
+}
+
+bool ConversationArchive::RemoveLastTurnIf(const std::string& sessionId, const std::string& role, const std::string& content)
+{
+    sqlite3* const database = Acquire();
+    if (database == nullptr || sessionId.empty() || content.empty())
+        return false;
+    std::lock_guard writeLock(connectionMutex);
+    ArchiveTransaction transaction(database);
+    if (!transaction.IsActive())
+        return false;
+    sqlite3_int64 rowid = 0;
+    {
+        sqlite3_stmt* raw = nullptr;
+        if (sqlite3_prepare_v2(database,
+                "SELECT rowid, role, content FROM conversation_turns WHERE session_id = ? ORDER BY turn_index DESC LIMIT 1;", -1, &raw,
+                nullptr) != SQLITE_OK)
+            return false;
+        Statement statement(raw);
+        sqlite3_bind_text(statement.get(), 1, sessionId.c_str(), -1, SQLITE_TRANSIENT);
+        if (sqlite3_step(statement.get()) != SQLITE_ROW || ColumnText(statement.get(), 1) != role ||
+            ColumnText(statement.get(), 2) != StoredForm(content, limits.maxContentCharacters))
+            return false;
+        rowid = sqlite3_column_int64(statement.get(), 0);
+    }
+    sqlite3_stmt* raw = nullptr;
+    if (sqlite3_prepare_v2(database, "DELETE FROM conversation_turns WHERE rowid = ?;", -1, &raw, nullptr) != SQLITE_OK)
+        return false;
+    Statement statement(raw);
+    sqlite3_bind_int64(statement.get(), 1, rowid);
+    return sqlite3_step(statement.get()) == SQLITE_DONE && sqlite3_changes64(database) == 1 && transaction.Commit();
 }
 
 std::vector<ArchivedTurn> ConversationArchive::LoadSessionTail(

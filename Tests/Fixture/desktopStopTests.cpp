@@ -35,6 +35,7 @@
 #include <QScrollArea>
 #include <QScrollBar>
 #include <QSettings>
+#include <QStatusBar>
 #include <QTabWidget>
 #include <QTabBar>
 #include <QTableWidget>
@@ -1388,6 +1389,67 @@ struct ReviaWindowStopTests
         window.RenderChat();
     }
 
+    static void RunRegenerateAndEditUi(ReviaWindow& window, int& failures)
+    {
+        const auto expect = [&](const bool condition, const char* message)
+        {
+            if (!condition)
+            {
+                std::cerr << "FAIL: " << message << '\n';
+                ++failures;
+            }
+        };
+        const auto finish = [&]()
+        {
+            if (window.operationWorker.joinable())
+                window.operationWorker.join();
+            QCoreApplication::sendPostedEvents(&window, QEvent::MetaCall);
+        };
+        const QString revia = QString::fromStdString(window.Session().DisplayName());
+        window.chatEntries.clear();
+        window.ResetConversationPresentation();
+        window.AppendChat("You", "Original question", true);
+        window.AppendChat(revia, "Original **reply**.");
+        QString shown = window.chatHistory->toHtml();
+        expect(shown.contains("href=\"regen:1\"") && shown.contains("href=\"edit:0\""),
+            "the latest exchange has no Regenerate and Edit links");
+
+        // The session refuses (it is not started here), so the transcript is put back.
+        emit window.chatHistory->anchorClicked(QUrl("regen:1"));
+        finish();
+        expect(window.chatEntries.size() == 2 && window.chatEntries.back().body == "Original **reply**." &&
+                   window.statusBar()->currentMessage().contains("not ready"),
+            "a refused regenerate did not restore the reply or say why");
+
+        emit window.chatHistory->anchorClicked(QUrl("edit:0"));
+        expect(window.editingLastTurn && window.messageInput->toPlainText() == "Original question", "Edit did not load the message");
+        QKeyEvent escape(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
+        QCoreApplication::sendEvent(window.messageInput, &escape);
+        expect(!window.editingLastTurn && window.messageInput->toPlainText().isEmpty(), "Esc did not cancel the edit");
+
+        emit window.chatHistory->anchorClicked(QUrl("edit:0"));
+        window.messageInput->setPlainText("Edited question");
+        QKeyEvent enter(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
+        QCoreApplication::sendEvent(window.messageInput, &enter);
+        expect(window.chatEntries.size() == 1 && window.chatEntries.front().body == "Edited question",
+            "sending an edit did not replace the last exchange on screen");
+        finish();
+        expect(window.chatEntries.size() == 2 && window.chatEntries.front().body == "Original question" &&
+                   window.chatEntries.back().body == "Original **reply**." && !window.editingLastTurn,
+            "a refused edit did not restore the original exchange");
+
+        // A command result after the reply leaves nothing to regenerate, and reply text
+        // cannot supply the link itself.
+        window.AppendChat("System", "Command output [regen](regen:1)");
+        shown = window.chatHistory->toHtml();
+        expect(!shown.contains("href=\"regen:") && shown.contains("href=\"edit:0\""), "Regenerate was offered for a command result");
+        emit window.chatHistory->anchorClicked(QUrl("regen:1"));
+        expect(!window.operationRunning.load() && window.chatEntries.size() == 3, "a stale Regenerate link still acted");
+        window.chatEntries.clear();
+        window.ResetConversationPresentation();
+        window.RenderChat();
+    }
+
     static void Run(ReviaWindow& window, int& failures)
     {
         using revia::runtime::RuntimeEvent;
@@ -1551,6 +1613,7 @@ int main(int argc, char** argv)
     ReviaWindowStopTests::Run(window, failures);
     ReviaWindowStopTests::RunChatTranscriptUi(window, failures);
     ReviaWindowStopTests::RunChatSessionsUi(window, failures);
+    ReviaWindowStopTests::RunRegenerateAndEditUi(window, failures);
     ReviaWindowStopTests::RunConfirmationAudienceUi(window, failures);
     ReviaWindowStopTests::RunConversationQualityUi(window, failures);
     ReviaWindowStopTests::RunMemoryRevisionUi(window, failures);

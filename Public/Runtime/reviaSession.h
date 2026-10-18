@@ -381,6 +381,14 @@ class ReviaSession
     bool ContinueConversation(const std::string& sessionId, std::string& outError);
     bool RenameConversation(const std::string& sessionId, const std::string& title, std::string& outError);
     bool DeleteConversation(const std::string& sessionId, std::string& outError);
+    // Retract the latest conversational exchange from the working context and the
+    // archive, then run the same or the edited text through Submit, so the new turn
+    // passes every admission check a typed message does. outRetracted is false when
+    // nothing was removed: no eligible exchange, the audience changed, or the
+    // conversation has moved on. Facts the memory agent already took from the first
+    // reply are not undone here.
+    SessionResult RegenerateLast(bool& outRetracted);
+    SessionResult ReplaceLastUserTurn(const std::string& replacement, bool& outRetracted);
 
     // Durable non-authority settings. The store cannot reach a capability, so nothing
     // here can widen what Revia is permitted to do.
@@ -563,6 +571,22 @@ class ReviaSession
     [[nodiscard]] memory::MemoryScope CapturePrivateMemoryScope() const;
     std::string privateContextParticipant;
     std::string privateContextAudience;
+    // The newest typed or merged exchange as each store holds it, kept so a regenerate
+    // or edit retracts exactly that exchange and nothing older. Cleared at the start of
+    // every turn; guarded by operationMutex.
+    struct RetractableExchange
+    {
+        bool privateContext = false;
+        std::uint64_t audienceRevision = 0;
+        std::string participantId;
+        std::string input;
+        std::string contextUser;
+        std::string contextAssistant;
+        std::string archivedAssistant;
+    };
+    std::optional<RetractableExchange> lastExchange;
+    void RememberExchange(const agents::InputBatch& batch, const SessionResult& result, bool privateContext);
+    SessionResult RetryLastExchange(const std::string& replacement, bool& outRetracted);
     // Submit already holds operationMutex when /eval arrives; the public entry point locks.
     evaluation::EvaluationReport RunConversationEvaluationUnlocked(
         const std::vector<evaluation::EvaluationCase>& cases, std::stop_token stopToken);

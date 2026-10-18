@@ -12,6 +12,7 @@
 #include <functional>
 #include <map>
 #include <memory>
+#include <optional>
 #include <set>
 #include <thread>
 #include <vector>
@@ -212,6 +213,22 @@ class ReviaWindow final : public QMainWindow
     // fragments) are shifted, or forgotten when their entry scrolled away.
     static constexpr std::size_t MaximumChatEntries = 400;
     void TrimTranscript();
+    // How many entries trimming has dropped from the front, so a position kept across
+    // an asynchronous operation can still be found afterwards.
+    std::size_t chatEntriesDropped = 0;
+    // Regenerate and edit-and-resend act on the latest exchange only: the last user
+    // line, and the reply from Revia after it.
+    [[nodiscard]] std::optional<std::size_t> LastUserEntry() const;
+    [[nodiscard]] std::optional<std::size_t> RegenerableReply() const;
+    // Runs ReviaSession::RegenerateLast, or ReplaceLastUserTurn when `replacement` is
+    // given. The transcript changes at once and is put back if the session refuses.
+    void RetryLastExchange(const QString& replacement);
+    void BeginEditLastTurn();
+    void CancelEditLastTurn();
+    bool editingLastTurn = false;
+    // A foreground turn has been sent and its result is not shown yet; the regenerate
+    // and edit links stay hidden until it is.
+    bool chatTurnInFlight = false;
     std::vector<ChatEntry> chatEntries;
     enum class ActivitySeverity
     {

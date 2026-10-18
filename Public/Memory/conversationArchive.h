@@ -88,6 +88,10 @@ public:
     [[nodiscard]] bool HasSession(const std::string& sessionId) const;
     // Titles are bounded, valid UTF-8 and pass the same sensitive-content gate as turns.
     bool RenameSession(const std::string& sessionId, const std::string& title, std::string& outError);
+    // Removes the newest turn of a session only when it is exactly this role and the
+    // stored form of this content. Regenerating a reply retracts what it replaces; a
+    // turn the archive withheld or that something else followed is never touched.
+    bool RemoveLastTurnIf(const std::string& sessionId, const std::string& role, const std::string& content);
     // The tail of the most recent session that is not this one, for restoring continuity
     // across a restart.
     [[nodiscard]] std::vector<ArchivedTurn> LoadPreviousSessionTail(

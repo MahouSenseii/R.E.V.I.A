@@ -345,6 +345,75 @@ void TestDefaultPrivateWorkCapturesAudienceAdmission()
     Check(!denied.succeeded && fixture.backend.Requests().empty(), "Factory exception permitted private background work.");
 }
 
+void TestRegenerateAndEditRetractOnlyTheLatestExchange()
+{
+    tests::ScopedTestDirectory directory;
+    WorkingDirectory cwd(directory.root);
+    Backend backend("fixture-main");
+    ReviaSession session(CompanionPaths(directory.root, {"regenerate-fixture", "Fixture Revia", "assistant", false}));
+    ReviaSessionTestAccess::ConfigureStartupBrains(session, backend.port);
+    ReviaSessionTestAccess::OpenConversationArchive(session, directory.root / "conversations.db", "fixture-chat");
+    ReviaSessionTestAccess::MarkStudioStarted(session, true);
+    const std::string first = "What does a static library contain?";
+    const std::string original = "Which sentinel_original_question_5d1 does the linker resolve?";
+    const std::string edited = "Which sentinel_edited_question_9b2 does the linker resolve?";
+
+    bool retracted = true;
+    const auto nothing = session.RegenerateLast(retracted);
+    Check(!retracted && !nothing.succeeded, "Regenerate retracted something before any exchange.");
+    const auto answeredFirst = session.Submit(first);
+    const auto answeredOriginal = session.Submit(original);
+    Check(answeredFirst.succeeded && answeredOriginal.succeeded && answeredOriginal.fromAssistant,
+        "The private fixture turns failed: " + answeredOriginal.reason);
+    std::string error;
+    Check(session.ConversationTranscript("fixture-chat", error).size() == 4, "The fixture exchanges were not archived: " + error);
+
+    const auto regenerated = session.RegenerateLast(retracted);
+    Check(retracted && regenerated.succeeded, "Regenerate did not rerun the latest exchange: " + regenerated.reason);
+    auto context = ReviaSessionTestAccess::WorkingContext(session);
+    auto archived = session.ConversationTranscript("fixture-chat", error);
+    Check(context.size() == 4 && context[2].content == original && context[3].role == "assistant" &&
+              std::count_if(context.begin(), context.end(), [&](const auto& message) { return message.content == original; }) == 1,
+        "Regenerate duplicated or lost the question in the working context.");
+    Check(archived.size() == 4 && archived[2].content == original && archived[3].role == "assistant" && archived[0].content == first,
+        "Regenerate left the replaced reply in the archive or touched an older exchange.");
+
+    const auto editedReply = session.ReplaceLastUserTurn(edited, retracted);
+    Check(retracted && editedReply.succeeded, "Edit and resend did not rerun the turn: " + editedReply.reason);
+    context = ReviaSessionTestAccess::WorkingContext(session);
+    archived = session.ConversationTranscript("fixture-chat", error);
+    Check(context.size() == 4 && context[0].content == first && context[2].content == edited,
+        "Edit did not replace exactly the latest question in the working context.");
+    Check(archived.size() == 4 && archived[2].content == edited, "Edit did not replace the latest question in the archive.");
+    const auto requests = backend.Requests();
+    Check(!requests.empty() && requests.back().dump().find("sentinel_edited_question_9b2") != std::string::npos,
+        "The edited question did not reach the model.");
+    for (auto request = requests.rbegin(); request != requests.rend(); ++request)
+    {
+        const std::string wire = request->dump();
+        if (wire.find("sentinel_edited_question_9b2") == std::string::npos)
+            break;
+        Check(wire.find("sentinel_original_question_5d1") == std::string::npos, "The retracted question still reached the model after an edit.");
+    }
+
+    // Something that is not a conversational reply leaves nothing to regenerate.
+    (void)session.Submit("/history");
+    const auto afterCommand = session.RegenerateLast(retracted);
+    Check(!retracted && !afterCommand.succeeded && ReviaSessionTestAccess::WorkingContext(session).size() == 4,
+        "Regenerate after a command retracted an older exchange.");
+
+    // A changed audience refuses rather than replaying private history to it.
+    (void)session.Submit(original);
+    Check(session.SetAudience({identity::AudienceKind::Shared, "regenerate-room", 0, {"fixture-viewer"}}, error), error);
+    const auto requestsBefore = backend.Requests().size();
+    const auto acrossAudience = session.RegenerateLast(retracted);
+    Check(!retracted && !acrossAudience.succeeded && backend.Requests().size() == requestsBefore,
+        "Regenerate ran across an audience change.");
+    Check(session.BrowseConversations({}, 10, error).empty() && !error.empty(), "Past chats were listed to a shared audience.");
+    Check(ReviaSessionTestAccess::WorkingContext(session).size() == 6, "A refused regenerate changed the private context.");
+    ReviaSessionTestAccess::MarkStudioStarted(session, false);
+}
+
 void TestNewChatStartsAFreshContextAndKeepsTheOldOne()
 {
     tests::ScopedTestDirectory directory;
@@ -391,6 +460,7 @@ void RunAudiencePrivacyTests()
     TestAudienceRoutesMinimizeAndKeepTrustedPrivateReference();
     TestRevokedContextDoesNotRequestOrDeliver();
     TestDefaultPrivateWorkCapturesAudienceAdmission();
+    TestRegenerateAndEditRetractOnlyTheLatestExchange();
     TestNewChatStartsAFreshContextAndKeepsTheOldOne();
-    std::cout << "Audience privacy tests passed (7 real provider-request fixtures).\n";
+    std::cout << "Audience privacy tests passed (8 real provider-request fixtures).\n";
 }

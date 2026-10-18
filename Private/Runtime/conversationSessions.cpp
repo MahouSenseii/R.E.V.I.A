@@ -107,6 +107,7 @@ bool ReviaSession::StartNewConversation(std::string& outError)
     // The working context and its continuity notes only. Long-term memory is a separate
     // store and stays exactly as it was.
     conversationRuntime.ResetParticipantContinuity();
+    lastExchange.reset();
     // Marked as already restored for the person typing, so the first turn of the new chat
     // does not pull the previous chat straight back in.
     {
@@ -175,6 +176,7 @@ bool ReviaSession::ContinueConversation(const std::string& sessionId, std::strin
     conversationRuntime.ResetParticipantContinuity();
     const int wanted = settings.conversation.restoreTurns > 0 ? settings.conversation.restoreTurns : 12;
     context.RestoreMessages(restored, static_cast<std::size_t>(wanted));
+    lastExchange.reset();
     {
         const std::scoped_lock lock(speakerMutex, audienceMutex);
         privateContextParticipant = scope.participantId;
@@ -228,6 +230,7 @@ bool ReviaSession::DeleteConversation(const std::string& sessionId, std::string&
     }
     conversationArchive.ForgetSession(sessionId);
     conversationRuntime.ResetParticipantContinuity();
+    lastExchange.reset();
     std::string error;
     if (!conversationArchive.BeginSession(sessionId, error))
     {
@@ -236,6 +239,113 @@ bool ReviaSession::DeleteConversation(const std::string& sessionId, std::string&
         outError = "The chat was deleted, but new turns will not be saved: " + error;
     }
     return true;
+}
+
+void ReviaSession::RememberExchange(const agents::InputBatch& batch, const SessionResult& result, const bool privateContext)
+{
+    // Only a delivered conversational reply can be regenerated. Commands, drawings and
+    // refusals never reach here with an assistant reply, so they leave nothing to retract.
+    if (!result.succeeded || !result.fromAssistant || result.text.empty())
+        return;
+    RetractableExchange exchange;
+    exchange.privateContext = privateContext;
+    exchange.audienceRevision = batch.context.audience.revision;
+    exchange.participantId = batch.context.participantId;
+    exchange.input = batch.text;
+    if (privateContext)
+    {
+        // Read back from the context itself, which may have bounded either message, so
+        // the retraction later compares against exactly what is stored.
+        const std::vector<conversationMessage> messages = context.GetRecentMessages();
+        if (messages.size() < 2 || messages[messages.size() - 2].role != "user" || messages.back().role != "assistant")
+            return;
+        exchange.contextUser = messages[messages.size() - 2].content;
+        exchange.contextAssistant = messages.back().content;
+        exchange.archivedAssistant = result.text;
+    }
+    else
+    {
+        exchange.contextUser = batch.text;
+        exchange.contextAssistant = result.text;
+    }
+    lastExchange = std::move(exchange);
+}
+
+SessionResult ReviaSession::RegenerateLast(bool& outRetracted)
+{
+    return RetryLastExchange({}, outRetracted);
+}
+
+SessionResult ReviaSession::ReplaceLastUserTurn(const std::string& replacement, bool& outRetracted)
+{
+    outRetracted = false;
+    if (replacement.empty())
+    {
+        SessionResult refused;
+        refused.succeeded = false;
+        refused.text = refused.reason = "The edited message is empty.";
+        return refused;
+    }
+    return RetryLastExchange(replacement, outRetracted);
+}
+
+SessionResult ReviaSession::RetryLastExchange(const std::string& replacement, bool& outRetracted)
+{
+    outRetracted = false;
+    SessionResult refused;
+    refused.succeeded = false;
+    refused.fromAssistant = false;
+    const auto refuse = [&refused](const std::string& why)
+    {
+        refused.text = why;
+        refused.reason = why;
+        return refused;
+    };
+    if (!started.load())
+        return refuse("Revia is not ready yet.");
+    std::string input;
+    {
+        std::lock_guard operationLock(operationMutex);
+        if (!lastExchange)
+            return refuse("There is no reply to replace. Only Revia's latest conversational reply can be regenerated or edited.");
+        const RetractableExchange exchange = *lastExchange;
+        // The same capture Submit makes, so the replacement runs for the same audience
+        // or not at all.
+        const agents::InputContext current = CaptureInputContext(agents::InputSource::Typed);
+        if (current.audience.revision != exchange.audienceRevision || current.participantId != exchange.participantId ||
+            (current.audience.kind == identity::AudienceKind::Private) != exchange.privateContext)
+            return refuse("The audience changed since that reply, so it was left as it was.");
+        if (exchange.privateContext)
+        {
+            const std::vector<conversationMessage> messages = context.GetRecentMessages();
+            if (messages.size() < 2 || messages.back().role != "assistant" || messages.back().content != exchange.contextAssistant ||
+                messages[messages.size() - 2].role != "user" || messages[messages.size() - 2].content != exchange.contextUser)
+                return refuse("The conversation has moved on since that reply, so it was left as it was.");
+            (void)context.RemoveLastMessageIf("assistant", exchange.contextAssistant);
+            (void)context.RemoveLastMessageIf("user", exchange.contextUser);
+            const std::string archiveId = CurrentConversationId();
+            if (!archiveId.empty())
+            {
+                // Each store retracts only its own exact newest turn. One the archive
+                // withheld is simply not found, and nothing older is touched.
+                (void)conversationArchive.RemoveLastTurnIf(archiveId, "assistant", exchange.archivedAssistant);
+                (void)conversationArchive.RemoveLastTurnIf(archiveId, "user", exchange.input);
+            }
+        }
+        else
+        {
+            std::lock_guard lock(audienceMutex);
+            const std::size_t size = audienceHistory.size();
+            if (size < 2 || audienceHistory[size - 1].role != "assistant" || audienceHistory[size - 1].content != exchange.contextAssistant ||
+                audienceHistory[size - 2].role != "user" || audienceHistory[size - 2].content != exchange.contextUser)
+                return refuse("The conversation has moved on since that reply, so it was left as it was.");
+            audienceHistory.resize(size - 2);
+        }
+        lastExchange.reset();
+        input = replacement.empty() ? exchange.input : replacement;
+    }
+    outRetracted = true;
+    return Submit(input, agents::InputSource::Typed);
 }
 
 } // namespace revia::runtime
