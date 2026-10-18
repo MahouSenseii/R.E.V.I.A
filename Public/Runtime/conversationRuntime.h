@@ -131,6 +131,7 @@ public:
         agents::ToolExecutors executors;
         std::vector<std::filesystem::path> approvedRoots;
         bool archiveEnabled = false;
+        bool documentsAvailable = false;
         bool remindersAvailable = false;
         bool imageGenerationEnabled = false;
     };

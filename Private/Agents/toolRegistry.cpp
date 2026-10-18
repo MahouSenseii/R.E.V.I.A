@@ -199,6 +199,19 @@ ChatTool RecallHistoryTool(const ToolExecutors& executors)
     return tool;
 }
 
+ChatTool SearchDocumentsTool(const ToolExecutors& executors)
+{
+    ChatTool tool;
+    tool.definition = {"search_documents",
+        "Search the documents the user attached and kept (PDF, Word, text, code) for the passages that answer a question.",
+        ObjectSchema({{"query", StringSchema(1, 256, "What to look for.")}}, {"query"})};
+    tool.parallelSafe = true;
+    tool.describe = [](const Json& arguments) { return "Searching your documents for \"" + Shown(Text(arguments, "query")) + "\""; };
+    tool.execute = [search = executors.searchDocuments](const Json& arguments, const ToolCallContext& context)
+    { return search(Text(arguments, "query"), context); };
+    return tool;
+}
+
 ChatTool FileTool(const bool listing, const ToolExecutors& executors, const std::string& roots)
 {
     ChatTool tool;
@@ -316,6 +329,8 @@ ToolRegistry ToolRegistry::Project(const ToolPermissions& permissions, const Too
         registry.Add(SearchMemoryTool(executors));
     if (permissions.archiveEnabled && executors.recallHistory)
         registry.Add(RecallHistoryTool(executors));
+    if (permissions.documentsAvailable && executors.searchDocuments)
+        registry.Add(SearchDocumentsTool(executors));
     if (!permissions.approvedRoots.empty())
     {
         const std::string roots = DescribeRoots(permissions.approvedRoots);

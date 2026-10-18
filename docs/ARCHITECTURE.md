@@ -734,6 +734,7 @@ flowchart LR
   replies, proactive openings and evaluation turns get none. `web_search` needs internet
   on plus automatic lookup or an explicit search request; `search_memory` needs profile
   memory and an attributed private scope; `recall_history` needs the archive;
+  `search_documents` needs kept documents and a main model endpoint on this computer;
   `read_file`/`list_dir` need approved roots, which their descriptions name; `set_reminder`
   and `calculator` are private-chat tools; `generate_image` needs image generation on. A
   tool without a bound executor is not offered.

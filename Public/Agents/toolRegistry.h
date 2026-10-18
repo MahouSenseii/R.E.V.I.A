@@ -74,6 +74,8 @@ struct ToolPermissions
     bool explicitSearchRequest = false;
     bool memoryEnabled = false;
     bool archiveEnabled = false;
+    // Documents the user attached are kept and the main model runs on this computer.
+    bool documentsAvailable = false;
     // Folders read_file and list_dir may name; empty means no file tools.
     std::vector<std::filesystem::path> approvedRoots;
     bool remindersAvailable = false;
@@ -81,13 +83,14 @@ struct ToolPermissions
 };
 
 // Bound to the existing owners: the internet lookup, memory retrieval, the conversation
-// archive, ActionRuntime, the reminder book and the image provider. A missing executor
+// archive, the attachment library, ActionRuntime, the reminder book and the image provider. A missing executor
 // means the tool is not offered, whatever the permissions say.
 struct ToolExecutors
 {
     std::function<ToolExecution(const std::string& query, const ToolCallContext&)> webSearch;
     std::function<ToolExecution(const std::string& query, const ToolCallContext&)> searchMemory;
     std::function<ToolExecution(const std::string& topic, const std::string& when, bool earliest, const ToolCallContext&)> recallHistory;
+    std::function<ToolExecution(const std::string& query, const ToolCallContext&)> searchDocuments;
     std::function<ToolExecution(const std::string& path, const ToolCallContext&)> readFile;
     std::function<ToolExecution(const std::string& path, const ToolCallContext&)> listDirectory;
     std::function<ToolExecution(const std::string& text, const std::string& when, const ToolCallContext&)> setReminder;

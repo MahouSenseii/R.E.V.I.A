@@ -1182,6 +1182,7 @@ SessionResult ConversationRuntime::Generate(const std::string& policyInput, cons
         permissions.explicitSearchRequest = revia::internet::InternetLookupPolicy::ShouldLookup(policyInput, false);
         permissions.memoryEnabled = profile.bMemoryEnabled && memory::IsAttributedPrivateScope(memoryScope);
         permissions.archiveEnabled = grant.archiveEnabled && turnPolicy.includePrivateHistory;
+        permissions.documentsAvailable = grant.documentsAvailable;
         permissions.approvedRoots = grant.approvedRoots;
         permissions.remindersAvailable = grant.remindersAvailable;
         permissions.imageGenerationEnabled = grant.imageGenerationEnabled;

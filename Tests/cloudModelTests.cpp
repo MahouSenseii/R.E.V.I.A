@@ -11,6 +11,7 @@
 #include "LLM/Cloud/cloudTransport.h"
 #include "testSupport.h"
 
+#include <algorithm>
 #include <fstream>
 #include <map>
 #include <memory>
@@ -414,6 +415,39 @@ void TestPrivateContextIsStripped()
     Check(stripped.size() >= 3, "The stripped sections were not reported.");
 }
 
+void TestAttachmentsStayLocal()
+{
+    namespace markers = revia::identity::markers;
+    const std::string userTurn = "Summarise my lease.\n\n" + std::string(markers::AttachmentGrounding) +
+        "\n[lease.pdf]\nFILETEXT: rent is due on the first\n\n" + std::string(markers::DocumentGrounding) +
+        "\n[notes.md]\nDOCTEXT: landlord phone number";
+    conversationMessage message{"user", userTurn};
+    conversationImage picture;
+    picture.name = "scan.png";
+    picture.mimeType = "image/png";
+    picture.bytes = std::make_shared<const std::string>("PIXELDATA");
+    message.images.push_back(picture);
+    std::vector<conversationMessage> history = {message};
+
+    Harness harness;
+    harness.transport->body = OpenAiStream();
+    CloudTurnRequest turn;
+    turn.bExplicit = true;
+    turn.bIncludeScreen = true;
+    turn.bIncludeMemories = true;
+    const auto reply = harness.service.GenerateResponse(history, turn);
+    const std::string& sent = harness.transport->last.body;
+    Check(reply.bSuccess && sent.find("Summarise my lease.") != std::string::npos, "The user's own words were not sent.");
+    Check(sent.find("FILETEXT:") == std::string::npos && sent.find("DOCTEXT:") == std::string::npos,
+        "Attached file or kept document text left the PC.");
+    Check(sent.find("PIXELDATA") == std::string::npos && sent.find("UElYRUxEQVRB") == std::string::npos && sent.find("image_url") == std::string::npos,
+        "An attached picture left the PC.");
+
+    std::vector<std::string> stripped;
+    (void)StripPrivateContext(userTurn, &stripped);
+    Check(std::find(stripped.begin(), stripped.end(), "attached files") != stripped.end(), "Stripped attachments were not reported.");
+}
+
 void TestEveryRequestIsAudited()
 {
     Harness harness;
@@ -540,6 +574,7 @@ void RunCloudModelTests()
     TestKeyComesOnlyFromTheEnvironment();
     TestRefusals();
     TestPrivateContextIsStripped();
+    TestAttachmentsStayLocal();
     TestEveryRequestIsAudited();
     TestRoutingAndAsks();
     TestRouterUsesTheCloudOnlyWhenAsked();

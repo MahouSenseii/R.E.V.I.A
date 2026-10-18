@@ -38,11 +38,13 @@ void Note(std::vector<std::string>* stripped, const std::string& name)
 
 // Reference blocks are placed last in a message, so everything from their header on is
 // reference material and goes with it.
-constexpr std::array<std::pair<std::string_view, std::string_view>, 4> TrailingReferences = {{
+constexpr std::array<std::pair<std::string_view, std::string_view>, 6> TrailingReferences = {{
     {markers::RetrievedMemoryBlock, "saved memories"},
     {markers::RetrievedConversationBlock, "recalled conversations"},
     {markers::LivePageGrounding, "page text"},
     {markers::VisibleBrowserGrounding, "browser results"},
+    {markers::AttachmentGrounding, "attached files"},
+    {markers::DocumentGrounding, "kept documents"},
 }};
 
 // Lines of Revia's own state. Each is one paragraph.

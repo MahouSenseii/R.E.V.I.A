@@ -389,6 +389,19 @@ ReviaSession::ReviaSession(CompanionPaths paths, std::shared_ptr<policy::Compani
                     return agents::ToolExecution::Fail("The turn ended before the reminder was set.");
                 return agents::AddChatReminder(reminders, text, when, planning::WallClock::now());
             };
+            // Passages go to the main model, so only when it runs on this computer, as
+            // attachments themselves do.
+            if (attachments::AttachmentLibrary* library = AttachmentsIfPresent();
+                library && library->HasDocuments() && attachments::IsLocalEndpoint(settings.llm.host))
+            {
+                grant.documentsAvailable = true;
+                grant.executors.searchDocuments = [this](const std::string& query, const agents::ToolCallContext& call)
+                {
+                    if (!call.Admitted())
+                        return agents::ToolExecution::Fail("The turn ended before the documents were searched.");
+                    return agents::ToolExecution::Ok(SearchDocuments(query, call.stopToken));
+                };
+            }
             if (!actionRuntime.IsInitialized())
                 return grant;
             const auto capabilities = actionRuntime.Settings();

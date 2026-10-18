@@ -187,6 +187,7 @@ ToolPermissions EveryPermission()
     permissions.automaticLookup = true;
     permissions.memoryEnabled = true;
     permissions.archiveEnabled = true;
+    permissions.documentsAvailable = true;
     permissions.approvedRoots = {std::filesystem::temp_directory_path()};
     permissions.remindersAvailable = true;
     permissions.imageGenerationEnabled = true;
@@ -201,6 +202,7 @@ ToolExecutors EveryExecutor()
     executors.searchMemory = ok;
     executors.recallHistory = [](const std::string& topic, const std::string&, bool, const ToolCallContext&)
     { return ToolExecution::Ok(topic); };
+    executors.searchDocuments = ok;
     executors.readFile = ok;
     executors.listDirectory = ok;
     executors.setReminder = [](const std::string& text, const std::string&, const ToolCallContext&) { return ToolExecution::Ok(text); };
@@ -257,8 +259,8 @@ struct ApprovalProbe
 void TestRegistryProjectsTheTurnsEffectivePermissions()
 {
     const auto all = ToolRegistry::Project(EveryPermission(), EveryExecutor());
-    Check(Names(all) == std::vector<std::string>{"web_search", "search_memory", "recall_history", "read_file", "list_dir", "set_reminder",
-                            "calculator", "generate_image"},
+    Check(Names(all) == std::vector<std::string>{"web_search", "search_memory", "recall_history", "search_documents", "read_file", "list_dir",
+                            "set_reminder", "calculator", "generate_image"},
         "A private turn with every permission did not offer every first tool: " + Json(Names(all)).dump());
     for (const auto& definition : all.Definitions())
     {
@@ -287,10 +289,11 @@ void TestRegistryProjectsTheTurnsEffectivePermissions()
 
     permissions = EveryPermission();
     permissions.memoryEnabled = permissions.archiveEnabled = permissions.remindersAvailable = permissions.imageGenerationEnabled = false;
+    permissions.documentsAvailable = false;
     permissions.approvedRoots.clear();
     const auto narrow = ToolRegistry::Project(permissions, EveryExecutor());
     Check(Names(narrow) == std::vector<std::string>{"web_search", "calculator"},
-        "Withdrawn memory, archive, roots, reminders or images still produced tools: " + Json(Names(narrow)).dump());
+        "Withdrawn memory, archive, documents, roots, reminders or images still produced tools: " + Json(Names(narrow)).dump());
 
     auto executors = EveryExecutor();
     executors.readFile = nullptr;
