@@ -4,6 +4,7 @@
 // result with images and links, and schemas the client must refuse.
 //
 //   ReviaMcpServerFixture [--log <file>] [--version <revision>] [--page-size <n>] [--exit-on-start]
+//                         [--close-input-then-complain]
 #include <nlohmann/json.hpp>
 
 #include <chrono>
@@ -12,6 +13,14 @@
 #include <string>
 #include <thread>
 #include <vector>
+
+#ifdef _WIN32
+#define NOMINMAX
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#else
+#include <unistd.h>
+#endif
 
 using Json = nlohmann::json;
 
@@ -26,6 +35,16 @@ Json pingReply;
 std::vector<Json> cancelled;
 Json pendingSample;
 Json samplingReply;
+
+// Closes the stream itself, not just the C++ stream over it, so the other end sees it.
+void CloseStandard(const int descriptor)
+{
+#ifdef _WIN32
+    CloseHandle(GetStdHandle(descriptor == 0 ? STD_INPUT_HANDLE : STD_ERROR_HANDLE));
+#else
+    close(descriptor);
+#endif
+}
 
 void Send(const Json& message)
 {
@@ -143,6 +162,7 @@ void Call(const Json& id, const std::string& name, const Json& arguments)
 int main(int argc, char** argv)
 {
     bool exitOnStart = false;
+    bool closeInputThenComplain = false;
     for (int index = 1; index < argc; ++index)
     {
         const std::string argument = argv[index];
@@ -154,11 +174,24 @@ int main(int argc, char** argv)
             pageSize = static_cast<std::size_t>(std::stoul(argv[++index]));
         else if (argument == "--exit-on-start")
             exitOnStart = true;
+        else if (argument == "--close-input-then-complain")
+            closeInputThenComplain = true;
     }
     if (exitOnStart)
     {
         std::cerr << "fixture refused to start\n";
         return 3;
+    }
+    if (closeInputThenComplain)
+    {
+        // Stops reading at once but says why only later, and keeps its output open: a
+        // write to it fails before it can be seen to have gone, and before its last words.
+        CloseStandard(0);
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        std::cerr << "fixture closed its input\n" << std::flush;
+        CloseStandard(2);
+        std::this_thread::sleep_for(std::chrono::seconds(3));
+        return 4;
     }
     std::string line;
     while (std::getline(std::cin, line))
