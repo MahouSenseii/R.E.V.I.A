@@ -464,7 +464,8 @@ ReviaSession::ReviaSession(CompanionPaths paths, std::shared_ptr<policy::Compani
                 event.kind = RuntimeEventKind::Activity;
                 event.state = state.load();
                 event.component = "Code sandbox";
-                event.message = title;
+                // The activity log shows the message, so the diff travels in it, bounded.
+                event.message = title + ":\n" + utf8::Prefix(diff, 6000) + (diff.size() > 6000 ? "\n[... the rest is in the patch]" : "");
                 event.detail = utf8::Prefix(diff, 16000);
                 event.stamp = origin;
                 eventBus.Publish(std::move(event));
