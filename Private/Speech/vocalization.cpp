@@ -71,15 +71,20 @@ std::string CollapseSpaces(const std::string& value)
 }
 
 // A space before punctuation is the visible scar of a removed tag: "That is great ."
+// Only a mark that ends a word counts. One that starts a token -- "./run.sh", ".NET",
+// ".gitignore" -- is part of what she said and keeps the space in front of it.
 std::string RepairPunctuationSpacing(std::string value)
 {
     static const std::string punctuation = ".,!?;:";
+    static const std::string closing = ".,!?;:\"')]";
     std::string result;
     result.reserve(value.size());
     for (std::size_t index = 0; index < value.size(); ++index)
     {
+        const bool endsWord = index + 2 >= value.size() ||
+            std::isspace(static_cast<unsigned char>(value[index + 2])) != 0 || closing.find(value[index + 2]) != std::string::npos;
         if (value[index] == ' ' && index + 1 < value.size() &&
-            punctuation.find(value[index + 1]) != std::string::npos)
+            punctuation.find(value[index + 1]) != std::string::npos && endsWord)
         {
             continue;
         }
