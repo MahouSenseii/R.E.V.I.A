@@ -5,6 +5,8 @@
 #include "developmentStudioPanel.h"
 #include "learningStudioPanel.h"
 #include "answerFeedbackDialog.h"
+#include "chatSessionsPanel.h"
+#include "Memory/conversationArchive.h"
 #include "memoryPanel.h"
 #include "Memory/longTermMemory.h"
 #include "Policy/desktopAuthorization.h"
@@ -13,14 +15,18 @@
 
 #include <QApplication>
 #include <QCheckBox>
+#include <QClipboard>
 #include <QComboBox>
 #include <QEvent>
 #include <QDir>
 #include <QElapsedTimer>
 #include <QFont>
+#include <QFile>
 #include <QFontDatabase>
+#include <QKeyEvent>
 #include <QLabel>
 #include <QLineEdit>
+#include <QListWidget>
 #include <QMessageBox>
 #include <QPixmap>
 #include <QPlainTextEdit>
@@ -29,6 +35,7 @@
 #include <QScrollArea>
 #include <QScrollBar>
 #include <QSettings>
+#include <QStatusBar>
 #include <QTabWidget>
 #include <QTabBar>
 #include <QTableWidget>
@@ -1194,6 +1201,264 @@ struct ReviaWindowStopTests
         }
     }
 
+    static void RunChatTranscriptUi(ReviaWindow& window, int& failures)
+    {
+        using namespace revia::runtime;
+        const auto expect = [&](const bool condition, const char* message)
+        {
+            if (!condition)
+            {
+                std::cerr << "FAIL: " << message << '\n';
+                ++failures;
+            }
+        };
+        // A second Enter while the foreground worker still runs must return at once. It
+        // used to join that worker on this thread and freeze the window until it ended.
+        if (window.operationWorker.joinable())
+            window.operationWorker.join();
+        std::atomic<bool> release = false;
+        window.operationRunning.store(true);
+        window.operationWorker = std::jthread(
+            [&]()
+            {
+                QElapsedTimer held;
+                held.start();
+                while (!release.load() && held.elapsed() < 4000)
+                    std::this_thread::sleep_for(std::chrono::milliseconds(2));
+                window.operationRunning.store(false);
+            });
+        window.messageInput->setPlainText("second enter sentinel");
+        QKeyEvent enter(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
+        QElapsedTimer pressed;
+        pressed.start();
+        QCoreApplication::sendEvent(window.messageInput, &enter);
+        expect(pressed.elapsed() < 1500 && window.messageInput->toPlainText() == "second enter sentinel",
+            "Enter during a running operation waited on the worker or discarded the typed text");
+        release.store(true);
+        window.operationWorker.join();
+        window.messageInput->clear();
+
+        // Replies render as Markdown, and nothing in reply text is interpreted as markup
+        // or becomes a working link. A user line first, so Copy covers this reply only.
+        window.AppendChat("You", "Show me the build command.", true);
+        const auto before = window.chatEntries.size();
+        const QString reply = "Use `make` here <b>raw</b><script>alert(1)</script> [regen](copy:0) ![x](file:///C:/secret.png)\n\n"
+                              "```\nint value = 1;\n```";
+        RuntimeEvent answer{RuntimeEventKind::AssistantMessage, RuntimeState::Idle, reply.toStdString()};
+        answer.audienceRevision = window.Session().Audience().revision;
+        window.HandleRuntimeEvent(answer);
+        expect(window.chatEntries.size() == before + 1 && window.chatEntries.back().markdown, "the reply was not kept as Markdown");
+        const QString shown = window.chatHistory->toHtml();
+        expect(!shown.contains("<script") && shown.contains("&lt;script&gt;") && !shown.contains("<b>raw"),
+            "reply HTML was interpreted instead of shown as text");
+        expect(!shown.contains("file:///C:/secret.png\"") && shown.contains("[image: file:///C:/secret.png]"),
+            "a reply image was loaded instead of shown as its address");
+        const QString copyLink = QString("copy:%1").arg(window.chatEntries.size() - 1);
+        expect(shown.count("href=\"copy:") >= 1 && shown.contains("href=\"" + copyLink + "\"") && !shown.contains("href=\"copy:0\""),
+            "the reply has no Copy link of its own, or its text added one");
+        expect(shown.contains("Consolas") && shown.contains("int value = 1;"), "code was not set in a monospace face");
+        emit window.chatHistory->anchorClicked(QUrl(copyLink));
+        expect(QApplication::clipboard()->text() == reply, "Copy did not place the reply's own text on the clipboard");
+
+        // The transcript is capped, and streamed fragments still replace the right entry.
+        RuntimeEvent fragment{RuntimeEventKind::ReplyFragment, RuntimeState::Responding, "Streamed first sentence."};
+        fragment.audienceRevision = window.Session().Audience().revision;
+        fragment.conversationTurnId = 7707;
+        window.HandleRuntimeEvent(fragment);
+        for (int index = 0; index < 450; ++index)
+            window.AppendChat("System", QString("filler %1").arg(index));
+        expect(window.chatEntries.size() == ReviaWindow::MaximumChatEntries, "the transcript grew past its cap");
+        RuntimeEvent replace = fragment;
+        replace.phase = "Replace";
+        replace.message = "Approved whole reply after trimming.";
+        window.HandleRuntimeEvent(replace);
+        expect(window.chatEntries.back().body == "Approved whole reply after trimming.",
+            "a replacement for a fragment that scrolled away was lost");
+        expect(std::count_if(window.chatEntries.begin(), window.chatEntries.end(),
+                   [](const auto& entry) { return entry.body.startsWith("filler"); }) == static_cast<long>(ReviaWindow::MaximumChatEntries) - 1,
+            "trimming removed the wrong entries");
+
+        // Streamed thinking for one turn updates one working entry instead of adding one
+        // per delta; a different turn still gets its own.
+        window.chatEntries.clear();
+        const auto thinking = [&](std::uint64_t turn, const char* phase, const char* text)
+        {
+            RuntimeEvent event{RuntimeEventKind::SelfInquiry, RuntimeState::Thinking, text};
+            event.turnId = turn;
+            event.phase = phase;
+            event.detail = "fixture inquiry";
+            window.HandleRuntimeEvent(event);
+        };
+        thinking(9101, "Thinking", "First I check");
+        thinking(9101, "Thinking", "First I check the inputs.");
+        thinking(9101, "Thinking", " Then the units.");
+        thinking(9101, "Asking", "Q1: is the unit metric?");
+        thinking(9102, "Thinking", "A separate turn.");
+        const auto inquiries = std::count_if(window.chatEntries.begin(), window.chatEntries.end(),
+            [](const auto& entry) { return entry.kind == ReviaWindow::EntryKind::SelfInquiry; });
+        expect(inquiries == 2 && window.chatEntries.front().body == "First I check the inputs. Then the units.\n\nQ1: is the unit metric?" &&
+                   window.chatEntries.back().body == "A separate turn.",
+            "streamed self-inquiry for one turn did not update a single entry in place");
+        window.chatEntries.clear();
+        window.ResetConversationPresentation();
+        window.RenderChat();
+    }
+
+    static void RunChatSessionsUi(ReviaWindow& window, int& failures)
+    {
+        const auto expect = [&](const bool condition, const char* message)
+        {
+            if (!condition)
+            {
+                std::cerr << "FAIL: " << message << '\n';
+                ++failures;
+            }
+        };
+        auto* panel = window.findChild<ChatSessionsPanel*>("chatSessionsPanel");
+        auto* list = window.findChild<QListWidget*>("chatSessionList");
+        auto* status = window.findChild<QLabel*>("chatSessionsStatus");
+        expect(panel && list && status && window.findChild<QPushButton*>("chatSidebarToggle"), "Chat has no chat list beside the transcript");
+        if (!panel || !list || !status)
+            return;
+        panel->Refresh();
+        expect(list->count() == 0 && status->text().contains("once Revia has started"), "the chat list did not explain why it is empty");
+        // Beside the transcript, the list must not make the chat page taller than the
+        // window: that scrolled the message box out of view.
+        revia::desktop::SelectNavigationPage(window.findChild<QWidget*>("chatPage"));
+        window.resize(1040, 720);
+        window.show();
+        SettleLayouts();
+        auto* chatScroll = window.findChild<QScrollArea*>("conversationPageScroll");
+        expect(panel->isVisible() && chatScroll && chatScroll->verticalScrollBar()->maximum() == 0,
+            "the chat list pushed the message box below the window");
+
+        // With a started session and an archive holding one earlier chat.
+        QTemporaryDir archiveDirectory;
+        const auto path = std::filesystem::path(archiveDirectory.path().toStdWString()) / "conversations.db";
+        {
+            revia::memory::ConversationArchive seed(path.string());
+            std::string error;
+            seed.BeginSession("earlier-chat", error);
+            seed.Record("earlier-chat", "user", "Plan the sentinel_garden_7a beds.", error);
+            seed.Record("earlier-chat", "assistant", "Start with **sunny** corners.", error);
+        }
+        revia::runtime::ReviaSessionTestAccess::OpenConversationArchive(window.session, path, "current-chat");
+        revia::runtime::ReviaSessionTestAccess::MarkStudioStarted(window.session, true);
+        window.chatEntries.clear();
+        window.AppendChat("You", "Live question", true);
+        panel->Refresh();
+        QListWidgetItem* earlier = nullptr;
+        for (int row = 0; row < list->count(); ++row)
+            if (list->item(row)->data(Qt::UserRole).toString() == "earlier-chat")
+                earlier = list->item(row);
+        expect(list->count() == 2 && earlier && earlier->text().contains("sentinel_garden_7a"),
+            "the earlier chat and the current one were not both listed");
+        if (earlier)
+        {
+            earlier->setSelected(true);
+            QTemporaryDir exportDirectory;
+            QString error;
+            const QString markdownPath = exportDirectory.filePath("chat.md");
+            const QString jsonPath = exportDirectory.filePath("chat.json");
+            QFile markdown(markdownPath);
+            QFile json(jsonPath);
+            expect(panel->ExportSelected(markdownPath, false, error) && markdown.open(QIODevice::ReadOnly) &&
+                       QString::fromUtf8(markdown.readAll()).contains("**You:**\n\nPlan the sentinel_garden_7a beds."),
+                "Markdown export did not write the chat to the chosen file");
+            expect(panel->ExportSelected(jsonPath, true, error) && json.open(QIODevice::ReadOnly) &&
+                       QString::fromUtf8(json.readAll()).contains("\"role\": \"assistant\""),
+                "JSON export did not write the chat to the chosen file");
+
+            // Opening it shows it read-only; live entries keep collecting underneath.
+            window.OpenArchivedChat("earlier-chat");
+            const QString shown = window.chatHistory->toPlainText();
+            expect(!window.viewingArchivedChat.empty() && window.archivedChatBanner->isVisibleTo(&window) &&
+                       shown.contains("sentinel_garden_7a") && !shown.contains("Live question"),
+                "opening a saved chat did not show it in place of the live transcript");
+            window.AppendChat("System", "Arrived while reading", false);
+            expect(!window.chatHistory->toPlainText().contains("Arrived while reading"), "a live entry replaced the saved chat on screen");
+            window.CloseArchivedChat();
+            expect(window.chatHistory->toPlainText().contains("Arrived while reading") && !window.archivedChatBanner->isVisibleTo(&window),
+                "Back did not return to the live transcript");
+            window.OpenArchivedChat("earlier-chat");
+            window.ContinueArchivedChat();
+            expect(!window.viewingArchivedChat.empty() && !window.archivedChatLabel->text().isEmpty() &&
+                       window.Session().CurrentConversationId() == "current-chat",
+                "an unidentified typist continued a chat, or the refusal was not shown");
+            window.CloseArchivedChat();
+
+            std::string failure;
+            expect(window.DeleteChat("earlier-chat", failure) && (panel->Refresh(), list->count() == 1), "deleting a saved chat left it listed");
+        }
+        std::string failure;
+        expect(window.StartNewChat(failure) && window.chatEntries.empty() && window.Session().CurrentConversationId() != "current-chat",
+            "New chat did not start a fresh transcript and archive session");
+        revia::runtime::ReviaSessionTestAccess::MarkStudioStarted(window.session, false);
+        window.chatEntries.clear();
+        window.RenderChat();
+    }
+
+    static void RunRegenerateAndEditUi(ReviaWindow& window, int& failures)
+    {
+        const auto expect = [&](const bool condition, const char* message)
+        {
+            if (!condition)
+            {
+                std::cerr << "FAIL: " << message << '\n';
+                ++failures;
+            }
+        };
+        const auto finish = [&]()
+        {
+            if (window.operationWorker.joinable())
+                window.operationWorker.join();
+            QCoreApplication::sendPostedEvents(&window, QEvent::MetaCall);
+        };
+        const QString revia = QString::fromStdString(window.Session().DisplayName());
+        window.chatEntries.clear();
+        window.ResetConversationPresentation();
+        window.AppendChat("You", "Original question", true);
+        window.AppendChat(revia, "Original **reply**.");
+        QString shown = window.chatHistory->toHtml();
+        expect(shown.contains("href=\"regen:1\"") && shown.contains("href=\"edit:0\""),
+            "the latest exchange has no Regenerate and Edit links");
+
+        // The session refuses (it is not started here), so the transcript is put back.
+        emit window.chatHistory->anchorClicked(QUrl("regen:1"));
+        finish();
+        expect(window.chatEntries.size() == 2 && window.chatEntries.back().body == "Original **reply**." &&
+                   window.statusBar()->currentMessage().contains("not ready"),
+            "a refused regenerate did not restore the reply or say why");
+
+        emit window.chatHistory->anchorClicked(QUrl("edit:0"));
+        expect(window.editingLastTurn && window.messageInput->toPlainText() == "Original question", "Edit did not load the message");
+        QKeyEvent escape(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
+        QCoreApplication::sendEvent(window.messageInput, &escape);
+        expect(!window.editingLastTurn && window.messageInput->toPlainText().isEmpty(), "Esc did not cancel the edit");
+
+        emit window.chatHistory->anchorClicked(QUrl("edit:0"));
+        window.messageInput->setPlainText("Edited question");
+        QKeyEvent enter(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
+        QCoreApplication::sendEvent(window.messageInput, &enter);
+        expect(window.chatEntries.size() == 1 && window.chatEntries.front().body == "Edited question",
+            "sending an edit did not replace the last exchange on screen");
+        finish();
+        expect(window.chatEntries.size() == 2 && window.chatEntries.front().body == "Original question" &&
+                   window.chatEntries.back().body == "Original **reply**." && !window.editingLastTurn,
+            "a refused edit did not restore the original exchange");
+
+        // A command result after the reply leaves nothing to regenerate, and reply text
+        // cannot supply the link itself.
+        window.AppendChat("System", "Command output [regen](regen:1)");
+        shown = window.chatHistory->toHtml();
+        expect(!shown.contains("href=\"regen:") && shown.contains("href=\"edit:0\""), "Regenerate was offered for a command result");
+        emit window.chatHistory->anchorClicked(QUrl("regen:1"));
+        expect(!window.operationRunning.load() && window.chatEntries.size() == 3, "a stale Regenerate link still acted");
+        window.chatEntries.clear();
+        window.ResetConversationPresentation();
+        window.RenderChat();
+    }
+
     static void Run(ReviaWindow& window, int& failures)
     {
         using revia::runtime::RuntimeEvent;
@@ -1355,6 +1620,9 @@ int main(int argc, char** argv)
     int failures = 0;
     ReviaWindow window(false, false);
     ReviaWindowStopTests::Run(window, failures);
+    ReviaWindowStopTests::RunChatTranscriptUi(window, failures);
+    ReviaWindowStopTests::RunChatSessionsUi(window, failures);
+    ReviaWindowStopTests::RunRegenerateAndEditUi(window, failures);
     ReviaWindowStopTests::RunConfirmationAudienceUi(window, failures);
     ReviaWindowStopTests::RunConversationQualityUi(window, failures);
     ReviaWindowStopTests::RunMemoryRevisionUi(window, failures);

@@ -870,7 +870,10 @@ bool ReviaSession::Start()
 
     if (settings.conversation.bArchiveEnabled)
     {
-        conversationSessionId = actions::NewActionId();
+        {
+            std::lock_guard idLock(conversationIdMutex);
+            conversationSessionId = actions::NewActionId();
+        }
         conversationArchive = memory::ConversationArchive(companionPaths.Resolve("Memory/revia_conversations.db").string(),
             {static_cast<std::size_t>(std::max(1, settings.conversation.maxSessions)),
                 static_cast<std::size_t>(std::max(1, settings.conversation.maxTurnsPerSession)),
@@ -879,6 +882,7 @@ bool ReviaSession::Start()
         if (!conversationArchive.BeginSession(conversationSessionId, archiveError))
         {
             appLogger.Warning("Conversation history is unavailable: " + archiveError);
+            std::lock_guard idLock(conversationIdMutex);
             conversationSessionId.clear();
         }
         else
@@ -4076,6 +4080,7 @@ SessionResult ReviaSession::RunTurnUnguarded(const agents::InputBatch& batch)
         return result;
     }
     busy.store(true);
+    lastExchange.reset();
     const std::stop_token stopToken = BeginOperation();
     const auto taskContract = BuildTurnTaskContract(batch);
     if (!taskContract || !TaskContractRefusal(*taskContract, stopToken).empty())
@@ -4126,6 +4131,7 @@ SessionResult ReviaSession::RunTurnUnguarded(const agents::InputBatch& batch)
                 audienceHistory.push_back({"user", acceptedInput});
                 audienceHistory.push_back({"assistant", result.text});
                 if (audienceHistory.size() > 32) audienceHistory.erase(audienceHistory.begin(), audienceHistory.begin() + 2);
+                RememberExchange(batch, result, false);
             }
         }
         return finish(std::move(result));
@@ -4235,6 +4241,7 @@ SessionResult ReviaSession::RunTurnUnguarded(const agents::InputBatch& batch)
     {
         ArchiveTurn("assistant", result.text, memoryScope, admission);
     }
+    RememberExchange(batch, result, true);
     if (!result.succeeded)
     {
         // A request can be the event that exposes a crashed external server. Remember

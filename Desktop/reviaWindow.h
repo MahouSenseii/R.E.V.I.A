@@ -12,6 +12,7 @@
 #include <functional>
 #include <map>
 #include <memory>
+#include <optional>
 #include <set>
 #include <thread>
 #include <vector>
@@ -49,6 +50,7 @@ class LearningStudioPanel;
 class DevelopmentStudioPanel;
 class AudienceStudioPanel;
 class ConversationStatusPanel;
+class ChatSessionsPanel;
 class NavigationSidebar;
 class AnswerFeedbackDialog;
 namespace Ui
@@ -102,6 +104,10 @@ class ReviaWindow final : public QMainWindow
     void BuildNavigationSidebar();
     void BuildTray();
     void StartRuntime();
+    // Takes operationWorker for a new foreground operation. Refuses, with a status line,
+    // while the previous one is still running, and only ever joins a finished worker,
+    // because joining a running one on this thread is what froze the window.
+    bool ClaimOperationWorker();
     void SendMessage(bool voiceInput = false);
     void ToggleListening();
     // Rebuilds the device list from what Windows reports and restores the saved
@@ -129,6 +135,18 @@ class ReviaWindow final : public QMainWindow
         std::uint64_t turnId = 0, bool fragment = false);
     void ReviewDisplayedAnswer();
     void ResetConversationPresentation();
+    // The chat list beside the transcript, backed by the conversation archive.
+    void BuildChatSidebar();
+    void ApplyChatSidebarVisibility();
+    void RefreshChatSidebar();
+    bool StartNewChat(std::string& outError);
+    bool DeleteChat(const std::string& id, std::string& outError);
+    // A past chat is shown read-only in place of the live transcript, which keeps
+    // updating underneath; Back returns to it and Continue makes the past chat current.
+    void OpenArchivedChat(const std::string& id);
+    void CloseArchivedChat();
+    void ContinueArchivedChat();
+    void ClearTranscript();
     void ConfigureMemoryRevisionControls();
     void UpdateState(revia::runtime::RuntimeState state, const QString& detail);
     // The runtime returns to Idle as soon as a turn finishes, but speech is generated and
@@ -166,6 +184,16 @@ class ReviaWindow final : public QMainWindow
         // never be drawn under a later one.
         quint64 taskId = 0;
         int round = 0;
+        // Revia's own replies are Markdown; everything else is shown as plain text.
+        bool markdown = false;
+        // The event phase that last wrote a working entry, so streamed thinking can tell
+        // a continuation from a new stage of the same turn.
+        QString phase;
+        // The body as last rendered and the text it came from. A re-render only converts
+        // entries whose text changed, so a streamed sentence does not re-run Markdown
+        // over the whole history.
+        QString renderedSource;
+        QString renderedBody;
     };
 
     // Appends one of Revia's working entries. `detail` is the supporting evidence, shown
@@ -175,6 +203,32 @@ class ReviaWindow final : public QMainWindow
     // the investigation runs -- enablement lives in the runtime settings, not here.
     bool showWorkSummaries = true;
     void RenderChat();
+    // The cached body HTML of one entry, converted again only when its text changed.
+    const QString& RenderedBody(ChatEntry& entry);
+    // Consecutive entries from one non-user speaker read as one message: streamed speech
+    // arrives sentence by sentence. These find where such a message ends and its text.
+    [[nodiscard]] bool EndsMessage(std::size_t index) const;
+    [[nodiscard]] QString MessageText(std::size_t last) const;
+    // The transcript keeps the newest entries only. Indices held elsewhere (streamed
+    // fragments) are shifted, or forgotten when their entry scrolled away.
+    static constexpr std::size_t MaximumChatEntries = 400;
+    void TrimTranscript();
+    // How many entries trimming has dropped from the front, so a position kept across
+    // an asynchronous operation can still be found afterwards.
+    std::size_t chatEntriesDropped = 0;
+    // Regenerate and edit-and-resend act on the latest exchange only: the last user
+    // line, and the reply from Revia after it.
+    [[nodiscard]] std::optional<std::size_t> LastUserEntry() const;
+    [[nodiscard]] std::optional<std::size_t> RegenerableReply() const;
+    // Runs ReviaSession::RegenerateLast, or ReplaceLastUserTurn when `replacement` is
+    // given. The transcript changes at once and is put back if the session refuses.
+    void RetryLastExchange(const QString& replacement);
+    void BeginEditLastTurn();
+    void CancelEditLastTurn();
+    bool editingLastTurn = false;
+    // A foreground turn has been sent and its result is not shown yet; the regenerate
+    // and edit links stay hidden until it is.
+    bool chatTurnInFlight = false;
     std::vector<ChatEntry> chatEntries;
     enum class ActivitySeverity
     {
@@ -264,6 +318,13 @@ class ReviaWindow final : public QMainWindow
     VoiceHealthPanel* chatVoiceHealth = nullptr;
     VoiceHealthPanel* voiceHealth = nullptr;
     ConversationStatusPanel* conversationStatus = nullptr;
+    ChatSessionsPanel* chatSessionsPanel = nullptr;
+    QPushButton* chatSidebarToggle = nullptr;
+    QWidget* archivedChatBanner = nullptr;
+    QLabel* archivedChatLabel = nullptr;
+    QPushButton* continueChatButton = nullptr;
+    std::string viewingArchivedChat;
+    bool chatSidebarWanted = true;
     QPointer<AnswerFeedbackDialog> answerFeedbackDialog;
     QString latestDisplayedAnswer;
     revia::learning::QualityFeedback displayedAnswerTarget;
@@ -316,6 +377,8 @@ class ReviaWindow final : public QMainWindow
     QTimer* pollTimer = nullptr;
 
     std::jthread operationWorker;
+    // Set by ClaimOperationWorker, cleared by the worker itself as its body ends.
+    std::atomic<bool> operationRunning = false;
     std::jthread shutdownWorker;
     std::jthread voiceWorker;
     std::jthread capabilityWorker;

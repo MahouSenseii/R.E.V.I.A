@@ -101,6 +101,21 @@ struct ReviaSessionTestAccess
     {
         return session.AgentProvider(AgentProviderMode::Local)(request, {});
     }
+    static void OpenConversationArchive(ReviaSession& session, const std::filesystem::path& path, const std::string& sessionId)
+    {
+        std::lock_guard lock(session.operationMutex);
+        session.settings.conversation.bArchiveEnabled = true;
+        session.conversationArchive = memory::ConversationArchive(path.string());
+        std::string error;
+        tests::Check(session.conversationArchive.BeginSession(sessionId, error), error);
+        std::lock_guard idLock(session.conversationIdMutex);
+        session.conversationSessionId = sessionId;
+    }
+    static std::vector<conversationMessage> WorkingContext(ReviaSession& session)
+    {
+        std::lock_guard lock(session.operationMutex);
+        return session.context.GetRecentMessages();
+    }
     static void ConfigureStartupBrains(ReviaSession& session, int port, bool fastWarm = true, bool expertWarm = true)
     {
         session.settings.llm.backend = "LLamaCpp";
