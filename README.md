@@ -280,7 +280,7 @@ This is a separate small Node program in `Tools\Presence\DiscordVoice\`. It list
    notepad config.json
    ```
 
-   Fill in `guildId`, `channelId`, and the **absolute** `inbox`/`outbox` paths of the Revia you are running, for example `C:/Users/you/Documents/R.E.V.I.A/build/debug/RuntimeData/Presence/Inbox` and `.../Outbox`. Leave `whisperUrl` as `http://127.0.0.1:8094`. Keep `replyMode: "addressed"` so she answers only when someone says "Revia", or use `"conversation"` to let her answer anyone.
+   Fill in `guildId`, `channelId`, and the **absolute** `inbox`/`outbox` paths of the Revia you are running, for example `C:/Users/you/Documents/R.E.V.I.A/build/debug/RuntimeData/Presence/Inbox` and `.../Outbox`. Set `whisperEndpointFile` to the absolute path of `RuntimeData/Speech/whisper-endpoint.json` in the same runtime folder (for example `C:/Users/you/Documents/R.E.V.I.A/build/debug/RuntimeData/Speech/whisper-endpoint.json`). Revia starts whisper.cpp under a new random URL prefix each time and writes the full address there once it has checked the server is its own, so a fixed `whisperUrl` no longer reaches it. Keep `replyMode: "addressed"` so she answers only when someone says "Revia", or use `"conversation"` to let her answer anyone.
 
 5. **Check it offline** (no Discord login, no microphone):
 
@@ -521,6 +521,7 @@ The capability `mode` can be `supervised` (default) or `owner_full_access`. The 
 - Anything she does because of what she saw must map back to an approved UI element that is re-checked right before acting.
 - Action logs record typed text by length, not content.
 - She cannot edit her own source, change her models or settings, or widen her own permissions.
+- The whisper.cpp server is started under a new random URL prefix each launch (`--request-path`), so web pages and other programs cannot reach its routes, including its unauthenticated `/load`, without learning it. Microphone audio goes only to a server that answers under that prefix, not outside it, and, on Windows, owns the listening port by process ID. A program squatting on the port gets no audio; recognition falls back to the command-line runner. The pinned v1.9.2 server has no `--no-prints` option (an unknown option makes it exit), and it writes no transcript text to its log unless `--print-realtime` is passed, which Revia does not. The probe is tested against local fixture servers; the Windows ownership check is compiled for Windows but not yet run live.
 
 The live permissions file is `build\debug\RuntimeData\Capabilities\capabilities.json`, seeded once from `Config\capabilities.json` and never overwritten by builds. Use the **Permissions** tab rather than editing it.
 

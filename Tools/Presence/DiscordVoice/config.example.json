@@ -3,7 +3,7 @@
   "channelId": "REPLACE_WITH_VOICE_CHANNEL_ID",
   "inbox": "C:/absolute/path/to/Revia/RuntimeData/Presence/Inbox",
   "outbox": "C:/absolute/path/to/Revia/RuntimeData/Presence/Outbox",
-  "whisperUrl": "http://127.0.0.1:8094",
+  "whisperEndpointFile": "C:/absolute/path/to/Revia/RuntimeData/Speech/whisper-endpoint.json",
   "language": "en",
   "replyMode": "addressed",
   "maxUtteranceSeconds": 20,
