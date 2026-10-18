@@ -7645,13 +7645,16 @@ void TestOnlySoundEffectsSurviveInAsterisks()
 
     // Paths and names that begin with punctuation keep the space in front of them; only
     // the gap a removed tag leaves before a closing mark is repaired.
-    for (const std::string written : {"Then run it as ./build.sh from the root.", "It targets .NET and reads .gitignore first."})
+    for (const std::string written : {"Then run it as ./build.sh from the root.", "It targets .NET and reads .gitignore first.",
+             "So you can run it as ./script.sh.", "It needs version .NET 8; see .gitignore too.", "From docs, run cd ../src first."})
     {
         const VocalizationShaping path = ShapeVocalizations(written, 2);
         Check(path.text == written && !path.changed, "Token-leading punctuation lost its space: " + path.text);
     }
     Check(ShapeVocalizations("That is great *Leans back.* .", 2).text == "That is great.",
         "The space a removed stage direction left before a full stop was not repaired.");
+    Check(ShapeVocalizations("Wait for it *Leans back.* ...", 2).text == "Wait for it...",
+        "The space a removed stage direction left before an ellipsis was not repaired.");
 
     // A bracketed aside Revia meant literally is still hers. Only asterisks are policed.
     const VocalizationShaping literal = ShapeVocalizations("Check [section 4] for that.", 2);
