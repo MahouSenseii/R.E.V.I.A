@@ -7,6 +7,7 @@
 
 #include <cstdint>
 #include <functional>
+#include <map>
 #include <stop_token>
 #include <string>
 
@@ -71,9 +72,15 @@ class GoalRunner
     // Drops any standing yes. Called at the start of every run, so an approval can never
     // leak from one goal into the next.
     void ClearStandingApproval();
-    // Consumed by the next run only; never stored or used to widen permissions.
-    // Covers only the shown risk ceiling; escalation and deletion still require confirmation.
-    void SeedStandingApproval(actions::RiskLevel ceiling, bool refuseEscalation = false);
+    // Consumed by the next run only; never stored or used to widen permissions. Says the
+    // person approved the task as a whole. It covers no step by itself: the first step of
+    // each kind of action (its type and application) still asks once, and that answer
+    // covers later steps of the same kind, never one riskier than `ceiling`. With
+    // `refuseEscalation`, anything a kind approval cannot cover stops the task instead of
+    // asking. `approveKindsWithoutAsking` is owner_full_access: routine kinds are taken as
+    // approved without the question, and the kinds that always need their own
+    // confirmation are still never covered.
+    void SeedStandingApproval(actions::RiskLevel ceiling, bool refuseEscalation = false, bool approveKindsWithoutAsking = false);
     void SeedToolDelegation(bool process, bool browser);
     void SetStepProvider(StepProvider provider);
     void SetCompletionVerifier(CompletionVerifier verifier);
@@ -111,14 +118,19 @@ class GoalRunner
     const GoalStore& goalStore;
     ProgressHandler progressHandler;
     ConfirmationHandler confirmationHandler;
-    // A standing yes for the current run. Reset at the start of every Run and Operate,
-    // never persisted, and never consulted for anything riskier than what was shown.
-    bool blanketApproval = false;
+    // Standing yeses for the current run, one per kind of action (see ActionKind), each
+    // bounded by the risk of the step the person actually saw. Reset at the start of every
+    // Run and Operate and never persisted.
+    std::map<std::string, actions::RiskLevel> approvedKinds;
+    // The person approved this task up front: a per-kind answer then covers that kind.
+    bool taskApproved = false;
     bool refuseAdditionalApproval = false;
-    actions::RiskLevel blanketRiskCeiling = actions::RiskLevel::ReadOnly;
+    bool approveKindsWithoutAsking = false;
+    actions::RiskLevel taskRiskCeiling = actions::RiskLevel::ReadOnly;
     // Set before a run starts, consumed by it. Separate from the live flag so that
     // starting a run still clears whatever the previous one left behind.
     bool seededApproval = false;
+    bool seededApproveKinds = false;
     bool seededProcessDelegation = false;
     bool seededBrowserDelegation = false;
     bool processDelegation = false;

@@ -2571,9 +2571,10 @@ revia::actions::ConfirmationChoice ReviaWindow::ConfirmAction(
         QPushButton* everything = prompt.addButton("Allow for this whole task", QMessageBox::AcceptRole);
         QPushButton* refuse = prompt.addButton("No", QMessageBox::RejectRole);
         everything->setToolTip(wholeTask ? "Approve the task described above. Work outside its scope stops; approval ends with the task."
-                                         : "Stops asking for the rest of this one task, for work no riskier than this. "
-                                           "Anything riskier still asks, and so does anything that sends, buys or "
-                                           "deletes. It is forgotten when the task ends and changes no permission.");
+                                         : "Stops asking for the rest of this one task, for this same kind of action in "
+                                           "this same application, no riskier than this. A different kind of action asks "
+                                           "again, and so does anything that sends, buys, deletes or opens a file with an "
+                                           "application. It is forgotten when the task ends and changes no permission.");
         prompt.setDefaultButton(refuse);
         prompt.setEscapeButton(refuse);
         if (!RunAdmittedQuestion(prompt, admitted))

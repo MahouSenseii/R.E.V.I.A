@@ -7636,12 +7636,13 @@ bool ReviaSession::RunOperateGoal(const std::string& request, SessionResult& res
                       std::to_string(goal.budget.maxActions) + " actions, " + std::to_string(goal.budget.maxTotalRetries) +
                       " retries and " + std::to_string(goal.budget.maxDurationMs / 1000) +
                       " seconds.\n"
-                      "Approve this task once. Routine steps and content editing will continue "
-                      "within your existing permissions. Each step must be checked before continuing.\n" +
+                      "Approving starts the task. The first step of each kind of action in each application "
+                      "(typing in one app, clicking in another, writing a file) asks you once; later steps "
+                      "of that same kind are covered until the task ends. Each step must be checked before continuing.\n" +
                       std::string(messaging ? "This includes composing and sending the message you requested.\n"
                                             : "This does not include sending or publishing messages.\n") +
-                      "Purchases, deletion, account changes and commands outside existing grants "
-                      "stop the task instead of opening more prompts.";
+                      "Opening a file with an application, purchases, deletion, account changes and commands "
+                      "outside existing grants stop the task instead of opening more prompts.";
     actions::ConfirmationChoice goalChoice = actions::ConfirmationChoice::AllowForThisTask;
     if (!freeMode)
     {
@@ -7673,7 +7674,11 @@ bool ReviaSession::RunOperateGoal(const std::string& request, SessionResult& res
 goals::Goal ReviaSession::ExecuteOperate(
     goals::Goal goal, const std::string& request, const bool messaging, const std::stop_token stopToken, const bool reportState)
 {
-    goalRunner.SeedStandingApproval(actions::RiskLevel::ReversibleWrite, true);
+    // Owner full access answers the per-kind questions itself, for routine kinds only; the
+    // kinds that always need their own confirmation still stop the task.
+    const bool ownerFullAccess = actionRuntime.Settings().mode == actions::ExecutionMode::OwnerFullAccess &&
+        goal.scope.mode == actions::ExecutionMode::OwnerFullAccess;
+    goalRunner.SeedStandingApproval(actions::RiskLevel::ReversibleWrite, true, ownerFullAccess);
     const auto tools = policy::ProjectCapabilityScope(goal.scope, actionRuntime.Settings());
     goalRunner.SeedToolDelegation(
         tools.process.enabled && tools.process.allowTaskExecution, tools.browser.enabled && tools.browser.allowTaskInteraction);

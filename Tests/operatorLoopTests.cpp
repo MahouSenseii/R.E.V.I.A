@@ -46,13 +46,15 @@ struct LoopFixture
     GoalStore store{(directory.root / "goals.db").string()};
     GoalRunner runner{runtime, store};
 
-    LoopFixture()
+    explicit LoopFixture(const nlohmann::json& extraPolicy = nlohmann::json::object())
     {
         std::filesystem::create_directories(approved);
         const auto configPath = directory.root / "capabilities.json";
         {
             std::ofstream file(configPath);
-            file << CapabilityConfig(approved).dump();
+            nlohmann::json policy = CapabilityConfig(approved);
+            policy.update(extraPolicy);
+            file << policy.dump();
             Check(file.good(), "Could not write the loop fixture policy.");
         }
         std::string error;
@@ -1576,9 +1578,106 @@ void TestAStandingYesDoesNotCoverEscalation()
         "which is the whole reason it needs its own rule.");
 }
 
-// Answering the up-front goal question with "for the whole task" must actually stop the
-// per-step questions, or the offer is a lie and the user keeps clicking.
-void TestTheGoalApprovalCanAnswerForTheWholeRun()
+// A yes for one kind of action is not a yes for another kind at the same risk level.
+// Creating folders and renaming one are both ReversibleWrite, and the person only saw
+// the first, so the rename asks on its own.
+void TestAStandingYesCoversOnlyItsKind()
+{
+    LoopFixture fixture;
+    std::vector<revia::actions::ActionType> asked;
+    fixture.runner.SetConfirmationHandler([&](
+        const revia::actions::ActionRequest& action,
+        const revia::actions::PolicyDecision&)
+    {
+        asked.push_back(action.type);
+        return revia::actions::ConfirmationChoice::AllowForThisTask;
+    });
+    fixture.runner.SetStepProvider([&](const Goal&, const std::uint32_t iteration)
+    {
+        if (iteration == 0) return Take(fixture.MakeDirectory("first"));
+        if (iteration == 1) return Take(fixture.MakeDirectory("second"));
+        if (iteration == 2)
+        {
+            GoalStep step;
+            step.description = "Rename the second folder";
+            step.action.type = revia::actions::ActionType::RenamePath;
+            step.action.source = fixture.approved / "second";
+            step.action.destination = fixture.approved / "renamed";
+            step.check.type = revia::actions::ActionType::ListDirectory;
+            step.check.source = fixture.approved;
+            step.expected = "renamed";
+            return Take(step);
+        }
+        if (iteration == 3) return Take(fixture.MakeDirectory("third"));
+        return Done("finished");
+    });
+
+    const Goal finished = fixture.runner.Operate(SupervisedGoal(fixture, "folders and a rename"));
+    Check(finished.status == GoalStatus::Succeeded, "The mixed run did not finish: " + ToString(finished.stopReason) +
+        (finished.steps.empty() || finished.steps.back().attempts.empty() ? std::string()
+            : " (" + finished.steps.back().attempts.back().failure + " | " + finished.steps.back().attempts.back().observation + ")"));
+    Check(asked == std::vector<revia::actions::ActionType>{revia::actions::ActionType::CreateDirectory,
+                       revia::actions::ActionType::RenamePath},
+        "A standing yes for creating folders was not limited to that kind; the person was asked " +
+            std::to_string(asked.size()) + " time(s) instead of once per kind.");
+}
+
+// Launching an application with a file to open is decided by the file, not the
+// application, so no standing yes covers it: the planned run asks every time, and a task
+// approved up front stops rather than opening it, owner_full_access included.
+void TestOpeningAFileIsNeverCoveredByTheTask()
+{
+    revia::actions::ActionRequest launch;
+    launch.type = revia::actions::ActionType::LaunchApplication;
+    launch.application = "notepad.exe";
+    Check(!revia::actions::AlwaysNeedsItsOwnConfirmation(launch),
+        "Starting an application with nothing to open was treated like opening a file.");
+    launch.source = "C:/Sandbox/notes.txt";
+    Check(revia::actions::AlwaysNeedsItsOwnConfirmation(launch),
+        "Launching an application with a file was coverable by a standing approval.");
+
+    for (const bool ownerFullAccess : {false, true})
+    {
+        LoopFixture fixture(nlohmann::json::parse(
+            R"({"approvedApplications": ["notepad.exe"], "approvedControls": {"notepad.exe": ["*"]},
+                "desktopControl": {"applicationLaunch": true}})"));
+        int prompts = 0;
+        fixture.runner.SetConfirmationHandler([&](
+            const revia::actions::ActionRequest&,
+            const revia::actions::PolicyDecision&)
+        {
+            ++prompts;
+            return revia::actions::ConfirmationChoice::AllowForThisTask;
+        });
+        fixture.runner.SetStepProvider([&](const Goal&, const std::uint32_t iteration)
+        {
+            if (iteration > 0) return Done("finished");
+            GoalStep step;
+            step.description = "Open the note";
+            step.action.type = revia::actions::ActionType::LaunchApplication;
+            step.action.application = "notepad.exe";
+            step.action.source = fixture.approved / "note.txt";
+            step.check.type = revia::actions::ActionType::InspectWindow;
+            step.check.application = "notepad.exe";
+            step.expected = "note.txt";
+            return Take(step);
+        });
+        Goal goal = SupervisedGoal(fixture, "open a note");
+        goal.scope.approvedApplications = {"notepad.exe"};
+        goal.scope.desktopControl.applicationLaunch = true;
+        fixture.runner.SeedStandingApproval(revia::actions::RiskLevel::ReversibleWrite, true, ownerFullAccess);
+        const Goal finished = fixture.runner.Operate(goal);
+        Check(prompts == 0 && finished.stopReason == StopReason::PolicyBlocked && !finished.steps.empty() &&
+                  !finished.steps[0].attempts.empty() && !finished.steps[0].attempts[0].executed &&
+                  finished.steps[0].attempts[0].failure.find("its own approval") != std::string::npos,
+            std::string("Opening a file inside an approved task was not stopped") +
+                (ownerFullAccess ? " under owner_full_access." : ".") + " Stop reason: " + ToString(finished.stopReason));
+    }
+}
+
+// The task approval itself covers nothing: the first step of each kind asks once, and
+// then later steps of that kind run without asking.
+void TestTheGoalApprovalAsksOncePerKind()
 {
     LoopFixture fixture;
     int prompts = 0;
@@ -1596,23 +1695,34 @@ void TestTheGoalApprovalCanAnswerForTheWholeRun()
             : Take(fixture.MakeDirectory("seeded" + std::to_string(iteration)));
     });
 
-    // What ReviaSession does when the person answers the goal prompt that way.
-    fixture.runner.SeedStandingApproval(revia::actions::RiskLevel::ReversibleWrite);
+    // What ReviaSession does when the person approves the task. Before approvals were
+    // kept per kind, this seed covered every step at once and asked nothing; the person
+    // now answers once for the one kind of action this run takes. Any yes counts, because
+    // inside an approved task the question is about the kind.
+    fixture.runner.SeedStandingApproval(revia::actions::RiskLevel::ReversibleWrite, true);
     const Goal finished = fixture.runner.Operate(SupervisedGoal(fixture, "seeded task"));
     Check(finished.status == GoalStatus::Succeeded,
         "The seeded run did not finish: " + ToString(finished.stopReason));
-    Check(prompts == 0,
-        "Answering for the whole task still produced " + std::to_string(prompts) +
-            " per-step prompt(s).");
+    Check(prompts == 1,
+        "An approved task asked " + std::to_string(prompts) + " time(s) for three steps of one kind instead of once.");
+
+    // owner_full_access answers the per-kind question itself for routine kinds.
+    fixture.runner.SetStepProvider([&](const Goal&, const std::uint32_t iteration)
+    {
+        return iteration >= 2 ? Done("done") : Take(fixture.MakeDirectory("owner" + std::to_string(iteration)));
+    });
+    fixture.runner.SeedStandingApproval(revia::actions::RiskLevel::ReversibleWrite, true, true);
+    Check(fixture.runner.Operate(SupervisedGoal(fixture, "owner task")).status == GoalStatus::Succeeded && prompts == 1,
+        "owner_full_access did not cover a routine kind without asking.");
 
     // Used once, then gone. A seed that is not renewed does not quietly cover the next
-    // goal as well.
+    // goal as well, and neither does the kind approved in it.
     fixture.runner.SetStepProvider([&](const Goal&, const std::uint32_t iteration)
     {
         return iteration >= 1 ? Done("done") : Take(fixture.MakeDirectory("after"));
     });
     static_cast<void>(fixture.runner.Operate(SupervisedGoal(fixture, "the next task")));
-    Check(prompts == 1,
+    Check(prompts == 2,
         "A seeded approval survived into the following goal.");
 }
 
@@ -1916,7 +2026,9 @@ void RunOperatorLoopTests()
     TestPlannedRunsAreUnchanged();
     TestAStandingYesIsBoundedByTheRunAndByRisk();
     TestAStandingYesDoesNotCoverEscalation();
-    TestTheGoalApprovalCanAnswerForTheWholeRun();
+    TestAStandingYesCoversOnlyItsKind();
+    TestOpeningAFileIsNeverCoveredByTheTask();
+    TestTheGoalApprovalAsksOncePerKind();
     TestTheObservationDigestNoticesChange();
     TestVerificationEvidenceSurvivesTheHistoryLimit();
     TestExplicitPlannerDecisions();
