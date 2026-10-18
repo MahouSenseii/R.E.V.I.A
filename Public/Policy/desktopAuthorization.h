@@ -117,7 +117,8 @@ struct AuthorizationRequest
     // Whether Revia raised this herself. Runtime-owned: it comes from the requestedBy
     // the session stamps at the entry points, and model JSON has no field that reaches
     // it. A user who asked for something specific has already supplied the judgement
-    // that an unreadable label would otherwise have to stand in for.
+    // that an unreadable label would otherwise have to stand in for -- except for a click
+    // or invoke on a control with no name and no automation id, which still needs approval.
     bool autonomousOrigin = false;
     // A verified disposable workspace. Unknown labels there are not a reason to stop,
     // because there is nothing in it that matters.

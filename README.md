@@ -504,6 +504,8 @@ Pointer, keyboard, and application launch are **off** by default and each is tur
 
 `launch_application` starts an approved app with no arguments or one approved file. After each pointer action she reports what is under the pointer, which is description only and never permission.
 
+A click or invoke on a control with no readable name and no automation id (an icon-only button, or nothing identifiable at a coordinate) asks for your approval even when you asked for the task, because nothing says what it does; inside a running task it stops instead. Observation, navigation and the disposable workspace are unchanged. This is covered by the authorization tests, not yet checked live.
+
 The capability `mode` can be `supervised` (default) or `owner_full_access`. The latter only stops asking for confirmation on reversible, in-scope work; every approved root, app, control, and desktop switch still applies.
 
 **Approving a task.** "Allow for this whole task" covers one *kind* of action: the same action type in the same application (typing in Notepad, say), no riskier than the step you saw, until the task ends. A different kind asks again. In an `/operate` task, approving the task starts it, and then the first step of each kind asks once in `supervised` mode; `owner_full_access` answers those per-kind questions itself for routine kinds. Opening a file with an application (`launch_application` with a file), deleting, running commands and browser clicks are never covered by a standing approval: a planned goal asks each time, and an `/operate` task stops instead. This is covered by the goal-runner tests; it has not been checked in a live session.
