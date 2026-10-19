@@ -109,6 +109,33 @@ jobs:
           "REVIA_COMPILER_BIN=$compilerBin" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           $compilerBin | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
+      # With the compile cache warm, GNU ld took nearly the whole build: about eighty
+      # Debug executables, each pulling in the foundation library, six at a time on a
+      # 16 GB runner. LLVM's lld links them about ten times faster in far less memory.
+      # The image ships LLVM, and Qt's gcc runs the first ld.lld it finds on PATH. A
+      # missing lld only makes the build slow again (CMake then keeps GNU ld), so this
+      # warns instead of failing.
+      - name: Find LLVM's lld linker
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $lld = (Get-Command ld.lld.exe -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1).Source
+          if (-not $lld) {
+            $llvmBin = Join-Path $env:ProgramFiles 'LLVM\bin'
+            if (Test-Path -LiteralPath (Join-Path $llvmBin 'ld.lld.exe')) {
+              $lld = Join-Path $llvmBin 'ld.lld.exe'
+              $llvmBin | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+              # GITHUB_PATH prepends. Put the MinGW directory back in front of LLVM's so
+              # its tools and runtime DLLs are still found first.
+              $env:REVIA_COMPILER_BIN | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+            }
+          }
+          if ($lld) { & $lld --version }
+          if (-not $lld -or $LASTEXITCODE -ne 0) {
+            Write-Output '::warning title=No lld::ld.lld was not found or does not run, so this build links with GNU ld and is much slower.'
+            exit 0
+          }
+
       - name: Install Ninja
         uses: seanmiddleditch/gha-setup-ninja@96bed6edff20d1dd61ecff9b75cc519d516e6401 # v5
 
@@ -131,13 +158,16 @@ jobs:
           "CCACHE_DIR=$(Join-Path $env:RUNNER_TEMP 'ccache')" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       # Restored from the newest earlier run and saved under a new key after every build,
-      # so the cache follows the code instead of freezing at its first contents.
+      # so the cache follows the code instead of freezing at its first contents. The g0
+      # in the key matches the compile flags set at Configure: objects built with other
+      # flags can never be hit, so a flag change starts an empty cache instead of
+      # carrying dead entries in every restore and save.
       - name: Restore compiler cache
         uses: actions/cache/restore@v4
         with:
           path: ${{ runner.temp }}/ccache
-          key: ccache-${{ runner.os }}-mingw1310-${{ github.run_id }}-${{ github.run_attempt }}
-          restore-keys: ccache-${{ runner.os }}-mingw1310-
+          key: ccache-${{ runner.os }}-mingw1310-g0-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: ccache-${{ runner.os }}-mingw1310-g0-
 
       # FetchContent pulls cpp-httplib, nlohmann/json and the SQLite amalgamation on a
       # cold tree. Cached on the lockfile-equivalent -- the CMakeLists that names the
@@ -148,10 +178,28 @@ jobs:
           path: build/ci/_deps
           key: deps-${{ runner.os }}-${{ hashFiles('CMakeLists.txt') }}
 
+      # Three settings make the links cheap. They are CI-only: a local Debug build keeps
+      # CMake's defaults (-g, GNU ld) unless the developer opts in.
+      # - No debug information (-g0). With it the foundation library was about 1.1 GB and
+      #   some executables 1 GB, all read and written by every link, and nobody debugs
+      #   these executables. Still -O0 and still no NDEBUG, so asserts stay on, and GCC
+      #   generates the same code with or without -g. Changing compile flags makes the
+      #   first run after the change compile everything once (see the cache key).
+      # - REVIA_USE_LLD links with LLVM lld (found above) instead of GNU ld.
+      # - At most three links at a time instead of ninja's six. Six GNU ld links at once
+      #   can need more than the runner's 16 GB: up to 2.3 GB each even without debug
+      #   information, 5.2 GB for ReviaTests. lld needs far less, but GNU ld is what runs
+      #   when lld is missing, and it is single-threaded, so three links still keep most
+      #   of the 4 cores busy.
       - name: Configure
         run: >
           cmake -S . -B build/ci -G Ninja
           -DCMAKE_BUILD_TYPE=Debug
+          '-DCMAKE_C_FLAGS_DEBUG=-O0 -g0'
+          '-DCMAKE_CXX_FLAGS_DEBUG=-O0 -g0'
+          -DREVIA_USE_LLD=ON
+          -DCMAKE_JOB_POOLS=link=3
+          -DCMAKE_JOB_POOL_LINK=link
           -DBUILD_TESTING=ON
           -DREVIA_REQUIRE_DESKTOP=ON
           -DCMAKE_C_COMPILER="${env:REVIA_COMPILER_BIN}/gcc.exe"
@@ -160,10 +208,35 @@ jobs:
           -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
           -DREVIA_QT_ROOT="${env:QT_ROOT_DIR}"
 
+      # CMake keeps GNU ld when Qt's gcc cannot run lld. Say so where it is seen.
+      - name: Check which linker the build uses
+        run: |
+          if (Select-String -LiteralPath build/ci/build.ninja -SimpleMatch -Pattern '-fuse-ld=lld' -Quiet) {
+            Write-Output 'Executables link with LLVM lld.'
+          } else {
+            Write-Output '::warning title=Slow links::CMake kept GNU ld (see the Configure step), so this build links slowly.'
+          }
+
       - name: Build
         run: |
           ccache --zero-stats
           cmake --build build/ci
+
+      # The console log cannot time a single link: ninja's output reaches it in buffered
+      # bursts. Ninja's own log can, so list the slowest steps and the summed link time.
+      - name: Show the slowest build steps
+        if: always()
+        continue-on-error: true
+        run: |
+          $log = 'build/ci/.ninja_log'
+          if (-not (Test-Path -LiteralPath $log)) { exit 0 }
+          $steps = Get-Content -LiteralPath $log | Where-Object { $_ -notmatch '^#' } | ForEach-Object {
+            $fields = $_ -split "`t"
+            [pscustomobject]@{ Seconds = ([long]$fields[1] - [long]$fields[0]) / 1000; Output = $fields[3] }
+          }
+          $links = @($steps | Where-Object Output -like '*.exe')
+          'Linked {0} executables; their links took {1:N0} s added together.' -f $links.Count, ($links | Measure-Object Seconds -Sum).Sum
+          $steps | Sort-Object Seconds -Descending | Select-Object -First 20 | Format-Table -AutoSize | Out-String -Width 240
 
       # Saved even when the build or a later step fails: the objects that did compile are
       # still good, and the next run should not have to compile them again.
@@ -176,7 +249,7 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: ${{ runner.temp }}/ccache
-          key: ccache-${{ runner.os }}-mingw1310-${{ github.run_id }}-${{ github.run_attempt }}
+          key: ccache-${{ runner.os }}-mingw1310-g0-${{ github.run_id }}-${{ github.run_attempt }}
 
       - uses: actions/setup-node@v4
         with:
