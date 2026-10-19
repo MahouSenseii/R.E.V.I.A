@@ -240,6 +240,10 @@ if(REVIA_BUILD_DESKTOP)
                 "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/resourcePanel.cpp"
                 "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/resourcePanel.h"
                 # [sources:B2]
+                "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/settingsCatalog.cpp"
+                "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/settingsCatalog.h"
+                "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/settingsDialog.cpp"
+                "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/settingsDialog.h"
                 "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/reviaWindow.cpp"
                 "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/reviaWindow.h"
                 "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/reviaWindow.ui"
@@ -740,6 +744,7 @@ if(BUILD_TESTING)
         # [suite:theme]
 
         # [suite:settings]
+        list(APPEND REVIA_DESKTOP_SUITE_SOURCES Tests/Fixture/settingsDialogTests.cpp)
 
         # [suite:shell]
 

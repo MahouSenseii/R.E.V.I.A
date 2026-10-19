@@ -9,6 +9,8 @@
 class QCheckBox;
 class QComboBox;
 class QDoubleSpinBox;
+class QEvent;
+class QFrame;
 class QLabel;
 class QLineEdit;
 class QPlainTextEdit;
@@ -26,9 +28,15 @@ public:
     // Re-reads profiles, the active profile, and the created-voice list. Called after
     // startup and whenever the voice studio creates a preset.
     void Refresh();
+    // True while the form holds edits the selected profile does not have on disk, including a new
+    // profile that was never saved. Settings refuses its own profile switches meanwhile, because
+    // the Refresh that follows such a write would throw these edits away.
+    [[nodiscard]] bool HasUnsavedChanges() const;
 
 protected:
     void resizeEvent(QResizeEvent* event) override;
+    // A click anywhere on a switch row toggles its switch.
+    bool eventFilter(QObject* watched, QEvent* event) override;
 
 private:
     void LoadSelectedProfile();
