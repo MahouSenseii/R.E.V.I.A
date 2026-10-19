@@ -58,7 +58,8 @@ Appearance) applies.
 - The voice-health pill, shown only while synthesis is not known to work.
 - The hands-free chip.
 - Mic, Stop and Send. While a turn, task or studio operation runs, Stop takes Send's
-  place. While only speech or the microphone runs, Stop sits beside Send.
+  place. While only speech or the microphone runs, Stop sits beside Send. While Revia starts,
+  Send stays in its place, disabled until Revia is ready, beside a Stop that cancels the startup.
 
 Long-lived modes, such as editing your last message or waiting for the previous request,
 show as a line above the message box. Short notices show as a toast over the composer.
@@ -117,7 +118,7 @@ open while a companion switch or shutdown has locked the window.
 | Chat list | F2 rename, Delete delete |
 | Anywhere | Ctrl+K palette, Ctrl+, Settings, Ctrl+/ shortcut sheet, Ctrl+Shift+A Activity, Ctrl+Shift+M Memory |
 | Panel windows | Ctrl+W close, Esc close unless editing text |
-| Settings | Ctrl+F search, Esc clears the search, then closes |
+| Settings | Ctrl+F search, Esc clears the search, then closes (not while you are typing in a box) |
 
 ## Closing, the tray and restarts
 
@@ -158,9 +159,17 @@ count, error Details and Voice Details. Its `RunShellUi` part covers:
 - the toast;
 - the theme reaching the transcript;
 - the failed-turn row;
-- the Send and Stop slot, and Esc;
+- the Send and Stop slot while Revia starts and while a turn runs, and Esc;
 - scroll pinning;
-- the desktop indicator and Stop.
+- the desktop indicator and Stop;
+- the sidebar's buttons keeping their size through a collapse and expand;
+- a fenced code block drawn as one box, the empty chat's greeting a third of the way down,
+  the 28px state pill and the sidebar menu's group headings.
+
+`RunSettingsReadBackUi` checks that the two number rows the window adds to Settings follow a
+change made elsewhere and never write an untouched value back, that the window's own controls in
+Settings ignore a passing mouse wheel, and that choosing Hard questions for the cloud asks first.
+`RunShutdownUi` quits with the window showing and expects the event loop to end.
 
 `Revia.Theme`, `Revia.SettingsDialog`, `Revia.ShellWidgets` and `Revia.SettingsBackend` run
 the slices' own suites in the same binary.
