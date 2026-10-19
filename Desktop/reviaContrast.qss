@@ -1,0 +1,27 @@
+/* Windows high contrast only: theme.cpp appends this to revia.qss in place of reviaTheme.qss.
+   Every colour here is a palette() reference, so it is one of the system's contrast colours;
+   the sheet names none of its own (Revia.Theme checks). It supplies what would otherwise exist
+   only in reviaTheme.qss and matters for reading the window: an opaque fill for overlays, which
+   do not fill their own background and would print over the transcript; a fill for checked
+   buttons, whose state is otherwise shown by colour alone; and a visible ring on controls whose
+   structure border is transparent. */
+
+/* ---------------------------------------------------------------- overlays */
+
+QFrame#toast { background: palette(window-text); }
+QLabel#toastLabel { color: palette(window); background: transparent; }
+QFrame#commandPalette, QFrame#statusPopover { background: palette(base); }
+QToolButton#jumpToLatest { color: palette(button-text); background: palette(button); }
+QWidget#commandPaletteScrim { background: palette(window); }
+QLabel#navigationLockOverlay { color: palette(window-text); background: palette(window); }
+
+/* ---------------------------------------------------------------- checked and focused */
+
+QPushButton:checked, QToolButton:checked { color: palette(highlighted-text); background: palette(highlight); }
+QToolButton#statePill { border-color: palette(window-text); }
+QToolButton:focus, QToolButton#statePill:focus, QPushButton[flat="true"]:focus, QPushButton#themeSystem:focus,
+QPushButton#themeLight:focus, QPushButton#themeDark:focus, QTextBrowser#chatHistory[kbdFocus="true"] {
+    border-color: palette(highlight);
+}
+QToolButton:checked:focus, QPushButton:checked:focus { border-color: palette(highlighted-text); }
+QFrame[reviaClass="settingRow"][highlight="true"] { border-color: palette(highlight); }

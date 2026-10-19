@@ -2,8 +2,7 @@
   <qresource prefix="/revia">
     <file>revia.qss</file>
     <file>reviaTheme.qss</file>
-    <file>spin-up.svg</file>
-    <file>spin-down.svg</file>
+    <file>reviaContrast.qss</file>
     <file>spin-up-light.svg</file>
     <file>spin-up-dark.svg</file>
     <file>spin-down-light.svg</file>

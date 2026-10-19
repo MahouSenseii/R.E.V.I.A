@@ -33,6 +33,7 @@
 #include <QSettings>
 #include <QSpinBox>
 #include <QStyle>
+#include <QStyleOptionSpinBox>
 #include <QTabBar>
 #include <QTabWidget>
 #include <QTableWidget>
@@ -42,7 +43,9 @@
 #include <QToolButton>
 #include <QVBoxLayout>
 
+#include <algorithm>
 #include <iostream>
+#include <map>
 #include <memory>
 #include <string>
 #include <tuple>
@@ -106,6 +109,21 @@ QColor StrokeColour(const QPixmap& pixmap)
     return best;
 }
 
+// QAbstractSpinBox::initStyleOption is protected; this lets a test ask the style where the up
+// button sits. No signals or slots, so no moc.
+class InspectableSpinBox final : public QSpinBox
+{
+public:
+    using QSpinBox::QSpinBox;
+
+    [[nodiscard]] QRect UpButton() const
+    {
+        QStyleOptionSpinBox option;
+        initStyleOption(&option);
+        return style()->subControlRect(QStyle::CC_SpinBox, &option, QStyle::SC_SpinBoxUp, this);
+    }
+};
+
 QString StructureSheet()
 {
     QFile file(QStringLiteral(":/revia/revia.qss"));
@@ -115,6 +133,12 @@ QString StructureSheet()
 QString ColourTemplate()
 {
     QFile file(QStringLiteral(":/revia/reviaTheme.qss"));
+    return file.open(QIODevice::ReadOnly | QIODevice::Text) ? QString::fromUtf8(file.readAll()) : QString();
+}
+
+QString ContrastSheet()
+{
+    QFile file(QStringLiteral(":/revia/reviaContrast.qss"));
     return file.open(QIODevice::ReadOnly | QIODevice::Text) ? QString::fromUtf8(file.readAll()) : QString();
 }
 
@@ -331,6 +355,11 @@ int RunThemeSuite(int, char**)
     const QRegularExpression colourLiteral(QStringLiteral(R"(#[0-9A-Fa-f]{6}(?![\w-])|#[0-9A-Fa-f]{3}(?![\w-])|rgba?\()"));
     results.Expect(!structure.contains(colourLiteral), "revia.qss must hold structure only, but it names a colour: " +
         colourLiteral.match(structure).captured(0).toStdString());
+    results.Expect(!structure.contains(QLatin1String("url(")), "revia.qss loads an image, which bakes in a colour high contrast cannot change");
+    const QString contrastSheet = ContrastSheet();
+    results.Expect(!contrastSheet.isEmpty() && !contrastSheet.contains(colourLiteral) && !contrastSheet.contains(QLatin1String("{{")) &&
+            !contrastSheet.contains(QLatin1String("url(")),
+        "reviaContrast.qss is missing, or names a colour of its own instead of the system palette's");
     results.Expect(theme::PreferenceFromString("dark") == theme::Preference::Dark &&
             theme::PreferenceFromString(" Light ") == theme::Preference::Light &&
             theme::PreferenceFromString("sepia") == theme::Preference::System &&
@@ -611,12 +640,102 @@ int RunThemeSuite(int, char**)
     theme::SetHighContrastForTest(true);
     Settle();
     results.Expect(theme::HighContrastActive(), "the high-contrast test hook did not take effect");
-    results.Expect(root->styleSheet() == structure, "high contrast kept the colour stylesheet");
+    results.Expect(root->styleSheet() == structure + QLatin1Char('\n') + contrastSheet,
+        "high contrast did not swap the colour stylesheet for the structure and contrast sheets");
     results.Expect(QApplication::palette().color(QPalette::Window) != theme::Light().background,
         "high contrast kept the custom palette");
     results.Expect(theme::Current().background == QApplication::palette().color(QPalette::Window) &&
             theme::Current().accent == QApplication::palette().color(QPalette::Highlight),
         "high-contrast tokens are not taken from the system palette");
+    {
+        // The contrast sheet still gives overlays an opaque fill, checked buttons a fill and a
+        // focused tool button a visible ring, all from the system palette.
+        // A stand-in transcript in a colour no system palette uses, so an overlay that lets it
+        // show through cannot pass by matching it.
+        auto* page = new QTextBrowser(root.get());
+        page->setStyleSheet(QStringLiteral("QTextBrowser { background: #ff00ff; border: none; padding: 0px; }"));
+        page->setGeometry(0, 0, 360, 160);
+        auto* toast = new QFrame(root.get());
+        toast->setObjectName("toast");
+        auto* toastLayout = new QHBoxLayout(toast);
+        auto* toastLabel = new QLabel("Turned off. Change it in Settings.", toast);
+        toastLabel->setObjectName("toastLabel");
+        toastLayout->addWidget(toastLabel);
+        toast->setGeometry(20, 20, 300, 48);
+        auto* overlay = new QLabel("Switching to Mira", root.get());
+        overlay->setObjectName("navigationLockOverlay");
+        overlay->setAlignment(Qt::AlignCenter);
+        overlay->setGeometry(0, 80, 360, 80);
+        auto* onButton = new QPushButton("On", root.get());
+        onButton->setCheckable(true);
+        onButton->setChecked(true);
+        onButton->setGeometry(380, 20, 80, 32);
+        auto* offButton = new QPushButton("Off", root.get());
+        offButton->setCheckable(true);
+        offButton->setGeometry(470, 20, 80, 32);
+        auto* contrastTool = new QToolButton(root.get());
+        theme::BindIcon(contrastTool, "settings");
+        contrastTool->setGeometry(560, 20, 32, 32);
+        auto* contrastSpin = new InspectableSpinBox(root.get());
+        contrastSpin->setValue(12);
+        contrastSpin->setGeometry(QRect(QPoint(380, 70), QSize(120, contrastSpin->sizeHint().height())));
+        for (QWidget* widget : std::initializer_list<QWidget*>{page, toast, overlay, onButton, offButton, contrastTool, contrastSpin})
+        {
+            widget->show();
+            widget->raise();
+        }
+        Settle();
+        const QPoint inToast = toast->geometry().topLeft() + QPoint(toast->width() / 2, 3);
+        const QPoint inOverlay = overlay->geometry().topLeft() + QPoint(16, 16);
+        const QColor toastShown = PixelAt(root.get(), inToast);
+        const QColor overlayShown = PixelAt(root.get(), inOverlay);
+        toast->hide();
+        overlay->hide();
+        Settle();
+        const QColor toastHidden = PixelAt(root.get(), inToast);
+        const QColor overlayHidden = PixelAt(root.get(), inOverlay);
+        results.Expect(toastShown != toastHidden && overlayShown != overlayHidden,
+            "under high contrast the toast or the navigation lock overlay lets the transcript show through: toast " +
+                Describe(toastShown) + " over " + Describe(toastHidden) + ", overlay " + Describe(overlayShown) + " over " +
+                Describe(overlayHidden));
+        const QPoint inButton(4, onButton->height() / 2);
+        results.Expect(PixelAt(onButton, inButton) != PixelAt(offButton, inButton),
+            "under high contrast a checked button looks the same as an unchecked one: " + Describe(PixelAt(onButton, inButton)));
+        // A gallery window may have taken activation since the focus checks above.
+        root->activateWindow();
+        sample->setFocus(Qt::OtherFocusReason);
+        Settle();
+        const QImage toolRest = contrastTool->grab().toImage();
+        contrastTool->setFocus(Qt::TabFocusReason);
+        Settle();
+        results.Expect(contrastTool->grab().toImage() != toolRest, "under high contrast a focused tool button shows no ring");
+        sample->setFocus(Qt::OtherFocusReason);
+        {
+            // The style draws a spin box's arrows itself: in the middle of the up button, away from
+            // its edges, some pixels must stand out from the button at 3:1, as a glyph must.
+            const QImage spin = contrastSpin->grab().toImage().convertToFormat(QImage::Format_ARGB32);
+            const qreal ratio = spin.devicePixelRatio();
+            const QRect up = contrastSpin->UpButton();
+            const QRect middle = up.adjusted(up.width() / 4, up.height() / 4, -up.width() / 4, -up.height() / 4);
+            const QRect band(qRound(middle.x() * ratio), qRound(middle.y() * ratio), qRound(middle.width() * ratio),
+                qRound(middle.height() * ratio));
+            std::map<QRgb, int> counts;
+            for (int y = band.top(); y <= band.bottom(); ++y)
+                for (int x = band.left(); x <= band.right(); ++x)
+                    ++counts[spin.pixel(x, y)];
+            const auto common = std::max_element(counts.begin(), counts.end(),
+                [](const auto& first, const auto& second) { return first.second < second.second; });
+            int glyph = 0;
+            for (const auto& [pixel, count] : counts)
+                if (common != counts.end() && theme::ContrastRatio(QColor(pixel), QColor(common->first)) >= 3.0)
+                    glyph += count;
+            results.Expect(!up.isEmpty() && glyph >= 3,
+                "under high contrast a spin box shows no arrows (" + std::to_string(glyph) + " glyph pixels)");
+        }
+        for (QWidget* widget : std::initializer_list<QWidget*>{page, toast, overlay, onButton, offButton, contrastTool, contrastSpin})
+            delete widget;
+        Settle();
+    }
     if (!renderDirectory.isEmpty())
         SaveGallery(root.get(), renderDirectory, "theme-gallery-high-contrast.png");
     {

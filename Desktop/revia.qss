@@ -1,10 +1,12 @@
-/* Structure only: sizes, spacing, radii, border widths and type. Every colour lives in
-   reviaTheme.qss, which theme.cpp fills from the light or dark tokens and appends to this
-   sheet. Under Windows high contrast this sheet is used alone, so borders declared here
-   without a colour take the system text colour, and the sub-controls whose state is shown
-   only by colour (check indicators, combo arrows, progress chunks, the selected tab's
-   underline) are styled in reviaTheme.qss alone, leaving the native drawing in place here.
-   Revia.StudioPanels loads this file raw.
+/* Structure only: sizes, spacing, radii, border widths and type, and no images, which would
+   bake a colour in. Every colour lives in reviaTheme.qss, which theme.cpp fills from the
+   light or dark tokens and appends to this sheet. Under Windows high contrast this sheet is
+   used with reviaContrast.qss instead, which takes its few colours from the system palette:
+   borders declared here without a colour take the system text colour, and the sub-controls
+   whose state is shown only by colour (check indicators, combo arrows, progress chunks, the
+   selected tab's underline) are styled in reviaTheme.qss alone, leaving the native drawing
+   in place here. So are spin boxes as a whole: given any box rule, Qt draws no arrows of its
+   own. Revia.StudioPanels loads this file raw.
    Weights are 400 and 600 only. Spacing steps are 4, 8, 12, 16, 20, 24, 32 and 40; radii
    are 4 (badges), 6 (controls), 10 (cards), 14 (palette), 20 (composer) and pills. */
 
@@ -61,14 +63,14 @@ QCheckBox[reviaRole="settingSwitch"] { spacing: 0px; padding: 0px; }
 
 /* ---------------------------------------------------------------- inputs */
 
-QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox {
+QLineEdit, QComboBox {
     border: 1px solid;
     border-radius: 6px;
     padding: 6px 8px;
     min-height: 18px;
     font-size: 13px;
 }
-QLineEdit:focus, QComboBox:focus, QSpinBox:focus, QDoubleSpinBox:focus {
+QLineEdit:focus, QComboBox:focus {
     border-width: 2px;
     padding: 5px 7px;
 }
@@ -79,31 +81,6 @@ QPlainTextEdit, QTextEdit, QTextBrowser {
     font-size: 13px;
 }
 QPlainTextEdit:focus, QTextEdit:focus { border-width: 2px; padding: 7px; }
-
-/* Giving a spin box custom padding without reserving room for its buttons squeezes them
-   into a pair of unclickable slivers. Reserving the space is enough -- the style then
-   draws its own buttons, and the arrows come from images, because a CSS arrow renders
-   as a solid block. */
-QSpinBox, QDoubleSpinBox { padding-right: 26px; }
-QSpinBox:focus, QDoubleSpinBox:focus { padding-right: 25px; }
-QSpinBox::up-button, QDoubleSpinBox::up-button,
-QSpinBox::down-button, QDoubleSpinBox::down-button {
-    subcontrol-origin: border;
-    width: 22px;
-    border: none;
-}
-QSpinBox::up-button, QDoubleSpinBox::up-button {
-    subcontrol-position: top right;
-    border-top-right-radius: 5px;
-    margin: 1px 1px 0 0;
-}
-QSpinBox::down-button, QDoubleSpinBox::down-button {
-    subcontrol-position: bottom right;
-    border-bottom-right-radius: 5px;
-    margin: 0 1px 1px 0;
-}
-QSpinBox::up-arrow, QDoubleSpinBox::up-arrow { image: url(:/revia/spin-up.svg); width: 9px; height: 6px; }
-QSpinBox::down-arrow, QDoubleSpinBox::down-arrow { image: url(:/revia/spin-down.svg); width: 9px; height: 6px; }
 
 QComboBox { padding-right: 28px; }
 QComboBox:focus { padding-right: 27px; }

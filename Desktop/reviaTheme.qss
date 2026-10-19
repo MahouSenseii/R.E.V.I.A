@@ -1,11 +1,14 @@
-/* Colours only. theme.cpp appends this to revia.qss after replacing each token name in
-   double braces with its light or dark value (revia::desktop::theme::Tokens), a name
-   followed by /NN with that colour at NN% opacity, and "scheme" with light or dark for the
-   images drawn per scheme. A name the code does not know is left in place, which
+/* Colours, plus the whole styling of what high contrast leaves to the style's own drawing
+   (spin boxes, check indicators, combo arrows, tabs, progress chunks; see revia.qss), since
+   this sheet is dropped there. theme.cpp appends this to revia.qss after replacing each
+   token name in double braces with its light or dark value (revia::desktop::theme::Tokens),
+   a name followed by /NN with that colour at NN% opacity, and "scheme" with light or dark
+   for the images drawn per scheme. A name the code does not know is left in place, which
    Revia.Theme reports.
    Contrast rules (enforced through theme::ContrastPairs): selected rows carry text or
    selectionText titles and textSecondary subtitles, never textTertiary or accent; status
-   colours appear as text only on background, surface, sidebar or their own soft colour. */
+   colours appear as text only on background, surface, sidebar, a hovered row or their own
+   soft colour. */
 
 QWidget { color: {{text}}; }
 QMainWindow, QDialog, QMessageBox, QWidget#rootPanel, QWidget#chatColumn, [reviaRole="panelWindow"] {
@@ -180,14 +183,43 @@ QTextEdit:disabled {
     border-color: {{border}};
 }
 QLineEdit:read-only { background: {{surfaceAlt}}; }
-QSpinBox::up-button, QDoubleSpinBox::up-button, QSpinBox::down-button, QDoubleSpinBox::down-button {
+/* Spin boxes are styled here alone, structure included, so that under high contrast, where
+   this sheet is dropped, the style draws the whole control and its arrows in the system
+   colours. Giving a spin box custom padding without reserving room for its buttons squeezes
+   them into a pair of unclickable slivers; the arrows are images, because a CSS arrow renders
+   as a solid block. border-style and border-width rather than the shorthand, which would
+   reset the border colour set above. */
+QSpinBox, QDoubleSpinBox {
+    border-style: solid;
+    border-width: 1px;
+    border-radius: 6px;
+    padding: 6px 26px 6px 8px;
+    min-height: 18px;
+    font-size: 13px;
+}
+QSpinBox:focus, QDoubleSpinBox:focus { border-width: 2px; padding: 5px 25px 5px 7px; }
+QSpinBox::up-button, QDoubleSpinBox::up-button,
+QSpinBox::down-button, QDoubleSpinBox::down-button {
+    subcontrol-origin: border;
+    width: 22px;
+    border: none;
     background: {{surfaceAlt}};
+}
+QSpinBox::up-button, QDoubleSpinBox::up-button {
+    subcontrol-position: top right;
+    border-top-right-radius: 5px;
+    margin: 1px 1px 0 0;
+}
+QSpinBox::down-button, QDoubleSpinBox::down-button {
+    subcontrol-position: bottom right;
+    border-bottom-right-radius: 5px;
+    margin: 0 1px 1px 0;
 }
 QSpinBox::up-button:hover, QDoubleSpinBox::up-button:hover, QSpinBox::down-button:hover, QDoubleSpinBox::down-button:hover {
     background: {{surfaceHover}};
 }
-QSpinBox::up-arrow, QDoubleSpinBox::up-arrow { image: url(:/revia/spin-up-{{scheme}}.svg); }
-QSpinBox::down-arrow, QDoubleSpinBox::down-arrow { image: url(:/revia/spin-down-{{scheme}}.svg); }
+QSpinBox::up-arrow, QDoubleSpinBox::up-arrow { image: url(:/revia/spin-up-{{scheme}}.svg); width: 9px; height: 6px; }
+QSpinBox::down-arrow, QDoubleSpinBox::down-arrow { image: url(:/revia/spin-down-{{scheme}}.svg); width: 9px; height: 6px; }
 QComboBox::drop-down { subcontrol-origin: padding; subcontrol-position: center right; width: 24px; border: none; }
 QComboBox::down-arrow { image: url(:/revia/chevron-down-{{scheme}}.svg); width: 10px; height: 6px; }
 QComboBox QAbstractItemView {

@@ -91,8 +91,9 @@ void SetPreference(Preference preference);
 int AddListener(std::function<void()> listener);
 void RemoveListener(int id);
 
-// revia.qss (structure) plus reviaTheme.qss filled from the current tokens; structure only under
-// high contrast. The overload fills the template from any token set.
+// revia.qss (structure) plus reviaTheme.qss filled from the current tokens; under high contrast,
+// revia.qss plus reviaContrast.qss, whose few colours all come from the system palette. The
+// overload fills the template from any token set.
 [[nodiscard]] QString StyleSheet();
 [[nodiscard]] QString StyleSheet(const Tokens& tokens);
 // Default stylesheet for transcript documents (QTextDocument::setDefaultStyleSheet).

@@ -438,6 +438,7 @@ struct State
     std::map<QString, QIcon> icons;
     QString structureSheet;
     QString colourSheet;
+    QString contrastSheet;
     bool sheetsLoaded = false;
 };
 
@@ -456,6 +457,7 @@ void LoadSheets()
         return;
     state.structureSheet = ReadResource(":/revia/revia.qss");
     state.colourSheet = ReadResource(":/revia/reviaTheme.qss");
+    state.contrastSheet = ReadResource(":/revia/reviaContrast.qss");
     state.sheetsLoaded = true;
 }
 
@@ -878,7 +880,7 @@ QString StyleSheet()
 {
     LoadSheets();
     if (HighContrastActive())
-        return Get().structureSheet;
+        return Get().structureSheet + QLatin1Char('\n') + Get().contrastSheet;
     return StyleSheet(Current());
 }
 
@@ -938,6 +940,10 @@ QIcon Icon(const char* const name, const int logicalSize)
         return cached->second;
 
     const Tokens& tokens = Current();
+    // Under high contrast nothing is filled with the accent, and a checked button is filled with
+    // the system highlight instead (reviaContrast.qss): "onAccent" glyphs take the button's text
+    // colour and every checked glyph the highlighted text colour.
+    const bool contrast = HighContrastActive();
     QColor fixed;
     if (tone == QLatin1String("accent"))
         fixed = tokens.accent;
@@ -948,7 +954,7 @@ QIcon Icon(const char* const name, const int logicalSize)
     else if (tone == QLatin1String("success"))
         fixed = tokens.success;
     else if (tone == QLatin1String("onAccent"))
-        fixed = tokens.textOnAccent;
+        fixed = contrast ? QColor() : tokens.textOnAccent;
     else if (tone == QLatin1String("text"))
         fixed = tokens.text;
     else if (!tone.isEmpty() && tone != QLatin1String("secondary"))
@@ -961,7 +967,7 @@ QIcon Icon(const char* const name, const int logicalSize)
         QColor colour;
     };
     const QColor normal = fixed.isValid() ? fixed : tokens.textSecondary;
-    const QColor checked = fixed.isValid() ? fixed : tokens.accent;
+    const QColor checked = contrast ? tokens.textOnAccent : (fixed.isValid() ? fixed : tokens.accent);
     const QColor hover = fixed.isValid() ? fixed : tokens.text;
     const Variant variants[] = {
         {QIcon::Normal, QIcon::Off, normal},
