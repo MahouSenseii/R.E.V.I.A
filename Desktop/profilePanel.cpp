@@ -1,15 +1,20 @@
 #include "Agents/answerObligation.h"
 #include "profilePanel.h"
+#include "settingsCatalog.h"
+#include "toggleSwitch.h"
 
 #include <QBoxLayout>
 #include <QCheckBox>
 #include <QComboBox>
 #include <QDoubleSpinBox>
+#include <QEvent>
+#include <QFrame>
 #include <QFormLayout>
 #include <QGroupBox>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QLineEdit>
+#include <QMouseEvent>
 #include <QPlainTextEdit>
 #include <QPushButton>
 #include <QResizeEvent>
@@ -17,6 +22,8 @@
 #include <QSpinBox>
 #include <QStyle>
 #include <QVBoxLayout>
+
+#include <cmath>
 
 namespace
 {
@@ -38,6 +45,45 @@ namespace
         return QString::fromStdString(profile.displayName) +
             " (" + QString::fromStdString(profile.id) + ")";
     }
+
+    // Row widgets remember their switch, so a click on the text can toggle it.
+    constexpr const char* RowTargetProperty = "reviaRowTarget";
+
+    // A switch row in the look of a Settings row: the catalog's label and one-line help on the
+    // left, the switch on the right, and an optional value control under the help line.
+    QFrame* MakeSwitchRow(QCheckBox* toggle, const char* catalogKey, const QString& companionName, QWidget* value = nullptr)
+    {
+        const auto* descriptor = revia::desktop::FindSetting(catalogKey);
+        const QString label = descriptor != nullptr ? revia::desktop::WithCompanionName(descriptor->label, companionName) : QString();
+        const QString help = descriptor != nullptr ? revia::desktop::WithCompanionName(descriptor->description, companionName) : QString();
+        auto* row = new QFrame();
+        row->setObjectName(toggle->objectName() + "Row");
+        row->setProperty("reviaClass", QStringLiteral("settingRow"));
+        row->setProperty(RowTargetProperty, QVariant::fromValue<QObject*>(toggle));
+        auto* line = new QHBoxLayout(row);
+        line->setContentsMargins(16, 12, 16, 12);
+        line->setSpacing(16);
+        auto* text = new QVBoxLayout();
+        text->setSpacing(4);
+        auto* title = new QLabel(label, row);
+        title->setObjectName("settingTitle");
+        title->setWordWrap(true);
+        text->addWidget(title);
+        auto* description = new QLabel(help, row);
+        description->setObjectName("settingDescription");
+        description->setWordWrap(true);
+        text->addWidget(description);
+        if (value != nullptr)
+        {
+            text->addSpacing(4);
+            text->addWidget(value, 0, Qt::AlignLeft);
+        }
+        line->addLayout(text, 1);
+        line->addWidget(toggle, 0, Qt::AlignVCenter);
+        toggle->setAccessibleName(label);
+        toggle->setAccessibleDescription(help);
+        return row;
+    }
 }
 
 ProfilePanel::ProfilePanel(revia::runtime::ReviaSession& inputSession, QWidget* parent)
@@ -52,10 +98,11 @@ ProfilePanel::ProfilePanel(revia::runtime::ReviaSession& inputSession, QWidget* 
     title->setObjectName("sectionTitle");
     layout->addWidget(title);
 
-    auto* explanation = new QLabel(
+    const QString companionName = QString::fromStdString(session.DisplayName());
+    auto* explanation = new QLabel(QStringLiteral(
         "Profiles edit the selected companion's authored name, personality, memory setting "
-        "and assigned voice. Her earned development and private history stay with the companion. "
-        "Create voices in the Voice tab, then assign them here.", this);
+        "and assigned voice. %1's earned development and private history stay with the companion. "
+        "Create voices in Voice, then assign them here.").arg(companionName), this);
     explanation->setWordWrap(true);
     explanation->setObjectName("secondaryText");
     layout->addWidget(explanation);
@@ -109,11 +156,11 @@ ProfilePanel::ProfilePanel(revia::runtime::ReviaSession& inputSession, QWidget* 
         "You are a helpful local AI assistant. Keep responses clear, useful, and concise.");
     identityLayout->addWidget(systemPromptInput);
 
-    memoryCheck = new QCheckBox("Remember what is said to this profile", identityGroup);
-    memoryCheck->setToolTip(
-        "Long-term memory is wired up during startup, so a change here applies at the "
-        "next start.");
-    identityLayout->addWidget(memoryCheck);
+    // Saving the active profile applies its memory setting to the running session at once.
+    memoryCheck = new ToggleSwitch(ToggleSwitch::Accent::Cyan, identityGroup);
+    memoryCheck->setObjectName("profileMemoryCheck");
+    memoryCheck->setToolTip("Applies right away to the active profile; other profiles pick it up when activated.");
+    identityLayout->addWidget(MakeSwitchRow(memoryCheck, "profile.memoryEnabled", companionName));
 
     // How complete an answer this profile owes. Deliberately worded around
     // completeness rather than temperament: how she says a thing is her personality's
@@ -126,20 +173,19 @@ ProfilePanel::ProfilePanel(revia::runtime::ReviaSession& inputSession, QWidget* 
         static_cast<int>(AnswerObligationMode::Balanced));
     answerStyleCombo->addItem("Character First",
         static_cast<int>(AnswerObligationMode::CharacterFirst));
-    answerStyleCombo->setToolTip(
-        "Answer style. Reliable usually gives the substantive answer, in her own "
-        "voice. Balanced usually answers, and her current state may affect how "
-        "complete it is. Character First lets her personality take priority over "
+    answerStyleCombo->setToolTip(QStringLiteral(
+        "Answer style. Reliable usually gives the substantive answer, in %1's own "
+        "voice. Balanced usually answers, and %1's current state may affect how "
+        "complete it is. Character First lets %1's personality take priority over "
         "completing the answer in ordinary conversation. This does not change who "
-        "she is, only how much of an answer she owes.");
+        "%1 is, only how much of an answer is owed.").arg(companionName));
     auto* answerStyleRow = new QHBoxLayout();
     answerStyleRow->addWidget(new QLabel("Answer style", identityGroup));
     answerStyleRow->addWidget(answerStyleCombo, 1);
     identityLayout->addLayout(answerStyleRow);
 
-    auto* samplingRow = new QHBoxLayout();
-    samplingRow->setObjectName("profileSamplingRow");
-    temperatureCheck = new QCheckBox("Override temperature", identityGroup);
+    temperatureCheck = new ToggleSwitch(ToggleSwitch::Accent::Cyan, identityGroup);
+    temperatureCheck->setObjectName("profileTemperatureCheck");
     temperatureSpin = new QDoubleSpinBox(identityGroup);
     temperatureSpin->setRange(0.0, 2.0);
     temperatureSpin->setSingleStep(0.05);
@@ -148,19 +194,22 @@ ProfilePanel::ProfilePanel(revia::runtime::ReviaSession& inputSession, QWidget* 
     // Without a floor the spin buttons are clipped to a pair of slivers, and the suffix
     // on the reply limit pushes its own value out of view entirely.
     temperatureSpin->setMinimumWidth(110);
-    maxTokensCheck = new QCheckBox("Override reply limit", identityGroup);
+    temperatureSpin->setAccessibleName("Profile temperature");
+    maxTokensCheck = new ToggleSwitch(ToggleSwitch::Accent::Cyan, identityGroup);
+    maxTokensCheck->setObjectName("profileMaxTokensCheck");
     maxTokensSpin = new QSpinBox(identityGroup);
     maxTokensSpin->setRange(1, 32768);
     maxTokensSpin->setValue(512);
     maxTokensSpin->setSuffix(" tokens");
     maxTokensSpin->setMinimumWidth(150);
-    samplingRow->addWidget(temperatureCheck);
-    samplingRow->addWidget(temperatureSpin);
-    samplingRow->addSpacing(18);
-    samplingRow->addWidget(maxTokensCheck);
-    samplingRow->addWidget(maxTokensSpin);
-    samplingRow->addStretch();
-    identityLayout->addLayout(samplingRow);
+    maxTokensSpin->setAccessibleName("Profile reply limit");
+    identityLayout->addWidget(MakeSwitchRow(temperatureCheck, "profile.hasTemperatureOverride", companionName, temperatureSpin));
+    identityLayout->addWidget(MakeSwitchRow(maxTokensCheck, "profile.hasMaxTokensOverride", companionName, maxTokensSpin));
+    for (QFrame* row : identityGroup->findChildren<QFrame*>())
+    {
+        if (row->property(RowTargetProperty).isValid())
+            row->installEventFilter(this);
+    }
     layout->addWidget(identityGroup);
 
     auto* voiceGroup = new QGroupBox("Voice", this);
@@ -238,11 +287,50 @@ const revia::runtime::ProfileSummary* ProfilePanel::FindProfile(const std::strin
     return nullptr;
 }
 
+bool ProfilePanel::eventFilter(QObject* watched, QEvent* event)
+{
+    if (event->type() == QEvent::MouseButtonRelease)
+    {
+        auto* row = qobject_cast<QWidget*>(watched);
+        const auto* click = static_cast<QMouseEvent*>(event);
+        auto* target = row != nullptr ? qobject_cast<QCheckBox*>(row->property(RowTargetProperty).value<QObject*>()) : nullptr;
+        if (target != nullptr && click->button() == Qt::LeftButton && row->rect().contains(click->pos()) && target->isEnabled())
+        {
+            target->toggle();
+            return true;
+        }
+    }
+    return QWidget::eventFilter(watched, event);
+}
+
+bool ProfilePanel::HasUnsavedChanges() const
+{
+    if (draftProfile)
+        return true;
+    const revia::runtime::ProfileSummary* profile = FindProfile(profileCombo->currentData().toString().toStdString());
+    if (profile == nullptr)
+        return false;
+    // Save trims the text fields, so trailing whitespace alone is not an unsaved change.
+    const auto differs = [](const QString& edited, const std::string& stored)
+        { return edited.trimmed() != QString::fromStdString(stored).trimmed(); };
+    if (differs(displayNameInput->text(), profile->displayName) || differs(descriptionInput->text(), profile->description) ||
+        differs(systemPromptInput->toPlainText(), profile->systemPrompt))
+        return true;
+    if (memoryCheck->isChecked() != profile->memoryEnabled ||
+        answerStyleCombo->currentData().toInt() != static_cast<int>(profile->answerObligation))
+        return true;
+    if (temperatureCheck->isChecked() != profile->hasTemperatureOverride ||
+        (profile->hasTemperatureOverride && std::abs(temperatureSpin->value() - static_cast<double>(profile->temperature)) > 0.005))
+        return true;
+    return maxTokensCheck->isChecked() != profile->hasMaxTokensOverride ||
+           (profile->hasMaxTokensOverride && maxTokensSpin->value() != profile->maxTokens);
+}
+
 void ProfilePanel::resizeEvent(QResizeEvent* event)
 {
     QWidget::resizeEvent(event);
     const bool compact = width() < 720;
-    for (const auto* name : {"profileSelectionRow", "profileSamplingRow", "profileVoiceRow"})
+    for (const auto* name : {"profileSelectionRow", "profileVoiceRow"})
     {
         if (auto* row = findChild<QBoxLayout*>(name))
             row->setDirection(compact ? QBoxLayout::TopToBottom : QBoxLayout::LeftToRight);
@@ -311,8 +399,8 @@ void ProfilePanel::UpdateBanner()
     // guess, and this banner exists precisely so the answer is not a guess.
     if (!session.IsStarted())
     {
-        activeBanner->setText(
-            "Revia is still starting. The profile in use appears once she is online.");
+        activeBanner->setText(QStringLiteral("Revia is still starting. The profile in use appears once %1 is online.")
+                .arg(QString::fromStdString(session.DisplayName())));
         return;
     }
     if (snapshot.activeProfileId.empty())

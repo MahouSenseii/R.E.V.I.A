@@ -120,7 +120,9 @@ struct SettingWrite
 using SettingDone = std::function<void(SettingWrite)>;
 
 // Every store except Shell, which the dialog handles itself through QSettings. Writes are
-// asynchronous and always call done on the UI thread.
+// asynchronous and call done exactly once, on the UI thread: the row stays busy until it runs. A
+// backend that has to drop answers (their session was retired) calls
+// SettingsDialog::AbandonPendingWrites() instead, after which a late answer is ignored.
 struct SettingsBackend
 {
     std::function<std::map<std::string, SettingRead>(const std::vector<SettingKeyRef>&)> readAll; // UI thread, fast

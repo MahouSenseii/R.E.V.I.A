@@ -1,4 +1,5 @@
 #include "capabilityPanel.h"
+#include "settingsCatalog.h"
 #include "toggleSwitch.h"
 
 #include "Browser/browserTypes.h"
@@ -19,7 +20,9 @@
 #include <QMouseEvent>
 #include <QPlainTextEdit>
 #include <QPushButton>
+#include <QSignalBlocker>
 #include <QStringList>
+#include <QStyle>
 #include <QSvgWidget>
 #include <QTableWidget>
 #include <QTableWidgetItem>
@@ -92,56 +95,6 @@ void AddCardHeader(QFrame* card, const QString& iconPath, const QString& stroke,
     cardLayout->addSpacing(14);
 }
 
-// One permission: label, optional helper line and risk chip, switch on the right.
-QFrame* MakeRow(ToggleSwitch* toggle, const QString& label, const QString& help = QString(), const QString& chipText = QString(),
-    const QString& chipObjectName = QString(), const bool nested = false, const QString& tip = QString())
-{
-    auto* row = new QFrame();
-    row->setObjectName(nested ? "permRowNested" : "permRow");
-    row->setProperty(RowTargetProperty, QVariant::fromValue<QObject*>(toggle));
-    auto* layout = new QHBoxLayout(row);
-    layout->setContentsMargins(nested ? 26 : 4, 12, 4, 12);
-    layout->setSpacing(16);
-
-    auto* text = new QVBoxLayout();
-    text->setSpacing(4);
-    auto* labelRow = new QHBoxLayout();
-    labelRow->setSpacing(7);
-    auto* labelWidget = new QLabel(label);
-    labelWidget->setObjectName(nested ? "permLabelNested" : "permLabel");
-    labelRow->addWidget(labelWidget);
-    if (!chipText.isEmpty())
-    {
-        auto* chip = new QLabel(chipText);
-        chip->setObjectName(chipObjectName);
-        labelRow->addWidget(chip);
-    }
-    if (!tip.isEmpty())
-    {
-        // The tooltip text already existed; it was only reachable by hovering the
-        // checkbox, which gave no sign it was there. The marker makes it discoverable.
-        auto* info = new QLabel("i");
-        info->setObjectName("infoDot");
-        info->setAlignment(Qt::AlignCenter);
-        info->setFixedSize(15, 15);
-        info->setToolTip(tip);
-        labelRow->addWidget(info);
-        labelWidget->setToolTip(tip);
-    }
-    labelRow->addStretch();
-    text->addLayout(labelRow);
-    if (!help.isEmpty())
-    {
-        auto* helpLabel = new QLabel(help);
-        helpLabel->setObjectName("permHelp");
-        helpLabel->setWordWrap(true);
-        text->addWidget(helpLabel);
-    }
-    layout->addLayout(text, 1);
-    layout->addWidget(toggle, 0, Qt::AlignVCenter);
-    return row;
-}
-
 void AddRow(QFrame* card, QFrame* row)
 {
     qobject_cast<QVBoxLayout*>(card->layout())->addWidget(row);
@@ -154,10 +107,35 @@ QFrame* MakeSeparator()
     line->setFixedHeight(1);
     return line;
 }
+
+QLabel* MakeBadge(const QString& text, const QString& kind)
+{
+    auto* badge = new QLabel(text);
+    badge->setObjectName("settingBadge");
+    badge->setProperty("kind", kind);
+    return badge;
+}
+
+void SetTone(QLabel* label, const QString& text, const bool error)
+{
+    label->setText(text);
+    label->setProperty("tone", error ? "error" : "success");
+    label->style()->unpolish(label);
+    label->style()->polish(label);
+}
+
+const QString ChangeBack = QStringLiteral("\n\nYou can change this back here at any time.");
 }
 
 bool CapabilityPanel::eventFilter(QObject* watched, QEvent* event)
 {
+    if (event->type() == QEvent::Wheel && watched == taskApprovalMode && !taskApprovalMode->hasFocus())
+    {
+        // A notch over the closed list picks the neighbouring mode and applies it at once; one down
+        // from the default is "Free". Ignored, the wheel scrolls the page the panel sits in instead.
+        event->ignore();
+        return true;
+    }
     if (event->type() == QEvent::MouseButtonRelease)
     {
         auto* row = qobject_cast<QWidget*>(watched);
@@ -178,6 +156,96 @@ bool CapabilityPanel::eventFilter(QObject* watched, QEvent* event)
     return QWidget::eventFilter(watched, event);
 }
 
+QString CapabilityPanel::CompanionName() const
+{
+    return QString::fromStdString(session.DisplayName());
+}
+
+QString CapabilityPanel::Warning(const ToggleSwitch* toggle) const
+{
+    const auto* descriptor = revia::desktop::FindSetting(toggle->objectName().toStdString());
+    return descriptor != nullptr ? revia::desktop::WithCompanionName(descriptor->warning, CompanionName()) : QString();
+}
+
+// One permission: the catalog's label and one-line help, risk badges, an optional second help
+// line, and the switch on the right. The switch must already carry its objectName.
+QFrame* CapabilityPanel::MakeRow(ToggleSwitch* toggle, const QString& tip, const bool nested, const QString& riskText)
+{
+    using revia::desktop::SettingRisk;
+    const auto* descriptor = revia::desktop::FindSetting(toggle->objectName().toStdString());
+    const QString name = CompanionName();
+    const QString label = descriptor != nullptr ? revia::desktop::WithCompanionName(descriptor->label, name) : toggle->objectName();
+    const QString help = descriptor != nullptr ? revia::desktop::WithCompanionName(descriptor->description, name) : QString();
+    const QString detail = revia::desktop::WithCompanionName(tip, name);
+
+    auto* row = new QFrame();
+    row->setObjectName(nested ? "permRowNested" : "permRow");
+    row->setProperty(RowTargetProperty, QVariant::fromValue<QObject*>(toggle));
+    auto* layout = new QHBoxLayout(row);
+    layout->setContentsMargins(nested ? 32 : 16, 12, 16, 12);
+    layout->setSpacing(16);
+
+    auto* text = new QVBoxLayout();
+    text->setSpacing(4);
+    auto* labelWidget = new QLabel(label);
+    labelWidget->setObjectName(nested ? "permLabelNested" : "permLabel");
+    labelWidget->setWordWrap(true);
+    text->addWidget(labelWidget);
+    if (!help.isEmpty())
+    {
+        auto* helpLabel = new QLabel(help);
+        helpLabel->setObjectName("permHelp");
+        helpLabel->setWordWrap(true);
+        text->addWidget(helpLabel);
+    }
+    if (!detail.isEmpty())
+    {
+        // What used to hide behind an "i" tooltip is now a visible second line.
+        auto* detailLabel = new QLabel(detail);
+        detailLabel->setObjectName("permRowHelp");
+        detailLabel->setWordWrap(true);
+        text->addWidget(detailLabel);
+    }
+    // The same badges, in the same place, as a Settings row, so risk reads alike in both.
+    QStringList badges;
+    if (descriptor != nullptr)
+    {
+        if (descriptor->risk == SettingRisk::Privacy)
+            badges.push_back(QStringLiteral("privacy:Privacy"));
+        if (descriptor->risk == SettingRisk::Dangerous)
+            badges.push_back(QStringLiteral("danger:") + (riskText.isEmpty() ? QStringLiteral("Risky") : riskText));
+        if (descriptor->autonomy)
+            badges.push_back(QStringLiteral("autonomy:Autonomy"));
+    }
+    if (!badges.isEmpty())
+    {
+        auto* badgeRow = new QHBoxLayout();
+        badgeRow->setContentsMargins(0, 2, 0, 0);
+        badgeRow->setSpacing(6);
+        for (QString& badge : badges)
+        {
+            const qsizetype colon = badge.indexOf(QLatin1Char(':'));
+            badgeRow->addWidget(MakeBadge(badge.mid(colon + 1), badge.left(colon)));
+            badge = badge.mid(colon + 1);
+        }
+        badgeRow->addStretch(1);
+        text->addLayout(badgeRow);
+    }
+    layout->addLayout(text, 1);
+    layout->addWidget(toggle, 0, Qt::AlignVCenter);
+
+    QString description = help;
+    if (!detail.isEmpty())
+        description += (description.isEmpty() ? QString() : QStringLiteral(" ")) + detail;
+    if (!badges.isEmpty())
+        description += QStringLiteral(" (") + badges.join(QStringLiteral(", ")) + QLatin1Char(')');
+    row->setAccessibleName(label);
+    row->setAccessibleDescription(description);
+    toggle->setAccessibleName(label);
+    toggle->setAccessibleDescription(description);
+    return row;
+}
+
 CapabilityPanel::CapabilityPanel(revia::runtime::ReviaSession& inputSession, DiscoveryRequest inputDiscoveryRequest, QWidget* parent)
     : QWidget(parent),
       session(inputSession),
@@ -196,9 +264,9 @@ CapabilityPanel::CapabilityPanel(revia::runtime::ReviaSession& inputSession, Dis
     auto* introLayout = new QVBoxLayout(intro);
     introLayout->setContentsMargins(14, 11, 14, 11);
     auto* explanation = new QLabel(
-        "Applications begin with read-only inspection permission and no mutable controls. "
-        "Discover a foreground window, then approve only the controls Revia may invoke or edit. "
-        "Internet access is a separate read-only, rate-limited capability.", intro);
+        QStringLiteral("Applications begin with read-only inspection permission and no mutable controls. "
+                       "Discover a foreground window, then approve only the controls %1 may invoke or edit. "
+                       "Internet access is a separate read-only, rate-limited capability.").arg(CompanionName()), intro);
     explanation->setWordWrap(true);
     explanation->setObjectName("secondaryText");
     introLayout->addWidget(explanation);
@@ -211,11 +279,15 @@ CapabilityPanel::CapabilityPanel(revia::runtime::ReviaSession& inputSession, Dis
     taskLayout->addWidget(taskTitle);
     taskApprovalMode = new QComboBox(taskApprovals);
     taskApprovalMode->setObjectName("taskApprovalMode");
+    taskApprovalMode->setAccessibleName("Requested tasks");
     using ExecutionMode = revia::actions::ExecutionMode;
     taskApprovalMode->addItem("Approve once at the start", static_cast<int>(ExecutionMode::Supervised));
     taskApprovalMode->addItem("Free — use granted permissions without asking", static_cast<int>(ExecutionMode::OwnerFullAccess));
     taskApprovalMode->addItem("Approved scope only", static_cast<int>(ExecutionMode::ApprovedScope));
     taskApprovalMode->addItem("Actions disabled", static_cast<int>(ExecutionMode::Disabled));
+    // Changed only once clicked or tabbed into; see eventFilter.
+    taskApprovalMode->setFocusPolicy(Qt::StrongFocus);
+    taskApprovalMode->installEventFilter(this);
     taskLayout->addWidget(taskApprovalMode);
     auto* taskHelp = new QLabel(
         "Task approval covers routine steps and messages you explicitly request. "
@@ -234,39 +306,28 @@ CapabilityPanel::CapabilityPanel(revia::runtime::ReviaSession& inputSession, Dis
         Refresh();
     });
 
+    // ------------------------------------------------------------ internet group
+    // Built inside its own container so the Settings dialog can show it in the Internet section;
+    // until then it sits here, and the panel works on its own.
+    internetGroup = new QWidget(this);
+    auto* internetLayout = new QVBoxLayout(internetGroup);
+    internetLayout->setContentsMargins(0, 0, 0, 0);
+    internetLayout->setSpacing(18);
+    internetLayout->addWidget(CreateInternetCard());
+    internetLayout->addWidget(CreateInteractiveBrowserCard());
+    internetStatusLabel = new QLabel(internetGroup);
+    internetStatusLabel->setObjectName("settingStatus");
+    internetStatusLabel->setWordWrap(true);
+    internetStatusLabel->hide();
+    internetLayout->addWidget(internetStatusLabel);
+    layout->addWidget(internetGroup);
+
     auto* cards = new QGridLayout();
     cards->setObjectName("permissionCards");
     cards->setHorizontalSpacing(18);
     cards->setVerticalSpacing(18);
     cards->setColumnStretch(0, 1);
     cards->setColumnStretch(1, 1);
-
-    // ------------------------------------------------------------ internet
-    auto* internetCard = MakeCard("permCard");
-    AddCardHeader(internetCard,
-        "<circle cx='12' cy='12' r='9'/><path d='M3 12h18M12 3c2.5 2.6 2.5 15.4 0 18M12 3"
-        "c-2.5 2.6-2.5 15.4 0 18'/>",
-        "#55E8F2", "iconWell", "Internet & Research", "Read-only and rate-limited. Results are grounding, never instructions.");
-    internetCheck = new ToggleSwitch(ToggleSwitch::Accent::Cyan, this);
-    automaticLookupCheck = new ToggleSwitch(ToggleSwitch::Accent::Cyan, this);
-    visibleBrowserCheck = new ToggleSwitch(ToggleSwitch::Accent::Cyan, this);
-    autonomousResearchCheck = new ToggleSwitch(ToggleSwitch::Accent::Violet, this);
-    AddRow(internetCard, MakeRow(internetCheck,
-        "Allow bounded internet lookup",
-        "Searches a fixed set of public HTTPS sources on request."));
-    AddRow(internetCard, MakeRow(automaticLookupCheck,
-        "Automatically look up factual questions",
-        "Without this she searches only when you ask her to.",
-        QString(), QString(), true));
-    AddRow(internetCard, MakeRow(visibleBrowserCheck,
-        "Use a dedicated visible browser window",
-        QString(), QString(), QString(), true));
-    AddRow(internetCard, MakeRow(autonomousResearchCheck,
-        "Research her own topics",
-        "Lets curiosity start a bounded search with no request from you.",
-        "Autonomy", "chipAutonomy", true));
-    qobject_cast<QVBoxLayout*>(internetCard->layout())->addStretch();
-    cards->addWidget(internetCard, 0, 0);
 
     // ------------------------------------------------------------ camera
     auto* cameraCard = MakeCard("permCard");
@@ -277,19 +338,16 @@ CapabilityPanel::CapabilityPanel(revia::runtime::ReviaSession& inputSession, Dis
         "Camera",
         "Opened for a single frame, then closed again immediately.");
     cameraCheck = new ToggleSwitch(ToggleSwitch::Accent::Cyan, this);
+    cameraCheck->setObjectName("cameraCheck");
     autonomousCameraCheck = new ToggleSwitch(ToggleSwitch::Accent::Violet, this);
+    autonomousCameraCheck->setObjectName("autonomousCameraCheck");
     AddRow(cameraCard, MakeRow(cameraCheck,
-        "Allow camera access",
-        "Still frames only. No continuous capture, no recording.",
-        QString(), QString(), false,
-        "Revia may take a single still frame when you ask her to look at something. "
-        "The camera is opened for that frame and closed again immediately."));
+        "{name} may take a single still frame when you ask about something in view. The camera is opened for that "
+        "frame and closed again immediately."));
     AddRow(cameraCard, MakeRow(autonomousCameraCheck,
-        "Let her decide when to look",
-        QString(), "Autonomy", "chipAutonomy", true,
-        "A separate permission. Without it she can only use the camera when asked."));
+        "A separate permission. Without it the camera is used only when you ask.", true));
     qobject_cast<QVBoxLayout*>(cameraCard->layout())->addStretch();
-    cards->addWidget(cameraCard, 0, 1);
+    cards->addWidget(cameraCard, 0, 0);
 
     // ------------------------------------------------------------ pointer and keyboard
     auto* desktopCard = MakeCard("permCard");
@@ -300,26 +358,24 @@ CapabilityPanel::CapabilityPanel(revia::runtime::ReviaSession& inputSession, Dis
         "Synthesized input is indistinguishable from you typing. Confined to approved "
         "applications unless that confinement is lifted.");
     pointerCheck = new ToggleSwitch(ToggleSwitch::Accent::Cyan, this);
+    pointerCheck->setObjectName("pointerCheck");
     keyboardCheck = new ToggleSwitch(ToggleSwitch::Accent::Cyan, this);
+    keyboardCheck->setObjectName("keyboardCheck");
     launchCheck = new ToggleSwitch(ToggleSwitch::Accent::Cyan, this);
+    launchCheck->setObjectName("launchCheck");
     rawCoordinateCheck = new ToggleSwitch(ToggleSwitch::Accent::Cyan, this);
+    rawCoordinateCheck->setObjectName("rawCoordinateCheck");
     visualTargetCheck = new ToggleSwitch(ToggleSwitch::Accent::Cyan, this);
-    AddRow(desktopCard, MakeRow(pointerCheck, "Move and click the pointer"));
-    AddRow(desktopCard, MakeRow(keyboardCheck, "Type and press key chords"));
-    AddRow(desktopCard, MakeRow(launchCheck, "Start approved applications"));
+    visualTargetCheck->setObjectName("visualTargetCheck");
+    AddRow(desktopCard, MakeRow(pointerCheck));
+    AddRow(desktopCard, MakeRow(keyboardCheck));
+    AddRow(desktopCard, MakeRow(launchCheck));
     AddRow(desktopCard, MakeRow(visualTargetCheck,
-        "Click what she can see",
-        "For games and drawn interfaces that expose no controls to Windows.",
-        QString(), QString(), true,
-        "The target must be something she just looked at, in the window she looked at, "
-        "still in front and still the same size. Anything else is refused and she looks "
-        "again."));
+        "The target must be something {name} just looked at, in the window looked at, still in front and still the "
+        "same size. Anything else is refused and {name} looks again.", true));
     AddRow(desktopCard, MakeRow(rawCoordinateCheck,
-        "Aim at coordinates she chose",
-        "Otherwise every click must land on a re-verified element.",
-        QString(), QString(), true,
-        "Wider than the setting above: this is a point with nothing behind it, rather "
-        "than a thing she was looking at."));
+        "Wider than the setting above: a point with nothing behind it, rather than a thing {name} was looking at.",
+        true));
 
     auto* desktopLayout = qobject_cast<QVBoxLayout*>(desktopCard->layout());
     desktopLayout->addSpacing(6);
@@ -328,16 +384,17 @@ CapabilityPanel::CapabilityPanel(revia::runtime::ReviaSession& inputSession, Dis
     auto* stopLayout = new QHBoxLayout(stopBar);
     stopLayout->setContentsMargins(11, 9, 11, 9);
     stopLayout->setSpacing(10);
-    auto* stopState = new QLabel("Hold ctrl+alt+shift to halt input immediately.");
+    auto* stopState = new QLabel("Hold Ctrl+Alt+Shift to halt input immediately.");
     stopState->setObjectName("stopState");
     stopState->setWordWrap(true);
     stopLayout->addWidget(stopState, 1);
+    // Named apart from the composer's stopButton, which stops a reply rather than desktop control.
     desktopStopButton = new QPushButton("Stop desktop control", this);
-    desktopStopButton->setObjectName("stopButton");
+    desktopStopButton->setObjectName("desktopStopButton");
     stopLayout->addWidget(desktopStopButton, 0);
     desktopLayout->addWidget(stopBar);
     desktopLayout->addStretch();
-    cards->addWidget(desktopCard, 1, 0);
+    cards->addWidget(desktopCard, 0, 1);
 
     // ------------------------------------------------------------ gated
     auto* gatedCard = MakeCard("gatedCard");
@@ -347,10 +404,10 @@ CapabilityPanel::CapabilityPanel(revia::runtime::ReviaSession& inputSession, Dis
         "#F3A446", "iconWellGated",
         "Gated Controls",
         "Each one removes a boundary the other permissions rely on. Off by default.");
-    auto* gatedNotice = new QLabel(
-        "These extend Revia beyond approved applications. Policy, confirmation and the "
-        "audit log still apply to every action — but the scope they are checked "
-        "against grows.");
+    auto* gatedNotice = new QLabel(QStringLiteral(
+        "These extend %1 beyond approved applications. Policy, confirmation and the "
+        "audit log still apply to every action, but the scope they are checked "
+        "against grows.").arg(CompanionName()));
     gatedNotice->setObjectName("gatedNotice");
     gatedNotice->setWordWrap(true);
     auto* gatedLayout = qobject_cast<QVBoxLayout*>(gatedCard->layout());
@@ -358,32 +415,25 @@ CapabilityPanel::CapabilityPanel(revia::runtime::ReviaSession& inputSession, Dis
     gatedLayout->addSpacing(4);
 
     wholeDesktopCheck = new ToggleSwitch(ToggleSwitch::Accent::Amber, this);
+    wholeDesktopCheck->setObjectName("wholeDesktopCheck");
     commandSurfaceCheck = new ToggleSwitch(ToggleSwitch::Accent::Red, this);
+    commandSurfaceCheck->setObjectName("commandSurfaceCheck");
     autonomousDesktopCheck = new ToggleSwitch(ToggleSwitch::Accent::Violet, this);
+    autonomousDesktopCheck->setObjectName("autonomousDesktopCheck");
     AddRow(gatedCard, MakeRow(wholeDesktopCheck,
-        "Give her the whole desktop",
-        "Allows Revia to act outside approved applications. Requires pointer control "
-        "and chosen coordinates.",
-        "Removes confinement", "chipGated", false,
-        "The pointer goes anywhere and the keyboard goes to whatever has focus, the way "
-        "it does for you. Needs pointer control and chosen coordinates."));
+        "The pointer goes anywhere and the keyboard goes to whatever has focus, the way it does for you.", false,
+        "Removes confinement"));
     AddRow(gatedCard, MakeSeparator());
     AddRow(gatedCard, MakeRow(commandSurfaceCheck,
-        "Allow terminals and script hosts",
-        "Typing into a command interpreter is model text reaching a shell, whichever "
-        "window it arrived through.",
-        "Command surface", "chipCritical", false,
-        "Off by default. Typing into a command interpreter is model text reaching a "
-        "shell no matter which window it arrived through."));
+        "Off by default. Typing into a command interpreter is model text reaching a shell, whichever window it "
+        "arrived through.", false, "Command surface"));
     AddRow(gatedCard, MakeSeparator());
-    AddRow(gatedCard, MakeRow(autonomousDesktopCheck, "Let Revia operate on her own",
-                          "Unprompted desktop work. Still refused while you are actively working.", "Autonomy", "chipAutonomy", false,
-                          "A separate permission. Without it she may only do this as part of something "
-                          "you asked for."));
+    AddRow(gatedCard, MakeRow(autonomousDesktopCheck,
+        "A separate permission. Without it desktop work happens only as part of something you asked for."));
     gatedLayout->addStretch();
-    cards->addWidget(gatedCard, 1, 1);
-    layout->addLayout(cards);
+    cards->addWidget(gatedCard, 1, 0);
 
+    // ------------------------------------------------------------ commands
     auto* processCard = MakeCard("permCard");
     AddCardHeader(processCard, "<rect x='3' y='4' width='18' height='16' rx='2'/><path d='m7 9 3 3-3 3M13 15h4'/>", "#55E8F2", "iconWell",
         "Commands", "Run approved programs with bounded time and output.");
@@ -393,17 +443,18 @@ CapabilityPanel::CapabilityPanel(revia::runtime::ReviaSession& inputSession, Dis
     taskProcessCheck->setObjectName("processTaskExecution");
     commandInterpreterCheck = new ToggleSwitch(ToggleSwitch::Accent::Amber, this);
     commandInterpreterCheck->setObjectName("processCommandInterpreters");
-    AddRow(processCard, MakeRow(processCheck, "Allow approved programs to run",
-                            "Use an approved working directory. Programs retain their normal Windows account access."));
-    AddRow(processCard, MakeRow(commandInterpreterCheck, "Allow approved command interpreters",
-                            "Shells and script hosts must also be listed below. Task approval and execution limits still apply.",
-                            "Command surface", "chipCritical"));
-    AddRow(processCard, MakeRow(taskProcessCheck, "Use commands in delegated tasks",
-                            "Delegated work may use the same approved executables, working directories and execution limits."));
+    AddRow(processCard, MakeRow(processCheck,
+        "Use an approved working directory. Programs keep their normal Windows account access."));
+    AddRow(processCard, MakeRow(commandInterpreterCheck,
+        "Shells and script hosts must also be listed below. Task approval and execution limits still apply.", false,
+        "Command surface"));
+    AddRow(processCard, MakeRow(taskProcessCheck,
+        "Delegated work uses the same approved executables, working directories and execution limits."));
     auto* processLayout = qobject_cast<QVBoxLayout*>(processCard->layout());
     processLayout->addSpacing(8);
     auto* executableLabel = new QLabel("Approved executable paths — one absolute path per line");
     executableLabel->setObjectName("permLabel");
+    executableLabel->setWordWrap(true);
     processLayout->addWidget(executableLabel);
     processLayout->addSpacing(6);
     approvedExecutablesEdit = new QPlainTextEdit(this);
@@ -411,25 +462,30 @@ CapabilityPanel::CapabilityPanel(revia::runtime::ReviaSession& inputSession, Dis
     approvedExecutablesEdit->setAccessibleName("Approved executable paths");
     approvedExecutablesEdit->setPlaceholderText("C:\\Tools\\program.exe");
     approvedExecutablesEdit->setLineWrapMode(QPlainTextEdit::NoWrap);
+    // One entry per line, so Tab moves on instead of typing a tab: in Settings, Esc keeps the
+    // typed list and the focus, and Tab is the keyboard's way out.
+    approvedExecutablesEdit->setTabChangesFocus(true);
     approvedExecutablesEdit->setMinimumHeight(96);
     approvedExecutablesEdit->setMaximumHeight(160);
     executableLabel->setBuddy(approvedExecutablesEdit);
     processLayout->addWidget(approvedExecutablesEdit);
-    processLayout->addSpacing(10);
-    auto* processActions = new QHBoxLayout();
+    processLayout->addSpacing(8);
     processStatusLabel = new QLabel(this);
     processStatusLabel->setObjectName("secondaryText");
     processStatusLabel->setWordWrap(true);
-    processActions->addWidget(processStatusLabel, 1);
-    applyProcessButton = new QPushButton("Apply", this);
-    applyProcessButton->setObjectName("primaryButton");
-    applyProcessButton->setAccessibleName("Apply command permissions");
-    processActions->addWidget(applyProcessButton);
-    processLayout->addLayout(processActions);
-    layout->addWidget(processCard);
-    layout->addWidget(CreateInteractiveBrowserCard());
+    processLayout->addWidget(processStatusLabel);
+    processLayout->addSpacing(8);
+    processListFooter = CreateListFooter(applyProcessButton, "Apply command permissions", [this]() { ApplyProcessSettings(); },
+        [this]()
+        {
+            processSettingsDirty = false;
+            Refresh();
+        });
+    processLayout->addWidget(processListFooter);
+    cards->addWidget(processCard, 1, 1);
+    layout->addLayout(cards);
 
-    // Whole-row clicking for every permission built above.
+    // Whole-row clicking for every permission built above, the internet group included.
     for (QFrame* row : findChildren<QFrame*>())
     {
         if (row->property(RowTargetProperty).isValid()) row->installEventFilter(this);
@@ -514,50 +570,138 @@ CapabilityPanel::CapabilityPanel(revia::runtime::ReviaSession& inputSession, Dis
 
     statusLabel = new QLabel(
         "Permissions persist in RuntimeData/Capabilities/capabilities.json.", this);
-    statusLabel->setObjectName("secondaryText");
+    statusLabel->setObjectName("settingStatus");
+    statusLabel->setProperty("tone", "info");
     statusLabel->setWordWrap(true);
     layout->addWidget(statusLabel);
 
-    connect(internetCheck, &QCheckBox::toggled, this, [this]() { ApplyInternetSettings(); });
-    connect(automaticLookupCheck, &QCheckBox::toggled, this, [this]() { ApplyInternetSettings(); });
-    connect(visibleBrowserCheck, &QCheckBox::toggled,
-        this, [this]() { ApplyBrowserSettings(); });
-    connect(autonomousResearchCheck, &QCheckBox::toggled,
-        this, [this]() { ApplyBrowserSettings(); });
-    connect(cameraCheck, &QCheckBox::toggled, this, [this]() { ApplyCameraSettings(); });
-    connect(autonomousCameraCheck, &QCheckBox::toggled,
-        this, [this]() { ApplyCameraSettings(); });
-    const auto markProcessSettingsDirty = [this]()
+    // Turning on a risky switch asks first; turning anything off never does.
+    const auto confirmFirst = [this](ToggleSwitch* toggle, const bool on, const QString& explanation, std::function<void()> apply)
     {
-        if (refreshing)
-        {
-            return;
-        }
-        processSettingsDirty = true;
-        applyProcessButton->setEnabled(true);
-        processStatusLabel->setText("Unapplied changes. Saved command permissions remain in effect until Apply.");
+        if (refreshing) return;
+        if (on)
+            ConfirmTurnOn(toggle, explanation, std::move(apply));
+        else
+            apply();
     };
-    connect(processCheck, &QCheckBox::toggled, this, markProcessSettingsDirty);
-    connect(taskProcessCheck, &QCheckBox::toggled, this, markProcessSettingsDirty);
-    connect(commandInterpreterCheck, &QCheckBox::toggled, this, markProcessSettingsDirty);
-    connect(approvedExecutablesEdit, &QPlainTextEdit::textChanged, this, markProcessSettingsDirty);
-    connect(applyProcessButton, &QPushButton::clicked, this, [this]() { ApplyProcessSettings(); });
-    connect(pointerCheck, &QCheckBox::toggled,
-        this, [this]() { ApplyDesktopControlSettings(); });
-    connect(keyboardCheck, &QCheckBox::toggled,
-        this, [this]() { ApplyDesktopControlSettings(); });
-    connect(launchCheck, &QCheckBox::toggled,
-        this, [this]() { ApplyDesktopControlSettings(); });
-    connect(rawCoordinateCheck, &QCheckBox::toggled,
-        this, [this]() { ApplyDesktopControlSettings(); });
-    connect(visualTargetCheck, &QCheckBox::toggled,
-        this, [this]() { ApplyDesktopControlSettings(); });
-    connect(wholeDesktopCheck, &QCheckBox::toggled,
-        this, [this]() { ApplyDesktopControlSettings(); });
-    connect(commandSurfaceCheck, &QCheckBox::toggled,
-        this, [this]() { ApplyDesktopControlSettings(); });
-    connect(autonomousDesktopCheck, &QCheckBox::toggled,
-        this, [this]() { ApplyDesktopControlSettings(); });
+    connect(internetCheck, &QCheckBox::toggled, this, [this, confirmFirst](const bool on)
+    {
+        confirmFirst(internetCheck, on,
+            "Knowledge questions may be sent to the configured DuckDuckGo and Wikipedia HTTPS endpoints or, when "
+            "selected below, to a dedicated visible browser. Every lookup is read-only, bounded, rate limited and "
+            "audited.",
+            [this]() { ApplyInternetSettings(); });
+    });
+    connect(automaticLookupCheck, &QCheckBox::toggled, this, [this]() { ApplyInternetSettings(); });
+    connect(visibleBrowserCheck, &QCheckBox::toggled, this, [this, confirmFirst](const bool on)
+    {
+        confirmFirst(visibleBrowserCheck, on,
+            QStringLiteral("%1 will open a separate, visible Edge or Chrome window using a dedicated RuntimeData browser "
+                           "profile, to search public HTTPS pages and read bounded page text. Your personal cookies, "
+                           "downloads, uploads, passwords, payments, localhost and private-network pages stay out of "
+                           "reach. Queries, pages, results, timing and failures remain visible and audited.")
+                .arg(CompanionName()),
+            [this]() { ApplyBrowserSettings(); });
+    });
+    connect(autonomousResearchCheck, &QCheckBox::toggled, this, [this, confirmFirst](const bool on)
+    {
+        confirmFirst(autonomousResearchCheck, on,
+            QStringLiteral("This lets %1 choose a read-only web query without a new message from you when recent "
+                           "conversation or a meaningful emotion creates a concrete topic. A timer alone cannot create a "
+                           "topic, and attention, cooldown, deduplication, hourly, browser and network limits still apply.")
+                .arg(CompanionName()),
+            [this]() { ApplyBrowserSettings(); });
+    });
+    connect(cameraCheck, &QCheckBox::toggled, this, [this, confirmFirst](const bool on)
+    {
+        confirmFirst(cameraCheck, on,
+            QStringLiteral("%1 will be able to take a single still frame from your camera and describe what it contains. "
+                           "The camera is opened for that frame and closed again immediately, so the hardware light is on "
+                           "only while a frame is being taken. Frames are written to RuntimeData/Camera on this computer "
+                           "and are never uploaded. Seeing something grants nothing new: anything done as a result still "
+                           "goes through the ordinary permission and confirmation path.")
+                .arg(CompanionName()),
+            [this]() { ApplyCameraSettings(); });
+    });
+    connect(autonomousCameraCheck, &QCheckBox::toggled, this, [this, confirmFirst](const bool on)
+    {
+        confirmFirst(autonomousCameraCheck, on,
+            QStringLiteral("This is a separate permission from answering a question about what %1 can see. It allows a "
+                           "frame to be taken without you asking, subject to the same rate limit and the same audit trail. "
+                           "Consenting to answer \"what am I holding?\" is not the same as consenting to be watched, which "
+                           "is why this is asked separately.")
+                .arg(CompanionName()),
+            [this]() { ApplyCameraSettings(); });
+    });
+    for (ToggleSwitch* toggle : {processCheck, taskProcessCheck, commandInterpreterCheck})
+    {
+        connect(toggle, &QCheckBox::toggled, this, [this, toggle, confirmFirst](const bool on)
+        {
+            confirmFirst(toggle, on, Warning(toggle), [this, toggle]()
+            {
+                const bool value = toggle->isChecked();
+                if (toggle == processCheck)
+                    CommitProcessFlag([value](revia::process::ProcessSettings& settings) { settings.enabled = value; });
+                else if (toggle == taskProcessCheck)
+                    CommitProcessFlag([value](revia::process::ProcessSettings& settings) { settings.allowTaskExecution = value; });
+                else
+                    CommitProcessFlag([value](revia::process::ProcessSettings& settings) { settings.allowCommandInterpreters = value; });
+            });
+        });
+    }
+    connect(approvedExecutablesEdit, &QPlainTextEdit::textChanged, this, [this]()
+    {
+        if (refreshing) return;
+        processSettingsDirty = true;
+        processListFooter->setVisible(true);
+        processStatusLabel->setText("Unsaved list changes. The saved list stays in effect until Apply.");
+    });
+    for (ToggleSwitch* toggle : {pointerCheck, keyboardCheck, launchCheck, rawCoordinateCheck, visualTargetCheck, wholeDesktopCheck,
+             commandSurfaceCheck, autonomousDesktopCheck})
+    {
+        connect(toggle, &QCheckBox::toggled, this, [this, toggle, confirmFirst](const bool on)
+        {
+            QString explanation = Warning(toggle);
+            const bool hand = toggle == pointerCheck || toggle == keyboardCheck || toggle == launchCheck;
+            if (hand && !session.Capabilities().desktopControl.AnyEnabled())
+            {
+                // The first hand turned on is the moment desktop control as a whole begins.
+                explanation = QStringLiteral(
+                    "%1 will be able to move the pointer, click and type on this computer. Input is confined to windows "
+                    "belonging to the applications approved below, and is refused when something else has focus, but "
+                    "inside those windows it is the same as you doing it. Every action is rate limited and written to "
+                    "the action audit log; typed text is recorded only by length. Hold Ctrl+Alt+Shift at any time to "
+                    "stop it.").arg(CompanionName());
+            }
+            else if (toggle == autonomousDesktopCheck)
+            {
+                explanation = QStringLiteral(
+                    "This is a separate permission from doing desktop work you asked for. It allows %1 to move the "
+                    "pointer, type and start approved applications without a request, subject to the same limits and "
+                    "the same audit trail.").arg(CompanionName());
+            }
+            else if (toggle == wholeDesktopCheck)
+            {
+                explanation = QStringLiteral(
+                    "Until now input has been confined to windows belonging to the applications you approved. This "
+                    "removes that confinement: the pointer can go anywhere on your screens and the keyboard goes to "
+                    "whatever has focus, exactly as it does for you.\n\n"
+                    "That is the point of it, since a general skill cannot be learned inside one application, but "
+                    "confinement is what is being given up. What remains is this permission, the refusal to touch "
+                    "terminals and script hosts, the per-minute input budget, the audit log and the Ctrl+Alt+Shift "
+                    "stop. Those raise the effort; none of them proves that nothing you would not have chosen can be "
+                    "reached.");
+            }
+            else if (toggle == commandSurfaceCheck)
+            {
+                explanation = QStringLiteral(
+                    "Command interpreters, script hosts and the chords that summon them are refused by default, because "
+                    "text typed into one of them is model text running as a command however it arrived. Allowing this "
+                    "makes that possible on purpose.");
+            }
+            confirmFirst(toggle, on, explanation, [this]() { ApplyDesktopControlSettings(); });
+        });
+    }
     connect(desktopStopButton, &QPushButton::clicked, this, [this]() { ToggleDesktopStop(); });
     connect(addApplicationButton, &QPushButton::clicked, this,
         [this]() { AddApplicationManually(); });
@@ -570,6 +714,72 @@ CapabilityPanel::CapabilityPanel(revia::runtime::ReviaSession& inputSession, Dis
     connect(approveDiscoveredButton, &QPushButton::clicked, this,
         [this]() { ApproveSelectedDiscoveredControls(); });
     Refresh();
+}
+
+CapabilityPanel::~CapabilityPanel()
+{
+    // Once detached the group lives in another widget's layout, but it is still this panel's
+    // to delete: its switches call back into this object.
+    delete internetGroup.data();
+}
+
+QWidget* CapabilityPanel::DetachInternetGroup()
+{
+    if (internetGroup != nullptr && !internetDetached)
+    {
+        internetDetached = true;
+        layout()->removeWidget(internetGroup);
+        internetGroup->setParent(nullptr);
+    }
+    return internetGroup;
+}
+
+QFrame* CapabilityPanel::CreateInternetCard()
+{
+    auto* internetCard = MakeCard("permCard");
+    AddCardHeader(internetCard,
+        "<circle cx='12' cy='12' r='9'/><path d='M3 12h18M12 3c2.5 2.6 2.5 15.4 0 18M12 3"
+        "c-2.5 2.6-2.5 15.4 0 18'/>",
+        "#55E8F2", "iconWell", "Internet & Research", "Read-only and rate-limited. Results are grounding, never instructions.");
+    internetCheck = new ToggleSwitch(ToggleSwitch::Accent::Cyan, this);
+    internetCheck->setObjectName("internetCheck");
+    automaticLookupCheck = new ToggleSwitch(ToggleSwitch::Accent::Cyan, this);
+    automaticLookupCheck->setObjectName("automaticLookupCheck");
+    visibleBrowserCheck = new ToggleSwitch(ToggleSwitch::Accent::Cyan, this);
+    visibleBrowserCheck->setObjectName("visibleBrowserCheck");
+    autonomousResearchCheck = new ToggleSwitch(ToggleSwitch::Accent::Violet, this);
+    autonomousResearchCheck->setObjectName("autonomousResearchCheck");
+    AddRow(internetCard, MakeRow(internetCheck));
+    AddRow(internetCard, MakeRow(automaticLookupCheck, "Without this, lookups happen only when you ask for one.", true));
+    AddRow(internetCard, MakeRow(visibleBrowserCheck, QString(), true));
+    AddRow(internetCard, MakeRow(autonomousResearchCheck, QString(), true));
+    qobject_cast<QVBoxLayout*>(internetCard->layout())->addStretch();
+    return internetCard;
+}
+
+QWidget* CapabilityPanel::CreateListFooter(QPushButton*& apply, const QString& applyName, std::function<void()> onApply,
+    std::function<void()> onDiscard)
+{
+    auto* footer = new QWidget(this);
+    footer->setObjectName("capabilityListFooter");
+    footer->setAttribute(Qt::WA_StyledBackground, true);
+    auto* footerLayout = new QHBoxLayout(footer);
+    footerLayout->setContentsMargins(12, 8, 8, 8);
+    footerLayout->setSpacing(8);
+    auto* unsaved = new QLabel("Unsaved changes", footer);
+    unsaved->setObjectName("secondaryText");
+    footerLayout->addWidget(unsaved, 1);
+    auto* discard = new QPushButton("Discard", footer);
+    discard->setAccessibleName(QStringLiteral("Discard %1").arg(applyName.mid(QStringLiteral("Apply ").size())));
+    footerLayout->addWidget(discard);
+    apply = new QPushButton("Apply", footer);
+    apply->setObjectName("primaryButton");
+    apply->setAccessibleName(applyName);
+    footerLayout->addWidget(apply);
+    connect(apply, &QPushButton::clicked, this, std::move(onApply));
+    connect(discard, &QPushButton::clicked, this, std::move(onDiscard));
+    footer->hide();
+    return footer;
 }
 
 QFrame* CapabilityPanel::CreateInteractiveBrowserCard()
@@ -587,19 +797,16 @@ QFrame* CapabilityPanel::CreateInteractiveBrowserCard()
     taskBrowserCheck->setObjectName("browserTaskInteraction");
     browserLoopbackCheck = new ToggleSwitch(ToggleSwitch::Accent::Amber, this);
     browserLoopbackCheck->setObjectName("browserLoopback");
-    AddRow(
-        card, MakeRow(interactiveBrowserCheck, "Enable interactive browsing", "Use a dedicated browser within the approved sites below."));
-    AddRow(card, MakeRow(browserNavigateCheck, "Navigate approved sites", "Open pages within an approved site.", {}, {}, true));
-    AddRow(card, MakeRow(browserInteractCheck, "Click controls and fill forms",
-                     "Allows changes through page controls, including submitting forms.", {}, {}, true));
-    AddRow(card, MakeRow(taskBrowserCheck, "Use the browser in delegated tasks",
-                     "Delegated work uses the same approved sites, navigation and interaction permissions."));
-    AddRow(card, MakeRow(browserLoopbackCheck, "Allow local test sites",
-                     "Localhost and loopback addresses still need an approved origin. HTTP is allowed for these local sites."));
+    AddRow(card, MakeRow(interactiveBrowserCheck));
+    AddRow(card, MakeRow(browserNavigateCheck, QString(), true));
+    AddRow(card, MakeRow(browserInteractCheck, QString(), true));
+    AddRow(card, MakeRow(taskBrowserCheck));
+    AddRow(card, MakeRow(browserLoopbackCheck, "Localhost and loopback addresses still need an approved origin below."));
     auto* cardLayout = qobject_cast<QVBoxLayout*>(card->layout());
     cardLayout->addSpacing(8);
     auto* originsLabel = new QLabel("Approved site origins — one per line");
     originsLabel->setObjectName("permLabel");
+    originsLabel->setWordWrap(true);
     cardLayout->addWidget(originsLabel);
     auto* originsHelp = new QLabel("Use https://host[:port] with no path or trailing slash. Each site needs its own origin.");
     originsHelp->setObjectName("permHelp");
@@ -611,50 +818,109 @@ QFrame* CapabilityPanel::CreateInteractiveBrowserCard()
     approvedOriginsEdit->setAccessibleName("Approved browser site origins");
     approvedOriginsEdit->setPlaceholderText("https://example.com\nhttps://app.example.com:8443");
     approvedOriginsEdit->setLineWrapMode(QPlainTextEdit::NoWrap);
+    approvedOriginsEdit->setTabChangesFocus(true); // as for approvedExecutablesEdit
     approvedOriginsEdit->setMinimumHeight(96);
     approvedOriginsEdit->setMaximumHeight(160);
     originsLabel->setBuddy(approvedOriginsEdit);
     cardLayout->addWidget(approvedOriginsEdit);
-    cardLayout->addSpacing(10);
-    auto* actions = new QHBoxLayout();
+    cardLayout->addSpacing(8);
     browserStatusLabel = new QLabel(this);
     browserStatusLabel->setObjectName("secondaryText");
     browserStatusLabel->setWordWrap(true);
-    actions->addWidget(browserStatusLabel, 1);
-    applyInteractiveBrowserButton = new QPushButton("Apply", this);
-    applyInteractiveBrowserButton->setObjectName("primaryButton");
-    applyInteractiveBrowserButton->setAccessibleName("Apply interactive browser permissions");
-    actions->addWidget(applyInteractiveBrowserButton);
-    cardLayout->addLayout(actions);
-    const auto markBrowserSettingsDirty = [this]()
-    {
-        if (refreshing)
+    cardLayout->addWidget(browserStatusLabel);
+    cardLayout->addSpacing(8);
+    browserListFooter = CreateListFooter(applyInteractiveBrowserButton, "Apply interactive browser permissions",
+        [this]() { ApplyInteractiveBrowserSettings(); },
+        [this]()
         {
-            return;
-        }
-        browserSettingsDirty = true;
-        applyInteractiveBrowserButton->setEnabled(true);
-        browserStatusLabel->setText("Unapplied changes. Saved browser permissions remain in effect until Apply.");
-    };
-    for (auto* toggle : {interactiveBrowserCheck, browserNavigateCheck, browserInteractCheck, taskBrowserCheck, browserLoopbackCheck})
+            browserSettingsDirty = false;
+            Refresh();
+        });
+    cardLayout->addWidget(browserListFooter);
+
+    const auto commitFlag = [this](ToggleSwitch* toggle)
     {
-        connect(toggle, &QCheckBox::toggled, this, markBrowserSettingsDirty);
+        const bool value = toggle->isChecked();
+        if (toggle == interactiveBrowserCheck)
+            CommitBrowserFlag([value](revia::browser::BrowserSettings& settings) { settings.enabled = value; });
+        else if (toggle == browserNavigateCheck)
+            CommitBrowserFlag([value](revia::browser::BrowserSettings& settings) { settings.navigate = value; });
+        else if (toggle == browserInteractCheck)
+            CommitBrowserFlag([value](revia::browser::BrowserSettings& settings) { settings.interact = value; });
+        else if (toggle == taskBrowserCheck)
+            CommitBrowserFlag([value](revia::browser::BrowserSettings& settings) { settings.allowTaskInteraction = value; });
+        else
+            CommitBrowserFlag([value](revia::browser::BrowserSettings& settings) { settings.allowLoopback = value; });
+    };
+    for (ToggleSwitch* toggle : {interactiveBrowserCheck, browserNavigateCheck, browserInteractCheck, taskBrowserCheck, browserLoopbackCheck})
+    {
+        const bool risky = toggle == browserInteractCheck || toggle == taskBrowserCheck || toggle == browserLoopbackCheck;
+        connect(toggle, &QCheckBox::toggled, this, [this, toggle, risky, commitFlag](const bool on)
+        {
+            if (refreshing) return;
+            if (on && risky)
+                ConfirmTurnOn(toggle, Warning(toggle), [toggle, commitFlag]() { commitFlag(toggle); });
+            else
+                commitFlag(toggle);
+        });
     }
-    connect(approvedOriginsEdit, &QPlainTextEdit::textChanged, this, markBrowserSettingsDirty);
-    connect(applyInteractiveBrowserButton, &QPushButton::clicked, this, [this]() { ApplyInteractiveBrowserSettings(); });
+    connect(approvedOriginsEdit, &QPlainTextEdit::textChanged, this, [this]()
+    {
+        if (refreshing) return;
+        browserSettingsDirty = true;
+        browserListFooter->setVisible(true);
+        browserStatusLabel->setText("Unsaved list changes. The saved list stays in effect until Apply.");
+    });
     return card;
+}
+
+void CapabilityPanel::ConfirmTurnOn(ToggleSwitch* toggle, const QString& explanation, std::function<void()> apply)
+{
+    {
+        const QSignalBlocker blocker(toggle);
+        toggle->setChecked(false);
+    }
+    const auto* descriptor = revia::desktop::FindSetting(toggle->objectName().toStdString());
+    const QString label = descriptor != nullptr ? revia::desktop::WithCompanionName(descriptor->label, CompanionName())
+                                                : toggle->accessibleName();
+    auto* box = new QMessageBox(this);
+    box->setObjectName("settingConfirmDialog");
+    box->setAttribute(Qt::WA_DeleteOnClose);
+    box->setWindowModality(Qt::WindowModal);
+    box->setIcon(QMessageBox::Warning);
+    box->setWindowTitle(QStringLiteral("Turn on %1?").arg(label));
+    box->setTextFormat(Qt::PlainText);
+    box->setText((explanation.isEmpty() ? label : explanation) + ChangeBack);
+    QPushButton* accept = box->addButton("Turn on", QMessageBox::AcceptRole);
+    QPushButton* cancel = box->addButton(QMessageBox::Cancel);
+    box->setDefaultButton(cancel);
+    box->setEscapeButton(cancel);
+    const QPointer<QCheckBox> target(toggle);
+    connect(box, &QMessageBox::finished, this, [box, accept, target, apply = std::move(apply)](int)
+    {
+        if (box->clickedButton() != accept || target == nullptr || !target->isEnabled())
+            return;
+        {
+            const QSignalBlocker blocker(target);
+            target->setChecked(true);
+        }
+        apply();
+    });
+    box->open();
 }
 
 void CapabilityPanel::RefreshInteractiveBrowserSettings(const revia::actions::CapabilitySettings& settings)
 {
     const auto& browser = settings.browser;
+    interactiveBrowserCheck->setChecked(browser.enabled);
+    browserNavigateCheck->setChecked(browser.navigate);
+    browserInteractCheck->setChecked(browser.interact);
+    taskBrowserCheck->setChecked(browser.allowTaskInteraction);
+    browserLoopbackCheck->setChecked(browser.allowLoopback);
+    for (ToggleSwitch* toggle : {browserNavigateCheck, browserInteractCheck, taskBrowserCheck, browserLoopbackCheck})
+        toggle->setEnabled(browser.enabled);
     if (!browserSettingsDirty)
     {
-        interactiveBrowserCheck->setChecked(browser.enabled);
-        browserNavigateCheck->setChecked(browser.navigate);
-        browserInteractCheck->setChecked(browser.interact);
-        taskBrowserCheck->setChecked(browser.allowTaskInteraction);
-        browserLoopbackCheck->setChecked(browser.allowLoopback);
         QStringList origins;
         for (const auto& origin : browser.approvedOrigins)
         {
@@ -682,12 +948,13 @@ void CapabilityPanel::RefreshInteractiveBrowserSettings(const revia::actions::Ca
     }
     if (browserSettingsDirty)
     {
-        status += " Draft changes are not applied.";
+        status += " The edited list is not applied yet.";
     }
     browserStatusLabel->setText(status);
-    applyInteractiveBrowserButton->setEnabled(browserSettingsDirty);
+    browserListFooter->setVisible(browserSettingsDirty);
 }
 
+// Apply for the origins list only; the switches beside it have already committed.
 void CapabilityPanel::ApplyInteractiveBrowserSettings()
 {
     if (refreshing)
@@ -695,11 +962,6 @@ void CapabilityPanel::ApplyInteractiveBrowserSettings()
         return;
     }
     revia::browser::BrowserSettings settings = session.Capabilities().browser;
-    settings.enabled = interactiveBrowserCheck->isChecked();
-    settings.navigate = browserNavigateCheck->isChecked();
-    settings.interact = browserInteractCheck->isChecked();
-    settings.allowTaskInteraction = taskBrowserCheck->isChecked();
-    settings.allowLoopback = browserLoopbackCheck->isChecked();
     settings.approvedOrigins.clear();
     const QStringList lines = approvedOriginsEdit->toPlainText().split('\n');
     for (const QString& line : lines)
@@ -714,7 +976,7 @@ void CapabilityPanel::ApplyInteractiveBrowserSettings()
     if (!revia::browser::ValidateSettings(settings, error))
     {
         browserStatusLabel->setText(QString::fromStdString(error));
-        SetStatus(QString::fromStdString(error), true);
+        ShowInternetResult(QString::fromStdString(error), true);
         approvedOriginsEdit->setFocus();
         return;
     }
@@ -724,11 +986,29 @@ void CapabilityPanel::ApplyInteractiveBrowserSettings()
         browserSettingsDirty = false;
     }
     Refresh();
-    SetStatus(QString::fromStdString(result.message), !result.succeeded);
+    ShowInternetResult(QString::fromStdString(result.message), !result.succeeded);
     if (!result.succeeded)
     {
         browserStatusLabel->setText(QString::fromStdString(result.message));
     }
+}
+
+// One browser switch: the saved settings with that one flag changed. A refusal leaves the
+// saved value in place and Refresh puts the switch back.
+void CapabilityPanel::CommitBrowserFlag(const std::function<void(revia::browser::BrowserSettings&)>& change)
+{
+    revia::browser::BrowserSettings settings = session.Capabilities().browser;
+    change(settings);
+    std::string error;
+    if (!revia::browser::ValidateSettings(settings, error))
+    {
+        ShowInternetResult(QString::fromStdString(error), true);
+        Refresh();
+        return;
+    }
+    const auto result = session.SetInteractiveBrowser(settings);
+    ShowInternetResult(QString::fromStdString(result.message), !result.succeeded);
+    Refresh();
 }
 
 void CapabilityPanel::Refresh()
@@ -774,11 +1054,11 @@ void CapabilityPanel::Refresh()
     cameraCheck->setChecked(settings.camera.enabled);
     autonomousCameraCheck->setChecked(settings.camera.autonomousCapture);
     autonomousCameraCheck->setEnabled(settings.camera.enabled);
+    processCheck->setChecked(settings.process.enabled);
+    taskProcessCheck->setChecked(settings.process.allowTaskExecution);
+    commandInterpreterCheck->setChecked(settings.process.allowCommandInterpreters);
     if (!processSettingsDirty)
     {
-        processCheck->setChecked(settings.process.enabled);
-        taskProcessCheck->setChecked(settings.process.allowTaskExecution);
-        commandInterpreterCheck->setChecked(settings.process.allowCommandInterpreters);
         QStringList executablePaths;
         for (const auto& executable : settings.process.approvedExecutables)
         {
@@ -807,10 +1087,10 @@ void CapabilityPanel::Refresh()
     }
     if (processSettingsDirty)
     {
-        processStatus += " Draft changes are not applied.";
+        processStatus += " The edited list is not applied yet.";
     }
     processStatusLabel->setText(processStatus);
-    applyProcessButton->setEnabled(processSettingsDirty);
+    processListFooter->setVisible(processSettingsDirty);
     RefreshInteractiveBrowserSettings(settings);
     const auto& desktop = settings.desktopControl;
     pointerCheck->setChecked(desktop.pointer);
@@ -834,6 +1114,34 @@ void CapabilityPanel::Refresh()
     refreshing = false;
 }
 
+void CapabilityPanel::ApplyContentWidth(const int width)
+{
+    if (auto* cards = findChild<QGridLayout*>("permissionCards"))
+    {
+        const int columns = width >= 900 ? 2 : 1;
+        QList<QLayoutItem*> items;
+        while (cards->count() > 0)
+            items.push_back(cards->takeAt(0));
+        for (int index = 0; index < items.size(); ++index)
+            cards->addItem(items[index], index / columns, index % columns);
+        cards->setColumnStretch(1, columns == 2 ? 1 : 0);
+    }
+    if (auto* applications = findChild<QBoxLayout*>("permissionApplications"))
+        applications->setDirection(width >= 760 ? QBoxLayout::LeftToRight : QBoxLayout::TopToBottom);
+    approvedTree->setMinimumWidth(0);
+    discoveredTable->setMinimumWidth(0);
+}
+
+void CapabilityPanel::RevertUnsavedLists()
+{
+    if (!processSettingsDirty && !browserSettingsDirty)
+        return;
+    processSettingsDirty = false;
+    browserSettingsDirty = false;
+    Refresh();
+}
+
+// Apply for the executables list only; the switches above it have already committed.
 void CapabilityPanel::ApplyProcessSettings()
 {
     if (refreshing)
@@ -841,9 +1149,6 @@ void CapabilityPanel::ApplyProcessSettings()
         return;
     }
     auto settings = session.Capabilities().process;
-    settings.enabled = processCheck->isChecked();
-    settings.allowTaskExecution = taskProcessCheck->isChecked();
-    settings.allowCommandInterpreters = commandInterpreterCheck->isChecked();
     settings.approvedExecutables.clear();
     const QStringList lines = approvedExecutablesEdit->toPlainText().split('\n');
     for (const QString& line : lines)
@@ -877,51 +1182,18 @@ void CapabilityPanel::ApplyProcessSettings()
     }
 }
 
+void CapabilityPanel::CommitProcessFlag(const std::function<void(revia::process::ProcessSettings&)>& change)
+{
+    auto settings = session.Capabilities().process;
+    change(settings);
+    const auto result = session.SetProcessSettings(settings);
+    SetStatus(QString::fromStdString(result.message), !result.succeeded);
+    Refresh();
+}
+
 void CapabilityPanel::ApplyCameraSettings()
 {
     if (refreshing) return;
-    const auto previous = session.Capabilities().camera;
-    // Confirmed on the way up only, and worded so the answer is informed rather than
-    // reflexive. A camera toggle that flips silently is the one permission users would
-    // most reasonably expect to be asked about.
-    if (!previous.enabled && cameraCheck->isChecked())
-    {
-        const bool approved = QMessageBox::question(
-            this,
-            "Allow camera access",
-            "Revia will be able to take a single still frame from your camera and describe "
-            "what it contains. The camera is opened for that frame and closed again "
-            "immediately, so the hardware light is on only while a frame is being taken. "
-            "Frames are written to RuntimeData/Camera on this computer and are never "
-            "uploaded. Seeing something does not let her act on it: anything she does as a "
-            "result still goes through the ordinary permission and confirmation path. "
-            "Enable camera access?",
-            QMessageBox::Yes | QMessageBox::No,
-            QMessageBox::No) == QMessageBox::Yes;
-        if (!approved)
-        {
-            Refresh();
-            return;
-        }
-    }
-    if (!previous.autonomousCapture && autonomousCameraCheck->isChecked())
-    {
-        const bool approved = QMessageBox::question(
-            this,
-            "Let Revia decide when to look",
-            "This is a separate permission from answering a question about what she can see. "
-            "It allows Revia to take a frame without you asking, subject to the same rate "
-            "limit and the same audit trail. Consenting to answer \"what am I holding?\" is "
-            "not the same as consenting to be watched, which is why this is asked "
-            "separately. Allow it?",
-            QMessageBox::Yes | QMessageBox::No,
-            QMessageBox::No) == QMessageBox::Yes;
-        if (!approved)
-        {
-            Refresh();
-            return;
-        }
-    }
     autonomousCameraCheck->setEnabled(cameraCheck->isChecked());
     const auto result = session.SetCameraAccess(
         cameraCheck->isChecked(), autonomousCameraCheck->isChecked());
@@ -932,90 +1204,8 @@ void CapabilityPanel::ApplyCameraSettings()
 void CapabilityPanel::ApplyDesktopControlSettings()
 {
     if (refreshing) return;
-    const auto previous = session.Capabilities().desktopControl;
-    // Confirmed on the way up only. This is the permission that lets Revia act as the
-    // person at the keyboard, so the question is asked once and answered informed.
-    if (!previous.AnyEnabled() &&
-        (pointerCheck->isChecked() || keyboardCheck->isChecked() ||
-            launchCheck->isChecked()))
-    {
-        const bool approved = QMessageBox::question(
-            this,
-            "Allow pointer and keyboard control",
-            "Revia will be able to move the pointer, click, and type on this computer. "
-            "Input is confined to windows belonging to the applications approved below, "
-            "and she refuses to act when something else has focus, but inside those "
-            "windows it is the same as you doing it. Every action is rate limited and "
-            "written to the action audit log; typed text is recorded only by length. "
-            "Hold ctrl+alt+shift at any time to stop it. Enable desktop control?",
-            QMessageBox::Yes | QMessageBox::No,
-            QMessageBox::No) == QMessageBox::Yes;
-        if (!approved)
-        {
-            Refresh();
-            return;
-        }
-    }
-    if (!previous.autonomous && autonomousDesktopCheck->isChecked())
-    {
-        const bool approved = QMessageBox::question(
-            this,
-            "Let Revia operate the desktop on her own",
-            "This is a separate permission from doing desktop work you asked for. It "
-            "allows Revia to move the pointer, type, and start approved applications "
-            "without a request, subject to the same limits and the same audit trail. "
-            "Allow it?",
-            QMessageBox::Yes | QMessageBox::No,
-            QMessageBox::No) == QMessageBox::Yes;
-        if (!approved)
-        {
-            Refresh();
-            return;
-        }
-    }
     using InputScope =
         revia::actions::CapabilitySettings::DesktopControl::InputScope;
-    if (previous.scope != InputScope::WholeDesktop && wholeDesktopCheck->isChecked())
-    {
-        const bool approved = QMessageBox::question(
-            this,
-            "Give Revia the whole desktop",
-            "Until now her input has been confined to windows belonging to the "
-            "applications you approved. This removes that confinement: the pointer can "
-            "go anywhere on your screens and the keyboard goes to whatever has focus, "
-            "exactly as it does for you.\n\n"
-            "That is the point of it -- a general skill cannot be learned inside one "
-            "application -- but it is worth being clear that confinement is what is "
-            "being given up. What remains is this permission, the refusal to touch "
-            "terminals and script hosts, the per-minute input budget, the audit log, and "
-            "the ctrl+alt+shift stop. Those raise the effort; none of them is a proof "
-            "that she cannot reach something you would not have chosen.\n\n"
-            "Give her the whole desktop?",
-            QMessageBox::Yes | QMessageBox::No,
-            QMessageBox::No) == QMessageBox::Yes;
-        if (!approved)
-        {
-            Refresh();
-            return;
-        }
-    }
-    if (!previous.allowCommandSurfaces && commandSurfaceCheck->isChecked())
-    {
-        const bool approved = QMessageBox::question(
-            this,
-            "Allow terminals and script hosts",
-            "Command interpreters, script hosts, and the chords that summon them are "
-            "refused by default, because text typed into one of them is model text "
-            "running as a command however it arrived. Allowing this makes that possible "
-            "on purpose. Allow it?",
-            QMessageBox::Yes | QMessageBox::No,
-            QMessageBox::No) == QMessageBox::Yes;
-        if (!approved)
-        {
-            Refresh();
-            return;
-        }
-    }
     const auto result = session.SetDesktopControl(
         pointerCheck->isChecked(),
         keyboardCheck->isChecked(),
@@ -1039,7 +1229,7 @@ void CapabilityPanel::ToggleDesktopStop()
     }
     else
     {
-        session.StopDesktopControl("stopped from the Permissions tab");
+        session.StopDesktopControl("stopped from Settings, Permissions");
         SetStatus("Desktop control is stopped. Nothing further will be typed or clicked.");
     }
     Refresh();
@@ -1058,8 +1248,8 @@ void CapabilityPanel::ShowDiscovery(const revia::actions::windows::ApplicationCo
     }
     discoveredApplication = inventory.application;
     discoveryLabel->setText(
-        QString::fromStdString(inventory.application + " — " + inventory.windowTitle +
-            ". Select only controls Revia should be allowed to change."));
+        QString::fromStdString(inventory.application + " — " + inventory.windowTitle) +
+        QStringLiteral(". Select only controls %1 should be allowed to change.").arg(CompanionName()));
     for (const auto& control : inventory.controls)
     {
         const int row = discoveredTable->rowCount();
@@ -1081,8 +1271,16 @@ void CapabilityPanel::ShowDiscovery(const revia::actions::windows::ApplicationCo
 
 void CapabilityPanel::SetStatus(const QString& text, const bool error)
 {
-    statusLabel->setText(text);
-    statusLabel->setStyleSheet(error ? "color: #ff8da1;" : "color: #85d7c8;");
+    SetTone(statusLabel, text, error);
+}
+
+// Internet results also show inside the internet group, which may be in another Settings section
+// than the panel's own status line.
+void CapabilityPanel::ShowInternetResult(const QString& text, const bool error)
+{
+    SetStatus(text, error);
+    SetTone(internetStatusLabel, text, error);
+    internetStatusLabel->setVisible(!text.isEmpty());
 }
 
 void CapabilityPanel::AddApplicationManually()
@@ -1145,79 +1343,22 @@ void CapabilityPanel::RemoveSelectedPermission()
 void CapabilityPanel::ApplyInternetSettings()
 {
     if (refreshing) return;
-    const bool wasEnabled = session.Capabilities().internet.enabled;
-    if (!wasEnabled && internetCheck->isChecked())
-    {
-        const bool approved = QMessageBox::question(
-            this,
-            "Enable internet lookup",
-            "Knowledge questions may be sent to the configured DuckDuckGo and Wikipedia "
-            "HTTPS endpoints or, when selected below, to Revia's dedicated visible browser. "
-            "Every lookup is read-only, bounded, rate limited, and audited. Enable this "
-            "capability?",
-            QMessageBox::Yes | QMessageBox::No,
-            QMessageBox::No) == QMessageBox::Yes;
-        if (!approved)
-        {
-            refreshing = true;
-            internetCheck->setChecked(false);
-            refreshing = false;
-            return;
-        }
-    }
     automaticLookupCheck->setEnabled(internetCheck->isChecked());
     visibleBrowserCheck->setEnabled(internetCheck->isChecked());
     autonomousResearchCheck->setEnabled(
         internetCheck->isChecked() && visibleBrowserCheck->isChecked());
     const auto result = session.SetInternetAccess(
         internetCheck->isChecked(), automaticLookupCheck->isChecked());
-    SetStatus(QString::fromStdString(result.message), !result.succeeded);
+    ShowInternetResult(QString::fromStdString(result.message), !result.succeeded);
     Refresh();
 }
 
 void CapabilityPanel::ApplyBrowserSettings()
 {
     if (refreshing) return;
-    const auto previous = session.Capabilities().internet;
-    if (!previous.visibleBrowser && visibleBrowserCheck->isChecked())
-    {
-        const bool approved = QMessageBox::question(
-            this,
-            "Enable visible browsing",
-            "Revia will open a separate, visible Edge or Chrome window using a dedicated "
-            "RuntimeData browser profile. She may search public HTTPS pages and read bounded "
-            "page text, but cannot use your personal cookies, downloads, uploads, passwords, "
-            "payments, localhost, or private-network pages. Queries, pages, results, timing, "
-            "and failures remain visible and audited. Enable it?",
-            QMessageBox::Yes | QMessageBox::No,
-            QMessageBox::No) == QMessageBox::Yes;
-        if (!approved)
-        {
-            Refresh();
-            return;
-        }
-    }
-    if (!previous.autonomousResearch && autonomousResearchCheck->isChecked())
-    {
-        const bool approved = QMessageBox::question(
-            this,
-            "Allow autonomous research",
-            "This allows Revia to choose a read-only web query without a new message from "
-            "you when recent conversation or a meaningful emotion creates a concrete topic. "
-            "A timer alone cannot create a topic, and attention, cooldown, deduplication, "
-            "hourly, browser, and network limits still apply. Allow this separate permission?",
-            QMessageBox::Yes | QMessageBox::No,
-            QMessageBox::No) == QMessageBox::Yes;
-        if (!approved)
-        {
-            Refresh();
-            return;
-        }
-    }
-
     const auto result = session.SetInternetBrowser(
         visibleBrowserCheck->isChecked(),
         autonomousResearchCheck->isChecked());
-    SetStatus(QString::fromStdString(result.message), !result.succeeded);
+    ShowInternetResult(QString::fromStdString(result.message), !result.succeeded);
     Refresh();
 }
