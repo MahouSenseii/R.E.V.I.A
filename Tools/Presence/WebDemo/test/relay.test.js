@@ -180,6 +180,22 @@ test('owner pause closes old sessions for further work while preserving cancella
   assert.equal((await submit(await session())).status, 202);
 });
 
+test('owner off closes old sessions to new work but keeps terminal polling until host loss revokes tokens', async t => {
+  const { api, host, session, submit } = await setup(t);
+  const h = await host(), s = await session(); const first = (await submit(s)).body;
+  await until(() => h.frames.some(f => f.type === 'turn'));
+  h.send({ type: 'result', sessionId: s.sessionId, requestId: first.requestId, state: 'completed', text: 'done' });
+  const path = '/v1/messages/' + first.requestId;
+  await until(async () => (await api(path, { token: s.token })).body.state === 'completed');
+  h.send({ type: 'ready', state: 'offline' });
+  await until(async () => (await api('/v1/status')).body.state === 'offline');
+  // Status offline does not mean the host is gone, so callers cannot treat it as revocation.
+  assert.equal((await submit(s)).status, 401);
+  assert.deepEqual((await api(path, { token: s.token })).body, { requestId: first.requestId, state: 'completed', text: 'done' });
+  h.ws.terminate();
+  await until(async () => (await api(path, { token: s.token })).status === 401);
+});
+
 test('native busy state accepts only the bounded waiting queue', async t => {
   const { api, host, session, submit } = await setup(t, { maxWaiting: 1 });
   const h = await host(), a = await session(), b = await session();
