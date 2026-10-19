@@ -30,13 +30,14 @@ struct SessionBackendDeps
 // The Settings dialog's backend over a ReviaSession, dispatching on SettingKeyRef::store:
 // - Preference: SetPreference / ResetPreference.
 // - SettingsFile: SetOwnerSetting / SetOwnerChoice / ResetOwnerSetting.
-// - Capability: the guest switches (keys ending in .enabled, .read, .write, .execute,
-//   .allowTaskExecution), through SetGuestCapabilities with one flag changed.
+// - Capability: only the Ubuntu workspace switches (capabilities.guest.enabled, .read,
+//   .write, .execute, .allowTaskExecution), through SetGuestCapabilities with one flag
+//   changed. Any other capability key is refused as unknown.
 // - Session: "perception.paused" and "cloud.session".
 // - VirtualMachine: any key; Set/IsVirtualMachineEnabled.
 // - Profile: "profile.memoryEnabled", "profile.hasTemperatureOverride" and
 //   "profile.hasMaxTokensOverride" on the active profile, refused while the Profiles editor
-//   has unsaved edits.
+//   has unsaved edits or while a turn is running.
 // readAll, readChoice, readProfileValue, mcpServers and statusText run on the UI thread and
 // return at once. Every write runs through runInBackground and calls done on the UI thread
 // through postToUi, including a write refused before it starts.

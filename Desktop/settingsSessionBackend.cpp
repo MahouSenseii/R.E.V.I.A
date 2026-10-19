@@ -6,6 +6,7 @@
 #include <exception>
 #include <memory>
 #include <optional>
+#include <string_view>
 #include <utility>
 
 namespace revia::desktop
@@ -28,11 +29,16 @@ SettingWrite Result(const bool succeeded, const std::string& message)
     return {succeeded, QString::fromStdString(message)};
 }
 
-// The guest switch a capability key names, by its last segment
-// (capabilities.guest.execute -> execute).
+constexpr std::string_view GuestPrefix = "capabilities.guest.";
+
+// The Ubuntu workspace switch a capability key names (capabilities.guest.execute -> execute),
+// or null. Only the guest's own keys: every other capability ends in .enabled too, and must
+// never reach a guest permission.
 bool* GuestFlag(revia::policy::GuestCapabilitySettings& guest, const std::string& key)
 {
-    const std::string field = key.substr(key.rfind('.') + 1);
+    if (!key.starts_with(GuestPrefix))
+        return nullptr;
+    const std::string field = key.substr(GuestPrefix.size());
     if (field == "enabled")
         return &guest.enabled;
     if (field == "read")
@@ -44,6 +50,12 @@ bool* GuestFlag(revia::policy::GuestCapabilitySettings& guest, const std::string
     if (field == "allowTaskExecution")
         return &guest.allowTaskExecution;
     return nullptr;
+}
+
+bool IsGuestKey(const std::string& key)
+{
+    revia::policy::GuestCapabilitySettings probe;
+    return GuestFlag(probe, key) != nullptr;
 }
 
 bool* ProfileFlag(revia::runtime::ProfileSummary& profile, const std::string& key)
@@ -117,7 +129,9 @@ std::function<SettingWrite()> ProfileWork(ReviaSession* session, std::function<b
             return Result(false, NotStarted);
         if (!change(*active))
             return Result(false, UnknownSetting);
-        const revia::runtime::ProfileOperationResult saved = session->SaveProfile(*active);
+        // Refused at once during a turn rather than waiting for it: writes share one queue, and
+        // a profile switch must not hold up a privacy switch behind a long reply.
+        const revia::runtime::ProfileOperationResult saved = session->TrySaveProfile(*active);
         return Result(saved.succeeded, saved.message);
     };
 }
@@ -154,6 +168,8 @@ SettingsBackend MakeSessionSettingsBackend(SessionBackendDeps deps)
             }
             case SettingStore::Capability:
             {
+                if (!IsGuestKey(ref.key))
+                    break;
                 if (!session.IsStarted())
                 {
                     read = Unavailable(NotStarted);
@@ -161,8 +177,8 @@ SettingsBackend MakeSessionSettingsBackend(SessionBackendDeps deps)
                 }
                 if (!guest)
                     guest = session.Capabilities().guest;
-                if (const bool* flag = GuestFlag(*guest, ref.key))
-                    read = {true, *flag, *flag, {}};
+                const bool flag = *GuestFlag(*guest, ref.key);
+                read = {true, flag, flag, {}};
                 break;
             }
             case SettingStore::Profile:
@@ -211,14 +227,14 @@ SettingsBackend MakeSessionSettingsBackend(SessionBackendDeps deps)
                 std::move(done));
             return;
         case SettingStore::Capability:
+        {
+            if (!IsGuestKey(key))
+                break;
             Dispatch(context,
                 [session, key, value]()
                 {
                     revia::policy::GuestCapabilitySettings guest = session->Capabilities().guest;
-                    bool* flag = GuestFlag(guest, key);
-                    if (!flag)
-                        return Result(false, UnknownSetting);
-                    *flag = value;
+                    *GuestFlag(guest, key) = value;
                     const auto result = session->SetGuestCapabilities(guest);
                     if (!result.succeeded)
                         return Result(false, result.message);
@@ -230,6 +246,7 @@ SettingsBackend MakeSessionSettingsBackend(SessionBackendDeps deps)
                 },
                 std::move(done));
             return;
+        }
         case SettingStore::Session:
             Dispatch(context,
                 [session, key, value]()

@@ -7536,6 +7536,24 @@ ProfileOperationResult ReviaSession::SaveProfile(const ProfileSummary& definitio
 {
     if (HasRunningTask())
         return {false, "Finish or cancel delegated work before editing its active profile."};
+    std::lock_guard operationLock(operationMutex);
+    return SaveProfileLocked(definition);
+}
+
+ProfileOperationResult ReviaSession::TrySaveProfile(const ProfileSummary& definition)
+{
+    if (HasRunningTask())
+        return {false, "Finish or cancel delegated work before editing its active profile."};
+    std::unique_lock operationLock(operationMutex, std::try_to_lock);
+    if (!operationLock.owns_lock() || busy.load())
+    {
+        return {false, "Revia is in the middle of a turn. Change this once she has finished."};
+    }
+    return SaveProfileLocked(definition);
+}
+
+ProfileOperationResult ReviaSession::SaveProfileLocked(const ProfileSummary& definition)
+{
     aiProfile candidate;
     candidate.id = definition.id;
     candidate.displayName = definition.displayName;
@@ -7549,7 +7567,6 @@ ProfileOperationResult ReviaSession::SaveProfile(const ProfileSummary& definitio
     candidate.answerObligation = definition.answerObligation;
 
     std::string error;
-    std::lock_guard operationLock(operationMutex);
     if (!config.SaveProfile(candidate, error))
     {
         appLogger.Warning("Profile save failed: " + error);

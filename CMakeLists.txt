@@ -738,6 +738,8 @@ if(BUILD_TESTING)
         # Every desktop Qt suite is a --suite=<name> mode of this one binary, so a suite costs no
         # extra executable or link. Each suite appends its source under its own marker.
         set(REVIA_DESKTOP_SUITE_SOURCES Tests/Fixture/desktopStopTests.cpp)
+        # [suite:settingsBackend] (B1: the Settings dialog's backend over a real session)
+        list(APPEND REVIA_DESKTOP_SUITE_SOURCES Tests/Fixture/settingsBackendTests.cpp)
 
         # [suite:theme]
 
@@ -759,8 +761,9 @@ if(BUILD_TESTING)
         add_test(NAME Revia.Theme COMMAND ReviaDesktopStopTests --suite=theme)
         add_test(NAME Revia.SettingsDialog COMMAND ReviaDesktopStopTests --suite=settings)
         add_test(NAME Revia.ShellWidgets COMMAND ReviaDesktopStopTests --suite=shell)
+        add_test(NAME Revia.SettingsBackend COMMAND ReviaDesktopStopTests --suite=settingsBackend)
         # REVIA_THEME=light keeps every capture the same whatever the runner's Windows colour setting.
-        set_tests_properties(Revia.DesktopStopPolicy Revia.Theme Revia.SettingsDialog Revia.ShellWidgets PROPERTIES
+        set_tests_properties(Revia.DesktopStopPolicy Revia.Theme Revia.SettingsDialog Revia.ShellWidgets Revia.SettingsBackend PROPERTIES
                 ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QPA_PLATFORM_PLUGIN_PATH=$<TARGET_FILE_DIR:Qt6::QOffscreenIntegrationPlugin>;REVIA_LOG_DIR=${CMAKE_CURRENT_BINARY_DIR}/TestLogs;REVIA_THEME=light"
                 TIMEOUT 30)
         # A suite whose source is not in REVIA_DESKTOP_SUITE_SOURCES yet exits with 77 and is skipped.

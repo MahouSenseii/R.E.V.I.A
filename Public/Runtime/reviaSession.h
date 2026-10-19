@@ -541,6 +541,9 @@ class ReviaSession
     // The running profile as saved, without waiting for a turn. Voice fields are left empty.
     [[nodiscard]] std::optional<ProfileSummary> ActiveProfileSummary() const;
     ProfileOperationResult SaveProfile(const ProfileSummary& definition);
+    // SaveProfile that refuses at once, instead of waiting, while a turn holds the session.
+    // For a caller whose queue must not stall behind a reply.
+    ProfileOperationResult TrySaveProfile(const ProfileSummary& definition);
     ProfileOperationResult ActivateProfile(const std::string& profileId);
 
   private:
@@ -552,6 +555,7 @@ class ReviaSession
     // UI and CLI selection additionally require the preference write to succeed first.
     void ApplyProfileLocked(const std::string& profileId, aiProfile loaded);
     ProfileOperationResult ActivateProfileLocked(const std::string& profileId);
+    ProfileOperationResult SaveProfileLocked(const ProfileSummary& definition);
     // Apply authored baselines while preserving earned trait drift and learned preferences.
     void ApplyProfilePersonality();
     core::PreferenceResult ClearPreference(const std::string& name);
