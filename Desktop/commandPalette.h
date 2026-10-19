@@ -53,7 +53,8 @@ class CommandPalette final : public QWidget
     // Asked again 150 ms after the query stops changing (and at once on opening); its entries are
     // already filtered by the source and at most eight are shown.
     void SetDynamicSource(std::function<std::vector<CommandEntry>(const QString&)> source);
-    // When it returns false (navigation is locked) the palette does not open.
+    // When it returns false (navigation is locked) the palette does not open, and an open one
+    // closes instead of running an entry. The window should still Close() it when it locks.
     void SetAvailable(std::function<bool()> available);
     void Open(const QString& query = {});
     // Only chats: the rail's search button and Ctrl+F while the sidebar is a rail.
@@ -64,7 +65,8 @@ class CommandPalette final : public QWidget
     void SetIconProvider(std::function<QIcon(const char*)> provider);
     // The highlighted entry's id, empty when nothing is highlighted.
     [[nodiscard]] QString CurrentId() const;
-    // Runs the highlighted entry (what Enter does). False when there is none or it is disabled.
+    // Runs the highlighted entry (what Enter and a click do). False when there is none, it is
+    // disabled, or the palette is no longer available (it then closes).
     bool RunCurrent();
     // Runs the pending dynamic query now instead of after the debounce.
     void FlushDynamicSource();

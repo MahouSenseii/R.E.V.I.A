@@ -347,7 +347,15 @@ void TestPalette(Results& results)
     results.Expect(card->width() == 452 && card->y() == 60, "the card narrows with its host");
     Capture(&host, "shell-palette-narrow.png");
     palette->Close();
+
+    // Locking while the palette is open (a companion switch, shutting down) stops it running
+    // anything, from the keyboard or a click.
+    palette->Open("theme");
+    Settle();
+    const qsizetype ranBeforeLock = ran.size();
     locked = true;
+    SendKey(input, Qt::Key_Return);
+    results.Expect(!palette->IsOpen() && ran.size() == ranBeforeLock, "an open palette runs nothing once navigation locks; it closes");
     palette->Open();
     results.Expect(!palette->IsOpen(), "the palette does not open while navigation is locked");
     locked = false;

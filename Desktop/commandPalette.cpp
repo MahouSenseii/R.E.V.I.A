@@ -350,6 +350,13 @@ bool CommandPalette::IsRunnable(const int row) const
 
 bool CommandPalette::RunCurrent()
 {
+    // Navigation locked while the palette was open (a companion switch, or shutting down for
+    // good): nothing may run any more, so the palette goes instead.
+    if (available && !available())
+    {
+        Close();
+        return false;
+    }
     const int row = list->currentRow();
     if (!IsRunnable(row))
         return false;
