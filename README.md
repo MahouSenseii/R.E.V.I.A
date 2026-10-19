@@ -230,7 +230,7 @@ CI job uses lld, compiles without debug information (`-g0`, still `-O0` with ass
 and runs at most three links at once. A local Debug build keeps full debug information.
 lld finds a symbol in any archive whatever the order on the command line and ignores
 `--start-group`, so it links some command lines that GNU ld rejects. The CI job therefore
-relinks `R_E_V_I_A`, `ReviaTests` and two small executables with GNU ld as well.
+relinks `R_E_V_I_A` and three small executables with GNU ld as well.
 On Windows, keep the toolchain, Qt and build folders free of spaces when lld is on: lld
 reads the compiler's long-link response files with Windows quoting, so a spaced path there
 fails to open.

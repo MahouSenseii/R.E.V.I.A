@@ -293,14 +293,14 @@ jobs:
       # in. Relinking a few executables with it here keeps a link-order mistake from
       # passing CI and then breaking those builds. Each one covers a different kind of link:
       # - R_E_V_I_A pulls in the foundation through revia_link_foundation.
-      # - ReviaTests links the most objects. ReviaDesktopFixture, a -municode GUI
-      #   program, comes with it as a dependency.
+      # - ReviaDesktopFixture is a -municode GUI program.
       # - ReviaArchiveWriterTests links SQLite by itself and --wraps two of its functions.
       # - ReviaProcessFixture links fully static.
+      # ReviaTests, the largest link, is left out: on the runner GNU ld spent most of this
+      # step's 7 minutes on it, and it adds no kind of link the four above do not cover.
       # The objects are already built, and reconfiguring only takes -fuse-ld=lld out of
-      # the link commands, so ninja relinks these and compiles nothing. GNU ld took about
-      # 6 s for R_E_V_I_A and 19 s for ReviaTests locally. This runs after Test, also
-      # when a test failed, so the tests above ran the lld build.
+      # the link commands, so ninja relinks these and compiles nothing. This runs after
+      # Test, also when a test failed, so the tests above ran the lld build.
       - name: Link a few executables with GNU ld too
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: |
@@ -309,7 +309,7 @@ jobs:
           if (Select-String -LiteralPath build/ci/build.ninja -SimpleMatch -Pattern '-fuse-ld=lld' -Quiet) {
             throw 'build.ninja still links with lld after configuring with REVIA_USE_LLD=OFF.'
           }
-          cmake --build build/ci --target R_E_V_I_A ReviaTests ReviaArchiveWriterTests ReviaProcessFixture
+          cmake --build build/ci --target R_E_V_I_A ReviaDesktopFixture ReviaArchiveWriterTests ReviaProcessFixture
           exit $LASTEXITCODE
 
   # Cheap, fast, and catches the class of defect that has actually bitten this project:
