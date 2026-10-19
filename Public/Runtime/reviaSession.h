@@ -587,6 +587,9 @@ class ReviaSession
     // overlay, then the commit and the applier. description words the new value for the log.
     core::PreferenceResult WriteOwnerSetting(const std::string& key,
         const std::function<bool(core::SettingsFileEditor&, std::string&)>& write, const std::string& description);
+    // Once key is off as saved, the settings that only mean something inside it go back to their
+    // safe values (continuous screen awareness, local API trust, a server's per-call question).
+    void SecureInnerOwnerSettings(const std::string& key, core::PreferenceResult& result);
     [[nodiscard]] visionSettings VisionSnapshot() const;
     [[nodiscard]] performanceSettings PerformanceSnapshot() const;
     [[nodiscard]] bool SpeechRecognitionEnabledNow() const;

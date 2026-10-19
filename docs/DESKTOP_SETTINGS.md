@@ -35,6 +35,10 @@ that every boolean preference and every owner-settings key has a row.
 - **Restart banner.** "Restart Revia to apply N changes" counts the switches whose saved value
   differs from the one in effect. "Restart now" restarts Revia; "Later" hides the banner until the
   count changes.
+- **Settings inside another.** Turning off "Let *{name}* see my screen", "Local API for other
+  apps" or "Connect *server*" also puts "Keep track of my screen", "Trust the local API as me" and
+  that server's "Ask before each tool call" back in their safe position, so turning the outer
+  switch on again never brings the inner one back unasked.
 - **Dependencies.** A switch whose requirement is off is disabled, and its tooltip says which
   switch to turn on first. Requirements are judged on saved values, so a restart-only parent still
   counts once you have changed it. "Works best with ..." is only a hint.

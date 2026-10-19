@@ -439,6 +439,49 @@ void LiveOwnerSettingsReachTheirServices()
         "Turning continuous awareness off left its last observation in use.");
 }
 
+// A setting that only means something inside another goes back to its safe value when that one
+// is turned off, so turning the outer one on again never brings the inner one back unasked.
+void AnInnerOwnerSettingGoesBackWithItsParent()
+{
+    revia::tests::ScopedTestDirectory directory;
+    WorkingDirectory cwd(directory.root);
+    Configure(directory.root, LiveOwnerFixture());
+    ReviaSession session;
+    Access::UsePreferences(session, directory.root);
+    Check(session.Start(), "Inner owner setting session did not start.");
+
+    Check(session.BooleanSettings().at("vision.continuousAwareness").running, "The fixture started without continuous awareness.");
+    const auto visionOff = session.SetOwnerSetting("vision.enabled", false);
+    auto states = session.BooleanSettings();
+    Check(visionOff.succeeded && !states.at("vision.continuousAwareness").value && !states.at("vision.continuousAwareness").running &&
+              visionOff.message.find("vision.continuousAwareness") != std::string::npos,
+        "Keeping track of the screen survived vision being turned off.");
+    Check(session.SetOwnerSetting("vision.enabled", true).succeeded && !session.BooleanSettings().at("vision.continuousAwareness").value,
+        "Turning vision back on brought continuous awareness back unasked.");
+
+    Check(session.SetOwnerSetting("localApi.enabled", true).succeeded && session.SetOwnerSetting("localApi.trustedPrivate", true).succeeded,
+        "Could not trust the local API.");
+    Check(session.SetOwnerSetting("localApi.enabled", false).succeeded && !session.BooleanSettings().at("localApi.trustedPrivate").value,
+        "Trusting the local API survived the local API being turned off.");
+    // Reset to settings.json, which has the local API off, counts as turning it off.
+    Check(session.SetOwnerSetting("localApi.enabled", true).succeeded && session.SetOwnerSetting("localApi.trustedPrivate", true).succeeded,
+        "Could not trust the local API again.");
+    Check(session.ResetOwnerSetting("localApi.enabled").succeeded && !session.BooleanSettings().at("localApi.trustedPrivate").value,
+        "Trusting the local API survived a reset that turned the local API off.");
+
+    Check(session.SetOwnerSetting("mcp.servers[files].enabled", true).succeeded &&
+              session.SetOwnerSetting("mcp.servers[files].requireConfirmation", false).succeeded,
+        "Could not stop the MCP server asking before each call.");
+    Check(session.SetOwnerSetting("mcp.servers[files].enabled", false).succeeded &&
+              session.BooleanSettings().at("mcp.servers[files].requireConfirmation").value,
+        "Calls without a question survived their MCP server being disconnected.");
+    // Turning something on leaves what sits inside it alone.
+    Check(session.SetOwnerSetting("mcp.servers[files].requireConfirmation", false).succeeded &&
+              session.SetOwnerSetting("mcp.servers[files].enabled", true).succeeded &&
+              !session.BooleanSettings().at("mcp.servers[files].requireConfirmation").value,
+        "Connecting an MCP server changed its per-call question.");
+}
+
 void TheScreenIsWithheldOnceVisionIsOffBeforeItsApplierRuns()
 {
     revia::tests::ScopedTestDirectory directory;
@@ -640,6 +683,7 @@ void RunPreferenceResetTests()
     EveryPreferenceCommitsOnlyItsOwnField();
     RunningSessionKeepsRestartValuesUntilRestart();
     LiveOwnerSettingsReachTheirServices();
+    AnInnerOwnerSettingGoesBackWithItsParent();
     LivePreferencesReachTheirServices();
     OwnerChoicesSavedDuringStartupApply();
     APreferenceChangeNeverWaitsForAnotherApplier();
