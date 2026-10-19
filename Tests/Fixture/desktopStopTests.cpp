@@ -4,6 +4,7 @@
 #include "settingsDialog.h"
 #include "commandPalette.h"
 #include "shellSidebar.h"
+#include "serialWorker.h"
 #include "tabNavigation.h"
 #include "desktopObjectNames.h"
 #include "theme.h"
@@ -49,6 +50,7 @@
 #include <QRegularExpression>
 #include <QScrollArea>
 #include <QScrollBar>
+#include <QSpinBox>
 #include <QSettings>
 #include <QStackedWidget>
 #include <QStatusBar>
@@ -238,6 +240,17 @@ struct ReviaWindowStopTests
                 while (!releaseSwitch.load())
                     std::this_thread::sleep_for(std::chrono::milliseconds(2));
             });
+        // A Settings write still queued when the switch begins answers under the outgoing companion
+        // and is dropped; the control it disabled must not stay disabled afterwards.
+        window.settingsWorker->Post(
+            [&releaseSwitch]()
+            {
+                while (!releaseSwitch.load())
+                    std::this_thread::sleep_for(std::chrono::milliseconds(2));
+            });
+        window.cloudUseForCombo->setEnabled(true);
+        emit window.cloudUseForCombo->activated(1);
+        expect(!window.cloudUseForCombo->isEnabled(), "the cloud choice must wait while its write is queued");
         window.SwitchCompanion(second.id);
         expect(window.navigationLocked && !window.navigationSidebar->isEnabled() && !window.chatColumn->isEnabled(),
             "mutable companion controls remain enabled while the outgoing runtime retires");
@@ -253,6 +266,8 @@ struct ReviaWindowStopTests
         releaseSwitch.store(true);
         wait([&]() { return !window.switchingCompanion; });
         expect(window.Session().Stamp().companionId == second.id && window.chatEntries.empty(), "queued A result reached selected B UI");
+        expect(!window.cloudUseForCombo->testAttribute(Qt::WA_ForceDisabled),
+            "a Settings write queued before a companion switch must not leave its control disabled");
         window.findChild<QPushButton*>("voiceHealthDetailsButton")->click();
         expect(window.findChild<QWidget*>("voiceTab")->isVisible(), "Voice Details must still reach Voice after companion replacement");
         for (auto* group : window.findChildren<QTabWidget*>())
@@ -1220,6 +1235,75 @@ struct ReviaWindowStopTests
             expect(window.grab().save(QDir(renderDirectory).filePath("shell-1040x720.png")), "the shell must have a fresh Qt capture");
     }
 
+    // The two number rows the window adds to Settings follow a change made elsewhere (what /set does)
+    // and never write their old value back when focus only passes through them.
+    static void RunSettingsReadBackUi(ReviaWindow& window, int& failures)
+    {
+        const auto expect = [&](const bool condition, const char* message)
+        {
+            if (!condition)
+            {
+                std::cerr << "FAIL: " << message << '\n';
+                ++failures;
+            }
+        };
+        const auto drainWrites = [&window]()
+        {
+            std::atomic<bool> drained = false;
+            window.settingsWorker->Post([&drained]() { drained.store(true); });
+            const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+            while (!drained.load() && std::chrono::steady_clock::now() < until)
+                std::this_thread::sleep_for(std::chrono::milliseconds(2));
+            SettleLayouts();
+        };
+        window.RefreshPreferenceSpins();
+        const int shown = window.initiativeMaxSpin->value();
+        const int outside = shown == 12 ? 11 : 12;
+        expect(window.Session().SetPreference("initiative.maxPerHour", std::to_string(outside)).succeeded,
+            "the read-back fixture could not change the openings per hour");
+        emit window.initiativeMaxSpin->editingFinished();
+        drainWrites();
+        expect(window.Session().UserPreferences().initiativeMaxPerHour == outside,
+            "leaving an untouched number row wrote its old value over a change made elsewhere");
+        window.OpenSettings("Chat");
+        SettleLayouts();
+        expect(window.initiativeMaxSpin->value() == outside, "opening Settings must show a number changed elsewhere");
+        window.settingsDialog->hide();
+        window.initiativeMaxSpin->setValue(outside - 1);
+        emit window.initiativeMaxSpin->editingFinished();
+        drainWrites();
+        expect(window.Session().UserPreferences().initiativeMaxPerHour == outside - 1, "an edited number row must be saved");
+        window.Session().SetPreference("initiative.maxPerHour", std::to_string(shown));
+        window.RefreshPreferenceSpins();
+    }
+
+    // Quit from a visible window: the shutdown's QApplication::quit() closes every window first and
+    // gives up if one refuses, so the main window must accept its close once shutdown has begun.
+    static void RunShutdownUi(int& failures)
+    {
+        ReviaWindow window(false, false);
+        window.resize(1040, 720);
+        window.show();
+        SettleLayouts();
+        bool watchdogFired = false;
+        QTimer::singleShot(0, &window, [&window]() { window.BeginShutdown(revia::core::ExitReason::UserCommand, "shutdown fixture"); });
+        QTimer watchdog;
+        watchdog.setSingleShot(true);
+        QObject::connect(&watchdog, &QTimer::timeout, [&watchdogFired]()
+        {
+            watchdogFired = true;
+            QCoreApplication::exit(42);
+        });
+        watchdog.start(10000);
+        const int code = QCoreApplication::exec();
+        watchdog.stop();
+        if (watchdogFired || code != 0 || window.isVisible())
+        {
+            std::cerr << "FAIL: quitting with the window visible must end the event loop (exec returned " << code << ")\n";
+            ++failures;
+        }
+    }
+
     static void RunConfirmationAudienceUi(ReviaWindow& window, int& failures)
     {
         using namespace revia::actions;
@@ -1917,18 +2001,23 @@ namespace
 int RunPolicySuite(int, char**)
 {
     int failures = 0;
-    ReviaWindow window(false, false);
-    ReviaWindowStopTests::Run(window, failures);
-    ReviaWindowStopTests::RunChatTranscriptUi(window, failures);
-    ReviaWindowStopTests::RunChatSessionsUi(window, failures);
-    ReviaWindowStopTests::RunRegenerateAndEditUi(window, failures);
-    ReviaWindowStopTests::RunAttachmentUi(window, failures);
-    ReviaWindowStopTests::RunConfirmationAudienceUi(window, failures);
-    ReviaWindowStopTests::RunConversationQualityUi(window, failures);
-    ReviaWindowStopTests::RunMemoryRevisionUi(window, failures);
-    ReviaWindowStopTests::RunShellUi(window, failures);
-    ReviaWindowStopTests::RunHealthUiAndLayout(window, failures);
-    ReviaWindowStopTests::RunCompanionStudio(window, failures);
+    {
+        ReviaWindow window(false, false);
+        ReviaWindowStopTests::Run(window, failures);
+        ReviaWindowStopTests::RunChatTranscriptUi(window, failures);
+        ReviaWindowStopTests::RunChatSessionsUi(window, failures);
+        ReviaWindowStopTests::RunRegenerateAndEditUi(window, failures);
+        ReviaWindowStopTests::RunAttachmentUi(window, failures);
+        ReviaWindowStopTests::RunConfirmationAudienceUi(window, failures);
+        ReviaWindowStopTests::RunConversationQualityUi(window, failures);
+        ReviaWindowStopTests::RunMemoryRevisionUi(window, failures);
+        ReviaWindowStopTests::RunShellUi(window, failures);
+        ReviaWindowStopTests::RunSettingsReadBackUi(window, failures);
+        ReviaWindowStopTests::RunHealthUiAndLayout(window, failures);
+        ReviaWindowStopTests::RunCompanionStudio(window, failures);
+    }
+    // Last, on a window of its own: it ends that window's event loop for good.
+    ReviaWindowStopTests::RunShutdownUi(failures);
     if (failures == 0)
         std::cout << "Desktop Stop policy regression passed.\n";
     return failures;

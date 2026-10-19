@@ -55,8 +55,9 @@ private:
     void AddApplicationManually();
     void ApproveSelectedDiscoveredControls();
     void RemoveSelectedPermission();
-    void ApplyInternetSettings();
-    void ApplyBrowserSettings();
+    // The switch that changed, applied on top of the saved permissions; see ApplyCameraSettings.
+    void ApplyInternetSettings(const ToggleSwitch* changed);
+    void ApplyBrowserSettings(const ToggleSwitch* changed);
     QFrame* CreateInternetCard();
     QFrame* CreateInteractiveBrowserCard();
     QWidget* CreateListFooter(QPushButton*& apply, const QString& applyName, std::function<void()> onApply,
@@ -65,10 +66,10 @@ private:
     void RefreshInteractiveBrowserSettings(const revia::actions::CapabilitySettings& settings);
     void ApplyInteractiveBrowserSettings();
     void CommitBrowserFlag(const std::function<void(revia::browser::BrowserSettings&)>& change);
-    void ApplyCameraSettings();
+    void ApplyCameraSettings(const ToggleSwitch* changed);
     void ApplyProcessSettings();
     void CommitProcessFlag(const std::function<void(revia::process::ProcessSettings&)>& change);
-    void ApplyDesktopControlSettings();
+    void ApplyDesktopControlSettings(const ToggleSwitch* changed);
     void ToggleDesktopStop();
     // Puts the switch back off and asks; on "Turn on" the switch goes on again and apply runs.
     // Window-modal and non-blocking, so no nested event loop waits on the answer.

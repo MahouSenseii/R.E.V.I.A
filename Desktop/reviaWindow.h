@@ -386,6 +386,13 @@ class ReviaWindow final : public QMainWindow
     void ShowPreferenceResult(const revia::core::PreferenceResult& result);
     // Settings re-reads its values once a burst of preference changes has settled.
     void SchedulePreferenceRefresh();
+    // What the window placed into Settings beside the dialog's own rows (the two number rows, the
+    // cloud choice and the hosted permission panel), read again when Settings opens.
+    void RefreshSettingsExtras();
+    void RefreshPreferenceSpins();
+    // Saves a number row through the settings worker, but only when it changed since it was read:
+    // a spin box reports editingFinished whenever it loses focus.
+    void WriteSpinPreference(QSpinBox* spin, const std::string& key, int& stored);
     std::function<bool()> CaptureQuestionAdmission();
     bool RunAdmittedQuestion(QMessageBox& question, const std::function<bool()>& admitted);
     // The specific yes a control like Send needs. Separate from ConfirmAction: that
@@ -512,6 +519,8 @@ class ReviaWindow final : public QMainWindow
     QComboBox* cloudUseForCombo = nullptr;
     std::function<QString(const std::string&)> cloudUseForReader;
     QTimer* preferenceRefreshTimer = nullptr;
+    // The permission panel re-reads the capability file once a burst of capability events settles.
+    QTimer* capabilityRefreshTimer = nullptr;
     bool navigationLocked = false;
     bool restartRequested = false;
     int themeListenerId = -1;
@@ -551,6 +560,9 @@ class ReviaWindow final : public QMainWindow
     QCheckBox* aiFilterCheck = nullptr;
     QSpinBox* initiativeMaxSpin = nullptr;
     QSpinBox* resourceSampleSpin = nullptr;
+    // What the two number rows last read or wrote.
+    int initiativeMaxStored = -1;
+    int resourceSampleStored = -1;
     QLabel* presencePhaseValue = nullptr;
     QLabel* presenceAffectValue = nullptr;
     QLabel* presenceAttentionValue = nullptr;

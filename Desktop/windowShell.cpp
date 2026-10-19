@@ -59,6 +59,7 @@
 #include <QToolButton>
 
 #include <algorithm>
+#include <exception>
 
 namespace
 {
@@ -233,13 +234,14 @@ void ReviaWindow::BuildSettingsDialog()
     initiativeMaxSpin->setObjectName("initiativeMaxSpin");
     initiativeMaxSpin->setRange(0, 30);
     initiativeMaxSpin->setValue(4);
+    initiativeMaxStored = initiativeMaxSpin->value();
     initiativeMaxSpin->setAccessibleName("Unprompted openings per hour");
     settingsDialog->AddCustomRow(SettingsSection::Chat, QStringLiteral("Starting conversations"),
         QStringLiteral("At most N unprompted openings per hour (0 = never)"),
         QStringLiteral("How often {name} may start a conversation without being asked."), initiativeMaxSpin,
         QStringLiteral("initiativeMaxSpinRow"), {"initiative.enabled"});
     connect(initiativeMaxSpin, &QSpinBox::editingFinished, this,
-        [this]() { ShowPreferenceResult(Session().SetPreference("initiative.maxPerHour", std::to_string(initiativeMaxSpin->value()))); });
+        [this]() { WriteSpinPreference(initiativeMaxSpin, "initiative.maxPerHour", initiativeMaxStored); });
 
     auto* hardFilterStatus = new QLabel(QStringLiteral("Always on"));
     hardFilterStatus->setObjectName("hardFilterStatus");
@@ -287,6 +289,7 @@ void ReviaWindow::BuildSettingsDialog()
     resourceSampleSpin->setObjectName("resourceSampleSpin");
     resourceSampleSpin->setRange(0, 3600);
     resourceSampleSpin->setValue(2);
+    resourceSampleStored = resourceSampleSpin->value();
     resourceSampleSpin->setSpecialValueText(QStringLiteral("Off"));
     resourceSampleSpin->setSuffix(QStringLiteral(" seconds"));
     resourceSampleSpin->setAccessibleName("Resource sampling interval");
@@ -294,8 +297,8 @@ void ReviaWindow::BuildSettingsDialog()
         QStringLiteral("Sample resource usage every N seconds (0 = off)"),
         QStringLiteral("How often processor, memory and GPU use are measured for the Resources window."), resourceSampleSpin,
         QStringLiteral("resourceSampleSpinRow"));
-    connect(resourceSampleSpin, &QSpinBox::editingFinished, this, [this]()
-        { ShowPreferenceResult(Session().SetPreference("resources.usageSampleSeconds", std::to_string(resourceSampleSpin->value()))); });
+    connect(resourceSampleSpin, &QSpinBox::editingFinished, this,
+        [this]() { WriteSpinPreference(resourceSampleSpin, "resources.usageSampleSeconds", resourceSampleStored); });
 
     // Permissions hosts the whole CapabilityPanel; its internet cards go to Internet.
     settingsDialog->SetHostedWidget(SettingsSection::Permissions, QStringLiteral("permissions"), capabilityPanel, 0);
@@ -309,9 +312,21 @@ void ReviaWindow::BuildSettingsDialog()
     connect(preferenceRefreshTimer, &QTimer::timeout, this,
         [this]()
         {
-            if (settingsDialog && !switchingCompanion)
+            if (switchingCompanion)
+                return;
+            if (settingsDialog)
                 settingsDialog->Refresh();
+            RefreshPreferenceSpins();
             RefreshCloudUseFor();
+        });
+    capabilityRefreshTimer = new QTimer(this);
+    capabilityRefreshTimer->setSingleShot(true);
+    capabilityRefreshTimer->setInterval(100);
+    connect(capabilityRefreshTimer, &QTimer::timeout, this,
+        [this]()
+        {
+            if (capabilityPanel && !switchingCompanion)
+                capabilityPanel->Refresh();
         });
 
     // Shell rows the window acts on at startup.
@@ -339,6 +354,71 @@ void ReviaWindow::SchedulePreferenceRefresh()
 {
     if (preferenceRefreshTimer)
         preferenceRefreshTimer->start();
+}
+
+void ReviaWindow::RefreshSettingsExtras()
+{
+    if (switchingCompanion)
+        return;
+    RefreshPreferenceSpins();
+    RefreshCloudUseFor();
+    // /internet, /set and capability changes from elsewhere reach the hosted panel here, so a
+    // switch never shows a value from before them.
+    if (capabilityPanel)
+        capabilityPanel->Refresh();
+}
+
+void ReviaWindow::RefreshPreferenceSpins()
+{
+    const revia::runtime::UserPreferenceSnapshot snapshot = Session().UserPreferences();
+    const auto show = [](QSpinBox* spin, const int value, int& stored)
+    {
+        // A box being edited keeps what is typed in it; leaving it compares against this read.
+        stored = value;
+        if (spin == nullptr || spin->hasFocus())
+            return;
+        const QSignalBlocker blocker(spin);
+        spin->setValue(value);
+    };
+    show(initiativeMaxSpin, snapshot.initiativeMaxPerHour, initiativeMaxStored);
+    show(resourceSampleSpin, snapshot.resourceSampleSeconds, resourceSampleStored);
+}
+
+void ReviaWindow::WriteSpinPreference(QSpinBox* spin, const std::string& key, int& stored)
+{
+    const int value = spin->value();
+    if (value == stored || switchingCompanion || shuttingDown.load() || !settingsWorker)
+        return;
+    // Counted as stored now, so leaving the box again while the write runs is not another edit.
+    stored = value;
+    revia::runtime::ReviaSession* session = &Session();
+    const std::uint64_t epoch = sessionUiEpoch.load();
+    // On the settings worker, like every other Settings write: the live applier restarts loops,
+    // and a background write may hold the preference lock for a while.
+    settingsWorker->Post(
+        [this, session, key, value, epoch]()
+        {
+            revia::core::PreferenceResult result;
+            try
+            {
+                result = session->SetPreference(key, std::to_string(value));
+            }
+            catch (const std::exception& error)
+            {
+                result = {false, error.what()};
+            }
+            QMetaObject::invokeMethod(
+                this,
+                [this, result, epoch]()
+                {
+                    if (epoch != sessionUiEpoch.load() || shuttingDown.load())
+                        return;
+                    ShowPreferenceResult(result);
+                    if (!result.succeeded)
+                        RefreshPreferenceSpins();
+                },
+                Qt::QueuedConnection);
+        });
 }
 
 void ReviaWindow::ApplyShellSetting(const std::string& key, const bool value)

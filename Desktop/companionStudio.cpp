@@ -396,6 +396,11 @@ void ReviaWindow::SwitchCompanion(const std::string& id)
                 {
                     if (shuttingDown.load() || epoch != sessionUiEpoch.load())
                         return;
+                    // Settings writes queued for the outgoing companion answered under its epoch
+                    // and were dropped; their rows and the cloud combo stop waiting for them before
+                    // the dialog reads the incoming companion.
+                    settingsDialog->AbandonPendingWrites();
+                    cloudUseForCombo->setEnabled(true);
                     std::string error;
                     try
                     {

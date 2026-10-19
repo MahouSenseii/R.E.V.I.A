@@ -438,7 +438,7 @@ bool ReviaWindow::eventFilter(QObject* watched, QEvent* event)
             settingsDialog->setProperty("reviaFramed", true);
             revia::desktop::theme::ApplyNativeFrame(settingsDialog);
         }
-        RefreshCloudUseFor();
+        RefreshSettingsExtras();
     }
     if (watched == messageInput && event->type() == QEvent::KeyPress)
     {
@@ -484,7 +484,15 @@ bool ReviaWindow::eventFilter(QObject* watched, QEvent* event)
 
 void ReviaWindow::closeEvent(QCloseEvent* event)
 {
-    if (!shuttingDown.load() && trayIcon && trayIcon->isVisible() && QSettings().value("window/closeToTray", true).toBool())
+    // Shutdown ends with QApplication::quit(), which first closes every visible window and gives
+    // up if one refuses. Once shutdown has begun the close is therefore accepted, or the process
+    // would stay alive behind a locked window.
+    if (shuttingDown.load())
+    {
+        event->accept();
+        return;
+    }
+    if (trayIcon && trayIcon->isVisible() && QSettings().value("window/closeToTray", true).toBool())
     {
         hide();
         if (panelHost)
@@ -500,7 +508,9 @@ void ReviaWindow::closeEvent(QCloseEvent* event)
         return;
     }
     // Nowhere to retreat to, or the owner asked closing to quit: shut down properly. Accepting the
-    // close here would leave a windowless process with every server still running.
+    // close here would leave a windowless process with every server still running; the window
+    // stays up under "Closing Revia…" until the shutdown's quit() closes it. BeginShutdown saves
+    // the open panels before it hides them.
     BeginShutdown(revia::core::ExitReason::WindowClosed, "the window was closed");
     event->ignore();
 }
@@ -2164,6 +2174,15 @@ void ReviaWindow::HandleRuntimeEvent(const revia::runtime::RuntimeEvent& event)
                 // /bargein, /set and Settings itself: the dialog re-reads once the burst settles.
                 SchedulePreferenceRefresh();
             }
+            if ((event.component == "Internet" || event.component == "Permissions" || event.component == "Browser" ||
+                    event.component == "Commands" || event.component == "DesktopControl" ||
+                    (event.component == "Camera" && (event.phase == "Ready" || event.phase == "Disabled"))) &&
+                capabilityRefreshTimer)
+            {
+                // /internet and every other capability change: the permission switches in Settings
+                // re-read the capability file, so none of them shows (or writes back) a stale value.
+                capabilityRefreshTimer->start();
+            }
             QString detail = QString::fromStdString(event.component) + QStringLiteral(" ") + QString::fromStdString(event.phase) +
                              QStringLiteral(": ") + QString::fromStdString(event.message);
             if (event.elapsedMilliseconds >= 0.0)
@@ -3471,13 +3490,7 @@ void ReviaWindow::ApplyUserPreferences()
     // the window made are read here.
     if (settingsDialog)
         settingsDialog->Refresh();
-    const revia::runtime::UserPreferenceSnapshot snapshot = Session().UserPreferences();
-    {
-        const QSignalBlocker initiativeMaxBlocker(initiativeMaxSpin);
-        const QSignalBlocker sampleBlocker(resourceSampleSpin);
-        initiativeMaxSpin->setValue(snapshot.initiativeMaxPerHour);
-        resourceSampleSpin->setValue(snapshot.resourceSampleSeconds);
-    }
+    RefreshPreferenceSpins();
     RefreshCloudUseFor();
     RefreshPresenceUi();
 }

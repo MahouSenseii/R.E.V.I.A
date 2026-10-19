@@ -584,9 +584,9 @@ CapabilityPanel::CapabilityPanel(revia::runtime::ReviaSession& inputSession, Dis
             "Knowledge questions may be sent to the configured DuckDuckGo and Wikipedia HTTPS endpoints or, when "
             "selected below, to a dedicated visible browser. Every lookup is read-only, bounded, rate limited and "
             "audited.",
-            [this]() { ApplyInternetSettings(); });
+            [this]() { ApplyInternetSettings(internetCheck); });
     });
-    connect(automaticLookupCheck, &QCheckBox::toggled, this, [this]() { ApplyInternetSettings(); });
+    connect(automaticLookupCheck, &QCheckBox::toggled, this, [this]() { ApplyInternetSettings(automaticLookupCheck); });
     connect(visibleBrowserCheck, &QCheckBox::toggled, this, [this, confirmFirst](const bool on)
     {
         confirmFirst(visibleBrowserCheck, on,
@@ -595,7 +595,7 @@ CapabilityPanel::CapabilityPanel(revia::runtime::ReviaSession& inputSession, Dis
                            "downloads, uploads, passwords, payments, localhost and private-network pages stay out of "
                            "reach. Queries, pages, results, timing and failures remain visible and audited.")
                 .arg(CompanionName()),
-            [this]() { ApplyBrowserSettings(); });
+            [this]() { ApplyBrowserSettings(visibleBrowserCheck); });
     });
     connect(autonomousResearchCheck, &QCheckBox::toggled, this, [this, confirmFirst](const bool on)
     {
@@ -604,7 +604,7 @@ CapabilityPanel::CapabilityPanel(revia::runtime::ReviaSession& inputSession, Dis
                            "conversation or a meaningful emotion creates a concrete topic. A timer alone cannot create a "
                            "topic, and attention, cooldown, deduplication, hourly, browser and network limits still apply.")
                 .arg(CompanionName()),
-            [this]() { ApplyBrowserSettings(); });
+            [this]() { ApplyBrowserSettings(autonomousResearchCheck); });
     });
     connect(cameraCheck, &QCheckBox::toggled, this, [this, confirmFirst](const bool on)
     {
@@ -615,7 +615,7 @@ CapabilityPanel::CapabilityPanel(revia::runtime::ReviaSession& inputSession, Dis
                            "and are never uploaded. Seeing something grants nothing new: anything done as a result still "
                            "goes through the ordinary permission and confirmation path.")
                 .arg(CompanionName()),
-            [this]() { ApplyCameraSettings(); });
+            [this]() { ApplyCameraSettings(cameraCheck); });
     });
     connect(autonomousCameraCheck, &QCheckBox::toggled, this, [this, confirmFirst](const bool on)
     {
@@ -625,7 +625,7 @@ CapabilityPanel::CapabilityPanel(revia::runtime::ReviaSession& inputSession, Dis
                            "Consenting to answer \"what am I holding?\" is not the same as consenting to be watched, which "
                            "is why this is asked separately.")
                 .arg(CompanionName()),
-            [this]() { ApplyCameraSettings(); });
+            [this]() { ApplyCameraSettings(autonomousCameraCheck); });
     });
     for (ToggleSwitch* toggle : {processCheck, taskProcessCheck, commandInterpreterCheck})
     {
@@ -693,7 +693,7 @@ CapabilityPanel::CapabilityPanel(revia::runtime::ReviaSession& inputSession, Dis
                     "text typed into one of them is model text running as a command however it arrived. Allowing this "
                     "makes that possible on purpose.");
             }
-            confirmFirst(toggle, on, explanation, [this]() { ApplyDesktopControlSettings(); });
+            confirmFirst(toggle, on, explanation, [this, toggle]() { ApplyDesktopControlSettings(toggle); });
         });
     }
     connect(desktopStopButton, &QPushButton::clicked, this, [this]() { ToggleDesktopStop(); });
@@ -1185,31 +1185,44 @@ void CapabilityPanel::CommitProcessFlag(const std::function<void(revia::process:
     Refresh();
 }
 
-void CapabilityPanel::ApplyCameraSettings()
+// Like every switch here, the camera pair commits only the switch that changed, on top of the saved
+// permissions: a switch still showing a value from before a change elsewhere (/internet, another
+// window) never writes that stale value back, and nothing is granted without its own question.
+void CapabilityPanel::ApplyCameraSettings(const ToggleSwitch* changed)
 {
     if (refreshing) return;
-    autonomousCameraCheck->setEnabled(cameraCheck->isChecked());
-    const auto result = session.SetCameraAccess(
-        cameraCheck->isChecked(), autonomousCameraCheck->isChecked());
+    const auto stored = session.Capabilities().camera;
+    const auto result = session.SetCameraAccess(changed == cameraCheck ? cameraCheck->isChecked() : stored.enabled,
+        changed == autonomousCameraCheck ? autonomousCameraCheck->isChecked() : stored.autonomousCapture);
     SetStatus(QString::fromStdString(result.message), !result.succeeded);
     Refresh();
 }
 
-void CapabilityPanel::ApplyDesktopControlSettings()
+void CapabilityPanel::ApplyDesktopControlSettings(const ToggleSwitch* changed)
 {
     if (refreshing) return;
     using InputScope =
         revia::actions::CapabilitySettings::DesktopControl::InputScope;
-    const auto result = session.SetDesktopControl(
-        pointerCheck->isChecked(),
-        keyboardCheck->isChecked(),
-        launchCheck->isChecked(),
-        rawCoordinateCheck->isChecked(),
-        visualTargetCheck->isChecked(),
-        autonomousDesktopCheck->isChecked(),
-        wholeDesktopCheck->isChecked()
-            ? InputScope::WholeDesktop : InputScope::ApprovedApplications,
-        commandSurfaceCheck->isChecked());
+    auto desktop = session.Capabilities().desktopControl;
+    const bool on = changed->isChecked();
+    if (changed == pointerCheck)
+        desktop.pointer = on;
+    else if (changed == keyboardCheck)
+        desktop.keyboard = on;
+    else if (changed == launchCheck)
+        desktop.applicationLaunch = on;
+    else if (changed == rawCoordinateCheck)
+        desktop.rawCoordinates = on;
+    else if (changed == visualTargetCheck)
+        desktop.visualTargeting = on;
+    else if (changed == autonomousDesktopCheck)
+        desktop.autonomous = on;
+    else if (changed == wholeDesktopCheck)
+        desktop.scope = on ? InputScope::WholeDesktop : InputScope::ApprovedApplications;
+    else if (changed == commandSurfaceCheck)
+        desktop.allowCommandSurfaces = on;
+    const auto result = session.SetDesktopControl(desktop.pointer, desktop.keyboard, desktop.applicationLaunch, desktop.rawCoordinates,
+        desktop.visualTargeting, desktop.autonomous, desktop.scope, desktop.allowCommandSurfaces);
     SetStatus(QString::fromStdString(result.message), !result.succeeded);
     Refresh();
 }
@@ -1334,25 +1347,22 @@ void CapabilityPanel::RemoveSelectedPermission()
     Refresh();
 }
 
-void CapabilityPanel::ApplyInternetSettings()
+void CapabilityPanel::ApplyInternetSettings(const ToggleSwitch* changed)
 {
     if (refreshing) return;
-    automaticLookupCheck->setEnabled(internetCheck->isChecked());
-    visibleBrowserCheck->setEnabled(internetCheck->isChecked());
-    autonomousResearchCheck->setEnabled(
-        internetCheck->isChecked() && visibleBrowserCheck->isChecked());
-    const auto result = session.SetInternetAccess(
-        internetCheck->isChecked(), automaticLookupCheck->isChecked());
+    const auto stored = session.Capabilities().internet;
+    const auto result = session.SetInternetAccess(changed == internetCheck ? internetCheck->isChecked() : stored.enabled,
+        changed == automaticLookupCheck ? automaticLookupCheck->isChecked() : stored.automaticLookup);
     ShowInternetResult(QString::fromStdString(result.message), !result.succeeded);
     Refresh();
 }
 
-void CapabilityPanel::ApplyBrowserSettings()
+void CapabilityPanel::ApplyBrowserSettings(const ToggleSwitch* changed)
 {
     if (refreshing) return;
-    const auto result = session.SetInternetBrowser(
-        visibleBrowserCheck->isChecked(),
-        autonomousResearchCheck->isChecked());
+    const auto stored = session.Capabilities().internet;
+    const auto result = session.SetInternetBrowser(changed == visibleBrowserCheck ? visibleBrowserCheck->isChecked() : stored.visibleBrowser,
+        changed == autonomousResearchCheck ? autonomousResearchCheck->isChecked() : stored.autonomousResearch);
     ShowInternetResult(QString::fromStdString(result.message), !result.succeeded);
     Refresh();
 }

@@ -1453,6 +1453,22 @@ void CheckCapabilityPanel(Expect& expect, revia::runtime::ReviaSession& session)
     const Capabilities afterOff = session.Capabilities();
     expect(!afterOff.browser.interact && !afterOff.process.enabled, "turning switches off is saved at once");
 
+    // A switch still showing a value from before a change made elsewhere (/internet off) commits only
+    // its own flag: turning on automatic lookups must not turn internet lookups back on unasked.
+    turnOn("internetCheck", [](const Capabilities& saved) { return saved.internet.enabled; });
+    const bool internetOff = session.SetInternetAccess(false, false).succeeded;
+    if (auto* automatic = panel.findChild<QCheckBox*>("automaticLookupCheck"); automatic && internetOff && automatic->isEnabled())
+    {
+        automatic->click();
+        Settle();
+        expect(!OpenConfirmation(&panel) && !session.Capabilities().internet.enabled,
+            "a stale internet card turned internet lookups back on without asking");
+    }
+    else
+    {
+        expect(false, "the stale internet card fixture could not be set up");
+    }
+
     // Back to everything off, for the captures that follow.
     const bool desktopOff = session.SetDesktopControl(false, false, false, false, false, false, InputScope::ApprovedApplications, false).succeeded;
     revia::browser::BrowserSettings browser = session.Capabilities().browser;
