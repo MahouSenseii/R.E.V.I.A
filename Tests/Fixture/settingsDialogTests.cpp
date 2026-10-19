@@ -848,6 +848,46 @@ void CheckDialog(Expect& expect, revia::runtime::ReviaSession& session)
         "FocusSetting reaches a hosted switch");
 }
 
+// Enter presses nothing that lacks focus. A shown QDialog makes its first auto-default button the
+// default and presses it on Enter from anywhere; with the capability panel hosted that button was
+// Stop desktop control. A fresh dialog, shown once with the panel in place, the way the window
+// builds it.
+void CheckEnterKey(Expect& expect, revia::runtime::ReviaSession& session)
+{
+    FakeBackend fake;
+    SettingsDialog dialog(fake.Make(), {}, nullptr);
+    auto* panel = new CapabilityPanel(session, {}, nullptr);
+    dialog.SetHostedWidget(SettingsSection::Permissions, "permissions", panel, 0);
+    dialog.SetHostedWidget(SettingsSection::Internet, "internet", panel->DetachInternetGroup(), 0);
+    dialog.resize(920, 640);
+    dialog.show();
+    Settle();
+    dialog.ShowSection(SettingsSection::Permissions);
+    Settle();
+    for (QPushButton* button : dialog.findChildren<QPushButton*>())
+        expect(!button->isDefault() && !button->autoDefault(), button->text() + " must not be a default button in Settings");
+    auto* pointer = panel->findChild<QCheckBox*>("pointerCheck");
+    auto* stop = panel->findChild<QPushButton*>("desktopStopButton");
+    expect(pointer && stop && stop->isVisible(), "the Permissions page shows Mouse control and Stop desktop control");
+    if (pointer == nullptr)
+        return;
+    const bool stopped = session.DesktopControlStopped();
+    pointer->setFocus(Qt::TabFocusReason);
+    expect(pointer->hasFocus(), "Mouse control takes key focus");
+    // Checked after each key: a second press of a default Stop button resumes again.
+    for (const int key : {Qt::Key_Return, Qt::Key_Enter})
+    {
+        PressKey(pointer, key);
+        expect(session.DesktopControlStopped() == stopped && stop->text() == "Stop desktop control" && !pointer->isChecked() &&
+                   !OpenConfirmation(&dialog),
+            QStringLiteral("%1 on a switch neither stops desktop control nor changes the switch")
+                .arg(key == Qt::Key_Return ? "Return" : "Enter"));
+        if (session.DesktopControlStopped() != stopped)
+            (void)session.ResumeDesktopControl();
+        panel->Refresh();
+    }
+}
+
 void CheckCapabilityPanel(Expect& expect, revia::runtime::ReviaSession& session)
 {
     CapabilityPanel panel(session, {}, nullptr);
@@ -1032,6 +1072,7 @@ int RunSettingsSuite(int, char**)
         // Never started: it only gives the panels something to read.
         revia::runtime::ReviaSession session;
         CheckDialog(expect, session);
+        CheckEnterKey(expect, session);
         CheckCapabilityPanel(expect, session);
         CheckProfilePanel(expect, session);
         SaveCaptures(expect, session);

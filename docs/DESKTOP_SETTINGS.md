@@ -41,6 +41,8 @@ that every boolean preference and every owner-settings key has a row.
 - **Search.** The search box filters rows by label, description and keywords across every
   section, shows each section's hit count, and says so when nothing matches. Esc clears the search
   first and closes Settings second. Ctrl+F focuses it and Down moves into the section list.
+  Enter does nothing by itself in Settings; Space turns a focused switch or presses a focused
+  button.
 - **Names.** "{name}" in this page is the active companion's display name. "Revia" in a label
   names the application.
 

@@ -175,6 +175,24 @@ bool Matches(const QString& haystack, const QStringList& terms)
     return std::all_of(terms.begin(), terms.end(), [&](const QString& term) { return haystack.contains(term, Qt::CaseInsensitive); });
 }
 
+// A QPushButton inside a QDialog is auto-default, and the dialog presses its default button on
+// Enter wherever focus is. Hosted panels bring their own buttons (CapabilityPanel's first one stops
+// desktop control), so no button in Settings may be a default; Space still presses a focused one.
+// Buttons of a message box open over the dialog belong to that box and keep their default.
+void ClearAutoDefault(QWidget* root)
+{
+    QList<QPushButton*> buttons = root->findChildren<QPushButton*>();
+    if (auto* button = qobject_cast<QPushButton*>(root))
+        buttons.push_back(button);
+    for (QPushButton* button : buttons)
+    {
+        if (button->window() != root->window())
+            continue;
+        button->setAutoDefault(false);
+        button->setDefault(false);
+    }
+}
+
 // Paints a section's search hit count at the right edge of its row, in the secondary text colour
 // (the theme maps PlaceholderText to it), so the count stays readable on the selected row.
 class SectionItemDelegate final : public QStyledItemDelegate
@@ -759,6 +777,7 @@ SettingsDialog::Row& SettingsDialog::AddPlainRow(Group& group, const QString& la
     {
         row.control = control;
         control->setParent(row.frame);
+        ClearAutoDefault(control);
         // A wide control (the microphone picker with its buttons) gets the full row under the text.
         if (control->sizeHint().width() > 260)
             row.text->addWidget(control);
@@ -1601,6 +1620,7 @@ void SettingsDialog::SetHostedWidget(const SettingsSection sectionId, const QStr
     if (widget == nullptr)
         return;
     widget->setParent(section.content);
+    ClearAutoDefault(widget);
     const int count = section.body->count();
     section.body->insertWidget(position < 0 || position > count ? count : position, widget);
     // A widget taken out of another layout or a tab page may have been hidden there.
@@ -1726,6 +1746,9 @@ void SettingsDialog::ShowAllRows()
 void SettingsDialog::showEvent(QShowEvent* event)
 {
     QDialog::showEvent(event);
+    // Before QDialog picks a default button among the auto-default ones, which it does right after
+    // this event; a hosted panel may have made buttons since it was placed.
+    ClearAutoDefault(this);
     Refresh();
     search->setFocus(Qt::OtherFocusReason);
     NotifyResize();
@@ -1802,9 +1825,10 @@ void SettingsDialog::keyPressEvent(QKeyEvent* event)
         event->accept();
         return;
     }
-    if ((event->key() == Qt::Key_Return || event->key() == Qt::Key_Enter) && qobject_cast<QAbstractButton*>(focusWidget()) == nullptr)
+    if (event->key() == Qt::Key_Return || event->key() == Qt::Key_Enter)
     {
-        // A QDialog would otherwise press its first button when Enter reaches it from a line edit.
+        // QDialog would press its default button whichever widget has focus, a switch included.
+        // Settings has no default action: Space presses a focused switch or button.
         event->accept();
         return;
     }
