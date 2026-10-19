@@ -39,7 +39,9 @@ that every boolean preference and every owner-settings key has a row.
 - **Inverted rows.** "Let picture generation use the internet" shows the opposite of the stored
   `image.offline` value, so the switch can ask the positive question.
 - **Reset.** Right-click a Preference or owner-overlay row for "Reset to default", which removes
-  your saved choice so the shipped value applies again.
+  your saved choice so the shipped value applies again. A switch that asks before it turns on is
+  reset only while it is on (one that asks when turned off, only while it is off): the shipped
+  value may be the risky one, and a reset never makes that change without the question.
 - **Search.** The search box filters rows by label, description and keywords across every
   section, shows each section's hit count, and says so when nothing matches. Esc clears the search
   first and closes Settings second. Ctrl+F focuses it and Down moves into the section list.

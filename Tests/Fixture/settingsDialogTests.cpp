@@ -11,6 +11,7 @@
 
 #include <QApplication>
 #include <QCheckBox>
+#include <QContextMenuEvent>
 #include <QCoreApplication>
 #include <QDir>
 #include <QFrame>
@@ -18,6 +19,7 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
+#include <QMenu>
 #include <QMessageBox>
 #include <QPlainTextEdit>
 #include <QPushButton>
@@ -27,6 +29,7 @@
 #include <QSettings>
 #include <QSpinBox>
 #include <QStackedWidget>
+#include <QTimer>
 #include <QComboBox>
 #include <QIcon>
 #include <QPalette>
@@ -36,6 +39,7 @@
 #include <functional>
 #include <iostream>
 #include <map>
+#include <memory>
 #include <set>
 #include <string>
 #include <utility>
@@ -198,6 +202,10 @@ struct FakeBackend
     std::vector<std::pair<std::string, double>> profileWrites;
     std::map<std::string, double> profileValues{{"temperature", 0.75}, {"maxTokens", 640.0}};
     bool refuseProfileWrites = false;
+    std::vector<std::string> resets;
+    // Where a reset leads, when it is not the catalog default (an owner overlay key falls back to
+    // whatever Config/settings.json ships).
+    std::map<std::string, bool> resetTo;
 
     SettingRead& Entry(const std::string& key)
     {
@@ -251,8 +259,10 @@ struct FakeBackend
         };
         backend.reset = [this](const SettingKeyRef& key, SettingDone done)
         {
+            resets.push_back(key.key);
             const SettingDescriptor* row = CatalogRow(key.key);
-            Set(key.key, row != nullptr && row->defaultValue);
+            const auto target = resetTo.find(key.key);
+            Set(key.key, target != resetTo.end() ? target->second : row != nullptr && row->defaultValue);
             done({true, QStringLiteral("Back to the default.")});
         };
         backend.readChoice = [this](const std::string& key) { return choices.contains(key) ? choices[key] : QString(); };
@@ -324,6 +334,40 @@ void PressKey(QWidget* target, const int key)
     QKeyEvent release(QEvent::KeyRelease, key, Qt::NoModifier);
     QApplication::sendEvent(target, &release);
     Settle();
+}
+
+// Opens a row's context menu the way a right-click does and reports whether "Reset to default" was
+// there and enabled, choosing it when asked to. QMenu::exec runs its own loop, so the menu is
+// examined and closed from a timer inside it.
+bool ResetOffered(QWidget* row, const bool choose)
+{
+    auto offered = std::make_shared<bool>(false);
+    QTimer::singleShot(0, row, [offered, choose]()
+    {
+        auto* menu = dynamic_cast<QMenu*>(QApplication::activePopupWidget());
+        if (menu == nullptr)
+            return;
+        for (QAction* action : menu->actions())
+        {
+            if (action->text() == "Reset to default")
+            {
+                *offered = action->isEnabled();
+                if (*offered && choose)
+                {
+                    menu->setActiveAction(action);
+                    QKeyEvent press(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
+                    QApplication::sendEvent(menu, &press);
+                }
+            }
+        }
+        if (menu->isVisible())
+            menu->close();
+    });
+    const QPoint inside = row->rect().center();
+    QContextMenuEvent event(QContextMenuEvent::Mouse, inside, row->mapToGlobal(inside));
+    QApplication::sendEvent(row, &event);
+    Settle();
+    return *offered;
 }
 
 void CheckCatalog(Expect& expect)
@@ -791,6 +835,31 @@ void CheckDialog(Expect& expect, revia::runtime::ReviaSession& session)
         emit temperature->editingFinished();
         expect(fake.profileWrites.size() == 2, "the value put back after a refusal is not written again");
     }
+
+    // "Reset to default" never makes the change a switch would have asked about. The overlay's
+    // default for improvement.verify is whatever Config/settings.json ships, which is on.
+    fake.Set("improvement.enabled", true);
+    fake.Set("improvement.verify", false);
+    fake.resetTo["improvement.verify"] = true;
+    dialog.Refresh();
+    dialog.ShowSection(SettingsSection::Advanced);
+    Settle();
+    auto* verify = dialog.findChild<QCheckBox*>(QStringLiteral("sw_improvement_verify"));
+    auto* verifyRow = dialog.findChild<QFrame*>(QStringLiteral("sw_improvement_verifyRow"));
+    expect(verify && verifyRow && verify->isEnabled() && !verify->isChecked(), "Build and test suggested improvements starts off and reachable");
+    if (verify && verifyRow)
+    {
+        expect(!ResetOffered(verifyRow, true) && fake.resets.empty() && !verify->isChecked() && !fake.Entry("improvement.verify").value,
+            "a risky switch that is off offers no reset that could turn it on unasked");
+        fake.Set("improvement.verify", true);
+        fake.resetTo["improvement.verify"] = false;
+        dialog.Refresh();
+        expect(verify->isChecked() && ResetOffered(verifyRow, true) && fake.resets == std::vector<std::string>{"improvement.verify"} &&
+                   !verify->isChecked(),
+            "once it is on, a reset can only leave it on or take it off, so it is offered and runs");
+    }
+    if (auto* visionRow = dialog.findChild<QFrame*>(QStringLiteral("sw_vision_enabledRow")))
+        expect(ResetOffered(visionRow, false), "a switch that never asks offers its reset either way");
 
     // Companion name substitution.
     const QLabel* bargeIn = RowLabel(&dialog, "bargeInCheckRow", "settingTitle");

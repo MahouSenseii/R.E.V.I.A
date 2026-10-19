@@ -194,6 +194,21 @@ void ClearAutoDefault(QWidget* root)
     }
 }
 
+// The default a reset returns to is not known here (an owner overlay key falls back to whatever
+// Config/settings.json ships), so a switch that asks before one of its changes may be reset only
+// from the position that needed the question: from there a reset can leave it or take it back,
+// never make the risky change unasked. confirm follows what the switch shows, inverted rows too.
+bool ResetNeedsNoQuestion(const SettingDescriptor& descriptor, const bool shownOn)
+{
+    switch (descriptor.confirm)
+    {
+        case ConfirmWhen::Never: return true;
+        case ConfirmWhen::TurningOn: return shownOn;
+        case ConfirmWhen::TurningOff: return !shownOn;
+    }
+    return false;
+}
+
 // Paints a section's search hit count at the right edge of its row, in the secondary text colour
 // (the theme maps PlaceholderText to it), so the count stays readable on the selected row.
 class SectionItemDelegate final : public QStyledItemDelegate
@@ -1081,7 +1096,8 @@ void SettingsDialog::FinishWrite(const std::string& key, const bool previousDisp
 void SettingsDialog::ResetRow(const std::string& key)
 {
     Row* row = FindRow(key);
-    if (row == nullptr || !backend.reset)
+    if (row == nullptr || row->toggle == nullptr || row->busy || !backend.reset ||
+        !ResetNeedsNoQuestion(row->descriptor, row->toggle->isChecked()))
         return;
     const bool display = row->toggle->isChecked();
     row->busy = true;
@@ -1832,8 +1848,16 @@ bool SettingsDialog::eventFilter(QObject* watched, QEvent* event)
             (row->descriptor.store == SettingStore::Preference || row->descriptor.store == SettingStore::SettingsFile))
         {
             QMenu menu(this);
+            menu.setToolTipsVisible(true);
             QAction* reset = menu.addAction(QStringLiteral("Reset to default"));
-            reset->setEnabled(row->frame->isEnabled() && !row->busy && static_cast<bool>(backend.reset));
+            const bool unasked = ResetNeedsNoQuestion(row->descriptor, row->toggle->isChecked());
+            reset->setEnabled(unasked && row->frame->isEnabled() && !row->busy && static_cast<bool>(backend.reset));
+            if (!unasked)
+            {
+                reset->setToolTip(row->descriptor.confirm == ConfirmWhen::TurningOn
+                        ? QStringLiteral("Use the switch: it asks before turning this on.")
+                        : QStringLiteral("Use the switch: it asks before turning this off."));
+            }
             const std::string key = row->descriptor.key;
             if (menu.exec(static_cast<QContextMenuEvent*>(event)->globalPos()) == reset)
                 ResetRow(key);
