@@ -516,6 +516,8 @@ void TestDurableEvidenceAndInvalidCheckpointRejection()
     }
     Check(!restored.Load(path, error), "Corrupt evidence hash was admitted from disk.");
     const auto directory = Checkpoint("occupied-destination");
+    // A run stopped before its cleanup must not break every later one.
+    std::filesystem::remove_all(directory);
     std::filesystem::create_directory(directory);
     Check(!original.Save(directory, error) && std::filesystem::is_directory(directory),
         "Failed atomic publication damaged the existing destination.");
@@ -681,14 +683,17 @@ void TestRetryAtVisiblePausedTeardown()
     {
         std::mutex mutex;
         std::condition_variable condition;
-        std::vector<std::thread::id> providerThreads;
+        std::thread::id secondThread;
         bool workReleased = false;
+        bool firstReleased = false;
+        bool dispatchSeen = false;
         bool resultCallbackHeld = false;
         bool resultCallbackReleased = false;
         bool paused = false;
         bool callbackReleased = false;
         bool retryFinished = false;
         bool retryAccepted = false;
+        std::string retryError;
         bool callbackRetryRefused = false;
         std::atomic<int> calls = 0;
         AgentWorkflow workflow;
@@ -699,8 +704,14 @@ void TestRetryAtVisiblePausedTeardown()
                   {
                       ++calls;
                       std::unique_lock lock(mutex);
-                      providerThreads.push_back(std::this_thread::get_id());
-                      while (!workReleased && !token.stop_requested())
+                      if (request.node.id == "second")
+                          secondThread = std::this_thread::get_id();
+                      // "first" finishes only once "second"'s own thread holds the result
+                      // drainer, so the dispatcher joins first's thread, and frees its id, before
+                      // it blocks on second's. glibc gives a joined thread's id to the next thread
+                      // created, here the retry below: that reuse is what this proves harmless.
+                      const auto released = [&] { return request.node.id == "first" ? firstReleased : workReleased; };
+                      while (!released() && !token.stop_requested())
                           condition.wait_for(lock, 5ms);
                       auto result = Verified(request);
                       if (request.node.id == "second")
@@ -710,19 +721,35 @@ void TestRetryAtVisiblePausedTeardown()
                   error,
                   [&](const WorkflowSnapshot& snapshot)
                   {
+                      const auto running = [&](const char* id)
+                      {
+                          const auto& node = Node(snapshot, id);
+                          return !node.attempts.empty() && node.attempts.back().state == WorkflowState::Running;
+                      };
+                      if (running("first") && running("second"))
+                      {
+                          std::lock_guard seen(mutex);
+                          dispatchSeen = true;
+                          condition.notify_all();
+                      }
                       const bool hasCompletedAttempt = std::any_of(snapshot.nodes.begin(), snapshot.nodes.end(),
                           [](const auto& node) { return !node.attempts.empty() && node.attempts.back().state != WorkflowState::Running; });
                       if (snapshot.state == WorkflowState::Running && hasCompletedAttempt)
                       {
                           std::unique_lock lock(mutex);
-                          const bool providerOwnsDrain = std::find(providerThreads.begin(), providerThreads.end(),
-                                                             std::this_thread::get_id()) != providerThreads.end();
-                          if (providerOwnsDrain && !resultCallbackHeld)
+                          if (!resultCallbackHeld)
                           {
-                              resultCallbackHeld = true;
+                              // "first" may finish now. Either second's own thread drains its
+                              // result and is held here, or another thread did and this setup
+                              // cannot qualify, so it should end at once.
+                              firstReleased = true;
                               condition.notify_all();
-                              while (!resultCallbackReleased)
-                                  condition.wait_for(lock, 5ms);
+                              if (std::this_thread::get_id() == secondThread)
+                              {
+                                  resultCallbackHeld = true;
+                                  while (!resultCallbackReleased)
+                                      condition.wait_for(lock, 5ms);
+                              }
                           }
                       }
                       if (snapshot.state != WorkflowState::Paused)
@@ -739,7 +766,14 @@ void TestRetryAtVisiblePausedTeardown()
                   }),
             "Visible paused teardown fixture did not start.");
         {
-            std::lock_guard lock(mutex);
+            // Released only once the dispatcher has delivered both dispatched attempts and moved
+            // on, so that second's own thread, not the dispatcher, drains its result. The pause
+            // grows with each setup, so a setup lost to scheduling is not repeated identically.
+            std::unique_lock lock(mutex);
+            condition.wait_for(lock, 1s, [&] { return dispatchSeen; });
+            lock.unlock();
+            std::this_thread::sleep_for(std::chrono::milliseconds(2 + 3 * setup));
+            lock.lock();
             workReleased = true;
             condition.notify_all();
         }
@@ -748,6 +782,8 @@ void TestRetryAtVisiblePausedTeardown()
         {
             std::unique_lock lock(mutex);
             condition.wait_for(lock, 1s, [&] { return resultCallbackHeld || paused; });
+            firstReleased = true;
+            condition.notify_all();
             if (resultCallbackHeld)
             {
                 const auto deadline = std::chrono::steady_clock::now() + 1s;
@@ -772,10 +808,11 @@ void TestRetryAtVisiblePausedTeardown()
         std::jthread retry(
             [&]
             {
-                std::string retryError;
-                const bool accepted = workflow.Retry("second", "changed input", "changed evidence", retryError);
+                std::string refusal;
+                const bool accepted = workflow.Retry("second", "changed input", "changed evidence", refusal);
                 std::lock_guard lock(mutex);
                 retryAccepted = accepted;
+                retryError = refusal;
                 retryFinished = true;
                 condition.notify_all();
             });
@@ -787,9 +824,11 @@ void TestRetryAtVisiblePausedTeardown()
         }
         retry.join();
         workflow.Join();
+        const std::string message =
+            "Visible Paused recovery was rejected while the completed dispatcher was tearing down: " + retryError;
         Check(observedPaused && callbackRetryRefused && retryAccepted && calls == 2 &&
                   Node(workflow.Snapshot(), "second").state == WorkflowState::Waiting,
-            "Visible Paused recovery was rejected while the completed dispatcher was tearing down.");
+            message.c_str());
         return;
     }
     Check(false, "Fixture could not establish a provider-owned result drainer within its setup bound.");

@@ -43,6 +43,9 @@ struct promptFitReport
 struct responseOutput
 {
     bool bSuccess = false;
+    // A background request that yielded to interactive inference before it produced
+    // anything. It made no progress, so its owner may wait and ask again.
+    bool bPreempted = false;
     bool bShouldRemember = false;
     bool bShouldSpeak = true;
     bool bWasStreamed = false;  // true when visible deltas were delivered to a consumer

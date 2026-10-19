@@ -73,6 +73,15 @@ AgentStudioPanel::AgentStudioPanel(Controls inputControls, QWidget* parent) : QW
     requestLayout->addWidget(cancel, 2, 1);
     requestLayout->addWidget(resume, 2, 2);
     layout->addWidget(request);
+    // Shown only while the current workflow is a task Revia handed off from chat, so it is
+    // clear where the work came from and what the workers were allowed to touch.
+    delegation = new QLabel(this);
+    delegation->setObjectName("agentDelegation");
+    delegation->setTextFormat(Qt::PlainText);
+    delegation->setWordWrap(true);
+    delegation->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    delegation->hide();
+    layout->addWidget(delegation);
     summary = new QLabel("No workflow started. Provider telemetry is unavailable.", this);
     summary->setObjectName("agentSummary");
     summary->setWordWrap(true);
@@ -203,7 +212,17 @@ void AgentStudioPanel::ResetForCompanion()
     evidence->clear();
     feedback->clear();
     provider->setCurrentIndex(0);
+    SetDelegation({});
     SetSnapshot({});
+}
+
+void AgentStudioPanel::SetDelegation(const QString& line)
+{
+    // Fed on every poll; an unchanged line must not cost a relayout each time.
+    if (delegation->text() == line)
+        return;
+    delegation->setText(line);
+    delegation->setVisible(!line.isEmpty());
 }
 
 void AgentStudioPanel::SetSnapshot(const revia::agents::WorkflowSnapshot& incoming)

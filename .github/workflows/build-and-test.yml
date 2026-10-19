@@ -71,9 +71,11 @@ jobs:
   windows:
     name: Windows / MinGW
     runs-on: windows-latest
-    # A cold build alone takes close to an hour on a hosted runner, so a 60-minute limit
-    # kept cancelling runs before any test could report.
-    timeout-minutes: 120
+    # A build that misses the compiler cache below is cold. A cold Debug build has grown from
+    # about an hour to 100-125 minutes on a hosted runner, and a slow runner was cancelled at
+    # 120 minutes seven steps before the end of the build. The limit leaves room for that and
+    # the tests.
+    timeout-minutes: 180
     env:
       CCACHE_BASEDIR: ${{ github.workspace }}
       CCACHE_MAXSIZE: 2G

@@ -614,6 +614,10 @@ struct AgentWorkflow::Impl
                                 {
                                 }
                                 Complete(request.node.id, capturedEra, std::move(result));
+                                // A joined thread's id can be given to the next thread created,
+                                // so this one leaves the owned set while it is still alive.
+                                std::lock_guard owned(mutex);
+                                std::erase(jobIds, std::this_thread::get_id());
                             });
                         jobIds.push_back(jobs.back().get_id());
                         ObserveLocked();
@@ -656,6 +660,9 @@ struct AgentWorkflow::Impl
         }
         changed.notify_all();
         Drain();
+        // Likewise the runner's own id, once its last callback has run.
+        std::lock_guard owned(mutex);
+        runnerId = {};
     }
     Json EncodeLocked() const
     {
@@ -1033,6 +1040,48 @@ std::optional<WorkflowArtifact> AgentWorkflow::AcceptedArtifact() const
     if (parent == impl->nodes.end() || !parent->artifact || parent->history.empty() || !parent->history.back().view.verified)
         return std::nullopt;
     return parent->artifact;
+}
+std::optional<WorkflowArtifact> AgentWorkflow::CandidateArtifact() const
+{
+    std::lock_guard lock(impl->mutex);
+    if (impl->summary.state != WorkflowState::AwaitingAcceptance || impl->cancellation.stop_requested())
+        return std::nullopt;
+    const auto parent =
+        std::find_if(impl->nodes.begin(), impl->nodes.end(), [](const auto& node) { return node.spec.role == WorkflowRole::Parent; });
+    // Succeeded, not merely AwaitingAcceptance: right after EvaluateParent the summary still
+    // awaits acceptance while the parent attempt is only waiting to run.
+    if (parent == impl->nodes.end() || parent->view.state != WorkflowState::Succeeded || !parent->artifact || parent->history.empty() ||
+        !parent->history.back().view.verified || !parent->history.back().artifact)
+        return std::nullopt;
+    return parent->history.back().artifact;
+}
+bool AgentWorkflow::AcceptCandidate(const ArtifactReference& expected, std::string& error)
+{
+    {
+        std::lock_guard lock(impl->mutex);
+        const auto parent = std::find_if(
+            impl->nodes.begin(), impl->nodes.end(), [](const auto& node) { return node.spec.role == WorkflowRole::Parent; });
+        if (impl->summary.state != WorkflowState::AwaitingAcceptance || impl->cancellation.stop_requested() ||
+            parent == impl->nodes.end() || parent->view.state != WorkflowState::Succeeded || !parent->artifact ||
+            parent->history.empty() || !parent->history.back().view.verified)
+        {
+            error = "A verified parent deliverable is required before acceptance.";
+            return false;
+        }
+        if (expected.nodeId != parent->spec.id || expected.id != parent->artifact->id || expected.version != parent->artifact->version ||
+            expected.hash != parent->artifact->hash)
+        {
+            error = "The examined deliverable is no longer the workflow's current candidate.";
+            return false;
+        }
+        impl->summary.parentDecision = ParentDecision::Accept;
+        impl->summary.state = WorkflowState::Accepted;
+        impl->Transition(*parent, WorkflowState::Accepted);
+        impl->ObserveLocked();
+    }
+    error.clear();
+    impl->Drain();
+    return true;
 }
 bool AgentWorkflow::Start(WorkflowSpec spec, runtime::RuntimeStamp stamp, Provider provider, std::string& error, Observer observer)
 {

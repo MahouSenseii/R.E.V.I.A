@@ -182,7 +182,29 @@ class ReviaWindow final : public QMainWindow
         Message,
         SelfInquiry,
         InvestigationChecking,
-        InvestigationFindings
+        InvestigationFindings,
+        // A task Revia handed to her agents from chat, shown under the reply that did it.
+        DelegatedTask
+    };
+
+    // What a delegated-task card follows and last showed. The text is kept, not recomputed,
+    // once the session reports on another task or none, so an old card still says honestly
+    // how its own task ended.
+    struct DelegatedCard
+    {
+        std::string workflowId;
+        std::uint64_t originTurnId = 0;
+        QString objective;
+        // The last phase the session published for this task, used once it no longer
+        // reports on the task directly.
+        std::optional<revia::runtime::DelegatedTaskStatus> published;
+        QString publishedDetail;
+        QString status;
+        QString progress;
+        // Running, as far as the session last said: the only state that offers Cancel.
+        bool active = true;
+        // What the shown text was computed from. A poll that changes none of it renders nothing.
+        QString basis;
     };
 
     struct ChatEntry
@@ -209,15 +231,40 @@ class ReviaWindow final : public QMainWindow
         QString renderedBody;
         // The files sent with a user message, shown under it.
         std::vector<AttachmentChip> attachments;
+        // Set for EntryKind::DelegatedTask only.
+        DelegatedCard delegated;
     };
 
     // Appends one of Revia's working entries. `detail` is the supporting evidence, shown
     // only when the user expands it.
     void AppendWorkEntry(EntryKind kind, const QString& body, const QString& detail, quint64 taskId, int round);
+    // Chat delegation. Agent Studio and every task card are refreshed together from one read
+    // of the workflow and the delegated task, so the two views can never disagree.
+    // `transcriptChanged` renders the chat even when no card's text changed.
+    void RefreshAgentWorkflowViews(bool transcriptChanged = false);
+    // A Delegation event: starts a card on submission and records each later phase.
+    // Returns whether it added an entry to the transcript.
+    bool ObserveDelegation(const revia::runtime::RuntimeEvent& event);
+    // True when the card's shown text changed.
+    bool UpdateTaskCard(ChatEntry& entry, const revia::agents::WorkflowSnapshot& snapshot,
+        const std::optional<revia::runtime::DelegatedTaskView>& task);
+    // Appends the held card, unless a card for its task is already on screen. The caller
+    // trims and renders; true when it appended.
+    bool PlaceHeldTaskCard();
+    // By task id, never by a stored index: trimming shifts every index.
+    [[nodiscard]] std::optional<std::size_t> FindTaskCard(const std::string& workflowId) const;
+    // The submission arrives mid-turn, before the reply it belongs under, so its card waits
+    // here until that reply is on screen. One workflow owner means one card at most.
+    std::optional<ChatEntry> heldTaskCard;
+    // The latest conversation turn seen to end, so a submission arriving after its own turn
+    // is placed at once instead of waiting for a reply that has already been shown.
+    std::uint64_t lastFinishedConversationTurn = 0;
     // Display only. Turning this off hides the blocks and changes nothing about whether
     // the investigation runs -- enablement lives in the runtime settings, not here.
     bool showWorkSummaries = true;
-    void RenderChat();
+    // `keepReaderPosition` leaves a reader who scrolled up where they were; otherwise the
+    // transcript follows its newest line, as it always has.
+    void RenderChat(bool keepReaderPosition = false);
     // The cached body HTML of one entry, converted again only when its text changed.
     const QString& RenderedBody(ChatEntry& entry);
     // Consecutive entries from one non-user speaker read as one message: streamed speech
@@ -375,6 +422,7 @@ class ReviaWindow final : public QMainWindow
     QCheckBox* speakWhenAwayCheck = nullptr;
     QCheckBox* aiFilterCheck = nullptr;
     QSpinBox* initiativeMaxSpin = nullptr;
+    QComboBox* delegationModeCombo = nullptr;
     QSpinBox* resourceSampleSpin = nullptr;
     QLabel* preferenceStatus = nullptr;
     QLabel* presencePhaseValue = nullptr;

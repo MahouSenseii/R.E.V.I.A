@@ -270,6 +270,18 @@ void TestShippedSettingsSelectA32KMainContext()
     document["conversation"]["deliberation"] = "ponder";
     std::ofstream(invalid) << document.dump(2);
     Check(!configManager(invalid.string(), "Profiles").LoadSettings(rejected), "An unknown deliberation mode passed validation.");
+
+    // Delegation from chat waits to be asked until a qualification run shows it helps.
+    Check(shipped.conversation.delegation == "on_request", "The shipped settings do not delegate only on request.");
+    document["conversation"]["deliberation"] = "native";
+    document["conversation"]["delegation"] = "auto";
+    std::ofstream(invalid) << document.dump(2);
+    appSettings automatic;
+    Check(configManager(invalid.string(), "Profiles").LoadSettings(automatic) && automatic.conversation.delegation == "auto",
+        "A valid delegation mode was refused.");
+    document["conversation"]["delegation"] = "sometimes";
+    std::ofstream(invalid) << document.dump(2);
+    Check(!configManager(invalid.string(), "Profiles").LoadSettings(rejected), "An unknown delegation mode passed validation.");
 }
 
 void TestPronounRecallUsesTheLatestAdmittedTopic()

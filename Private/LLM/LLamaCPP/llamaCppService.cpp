@@ -2348,6 +2348,7 @@ responseOutput llamaCppService::GeneratePlannerResponse(const std::string& syste
     {
         if (stopToken.stop_requested() || preemptionToken.stop_requested())
         {
+            output.bPreempted = preemptionToken.stop_requested() && !stopToken.stop_requested();
             output.reason = operation + (preemptionToken.stop_requested()
                 ? " was preempted by interactive inference."
                 : " was cancelled.");
