@@ -26,6 +26,7 @@
 #include <QMessageBox>
 #include <QMouseEvent>
 #include <QPainter>
+#include <QPlainTextEdit>
 #include <QPushButton>
 #include <QResizeEvent>
 #include <QScrollArea>
@@ -37,6 +38,7 @@
 #include <QStackedWidget>
 #include <QStyle>
 #include <QStyledItemDelegate>
+#include <QTextEdit>
 #include <QTimer>
 #include <QVBoxLayout>
 
@@ -216,6 +218,31 @@ bool ResetNeedsNoQuestion(const SettingDescriptor& descriptor, const bool shownO
 bool IsWheelGuarded(const QObject* object)
 {
     return dynamic_cast<const QAbstractSpinBox*>(object) != nullptr || dynamic_cast<const QComboBox*>(object) != nullptr;
+}
+
+// The control being edited when focus is in one: a spin box, which always holds a value, or an
+// editable combo box, line or text editor that holds some text. The search box is not one; Esc there
+// clears the query.
+QWidget* EditedControl(QWidget* focus, const QWidget* dialog, const QLineEdit* search)
+{
+    // A spin box or combo box first, since the line edit inside one may be what has focus.
+    for (QWidget* widget = focus; widget != nullptr && widget != dialog; widget = widget->parentWidget())
+    {
+        if (auto* spin = dynamic_cast<QAbstractSpinBox*>(widget))
+            return spin->isReadOnly() ? nullptr : spin;
+        if (auto* combo = dynamic_cast<QComboBox*>(widget))
+            return combo->isEditable() && !combo->currentText().isEmpty() ? combo : nullptr;
+    }
+    for (QWidget* widget = focus; widget != nullptr && widget != dialog; widget = widget->parentWidget())
+    {
+        if (auto* line = dynamic_cast<QLineEdit*>(widget))
+            return line != search && !line->isReadOnly() && !line->text().isEmpty() ? line : nullptr;
+        if (auto* plain = dynamic_cast<QPlainTextEdit*>(widget))
+            return !plain->isReadOnly() && !plain->toPlainText().isEmpty() ? plain : nullptr;
+        if (auto* rich = dynamic_cast<QTextEdit*>(widget))
+            return !rich->isReadOnly() && !rich->toPlainText().isEmpty() ? rich : nullptr;
+    }
+    return nullptr;
 }
 
 // Paints a section's search hit count at the right edge of its row, in the secondary text colour
@@ -1182,6 +1209,23 @@ void SettingsDialog::GuardWheel(QWidget* root)
     }
 }
 
+void SettingsDialog::CancelEdit(QWidget* editor)
+{
+    for (const auto& owned : rows)
+    {
+        Row& row = *owned;
+        if (!row.inlineValue || row.control != editor)
+            continue;
+        // The value beside a profile switch goes back to the saved one. Leaving the spin reports
+        // editingFinished, which now finds nothing changed, so a second Esc can close Settings.
+        ShowInlineValue(row, row.inlineStored);
+        if (row.toggle->isEnabled())
+            row.toggle->setFocus(Qt::OtherFocusReason);
+        return;
+    }
+    // Any other editor keeps what was typed and the focus: its owner saves or discards it.
+}
+
 void SettingsDialog::ReadRows(const std::vector<Row*>& wanted)
 {
     std::vector<SettingKeyRef> keys;
@@ -1906,6 +1950,19 @@ bool SettingsDialog::eventFilter(QObject* watched, QEvent* event)
 
 void SettingsDialog::keyPressEvent(QKeyEvent* event)
 {
+    if (event->key() == Qt::Key_Escape)
+    {
+        // Esc never closes Settings from a control being edited, the rule panel windows follow
+        // (design spec 3.4). Hiding the dialog would save a value typed into a spin box when it
+        // loses focus, and throw away a list typed into a hosted editor (onHide reverts those), so
+        // Esc would mean save in one place and discard in another, unseen in both.
+        if (QWidget* editor = EditedControl(focusWidget(), this, search))
+        {
+            CancelEdit(editor);
+            event->accept();
+            return;
+        }
+    }
     if (event->key() == Qt::Key_Escape && !search->text().isEmpty())
     {
         // Esc clears the search first and closes the dialog only once it is empty.

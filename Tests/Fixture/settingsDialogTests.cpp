@@ -878,6 +878,16 @@ void CheckDialog(Expect& expect, revia::runtime::ReviaSession& session)
         fake.refuseProfileWrites = false;
         emit temperature->editingFinished();
         expect(fake.profileWrites.size() == 2, "the value put back after a refusal is not written again");
+        // Esc while a value is being typed puts the saved one back and writes nothing, rather than
+        // closing Settings, which would save the typed value as the spin lost focus.
+        auto* temperatureSwitch = dialog.findChild<QCheckBox*>(QStringLiteral("sw_profile_temperatureOverride"));
+        temperature->setFocus(Qt::TabFocusReason);
+        temperature->setValue(1.5);
+        const bool typing = temperature->hasFocus();
+        PressKey(temperature, Qt::Key_Escape);
+        expect(typing && dialog.isVisible() && qFuzzyCompare(temperature->value(), 1.1) && fake.profileWrites.size() == 2,
+            "Esc in a profile spin restores the saved value, writes nothing and leaves Settings open");
+        expect(temperatureSwitch && temperatureSwitch->hasFocus(), "the focus moves to the spin's switch, so a second Esc can close Settings");
     }
 
     // "Reset to default" never makes the change a switch would have asked about. The overlay's
@@ -987,6 +997,48 @@ void CheckDialog(Expect& expect, revia::runtime::ReviaSession& session)
     expect(stack->currentWidget() == dialog.SectionPage(SettingsSection::Permissions) && pointer &&
                pointer->parentWidget()->property("highlight").toBool(),
         "FocusSetting reaches a hosted switch");
+
+    // Esc in a list being typed in a hosted editor keeps Settings open, the text and the focus: closing
+    // would throw the list away (the window reverts unsaved lists when Settings hides). Tab leaves
+    // the editor, and Esc in an empty one closes Settings as usual.
+    dialog.ShowSection(SettingsSection::Permissions);
+    Settle();
+    if (auto* executables = panel->findChild<QPlainTextEdit*>(QStringLiteral("processApprovedExecutables")))
+    {
+        const int hidesBefore = hides;
+        executables->setFocus(Qt::TabFocusReason);
+        executables->setPlainText(QStringLiteral("C:\\Tools\\fixture.exe"));
+        PressKey(executables, Qt::Key_Escape);
+        expect(dialog.isVisible() && hides == hidesBefore && executables->hasFocus() && executables->toPlainText() == "C:\\Tools\\fixture.exe",
+            "Esc in a hosted list editor keeps Settings open with the typed list");
+        PressKey(executables, Qt::Key_Tab);
+        expect(!executables->hasFocus() && executables->toPlainText() == "C:\\Tools\\fixture.exe", "Tab leaves the list editor without typing a tab");
+        panel->RevertUnsavedLists();
+        executables->setFocus(Qt::TabFocusReason);
+        PressKey(executables, Qt::Key_Escape);
+        expect(executables->toPlainText().isEmpty() && !dialog.isVisible() && hides == hidesBefore + 1, "Esc in an empty list editor closes Settings");
+        dialog.show();
+        dialog.activateWindow();
+        Settle();
+    }
+    else
+    {
+        expect(false, "the hosted panel needs its approved executables editor");
+    }
+    // A spin box in a custom row: the window saves it when it loses focus, so Esc leaves it alone.
+    {
+        dialog.ShowSection(SettingsSection::Chat);
+        Settle();
+        int finished = 0;
+        const auto connection = QObject::connect(spinner, &QSpinBox::editingFinished, [&finished]() { ++finished; });
+        spinner->setFocus(Qt::TabFocusReason);
+        const bool spinnerFocused = spinner->hasFocus();
+        PressKey(spinner, Qt::Key_Escape);
+        expect(spinnerFocused && dialog.isVisible() && spinner->hasFocus() && finished == 0,
+            "Esc in a custom row's spin box neither closes Settings nor finishes the edit");
+        QObject::disconnect(connection);
+        search->setFocus(Qt::OtherFocusReason);
+    }
 
     // The wheel over a value control that has no focus scrolls the page instead of changing the value:
     // the profile spins save the profile, the text size applies at once, and one notch down from the

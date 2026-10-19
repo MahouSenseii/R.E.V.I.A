@@ -120,6 +120,7 @@ private:
     void WriteProfileValue(const std::string& key, double value);
     void ShowInlineValue(Row& row, double value);
     void GuardWheel(QWidget* root);
+    void CancelEdit(QWidget* editor);
     void ReadRows(const std::vector<Row*>& rows);
     void SetDisplay(Row& row, bool storedValue);
     [[nodiscard]] bool StoredValue(const std::string& key, bool& value) const;

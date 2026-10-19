@@ -49,6 +49,10 @@ that every boolean preference and every owner-settings key has a row.
   first and closes Settings second. Ctrl+F focuses it and Down moves into the section list.
   Enter does nothing by itself in Settings; Space turns a focused switch or presses a focused
   button.
+- **Typing in a box.** Esc never closes Settings while you are typing in a number box or a text
+  box that holds text. In the temperature or reply limit beside a profile switch it puts the saved
+  value back and moves to the switch; in any other box it leaves what you typed alone, and Tab
+  moves on (the approved executables and site lists take Tab as "next", not as a character).
 - **Scrolling.** The mouse wheel changes a number box or a drop-down list only after you have
   clicked or tabbed into it; over one you have not, it scrolls the page. This includes the
   "Requested tasks" mode in Permissions, where one notch would otherwise switch to Free mode.

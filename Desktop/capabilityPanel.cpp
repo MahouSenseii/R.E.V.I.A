@@ -462,6 +462,9 @@ CapabilityPanel::CapabilityPanel(revia::runtime::ReviaSession& inputSession, Dis
     approvedExecutablesEdit->setAccessibleName("Approved executable paths");
     approvedExecutablesEdit->setPlaceholderText("C:\\Tools\\program.exe");
     approvedExecutablesEdit->setLineWrapMode(QPlainTextEdit::NoWrap);
+    // One entry per line, so Tab moves on instead of typing a tab: in Settings, Esc keeps the
+    // typed list and the focus, and Tab is the keyboard's way out.
+    approvedExecutablesEdit->setTabChangesFocus(true);
     approvedExecutablesEdit->setMinimumHeight(96);
     approvedExecutablesEdit->setMaximumHeight(160);
     executableLabel->setBuddy(approvedExecutablesEdit);
@@ -815,6 +818,7 @@ QFrame* CapabilityPanel::CreateInteractiveBrowserCard()
     approvedOriginsEdit->setAccessibleName("Approved browser site origins");
     approvedOriginsEdit->setPlaceholderText("https://example.com\nhttps://app.example.com:8443");
     approvedOriginsEdit->setLineWrapMode(QPlainTextEdit::NoWrap);
+    approvedOriginsEdit->setTabChangesFocus(true); // as for approvedExecutablesEdit
     approvedOriginsEdit->setMinimumHeight(96);
     approvedOriginsEdit->setMaximumHeight(160);
     originsLabel->setBuddy(approvedOriginsEdit);
