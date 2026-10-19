@@ -158,8 +158,15 @@ class Backend
                     nlohmann::json{{"succeeded", false}, {"message", Sentinel}, {"device_name", Sentinel}}.dump(), "application/json");
             });
         server.new_task_queue = [] { return new httplib::ThreadPool(4); };
-        port = server.bind_to_any_port("127.0.0.1");
-        Check(port > 0 && port <= 65503 && design.bind_to_port("127.0.0.1", port + 32), "Could not bind cue fixture pair.");
+        // The design service lives at port + 32, which another process on a busy runner may already hold. Each attempt
+        // keeps the previous socket bound, so the next ephemeral port is a different one.
+        bool paired = false;
+        for (int attempt = 0; attempt < 20 && !paired; ++attempt)
+        {
+            port = server.bind_to_any_port("127.0.0.1");
+            paired = port > 0 && port <= 65503 && design.bind_to_port("127.0.0.1", port + 32);
+        }
+        Check(paired, "Could not bind cue fixture pair.");
         thread = std::jthread([&] { server.listen_after_bind(); });
         designThread = std::jthread([&] { design.listen_after_bind(); });
         Check(WaitUntil([&] { return server.is_running() && design.is_running(); }), "Cue fixture pair did not start.");

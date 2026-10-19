@@ -80,17 +80,22 @@ test('browser HTTP -> relay -> loopback WS bridge -> native ReplyPublic -> seria
   const after=(await api('/v1/messages',a.token,{text:'What shape is the leaf?',idempotencyKey:randomUUID()})).body;
   await until(async()=>(await api('/v1/messages/'+after.requestId,a.token)).body.state==='completed','after preemption');
   assert.ok(!JSON.stringify(requests.at(-1)).includes('CANCELLED_INPUT_CANARY'));
-  await api('/v1/session',a.token,undefined,'DELETE');
+  assert.equal((await api('/v1/session',a.token,undefined,'DELETE')).status,204);
   assert.equal((await api('/v1/messages/'+first.requestId,a.token)).status,401);
   for(let i=0;i<11;i++){
     const visitor=(await api('/v1/sessions',null,{inviteCode})).body;
     const turn=(await api('/v1/messages',visitor.token,{text:'Describe a maple leaf.',idempotencyKey:randomUUID()})).body;
     await until(async()=>{const r=await api('/v1/messages/'+turn.requestId,visitor.token);assert.notEqual(r.body.state,'failed','Ending guests must release native live capacity');return r.body.state==='completed';},'sequential guest '+i);
-    await api('/v1/session',visitor.token,undefined,'DELETE');
+    assert.equal((await api('/v1/session',visitor.token,undefined,'DELETE')).status,204);
   }
   const disabled=await fetch(`http://127.0.0.1:${localPort}/web/v1/control`,{method:'POST',headers:{Authorization:`Bearer ${localToken}`,'Content-Type':'application/json'},body:JSON.stringify({enabled:false,paused:false})});
   assert.equal((await disabled.json()).state,'offline');
+  // Status reads offline as soon as the connector forwards native's offline readiness. That
+  // closes old sessions to new work at once, but the relay keeps terminal polling until host
+  // loss, and the connector disconnects only after it has ended native contexts. Wait for the
+  // disconnect to revoke guest b rather than assuming status offline already did.
   await until(async()=>(await api('/v1/status')).body.state==='offline','owner disable stopped connector');
-  assert.equal((await api('/v1/messages/'+second.requestId,b.token)).status,401);
+  assert.equal((await api('/v1/messages',b.token,{text:'Describe maple leaves.',idempotencyKey:randomUUID()})).status,401);
+  await until(async()=>{const r=await api('/v1/messages/'+second.requestId,b.token);if(r.status===401)return true;assert.deepEqual([r.status,r.body.state],[200,'completed'],'Only terminal polling may remain before the connector disconnects');return false;},'connector disconnect revoked guest tokens');
   native.stdin.write('quit\n');const [code]=await exited;assert.equal(code,0);assert.equal(stderr,'');
 });
