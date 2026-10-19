@@ -64,6 +64,79 @@ if(WIN32 AND REVIA_BUILD_DESKTOP)
     endif()
 endif()
 
+# Once objects are cached, a Debug build is mostly linking: about eighty executables each
+# pull in ReviaFoundation, a static library of roughly a gigabyte with debug information.
+# GNU ld takes seconds and up to several gigabytes of memory per executable; LLVM's lld
+# links the same objects about ten times faster in a fraction of the memory. The objects,
+# and so the code under test, are identical with either linker.
+#
+# Opt-in, because it needs LLVM's ld.lld on PATH. CI turns it on. On Windows the toolchain,
+# Qt and build paths must be free of spaces: lld reads GCC's response files for long links
+# with Windows quoting, so a spaced path in one fails to open.
+# lld also takes a symbol from any archive whatever the order and ignores --start-group,
+# so a link line can work with lld and fail with GNU ld. CI relinks a few executables
+# with GNU ld to catch that.
+option(REVIA_USE_LLD "Link with LLVM lld instead of GNU ld when the compiler can run it" OFF)
+
+function(revia_use_lld)
+    if(MSVC)
+        message(WARNING "REVIA_USE_LLD applies to GCC and Clang; keeping the default linker.")
+        return()
+    endif()
+
+    # Ask the compiler which linker it really runs. A GCC configured with an absolute
+    # --with-ld (Debian's MinGW cross compiler is one) does not fail when there is no
+    # ld.lld beside that path: it quietly links with GNU ld, and the build stays slow.
+    execute_process(
+            COMMAND "${CMAKE_CXX_COMPILER}" -fuse-ld=lld -Wl,--version
+            RESULT_VARIABLE probeResult
+            OUTPUT_VARIABLE probeOutput
+            ERROR_VARIABLE probeError)
+    # The linker prints its version on stdout ("LLD 20.1.8 ...", or "GNU ld ..."); the
+    # driver's command line and any "cannot find 'ld'" error go to stderr.
+    string(REGEX MATCH "LLD [0-9][0-9.]*" lldVersion "${probeOutput}")
+    if(NOT probeResult EQUAL 0 OR NOT lldVersion)
+        string(REGEX MATCH "^[^\n]+" probeText "${probeOutput}")
+        if(NOT probeText)
+            string(REGEX MATCH "[^\n]*error[^\n]*" probeText "${probeError}")
+        endif()
+        message(WARNING
+                "REVIA_USE_LLD is ON, but ${CMAKE_CXX_COMPILER} does not link with lld, "
+                "so the build keeps GNU ld and its slow links. Put LLVM's bin directory, "
+                "which holds ld.lld, on PATH and configure again.\n"
+                "The compiler's linker reported: ${probeText}")
+        return()
+    endif()
+
+    set(lldOptions -fuse-ld=lld)
+    if(MINGW)
+        # lld reserves a 1 MiB stack for the main thread where GNU ld reserves 2 MiB, and
+        # threads started without an explicit size get the same reservation. Keep GNU
+        # ld's size so deep -O0 call chains behave as they do with the default linker.
+        list(APPEND lldOptions -Wl,--stack,2097152)
+    endif()
+
+    # A whole program, with its startup code and runtime libraries, has to link too.
+    include(CheckCXXSourceCompiles)
+    set(CMAKE_REQUIRED_LINK_OPTIONS ${lldOptions})
+    check_cxx_source_compiles("int main() { return 0; }" REVIA_LLD_LINKS_A_PROGRAM)
+    if(NOT REVIA_LLD_LINKS_A_PROGRAM)
+        message(WARNING
+                "REVIA_USE_LLD is ON and ${lldVersion} was found, but a test program did "
+                "not link with it, so the build keeps GNU ld. The configure log under "
+                "CMakeFiles/ has the linker's error.")
+        return()
+    endif()
+
+    # Directory-wide, so every executable below links with it, the test fixtures too.
+    add_link_options(${lldOptions})
+    message(STATUS "Revia: linking with ${lldVersion}")
+endfunction()
+
+if(REVIA_USE_LLD)
+    revia_use_lld()
+endif()
+
 include(FetchContent)
 
 # Prevent cpp-httplib from using Windows API calls that MinGW may not expose correctly.

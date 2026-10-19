@@ -33,7 +33,7 @@ async function setup(t, behavior = {}) {
       response?.end(JSON.stringify({ requestId: body.requestId, state: 'cancelled' }));
       return res.end(JSON.stringify({ requestId: body.requestId, state: 'cancelled' }));
     }
-    if (req.url === '/web/v1/end') return res.end(JSON.stringify({ state: 'ended' }));
+    if (req.url === '/web/v1/end') { await behavior.endGate; return res.end(JSON.stringify({ state: 'ended' })); }
     assert.fail('Bridge forwarded an unapproved native route');
   });
   native.listen(0, '127.0.0.1'); await once(native, 'listening');
@@ -112,6 +112,24 @@ test('authoritative native offline cancels work and permanently stops the connec
   assert.equal(calls.length, callCount, 'Stopped connector must cease readiness polling');
   readiness('online'); await wait(200);
   assert.equal((await api('/v1/status')).body.state, 'offline', 'Re-enabling native requires starting a fresh connector process');
+});
+
+test('owner disable shows offline before the connector disconnects; only the disconnect revokes guest tokens', async t => {
+  let release; const endGate = new Promise(resolve => { release = resolve; });
+  const { api, session, submit, calls, readiness } = await setup(t, { endGate });
+  const s = await session(), r = await submit(s);
+  const path = '/v1/messages/' + r.requestId;
+  await until(async () => (await api(path, s.token)).body.state === 'completed');
+  readiness('offline');
+  try {
+    await until(async () => (await api('/v1/status')).body.state === 'offline');
+    // The connector forwards offline, then ends native contexts before it disconnects. While
+    // native holds that end, the relay already reads offline but still has the host.
+    await until(() => calls.some(c => c.path === '/web/v1/end' && c.body.sessionId === s.sessionId));
+    assert.equal((await api('/v1/messages', s.token, { text: 'more', idempotencyKey: randomUUID() })).status, 401);
+    assert.deepEqual((await api(path, s.token)).body, { requestId: r.requestId, state: 'completed', text: 'Reply: Hello' });
+  } finally { release(); }
+  await until(async () => (await api(path, s.token)).status === 401);
 });
 
 test('owner disable during relay outage stops reconnect attempts before the relay returns', async t => {
