@@ -1,6 +1,7 @@
 #include "chatMarkdown.h"
 
-#include <QColor>
+#include "theme.h"
+
 #include <QStringList>
 #include <QTextBlock>
 #include <QTextCursor>
@@ -60,6 +61,8 @@ struct Rewrite
 
 QString RenderUntrustedMarkdown(const QString& text)
 {
+    // Colours are baked into the returned HTML, so the transcript re-renders on a theme change.
+    const theme::Tokens& tokens = theme::Current();
     QTextDocument document;
     document.setMarkdown(KeepLineBreaks(text), QTextDocument::MarkdownFeatures(QTextDocument::MarkdownDialectGitHub | QTextDocument::MarkdownNoHTML));
 
@@ -68,6 +71,7 @@ QString RenderUntrustedMarkdown(const QString& text)
     {
         const bool code = IsCodeBlock(block);
         const int heading = block.blockFormat().headingLevel();
+        const bool quote = block.blockFormat().intProperty(QTextFormat::BlockQuoteLevel) > 0;
         for (auto fragmentIt = block.begin(); !fragmentIt.atEnd(); ++fragmentIt)
         {
             const QTextFragment fragment = fragmentIt.fragment();
@@ -78,6 +82,12 @@ QString RenderUntrustedMarkdown(const QString& text)
             rewrite.position = fragment.position();
             rewrite.length = fragment.length();
             bool changed = false;
+            if (quote)
+            {
+                // A quoted passage reads as someone else's words: quieter than the reply.
+                format.setForeground(tokens.textSecondary);
+                changed = true;
+            }
             if (heading > 0)
             {
                 // A reply heading is a section label inside a chat bubble, not a page title.
@@ -104,7 +114,7 @@ QString RenderUntrustedMarkdown(const QString& text)
                 format.clearProperty(QTextFormat::IsAnchor);
                 format.clearProperty(QTextFormat::AnchorHref);
                 format.clearProperty(QTextFormat::AnchorName);
-                format.setForeground(QColor(QStringLiteral("#8fd3ff")));
+                format.setForeground(tokens.link);
                 format.setFontUnderline(true);
                 const QString shown = fragment.text();
                 if (!target.isEmpty() && !shown.contains(target) && !target.endsWith(shown))
@@ -116,7 +126,7 @@ QString RenderUntrustedMarkdown(const QString& text)
                 format.setFontFamilies(MonospaceFamilies);
                 format.setFontFixedPitch(true);
                 if (!code)
-                    format.setBackground(QColor(QStringLiteral("#1a2940")));
+                    format.setBackground(tokens.codeBackground);
                 changed = true;
             }
             if (changed)
@@ -143,7 +153,7 @@ QString RenderUntrustedMarkdown(const QString& text)
         {
             QTextCharFormat plain = rewrite.format;
             plain.setFontUnderline(false);
-            plain.setForeground(QColor(QStringLiteral("#93a4bd")));
+            plain.setForeground(tokens.textSecondary);
             cursor.setPosition(rewrite.position + rewrite.length);
             cursor.insertText(rewrite.suffix, plain);
         }
@@ -158,7 +168,7 @@ QString RenderUntrustedMarkdown(const QString& text)
         format.setBottomMargin(std::min<qreal>(format.bottomMargin(), 2));
         if (IsCodeBlock(block))
         {
-            format.setBackground(QColor(QStringLiteral("#0b1424")));
+            format.setBackground(tokens.codeBackground);
             format.setLeftMargin(6);
             format.setRightMargin(6);
         }

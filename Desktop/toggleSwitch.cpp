@@ -1,27 +1,20 @@
 #include "toggleSwitch.h"
 
-#include <QColor>
+#include "theme.h"
+
+#include <QFocusEvent>
 #include <QPainter>
-#include <QPainterPath>
 #include <QRectF>
 
 namespace
 {
-constexpr int SwitchWidth = 46;
-constexpr int SwitchHeight = 26;
-constexpr int KnobInset = 3;
-
-QColor AccentColor(const ToggleSwitch::Accent accent)
-{
-    switch (accent)
-    {
-        case ToggleSwitch::Accent::Violet: return QColor("#9A65E8");
-        case ToggleSwitch::Accent::Amber:  return QColor("#F3A446");
-        case ToggleSwitch::Accent::Red:    return QColor("#E55454");
-        case ToggleSwitch::Accent::Cyan:   break;
-    }
-    return QColor("#55E8F2");
-}
+// The visible track is 40x22. The widget adds 4px on every side for the keyboard focus ring,
+// which sits 2px outside the track and is 2px wide.
+constexpr int TrackWidth = 40;
+constexpr int TrackHeight = 22;
+constexpr int RingMargin = 4;
+constexpr qreal OffKnob = 12.0;
+constexpr qreal OnKnob = 16.0;
 }
 
 ToggleSwitch::ToggleSwitch(const Accent inputAccent, QWidget* const parent)
@@ -31,18 +24,24 @@ ToggleSwitch::ToggleSwitch(const Accent inputAccent, QWidget* const parent)
     setFocusPolicy(Qt::StrongFocus);
 }
 
+ToggleSwitch::Accent ToggleSwitch::SwitchAccent() const
+{
+    return accent;
+}
+
 QSize ToggleSwitch::sizeHint() const
 {
-    return {SwitchWidth, SwitchHeight};
+    return {TrackWidth + 2 * RingMargin, TrackHeight + 2 * RingMargin};
 }
 
 QSize ToggleSwitch::minimumSizeHint() const
 {
-    return {SwitchWidth, SwitchHeight};
+    return sizeHint();
 }
 
 void ToggleSwitch::paintEvent(QPaintEvent*)
 {
+    const revia::desktop::theme::Tokens& tokens = revia::desktop::theme::Current();
     QPainter painter(this);
     painter.setRenderHint(QPainter::Antialiasing, true);
     if (!isEnabled())
@@ -52,50 +51,59 @@ void ToggleSwitch::paintEvent(QPaintEvent*)
         painter.setOpacity(0.38);
     }
 
-    const qreal top = (height() - SwitchHeight) / 2.0;
-    const QRectF track(0.5, top + 0.5, SwitchWidth - 1.0, SwitchHeight - 1.0);
-    const qreal radius = track.height() / 2.0;
-    const QColor tint = AccentColor(accent);
+    const QRectF track(RingMargin, (height() - TrackHeight) / 2.0, TrackWidth, TrackHeight);
     const bool on = isChecked();
-
-    QColor fill = on ? tint : QColor("#1D2A45");
-    QColor border = on ? tint : QColor("#2C3D5F");
     if (on)
     {
-        fill.setAlpha(52);
-        border.setAlpha(165);
-    }
-
-    painter.setPen(QPen(border, 1.0));
-    painter.setBrush(fill);
-    painter.drawRoundedRect(track, radius, radius);
-
-    const qreal knobDiameter = SwitchHeight - (KnobInset * 2);
-    const qreal knobLeft = on
-        ? track.right() - KnobInset - knobDiameter + 0.5
-        : track.left() + KnobInset - 0.5;
-    const QRectF knob(knobLeft, track.top() + KnobInset, knobDiameter, knobDiameter);
-
-    if (on)
-    {
-        // A soft halo only in the on state, so a screen of switches does not glow.
-        QColor halo = tint;
-        halo.setAlpha(60);
         painter.setPen(Qt::NoPen);
-        painter.setBrush(halo);
-        painter.drawEllipse(knob.adjusted(-3.0, -3.0, 3.0, 3.0));
+        painter.setBrush(tokens.accent);
+        painter.drawRoundedRect(track, track.height() / 2.0, track.height() / 2.0);
+        const QRectF knob(track.right() - 3.0 - OnKnob, track.center().y() - OnKnob / 2.0, OnKnob, OnKnob);
+        painter.setBrush(tokens.textOnAccent);
+        painter.drawEllipse(knob);
     }
-
-    painter.setPen(Qt::NoPen);
-    painter.setBrush(on ? tint : QColor("#7789A5"));
-    painter.drawEllipse(knob);
-
-    if (hasFocus())
+    else
     {
-        QColor focusRing = tint;
-        focusRing.setAlpha(200);
-        painter.setPen(QPen(focusRing, 1.4));
+        // A 2px outline drawn on the track's inside edge, so on and off share one outline.
+        const QRectF outline = track.adjusted(1.0, 1.0, -1.0, -1.0);
+        painter.setPen(QPen(tokens.switchOff, 2.0));
         painter.setBrush(Qt::NoBrush);
-        painter.drawRoundedRect(track.adjusted(-2.5, -2.5, 2.5, 2.5), radius + 2.5, radius + 2.5);
+        painter.drawRoundedRect(outline, outline.height() / 2.0, outline.height() / 2.0);
+        const QRectF knob(track.left() + 5.0, track.center().y() - OffKnob / 2.0, OffKnob, OffKnob);
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(tokens.switchOff);
+        painter.drawEllipse(knob);
     }
+
+    if (hasFocus() && keyboardFocus)
+    {
+        // Keyboard focus only: a click gives focus too, and a ring after every click is noise.
+        painter.setOpacity(1.0);
+        const QRectF ring = track.adjusted(-3.0, -3.0, 3.0, 3.0);
+        painter.setPen(QPen(tokens.focusRing, 2.0));
+        painter.setBrush(Qt::NoBrush);
+        painter.drawRoundedRect(ring, ring.height() / 2.0, ring.height() / 2.0);
+    }
+}
+
+// The ring follows the keyboard: it survives the window losing and regaining activation or a
+// popup opening and closing, which would otherwise wipe it from a switch the owner tabbed to.
+void ToggleSwitch::focusInEvent(QFocusEvent* const event)
+{
+    keyboardFocus = revia::desktop::theme::KeyboardFocusAfter(keyboardFocus, *event);
+    QCheckBox::focusInEvent(event);
+    update();
+}
+
+void ToggleSwitch::focusOutEvent(QFocusEvent* const event)
+{
+    keyboardFocus = revia::desktop::theme::KeyboardFocusAfter(keyboardFocus, *event);
+    QCheckBox::focusOutEvent(event);
+    update();
+}
+
+bool ToggleSwitch::hitButton(const QPoint& position) const
+{
+    // The whole switch toggles, not only the small indicator box QCheckBox would test.
+    return rect().contains(position);
 }

@@ -1,7 +1,19 @@
 <RCC>
   <qresource prefix="/revia">
     <file>revia.qss</file>
-    <file>spin-up.svg</file>
-    <file>spin-down.svg</file>
+    <file>reviaTheme.qss</file>
+    <file>reviaContrast.qss</file>
+    <file>spin-up-light.svg</file>
+    <file>spin-up-dark.svg</file>
+    <file>spin-down-light.svg</file>
+    <file>spin-down-dark.svg</file>
+    <file>chevron-down-light.svg</file>
+    <file>chevron-down-dark.svg</file>
+    <file>check-light.svg</file>
+    <file>check-dark.svg</file>
+    <file>check-on-accent-light.svg</file>
+    <file>check-on-accent-dark.svg</file>
+    <file>radio-dot-light.svg</file>
+    <file>radio-dot-dark.svg</file>
   </qresource>
 </RCC>

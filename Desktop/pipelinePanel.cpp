@@ -1,7 +1,6 @@
 #include "pipelinePanel.h"
 
 #include <QAbstractItemView>
-#include <QColor>
 #include <QHeaderView>
 #include <QLabel>
 #include <QTableWidget>
@@ -10,15 +9,20 @@
 
 namespace
 {
-    QColor PhaseColor(const QString& phase)
+    using revia::desktop::theme::Role;
+
+    // Holds the Role of a toned cell; the colour itself is derived from the current theme.
+    constexpr int ToneRole = Qt::UserRole + 7;
+
+    Role PhaseTone(const QString& phase)
     {
         if (phase == "Error" || phase == "Unavailable" || phase == "Missing")
         {
-            return QColor("#ff8da1");
+            return Role::Danger;
         }
         if (phase == "Degraded" || phase == "Hard only" || phase == "Flagged")
         {
-            return QColor("#f4c56a");
+            return Role::Warning;
         }
         if (phase == "Running" || phase == "Thinking" || phase == "Generating" ||
             phase == "Speaking" || phase == "Recording" || phase == "Transcribing" ||
@@ -28,15 +32,15 @@ namespace
             phase == "Researching" || phase == "SpeechDetected" ||
             phase == "Received")
         {
-            return QColor("#79d9ff");
+            return Role::Accent;
         }
         if (phase == "Ready" || phase == "Generated" || phase == "Saved" || phase == "Backfilled" ||
             phase == "Watching" || phase == "Healthy" || phase == "HandsFree" ||
             phase == "Replied" || phase == "Spoke")
         {
-            return QColor("#69e2c4");
+            return Role::Success;
         }
-        return QColor("#aab9cd");
+        return Role::TextSecondary;
     }
 }
 
@@ -86,10 +90,31 @@ PipelinePanel::PipelinePanel(QWidget* parent)
     {
         const int row = EnsureRow(component);
         SetCell(row, 1, "-");
-        SetCell(row, 2, "Waiting", QColor("#7f91aa"));
+        SetCell(row, 2, "Waiting", Role::TextSecondary);
         SetCell(row, 3, "0");
         SetCell(row, 4, "-");
         SetCell(row, 5, "No event yet.");
+    }
+    themeListener = revia::desktop::theme::AddListener([this]() { ApplyTones(); });
+}
+
+PipelinePanel::~PipelinePanel()
+{
+    revia::desktop::theme::RemoveListener(themeListener);
+}
+
+void PipelinePanel::ApplyTones()
+{
+    for (int row = 0; row < table->rowCount(); ++row)
+    {
+        for (int column = 0; column < table->columnCount(); ++column)
+        {
+            QTableWidgetItem* item = table->item(row, column);
+            if (item != nullptr && item->data(ToneRole).isValid())
+            {
+                item->setForeground(revia::desktop::theme::RoleColor(static_cast<Role>(item->data(ToneRole).toInt())));
+            }
+        }
     }
 }
 
@@ -103,11 +128,11 @@ int PipelinePanel::EnsureRow(const QString& component)
     const int row = table->rowCount();
     table->insertRow(row);
     rows.emplace(component, row);
-    SetCell(row, 0, component, QColor("#dceaff"));
+    SetCell(row, 0, component);
     return row;
 }
 
-void PipelinePanel::SetCell(const int row, const int column, const QString& text, const QColor& color)
+void PipelinePanel::SetCell(const int row, const int column, const QString& text, const std::optional<Role> tone)
 {
     QTableWidgetItem* item = table->item(row, column);
     if (item == nullptr)
@@ -116,9 +141,10 @@ void PipelinePanel::SetCell(const int row, const int column, const QString& text
         table->setItem(row, column, item);
     }
     item->setText(text);
-    if (color.isValid())
+    if (tone.has_value())
     {
-        item->setForeground(color);
+        item->setData(ToneRole, static_cast<int>(*tone));
+        item->setForeground(revia::desktop::theme::RoleColor(*tone));
     }
 }
 
@@ -135,9 +161,9 @@ void PipelinePanel::Observe(const revia::runtime::RuntimeEvent& event)
     const int row = EnsureRow(component);
     if (!event.resource.empty())
     {
-        SetCell(row, 1, QString::fromStdString(event.resource), QColor("#c5d6ea"));
+        SetCell(row, 1, QString::fromStdString(event.resource));
     }
-    SetCell(row, 2, phase, PhaseColor(phase));
+    SetCell(row, 2, phase, PhaseTone(phase));
     SetCell(row, 3, QString::number(event.queueDepth));
     SetCell(row, 4, event.elapsedMilliseconds >= 0.0
         ? QString::number(event.elapsedMilliseconds, 'f', 1) + " ms"
