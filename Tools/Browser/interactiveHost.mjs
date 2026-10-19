@@ -61,9 +61,10 @@ export function validateOperation(request, current) {
 
 class CdpPipe {
   constructor(child) {
-    this.child = child; this.next = 1; this.pending = new Map(); this.listeners = new Map(); this.buffer = '';
+    this.child = child; this.next = 1; this.pending = new Map(); this.listeners = new Map(); this.buffer = ''; this.closed = '';
     child.stdio[4].setEncoding('utf8');
     child.stdio[4].on('data', chunk => {
+      if (this.closed) return;
       this.buffer += chunk;
       if (this.buffer.length > 4 * 1024 * 1024) { child.kill(); return; }
       for (;;) {
@@ -78,13 +79,22 @@ class CdpPipe {
           Promise.resolve(listener(message.params ?? {}, message.sessionId)).catch(() => {});
       }
     });
-    child.once('exit', () => { for (const value of this.pending.values()) { clearTimeout(value.timer); value.reject(new Error('Owned browser exited.')); } this.pending.clear(); });
+    // A dead browser or pipe fails its commands at once instead of at their timers; a pipe error must not crash the host.
+    child.once('exit', () => this.close('Owned browser exited.'));
+    child.once('error', () => this.close('The owned browser could not be launched.'));
+    for (const stream of [child.stdio[3], child.stdio[4]]) stream.on('error', () => { this.close('The owned browser pipe failed.'); child.kill(); });
   }
   on(method, callback) { this.listeners.set(method, [...(this.listeners.get(method) ?? []), callback]); }
+  close(message) {
+    this.closed ||= message;
+    for (const value of this.pending.values()) { clearTimeout(value.timer); value.reject(new Error(this.closed)); }
+    this.pending.clear();
+  }
   send(method, params = {}, sessionId, timeout = 5000) {
+    if (this.closed) return Promise.reject(new Error(this.closed));
     const id = this.next++;
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => { this.pending.delete(id); reject(new Error('Browser operation timed out.')); }, timeout);
+      const timer = setTimeout(() => { this.pending.delete(id); reject(new Error(`Browser operation timed out (${method}).`)); }, timeout);
       this.pending.set(id, { resolve, reject, timer });
       this.child.stdio[3].write(`${JSON.stringify({ id, method, params, ...(sessionId ? { sessionId } : {}) })}\0`);
     });
@@ -102,37 +112,46 @@ export class InteractiveBrowser {
     const executable = candidates.find(candidate => candidate && existsSync(candidate));
     if (!executable) throw new Error('No installed Chromium browser was found.');
     await mkdir(this.profile, { recursive: true });
-    this.child = spawn(executable, [`--user-data-dir=${this.profile}`, '--remote-debugging-pipe',
+    const child = this.child = spawn(executable, [`--user-data-dir=${this.profile}`, '--remote-debugging-pipe',
       '--edge-skip-compat-layer-relaunch', '--no-first-run', '--no-default-browser-check', '--disable-background-mode',
       '--disable-component-update', '--disable-sync', '--disable-extensions', '--disable-features=msEdgeFirstRunExperience',
       '--disable-quic', '--force-webrtc-ip-handling-policy=disable_non_proxied_udp', '--new-window', 'about:blank'],
     { stdio: ['ignore', 'ignore', 'ignore', 'pipe', 'pipe'], windowsHide: true });
-    this.cdp = new CdpPipe(this.child);
-    await this.cdp.send('Browser.setDownloadBehavior', { behavior: 'deny' });
-    const { targetInfos } = await this.cdp.send('Target.getTargets');
-    const target = targetInfos.find(value => value.type === 'page');
-    if (!target) throw new Error('The owned browser did not create a page.');
-    this.target = target.targetId;
-    const attached = await this.cdp.send('Target.attachToTarget', { targetId: this.target, flatten: true });
-    this.page = attached.sessionId;
-    this.cdp.on('Target.attachedToTarget', info => {
-      if (info.targetInfo.targetId !== this.target) return this.cdp.send('Target.closeTarget', { targetId: info.targetInfo.targetId });
-    });
-    await this.cdp.send('Target.setAutoAttach', { autoAttach: true, waitForDebuggerOnStart: true, flatten: true });
-    this.cdp.on('Target.targetCreated', info => { if (info.targetInfo.type === 'page' && info.targetInfo.targetId !== this.target)
-      return this.cdp.send('Target.closeTarget', { targetId: info.targetInfo.targetId }); });
-    await this.cdp.send('Target.setDiscoverTargets', { discover: true });
-    this.cdp.on('Page.frameNavigated', (_, session) => { if (session === this.page) this.context = null; });
-    this.cdp.on('Page.javascriptDialogOpening', () => this.send('Page.handleJavaScriptDialog', { accept: false }));
-    this.cdp.on('Fetch.requestPaused', async request => {
-      const admitted = await this.allowedNetwork(request.request.url);
-      await this.send(admitted ? 'Fetch.continueRequest' : 'Fetch.failRequest', admitted ? { requestId: request.requestId }
-        : { requestId: request.requestId, errorReason: 'BlockedByClient' });
-    });
-    await this.send('Page.enable'); await this.send('Runtime.enable'); await this.send('Network.enable');
-    await this.send('Network.setBypassServiceWorker', { bypass: true });
-    await this.send('Network.setBlockedURLs', { urls: ['ws://*', 'wss://*'] });
-    await this.send('Fetch.enable', { patterns: [{ urlPattern: '*', requestStage: 'Request' }] });
+    const cdp = this.cdp = new CdpPipe(child);
+    try {
+      await cdp.send('Browser.setDownloadBehavior', { behavior: 'deny' });
+      const { targetInfos } = await cdp.send('Target.getTargets');
+      const target = targetInfos.find(value => value.type === 'page');
+      if (!target) throw new Error('The owned browser did not create a page.');
+      this.target = target.targetId;
+      const attached = await cdp.send('Target.attachToTarget', { targetId: this.target, flatten: true });
+      const page = this.page = attached.sessionId;
+      // Handlers answer through this browser's own pipe and page session, never through whichever browser is current by the
+      // time an awaited admission decision completes: interception ids restart in every browser.
+      const reply = (method, params) => cdp.send(method, params, page, Math.min(this.grant?.timeoutMs ?? 5000, 15000));
+      cdp.on('Target.attachedToTarget', info => {
+        if (info.targetInfo.targetId !== target.targetId) return cdp.send('Target.closeTarget', { targetId: info.targetInfo.targetId });
+      });
+      await cdp.send('Target.setAutoAttach', { autoAttach: true, waitForDebuggerOnStart: true, flatten: true });
+      cdp.on('Target.targetCreated', info => { if (info.targetInfo.type === 'page' && info.targetInfo.targetId !== target.targetId)
+        return cdp.send('Target.closeTarget', { targetId: info.targetInfo.targetId }); });
+      await cdp.send('Target.setDiscoverTargets', { discover: true });
+      cdp.on('Page.frameNavigated', (_, session) => { if (session === page) this.context = null; });
+      cdp.on('Page.javascriptDialogOpening', () => reply('Page.handleJavaScriptDialog', { accept: false }));
+      cdp.on('Fetch.requestPaused', async request => {
+        const admitted = await this.allowedNetwork(request.request.url);
+        await reply(admitted ? 'Fetch.continueRequest' : 'Fetch.failRequest', admitted ? { requestId: request.requestId }
+          : { requestId: request.requestId, errorReason: 'BlockedByClient' });
+      });
+      await this.send('Page.enable'); await this.send('Runtime.enable'); await this.send('Network.enable');
+      await this.send('Network.setBypassServiceWorker', { bypass: true });
+      await this.send('Network.setBlockedURLs', { urls: ['ws://*', 'wss://*'] });
+      await this.send('Fetch.enable', { patterns: [{ urlPattern: '*', requestStage: 'Request' }] });
+    } catch (error) {
+      // Never keep a half-configured browser: the next operation would skip start() and run without network admission.
+      cdp.close('The owned browser did not start.'); child.kill(); this.child = this.cdp = this.page = this.target = this.context = null;
+      throw error;
+    }
   }
   send(method, params = {}) { return this.cdp.send(method, params, this.page, Math.min(this.grant?.timeoutMs ?? 5000, 15000)); }
   async allowedNetwork(raw) {
