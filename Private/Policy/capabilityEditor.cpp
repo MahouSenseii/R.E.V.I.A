@@ -163,8 +163,12 @@ bool CapabilityEditor::SetInteractiveBrowser(
         stream.close();
         if (!data.is_object())
             throw std::invalid_argument("Capability configuration must be an object.");
-        data["browser"] = {{"enabled", settings.enabled}, {"navigate", settings.navigate}, {"interact", settings.interact},
-            {"allowLoopback", settings.allowLoopback}, {"allowTaskInteraction", settings.allowTaskInteraction},
+        // The risky browser grants sit inside the browser itself. Like the camera's and the guest's,
+        // they must not survive the browser being turned off and quietly return, unasked, when it
+        // is turned on again. Navigation alone is kept: it reads pages and asks nothing.
+        const bool enabled = settings.enabled;
+        data["browser"] = {{"enabled", enabled}, {"navigate", settings.navigate}, {"interact", enabled && settings.interact},
+            {"allowLoopback", enabled && settings.allowLoopback}, {"allowTaskInteraction", enabled && settings.allowTaskInteraction},
             {"approvedOrigins", settings.approvedOrigins}, {"timeoutMs", settings.timeoutMs}, {"maxTextBytes", settings.maxTextBytes},
             {"maxElements", settings.maxElements}, {"maxValueBytes", settings.maxValueBytes}};
         return ReplaceValidated(path, data, outError);
@@ -190,8 +194,12 @@ bool CapabilityEditor::SetProcessSettings(
         std::vector<std::string> executables;
         for (const auto& executable : settings.approvedExecutables)
             executables.push_back(actions::PathToUtf8(executable));
-        data["process"] = {{"enabled", settings.enabled}, {"approvedExecutables", executables},
-            {"allowCommandInterpreters", settings.allowCommandInterpreters}, {"allowTaskExecution", settings.allowTaskExecution},
+        // Shells and delegated use are narrower grants inside running programs at all: they are
+        // withdrawn with it rather than coming back unasked when it is turned on again.
+        const bool enabled = settings.enabled;
+        data["process"] = {{"enabled", enabled}, {"approvedExecutables", executables},
+            {"allowCommandInterpreters", enabled && settings.allowCommandInterpreters},
+            {"allowTaskExecution", enabled && settings.allowTaskExecution},
             {"maxTimeoutMs", settings.maxTimeoutMs}, {"maxOutputBytes", settings.maxOutputBytes},
             {"maxEnvironmentBytes", settings.maxEnvironmentBytes}, {"approvedEnvironmentNames", settings.approvedEnvironmentNames}};
         return ReplaceValidated(path, data, outError);

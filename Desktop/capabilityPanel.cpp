@@ -1075,6 +1075,9 @@ void CapabilityPanel::Refresh()
     processCheck->setChecked(settings.process.enabled);
     taskProcessCheck->setChecked(settings.process.allowTaskExecution);
     commandInterpreterCheck->setChecked(settings.process.allowCommandInterpreters);
+    // Shells and delegated use are grants inside running programs at all.
+    taskProcessCheck->setEnabled(settings.process.enabled);
+    commandInterpreterCheck->setEnabled(settings.process.enabled);
     if (!processSettingsDirty)
     {
         QStringList executablePaths;

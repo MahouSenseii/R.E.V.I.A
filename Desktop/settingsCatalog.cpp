@@ -806,6 +806,7 @@ std::vector<SettingDescriptor> BuildCatalog()
         .risk = Risk::Dangerous,
         .confirm = Confirm::TurningOn,
         .host = Host::CapabilityPanel,
+        .requiresAll = {"capabilities.process.enabled"},
         .allCompanions = true,
         .keywords = {"shell", "powershell", "cmd", "scripts", "interpreters"}});
     rows.push_back({.key = "capabilities.process.allowTaskExecution",
@@ -819,6 +820,7 @@ std::vector<SettingDescriptor> BuildCatalog()
         .risk = Risk::Dangerous,
         .confirm = Confirm::TurningOn,
         .host = Host::CapabilityPanel,
+        .requiresAll = {"capabilities.process.enabled"},
         .allCompanions = true,
         .keywords = {"tasks", "delegated", "agents", "programs"}});
     rows.push_back({.key = "virtualMachine.enabled",

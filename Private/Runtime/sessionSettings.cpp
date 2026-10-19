@@ -5,6 +5,8 @@
 
 #include <algorithm>
 #include <cstdlib>
+#include <nlohmann/json.hpp>
+#include <optional>
 #include <utility>
 #include <vector>
 
@@ -33,16 +35,32 @@ bool OwnerFlag(const appSettings& settings, const std::string& key, const bool f
     return value && value->is_boolean() ? value->get<bool>() : fallback;
 }
 
-// The owner settings that only mean something inside another one, each with its safe value. A
-// narrower setting must not survive the one it sits inside and quietly return when that one is
-// turned on again (the rule CapabilityEditor keeps for capabilities), so turning the outer one
-// off puts these back too.
-std::vector<std::pair<std::string, bool>> InnerOwnerSettings(const std::string& key)
+// An owner setting that only means something inside another one: the value it goes back to,
+// and, for a choice, the one value that is not safe (null when anything but the safe value is not).
+struct InnerOwnerSetting
+{
+    std::string key;
+    nlohmann::json safe;
+    nlohmann::json risky = nullptr;
+};
+
+// The owner settings that only mean something inside another one. A narrower setting must not
+// survive the one it sits inside and quietly return, without the question it asks, when that one
+// is turned on again (the rule CapabilityEditor keeps for capabilities), so turning the outer one
+// off puts these back too. Hard questions go back to "only when I ask", which the cloud's own
+// question covers.
+std::vector<InnerOwnerSetting> InnerOwnerSettings(const std::string& key)
 {
     if (key == "vision.enabled")
         return {{"vision.continuousAwareness", false}};
     if (key == "localApi.enabled")
         return {{"localApi.trustedPrivate", false}};
+    if (key == "llm.cloud.enabled")
+        return {{"llm.cloud.useFor", "ask", "hardTurns"}};
+    if (key == "improvement.enabled")
+        return {{"improvement.verify", false}};
+    if (key == "image.enabled")
+        return {{"image.offline", true}};
     std::string serverId;
     if (core::FindOwnerKey(key, &serverId) && !serverId.empty() && key.ends_with("].enabled"))
         return {{"mcp.servers[" + serverId + "].requireConfirmation", true}};
@@ -268,20 +286,28 @@ core::PreferenceResult ReviaSession::ResetOwnerSetting(const std::string& key)
 
 void ReviaSession::SecureInnerOwnerSettings(const std::string& key, core::PreferenceResult& result)
 {
-    const std::vector<std::pair<std::string, bool>> inner = InnerOwnerSettings(key);
+    const std::vector<InnerOwnerSetting> inner = InnerOwnerSettings(key);
     appSettings persisted;
     if (inner.empty() || !config.LoadSettings(persisted) || OwnerFlag(persisted, key, true))
         return;
-    for (const auto& [innerKey, safe] : inner)
+    for (const InnerOwnerSetting& setting : inner)
     {
-        if (OwnerFlag(persisted, innerKey, safe) == safe)
+        const std::optional<nlohmann::json> current = core::OwnerSettingValue(persisted, setting.key);
+        if (!current || *current == setting.safe || (!setting.risky.is_null() && *current != setting.risky))
             continue;
+        const bool choice = setting.safe.is_string();
+        const std::string shown = choice ? "\"" + setting.safe.get<std::string>() + "\"" : (setting.safe.get<bool>() ? "on" : "off");
         // Each goes through the ordinary write, so a live one also changes what is running.
         const core::PreferenceResult secured = WriteOwnerSetting(
-            innerKey, [&](core::SettingsFileEditor& editor, std::string& error) { return editor.SetBool(innerKey, safe, error); },
-            safe ? "on" : "off");
-        result.message += secured.succeeded ? " " + innerKey + " went back to " + (safe ? "on" : "off") + " with it."
-                                            : " " + innerKey + " could not go back to " + (safe ? "on" : "off") + ": " + secured.message;
+            setting.key,
+            [&](core::SettingsFileEditor& editor, std::string& error)
+            {
+                return choice ? editor.SetChoice(setting.key, setting.safe.get<std::string>(), error)
+                              : editor.SetBool(setting.key, setting.safe.get<bool>(), error);
+            },
+            shown);
+        result.message += secured.succeeded ? " " + setting.key + " went back to " + shown + " with it."
+                                            : " " + setting.key + " could not go back to " + shown + ": " + secured.message;
     }
 }
 

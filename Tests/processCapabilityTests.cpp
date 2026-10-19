@@ -44,6 +44,41 @@ public:
                 saved.browser.approvedOrigins == browser.approvedOrigins,
             "Browser permissions were not persisted and reloaded.");
     }
+    // Turning the browser or running programs off withdraws the narrower grants inside them, so
+    // turning it on again cannot bring a risky one back without its own question.
+    void VerifyInnerGrantsAreWithdrawn() const
+    {
+        const revia::policy::CapabilityEditor editor;
+        revia::browser::BrowserSettings browser;
+        browser.enabled = true;
+        browser.navigate = true;
+        browser.interact = true;
+        browser.allowTaskInteraction = true;
+        browser.allowLoopback = true;
+        browser.approvedOrigins = {"https://example.com"};
+        std::string error;
+        revia::actions::CapabilitySettings saved;
+        Require(editor.SetInteractiveBrowser(path, browser, error) && revia::policy::PermissionStore().Load(path, saved, error) &&
+                saved.browser.interact && saved.browser.allowTaskInteraction && saved.browser.allowLoopback,
+            "The browser's risky grants could not be given.");
+        browser.enabled = false;
+        Require(editor.SetInteractiveBrowser(path, browser, error) && revia::policy::PermissionStore().Load(path, saved, error) &&
+                !saved.browser.enabled && !saved.browser.interact && !saved.browser.allowTaskInteraction && !saved.browser.allowLoopback &&
+                saved.browser.navigate,
+            "A risky browser grant survived the browser being turned off.");
+
+        revia::process::ProcessSettings process;
+        process.enabled = true;
+        process.allowCommandInterpreters = true;
+        process.allowTaskExecution = true;
+        Require(editor.SetProcessSettings(path, process, error) && revia::policy::PermissionStore().Load(path, saved, error) &&
+                saved.process.allowCommandInterpreters && saved.process.allowTaskExecution,
+            "Shells and delegated programs could not be allowed.");
+        process.enabled = false;
+        Require(editor.SetProcessSettings(path, process, error) && revia::policy::PermissionStore().Load(path, saved, error) &&
+                !saved.process.enabled && !saved.process.allowCommandInterpreters && !saved.process.allowTaskExecution,
+            "Shells or delegated programs survived running programs being turned off.");
+    }
 private:
     std::filesystem::path path;
 };
@@ -71,4 +106,5 @@ void RunProcessCapabilityTests()
     Require(!file.Load(R"({"browser":{"interact":"yes"}})", settings, error), "Malformed browser interaction authority was accepted.");
     Require(file.Load("{}", settings, error), "Could not restore a valid policy for the editor check.");
     file.VerifyBrowserEdit();
+    file.VerifyInnerGrantsAreWithdrawn();
 }

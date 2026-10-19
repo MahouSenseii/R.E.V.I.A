@@ -36,9 +36,15 @@ that every boolean preference and every owner-settings key has a row.
   differs from the one in effect. "Restart now" restarts Revia; "Later" hides the banner until the
   count changes.
 - **Settings inside another.** Turning off "Let *{name}* see my screen", "Local API for other
-  apps" or "Connect *server*" also puts "Keep track of my screen", "Trust the local API as me" and
-  that server's "Ask before each tool call" back in their safe position, so turning the outer
-  switch on again never brings the inner one back unasked.
+  apps", "Connect *server*", "Allow the cloud model", "Self-improvement reviews" or "Picture
+  generation" also puts "Keep track of my screen", "Trust the local API as me", that server's "Ask
+  before each tool call", Hard questions (back to "Only when I ask"), "Build and test suggested
+  improvements" and "Let picture generation use the internet" back in their safe position. The
+  permissions keep the same rule: turning off "Interactive browser" withdraws "Click and fill in
+  forms", "Let tasks use the browser" and "Allow local test sites", and turning off "Run approved
+  programs" withdraws "Allow shells and scripts" and "Let tasks run programs" (which cannot be
+  turned on while it is off). Turning the outer switch on again never brings an inner one back
+  without its own question.
 - **Dependencies.** A switch whose requirement is off is disabled, and its tooltip says which
   switch to turn on first. Requirements are judged on saved values, so a restart-only parent still
   counts once you have changed it. "Works best with ..." is only a hint.

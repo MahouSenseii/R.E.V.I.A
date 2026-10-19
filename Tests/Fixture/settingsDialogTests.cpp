@@ -1435,8 +1435,12 @@ void CheckCapabilityPanel(Expect& expect, revia::runtime::ReviaSession& session)
     asksFirst("keyboardCheck", [](const Capabilities& saved) { return saved.desktopControl.keyboard; });
     asksFirst("launchCheck", [](const Capabilities& saved) { return saved.desktopControl.applicationLaunch; });
     asksFirst("processEnabled", [](const Capabilities& saved) { return saved.process.enabled; });
-    asksFirst("processTaskExecution", [](const Capabilities& saved) { return saved.process.allowTaskExecution; });
-    asksFirst("processCommandInterpreters", [](const Capabilities& saved) { return saved.process.allowCommandInterpreters; });
+    // Shells and delegated use are grants inside running programs at all.
+    for (const char* name : {"processTaskExecution", "processCommandInterpreters"})
+    {
+        auto* toggle = panel.findChild<QCheckBox*>(name);
+        expect(toggle && !toggle->isEnabled(), QString(name) + " must not be reachable while Run approved programs is off");
+    }
     // Chosen points, visual targets, command surfaces and unprompted work follow the pointer.
     turnOn("pointerCheck", [](const Capabilities& saved) { return saved.desktopControl.pointer; });
     asksFirst("visualTargetCheck", [](const Capabilities& saved) { return saved.desktopControl.visualTargeting; });
@@ -1453,6 +1457,22 @@ void CheckCapabilityPanel(Expect& expect, revia::runtime::ReviaSession& session)
     asksFirst("browserLoopback", [](const Capabilities& saved) { return saved.browser.allowLoopback; });
     turnOn("browserInteract", [](const Capabilities& saved) { return saved.browser.interact; });
     turnOn("processEnabled", [](const Capabilities& saved) { return saved.process.enabled; });
+    asksFirst("processTaskExecution", [](const Capabilities& saved) { return saved.process.allowTaskExecution; });
+    asksFirst("processCommandInterpreters", [](const Capabilities& saved) { return saved.process.allowCommandInterpreters; });
+    turnOn("processCommandInterpreters", [](const Capabilities& saved) { return saved.process.allowCommandInterpreters; });
+    // A risky grant inside the browser does not survive the browser being turned off, so turning
+    // the browser (which does not ask) back on cannot bring it back unasked.
+    if (auto* browser = panel.findChild<QCheckBox*>("browserEnabled"))
+    {
+        browser->click();
+        Settle();
+        browser->click();
+        Settle();
+        auto* interact = panel.findChild<QCheckBox*>("browserInteract");
+        expect(browser->isChecked() && !session.Capabilities().browser.interact && interact && !interact->isChecked(),
+            "turning the browser off and on again brought Click and fill in forms back without its question");
+    }
+    turnOn("browserInteract", [](const Capabilities& saved) { return saved.browser.interact; });
     // Turning off never asks and saves at once too.
     for (const char* name : {"browserInteract", "processEnabled"})
     {
@@ -1465,6 +1485,7 @@ void CheckCapabilityPanel(Expect& expect, revia::runtime::ReviaSession& session)
     }
     const Capabilities afterOff = session.Capabilities();
     expect(!afterOff.browser.interact && !afterOff.process.enabled, "turning switches off is saved at once");
+    expect(!afterOff.process.allowCommandInterpreters, "shells and scripts survived running programs being turned off");
 
     // A switch still showing a value from before a change made elsewhere (/internet off) commits only
     // its own flag: turning on automatic lookups must not turn internet lookups back on unasked.

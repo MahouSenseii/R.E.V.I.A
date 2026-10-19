@@ -469,6 +469,24 @@ void AnInnerOwnerSettingGoesBackWithItsParent()
     Check(session.ResetOwnerSetting("localApi.enabled").succeeded && !session.BooleanSettings().at("localApi.trustedPrivate").value,
         "Trusting the local API survived a reset that turned the local API off.");
 
+    // Hard questions go back to "only when I ask" with the cloud; a choice that was already safe stays.
+    Check(session.SetOwnerSetting("llm.cloud.enabled", true).succeeded && session.SetOwnerChoice("llm.cloud.useFor", "hardTurns").succeeded,
+        "Could not send hard questions to the cloud.");
+    Check(session.SetOwnerSetting("llm.cloud.enabled", false).succeeded && session.OwnerChoice("llm.cloud.useFor") == "ask",
+        "Sending hard questions to the cloud survived the cloud being turned off.");
+    Check(session.SetOwnerChoice("llm.cloud.useFor", "never").succeeded && session.SetOwnerSetting("llm.cloud.enabled", true).succeeded &&
+              session.SetOwnerSetting("llm.cloud.enabled", false).succeeded && session.OwnerChoice("llm.cloud.useFor") == "never",
+        "Turning the cloud off changed a cloud choice that was already safe.");
+    Check(session.SetOwnerSetting("improvement.enabled", true).succeeded && session.SetOwnerSetting("improvement.verify", true).succeeded,
+        "Could not build and test suggested improvements.");
+    Check(session.SetOwnerSetting("improvement.enabled", false).succeeded && !session.BooleanSettings().at("improvement.verify").value,
+        "Building model-written code survived self-improvement being turned off.");
+    if (session.SetOwnerSetting("image.enabled", true).succeeded && session.SetOwnerSetting("image.offline", false).succeeded)
+    {
+        Check(session.SetOwnerSetting("image.enabled", false).succeeded && session.BooleanSettings().at("image.offline").value,
+            "Picture downloads from the internet survived picture generation being turned off.");
+    }
+
     Check(session.SetOwnerSetting("mcp.servers[files].enabled", true).succeeded &&
               session.SetOwnerSetting("mcp.servers[files].requireConfirmation", false).succeeded,
         "Could not stop the MCP server asking before each call.");
