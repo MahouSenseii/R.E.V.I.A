@@ -97,6 +97,32 @@ QToolButton* IconButton(QWidget* parent, const char* objectName, const char* ico
     return button;
 }
 
+// The question Settings asks before a risky change, for the window's own controls in it: the
+// question itself as the message, the consequence under it, and Cancel as the default.
+void AskBeforeRiskyChoice(QWidget* parent, const QString& question, const QString& consequence, std::function<void()> accepted)
+{
+    auto* box = new QMessageBox(parent);
+    box->setObjectName("settingConfirmDialog");
+    box->setAttribute(Qt::WA_DeleteOnClose);
+    box->setWindowModality(Qt::WindowModal);
+    box->setIcon(QMessageBox::Warning);
+    box->setWindowTitle(question);
+    box->setTextFormat(Qt::PlainText);
+    box->setText(question);
+    box->setInformativeText(consequence + QStringLiteral(" You can change this back here at any time."));
+    QPushButton* accept = box->addButton(QStringLiteral("Turn on"), QMessageBox::AcceptRole);
+    accept->setProperty("destructive", true);
+    QPushButton* cancel = box->addButton(QMessageBox::Cancel);
+    box->setDefaultButton(cancel);
+    box->setEscapeButton(cancel);
+    QObject::connect(box, &QMessageBox::finished, parent, [box, accept, accepted = std::move(accepted)](int)
+    {
+        if (box->clickedButton() == accept)
+            accepted();
+    });
+    box->open();
+}
+
 QLabel* StatusChip(QWidget* parent, const char* objectName, const QString& text)
 {
     auto* label = new QLabel(text, parent);
@@ -273,15 +299,34 @@ void ReviaWindow::BuildSettingsDialog()
         {
             if (!backend.writeChoice || index < 0)
                 return;
-            cloudUseForCombo->setEnabled(false);
-            backend.writeChoice("llm.cloud.useFor", cloudUseForCombo->itemData(index).toString(),
-                [this](const desktop::SettingWrite result)
-                {
-                    cloudUseForCombo->setEnabled(true);
-                    if (!result.succeeded)
+            const QString choice = cloudUseForCombo->itemData(index).toString();
+            const auto write = [this, backend, choice]()
+            {
+                cloudUseForCombo->setEnabled(false);
+                backend.writeChoice("llm.cloud.useFor", choice,
+                    [this](const desktop::SettingWrite result)
+                    {
+                        cloudUseForCombo->setEnabled(true);
+                        // What was saved, whether the write took or not.
                         RefreshCloudUseFor();
-                    ShowStatus(result.message, result.succeeded ? 5000 : 8000);
-                });
+                        ShowStatus(result.message, result.succeeded ? 5000 : 8000);
+                    });
+            };
+            const QString saved = cloudUseForReader ? cloudUseForReader("llm.cloud.useFor") : QString();
+            if (choice == QStringLiteral("hardTurns") && saved != choice)
+            {
+                // Hard questions go to the cloud without being asked for each time, which the
+                // question on Allow the cloud model never covered; the saved choice stays shown
+                // until the answer.
+                RefreshCloudUseFor();
+                AskBeforeRiskyChoice(settingsDialog, QStringLiteral("Use the cloud for hard questions?"),
+                    QStringLiteral("Questions %1 judges hard go to the cloud model without you asking each time, with the "
+                                   "context that goes with them.")
+                        .arg(DisplayName()),
+                    write);
+                return;
+            }
+            write();
         });
     cloudUseForReader = backend.readChoice;
 

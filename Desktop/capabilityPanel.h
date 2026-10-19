@@ -74,6 +74,8 @@ private:
     // Puts the switch back off and asks; on "Turn on" the switch goes on again and apply runs.
     // Window-modal and non-blocking, so no nested event loop waits on the answer.
     void ConfirmTurnOn(ToggleSwitch* toggle, const QString& explanation, std::function<void()> apply);
+    // The shared question: Turn on or Cancel (the default), accepted runs only on Turn on.
+    void AskToConfirm(const QString& question, const QString& consequence, const QString& details, std::function<void()> accepted);
     void ShowInternetResult(const QString& text, bool error);
     [[nodiscard]] QString CompanionName() const;
     [[nodiscard]] QString Warning(const ToggleSwitch* toggle) const;

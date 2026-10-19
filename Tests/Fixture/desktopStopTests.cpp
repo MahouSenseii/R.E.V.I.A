@@ -1275,6 +1275,29 @@ struct ReviaWindowStopTests
         expect(window.Session().UserPreferences().initiativeMaxPerHour == outside - 1, "an edited number row must be saved");
         window.Session().SetPreference("initiative.maxPerHour", std::to_string(shown));
         window.RefreshPreferenceSpins();
+
+        // The window's own controls in Settings take the wheel only once focused, and choosing Hard
+        // questions, which sends turns to the cloud without asking each time, asks first.
+        window.OpenSettings("Models");
+        SettleLayouts();
+        expect(window.cloudUseForCombo->focusPolicy() == Qt::StrongFocus && window.initiativeMaxSpin->focusPolicy() == Qt::StrongFocus &&
+                   window.resourceSampleSpin->focusPolicy() == Qt::StrongFocus,
+            "the window's Settings controls must not change under a passing wheel");
+        const QString savedUse = window.cloudUseForReader ? window.cloudUseForReader("llm.cloud.useFor") : QString();
+        const int hard = window.cloudUseForCombo->findData(QStringLiteral("hardTurns"));
+        window.cloudUseForCombo->setCurrentIndex(hard);
+        emit window.cloudUseForCombo->activated(hard);
+        SettleLayouts();
+        auto* box = window.settingsDialog->findChild<QMessageBox*>("settingConfirmDialog");
+        expect(box && box->isVisible() && box->defaultButton() == box->button(QMessageBox::Cancel) &&
+                   window.cloudUseForCombo->currentIndex() != hard,
+            "choosing Hard questions must ask first and keep the saved choice shown meanwhile");
+        if (box)
+            box->button(QMessageBox::Cancel)->click();
+        SettleLayouts();
+        expect((window.cloudUseForReader ? window.cloudUseForReader("llm.cloud.useFor") : QString()) == savedUse,
+            "Cancel must keep the saved cloud choice");
+        window.settingsDialog->hide();
     }
 
     // Quit from a visible window: the shutdown's QApplication::quit() closes every window first and

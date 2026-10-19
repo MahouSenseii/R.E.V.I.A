@@ -500,6 +500,12 @@ void CheckCatalog(Expect& expect)
     const SettingDescriptor* microphone = FindSetting("speechRecognition.enabled");
     expect(microphone != nullptr && microphone->apply == SettingApply::LiveWhenOffRestartWhenOn,
         "turning the microphone off applies at once and turning it on after a restart");
+    // Screen capture is authority, like the camera: both screen switches ask before turning on.
+    for (const char* key : {"vision.enabled", "vision.continuousAwareness"})
+    {
+        const SettingDescriptor* row = FindSetting(key);
+        expect(row != nullptr && row->confirm == ConfirmWhen::TurningOn, Q(key) + " captures the screen and must ask before turning on");
+    }
 
     // Tool-server templates expand per server, with sanitised objectNames.
     const SettingDescriptor* confirmation = FindSetting("mcp.servers[*].requireConfirmation");
@@ -678,7 +684,11 @@ void CheckDialog(Expect& expect, revia::runtime::ReviaSession& session)
             expect(box->windowTitle() == "Turn on Trust the local API as me?", "the confirmation names the switch: " + box->windowTitle());
             expect(box->windowTitle() != "Confirm Revia action" && box->windowTitle() != "Approve this action", "reserved titles stay unused");
             expect(box->defaultButton() == box->button(QMessageBox::Cancel), "Cancel is the default button");
-            expect(box->text().contains("speaks as you") && box->text().contains("change this back"), "the warning explains the risk");
+            expect(box->text() == box->windowTitle(), "the question is the message itself, not only the caption");
+            expect(box->informativeText().contains("speaks as you") && box->informativeText().contains("change this back"),
+                "the warning explains the risk");
+            expect(ButtonWithText(box, "Turn on") && ButtonWithText(box, "Turn on")->property("destructive").toBool(),
+                "Turn on is drawn as the risky choice");
             expect(!trusted->isChecked() && fake.writes.size() == writes, "nothing changes while the question is open");
             box->button(QMessageBox::Cancel)->click();
             Settle();
@@ -711,55 +721,55 @@ void CheckDialog(Expect& expect, revia::runtime::ReviaSession& session)
     }
 
     // A write in flight keeps the switch busy until done runs.
-    if (auto* vision = dialog.findChild<QCheckBox*>(QStringLiteral("sw_vision_enabled")))
+    if (auto* review = dialog.findChild<QCheckBox*>(QStringLiteral("aiFilterCheck")))
     {
         fake.deferNext = true;
-        vision->click();
+        review->click();
         Settle();
-        const QLabel* status = RowLabel(&dialog, "sw_vision_enabledRow", "settingStatus");
-        expect(!vision->isEnabled() && status && !status->isHidden() && status->text().startsWith("Saving"),
+        const QLabel* status = RowLabel(&dialog, "aiFilterCheckRow", "settingStatus");
+        expect(!review->isEnabled() && status && !status->isHidden() && status->text().startsWith("Saving"),
             "a pending write disables the switch and says Saving");
         if (fake.deferred)
-            fake.deferred({true, QStringLiteral("Vision is on.")});
+            fake.deferred({true, QStringLiteral("AI review is on.")});
         Settle();
-        expect(vision->isEnabled() && vision->isChecked() && status && status->text() == "Vision is on." &&
+        expect(review->isEnabled() && review->isChecked() && status && status->text() == "AI review is on." &&
                    status->property("tone").toString() == "success",
             "the switch comes back with the backend's message when done runs");
-        expect(!changed.empty() && changed.back() == std::pair<std::string, bool>{"vision.enabled", true},
+        expect(!changed.empty() && changed.back() == std::pair<std::string, bool>{"responseFilter.aiReviewEnabled", true},
             "valueChanged runs after a successful write");
     }
     // A write whose answer never comes (the window drops answers for a retired session) does not keep
     // its row busy for good: AbandonPendingWrites releases it, and an answer that still arrives
     // afterwards neither finishes a newer write nor reports a change.
-    if (auto* vision = dialog.findChild<QCheckBox*>(QStringLiteral("sw_vision_enabled")))
+    if (auto* review = dialog.findChild<QCheckBox*>(QStringLiteral("aiFilterCheck")))
     {
-        const QLabel* status = RowLabel(&dialog, "sw_vision_enabledRow", "settingStatus");
+        const QLabel* status = RowLabel(&dialog, "aiFilterCheckRow", "settingStatus");
         fake.deferNext = true;
-        vision->click();
+        review->click();
         Settle();
         SettingDone lost = std::move(fake.deferred);
         fake.deferred = nullptr;
         dialog.AbandonPendingWrites();
-        expect(lost && vision->isEnabled() && vision->isChecked() && status && !status->text().startsWith("Saving"),
+        expect(lost && review->isEnabled() && review->isChecked() && status && !status->text().startsWith("Saving"),
             "AbandonPendingWrites enables the switch again, shows the value last read and drops Saving");
         dialog.Refresh();
-        expect(!vision->isChecked(), "the next Refresh shows what was saved");
+        expect(!review->isChecked(), "the next Refresh shows what was saved");
         const std::size_t notified = changed.size();
         fake.deferNext = true;
-        vision->click();
+        review->click();
         Settle();
         dialog.Refresh();
-        expect(!vision->isEnabled(), "a write in flight stays pending through Refresh");
+        expect(!review->isEnabled(), "a write in flight stays pending through Refresh");
         if (lost)
             lost({false, QStringLiteral("Late answer.")});
         Settle();
-        expect(!vision->isEnabled() && vision->isChecked() && status && status->text().startsWith("Saving") && changed.size() == notified,
+        expect(!review->isEnabled() && review->isChecked() && status && status->text().startsWith("Saving") && changed.size() == notified,
             "the abandoned write's late answer leaves the newer write pending");
         if (fake.deferred)
-            fake.deferred({true, QStringLiteral("Vision is on.")});
+            fake.deferred({true, QStringLiteral("AI review is on.")});
         fake.deferred = nullptr;
         Settle();
-        expect(vision->isEnabled() && vision->isChecked() && status && status->text() == "Vision is on." && changed.size() == notified + 1,
+        expect(review->isEnabled() && review->isChecked() && status && status->text() == "AI review is on." && changed.size() == notified + 1,
             "the newer write finishes with its own answer");
     }
     // A refused write puts the switch back and shows the error.
@@ -1031,8 +1041,8 @@ void CheckDialog(Expect& expect, revia::runtime::ReviaSession& session)
                    !verify->isChecked(),
             "once it is on, a reset can only leave it on or take it off, so it is offered and runs");
     }
-    if (auto* visionRow = dialog.findChild<QFrame*>(QStringLiteral("sw_vision_enabledRow")))
-        expect(ResetOffered(visionRow, false), "a switch that never asks offers its reset either way");
+    if (auto* reviewRow = dialog.findChild<QFrame*>(QStringLiteral("aiFilterCheckRow")))
+        expect(ResetOffered(reviewRow, false), "a switch that never asks offers its reset either way");
 
     // A renamed profile re-renders its group's title.
     fake.choices["profile.displayName"] = QStringLiteral("Evening");
@@ -1467,6 +1477,26 @@ void CheckCapabilityPanel(Expect& expect, revia::runtime::ReviaSession& session)
     else
     {
         expect(false, "the stale internet card fixture could not be set up");
+    }
+
+    // Free mode drops each requested task's first approval, so choosing it asks first; Cancel keeps
+    // the saved mode, whatever the combo box showed for a moment.
+    if (auto* mode = panel.findChild<QComboBox*>(QStringLiteral("taskApprovalMode")))
+    {
+        using revia::actions::ExecutionMode;
+        const ExecutionMode before = session.Capabilities().mode;
+        const int free = mode->findData(static_cast<int>(ExecutionMode::OwnerFullAccess));
+        mode->setCurrentIndex(free);
+        emit mode->activated(free);
+        QMessageBox* box = OpenConfirmation(&panel);
+        expect(box && box->text() == "Turn on Free mode?" && box->defaultButton() == box->button(QMessageBox::Cancel),
+            "choosing Free mode asks first, with Cancel as the default");
+        expect(session.Capabilities().mode == before && mode->currentData().toInt() == static_cast<int>(before),
+            "the saved mode stays selected while the question is open");
+        if (box)
+            box->button(QMessageBox::Cancel)->click();
+        Settle();
+        expect(session.Capabilities().mode == before, "Cancel keeps the saved task mode");
     }
 
     // Back to everything off, for the captures that follow.

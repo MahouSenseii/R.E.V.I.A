@@ -286,8 +286,12 @@ std::vector<SettingDescriptor> BuildCatalog()
         .group = "Screen",
         .label = "Let {name} see my screen",
         .description = "When you ask, {name} can take a screenshot and look at it on this PC.",
+        .warning = "A screenshot shows everything on your screens, including private messages and anything you are typing.",
         .store = Store::SettingsFile,
         .risk = Risk::Privacy,
+        // Screen capture is authority (PreferenceStore refuses it as a comfort setting), so it asks
+        // first like the camera does; an amendment to the design's section 5.4.
+        .confirm = Confirm::TurningOn,
         .allCompanions = true,
         .keywords = {"screen", "screenshot", "vision", "look"}});
     rows.push_back({.key = "vision.continuousAwareness",
@@ -297,8 +301,11 @@ std::vector<SettingDescriptor> BuildCatalog()
         .label = "Keep track of my screen",
         .description = "{name} keeps a short private summary of what is on screen, updated when windows change. Nothing is "
                        "clicked or typed from it.",
+        .warning = "{name} takes screenshots of your screens whenever windows change, without being asked, and keeps a summary "
+                   "of what is on them.",
         .store = Store::SettingsFile,
         .risk = Risk::Privacy,
+        .confirm = Confirm::TurningOn,
         .requiresAll = {"vision.enabled", "perception.enabled"},
         .allCompanions = true,
         .keywords = {"screen awareness", "continuous", "watch", "summary"}});

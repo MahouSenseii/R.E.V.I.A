@@ -1058,10 +1058,15 @@ void SettingsDialog::AskToConfirm(const std::string& key, const bool checked)
     box->setAttribute(Qt::WA_DeleteOnClose);
     box->setWindowModality(Qt::WindowModal);
     box->setIcon(QMessageBox::Warning);
-    box->setWindowTitle(QStringLiteral("%1 %2?").arg(checked ? QStringLiteral("Turn on") : QStringLiteral("Turn off"), label));
+    // The question is the message itself, not only the caption (small or missing on many setups),
+    // with the one-line consequence under it.
+    const QString question = QStringLiteral("%1 %2?").arg(checked ? QStringLiteral("Turn on") : QStringLiteral("Turn off"), label);
+    box->setWindowTitle(question);
     box->setTextFormat(Qt::PlainText);
-    box->setText(text + QStringLiteral("\n\nYou can change this back here at any time."));
+    box->setText(question);
+    box->setInformativeText(text + QStringLiteral(" You can change this back here at any time."));
     QPushButton* accept = box->addButton(checked ? QStringLiteral("Turn on") : QStringLiteral("Turn off"), QMessageBox::AcceptRole);
+    accept->setProperty("destructive", true);
     QPushButton* cancel = box->addButton(QMessageBox::Cancel);
     box->setDefaultButton(cancel);
     box->setEscapeButton(cancel);

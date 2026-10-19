@@ -118,7 +118,7 @@ void SetTone(QLabel* label, const QString& text, const bool error)
     label->style()->polish(label);
 }
 
-const QString ChangeBack = QStringLiteral("\n\nYou can change this back here at any time.");
+const QString ChangeBack = QStringLiteral(" You can change this back here at any time.");
 }
 
 bool CapabilityPanel::eventFilter(QObject* watched, QEvent* event)
@@ -295,9 +295,24 @@ CapabilityPanel::CapabilityPanel(revia::runtime::ReviaSession& inputSession, Dis
     {
         if (refreshing) return;
         const auto mode = static_cast<ExecutionMode>(taskApprovalMode->itemData(index).toInt());
-        const auto result = session.SetExecutionMode(mode);
-        SetStatus(QString::fromStdString(result.message), !result.succeeded);
-        Refresh();
+        const auto commit = [this, mode]()
+        {
+            const auto result = session.SetExecutionMode(mode);
+            SetStatus(QString::fromStdString(result.message), !result.succeeded);
+            Refresh();
+        };
+        if (mode == ExecutionMode::OwnerFullAccess && session.Capabilities().mode != ExecutionMode::OwnerFullAccess)
+        {
+            // Free mode drops the approval every requested task asks for at the start, so it asks
+            // first like the risky switches do; the saved mode stays selected until the answer.
+            Refresh();
+            AskToConfirm(QStringLiteral("Turn on Free mode?"),
+                QStringLiteral("Tasks you ask for start without asking you first. The permissions you granted still "
+                               "apply, and work outside a task's scope still stops."),
+                {}, commit);
+            return;
+        }
+        commit();
     });
 
     // ------------------------------------------------------------ internet group
@@ -877,28 +892,47 @@ void CapabilityPanel::ConfirmTurnOn(ToggleSwitch* toggle, const QString& explana
     const auto* descriptor = revia::desktop::FindSetting(toggle->objectName().toStdString());
     const QString label = descriptor != nullptr ? revia::desktop::WithCompanionName(descriptor->label, CompanionName())
                                                 : toggle->accessibleName();
+    // The switch's one-line warning under the question; the longer explanation stays one click
+    // away under Show Details.
+    const QString warning = Warning(toggle);
+    const QPointer<QCheckBox> target(toggle);
+    AskToConfirm(QStringLiteral("Turn on %1?").arg(label), warning.isEmpty() ? (explanation.isEmpty() ? label : explanation) : warning,
+        warning.isEmpty() || explanation == warning ? QString() : explanation,
+        [target, apply = std::move(apply)]()
+        {
+            if (target == nullptr || !target->isEnabled())
+                return;
+            {
+                const QSignalBlocker blocker(target);
+                target->setChecked(true);
+            }
+            apply();
+        });
+}
+
+void CapabilityPanel::AskToConfirm(const QString& question, const QString& consequence, const QString& details, std::function<void()> accepted)
+{
     auto* box = new QMessageBox(this);
     box->setObjectName("settingConfirmDialog");
     box->setAttribute(Qt::WA_DeleteOnClose);
     box->setWindowModality(Qt::WindowModal);
     box->setIcon(QMessageBox::Warning);
-    box->setWindowTitle(QStringLiteral("Turn on %1?").arg(label));
+    // The question is the message itself, not only the caption (small or missing on many setups).
+    box->setWindowTitle(question);
     box->setTextFormat(Qt::PlainText);
-    box->setText((explanation.isEmpty() ? label : explanation) + ChangeBack);
+    box->setText(question);
+    box->setInformativeText(consequence + ChangeBack);
+    if (!details.isEmpty())
+        box->setDetailedText(details);
     QPushButton* accept = box->addButton("Turn on", QMessageBox::AcceptRole);
+    accept->setProperty("destructive", true);
     QPushButton* cancel = box->addButton(QMessageBox::Cancel);
     box->setDefaultButton(cancel);
     box->setEscapeButton(cancel);
-    const QPointer<QCheckBox> target(toggle);
-    connect(box, &QMessageBox::finished, this, [box, accept, target, apply = std::move(apply)](int)
+    connect(box, &QMessageBox::finished, this, [box, accept, accepted = std::move(accepted)](int)
     {
-        if (box->clickedButton() != accept || target == nullptr || !target->isEnabled())
-            return;
-        {
-            const QSignalBlocker blocker(target);
-            target->setChecked(true);
-        }
-        apply();
+        if (box->clickedButton() == accept)
+            accepted();
     });
     box->open();
 }
