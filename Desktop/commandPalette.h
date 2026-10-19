@@ -60,6 +60,8 @@ class CommandPalette final : public QWidget
     // Only chats: the rail's search button and Ctrl+F while the sidebar is a rail.
     void OpenChats();
     void Close();
+    // Open from Open() until Close(), Esc, a click outside the card, a run, or the host hiding (to
+    // the tray). A minimised window keeps it open. While open, its input keeps the window's focus.
     [[nodiscard]] bool IsOpen() const;
     // The search icon in the input, by name.
     void SetIconProvider(std::function<QIcon(const char*)> provider);

@@ -257,6 +257,19 @@ CommandPalette::CommandPalette(QWidget* hostWidget) : QWidget(hostWidget), host(
     connect(dynamicDelay, &QTimer::timeout, this, [this]() { FlushDynamicSource(); });
     if (host)
         host->installEventFilter(this);
+    // The key handling below holds Tab inside the card, but anything else that moves focus under
+    // the scrim while the palette shows would hand that widget the keys, Esc and Enter included:
+    // a window shortcut (Ctrl+F, F6) or the window itself (a finished reply focuses the message
+    // box, where Esc stops a reply and Enter sends). The input takes focus straight back, so the
+    // palette keeps the keyboard until it closes. Another window taking focus is left alone;
+    // reactivating this one focuses the input again.
+    connect(static_cast<QApplication*>(QCoreApplication::instance()), &QApplication::focusChanged, this,
+        [this](QWidget*, QWidget* now)
+        {
+            if (isHidden() || now == nullptr || now == this || isAncestorOf(now) || now->window() != window())
+                return;
+            input->setFocus(Qt::OtherFocusReason);
+        });
 }
 
 void CommandPalette::SetCommands(std::vector<CommandEntry> entries)
@@ -310,18 +323,22 @@ void CommandPalette::OpenWith(const QString& query, const bool chats)
 
 void CommandPalette::Close()
 {
-    if (!isVisible())
+    // isHidden, not isVisible: with the window hidden to the tray the palette is still open, and
+    // a Close() then (the window locking) must still close it.
+    if (isHidden())
         return;
     dynamicDelay->stop();
     hide();
-    if (previousFocus && previousFocus->isVisible() && previousFocus->isEnabled())
+    // Visible to its window rather than visible: in a hidden window this makes it the widget that
+    // has focus when the window shows again.
+    if (previousFocus && previousFocus->isEnabled() && previousFocus->isVisibleTo(previousFocus->window()))
         previousFocus->setFocus(Qt::OtherFocusReason);
     previousFocus = nullptr;
 }
 
 bool CommandPalette::IsOpen() const
 {
-    return isVisible();
+    return !isHidden();
 }
 
 void CommandPalette::SetIconProvider(std::function<QIcon(const char*)> provider)
@@ -611,6 +628,10 @@ bool CommandPalette::eventFilter(QObject* watched, QEvent* event)
         setGeometry(host->rect());
         LayoutCard();
     }
+    // The window hidden (to the tray): the palette would come back with a stale query. A
+    // spontaneous hide is a minimise, which the window comes back from as it was.
+    if (watched == host && event->type() == QEvent::Hide && !event->spontaneous())
+        Close();
     if (watched == input && event->type() == QEvent::KeyPress)
     {
         switch (static_cast<QKeyEvent*>(event)->key())

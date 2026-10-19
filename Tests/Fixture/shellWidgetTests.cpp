@@ -377,6 +377,102 @@ void TestPalette(Results& results)
     Capture(&host, "shell-palette-narrow.png");
     palette->Close();
 
+    // Keywords count as titles do: an entry found only through one is listed, and a keyword's
+    // prefix (1000) beats a title that matches only as a subsequence, whatever the groups' order.
+    std::vector<CommandEntry> withKeywords = commands;
+    withKeywords.push_back(entry("action:settings", "Settings", "Actions"));
+    withKeywords.push_back(entry("setting:tts", "Speak replies", "Settings", "Settings › Voice"));
+    withKeywords.back().keywords = {"text to speech", "tts"};
+    palette->SetCommands(withKeywords);
+    palette->Open("tts");
+    Settle();
+    results.Expect(FuzzyScore("tts", "Speak replies") == -1 && FuzzyScore("tts", "Settings") > 0 && FuzzyScore("tts", "Settings") < 100,
+        "the keyword fixture: \"tts\" is not in Speak replies and only scattered in Settings");
+    bool settingsListed = false;
+    for (int row = 0; row < list->count(); ++row)
+        settingsListed = settingsListed || list->item(row)->text() == "Settings";
+    results.Expect(palette->CurrentId() == "setting:tts" && settingsListed,
+        "an entry that matches only through a keyword is listed, and its keyword prefix outranks a title subsequence");
+    palette->Close();
+    palette->SetCommands(commands);
+
+    // Focus moved under the open palette (a window shortcut such as Ctrl+F or F6, or the window
+    // focusing the message box when a reply finishes) comes straight back: no key, Esc or Enter
+    // included, reaches a field under the scrim while the palette shows.
+    before->setFocus();
+    Settle();
+    palette->Open("the");
+    Settle();
+    after->setFocus(Qt::ShortcutFocusReason);
+    Settle();
+    results.Expect(palette->IsOpen() && input->hasFocus() && input->text() == "the",
+        "focus moved under the open palette comes back to its input, query intact");
+    QMetaObject::invokeMethod(after, [after]() { after->setFocus(); }, Qt::QueuedConnection);
+    Settle();
+    results.Expect(palette->IsOpen() && input->hasFocus(), "a deferred focus change under the palette comes back too");
+    SendKey(QApplication::focusWidget(), Qt::Key_Escape);
+    Settle();
+    results.Expect(!palette->IsOpen() && before->hasFocus(), "Esc then closes the palette, not the field under it, and focus goes back");
+    // Another window taking focus leaves it open; it has the keyboard again when its window does.
+    palette->Open();
+    Settle();
+    QLineEdit elsewhere;
+    elsewhere.setObjectName("testElsewhere");
+    elsewhere.show();
+    elsewhere.activateWindow();
+    Settle();
+    elsewhere.setFocus();
+    Settle();
+    results.Expect(palette->IsOpen() && elsewhere.hasFocus(), "focus in another window leaves the palette open");
+    elsewhere.hide();
+    host.activateWindow();
+    Settle();
+    results.Expect(palette->IsOpen() && input->hasFocus(), "back in its window, the palette has the keyboard again");
+    palette->Close();
+
+    // As in the window, the host is a root panel inside a top-level window: hiding the window
+    // marks the palette invisible before the host hears of it. Hidden to the tray with the palette
+    // open, the palette closes rather than come back stale.
+    QWidget trayWindow;
+    trayWindow.setObjectName("testTrayWindow");
+    trayWindow.resize(700, 500);
+    auto* rootPanel = new QWidget(&trayWindow);
+    rootPanel->setObjectName("testRootPanel");
+    rootPanel->setGeometry(0, 0, 700, 500);
+    auto* message = new QLineEdit(rootPanel);
+    message->setObjectName("testTrayMessage");
+    auto* trayPalette = new CommandPalette(rootPanel);
+    trayPalette->SetCommands(commands);
+    trayWindow.show();
+    trayWindow.activateWindow();
+    Settle();
+    message->setFocus();
+    Settle();
+    trayPalette->Open("theme");
+    Settle();
+    results.Expect(trayPalette->IsOpen() && message->window()->isActiveWindow(), "the root panel's palette opens in the active window");
+    trayWindow.hide();
+    Settle();
+    results.Expect(!trayPalette->IsOpen(), "hiding the window closes the palette in its root panel");
+    trayWindow.show();
+    Settle();
+    results.Expect(trayPalette->isHidden(), "the palette stays closed when the window shows again");
+    // Offscreen does not activate a window shown again; its focus child is what activation focuses.
+    results.Expect(trayWindow.focusWidget() == message, "the window shows again with focus where it was before the palette");
+    // Opened while its window is hidden, it counts as open (it shows with the window), and a
+    // Close() meanwhile, the window locking, still closes it.
+    trayWindow.hide();
+    Settle();
+    trayPalette->Open("theme");
+    results.Expect(trayPalette->IsOpen(), "a palette opened while its window is hidden counts as open");
+    trayPalette->Close();
+    trayWindow.show();
+    Settle();
+    results.Expect(!trayPalette->IsOpen() && trayPalette->isHidden(), "Close() while the window is hidden closes the palette");
+    trayWindow.hide();
+    host.activateWindow();
+    Settle();
+
     // Locking while the palette is open (a companion switch, shutting down) stops it running
     // anything, from the keyboard or a click.
     palette->Open("theme");
