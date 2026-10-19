@@ -86,17 +86,18 @@ void ToggleSwitch::paintEvent(QPaintEvent*)
     }
 }
 
+// The ring follows the keyboard: it survives the window losing and regaining activation or a
+// popup opening and closing, which would otherwise wipe it from a switch the owner tabbed to.
 void ToggleSwitch::focusInEvent(QFocusEvent* const event)
 {
-    const Qt::FocusReason reason = event->reason();
-    keyboardFocus = reason == Qt::TabFocusReason || reason == Qt::BacktabFocusReason || reason == Qt::ShortcutFocusReason;
+    keyboardFocus = revia::desktop::theme::KeyboardFocusAfter(keyboardFocus, *event);
     QCheckBox::focusInEvent(event);
     update();
 }
 
 void ToggleSwitch::focusOutEvent(QFocusEvent* const event)
 {
-    keyboardFocus = false;
+    keyboardFocus = revia::desktop::theme::KeyboardFocusAfter(keyboardFocus, *event);
     QCheckBox::focusOutEvent(event);
     update();
 }

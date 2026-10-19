@@ -1,11 +1,13 @@
 #include "theme.h"
 
 #include <QAbstractButton>
+#include <QAbstractItemView>
 #include <QAction>
 #include <QApplication>
 #include <QByteArray>
 #include <QEvent>
 #include <QFile>
+#include <QFocusEvent>
 #include <QFont>
 #include <QLabel>
 #include <QMenu>
@@ -421,6 +423,7 @@ struct State
     Tokens contrast = MakeLight();
     std::vector<QPointer<QWidget>> roots;
     QPointer<QObject> watcher;
+    QPointer<QObject> focusTracker;
     std::map<int, std::function<void()>> listeners;
     int nextListener = 1;
     std::vector<ButtonBinding> buttons;
@@ -648,6 +651,37 @@ protected:
     }
 };
 
+// A click focuses an item view as well as the keyboard does, and a ring after every click on a
+// list is noise, so revia.qss draws an item view's ring only while kbdFocus is set. One filter on
+// the application keeps that property for every item view, whoever built it.
+class KeyboardFocusTracker final : public QObject
+{
+public:
+    using QObject::QObject;
+
+protected:
+    bool eventFilter(QObject* watched, QEvent* event) override
+    {
+        if (event->type() == QEvent::FocusIn || event->type() == QEvent::FocusOut)
+        {
+            if (auto* const view = qobject_cast<QAbstractItemView*>(watched))
+            {
+                const bool before = view->property("kbdFocus").toBool();
+                const bool after = KeyboardFocusAfter(before, *static_cast<QFocusEvent*>(event));
+                if (after != before)
+                {
+                    // Property selectors are matched at polish time.
+                    view->setProperty("kbdFocus", after);
+                    view->style()->unpolish(view);
+                    view->style()->polish(view);
+                    view->update();
+                }
+            }
+        }
+        return QObject::eventFilter(watched, event);
+    }
+};
+
 void InstallOnce()
 {
     State& state = Get();
@@ -661,6 +695,8 @@ void InstallOnce()
     font.setFamilies({QStringLiteral("Segoe UI Variable Text"), QStringLiteral("Segoe UI")});
     QApplication::setFont(font);
     state.watcher = new ThemeWatcher(QCoreApplication::instance());
+    state.focusTracker = new KeyboardFocusTracker(QCoreApplication::instance());
+    QCoreApplication::instance()->installEventFilter(state.focusTracker);
 #if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
     QObject::connect(QGuiApplication::styleHints(), &QStyleHints::colorSchemeChanged, QCoreApplication::instance(),
         [](Qt::ColorScheme) { ScheduleRecompute(); });
@@ -959,6 +995,23 @@ void BindSvgLabel(QLabel* const label, const QString& svgPaths, const Role role,
     state.labels.push_back({label, svgPaths, role, size});
     const qreal ratio = std::max<qreal>(label->devicePixelRatioF(), 2.0);
     label->setPixmap(RenderSvg(svgPaths, RoleColor(role), size, ratio));
+}
+
+bool KeyboardFocusAfter(const bool before, const QFocusEvent& event)
+{
+    switch (event.reason())
+    {
+        case Qt::TabFocusReason:
+        case Qt::BacktabFocusReason:
+        case Qt::ShortcutFocusReason: return event.gotFocus();
+        case Qt::ActiveWindowFocusReason:
+        case Qt::PopupFocusReason:
+        case Qt::MenuBarFocusReason: return before;
+        case Qt::MouseFocusReason: return false;
+        case Qt::OtherFocusReason:
+        case Qt::NoFocusReason: break;
+    }
+    return event.gotFocus() && before;
 }
 
 void PolishMenu(QMenu* const menu)

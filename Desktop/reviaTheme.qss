@@ -133,8 +133,24 @@ QCheckBox::indicator:checked {
     border-color: {{accent}};
     image: url(:/revia/check-on-accent-{{scheme}}.svg);
 }
-QRadioButton::indicator:checked { background: {{inputBackground}}; border: 5px solid {{accent}}; }
-QCheckBox::indicator:focus, QRadioButton::indicator:focus { border-color: {{focusRing}}; }
+/* A checked radio is a thick accent ring around the field colour, 18px across like the rest. */
+QRadioButton::indicator:checked { width: 8px; height: 8px; background: {{inputBackground}}; border: 5px solid {{accent}}; }
+/* Keyboard focus is a 2px ring in the same 18px. A checked indicator keeps a gap inside the
+   ring so the ring still reads against the accent: the check box's fill stops 2px short of it
+   (the page shows through), and the radio turns into a ring around an accent dot. */
+QCheckBox::indicator:focus, QRadioButton::indicator:focus {
+    width: 14px;
+    height: 14px;
+    border: 2px solid {{focusRing}};
+}
+QCheckBox::indicator:checked:focus {
+    width: 10px;
+    height: 10px;
+    padding: 2px;
+    background: {{accent}};
+    background-clip: content;
+}
+QRadioButton::indicator:checked:focus { background: {{inputBackground}}; image: url(:/revia/radio-dot-{{scheme}}.svg); }
 QCheckBox::indicator:disabled, QRadioButton::indicator:disabled { background: {{surfaceAlt}}; border-color: {{border}}; }
 QCheckBox::indicator:checked:disabled { background: {{border}}; border-color: {{border}}; }
 
@@ -193,6 +209,12 @@ QTableWidget, QTreeWidget, QListWidget, QTableView, QTreeView, QListView {
     selection-background-color: {{selection}};
     selection-color: {{selectionText}};
 }
+QTableWidget[kbdFocus="true"]:focus, QTreeWidget[kbdFocus="true"]:focus, QListWidget[kbdFocus="true"]:focus,
+QTableView[kbdFocus="true"]:focus, QTreeView[kbdFocus="true"]:focus, QListView[kbdFocus="true"]:focus,
+QListWidget#chatSessionList[kbdFocus="true"]:focus, QListWidget#settingsSections[kbdFocus="true"]:focus,
+QListWidget#commandPaletteList[kbdFocus="true"]:focus {
+    border-color: {{focusRing}};
+}
 QTreeWidget::item:hover, QTableWidget::item:hover, QListWidget::item:hover { background: {{surfaceHover}}; }
 QTreeWidget::item:selected, QTableWidget::item:selected, QListWidget::item:selected {
     color: {{selectionText}};
@@ -204,12 +226,24 @@ QTableCornerButton::section { background: {{surface}}; border: none; }
 
 /* ---------------------------------------------------------------- tabs */
 
+/* Every tab carries a 2px border, transparent until it shows the selected tab's underline or
+   a keyboard focus ring (a tab bar takes focus only from the keyboard). The padding is the
+   structure sheet's less those 2px, so a tab is the same size in every state and in both
+   sheets. */
 QTabWidget::pane { background: transparent; }
-QTabBar::tab { color: {{textSecondary}}; background: transparent; border: none; border-bottom: 2px solid transparent; }
+QTabBar::tab {
+    color: {{textSecondary}};
+    background: transparent;
+    border: 2px solid transparent;
+    padding: 7px 11px 9px 11px;
+}
+QTabBar#primaryNavigation::tab { padding: 7px 12px 9px 12px; }
+QTabBar#sectionNavigation::tab { padding: 5px 8px 7px 8px; }
 QTabBar::tab:hover { color: {{text}}; }
 QTabBar::tab:selected { color: {{text}}; border-bottom-color: {{accent}}; }
 QTabBar::tab:disabled { color: {{textDisabled}}; }
 QTabBar#primaryNavigation::tab:selected { background: {{sidebarSelected}}; border-bottom-color: transparent; }
+QTabBar::tab:focus, QTabBar#primaryNavigation::tab:focus { border-color: {{focusRing}}; }
 QTabBar QToolButton { color: {{textSecondary}}; background: {{surface}}; border-color: {{border}}; }
 QTabBar QToolButton:hover { background: {{surfaceHover}}; }
 

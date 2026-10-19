@@ -16,6 +16,7 @@
 #include <QComboBox>
 #include <QDir>
 #include <QFile>
+#include <QFocusEvent>
 #include <QGridLayout>
 #include <QGroupBox>
 #include <QHBoxLayout>
@@ -32,6 +33,7 @@
 #include <QSettings>
 #include <QSpinBox>
 #include <QStyle>
+#include <QTabBar>
 #include <QTabWidget>
 #include <QTableWidget>
 #include <QTextBrowser>
@@ -357,6 +359,17 @@ int RunThemeSuite(int, char**)
     rootLayout->addWidget(pipelines);
     auto* internet = new InternetActivityPanel(root.get());
     rootLayout->addWidget(internet);
+    auto* focusList = new QListWidget(root.get());
+    focusList->addItems({"Project planning", "Build failures"});
+    focusList->setCurrentRow(0);
+    rootLayout->addWidget(focusList);
+    auto* focusTabs = new QTabBar(root.get());
+    focusTabs->addTab("Pipelines");
+    focusTabs->addTab("Resources");
+    rootLayout->addWidget(focusTabs);
+    auto* focusCheck = new QCheckBox("Follow new activity", root.get());
+    focusCheck->setChecked(true);
+    rootLayout->addWidget(focusCheck);
     root->resize(720, 900);
     theme::Install(root.get());
     root->show();
@@ -393,6 +406,59 @@ int RunThemeSuite(int, char**)
         QApplication::sendEvent(offSwitch, &release);
         results.Expect(offSwitch->isChecked(), "clicking the right end of a switch did not toggle it");
         offSwitch->setChecked(false);
+    }
+
+    // Keyboard focus rings. Every focusable control shows one; an item view takes focus from a
+    // click as well, so its ring follows the keyboard only, as a switch's does. A ring survives
+    // the window losing and regaining activation, and never moves what is inside the control.
+    root->activateWindow();
+    Settle();
+    results.Expect(root->isActiveWindow(), "the theme test window could not be activated");
+    {
+        const auto reactivate = [](QWidget* widget)
+        {
+            QFocusEvent out(QEvent::FocusOut, Qt::ActiveWindowFocusReason);
+            QApplication::sendEvent(widget, &out);
+            QFocusEvent in(QEvent::FocusIn, Qt::ActiveWindowFocusReason);
+            QApplication::sendEvent(widget, &in);
+            Settle();
+        };
+        const QRect listViewport = focusList->viewport()->geometry();
+        const QRect firstTab = focusTabs->tabRect(0);
+        struct FocusCase
+        {
+            QWidget* control;
+            std::string name;
+            bool clickShowsRing;
+        };
+        const FocusCase cases[] = {{focusList, "a list", false}, {focusTabs, "a tab bar", true},
+            {focusCheck, "a check box", true}, {offSwitch, "a switch", false}};
+        for (const auto& [control, name, clickShowsRing] : cases)
+        {
+            sample->setFocus(Qt::OtherFocusReason);
+            Settle();
+            const QImage rest = control->grab().toImage();
+            control->setFocus(Qt::MouseFocusReason);
+            Settle();
+            const QImage clicked = control->grab().toImage();
+            if (!clickShowsRing)
+                results.Expect(clicked == rest, name + " shows a focus ring after a click");
+            sample->setFocus(Qt::OtherFocusReason);
+            control->setFocus(Qt::TabFocusReason);
+            Settle();
+            const QImage keyed = control->grab().toImage();
+            results.Expect(control->hasFocus() && keyed != rest, name + " looks the same with keyboard focus");
+            reactivate(control);
+            results.Expect(control->grab().toImage() == keyed, name + " lost its focus ring when the window was reactivated");
+        }
+        focusList->setFocus(Qt::TabFocusReason);
+        Settle();
+        results.Expect(Near(PixelAt(focusList, QPoint(1, focusList->height() / 2)), theme::Light().focusRing),
+            "a keyboard-focused list's ring is not focusRing: " + Describe(PixelAt(focusList, QPoint(1, focusList->height() / 2))));
+        results.Expect(focusList->viewport()->geometry() == listViewport && focusTabs->tabRect(0) == firstTab,
+            "a focus ring moved a list's rows or resized a tab");
+        sample->setFocus(Qt::OtherFocusReason);
+        Settle();
     }
 
     // Bound icons and labels follow the scheme.

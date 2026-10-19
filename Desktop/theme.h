@@ -10,6 +10,7 @@
 
 class QAbstractButton;
 class QAction;
+class QFocusEvent;
 class QLabel;
 class QMenu;
 class QWidget;
@@ -108,6 +109,13 @@ void BindIcon(QAction* action, const char* name);
 // Renders inline SVG elements (24-unit grid, stroked) into label in the role's colour, and again
 // after every scheme change.
 void BindSvgLabel(QLabel* label, const QString& svgPaths, Role role, int size);
+
+// Whether a keyboard focus ring should show after this focus event, given whether one showed
+// before. Focus from Tab, Backtab or a shortcut shows it and a click hides it; deactivating and
+// reactivating the window, opening and closing a popup, or a programmatic setFocus() leave it as
+// it was, so a ring the keyboard put there survives an Alt+Tab. ToggleSwitch uses it, and so does
+// the theme for item views, which key their ring off the kbdFocus property.
+[[nodiscard]] bool KeyboardFocusAfter(bool before, const QFocusEvent& event);
 
 // Native rounding and shadow for menus on Windows 11 (no-op elsewhere).
 void PolishMenu(QMenu* menu);
