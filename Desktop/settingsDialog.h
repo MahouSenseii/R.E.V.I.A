@@ -117,7 +117,8 @@ private:
     void Commit(const std::string& key, bool checked);
     void FinishWrite(const std::string& key, bool previousDisplay, std::optional<bool> written, const SettingWrite& result);
     void ResetRow(const std::string& key);
-    void WriteProfileValue(const std::string& key, const std::string& field, double value);
+    void WriteProfileValue(const std::string& key, double value);
+    void ShowInlineValue(Row& row, double value);
     void ReadRows(const std::vector<Row*>& rows);
     void SetDisplay(Row& row, bool storedValue);
     [[nodiscard]] bool StoredValue(const std::string& key, bool& value) const;

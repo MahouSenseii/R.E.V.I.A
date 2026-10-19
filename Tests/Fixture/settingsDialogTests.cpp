@@ -196,6 +196,8 @@ struct FakeBackend
     std::map<std::string, QString> choices;
     std::map<std::string, QString> status;
     std::vector<std::pair<std::string, double>> profileWrites;
+    std::map<std::string, double> profileValues{{"temperature", 0.75}, {"maxTokens", 640.0}};
+    bool refuseProfileWrites = false;
 
     SettingRead& Entry(const std::string& key)
     {
@@ -259,10 +261,17 @@ struct FakeBackend
             choices[key] = value;
             done({true, QString()});
         };
-        backend.readProfileValue = [](const std::string& field) { return field == "temperature" ? 0.75 : 640.0; };
+        backend.readProfileValue = [this](const std::string& field) { return profileValues[field]; };
         backend.writeProfileValue = [this](const std::string& field, const double value, SettingDone done)
         {
             profileWrites.emplace_back(field, value);
+            if (refuseProfileWrites)
+            {
+                // What B1's adapter says while the Profiles editor holds unsaved edits.
+                done({false, QStringLiteral("Save or discard your changes in Profiles first.")});
+                return;
+            }
+            profileValues[field] = value;
             done({true, QStringLiteral("Profile saved.")});
         };
         backend.mcpServers = [this]() { return servers; };
@@ -745,13 +754,42 @@ void CheckDialog(Expect& expect, revia::runtime::ReviaSession& session)
             profileGroup = label;
     }
     expect(profileGroup && profileGroup->text() == "This profile (Assistant)", "the profile group names the active profile");
-    if (auto* temperature = dialog.findChild<QDoubleSpinBox*>(QStringLiteral("profileTemperatureSpin")))
+    // The value beside a profile override switch is saved only when it changed: a spin box reports
+    // editingFinished on every focus change, and each write saves the whole profile.
+    auto* temperature = dialog.findChild<QDoubleSpinBox*>(QStringLiteral("profileTemperatureSpin"));
+    expect(temperature && qFuzzyCompare(temperature->value(), 0.75) && !temperature->isEnabled(),
+        "the temperature spin shows the profile's value and waits for its switch");
+    fake.Set("profile.hasTemperatureOverride", true);
+    dialog.Refresh();
+    if (temperature)
     {
-        expect(qFuzzyCompare(temperature->value(), 0.75) && !temperature->isEnabled(),
-            "the temperature spin shows the profile's value and waits for its switch");
+        expect(temperature->isEnabled(), "the temperature spin follows its switch");
+        const QLabel* status = RowLabel(&dialog, "sw_profile_temperatureOverrideRow", "settingStatus");
+        dialog.ShowSection(SettingsSection::Chat);
+        // The confirmations above took activation with them when they closed (offscreen).
+        dialog.activateWindow();
+        Settle();
+        temperature->setFocus(Qt::TabFocusReason);
+        const bool focused = temperature->hasFocus();
+        search->setFocus(Qt::TabFocusReason);
+        Settle();
+        expect(focused && !temperature->hasFocus() && fake.profileWrites.empty(), "passing through the spin without a change writes nothing");
         temperature->setValue(1.1);
         emit temperature->editingFinished();
-        expect(!fake.profileWrites.empty() && fake.profileWrites.back().first == "temperature", "editing the spin writes the profile value");
+        expect(fake.profileWrites.size() == 1 && fake.profileWrites.back().first == "temperature" &&
+                   qFuzzyCompare(fake.profileWrites.back().second, 1.1),
+            "a changed value writes the profile");
+        emit temperature->editingFinished();
+        expect(fake.profileWrites.size() == 1, "leaving the spin again with the saved value writes nothing more");
+        fake.refuseProfileWrites = true;
+        temperature->setValue(1.3);
+        emit temperature->editingFinished();
+        expect(fake.profileWrites.size() == 2 && qFuzzyCompare(temperature->value(), 1.1) && status &&
+                   status->text() == "Save or discard your changes in Profiles first." && status->property("tone").toString() == "error",
+            "a refused value goes back to the saved one and says why");
+        fake.refuseProfileWrites = false;
+        emit temperature->editingFinished();
+        expect(fake.profileWrites.size() == 2, "the value put back after a refusal is not written again");
     }
 
     // Companion name substitution.

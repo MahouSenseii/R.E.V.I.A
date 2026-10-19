@@ -41,6 +41,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <set>
 #include <tuple>
 #include <utility>
@@ -219,8 +220,11 @@ struct SettingsDialog::Row
     SettingDescriptor descriptor;
     // Custom, link and appearance rows have no switch; their key is the row's objectName.
     bool hasSwitch = true;
-    // Profile override rows carry an inline value control that follows the switch.
+    // Profile override rows carry an inline value control that follows the switch, for a profile
+    // field ("temperature" or "maxTokens"), and remember the value last read from or written to it.
     bool inlineValue = false;
+    std::string inlineField;
+    double inlineStored = 0.0;
     std::vector<std::string> requiresAll;
     Group* group = nullptr;
     QFrame* frame = nullptr;
@@ -710,6 +714,9 @@ SettingsDialog::Row& SettingsDialog::AddSwitchRow(Group& group, const SettingDes
         // The override switch and the value it overrides with sit in one row.
         row.inlineValue = true;
         const bool temperature = key == "profile.hasTemperatureOverride";
+        row.inlineField = temperature ? "temperature" : "maxTokens";
+        // What the spin shows until Refresh reads the profile.
+        row.inlineStored = temperature ? 0.7 : 512.0;
         QAbstractSpinBox* spin = nullptr;
         if (temperature)
         {
@@ -718,10 +725,9 @@ SettingsDialog::Row& SettingsDialog::AddSwitchRow(Group& group, const SettingDes
             value->setRange(0.0, 2.0);
             value->setSingleStep(0.05);
             value->setDecimals(2);
-            value->setValue(0.7);
+            value->setValue(row.inlineStored);
             value->setAccessibleName(QStringLiteral("Profile temperature"));
-            connect(value, &QDoubleSpinBox::editingFinished, this, [this, key, value]()
-                { WriteProfileValue(key, "temperature", value->value()); });
+            connect(value, &QDoubleSpinBox::editingFinished, this, [this, key, value]() { WriteProfileValue(key, value->value()); });
             spin = value;
         }
         else
@@ -729,11 +735,11 @@ SettingsDialog::Row& SettingsDialog::AddSwitchRow(Group& group, const SettingDes
             auto* value = new QSpinBox(row.frame);
             value->setObjectName(QStringLiteral("profileMaxTokensSpin"));
             value->setRange(1, 32768);
-            value->setValue(512);
+            value->setValue(static_cast<int>(row.inlineStored));
             value->setSuffix(QStringLiteral(" tokens"));
             value->setAccessibleName(QStringLiteral("Profile reply limit"));
-            connect(value, &QSpinBox::editingFinished, this, [this, key, value]()
-                { WriteProfileValue(key, "maxTokens", static_cast<double>(value->value())); });
+            connect(value, &QSpinBox::editingFinished, this,
+                [this, key, value]() { WriteProfileValue(key, static_cast<double>(value->value())); });
             spin = value;
         }
         spin->setKeyboardTracking(false);
@@ -1089,25 +1095,47 @@ void SettingsDialog::ResetRow(const std::string& key)
     });
 }
 
-void SettingsDialog::WriteProfileValue(const std::string& key, const std::string& field, const double value)
+void SettingsDialog::WriteProfileValue(const std::string& key, const double value)
 {
     Row* row = FindRow(key);
-    if (row == nullptr || updating || !backend.writeProfileValue)
+    if (row == nullptr || !row->inlineValue || updating || !backend.writeProfileValue)
         return;
+    // A spin box reports editingFinished whenever it loses focus, edited or not, and each write
+    // saves the whole profile. The temperature shows two decimals; the reply limit is whole.
+    const double tolerance = row->inlineField == "temperature" ? 0.005 : 0.5;
+    if (std::abs(value - row->inlineStored) < tolerance)
+        return;
+    // Counted as stored now, so leaving the spin again while this write runs is not another edit.
+    row->inlineStored = value;
     ShowTransientStatus(*row, QString::fromUtf8(SavingText), QStringLiteral("info"));
     QPointer<SettingsDialog> guard(this);
-    backend.writeProfileValue(field, value, [guard, key](SettingWrite result)
+    backend.writeProfileValue(row->inlineField, value, [guard, key](SettingWrite result)
     {
         if (!guard)
             return;
-        if (Row* answered = guard->FindRow(key))
+        Row* answered = guard->FindRow(key);
+        if (answered == nullptr)
+            return;
+        if (!result.succeeded && guard->backend.readProfileValue)
         {
-            guard->ShowTransientStatus(*answered,
-                result.message.isEmpty() ? (result.succeeded ? QStringLiteral("Saved.") : QStringLiteral("The change could not be saved."))
-                                         : result.message,
-                result.succeeded ? QStringLiteral("success") : QStringLiteral("error"));
+            // The refused value does not stay on screen as if it had been saved.
+            answered->inlineStored = guard->backend.readProfileValue(answered->inlineField);
+            guard->ShowInlineValue(*answered, answered->inlineStored);
         }
+        guard->ShowTransientStatus(*answered,
+            result.message.isEmpty() ? (result.succeeded ? QStringLiteral("Saved.") : QStringLiteral("The change could not be saved."))
+                                     : result.message,
+            result.succeeded ? QStringLiteral("success") : QStringLiteral("error"));
     });
+}
+
+void SettingsDialog::ShowInlineValue(Row& row, const double value)
+{
+    const QSignalBlocker blocker(row.control);
+    if (auto* decimal = dynamic_cast<QDoubleSpinBox*>(row.control))
+        decimal->setValue(value);
+    else if (auto* whole = dynamic_cast<QSpinBox*>(row.control))
+        whole->setValue(static_cast<int>(std::lround(value)));
 }
 
 void SettingsDialog::ReadRows(const std::vector<Row*>& wanted)
@@ -1437,15 +1465,15 @@ void SettingsDialog::Refresh()
     }
     if (backend.readProfileValue)
     {
-        if (auto* temperature = findChild<QDoubleSpinBox*>(QStringLiteral("profileTemperatureSpin")); temperature && !temperature->hasFocus())
+        for (const auto& owned : rows)
         {
-            const QSignalBlocker blocker(temperature);
-            temperature->setValue(backend.readProfileValue("temperature"));
-        }
-        if (auto* maxTokens = findChild<QSpinBox*>(QStringLiteral("profileMaxTokensSpin")); maxTokens && !maxTokens->hasFocus())
-        {
-            const QSignalBlocker blocker(maxTokens);
-            maxTokens->setValue(static_cast<int>(backend.readProfileValue("maxTokens")));
+            Row& row = *owned;
+            if (!row.inlineValue || row.control == nullptr)
+                continue;
+            // A value being typed stays on screen; leaving the spin compares it with the stored one.
+            row.inlineStored = backend.readProfileValue(row.inlineField);
+            if (!row.control->hasFocus())
+                ShowInlineValue(row, row.inlineStored);
         }
     }
     updating = false;

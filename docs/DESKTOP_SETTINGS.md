@@ -27,7 +27,9 @@ that every boolean preference and every owner-settings key has a row.
 - **Saving.** Shell settings are written to QSettings at once. Everything else is written in the
   background: the switch shows "Saving..." and is disabled until the write finishes. If the write
   is refused, the switch goes back and the reason is shown under it. After a successful write the
-  row shows the message Revia returned.
+  row shows the message Revia returned. The temperature and reply limit beside the two profile
+  override switches are saved when you leave them with a changed value; a refused value goes back
+  to the saved one.
 - **Restart banner.** "Restart Revia to apply N changes" counts the switches whose saved value
   differs from the one in effect. "Restart now" restarts Revia; "Later" hides the banner until the
   count changes.
