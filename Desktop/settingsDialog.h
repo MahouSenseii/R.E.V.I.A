@@ -57,6 +57,10 @@ public:
     void SetRowStatus(const std::string& key, const QString& text, const QString& tone);
     // Re-reads every value (QSettings, then the backend in one call) and the theme and text size.
     void Refresh();
+    // Releases every row still waiting for a write whose answer will never come, because the
+    // session it was made for has been retired: the switch is enabled again and "Saving…" goes.
+    // The next Refresh shows what was actually saved.
+    void AbandonPendingWrites();
     void SetCompanionName(const QString& name);
     void ShowSection(SettingsSection section);
     // Accepts a section name or id ("Voice", "voice"), or a setting key or objectName, which also
@@ -115,7 +119,7 @@ private:
     void OnToggled(const std::string& key, bool checked);
     void AskToConfirm(const std::string& key, bool checked);
     void Commit(const std::string& key, bool checked);
-    void FinishWrite(const std::string& key, bool previousDisplay, std::optional<bool> written, const SettingWrite& result);
+    void FinishWrite(const std::string& key, quint64 serial, bool previousDisplay, std::optional<bool> written, const SettingWrite& result);
     void ResetRow(const std::string& key);
     void WriteProfileValue(const std::string& key, double value);
     void ShowInlineValue(Row& row, double value);
@@ -163,5 +167,7 @@ private:
     bool updating = false;
     bool geometryRestored = false;
     quint64 statusSerial = 0;
+    // Numbers every backend write, so the answer to one that was abandoned or replaced is ignored.
+    quint64 writeSerial = 0;
 };
 }

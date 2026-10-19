@@ -209,6 +209,8 @@ struct FakeBackend
     std::vector<std::pair<std::string, double>> profileWrites;
     std::map<std::string, double> profileValues{{"temperature", 0.75}, {"maxTokens", 640.0}};
     bool refuseProfileWrites = false;
+    bool deferNextProfileWrite = false;
+    SettingDone deferredProfileWrite;
     std::vector<std::string> resets;
     // Where a reset leads, when it is not the catalog default (an owner overlay key falls back to
     // whatever Config/settings.json ships).
@@ -290,6 +292,12 @@ struct FakeBackend
                 return;
             }
             profileValues[field] = value;
+            if (deferNextProfileWrite)
+            {
+                deferNextProfileWrite = false;
+                deferredProfileWrite = std::move(done);
+                return;
+            }
             done({true, QStringLiteral("Profile saved.")});
         };
         backend.mcpServers = [this]() { return servers; };
@@ -686,6 +694,40 @@ void CheckDialog(Expect& expect, revia::runtime::ReviaSession& session)
         expect(!changed.empty() && changed.back() == std::pair<std::string, bool>{"vision.enabled", true},
             "valueChanged runs after a successful write");
     }
+    // A write whose answer never comes (the window drops answers for a retired session) does not keep
+    // its row busy for good: AbandonPendingWrites releases it, and an answer that still arrives
+    // afterwards neither finishes a newer write nor reports a change.
+    if (auto* vision = dialog.findChild<QCheckBox*>(QStringLiteral("sw_vision_enabled")))
+    {
+        const QLabel* status = RowLabel(&dialog, "sw_vision_enabledRow", "settingStatus");
+        fake.deferNext = true;
+        vision->click();
+        Settle();
+        SettingDone lost = std::move(fake.deferred);
+        fake.deferred = nullptr;
+        dialog.AbandonPendingWrites();
+        expect(lost && vision->isEnabled() && vision->isChecked() && status && !status->text().startsWith("Saving"),
+            "AbandonPendingWrites enables the switch again, shows the value last read and drops Saving");
+        dialog.Refresh();
+        expect(!vision->isChecked(), "the next Refresh shows what was saved");
+        const std::size_t notified = changed.size();
+        fake.deferNext = true;
+        vision->click();
+        Settle();
+        dialog.Refresh();
+        expect(!vision->isEnabled(), "a write in flight stays pending through Refresh");
+        if (lost)
+            lost({false, QStringLiteral("Late answer.")});
+        Settle();
+        expect(!vision->isEnabled() && vision->isChecked() && status && status->text().startsWith("Saving") && changed.size() == notified,
+            "the abandoned write's late answer leaves the newer write pending");
+        if (fake.deferred)
+            fake.deferred({true, QStringLiteral("Vision is on.")});
+        fake.deferred = nullptr;
+        Settle();
+        expect(vision->isEnabled() && vision->isChecked() && status && status->text() == "Vision is on." && changed.size() == notified + 1,
+            "the newer write finishes with its own answer");
+    }
     // A refused write puts the switch back and shows the error.
     if (auto* perception = dialog.findChild<QCheckBox*>(QStringLiteral("sw_perception_enabled")))
     {
@@ -888,6 +930,18 @@ void CheckDialog(Expect& expect, revia::runtime::ReviaSession& session)
         expect(typing && dialog.isVisible() && qFuzzyCompare(temperature->value(), 1.1) && fake.profileWrites.size() == 2,
             "Esc in a profile spin restores the saved value, writes nothing and leaves Settings open");
         expect(temperatureSwitch && temperatureSwitch->hasFocus(), "the focus moves to the spin's switch, so a second Esc can close Settings");
+        // An abandoned value write drops its Saving line, and its late answer is ignored.
+        fake.deferNextProfileWrite = true;
+        temperature->setValue(1.2);
+        emit temperature->editingFinished();
+        const bool saving = status && status->text().startsWith("Saving");
+        dialog.AbandonPendingWrites();
+        expect(saving && status && !status->text().startsWith("Saving"), "AbandonPendingWrites clears a profile value's Saving line");
+        if (fake.deferredProfileWrite)
+            fake.deferredProfileWrite({false, QStringLiteral("Late refusal.")});
+        fake.deferredProfileWrite = nullptr;
+        expect(qFuzzyCompare(temperature->value(), 1.2) && status && status->text() != "Late refusal.",
+            "the late answer to an abandoned value write changes nothing");
     }
 
     // "Reset to default" never makes the change a switch would have asked about. The overlay's

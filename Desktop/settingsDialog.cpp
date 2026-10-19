@@ -276,6 +276,9 @@ struct SettingsDialog::Row
     bool inlineValue = false;
     std::string inlineField;
     double inlineStored = 0.0;
+    // The write each answer must match (0: none pending): the switch's, and the inline value's.
+    quint64 pendingWrite = 0;
+    quint64 pendingValueWrite = 0;
     std::vector<std::string> requiresAll;
     Group* group = nullptr;
     QFrame* frame = nullptr;
@@ -1077,28 +1080,33 @@ void SettingsDialog::Commit(const std::string& key, const bool checked)
             hooks.valueChanged(key, stored);
         return;
     }
+    const quint64 serial = ++writeSerial;
+    row->pendingWrite = serial;
     if (!backend.write)
     {
-        FinishWrite(key, !checked, std::nullopt, {false, QStringLiteral("Available once Revia has started.")});
+        FinishWrite(key, serial, !checked, std::nullopt, {false, QStringLiteral("Available once Revia has started.")});
         return;
     }
     row->busy = true;
     ShowTransientStatus(*row, QString::fromUtf8(SavingText), QStringLiteral("info"));
     ApplyRowState(*row);
     QPointer<SettingsDialog> guard(this);
-    backend.write({descriptor.key, descriptor.store}, stored, [guard, key, checked, stored](SettingWrite result)
+    backend.write({descriptor.key, descriptor.store}, stored, [guard, key, serial, checked, stored](SettingWrite result)
     {
         if (guard)
-            guard->FinishWrite(key, !checked, stored, result);
+            guard->FinishWrite(key, serial, !checked, stored, result);
     });
 }
 
-void SettingsDialog::FinishWrite(const std::string& key, const bool previousDisplay, const std::optional<bool> written,
-    const SettingWrite& result)
+void SettingsDialog::FinishWrite(const std::string& key, const quint64 serial, const bool previousDisplay,
+    const std::optional<bool> written, const SettingWrite& result)
 {
     Row* row = FindRow(key);
-    if (row == nullptr)
+    // The answer to a write that was abandoned, or made by a row rebuilt since (tool servers),
+    // finds a different serial and changes nothing.
+    if (row == nullptr || row->pendingWrite != serial)
         return;
+    row->pendingWrite = 0;
     row->busy = false;
     if (!result.succeeded)
     {
@@ -1138,14 +1146,16 @@ void SettingsDialog::ResetRow(const std::string& key)
         !ResetNeedsNoQuestion(row->descriptor, row->toggle->isChecked()))
         return;
     const bool display = row->toggle->isChecked();
+    const quint64 serial = ++writeSerial;
+    row->pendingWrite = serial;
     row->busy = true;
     ShowTransientStatus(*row, QString::fromUtf8(SavingText), QStringLiteral("info"));
     ApplyRowState(*row);
     QPointer<SettingsDialog> guard(this);
-    backend.reset({row->descriptor.key, row->descriptor.store}, [guard, key, display](SettingWrite result)
+    backend.reset({row->descriptor.key, row->descriptor.store}, [guard, key, serial, display](SettingWrite result)
     {
         if (guard)
-            guard->FinishWrite(key, display, std::nullopt, result);
+            guard->FinishWrite(key, serial, display, std::nullopt, result);
     });
 }
 
@@ -1161,15 +1171,19 @@ void SettingsDialog::WriteProfileValue(const std::string& key, const double valu
         return;
     // Counted as stored now, so leaving the spin again while this write runs is not another edit.
     row->inlineStored = value;
+    const quint64 serial = ++writeSerial;
+    row->pendingValueWrite = serial;
     ShowTransientStatus(*row, QString::fromUtf8(SavingText), QStringLiteral("info"));
     QPointer<SettingsDialog> guard(this);
-    backend.writeProfileValue(row->inlineField, value, [guard, key](SettingWrite result)
+    backend.writeProfileValue(row->inlineField, value, [guard, key, serial](SettingWrite result)
     {
         if (!guard)
             return;
+        // Only the latest write's answer counts, and none once it was abandoned.
         Row* answered = guard->FindRow(key);
-        if (answered == nullptr)
+        if (answered == nullptr || answered->pendingValueWrite != serial)
             return;
+        answered->pendingValueWrite = 0;
         if (!result.succeeded && guard->backend.readProfileValue)
         {
             // The refused value does not stay on screen as if it had been saved.
@@ -1489,6 +1503,30 @@ void SettingsDialog::SetRowStatus(const std::string& key, const QString& text, c
     row->persistentStatus = text;
     row->persistentTone = tone.isEmpty() ? QStringLiteral("info") : tone;
     RenderStatus(*row);
+}
+
+void SettingsDialog::AbandonPendingWrites()
+{
+    for (const auto& owned : rows)
+    {
+        Row& row = *owned;
+        // Any answer that still comes no longer matches.
+        row.pendingWrite = 0;
+        row.pendingValueWrite = 0;
+        if (row.transientStatus == QString::fromUtf8(SavingText))
+        {
+            row.transientStatus.clear();
+            row.transientSerial = ++statusSerial;
+            RenderStatus(row);
+        }
+        if (!row.busy)
+            continue;
+        row.busy = false;
+        // Back to the value last read rather than the one the write would have saved.
+        SetDisplay(row, row.value);
+        RenderRowTexts(row);
+        ApplyRowState(row);
+    }
 }
 
 void SettingsDialog::Refresh()
