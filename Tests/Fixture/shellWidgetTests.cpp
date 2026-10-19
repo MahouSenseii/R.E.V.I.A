@@ -32,6 +32,7 @@
 #include <QPushButton>
 #include <QScrollBar>
 #include <QSettings>
+#include <QStatusBar>
 #include <QTabWidget>
 #include <QTableWidget>
 #include <QTextEdit>
@@ -934,6 +935,28 @@ void TestToast(Results& results)
     toast->ShowMessage("Going", 3000);
     toast->ShowMessage({}, 3000);
     results.Expect(!toast->isVisible() && toast->Message().isEmpty(), "an empty message clears the toast");
+
+    // Following the window's status bar: what reaches the bar toasts, and the bar stays the record.
+    auto* bar = new QStatusBar(&host);
+    bar->setObjectName("testStatusBar");
+    toast->Follow(bar);
+    bar->showMessage("toast fixture");
+    results.Expect(toast->isVisible() && toast->Message() == "toast fixture" && toast->HideDelayMs() == ToastOverlay::MaximumTimeoutMs,
+        "a message put straight on the bar toasts for at most 5 s");
+    toast->ShowStatus("Saved", 3000);
+    results.Expect(bar->currentMessage() == "Saved" && toast->Message() == "Saved" && toast->HideDelayMs() == 3000,
+        "ShowStatus puts the message on the bar and toasts it for the bar's timeout");
+    toast->ShowStatus("Revia is still working on the previous request", 8000);
+    toast->Clear(); // as when its 5 s are up: the bar keeps the message for its own 8 s
+    toast->ShowStatus("Revia is still working on the previous request", 8000);
+    results.Expect(toast->isVisible() && bar->currentMessage() == "Revia is still working on the previous request",
+        "a message repeated while the bar still shows it toasts again");
+    Press(toast, QPoint(4, 4));
+    results.Expect(!toast->isVisible() && bar->currentMessage().isEmpty(), "a click dismisses the toast and clears the bar");
+    bar->showMessage("Brief", 100);
+    results.Expect(toast->isVisible(), "a timed bar message toasts");
+    Wait(300);
+    results.Expect(!toast->isVisible() && bar->currentMessage().isEmpty(), "the toast goes when the bar's message times out");
 }
 
 void TestShortcutSheet(Results& results)

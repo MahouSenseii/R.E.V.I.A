@@ -7,6 +7,7 @@
 #include <QLabel>
 #include <QMargins>
 #include <QMouseEvent>
+#include <QStatusBar>
 #include <QTimer>
 
 #include <algorithm>
@@ -85,6 +86,32 @@ void ToastOverlay::SetDismissHook(std::function<void()> hook)
     dismissHook = std::move(hook);
 }
 
+void ToastOverlay::Follow(QStatusBar* const bar)
+{
+    disconnect(statusConnection);
+    statusBar = bar;
+    if (bar != nullptr)
+        statusConnection =
+            connect(bar, &QStatusBar::messageChanged, this, [this](const QString& text) { ShowMessage(text, statusTimeoutMs); });
+}
+
+void ToastOverlay::ShowStatus(const QString& text, const int timeoutMs)
+{
+    if (!statusBar)
+    {
+        ShowMessage(text, timeoutMs);
+        return;
+    }
+    // A changed message reaches the toast through messageChanged; an unchanged one only restarts
+    // the bar's timer, so it is shown here.
+    const bool unchanged = statusBar->currentMessage() == text;
+    statusTimeoutMs = timeoutMs;
+    statusBar->showMessage(text, timeoutMs);
+    statusTimeoutMs = 0;
+    if (unchanged)
+        ShowMessage(text, timeoutMs);
+}
+
 int ToastOverlay::HideDelayMs() const
 {
     return isVisible() && timer->isActive() ? timer->interval() : 0;
@@ -138,6 +165,8 @@ void ToastOverlay::mousePressEvent(QMouseEvent* event)
 {
     event->accept();
     Clear();
+    if (statusBar)
+        statusBar->clearMessage();
     if (dismissHook)
         dismissHook();
 }
