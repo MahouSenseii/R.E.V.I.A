@@ -296,6 +296,78 @@ void TestTimeoutCancellationAndListChanged()
     Check(!absent.Initialize({}, error), "A missing server program was reported as started.");
 }
 
+// A server that exits at once is noticed -- by a failed write, or by the end of its
+// output -- a moment before it has fully gone and its stderr has been read. The reason
+// must still be reported, and an error left over from an earlier call must not be.
+class ExitingTransport final : public mcp::McpTransport
+{
+  public:
+    // Where the exit is first seen: before the first request, at its write, or as the
+    // end of output while the answer is awaited.
+    enum class Seen
+    {
+        BeforeRequest,
+        AtWrite,
+        AwaitingAnswer
+    };
+    explicit ExitingTransport(const Seen seen) : seen(seen)
+    {
+    }
+    bool Open(std::string&) override
+    {
+        opened = std::chrono::steady_clock::now();
+        return true;
+    }
+    bool Send(const std::string&, std::stop_token, std::string& error) override
+    {
+        sent = true;
+        if (seen != Seen::AtWrite)
+            return true;
+        error = "The server stopped reading its input.";
+        return false;
+    }
+    std::optional<std::string> Receive(const std::chrono::milliseconds wait) override
+    {
+        std::this_thread::sleep_for(std::min(wait, std::chrono::milliseconds(5)));
+        return std::nullopt;
+    }
+    bool Closed() const override
+    {
+        if (seen == Seen::BeforeRequest)
+            return true;
+        return sent && Since() >= (seen == Seen::AtWrite ? 50ms : 0ms);
+    }
+    std::string Diagnostics() const override
+    {
+        return Since() >= 150ms ? "Its last error output: fixture refused to start" : "";
+    }
+    void Close() override
+    {
+    }
+
+  private:
+    std::chrono::milliseconds Since() const
+    {
+        return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - opened);
+    }
+    Seen seen;
+    bool sent = false;
+    std::chrono::steady_clock::time_point opened = std::chrono::steady_clock::now();
+};
+
+void TestServerThatExitsAtOnceIsDiagnosed()
+{
+    using Seen = ExitingTransport::Seen;
+    for (const Seen seen : {Seen::BeforeRequest, Seen::AtWrite, Seen::AwaitingAnswer})
+    {
+        mcp::McpClient client(std::make_unique<ExitingTransport>(seen), 2000ms);
+        std::string error = "The server speaks protocol revision \"1999-01-01\", which Revia does not.";
+        const bool initialized = client.Initialize({}, error);
+        Check(!initialized && Contains(error, "fixture refused to start") && !Contains(error, "1999-01-01"),
+            "A server that exited at once (case " + std::to_string(static_cast<int>(seen)) + ") was not diagnosed: " + error);
+    }
+}
+
 struct GateRecorder
 {
     std::mutex mutex;
@@ -639,6 +711,7 @@ void RunMcpClientTests()
 {
     TestSettingsAreValidatedAndOffByDefault();
     TestSchemasAreClosedOrRefused();
+    TestServerThatExitsAtOnceIsDiagnosed();
     Check(std::filesystem::exists(FixturePath()), "The MCP server fixture was not found at " + actions::PathToUtf8(FixturePath()) +
                                                       "; build ReviaMcpServerFixture or set REVIA_MCP_SERVER_FIXTURE.");
     TestHandshakeListAndCall();
