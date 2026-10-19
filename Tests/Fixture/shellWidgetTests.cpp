@@ -362,6 +362,16 @@ void TestPalette(Results& results)
     ExpectListedNames(results, palette, "the command palette");
 }
 
+// The window's frame is the planned rectangle, or, when the planned one is smaller than the
+// window's minimum size allows, that minimum frame aligned to the plan's right and bottom edges.
+bool FitsPlan(const QWidget* window, const QRect& plan)
+{
+    const QRect frame = window->frameGeometry();
+    const QSize extra = frame.size() - window->size();
+    const QSize expected = plan.size().expandedTo(window->minimumSize() + extra);
+    return frame.size() == expected && frame.right() == plan.right() && frame.bottom() == plan.bottom();
+}
+
 void TestPlacement(Results& results)
 {
     const QRect screen(0, 0, 1920, 1040);
@@ -437,10 +447,21 @@ void TestPanelWindows(Results& results)
     owner.setObjectName("testOwner");
     owner.resize(760, 540);
     owner.show();
+    // In tab order: first, the message box (the default focus), then a field the test hides.
+    auto* first = new QLineEdit(&owner);
+    first->setObjectName("testFirstField");
     auto* message = new QPlainTextEdit(&owner);
     message->setObjectName("testMessage");
+    auto* other = new QLineEdit(&owner);
+    other->setObjectName("testOtherField");
+    for (QWidget* widget : {static_cast<QWidget*>(first), static_cast<QWidget*>(message), static_cast<QWidget*>(other)})
+        widget->show();
     auto host = std::make_unique<PanelHost>(&owner);
     host->SetDefaultFocus(message);
+    Settle();
+    message->setFocus();
+    Settle();
+    const QRect available = owner.screen()->availableGeometry();
 
     // A page that lives in a tab widget and is not its current tab, so it is explicitly hidden,
     // like the pages the window takes out of its old tab tree.
@@ -487,6 +508,9 @@ void TestPanelWindows(Results& results)
     host->Open(PanelId::Canvas);
     host->Open(PanelId::Canvas);
     Settle();
+    const QRect canvasFrame = window->frameGeometry();
+    results.Expect(available.contains(canvasFrame) && window->size() == Spec(PanelId::Canvas).defaultSize,
+        "the first panel opens at its default size with its whole frame on the available area");
     int canvasWindows = 0;
     for (const QWidget* child : owner.findChildren<QWidget*>())
         canvasWindows += child->objectName() == "panelWindow_canvas" ? 1 : 0;
@@ -507,6 +531,19 @@ void TestPanelWindows(Results& results)
     SendKey(field, Qt::Key_Escape);
     results.Expect(!window->isVisible() && guard, "Esc in an empty field closes (hides) the panel");
     results.Expect(!host->Action(PanelId::Canvas)->isChecked(), "the action unchecks when the window hides");
+    Settle();
+    results.Expect(owner.isActiveWindow() && message->hasFocus(), "closing a panel gives focus back to the owner's message box");
+    // The owner's last focus widget went while the panel was open: focus goes to the default, not
+    // to the first widget in the tab chain, which is all activating the owner would give.
+    other->setFocus();
+    Settle();
+    host->Open(PanelId::Canvas);
+    Settle();
+    other->hide();
+    host->Close(PanelId::Canvas);
+    Settle();
+    results.Expect(message->hasFocus(), "with the last focus widget gone, closing a panel focuses the default");
+    other->show();
     host->Open(PanelId::Canvas);
     notes->setPlainText("notes");
     notes->setFocus();
@@ -537,7 +574,11 @@ void TestPanelWindows(Results& results)
     QSettings().setValue("panels/vision/geometry", QRect(-6000, -6000, 500, 420));
     auto* visionPage = new QWidget;
     visionPage->setObjectName("testVisionPage");
-    new QVBoxLayout(visionPage);
+    auto* visionLayout = new QVBoxLayout(visionPage);
+    // Vision's catalog entry names this heading as one that only repeats the window title.
+    auto* visionTitle = new QLabel("Vision", visionPage);
+    visionTitle->setObjectName("sectionTitle");
+    visionLayout->addWidget(visionTitle);
     int shows = 0;
     std::vector<QSize> resizes;
     host->SetShowHook([&shows](QWidget*) { ++shows; });
@@ -548,6 +589,9 @@ void TestPanelWindows(Results& results)
     Settle();
     results.Expect(vision->geometry().intersects(QRect(0, 0, 800, 600)) && !QSettings().contains("panels/vision/geometry"),
         "a saved geometry on no screen is discarded and the panel is placed afresh");
+    results.Expect(vision->frameGeometry().y() - canvasFrame.y() == 32 && vision->frameGeometry().right() == canvasFrame.right(),
+        "the second panel placed on the same side steps down 32px");
+    results.Expect(visionTitle->isHidden(), "a heading that repeats the window title is hidden");
     results.Expect(!resizes.empty() && resizes.back() == vision->size(), "the resize hook runs when the window shows");
     vision->resize(560, 450);
     Settle();
@@ -570,31 +614,44 @@ void TestPanelWindows(Results& results)
     Settle();
     const BesidePlacement expected =
         PlaceBesideGeometry(owner.frameGeometry(), owner.screen()->availableGeometry(), Spec(PanelId::Vision).defaultSize.width(), 480);
-    results.Expect(vision->isVisible() && vision->frameGeometry().topLeft() == expected.panelFrame.topLeft() &&
-                       owner.frameGeometry().topLeft() == expected.ownerFrame.topLeft(),
+    results.Expect(vision->isVisible() && FitsPlan(vision, expected.panelFrame) && owner.frameGeometry() == expected.ownerFrame,
         "Place beside chat moves the owner to the left edge and the panel beside it");
 
     host->SetTitleSuffix(PanelId::Canvas, " (3)");
     results.Expect(window->windowTitle() == "Canvas (3) — Revia" && host->Action(PanelId::Canvas)->text() == "Canvas (3)",
         "a title suffix reaches the window title and the action");
+    host->Close(PanelId::Canvas);
     host->SetLocked(true);
     results.Expect(!page->isEnabled() && !window->findChild<QWidget*>("panelHeader")->isEnabled() && window->isEnabled(),
         "locking disables the panel's body but not the window");
+    host->Action(PanelId::Canvas)->trigger();
+    results.Expect(!host->Action(PanelId::Canvas)->isEnabled() && !host->IsOpen(PanelId::Canvas),
+        "locking disables the panel actions, so their shortcuts open nothing");
     host->SetLocked(false);
-    results.Expect(page->isEnabled(), "unlocking enables the body again");
+    results.Expect(page->isEnabled() && host->Action(PanelId::Canvas)->isEnabled(), "unlocking enables the body and the actions again");
 
     host->Open(PanelId::Canvas);
     host->HideAll(true);
     results.Expect(!host->IsOpen(PanelId::Canvas) && !host->IsOpen(PanelId::Vision), "HideAll hides every panel");
+    host->SaveOpenSet();
+    results.Expect(QSettings().value("panels/openSet").toStringList() == QStringList{"canvas", "vision"},
+        "SaveOpenSet counts the panels hidden to the tray");
+    message->setFocus();
+    Settle();
     host->RestoreHidden();
+    Settle();
     results.Expect(host->IsOpen(PanelId::Canvas) && host->IsOpen(PanelId::Vision), "RestoreHidden reopens what HideAll hid");
+    results.Expect(QApplication::activeWindow() == &owner && message->hasFocus(),
+        "RestoreHidden leaves the owner active, with its focus widget, not the last panel shown");
     host->Close(PanelId::Vision);
     host->SaveOpenSet();
     results.Expect(QSettings().value("panels/openSet").toStringList() == QStringList{"canvas"}, "SaveOpenSet records the open panels");
     host->CloseAll();
     results.Expect(!host->IsOpen(PanelId::Canvas), "CloseAll closes every panel");
     host->RestoreOpenSet();
+    Settle();
     results.Expect(host->IsOpen(PanelId::Canvas) && !host->IsOpen(PanelId::Vision), "RestoreOpenSet reopens the saved set");
+    results.Expect(QApplication::activeWindow() == &owner, "RestoreOpenSet leaves the owner active");
 
     QAction* memory = host->Action(PanelId::Memory);
     results.Expect(memory != nullptr && owner.actions().contains(memory) && memory->shortcut() == QKeySequence("Ctrl+Shift+M") &&
@@ -603,6 +660,12 @@ void TestPanelWindows(Results& results)
     host->Close(PanelId::Canvas);
     host->Action(PanelId::Canvas)->trigger();
     results.Expect(host->IsOpen(PanelId::Canvas) && host->Action(PanelId::Canvas)->isChecked(), "triggering the action opens the panel");
+    Settle();
+    results.Expect(window->isActiveWindow(), "a panel opened by its action is the active window");
+    host->Action(PanelId::Canvas)->trigger();
+    results.Expect(!host->IsOpen(PanelId::Canvas) && !host->Action(PanelId::Canvas)->isChecked(),
+        "triggering the action of the active panel closes it");
+    host->Action(PanelId::Canvas)->trigger();
     ExpectListedNames(results, window, "a panel window");
     ExpectListedNames(results, vision, "a panel window with a gear");
     host->SetIconProvider([](const char*) { return Swatch(QColor("#57534E")); });
@@ -610,6 +673,58 @@ void TestPanelWindows(Results& results)
     host->CloseAll();
     host.reset();
     results.Expect(guard && !owner.actions().contains(memory), "the host's actions leave with it; its windows stay with the owner");
+}
+
+// Placement works in frame rectangles, but QWidget::resize sizes the client area: the frame
+// margins (2px a side even offscreen, a title bar on Windows) must come off, and Qt knows them
+// only once the window shows.
+void TestPanelFrames(Results& results)
+{
+    QSettings().remove("panels");
+    QWidget owner;
+    owner.setObjectName("testFramesOwner");
+    owner.resize(760, 540);
+    owner.move(0, 300);
+    owner.show();
+    Settle();
+    const QRect available = owner.screen()->availableGeometry();
+    PanelHost host(&owner);
+    const auto standIn = [](const char* name)
+    {
+        auto* made = new QWidget;
+        made->setObjectName(name);
+        new QVBoxLayout(made);
+        return made;
+    };
+    host.Adopt(PanelId::Voice, standIn("testVoicePage"));
+    host.Adopt(PanelId::Memory, standIn("testMemoryPage"));
+    PanelWindow* voice = host.Window(PanelId::Voice);
+    PanelWindow* memory = host.Window(PanelId::Memory);
+
+    // Voice is 700px tall: for an owner low on the screen it rises until its frame's bottom
+    // meets the available area's.
+    host.Open(PanelId::Voice);
+    Settle();
+    const QRect voiceFrame = voice->frameGeometry();
+    results.Expect(available.contains(voiceFrame) && voiceFrame.bottom() == available.bottom(),
+        "a tall panel's whole frame is clamped to the available area");
+
+    // Memory never showed, so its rectangle waits for the show; Voice is showing and moves at once.
+    const BesidePlacement memoryPlan = PlaceBesideGeometry(
+        owner.frameGeometry(), available, Spec(PanelId::Memory).defaultSize.width(), Spec(PanelId::Memory).minUsefulWidth);
+    host.PlaceBeside(PanelId::Memory);
+    Settle();
+    results.Expect(
+        memory->isVisible() && memory->frameGeometry() == memoryPlan.panelFrame && owner.frameGeometry() == memoryPlan.ownerFrame,
+        "Place beside chat gives a panel that never showed exactly the planned frame");
+    const BesidePlacement voicePlan = PlaceBesideGeometry(
+        owner.frameGeometry(), available, Spec(PanelId::Voice).defaultSize.width(), Spec(PanelId::Voice).minUsefulWidth);
+    host.PlaceBeside(PanelId::Voice);
+    Settle();
+    results.Expect(voicePlan.panelFrame.width() < voice->minimumWidth() + voice->frameGeometry().width() - voice->width() &&
+                       FitsPlan(voice, voicePlan.panelFrame) && voice->frameGeometry().right() == available.right(),
+        "Place beside chat moves a showing panel at once; its minimum size grows it leftwards, not off the screen");
+    host.CloseAll();
 }
 
 void TestSidebar(Results& results)
@@ -1040,6 +1155,7 @@ int RunShellSuite(int, char**)
     TestPlacement(results);
     TestPanelCatalog(results);
     TestPanelWindows(results);
+    TestPanelFrames(results);
     TestSidebar(results);
     TestComposer(results);
     TestToast(results);

@@ -105,7 +105,8 @@ class PanelWindow final : public QWidget
     // Shows (restoring from minimised), raises and activates.
     void Reveal();
     // Moves to a frame rectangle and counts as placed, so the first show neither restores the
-    // saved geometry nor runs the default placement.
+    // saved geometry nor runs the default placement. While the window is hidden the rectangle
+    // waits for the next show, where the frame margins it needs are known.
     void PlaceAt(const QRect& frame);
     void SetLocked(bool locked);
     // Runs once, on the first show (the native frame colours).
@@ -114,7 +115,8 @@ class PanelWindow final : public QWidget
     void SetResizeHook(std::function<void(QSize)> hook);
     void SetSettingsHook(std::function<void()> hook);
     void SetPlaceBesideHook(std::function<void()> hook);
-    // Gives the frame rectangle for a first show without saved geometry (PanelHost's cascade).
+    // Gives the frame rectangle for a first show without saved geometry (PanelHost's cascade),
+    // from the window's frame size.
     void SetPlacementHook(std::function<QRect(QSize)> hook);
     // Runs after every non-spontaneous show (true) and hide (false).
     void SetVisibilityHook(std::function<void(bool visible)> hook);
@@ -139,6 +141,11 @@ class PanelWindow final : public QWidget
   private:
     [[nodiscard]] bool RestoreGeometry();
     void SaveGeometry() const;
+    // The frame's size beyond the client area. Accurate only while the native window exists and
+    // the window counts as visible (from showEvent on); Qt reports nothing usable before that.
+    [[nodiscard]] QSize FrameExtra() const;
+    // move() places a top-level window's frame but resize() sizes its client area.
+    void ApplyFrame(const QRect& frame);
     void ApplyIcons();
     void ApplyUnowned();
 
@@ -156,6 +163,7 @@ class PanelWindow final : public QWidget
     std::function<QRect(QSize)> placementHook;
     std::function<void(bool)> visibilityHook;
     std::function<QIcon(const char*)> iconProvider;
+    std::optional<QRect> pendingFrame; // PlaceAt while hidden
     bool placed = false;
     bool shownOnce = false;
     bool unowned = false;
@@ -185,7 +193,11 @@ class PanelHost final
     void CloseAll();
     // remember=true records the open windows for RestoreHidden (hide to tray).
     void HideAll(bool remember);
+    // Shows the windows HideAll(true) hid without activating them: the owner keeps (or gets back)
+    // the active window and its last focus widget. Show the owner first.
     void RestoreHidden();
+    // Disables the panels' bodies and their actions (shortcuts and menu entries). The windows
+    // still close, and Open() still works for the owner's own use.
     void SetLocked(bool locked);
     // Window title and action text: SetTitleSuffix(Activity, " (3)") gives "Activity (3)".
     void SetTitleSuffix(PanelId id, const QString& suffix);
@@ -194,7 +206,7 @@ class PanelHost final
     // The hosted pages in catalog order.
     [[nodiscard]] QList<QWidget*> Pages() const;
     // QSettings panels/openSet: the open panels (or those hidden to the tray). Call it before
-    // HideAll(false) at shutdown; RestoreOpenSet reopens them.
+    // HideAll(false) at shutdown; RestoreOpenSet reopens them the way RestoreHidden does.
     void SaveOpenSet() const;
     void RestoreOpenSet();
     void SetShowHook(std::function<void(QWidget*)> hook);
@@ -207,11 +219,13 @@ class PanelHost final
     // the provider (after a theme change); the windows refresh their own headers.
     void SetIconProvider(std::function<QIcon(const char*)> provider);
     void RefreshIcons();
-    // Focus returns here when a panel closes and the owner had no other focus widget yet.
+    // Focus returns here when a panel closes and the owner's last focus widget is missing,
+    // hidden or disabled.
     void SetDefaultFocus(QWidget* widget);
 
   private:
     void Toggle(PanelId id);
+    void Restore(const std::vector<PanelId>& ids);
     void Configure(PanelWindow* window);
     void ReturnFocusToOwner();
     [[nodiscard]] QRect DefaultPlacement(QSize size);

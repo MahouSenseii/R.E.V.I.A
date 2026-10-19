@@ -31,6 +31,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <iterator>
+#include <optional>
 #include <utility>
 
 namespace revia::desktop
@@ -285,9 +286,28 @@ void PanelWindow::Reveal()
 void PanelWindow::PlaceAt(const QRect& frame)
 {
     placed = true;
-    const QSize frameExtra = frameGeometry().size() - size();
-    move(frame.topLeft());
-    resize(frame.size() - frameExtra);
+    // A window that is not showing has no reliable frame margins (none at all before its first
+    // show), so the rectangle is applied by the next showEvent.
+    if (isVisible())
+        ApplyFrame(frame);
+    else
+        pendingFrame = frame;
+}
+
+QSize PanelWindow::FrameExtra() const
+{
+    return frameGeometry().size() - size();
+}
+
+void PanelWindow::ApplyFrame(const QRect& frame)
+{
+    const QSize extra = FrameExtra();
+    // The minimum size (480x400 of client area) can make the window larger than planned. It then
+    // keeps the planned right and bottom edges, the ones the placement kept on the screen.
+    const QSize client = (frame.size() - extra).expandedTo(minimumSize());
+    const QSize actual = client + extra;
+    move(frame.x() + std::min(0, frame.width() - actual.width()), frame.y() + std::min(0, frame.height() - actual.height()));
+    resize(client);
 }
 
 void PanelWindow::SetLocked(const bool locked)
@@ -390,17 +410,18 @@ void PanelWindow::showEvent(QShowEvent* event)
     // A spontaneous show is the system restoring a minimised window; it changes nothing here.
     if (!event->spontaneous())
     {
-        // The show event arrives before the native window maps, so placing here does not flash.
+        // The show event arrives before the native window maps, so placing here does not flash,
+        // and it is the first point at which the frame margins are known: the native window
+        // exists and the widget already counts as visible.
+        std::optional<QRect> frame = std::exchange(pendingFrame, std::nullopt);
         if (!placed)
         {
             placed = true;
             if (!RestoreGeometry() && placementHook)
-            {
-                const QRect frame = placementHook(size());
-                move(frame.topLeft());
-                resize(frame.size());
-            }
+                frame = placementHook(size() + FrameExtra());
         }
+        if (frame)
+            ApplyFrame(*frame);
         ApplyUnowned();
         PolishPage();
         // Activation would otherwise focus the first button in the tab chain, Place beside chat,
@@ -634,9 +655,26 @@ void PanelHost::HideAll(const bool remember)
 
 void PanelHost::RestoreHidden()
 {
-    const std::vector<PanelId> reopen = std::exchange(hiddenForTray, {});
-    for (const PanelId id : reopen)
-        Open(id);
+    Restore(std::exchange(hiddenForTray, {}));
+}
+
+void PanelHost::Restore(const std::vector<PanelId>& ids)
+{
+    bool shown = false;
+    for (const PanelId id : ids)
+    {
+        PanelWindow* window = Window(id);
+        if (window == nullptr || window->isVisible())
+            continue;
+        // Shown as it was hidden (a minimised panel comes back minimised), and not activated:
+        // the user asked for the main window, not for whichever panel happens to come back last.
+        window->show();
+        window->raise();
+        shown = true;
+    }
+    // Showing a window activates it on most platforms, so the owner takes the keyboard back.
+    if (shown)
+        ReturnFocusToOwner();
 }
 
 void PanelHost::SetLocked(const bool value)
@@ -646,6 +684,13 @@ void PanelHost::SetLocked(const bool value)
     {
         if (window)
             window->SetLocked(locked);
+    }
+    // The panel shortcuts and menu entries too: a locked window (a companion switch, or shutting
+    // down for good) opens no more panels. Open() itself stays available to the window.
+    for (auto& [id, action] : actions)
+    {
+        if (action)
+            action->setEnabled(!locked);
     }
 }
 
@@ -698,11 +743,13 @@ void PanelHost::SaveOpenSet() const
 
 void PanelHost::RestoreOpenSet()
 {
+    std::vector<PanelId> ids;
     for (const QString& key : QSettings().value("panels/openSet").toStringList())
     {
         if (const auto id = PanelFromKey(key))
-            Open(*id);
+            ids.push_back(*id);
     }
+    Restore(ids);
 }
 
 void PanelHost::SetShowHook(std::function<void(QWidget*)> hook)
@@ -787,7 +834,11 @@ void PanelHost::ReturnFocusToOwner()
     if (!owner->isVisible() || owner->isMinimized())
         return;
     owner->activateWindow();
-    QWidget* target = lastOwnerFocus ? lastOwnerFocus.data() : defaultFocus.data();
+    // The last focus widget may have gone since (a chat search hidden by the rail); activation
+    // alone would then pick the first widget in the tab chain, not the message box.
+    QWidget* target = lastOwnerFocus.data();
+    if (target == nullptr || !target->isVisible() || !target->isEnabled())
+        target = defaultFocus.data();
     if (target != nullptr && target->isVisible() && target->isEnabled())
         target->setFocus(Qt::OtherFocusReason);
 }
