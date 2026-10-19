@@ -25,6 +25,7 @@
 #include <QListWidget>
 #include <QMenu>
 #include <QMessageBox>
+#include <QMouseEvent>
 #include <QPlainTextEdit>
 #include <QPushButton>
 #include <QRegularExpression>
@@ -343,13 +344,39 @@ QLabel* Badge(QWidget* row, const QString& kind)
     return nullptr;
 }
 
-void PressKey(QWidget* target, const int key)
+void PressKey(QWidget* target, const int key, const Qt::KeyboardModifiers modifiers = Qt::NoModifier)
 {
-    QKeyEvent press(QEvent::KeyPress, key, Qt::NoModifier);
+    // A key press that is not spontaneous is offered to shortcuts first, as a typed one is.
+    QKeyEvent press(QEvent::KeyPress, key, modifiers);
     QApplication::sendEvent(target, &press);
-    QKeyEvent release(QEvent::KeyRelease, key, Qt::NoModifier);
+    QKeyEvent release(QEvent::KeyRelease, key, modifiers);
     QApplication::sendEvent(target, &release);
     Settle();
+}
+
+// A left click in the middle of a widget; a label passes it on to the row it sits in.
+void ClickOn(QWidget* target)
+{
+    if (target == nullptr)
+        return;
+    const QPointF centre = QRectF(target->rect()).center();
+    const QPointF global = target->mapToGlobal(centre);
+    QMouseEvent press(QEvent::MouseButtonPress, centre, global, Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(target, &press);
+    QMouseEvent release(QEvent::MouseButtonRelease, centre, global, Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+    QApplication::sendEvent(target, &release);
+    Settle();
+}
+
+// The box holding a group: its title label and its frame of rows.
+QWidget* GroupBox(QWidget* page, const QString& title)
+{
+    for (QLabel* label : page->findChildren<QLabel*>(QStringLiteral("settingsGroupTitle")))
+    {
+        if (label->text() == title)
+            return label->parentWidget();
+    }
+    return nullptr;
 }
 
 // One notch of the mouse wheel over a widget; true when the widget took it. A synthetic event is not
@@ -868,6 +895,34 @@ void CheckDialog(Expect& expect, revia::runtime::ReviaSession& session)
         dialog.Refresh();
     }
 
+    // The whole row is the switch's hit area: a click on its description turns a switch, and a
+    // risky row asks first, exactly as its switch does.
+    dialog.ShowSection(SettingsSection::General);
+    Settle();
+    if (auto* follow = dialog.findChild<QCheckBox*>(QStringLiteral("sw_activity_follow")))
+    {
+        QLabel* description = RowLabel(&dialog, "sw_activity_followRow", "settingDescription");
+        const bool before = follow->isChecked();
+        ClickOn(description);
+        expect(description && follow->isChecked() != before && QSettings().value("activity/follow").toBool() != before,
+            "clicking a row's description turns its switch and saves it");
+        ClickOn(description);
+        expect(follow->isChecked() == before && QSettings().value("activity/follow").toBool() == before, "a second click turns it back");
+    }
+    if (trusted)
+    {
+        dialog.ShowSection(SettingsSection::Integrations);
+        Settle();
+        const std::size_t writes = fake.writes.size();
+        ClickOn(RowLabel(&dialog, "sw_localApi_trustedPrivateRow", "settingDescription"));
+        QMessageBox* box = OpenConfirmation(&dialog);
+        expect(box != nullptr && !trusted->isChecked(), "clicking a risky row asks before turning it on");
+        if (box)
+            box->button(QMessageBox::Cancel)->click();
+        Settle();
+        expect(!trusted->isChecked() && fake.writes.size() == writes, "and Cancel from a row click writes nothing");
+    }
+
     // Persistent statuses and backend status text.
     dialog.SetRowStatus("speech.enabled", "Voice is unavailable: fixture", "warning");
     const QLabel* speechStatus = RowLabel(&dialog, "speechCheckRow", "settingStatus");
@@ -969,11 +1024,22 @@ void CheckDialog(Expect& expect, revia::runtime::ReviaSession& session)
     if (auto* visionRow = dialog.findChild<QFrame*>(QStringLiteral("sw_vision_enabledRow")))
         expect(ResetOffered(visionRow, false), "a switch that never asks offers its reset either way");
 
+    // A renamed profile re-renders its group's title.
+    fake.choices["profile.displayName"] = QStringLiteral("Evening");
+    dialog.Refresh();
+    expect(profileGroup && profileGroup->text() == "This profile (Evening)", "Refresh re-renders group titles");
+    fake.choices["profile.displayName"] = QStringLiteral("Assistant");
+    dialog.Refresh();
+
     // Companion name substitution.
     const QLabel* bargeIn = RowLabel(&dialog, "bargeInCheckRow", "settingTitle");
+    const QLabel* voiceIntro = dialog.SectionPage(SettingsSection::Voice)->findChild<QLabel*>(QStringLiteral("settingsSectionIntro"));
     expect(bargeIn && bargeIn->text() == "Let me interrupt Revia", "{name} becomes the companion's name");
+    expect(voiceIntro && voiceIntro->text().contains("Revia"), "{name} in a section intro becomes the companion's name");
     dialog.SetCompanionName("Nova");
     expect(bargeIn && bargeIn->text() == "Let me interrupt Nova", "SetCompanionName re-renders the rows");
+    expect(voiceIntro && voiceIntro->text().contains("Nova") && !voiceIntro->text().contains("Revia"),
+        "SetCompanionName re-renders the section intros");
     for (const QLabel* label : dialog.findChildren<QLabel*>())
         expect(!label->text().contains("{name}") && !label->text().contains("{profile}"), "no placeholder may show: " + label->text());
 
@@ -990,6 +1056,19 @@ void CheckDialog(Expect& expect, revia::runtime::ReviaSession& session)
         "the Voice section shows its hit count");
     expect(generalItem && generalItem->isHidden(), "sections without hits are hidden");
     expect(stack->currentWidget() == dialog.SectionPage(SettingsSection::Voice), "search moves to the first section with hits");
+    QWidget* singing = GroupBox(dialog.SectionPage(SettingsSection::Voice), QStringLiteral("Singing"));
+    QWidget* listening = GroupBox(dialog.SectionPage(SettingsSection::Voice), QStringLiteral("Listening"));
+    expect(singing && singing->isHidden() && listening && !listening->isHidden(),
+        "search hides a group without matching rows and keeps a group with them");
+    // Down in the search box moves into the section list, and Ctrl+F comes back with the query
+    // selected. The confirmation above took activation with it when it closed (offscreen).
+    dialog.activateWindow();
+    Settle();
+    search->setFocus(Qt::OtherFocusReason);
+    PressKey(search, Qt::Key_Down);
+    expect(sectionList->hasFocus(), "Down in the search box moves into the section list");
+    PressKey(sectionList, Qt::Key_F, Qt::ControlModifier);
+    expect(search->hasFocus() && search->selectedText() == "microphone", "Ctrl+F focuses the search box and selects the query");
     auto* noResults = dialog.findChild<QLabel*>(QStringLiteral("settingsNoResults"));
     expect(noResults && noResults->isHidden(), "the no-results line stays hidden while something matches");
     search->setText("zzqx");
@@ -998,8 +1077,9 @@ void CheckDialog(Expect& expect, revia::runtime::ReviaSession& session)
         "a query with no hits says so");
     search->setFocus();
     PressKey(search, Qt::Key_Escape);
-    expect(search->text().isEmpty() && dialog.isVisible() && micRow && !micRow->isHidden() && speechRow && !speechRow->isHidden(),
-        "Esc clears the search first and restores every row");
+    expect(search->text().isEmpty() && dialog.isVisible() && micRow && !micRow->isHidden() && speechRow && !speechRow->isHidden() &&
+               singing && !singing->isHidden(),
+        "Esc clears the search first and restores every row and group");
     PressKey(search, Qt::Key_Escape);
     expect(!dialog.isVisible() && hides >= 1, "a second Esc closes Settings and runs onHide");
     dialog.show();
@@ -1155,7 +1235,19 @@ void CheckDialog(Expect& expect, revia::runtime::ReviaSession& session)
         auto* page = dynamic_cast<QScrollArea*>(dialog.SectionPage(section));
         expect(page && page->horizontalScrollBar()->maximum() == 0, page->objectName() + " must fit 760x540 without horizontal scrolling");
     }
-    dialog.resize(920, 640);
+
+    // Hiding Settings saves its geometry, and the next dialog opens with it. The size stays inside
+    // the offscreen screen, which a restored geometry is fitted to.
+    dialog.resize(780, 540);
+    Settle();
+    dialog.hide();
+    expect(QSettings().value("settingsDialog/geometry").toByteArray() == dialog.saveGeometry(), "hiding Settings saves its geometry");
+    {
+        FakeBackend other;
+        SettingsDialog restored(other.Make(), {}, nullptr);
+        expect(restored.size() == QSize(780, 540), "a new Settings dialog opens with the saved size");
+    }
+    QSettings().remove("settingsDialog/geometry");
 }
 
 // Enter presses nothing that lacks focus. A shown QDialog makes its first auto-default button the
