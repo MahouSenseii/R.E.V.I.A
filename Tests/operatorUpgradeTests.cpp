@@ -166,13 +166,15 @@ void RunOperatorUpgradeTests()
     tests::Check(
         runner.Operate(goal).status == goals::GoalStatus::Exhausted, "A completion returned beyond the token ceiling was accepted.");
     goal.budget.maxTokens = 100;
-    goal.budget.maxDurationMs = 100;
+    // The ceiling is checked before the first step too, so it must leave room for the
+    // run's own setup on a slow machine; otherwise the step is never asked for at all.
+    goal.budget.maxDurationMs = 1000;
     bool called = false;
     runner.SetStepProvider(
         [&](const goals::Goal&, std::uint32_t)
         {
             called = true;
-            std::this_thread::sleep_for(std::chrono::milliseconds(120));
+            std::this_thread::sleep_for(std::chrono::milliseconds(1200));
             goals::NextStep next;
             next.finished = true;
             return next;
@@ -189,7 +191,7 @@ void RunOperatorUpgradeTests()
     runner.SetCompletionVerifier(
         [](const goals::Goal&, std::stop_token)
         {
-            std::this_thread::sleep_for(std::chrono::milliseconds(120));
+            std::this_thread::sleep_for(std::chrono::milliseconds(1200));
             return goals::CompletionEvidence{true, "Late fixture acceptance."};
         });
     tests::Check(runner.Operate(goal).stopReason == goals::StopReason::BudgetDuration,

@@ -71,10 +71,16 @@ jobs:
   windows:
     name: Windows / MinGW
     runs-on: windows-latest
-    # Every run is a cold Debug build with no compiler cache. It has grown from about an hour to
-    # 100-125 minutes on a hosted runner, and a slow runner was cancelled at 120 minutes seven
-    # steps before the end of the build. The limit leaves room for that and the tests.
+    # A build that misses the compiler cache below is cold. A cold Debug build has grown from
+    # about an hour to 100-125 minutes on a hosted runner, and a slow runner was cancelled at
+    # 120 minutes seven steps before the end of the build. The limit leaves room for that and
+    # the tests.
     timeout-minutes: 180
+    env:
+      CCACHE_BASEDIR: ${{ github.workspace }}
+      CCACHE_MAXSIZE: 2G
+      # The compiler comes out of the Qt tool cache, whose file times are not stable.
+      CCACHE_COMPILERCHECK: content
     steps:
       - uses: actions/checkout@v4
         with:
@@ -108,6 +114,33 @@ jobs:
       - name: Install Ninja
         uses: seanmiddleditch/gha-setup-ninja@96bed6edff20d1dd61ecff9b75cc519d516e6401 # v5
 
+      # A cold build spends most of its time compiling sources that have not changed since
+      # the last run. ccache keeps those objects between runs. The release zip is pinned by
+      # its SHA-256, checked against the maintainer's GPG signature when it was pinned.
+      - name: Install ccache
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $zip = Join-Path $env:RUNNER_TEMP 'ccache.zip'
+          Invoke-WebRequest -Uri 'https://github.com/ccache/ccache/releases/download/v4.11.3/ccache-4.11.3-windows-x86_64.zip' -OutFile $zip
+          $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $zip).Hash.ToLowerInvariant()
+          if ($hash -ne 'bfd031cad091b7db7e68c3303be542b0f7fee7a3e716d76ec6f7e6c7ef4b3526') { throw "Unexpected ccache archive: $hash" }
+          Expand-Archive -LiteralPath $zip -DestinationPath $env:RUNNER_TEMP
+          $dir = Join-Path $env:RUNNER_TEMP 'ccache-4.11.3-windows-x86_64'
+          & (Join-Path $dir 'ccache.exe') --version
+          $dir | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          # Job-level env cannot name the runner's temp folder, so the cache path is set here.
+          "CCACHE_DIR=$(Join-Path $env:RUNNER_TEMP 'ccache')" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      # Restored from the newest earlier run and saved under a new key after every build,
+      # so the cache follows the code instead of freezing at its first contents.
+      - name: Restore compiler cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/ccache
+          key: ccache-${{ runner.os }}-mingw1310-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: ccache-${{ runner.os }}-mingw1310-
+
       # FetchContent pulls cpp-httplib, nlohmann/json and the SQLite amalgamation on a
       # cold tree. Cached on the lockfile-equivalent -- the CMakeLists that names the
       # tags -- so an ordinary run does not re-download them.
@@ -125,10 +158,27 @@ jobs:
           -DREVIA_REQUIRE_DESKTOP=ON
           -DCMAKE_C_COMPILER="${env:REVIA_COMPILER_BIN}/gcc.exe"
           -DCMAKE_CXX_COMPILER="${env:REVIA_COMPILER_BIN}/g++.exe"
+          -DCMAKE_C_COMPILER_LAUNCHER=ccache
+          -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
           -DREVIA_QT_ROOT="${env:QT_ROOT_DIR}"
 
       - name: Build
-        run: cmake --build build/ci
+        run: |
+          ccache --zero-stats
+          cmake --build build/ci
+
+      # Saved even when the build or a later step fails: the objects that did compile are
+      # still good, and the next run should not have to compile them again.
+      - name: Show compiler cache statistics
+        if: always()
+        run: ccache --show-stats
+
+      - name: Save compiler cache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/ccache
+          key: ccache-${{ runner.os }}-mingw1310-${{ github.run_id }}-${{ github.run_attempt }}
 
       - uses: actions/setup-node@v4
         with:
