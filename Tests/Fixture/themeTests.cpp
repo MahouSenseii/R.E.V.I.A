@@ -36,7 +36,9 @@
 #include <QTabBar>
 #include <QTabWidget>
 #include <QTableWidget>
+#include <QTextBlock>
 #include <QTextBrowser>
+#include <QTextDocument>
 #include <QToolButton>
 #include <QVBoxLayout>
 
@@ -515,6 +517,36 @@ int RunThemeSuite(int, char**)
         "Markdown links and inline code do not use the light link and code colours");
     results.Expect(lightMarkdown.contains(QLatin1String("Consolas")), "inline code lost its monospace face");
     results.Expect(theme::DocumentCss().contains(theme::Light().text.name()), "DocumentCss does not carry the light text colour");
+    {
+        // Qt's rich-text CSS drops what it cannot parse without a word (a 12.5px size, for one),
+        // so check what a document does with each class rather than the text of the sheet.
+        QTextDocument document;
+        document.setDefaultStyleSheet(theme::DocumentCss());
+        document.setHtml(QStringLiteral("<p class='speaker'>Revia</p><p class='activityRow'>Remembered a preference</p>"
+                                        "<p class='activityRow warn'>Needs your OK</p><p class='activityRow error'>Couldn't finish</p>"));
+        struct ExpectedBlock
+        {
+            const char* text;
+            QColor colour;
+            int pixels;
+            int weight;
+        };
+        const ExpectedBlock expected[] = {{"Revia", theme::Light().textSecondary, 13, QFont::DemiBold},
+            {"Remembered a preference", theme::Light().textTertiary, 12, QFont::Normal},
+            {"Needs your OK", theme::Light().warning, 12, QFont::Normal}, {"Couldn't finish", theme::Light().danger, 13, QFont::Normal}};
+        QTextBlock block = document.begin();
+        for (const ExpectedBlock& want : expected)
+        {
+            const QTextCharFormat format = block.isValid() ? block.begin().fragment().charFormat() : QTextCharFormat();
+            const int pixels = format.property(QTextFormat::FontPixelSize).toInt();
+            results.Expect(block.text() == QLatin1String(want.text) && format.foreground().color() == want.colour &&
+                    pixels == want.pixels && format.fontWeight() == want.weight,
+                std::string("transcript block '") + want.text + "' renders " + Describe(format.foreground().color()) + " at " +
+                    std::to_string(pixels) + "px weight " + std::to_string(format.fontWeight()) + ", wants " + Describe(want.colour) +
+                    " at " + std::to_string(want.pixels) + "px weight " + std::to_string(want.weight));
+            block = block.next();
+        }
+    }
 
     // Light to Dark: palette, stylesheet, painted widgets, icons and listeners all follow.
     int listenerRuns = 0;

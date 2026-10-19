@@ -880,7 +880,9 @@ QString DocumentCss()
     css += QStringLiteral(".work, .thought, .work a, .thought a { color: %1; font-size: 13px; }\n").arg(c(tokens.textTertiary));
     css += QStringLiteral(".evidence, .evidence td { color: %1; background-color: %2; font-size: 13px; }\n")
                .arg(c(tokens.textSecondary), c(tokens.surfaceAlt));
-    css += QStringLiteral(".activityRow { color: %1; font-size: 12.5px; }\n").arg(c(tokens.textTertiary));
+    // Qt's rich-text CSS takes whole pixels only and silently drops 12.5px, so memory and
+    // proposal rows are 12px (spec 2.6 asks for 12.5).
+    css += QStringLiteral(".activityRow { color: %1; font-size: 12px; }\n").arg(c(tokens.textTertiary));
     css += QStringLiteral(".activityRow.warn { color: %1; }\n").arg(c(tokens.warning));
     css += QStringLiteral(".activityRow.error { color: %1; font-size: 13px; }\n").arg(c(tokens.danger));
     css += QStringLiteral(".activityRow.error a { color: %1; }\n").arg(c(tokens.danger));
