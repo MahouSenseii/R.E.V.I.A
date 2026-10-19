@@ -19,6 +19,11 @@ namespace revia::core
 // outServerId; it is cleared for every other key.
 [[nodiscard]] const OwnerKey* FindOwnerKey(std::string_view key, std::string* outServerId = nullptr);
 
+// Whether a load would apply this overlay entry: an allowlisted key holding a value of its kind
+// (a boolean, or one of the choice's values). Everything else is ignored by every load, so
+// nothing needs to copy it, however large or deeply nested it is.
+[[nodiscard]] bool IsAcceptedOwnerValue(std::string_view key, const nlohmann::json& value);
+
 // What an owner key holds in loaded settings: a boolean, or the text of a choice. Empty for a
 // key that is not allowlisted, or an MCP key naming a server the settings do not have.
 [[nodiscard]] std::optional<nlohmann::json> OwnerSettingValue(const appSettings& settings, std::string_view key);

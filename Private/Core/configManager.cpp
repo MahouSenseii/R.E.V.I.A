@@ -1718,6 +1718,11 @@ bool configManager::LoadSettings(appSettings& outSettings, std::vector<std::stri
     json accepted = data;
     for (const auto& [key, value] : overlay["values"].items())
     {
+        // An entry the overlay pass above ignored (and warned about) is never copied: only a
+        // boolean or a choice can be applied, and a hand-written value nested deep enough would
+        // exhaust the stack in the copy.
+        if (!revia::core::IsAcceptedOwnerValue(key, value))
+            continue;
         json trial = accepted;
         std::vector<std::string> ignored;
         revia::core::ApplyOwnerOverrides(trial, {{"schemaVersion", 1}, {"values", {{key, value}}}}, ignored);

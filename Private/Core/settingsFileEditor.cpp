@@ -166,6 +166,16 @@ OverlayFile ReadOverlay(const std::filesystem::path& path, json& outOverlay)
         stream >> overlay;
         if (!IsUsableOverlay(overlay))
             return OverlayFile::Unusable;
+        // Entries no load applies are dropped here, so a write never carries (or recursively
+        // dumps) a hand-written value that could only ever be ignored.
+        json& values = overlay["values"];
+        for (auto entry = values.begin(); entry != values.end();)
+        {
+            if (IsAcceptedOwnerValue(entry.key(), entry.value()))
+                ++entry;
+            else
+                entry = values.erase(entry);
+        }
         outOverlay = std::move(overlay);
         return OverlayFile::Usable;
     }
@@ -218,6 +228,12 @@ const OwnerKey* FindOwnerKey(const std::string_view key, std::string* outServerI
         return nullptr;
     }
     return &*found;
+}
+
+bool IsAcceptedOwnerValue(const std::string_view key, const json& value)
+{
+    const OwnerKey* entry = FindOwnerKey(key);
+    return entry != nullptr && HasOwnerType(*entry, value);
 }
 
 std::optional<json> OwnerSettingValue(const appSettings& settings, const std::string_view key)

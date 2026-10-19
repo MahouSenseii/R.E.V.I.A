@@ -229,6 +229,29 @@ void TestAnUnusableOverlayIsIgnored()
     fixture.CheckBaseUntouched();
 }
 
+void TestADeeplyNestedJunkEntryIsNeverCopied()
+{
+    // Hand-written junk under an unknown key, beside a stale entry that sends the load down its
+    // entry-by-entry path. No load or write may copy the junk: nested this deep, a recursive
+    // copy or dump runs out of stack, and Revia could neither start nor repair the file.
+    Fixture fixture;
+    const int depth = 60000;
+    std::string junk(static_cast<std::size_t>(depth), '[');
+    junk.append(static_cast<std::size_t>(depth), ']');
+    Write(fixture.overlay, R"({"schemaVersion":1,"values":{"llm.visionEnabled":true,"vision.enabled":false,"zzz":)" + junk + "}}");
+    std::vector<std::string> warnings;
+    const appSettings loaded = fixture.Load(&warnings);
+    Check(!loaded.llm.bVisionEnabled && !loaded.vision.bEnabled && Mentions(warnings, "zzz") && Mentions(warnings, "llm.visionEnabled"),
+        "A deeply nested unknown entry changed how the overlay loads.");
+    SettingsFileEditor editor = fixture.Editor();
+    std::string error;
+    Check(editor.SetBool("image.keepLoaded", true, error), "A change beside a deeply nested unknown entry failed: " + error);
+    const json saved = json::parse(Read(fixture.overlay));
+    Check(!saved["values"].contains("zzz") && saved["values"]["vision.enabled"] == false && saved["values"]["image.keepLoaded"] == true,
+        "The editor kept an entry no load applies, or lost one that loads.");
+    fixture.CheckBaseUntouched();
+}
+
 void TestAStaleEntryDoesNotBlockOtherChanges()
 {
     // Startup sets the stale entry aside and loads, so it must not stop the owner changing,
@@ -389,6 +412,7 @@ void RunSettingsFileEditorTests()
     TestAMissingServerIsSkippedWithAWarning();
     TestAnUnusableOverlayIsIgnored();
     TestAStaleEntryDoesNotBlockOtherChanges();
+    TestADeeplyNestedJunkEntryIsNeverCopied();
     TestAnUnreadableOverlayIsMovedAside();
     TestRemoveReturnsToSettingsJson();
     TestTheReplacedOverlayIsKeptAsBak();
