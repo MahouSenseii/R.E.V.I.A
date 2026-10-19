@@ -129,6 +129,13 @@ const QString ChangeBack = QStringLiteral("\n\nYou can change this back here at 
 
 bool CapabilityPanel::eventFilter(QObject* watched, QEvent* event)
 {
+    if (event->type() == QEvent::Wheel && watched == taskApprovalMode && !taskApprovalMode->hasFocus())
+    {
+        // A notch over the closed list picks the neighbouring mode and applies it at once; one down
+        // from the default is "Free". Ignored, the wheel scrolls the page the panel sits in instead.
+        event->ignore();
+        return true;
+    }
     if (event->type() == QEvent::MouseButtonRelease)
     {
         auto* row = qobject_cast<QWidget*>(watched);
@@ -278,6 +285,9 @@ CapabilityPanel::CapabilityPanel(revia::runtime::ReviaSession& inputSession, Dis
     taskApprovalMode->addItem("Free — use granted permissions without asking", static_cast<int>(ExecutionMode::OwnerFullAccess));
     taskApprovalMode->addItem("Approved scope only", static_cast<int>(ExecutionMode::ApprovedScope));
     taskApprovalMode->addItem("Actions disabled", static_cast<int>(ExecutionMode::Disabled));
+    // Changed only once clicked or tabbed into; see eventFilter.
+    taskApprovalMode->setFocusPolicy(Qt::StrongFocus);
+    taskApprovalMode->installEventFilter(this);
     taskLayout->addWidget(taskApprovalMode);
     auto* taskHelp = new QLabel(
         "Task approval covers routine steps and messages you explicitly request. "

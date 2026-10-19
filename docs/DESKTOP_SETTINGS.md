@@ -49,6 +49,9 @@ that every boolean preference and every owner-settings key has a row.
   first and closes Settings second. Ctrl+F focuses it and Down moves into the section list.
   Enter does nothing by itself in Settings; Space turns a focused switch or presses a focused
   button.
+- **Scrolling.** The mouse wheel changes a number box or a drop-down list only after you have
+  clicked or tabbed into it; over one you have not, it scrolls the page. This includes the
+  "Requested tasks" mode in Permissions, where one notch would otherwise switch to Free mode.
 - **Names.** "{name}" in this page is the active companion's display name. "Revia" in a label
   names the application.
 

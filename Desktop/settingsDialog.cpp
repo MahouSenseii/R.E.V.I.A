@@ -5,6 +5,7 @@
 #include "toggleSwitch.h"
 
 #include <QAbstractButton>
+#include <QAbstractSpinBox>
 #include <QAction>
 #include <QButtonGroup>
 #include <QCheckBox>
@@ -207,6 +208,14 @@ bool ResetNeedsNoQuestion(const SettingDescriptor& descriptor, const bool shownO
         case ConfirmWhen::TurningOff: return !shownOn;
     }
     return false;
+}
+
+// Spin boxes and combo boxes change their value under the mouse wheel even without focus, so a wheel
+// turned to scroll a long page would change whatever passed under the pointer (and the combo box's
+// "activated" applies at once). In Settings they ignore the wheel until clicked or tabbed into.
+bool IsWheelGuarded(const QObject* object)
+{
+    return dynamic_cast<const QAbstractSpinBox*>(object) != nullptr || dynamic_cast<const QComboBox*>(object) != nullptr;
 }
 
 // Paints a section's search hit count at the right edge of its row, in the secondary text colour
@@ -758,6 +767,7 @@ SettingsDialog::Row& SettingsDialog::AddSwitchRow(Group& group, const SettingDes
             spin = value;
         }
         spin->setKeyboardTracking(false);
+        GuardWheel(spin);
         row.control = spin;
         row.text->addSpacing(4);
         row.text->addWidget(spin, 0, Qt::AlignLeft);
@@ -799,6 +809,7 @@ SettingsDialog::Row& SettingsDialog::AddPlainRow(Group& group, const QString& la
         row.control = control;
         control->setParent(row.frame);
         ClearAutoDefault(control);
+        GuardWheel(control);
         // A wide control (the microphone picker with its buttons) gets the full row under the text.
         if (control->sizeHint().width() > 260)
             row.text->addWidget(control);
@@ -1152,6 +1163,23 @@ void SettingsDialog::ShowInlineValue(Row& row, const double value)
         decimal->setValue(value);
     else if (auto* whole = dynamic_cast<QSpinBox*>(row.control))
         whole->setValue(static_cast<int>(std::lround(value)));
+}
+
+void SettingsDialog::GuardWheel(QWidget* root)
+{
+    QList<QWidget*> controls;
+    for (QAbstractSpinBox* spin : root->findChildren<QAbstractSpinBox*>())
+        controls.push_back(spin);
+    for (QComboBox* combo : root->findChildren<QComboBox*>())
+        controls.push_back(combo);
+    if (IsWheelGuarded(root))
+        controls.push_back(root);
+    for (QWidget* control : controls)
+    {
+        // Focus from a click or Tab only; the wheel would otherwise give it focus and then change it.
+        control->setFocusPolicy(Qt::StrongFocus);
+        control->installEventFilter(this); // installing twice keeps one filter
+    }
 }
 
 void SettingsDialog::ReadRows(const std::vector<Row*>& wanted)
@@ -1665,6 +1693,7 @@ void SettingsDialog::SetHostedWidget(const SettingsSection sectionId, const QStr
         return;
     widget->setParent(section.content);
     ClearAutoDefault(widget);
+    GuardWheel(widget);
     const int count = section.body->count();
     section.body->insertWidget(position < 0 || position > count ? count : position, widget);
     // A widget taken out of another layout or a tab page may have been hidden there.
@@ -1793,6 +1822,8 @@ void SettingsDialog::showEvent(QShowEvent* event)
     // Before QDialog picks a default button among the auto-default ones, which it does right after
     // this event; a hosted panel may have made buttons since it was placed.
     ClearAutoDefault(this);
+    // Likewise for value controls a hosted panel or the window made after placing them.
+    GuardWheel(this);
     Refresh();
     search->setFocus(Qt::OtherFocusReason);
     NotifyResize();
@@ -1823,6 +1854,12 @@ void SettingsDialog::resizeEvent(QResizeEvent* event)
 
 bool SettingsDialog::eventFilter(QObject* watched, QEvent* event)
 {
+    if (event->type() == QEvent::Wheel && IsWheelGuarded(watched) && !static_cast<QWidget*>(watched)->hasFocus())
+    {
+        // Ignored, the wheel goes on to the parents and scrolls the section page.
+        event->ignore();
+        return true;
+    }
     if (watched == search && event->type() == QEvent::KeyPress && static_cast<QKeyEvent*>(event)->key() == Qt::Key_Down)
     {
         // Down from the search box continues into the section list.

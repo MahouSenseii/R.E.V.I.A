@@ -34,6 +34,7 @@
 #include <QSpinBox>
 #include <QStackedWidget>
 #include <QTimer>
+#include <QWheelEvent>
 #include <QComboBox>
 #include <QIcon>
 #include <QPalette>
@@ -341,6 +342,18 @@ void PressKey(QWidget* target, const int key)
     QKeyEvent release(QEvent::KeyRelease, key, Qt::NoModifier);
     QApplication::sendEvent(target, &release);
     Settle();
+}
+
+// One notch of the mouse wheel over a widget; true when the widget took it. A synthetic event is not
+// passed on to the parents the way a real one is, so a guarded control simply leaves it unaccepted.
+bool WheelTaken(QWidget* target)
+{
+    const QPointF centre = QRectF(target->rect()).center();
+    QWheelEvent wheel(centre, target->mapToGlobal(centre), QPoint(), QPoint(0, -120), Qt::NoButton, Qt::NoModifier, Qt::NoScrollPhase,
+        false);
+    QApplication::sendEvent(target, &wheel);
+    Settle();
+    return wheel.isAccepted();
 }
 
 // Opens a row's context menu the way a right-click does and reports whether "Reset to default" was
@@ -974,6 +987,56 @@ void CheckDialog(Expect& expect, revia::runtime::ReviaSession& session)
     expect(stack->currentWidget() == dialog.SectionPage(SettingsSection::Permissions) && pointer &&
                pointer->parentWidget()->property("highlight").toBool(),
         "FocusSetting reaches a hosted switch");
+
+    // The wheel over a value control that has no focus scrolls the page instead of changing the value:
+    // the profile spins save the profile, the text size applies at once, and one notch down from the
+    // default task mode would apply "Free" without a question.
+    QList<QWidget*> valueControls;
+    for (QAbstractSpinBox* spin : dialog.findChildren<QAbstractSpinBox*>())
+        valueControls.push_back(spin);
+    for (QComboBox* combo : dialog.findChildren<QComboBox*>())
+        valueControls.push_back(combo);
+    for (const QWidget* control : valueControls)
+    {
+        const QString name = control->objectName().isEmpty() ? QString::fromUtf8(control->metaObject()->className()) : control->objectName();
+        expect(control->focusPolicy() == Qt::StrongFocus, name + " must take focus only from a click or Tab");
+    }
+    if (temperature)
+    {
+        dialog.ShowSection(SettingsSection::Chat);
+        search->setFocus(Qt::OtherFocusReason);
+        const double before = temperature->value();
+        const std::size_t profileWrites = fake.profileWrites.size();
+        expect(!WheelTaken(temperature) && qFuzzyCompare(temperature->value(), before) && !temperature->hasFocus(),
+            "the wheel leaves an unfocused profile spin alone");
+        search->setFocus(Qt::OtherFocusReason);
+        Settle();
+        expect(fake.profileWrites.size() == profileWrites, "and nothing is written when focus moves on");
+    }
+    if (sizeCombo)
+    {
+        dialog.ShowSection(SettingsSection::Appearance);
+        const int before = sizeCombo->currentIndex();
+        expect(!WheelTaken(sizeCombo) && sizeCombo->currentIndex() == before && textSize == -1,
+            "the wheel leaves an unfocused text size alone and applies nothing");
+    }
+    if (auto* mode = panel->findChild<QComboBox*>(QStringLiteral("taskApprovalMode")))
+    {
+        dialog.ShowSection(SettingsSection::Permissions);
+        search->setFocus(Qt::OtherFocusReason);
+        const int before = mode->currentIndex();
+        expect(!WheelTaken(mode) && mode->currentIndex() == before && mode->focusPolicy() == Qt::StrongFocus,
+            "the wheel leaves the unfocused task approval mode alone");
+    }
+    // Once the owner has clicked or tabbed into a value control, the wheel changes it as usual.
+    dialog.ShowSection(SettingsSection::Chat);
+    Settle();
+    spinner->setValue(5);
+    spinner->setFocus(Qt::TabFocusReason);
+    const int spinnerBefore = spinner->value();
+    expect(spinner->hasFocus() && WheelTaken(spinner) && spinner->value() != spinnerBefore, "the wheel steps a focused spin box");
+    spinner->setValue(spinnerBefore);
+    search->setFocus(Qt::OtherFocusReason);
 
     // Every section fits 760x540 without horizontal scrolling, the hosted panel included.
     dialog.resize(760, 540);
