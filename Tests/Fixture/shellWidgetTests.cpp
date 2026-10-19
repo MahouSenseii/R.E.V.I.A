@@ -30,6 +30,7 @@
 #include <QPlainTextEdit>
 #include <QPointer>
 #include <QPushButton>
+#include <QScrollArea>
 #include <QScrollBar>
 #include <QSettings>
 #include <QStatusBar>
@@ -516,6 +517,21 @@ void TestPlacement(Results& results)
     results.Expect(PanelPlacement({2000, 50, 700, 600}, {1920, 0, 1280, 1000}, size, 0) == QRect(2560, 50, 640, 560),
         "placement respects a second monitor's origin");
 
+    // A saved frame comes back on the screen it overlaps most, shrunk to fit and moved fully onto it.
+    const QSize minimum(484, 404);
+    const QList<QRect> one{screen};
+    const QList<QRect> two{screen, QRect(1920, 0, 1280, 1000)};
+    results.Expect(FitSavedPanelFrame({100, 80, 640, 560}, one, minimum) == QRect(100, 80, 640, 560), "a saved frame on the screen is kept");
+    results.Expect(FitSavedPanelFrame({1910, 1030, 640, 560}, one, minimum) == QRect(1280, 480, 640, 560),
+        "a saved frame overlapping the screen by a few pixels moves fully onto it");
+    results.Expect(FitSavedPanelFrame({-200, -100, 30000, 30000}, one, minimum) == screen, "a saved frame larger than the screen shrinks to it");
+    results.Expect(FitSavedPanelFrame({1800, 100, 640, 560}, two, minimum) == QRect(1920, 100, 640, 560),
+        "a saved frame across two monitors goes to the one it overlaps most");
+    results.Expect(FitSavedPanelFrame({0, 0, 600, 500}, {QRect(0, 0, 400, 300)}, minimum) == QRect(0, 0, 484, 404),
+        "a screen smaller than the minimum keeps the minimum size, top-left on the screen so the title bar shows");
+    results.Expect(!FitSavedPanelFrame({-6000, -6000, 640, 560}, two, minimum).has_value(), "a saved frame on no screen is discarded");
+    results.Expect(!FitSavedPanelFrame({}, one, minimum).has_value(), "an empty saved frame is discarded");
+
     const BesidePlacement wide = PlaceBesideGeometry({300, 100, 1180, 780}, screen, 640, 480);
     results.Expect(wide.ownerFrame == QRect(0, 100, 1268, 780) && wide.panelFrame == QRect(1280, 100, 640, 780),
         "Place beside chat splits a wide screen into owner, 12px gap and panel");
@@ -849,6 +865,37 @@ void TestPanelFrames(Results& results)
     results.Expect(voicePlan.panelFrame.width() < voice->minimumWidth() + voice->frameGeometry().width() - voice->width() &&
                        FitsPlan(voice, voicePlan.panelFrame) && voice->frameGeometry().right() == available.right(),
         "Place beside chat moves a showing panel at once; its minimum size grows it leftwards, not off the screen");
+    host.CloseAll();
+
+    // Four catalog pages are scroll areas (audienceStudioScroll and the studio pages): the 20/16
+    // floor goes on the layout of the widget they scroll, since they have none of their own.
+    auto* scroll = new QScrollArea;
+    scroll->setObjectName("testAgentsScroll");
+    scroll->setWidgetResizable(true);
+    auto* scrolled = new QWidget;
+    scrolled->setObjectName("testAgentsContent");
+    auto* scrolledLayout = new QVBoxLayout(scrolled);
+    scrolledLayout->setContentsMargins(0, 0, 0, 0);
+    scroll->setWidget(scrolled);
+    host.Adopt(PanelId::Agents, scroll);
+    results.Expect(scroll->layout() == nullptr && scrolledLayout->contentsMargins() == QMargins(20, 16, 20, 16),
+        "a scroll area page has the margins of the widget it scrolls raised to 20/16");
+
+    // A saved geometry from another monitor layout: barely on the screen, or larger than it. The
+    // window comes back whole on the screen it overlaps, never larger than it.
+    QSettings().setValue("panels/pipelines/geometry", QRect(available.right() - 40, available.bottom() - 30, 520, 440));
+    QSettings().setValue("panels/resources/geometry", QRect(available.x() - 200, available.y() - 100, 30000, 30000));
+    host.Adopt(PanelId::Pipelines, standIn("testPipelinesPage"));
+    host.Adopt(PanelId::Resources, standIn("testResourcesPage"));
+    host.Open(PanelId::Pipelines);
+    host.Open(PanelId::Resources);
+    Settle();
+    const PanelWindow* pipelines = host.Window(PanelId::Pipelines);
+    const PanelWindow* resources = host.Window(PanelId::Resources);
+    results.Expect(available.contains(pipelines->frameGeometry()) && pipelines->size() == QSize(520, 440) &&
+                       pipelines->frameGeometry().bottomRight() == available.bottomRight(),
+        "a saved geometry barely on the screen keeps its size and moves fully onto it");
+    results.Expect(resources->frameGeometry() == available, "a saved geometry larger than the screen shrinks to the available area");
     host.CloseAll();
 }
 

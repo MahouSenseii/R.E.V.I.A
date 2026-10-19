@@ -157,6 +157,32 @@ QRect PanelPlacement(const QRect& ownerFrame, const QRect& available, const QSiz
     return {x, y, width, height};
 }
 
+std::optional<QRect> FitSavedPanelFrame(const QRect& saved, const QList<QRect>& availableAreas, const QSize minimum)
+{
+    if (saved.isEmpty())
+        return std::nullopt;
+    const QRect* best = nullptr;
+    qint64 bestOverlap = 0;
+    for (const QRect& area : availableAreas)
+    {
+        const QRect overlap = area.intersected(saved);
+        const qint64 size = static_cast<qint64>(overlap.width()) * overlap.height();
+        if (!overlap.isEmpty() && size > bestOverlap)
+        {
+            best = &area;
+            bestOverlap = size;
+        }
+    }
+    if (best == nullptr)
+        return std::nullopt;
+    const int width = std::clamp(saved.width(), minimum.width(), std::max(minimum.width(), best->width()));
+    const int height = std::clamp(saved.height(), minimum.height(), std::max(minimum.height(), best->height()));
+    // The lowest x and y that keep the far edges on the area; never left of or above it.
+    const int x = std::clamp(saved.x(), best->x(), std::max(best->x(), best->x() + best->width() - width));
+    const int y = std::clamp(saved.y(), best->y(), std::max(best->y(), best->y() + best->height() - height));
+    return QRect(x, y, width, height);
+}
+
 BesidePlacement PlaceBesideGeometry(const QRect& ownerFrame, const QRect& available, const int defaultWidth, const int minUsefulWidth)
 {
     const int panelWidth = std::min(available.width(), std::max(minUsefulWidth, std::min(defaultWidth, available.width() * 2 / 5)));
@@ -386,17 +412,27 @@ bool PanelWindow::RestoreGeometry()
     const QVariant saved = settings.value(key);
     if (!saved.isValid())
         return false;
-    const QRect rect = saved.toRect();
-    const QList<QScreen*> screens = QGuiApplication::screens();
-    const bool onScreen = std::any_of(
-        screens.begin(), screens.end(), [&rect](const QScreen* screen) { return screen->availableGeometry().intersects(rect); });
-    if (!rect.isValid() || !onScreen)
+    // The saved rectangle is the client area; fitting it to a screen needs the frame around it,
+    // which is known here, in the first showEvent.
+    const QRect client = saved.toRect();
+    const QRect frameNow = frameGeometry();
+    const QRect clientNow = geometry();
+    const QMargins margins(clientNow.left() - frameNow.left(), clientNow.top() - frameNow.top(), frameNow.right() - clientNow.right(),
+        frameNow.bottom() - clientNow.bottom());
+    QList<QRect> areas;
+    for (const QScreen* screen : QGuiApplication::screens())
+        areas.push_back(screen->availableGeometry());
+    // A monitor layout that changed since (a smaller screen, a monitor moved) can leave the saved
+    // window barely on a screen or larger than it; it comes back whole on the screen it overlaps.
+    const std::optional<QRect> frame =
+        client.isValid() ? FitSavedPanelFrame(client.marginsAdded(margins), areas, minimumSize() + FrameExtra()) : std::nullopt;
+    if (!frame)
     {
         // A monitor that is gone, or a value that is not a rectangle: place it afresh.
         settings.remove(key);
         return false;
     }
-    setGeometry(rect.x(), rect.y(), std::max(rect.width(), minimumWidth()), std::max(rect.height(), minimumHeight()));
+    ApplyFrame(*frame);
     return true;
 }
 

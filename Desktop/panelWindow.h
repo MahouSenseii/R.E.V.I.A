@@ -75,6 +75,12 @@ struct PanelSpec
 // placed on that side this session. The size is clamped to the available area.
 [[nodiscard]] QRect PanelPlacement(const QRect& ownerFrame, const QRect& available, QSize size, int cascadeIndex);
 
+// Where a panel with a saved frame rectangle reopens: on the available area it overlaps most,
+// shrunk to fit it (never below minimum, the minimum frame size) and moved fully onto it, or onto
+// its top-left corner when even the minimum is larger, so the title bar stays reachable. Nothing
+// when it overlaps no area (a monitor that is gone) or is empty.
+[[nodiscard]] std::optional<QRect> FitSavedPanelFrame(const QRect& saved, const QList<QRect>& availableAreas, QSize minimum);
+
 // "Place beside chat": the owner keeps its height and moves to the left edge, narrowed so a panel
 // of max(minUsefulWidth, min(defaultWidth, 40% of the available width)) fits to its right with a
 // 12px gap. The owner never gets narrower than 760; the panel then overlaps it at the right edge.
