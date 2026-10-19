@@ -1244,16 +1244,16 @@ void TestToast(Results& results)
                        std::abs(toast->geometry().center().x() - anchor->geometry().center().x()) <= 1,
         "the toast sits centred above its anchor");
     Capture(&host, "shell-toast.png");
+    // The spec's limits (2.10) as literals, so a changed constant cannot move the expectation.
     toast->ShowMessage("Long", 60000);
-    results.Expect(toast->HideDelayMs() == ToastOverlay::MaximumTimeoutMs, "a toast never lasts longer than 5 s");
+    results.Expect(toast->HideDelayMs() == 5000, "a toast never lasts longer than 5 s");
     toast->ShowMessage("Sticky", 0);
-    results.Expect(toast->HideDelayMs() == ToastOverlay::MaximumTimeoutMs, "a message without a timeout still goes after 5 s");
+    results.Expect(toast->HideDelayMs() == 5000, "a message without a timeout still goes after 5 s");
     const QString longText = QString("This status line is far too long to fit on a single toast line. ").repeated(5);
     toast->ShowMessage(longText, 3000);
     Settle();
-    results.Expect(toast->width() <= ToastOverlay::MaximumWidth && label->text() != longText && label->text().endsWith("…") &&
-                       toast->toolTip() == longText,
-        "a long message is elided to one line, in full in the tooltip");
+    results.Expect(toast->width() <= 480 && label->text() != longText && label->text().endsWith("…") && toast->toolTip() == longText,
+        "a long message is elided to one line, at most 480px wide, in full in the tooltip");
     toast->ShowMessage("First", 3000);
     toast->ShowMessage("Second", 3000);
     results.Expect(toast->Message() == "Second" && label->text() == "Second", "a new message replaces the old one");
@@ -1275,7 +1275,7 @@ void TestToast(Results& results)
     bar->setObjectName("testStatusBar");
     toast->Follow(bar);
     bar->showMessage("toast fixture");
-    results.Expect(toast->isVisible() && toast->Message() == "toast fixture" && toast->HideDelayMs() == ToastOverlay::MaximumTimeoutMs,
+    results.Expect(toast->isVisible() && toast->Message() == "toast fixture" && toast->HideDelayMs() == 5000,
         "a message put straight on the bar toasts for at most 5 s");
     toast->ShowStatus("Saved", 3000);
     results.Expect(bar->currentMessage() == "Saved" && toast->Message() == "Saved" && toast->HideDelayMs() == 3000,
