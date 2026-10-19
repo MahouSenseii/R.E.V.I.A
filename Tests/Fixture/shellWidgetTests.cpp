@@ -1022,6 +1022,22 @@ void TestSidebar(Results& results)
     results.Expect(menu.isVisible() && menu.geometry().bottom() < menuButtonTop.y() && menu.x() == menuButtonTop.x(),
         "the menu button opens the menu above itself");
     menu.hide();
+    // The window reveals Stop desktop control as the menu opens (aboutToShow), after its size was
+    // taken. The menu must still end above the button, or its last entry (Quit Revia) would lie
+    // under a second click.
+    QAction* revealed = menu.addAction("Stop desktop control");
+    revealed->setVisible(false);
+    const QMetaObject::Connection reveal =
+        QObject::connect(&menu, &QMenu::aboutToShow, &menu, [revealed]() { revealed->setVisible(true); });
+    const int closedHeight = menu.sizeHint().height();
+    sidebar->PopupMenu();
+    Settle();
+    results.Expect(menu.isVisible() && menu.height() > closedHeight && menu.geometry().bottom() < menuButtonTop.y() &&
+                       menu.x() == menuButtonTop.x(),
+        "a menu that grows as it opens still ends above the menu button");
+    menu.hide();
+    QObject::disconnect(reveal);
+    menu.removeAction(revealed);
 
     // Without a panels callback the rail button opens the menu beside itself, the anchor action
     // level with the button.

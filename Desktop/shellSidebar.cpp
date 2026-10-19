@@ -8,6 +8,7 @@
 #include <QIcon>
 #include <QLabel>
 #include <QMenu>
+#include <QScreen>
 #include <QShowEvent>
 #include <QSizePolicy>
 #include <QStyle>
@@ -210,8 +211,15 @@ void ShellSidebar::PopupMenu()
     if (!menu)
         return;
     // Above the footer button: the button sits at the bottom of the window.
-    const QSize size = menu->sizeHint();
-    menu->popup(menuButton->mapToGlobal(QPoint(0, -size.height() - 4)));
+    const QPoint anchor = menuButton->mapToGlobal(QPoint(0, -4));
+    menu->popup(QPoint(anchor.x(), anchor.y() - menu->sizeHint().height()));
+    // popup() emits aboutToShow after the size above was taken, and the window's handler can
+    // reveal items (Stop desktop control). The grown menu would reach down over the button, its
+    // last entry (Quit Revia) under a second click, so it moves up by what it grew; never above
+    // the screen.
+    const int top = std::max(anchor.y() - menu->height(), menu->screen()->availableGeometry().top());
+    if (menu->y() > top)
+        menu->move(menu->x(), top);
 }
 
 void ShellSidebar::SetAccount(const QString& accountNameText, const QString& accountDetailText)
