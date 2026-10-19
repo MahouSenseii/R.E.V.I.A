@@ -1085,18 +1085,21 @@ void ReviaWindow::RefreshProfileMenu()
             });
     }
     composerProfileMenu->addSeparator();
-    // The session's cloud gate mirrors Settings' switch, and only while the cloud is allowed.
+    // The session's cloud gate, only while the cloud is allowed. It shows the session's own state
+    // (a /cloud command may have changed it since Settings last read it) and writes through
+    // Settings' switch, so the row and the menu cannot disagree.
     QCheckBox* cloudSession = settingsDialog ? settingsDialog->Switch("cloud.session") : nullptr;
     QCheckBox* cloudAllowed = settingsDialog ? settingsDialog->Switch("llm.cloud.enabled") : nullptr;
     if (cloudSession != nullptr && cloudAllowed != nullptr && cloudAllowed->isChecked())
     {
         QAction* cloud = composerProfileMenu->addAction(QStringLiteral("Use the cloud this session"));
         cloud->setCheckable(true);
-        cloud->setChecked(cloudSession->isChecked());
+        cloud->setChecked(Session().IsCloudSessionEnabled());
         cloud->setEnabled(cloudSession->isEnabled());
         connect(cloud, &QAction::toggled, this,
-            [cloudSession](const bool enabled)
+            [this, cloudSession](const bool enabled)
             {
+                settingsDialog->SetValue("cloud.session", Session().IsCloudSessionEnabled());
                 if (cloudSession->isChecked() != enabled)
                     cloudSession->setChecked(enabled);
             });

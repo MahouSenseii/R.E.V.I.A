@@ -5,7 +5,11 @@
 #include "Runtime/companion.h"
 #include "Speech/addresseeGate.h"
 
+#include <algorithm>
 #include <iostream>
+#include <mutex>
+#include <string>
+#include <vector>
 
 namespace
 {
@@ -122,6 +126,24 @@ void TestVoicesInTheRoomNeitherInterruptNorReachHer()
     Access::Hear(session, Heard("Transcript", "Revia, are you still listening?"));
     Check(Access::TakeOfferedInput(session).empty() && !session.BeginListening(),
         "Speech heard after the microphone was turned off still reached her.");
+    // Hands-free cannot start behind the master switch, from /set or from Settings.
+    std::vector<std::string> microphonePhases;
+    std::mutex phasesMutex;
+    const auto subscription = session.Events().Subscribe(
+        [&](const revia::runtime::RuntimeEvent& event)
+        {
+            if (event.component == "Microphone")
+            {
+                std::lock_guard lock(phasesMutex);
+                microphonePhases.push_back(event.phase);
+            }
+        });
+    const auto handsFree = session.SetPreference("speechRecognition.handsFree", "on");
+    session.Events().Unsubscribe(subscription);
+    Check(handsFree.succeeded && !session.IsHandsFreeEnabled() &&
+              std::find(microphonePhases.begin(), microphonePhases.end(), "HandsFree") == microphonePhases.end() &&
+              handsFree.message.find("next time") != std::string::npos,
+        "Hands-free started listening while the microphone was off.");
     const auto on = session.SetPreference("speechRecognition.enabled", "on");
     Access::Hear(session, Heard("Transcript", "Revia, can you hear me now?"));
     Check(on.succeeded && on.message.find("next time") != std::string::npos && Access::TakeOfferedInput(session).empty(),

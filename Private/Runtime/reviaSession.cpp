@@ -3618,6 +3618,10 @@ bool ReviaSession::CommitPreferenceLocked(const std::string& lowered, const appS
     {
         result.message += " The microphone stops listening now.";
     }
+    else if (lowered == "speechrecognition.handsfree" && updated.speechRecognition.bHandsFree && !SpeechRecognitionEnabledNow())
+    {
+        result.message += " The microphone is off, so hands-free starts with it the next time Revia starts.";
+    }
     else if (partlyNow)
     {
         result.message += " Part of it applies now; all of it takes effect the next time Revia starts.";
@@ -5112,6 +5116,8 @@ void ReviaSession::SetPerceptionPaused(const bool paused)
     {
         SignalScreenAwareness("perception resumed");
     }
+    // The header's indicator pauses too, not only Settings' row; the row follows either way.
+    PublishComponent("Preferences", "Changed", "perception.paused");
 }
 
 perception::PerceptionCounters ReviaSession::PerceptionCounters() const
@@ -5178,6 +5184,17 @@ void ReviaSession::SetHandsFreeEnabled(const bool enabled)
     {
         std::lock_guard snapshotLock(preferenceSnapshotMutex);
         settings.speechRecognition.bHandsFree = enabled;
+    }
+    // Use the microphone is the master switch. While it is off (turned off live, or switched back
+    // on but waiting for the restart that opens the recognizer) nothing may capture, so hands-free
+    // only keeps its preference and starts with the microphone at the next start.
+    if (!SpeechRecognitionEnabledNow())
+    {
+        speechRecognitionService.SetHandsFreeEnabled(false);
+        PublishComponent("Microphone", "Disabled",
+            enabled ? "The microphone is off. Hands-free starts with it the next time Revia starts."
+                    : "The microphone is turned off in Settings.");
+        return;
     }
     speechRecognitionService.SetHandsFreeEnabled(enabled);
     PublishComponent("Microphone", enabled ? "HandsFree" : "Ready",
@@ -7654,7 +7671,11 @@ ProfileOperationResult ReviaSession::ActivateProfile(const std::string& profileI
         result = ActivateProfileLocked(profileId);
     }
     if (result.succeeded)
+    {
         Publish(RuntimeEventKind::Activity, result.message);
+        // Settings shows the active profile's switches and values; it re-reads them.
+        PublishComponent("Preferences", "Changed", "activeProfile");
+    }
     return result;
 }
 
@@ -9857,8 +9878,9 @@ bool ReviaSession::TryHandleActionInput(const std::string& input, SessionResult&
         if (argument == "on" || argument == "off")
         {
             // A session switch on top of llm.cloud.enabled, like /internet off: it can
-            // stop cloud use at once, but "on" cannot enable what settings leave off.
-            router.Cloud().SetSessionEnabled(argument == "on");
+            // stop cloud use at once, but "on" cannot enable what settings leave off. The same
+            // call as Settings' switch, so an open Settings follows it.
+            SetCloudSessionEnabled(argument == "on");
             result.text = argument == "off" ? "Cloud model is OFF for this session. Every turn stays on this PC."
                                             : "Cloud model is allowed again for this session. " + router.Cloud().StatusText();
         }
@@ -10446,6 +10468,7 @@ bool ReviaSession::TryHandleActionInput(const std::string& input, SessionResult&
                 return true;
             }
             windowEventMonitor.SetPaused(argument == "pause");
+            PublishComponent("Preferences", "Changed", "perception.paused");
         }
         else if (!argument.empty())
         {
