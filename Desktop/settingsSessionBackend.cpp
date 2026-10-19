@@ -329,7 +329,19 @@ SettingsBackend MakeSessionSettingsBackend(SessionBackendDeps deps)
         Refuse(context, std::move(done), "This setting has no saved default to return to.");
     };
 
-    backend.readChoice = [context](const std::string& key) { return QString::fromStdString(context->deps.session().OwnerChoice(key)); };
+    backend.readChoice = [context](const std::string& key)
+    {
+        // The dialog names the active profile in its Chat group; that name is the profile's own,
+        // not an owner choice (empty before the session has a profile).
+        if (key == "profile.displayName")
+        {
+            const std::optional<revia::runtime::ProfileSummary> active = context->deps.session().ActiveProfileSummary();
+            if (!active)
+                return QString();
+            return QString::fromStdString(active->displayName.empty() ? active->id : active->displayName);
+        }
+        return QString::fromStdString(context->deps.session().OwnerChoice(key));
+    };
 
     backend.writeChoice = [context](const std::string& key, const QString& value, SettingDone done)
     {

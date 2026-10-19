@@ -461,13 +461,15 @@ bool ReviaWindow::eventFilter(QObject* watched, QEvent* event)
         }
         if (keyEvent->key() == Qt::Key_Escape)
         {
-            // An edit in progress goes first; otherwise Esc stops whatever Stop would.
+            // An edit in progress goes first; otherwise Esc stops a running turn, task or studio
+            // operation (Stop in Send's slot). A reflex key in a text box never cancels the startup,
+            // speech or the microphone: those stop from their own button.
             if (editingLastTurn)
             {
                 CancelEditLastTurn();
                 return true;
             }
-            if (stopButton->isEnabled())
+            if (stopButton->isEnabled() && stopButton->property("primary").toBool())
             {
                 stopButton->click();
                 return true;
@@ -698,11 +700,24 @@ void ReviaWindow::BuildInterface()
             const QString action = target.left(colon);
             const QString argument = target.mid(colon + 1);
             // A link that would start or change a turn waits for the one in flight; reading
-            // the details of a panel never does.
+            // the details of a panel, or what Revia is checking right now, never does.
             if (action == QStringLiteral("panel"))
             {
                 if (const auto panel = revia::desktop::PanelFromKey(argument))
                     OpenPanel(*panel);
+                return;
+            }
+            bool parsed = false;
+            const std::size_t index = static_cast<std::size_t>(argument.toULongLong(&parsed));
+            if (action == QStringLiteral("thought"))
+            {
+                if (!parsed || index >= chatEntries.size())
+                    return;
+                chatEntries[index].expanded = !chatEntries[index].expanded;
+                // Opening a block never moves the reader.
+                renderKeepsPosition = true;
+                RenderChat();
+                renderKeepsPosition = false;
                 return;
             }
             if (chatTurnInFlight)
@@ -712,19 +727,9 @@ void ReviaWindow::BuildInterface()
                 RetryFailedTurn();
                 return;
             }
-            bool parsed = false;
-            const std::size_t index = static_cast<std::size_t>(argument.toULongLong(&parsed));
             if (!parsed || index >= chatEntries.size())
                 return;
-            if (action == QStringLiteral("thought"))
-            {
-                chatEntries[index].expanded = !chatEntries[index].expanded;
-                // Opening a block never moves the reader.
-                renderKeepsPosition = true;
-                RenderChat();
-                renderKeepsPosition = false;
-            }
-            else if (action == QStringLiteral("copy"))
+            if (action == QStringLiteral("copy"))
             {
                 QApplication::clipboard()->setText(MessageText(index));
                 ShowStatus(QStringLiteral("Copied to the clipboard."), 3000);
@@ -2481,7 +2486,7 @@ void ReviaWindow::UpdateSendState()
         stopName = QStringLiteral("Stop speaking");
     else if (!turnRunning && microphoneActive)
         stopName = QStringLiteral("Stop listening");
-    stopButton->setToolTip(stopName + QStringLiteral(" (Esc)"));
+    stopButton->setToolTip(primary ? stopName + QStringLiteral(" (Esc)") : stopName);
     stopButton->setAccessibleName(stopName);
     stopButton->setVisible(stopEnabled);
     sendButton->setVisible(!primary);

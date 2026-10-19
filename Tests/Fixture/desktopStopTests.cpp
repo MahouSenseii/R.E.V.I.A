@@ -311,8 +311,18 @@ struct ReviaWindowStopTests
         expect(QDir::currentPath() == cwd, "companion selection changed process cwd");
         expect(window.Session().Authority() == ledger, "B selection replaced the trusted authority ledger");
         exerciseAction(window.Session(), "allowed-b-fixture", true);
+        // Settings stays open through the switch: the rebuilt permissions panel takes the open
+        // dialog's narrow layout at once, not at the next resize.
+        window.OpenSettings("Permissions");
+        window.settingsDialog->resize(760, 540);
+        SettleLayouts();
         window.SwitchCompanion("legacy");
         wait([&]() { return !window.switchingCompanion; });
+        SettleLayouts();
+        if (auto* permissions = window.settingsDialog->findChild<QScrollArea*>("settingsSection_permissions"))
+            expect(permissions->horizontalScrollBar()->maximum() == 0,
+                "Permissions must still fit a 760px Settings after a companion switch with Settings open");
+        window.settingsDialog->hide();
         expect(!window.Session().Admits(original) && window.Session().SearchMemories("orbit", 20).size() == 1,
             "A to B to A UI lost its private mind or admitted the prior generation");
         expect(window.companionCombo->currentData().toString() == "legacy", "companion selection did not reflect actual owner");
@@ -1170,6 +1180,28 @@ struct ReviaWindowStopTests
         expect(window.chatHistory->toHtml().contains(revia::desktop::theme::Light().text.name(), Qt::CaseInsensitive),
             "the light scheme must come back to the transcript");
 
+        // What Revia is checking can be opened while the turn that checks it is still running.
+        {
+            window.chatEntries.clear();
+            window.ResetConversationPresentation();
+            window.AppendChat("You", "Fixture question", true);
+            ReviaWindow::ChatEntry work;
+            work.kind = ReviaWindow::EntryKind::InvestigationChecking;
+            work.speaker = window.DisplayName();
+            work.body = "Checking the fixture build log";
+            window.chatEntries.push_back(work);
+            window.chatTurnInFlight = true;
+            window.RenderChat();
+            const std::size_t index = window.chatEntries.size() - 1;
+            emit window.chatHistory->anchorClicked(QUrl(QStringLiteral("thought:%1").arg(index)));
+            expect(window.chatEntries[index].expanded && window.chatHistory->toPlainText().contains("Checking the fixture build log"),
+                "a checking row must open when clicked while its turn runs");
+            window.chatTurnInFlight = false;
+            window.chatEntries.clear();
+            window.ResetConversationPresentation();
+            window.RenderChat();
+        }
+
         // A failed turn is one row after the turn, with Retry; no chat entry is added for it.
         window.chatEntries.clear();
         window.ResetConversationPresentation();
@@ -1198,6 +1230,17 @@ struct ReviaWindowStopTests
         expect(!window.sendButton->isHidden() && window.stopButton->isEnabled() && !window.stopButton->property("primary").toBool() &&
                    window.stopButton->accessibleName() == "Cancel startup",
             "while Revia starts, Send must stay in its slot beside a Cancel startup button");
+        {
+            // Esc while typing during the startup is a reflex, not a request to give the startup up.
+            bool cancelled = false;
+            const auto startupProbe = QObject::connect(window.stopButton, &QPushButton::clicked, &window, [&cancelled]() { cancelled = true; });
+            window.editingLastTurn = false;
+            QKeyEvent escape(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
+            QCoreApplication::sendEvent(window.messageInput, &escape);
+            QObject::disconnect(startupProbe);
+            expect(!cancelled && !window.userStopRequested && !window.stopButton->toolTip().contains("Esc"),
+                "Esc in the message box must not cancel the startup");
+        }
 
         // Stop takes Send's slot while a turn runs, and Esc stops it.
         window.UpdateState(RuntimeState::Thinking, "Working on the fixture");
@@ -1746,8 +1789,43 @@ struct ReviaWindowStopTests
                 "an unidentified typist continued a chat, or the refusal was not shown");
             window.CloseArchivedChat();
 
-            std::string failure;
-            expect(window.DeleteChat("earlier-chat", failure) && (panel->Refresh(), list->count() == 1), "deleting a saved chat left it listed");
+            // Delete in the list acts on the highlighted row, never on the chat in progress behind it.
+            panel->Refresh();
+            for (int row = 0; row < list->count(); ++row)
+                if (list->item(row)->data(Qt::UserRole).toString() == "earlier-chat")
+                    list->setCurrentItem(list->item(row));
+            list->setFocus(Qt::OtherFocusReason);
+            QString asked;
+            QTimer answer;
+            answer.setInterval(20);
+            QObject::connect(&answer, &QTimer::timeout, &window,
+                [&asked, &answer]()
+                {
+                    if (auto* box = qobject_cast<QMessageBox*>(QApplication::activeModalWidget()))
+                    {
+                        asked = box->text();
+                        answer.stop();
+                        box->button(QMessageBox::Yes)->click();
+                    }
+                });
+            answer.start();
+            const std::size_t liveEntries = window.chatEntries.size();
+            QKeyEvent press(QEvent::KeyPress, Qt::Key_Delete, Qt::NoModifier);
+            QKeyEvent release(QEvent::KeyRelease, Qt::Key_Delete, Qt::NoModifier);
+            QApplication::sendEvent(list, &press);
+            QApplication::sendEvent(list, &release);
+            answer.stop();
+            panel->Refresh();
+            bool earlierListed = false;
+            bool currentListed = false;
+            for (int row = 0; row < list->count(); ++row)
+            {
+                earlierListed = earlierListed || list->item(row)->data(Qt::UserRole).toString() == "earlier-chat";
+                currentListed = currentListed || list->item(row)->data(Qt::UserRole).toString() == "current-chat";
+            }
+            expect(!asked.contains("in progress") && !earlierListed && currentListed && window.chatEntries.size() == liveEntries &&
+                       window.Session().CurrentConversationId() == "current-chat",
+                "Delete in the chat list must delete the highlighted chat and leave the chat in progress alone");
         }
         std::string failure;
         expect(window.StartNewChat(failure) && window.chatEntries.empty() && window.Session().CurrentConversationId() != "current-chat",

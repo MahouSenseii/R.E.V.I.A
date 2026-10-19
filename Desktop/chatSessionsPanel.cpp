@@ -91,6 +91,13 @@ ChatSessionsPanel::ChatSessionsPanel(ChatSessionControls inputControls, QWidget*
     revia::desktop::theme::BindIcon(listToggle, "chevron-down", 14);
     layout->addWidget(listToggle, 0, Qt::AlignLeft);
 
+    // Under the heading it explains, not below an empty list at the foot of the sidebar.
+    status = new QLabel(this);
+    status->setObjectName("chatSessionsStatus");
+    status->setWordWrap(true);
+    status->hide();
+    layout->addWidget(status);
+
     list = new QListWidget(this);
     list->setObjectName("chatSessionList");
     list->setAccessibleName(QStringLiteral("Recent chats"));
@@ -115,12 +122,6 @@ ChatSessionsPanel::ChatSessionsPanel(ChatSessionControls inputControls, QWidget*
     for (QPushButton* button : {rename, remove, exportChat})
         button->hide();
 
-    status = new QLabel(this);
-    status->setObjectName("chatSessionsStatus");
-    status->setWordWrap(true);
-    status->hide();
-    layout->addWidget(status);
-
     // Searching on every keystroke would query the archive for each letter.
     searchDelay = new QTimer(this);
     searchDelay->setSingleShot(true);
@@ -142,15 +143,15 @@ ChatSessionsPanel::ChatSessionsPanel(ChatSessionControls inputControls, QWidget*
     connect(list, &QListWidget::customContextMenuRequested, this, [this](const QPoint& position) { ShowRowMenu(position); });
     connect(newChat, &QPushButton::clicked, this, [this]() { StartNewChat(); });
     connect(listToggle, &QPushButton::toggled, this, [this](const bool shown) { SetListVisible(shown); });
-    connect(rename, &QPushButton::clicked, this, [this]() { RenameChat(CurrentId()); });
-    connect(remove, &QPushButton::clicked, this, [this]() { DeleteChat(CurrentId()); });
+    connect(rename, &QPushButton::clicked, this, [this]() { RenameChat(TargetId()); });
+    connect(remove, &QPushButton::clicked, this, [this]() { DeleteChat(TargetId()); });
 
     auto* renameKey = new QShortcut(QKeySequence(Qt::Key_F2), list);
     renameKey->setContext(Qt::WidgetShortcut);
-    connect(renameKey, &QShortcut::activated, this, [this]() { RenameChat(CurrentId()); });
+    connect(renameKey, &QShortcut::activated, this, [this]() { RenameChat(TargetId()); });
     auto* deleteKey = new QShortcut(QKeySequence(QKeySequence::Delete), list);
     deleteKey->setContext(Qt::WidgetShortcut);
-    connect(deleteKey, &QShortcut::activated, this, [this]() { DeleteChat(CurrentId()); });
+    connect(deleteKey, &QShortcut::activated, this, [this]() { DeleteChat(TargetId()); });
 }
 
 void ChatSessionsPanel::Refresh()
@@ -198,6 +199,13 @@ std::string ChatSessionsPanel::SelectedId() const
 std::string ChatSessionsPanel::CurrentId() const
 {
     return controls.current ? controls.current() : std::string();
+}
+
+std::string ChatSessionsPanel::TargetId() const
+{
+    // The row the owner highlighted (a click also opens it), never the live chat behind it.
+    const std::string selected = SelectedId();
+    return selected.empty() ? CurrentId() : selected;
 }
 
 void ChatSessionsPanel::SetStatus(const QString& text)

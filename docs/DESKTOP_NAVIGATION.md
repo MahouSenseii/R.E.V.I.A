@@ -15,7 +15,8 @@ Its caption follows the light or dark scheme. Default size 1180 × 780, minimum 
 - **New chat**, **Search chats** and a **Recents** heading that folds the chat list.
 - One line per chat, with the current chat in bold. The date and length are in the row's
   tooltip. Right-click a row to rename, export (Markdown or JSON) or delete it. F2 and
-  Delete act on the current chat while the list has focus.
+  Delete act on the highlighted chat while the list has focus (the current chat when no row is
+  highlighted).
 - At the bottom, the companion's menu button and Settings. The menu holds the companion
   switcher, every panel grouped as Workspace, Companion, Studio and Runtime, Stop desktop
   control (while it is active), Settings, the command palette, the shortcut sheet, Keep
@@ -36,7 +37,8 @@ Appearance) applies.
   header only on Problem and opens the Activity window.
 - The transcript reads at a 760 px measure. Your turns are bubbles on the right; replies
   are plain text with a speaker line where the speaker changes. Thinking, checking,
-  memory and offers are small muted rows. **Show {name}'s thinking steps** hides them.
+  memory and offers are small muted rows. A thinking or checking row opens with a click, also
+  while the reply is still being prepared. **Show {name}'s thinking steps** hides them.
   Only the newest finished reply carries Copy, Regenerate and Review. Right-click any
   reply for **Copy message**.
 - A turn that could not finish draws one red row with **Retry** and **Details**. A turn
@@ -114,8 +116,8 @@ open while a companion switch or shutdown has locked the window.
 | Scope | Keys |
 | --- | --- |
 | Window | Ctrl+N new chat, Ctrl+B sidebar, Ctrl+F search chats (palette in the rail), Ctrl+Space listen, F6 / Shift+F6 move between sidebar, transcript and message box |
-| Message box | Enter send, Shift+Enter new line, Esc cancels an edit, else stops |
-| Chat list | F2 rename, Delete delete |
+| Message box | Enter send, Shift+Enter new line, Esc cancels an edit, else stops a running reply, task or studio operation (never the startup, speech or the microphone) |
+| Chat list | F2 rename, Delete delete (the highlighted chat) |
 | Anywhere | Ctrl+K palette, Ctrl+, Settings, Ctrl+/ shortcut sheet, Ctrl+Shift+A Activity, Ctrl+Shift+M Memory |
 | Panel windows | Ctrl+W close, Esc close unless editing text |
 | Settings | Ctrl+F search, Esc clears the search, then closes (not while you are typing in a box) |

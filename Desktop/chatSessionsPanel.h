@@ -31,7 +31,7 @@ struct ChatSessionControls
 // Past conversations from the archive, as the sidebar's body: New chat, search, a "Recents"
 // heading that folds the list, and one line per chat. Rename, export and delete live in each
 // row's context menu (and in the chat header's menu for the current chat); F2 and Delete act on
-// the current chat while the list has focus.
+// the highlighted row while the list has focus, or on the current chat when no row is.
 class ChatSessionsPanel final : public QWidget
 {
   public:
@@ -67,6 +67,8 @@ class ChatSessionsPanel final : public QWidget
   private:
     void ShowRowMenu(const QPoint& position);
     [[nodiscard]] std::string CurrentId() const;
+    // What F2 and Delete act on: the highlighted row, else the current chat.
+    [[nodiscard]] std::string TargetId() const;
     bool WriteExport(const std::string& id, const QString& path, bool json, QString& error);
 
     ChatSessionControls controls;

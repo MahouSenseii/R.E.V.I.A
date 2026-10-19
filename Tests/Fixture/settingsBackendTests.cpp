@@ -45,7 +45,7 @@ void WriteFixture(const std::filesystem::path& root)
             {"speechRecognition", {{"enabled", false}}}, {"presence", {{"enabled", false}, {"externalAdaptersEnabled", false}}},
             {"vision", {{"enabled", true}}}, {"perception", {{"enabled", false}}}, {"initiative", {{"enabled", false}}},
             {"conversation", {{"archiveEnabled", false}}}, {"image", {{"enabled", false}}}, {"resources", {{"startupSampleSeconds", 0}}}});
-    WriteJson(root / "Config/Profiles/fixture.json", {{"id", "fixture"}, {"systemPrompt", "Settings backend fixture."}, {"memoryEnabled", false}});
+    WriteJson(root / "Config/Profiles/fixture.json", {{"id", "fixture"}, {"displayName", "Fixture Profile"}, {"systemPrompt", "Settings backend fixture."}, {"memoryEnabled", false}});
     WriteJson(root / "Config/capabilities.json",
         {{"mode", "supervised"}, {"approvedRoots", json::array()}, {"createMissingApprovedRoots", false},
             {"guest", {{"enabled", false}, {"read", false}, {"write", false}, {"execute", false}, {"allowTaskExecution", false}}}});
@@ -150,6 +150,10 @@ int RunSettingsBackendSuite(int, char**)
     const SettingKeyRef machine{"virtualMachine.enabled", SettingStore::VirtualMachine};
     expect(write(machine, true).succeeded && read(machine).value && !read(machine).running && session.IsVirtualMachineEnabled(),
         "the workspace start choice did not read back as waiting for a restart");
+
+    // The Chat section's profile group is titled with the active profile's own name.
+    expect(backend.readChoice("profile.displayName") == QStringLiteral("Fixture Profile"),
+        "the profile group's name was not the active profile's: \"" + backend.readChoice("profile.displayName").toStdString() + "\"");
 
     // Profile switches: never over an unsaved draft, and the editor refreshes after a save.
     const SettingKeyRef memory{"profile.memoryEnabled", SettingStore::Profile};

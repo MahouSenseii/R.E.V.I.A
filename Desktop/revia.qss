@@ -207,6 +207,8 @@ QLabel#sidebarAttentionDot { min-width: 8px; max-width: 8px; min-height: 8px; ma
 QWidget#chatSessionsPanel { border: none; }
 QLabel#chatSessionsHeading { font-size: 12px; font-weight: 600; padding: 0 2px; }
 QLabel#chatSessionsStatus, QLabel#archivedChatLabel { font-size: 12px; }
+/* Lined up with the rows' text: the list's 2px padding, the item's 8px and its frame. */
+QLabel#chatSessionsStatus { padding: 4px 12px; }
 QListWidget#chatSessionList { border: none; border-radius: 6px; padding: 2px; font-size: 13px; }
 QListWidget#chatSessionList[kbdFocus="true"]:focus { border-style: solid; border-width: 2px; padding: 0px; }
 QListWidget#chatSessionList::item { padding: 6px 8px; border-radius: 6px; }

@@ -1814,6 +1814,9 @@ void SettingsDialog::SetHostedWidget(const SettingsSection sectionId, const QStr
     EvaluateDependencies();
     if (!search->text().trimmed().isEmpty())
         ApplySearch(search->text());
+    // A widget swapped in while the dialog is open (a companion switch rebuilds the permissions
+    // panel) takes the current width's layout now, not at the next resize.
+    NotifyResize();
 }
 
 void SettingsDialog::SetLocked(const bool locked)
