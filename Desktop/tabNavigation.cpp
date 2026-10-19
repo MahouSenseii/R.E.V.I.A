@@ -1,88 +1,86 @@
 #include "tabNavigation.h"
 
+#include "desktopObjectNames.h"
+#include "settingsCatalog.h"
+#include "settingsDialog.h"
+
+#include <QStackedWidget>
 #include <QTabBar>
 #include <QTabWidget>
-
-#include <initializer_list>
 
 namespace revia::desktop
 {
 namespace
 {
-struct PageLink
+void PolishTabs(QTabWidget* tabs)
 {
-    const char* name;
-    const char* title;
-};
-
-void AddSection(QTabWidget* tabs, const int position, const char* name, const char* title, const std::initializer_list<PageLink> pages)
-{
-    auto* section = new QTabWidget(tabs);
-    section->setObjectName(name);
-    section->setDocumentMode(true);
-    for (const auto& link : pages)
-    {
-        for (int index = 0; index < tabs->count(); ++index)
-        {
-            QWidget* page = tabs->widget(index);
-            if (page->objectName() != link.name)
-                continue;
-            const QString description = QString(tabs->tabText(index)).replace("&&", "&");
-            tabs->removeTab(index);
-            const int added = section->addTab(page, link.title);
-            section->setTabToolTip(added, description);
-            break;
-        }
-    }
-    tabs->insertTab(position, section, title);
+    QTabBar* bar = tabs->tabBar();
+    // QTabWidget names its own bar; any other name was given on purpose and is kept.
+    if (bar->objectName().isEmpty() || bar->objectName() == QLatin1String("qt_tabwidget_tabbar"))
+        bar->setObjectName("sectionNavigation");
+    bar->setDrawBase(false);
+    bar->setUsesScrollButtons(false);
+    bar->setElideMode(Qt::ElideNone);
 }
 }
 
-void GroupNavigationPages(QTabWidget* tabs)
+void PolishSectionTabs(QWidget* root)
 {
-    if (tabs == nullptr)
+    if (root == nullptr)
         return;
-    if (tabs->findChild<QTabWidget*>("workspaceTabs") == nullptr)
-    {
-        AddSection(tabs, 1, "workspaceTabs", "Workspace", {{"canvasPage", "Canvas"}, {"visionTab", "Vision"}});
-        AddSection(tabs, 2, "companionTabs", "Companion",
-            {{"profilesTab", "Profiles"}, {"mindTab", "Mind"}, {"memoryTab", "Memory"}, {"voiceTab", "Voice"}, {"presencePage", "Presence"},
-                {"audienceStudioScroll", "Audience"}});
-        AddSection(tabs, 3, "studioTabs", "Studio",
-            {{"agentStudioScroll", "Agents"}, {"learningStudioScroll", "Learning"}, {"developmentStudioScroll", "Development"}});
-        AddSection(tabs, 5, "settingsTabs", "Settings", {{"settingsPage", "General"}, {"permissionsPage", "Permissions"}});
-        tabs->setCurrentIndex(0);
-    }
-    tabs->tabBar()->setObjectName("primaryNavigation");
-    for (auto* group : tabs->findChildren<QTabWidget*>())
-    {
-        group->tabBar()->setObjectName("sectionNavigation");
-        group->tabBar()->setDrawBase(false);
-        group->tabBar()->setUsesScrollButtons(false);
-        group->tabBar()->setElideMode(Qt::ElideNone);
-    }
-    tabs->tabBar()->setUsesScrollButtons(false);
-    tabs->tabBar()->setElideMode(Qt::ElideNone);
+    if (auto* tabs = qobject_cast<QTabWidget*>(root))
+        PolishTabs(tabs);
+    for (QTabWidget* tabs : root->findChildren<QTabWidget*>())
+        PolishTabs(tabs);
 }
 
 void SelectNavigationPage(QWidget* page)
 {
     if (page == nullptr)
         return;
-    for (QWidget* ancestor = page->parentWidget(); ancestor != nullptr; ancestor = ancestor->parentWidget())
+    QWidget* child = page;
+    for (QWidget* ancestor = page->parentWidget(); ancestor != nullptr; child = ancestor, ancestor = ancestor->parentWidget())
     {
-        auto* group = qobject_cast<QTabWidget*>(ancestor);
-        if (group == nullptr)
-            continue;
-        for (int index = 0; index < group->count(); ++index)
+        if (auto* tabs = qobject_cast<QTabWidget*>(ancestor))
         {
-            QWidget* candidate = group->widget(index);
-            if (candidate == page || candidate->isAncestorOf(page))
+            for (int index = 0; index < tabs->count(); ++index)
             {
-                group->setCurrentIndex(index);
+                QWidget* candidate = tabs->widget(index);
+                if (candidate == page || candidate->isAncestorOf(page))
+                {
+                    tabs->setCurrentIndex(index);
+                    break;
+                }
+            }
+        }
+        else if (auto* stack = qobject_cast<QStackedWidget*>(ancestor);
+                 stack != nullptr && stack->property(names::kNavigationStackProperty).toBool() && stack->indexOf(child) >= 0)
+        {
+            stack->setCurrentWidget(child);
+        }
+        if (ancestor->isWindow())
+            break;
+    }
+    QWidget* window = page->window();
+    // The Settings dialog keeps its section list in step with its stack; going through it selects
+    // the list row as well.
+    if (auto* settings = dynamic_cast<SettingsDialog*>(window))
+    {
+        for (const SettingsSection section : SettingsSections())
+        {
+            QWidget* sectionPage = settings->SectionPage(section);
+            if (sectionPage == page || (sectionPage != nullptr && sectionPage->isAncestorOf(page)))
+            {
+                settings->ShowSection(section);
                 break;
             }
         }
     }
+    if (window->isMinimized())
+        window->showNormal();
+    else
+        window->show();
+    window->raise();
+    window->activateWindow();
 }
 }

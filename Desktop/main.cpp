@@ -1,5 +1,4 @@
 #include "reviaWindow.h"
-#include "tabNavigation.h"
 #include "runtimeRootArgument.h"
 
 #include "Core/crashDiagnostics.h"
@@ -11,17 +10,42 @@
 #include <QFont>
 #include <QFontDatabase>
 #include <QPixmap>
+#include <QProcess>
 #include <QSettings>
-#include <QTabWidget>
 #include <QTemporaryDir>
 #include <QTimer>
 
+#include <algorithm>
 #include <exception>
 #include <filesystem>
 #include <iostream>
 #include <memory>
 #include <string>
 #include <system_error>
+
+#ifdef Q_OS_WIN
+#include <windows.h>
+#endif
+
+namespace
+{
+// A restart from Settings starts the new process before the old one has finished closing its
+// databases and logs. The new one waits (up to 10 s) for the old one to be gone first.
+void WaitForPreviousProcess(const unsigned long processId)
+{
+#ifdef Q_OS_WIN
+    if (processId == 0)
+        return;
+    if (HANDLE previous = OpenProcess(SYNCHRONIZE, FALSE, static_cast<DWORD>(processId)); previous != nullptr)
+    {
+        WaitForSingleObject(previous, 10000);
+        CloseHandle(previous);
+    }
+#else
+    (void)processId;
+#endif
+}
+}
 
 int main(int argc, char** argv)
 {
@@ -41,9 +65,22 @@ int main(int argc, char** argv)
     // initiative and autonomy loops actually run needs the process to outlive their
     // debounce, and doing that by hand is not a check anyone will repeat.
     int holdSeconds = 0;
+    unsigned long restartedFrom = 0;
     revia::desktop::RuntimeRootArgument runtimeRoot;
     for (int index = 1; index < argc; ++index)
     {
+        if (std::string(argv[index]).rfind("--after-restart=", 0) == 0)
+        {
+            try
+            {
+                restartedFrom = std::stoul(std::string(argv[index]).substr(std::string("--after-restart=").size()));
+            }
+            catch (const std::exception&)
+            {
+                restartedFrom = 0;
+            }
+            continue;
+        }
         if (std::string(argv[index]) == "--runtime-root")
         {
             if (index + 1 >= argc ||
@@ -73,6 +110,11 @@ int main(int argc, char** argv)
         else if (std::string(argv[index]) == "--ui-screenshot-tab" && index + 1 < argc)
         {
             screenshotTab = argv[++index];
+        }
+        else if (std::string(argv[index]) == "--ui-theme" && index + 1 < argc)
+        {
+            // Read by the theme when the window is built; system, light or dark.
+            qputenv("REVIA_THEME", QByteArray(argv[++index]));
         }
         else if (std::string(argv[index]) == "--runtime-hold" && index + 1 < argc)
         {
@@ -106,6 +148,7 @@ int main(int argc, char** argv)
         }
     }
     runtimeSmokeTest = runtimeSmokeTest || runtimeReadySmokeTest;
+    WaitForPreviousProcess(restartedFrom);
 
     if (const std::filesystem::path directory =
             runtimeRoot.Directory(revia::core::ProgramDirectory(argc > 0 ? argv[0] : nullptr));
@@ -197,82 +240,91 @@ int main(int argc, char** argv)
                 "Windows asked the application to close");
         });
 
-    ReviaWindow window(!smokeTest, !smokeTest && !runtimeSmokeTest);
-    if (forcedWidth > 0 && forcedHeight > 0)
+    // The window lives in its own scope: its workers, and the session's databases and logs, are
+    // gone before a restart starts the next process.
+    int code = 0;
+    bool restart = false;
     {
-        window.resize(forcedWidth, forcedHeight);
-    }
-    if (!runtimeSmokeTest)
-    {
-        window.show();
-    }
-    if (!screenshotTab.empty())
-    {
-        const QString wanted = QString::fromStdString(screenshotTab);
-        for (auto* tabs : window.findChildren<QTabWidget*>())
+        ReviaWindow window(!smokeTest, !smokeTest && !runtimeSmokeTest);
+        if (forcedWidth > 0 && forcedHeight > 0)
         {
-            for (int index = 0; index < tabs->count(); ++index)
-            {
-                if (tabs->tabText(index).startsWith(wanted, Qt::CaseInsensitive) ||
-                    tabs->tabToolTip(index).startsWith(wanted, Qt::CaseInsensitive))
-                {
-                    revia::desktop::SelectNavigationPage(tabs->widget(index));
-                    break;
-                }
-            }
+            window.resize(forcedWidth, forcedHeight);
         }
-    }
-    if (!screenshotPath.empty())
-    {
-        QTimer::singleShot(500, &application, [&application, &window, screenshotPath]()
+        if (!runtimeSmokeTest)
         {
-            const bool saved = window.grab().save(QString::fromStdString(screenshotPath));
-            window.hide();
-            application.exit(saved ? 0 : 2);
-        });
-    }
-    else if (smokeTest)
-    {
-        QTimer::singleShot(900, &application, [&application, &window]()
+            window.show();
+        }
+        // "chat", a panel (key or title prefix), "settings" or "settings:<section>".
+        QWidget* shown = &window;
+        if (!screenshotTab.empty())
         {
-            window.hide();
-            application.exit(0);
-        });
-    }
-    else if (runtimeReadySmokeTest)
-    {
-        auto* readyTimer = new QTimer(&application);
-        readyTimer->setInterval(250);
-        QObject::connect(readyTimer, &QTimer::timeout, &window, [readyTimer, &window]()
+            if (QWidget* target = window.ShowScreenshotTarget(QString::fromStdString(screenshotTab)))
+                shown = target;
+            if (shown != &window && forcedWidth > 0 && forcedHeight > 0)
+                shown->resize(forcedWidth, forcedHeight);
+        }
+        if (!screenshotPath.empty())
         {
-            if (window.IsRuntimeStarted())
+            QTimer::singleShot(500, &application, [&application, &window, shown, screenshotPath]()
             {
-                readyTimer->stop();
+                const bool saved = shown->grab().save(QString::fromStdString(screenshotPath));
+                window.hide();
+                application.exit(saved ? 0 : 2);
+            });
+        }
+        else if (smokeTest)
+        {
+            QTimer::singleShot(900, &application, [&application, &window]()
+            {
+                window.hide();
+                application.exit(0);
+            });
+        }
+        else if (runtimeReadySmokeTest)
+        {
+            auto* readyTimer = new QTimer(&application);
+            readyTimer->setInterval(250);
+            QObject::connect(readyTimer, &QTimer::timeout, &window, [readyTimer, &window]()
+            {
+                if (window.IsRuntimeStarted())
+                {
+                    readyTimer->stop();
+                    window.RequestShutdown();
+                }
+            });
+            readyTimer->start();
+            QTimer::singleShot(120000, &window, [&window]() { window.RequestShutdown(); });
+        }
+        else if (holdSeconds > 0)
+        {
+            QTimer::singleShot(holdSeconds * 1000, &window, [&window]()
+            {
                 window.RequestShutdown();
-            }
-        });
-        readyTimer->start();
-        QTimer::singleShot(120000, &window, [&window]() { window.RequestShutdown(); });
-    }
-    else if (holdSeconds > 0)
-    {
-        QTimer::singleShot(holdSeconds * 1000, &window, [&window]()
+            });
+        }
+        else if (runtimeSmokeTest)
         {
-            window.RequestShutdown();
-        });
+            QTimer::singleShot(1500, &window, [&window]()
+            {
+                window.RequestShutdown();
+            });
+        }
+        code = application.exec();
+        // Whatever unwound the event loop, the session now has exactly one closing line. If
+        // something more specific already recorded itself, this is ignored.
+        revia::core::ExitReporter::Record(
+            revia::core::ExitReason::EventLoopEnded,
+            "exec() returned " + std::to_string(code));
+        restart = window.RestartRequested();
     }
-    else if (runtimeSmokeTest)
+    if (restart)
     {
-        QTimer::singleShot(1500, &window, [&window]()
-        {
-            window.RequestShutdown();
-        });
+        QStringList arguments = QCoreApplication::arguments().mid(1);
+        arguments.erase(std::remove_if(arguments.begin(), arguments.end(),
+                            [](const QString& argument) { return argument.startsWith(QStringLiteral("--after-restart=")); }),
+            arguments.end());
+        arguments << QStringLiteral("--after-restart=%1").arg(QCoreApplication::applicationPid());
+        QProcess::startDetached(QCoreApplication::applicationFilePath(), arguments);
     }
-    const int code = application.exec();
-    // Whatever unwound the event loop, the session now has exactly one closing line. If
-    // something more specific already recorded itself, this is ignored.
-    revia::core::ExitReporter::Record(
-        revia::core::ExitReason::EventLoopEnded,
-        "exec() returned " + std::to_string(code));
     return code;
 }

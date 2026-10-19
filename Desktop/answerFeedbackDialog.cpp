@@ -18,7 +18,7 @@ AnswerFeedbackDialog::AnswerFeedbackDialog(revia::learning::QualityFeedback valu
     resize(540, 480);
     auto* layout = new QVBoxLayout(this);
     auto* explanation = new QLabel("Judge this displayed reply against one explicit criterion. Your feedback creates a private "
-                                   "candidate for Skills & Learning review; it does not accept a lesson.",
+                                   "candidate for review in the Learning window; it does not accept a lesson.",
         this);
     explanation->setWordWrap(true);
     explanation->setTextFormat(Qt::PlainText);

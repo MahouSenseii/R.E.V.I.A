@@ -1,6 +1,5 @@
 #include "reviaWindow.h"
 #include "tabNavigation.h"
-#include "navigationSidebar.h"
 
 #include "Core/logger.h"
 #include "Audit/contentDigest.h"
@@ -21,11 +20,20 @@
 #include "resourcePanel.h"
 #include "chatMarkdown.h"
 #include "chatSessionsPanel.h"
+#include "commandPalette.h"
+#include "composerCard.h"
 #include "documentsDialog.h"
+#include "panelWindow.h"
+#include "serialWorker.h"
+#include "settingsDialog.h"
+#include "shellSidebar.h"
 #include "theme.h"
+#include "toastOverlay.h"
 #include "ui_reviaWindow.h"
 
+#include <QAbstractTextDocumentLayout>
 #include <QApplication>
+#include <QBoxLayout>
 #include <QCheckBox>
 #include <QClipboard>
 #include <QCloseEvent>
@@ -36,6 +44,8 @@
 #include <QDropEvent>
 #include <QFileDialog>
 #include <QFileInfo>
+#include <QFocusEvent>
+#include <QFormLayout>
 #include <QDir>
 #include <QEvent>
 #include <QFile>
@@ -54,7 +64,6 @@
 #include <QMargins>
 #include <QPushButton>
 #include <QScrollArea>
-#include <QTabWidget>
 #include <QResizeEvent>
 #include <QProgressBar>
 #include <QPixmap>
@@ -66,12 +75,16 @@
 #include <QStyle>
 #include <QSystemTrayIcon>
 #include <QTextBrowser>
+#include <QTextBlock>
 #include <QTextBlockFormat>
 #include <QtMath>
 #include <QTextCharFormat>
 #include <QTextCursor>
 #include <QTextDocument>
+#include <QTextFrame>
+#include <QTextFrameFormat>
 #include <QThread>
+#include <QTime>
 #include <QTimer>
 #include <QToolButton>
 #include <QUrl>
@@ -168,30 +181,51 @@ revia::speech::VoiceOperationResult FailedVoiceOperation(const std::string&)
     return {false, "The voice operation failed. The cause is unknown.", {}, -1.0};
 }
 
-QString StateColor(const revia::runtime::RuntimeState state)
+// What the state pill shows for a runtime state (design spec 2.4). Idle is refined by the
+// microphone and speech in RefreshStateBadge; the stylesheet colours the dot by `state`.
+struct StatePresentation
+{
+    const char* state;
+    QString label;
+};
+
+StatePresentation PresentState(const revia::runtime::RuntimeState state, const bool desktopControl)
 {
     using revia::runtime::RuntimeState;
     switch (state)
     {
-    case RuntimeState::Idle:
-        return "#62e6c8";
-    case RuntimeState::Starting:
-    case RuntimeState::Thinking:
-    case RuntimeState::Responding:
-    case RuntimeState::Remembering:
-    case RuntimeState::Acting:
-        return "#77b7ff";
-    case RuntimeState::WaitingForConfirmation:
-        return "#ffd166";
-    case RuntimeState::Blocked:
-    case RuntimeState::Error:
-        return "#ff6b7a";
-    case RuntimeState::Stopping:
-        return "#c3a6ff";
     case RuntimeState::Offline:
+        return {"offline", QStringLiteral("Offline")};
+    case RuntimeState::Starting:
+        return {"starting", QStringLiteral("Starting…")};
+    case RuntimeState::Stopping:
+        return {"stopping", QStringLiteral("Stopping…")};
+    case RuntimeState::Error:
+        return {"error", QStringLiteral("Problem")};
+    case RuntimeState::WaitingForConfirmation:
+        return {"waiting", QStringLiteral("Needs your OK")};
+    case RuntimeState::Acting:
+        return desktopControl ? StatePresentation{"acting", QStringLiteral("Controlling desktop")}
+                              : StatePresentation{"busy", QStringLiteral("Working")};
+    case RuntimeState::Blocked:
+        return {"blocked", QStringLiteral("Blocked")};
+    case RuntimeState::Thinking:
+        return {"busy", QStringLiteral("Thinking")};
+    case RuntimeState::Responding:
+        return {"busy", QStringLiteral("Replying")};
+    case RuntimeState::Remembering:
+        return {"busy", QStringLiteral("Remembering")};
+    case RuntimeState::Idle:
     default:
-        return "#8290a8";
+        return {"ready", QStringLiteral("Ready")};
     }
+}
+
+// Dynamic properties only take effect in the stylesheet after a repolish.
+void Repolish(QWidget* widget)
+{
+    widget->style()->unpolish(widget);
+    widget->style()->polish(widget);
 }
 
 // Escapes text and turns line breaks into <br>, so a reply can never inject markup
@@ -217,10 +251,9 @@ ReviaWindow::ReviaWindow(const bool startRuntime, const bool buildSystemTray, QW
 {
     setWindowTitle("Revia");
     setWindowIcon(CreateReviaIcon());
-    setWindowFlags(Qt::Window | Qt::FramelessWindowHint);
-    resize(1040, 720);
+    // The native frame brings edge resizing, snap layouts, the system shadow and Alt+Space.
+    resize(1180, 780);
     setMinimumSize(760, 540);
-    setAttribute(Qt::WA_TranslucentBackground, true);
 
     if (startRuntime)
     {
@@ -239,10 +272,12 @@ ReviaWindow::ReviaWindow(const bool startRuntime, const bool buildSystemTray, QW
         }
     }
 
+    // Pages first, then the windows that host them, then the shell around the chat.
     BuildInterface();
     BuildCompanionControls();
-    revia::desktop::GroupNavigationPages(tabs);
-    BuildNavigationSidebar();
+    BuildPanels();
+    BuildSettingsDialog();
+    BuildShell();
     ApplyResponsiveLayout();
     if (buildSystemTray)
     {
@@ -277,15 +312,22 @@ ReviaWindow::ReviaWindow(const bool startRuntime, const bool buildSystemTray, QW
         });
     pollTimer->start();
 
+    ApplyMicrophoneUi(MicrophoneUi::Unavailable);
+    // The message box has the keyboard when the window first shows.
+    messageInput->setFocus(Qt::OtherFocusReason);
     if (startRuntime)
     {
         StartRuntime();
+        // The owner's choice in Appearance: panels that were open when Revia last closed come back
+        // beside the chat, without taking the keyboard from it.
+        if (QSettings().value("panels/restoreOpen", false).toBool())
+            QTimer::singleShot(0, this, [this]() { panelHost->RestoreOpenSet(); });
     }
     else
     {
         UpdateState(revia::runtime::RuntimeState::Offline, "UI smoke-test mode");
-        sendButton->setEnabled(false);
         stopButton->setEnabled(false);
+        UpdateSendState();
     }
 }
 
@@ -295,11 +337,16 @@ ReviaWindow::~ReviaWindow()
     // so a worker waiting for one must be refused rather than wait for ever.
     shuttingDown.store(true);
     sessionUiEpoch.fetch_add(1);
+    if (themeListenerId >= 0)
+        revia::desktop::theme::RemoveListener(themeListenerId);
     AbandonQuestions();
     if (shutdownWorker.joinable())
         shutdownWorker.join();
     if (companionSwitchWorker.joinable())
         companionSwitchWorker.join();
+    // Settings writes run against the session; they finish before it stops.
+    if (settingsWorker)
+        settingsWorker->Stop();
     Session().Events().Unsubscribe(subscriptionId);
     Session().RequestStop();
     if (studioWorker.joinable())
@@ -338,32 +385,60 @@ bool ReviaWindow::IsRuntimeStarted() const
 
 bool ReviaWindow::eventFilter(QObject* watched, QEvent* event)
 {
-    if (watched == titleBar)
-    {
-        if (event->type() == QEvent::MouseButtonDblClick)
-        {
-            const auto* mouseEvent = static_cast<QMouseEvent*>(event);
-            if (mouseEvent->button() == Qt::LeftButton)
-            {
-                ToggleMaximized();
-                return true;
-            }
-        }
-        if (event->type() == QEvent::MouseButtonPress)
-        {
-            const auto* mouseEvent = static_cast<QMouseEvent*>(event);
-            if (mouseEvent->button() == Qt::LeftButton && windowHandle())
-            {
-                windowHandle()->startSystemMove();
-                return true;
-            }
-        }
-    }
-
     if ((messageInput && watched == messageInput->viewport()) || (chatHistory && watched == chatHistory->viewport()))
     {
         if (HandleAttachmentDrag(event))
             return true;
+        // The measure follows the viewport without re-rendering the transcript; an empty chat's
+        // greeting is placed by the viewport's height, so that one is drawn again.
+        if (chatHistory && watched == chatHistory->viewport() && event->type() == QEvent::Resize)
+        {
+            if (chatEntries.empty() && viewingArchivedChat.empty() && !lastTurnError && !renderingTranscript)
+                RenderChat();
+            else
+                ApplyChatMeasure();
+        }
+    }
+    if (watched == chatHistory && (event->type() == QEvent::FocusIn || event->type() == QEvent::FocusOut))
+    {
+        // The transcript's ring belongs to the keyboard: a click into it to select text shows none.
+        const bool before = chatHistory->property("kbdFocus").toBool();
+        const bool ring = revia::desktop::theme::KeyboardFocusAfter(before, *static_cast<QFocusEvent*>(event));
+        if (ring != before)
+        {
+            chatHistory->setProperty("kbdFocus", ring);
+            Repolish(chatHistory);
+        }
+    }
+    if (watched == chatColumn && event->type() == QEvent::Resize)
+    {
+        // The overlays float over the column rather than sit in its layout.
+        if (navigationLockOverlay)
+            navigationLockOverlay->setGeometry(chatColumn->rect());
+        ApplyComposerMeasure();
+        ApplyResponsiveLayout();
+    }
+    if ((watched == chatHeader && event->type() == QEvent::Resize) ||
+        (composerShadow && watched == composerShadow && (event->type() == QEvent::Move || event->type() == QEvent::Resize)))
+    {
+        RefreshChatTitle();
+        if (jumpToLatest && composerShadow)
+        {
+            jumpToLatest->adjustSize();
+            const QPoint composerTop = composerShadow->mapTo(chatColumn, QPoint(0, 0));
+            jumpToLatest->move((chatColumn->width() - jumpToLatest->width()) / 2, composerTop.y() - jumpToLatest->height() - 8);
+            jumpToLatest->raise();
+        }
+    }
+    if (settingsDialog && watched == settingsDialog && event->type() == QEvent::Show)
+    {
+        // The dialog's own window gets the native caption colours on its first show.
+        if (!settingsDialog->property("reviaFramed").toBool())
+        {
+            settingsDialog->setProperty("reviaFramed", true);
+            revia::desktop::theme::ApplyNativeFrame(settingsDialog);
+        }
+        RefreshCloudUseFor();
     }
     if (watched == messageInput && event->type() == QEvent::KeyPress)
     {
@@ -389,83 +464,75 @@ bool ReviaWindow::eventFilter(QObject* watched, QEvent* event)
             SendMessage();
             return true;
         }
-        if (keyEvent->key() == Qt::Key_Escape && editingLastTurn)
+        if (keyEvent->key() == Qt::Key_Escape)
         {
-            CancelEditLastTurn();
-            return true;
+            // An edit in progress goes first; otherwise Esc stops whatever Stop would.
+            if (editingLastTurn)
+            {
+                CancelEditLastTurn();
+                return true;
+            }
+            if (stopButton->isEnabled())
+            {
+                stopButton->click();
+                return true;
+            }
         }
     }
     return QMainWindow::eventFilter(watched, event);
 }
 
-void ReviaWindow::changeEvent(QEvent* event)
-{
-    QMainWindow::changeEvent(event);
-    if (event->type() == QEvent::WindowStateChange)
-    {
-        UpdateMaximizeButton();
-    }
-}
-
 void ReviaWindow::closeEvent(QCloseEvent* event)
 {
-    if (!shuttingDown.load() && trayIcon && trayIcon->isVisible())
+    if (!shuttingDown.load() && trayIcon && trayIcon->isVisible() && QSettings().value("window/closeToTray", true).toBool())
     {
         hide();
-        trayIcon->showMessage(
-            "Revia", "I'm still running here. Use Quit from the tray when you want me to stop.", QSystemTrayIcon::Information, 2500);
+        if (panelHost)
+            panelHost->HideAll(true);
+        QSettings settings;
+        if (!settings.value("window/trayHintShown", false).toBool())
+        {
+            settings.setValue("window/trayHintShown", true);
+            trayIcon->showMessage("Revia", "Revia is still running here. Use Quit Revia from the tray when you want it to stop.",
+                QSystemTrayIcon::Information, 2500);
+        }
         event->ignore();
         return;
     }
-    // No tray icon to retreat to, so this close really does end the Session().
-    revia::core::ExitReporter::Record(revia::core::ExitReason::WindowClosed, "the window was closed with no tray icon available");
-    event->accept();
+    // Nowhere to retreat to, or the owner asked closing to quit: shut down properly. Accepting the
+    // close here would leave a windowless process with every server still running.
+    BeginShutdown(revia::core::ExitReason::WindowClosed, "the window was closed");
+    event->ignore();
+}
+
+void ReviaWindow::showEvent(QShowEvent* event)
+{
+    QMainWindow::showEvent(event);
+    // The caption takes the scheme's colours once the native window exists.
+    if (!property("reviaFramed").toBool())
+    {
+        setProperty("reviaFramed", true);
+        revia::desktop::theme::ApplyNativeFrame(this);
+    }
 }
 
 void ReviaWindow::resizeEvent(QResizeEvent* event)
 {
     QMainWindow::resizeEvent(event);
-    ApplyContentWidthCap();
     ApplyResponsiveLayout();
+    // The message box grows with its text up to eight lines, 200px or 30% of the window.
+    if (composer)
+        composer->SetMaxInputHeight(std::min(200, std::max(48, height() * 3 / 10)));
 }
 
 namespace
 {
-// Gives every tab page room at the bottom.
+// Moves a page's existing content into a scroll area without rebuilding it.
 //
-// Each page in the .ui sets bottomMargin to 0, so content of any height runs flush into
-// the window edge: a table ends on a half-drawn row, a paragraph ends on a clipped line,
-// and the rounded corner of the shell is cut through. It is the same defect on every
-// tab, which is why fixing one tab fixed one tab. Done here in one pass over every page
-// of every tab widget -- including the nested Runtime pages -- rather than as fifteen
-// identical edits to the .ui that the next page added would not inherit.
-void ApplyTabPageBottomMargin(QWidget* root, const int bottom)
-{
-    if (root == nullptr)
-        return;
-    for (QTabWidget* tabs : root->findChildren<QTabWidget*>())
-    {
-        for (int index = 0; index < tabs->count(); ++index)
-        {
-            QWidget* page = tabs->widget(index);
-            if (page == nullptr || page->layout() == nullptr)
-                continue;
-            QMargins margins = page->layout()->contentsMargins();
-            // Never shrink a page that already asked for more.
-            margins.setBottom(std::max(margins.bottom(), bottom));
-            page->layout()->setContentsMargins(margins);
-        }
-    }
-}
-
-// Moves a tab's existing content into a scroll area without rebuilding it.
-//
-// Settings and Presence are stacks of group boxes with nothing stretchy in them, which
-// is the shape that made Permissions unreadable: when the window is shorter than the
-// content, a plain layout has nowhere to take the shortfall from and compresses every
-// child below its minimum, so labels land on top of one another. Profiles and Voice
-// already scroll and never had the problem. Content this tall has to be scrollable
-// rather than squeezable.
+// Presence and Memory are stacks of group boxes with nothing stretchy in them: when the
+// window is shorter than the content, a plain layout has nowhere to take the shortfall from
+// and compresses every child below its minimum, so labels land on top of one another.
+// Content this tall has to be scrollable rather than squeezable.
 void MakePageScrollable(QWidget* page, const char* scrollName = nullptr)
 {
     if (page == nullptr)
@@ -495,19 +562,13 @@ void MakePageScrollable(QWidget* page, const char* scrollName = nullptr)
 
 void ReviaWindow::BuildInterface()
 {
+    // Palette, stylesheet and app font for the light or dark scheme, following Windows unless
+    // the owner chose one. First, so every widget the .ui makes is polished once, in the right
+    // scheme; the window and everything parented to it restyle on a change.
+    revia::desktop::theme::Install(this);
     ui->setupUi(this);
 
-    titleBar = ui->titleBar;
-    maximizeButton = ui->maximizeButton;
-    stateLabel = ui->stateLabel;
-    stateDetailLabel = ui->stateDetailLabel;
-    affectLabel = ui->affectLabel;
-    speechLabel = ui->speechLabel;
-    microphoneLabel = ui->microphoneLabel;
-    automationLabel = ui->automationLabel;
-    visionLabel = ui->visionLabel;
-    perceptionLabel = ui->perceptionLabel;
-    tabs = ui->tabs;
+    chatPage = ui->chatPage;
     chatHistory = ui->chatHistory;
     messageInput = ui->messageInput;
     activityFeed = ui->activityFeed;
@@ -520,25 +581,6 @@ void ReviaWindow::BuildInterface()
     stopButton = ui->stopButton;
     microphoneButton = ui->microphoneButton;
     screenActionButton = ui->screenActionButton;
-    microphoneDeviceCombo = ui->microphoneDeviceCombo;
-    refreshMicrophonesButton = ui->refreshMicrophonesButton;
-    testMicrophoneButton = ui->testMicrophoneButton;
-    microphoneTestResultLabel = ui->microphoneTestResultLabel;
-    alwaysOnTopCheck = ui->alwaysOnTopCheck;
-    speechCheck = ui->speechCheck;
-    autoSendVoiceCheck = ui->autoSendVoiceCheck;
-    bargeInCheck = ui->bargeInCheck;
-    handsFreeCheck = ui->handsFreeCheck;
-    avatarBridgeCheck = ui->avatarBridgeCheck;
-    externalAdaptersCheck = ui->externalAdaptersCheck;
-    initiativeCheck = ui->initiativeCheck;
-    curiosityCheck = ui->curiosityCheck;
-    spontaneousSpeechCheck = ui->spontaneousSpeechCheck;
-    speakWhenAwayCheck = ui->speakWhenAwayCheck;
-    aiFilterCheck = ui->aiFilterCheck;
-    initiativeMaxSpin = ui->initiativeMaxSpin;
-    resourceSampleSpin = ui->resourceSampleSpin;
-    preferenceStatus = ui->preferenceStatus;
     presencePhaseValue = ui->presencePhaseValue;
     presenceAffectValue = ui->presenceAffectValue;
     presenceAttentionValue = ui->presenceAttentionValue;
@@ -555,24 +597,54 @@ void ReviaWindow::BuildInterface()
     previewVoiceButton = ui->previewVoiceButton;
     renderVoiceBankButton = ui->renderVoiceBankButton;
 
-    chatVoiceHealth = new VoiceHealthPanel(true, ui->chatPage);
-    ui->chatLayout->insertWidget(1, chatVoiceHealth);
-    conversationStatus = new ConversationStatusPanel(ui->chatPage);
-    ui->chatLayout->insertWidget(0, conversationStatus);
+    // The microphone controls from the old Settings page, in one row the Settings dialog hosts
+    // under Voice. Same names and wiring as before.
+    microphoneRow = new QWidget(this);
+    microphoneRow->setObjectName("microphoneRow");
+    auto* microphoneLayout = new QBoxLayout(QBoxLayout::LeftToRight, microphoneRow);
+    microphoneLayout->setContentsMargins(0, 0, 0, 0);
+    microphoneLayout->setSpacing(8);
+    microphoneDeviceCombo = new QComboBox(microphoneRow);
+    microphoneDeviceCombo->setObjectName("microphoneDeviceCombo");
+    microphoneDeviceCombo->setAccessibleName("Microphone");
+    microphoneDeviceCombo->setToolTip("Which Windows recording device is used. Default follows the Windows setting. A saved device that "
+                                      "is unplugged falls back to Default and says so rather than switching silently.");
+    microphoneDeviceCombo->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
+    microphoneDeviceCombo->setMinimumContentsLength(14);
+    microphoneLayout->addWidget(microphoneDeviceCombo, 1);
+    refreshMicrophonesButton = new QPushButton("Refresh", microphoneRow);
+    refreshMicrophonesButton->setObjectName("refreshMicrophonesButton");
+    refreshMicrophonesButton->setToolTip("Re-read the list of recording devices Windows currently reports.");
+    microphoneLayout->addWidget(refreshMicrophonesButton);
+    testMicrophoneButton = new QPushButton("Test microphone", microphoneRow);
+    testMicrophoneButton->setObjectName("testMicrophoneButton");
+    testMicrophoneButton->setToolTip("Record a few seconds from the selected device, measure the signal, and transcribe it. The result "
+                                     "is shown here only and is never sent as a message.");
+    microphoneLayout->addWidget(testMicrophoneButton);
+    microphoneTestResultLabel = new QLabel(this);
+    microphoneTestResultLabel->setObjectName("microphoneTestResultLabel");
+    microphoneTestResultLabel->setWordWrap(true);
+    microphoneTestResultLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    microphoneTestResultLabel->setParent(microphoneRow);
+    microphoneLayout->addWidget(microphoneTestResultLabel, 1);
+
+    chatVoiceHealth = new VoiceHealthPanel(true, chatPage);
+    conversationStatus = new ConversationStatusPanel(chatPage);
     connect(conversationStatus->ReviewButton(), &QPushButton::clicked, this, [this]() { ReviewDisplayedAnswer(); });
+    if (auto* details = conversationStatus->findChild<QPushButton*>("conversationDetailsButton"))
+        connect(details, &QPushButton::toggled, this, [this]() { UpdateConversationStrip(); });
     BuildChatSidebar();
     voiceHealth = new VoiceHealthPanel(false, ui->voicePage);
     ui->voiceLayout->insertWidget(0, voiceHealth);
     connect(chatVoiceHealth->DetailsButton(), &QPushButton::clicked, this,
         [this]()
         {
-            revia::desktop::SelectNavigationPage(ui->voiceTab);
+            OpenPanel(revia::desktop::PanelId::Voice);
             ui->voiceScroll->verticalScrollBar()->setValue(0);
         });
 
-    ui->titleIcon->setPixmap(CreateReviaIcon().pixmap(20, 20));
-    titleBar->installEventFilter(this);
     messageInput->installEventFilter(this);
+    chatHistory->installEventFilter(this);
     BuildAttachmentControls();
 
     pipelinePanel = new PipelinePanel(ui->pipelinePage);
@@ -584,18 +656,9 @@ void ReviaWindow::BuildInterface()
     ui->resourceHostLayout->addWidget(resourcePanel);
     canvasPanel = new CanvasPanel(ui->canvasPage);
     ui->canvasHostLayout->addWidget(canvasPanel);
-    // Scrolled, like Profiles and Voice already are. Permissions is a stack of
-    // fixed-height cards, so on a short window the layout had nowhere to take the
-    // shortfall from and compressed every card below its minimum -- which is what made
-    // titles overlap their own subtitles and hid the switches entirely. Content this
-    // tall has to be scrollable rather than squeezable.
-    auto* permissionsScroll = new QScrollArea(ui->permissionsPage);
-    permissionsScroll->setFrameShape(QFrame::NoFrame);
-    permissionsScroll->setWidgetResizable(true);
-    permissionsScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-    capabilityPanel = new CapabilityPanel(Session(), [this]() { DiscoverApplicationPermissions(); }, permissionsScroll);
-    permissionsScroll->setWidget(capabilityPanel);
-    ui->permissionsHostLayout->addWidget(permissionsScroll);
+    // Hosted by Settings › Permissions (and its internet cards by Settings › Internet) once the
+    // dialog exists; the dialog's own page scrolls, so the panel needs no scroll area of its own.
+    capabilityPanel = new CapabilityPanel(Session(), [this]() { DiscoverApplicationPermissions(); }, this);
     profilePanel = new ProfilePanel(Session(), ui->profilesPage);
     ui->profilesHostLayout->addWidget(profilePanel);
     memoryPanel = new MemoryPanel(Session(), ui->memoryTab);
@@ -609,9 +672,12 @@ void ReviaWindow::BuildInterface()
     voiceLanguageCombo->addItems(
         {"English", "Chinese", "Japanese", "Korean", "German", "French", "Russian", "Portuguese", "Spanish", "Italian"});
 
-    connect(ui->minimizeButton, &QToolButton::clicked, this, &QWidget::showMinimized);
-    connect(maximizeButton, &QToolButton::clicked, this, [this]() { ToggleMaximized(); });
-    connect(ui->closeButton, &QToolButton::clicked, this, &QWidget::close);
+    // Presence's switches are Settings rows now; the page says where they went.
+    auto* presenceSettings = new QPushButton("Open Settings", ui->presenceControlsGroup);
+    presenceSettings->setObjectName("presenceOpenSettings");
+    presenceSettings->setToolTip("Open Settings › Integrations");
+    ui->presenceControlsLayout->addWidget(presenceSettings, 0, Qt::AlignLeft);
+    connect(presenceSettings, &QPushButton::clicked, this, [this]() { OpenSettings(QStringLiteral("Integrations")); });
 
     connect(chatHistory, &QTextBrowser::anchorClicked, this,
         [this](const QUrl& link)
@@ -625,19 +691,38 @@ void ReviaWindow::BuildInterface()
             if (colon <= 0)
                 return;
             const QString action = target.left(colon);
+            const QString argument = target.mid(colon + 1);
+            // A link that would start or change a turn waits for the one in flight; reading
+            // the details of a panel never does.
+            if (action == QStringLiteral("panel"))
+            {
+                if (const auto panel = revia::desktop::PanelFromKey(argument))
+                    OpenPanel(*panel);
+                return;
+            }
+            if (chatTurnInFlight)
+                return;
+            if (action == QStringLiteral("retry"))
+            {
+                RetryFailedTurn();
+                return;
+            }
             bool parsed = false;
-            const std::size_t index = static_cast<std::size_t>(target.mid(colon + 1).toULongLong(&parsed));
+            const std::size_t index = static_cast<std::size_t>(argument.toULongLong(&parsed));
             if (!parsed || index >= chatEntries.size())
                 return;
             if (action == QStringLiteral("thought"))
             {
                 chatEntries[index].expanded = !chatEntries[index].expanded;
+                // Opening a block never moves the reader.
+                renderKeepsPosition = true;
                 RenderChat();
+                renderKeepsPosition = false;
             }
             else if (action == QStringLiteral("copy"))
             {
                 QApplication::clipboard()->setText(MessageText(index));
-                statusBar()->showMessage(QStringLiteral("Copied to the clipboard."), 3000);
+                ShowStatus(QStringLiteral("Copied to the clipboard."), 3000);
             }
             else if (action == QStringLiteral("regen") && RegenerableReply() == index)
             {
@@ -646,6 +731,29 @@ void ReviaWindow::BuildInterface()
             else if (action == QStringLiteral("edit") && LastUserEntry() == index)
             {
                 BeginEditLastTurn();
+            }
+            else if (action == QStringLiteral("review"))
+            {
+                ReviewDisplayedAnswer();
+            }
+        });
+    // Copy for any reply, not only the newest one that carries the link.
+    chatHistory->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(chatHistory, &QWidget::customContextMenuRequested, this, [this](const QPoint& position) { CopyMessageAt(position); });
+    connect(chatHistory->verticalScrollBar(), &QScrollBar::valueChanged, this,
+        [this](const int value)
+        {
+            // Reaching the bottom again follows the conversation once more.
+            const QScrollBar* bar = chatHistory->verticalScrollBar();
+            if (bar->maximum() - value <= 48)
+            {
+                transcriptPinned = true;
+                if (jumpToLatest)
+                    jumpToLatest->hide();
+            }
+            else if (!renderingTranscript)
+            {
+                transcriptPinned = false;
             }
         });
 
@@ -659,7 +767,14 @@ void ReviaWindow::BuildInterface()
             QSettings().setValue("activity/filter", index);
             RenderActivity();
         });
-    connect(activityAutoScroll, &QCheckBox::toggled, this, [](const bool enabled) { QSettings().setValue("activity/follow", enabled); });
+    connect(activityAutoScroll, &QCheckBox::toggled, this,
+        [this](const bool enabled)
+        {
+            // The same setting as Settings › General › Follow new activity.
+            QSettings().setValue("activity/follow", enabled);
+            if (settingsDialog)
+                settingsDialog->SetValue("activity/follow", enabled);
+        });
     connect(clearActivityButton, &QPushButton::clicked, this,
         [this]()
         {
@@ -680,16 +795,18 @@ void ReviaWindow::BuildInterface()
                 AppendActivity(QStringLiteral("The Logs folder could not be opened: ") + path, ActivitySeverity::Warning);
             }
         });
-    UpdateActivitySummary();
 
     connect(sendButton, &QPushButton::clicked, this, [this]() { SendMessage(); });
     connect(stopButton, &QPushButton::clicked, this, [this]()
     {
+        // Remembered so the turn that ends now reads "Stopped" rather than as a failure.
+        userStopRequested = true;
         studioWorker.request_stop();
         Session().RequestStop();
     });
     connect(microphoneButton, &QPushButton::clicked, this, [this]() { ToggleListening(); });
     connect(screenActionButton, &QPushButton::clicked, this, [this]() { UseVisibleScreen(); });
+    connect(messageInput, &QPlainTextEdit::textChanged, this, [this]() { UpdateSendState(); });
     RefreshMicrophoneDevices();
     connect(refreshMicrophonesButton, &QPushButton::clicked, this, [this]() { RefreshMicrophoneDevices(); });
     connect(testMicrophoneButton, &QPushButton::clicked, this, [this]() { RunMicrophoneTest(); });
@@ -704,34 +821,6 @@ void ReviaWindow::BuildInterface()
             QSettings().setValue("input/microphoneDevice", device);
             Session().SetMicrophoneDevice(device.toStdString());
         });
-    alwaysOnTopCheck->setChecked(shellSettings.value("window/alwaysOnTop", false).toBool());
-    autoSendVoiceCheck->setChecked(shellSettings.value("input/autoSendVoice", true).toBool());
-    connect(alwaysOnTopCheck, &QCheckBox::toggled, this,
-        [this](const bool enabled)
-        {
-            QSettings().setValue("window/alwaysOnTop", enabled);
-            SetAlwaysOnTop(enabled);
-        });
-    connect(
-        autoSendVoiceCheck, &QCheckBox::toggled, this, [](const bool enabled) { QSettings().setValue("input/autoSendVoice", enabled); });
-    if (alwaysOnTopCheck->isChecked())
-    {
-        SetAlwaysOnTop(true);
-    }
-    connect(speechCheck, &QCheckBox::toggled, this,
-        [this](const bool enabled) { ShowPreferenceResult(Session().SetPreference("speech.enabled", enabled ? "on" : "off")); });
-    connect(bargeInCheck, &QCheckBox::toggled, this,
-        [this](const bool enabled) { ShowPreferenceResult(Session().SetPreference("bargeIn.enabled", enabled ? "on" : "off")); });
-    connect(handsFreeCheck, &QCheckBox::toggled, this,
-        [this](const bool enabled)
-        {
-            ShowPreferenceResult(Session().SetPreference("speechRecognition.handsFree", enabled ? "on" : "off"));
-            autoSendVoiceCheck->setEnabled(!enabled);
-        });
-    connect(avatarBridgeCheck, &QCheckBox::toggled, this, [this](const bool enabled)
-        { ShowPreferenceResult(Session().SetPreference("presence.avatarBridgeEnabled", enabled ? "on" : "off")); });
-    connect(externalAdaptersCheck, &QCheckBox::toggled, this, [this](const bool enabled)
-        { ShowPreferenceResult(Session().SetPreference("presence.externalAdaptersEnabled", enabled ? "on" : "off")); });
     connect(openPresenceFolderButton, &QPushButton::clicked, this,
         [this]()
         {
@@ -742,52 +831,28 @@ void ReviaWindow::BuildInterface()
                 AppendActivity(QStringLiteral("The Presence folder could not be opened: ") + path, ActivitySeverity::Warning);
             }
         });
-    connect(initiativeCheck, &QCheckBox::toggled, this,
-        [this](const bool enabled)
-        {
-            initiativeMaxSpin->setEnabled(enabled);
-            curiosityCheck->setEnabled(enabled);
-            spontaneousSpeechCheck->setEnabled(enabled && curiosityCheck->isChecked());
-            speakWhenAwayCheck->setEnabled(enabled && curiosityCheck->isChecked());
-            ShowPreferenceResult(Session().SetPreference("initiative.enabled", enabled ? "on" : "off"));
-        });
-    connect(curiosityCheck, &QCheckBox::toggled, this,
-        [this](const bool enabled)
-        {
-            spontaneousSpeechCheck->setEnabled(initiativeCheck->isChecked() && enabled);
-            speakWhenAwayCheck->setEnabled(initiativeCheck->isChecked() && enabled);
-            ShowPreferenceResult(Session().SetPreference("initiative.curiosityEnabled", enabled ? "on" : "off"));
-        });
-    connect(spontaneousSpeechCheck, &QCheckBox::toggled, this, [this](const bool enabled)
-        { ShowPreferenceResult(Session().SetPreference("initiative.spontaneousSpeechEnabled", enabled ? "on" : "off")); });
-    connect(speakWhenAwayCheck, &QCheckBox::toggled, this, [this](const bool enabled)
-        { ShowPreferenceResult(Session().SetPreference("initiative.speakWhenUserAway", enabled ? "on" : "off")); });
-    connect(aiFilterCheck, &QCheckBox::toggled, this, [this](const bool enabled)
-        { ShowPreferenceResult(Session().SetPreference("responseFilter.aiReviewEnabled", enabled ? "on" : "off")); });
-    connect(initiativeMaxSpin, &QSpinBox::editingFinished, this,
-        [this]() { ShowPreferenceResult(Session().SetPreference("initiative.maxPerHour", std::to_string(initiativeMaxSpin->value()))); });
-    connect(resourceSampleSpin, &QSpinBox::editingFinished, this, [this]()
-        { ShowPreferenceResult(Session().SetPreference("resources.usageSampleSeconds", std::to_string(resourceSampleSpin->value()))); });
     connect(createVoiceButton, &QPushButton::clicked, this, [this]() { CreateVoicePreset(); });
     connect(previewVoiceButton, &QPushButton::clicked, this, [this]() { PreviewVoice(); });
     connect(renderVoiceBankButton, &QPushButton::clicked, this, [this]() { RenderVoiceBank(); });
     RefreshVoiceStudio();
 
-    // Palette, stylesheet and app font for the light or dark scheme, following Windows unless
-    // the owner chose one; the window and everything parented to it restyle on a change.
-    revia::desktop::theme::Install(this);
-
-    MakePageScrollable(ui->settingsPage);
     MakePageScrollable(ui->presencePage);
     chatHistory->setMinimumHeight(120);
-    ui->chatLayout->setStretchFactor(chatHistory, 1);
-    MakePageScrollable(ui->chatPage, "conversationPageScroll");
+    chatHistory->setFrameShape(QFrame::NoFrame);
+    MakePageScrollable(chatPage, "conversationPageScroll");
     MakePageScrollable(ui->memoryTab, "memoryPageScroll");
-    // After the scroll areas exist, so the outer layouts they introduce get it too.
-    ApplyTabPageBottomMargin(this, 14);
-    ApplyMicrophoneUi(MicrophoneUi::Unavailable);
-    ApplyContentWidthCap();
-    ApplyResponsiveLayout();
+    conversationScroll = chatPage->findChild<QScrollArea*>("conversationPageScroll");
+    // Long form rows wrap instead of widening their page (design spec 2.11).
+    for (auto* form : findChildren<QFormLayout*>())
+    {
+        form->setRowWrapPolicy(QFormLayout::WrapLongRows);
+        form->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
+    }
+    for (auto* label : {ui->avatarPathValue, ui->adapterInboxValue, ui->adapterOutboxValue})
+    {
+        label->setWordWrap(true);
+        label->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+    }
 }
 
 void ReviaWindow::BuildTray()
@@ -798,30 +863,29 @@ void ReviaWindow::BuildTray()
     QAction* alwaysOnTopAction = trayMenu->addAction("Always on top");
     alwaysOnTopAction->setCheckable(true);
     trayMenu->addSeparator();
-    QAction* quitAction = trayMenu->addAction("Quit");
+    QAction* quitAction = trayMenu->addAction("Quit Revia");
     trayIcon->setContextMenu(trayMenu);
     trayIcon->setToolTip("Revia - Offline");
 
-    connect(openAction, &QAction::triggered, this,
-        [this]()
-        {
-            showNormal();
-            raise();
-            activateWindow();
-        });
+    // Panels hidden with the window come back with it, without taking the keyboard from the chat.
+    const auto reopen = [this]()
+    {
+        showNormal();
+        raise();
+        activateWindow();
+        if (panelHost)
+            panelHost->RestoreHidden();
+    };
+    connect(openAction, &QAction::triggered, this, reopen);
     connect(alwaysOnTopAction, &QAction::toggled, alwaysOnTopCheck, &QCheckBox::setChecked);
     connect(alwaysOnTopCheck, &QCheckBox::toggled, alwaysOnTopAction, &QAction::setChecked);
     alwaysOnTopAction->setChecked(alwaysOnTopCheck->isChecked());
     connect(quitAction, &QAction::triggered, this, [this]() { BeginShutdown(revia::core::ExitReason::TrayQuit); });
     connect(trayIcon, &QSystemTrayIcon::activated, this,
-        [this](const QSystemTrayIcon::ActivationReason reason)
+        [reopen](const QSystemTrayIcon::ActivationReason reason)
         {
             if (reason == QSystemTrayIcon::Trigger || reason == QSystemTrayIcon::DoubleClick)
-            {
-                showNormal();
-                raise();
-                activateWindow();
-            }
+                reopen();
         });
     trayIcon->show();
 }
@@ -830,7 +894,7 @@ bool ReviaWindow::ClaimOperationWorker()
 {
     if (operationRunning.exchange(true))
     {
-        statusBar()->showMessage(QStringLiteral("Revia is still working on the previous request. Send again once she has answered."), 8000);
+        ShowStillWorking();
         return false;
     }
     // Finished: its own last act was clearing the flag, so this returns at once.
@@ -843,8 +907,8 @@ void ReviaWindow::StartRuntime()
 {
     if (switchingCompanion || shuttingDown.load() || !ClaimOperationWorker())
         return;
-    sendButton->setEnabled(false);
     stopButton->setEnabled(true);
+    UpdateSendState();
     operationWorker = std::jthread(
         [this, epoch = sessionUiEpoch.load()]()
         {
@@ -863,7 +927,6 @@ void ReviaWindow::StartRuntime()
                 {
                     if (epoch != sessionUiEpoch.load() || shuttingDown.load())
                         return;
-                    sendButton->setEnabled(started);
                     screenActionButton->setEnabled(Session().IsVisionAvailable());
                     // Re-evaluate the microphone now that IsStarted() is finally true; the last
                     // recognition phase event arrived while startup was still in flight.
@@ -904,6 +967,9 @@ void ReviaWindow::StartRuntime()
                         visionPanel->Refresh();
                     }
                     RefreshChatSidebar();
+                    RefreshAccount();
+                    RefreshStateBadge();
+                    RenderChat();
                     messageInput->setFocus();
                 },
                 Qt::QueuedConnection);
@@ -922,7 +988,7 @@ void ReviaWindow::SendMessage(const bool voiceInput)
     }
     if (!voiceInput && (operationRunning.load() || Session().IsBusy()))
     {
-        statusBar()->showMessage(QStringLiteral("Revia is still working on the previous request. Send again once she has answered."), 8000);
+        ShowStillWorking();
         return;
     }
 
@@ -935,15 +1001,21 @@ void ReviaWindow::SendMessage(const bool voiceInput)
     }
     if (withAttachments && attachmentRunning.load())
     {
-        statusBar()->showMessage(QStringLiteral("Still reading an attachment. Send again in a moment."), 6000);
+        ShowStatus(QStringLiteral("Still reading an attachment. Send again in a moment."), 6000);
         return;
     }
     messageInput->clear();
+    // A new turn: whatever went wrong with the last one, and a stop asked for it, are history.
+    lastTurnError.reset();
+    userStopRequested = false;
     // A message always goes to the current chat, so that is what the window shows.
     CloseArchivedChat();
     if (!voiceInput && editingLastTurn)
     {
         editingLastTurn = false;
+        if (composer)
+            composer->ClearContext();
+        composerContextKind = ComposerContextKind::None;
         RetryLastExchange(text);
         return;
     }
@@ -987,6 +1059,8 @@ void ReviaWindow::SendMessage(const bool voiceInput)
         // The turn waits for the studio operation's lock on its own worker; the window
         // stays responsive and says what the message is waiting for.
         statusBar()->showMessage(QStringLiteral("Your message will be answered when the current studio operation finishes."), 8000);
+        ShowComposerContext(QStringLiteral("Queued until the current studio operation finishes"), QString(), {});
+        composerContextKind = ComposerContextKind::Queued;
     }
     chatTurnInFlight = true;
     if (attached.empty())
@@ -1004,8 +1078,8 @@ void ReviaWindow::SendMessage(const bool voiceInput)
         TrimTranscript();
         RenderChat();
     }
-    sendButton->setEnabled(false);
     stopButton->setEnabled(true);
+    UpdateSendState();
 
     operationWorker = std::jthread(
         [this, epoch = sessionUiEpoch.load(), input = text.toStdString(), voiceInput, origin = Session().Stamp(),
@@ -1051,11 +1125,13 @@ void ReviaWindow::SendMessage(const bool voiceInput)
                     if (epoch != sessionUiEpoch.load() || shuttingDown.load())
                         return;
                     chatTurnInFlight = false;
+                    if (composer)
+                        composer->ClearContext();
                     PresentSessionResult(result);
                     RenderChat();
-                    sendButton->setEnabled(!result.shouldExit && Session().IsStarted());
                     RefreshStateBadge();
                     RefreshChatSidebar();
+                    RefreshChatTitle();
                     if (result.shouldExit)
                     {
                         BeginShutdown(revia::core::ExitReason::UserCommand, "the conversation asked Revia to exit");
@@ -1089,7 +1165,10 @@ void ReviaWindow::PresentSessionResult(const revia::runtime::SessionResult& resu
         AppendChat(QString(), QString(), false, reasoning);
     }
     if (!result.succeeded && !result.reason.empty())
+    {
         AppendActivity("Request stopped: " + QString::fromStdString(result.reason));
+        RecordTurnError(result);
+    }
 }
 
 void ReviaWindow::ReleasePendingSpeechText(const std::uint64_t utteranceId)
@@ -1214,6 +1293,20 @@ void ReviaWindow::ToggleListening()
         return;
     }
 
+    // Recognition switched off in Settings: the button leads there instead of doing nothing.
+    if (microphoneUiState == MicrophoneUi::Unavailable && microphoneDisabledBySetting)
+    {
+        OpenSettings(QStringLiteral("speechRecognition.enabled"));
+        return;
+    }
+    // Hands-free listens on its own; stopping it means turning hands-free off, which Settings owns.
+    if (microphoneUiState == MicrophoneUi::HandsFree)
+    {
+        if (handsFreeCheck && handsFreeCheck->isChecked() && handsFreeCheck->isEnabled())
+            handsFreeCheck->setChecked(false);
+        return;
+    }
+
     if (microphoneUiState == MicrophoneUi::Listening)
     {
         listenRequested = false;
@@ -1248,46 +1341,49 @@ void ReviaWindow::ApplyMicrophoneUi(const MicrophoneUi microphoneUi)
     microphoneUiState = microphoneUi;
     microphoneActive = microphoneUi == MicrophoneUi::Listening || microphoneUi == MicrophoneUi::Transcribing;
 
+    // Icon, tooltip and accessible name only: the button is a 32px round icon in the composer.
+    const auto present = [this](const char* icon, const QString& tip, const bool enabled)
+    {
+        revia::desktop::theme::BindIcon(microphoneButton, icon);
+        microphoneButton->setText(QString());
+        microphoneButton->setToolTip(tip);
+        microphoneButton->setAccessibleName(tip);
+        microphoneButton->setEnabled(enabled);
+    };
     switch (microphoneUi)
     {
     case MicrophoneUi::HandsFree:
-        microphoneButton->setText("Hands-free on");
-        microphoneButton->setToolTip("Voice activity detection is waiting for a complete spoken thought. "
-                                     "Turn it off from the Presence tab to use push-to-talk.");
-        microphoneButton->setEnabled(false);
+        present("mic", QStringLiteral("Hands-free is on: click to stop"), true);
         break;
     case MicrophoneUi::Listening:
-        microphoneButton->setText("Stop listening");
-        microphoneButton->setToolTip("Stop listening and transcribe (Ctrl+Space)");
-        microphoneButton->setEnabled(true);
+        present("mic:onAccent", QStringLiteral("Stop listening (Ctrl+Space)"), true);
         break;
     case MicrophoneUi::Transcribing:
-        microphoneButton->setText("Transcribing...");
-        microphoneButton->setToolTip("Whisper is turning the recording into text.");
-        microphoneButton->setEnabled(false);
+        present("mic", QStringLiteral("Transcribing\u2026"), false);
         break;
     case MicrophoneUi::Ready:
-        microphoneButton->setText("Listen");
         // Recognition reports Ready partway through startup, while the startup thread
         // is still running. Taking a turn then would block the UI joining it, so the
         // button stays disabled until the runtime is actually up.
-        microphoneButton->setToolTip(
-            Session().IsStarted() ? "Start listening (Ctrl+Space)" : "Available once Revia has finished starting.");
-        microphoneButton->setEnabled(Session().IsStarted());
+        present("mic", Session().IsStarted() ? QStringLiteral("Listen (Ctrl+Space)") : QStringLiteral("Available once Revia has started"),
+            Session().IsStarted());
         break;
     case MicrophoneUi::Unavailable:
     default:
-        microphoneButton->setText("Listen");
-        microphoneButton->setToolTip("Speech recognition is not available.");
-        microphoneButton->setEnabled(false);
+        // Switched off in Settings, the button stays clickable and leads there.
+        if (microphoneDisabledBySetting)
+            present("mic-off", QStringLiteral("Microphone is off: turn it on in Settings \u203a Voice"), true);
+        else
+            present("mic-off", QStringLiteral("Speech recognition is not available."), false);
         break;
     }
 
     // The pressed-state styling is only meaningful while a press is held, so recolour
     // the button from its logical state instead.
     microphoneButton->setProperty("listening", microphoneUi == MicrophoneUi::Listening);
-    microphoneButton->style()->unpolish(microphoneButton);
-    microphoneButton->style()->polish(microphoneButton);
+    Repolish(microphoneButton);
+    if (composerHandsFreeChip)
+        composerHandsFreeChip->setVisible(microphoneUi == MicrophoneUi::HandsFree);
 
     RefreshStateBadge();
 }
@@ -1303,6 +1399,14 @@ void ReviaWindow::BeginShutdown(const revia::core::ExitReason reason, const std:
     // Recorded here rather than after the workers stop, so the reason survives even if
     // shutdown itself is what fails.
     revia::core::ExitReporter::Record(reason, detail);
+    // Nothing can start once shutdown begins, and it never unlocks. The open panels are
+    // remembered for the next start before they close.
+    SetNavigationLocked(true);
+    if (panelHost)
+    {
+        panelHost->SaveOpenSet();
+        panelHost->HideAll(false);
+    }
     sendButton->setEnabled(false);
     stopButton->setEnabled(false);
     Session().RequestStop();
@@ -1314,6 +1418,9 @@ void ReviaWindow::BeginShutdown(const revia::core::ExitReason reason, const std:
                 companionSwitchWorker.join();
             if (studioWorker.joinable())
                 studioWorker.join();
+            // A Settings write in flight finishes against the session before it stops.
+            if (settingsWorker)
+                settingsWorker->Stop();
             // Quit whatever happens: a shutdown that threw is still the end of the session,
             // and the exit reason was already recorded above.
             RunOrFail<bool>(
@@ -1342,7 +1449,7 @@ void ReviaWindow::UseVisibleScreen()
         return;
     }
     const bool approved = QMessageBox::question(this, "Share and resolve screen control",
-                              "Revia will capture only the foreground application window once, locate the requested control "
+                              DisplayName() + " will capture only the foreground application window once, locate the requested control "
                               "locally, and require a match to a real Windows UI Automation element. The "
                               "temporary PNG is deleted before any action. There is no coordinate-click "
                               "fallback, and the resulting action still requires normal policy approval. "
@@ -1356,11 +1463,13 @@ void ReviaWindow::UseVisibleScreen()
     if (!ClaimOperationWorker())
         return;
     messageInput->clear();
+    lastTurnError.reset();
+    userStopRequested = false;
     AppendChat("You", instruction, true);
     showMinimized();
-    sendButton->setEnabled(false);
     screenActionButton->setEnabled(false);
     stopButton->setEnabled(true);
+    UpdateSendState();
     operationWorker = std::jthread(
         [this, epoch = sessionUiEpoch.load(), request = instruction.toStdString()]()
         {
@@ -1392,8 +1501,9 @@ void ReviaWindow::UseVisibleScreen()
                     if (!result.succeeded && !result.reason.empty())
                     {
                         AppendActivity("Screen action stopped: " + QString::fromStdString(result.reason));
+                        RecordTurnError(result);
+                        RenderChat();
                     }
-                    sendButton->setEnabled(Session().IsStarted());
                     screenActionButton->setEnabled(Session().IsVisionAvailable());
                     RefreshStateBadge();
                     messageInput->setFocus();
@@ -1475,8 +1585,8 @@ void ReviaWindow::RefreshVoiceStudio()
             snapshot.presets.empty()
                 ? "No voices have been created yet. Describe one below and create it."
                 : QString::number(static_cast<int>(snapshot.presets.size())) +
-                      (snapshot.presets.size() == 1 ? " voice is available. Assign it to a profile under Profiles."
-                                                    : " voices are available. Assign one to a profile under Profiles."));
+                      (snapshot.presets.size() == 1 ? " voice is available. Assign it to a profile in the Profiles window."
+                                                    : " voices are available. Assign one to a profile in the Profiles window."));
     }
     if (profilePanel != nullptr)
     {
@@ -1564,7 +1674,7 @@ void ReviaWindow::RenderVoiceBank()
     {
         button->setEnabled(false);
     }
-    voiceStudioStatus->setText("Rendering her nonverbal sounds. This runs once per voice and the VoiceDesign "
+    voiceStudioStatus->setText("Rendering this voice's nonverbal sounds. This runs once per voice and the VoiceDesign "
                                "model downloads on first use, so the first time is slow.");
     if (voiceWorker.joinable())
     {
@@ -1637,29 +1747,6 @@ void ReviaWindow::PreviewVoice()
         });
 }
 
-void ReviaWindow::ToggleMaximized()
-{
-    if (isMaximized())
-    {
-        showNormal();
-    }
-    else
-    {
-        showMaximized();
-    }
-    UpdateMaximizeButton();
-}
-
-void ReviaWindow::UpdateMaximizeButton()
-{
-    if (!maximizeButton)
-    {
-        return;
-    }
-    maximizeButton->setText(isMaximized() ? QString::fromUtf8("\xE2\x9D\x90") : QString::fromUtf8("\xE2\x96\xA1"));
-    maximizeButton->setToolTip(isMaximized() ? "Restore" : "Maximize");
-}
-
 void ReviaWindow::SetAlwaysOnTop(const bool enabled)
 {
     const bool wasVisible = isVisible();
@@ -1686,7 +1773,10 @@ void ReviaWindow::HandleRuntimeEvent(const revia::runtime::RuntimeEvent& event)
         event.audienceRevision == 0)
         return;
     if (conversationStatus)
+    {
         conversationStatus->Observe(event);
+        UpdateConversationStrip();
+    }
     if (event.kind == revia::runtime::RuntimeEventKind::AgentWorkflow)
     {
         if (agentStudioPanel)
@@ -1769,6 +1859,9 @@ void ReviaWindow::HandleRuntimeEvent(const revia::runtime::RuntimeEvent& event)
         // which is the whole contract: it offers, it never acts.
         const QString message = QString::fromStdString(event.message);
         AppendChat(QString::fromStdString(Session().DisplayName()), message);
+        // Drawn as a quiet offer rather than a reply (it still counts as the companion speaking).
+        chatEntries.back().proposal = true;
+        RenderChat();
         const QString id = QString::fromStdString(event.phase);
         if (event.component == "Improvement")
         {
@@ -1871,11 +1964,16 @@ void ReviaWindow::HandleRuntimeEvent(const revia::runtime::RuntimeEvent& event)
                 // because the audio failed.
                 ReleasePendingSpeechText(0);
             }
+            // Engine health shows on the Speak replies row; the switch keeps the owner's choice.
+            if (settingsDialog)
             {
-                const QSignalBlocker blocker(speechCheck);
-                speechCheck->setChecked(
-                    phase != QStringLiteral("Disabled") && phase != QStringLiteral("Unavailable") && phase != QStringLiteral("Error"));
+                if (phase == QStringLiteral("Unavailable") || phase == QStringLiteral("Error"))
+                    settingsDialog->SetRowStatus("speech.enabled",
+                        QStringLiteral("Voice is unavailable: ") + QString::fromStdString(event.message), QStringLiteral("warning"));
+                else if (phase == QStringLiteral("Ready") || phase == QStringLiteral("Speaking") || phase == QStringLiteral("Disabled"))
+                    settingsDialog->SetRowStatus("speech.enabled", QString(), QString());
             }
+            UpdateSendState();
             QString detail = QStringLiteral("Voice ") + phase + QStringLiteral(": ") + QString::fromStdString(event.message);
             if (event.elapsedMilliseconds >= 0.0)
             {
@@ -1892,6 +1990,9 @@ void ReviaWindow::HandleRuntimeEvent(const revia::runtime::RuntimeEvent& event)
             const QString phase = QString::fromStdString(event.phase);
             microphoneLabel->setText(QStringLiteral("Mic: ") + phase);
             microphoneLabel->setToolTip(QString::fromStdString(event.message));
+            // "Disabled" is the owner's Use the microphone switch; the button then leads to it.
+            if (phase != QStringLiteral("Diagnostics") && !phase.startsWith(QStringLiteral("Test")))
+                microphoneDisabledBySetting = phase == QStringLiteral("Disabled");
             if (phase == QStringLiteral("Missing") || phase == QStringLiteral("Disabled") || phase == QStringLiteral("Unavailable"))
             {
                 listenRequested = false;
@@ -1942,7 +2043,7 @@ void ReviaWindow::HandleRuntimeEvent(const revia::runtime::RuntimeEvent& event)
                 const QString reason = QString::fromStdString(event.message);
                 microphoneTestResultLabel->setText(reason);
                 microphoneLabel->setText(QStringLiteral("Mic: error"));
-                statusBar()->showMessage(reason, 12000);
+                ShowStatus(reason, 12000);
             }
             else if (phase == QStringLiteral("Recording"))
             {
@@ -1987,6 +2088,11 @@ void ReviaWindow::HandleRuntimeEvent(const revia::runtime::RuntimeEvent& event)
             const QString phase = QString::fromStdString(event.phase);
             automationLabel->setText(QStringLiteral("Actions: ") + phase);
             automationLabel->setToolTip(QString::fromStdString(event.message));
+            // An action is running until its Ready or Blocked; while it does, desktop control is
+            // live unless the owner already stopped it.
+            automationRunning = phase == QStringLiteral("Running");
+            RefreshPrivacyIndicators();
+            RefreshStateBadge();
             QString detail = QStringLiteral("Automation ") + phase + QStringLiteral(": ") + QString::fromStdString(event.message);
             if (event.elapsedMilliseconds >= 0.0)
             {
@@ -2007,8 +2113,9 @@ void ReviaWindow::HandleRuntimeEvent(const revia::runtime::RuntimeEvent& event)
                     QStringLiteral("Watching: ") + (phase == QStringLiteral("Watching") ? QStringLiteral("On") : phase));
                 perceptionLabel->setToolTip(detail);
                 perceptionLabel->setProperty("watching", phase == QStringLiteral("Watching"));
-                perceptionLabel->style()->unpolish(perceptionLabel);
-                perceptionLabel->style()->polish(perceptionLabel);
+                Repolish(perceptionLabel);
+                perceptionWatching = phase == QStringLiteral("Watching");
+                RefreshPrivacyIndicators();
                 AppendActivity(QStringLiteral("Perception ") + phase + QStringLiteral(": ") + detail);
             }
             else
@@ -2023,6 +2130,17 @@ void ReviaWindow::HandleRuntimeEvent(const revia::runtime::RuntimeEvent& event)
             const QString phase = QString::fromStdString(event.phase);
             visionLabel->setText(QStringLiteral("Vision: ") + phase);
             visionLabel->setToolTip(QString::fromStdString(event.message));
+            // Continuous awareness has no event of its own: its passes report Watching and Aware,
+            // and the vision status names it when it is on. A one-off look for a question ("Ready"
+            // with another message) leaves the indicator as it was.
+            const QString visionMessage = QString::fromStdString(event.message);
+            if (phase == QStringLiteral("Watching") || phase == QStringLiteral("Aware") ||
+                (phase == QStringLiteral("Ready") && visionMessage.startsWith(QStringLiteral("Continuous"))))
+                screenAwarenessRunning = true;
+            else if (phase == QStringLiteral("Disabled") || phase == QStringLiteral("Error") ||
+                     (phase == QStringLiteral("Ready") && visionMessage.startsWith(QStringLiteral("Local screen vision is ready"))))
+                screenAwarenessRunning = false;
+            RefreshPrivacyIndicators();
             screenActionButton->setEnabled(phase != QStringLiteral("Disabled") && phase != QStringLiteral("Unavailable") &&
                                            phase != QStringLiteral("Error") && phase != QStringLiteral("Capturing") &&
                                            phase != QStringLiteral("Analyzing") && phase != QStringLiteral("Grounding") &&
@@ -2036,6 +2154,16 @@ void ReviaWindow::HandleRuntimeEvent(const revia::runtime::RuntimeEvent& event)
         }
         else
         {
+            if (event.component == "Camera")
+            {
+                cameraCapturing = event.phase == "Capturing";
+                RefreshPrivacyIndicators();
+            }
+            else if (event.component == "Preferences" && event.phase == "Changed")
+            {
+                // /bargein, /set and Settings itself: the dialog re-reads once the burst settles.
+                SchedulePreferenceRefresh();
+            }
             QString detail = QString::fromStdString(event.component) + QStringLiteral(" ") + QString::fromStdString(event.phase) +
                              QStringLiteral(": ") + QString::fromStdString(event.message);
             if (event.elapsedMilliseconds >= 0.0)
@@ -2092,7 +2220,11 @@ void ReviaWindow::CaptureDisplayedAnswer(const QString& text, const revia::runti
     displayedAnswerTarget.dependencies = {
         {"displayed-result", displayedAnswerTarget.targetDigest}, {"answer-contract", "authored-answer-obligation-v1"}};
     conversationStatus->ClearOwnerOutcomeIfMatching(ExpiredAnswerReviewOutcome);
+    const bool reviewWasAvailable = conversationStatus->ReviewButton()->isEnabled();
     conversationStatus->SetReviewAvailable(true);
+    // The newest reply's Review link appears with the first reply that can be reviewed.
+    if (!reviewWasAvailable)
+        RenderChat();
 }
 
 void ReviaWindow::ReviewDisplayedAnswer()
@@ -2139,7 +2271,7 @@ void ReviaWindow::ReviewDisplayedAnswer()
                     if (!current.RecordQualityFeedback(feedback, taskId, recordId, message, stopToken))
                         return false;
                     message = "Pending quality task " + taskId + "; private lesson " + recordId +
-                              ". Review the candidate in Skills & Learning. No lesson has been accepted.";
+                              ". Review the candidate in the Learning window. No lesson has been accepted.";
                     return true;
                 },
                 [this, dialog](const bool success, const std::string& message)
@@ -2169,6 +2301,14 @@ void ReviaWindow::ResetConversationPresentation()
         archivedChatBanner->hide();
     editingLastTurn = false;
     chatTurnInFlight = false;
+    lastTurnError.reset();
+    userStopRequested = false;
+    transcriptPinned = true;
+    if (jumpToLatest)
+        jumpToLatest->hide();
+    if (composer)
+        composer->ClearContext();
+    composerContextKind = ComposerContextKind::None;
     conversationStatus->ResetForCompanion();
     for (const char* name : {"conversationPageScroll", "memoryPageScroll"})
     {
@@ -2221,25 +2361,47 @@ void ReviaWindow::RefreshStateBadge()
 {
     const revia::runtime::RuntimeState newState = lastRuntimeState;
     const QString& detail = lastRuntimeDetail;
-    QString name = QString::fromStdString(revia::runtime::ToString(newState));
-    QString color = StateColor(newState);
-    // Speech outlives the turn that produced it. While it is queued, generating, or
-    // playing, say so rather than reporting Idle at someone who is about to be spoken to.
-    if (speechActive && newState == revia::runtime::RuntimeState::Idle)
+    StatePresentation shown = PresentState(newState, DesktopControlActive());
+    // Speech outlives the turn that produced it, and the microphone works while the runtime
+    // idles: while either is busy, say so rather than reporting Ready at someone who is about to
+    // be spoken to.
+    if (newState == revia::runtime::RuntimeState::Idle)
     {
-        name = speechPhase == QStringLiteral("Speaking") ? QStringLiteral("Speaking") : QStringLiteral("Preparing voice");
-        color = QStringLiteral("#85d7c8");
+        if (microphoneUiState == MicrophoneUi::Listening)
+            shown = {"listening", QStringLiteral("Listening")};
+        else if (microphoneUiState == MicrophoneUi::Transcribing)
+            shown = {"listening", QStringLiteral("Transcribing")};
+        else if (speechActive)
+            shown = {"speaking", speechPhase == QStringLiteral("Speaking") ? QStringLiteral("Speaking") : QStringLiteral("Preparing voice")};
     }
-    stateLabel->setText("●  " + name);
-    stateLabel->setStyleSheet("color: " + color + "; font-weight: 700;");
-    const QString cleanDetail = detail.trimmed().compare(name, Qt::CaseInsensitive) == 0 ? QString() : detail.trimmed();
-    stateDetailLabel->setText(cleanDetail);
-    stateDetailLabel->setVisible(!cleanDetail.isEmpty());
+    if (stateLabel != nullptr)
+    {
+        stateLabel->setText(shown.label);
+        stateDot->setProperty("state", QString::fromLatin1(shown.state));
+        Repolish(stateDot);
+        statePill->setAccessibleName(QStringLiteral("Status: ") + shown.label);
+        statePill->setToolTip(newState == revia::runtime::RuntimeState::WaitingForConfirmation
+                                  ? QStringLiteral("An action is waiting for your OK: click to see it")
+                                  : QStringLiteral("Status: click for details"));
+        // The pill is a button holding a dot and a label; it is as wide as they are.
+        if (QLayout* pillLayout = statePill->layout())
+        {
+            pillLayout->invalidate();
+            statePill->setFixedSize(pillLayout->sizeHint());
+        }
+    }
+    const QString cleanDetail = detail.trimmed().compare(shown.label, Qt::CaseInsensitive) == 0 ? QString() : detail.trimmed();
+    if (stateDetailLabel != nullptr)
+    {
+        stateDetailLabel->setToolTip(cleanDetail);
+        stateDetailLabel->setText(stateDetailLabel->fontMetrics().elidedText(cleanDetail, Qt::ElideRight, 280));
+        stateDetailLabel->setVisible(!cleanDetail.isEmpty() && (chatColumn == nullptr || chatColumn->width() >= 640));
+    }
     if (runtimeDetailsButton)
         runtimeDetailsButton->setVisible(newState == revia::runtime::RuntimeState::Error);
     if (trayIcon)
     {
-        trayIcon->setToolTip("Revia - " + name);
+        trayIcon->setToolTip("Revia - " + shown.label);
     }
 
     const bool cancellable = newState == revia::runtime::RuntimeState::Starting || newState == revia::runtime::RuntimeState::Thinking ||
@@ -2247,6 +2409,69 @@ void ReviaWindow::RefreshStateBadge()
     // Foreground commands can change the badge while a background task continues.
     // That task remains cancellable regardless of the foreground state.
     stopButton->setEnabled(cancellable || studioOperationRunning.load() || Session().HasRunningTask() || speechActive || microphoneActive);
+    if (composer)
+    {
+        QString voice = QStringLiteral("idle");
+        if (microphoneUiState == MicrophoneUi::Listening)
+            voice = QStringLiteral("listening");
+        else if (microphoneUiState == MicrophoneUi::Transcribing)
+            voice = QStringLiteral("transcribing");
+        else if (microphoneUiState == MicrophoneUi::HandsFree)
+            voice = QStringLiteral("handsfree");
+        else if (speechActive && speechPhase == QStringLiteral("Speaking"))
+            voice = QStringLiteral("speaking");
+        composer->SetVoiceState(voice);
+        composer->SetPlaceholder(newState == revia::runtime::RuntimeState::Starting
+                                     ? QStringLiteral("You can type now; send once %1 is ready").arg(DisplayName())
+                                     : QStringLiteral("Message %1").arg(DisplayName()));
+    }
+    UpdateSendState();
+    RefreshPrivacyIndicators();
+    UpdateConversationStrip();
+    // The greeting and the starting and offline notes in an empty chat follow the state.
+    if (chatEntries.empty() && viewingArchivedChat.empty() && chatHistory != nullptr && lastRenderedState != newState)
+        RenderChat();
+}
+
+void ReviaWindow::UpdateSendState()
+{
+    if (sendButton == nullptr || stopButton == nullptr)
+        return;
+    const bool turnBusy = operationRunning.load() || Session().IsBusy();
+    const bool pending = !messageInput->toPlainText().trimmed().isEmpty() || (attachmentTray != nullptr && !attachmentTray->IsEmpty());
+    sendButton->setEnabled(Session().IsStarted() && !turnBusy && !shuttingDown.load() && !switchingCompanion && pending);
+    // Stop takes the send slot while a turn, a task or a studio operation runs; while only speech
+    // or the microphone runs it waits beside Send, so the next message can still go.
+    const revia::runtime::RuntimeState state = lastRuntimeState;
+    const bool turnRunning = turnBusy || chatTurnInFlight || studioOperationRunning.load() || Session().HasRunningTask() ||
+                             state == revia::runtime::RuntimeState::Starting || state == revia::runtime::RuntimeState::Thinking ||
+                             state == revia::runtime::RuntimeState::Responding || state == revia::runtime::RuntimeState::Acting;
+    const bool stopEnabled = stopButton->isEnabled();
+    const bool primary = stopEnabled && turnRunning;
+    if (stopButton->property("primary").toBool() != primary || !stopButton->property("primary").isValid())
+    {
+        stopButton->setProperty("primary", primary);
+        Repolish(stopButton);
+        revia::desktop::theme::BindIcon(stopButton, primary ? "square:onAccent" : "square");
+    }
+    QString stopName = QStringLiteral("Stop reply");
+    if (studioOperationRunning.load() || Session().HasRunningTask())
+        stopName = QStringLiteral("Stop task");
+    else if (!turnRunning && speechActive)
+        stopName = QStringLiteral("Stop speaking");
+    else if (!turnRunning && microphoneActive)
+        stopName = QStringLiteral("Stop listening");
+    stopButton->setToolTip(stopName + QStringLiteral(" (Esc)"));
+    stopButton->setAccessibleName(stopName);
+    stopButton->setVisible(stopEnabled);
+    sendButton->setVisible(!primary);
+    // "Still working" and "queued" last exactly as long as the turn they describe.
+    if (!turnRunning && composer &&
+        (composerContextKind == ComposerContextKind::StillWorking || composerContextKind == ComposerContextKind::Queued))
+    {
+        composer->ClearContext();
+        composerContextKind = ComposerContextKind::None;
+    }
 }
 
 void ReviaWindow::AppendChat(const QString& speaker, const QString& message, const bool userMessage, const QString& reasoning)
@@ -2274,6 +2499,14 @@ void ReviaWindow::TrimTranscript()
         if (index >= dropped)
             kept.push_back(index - dropped);
     streamedReplyEntries = std::move(kept);
+    // The failed-turn row keeps its place after the entry it followed, or goes with it.
+    if (lastTurnError)
+    {
+        if (lastTurnError->afterEntry > dropped)
+            lastTurnError->afterEntry -= dropped;
+        else
+            lastTurnError.reset();
+    }
 }
 
 bool ReviaWindow::EndsMessage(const std::size_t index) const
@@ -2365,107 +2598,176 @@ void ReviaWindow::AppendWorkEntry(const EntryKind kind, const QString& body, con
     RenderChat();
 }
 
+QString ReviaWindow::TranscriptCss() const
+{
+    // The theme's classes, with the owner's chat text size (Appearance › Chat text size) for the
+    // replies and the user's bubble.
+    return revia::desktop::theme::DocumentCss() +
+           QStringLiteral(".assistant, .userBubble, .userBubble td { font-size: %1px; }\n"
+                          ".assistant p, .assistant li { line-height: 160%; }\n")
+               .arg(chatTextSize);
+}
+
+QString ReviaWindow::UserBubbleHtml(const QString& text) const
+{
+    // Right-aligned and only as wide as it needs to be, up to 80% of the measure. Qt ignores a
+    // percentage width on a table nested in a cell, so an empty 20% cell holds the bubble back.
+    return QStringLiteral("<table width=\"100%\" cellspacing=\"0\" cellpadding=\"0\" style=\"margin-top:24px;\"><tr><td width=\"20%\"></td>"
+                          "<td width=\"80%\" align=\"right\">"
+                          "<table class=\"userBubble\" cellspacing=\"0\" cellpadding=\"12\" bgcolor=\"%1\"><tr><td>%2</td></tr></table>"
+                          "</td></tr></table>")
+        .arg(revia::desktop::theme::Current().userBubble.name(), HtmlParagraph(text));
+}
+
+QString ReviaWindow::EmptyStateHtml() const
+{
+    using revia::runtime::RuntimeState;
+    const QString name = DisplayName().toHtmlEscaped();
+    // Roughly a third of the way down the transcript, like a greeting rather than a notice.
+    const int top = std::max(24, chatHistory->viewport()->height() / 3 - 48);
+    const QString open = QStringLiteral("<p class=\"emptyState\" align=\"center\" style=\"margin-top:%1px; margin-bottom:8px;\">").arg(top);
+    const bool modelDown = lastRuntimeState == RuntimeState::Offline ||
+                           (lastRuntimeState == RuntimeState::Error && lastRuntimeDetail.contains(QStringLiteral("unavailable"), Qt::CaseInsensitive));
+    if (lastRuntimeState == RuntimeState::Starting)
+        return open + name + QStringLiteral(" is starting…</p><p class=\"secondary\" align=\"center\">Loading models. You can type now "
+                                            "and send once ") +
+               name + QStringLiteral(" is ready.</p>");
+    if (modelDown)
+        return open + QStringLiteral("The language model isn't running</p><p class=\"secondary\" align=\"center\">"
+                                     "<a href=\"panel:activity\">Open Activity</a> &middot; <a href=\"panel:resources\">Open Resources</a></p>");
+    const int hour = QTime::currentTime().hour();
+    const QString greeting = hour >= 5 && hour < 12 ? QStringLiteral("Good morning")
+                             : hour >= 12 && hour < 18 ? QStringLiteral("Good afternoon")
+                                                       : QStringLiteral("Good evening");
+    return open + greeting + QStringLiteral("</p><p class=\"secondary\" align=\"center\">") + name + QStringLiteral(" is ready</p>");
+}
+
+std::optional<std::size_t> ReviaWindow::LatestFinishedReply() const
+{
+    const QString assistant = DisplayName();
+    for (std::size_t index = chatEntries.size(); index-- > 0;)
+    {
+        const ChatEntry& entry = chatEntries[index];
+        if (entry.kind != EntryKind::Message || entry.userMessage || entry.proposal || entry.speaker != assistant || entry.body.isEmpty())
+            continue;
+        return EndsMessage(index) ? std::optional<std::size_t>(index) : std::nullopt;
+    }
+    return std::nullopt;
+}
+
 void ReviaWindow::RenderChat()
 {
     // A saved chat stays on screen, scrolled where the reader left it; the live entries
     // keep collecting and are drawn again on the way back.
     if (!viewingArchivedChat.empty())
         return;
+    lastRenderedState = lastRuntimeState;
+    QScrollBar* bar = chatHistory->verticalScrollBar();
+    const int previousValue = bar->value();
+    const bool pinned = transcriptPinned || bar->maximum() - previousValue <= 48;
+    const revia::desktop::theme::Tokens& tokens = revia::desktop::theme::Current();
+    const QString name = DisplayName();
+    const QString assistant = name;
     // Rebuilt in full rather than appended, because expanding one entry changes the
     // document and QTextBrowser has no way to toggle a region in place.
     QString html;
     html.reserve(4096);
-    QString previousSpeaker;
-    bool previousSpeakerWasUser = false;
     const std::optional<std::size_t> editable = chatTurnInFlight ? std::nullopt : LastUserEntry();
     const std::optional<std::size_t> regenerable = chatTurnInFlight ? std::nullopt : RegenerableReply();
+    const std::optional<std::size_t> actionable = chatTurnInFlight ? std::nullopt : LatestFinishedReply();
+    const bool reviewable = conversationStatus != nullptr && conversationStatus->ReviewButton()->isEnabled();
+    const auto errorRow = [this]()
+    {
+        if (lastTurnError->stoppedByUser)
+            return QStringLiteral("<p class=\"activityRow\">Stopped</p>");
+        return QStringLiteral("<p class=\"activityRow error\">⚠ Couldn't finish this reply: %1 &middot; <a href=\"retry:\">Retry</a> "
+                              "&middot; <a href=\"panel:activity\">Details</a></p>")
+            .arg(HtmlParagraph(lastTurnError->reason));
+    };
+    const auto expander = [](const bool expanded) { return expanded ? QStringLiteral("&#9662;") : QStringLiteral("&#9656;"); };
+    QString lastAssistantSpeaker;
+    if (chatEntries.empty() && !lastTurnError)
+        html = EmptyStateHtml();
     for (std::size_t index = 0; index < chatEntries.size(); ++index)
     {
+        if (lastTurnError && lastTurnError->afterEntry == index)
+            html += errorRow();
         ChatEntry& entry = chatEntries[index];
         const bool working = entry.kind != EntryKind::Message;
-        if (working && !showWorkSummaries)
+        const bool activity = !working && !entry.userMessage && (entry.proposal || entry.speaker == QStringLiteral("Memory"));
+        // Thinking, checking, memory and proposals are Revia working, not Revia replying; the
+        // owner can hide them. A hidden entry is still recorded and still counts.
+        if ((working || activity) && !showWorkSummaries)
             continue;
-
-        const QString align = entry.userMessage ? "right" : "left";
-        const QString speakerColour = entry.userMessage ? "#9dd7ff" : "#70e0ca";
+        // Each entry starts with an anchor, so a right-click can tell which message it is on.
+        html += QStringLiteral("<a name=\"m%1\"></a>").arg(index);
 
         if (working)
         {
-            // Muted but readable, and deliberately not the same contrast as the answer:
-            // this is Revia working, not Revia replying, and the two must not be mistaken
-            // for each other at a glance.
             QString label;
             switch (entry.kind)
             {
             case EntryKind::InvestigationChecking:
-                label = QStringLiteral("Revia is checking\u2026");
+                label = name.toHtmlEscaped() + QStringLiteral(" is checking");
                 break;
             case EntryKind::InvestigationFindings:
                 label = QStringLiteral("Findings");
                 break;
             default:
-                label = QStringLiteral("Revia is thinking");
+                label = name.toHtmlEscaped() + QStringLiteral(" is thinking");
                 break;
             }
             if (entry.round > 0)
-            {
                 label += QStringLiteral(" (round ") + QString::number(entry.round) + QStringLiteral(")");
-            }
-            html += QStringLiteral("<p style=\"margin-top:8px; margin-bottom:1px; text-align:left;\">"
-                                   "<b><span style=\"color:#7f8c9e;\">%1</span></b></p>")
-                        .arg(label);
-            if (!entry.body.isEmpty())
+            html += QStringLiteral("<p class=\"work\" style=\"margin-top:12px; margin-bottom:4px;\"><a href=\"thought:%1\">%2 %3</a></p>")
+                        .arg(QString::number(index), expander(entry.expanded), label);
+            if (entry.expanded && (!entry.body.isEmpty() || !entry.reasoning.isEmpty()))
             {
-                html += QStringLiteral("<p style=\"margin-top:0px; margin-bottom:2px; text-align:left; "
-                                       "color:#a9b6c6;\">%1</p>")
-                            .arg(HtmlParagraph(entry.body));
+                QString evidence = HtmlParagraph(entry.body);
+                if (!entry.reasoning.isEmpty())
+                    evidence += (evidence.isEmpty() ? QString() : QStringLiteral("<br><br>")) + HtmlParagraph(entry.reasoning);
+                html += QStringLiteral("<table class=\"evidence\" width=\"100%\" cellspacing=\"0\" cellpadding=\"10\" bgcolor=\"%1\"><tr><td>%2</td></tr></table>")
+                            .arg(tokens.surfaceAlt.name(), evidence);
             }
-            if (!entry.reasoning.isEmpty())
-            {
-                html += QStringLiteral("<p style=\"margin-top:0px; margin-bottom:2px; text-align:left;\">"
-                                       "<a href=\"thought:%1\" style=\"color:#6f7c8d; "
-                                       "text-decoration:none;\">%2 Evidence</a></p>")
-                            .arg(QString::number(index), entry.expanded ? QStringLiteral("&#9662;") : QStringLiteral("&#9656;"));
-                if (entry.expanded)
-                {
-                    html += QStringLiteral("<p style=\"margin-top:0px; margin-bottom:6px; color:#8390a3; "
-                                           "font-size:11px;\">%1</p>")
-                                .arg(HtmlParagraph(entry.reasoning));
-                }
-            }
-            // A working entry never sets previousSpeaker, so the answer that follows
-            // still prints its own name.
+            continue;
+        }
+        if (activity)
+        {
+            html += QStringLiteral("<p class=\"activityRow\" style=\"margin-top:8px;\">%1 %2</p>")
+                        .arg(entry.proposal ? QStringLiteral("✦") : QStringLiteral("◇"), HtmlParagraph(entry.body));
             continue;
         }
 
-        // Streamed speech arrives sentence by sentence. Keep those separate so each one
-        // can appear when its audio begins, but do not print "Revia" above every sentence
-        // when nobody else has spoken between them.
-        const bool repeatedAssistantSpeaker =
-            !entry.userMessage && !previousSpeakerWasUser && !entry.speaker.isEmpty() && entry.speaker == previousSpeaker;
-        if (!entry.speaker.isEmpty() && !repeatedAssistantSpeaker)
+        if (entry.userMessage)
         {
-            html += QStringLiteral("<p style=\"margin-top:8px; margin-bottom:2px; text-align:%1;\">"
-                                   "<b><span style=\"color:%2;\">%3</span></b></p>")
-                        .arg(align, speakerColour, entry.speaker.toHtmlEscaped());
+            // An adapter's line names who said it; the owner's own turns need no label.
+            if (entry.speaker != QStringLiteral("You") && !entry.speaker.isEmpty())
+                html += QStringLiteral("<p class=\"speaker\" align=\"right\">%1</p>").arg(entry.speaker.toHtmlEscaped());
+            if (!entry.body.isEmpty())
+                html += UserBubbleHtml(entry.body);
         }
-        if (!entry.speaker.isEmpty())
+        else
         {
-            previousSpeaker = entry.speaker;
-            previousSpeakerWasUser = entry.userMessage;
+            // One speaker line where it helps: the first reply, a change of speaker, someone other
+            // than the companion, and System output. Streamed sentences share one.
+            const bool system = entry.speaker == QStringLiteral("System");
+            if (!entry.speaker.isEmpty() && (system || entry.speaker != assistant || entry.speaker != lastAssistantSpeaker))
+            {
+                if (system)
+                    html += QStringLiteral("<p class=\"speaker\">System</p>");
+                else
+                    html += QStringLiteral("<p class=\"speaker\"><span style=\"color:%1;\">&#9679;</span>&nbsp;%2</p>")
+                                .arg(tokens.accent.name(), entry.speaker.toHtmlEscaped());
+            }
+            if (!entry.speaker.isEmpty())
+                lastAssistantSpeaker = system ? QString() : entry.speaker;
+            if (!entry.body.isEmpty() && entry.markdown)
+                // Block-level HTML from the Markdown conversion, so it cannot sit inside a <p>.
+                html += QStringLiteral("<div class=\"assistant\">") + RenderedBody(entry) + QStringLiteral("</div>");
+            else if (!entry.body.isEmpty())
+                html += QStringLiteral("<p class=\"assistant\">%1</p>").arg(RenderedBody(entry));
         }
 
-        if (!entry.body.isEmpty() && entry.markdown)
-        {
-            // Block-level HTML from the Markdown conversion, so it cannot sit inside a <p>.
-            html += RenderedBody(entry);
-        }
-        else if (!entry.body.isEmpty())
-        {
-            html += QStringLiteral("<p style=\"margin-top:0px; margin-bottom:2px; text-align:%1; "
-                                   "color:#dce9f7;\">%2</p>")
-                        .arg(align, RenderedBody(entry));
-        }
         if (!entry.attachments.empty())
         {
             // Names and sizes only; a picture's thumbnail is an image resource of the
@@ -2481,49 +2783,70 @@ void ReviaWindow::RenderChat()
                 }
                 files += QStringLiteral("%1 (%2)&nbsp;&nbsp;").arg(chip.name.toHtmlEscaped(), chip.size.toHtmlEscaped());
             }
-            html += QStringLiteral("<p style=\"margin-top:0px; margin-bottom:2px; text-align:%1; color:#9fb3c8; font-size:11px;\">"
-                                   "Attached: %2</p>")
-                        .arg(align, files);
+            html += QStringLiteral("<p class=\"attachment\" align=\"%1\">Attached: %2</p>")
+                        .arg(entry.userMessage ? QStringLiteral("right") : QStringLiteral("left"), files);
         }
 
-        if (EndsMessage(index))
+        // Copy, Regenerate and Review sit under the newest finished reply only; older replies are
+        // copied from the transcript's context menu.
+        if (actionable == index)
         {
-            const QString regenerate =
-                regenerable == index ? QStringLiteral("&nbsp;&nbsp;&middot;&nbsp;&nbsp;<a href=\"regen:%1\" style=\"color:#6f8fb0; "
-                                                      "text-decoration:none; font-size:11px;\">Regenerate</a>")
-                                           .arg(QString::number(index))
-                                     : QString();
-            html += QStringLiteral("<p style=\"margin-top:0px; margin-bottom:4px; text-align:left;\">"
-                                   "<a href=\"copy:%1\" style=\"color:#6f8fb0; text-decoration:none; font-size:11px;\">Copy</a>%2</p>")
-                        .arg(QString::number(index), regenerate);
+            QString links = QStringLiteral("<a href=\"copy:%1\">Copy</a>").arg(QString::number(index));
+            if (regenerable == index)
+                links += QStringLiteral(" &middot; <a href=\"regen:%1\">Regenerate</a>").arg(QString::number(index));
+            if (reviewable)
+                links += QStringLiteral(" &middot; <a href=\"review:%1\">Review</a>").arg(QString::number(index));
+            html += QStringLiteral("<p class=\"actions\">%1</p>").arg(links);
         }
         if (editable == index)
-        {
-            html += QStringLiteral("<p style=\"margin-top:0px; margin-bottom:4px; text-align:right;\">"
-                                   "<a href=\"edit:%1\" style=\"color:#6f8fb0; text-decoration:none; font-size:11px;\">Edit</a></p>")
-                        .arg(QString::number(index));
-        }
+            html += QStringLiteral("<p class=\"actions\" align=\"right\"><a href=\"edit:%1\">Edit</a></p>").arg(QString::number(index));
 
-        if (entry.reasoning.isEmpty())
+        if (!entry.reasoning.isEmpty() && showWorkSummaries)
         {
-            continue;
-        }
-        // The anchor carries the entry index; anchorClicked toggles it and re-renders.
-        html += QStringLiteral("<p style=\"margin-top:0px; margin-bottom:2px; text-align:%1;\">"
-                               "<a href=\"thought:%2\" style=\"color:#8390a3; text-decoration:none;\">"
-                               "%3 Thought process</a></p>")
-                    .arg(align, QString::number(index), entry.expanded ? QStringLiteral("&#9662;") : QStringLiteral("&#9656;"));
-
-        if (entry.expanded)
-        {
-            html += QStringLiteral("<p style=\"margin-top:0px; margin-bottom:6px; color:#8390a3; "
-                                   "font-size:11px;\">%1</p>")
-                        .arg(HtmlParagraph(entry.reasoning));
+            // The anchor carries the entry index; anchorClicked toggles it and re-renders.
+            html += QStringLiteral("<p class=\"thought\" align=\"%1\"><a href=\"thought:%2\">%3 Thought process</a></p>")
+                        .arg(entry.userMessage ? QStringLiteral("right") : QStringLiteral("left"), QString::number(index), expander(entry.expanded));
+            if (entry.expanded)
+                html += QStringLiteral("<table class=\"evidence\" width=\"100%\" cellspacing=\"0\" cellpadding=\"10\" bgcolor=\"%1\"><tr><td>%2</td></tr></table>")
+                            .arg(tokens.surfaceAlt.name(), HtmlParagraph(entry.reasoning));
         }
     }
+    if (lastTurnError && lastTurnError->afterEntry >= chatEntries.size())
+        html += errorRow();
+    // While a reply is on its way and none of it has arrived yet.
+    if (chatTurnInFlight)
+    {
+        const std::optional<std::size_t> user = LastUserEntry();
+        bool answered = false;
+        for (std::size_t index = user ? *user + 1 : 0; index < chatEntries.size() && !answered; ++index)
+            answered = !chatEntries[index].userMessage && chatEntries[index].kind == EntryKind::Message && chatEntries[index].speaker == assistant &&
+                       !chatEntries[index].body.isEmpty();
+        if (!answered)
+            html += QStringLiteral("<p class=\"replying\" style=\"margin-top:24px;\">%1 is replying…</p>").arg(name.toHtmlEscaped());
+    }
 
+    const bool changed = html != lastTranscriptHtml;
+    lastTranscriptHtml = html;
+    renderingTranscript = true;
+    chatHistory->document()->setDefaultStyleSheet(TranscriptCss());
     chatHistory->setHtml(html);
-    chatHistory->verticalScrollBar()->setValue(chatHistory->verticalScrollBar()->maximum());
+    ApplyChatMeasure();
+    // Lays the document out now, so the scroll range below is the new one.
+    (void)chatHistory->document()->documentLayout()->documentSize();
+    if (renderKeepsPosition || !pinned)
+    {
+        bar->setValue(previousValue);
+        if (!renderKeepsPosition && changed && jumpToLatest != nullptr && chatColumn != nullptr && chatColumn->isVisible())
+        {
+            jumpToLatest->show();
+            jumpToLatest->raise();
+        }
+    }
+    else
+    {
+        bar->setValue(bar->maximum());
+    }
+    renderingTranscript = false;
 }
 
 std::optional<std::size_t> ReviaWindow::LastUserEntry() const
@@ -2571,15 +2894,21 @@ void ReviaWindow::BeginEditLastTurn()
     messageInput->setPlainText(chatEntries[*user].body);
     messageInput->moveCursor(QTextCursor::End);
     messageInput->setFocus();
+    // A mode, not news: it stays above the message box until the edit is sent or cancelled.
     statusBar()->showMessage(
-        QStringLiteral("Editing your last message. Send replaces it and Revia answers again; Esc cancels."), 15000);
+        QStringLiteral("Editing your last message. Send replaces it and ") + DisplayName() + QStringLiteral(" answers again; Esc cancels."), 15000);
+    ShowComposerContext(QStringLiteral("Editing your last message"), QStringLiteral("Cancel (Esc)"), [this]() { CancelEditLastTurn(); });
+    composerContextKind = ComposerContextKind::Editing;
 }
 
 void ReviaWindow::CancelEditLastTurn()
 {
     editingLastTurn = false;
     messageInput->clear();
-    statusBar()->showMessage(QStringLiteral("Edit cancelled. Your last message is unchanged."), 5000);
+    if (composer)
+        composer->ClearContext();
+    composerContextKind = ComposerContextKind::None;
+    ShowStatus(QStringLiteral("Edit cancelled. Your last message is unchanged."), 5000);
 }
 
 void ReviaWindow::RetryLastExchange(const QString& replacement)
@@ -2598,6 +2927,8 @@ void ReviaWindow::RetryLastExchange(const QString& replacement)
         return;
     }
     CloseArchivedChat();
+    lastTurnError.reset();
+    userStopRequested = false;
     // What is replaced is kept, so a refusal can put the transcript back exactly. The
     // position is absolute because the transcript may be trimmed while this runs.
     const std::size_t keepFrom = *user + (editing ? 0 : 1);
@@ -2612,8 +2943,8 @@ void ReviaWindow::RetryLastExchange(const QString& replacement)
         AppendChat("You", replacement, true);
     else
         RenderChat();
-    sendButton->setEnabled(false);
     stopButton->setEnabled(true);
+    UpdateSendState();
 
     operationWorker = std::jthread(
         [this, epoch = sessionUiEpoch.load(), text = replacement.toStdString(), editing, replaced, absoluteKeepFrom]()
@@ -2657,17 +2988,88 @@ void ReviaWindow::RetryLastExchange(const QString& replacement)
                             TrimTranscript();
                         }
                         const QString why = QString::fromStdString(result.text.empty() ? result.reason : result.text);
-                        statusBar()->showMessage(why, 12000);
+                        ShowStatus(why, 12000);
                         AppendActivity((editing ? QStringLiteral("Edit not applied: ") : QStringLiteral("Regenerate not applied: ")) + why);
                     }
                     RenderChat();
-                    sendButton->setEnabled(Session().IsStarted());
                     RefreshStateBadge();
                     RefreshChatSidebar();
+                    RefreshChatTitle();
                     messageInput->setFocus();
                 },
                 Qt::QueuedConnection);
         });
+}
+
+void ReviaWindow::RecordTurnError(const revia::runtime::SessionResult& result)
+{
+    // Drawn after the entry it followed; nothing is added to the transcript itself, so its
+    // entry count is what it would have been without the failure.
+    lastTurnError = TurnError{QString::fromStdString(result.reason), chatEntries.size(), 0, userStopRequested};
+}
+
+void ReviaWindow::RetryFailedTurn()
+{
+    const std::optional<std::size_t> user = LastUserEntry();
+    if (!user || switchingCompanion || shuttingDown.load())
+        return;
+    // A reply that came back incomplete is regenerated; a turn that got no reply at all is sent
+    // again with the same words, through the edit path, so nothing is removed.
+    if (RegenerableReply())
+        RetryLastExchange(QString());
+    else
+        RetryLastExchange(chatEntries[*user].body);
+}
+
+void ReviaWindow::CopyMessageAt(const QPoint& position)
+{
+    QMenu* menu = chatHistory->createStandardContextMenu(position);
+    // The entry under the pointer: the nearest anchor named m<N> at or before it.
+    std::optional<std::size_t> entryIndex;
+    const QTextCursor cursor = chatHistory->cursorForPosition(position);
+    for (QTextBlock block = cursor.block(); block.isValid() && !entryIndex; block = block.previous())
+    {
+        for (QTextBlock::iterator fragment = block.begin(); !fragment.atEnd(); ++fragment)
+        {
+            const QTextFragment piece = fragment.fragment();
+            if (!piece.isValid() || (block == cursor.block() && piece.position() > cursor.position()))
+                continue;
+            for (const QString& anchor : piece.charFormat().anchorNames())
+            {
+                bool parsed = false;
+                const std::size_t index = anchor.startsWith(QLatin1Char('m')) ? anchor.mid(1).toULongLong(&parsed) : 0;
+                if (parsed && index < chatEntries.size())
+                    entryIndex = index;
+            }
+        }
+    }
+    if (entryIndex && viewingArchivedChat.empty())
+    {
+        menu->addSeparator();
+        QAction* copy = menu->addAction(QStringLiteral("Copy message"));
+        const std::size_t first = *entryIndex;
+        connect(copy, &QAction::triggered, this,
+            [this, first]()
+            {
+                if (first >= chatEntries.size())
+                    return;
+                const ChatEntry& entry = chatEntries[first];
+                QString text = entry.body;
+                // A reply streamed in several entries is copied whole.
+                if (entry.kind == EntryKind::Message && !entry.userMessage)
+                {
+                    std::size_t last = first;
+                    while (last + 1 < chatEntries.size() && !EndsMessage(last))
+                        ++last;
+                    if (EndsMessage(last))
+                        text = MessageText(last);
+                }
+                QApplication::clipboard()->setText(text);
+                ShowStatus(QStringLiteral("Copied to the clipboard."), 3000);
+            });
+    }
+    menu->exec(chatHistory->viewport()->mapToGlobal(position));
+    delete menu;
 }
 
 void ReviaWindow::BuildChatSidebar()
@@ -2677,81 +3079,64 @@ void ReviaWindow::BuildChatSidebar()
     controls.current = [this]() { return Session().CurrentConversationId(); };
     controls.startNew = [this](std::string& error) { return StartNewChat(error); };
     controls.rename = [this](const std::string& id, const std::string& title, std::string& error)
-    { return Session().RenameConversation(id, title, error); };
+    {
+        const bool renamed = Session().RenameConversation(id, title, error);
+        if (renamed)
+            QTimer::singleShot(0, this, [this]() { RefreshChatTitle(); });
+        return renamed;
+    };
     controls.remove = [this](const std::string& id, std::string& error) { return DeleteChat(id, error); };
     controls.exportText = [this](const std::string& id, const bool json, std::string& text, std::string& error)
     { return Session().ExportConversation(id, json, text, error); };
     controls.open = [this](const std::string& id) { OpenArchivedChat(id); };
 
-    // The transcript moves into a row beside the chat list; the composer stays full width.
-    auto* body = new QWidget(ui->chatPage);
-    body->setObjectName("chatBody");
-    auto* row = new QHBoxLayout(body);
-    row->setContentsMargins(0, 0, 0, 0);
-    row->setSpacing(10);
-    chatSessionsPanel = new ChatSessionsPanel(std::move(controls), body);
-    chatSessionsPanel->setFixedWidth(236);
-    row->addWidget(chatSessionsPanel);
-    auto* column = new QWidget(body);
-    auto* columnLayout = new QVBoxLayout(column);
-    columnLayout->setContentsMargins(0, 0, 0, 0);
-    columnLayout->setSpacing(6);
-    archivedChatBanner = new QWidget(column);
+    // The list is the sidebar's body (BuildShell places it); the chat page keeps the transcript.
+    chatSessionsPanel = new ChatSessionsPanel(std::move(controls), this);
+    chatSidebarToggle = chatSessionsPanel->ListToggle();
+    chatSessionsPanel->SetListVisible(QSettings().value("chat/sidebarVisible", true).toBool());
+    connect(chatSidebarToggle, &QPushButton::toggled, this,
+        [this](const bool shown)
+        {
+            // The same setting as Settings › Appearance › Show recent chats in the sidebar.
+            QSettings().setValue("chat/sidebarVisible", shown);
+            if (settingsDialog)
+                settingsDialog->SetValue("chat/sidebarVisible", shown);
+        });
+
+    // In the transcript's 760px measure, like the composer (ApplyComposerMeasure).
+    archivedBannerHost = new QWidget(chatPage);
+    auto* bannerRow = new QHBoxLayout(archivedBannerHost);
+    bannerRow->setContentsMargins(16, 0, 16, 0);
+    archivedChatBanner = new QWidget(archivedBannerHost);
     archivedChatBanner->setObjectName("archivedChatBanner");
     archivedChatBanner->setAttribute(Qt::WA_StyledBackground, true);
+    bannerRow->addWidget(archivedChatBanner);
     auto* bannerLayout = new QHBoxLayout(archivedChatBanner);
-    bannerLayout->setContentsMargins(10, 6, 6, 6);
+    bannerLayout->setContentsMargins(12, 8, 8, 8);
     archivedChatLabel = new QLabel(archivedChatBanner);
     archivedChatLabel->setObjectName("archivedChatLabel");
     archivedChatLabel->setWordWrap(true);
     bannerLayout->addWidget(archivedChatLabel, 1);
     continueChatButton = new QPushButton(QStringLiteral("Continue this chat"), archivedChatBanner);
     continueChatButton->setObjectName("continueChatButton");
-    continueChatButton->setToolTip(QStringLiteral("Make this the current chat. Revia gets back only your own turns from it."));
+    continueChatButton->setToolTip(QStringLiteral("Make this the current chat. Only your own turns from it go back into the conversation."));
     bannerLayout->addWidget(continueChatButton);
     auto* back = new QPushButton(QStringLiteral("Back to current chat"), archivedChatBanner);
     back->setObjectName("backToChatButton");
     bannerLayout->addWidget(back);
     archivedChatBanner->hide();
-    const int at = ui->chatLayout->indexOf(chatHistory);
-    ui->chatLayout->removeWidget(chatHistory);
-    columnLayout->addWidget(archivedChatBanner);
-    columnLayout->addWidget(chatHistory, 1);
-    row->addWidget(column, 1);
-    ui->chatLayout->insertWidget(at, body, 1);
+    ui->chatLayout->insertWidget(ui->chatLayout->indexOf(chatHistory), archivedBannerHost);
     connect(continueChatButton, &QPushButton::clicked, this, [this]() { ContinueArchivedChat(); });
     connect(back, &QPushButton::clicked, this, [this]() { CloseArchivedChat(); });
-
-    chatSidebarToggle = new QPushButton(QStringLiteral("Chats"), ui->chatPage);
-    chatSidebarToggle->setObjectName("chatSidebarToggle");
-    chatSidebarToggle->setCheckable(true);
-    chatSidebarToggle->setToolTip(QStringLiteral("Show or hide the list of chats"));
-    ui->chatButtonLayout->insertWidget(0, chatSidebarToggle);
-    chatSidebarWanted = QSettings().value("chat/sidebarVisible", true).toBool();
-    chatSidebarToggle->setChecked(chatSidebarWanted);
-    connect(chatSidebarToggle, &QPushButton::toggled, this,
-        [this](const bool shown)
-        {
-            chatSidebarWanted = shown;
-            QSettings().setValue("chat/sidebarVisible", shown);
-            ApplyChatSidebarVisibility();
-            RefreshChatSidebar();
-        });
-    ApplyChatSidebarVisibility();
     chatSessionsPanel->Refresh();
-}
-
-void ReviaWindow::ApplyChatSidebarVisibility()
-{
-    // On a narrow window the transcript needs the width more than the list does.
-    if (chatSessionsPanel)
-        chatSessionsPanel->setVisible(chatSidebarWanted && width() >= 900);
 }
 
 void ReviaWindow::RefreshChatSidebar()
 {
-    if (chatSessionsPanel && chatSessionsPanel->isVisible())
+    // Refreshed while folded or hidden in the rail too: the chat header's title comes from it.
+    if (chatSessionsPanel)
         chatSessionsPanel->Refresh();
+    RefreshChatTitle();
 }
 
 void ReviaWindow::ClearTranscript()
@@ -2768,13 +3153,15 @@ bool ReviaWindow::StartNewChat(std::string& outError)
 {
     if (operationRunning.load())
     {
-        outError = "Revia is still working on the previous request. Start a new chat once she has answered.";
+        outError = DisplayName().toStdString() + " is still working on the previous request. Start a new chat once the reply is in.";
         return false;
     }
     if (!Session().StartNewConversation(outError))
         return false;
     CloseArchivedChat();
+    lastTurnError.reset();
     ClearTranscript();
+    RefreshChatTitle();
     messageInput->setFocus();
     return true;
 }
@@ -2784,7 +3171,7 @@ bool ReviaWindow::DeleteChat(const std::string& id, std::string& outError)
     const bool current = id == Session().CurrentConversationId();
     if (current && operationRunning.load())
     {
-        outError = "Revia is still working on the previous request. Delete this chat once she has answered.";
+        outError = DisplayName().toStdString() + " is still working on the previous request. Delete this chat once the reply is in.";
         return false;
     }
     if (!Session().DeleteConversation(id, outError))
@@ -2810,28 +3197,39 @@ void ReviaWindow::OpenArchivedChat(const std::string& id)
         chatSessionsPanel->SetStatus(QString::fromStdString(error));
         return;
     }
-    // Reply text from the archive is as untrusted as it was live.
-    const QString assistant = QString::fromStdString(Session().DisplayName());
-    QString html;
-    for (const revia::memory::ArchivedTurn& turn : turns)
-    {
-        const bool user = turn.role == "user";
-        html += QStringLiteral("<p style=\"margin-top:8px; margin-bottom:2px; text-align:%1;\"><b><span style=\"color:%2;\">%3</span></b></p>")
-                    .arg(user ? QStringLiteral("right") : QStringLiteral("left"), user ? QStringLiteral("#9dd7ff") : QStringLiteral("#70e0ca"),
-                        (user ? QStringLiteral("You") : assistant).toHtmlEscaped());
-        const QString body = QString::fromStdString(turn.content);
-        html += user ? QStringLiteral("<p style=\"margin-top:0px; margin-bottom:2px; text-align:right; color:#dce9f7;\">%1</p>")
-                           .arg(HtmlParagraph(body))
-                     : revia::desktop::RenderUntrustedMarkdown(body);
-    }
-    if (turns.empty())
-        html = QStringLiteral("<p style=\"color:#93a4bd;\">Nothing from this chat was kept in the archive.</p>");
     viewingArchivedChat = id;
     archivedChatLabel->setText(QStringLiteral("Reading a saved chat. It is not part of the current conversation."));
     continueChatButton->setEnabled(!turns.empty());
     archivedChatBanner->show();
-    chatHistory->setHtml(html);
+    RenderArchivedChat(turns);
     chatHistory->verticalScrollBar()->setValue(0);
+}
+
+void ReviaWindow::RenderArchivedChat(const std::vector<revia::memory::ArchivedTurn>& turns)
+{
+    // Drawn like the live transcript. Reply text from the archive is as untrusted as it was live.
+    const QString assistant = DisplayName();
+    QString html;
+    bool named = false;
+    for (const revia::memory::ArchivedTurn& turn : turns)
+    {
+        const QString body = QString::fromStdString(turn.content);
+        if (turn.role == "user")
+        {
+            html += UserBubbleHtml(body);
+            continue;
+        }
+        if (!named)
+            html += QStringLiteral("<p class=\"speaker\"><span style=\"color:%1;\">&#9679;</span>&nbsp;%2</p>")
+                        .arg(revia::desktop::theme::Current().accent.name(), assistant.toHtmlEscaped());
+        named = true;
+        html += QStringLiteral("<div class=\"assistant\">") + revia::desktop::RenderUntrustedMarkdown(body) + QStringLiteral("</div>");
+    }
+    if (turns.empty())
+        html = QStringLiteral("<p class=\"archivedNote\">Nothing from this chat was kept in the archive.</p>");
+    chatHistory->document()->setDefaultStyleSheet(TranscriptCss());
+    chatHistory->setHtml(html);
+    ApplyChatMeasure();
 }
 
 void ReviaWindow::CloseArchivedChat()
@@ -2850,7 +3248,7 @@ void ReviaWindow::ContinueArchivedChat()
         return;
     if (operationRunning.load())
     {
-        archivedChatLabel->setText(QStringLiteral("Revia is still working on the previous request. Continue once she has answered."));
+        archivedChatLabel->setText(DisplayName() + QStringLiteral(" is still working on the previous request. Continue once the reply is in."));
         return;
     }
     std::string error;
@@ -2865,6 +3263,7 @@ void ReviaWindow::ContinueArchivedChat()
     viewingArchivedChat.clear();
     archivedChatBanner->hide();
     chatEntries.clear();
+    lastTurnError.reset();
     streamedReplyTurnId = 0;
     streamedReplyEntries.clear();
     const QString assistant = QString::fromStdString(Session().DisplayName());
@@ -2987,9 +3386,7 @@ void ReviaWindow::AppendActivity(const QString& inputMessage, ActivitySeverity s
     }
     else if (visible && activityFeed != nullptr)
     {
-        const QString color = severity == ActivitySeverity::Error
-                                  ? QStringLiteral("#ff7b88")
-                                  : (severity == ActivitySeverity::Warning ? QStringLiteral("#e8c56d") : QStringLiteral("#c7d5e8"));
+        const QString color = ActivityColour(severity);
         activityFeed->append(
             QStringLiteral("<span style=\"color:%1; white-space:pre-wrap;\">%2</span>").arg(color, message.toHtmlEscaped()));
         if (activityAutoScroll != nullptr && activityAutoScroll->isChecked())
@@ -3016,9 +3413,7 @@ void ReviaWindow::RenderActivity()
         {
             continue;
         }
-        const QString color = entry.severity == ActivitySeverity::Error
-                                  ? QStringLiteral("#ff7b88")
-                                  : (entry.severity == ActivitySeverity::Warning ? QStringLiteral("#e8c56d") : QStringLiteral("#c7d5e8"));
+        const QString color = ActivityColour(entry.severity);
         html += QStringLiteral("<div style=\"color:%1; margin:0 0 4px 0; white-space:pre-wrap;\">%2</div>")
                     .arg(color, entry.message.toHtmlEscaped());
     }
@@ -3031,6 +3426,12 @@ void ReviaWindow::RenderActivity()
     {
         activityFeed->verticalScrollBar()->setValue(previousScroll);
     }
+}
+
+QString ReviaWindow::ActivityColour(const ActivitySeverity severity) const
+{
+    const revia::desktop::theme::Tokens& tokens = revia::desktop::theme::Current();
+    return (severity == ActivitySeverity::Error ? tokens.danger : severity == ActivitySeverity::Warning ? tokens.warning : tokens.text).name();
 }
 
 void ReviaWindow::UpdateActivitySummary()
@@ -3054,53 +3455,30 @@ void ReviaWindow::UpdateActivitySummary()
         QStringLiteral("Warnings and errors in the retained activity log (most recent %1 entries).").arg(2000));
     activityIssueSummary->setProperty(
         "level", hasErrors ? QStringLiteral("error") : (hasWarnings ? QStringLiteral("warning") : QStringLiteral("ok")));
-    activityIssueSummary->style()->unpolish(activityIssueSummary);
-    activityIssueSummary->style()->polish(activityIssueSummary);
+    Repolish(activityIssueSummary);
 
-    const int runtimeIndex = tabs == nullptr ? -1 : tabs->indexOf(ui->runtimePage);
-    if (runtimeIndex >= 0)
-    {
-        const int issueCount = activityErrorCount + activityWarningCount;
-        tabs->setTabText(runtimeIndex, issueCount == 0 ? QStringLiteral("Runtime") : QStringLiteral("Runtime (%1)").arg(issueCount));
-        tabs->setTabToolTip(runtimeIndex,
-            issueCount == 0 ? QStringLiteral("No warnings or errors in the retained activity log.") : activityIssueSummary->text());
-        if (navigationSidebar)
-            navigationSidebar->Refresh();
-    }
+    // The count rides on the Activity window's title and menu entry, and a dot on the avatar.
+    const int issueCount = activityErrorCount + activityWarningCount;
+    if (panelHost)
+        panelHost->SetTitleSuffix(revia::desktop::PanelId::Activity, issueCount == 0 ? QString() : QStringLiteral(" (%1)").arg(issueCount));
+    if (navigationSidebar)
+        navigationSidebar->SetAttention(issueCount > 0);
 }
 
 void ReviaWindow::ApplyUserPreferences()
 {
+    // The switches are the Settings dialog's and read their own stores; the two number rows
+    // the window made are read here.
+    if (settingsDialog)
+        settingsDialog->Refresh();
     const revia::runtime::UserPreferenceSnapshot snapshot = Session().UserPreferences();
-    const QSignalBlocker speechBlocker(speechCheck);
-    const QSignalBlocker bargeInBlocker(bargeInCheck);
-    const QSignalBlocker handsFreeBlocker(handsFreeCheck);
-    const QSignalBlocker avatarBlocker(avatarBridgeCheck);
-    const QSignalBlocker adapterBlocker(externalAdaptersCheck);
-    const QSignalBlocker initiativeBlocker(initiativeCheck);
-    const QSignalBlocker curiosityBlocker(curiosityCheck);
-    const QSignalBlocker spontaneousBlocker(spontaneousSpeechCheck);
-    const QSignalBlocker awayBlocker(speakWhenAwayCheck);
-    const QSignalBlocker aiFilterBlocker(aiFilterCheck);
-    const QSignalBlocker initiativeMaxBlocker(initiativeMaxSpin);
-    const QSignalBlocker sampleBlocker(resourceSampleSpin);
-    speechCheck->setChecked(snapshot.speechEnabled);
-    bargeInCheck->setChecked(snapshot.bargeInEnabled);
-    handsFreeCheck->setChecked(snapshot.handsFreeEnabled);
-    avatarBridgeCheck->setChecked(snapshot.avatarBridgeEnabled);
-    externalAdaptersCheck->setChecked(snapshot.externalAdaptersEnabled);
-    autoSendVoiceCheck->setEnabled(!snapshot.handsFreeEnabled);
-    initiativeCheck->setChecked(snapshot.initiativeEnabled);
-    curiosityCheck->setChecked(snapshot.curiosityEnabled);
-    spontaneousSpeechCheck->setChecked(snapshot.spontaneousSpeechEnabled);
-    speakWhenAwayCheck->setChecked(snapshot.speakWhenUserAway);
-    aiFilterCheck->setChecked(snapshot.aiResponseReviewEnabled);
-    initiativeMaxSpin->setValue(snapshot.initiativeMaxPerHour);
-    initiativeMaxSpin->setEnabled(snapshot.initiativeEnabled);
-    curiosityCheck->setEnabled(snapshot.initiativeEnabled);
-    spontaneousSpeechCheck->setEnabled(snapshot.initiativeEnabled && snapshot.curiosityEnabled);
-    speakWhenAwayCheck->setEnabled(snapshot.initiativeEnabled && snapshot.curiosityEnabled);
-    resourceSampleSpin->setValue(snapshot.resourceSampleSeconds);
+    {
+        const QSignalBlocker initiativeMaxBlocker(initiativeMaxSpin);
+        const QSignalBlocker sampleBlocker(resourceSampleSpin);
+        initiativeMaxSpin->setValue(snapshot.initiativeMaxPerHour);
+        resourceSampleSpin->setValue(snapshot.resourceSampleSeconds);
+    }
+    RefreshCloudUseFor();
     RefreshPresenceUi();
 }
 
@@ -3120,10 +3498,7 @@ void ReviaWindow::RefreshPresenceUi()
 void ReviaWindow::ShowPreferenceResult(const revia::core::PreferenceResult& result)
 {
     const QString message = QString::fromStdString(result.message);
-    preferenceStatus->setText(message);
-    preferenceStatus->setProperty("error", !result.succeeded);
-    preferenceStatus->style()->unpolish(preferenceStatus);
-    preferenceStatus->style()->polish(preferenceStatus);
+    ShowStatus(message, result.succeeded ? 5000 : 8000);
     AppendActivity(QStringLiteral("Setting: ") + message, result.succeeded ? ActivitySeverity::Information : ActivitySeverity::Warning);
 }
 

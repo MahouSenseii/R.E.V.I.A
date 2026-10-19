@@ -23,7 +23,7 @@ CanvasPanel::CanvasPanel(QWidget* parent)
     layout->setSpacing(10);
 
     auto* intro = new QLabel(
-        "Drawings Revia has made, and pictures you asked her to show. Ask for a diagram "
+        "Drawings made in conversation, and pictures you asked to see. Ask for a diagram "
         "or a mockup in conversation and it lands here; /show <path> displays an image "
         "from an approved folder. Every drawing is SVG that was checked before it was "
         "rendered: no script, no external references, no embedded documents. One that "

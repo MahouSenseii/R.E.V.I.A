@@ -1,5 +1,6 @@
 #include "capabilityPanel.h"
 #include "settingsCatalog.h"
+#include "theme.h"
 #include "toggleSwitch.h"
 
 #include "Browser/browserTypes.h"
@@ -23,7 +24,6 @@
 #include <QSignalBlocker>
 #include <QStringList>
 #include <QStyle>
-#include <QSvgWidget>
 #include <QTableWidget>
 #include <QTableWidgetItem>
 #include <QTreeWidget>
@@ -53,20 +53,9 @@ QFrame* MakeCard(const QString& objectName)
 
 // Small inline glyphs rather than a resource file: each is a few hundred bytes, and
 // keeping them beside the card they label is easier to follow than a .qrc indirection.
-QWidget* MakeIcon(const QString& path, const QString& stroke)
-{
-    const QString document = QStringLiteral(
-        "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' "
-        "stroke='%1' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'>"
-        "%2</svg>").arg(stroke, path);
-    auto* icon = new QSvgWidget();
-    icon->load(document.toUtf8());
-    icon->setFixedSize(18, 18);
-    icon->setAttribute(Qt::WA_TransparentForMouseEvents, true);
-    return icon;
-}
-
-void AddCardHeader(QFrame* card, const QString& iconPath, const QString& stroke, const QString& iconObjectName, const QString& title,
+// The theme draws them in its accent (warning for the gated card) and again on a scheme
+// change, so the stroke colour a card passes is no longer used.
+void AddCardHeader(QFrame* card, const QString& iconPath, const QString& /*stroke*/, const QString& iconObjectName, const QString& title,
     const QString& subtitle)
 {
     auto* header = new QHBoxLayout();
@@ -76,7 +65,12 @@ void AddCardHeader(QFrame* card, const QString& iconPath, const QString& stroke,
     well->setFixedSize(32, 32);
     auto* wellLayout = new QVBoxLayout(well);
     wellLayout->setContentsMargins(0, 0, 0, 0);
-    wellLayout->addWidget(MakeIcon(iconPath, stroke), 0, Qt::AlignCenter);
+    auto* icon = new QLabel(well);
+    icon->setFixedSize(18, 18);
+    icon->setAttribute(Qt::WA_TransparentForMouseEvents, true);
+    revia::desktop::theme::BindSvgLabel(icon, iconPath,
+        iconObjectName == QLatin1String("iconWellGated") ? revia::desktop::theme::Role::Warning : revia::desktop::theme::Role::Accent, 18);
+    wellLayout->addWidget(icon, 0, Qt::AlignCenter);
     header->addWidget(well, 0, Qt::AlignTop);
 
     auto* text = new QVBoxLayout();

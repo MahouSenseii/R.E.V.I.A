@@ -1,121 +1,171 @@
-# Revia sidebar navigation
+# Desktop navigation
 
-The desktop has six sidebar destinations and no main tab row. Settings stays
-at the bottom. Related pages retain their subtabs in the content area. The
-existing pages and runtime connections are retained.
+The window follows the Claude and Codex desktop apps: a left sidebar, the chat in a
+centred column, and every other page in a window of its own. Settings are one dialog
+(see [Desktop settings](DESKTOP_SETTINGS.md)). The pages themselves are the existing
+ones; only where they are shown changed.
 
-| Sidebar destination | Pages |
+## The main window
+
+The window uses the native Windows frame (snap layouts, the system shadow, Alt+Space).
+Its caption follows the light or dark scheme. Default size 1180 × 780, minimum 760 × 540.
+
+**Sidebar** (264 px, or a 56 px rail of icons):
+
+- **New chat**, **Search chats** and a **Recents** heading that folds the chat list.
+- One line per chat, with the current chat in bold. The date and length are in the row's
+  tooltip. Right-click a row to rename, export (Markdown or JSON) or delete it. F2 and
+  Delete act on the current chat while the list has focus.
+- At the bottom, the companion's menu button and Settings. The menu holds the companion
+  switcher, every panel grouped as Workspace, Companion, Studio and Runtime, Stop desktop
+  control (while it is active), Settings, the command palette, the shortcut sheet, Keep
+  Revia on top and Quit Revia.
+
+Below 900 px of window width the sidebar starts as the rail. Expanding it there lasts
+until the window widens again. At 900 px and wider, **Keep the sidebar open** (Settings ›
+Appearance) applies.
+
+**Chat column:**
+
+- The header shows the chat's title and the live privacy states (below). It also has the
+  desktop **Stop**, the status pill and the chat menu (rename, export, delete,
+  documents, review the last answer). The status pill reads Ready, Thinking, Replying,
+  Listening, Speaking, Needs your OK, Controlling desktop, Problem, and so on. Click it for the
+  six live chips (affect, voice, microphone, actions, vision, app awareness), or, while an
+  action waits for approval, to bring that question forward. **Details** appears in the
+  header only on Problem and opens the Activity window.
+- The transcript reads at a 760 px measure. Your turns are bubbles on the right; replies
+  are plain text with a speaker line where the speaker changes. Thinking, checking,
+  memory and offers are small muted rows. **Show {name}'s thinking steps** hides them.
+  Only the newest finished reply carries Copy, Regenerate and Review. Right-click any
+  reply for **Copy message**.
+- A turn that could not finish draws one red row with **Retry** and **Details**. A turn
+  you stopped reads **Stopped**. Neither becomes a chat entry.
+- If you scroll up, new messages do not move the view. **Latest** appears and takes you
+  back down.
+- An empty chat greets you by time of day. While the runtime starts it says so. When the
+  language model is not running it links to Activity and Resources.
+- The conversation strip (current status, Details, Review answer) shows above the
+  composer only while something is running, while its details are open or while it
+  flags the latest reply.
+
+**Composer:** a rounded card with the message box. It grows up to eight lines, 200 px or
+30% of the window. Its toolbar holds:
+
+- **+** for Attach files, Documents and Use screen.
+- The profile chip, which switches profiles, holds the session's cloud gate while the
+  cloud is allowed, and has Manage profiles.
+- The voice-health pill, shown only while synthesis is not known to work.
+- The hands-free chip.
+- Mic, Stop and Send. While a turn, task or studio operation runs, Stop takes Send's
+  place. While only speech or the microphone runs, Stop sits beside Send.
+
+Long-lived modes, such as editing your last message or waiting for the previous request,
+show as a line above the message box. Short notices show as a toast over the composer.
+
+## Privacy indicators
+
+Each indicator is in the header only while its state is live. All of them come from
+existing runtime events; no event was added.
+
+| Indicator | Live while | Click |
+| --- | --- | --- |
+| Microphone | listening, transcribing or hands-free | stops listening (hands-free: turns it off) |
+| App awareness | the Perception status is Watching | pauses app awareness |
+| Screen | Vision reports continuous awareness (its Watching and Aware passes, or the vision status naming it) | turns **Keep track of my screen** off |
+| Camera | the Camera status is Capturing | none |
+| Desktop control | an Automation action is Running and desktop control is not stopped | same as the header Stop |
+
+The header **Stop**, the menu entry and the palette entry all stop desktop control and
+the running turn.
+
+## Panel windows
+
+Each panel is one window, made once and only hidden afterwards. It opens beside the main
+window, to the right if it fits, else to the left, else at the screen's right edge.
+Later windows step down 32 px. Each window remembers its own size and place. Its header
+has **Place beside chat**, which narrows the main window and puts the panel next to it,
+and, where a Settings section matches, a gear for it. Esc closes a panel unless you are
+editing text; Ctrl+W always closes it.
+
+| Group | Panels |
 | --- | --- |
-| Chat | Conversation, answer review, voice status and input |
 | Workspace | Canvas, Vision |
-| Companion | Profiles, Mind, Memory, Voice, Presence, Audience |
+| Companion | Profiles, Mind, Memory (Ctrl+Shift+M), Voice, Presence, Audience |
 | Studio | Agents, Learning, Development |
-| Runtime | Activity, Pipelines, Internet, Resources |
-| Settings | General, Permissions |
+| Runtime | Activity (Ctrl+Shift+A, with its warning count in the title), Pipelines, Internet activity, Resources |
 
-Mind retains its existing Now, Development, Relationships and Drives pages.
-There are 21 leaf pages across the complete navigation tree. Runtime retains
-its live activity count. Long content uses each page's existing vertical scroll
-area; tab captions stay visible.
+When the window is hidden to the tray, the open panels hide with it and come back with
+**Open Revia**. **Reopen panel windows at startup** brings back the panels that were open
+at the last close.
 
-The selected sidebar destination uses a rounded glass highlight; subtabs use
-a smaller underline. The sidebar collapses to an icon rail below 1000 pixels
-of window width, and can be collapsed manually in larger windows. Icons retain
-accessible names and tooltips. Status cards and controls reflow for the actual
-content width after sidebar space is deducted. Profiles stacks its selection,
-sampling and voice controls when its panel becomes narrow.
+Panels are owned windows, so they stay above the main window. Placement keeps them off
+the chat. The design called for a Windows experiment: drop each panel's transient
+parent so the chat can be raised above it. That experiment needs Windows with Qt 6.8
+and has not been run. `PanelHost::SetUnowned(false)`, the owned fallback, is what ships.
 
-`Desktop/tabNavigation` reparents existing pages once, then reapplies tab bar
-settings after companion panels are rebuilt without resetting the selected
-main destination. `SelectNavigationPage` selects every ancestor tab so Voice Details
-and diagnostic screenshots still reach nested pages. Original screenshot names
-such as `Agent Studio` and `Skills & Learning` remain supported through tab
-tooltips. Offscreen smoke captures explicitly register the same Windows font
-as the existing fixture; native Windows launches use their ordinary font setup.
-`Desktop/navigationSidebar` projects the hidden root tab widget instead of
-creating another page owner. It mirrors navigation disabling during companion
-replacement, updates selection when a deep link opens a page, and refreshes
-the Runtime activity count. Collapsing the sidebar asks the window to reflow
-its existing controls. The current destination supplies the content title.
+## Command palette and shortcuts
 
-An Error status offers **Details**, which opens the existing Runtime Activity
-page. **Open folder** there reaches the runtime logs. A GitHub source download
-does not install model weights or llama.cpp; run `setup.bat` on the target
-computer. The [laptop setup instructions](../README.md#2-run-the-one-command-setup)
-describe Minimal setup with Windows voice fallback. The screenshot's generic
-error identifies a failed model startup, but the exact cause requires the
-target machine's startup messages or worker stderr. This package does not
-claim a successful model load on the user's laptop.
+Ctrl+K opens a search over actions, panels (open, or place beside the chat), every
+setting and your chats. Up and Down move, Enter runs, Esc closes. The palette does not
+open while a companion switch or shutdown has locked the window.
 
-## Director status
-
-| Area | Status |
+| Scope | Keys |
 | --- | --- |
-| Director / sidebar and presentation | Implemented. Six destinations, Settings footer, collapse control, compact rail and content title. |
-| Director / lifecycle connections | Implemented. Existing deep links and companion replacement lock drive the same page stack. |
-| Foundation Supervisor / startup diagnosis and source review | No source blocker found. GitHub source omits installed runtimes and model weights; exact laptop startup cause remains unconfirmed. |
-| Director / viewport verification | Verified. Twenty-one routes at three window sizes, compact Profiles, Memory rows, accessible rail, live count, collapse/expand and error Details; additional 125% display-scaling fixture passed. |
-| Director / repository delivery | Complete. Verified implementation merged to main and pushed to GitHub; the fully merged package branch was deleted. |
+| Window | Ctrl+N new chat, Ctrl+B sidebar, Ctrl+F search chats (palette in the rail), Ctrl+Space listen, F6 / Shift+F6 move between sidebar, transcript and message box |
+| Message box | Enter send, Shift+Enter new line, Esc cancels an edit, else stops |
+| Chat list | F2 rename, Delete delete |
+| Anywhere | Ctrl+K palette, Ctrl+, Settings, Ctrl+/ shortcut sheet, Ctrl+Shift+A Activity, Ctrl+Shift+M Memory |
+| Panel windows | Ctrl+W close, Esc close unless editing text |
+| Settings | Ctrl+F search, Esc clears the search, then closes |
 
-## Sidebar verification
+## Closing, the tray and restarts
 
-The final desktop targets built successfully. All 47 registered checks were
-verified across the complete registry run and focused reruns on the same frozen
-source and binaries. The complete run took 207.18 seconds and passed 46 checks,
-including Foundation. Its desktop fixture failed early screenshot saves because
-the new capture output directory had not been created before those phases. With
-that directory prepared, the unchanged failed fixture passed in 11.68 seconds.
-An earlier registry run failed the existing cue fixture's local port-pair setup;
-the unchanged Foundation rerun passed in 142.23 seconds. These failed runs remain
-in the evidence; this record does not claim a single clean 47-check invocation.
+Closing the window hides it to the tray when a tray is available and **Keep running in the
+tray when closed** is on. The tray note shows only the first time. Otherwise closing
+shuts Revia down properly, with servers stopped, rather than leaving a windowless process.
+A restart from Settings closes everything, then starts a new process. On Windows the new
+process waits for the old one to exit.
 
-The desktop checks exercise all 21 leaf routes at 760 × 540, 1040 × 720 and
-1600 × 1000, with no navigation scroll arrows or horizontal page overflow.
-They verify compact and manual sidebar modes, accessible labels, reverse deep
-links, live Runtime counts, profile replacement disabling, Error Details and
-the original/current Memory rows. The separate fixture at 125% display scaling
-also passed. Fresh Qt renders were inspected, and the production executable
-captured Chat and both legacy Studio screenshot aliases successfully.
+A companion switch locks the sidebar, the chat, every panel window and Settings, and
+says "Switching to {name}…" over the chat. Shutdown locks them for good.
 
-Ten implementation and test source fingerprints and both desktop executable
-fingerprints match the final build. Evidence, including initial Profiles
-overflow, both registry negatives, corrected renders and independent source
-review, is retained in `build/studio-20261004-sidebar`, excluded from Git.
-Personality guidance, authored profiles, saved memory, model configuration and
-permission policy are unchanged. Laptop model startup remains unverified.
+## How it is built
 
-Implementation commit `48dadc77b141e2cbd1e646d9788ae9d01c1fdebb` was
-fast-forwarded into main and pushed. Local main, origin/main and GitHub main
-matched before `codex/revia-sidebar-startup` was deleted. All four affected
-desktop checks passed on merged main in 8.23 seconds. Checkout converted line
-endings in the ten implementation and test files; normalized fingerprints
-matched the tested source, and both executable fingerprints were unchanged.
-This delivery record adds no implementation changes.
+- `Desktop/windowShell.cpp` builds the panel windows, the Settings dialog with its session
+  backend, the sidebar, the chat column, menus, palette and shortcuts.
+  `Desktop/windowLayout.cpp` holds the size rules.
+- `Desktop/tabNavigation.cpp` keeps deep links working. `SelectNavigationPage` selects the
+  page in any tab widget or Settings stack on its way up, then shows that window.
+  `PolishSectionTabs` gives every remaining tab bar (Mind's views) the section look.
+- `Desktop/reviaWindow.ui` is now a page factory. The page parking tab widget is deleted
+  once every page has moved into its window.
+- Settings writes run one at a time on `Desktop/serialWorker.h`. It is joined before a
+  companion's session retires, and a write that finishes after a switch is dropped.
 
-## Previous main-tab consolidation
+## Checks
 
-The initial failing fixture reproduced the old 15-tab root and scroll-arrow
-dependence before implementation. The final frozen implementation passed all 47
-registered checks in 186.23 seconds, including desktop stop, Studio panels,
-SVG rendering and the native Windows desktop smoke check. The additional
-125% display-scaling fixture passed in 10.64 seconds. Representative Qt renders
-were inspected for readable navigation, status wrapping and compact page layout.
-Real executable captures verify complete first-launch captions and both legacy
-Studio screenshot names. Earlier clipped and glyph-box diagnostic captures
-remain as negative evidence; corrected captures supersede them.
+`Revia.DesktopStopPolicy` walks all 30 destinations (the chat, 14 panel pages, Mind's
+four views and the 11 Settings sections) at 760 × 540, 1040 × 720 and 1600 × 1000. It
+checks that each one shows, that its menu entry follows, that nothing scrolls sideways
+and that no tab bar needs arrows. It also covers the companion-switch lock, the Activity
+count, error Details and Voice Details. Its `RunShellUi` part covers:
 
-The compact Memory render scrolls explicitly to its table and retains the
-existing assertion that both original and corrected rows are visible. No check
-was weakened to hide overflow. Negative captures and intermediate failures are
-retained with final evidence in `build/studio-20261004-navigation`, excluded from
-Git. The package changes desktop presentation and checks only; authored profiles,
-personality guidance, model settings, saved memory and permission policy are
-unchanged. No model inference or usage reset is needed for these UI checks.
+- every name in `desktopObjectNames.h` that should exist;
+- the palette opening Memory;
+- Settings opening on Voice;
+- the hands-free dependency;
+- the toast;
+- the theme reaching the transcript;
+- the failed-turn row;
+- the Send and Stop slot, and Esc;
+- scroll pinning;
+- the desktop indicator and Stop.
 
-Implementation commit `1fcf0198d9463de38498e1e2bf076a011c46b6f5` was
-fast-forwarded into main and pushed. Local main, origin/main and GitHub main
-matched before `codex/revia-clean-navigation` was deleted. The four affected
-desktop checks passed on merged main in 6.84 seconds. Git checkout converted
-line endings; normalized source fingerprints proved all nine implementation
-and test files retained exactly the tested content. This delivery record adds
-no implementation changes.
+`Revia.Theme`, `Revia.SettingsDialog`, `Revia.ShellWidgets` and `Revia.SettingsBackend` run
+the slices' own suites in the same binary.
+
+For a picture of one window, run `ReviaDesktop --ui-screenshot <file.png> --ui-screenshot-tab <target>`,
+optionally with `--ui-theme light|dark` and `--ui-size 1280x800`. The target is `chat`, a panel
+key or title (`memory`), `settings`, or `settings:<section>` for a section that shares a
+panel's name (`settings:voice`).

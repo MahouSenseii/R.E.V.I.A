@@ -298,10 +298,10 @@ if(REVIA_BUILD_DESKTOP)
                 "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/voiceHealthPanel.cpp"
                 "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/voiceHealthPanel.h"
                 "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/windowLayout.cpp"
+                "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/windowShell.cpp"
+                "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/serialWorker.h"
                 "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/tabNavigation.cpp"
                 "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/tabNavigation.h"
-                "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/navigationSidebar.cpp"
-                "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/navigationSidebar.h"
                 # [sources:C]
                 "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/commandPalette.cpp"
                 "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/commandPalette.h"
@@ -862,8 +862,6 @@ if(BUILD_TESTING)
         set_tests_properties(Revia.DesktopStopPolicy Revia.Theme Revia.SettingsDialog Revia.ShellWidgets Revia.SettingsBackend PROPERTIES
                 ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QPA_PLATFORM_PLUGIN_PATH=$<TARGET_FILE_DIR:Qt6::QOffscreenIntegrationPlugin>;REVIA_LOG_DIR=${CMAKE_CURRENT_BINARY_DIR}/TestLogs;REVIA_THEME=light"
                 TIMEOUT 30)
-        # A suite whose source is not in REVIA_DESKTOP_SUITE_SOURCES yet exits with 77 and is skipped.
-        set_tests_properties(Revia.Theme Revia.SettingsDialog Revia.ShellWidgets PROPERTIES SKIP_RETURN_CODE 77)
         add_executable(ReviaSvgRendererTests
                 Tests/Fixture/svgRendererTests.cpp
                 Private/Visual/svgCanvas.cpp

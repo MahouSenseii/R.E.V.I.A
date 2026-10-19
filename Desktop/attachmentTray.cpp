@@ -106,6 +106,8 @@ void AttachmentTray::Rebuild()
     }
     row->addStretch(1);
     setVisible(!chips.empty() || !status->text().isEmpty());
+    if (onChange)
+        onChange();
 }
 
 PreparedImage PrepareImageForAttachment(const QImage& source, const int maxSide)

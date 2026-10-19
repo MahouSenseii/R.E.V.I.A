@@ -171,7 +171,7 @@ void MindPanel::RenderEmotion()
     {
         // Calm is a real state, not a missing reading. Naming the strongest of several
         // negligible flickers would make this panel look busy while nothing is happening.
-        dominantLabel->setText("Calm \xE2\x80\x94 nothing in particular is pulling at her.");
+        dominantLabel->setText("Calm \xE2\x80\x94 nothing in particular is pulling right now.");
     }
     else
     {
@@ -212,10 +212,10 @@ void MindPanel::RenderDevelopment()
 {
     const revia::identity::DevelopmentState development = session.CurrentDevelopment();
     const std::string drift = development.DescribeDrift();
+    const QString name = QString::fromStdString(session.DisplayName());
     driftLabel->setText(drift.empty()
-        ? "She is still who she started out as. Nothing has accumulated enough evidence "
-          "to move yet."
-        : "She is now " + QString::fromStdString(drift) + ".");
+        ? name + " is still as it started out. Nothing has accumulated enough evidence to move yet."
+        : name + " is now " + QString::fromStdString(drift) + ".");
 
     const revia::identity::TraitVector current = development.Current();
     developmentTable->setRowCount(static_cast<int>(TraitCount));
@@ -322,8 +322,8 @@ void MindPanel::RenderDrives()
         ? "Last activity: " +
             QString::fromStdString(revia::autonomy::ToString(activity->type)) + " â " +
             QString::fromStdString(revia::autonomy::ToString(activity->status))
-        : QString("No activity has been started yet. She can choose something to explore "
-                  "or make during quiet time."));
+        : QString("No activity has been started yet. Something to explore or make can be "
+                  "chosen during quiet time."));
 
     driveTable->setRowCount(static_cast<int>(revia::autonomy::DriveCount));
     for (std::size_t index = 0; index < revia::autonomy::DriveCount; ++index)

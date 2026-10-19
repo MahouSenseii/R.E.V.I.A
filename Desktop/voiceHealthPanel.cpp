@@ -1,5 +1,7 @@
 #include "voiceHealthPanel.h"
 
+#include "theme.h"
+
 #include <QDateTime>
 #include <QHBoxLayout>
 #include <QLabel>
@@ -65,12 +67,14 @@ VoiceHealthPanel::VoiceHealthPanel(const bool compact, QWidget* parent) : QFrame
     compactView = compact;
     const QString prefix = compact ? "chatVoiceHealth" : "voiceHealth";
     setObjectName(prefix + "Card");
-    setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
+    // Compact, it is a pill in the composer's toolbar: the badge and a details button, shown only
+    // while synthesis is not known to work.
+    setSizePolicy(compact ? QSizePolicy::Maximum : QSizePolicy::Expanding, QSizePolicy::Preferred);
     auto* layout = new QVBoxLayout(this);
-    layout->setContentsMargins(12, compact ? 8 : 12, 12, compact ? 8 : 12);
+    layout->setContentsMargins(compact ? 4 : 12, compact ? 0 : 12, compact ? 0 : 12, compact ? 0 : 12);
     layout->setSpacing(8);
     auto* row = new QHBoxLayout();
-    row->setSpacing(12);
+    row->setSpacing(compact ? 4 : 12);
     badge = new QLabel(this);
     badge->setObjectName(prefix + "Badge");
     badge->setAccessibleName("Current voice synthesis health");
@@ -83,10 +87,14 @@ VoiceHealthPanel::VoiceHealthPanel(const bool compact, QWidget* parent) : QFrame
     detail->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
     if (compact)
     {
-        row->addWidget(detail, 1);
-        detailsButton = new QPushButton("Details", this);
+        // The detail line still holds the text (its tooltip is the badge's) but takes no room.
+        detail->hide();
+        detailsButton = new QPushButton(this);
         detailsButton->setObjectName("voiceHealthDetailsButton");
         detailsButton->setAccessibleName("Open Voice health details");
+        detailsButton->setToolTip("Voice health details");
+        detailsButton->setFocusPolicy(Qt::TabFocus);
+        revia::desktop::theme::BindIcon(detailsButton, "info", 16);
         row->addWidget(detailsButton);
     }
     else
@@ -134,6 +142,8 @@ void VoiceHealthPanel::SetHealth(const QString& phase)
     detail->setText(visibleDetail);
     badge->setToolTip(presentation.detail);
     setAccessibleDescription(presentation.detail);
+    if (compactView)
+        setVisible(presentation.tone != "available");
 }
 
 QString VoiceHealthPanel::ApplyEvent(const revia::runtime::RuntimeEvent& event)

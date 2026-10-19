@@ -1,6 +1,12 @@
 #include "reviaWindow.h"
 #include "desktopSuites.h"
+#include "panelWindow.h"
+#include "settingsDialog.h"
+#include "commandPalette.h"
+#include "shellSidebar.h"
 #include "tabNavigation.h"
+#include "desktopObjectNames.h"
+#include "theme.h"
 #include "agentStudioPanel.h"
 #include "audienceStudioPanel.h"
 #include "developmentStudioPanel.h"
@@ -34,14 +40,17 @@
 #include <QDropEvent>
 #include <QDragEnterEvent>
 #include <QImage>
+#include <QMenu>
 #include <QMessageBox>
 #include <QPixmap>
 #include <QPlainTextEdit>
 #include <QPushButton>
 #include <QRegion>
+#include <QRegularExpression>
 #include <QScrollArea>
 #include <QScrollBar>
 #include <QSettings>
+#include <QStackedWidget>
 #include <QStatusBar>
 #include <QTabWidget>
 #include <QTabBar>
@@ -82,14 +91,14 @@ struct ReviaWindowStopTests
         revia::desktop::SelectNavigationPage(scroll);
         for (const auto size : {QSize(760, 540), QSize(1040, 720), QSize(1600, 1000)})
         {
-            window.resize(size);
+            scroll->window()->resize(size);
             window.agentStudioPanel->SetSnapshot(window.Session().AgentWorkflowSnapshot());
             SettleLayouts();
             const int bottom = details->mapTo(scroll->widget(), QPoint(0, 0)).y() + details->height();
             scroll->verticalScrollBar()->setValue(std::max(0, bottom - scroll->viewport()->height()));
             SettleLayouts();
             const auto name = QString("agent-studio-%1-details-%2x%3.png").arg(phase).arg(size.width()).arg(size.height());
-            if (!window.grab().save(QDir(renderDirectory).filePath(name)))
+            if (!scroll->window()->grab().save(QDir(renderDirectory).filePath(name)))
             {
                 std::cerr << "FAIL: Studio detail capture failed\n";
                 ++failures;
@@ -230,7 +239,8 @@ struct ReviaWindowStopTests
                     std::this_thread::sleep_for(std::chrono::milliseconds(2));
             });
         window.SwitchCompanion(second.id);
-        expect(!window.tabs->isEnabled(), "mutable companion controls remain enabled while the outgoing runtime retires");
+        expect(window.navigationLocked && !window.navigationSidebar->isEnabled() && !window.chatColumn->isEnabled(),
+            "mutable companion controls remain enabled while the outgoing runtime retires");
         const auto heldWorker = window.operationWorker.get_id();
         window.messageInput->setPlainText("outgoing draft sentinel");
         window.SendMessage();
@@ -380,10 +390,12 @@ struct ReviaWindowStopTests
                 "a hierarchy without fresh owner observations invented current status");
         }
         const QString renderDirectory = qEnvironmentVariable("REVIA_UI_RENDER_DIR");
-        revia::desktop::SelectNavigationPage(window.findChild<QScrollArea*>("agentStudioScroll"));
+        auto* studioScroll = window.findChild<QScrollArea*>("agentStudioScroll");
+        revia::desktop::SelectNavigationPage(studioScroll);
         for (const auto size : {QSize(760, 540), QSize(1040, 720), QSize(1600, 1000)})
         {
-            window.resize(size);
+            if (studioScroll)
+                studioScroll->window()->resize(size);
             window.agentStudioPanel->SetSnapshot(window.Session().AgentWorkflowSnapshot());
             SettleLayouts();
             auto* scroll = window.findChild<QScrollArea*>("agentStudioScroll");
@@ -391,9 +403,9 @@ struct ReviaWindowStopTests
             if (scroll)
                 scroll->verticalScrollBar()->setValue(0);
             SettleLayouts();
-            if (!renderDirectory.isEmpty())
+            if (!renderDirectory.isEmpty() && scroll)
             {
-                expect(window.grab().save(
+                expect(scroll->window()->grab().save(
                            QDir(renderDirectory).filePath(QString("agent-studio-accepted-%1x%2.png").arg(size.width()).arg(size.height()))),
                     "live Agent Studio capture failed");
             }
@@ -433,31 +445,37 @@ struct ReviaWindowStopTests
             QCoreApplication::processEvents();
         };
         window.show();
-        expect(window.tabs->count() == 6, "main navigation must group related pages into six readable destinations");
         auto* sidebar = window.findChild<QWidget*>("navigationSidebar");
-        expect(sidebar != nullptr && !window.tabs->tabBar()->isVisible(), "main destinations must use the sidebar instead of a top tab row");
-        if (sidebar)
+        expect(sidebar != nullptr && window.findChildren<QTabWidget*>("tabs").isEmpty(),
+            "main destinations must use the sidebar and panel windows instead of a tab row");
+        // Every panel has its menu entry, opens as its own window with its page showing, and the
+        // entry follows the window.
+        for (const revia::desktop::PanelSpec& spec : revia::desktop::PanelCatalog())
         {
-            for (int index = 0; index < window.tabs->count(); ++index)
-            {
-                auto* button = sidebar->findChild<QToolButton*>(QString("sidebarPage%1").arg(index));
-                expect(button != nullptr, "every main destination must have a sidebar button");
-                if (button)
-                {
-                    button->click();
-                    expect(window.tabs->currentIndex() == index && button->isChecked(), "sidebar selection must activate the existing page");
-                }
-            }
-            window.tabs->setEnabled(false);
-            expect(!sidebar->isEnabled(), "sidebar must respect the companion replacement navigation lock");
-            window.tabs->setEnabled(true);
-            expect(sidebar->isEnabled(), "sidebar must recover when navigation is admitted again");
-            window.AppendActivity("Sidebar warning count fixture", ReviaWindow::ActivitySeverity::Warning);
-            auto* runtimeButton = sidebar->findChild<QToolButton*>("sidebarPage4");
-            expect(runtimeButton && runtimeButton->text() == window.tabs->tabText(4) && runtimeButton->text().contains('('),
-                "sidebar Runtime count must react to the actual activity summary");
-            window.tabs->setCurrentIndex(0);
+            QAction* action = window.panelHost->Action(spec.id);
+            expect(action != nullptr && window.sidebarMenu->actions().contains(action),
+                QString("the sidebar menu must list the %1 panel").arg(spec.title));
+            if (!action)
+                continue;
+            action->trigger();
+            SettleLayouts();
+            auto* panel = window.panelHost->Window(spec.id);
+            expect(panel && panel->isVisible() && panel->Page() && panel->Page()->isVisible() && action->isChecked(),
+                QString("the %1 menu entry must open its window with the page showing").arg(spec.title));
+            window.panelHost->Close(spec.id);
+            expect(!action->isChecked(), QString("the %1 menu entry must uncheck when its window closes").arg(spec.title));
         }
+        window.SetNavigationLocked(true);
+        expect(!window.navigationSidebar->isEnabled() && !window.chatColumn->isEnabled() && !window.settingsDialog->isEnabled(),
+            "the companion replacement lock must reach the sidebar, the chat and Settings");
+        window.SetNavigationLocked(false);
+        expect(window.navigationSidebar->isEnabled() && window.chatColumn->isEnabled() && window.settingsDialog->isEnabled(),
+            "navigation must recover when it is admitted again");
+        window.AppendActivity("Sidebar warning count fixture", ReviaWindow::ActivitySeverity::Warning);
+        if (auto* activity = window.panelHost->Action(revia::desktop::PanelId::Activity))
+            expect(activity->text().contains('(') && window.panelHost->Window(revia::desktop::PanelId::Activity)->windowTitle().contains('('),
+                "the Activity entry and window title must carry the actual warning count");
+        window.panelHost->CloseAll();
         window.UpdateState(revia::runtime::RuntimeState::Error, "The language model is unavailable; typed actions remain available.");
         auto* runtimeDetails = window.findChild<QPushButton*>("runtimeDetailsButton");
         expect(runtimeDetails != nullptr && !runtimeDetails->isHidden(), "model startup errors must offer an actionable diagnostics route");
@@ -467,7 +485,7 @@ struct ReviaWindowStopTests
             expect(window.findChild<QWidget*>("activityPage")->isVisible(), "error Details must open the existing Runtime Activity page");
             window.UpdateState(revia::runtime::RuntimeState::Idle, "Ready");
             expect(runtimeDetails->isHidden(), "startup Details must leave the header once the error clears");
-            window.tabs->setCurrentIndex(0);
+            window.panelHost->CloseAll();
         }
         health("Degraded");
         auto* chatBadge = window.findChild<QLabel*>("chatVoiceHealthBadge");
@@ -528,28 +546,17 @@ struct ReviaWindowStopTests
             {
                 details->click();
                 QCoreApplication::processEvents();
-                expect(window.tabs->tabText(window.tabs->currentIndex()) == "Companion" &&
-                           window.findChild<QWidget*>("voiceTab")->isVisible(),
-                    "Details must open Companion and its existing Voice view");
+                expect(window.panelHost->IsOpen(revia::desktop::PanelId::Voice) && window.findChild<QWidget*>("voiceTab")->isVisible(),
+                    "Details must open the Voice window and its existing view");
             }
         }
         const QString renderDirectory = qEnvironmentVariable("REVIA_UI_RENDER_DIR");
         if (!renderDirectory.isEmpty())
             expect(QDir().mkpath(renderDirectory), "render directory must be writable");
-        QList<QWidget*> pages;
-        for (auto* group : window.findChildren<QTabWidget*>())
-        {
-            for (int index = 0; index < group->count(); ++index)
-            {
-                QWidget* page = group->widget(index);
-                if (qobject_cast<QTabWidget*>(page) == nullptr && page->findChild<QTabWidget*>() == nullptr)
-                {
-                    page->setProperty("captureTitle", group->tabText(index));
-                    pages.push_back(page);
-                }
-            }
-        }
-        expect(pages.size() == 21, "all existing pages, including Mind's four views, must remain reachable");
+        QList<QWidget*> pages = window.NavigationPages();
+        for (QWidget* page : pages)
+            page->setProperty("captureTitle", window.NavigationTitle(page));
+        expect(pages.size() == 30, "every destination, including Mind's four views, must remain reachable");
         for (const auto size : {QSize(760, 540), QSize(1040, 720), QSize(1600, 1000)})
         {
             window.resize(size);
@@ -558,11 +565,12 @@ struct ReviaWindowStopTests
             if (sidebar && size.width() == 760)
             {
                 expect(sidebar->isVisible() && sidebar->width() <= 64, "small windows must retain a compact navigation rail");
-                for (int index = 0; index < window.tabs->count(); ++index)
+                for (auto* button : sidebar->findChildren<QToolButton*>())
                 {
-                    auto* button = sidebar->findChild<QToolButton*>(QString("sidebarPage%1").arg(index));
-                    expect(button && !button->accessibleName().isEmpty() && !button->toolTip().isEmpty(),
-                        "icon-only destinations must retain accessible names and readable tooltips");
+                    if (!button->isVisible())
+                        continue;
+                    expect(!button->accessibleName().isEmpty() && !button->toolTip().isEmpty(),
+                        QString("the rail's %1 must keep an accessible name and a readable tooltip").arg(button->objectName()));
                 }
             }
             if (!renderDirectory.isEmpty())
@@ -585,10 +593,10 @@ struct ReviaWindowStopTests
                 if (toggle)
                 {
                     const int expandedWidth = sidebar->width();
-                    const int contentWidth = window.tabs->width();
+                    const int contentWidth = window.chatColumn->width();
                     toggle->click();
                     SettleLayouts();
-                    expect(sidebar->width() < expandedWidth && window.tabs->width() > contentWidth,
+                    expect(sidebar->width() < expandedWidth && window.chatColumn->width() > contentWidth,
                         "collapsing the sidebar must give space back to the content");
                     toggle->click();
                     SettleLayouts();
@@ -603,12 +611,19 @@ struct ReviaWindowStopTests
             for (QWidget* page : pages)
             {
                 revia::desktop::SelectNavigationPage(page);
+                QWidget* host = page->window();
+                if (host != &window)
+                    host->resize(size);
                 SettleLayouts();
-                expect(page->isVisible(), "each subpage must activate its full navigation route");
-                if (sidebar)
+                expect(page->isVisible() && host->size() == size,
+                    QString("%1 must show at %2x%3 through its full navigation route")
+                        .arg(page->property("captureTitle").toString())
+                        .arg(size.width())
+                        .arg(size.height()));
+                if (const auto panel = window.panelHost->IdOf(page))
                 {
-                    auto* button = sidebar->findChild<QToolButton*>(QString("sidebarPage%1").arg(window.tabs->currentIndex()));
-                    expect(button && button->isChecked(), "deep-link page selection must update the sidebar highlight");
+                    QAction* action = window.panelHost->Action(*panel);
+                    expect(action && action->isChecked(), "deep-link page selection must check the panel's menu entry");
                 }
                 for (auto* group : window.findChildren<QTabWidget*>())
                 {
@@ -634,10 +649,11 @@ struct ReviaWindowStopTests
                 if (!renderDirectory.isEmpty())
                 {
                     const QString name = (page->objectName().isEmpty() ? page->property("captureTitle").toString() : page->objectName())
-                                             .toLower();
+                                             .toLower()
+                                             .replace(QRegularExpression("[^a-z0-9_]+"), "-");
                     const QString path =
                         QDir(renderDirectory).filePath(QString("%1-%2x%3.png").arg(name).arg(size.width()).arg(size.height()));
-                    expect(window.grab().save(path), "actual Qt render must be saved");
+                    expect(host->grab().save(path), "actual Qt render must be saved");
                     for (const auto& anchor : {QString("processApprovedExecutables"), QString("browserApprovedOrigins")})
                     {
                         auto* field = page->findChild<QPlainTextEdit*>(anchor);
@@ -649,15 +665,17 @@ struct ReviaWindowStopTests
                                 continue;
                             scroll->ensureWidgetVisible(field, 0, 100);
                             SettleLayouts();
-                            expect(window.grab().save(QDir(renderDirectory)
+                            expect(host->grab().save(QDir(renderDirectory)
                                            .filePath(QString("%1-%2x%3.png").arg(anchor).arg(size.width()).arg(size.height()))),
                                 "command and browser controls must render in the responsive viewport");
                         }
                     }
                 }
+                if (host != &window)
+                    host->hide();
             }
         }
-        window.tabs->setCurrentIndex(0);
+        window.panelHost->CloseAll();
         if (!renderDirectory.isEmpty())
         {
             window.resize(1040, 720);
@@ -882,7 +900,6 @@ struct ReviaWindowStopTests
         if (!renderDirectory.isEmpty())
         {
             window.show();
-            window.tabs->setCurrentIndex(0);
             for (const auto size : {QSize(760, 540), QSize(1040, 720), QSize(1600, 1000)})
             {
                 window.resize(size);
@@ -1008,12 +1025,13 @@ struct ReviaWindowStopTests
             corrected->window()->close();
             if (!renderDirectory.isEmpty())
             {
-                revia::desktop::SelectNavigationPage(window.findChild<QWidget*>("memoryTab"));
+                QWidget* memoryTab = window.findChild<QWidget*>("memoryTab");
+                revia::desktop::SelectNavigationPage(memoryTab);
                 for (const auto size : {QSize(760, 540), QSize(1040, 720), QSize(1600, 1000)})
                 {
-                    window.resize(size);
+                    memoryTab->window()->resize(size);
                     SettleLayouts();
-                    expect(window.size() == size, "memory revision provenance must fit the requested window size");
+                    expect(memoryTab->window()->size() == size, "memory revision provenance must fit the requested window size");
                     auto* memoryScroll = window.findChild<QScrollArea*>("memoryPageScroll");
                     memoryScroll->verticalScrollBar()->setValue(table->mapTo(memoryScroll->widget(), QPoint(0, 0)).y());
                     SettleLayouts();
@@ -1025,13 +1043,181 @@ struct ReviaWindowStopTests
                                   << " inner=" << memoryScroll->widget()->height() << " table=" << table->height() << '\n';
                     expect(table->viewport()->visibleRegion().boundingRect().height() >= table->rowHeight(0) + table->rowHeight(1),
                         "memory revision history must retain space for the original and current rows");
-                    expect(window.grab().save(
+                    expect(memoryTab->window()->grab().save(
                                QDir(renderDirectory).filePath(QString("memory-revision-%1x%2.png").arg(size.width()).arg(size.height()))),
                         "actual historical and current memory rows must have fresh Qt captures");
                 }
             }
         }
         window.ConfigureMemoryRevisionControls();
+    }
+
+    // The redesigned shell on the live window (design spec 8.4): its widgets exist, the palette,
+    // Settings, the toast and the theme reach what they should, and the composer, transcript and
+    // header behave. Only display-side setters are used; no Preference, settings-file,
+    // capability or workspace row is written.
+    static void RunShellUi(ReviaWindow& window, int& failures)
+    {
+        using namespace revia::runtime;
+        namespace names = revia::desktop::names;
+        using revia::desktop::PanelId;
+        const auto expect = [&](const bool condition, const QString& message)
+        {
+            if (!condition)
+            {
+                std::cerr << "FAIL: " << message.toStdString() << '\n';
+                ++failures;
+            }
+        };
+        window.resize(1040, 720);
+        window.show();
+        window.panelHost->CloseAll();
+        SettleLayouts();
+
+        for (const auto& list : {std::vector<names::Name>(names::kStyled.begin(), names::kStyled.end()),
+                 std::vector<names::Name>(names::kUnstyled.begin(), names::kUnstyled.end())})
+        {
+            for (const names::Name& name : list)
+            {
+                const QString objectName = QString::fromUtf8(name.name.data(), static_cast<qsizetype>(name.name.size()));
+                if (name.alwaysPresent)
+                    expect(window.findChild<QObject*>(objectName) != nullptr, QString("%1 must exist under the window").arg(objectName));
+            }
+        }
+
+        // The palette finds a panel by a few letters and opens it with Enter.
+        window.commandPalette->Open("mem");
+        SettleLayouts();
+        auto* paletteInput = window.findChild<QLineEdit*>("commandPaletteInput");
+        expect(window.commandPalette->IsOpen() && paletteInput != nullptr, "Ctrl+K's palette must open with its input");
+        if (paletteInput)
+        {
+            QKeyEvent enter(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
+            QCoreApplication::sendEvent(paletteInput, &enter);
+            SettleLayouts();
+        }
+        expect(window.panelHost->IsOpen(PanelId::Memory) && !window.commandPalette->IsOpen(), "\"mem\" and Enter must open the Memory window");
+        window.panelHost->CloseAll();
+
+        window.OpenSettings("Voice");
+        SettleLayouts();
+        auto* stack = window.settingsDialog->findChild<QStackedWidget*>("settingsStack");
+        expect(window.settingsDialog->isVisible() && stack &&
+                   stack->currentWidget() == window.settingsDialog->SectionPage(revia::desktop::SettingsSection::Voice),
+            "OpenSettings(\"Voice\") must show Settings on its Voice section");
+        window.settingsDialog->hide();
+        window.settingsDialog->SetValue("speechRecognition.handsFree", true);
+        expect(window.autoSendVoiceCheck && !window.autoSendVoiceCheck->isEnabled(), "hands-free listening must disable sending speech automatically");
+        window.settingsDialog->SetValue("speechRecognition.handsFree", false);
+
+        window.statusBar()->showMessage("toast fixture");
+        SettleLayouts();
+        auto* toastLabel = window.findChild<QLabel*>("toastLabel");
+        expect(toastLabel && toastLabel->isVisible() && toastLabel->text() == "toast fixture" &&
+                   window.statusBar()->currentMessage() == "toast fixture",
+            "a status message must show as the toast and stay the status bar's message");
+        window.statusBar()->clearMessage();
+
+        // The transcript follows the theme: Markdown and classes are rendered again in its colours.
+        window.chatEntries.clear();
+        window.ResetConversationPresentation();
+        window.AppendChat(QString::fromStdString(window.Session().DisplayName()), "A themed reply.");
+        revia::desktop::theme::SetPreference(revia::desktop::theme::Preference::Dark);
+        expect(window.chatHistory->toHtml().contains(revia::desktop::theme::Dark().text.name(), Qt::CaseInsensitive),
+            "the dark scheme must reach the transcript's text colour");
+        revia::desktop::theme::SetPreference(revia::desktop::theme::Preference::Light);
+        expect(window.chatHistory->toHtml().contains(revia::desktop::theme::Light().text.name(), Qt::CaseInsensitive),
+            "the light scheme must come back to the transcript");
+
+        // A failed turn is one row after the turn, with Retry; no chat entry is added for it.
+        window.chatEntries.clear();
+        window.ResetConversationPresentation();
+        window.AppendChat("You", "Fixture question", true);
+        const std::size_t entries = window.chatEntries.size();
+        SessionResult failed;
+        failed.stamp = window.Session().Stamp();
+        failed.audienceRevision = window.Session().Audience().revision;
+        failed.succeeded = false;
+        failed.reason = "the fixture model was unavailable";
+        window.PresentSessionResult(failed);
+        window.RenderChat();
+        QString html = window.chatHistory->toHtml();
+        expect(html.contains("Couldn't finish") && html.contains("retry:") && window.chatEntries.size() == entries,
+            "a failed turn must draw its own row with Retry and leave the transcript's entries alone");
+        window.userStopRequested = true;
+        window.PresentSessionResult(failed);
+        window.RenderChat();
+        html = window.chatHistory->toPlainText();
+        expect(html.contains("Stopped") && !html.contains("Couldn't finish"), "a turn the owner stopped must read Stopped, without Retry");
+        window.userStopRequested = false;
+        window.lastTurnError.reset();
+
+        // Stop takes Send's slot while a turn runs, and Esc stops it.
+        window.UpdateState(RuntimeState::Thinking, "Working on the fixture");
+        expect(window.stopButton->isEnabled() && window.stopButton->property("primary").toBool() && window.sendButton->isHidden(),
+            "while a turn runs, Stop must take Send's place");
+        bool stopped = false;
+        const auto probe = QObject::connect(window.stopButton, &QPushButton::clicked, &window, [&stopped]() { stopped = true; });
+        window.editingLastTurn = false;
+        QKeyEvent escape(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
+        QCoreApplication::sendEvent(window.messageInput, &escape);
+        QObject::disconnect(probe);
+        expect(stopped && window.userStopRequested, "Esc in the message box must press Stop while it is enabled");
+        window.userStopRequested = false;
+        window.UpdateState(RuntimeState::Idle, "Ready");
+        expect(!window.sendButton->isHidden(), "Send must come back once nothing runs");
+
+        // Scrolled up, the transcript keeps its place and offers the latest message.
+        window.chatEntries.clear();
+        window.ResetConversationPresentation();
+        for (int line = 0; line < 25; ++line)
+            window.AppendChat("System", QString("Pinning fixture line %1 with enough words to take a full row of the transcript.").arg(line));
+        SettleLayouts();
+        QScrollBar* bar = window.chatHistory->verticalScrollBar();
+        expect(bar->maximum() > 100, "the pinning fixture must be long enough to scroll");
+        bar->setValue(0);
+        window.AppendChat("System", "Arrived while scrolled up.");
+        SettleLayouts();
+        expect(bar->value() == 0 && window.jumpToLatest->isVisible(), "a new message must not move a reader who scrolled up, and Latest must show");
+        window.jumpToLatest->click();
+        expect(bar->value() == bar->maximum() && !window.jumpToLatest->isVisible(), "Latest must return to the newest message");
+        window.chatEntries.clear();
+        window.ResetConversationPresentation();
+        window.RenderChat();
+
+        // Desktop control shows itself in the header, with its own Stop, until the action ends. Stop
+        // above latched desktop control off (as it does for the owner); release the latch first.
+        window.Session().ResumeDesktopControl();
+        RuntimeEvent automation;
+        automation.kind = RuntimeEventKind::ComponentStatus;
+        automation.component = "Automation";
+        automation.phase = "Running";
+        automation.message = "Executing a fixture action.";
+        window.HandleRuntimeEvent(automation);
+        window.UpdateState(RuntimeState::Acting, "Executing a fixture action.");
+        auto* privacyDesktop = window.findChild<QToolButton*>("privacyDesktop");
+        auto* headerStop = window.findChild<QPushButton*>("headerDesktopStop");
+        expect(privacyDesktop && privacyDesktop->isVisible() && headerStop && headerStop->isVisible() &&
+                   window.stateLabel->text() == "Controlling desktop",
+            "an active desktop action must show its indicator, the header Stop and the Controlling desktop state");
+        automation.phase = "Ready";
+        window.HandleRuntimeEvent(automation);
+        window.UpdateState(RuntimeState::Idle, "Ready");
+        expect(privacyDesktop && !privacyDesktop->isVisible() && headerStop && !headerStop->isVisible(),
+            "the desktop indicator and Stop must leave once the action ends");
+        // The header Stop latches desktop control off, like the emergency stop it stands for.
+        automation.phase = "Running";
+        window.HandleRuntimeEvent(automation);
+        if (headerStop)
+            headerStop->click();
+        expect(window.Session().DesktopControlStopped() && privacyDesktop && !privacyDesktop->isVisible(),
+            "the header Stop must stop desktop control and take its indicator down");
+        automation.phase = "Ready";
+        window.HandleRuntimeEvent(automation);
+        window.userStopRequested = false;
+        SettleLayouts();
+        if (const QString renderDirectory = qEnvironmentVariable("REVIA_UI_RENDER_DIR"); !renderDirectory.isEmpty())
+            expect(window.grab().save(QDir(renderDirectory).filePath("shell-1040x720.png")), "the shell must have a fresh Qt capture");
     }
 
     static void RunConfirmationAudienceUi(ReviaWindow& window, int& failures)
@@ -1740,6 +1926,7 @@ int RunPolicySuite(int, char**)
     ReviaWindowStopTests::RunConfirmationAudienceUi(window, failures);
     ReviaWindowStopTests::RunConversationQualityUi(window, failures);
     ReviaWindowStopTests::RunMemoryRevisionUi(window, failures);
+    ReviaWindowStopTests::RunShellUi(window, failures);
     ReviaWindowStopTests::RunHealthUiAndLayout(window, failures);
     ReviaWindowStopTests::RunCompanionStudio(window, failures);
     if (failures == 0)

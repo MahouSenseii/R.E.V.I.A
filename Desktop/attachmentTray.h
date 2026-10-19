@@ -37,11 +37,14 @@ class AttachmentTray final : public QWidget
     [[nodiscard]] const std::vector<AttachmentChip>& Chips() const { return chips; }
     [[nodiscard]] bool IsEmpty() const { return chips.empty(); }
     void SetStatus(const QString& text);
+    // Runs after every change to the chips, so the window can enable Send for files alone.
+    void SetChangeHook(std::function<void()> hook) { onChange = std::move(hook); }
 
   private:
     void Rebuild();
 
     std::function<void(const std::string& id)> onRemove;
+    std::function<void()> onChange;
     std::vector<AttachmentChip> chips;
     QHBoxLayout* row = nullptr;
     QLabel* status = nullptr;

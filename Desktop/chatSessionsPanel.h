@@ -28,7 +28,10 @@ struct ChatSessionControls
     std::function<void(const std::string& id)> open;
 };
 
-// Past conversations from the archive: new chat, search, rename, delete and export.
+// Past conversations from the archive, as the sidebar's body: New chat, search, a "Recents"
+// heading that folds the list, and one line per chat. Rename, export and delete live in each
+// row's context menu (and in the chat header's menu for the current chat); F2 and Delete act on
+// the current chat while the list has focus.
 class ChatSessionsPanel final : public QWidget
 {
   public:
@@ -38,27 +41,45 @@ class ChatSessionsPanel final : public QWidget
     bool ExportSelected(const QString& path, bool json, QString& error);
     [[nodiscard]] std::string SelectedId() const;
     void SetStatus(const QString& text);
-    // The panel takes whatever height the transcript beside it gets. Its wrapped status
-    // line would otherwise report a height for its width, and the scrolled chat page
-    // would grow past the window and push the message box out of view.
+    // What New chat does: the window's start, then a fresh list.
+    void StartNewChat();
+    // Folds the list under its "Recents" heading without touching the rest of the panel.
+    void SetListVisible(bool visible);
+    [[nodiscard]] QPushButton* ListToggle() const
+    {
+        return listToggle;
+    }
+    // The title a chat is listed under (its own title, else its opening line).
+    [[nodiscard]] QString TitleFor(const std::string& id) const;
+    // The current chat's title, from the last refresh; "New chat" before it has one.
+    [[nodiscard]] QString CurrentTitle() const;
+    // The row actions, for any chat; they ask, then report in the status line.
+    void RenameChat(const std::string& id);
+    void DeleteChat(const std::string& id);
+    void ExportChat(const std::string& id, bool json);
+    // The panel takes whatever height the sidebar gives it. Its wrapped status line would
+    // otherwise report a height for its width and push the sidebar footer off the window.
     [[nodiscard]] bool hasHeightForWidth() const override
     {
         return false;
     }
 
   private:
-    void UpdateButtons();
-    void RenameSelected();
-    void DeleteSelected();
-    void ChooseExport(bool json);
+    void ShowRowMenu(const QPoint& position);
+    [[nodiscard]] std::string CurrentId() const;
+    bool WriteExport(const std::string& id, const QString& path, bool json, QString& error);
 
     ChatSessionControls controls;
     QLineEdit* search = nullptr;
     QListWidget* list = nullptr;
     QPushButton* newChat = nullptr;
+    QPushButton* listToggle = nullptr;
     QPushButton* rename = nullptr;
     QPushButton* remove = nullptr;
     QPushButton* exportChat = nullptr;
     QLabel* status = nullptr;
     QTimer* searchDelay = nullptr;
+    // From the last refresh, so the title stays right while the panel is folded or hidden.
+    std::vector<revia::memory::ArchivedSession> sessions;
+    bool loadFailed = false;
 };

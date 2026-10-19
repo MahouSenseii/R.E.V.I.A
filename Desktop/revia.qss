@@ -122,7 +122,6 @@ QTabBar::tab {
     font-size: 13px;
     font-weight: 600;
 }
-QTabBar#primaryNavigation::tab { padding: 9px 14px; margin-right: 6px; border-radius: 6px; }
 QTabBar#sectionNavigation::tab { padding: 7px 10px; font-size: 12px; }
 QTabBar QToolButton { border: 1px solid; border-radius: 4px; min-width: 22px; }
 
@@ -159,13 +158,8 @@ QScrollArea { border: none; }
 QScrollArea > QWidget > QWidget { background: transparent; }
 QSplitter::handle { width: 1px; height: 1px; }
 
-/* ---------------------------------------------------------------- window shell (until the redesign replaces it) */
+/* ---------------------------------------------------------------- status popover chips */
 
-QWidget#titleBar { background: transparent; }
-QLabel#windowTitle { font-size: 13px; }
-QToolButton#minimizeButton, QToolButton#maximizeButton, QToolButton#closeButton { border: none; font-size: 16px; }
-QLabel#reviaTitle { font-size: 20px; font-weight: 600; }
-QLabel#sidebarHeading { font-size: 12px; font-weight: 600; padding: 0 8px; }
 QLabel#affectLabel, QLabel#speechLabel, QLabel#microphoneLabel,
 QLabel#automationLabel, QLabel#visionLabel, QLabel#perceptionLabel {
     border: 1px solid;
@@ -185,6 +179,9 @@ QLabel#sidebarBrand { font-size: 15px; font-weight: 600; }
 QLabel#sidebarBrandMark { font-size: 15px; font-weight: 600; }
 QWidget#navigationSidebar QToolButton { padding: 6px 8px; min-height: 18px; font-size: 13px; text-align: left; }
 QWidget#navigationSidebar QToolButton:focus { padding: 5px 7px; }
+/* A line edit's search and clear icons are tool buttons too; the sidebar's minimum height would
+   stretch them below the box's centre. */
+QWidget#navigationSidebar QLineEdit QToolButton { padding: 0; min-height: 0; border: none; }
 QToolButton#sidebarToggle, QToolButton#sidebarRailNewChat, QToolButton#sidebarRailSearch,
 QToolButton#sidebarRailPanels, QToolButton#sidebarSettingsButton {
     padding: 6px;
@@ -408,5 +405,5 @@ QLabel#sectionTitle { font-size: 16px; font-weight: 600; }
 QLabel#mindHeadline { font-size: 16px; font-weight: 600; }
 QLabel#voiceStudioStatus, QLabel#profileActiveBanner { border: 1px solid; border-radius: 6px; padding: 8px; }
 QLabel#profileActiveBanner, QLabel#profileStatus, QLabel#memoryStatus { font-weight: 600; }
-QLabel#activityIssueSummary, QLabel#preferenceStatus { font-weight: 600; }
+QLabel#activityIssueSummary { font-weight: 600; }
 QLabel#memoryRevisionProvenance { font-size: 12px; }

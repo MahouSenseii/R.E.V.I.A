@@ -108,14 +108,16 @@ limits.
 
 ## Desktop navigation
 
-`Desktop/tabNavigation` groups the existing Qt pages and selects their complete
-ancestor route. `Desktop/navigationSidebar` projects that same page stack into
-six sidebar destinations, mirrors its navigation admission state, and offers
-a compact icon rail. It owns presentation only; session panels, permission controls
-and runtime owners retain their existing state and lifetime. Grouping runs after
-initial construction and after session panels are rebuilt, preserving selection
-on subsequent calls. See [Desktop navigation](DESKTOP_NAVIGATION.md) for the page
-map and fit checks.
+The desktop shell is presentation only: session panels, permission controls and runtime
+owners keep their state and lifetime. `ReviaWindow` builds a left sidebar
+(`Desktop/shellSidebar`) and a chat column. Every other existing page moves, unchanged,
+into its own `PanelWindow`, which `PanelHost` owns (`Desktop/panelWindow`). Settings are one
+dialog (`Desktop/settingsDialog`); its catalog is `Desktop/settingsCatalog` and its session
+adapter `Desktop/settingsSessionBackend`. Windows and dialog are QObject children of the
+main window, so lookups from it still reach every page. `Desktop/tabNavigation` keeps deep
+links working across windows. `Desktop/theme` owns the light, dark and high-contrast
+palettes and stylesheets. See [Desktop navigation](DESKTOP_NAVIGATION.md) and
+[Desktop settings](DESKTOP_SETTINGS.md).
 
 ## Live2D presentation
 

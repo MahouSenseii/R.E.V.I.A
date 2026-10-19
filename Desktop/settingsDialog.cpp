@@ -69,6 +69,20 @@ QString Name(const std::string_view text)
     return QString::fromUtf8(text.data(), static_cast<qsizetype>(text.size()));
 }
 
+// A widget capped at RowColumnWidth, in a row of its own and kept to the left. A vertical layout
+// works out a wrapped label's height at the page's full width, ignoring the cap, so on a wide
+// window rows came out a line short and their text overlapped; a horizontal layout hands the
+// capped width on.
+QHBoxLayout* CappedLine(QWidget* widget)
+{
+    auto* line = new QHBoxLayout();
+    line->setContentsMargins(0, 0, 0, 0);
+    line->setSpacing(0);
+    line->addWidget(widget, 1);
+    line->addStretch();
+    return line;
+}
+
 void Repolish(QWidget* widget)
 {
     widget->style()->unpolish(widget);
@@ -315,6 +329,7 @@ struct SettingsDialog::Group
     QString title;
     bool serverGroup = false;
     QWidget* box = nullptr;
+    QHBoxLayout* line = nullptr;
     QLabel* titleLabel = nullptr;
     QFrame* frame = nullptr;
     QVBoxLayout* layout = nullptr;
@@ -478,8 +493,8 @@ void SettingsDialog::BuildSections()
         auto* column = new QVBoxLayout(section->content);
         column->setContentsMargins(32, 24, 32, 32);
         column->setSpacing(0);
-        // Title, intro and groups share one column of at most RowColumnWidth, centred once the page
-        // is wider; hosted panels are added outside it and take the full width.
+        // Title, intro and groups share one column of at most RowColumnWidth at the page's left;
+        // hosted panels are added outside it and take the full width.
         auto* header = new QWidget(section->content);
         header->setMaximumWidth(RowColumnWidth);
         auto* headerLayout = new QVBoxLayout(header);
@@ -494,7 +509,7 @@ void SettingsDialog::BuildSections()
         section->intro->setWordWrap(true);
         section->intro->setTextFormat(Qt::PlainText);
         headerLayout->addWidget(section->intro);
-        column->addWidget(header);
+        column->addLayout(CappedLine(header));
         const auto [panelKey, panelTitle] = SectionPanel(id);
         if (panelKey != nullptr)
         {
@@ -620,6 +635,13 @@ void SettingsDialog::BuildServerRows()
     {
         if (group->serverGroup && group->box)
         {
+            if (group->line != nullptr)
+            {
+                SectionFor(group->section).body->removeItem(group->line);
+                group->line->removeWidget(group->box);
+                delete group->line;
+                group->line = nullptr;
+            }
             group->box->hide();
             group->box->deleteLater();
         }
@@ -687,7 +709,8 @@ SettingsDialog::Group& SettingsDialog::GroupFor(const SettingsSection sectionId,
     group->layout->setContentsMargins(0, 0, 0, 0);
     group->layout->setSpacing(0);
     boxLayout->addWidget(group->frame);
-    section.body->addWidget(group->box);
+    group->line = CappedLine(group->box);
+    section.body->addLayout(group->line);
     groups.push_back(std::move(group));
     return *groups.back();
 }

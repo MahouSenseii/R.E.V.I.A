@@ -19,20 +19,24 @@
 #include <thread>
 #include <vector>
 
+class QAction;
 class QCheckBox;
 class QCloseEvent;
 class QResizeEvent;
+class QShowEvent;
 class QComboBox;
 class QEvent;
+class QFrame;
 class QLabel;
 class QLineEdit;
+class QMenu;
 class QMessageBox;
 class QPlainTextEdit;
 class QProgressBar;
 class QPushButton;
+class QScrollArea;
 class QSpinBox;
 class QSystemTrayIcon;
-class QTabWidget;
 class QTextBrowser;
 class QTimer;
 class QToolButton;
@@ -53,12 +57,23 @@ class DevelopmentStudioPanel;
 class AudienceStudioPanel;
 class ConversationStatusPanel;
 class ChatSessionsPanel;
-class NavigationSidebar;
 class DocumentsDialog;
 class AnswerFeedbackDialog;
 namespace Ui
 {
 class ReviaWindow;
+}
+namespace revia::desktop
+{
+class CommandPalette;
+class ComposerCard;
+class PanelHost;
+class SerialWorker;
+class SettingsDialog;
+class ShellSidebar;
+class ShortcutSheet;
+class ToastOverlay;
+enum class PanelId;
 }
 
 class ReviaWindow final : public QMainWindow
@@ -79,12 +94,20 @@ class ReviaWindow final : public QMainWindow
     ~ReviaWindow() override;
     void RequestShutdown(revia::core::ExitReason reason = revia::core::ExitReason::SmokeTest);
     bool IsRuntimeStarted() const;
+    // Settings asked for a restart; main relaunches the app once this window is gone.
+    [[nodiscard]] bool RestartRequested() const
+    {
+        return restartRequested;
+    }
+    // --ui-screenshot-tab: "chat", a panel key or title prefix, then a Settings section; "settings"
+    // or "settings:<section>" for Settings itself. Returns the window that now shows it, or null.
+    QWidget* ShowScreenshotTarget(const QString& name);
 
   protected:
     bool eventFilter(QObject* watched, QEvent* event) override;
     void closeEvent(QCloseEvent* event) override;
-    void changeEvent(QEvent* event) override;
     void resizeEvent(QResizeEvent* event) override;
+    void showEvent(QShowEvent* event) override;
 
   private:
     friend struct ReviaWindowStopTests;
@@ -101,10 +124,40 @@ class ReviaWindow final : public QMainWindow
     void SwitchCompanion(const std::string& id);
     void CreateCompanion();
     void RebuildSessionPanels();
-    // Keep a readable measure while allowing wide windows to use their extra space.
-    void ApplyContentWidthCap();
+    // Window-size rules (design spec 2.11): the sidebar falls back to its rail below 900px and the
+    // header drops its detail text below 640px of chat column.
     void ApplyResponsiveLayout();
-    void BuildNavigationSidebar();
+    // Settings' reflow at its content width: the permission cards' columns and the microphone row.
+    void ApplySettingsLayout(int contentWidth);
+    // The Activity window's toolbar: two columns below 640px, otherwise one row.
+    void ApplyActivityLayout(int width);
+    // The secondary pages become panel windows; the Settings dialog gets the session backend and
+    // the window's own rows; then the sidebar, chat column, menus, palette and shortcuts are built
+    // around the chat page (windowShell.cpp).
+    void BuildPanels();
+    void BuildSettingsDialog();
+    void BuildShell();
+    void BuildChatColumn(QWidget* parent);
+    void BuildComposer();
+    void BuildMenus();
+    void BuildPalette();
+    void BuildShortcuts();
+    [[nodiscard]] std::vector<std::pair<QString, QString>> ShortcutRows() const;
+    void RefreshProfileMenu();
+    void RefreshSidebarMenu();
+    void RefreshAccount();
+    void RefreshChatTitle();
+    // Disables everything the owner could use to start work while a companion switch or shutdown
+    // runs, and says so over the chat. Shutdown never unlocks.
+    void SetNavigationLocked(bool locked);
+    // Every destination the shell can show: the chat page, each panel's page (Mind's four views
+    // instead of Mind) and the Settings sections.
+    [[nodiscard]] QList<QWidget*> NavigationPages() const;
+    [[nodiscard]] QString NavigationTitle(QWidget* page) const;
+    // A section name ("Voice"), a setting key or objectName, or empty for the last section shown.
+    void OpenSettings(const QString& sectionOrKey = {});
+    void OpenPanel(revia::desktop::PanelId id);
+    void ShowChat();
     void BuildTray();
     void StartRuntime();
     // Takes operationWorker for a new foreground operation. Refuses, with a status line,
@@ -139,9 +192,28 @@ class ReviaWindow final : public QMainWindow
     // Every shutdown names its own cause, so the ledger never has to guess between a
     // deliberate quit and something that merely looked like one.
     void BeginShutdown(revia::core::ExitReason reason, const std::string& detail = {});
-    void ToggleMaximized();
-    void UpdateMaximizeButton();
     void SetAlwaysOnTop(bool enabled);
+    // Settings' write hook for the rows the window itself acts on (window, sidebar, transcript).
+    void ApplyShellSetting(const std::string& key, bool value);
+    void ApplyChatTextSize(int pixels);
+    // Clears the cached Markdown (it bakes colours in) and redraws everything themed by hand.
+    void ApplyThemeToWindow();
+    // The status line: shown as a toast and kept as statusBar()->currentMessage().
+    void ShowStatus(const QString& text, int timeoutMs);
+    // A long-lived mode under the composer instead of a toast; the status line keeps the same text.
+    void ShowComposerContext(const QString& context, const QString& actionText, std::function<void()> action);
+    // "{name} is still working on the previous request": the status line and the composer.
+    void ShowStillWorking();
+    enum class ComposerContextKind
+    {
+        None,
+        Editing,
+        Queued,
+        StillWorking
+    };
+    ComposerContextKind composerContextKind = ComposerContextKind::None;
+    // Settings › Models › Use the cloud for, read from the owner overlay.
+    void RefreshCloudUseFor();
     void HandleRuntimeEvent(const revia::runtime::RuntimeEvent& event);
     void PresentSessionResult(const revia::runtime::SessionResult& result);
     void CaptureDisplayedAnswer(const QString& text, const revia::runtime::RuntimeStamp& origin, std::uint64_t audienceRevision,
@@ -150,7 +222,6 @@ class ReviaWindow final : public QMainWindow
     void ResetConversationPresentation();
     // The chat list beside the transcript, backed by the conversation archive.
     void BuildChatSidebar();
-    void ApplyChatSidebarVisibility();
     void RefreshChatSidebar();
     bool StartNewChat(std::string& outError);
     bool DeleteChat(const std::string& id, std::string& outError);
@@ -166,6 +237,20 @@ class ReviaWindow final : public QMainWindow
     // played afterwards on its own worker. Showing Idle while Revia is audibly about to
     // talk is wrong, so the badge reflects whichever of the two is actually busy.
     void RefreshStateBadge();
+    // Send is enabled only while a message could go now; Stop takes the send slot while a turn,
+    // task or studio operation runs, and sits beside it while only speech or the microphone does.
+    void UpdateSendState();
+    void RefreshPrivacyIndicators();
+    // The conversation strip shows while the runtime works, while its details are open or while it
+    // carries a quality flag for the latest reply.
+    void UpdateConversationStrip();
+    void ToggleStatusPopover();
+    // The header Stop, the sidebar and palette entries: halts desktop control and the running turn.
+    void StopDesktopControlFromShell();
+    // Puts the transcript in its 760px measure without re-rendering it.
+    void ApplyChatMeasure();
+    void ApplyComposerMeasure();
+    [[nodiscard]] QString DisplayName() const;
     revia::runtime::RuntimeState lastRuntimeState = revia::runtime::RuntimeState::Offline;
     QString lastRuntimeDetail;
     QString speechPhase;
@@ -209,6 +294,8 @@ class ReviaWindow final : public QMainWindow
         QString renderedBody;
         // The files sent with a user message, shown under it.
         std::vector<AttachmentChip> attachments;
+        // An unprompted offer (a Proposal event): drawn as a quiet activity row.
+        bool proposal = false;
     };
 
     // Appends one of Revia's working entries. `detail` is the supporting evidence, shown
@@ -218,6 +305,20 @@ class ReviaWindow final : public QMainWindow
     // the investigation runs -- enablement lives in the runtime settings, not here.
     bool showWorkSummaries = true;
     void RenderChat();
+    // The transcript's default stylesheet: the theme's classes at the owner's chat text size.
+    [[nodiscard]] QString TranscriptCss() const;
+    [[nodiscard]] QString UserBubbleHtml(const QString& text) const;
+    // The greeting, starting or offline note an empty chat shows (design spec 2.7).
+    [[nodiscard]] QString EmptyStateHtml() const;
+    // The newest reply that is complete, which alone carries Copy, Regenerate and Review.
+    [[nodiscard]] std::optional<std::size_t> LatestFinishedReply() const;
+    void RenderArchivedChat(const std::vector<revia::memory::ArchivedTurn>& turns);
+    // Set while RenderChat replaces the document, whose scroll changes are not the reader's.
+    bool renderingTranscript = false;
+    // A thought: toggle keeps the reader where they were.
+    bool renderKeepsPosition = false;
+    QString lastTranscriptHtml;
+    revia::runtime::RuntimeState lastRenderedState = revia::runtime::RuntimeState::Offline;
     // The cached body HTML of one entry, converted again only when its text changed.
     const QString& RenderedBody(ChatEntry& entry);
     // Consecutive entries from one non-user speaker read as one message: streamed speech
@@ -244,6 +345,24 @@ class ReviaWindow final : public QMainWindow
     // A foreground turn has been sent and its result is not shown yet; the regenerate
     // and edit links stay hidden until it is.
     bool chatTurnInFlight = false;
+    // A reply that could not be finished is drawn as one row after the entry it followed, without
+    // becoming a chat entry. A stop the owner asked for reads "Stopped" instead.
+    struct TurnError
+    {
+        QString reason;
+        std::size_t afterEntry = 0;
+        quint64 taskId = 0;
+        bool stoppedByUser = false;
+    };
+    std::optional<TurnError> lastTurnError;
+    void RecordTurnError(const revia::runtime::SessionResult& result);
+    // Set by Stop, Esc and the header Stop before they stop the turn; cleared by the next send.
+    bool userStopRequested = false;
+    void RetryFailedTurn();
+    void CopyMessageAt(const QPoint& position);
+    // The transcript stays at the bottom while it is followed there; scrolled up, it keeps its
+    // place and offers Latest once something new arrives.
+    bool transcriptPinned = true;
     std::vector<ChatEntry> chatEntries;
     enum class ActivitySeverity
     {
@@ -260,10 +379,13 @@ class ReviaWindow final : public QMainWindow
     void AppendActivity(const QString& message, ActivitySeverity severity = ActivitySeverity::Automatic);
     void AppendComponentActivity(const revia::runtime::RuntimeEvent& event, const QString& message);
     void RenderActivity();
+    [[nodiscard]] QString ActivityColour(ActivitySeverity severity) const;
     void UpdateActivitySummary();
     void ApplyUserPreferences();
     void RefreshPresenceUi();
     void ShowPreferenceResult(const revia::core::PreferenceResult& result);
+    // Settings re-reads its values once a burst of preference changes has settled.
+    void SchedulePreferenceRefresh();
     std::function<bool()> CaptureQuestionAdmission();
     bool RunAdmittedQuestion(QMessageBox& question, const std::function<bool()>& admitted);
     // The specific yes a control like Send needs. Separate from ConfirmAction: that
@@ -301,14 +423,15 @@ class ReviaWindow final : public QMainWindow
 
     QLabel* stateLabel = nullptr;
     QLabel* stateDetailLabel = nullptr;
+    QLabel* stateDot = nullptr;
+    QToolButton* statePill = nullptr;
+    QLabel* chatTitle = nullptr;
     QLabel* affectLabel = nullptr;
     QLabel* speechLabel = nullptr;
     QLabel* microphoneLabel = nullptr;
     QLabel* automationLabel = nullptr;
     QLabel* visionLabel = nullptr;
     QLabel* perceptionLabel = nullptr;
-    QWidget* titleBar = nullptr;
-    QToolButton* maximizeButton = nullptr;
     QTextBrowser* chatHistory = nullptr;
     QPlainTextEdit* messageInput = nullptr;
     QTextBrowser* activityFeed = nullptr;
@@ -335,11 +458,13 @@ class ReviaWindow final : public QMainWindow
     ConversationStatusPanel* conversationStatus = nullptr;
     ChatSessionsPanel* chatSessionsPanel = nullptr;
     QPushButton* chatSidebarToggle = nullptr;
+    QWidget* chatPage = nullptr;
+    QScrollArea* conversationScroll = nullptr;
+    QWidget* archivedBannerHost = nullptr;
     QWidget* archivedChatBanner = nullptr;
     QLabel* archivedChatLabel = nullptr;
     QPushButton* continueChatButton = nullptr;
     std::string viewingArchivedChat;
-    bool chatSidebarWanted = true;
     QPointer<AnswerFeedbackDialog> answerFeedbackDialog;
     QString latestDisplayedAnswer;
     revia::learning::QualityFeedback displayedAnswerTarget;
@@ -347,9 +472,59 @@ class ReviaWindow final : public QMainWindow
     // The transcript entries that one turn's streamed fragments occupy, in order.
     std::uint64_t streamedReplyTurnId = 0;
     std::vector<std::size_t> streamedReplyEntries;
-    QTabWidget* tabs = nullptr;
-    NavigationSidebar* navigationSidebar = nullptr;
+    // The shell (design spec 2.2). Panels and Settings are QObject children of this window, so a
+    // findChild from here reaches every page.
+    std::unique_ptr<revia::desktop::PanelHost> panelHost;
+    revia::desktop::SettingsDialog* settingsDialog = nullptr;
+    revia::desktop::CommandPalette* commandPalette = nullptr;
+    revia::desktop::ShellSidebar* navigationSidebar = nullptr;
+    revia::desktop::ComposerCard* composer = nullptr;
+    revia::desktop::ToastOverlay* toast = nullptr;
+    QPointer<revia::desktop::ShortcutSheet> shortcutSheet;
+    QMenu* sidebarMenu = nullptr;
+    QMenu* switchCompanionMenu = nullptr;
+    QMenu* chatMoreMenu = nullptr;
+    QMenu* composerAddMenu = nullptr;
+    QMenu* composerProfileMenu = nullptr;
+    QAction* menuNameHeader = nullptr;
+    QAction* menuStopDesktop = nullptr;
+    QAction* keepOnTopAction = nullptr;
+    QAction* useScreenAction = nullptr;
+    QWidget* chatColumn = nullptr;
+    QWidget* chatHeader = nullptr;
+    QWidget* composerArea = nullptr;
+    QWidget* composerShadow = nullptr;
+    QFrame* statusPopover = nullptr;
+    QWidget* privacyIndicators = nullptr;
+    QToolButton* privacyMic = nullptr;
+    QToolButton* privacyPerception = nullptr;
+    QToolButton* privacyScreen = nullptr;
+    QToolButton* privacyCamera = nullptr;
+    QToolButton* privacyDesktop = nullptr;
+    QPushButton* headerDesktopStop = nullptr;
+    QToolButton* chatMoreButton = nullptr;
+    QToolButton* jumpToLatest = nullptr;
+    QToolButton* composerProfileChip = nullptr;
+    QToolButton* composerHandsFreeChip = nullptr;
+    QLabel* navigationLockOverlay = nullptr;
     QPushButton* runtimeDetailsButton = nullptr;
+    QWidget* microphoneRow = nullptr;
+    QComboBox* cloudUseForCombo = nullptr;
+    std::function<QString(const std::string&)> cloudUseForReader;
+    QTimer* preferenceRefreshTimer = nullptr;
+    bool navigationLocked = false;
+    bool restartRequested = false;
+    int themeListenerId = -1;
+    int chatTextSize = 15;
+    // Live states the privacy indicators and the state pill show, from runtime events.
+    bool perceptionWatching = false;
+    bool screenAwarenessRunning = false;
+    bool cameraCapturing = false;
+    bool automationRunning = false;
+    bool microphoneDisabledBySetting = false;
+    [[nodiscard]] bool DesktopControlActive() const;
+    // Serial writer for the Settings backend; stopped and joined before a session retires.
+    std::unique_ptr<revia::desktop::SerialWorker> settingsWorker;
     QPushButton* sendButton = nullptr;
     QPushButton* attachButton = nullptr;
     QPushButton* documentsButton = nullptr;
@@ -376,7 +551,6 @@ class ReviaWindow final : public QMainWindow
     QCheckBox* aiFilterCheck = nullptr;
     QSpinBox* initiativeMaxSpin = nullptr;
     QSpinBox* resourceSampleSpin = nullptr;
-    QLabel* preferenceStatus = nullptr;
     QLabel* presencePhaseValue = nullptr;
     QLabel* presenceAffectValue = nullptr;
     QLabel* presenceAttentionValue = nullptr;

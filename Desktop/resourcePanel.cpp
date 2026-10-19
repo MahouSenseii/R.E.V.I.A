@@ -255,7 +255,7 @@ ResourcePanel::ResourcePanel(VoiceDeviceHandler voiceDeviceHandler, QWidget* par
         "card is in trouble. Compute is what the GPU is actually working on, which is "
         "usually idle while resident model weights sit in memory. Video memory figures "
         "are system-wide for the adapter, because the model weights live in a worker "
-        "process; RAM and CPU cover Revia and every process she started. Nothing here "
+        "process; RAM and CPU cover Revia and every process it started. Nothing here "
         "changes the plan.");
 
     usageTable = new QTableWidget(0, 6, page);

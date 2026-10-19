@@ -2,6 +2,12 @@
 #include "tabNavigation.h"
 #include "Actions/actionTypes.h"
 
+#include "commandPalette.h"
+#include "composerCard.h"
+#include "panelWindow.h"
+#include "serialWorker.h"
+#include "settingsDialog.h"
+
 #include "agentStudioPanel.h"
 #include "learningStudioPanel.h"
 #include "developmentStudioPanel.h"
@@ -19,6 +25,7 @@
 #include "ui_reviaWindow.h"
 
 #include <QComboBox>
+#include <QLabel>
 #include <QGridLayout>
 #include <QGroupBox>
 #include <QInputDialog>
@@ -32,6 +39,7 @@
 #include <QSignalBlocker>
 #include <QTabWidget>
 #include <QTimer>
+#include <QToolButton>
 #include <QVBoxLayout>
 
 #include <stdexcept>
@@ -100,7 +108,8 @@ void ReviaWindow::BuildCompanionControls()
         [this](const int index) { SwitchCompanion(companionCombo->itemData(index).toString().toStdString()); });
     connect(createCompanionButton, &QPushButton::clicked, this, [this]() { CreateCompanion(); });
 
-    auto* scroll = new QScrollArea(tabs);
+    // Studio pages become panel windows (BuildPanels); until then the .ui's tab widget parks them.
+    auto* scroll = new QScrollArea(ui->tabs);
     scroll->setObjectName("agentStudioScroll");
     scroll->setFrameShape(QFrame::NoFrame);
     scroll->setWidgetResizable(true);
@@ -124,7 +133,6 @@ void ReviaWindow::BuildCompanionControls()
     controls.deliverable = [this]() { return Session().AgentWorkflowResult(); };
     agentStudioPanel = new AgentStudioPanel(std::move(controls), scroll);
     scroll->setWidget(agentStudioPanel);
-    tabs->addTab(scroll, "Agent Studio");
     BuildAdditionalStudioPanels();
 }
 
@@ -179,15 +187,14 @@ void ReviaWindow::RunStudioOperation(std::function<bool(revia::runtime::ReviaSes
 
 void ReviaWindow::BuildAdditionalStudioPanels()
 {
-    const auto add = [this](QWidget* panel, const char* objectName, const char* title)
+    const auto add = [this](QWidget* panel, const char* objectName)
     {
-        auto* scroll = new QScrollArea(tabs);
+        auto* scroll = new QScrollArea(ui->tabs);
         scroll->setObjectName(objectName);
         scroll->setFrameShape(QFrame::NoFrame);
         scroll->setWidgetResizable(true);
         scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
         scroll->setWidget(panel);
-        tabs->addTab(scroll, title);
     };
     LearningStudioPanel::Controls learning;
     learning.inventory = [this](const std::string& directory)
@@ -231,7 +238,7 @@ void ReviaWindow::BuildAdditionalStudioPanels()
             [this](const bool success, const auto& message) { learningStudioPanel->SetOutcome(success, message); });
     };
     learningStudioPanel = new LearningStudioPanel(std::move(learning));
-    add(learningStudioPanel, "learningStudioScroll", "Skills && Learning");
+    add(learningStudioPanel, "learningStudioScroll");
     DevelopmentStudioPanel::Controls development;
     development.propose = [this]
     {
@@ -259,7 +266,7 @@ void ReviaWindow::BuildAdditionalStudioPanels()
             [this](const bool success, const auto& message) { developmentStudioPanel->SetOutcome(success, message); });
     };
     developmentStudioPanel = new DevelopmentStudioPanel(std::move(development));
-    add(developmentStudioPanel, "developmentStudioScroll", "Self Development");
+    add(developmentStudioPanel, "developmentStudioScroll");
     AudienceStudioPanel::Controls audience;
     audience.audience = [this](const auto context)
     {
@@ -290,7 +297,7 @@ void ReviaWindow::BuildAdditionalStudioPanels()
             [this](const bool success, const auto& message) { audienceStudioPanel->SetOutcome(success, message); });
     };
     audienceStudioPanel = new AudienceStudioPanel(std::move(audience));
-    add(audienceStudioPanel, "audienceStudioScroll", "Audience && Recognition");
+    add(audienceStudioPanel, "audienceStudioScroll");
     auto* timer = new QTimer(this);
     timer->setInterval(1000);
     connect(timer, &QTimer::timeout, this, [this] { RefreshStudioPanels(); });
@@ -360,13 +367,18 @@ void ReviaWindow::SwitchCompanion(const std::string& id)
     companionCombo->setEnabled(false);
     createCompanionButton->setEnabled(false);
     agentStudioPanel->setEnabled(false);
-    tabs->setEnabled(false);
-    sendButton->setEnabled(false);
+    // The sidebar, the chat, every panel window and Settings stay locked until the new
+    // companion is in place.
+    SetNavigationLocked(true);
+    navigationLockOverlay->setText(QStringLiteral("Switching to %1\u2026").arg(QString::fromStdString(destination->displayName)));
+    UpdateSendState();
     companionStatus->setText("Switching companion: stopping outgoing work and releasing model and device ownership…");
     auto* outgoing = &Session();
     companionSwitchWorker = std::jthread(
         [this, outgoing, destination = *destination, restart, epoch]()
         {
+            // Settings writes still queued finish against the companion they were made for.
+            settingsWorker->Stop();
             if (operationWorker.joinable())
                 operationWorker.join();
             if (capabilityWorker.joinable())
@@ -427,15 +439,20 @@ void ReviaWindow::SwitchCompanion(const std::string& id)
                         RebuildSessionPanels();
                         RefreshVoiceStudio();
                         retiring.reset();
+                        settingsWorker->Start();
                         questions.Reopen();
                         BindSession();
                         RefreshCompanions();
                         ApplyUserPreferences();
+                        BuildPalette();
+                        RefreshAccount();
+                        RefreshChatSidebar();
                         UpdateState(revia::runtime::RuntimeState::Offline, "Selected " + QString::fromStdString(destination.displayName));
                     }
                     catch (const std::exception& failure)
                     {
                         companionStatus->setText(QString::fromUtf8(failure.what()));
+                        settingsWorker->Start();
                         questions.Reopen();
                         BindSession();
                     }
@@ -443,7 +460,8 @@ void ReviaWindow::SwitchCompanion(const std::string& id)
                     companionCombo->setEnabled(true);
                     createCompanionButton->setEnabled(true);
                     agentStudioPanel->setEnabled(true);
-                    tabs->setEnabled(true);
+                    SetNavigationLocked(false);
+                    UpdateSendState();
                     agentStudioPanel->SetSnapshot(Session().AgentWorkflowSnapshot());
                     RefreshStudioPanels();
                     if (restart)
@@ -455,6 +473,8 @@ void ReviaWindow::SwitchCompanion(const std::string& id)
 
 void ReviaWindow::RebuildSessionPanels()
 {
+    // The panels are recreated inside the same host pages, which stay in their windows.
+    using revia::desktop::PanelId;
     delete profilePanel;
     profilePanel = new ProfilePanel(Session(), ui->profilesPage);
     ui->profilesHostLayout->addWidget(profilePanel);
@@ -468,10 +488,16 @@ void ReviaWindow::RebuildSessionPanels()
     delete visionPanel;
     visionPanel = new VisionPanel(Session(), ui->visionTab);
     ui->visionHostLayout->addWidget(visionPanel);
-    auto* permissions = qobject_cast<QScrollArea*>(ui->permissionsHostLayout->itemAt(0)->widget());
-    delete permissions->takeWidget();
-    capabilityPanel = new CapabilityPanel(Session(), [this]() { DiscoverApplicationPermissions(); }, permissions);
-    permissions->setWidget(capabilityPanel);
+    // Its destructor takes the detached internet cards with it; the new panel's go back into
+    // Settings in the same two places.
+    delete capabilityPanel;
+    capabilityPanel = new CapabilityPanel(Session(), [this]() { DiscoverApplicationPermissions(); }, this);
+    if (settingsDialog)
+    {
+        settingsDialog->SetHostedWidget(revia::desktop::SettingsSection::Permissions, QStringLiteral("permissions"), capabilityPanel, 0);
+        settingsDialog->SetHostedWidget(
+            revia::desktop::SettingsSection::Internet, QStringLiteral("internet"), capabilityPanel->DetachInternetGroup(), 0);
+    }
     delete pipelinePanel;
     pipelinePanel = new PipelinePanel(ui->pipelinePage);
     ui->pipelineHostLayout->addWidget(pipelinePanel);
@@ -486,13 +512,30 @@ void ReviaWindow::RebuildSessionPanels()
         [this](const std::string& device) { return Session().SetPreference("resources.voiceDevice", device); }, ui->resourcePage);
     ui->resourceHostLayout->addWidget(resourcePanel);
     delete chatVoiceHealth;
-    chatVoiceHealth = new VoiceHealthPanel(true, ui->chatPage);
-    ui->chatLayout->insertWidget(1, chatVoiceHealth);
+    chatVoiceHealth = new VoiceHealthPanel(true, composer);
+    if (composer)
+        composer->InsertTrailing(composer->TrailingIndexOf(composerHandsFreeChip), chatVoiceHealth);
     delete voiceHealth;
     voiceHealth = new VoiceHealthPanel(false, ui->voicePage);
     ui->voiceLayout->insertWidget(0, voiceHealth);
     connect(chatVoiceHealth->DetailsButton(), &QPushButton::clicked, this,
-        [this]() { revia::desktop::SelectNavigationPage(ui->voiceTab); });
-    revia::desktop::GroupNavigationPages(tabs);
+        [this]()
+        {
+            OpenPanel(PanelId::Voice);
+            ui->voiceScroll->verticalScrollBar()->setValue(0);
+        });
+    revia::desktop::PolishSectionTabs(ui->mindTab);
+    if (panelHost)
+    {
+        // Margins and the hidden repeated heading again, for the pages whose contents changed.
+        for (const PanelId id : {PanelId::Profiles, PanelId::Memory, PanelId::Mind, PanelId::Vision, PanelId::Pipelines,
+                 PanelId::InternetActivity, PanelId::Canvas, PanelId::Resources, PanelId::Voice})
+        {
+            if (auto* window = panelHost->Window(id))
+                window->PolishPage();
+        }
+    }
+    if (settingsDialog)
+        settingsDialog->SetCompanionName(DisplayName());
     ApplyResponsiveLayout();
 }

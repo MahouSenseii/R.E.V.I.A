@@ -272,13 +272,11 @@ QTabBar::tab {
     border: 2px solid transparent;
     padding: 7px 11px 9px 11px;
 }
-QTabBar#primaryNavigation::tab { padding: 7px 12px 9px 12px; }
 QTabBar#sectionNavigation::tab { padding: 5px 8px 7px 8px; }
 QTabBar::tab:hover { color: {{text}}; }
 QTabBar::tab:selected { color: {{text}}; border-bottom-color: {{accent}}; }
 QTabBar::tab:disabled { color: {{textDisabled}}; }
-QTabBar#primaryNavigation::tab:selected { background: {{sidebarSelected}}; border-bottom-color: transparent; }
-QTabBar::tab:focus, QTabBar#primaryNavigation::tab:focus { border-color: {{focusRing}}; }
+QTabBar::tab:focus { border-color: {{focusRing}}; }
 QTabBar QToolButton { color: {{textSecondary}}; background: {{surface}}; border-color: {{border}}; }
 QTabBar QToolButton:hover { background: {{surfaceHover}}; }
 
@@ -319,13 +317,8 @@ QAbstractScrollArea::corner { background: transparent; }
 QScrollArea { background: transparent; }
 QSplitter::handle { background: {{divider}}; }
 
-/* ---------------------------------------------------------------- window shell (until the redesign replaces it) */
+/* ---------------------------------------------------------------- status popover chips */
 
-QLabel#windowTitle { color: {{textSecondary}}; }
-QToolButton#minimizeButton, QToolButton#maximizeButton, QToolButton#closeButton { color: {{textSecondary}}; }
-QToolButton#closeButton:hover { color: {{textOnAccent}}; background: {{danger}}; }
-QLabel#reviaTitle { color: {{text}}; }
-QLabel#sidebarHeading { color: {{textSecondary}}; }
 QLabel#affectLabel, QLabel#speechLabel, QLabel#microphoneLabel,
 QLabel#automationLabel, QLabel#visionLabel, QLabel#perceptionLabel {
     color: {{textSecondary}};
@@ -595,8 +588,8 @@ QLabel#profileStatus, QLabel#memoryStatus, QLabel#memoryRevisionOutcome, QLabel#
 QLabel#profileStatus[error="true"], QLabel#memoryRevisionOutcome[error="true"], QLabel#answerFeedbackOutcome[error="true"] {
     color: {{danger}};
 }
-QLabel#activityIssueSummary, QLabel#preferenceStatus { color: {{success}}; }
+QLabel#activityIssueSummary { color: {{success}}; }
 QLabel#activityIssueSummary[level="warning"] { color: {{warning}}; }
-QLabel#activityIssueSummary[level="error"], QLabel#preferenceStatus[error="true"] { color: {{danger}}; }
+QLabel#activityIssueSummary[level="error"] { color: {{danger}}; }
 QLabel#memoryRevisionProvenance { color: {{textSecondary}}; }
 QDialog#answerFeedbackDialog, QDialog#memoryRevisionDialog, QDialog#documentsDialog { background: {{background}}; }

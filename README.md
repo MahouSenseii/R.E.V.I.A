@@ -35,7 +35,7 @@ The design rule: **one Revia**. Reflex, Fast, Main, and Expert share one identit
 | Camera (one still frame) | Tested | **Off by default** |
 | Image generation (`/imagine`, SD-Turbo) | Tested | **Off by default**; needs `Tools\InstallImageModel.ps1` |
 | Voice interruption (barge-in) | Tested | Enabled in settings; not confirmed in recent logs |
-| Discord text chat through the Presence inbox | Tested | Off until you turn on adapters in the Presence tab |
+| Discord text chat through the Presence inbox | Tested | Off until you turn on **Discord, stream and game connections** in Settings › Integrations |
 | Discord **voice** channel (she listens and talks in a call) | Tested | Connector tests pass 18/18; **no live Discord join has been done yet** |
 | Live2D avatar through VTube Studio | **First rig connected** | Native model, authentication, mappings, controls, source resets and renderer restart verified. Real speech worked with the original gate; corrected audio loudness timing awaits a fresh runtime check. See [avatar production status](Assets/Avatar/Revia/README.md) |
 | VRM avatar, OBS and streaming platform integration | **Not yet** | Separate renderer/integration work remains |
@@ -59,7 +59,7 @@ The design rule: **one Revia**. Reflex, Fast, Main, and Expert share one identit
 ### See, listen, and speak
 
 - **Watch your screens.** She notices what you are doing across every monitor, with no "Analyze screen" button. Screenshots are deleted immediately; only a short summary stays in memory. Text on screen is treated as information, never as instructions.
-- **Listen.** Hold **Ctrl+Space** (or the mic button) to talk, or turn on **Hands-free local conversation** in the Presence tab. Hands-free answers only when you say "Revia" or reply within 20 seconds of talking with her, counted from when she stops speaking (`speechRecognition.requireWakeWord`, `wakeWords`, `followUpSeconds`).
+- **Listen.** Hold **Ctrl+Space** (or the mic button) to talk, or turn on **Hands-free listening** in Settings › Voice. Hands-free answers only when you say "Revia" or reply within 20 seconds of talking with her, counted from when she stops speaking (`speechRecognition.requireWakeWord`, `wakeWords`, `followUpSeconds`).
 - **Speak in her own voice.** Qwen3-TTS starts speaking after the first complete sentence and spreads later sentences across both GPUs. The end of an answer is spoken even without a full stop, such as a last list item, a link or an emoji. Windows SAPI is the fallback.
 - **Be interrupted.** Start talking while she speaks and she stops.
 - **Look through the camera (optional).** One still frame, only with permission, and the camera light is on only while the frame is taken.
@@ -78,7 +78,7 @@ The design rule: **one Revia**. Reflex, Fast, Main, and Expert share one identit
   | `read_file`, `list_dir` | Reads a text file or lists a folder | Only inside your approved folders, through the same policy, confirmation and audit as any file action |
   | `set_reminder` | Sets a reminder with the same parser and saved list as "remind me in 10 minutes to ..." | Always, in a private chat |
   | `calculator` | Exact arithmetic: `+ - * / **`, parentheses, decimals, simple units | Always, in a private chat |
-  | `generate_image` | Makes a picture on the Canvas tab | Image generation is enabled |
+  | `generate_image` | Makes a picture in the Canvas window | Image generation is enabled |
   | `mcp_<server>_<tool>` | A tool from one of your own [MCP servers](#mcp-servers) | You enabled the server and named the tool in its `allowedTools`; each call asks you first unless you turned that off for the server |
   | `run_python` | Runs Python in the Ubuntu guest: no network, a fresh empty folder deleted afterwards, CPU, memory and time limits. numpy, matplotlib and sympy are installed. Up to 4 files saved under `out/` come back (pictures appear on the Canvas). **Asks you before every run.** | The guest permission allows execution with `/usr/bin/python3` approved, and the Ubuntu workspace is running and reports a working sandbox |
   | `share_project` | Copies the text files of a project folder into the guest (never mounts it). **Asks you every time**, showing the folder | Guest read and write are allowed, the workspace is running, and you have an approved folder |
@@ -169,7 +169,7 @@ hardware. For a first laptop install, start with:
 This installs chat, memory and speech-recognition models, disables vision, and
 keeps Windows SAPI as the voice fallback. After setup succeeds, launch
 `build\debug\ReviaDesktop.exe`. For a startup error, use the header's **Details**
-button to open **Runtime → Activity**, then **Open folder** for the actual logs.
+button to open the **Activity** window, then **Open folder** for the actual logs.
 `Logs\setup.log` records installer failures; language-worker stderr logs record
 model loading and runtime failures. Re-running setup does not replace saved
 memory. Optional custom voice and vision can be installed later.
@@ -246,7 +246,7 @@ A `-Release` build runs from `build\release\` instead and keeps its own `Memory\
 What happens on first start:
 
 1. The window opens right away and the status bar shows `Starting`.
-2. Revia starts her local workers: Main, Fast, and Expert language models, the embedding model, and Whisper. This took about **26 seconds** on the dev PC. The **Runtime → Pipelines** and **Resources** panels show each one coming up.
+2. Revia starts her local workers: Main, Fast, and Expert language models, the embedding model, and Whisper. This took about **26 seconds** on the dev PC. The **Pipelines** and **Resources** windows show each one coming up.
 3. The Qwen voice loads in the background. The first time, it **downloads the voice models from Hugging Face** (several GB), so the first launch can take many minutes. After that it takes about **40 seconds**. She can chat while it loads; until the voice is ready, replies are text only or use Windows SAPI.
 4. `RuntimeData\`, `Memory\`, and `Logs\` are created next to the executable (in `build\debug\`). Your live permissions file is seeded once at `build\debug\RuntimeData\Capabilities\capabilities.json`.
 
@@ -262,7 +262,7 @@ The command-line version runs the same core without the UI, which is useful for 
 
 Out of the box she speaks with Windows SAPI. To use her own voice:
 
-1. Open the **Voice** tab.
+1. Open the **Voice** window (sidebar menu, or Ctrl+K and type "voice").
 2. Under **Create a voice**, write a **Voice description** (for example "bright, young, playful female voice, clear and quick") and a **Reference line** for her to say.
 3. Click **Create voice**. This loads the 1.7B VoiceDesign model once, which takes a while the first time.
 4. Use **Generate preview** to hear it. Keep it or try another description.
@@ -274,13 +274,13 @@ Voices are stored in `build\debug\RuntimeData\Voices\`.
 ### 5. Talk to her
 
 - **Push-to-talk:** hold **Ctrl+Space** (or the mic button), speak, release. Releasing ends what you said, so the turn starts as soon as the transcript arrives.
-- **Hands-free:** turn on **Hands-free local conversation** in the **Presence** tab. If she does not hear you, use **Test microphone** and pick the right microphone. Speech is merged into one turn until you pause: 150 ms after a finished sentence, 350 ms otherwise (`inputArbiter.punctuatedMergeWindowMs`, `inputArbiter.mergeWindowMs`).
+- **Hands-free:** turn on **Hands-free listening** in Settings › Voice. If she does not hear you, use **Test microphone** and pick the right microphone. Speech is merged into one turn until you pause: 150 ms after a finished sentence, 350 ms otherwise (`inputArbiter.punctuatedMergeWindowMs`, `inputArbiter.mergeWindowMs`).
 - **Send what I say automatically** sends the transcript without pressing Send.
-- **Let me interrupt Revia while she speaks** turns barge-in on or off.
+- **Let me interrupt Revia** turns barge-in on or off.
 
 ### 6. Decide what she may see and do
 
-Open the **Permissions** tab. The defaults are cautious:
+Open Settings › **Permissions** (Ctrl+,). The defaults are cautious:
 
 | Permission | Default |
 |---|---|
@@ -311,7 +311,7 @@ This is a separate small Node program in `Tools\Presence\DiscordVoice\`. It list
 
 1. **Create a bot.** In the [Discord Developer Portal](https://discord.com/developers/applications), create an application, add a **Bot**, and copy its token. Invite it to your server with **View Channel**, **Connect**, and **Speak**. It does not need Administrator or the Message Content intent.
 2. **Get IDs.** In Discord turn on **Developer Mode** (Settings → Advanced), then right-click your server → *Copy Server ID* and the voice channel → *Copy Channel ID*.
-3. **Prepare Revia.** Start `ReviaDesktop.exe`. In the **Presence** tab turn on **Enable local Discord, stream, and game adapters**. Make sure her profile has a Qwen voice (step 4). Discord voice needs Qwen; SAPI is not used here.
+3. **Prepare Revia.** Start `ReviaDesktop.exe`. In Settings › Integrations turn on **Discord, stream and game connections**. Make sure her profile has a Qwen voice (step 4). Discord voice needs Qwen; SAPI is not used here.
 4. **Install and configure the connector:**
 
    ```powershell
@@ -363,30 +363,35 @@ Rebuilding does not overwrite your memory, voices, preferences, or live permissi
 
 ## The desktop window
 
-| Tab | What it is for |
-|---|---|
-| **Chat** | Talk to her; mic button; **Use screen** for a specific confirmed UI action |
-| **Mind** | Current mood, drives, relationships, what she is paying attention to |
-| **Memory** | What she remembers, and editing it |
-| **Vision** | Screen-awareness state and the latest summaries |
-| **Canvas** | Diagrams, images, and the working document |
-| **Voice** | Create, preview, and manage voices |
-| **Profiles** | Which profile is active, edit profiles, assign voices |
-| **Presence** | Hands-free listening, avatar state output, Discord/stream/game adapters |
-| **Permissions** | Files, apps, desktop control, internet, camera, emergency stop |
-| **Settings** | Microphone, speech, conversation behavior, initiative |
-| **Runtime** | Activity log, Pipelines (every worker), Resources (GPU/CPU/RAM), Diagnostics |
+The layout follows the Claude and Codex desktop apps. Details are in
+[Desktop navigation](docs/DESKTOP_NAVIGATION.md) and [Desktop settings](docs/DESKTOP_SETTINGS.md).
 
-### In the Chat tab
+- **Sidebar:** New chat, search, your recent chats, and at the bottom a menu and
+  Settings. The menu holds the companion switcher, every panel, the command palette,
+  Keep Revia on top and Quit. Ctrl+B folds the sidebar into a rail of icons.
+- **Chat:** the conversation in a centred column, with a rounded message box (**+** for
+  files, documents and the screen; the profile chip; mic; Send). The header shows the
+  chat's title, the status (click it for live details), and an icon for each live privacy
+  state: microphone, app awareness, screen, camera, desktop control. While desktop
+  control is active there is also a red **Stop**.
+- **Panels** open as their own windows beside the chat: Canvas, Vision, Profiles, Mind,
+  Memory, Voice, Presence, Audience, Agents, Learning, Development, Activity, Pipelines,
+  Internet activity and Resources. **Place beside chat** puts one next to the window.
+- **Settings** (Ctrl+,) is one dialog with sections down the left. Every true/false
+  setting is a labelled switch with a one-line explanation. Risky ones ask before they
+  turn on. Each shows whether it applies now or after a restart. Settings follows the
+  Windows light or dark mode, or keeps the one you choose under Appearance.
+- **Ctrl+K** searches commands, panels, settings and chats. **Ctrl+/** lists every shortcut.
+
+### In the chat
 
 - **Formatted replies.** Revia's replies are shown as Markdown: headings, lists, tables, and code in a monospace face. Reply text is never treated as HTML. A link in a reply shows its address but does nothing when clicked, and images are never loaded; only the window's own links act.
-- **Copy** under each reply puts its text (as she wrote it, Markdown included) on the clipboard.
-- **Regenerate** under her latest reply asks again; **Edit** under your latest message puts it back in the box, and sending it replaces that exchange (Esc cancels). Both remove the old exchange from her working context and the archive and then send the text the normal way, so the same audience and privacy checks apply. Either is refused, and the transcript left as it was, if the audience changed or the conversation moved on since. Anything the memory agent already learned from the first reply stays until you revise it under **Memory**.
+- **Copy**, **Regenerate** and **Review** sit under the newest reply; right-click any older reply for **Copy message**. **Edit** under your latest message puts it back in the box, and sending it replaces that exchange (Esc cancels). Both remove the old exchange from the working context and the archive and then send the text the normal way, so the same audience and privacy checks apply. Either is refused, and the transcript left as it was, if the audience changed or the conversation moved on since. Anything the memory agent already learned from the first reply stays until you revise it in **Memory**.
+- A reply that could not be finished shows one red line with **Retry**; a reply you stopped reads **Stopped**.
 - The window keeps the newest 400 entries. Older ones are still in the conversation archive.
-- **Chats** (the list beside the transcript, shown or hidden with the **Chats** button) lists past conversations from the archive, newest first, with search. **New chat** starts an empty working context and a new archive session; what she remembers long term is not touched. Clicking a chat shows it read-only; **Continue this chat** makes it current again and gives Revia back only your own turns from it (only once she knows who you are; otherwise the chat can still be read). **Rename**, **Delete** and **Export** (Markdown or JSON, to a file you choose) work on the selected chat. The list is hidden whenever the audience is not private, the same rule `/history` follows, and on windows narrower than 900 pixels.
-- Thinking that arrives in pieces for one turn updates a single **Revia is thinking** block in place rather than adding a block per piece.
-
-- **Attach** and **Documents** sit beside **Send**; see [Attachments](#attachments-and-your-documents).
+- **Recents** in the sidebar lists past conversations from the archive, newest first, with search. **New chat** starts an empty working context and a new archive session; what she remembers long term is not touched. Clicking a chat shows it read-only; **Continue this chat** makes it current again and gives Revia back only your own turns from it (only once she knows who you are; otherwise the chat can still be read). Right-click a chat to rename, delete or export it (Markdown or JSON). The list is empty whenever the audience is not private, the same rule `/history` follows.
+- Thinking, checks and memory notes are small muted rows; **Show Revia's thinking steps** in Settings › Appearance hides them.
+- Attachments come in through **+**, drag and drop or paste; see [Attachments](#attachments-and-your-documents).
 
 These were checked by the desktop test fixture with Qt offscreen on Linux; the Windows build has not been tried by hand yet.
 
@@ -712,7 +717,7 @@ Pointer, keyboard, and application launch are **off** by default and each is tur
 - An audit trail: pointer positions and key chords in full, typed text by length only.
 - The emergency stop.
 
-**Emergency stop:** hold **Ctrl+Alt+Shift**, press Stop in the window or Permissions tab, or run `/desktop stop`. It stays stopped until `/desktop resume`. It does not go through the model or the turn queue.
+**Emergency stop:** hold **Ctrl+Alt+Shift**, press **Stop** in the chat header or Settings › Permissions, or run `/desktop stop`. It stays stopped until `/desktop resume`. It does not go through the model or the turn queue.
 
 ```text
 /click "820" "140"                              anywhere on screen
@@ -746,7 +751,7 @@ The capability `mode` can be `supervised` (default) or `owner_full_access`. The 
 - She cannot edit her own source, change her models or settings, or widen her own permissions.
 - The whisper.cpp server is started under a new random URL prefix each launch (`--request-path`), so web pages and other programs cannot reach its routes, including its unauthenticated `/load`, without learning it. Microphone audio goes only to a server that answers under that prefix, not outside it, and, on Windows, owns the listening port by process ID. A program squatting on the port gets no audio; recognition falls back to the command-line runner. The pinned v1.9.2 server has no `--no-prints` option (an unknown option makes it exit), and it writes no transcript text to its log unless `--print-realtime` is passed, which Revia does not. The probe is tested against local fixture servers; the Windows ownership check is compiled for Windows but not yet run live.
 
-The live permissions file is `build\debug\RuntimeData\Capabilities\capabilities.json`, seeded once from `Config\capabilities.json` and never overwritten by builds. Use the **Permissions** tab rather than editing it.
+The live permissions file is `build\debug\RuntimeData\Capabilities\capabilities.json`, seeded once from `Config\capabilities.json` and never overwritten by builds. Use Settings › **Permissions** rather than editing it.
 
 ---
 
@@ -782,7 +787,7 @@ signatures, and short comments.
 
 ## Troubleshooting
 
-Start with **Runtime → Activity**, **Pipelines**, and **Resources**, or `/status` and `/resources`. Logs are in `build\debug\Logs\`:
+Start with the **Activity**, **Pipelines** and **Resources** windows, or `/status` and `/resources`. Logs are in `build\debug\Logs\`:
 
 - `revia.log`: startup, every turn, model placement, timings, shutdown. Each turn's `Timing` line also carries what llama.cpp reported for that reply: `llama_cached_prompt` (prompt tokens reused from its cache), `llama_evaluated_prompt` (tokens it had to read), `llama_prompt_eval` and `llama_generation` (milliseconds). A low cached count late in a conversation means the prompt cache is not being reused. Conversation history is trimmed to 60% of its budget when it overflows, rather than by one exchange per turn, so the start of the prompt stays identical for several turns. Unit-tested against a fake backend; the reuse it buys has not been measured live yet.
 - `llama-server-<port>.*.log`: one pair per language worker (8080 Main, 8082 Fast, 8083 Expert); `embedding-server.*.log`: memory worker
@@ -796,12 +801,12 @@ Start with **Runtime → Activity**, **Pipelines**, and **Resources**, or `/stat
 | Step 4 (Qwen3-TTS) fails | Needs Python **3.12** via the `py` launcher. Or re-run with `-SkipVoice`. |
 | Step 5 model check fails | Download was interrupted. Re-run; it resumes and re-verifies. |
 | She never finishes starting | Look in `llama-server-8080.stderr.log` (Main) or the Fast/Expert ones. Usually not enough VRAM: use `-Profile Standard` or `Minimal`. |
-| She talks in the Windows voice | Qwen is still loading (first launch downloads models) or no voice is assigned to the profile. Check the Voice tab. |
+| She talks in the Windows voice | Qwen is still loading (first launch downloads models) or no voice is assigned to the profile. Check the Voice window. |
 | Voice is very slow | GPU memory is nearly full. Check Resources; close other GPU apps or use a smaller profile. |
 | She does not hear you | Use **Test microphone**, choose the right device, check `whisper-server.stderr.log`. |
 | Web lookups fail | Node.js 22+ and Edge or Chrome must be installed. Check `visible-browser.stderr.log`. |
 | She never brings anything up | Search `revia.log` for `Initiative stayed quiet` and `Curiosity set aside`, which name the reason. If it says "user is mid-input" while you are idle, a held or stuck key (or a controller or macro mapped to one) is feeding Windows constant input. After five minutes of that she logs "input has not paused once" and stops reading it as typing, but the key is still held. |
-| Discord connector gets no replies | **Enable local Discord, stream, and game adapters** is off in the Presence tab, or `inbox`/`outbox` in `config.json` do not point at the Revia you are running. |
+| Discord connector gets no replies | **Discord, stream and game connections** is off in Settings › Integrations, or `inbox`/`outbox` in `config.json` do not point at the Revia you are running. |
 | GPU usage shows "unmeasured" | Revia could not match the device to a Windows adapter and will not guess. |
 
 ---

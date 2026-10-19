@@ -1,10 +1,13 @@
 #include "chatSessionsPanel.h"
 
+#include "theme.h"
+
 #include <QAction>
 #include <QDateTime>
 #include <QDir>
 #include <QFile>
 #include <QFileDialog>
+#include <QFont>
 #include <QHBoxLayout>
 #include <QInputDialog>
 #include <QLabel>
@@ -13,11 +16,15 @@
 #include <QMenu>
 #include <QMessageBox>
 #include <QPushButton>
+#include <QShortcut>
 #include <QTimer>
 #include <QVBoxLayout>
 
+#include <algorithm>
+
 namespace
 {
+// The line a chat is listed under: its title, else its opening line.
 QString SessionLabel(const revia::memory::ArchivedSession& session, const bool current)
 {
     QString name = QString::fromStdString(session.title.empty() ? session.opening : session.title).simplified();
@@ -25,6 +32,12 @@ QString SessionLabel(const revia::memory::ArchivedSession& session, const bool c
         name = current ? QStringLiteral("New chat") : QStringLiteral("Untitled chat");
     if (name.size() > 60)
         name = name.left(57) + QStringLiteral("...");
+    return name;
+}
+
+// The date and length moved off the row into its tooltip, with the opening line.
+QString SessionDetail(const revia::memory::ArchivedSession& session, const bool current)
+{
     bool parsed = false;
     const qint64 started = QString::fromStdString(session.startedAt).toLongLong(&parsed);
     QString detail = parsed && started > 0 ? QDateTime::fromSecsSinceEpoch(started).toString(QStringLiteral("yyyy-MM-dd HH:mm")) : QString();
@@ -32,7 +45,8 @@ QString SessionLabel(const revia::memory::ArchivedSession& session, const bool c
               (session.turns == 1 ? QStringLiteral(" turn") : QStringLiteral(" turns"));
     if (current)
         detail += QStringLiteral("  ·  current");
-    return name + QLatin1Char('\n') + detail;
+    const QString opening = QString::fromStdString(session.opening).left(300);
+    return opening.isEmpty() ? detail : detail + QLatin1Char('\n') + opening;
 }
 }
 
@@ -42,50 +56,64 @@ ChatSessionsPanel::ChatSessionsPanel(ChatSessionControls inputControls, QWidget*
     setObjectName("chatSessionsPanel");
     setAttribute(Qt::WA_StyledBackground, true);
     auto* layout = new QVBoxLayout(this);
-    layout->setContentsMargins(10, 10, 10, 10);
-    layout->setSpacing(8);
+    layout->setContentsMargins(0, 0, 0, 0);
+    layout->setSpacing(4);
 
-    auto* heading = new QLabel(QStringLiteral("Chats"), this);
-    heading->setObjectName("chatSessionsHeading");
-    layout->addWidget(heading);
     newChat = new QPushButton(QStringLiteral("New chat"), this);
     newChat->setObjectName("newChatButton");
-    newChat->setToolTip(QStringLiteral("Start with an empty conversation. What Revia remembers long term is not touched."));
+    newChat->setFlat(true);
+    newChat->setFocusPolicy(Qt::TabFocus);
+    newChat->setToolTip(QStringLiteral("New chat (Ctrl+N)"));
+    newChat->setAccessibleName(QStringLiteral("New chat"));
+    revia::desktop::theme::BindIcon(newChat, "plus", 16);
     layout->addWidget(newChat);
     search = new QLineEdit(this);
     search->setObjectName("chatSearch");
     search->setPlaceholderText(QStringLiteral("Search chats"));
+    search->setAccessibleName(QStringLiteral("Search chats"));
     search->setClearButtonEnabled(true);
+    revia::desktop::theme::BindIcon(search->addAction(QIcon(), QLineEdit::LeadingPosition), "search");
     layout->addWidget(search);
+    layout->addSpacing(8);
+
+    // The old heading stays as an object for anything that looks it up, but the folding
+    // "Recents" label takes its place.
+    auto* heading = new QLabel(QStringLiteral("Chats"), this);
+    heading->setObjectName("chatSessionsHeading");
+    heading->hide();
+    listToggle = new QPushButton(QStringLiteral("Recents"), this);
+    listToggle->setObjectName("chatSidebarToggle");
+    listToggle->setCheckable(true);
+    listToggle->setChecked(true);
+    listToggle->setFlat(true);
+    listToggle->setFocusPolicy(Qt::TabFocus);
+    listToggle->setToolTip(QStringLiteral("Show or hide recent chats"));
+    revia::desktop::theme::BindIcon(listToggle, "chevron-down", 14);
+    layout->addWidget(listToggle, 0, Qt::AlignLeft);
+
     list = new QListWidget(this);
     list->setObjectName("chatSessionList");
-    list->setWordWrap(true);
+    list->setAccessibleName(QStringLiteral("Recent chats"));
     list->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    list->setTextElideMode(Qt::ElideRight);
+    list->setUniformItemSizes(true);
+    list->setContextMenuPolicy(Qt::CustomContextMenu);
     list->setToolTip(QStringLiteral("Open a chat to read it. Past chats are read-only unless you continue one."));
-    // The list gives up height first, so the panel never makes the chat page taller
-    // than the window and pushes the message box out of view.
+    // The list gives up height first, so the panel never pushes the sidebar footer away.
     list->setMinimumHeight(36);
-    setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Ignored);
+    setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Ignored);
     layout->addWidget(list, 1);
 
-    auto* actions = new QHBoxLayout();
-    actions->setSpacing(6);
+    // Kept as objects (and for anything that drives them), never shown: the row context menu and
+    // the chat header's menu carry these actions now.
     rename = new QPushButton(QStringLiteral("Rename"), this);
     rename->setObjectName("renameChatButton");
     remove = new QPushButton(QStringLiteral("Delete"), this);
     remove->setObjectName("deleteChatButton");
-    remove->setToolTip(QStringLiteral("Delete this chat from the archive. Long-term memory is not touched."));
     exportChat = new QPushButton(QStringLiteral("Export"), this);
     exportChat->setObjectName("exportChatButton");
-    exportChat->setToolTip(QStringLiteral("Save this chat to a file you choose"));
-    auto* exportMenu = new QMenu(exportChat);
-    connect(exportMenu->addAction(QStringLiteral("Markdown (.md)")), &QAction::triggered, this, [this]() { ChooseExport(false); });
-    connect(exportMenu->addAction(QStringLiteral("JSON (.json)")), &QAction::triggered, this, [this]() { ChooseExport(true); });
-    exportChat->setMenu(exportMenu);
-    actions->addWidget(rename);
-    actions->addWidget(remove);
-    actions->addWidget(exportChat);
-    layout->addLayout(actions);
+    for (QPushButton* button : {rename, remove, exportChat})
+        button->hide();
 
     status = new QLabel(this);
     status->setObjectName("chatSessionsStatus");
@@ -99,7 +127,6 @@ ChatSessionsPanel::ChatSessionsPanel(ChatSessionControls inputControls, QWidget*
     searchDelay->setInterval(250);
     connect(searchDelay, &QTimer::timeout, this, [this]() { Refresh(); });
     connect(search, &QLineEdit::textChanged, this, [this]() { searchDelay->start(); });
-    connect(list, &QListWidget::itemSelectionChanged, this, [this]() { UpdateButtons(); });
     connect(list, &QListWidget::itemActivated, this,
         [this](QListWidgetItem* item)
         {
@@ -112,37 +139,42 @@ ChatSessionsPanel::ChatSessionsPanel(ChatSessionControls inputControls, QWidget*
             if (item && controls.open)
                 controls.open(item->data(Qt::UserRole).toString().toStdString());
         });
-    connect(newChat, &QPushButton::clicked, this,
-        [this]()
-        {
-            std::string error;
-            if (!controls.startNew || !controls.startNew(error))
-            {
-                SetStatus(QString::fromStdString(error.empty() ? std::string("A new chat could not be started.") : error));
-                return;
-            }
-            search->clear();
-            Refresh();
-            SetStatus(QString::fromStdString(error));
-        });
-    connect(rename, &QPushButton::clicked, this, [this]() { RenameSelected(); });
-    connect(remove, &QPushButton::clicked, this, [this]() { DeleteSelected(); });
-    UpdateButtons();
+    connect(list, &QListWidget::customContextMenuRequested, this, [this](const QPoint& position) { ShowRowMenu(position); });
+    connect(newChat, &QPushButton::clicked, this, [this]() { StartNewChat(); });
+    connect(listToggle, &QPushButton::toggled, this, [this](const bool shown) { SetListVisible(shown); });
+    connect(rename, &QPushButton::clicked, this, [this]() { RenameChat(CurrentId()); });
+    connect(remove, &QPushButton::clicked, this, [this]() { DeleteChat(CurrentId()); });
+
+    auto* renameKey = new QShortcut(QKeySequence(Qt::Key_F2), list);
+    renameKey->setContext(Qt::WidgetShortcut);
+    connect(renameKey, &QShortcut::activated, this, [this]() { RenameChat(CurrentId()); });
+    auto* deleteKey = new QShortcut(QKeySequence(QKeySequence::Delete), list);
+    deleteKey->setContext(Qt::WidgetShortcut);
+    connect(deleteKey, &QShortcut::activated, this, [this]() { DeleteChat(CurrentId()); });
 }
 
 void ChatSessionsPanel::Refresh()
 {
     const std::string selected = SelectedId();
     std::string error;
-    const std::vector<revia::memory::ArchivedSession> sessions =
-        controls.list ? controls.list(search->text().trimmed().toStdString(), error) : std::vector<revia::memory::ArchivedSession>{};
-    const std::string current = controls.current ? controls.current() : std::string();
+    sessions = controls.list ? controls.list(search->text().trimmed().toStdString(), error) : std::vector<revia::memory::ArchivedSession>{};
+    loadFailed = !error.empty();
+    const std::string current = CurrentId();
     list->clear();
     for (const auto& session : sessions)
     {
-        auto* item = new QListWidgetItem(SessionLabel(session, session.id == current), list);
+        const bool isCurrent = session.id == current;
+        auto* item = new QListWidgetItem(SessionLabel(session, isCurrent), list);
         item->setData(Qt::UserRole, QString::fromStdString(session.id));
-        item->setToolTip(QString::fromStdString(session.opening).left(300));
+        item->setToolTip(SessionDetail(session, isCurrent));
+        if (isCurrent)
+        {
+            // Marked, not selected: the selection is the owner's (Export acts on it).
+            QFont font = item->font();
+            font.setWeight(QFont::DemiBold);
+            item->setFont(font);
+            item->setBackground(revia::desktop::theme::Current().sidebarSelected);
+        }
         if (session.id == selected)
             item->setSelected(true);
     }
@@ -150,10 +182,11 @@ void ChatSessionsPanel::Refresh()
         SetStatus(QString::fromStdString(error));
     else if (sessions.empty() && !search->text().trimmed().isEmpty())
         SetStatus(QStringLiteral("No chat matches that search."));
+    else if (sessions.empty())
+        SetStatus(QStringLiteral("No saved chats yet."));
     else
         SetStatus(QString());
     newChat->setEnabled(controls.startNew != nullptr);
-    UpdateButtons();
 }
 
 std::string ChatSessionsPanel::SelectedId() const
@@ -162,27 +195,75 @@ std::string ChatSessionsPanel::SelectedId() const
     return selected.isEmpty() ? std::string() : selected.front()->data(Qt::UserRole).toString().toStdString();
 }
 
+std::string ChatSessionsPanel::CurrentId() const
+{
+    return controls.current ? controls.current() : std::string();
+}
+
 void ChatSessionsPanel::SetStatus(const QString& text)
 {
     status->setText(text);
     status->setVisible(!text.isEmpty());
 }
 
-void ChatSessionsPanel::UpdateButtons()
+void ChatSessionsPanel::StartNewChat()
 {
-    const bool chosen = !SelectedId().empty();
-    for (QPushButton* button : {rename, remove, exportChat})
-        button->setEnabled(chosen);
+    std::string error;
+    if (!controls.startNew || !controls.startNew(error))
+    {
+        SetStatus(QString::fromStdString(error.empty() ? std::string("A new chat could not be started.") : error));
+        return;
+    }
+    search->clear();
+    Refresh();
+    if (!error.empty())
+        SetStatus(QString::fromStdString(error));
 }
 
-void ChatSessionsPanel::RenameSelected()
+void ChatSessionsPanel::SetListVisible(const bool visible)
 {
-    const std::string id = SelectedId();
+    list->setVisible(visible);
+    if (listToggle->isChecked() != visible)
+        listToggle->setChecked(visible);
+    revia::desktop::theme::BindIcon(listToggle, visible ? "chevron-down" : "chevron-right", 14);
+}
+
+QString ChatSessionsPanel::TitleFor(const std::string& id) const
+{
+    const auto found = std::find_if(sessions.begin(), sessions.end(), [&id](const auto& session) { return session.id == id; });
+    return found == sessions.end() ? QString() : SessionLabel(*found, id == CurrentId());
+}
+
+QString ChatSessionsPanel::CurrentTitle() const
+{
+    const std::string current = CurrentId();
+    const QString title = current.empty() ? QString() : TitleFor(current);
+    return title.isEmpty() ? QStringLiteral("New chat") : title;
+}
+
+void ChatSessionsPanel::ShowRowMenu(const QPoint& position)
+{
+    QListWidgetItem* item = list->itemAt(position);
+    if (item == nullptr)
+        return;
+    // A right-click acts on the row clicked, whichever chat is current.
+    const std::string id = item->data(Qt::UserRole).toString().toStdString();
+    QMenu menu(this);
+    revia::desktop::theme::PolishMenu(&menu);
+    connect(menu.addAction(QStringLiteral("Rename")), &QAction::triggered, this, [this, id]() { RenameChat(id); });
+    connect(menu.addAction(QStringLiteral("Export as Markdown")), &QAction::triggered, this, [this, id]() { ExportChat(id, false); });
+    connect(menu.addAction(QStringLiteral("Export as JSON")), &QAction::triggered, this, [this, id]() { ExportChat(id, true); });
+    menu.addSeparator();
+    connect(menu.addAction(QStringLiteral("Delete")), &QAction::triggered, this, [this, id]() { DeleteChat(id); });
+    menu.exec(list->viewport()->mapToGlobal(position));
+}
+
+void ChatSessionsPanel::RenameChat(const std::string& id)
+{
     if (id.empty() || !controls.rename)
         return;
     bool accepted = false;
-    const QString title = QInputDialog::getText(this, QStringLiteral("Rename chat"), QStringLiteral("Name"), QLineEdit::Normal,
-        list->selectedItems().front()->text().section(QLatin1Char('\n'), 0, 0), &accepted);
+    const QString title = QInputDialog::getText(this, QStringLiteral("Rename chat"), QStringLiteral("Name"), QLineEdit::Normal, TitleFor(id), &accepted);
     if (!accepted)
         return;
     std::string error;
@@ -194,15 +275,14 @@ void ChatSessionsPanel::RenameSelected()
     Refresh();
 }
 
-void ChatSessionsPanel::DeleteSelected()
+void ChatSessionsPanel::DeleteChat(const std::string& id)
 {
-    const std::string id = SelectedId();
     if (id.empty() || !controls.remove)
         return;
-    const bool current = controls.current && controls.current() == id;
-    const QString question = current ? QStringLiteral("Delete the chat in progress? Its turns leave the archive and Revia's working "
-                                                      "context. What she remembers long term is not touched.")
-                                     : QStringLiteral("Delete this chat from the archive? What Revia remembers long term is not touched.");
+    const bool current = id == CurrentId();
+    const QString question = current ? QStringLiteral("Delete the chat in progress? Its turns leave the archive and the working "
+                                                      "context. Long-term memory is not touched.")
+                                     : QStringLiteral("Delete this chat from the archive? Long-term memory is not touched.");
     if (QMessageBox::question(this, QStringLiteral("Delete chat"), question, QMessageBox::Yes | QMessageBox::No, QMessageBox::No) !=
         QMessageBox::Yes)
         return;
@@ -213,12 +293,13 @@ void ChatSessionsPanel::DeleteSelected()
         return;
     }
     Refresh();
-    SetStatus(QString::fromStdString(error));
+    if (!error.empty())
+        SetStatus(QString::fromStdString(error));
 }
 
-void ChatSessionsPanel::ChooseExport(const bool json)
+void ChatSessionsPanel::ExportChat(const std::string& id, const bool json)
 {
-    if (SelectedId().empty())
+    if (id.empty())
         return;
     const QString suffix = json ? QStringLiteral("json") : QStringLiteral("md");
     const QString path = QFileDialog::getSaveFileName(this, QStringLiteral("Export chat"),
@@ -227,12 +308,16 @@ void ChatSessionsPanel::ChooseExport(const bool json)
     if (path.isEmpty())
         return;
     QString error;
-    SetStatus(ExportSelected(path, json, error) ? QStringLiteral("Exported to ") + QDir::toNativeSeparators(path) : error);
+    SetStatus(WriteExport(id, path, json, error) ? QStringLiteral("Exported to ") + QDir::toNativeSeparators(path) : error);
 }
 
 bool ChatSessionsPanel::ExportSelected(const QString& path, const bool json, QString& error)
 {
-    const std::string id = SelectedId();
+    return WriteExport(SelectedId(), path, json, error);
+}
+
+bool ChatSessionsPanel::WriteExport(const std::string& id, const QString& path, const bool json, QString& error)
+{
     std::string text;
     std::string failure;
     if (id.empty() || !controls.exportText || !controls.exportText(id, json, text, failure))
