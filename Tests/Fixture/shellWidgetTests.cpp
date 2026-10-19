@@ -188,8 +188,13 @@ void TestPalette(Results& results)
     host.show();
     auto* before = new QLineEdit(&host);
     before->setObjectName("testFocusBefore");
+    before->show();
     before->setFocus();
     auto* palette = new CommandPalette(&host);
+    // After the palette in the tab chain, so hiding the palette alone would focus this one.
+    auto* after = new QLineEdit(&host);
+    after->setObjectName("testFocusAfter");
+    after->show();
     QStringList ran;
     bool locked = false;
     palette->SetAvailable([&locked]() { return !locked; });
@@ -241,6 +246,7 @@ void TestPalette(Results& results)
     if (!input || !list || !card || !empty)
         return;
 
+    Settle(); // the host active, with focus in testFocusBefore
     palette->Open();
     Settle();
     results.Expect(palette->IsOpen() && palette->geometry() == host.rect(), "the open palette covers its host");
@@ -269,6 +275,8 @@ void TestPalette(Results& results)
     results.Expect(palette->IsOpen() && palette->CurrentId() == "theme:system", "Tab moves within the palette instead of leaving it");
     SendKey(input, Qt::Key_Escape);
     results.Expect(!palette->IsOpen() && ran.isEmpty(), "Esc closes without running anything");
+    Settle();
+    results.Expect(before->hasFocus(), "closing the palette gives focus back to where it was");
 
     palette->Open("mem");
     Settle();
@@ -338,9 +346,30 @@ void TestPalette(Results& results)
     }
     palette->Open();
     Settle();
+    // The footer takes no clicks, so this one reaches the scrim from inside the card.
+    Press(palette->findChild<QLabel*>("commandPaletteFooter"), QPoint(4, 4));
+    Settle();
+    results.Expect(palette->IsOpen(), "a click inside the card leaves the palette open");
     Press(palette, QPoint(4, 4));
     Settle();
     results.Expect(!palette->IsOpen(), "a click on the scrim closes the palette");
+
+    // The chat source may answer with more than fits; the palette lists eight.
+    palette->SetDynamicSource(
+        [&entry](const QString&)
+        {
+            std::vector<CommandEntry> many;
+            for (int index = 1; index <= 12; ++index)
+                many.push_back(entry(QStringLiteral("chat:%1").arg(index), QStringLiteral("Chat %1").arg(index), {}, "Chat"));
+            return many;
+        });
+    palette->OpenChats();
+    Settle();
+    int chatRows = 0;
+    for (int row = 0; row < list->count(); ++row)
+        chatRows += list->item(row)->text().startsWith("Chat ") ? 1 : 0;
+    results.Expect(chatRows == 8, "at most eight chats are listed");
+    palette->Close();
     host.resize(500, 400);
     palette->Open();
     Settle();
@@ -781,6 +810,21 @@ void TestSidebar(Results& results)
         return true;
     };
     results.Expect(everyButtonNamed(), "every visible sidebar button has an accessible name and a tooltip (expanded)");
+    const auto sized = [sidebar](const std::vector<const char*>& buttons, const int side)
+    {
+        return std::all_of(buttons.begin(), buttons.end(),
+            [sidebar, side](const char* button) { return sidebar->findChild<QToolButton*>(button)->size() == QSize(side, side); });
+    };
+    results.Expect(sized({"sidebarToggle", "sidebarSettingsButton"}, 32), "expanded, the header and footer icon buttons are 32x32");
+    const auto tips = [sidebar](const char* button, const char* keys)
+    { return sidebar->findChild<QToolButton*>(button)->toolTip().contains(QString::fromLatin1(keys)); };
+    results.Expect(tips("sidebarToggle", "Ctrl+B") && tips("sidebarRailNewChat", "Ctrl+N") && tips("sidebarRailSearch", "Ctrl+F") &&
+                       tips("sidebarSettingsButton", "Ctrl+,"),
+        "the sidebar's tooltips name their shortcuts");
+    const QList<QToolButton*> toolButtons = sidebar->findChildren<QToolButton*>();
+    results.Expect(std::all_of(toolButtons.begin(), toolButtons.end(),
+                       [](const QToolButton* button) { return button->focusPolicy() == Qt::TabFocus; }),
+        "sidebar buttons take focus from the keyboard only");
     Capture(&window, "shell-sidebar-expanded.png");
 
     const int chatWidth = chat->width();
@@ -794,6 +838,11 @@ void TestSidebar(Results& results)
                        sidebar->findChild<QToolButton*>("sidebarToggle")->isVisible(),
         "the rail shows its buttons and keeps the toggle");
     results.Expect(everyButtonNamed(), "every visible sidebar button has an accessible name and a tooltip (rail)");
+    results.Expect(sized({"sidebarToggle", "sidebarRailNewChat", "sidebarRailSearch", "sidebarRailPanels", "sidebarSettingsButton",
+                             "sidebarMenuButton"},
+                       40),
+        "the rail's buttons are 40x40");
+    results.Expect(tips("sidebarToggle", "Ctrl+B"), "the rail's toggle names its shortcut");
     Capture(&window, "shell-sidebar-rail.png");
     sidebar->findChild<QToolButton*>("sidebarRailNewChat")->click();
     sidebar->findChild<QToolButton*>("sidebarRailSearch")->click();
@@ -823,9 +872,12 @@ void TestSidebar(Results& results)
     results.Expect(!dot->isVisible(), "the attention dot hides while Activity is clear");
     sidebar->SetAttention(true);
     results.Expect(dot->isVisible() && dot->property("attention").toBool(), "the attention dot shows warnings");
+    Settle(); // the footer's layout after the mode changes above
     sidebar->PopupMenu();
     Settle();
-    results.Expect(menu.isVisible(), "the menu button opens the menu");
+    const QPoint menuButtonTop = sidebar->findChild<QToolButton*>("sidebarMenuButton")->mapToGlobal(QPoint(0, 0));
+    results.Expect(menu.isVisible() && menu.geometry().bottom() < menuButtonTop.y() && menu.x() == menuButtonTop.x(),
+        "the menu button opens the menu above itself");
     menu.hide();
 
     // Without a panels callback the rail button opens the menu beside itself, the anchor action
