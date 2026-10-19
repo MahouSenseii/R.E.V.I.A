@@ -1,6 +1,7 @@
 #include "settingsCatalog.h"
 
 #include <algorithm>
+#include <utility>
 #include <cctype>
 
 namespace revia::desktop
@@ -347,7 +348,7 @@ std::vector<SettingDescriptor> BuildCatalog()
     rows.push_back({.key = "capabilities.internet.enabled",
         .objectName = "internetCheck",
         .section = S::Internet,
-        .group = "Internet & research",
+        .group = "Internet and research",
         .label = "Internet lookups",
         .description = "Let {name} search the web, read-only and rate-limited, through a fixed set of public sources.",
         .warning = "Your questions are sent to the configured search providers.",
@@ -360,7 +361,7 @@ std::vector<SettingDescriptor> BuildCatalog()
     rows.push_back({.key = "capabilities.internet.automaticLookup",
         .objectName = "automaticLookupCheck",
         .section = S::Internet,
-        .group = "Internet & research",
+        .group = "Internet and research",
         .label = "Look things up automatically",
         .description = "Search for facts without being asked. Your questions are sent to the search provider.",
         .store = Store::Capability,
@@ -373,7 +374,7 @@ std::vector<SettingDescriptor> BuildCatalog()
     rows.push_back({.key = "capabilities.internet.visibleBrowser",
         .objectName = "visibleBrowserCheck",
         .section = S::Internet,
-        .group = "Internet & research",
+        .group = "Internet and research",
         .label = "Search in a visible browser",
         .description = "Run searches in a separate Edge or Chrome window you can watch.",
         .warning = "A dedicated browser profile opens public pages; your own cookies and passwords are never used.",
@@ -386,7 +387,7 @@ std::vector<SettingDescriptor> BuildCatalog()
     rows.push_back({.key = "capabilities.internet.autonomousResearch",
         .objectName = "autonomousResearchCheck",
         .section = S::Internet,
-        .group = "Internet & research",
+        .group = "Internet and research",
         .label = "Research without being asked",
         .description = "Curiosity may start a bounded web search with no request from you.",
         .warning = "Searches can start from recent conversation or feelings, without a new message from you.",
@@ -676,7 +677,7 @@ std::vector<SettingDescriptor> BuildCatalog()
     rows.push_back({.key = "capabilities.desktopControl.pointer",
         .objectName = "pointerCheck",
         .section = S::Permissions,
-        .group = "Pointer & keyboard",
+        .group = "Pointer and keyboard",
         .label = "Mouse control",
         .description = "Move and click the pointer, only inside apps you approve.",
         .warning = "Clicks inside approved apps are indistinguishable from yours.",
@@ -689,7 +690,7 @@ std::vector<SettingDescriptor> BuildCatalog()
     rows.push_back({.key = "capabilities.desktopControl.keyboard",
         .objectName = "keyboardCheck",
         .section = S::Permissions,
-        .group = "Pointer & keyboard",
+        .group = "Pointer and keyboard",
         .label = "Keyboard control",
         .description = "Type and press keys, only inside apps you approve.",
         .warning = "Typing inside approved apps is indistinguishable from yours.",
@@ -702,7 +703,7 @@ std::vector<SettingDescriptor> BuildCatalog()
     rows.push_back({.key = "capabilities.desktopControl.applicationLaunch",
         .objectName = "launchCheck",
         .section = S::Permissions,
-        .group = "Pointer & keyboard",
+        .group = "Pointer and keyboard",
         .label = "Open approved apps",
         .description = "Start apps from your approved list.",
         .warning = "Approved apps can be started without you opening them.",
@@ -715,7 +716,7 @@ std::vector<SettingDescriptor> BuildCatalog()
     rows.push_back({.key = "capabilities.desktopControl.visualTargeting",
         .objectName = "visualTargetCheck",
         .section = S::Permissions,
-        .group = "Pointer & keyboard",
+        .group = "Pointer and keyboard",
         .label = "Click what {name} sees",
         .description = "Click things {name} can see in games and custom screens that have no normal buttons. Needs Mouse "
                        "control.",
@@ -730,7 +731,7 @@ std::vector<SettingDescriptor> BuildCatalog()
     rows.push_back({.key = "capabilities.desktopControl.rawCoordinates",
         .objectName = "rawCoordinateCheck",
         .section = S::Permissions,
-        .group = "Pointer & keyboard",
+        .group = "Pointer and keyboard",
         .label = "Click chosen screen positions",
         .description = "Click screen positions {name} picks instead of checked buttons. Needs Mouse control.",
         .warning = "A click can land on whatever is at that point, with no control behind it to check.",
@@ -1236,6 +1237,57 @@ SettingDescriptor ServerRow(const SettingDescriptor& serverTemplate, const std::
 QString WithCompanionName(QString text, const QString& companionName)
 {
     return text.replace(QStringLiteral("{name}"), companionName.isEmpty() ? QStringLiteral("Revia") : companionName);
+}
+
+QString ConfirmQuestion(const SettingDescriptor& descriptor, const bool turningOn)
+{
+    // Labels are verb phrases and names ("Let {name} see my screen", "Mouse control"), so
+    // "Turn on <label>?" read as a broken question; each risky row asks its own.
+    static const std::vector<std::pair<std::string, const char*>> questions = {
+        {"speechRecognition.requireWakeWord", "Stop requiring the wake word?"},
+        {"vision.enabled", "Let {name} see your screen?"},
+        {"vision.continuousAwareness", "Let {name} keep track of your screen?"},
+        {"capabilities.internet.enabled", "Let {name} look things up on the internet?"},
+        {"capabilities.internet.visibleBrowser", "Search in a visible browser?"},
+        {"capabilities.internet.autonomousResearch", "Let {name} research without being asked?"},
+        {"capabilities.browser.interact", "Let {name} click and fill in forms?"},
+        {"capabilities.browser.allowTaskInteraction", "Let tasks use the browser?"},
+        {"capabilities.browser.allowLoopback", "Allow local test sites?"},
+        {"llm.cloud.enabled", "Allow the cloud model?"},
+        {"image.offline", "Let picture generation use the internet?"},
+        {"capabilities.camera.enabled", "Let {name} take camera snapshots?"},
+        {"capabilities.camera.autonomousCapture", "Let {name} decide when to look?"},
+        {"capabilities.desktopControl.pointer", "Let {name} control the mouse?"},
+        {"capabilities.desktopControl.keyboard", "Let {name} control the keyboard?"},
+        {"capabilities.desktopControl.applicationLaunch", "Let {name} open approved apps?"},
+        {"capabilities.desktopControl.visualTargeting", "Allow clicking what {name} sees?"},
+        {"capabilities.desktopControl.rawCoordinates", "Allow clicking chosen screen positions?"},
+        {"capabilities.desktopControl.wholeDesktop", "Allow the whole desktop?"},
+        {"capabilities.desktopControl.allowCommandSurfaces", "Let {name} type into terminals?"},
+        {"capabilities.desktopControl.autonomous", "Allow unprompted desktop work?"},
+        {"capabilities.process.enabled", "Let {name} run approved programs?"},
+        {"capabilities.process.allowCommandInterpreters", "Allow shells and scripts?"},
+        {"capabilities.process.allowTaskExecution", "Let tasks run programs?"},
+        {"capabilities.guest.execute", "Let {name} run programs in the workspace?"},
+        {"capabilities.guest.allowTaskExecution", "Let tasks use the workspace?"},
+        {"localApi.trustedPrivate", "Trust the local API as you?"},
+        {"improvement.verify", "Build and test suggested improvements?"},
+    };
+    const bool asksWhenOn = descriptor.confirm != ConfirmWhen::TurningOff;
+    if (turningOn == asksWhenOn)
+    {
+        for (const auto& [key, question] : questions)
+        {
+            if (key == descriptor.key)
+                return QString::fromUtf8(question);
+        }
+        // A tool server's row: its label already names the server ("Connect notes").
+        if (descriptor.key.starts_with("mcp.servers[") && descriptor.key.ends_with("].enabled"))
+            return descriptor.label + QLatin1Char('?');
+        if (descriptor.key.starts_with("mcp.servers[") && descriptor.key.ends_with("].requireConfirmation"))
+            return QStringLiteral("Stop asking before each tool call?");
+    }
+    return (turningOn ? QStringLiteral("Turn on \u201C%1\u201D?") : QStringLiteral("Turn off \u201C%1\u201D?")).arg(descriptor.label);
 }
 
 QString DescriptionWhenOff(const SettingDescriptor& descriptor)

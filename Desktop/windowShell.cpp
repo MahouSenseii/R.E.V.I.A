@@ -125,6 +125,7 @@ void AskBeforeRiskyChoice(QWidget* parent, const QString& question, const QStrin
         if (box->clickedButton() == accept)
             accepted();
     });
+    theme::PolishQuestion(box);
     box->open();
 }
 
@@ -615,7 +616,8 @@ void ReviaWindow::BuildShell()
     BuildPalette();
     BuildShortcuts();
     navigationSidebar->SetMenu(sidebarMenu);
-    navigationSidebar->SetPanelsAnchor(panelHost->Action(PanelId::Canvas));
+    // The rail's panels button opens the same menu with Panels under the pointer.
+    navigationSidebar->SetPanelsAnchor(sidebarPanelsMenu->menuAction());
 
     // The .ui's central widget and its parking tab widget go now that every page has moved out.
     // takeCentralWidget, not setCentralWidget alone, which would only delete it later and leave
@@ -790,8 +792,9 @@ void ReviaWindow::BuildChatColumn(QWidget* parent)
             jumpToLatest->hide();
         });
 
+    // Over the whole composer area, strip included, so a toast never lands on the strip's text.
     toast = new desktop::ToastOverlay(chatColumn);
-    toast->SetAnchor(composerShadow);
+    toast->SetAnchor(composerArea);
     toast->Follow(statusBar());
 
     navigationLockOverlay = new QLabel(chatColumn);
@@ -821,12 +824,28 @@ void ReviaWindow::BuildChatColumn(QWidget* parent)
     auto* openActivity = new QPushButton(QStringLiteral("Open Activity"), statusPopover);
     openActivity->setObjectName("statusPopoverActivity");
     openActivity->setAutoDefault(false);
-    chips->addWidget(openActivity, 3, 0, 1, 2, Qt::AlignLeft);
+    // The conversation's timing, quality and evidence open in the strip above the composer.
+    auto* conversationDetails = new QPushButton(QStringLiteral("Conversation details"), statusPopover);
+    conversationDetails->setObjectName("statusPopoverDetails");
+    conversationDetails->setAutoDefault(false);
+    auto* popoverButtons = new QHBoxLayout();
+    popoverButtons->setSpacing(8);
+    popoverButtons->addWidget(openActivity);
+    popoverButtons->addWidget(conversationDetails);
+    popoverButtons->addStretch(1);
+    chips->addLayout(popoverButtons, 3, 0, 1, 2);
     connect(openActivity, &QPushButton::clicked, this,
         [this]()
         {
             statusPopover->hide();
             OpenPanel(PanelId::Activity);
+        });
+    connect(conversationDetails, &QPushButton::clicked, this,
+        [this]()
+        {
+            statusPopover->hide();
+            if (auto* details = conversationStatus->findChild<QPushButton*>("conversationDetailsButton"))
+                details->setChecked(true);
         });
 }
 
@@ -917,7 +936,8 @@ void ReviaWindow::BuildComposer()
 
 void ReviaWindow::BuildMenus()
 {
-    // The sidebar's footer menu: the companion, every panel by group, then the app.
+    // The sidebar's footer menu: the companion, a Panels submenu with every panel by group, then the
+    // app. Fifteen panels inline made a menu taller than a laptop screen at 150%.
     sidebarMenu = new QMenu(this);
     sidebarMenu->setObjectName("sidebarMenu");
     theme::PolishMenu(sidebarMenu);
@@ -944,22 +964,26 @@ void ReviaWindow::BuildMenus()
             }
             connect(switchCompanionMenu->addAction(QStringLiteral("New companion...")), &QAction::triggered, this, [this]() { CreateCompanion(); });
         });
+    sidebarMenu->addSeparator();
+    sidebarPanelsMenu = sidebarMenu->addMenu(QStringLiteral("Panels"));
+    sidebarPanelsMenu->setObjectName("sidebarPanelsMenu");
+    theme::BindIcon(sidebarPanelsMenu->menuAction(), "grid");
+    theme::PolishMenu(sidebarPanelsMenu);
     for (const char* group : {"Workspace", "Companion", "Studio", "Runtime"})
     {
         // A heading the style cannot drop: Fusion with a stylesheet draws addSection() as a bare
         // separator, which left fifteen panels in one unlabelled list.
-        sidebarMenu->addSeparator();
         auto* heading = new QLabel(QString::fromLatin1(group));
         heading->setObjectName("sidebarMenuSection");
-        auto* section = new QWidgetAction(sidebarMenu);
+        auto* section = new QWidgetAction(sidebarPanelsMenu);
         section->setText(QString::fromLatin1(group));
         section->setDefaultWidget(heading);
         section->setEnabled(false);
-        sidebarMenu->addAction(section);
+        sidebarPanelsMenu->addAction(section);
         for (const desktop::PanelSpec& spec : desktop::PanelCatalog())
         {
             if (QLatin1String(spec.group) == QLatin1String(group))
-                sidebarMenu->addAction(panelHost->Action(spec.id));
+                sidebarPanelsMenu->addAction(panelHost->Action(spec.id));
         }
     }
     sidebarMenu->addSeparator();
@@ -1558,11 +1582,13 @@ void ReviaWindow::UpdateConversationStrip()
     if (conversationStatus == nullptr)
         return;
     using revia::runtime::RuntimeState;
-    const bool working = lastRuntimeState != RuntimeState::Idle && lastRuntimeState != RuntimeState::Offline;
     const auto* details = conversationStatus->findChild<QPushButton*>("conversationDetailsButton");
     const auto* quality = conversationStatus->findChild<QLabel*>("conversationQualityDiagnostic");
-    // The labels keep updating while it is hidden; only the strip itself comes and goes.
-    conversationStatus->setVisible(working || (details != nullptr && details->isChecked()) ||
+    // Only while its details are open (from the status pill's popover) or it flags the latest
+    // reply: the header's pill and the transcript already say what is running, so a strip that
+    // followed every state repeated them (an amendment to the design's section 2.8). The labels
+    // keep updating while it is hidden; only the strip itself comes and goes.
+    conversationStatus->setVisible((details != nullptr && details->isChecked()) ||
                                    (quality != nullptr && !quality->text().trimmed().isEmpty()));
 }
 

@@ -9,8 +9,11 @@
 #include <QFile>
 #include <QFocusEvent>
 #include <QFont>
+#include <QHeaderView>
 #include <QLabel>
+#include <QLayout>
 #include <QMenu>
+#include <QMessageBox>
 #include <QPainter>
 #include <QPalette>
 #include <QPixmap>
@@ -682,7 +685,8 @@ protected:
 
 // A click focuses an item view as well as the keyboard does, and a ring after every click on a
 // list is noise, so revia.qss draws an item view's ring only while kbdFocus is set. One filter on
-// the application keeps that property for every item view, whoever built it.
+// the application keeps that property for every item view, whoever built it. It also starts every
+// table's column headings at the left, over the text they head, rather than centred.
 class KeyboardFocusTracker final : public QObject
 {
 public:
@@ -691,6 +695,15 @@ public:
 protected:
     bool eventFilter(QObject* watched, QEvent* event) override
     {
+        if (event->type() == QEvent::Polish)
+        {
+            if (auto* const header = qobject_cast<QHeaderView*>(watched);
+                header != nullptr && header->orientation() == Qt::Horizontal && !header->property("reviaHeaderAligned").toBool())
+            {
+                header->setProperty("reviaHeaderAligned", true);
+                header->setDefaultAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+            }
+        }
         if (event->type() == QEvent::FocusIn || event->type() == QEvent::FocusOut)
         {
             if (auto* const view = qobject_cast<QAbstractItemView*>(watched))
@@ -1071,6 +1084,12 @@ void PolishMenu(QMenu* const menu)
             setter(reinterpret_cast<HWND>(menu->winId()), 33 /* DWMWA_WINDOW_CORNER_PREFERENCE */, &roundSmall, sizeof(roundSmall));
         });
 #endif
+}
+
+void PolishQuestion(QMessageBox* const box)
+{
+    if (box != nullptr && box->layout() != nullptr)
+        box->layout()->setContentsMargins(20, 20, 20, 16);
 }
 
 void ApplyNativeFrame(QWidget* const topLevel)

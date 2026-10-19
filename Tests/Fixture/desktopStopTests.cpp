@@ -481,8 +481,8 @@ struct ReviaWindowStopTests
         for (const revia::desktop::PanelSpec& spec : revia::desktop::PanelCatalog())
         {
             QAction* action = window.panelHost->Action(spec.id);
-            expect(action != nullptr && window.sidebarMenu->actions().contains(action),
-                QString("the sidebar menu must list the %1 panel").arg(spec.title));
+            expect(action != nullptr && window.sidebarPanelsMenu->actions().contains(action),
+                QString("the sidebar menu's Panels submenu must list the %1 panel").arg(spec.title));
             if (!action)
                 continue;
             action->trigger();
@@ -1202,6 +1202,34 @@ struct ReviaWindowStopTests
             window.RenderChat();
         }
 
+        // A turn reads in order: the speaker line, the work, the thought process, the answer, what
+        // was remembered, and last the actions that close it.
+        {
+            window.chatEntries.clear();
+            window.ResetConversationPresentation();
+            window.AppendChat("You", "Order fixture question", true);
+            window.AppendWorkEntry(ReviaWindow::EntryKind::InvestigationChecking, "Reading the order fixture.", QString(), 0, 1);
+            window.AppendChat(window.DisplayName(), "Order fixture answer.", false, "Order fixture reasoning.");
+            RuntimeEvent memory;
+            memory.kind = RuntimeEventKind::Memory;
+            memory.message = "Remembered: the order fixture.";
+            window.HandleRuntimeEvent(memory);
+            window.RenderChat();
+            const QString shown = window.chatHistory->toPlainText();
+            const qsizetype speaker = shown.indexOf(QChar(0x25CF));
+            const qsizetype work = shown.indexOf("is checking");
+            const qsizetype thought = shown.indexOf("Thought process");
+            const qsizetype answer = shown.indexOf("Order fixture answer.");
+            const qsizetype remembered = shown.indexOf("Remembered: the order fixture.");
+            const qsizetype copy = shown.lastIndexOf("Copy");
+            expect(speaker >= 0 && speaker < work && work < thought && thought < answer && answer < remembered && remembered < copy &&
+                       shown.count(QChar(0x25CF)) == 1,
+                "a turn must read speaker, work, thought process, answer, memory, then Copy");
+            window.chatEntries.clear();
+            window.ResetConversationPresentation();
+            window.RenderChat();
+        }
+
         // A failed turn is one row after the turn, with Retry; no chat entry is added for it.
         window.chatEntries.clear();
         window.ResetConversationPresentation();
@@ -1321,9 +1349,10 @@ struct ReviaWindowStopTests
         expect(window.chatHistory->document()->rootFrame()->frameFormat().topMargin() > 24,
             "the empty chat's greeting must sit a third of the way down, not under the header");
         expect(window.statePill->height() == 28, "the state pill must be 28px tall so its ends draw round");
-        // The sidebar menu names its groups.
+        // The sidebar menu keeps the panels in a submenu that names their groups, so the menu itself
+        // stays short enough for a laptop screen.
         QStringList headings;
-        for (QAction* action : window.sidebarMenu->actions())
+        for (QAction* action : window.sidebarPanelsMenu->actions())
         {
             if (auto* section = dynamic_cast<QWidgetAction*>(action);
                 section != nullptr && section->defaultWidget() != nullptr && section->defaultWidget()->objectName() == "sidebarMenuSection")
@@ -1331,6 +1360,8 @@ struct ReviaWindowStopTests
         }
         expect(headings == QStringList({"Workspace", "Companion", "Studio", "Runtime"}),
             "the sidebar menu must head its panel groups with Workspace, Companion, Studio and Runtime");
+        expect(window.sidebarMenu->actions().size() <= 14 && window.sidebarMenu->sizeHint().height() < 520,
+            "the sidebar menu must stay short enough to open above its button on a laptop screen");
 
         if (const QString renderDirectory = qEnvironmentVariable("REVIA_UI_RENDER_DIR"); !renderDirectory.isEmpty())
             expect(window.grab().save(QDir(renderDirectory).filePath("shell-1040x720.png")), "the shell must have a fresh Qt capture");

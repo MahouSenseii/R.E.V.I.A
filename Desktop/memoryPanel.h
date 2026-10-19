@@ -37,6 +37,7 @@ class MemoryPanel final : public QWidget
     revia::runtime::ReviaSession& session;
 
     QLabel* statusLabel = nullptr;
+    QLabel* emptyLabel = nullptr;
     QLineEdit* searchInput = nullptr;
     QPushButton* refreshButton = nullptr;
     QCheckBox* highImportanceOnly = nullptr;

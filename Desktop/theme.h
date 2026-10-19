@@ -13,6 +13,7 @@ class QAction;
 class QFocusEvent;
 class QLabel;
 class QMenu;
+class QMessageBox;
 class QWidget;
 
 // Light and dark appearance for the desktop: the colour tokens, the stylesheet built from them,
@@ -120,6 +121,10 @@ void BindSvgLabel(QLabel* label, const QString& svgPaths, Role role, int size);
 
 // Native rounding and shadow for menus on Windows 11 (no-op elsewhere).
 void PolishMenu(QMenu* menu);
+// Room around a Settings question (settingConfirmDialog), like a Windows task dialog: 20px
+// margins. The stylesheet sets the question above its consequence. Called last, after the text,
+// icon and buttons, since setting those can lay the box out again.
+void PolishQuestion(QMessageBox* box);
 // Dark or light caption, and on Windows 11 caption, text and border colours, for a top-level window.
 // Under high contrast it hands those colours back to the system.
 void ApplyNativeFrame(QWidget* topLevel);

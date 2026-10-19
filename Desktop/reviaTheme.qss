@@ -352,7 +352,7 @@ QLabel#sidebarAccountName { color: {{text}}; }
 QLabel#sidebarAccountDetail { color: {{textSecondary}}; }
 QLabel#sidebarAttentionDot { background: transparent; }
 QLabel#sidebarAttentionDot[attention="true"] { background: {{warning}}; }
-QMenu#sidebarMenu, QMenu#chatMoreMenu, QMenu#composerAddMenu, QMenu#composerProfileMenu {
+QMenu#sidebarMenu, QMenu#sidebarPanelsMenu, QMenu#chatMoreMenu, QMenu#composerAddMenu, QMenu#composerProfileMenu {
     background: {{surface}};
     border-color: {{borderStrong}};
 }
@@ -425,7 +425,8 @@ QLabel#archivedChatLabel { color: {{text}}; }
 
 QWidget#composerArea, QWidget#composerShadowHost, QWidget#composerToolbar { background: transparent; }
 QFrame#composerCard { background: {{surface}}; border-color: {{borderStrong}}; }
-QFrame#composerCard[focused="true"] { border-color: {{focusRing}}; }
+QFrame#composerCard[focused="true"] { border-color: {{inputBorder}}; }
+QFrame#composerCard[focused="true"][kbdFocus="true"] { border-color: {{focusRing}}; }
 QFrame#composerCard[voice="listening"], QFrame#composerCard[voice="transcribing"] { border-color: {{accent}}; }
 QFrame#composerCard QPlainTextEdit { color: {{text}}; background: transparent; }
 QWidget#composerToolbar QPushButton { color: {{textSecondary}}; background: transparent; border-color: transparent; }
@@ -514,7 +515,7 @@ QListWidget#settingsSections::item:hover { background: {{sidebarHover}}; }
 QListWidget#settingsSections::item:selected { color: {{text}}; background: {{sidebarSelected}}; }
 QLabel#settingsSectionTitle { color: {{text}}; }
 QLabel#settingsSectionIntro { color: {{textSecondary}}; }
-QLabel#settingsGroupTitle { color: {{text}}; }
+QLabel#settingsGroupTitle, QLabel#permGroupTitle { color: {{text}}; }
 QFrame#settingsGroup { background: {{surface}}; border-color: {{border}}; }
 QFrame#settingsDivider { background: {{divider}}; }
 QLabel#settingsRiskyHeader { color: {{danger}}; }
@@ -526,7 +527,8 @@ QFrame[reviaClass="settingRow"][highlight="true"] { background: {{surfaceHover}}
 QLabel#settingTitle { color: {{text}}; }
 QLabel#settingDescription { color: {{textSecondary}}; }
 QLabel#settingBadge { color: {{textSecondary}}; background: {{surfaceAlt}}; }
-QLabel#settingBadge[kind="restart"], QLabel#settingBadge[kind="partial"] { color: {{warning}}; background: {{warningSoft}}; }
+QLabel#settingBadge[kind="restart"], QLabel#settingBadge[kind="partial"] { color: {{textSecondary}}; background: {{surfaceAlt}}; }
+QLabel#settingBadge[pending="true"] { color: {{warning}}; background: {{warningSoft}}; }
 QLabel#settingBadge[kind="global"] { color: {{textSecondary}}; background: {{surfaceAlt}}; }
 QLabel#settingBadge[kind="privacy"], QLabel#settingBadge[kind="autonomy"] { color: {{accent}}; background: {{accentSoft}}; }
 QLabel#settingBadge[kind="danger"] { color: {{danger}}; background: {{dangerSoft}}; }
@@ -535,10 +537,21 @@ QLabel#settingStatus, QLabel#settingStatus[tone="info"] { color: {{textSecondary
 QLabel#settingStatus[tone="success"] { color: {{success}}; }
 QLabel#settingStatus[tone="error"] { color: {{danger}}; }
 QLabel#settingStatus[tone="warning"] { color: {{warning}}; }
+/* A row that cannot be used now reads as such (its status line says why), including a dependent
+   permission whose switch is ON under an OFF parent. */
+QLabel#settingTitle:disabled, QLabel#settingDescription:disabled, QLabel#settingStatus:disabled,
+QFrame#permRow[reachable="false"] QLabel#permLabel, QFrame#permRow[reachable="false"] QLabel#permHelp,
+QFrame#permRow[reachable="false"] QLabel#permRowHelp, QFrame#permRowNested[reachable="false"] QLabel#permLabelNested,
+QFrame#permRowNested[reachable="false"] QLabel#permHelp, QFrame#permRowNested[reachable="false"] QLabel#permRowHelp {
+    color: {{textTertiary}};
+}
 QFrame#settingsRestartBanner { background: {{warningSoft}}; border-color: {{warning/35}}; }
 QFrame#settingsRestartBanner QLabel { color: {{text}}; background: transparent; }
 QLabel#settingsNoResults { color: {{textSecondary}}; }
+QLineEdit#settingsSearch:focus { border-color: {{inputBorder}}; }
+QLineEdit#settingsSearch[kbdFocus="true"]:focus { border-color: {{focusRing}}; }
 QMessageBox#settingConfirmDialog { background: {{background}}; }
+QMessageBox#settingConfirmDialog QLabel#qt_msgbox_informativelabel { color: {{textSecondary}}; }
 QFrame#themeSegment { background: {{surfaceAlt}}; border-color: {{border}}; }
 QPushButton#themeSystem, QPushButton#themeLight, QPushButton#themeDark {
     color: {{textSecondary}};
@@ -585,7 +598,12 @@ QLabel#secondaryText, QLabel#voiceIntro, QLabel#settingsHint { color: {{textSeco
 QLabel#sectionTitle, QLabel#mindHeadline { color: {{text}}; }
 QLabel#voiceStudioStatus { color: {{text}}; background: {{accentSoft}}; border-color: {{accent/30}}; }
 QLabel#profileActiveBanner { color: {{text}}; background: {{accentSoft}}; border-color: {{accent/30}}; }
-QLabel#profileStatus, QLabel#memoryStatus, QLabel#memoryRevisionOutcome, QLabel#answerFeedbackOutcome { color: {{success}}; }
+QLabel#profileStatus, QLabel#memoryRevisionOutcome, QLabel#answerFeedbackOutcome { color: {{success}}; }
+/* What the store holds is a plain fact, not a success; a tone marks the rare line that is one. */
+QLabel#memoryStatus { color: {{textSecondary}}; }
+QLabel#memoryStatus[tone="success"] { color: {{success}}; }
+QLabel#memoryStatus[tone="error"] { color: {{danger}}; }
+QLabel#memoryEmpty { color: {{textTertiary}}; background: transparent; }
 QLabel#profileStatus[error="true"], QLabel#memoryRevisionOutcome[error="true"], QLabel#answerFeedbackOutcome[error="true"] {
     color: {{danger}};
 }

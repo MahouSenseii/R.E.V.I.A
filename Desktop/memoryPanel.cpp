@@ -118,6 +118,16 @@ MemoryPanel::MemoryPanel(revia::runtime::ReviaSession& inputSession, QWidget* pa
     table->setTextElideMode(Qt::ElideRight);
     table->verticalHeader()->setDefaultSectionSize(30);
     layout->addWidget(table, 1);
+    // An empty table says why in its middle, not as a blank box under a status line.
+    emptyLabel = new QLabel(table->viewport());
+    emptyLabel->setObjectName("memoryEmpty");
+    emptyLabel->setAlignment(Qt::AlignCenter);
+    emptyLabel->setWordWrap(true);
+    emptyLabel->setAttribute(Qt::WA_TransparentForMouseEvents, true);
+    auto* emptyLayout = new QVBoxLayout(table->viewport());
+    emptyLayout->setContentsMargins(24, 24, 24, 24);
+    emptyLayout->addWidget(emptyLabel);
+    emptyLabel->hide();
     auto* revisionRow = new QHBoxLayout();
     revisionProvenance = new QLabel(this);
     revisionProvenance->setObjectName("memoryRevisionProvenance");
@@ -222,6 +232,10 @@ void MemoryPanel::Render(const std::vector<memoryEntry>& entries)
         const bool searching = !searchInput->text().trimmed().isEmpty() || highImportanceOnly->isChecked();
         statusLabel->setText(searching ? QStringLiteral("Nothing stored matches that.") : QString::fromStdString(session.MemoryStatus()));
     }
+    // Said once: in the empty table's middle, or on the status line above a filled one.
+    emptyLabel->setText(statusLabel->text());
+    emptyLabel->setVisible(entries.empty());
+    statusLabel->setVisible(!entries.empty() && !statusLabel->text().isEmpty());
     UpdateSelectedRevision();
 }
 

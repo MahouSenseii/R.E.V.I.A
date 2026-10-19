@@ -589,6 +589,14 @@ void CheckDialog(Expect& expect, revia::runtime::ReviaSession& session)
         expect(page->objectName().startsWith("settingsSection_") && page->property(names::kRoleProperty).toString() == "settingsSection",
             "section page " + page->objectName() + " carries its name and role");
     expect(search->hasFocus(), "the search box takes focus when Settings opens");
+    // Focused whenever Settings opens, so it opens with a quiet border; the ring is for the keyboard.
+    expect(!search->property("kbdFocus").toBool(), "the search box opens without the keyboard focus ring");
+    sectionList->setFocus(Qt::OtherFocusReason);
+    search->setFocus(Qt::TabFocusReason);
+    expect(search->hasFocus() && search->property("kbdFocus").toBool(), "Tab into the search box draws the keyboard focus ring");
+    sectionList->setFocus(Qt::MouseFocusReason);
+    search->setFocus(Qt::MouseFocusReason);
+    expect(!search->property("kbdFocus").toBool(), "a click into the search box draws no ring");
     expect(!sectionList->item(0)->icon().isNull() && dialog.findChild<QPushButton*>("themeDark") &&
                !dialog.findChild<QPushButton*>("themeDark")->icon().isNull(),
         "sections and theme choices take their icons from hooks.icon");
@@ -670,6 +678,18 @@ void CheckDialog(Expect& expect, revia::runtime::ReviaSession& session)
         open->click();
     expect(openedPanel == "voice", "Open Voice window opens the Voice panel");
 
+    // Every risky row asks a question of its own, not "Turn on <label>?" built from a label that
+    // is a verb phrase or a name.
+    for (const SettingDescriptor& descriptor : revia::desktop::SettingCatalog())
+    {
+        if (descriptor.confirm == revia::desktop::ConfirmWhen::Never)
+            continue;
+        const QString question = revia::desktop::ConfirmQuestion(descriptor, descriptor.confirm == revia::desktop::ConfirmWhen::TurningOn);
+        expect(question.endsWith('?') && !question.startsWith(QStringLiteral("Turn on \u201C")) &&
+                   !question.startsWith(QStringLiteral("Turn off \u201C")),
+            Q(descriptor.key) + " asks a question of its own: " + question);
+    }
+
     // A risky switch asks first; Cancel is the default and writes nothing.
     auto* trusted = dialog.findChild<QCheckBox*>(QStringLiteral("sw_localApi_trustedPrivate"));
     expect(trusted && trusted->isEnabled() && !trusted->isChecked(), "Trust the local API starts off and reachable");
@@ -681,7 +701,7 @@ void CheckDialog(Expect& expect, revia::runtime::ReviaSession& session)
         expect(box != nullptr, "turning on a risky row opens settingConfirmDialog");
         if (box)
         {
-            expect(box->windowTitle() == "Turn on Trust the local API as me?", "the confirmation names the switch: " + box->windowTitle());
+            expect(box->windowTitle() == "Trust the local API as you?", "the confirmation asks its own question: " + box->windowTitle());
             expect(box->windowTitle() != "Confirm Revia action" && box->windowTitle() != "Approve this action", "reserved titles stay unused");
             expect(box->defaultButton() == box->button(QMessageBox::Cancel), "Cancel is the default button");
             expect(box->text() == box->windowTitle(), "the question is the message itself, not only the caption");
@@ -712,7 +732,7 @@ void CheckDialog(Expect& expect, revia::runtime::ReviaSession& session)
         expect(description && description->text().contains("revia, rivia"), "the wake word row lists the configured wake words");
         wakeWord->click();
         QMessageBox* box = OpenConfirmation(&dialog);
-        expect(box && box->windowTitle() == "Turn off Require the wake word?", "turning off a confirm-off row asks");
+        expect(box && box->windowTitle() == "Stop requiring the wake word?", "turning off a confirm-off row asks");
         if (QAbstractButton* accept = box ? ButtonWithText(box, "Turn off") : nullptr)
             accept->click();
         Settle();
@@ -1398,7 +1418,7 @@ void CheckCapabilityPanel(Expect& expect, revia::runtime::ReviaSession& session)
             return;
         const SettingDescriptor* descriptor = FindSetting(name);
         const QString title = descriptor != nullptr
-                                  ? QStringLiteral("Turn on %1?").arg(WithCompanionName(descriptor->label, Q(session.DisplayName())))
+                                  ? WithCompanionName(revia::desktop::ConfirmQuestion(*descriptor, true), Q(session.DisplayName()))
                                   : QString();
         toggle->click();
         QMessageBox* box = OpenConfirmation(&panel);

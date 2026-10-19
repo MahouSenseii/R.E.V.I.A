@@ -18,9 +18,9 @@ Its caption follows the light or dark scheme. Default size 1180 × 780, minimum 
   Delete act on the highlighted chat while the list has focus (the current chat when no row is
   highlighted).
 - At the bottom, the companion's menu button and Settings. The menu holds the companion
-  switcher, every panel grouped as Workspace, Companion, Studio and Runtime, Stop desktop
-  control (while it is active), Settings, the command palette, the shortcut sheet, Keep
-  Revia on top and Quit Revia.
+  switcher, a Panels submenu with every panel grouped as Workspace, Companion, Studio and
+  Runtime, Stop desktop control (while it is active), Settings, the command palette, the
+  shortcut sheet, Keep Revia on top and Quit Revia.
 
 Below 900 px of window width the sidebar starts as the rail. Expanding it there lasts
 until the window widens again. At 900 px and wider, **Keep the sidebar open** (Settings ›
@@ -48,8 +48,8 @@ Appearance) applies.
 - An empty chat greets you by time of day. While the runtime starts it says so. When the
   language model is not running it links to Activity and Resources.
 - The conversation strip (current status, Details, Review answer) shows above the
-  composer only while something is running, while its details are open or while it
-  flags the latest reply.
+  composer only while its details are open (**Conversation details** in the status pill's
+  popover) or while it flags the latest reply.
 
 **Composer:** a rounded card with the message box. It grows up to eight lines, 200 px or
 30% of the window. Its toolbar holds:
@@ -57,14 +57,17 @@ Appearance) applies.
 - **+** for Attach files, Documents and Use screen.
 - The profile chip, which switches profiles, holds the session's cloud gate while the
   cloud is allowed, and has Manage profiles.
-- The voice-health pill, shown only while synthesis is not known to work.
+- The voice-health pill, shown only when voice fails and replies fall back to text
+  (Text mode).
 - The hands-free chip.
 - Mic, Stop and Send. While a turn, task or studio operation runs, Stop takes Send's
   place. While only speech or the microphone runs, Stop sits beside Send. While Revia starts,
   Send stays in its place, disabled until Revia is ready, beside a Stop that cancels the startup.
 
-Long-lived modes, such as editing your last message or waiting for the previous request,
-show as a line above the message box. Short notices show as a toast over the composer.
+The message box's border darkens while it has focus; the accent ring appears only for a
+focus that came from the keyboard and while Revia listens. Long-lived modes, such as editing
+your last message or waiting for the previous request, show as a line above the message box.
+Short notices show as a toast above the composer and the strip.
 
 ## Privacy indicators
 
@@ -161,12 +164,20 @@ count, error Details and Voice Details. Its `RunShellUi` part covers:
 - the toast;
 - the theme reaching the transcript;
 - the failed-turn row;
-- the Send and Stop slot while Revia starts and while a turn runs, and Esc;
+- the Send and Stop slot while Revia starts and while a turn runs, and Esc (which never cancels
+  the startup);
+- a turn's order (speaker, work, thought process, answer, memory, actions) and opening a checking
+  row while the turn still runs;
 - scroll pinning;
 - the desktop indicator and Stop;
 - the sidebar's buttons keeping their size through a collapse and expand;
 - a fenced code block drawn as one box, the empty chat's greeting a third of the way down,
-  the 28px state pill and the sidebar menu's group headings.
+  the 28px state pill, and the sidebar menu's Panels submenu with its group headings and a menu
+  short enough for a laptop screen.
+
+`RunChatSessionsUi` presses Delete on a highlighted saved chat and expects that chat gone and the
+chat in progress kept. `RunCompanionStudio` switches companions with Settings open at 760 px and
+expects Permissions to fit without scrolling sideways.
 
 `RunSettingsReadBackUi` checks that the two number rows the window adds to Settings follow a
 change made elsewhere and never write an untouched value back, that the window's own controls in

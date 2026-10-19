@@ -142,8 +142,10 @@ void VoiceHealthPanel::SetHealth(const QString& phase)
     detail->setText(visibleDetail);
     badge->setToolTip(presentation.detail);
     setAccessibleDescription(presentation.detail);
+    // In the composer only a problem shows (Text mode). Unverified, at every start until the first
+    // spoken reply, and Voice off, which the owner chose, are routine and stay in the Voice window.
     if (compactView)
-        setVisible(presentation.tone != "available");
+        setVisible(presentation.tone == "warning");
 }
 
 QString VoiceHealthPanel::ApplyEvent(const revia::runtime::RuntimeEvent& event)

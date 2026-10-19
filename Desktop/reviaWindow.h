@@ -490,6 +490,7 @@ class ReviaWindow final : public QMainWindow
     QPointer<revia::desktop::ShortcutSheet> shortcutSheet;
     QMenu* sidebarMenu = nullptr;
     QMenu* switchCompanionMenu = nullptr;
+    QMenu* sidebarPanelsMenu = nullptr;
     QMenu* chatMoreMenu = nullptr;
     QMenu* composerAddMenu = nullptr;
     QMenu* composerProfileMenu = nullptr;

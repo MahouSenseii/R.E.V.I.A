@@ -44,13 +44,15 @@ QToolButton#composerProfileChip::menu-indicator, QToolButton#sidebarRailPanels::
 /* Small secondary actions beside the text they act on. */
 QPushButton#conversationDetailsButton, QPushButton#reviewAnswerButton, QPushButton#memoryReviseSelected,
 QPushButton#voiceHealthDetailsButton, QPushButton#runtimeDetailsButton, QPushButton#statusPopoverActivity,
-QPushButton#composerContextAction, QPushButton#settingsRestartLater, QPushButton#presenceOpenSettings {
+QPushButton#statusPopoverDetails, QPushButton#composerContextAction, QPushButton#settingsRestartLater,
+QPushButton#presenceOpenSettings {
     padding: 4px 10px;
     font-size: 12px;
 }
 QPushButton#conversationDetailsButton:focus, QPushButton#reviewAnswerButton:focus, QPushButton#memoryReviseSelected:focus,
 QPushButton#voiceHealthDetailsButton:focus, QPushButton#runtimeDetailsButton:focus, QPushButton#statusPopoverActivity:focus,
-QPushButton#composerContextAction:focus, QPushButton#settingsRestartLater:focus, QPushButton#presenceOpenSettings:focus {
+QPushButton#statusPopoverDetails:focus, QPushButton#composerContextAction:focus, QPushButton#settingsRestartLater:focus,
+QPushButton#presenceOpenSettings:focus {
     padding: 3px 9px;
 }
 QPushButton#attachButton, QPushButton#documentsButton { padding: 5px 10px; }
@@ -144,10 +146,11 @@ QGroupBox::title { subcontrol-origin: margin; subcontrol-position: top left; lef
 QProgressBar { border: 1px solid; border-radius: 6px; text-align: center; font-weight: 600; }
 
 QMenu { border: 1px solid; padding: 4px; }
-QMenu::item { padding: 6px 28px 6px 12px; border-radius: 6px; }
+QMenu::item { padding: 4px 28px 4px 12px; border-radius: 6px; }
 QMenu::separator { height: 1px; margin: 4px 8px; }
 /* The sidebar menu's group headings (Workspace, Companion, Studio, Runtime). */
-QLabel#sidebarMenuSection { font-size: 12px; font-weight: 600; padding: 6px 12px 2px 12px; }
+/* Its text starts on the items' text column, after their icon. */
+QLabel#sidebarMenuSection { font-size: 12px; font-weight: 600; padding: 6px 12px 2px 33px; }
 
 QScrollBar:vertical { width: 12px; margin: 2px 2px 2px 0; }
 QScrollBar:horizontal { height: 12px; margin: 0 2px 2px 2px; }
@@ -260,7 +263,9 @@ QWidget#archivedChatBanner { border: 1px solid; border-radius: 10px; }
 
 QWidget#composerArea, QWidget#composerShadowHost, QWidget#composerToolbar { border: none; }
 QFrame#composerCard { border: 1px solid; border-radius: 20px; padding: 1px; }
-QFrame#composerCard[focused="true"], QFrame#composerCard[voice="listening"], QFrame#composerCard[voice="transcribing"] {
+/* Focus alone keeps the 1px border (in a stronger colour); a keyboard focus and listening draw 2px. */
+QFrame#composerCard[focused="true"][kbdFocus="true"], QFrame#composerCard[voice="listening"],
+QFrame#composerCard[voice="transcribing"] {
     border-width: 2px;
     padding: 0px;
 }
@@ -286,7 +291,7 @@ QToolButton#composerProfileChip:focus, QToolButton#composerHandsFreeChip:focus {
 
 /* The strip above the composer: flat, small, and quiet unless something needs a look. */
 QFrame#conversationStatusCard { border: none; }
-QLabel#conversationCurrentStatus { font-size: 12px; font-weight: 600; }
+QLabel#conversationCurrentStatus { font-size: 12px; font-weight: 400; }
 QLabel#conversationOwnerOutcome, QLabel#conversationResponseTiming, QLabel#conversationResultEvidence,
 QLabel#conversationQualityDiagnostic {
     font-size: 12px;
@@ -300,6 +305,8 @@ QLabel#chatVoiceHealthBadge, QLabel#voiceHealthBadge {
     font-size: 11px;
     font-weight: 600;
 }
+/* In the composer it is a pill like the hands-free chip beside it: 28px tall, round ends. */
+QLabel#chatVoiceHealthBadge { border-radius: 14px; padding: 4px 10px; min-height: 18px; max-height: 18px; font-size: 12px; }
 QLabel#voiceHealthTitle { font-size: 15px; font-weight: 600; }
 QLabel#chatVoiceHealthDetail, QLabel#voiceHealthDetail { font-size: 12px; }
 QLabel#voiceCueStatus, QLabel#voiceHealthUpdated { font-size: 11px; }
@@ -345,6 +352,9 @@ QWidget#microphoneRow { border: none; }
 QDialog#settingsDialog { border: none; }
 QWidget#settingsNav { border: none; border-right: 1px solid; }
 QLineEdit#settingsSearch { border-radius: 6px; }
+/* Focused whenever Settings opens: a quiet border unless the focus came from the keyboard. */
+QLineEdit#settingsSearch:focus { border-width: 1px; padding: 6px 8px; }
+QLineEdit#settingsSearch[kbdFocus="true"]:focus { border-width: 2px; padding: 5px 7px; }
 QListWidget#settingsSections { border: none; border-radius: 6px; padding: 2px; font-size: 13px; }
 QListWidget#settingsSections[kbdFocus="true"]:focus { border-style: solid; border-width: 2px; padding: 0px; }
 QListWidget#settingsSections::item { padding: 6px 10px; border-radius: 6px; }
@@ -352,7 +362,7 @@ QStackedWidget#settingsStack { border: none; }
 [reviaRole="settingsSection"] { border: none; }
 QLabel#settingsSectionTitle { font-size: 22px; font-weight: 600; }
 QLabel#settingsSectionIntro { font-size: 13px; }
-QLabel#settingsGroupTitle { font-size: 13px; font-weight: 600; padding-top: 8px; }
+QLabel#settingsGroupTitle, QLabel#permGroupTitle { font-size: 13px; font-weight: 600; padding-top: 8px; }
 QFrame#settingsGroup { border: 1px solid; border-radius: 10px; }
 QFrame#settingsDivider { border: none; min-height: 1px; max-height: 1px; }
 QLabel#settingsRiskyHeader { font-size: 12px; font-weight: 600; }
@@ -368,6 +378,10 @@ QPushButton#settingsRestartNow { padding: 4px 12px; font-size: 12px; }
 QPushButton#settingsRestartNow:focus { padding: 3px 11px; }
 QLabel#settingsNoResults { padding: 24px; font-size: 13px; }
 QMessageBox#settingConfirmDialog { border: none; }
+/* The question first and larger, the consequence under it on a line wide enough for two lines of
+   warning, as in a Windows task dialog. */
+QMessageBox#settingConfirmDialog QLabel#qt_msgbox_label { font-size: 15px; font-weight: 600; }
+QMessageBox#settingConfirmDialog QLabel#qt_msgbox_informativelabel { min-width: 360px; font-size: 13px; }
 QFrame#themeSegment { border: 1px solid; border-radius: 8px; padding: 2px; }
 QPushButton#themeSystem, QPushButton#themeLight, QPushButton#themeDark {
     border: 1px solid transparent;
@@ -410,6 +424,7 @@ QWidget#capabilityListFooter { border: none; border-radius: 10px; }
 QLabel#sectionTitle { font-size: 16px; font-weight: 600; }
 QLabel#mindHeadline { font-size: 16px; font-weight: 600; }
 QLabel#voiceStudioStatus, QLabel#profileActiveBanner { border: 1px solid; border-radius: 6px; padding: 8px; }
-QLabel#profileActiveBanner, QLabel#profileStatus, QLabel#memoryStatus { font-weight: 600; }
+QLabel#profileActiveBanner, QLabel#profileStatus { font-weight: 600; }
+QLabel#memoryEmpty { font-size: 13px; }
 QLabel#activityIssueSummary { font-weight: 600; }
 QLabel#memoryRevisionProvenance { font-size: 12px; }

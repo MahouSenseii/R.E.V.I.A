@@ -37,7 +37,7 @@ automatically as if it were harmless.
 Guarded writes hold the existing file exclusively, but are not atomic replacement:
 a disk/write failure can leave a partial update. Inspect that result before recovery.
 
-The Interactive browser card is separate from Internet & Research. Enable
+The Interactive browser card is separate from Internet and research. Enable
 navigation and, if needed, interaction, then add exact origins such as
 `https://example.com` and apply. Paths and wildcard hosts are not origins.
 The local-test option explicitly permits loopback HTTP fixtures. Task interaction

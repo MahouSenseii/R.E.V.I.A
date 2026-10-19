@@ -37,6 +37,10 @@ namespace revia::desktop
 
 // "{name}" replaced by the companion's display name ("Revia" when none is known yet).
 [[nodiscard]] QString WithCompanionName(QString text, const QString& companionName);
+// The question a risky switch asks before the change it confirms, as a sentence the owner can
+// answer ("Let {name} see your screen?"), with "{name}" left for the caller to fill. A row
+// without its own question asks Turn on (or off) "label"?.
+[[nodiscard]] QString ConfirmQuestion(const SettingDescriptor& descriptor, bool turningOn);
 // The description to show while the switch is off, for the few rows whose off state needs its own
 // sentence (closing the window quits Revia). Empty when the ordinary description applies.
 [[nodiscard]] QString DescriptionWhenOff(const SettingDescriptor& descriptor);

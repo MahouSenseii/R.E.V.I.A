@@ -6,6 +6,8 @@
 #include <QScrollArea>
 #include <QVBoxLayout>
 
+#include <utility>
+
 namespace
 {
 QLabel* StatusLabel(const char* name, QWidget* parent)
@@ -83,7 +85,8 @@ void ConversationStatusPanel::Observe(const revia::runtime::RuntimeEvent& event)
     using revia::runtime::RuntimeEventKind;
     if (event.kind == RuntimeEventKind::StateChanged)
     {
-        current->setText("Conversation · " + QString::fromStdString(revia::runtime::ToString(event.state)));
+        current->setText("Conversation · " +
+                         (stateNames ? stateNames(event.state) : QString::fromStdString(revia::runtime::ToString(event.state))));
         if (event.state == revia::runtime::RuntimeState::WaitingForConfirmation)
             SetOwnerOutcome("An action is waiting for your decision.");
         else if (outcome->text() == "An action is waiting for your decision.")
@@ -112,6 +115,11 @@ void ConversationStatusPanel::Observe(const revia::runtime::RuntimeEvent& event)
         SetOwnerOutcome("Latest finding · " + BoundedText(event.message, 160));
         evidence->setText("Finding evidence · " + BoundedText(event.detail, 768));
     }
+}
+
+void ConversationStatusPanel::SetStateNames(std::function<QString(revia::runtime::RuntimeState)> names)
+{
+    stateNames = std::move(names);
 }
 
 void ConversationStatusPanel::ResetForCompanion()

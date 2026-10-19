@@ -637,6 +637,8 @@ void ReviaWindow::BuildInterface()
 
     chatVoiceHealth = new VoiceHealthPanel(true, chatPage);
     conversationStatus = new ConversationStatusPanel(chatPage);
+    conversationStatus->SetStateNames(
+        [this](const revia::runtime::RuntimeState state) { return PresentState(state, DesktopControlActive()).label; });
     connect(conversationStatus->ReviewButton(), &QPushButton::clicked, this, [this]() { ReviewDisplayedAnswer(); });
     if (auto* details = conversationStatus->findChild<QPushButton*>("conversationDetailsButton"))
         connect(details, &QPushButton::toggled, this, [this]() { UpdateConversationStrip(); });
@@ -750,6 +752,14 @@ void ReviaWindow::BuildInterface()
     // Copy for any reply, not only the newest one that carries the link.
     chatHistory->setContextMenuPolicy(Qt::CustomContextMenu);
     connect(chatHistory, &QWidget::customContextMenuRequested, this, [this](const QPoint& position) { CopyMessageAt(position); });
+    // A reader at the bottom stays there when the transcript's viewport shrinks (the composer grows
+    // with attachments or a context line); otherwise the newest lines slip behind the composer.
+    connect(chatHistory->verticalScrollBar(), &QScrollBar::rangeChanged, this,
+        [this](const int, const int maximum)
+        {
+            if (transcriptPinned && !renderingTranscript)
+                chatHistory->verticalScrollBar()->setValue(maximum);
+        });
     connect(chatHistory->verticalScrollBar(), &QScrollBar::valueChanged, this,
         [this](const int value)
         {
@@ -2709,13 +2719,30 @@ void ReviaWindow::RenderChat()
             .arg(HtmlParagraph(lastTurnError->reason));
     };
     const auto expander = [](const bool expanded) { return expanded ? QStringLiteral("&#9662;") : QStringLiteral("&#9656;"); };
+    const auto speakerLine = [&tokens](const QString& speaker)
+    {
+        return QStringLiteral("<p class=\"speaker\"><span style=\"color:%1;\">&#9679;</span>&nbsp;%2</p>")
+            .arg(tokens.accent.name(), speaker.toHtmlEscaped());
+    };
     QString lastAssistantSpeaker;
+    // A turn reads top to bottom: the speaker line, what Revia checked, the thought process, the
+    // answer, what it remembered, and last the actions that close it. The newest reply's actions
+    // wait here until its trailing memory and offer rows are written.
+    QString pendingActions;
+    const auto flushActions = [&html, &pendingActions]()
+    {
+        html += pendingActions;
+        pendingActions.clear();
+    };
     if (chatEntries.empty() && !lastTurnError)
         html = EmptyStateHtml();
     for (std::size_t index = 0; index < chatEntries.size(); ++index)
     {
         if (lastTurnError && lastTurnError->afterEntry == index)
+        {
+            flushActions();
             html += errorRow();
+        }
         ChatEntry& entry = chatEntries[index];
         const bool working = entry.kind != EntryKind::Message;
         const bool activity = !working && !entry.userMessage && (entry.proposal || entry.speaker == QStringLiteral("Memory"));
@@ -2723,11 +2750,20 @@ void ReviaWindow::RenderChat()
         // owner can hide them. A hidden entry is still recorded and still counts.
         if ((working || activity) && !showWorkSummaries)
             continue;
+        if (!activity)
+            flushActions();
         // Each entry starts with an anchor, so a right-click can tell which message it is on.
         html += QStringLiteral("<a name=\"m%1\"></a>").arg(index);
 
         if (working)
         {
+            // The speaker line goes above the turn's first work row, not between the work and the
+            // answer it led to.
+            if (assistant != lastAssistantSpeaker)
+            {
+                html += speakerLine(assistant);
+                lastAssistantSpeaker = assistant;
+            }
             QString label;
             switch (entry.kind)
             {
@@ -2780,11 +2816,20 @@ void ReviaWindow::RenderChat()
                 if (system)
                     html += QStringLiteral("<p class=\"speaker\">System</p>");
                 else
-                    html += QStringLiteral("<p class=\"speaker\"><span style=\"color:%1;\">&#9679;</span>&nbsp;%2</p>")
-                                .arg(tokens.accent.name(), entry.speaker.toHtmlEscaped());
+                    html += speakerLine(entry.speaker);
             }
             if (!entry.speaker.isEmpty())
                 lastAssistantSpeaker = system ? QString() : entry.speaker;
+            // The thought process sits under the speaker line, before the answer it led to.
+            if (!entry.reasoning.isEmpty() && showWorkSummaries)
+            {
+                // The anchor carries the entry index; anchorClicked toggles it and re-renders.
+                html += QStringLiteral("<p class=\"thought\"><a href=\"thought:%1\">%2 Thought process</a></p>")
+                            .arg(QString::number(index), expander(entry.expanded));
+                if (entry.expanded)
+                    html += QStringLiteral("<table class=\"evidence\" width=\"100%\" cellspacing=\"0\" cellpadding=\"10\" bgcolor=\"%1\"><tr><td>%2</td></tr></table>")
+                                .arg(tokens.surfaceAlt.name(), HtmlParagraph(entry.reasoning));
+            }
             if (!entry.body.isEmpty() && entry.markdown)
                 // Block-level HTML from the Markdown conversion, so it cannot sit inside a <p>.
                 html += QStringLiteral("<div class=\"assistant\">") + RenderedBody(entry) + QStringLiteral("</div>");
@@ -2820,21 +2865,21 @@ void ReviaWindow::RenderChat()
                 links += QStringLiteral(" &middot; <a href=\"regen:%1\">Regenerate</a>").arg(QString::number(index));
             if (reviewable)
                 links += QStringLiteral(" &middot; <a href=\"review:%1\">Review</a>").arg(QString::number(index));
-            html += QStringLiteral("<p class=\"actions\">%1</p>").arg(links);
+            pendingActions = QStringLiteral("<p class=\"actions\">%1</p>").arg(links);
         }
         if (editable == index)
             html += QStringLiteral("<p class=\"actions\" align=\"right\"><a href=\"edit:%1\">Edit</a></p>").arg(QString::number(index));
 
-        if (!entry.reasoning.isEmpty() && showWorkSummaries)
+        if (entry.userMessage && !entry.reasoning.isEmpty() && showWorkSummaries)
         {
-            // The anchor carries the entry index; anchorClicked toggles it and re-renders.
-            html += QStringLiteral("<p class=\"thought\" align=\"%1\"><a href=\"thought:%2\">%3 Thought process</a></p>")
-                        .arg(entry.userMessage ? QStringLiteral("right") : QStringLiteral("left"), QString::number(index), expander(entry.expanded));
+            html += QStringLiteral("<p class=\"thought\" align=\"right\"><a href=\"thought:%1\">%2 Thought process</a></p>")
+                        .arg(QString::number(index), expander(entry.expanded));
             if (entry.expanded)
                 html += QStringLiteral("<table class=\"evidence\" width=\"100%\" cellspacing=\"0\" cellpadding=\"10\" bgcolor=\"%1\"><tr><td>%2</td></tr></table>")
                             .arg(tokens.surfaceAlt.name(), HtmlParagraph(entry.reasoning));
         }
     }
+    flushActions();
     if (lastTurnError && lastTurnError->afterEntry >= chatEntries.size())
         html += errorRow();
     // While a reply is on its way and none of it has arrived yet.

@@ -1,7 +1,10 @@
 #include "composerCard.h"
 
+#include "theme.h"
+
 #include <QAbstractTextDocumentLayout>
 #include <QEvent>
+#include <QFocusEvent>
 #include <QFontMetrics>
 #include <QHBoxLayout>
 #include <QLabel>
@@ -252,11 +255,20 @@ bool ComposerCard::eventFilter(QObject* watched, QEvent* event)
         switch (event->type())
         {
         case QEvent::FocusIn:
-            SetFocused(true);
-            break;
         case QEvent::FocusOut:
-            SetFocused(false);
+        {
+            // The message box has focus nearly all the time, so focus alone is a quiet border; the
+            // accent ring is for focus that arrived from the keyboard (Tab, F6), as for lists.
+            const bool keyboard =
+                revia::desktop::theme::KeyboardFocusAfter(property("kbdFocus").toBool(), *static_cast<QFocusEvent*>(event));
+            if (property("kbdFocus").toBool() != keyboard)
+            {
+                setProperty("kbdFocus", keyboard);
+                Repolish();
+            }
+            SetFocused(event->type() == QEvent::FocusIn);
             break;
+        }
         case QEvent::FontChange:
         case QEvent::StyleChange:
             UpdateInputHeight();

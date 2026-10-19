@@ -1163,10 +1163,17 @@ void TestComposer(Results& results)
 
     QFocusEvent focusIn(QEvent::FocusIn, Qt::TabFocusReason);
     QCoreApplication::sendEvent(input, &focusIn);
-    results.Expect(card->property("focused").toBool(), "the card is marked focused with its message box");
+    results.Expect(card->property("focused").toBool() && card->property("kbdFocus").toBool(),
+        "the card is marked focused with its message box, from the keyboard");
     QFocusEvent focusOut(QEvent::FocusOut, Qt::TabFocusReason);
     QCoreApplication::sendEvent(input, &focusOut);
-    results.Expect(!card->property("focused").toBool(), "the focus mark clears with the message box");
+    results.Expect(!card->property("focused").toBool() && !card->property("kbdFocus").toBool(), "the focus mark clears with the message box");
+    // A click, or the window putting the focus back after a reply, is focus without the keyboard ring.
+    QFocusEvent clickIn(QEvent::FocusIn, Qt::MouseFocusReason);
+    QCoreApplication::sendEvent(input, &clickIn);
+    results.Expect(card->property("focused").toBool() && !card->property("kbdFocus").toBool(), "a click focuses the card without the ring");
+    QFocusEvent clickOut(QEvent::FocusOut, Qt::MouseFocusReason);
+    QCoreApplication::sendEvent(input, &clickOut);
 
     card->SetVoiceState("listening");
     results.Expect(card->property("voice").toString() == "listening" && input->placeholderText() == "Listening…",

@@ -17,6 +17,7 @@
 #include <QFrame>
 #include <QHBoxLayout>
 #include <QHideEvent>
+#include <QFocusEvent>
 #include <QKeyEvent>
 #include <QKeySequence>
 #include <QLabel>
@@ -30,6 +31,7 @@
 #include <QPushButton>
 #include <QResizeEvent>
 #include <QScrollArea>
+#include <QScrollBar>
 #include <QSettings>
 #include <QShortcut>
 #include <QShowEvent>
@@ -414,6 +416,9 @@ void SettingsDialog::BuildFrame()
 
     restartBanner = new QFrame(right);
     restartBanner->setObjectName(QStringLiteral("settingsRestartBanner"));
+    // Never taller than its line: with the sections hidden by a search, the no-results label
+    // takes the room instead.
+    restartBanner->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Maximum);
     auto* bannerLayout = new QHBoxLayout(restartBanner);
     bannerLayout->setContentsMargins(12, 8, 8, 8);
     bannerLayout->setSpacing(8);
@@ -442,7 +447,7 @@ void SettingsDialog::BuildFrame()
     noResults->setTextFormat(Qt::PlainText);
     noResults->setAlignment(Qt::AlignHCenter | Qt::AlignTop);
     noResults->hide();
-    rightLayout->addWidget(noResults);
+    rightLayout->addWidget(noResults, 1);
 
     stack = new QStackedWidget(right);
     stack->setObjectName(QStringLiteral("settingsStack"));
@@ -493,6 +498,16 @@ void SettingsDialog::BuildSections()
         auto* column = new QVBoxLayout(section->content);
         column->setContentsMargins(32, 24, 32, 32);
         column->setSpacing(0);
+        // While the page scrolls, its right margin gives up the scroll bar's width, so cards and
+        // switches end in the same place in every section, scrolling or not.
+        QScrollBar* bar = section->page->verticalScrollBar();
+        connect(bar, &QScrollBar::rangeChanged, section->page,
+            [column, bar](const int, const int maximum)
+            {
+                const int right = maximum > 0 ? std::max(8, 32 - bar->sizeHint().width()) : 32;
+                if (column->contentsMargins().right() != right)
+                    column->setContentsMargins(32, 24, right, 32);
+            });
         // Title, intro and groups share one column of at most RowColumnWidth at the page's left;
         // hosted panels are added outside it and take the full width.
         auto* header = new QWidget(section->content);
@@ -1048,7 +1063,6 @@ void SettingsDialog::AskToConfirm(const std::string& key, const bool checked)
         const QSignalBlocker blocker(row->toggle);
         row->toggle->setChecked(!checked);
     }
-    const QString label = Expand(row->descriptor.label);
     QString text = Expand(row->descriptor.warning);
     if (text.isEmpty())
         text = Expand(row->descriptor.description);
@@ -1060,7 +1074,7 @@ void SettingsDialog::AskToConfirm(const std::string& key, const bool checked)
     box->setIcon(QMessageBox::Warning);
     // The question is the message itself, not only the caption (small or missing on many setups),
     // with the one-line consequence under it.
-    const QString question = QStringLiteral("%1 %2?").arg(checked ? QStringLiteral("Turn on") : QStringLiteral("Turn off"), label);
+    const QString question = Expand(ConfirmQuestion(row->descriptor, checked));
     box->setWindowTitle(question);
     box->setTextFormat(Qt::PlainText);
     box->setText(question);
@@ -1086,6 +1100,10 @@ void SettingsDialog::AskToConfirm(const std::string& key, const bool checked)
         }
         Commit(key, checked);
     });
+    // Room around the question, like a Windows task dialog (theme::PolishQuestion does the same for
+    // the window's own questions); the stylesheet sets the question above its consequence.
+    if (box->layout() != nullptr)
+        box->layout()->setContentsMargins(20, 20, 20, 16);
     box->open();
 }
 
@@ -1428,7 +1446,8 @@ void SettingsDialog::RenderStatus(Row& row)
     }
     if (text.isEmpty())
     {
-        text = row.dependencyHint;
+        // Why a row cannot be used is said on the row, not only in a tooltip.
+        text = row.disabledReason.isEmpty() ? row.dependencyHint : row.disabledReason;
         tone = QStringLiteral("info");
     }
     row.status->setText(text);
@@ -1494,6 +1513,13 @@ void SettingsDialog::UpdateRestartBanner()
             continue;
         const bool waiting = row->value != row->running && row->available;
         row->restartBadge->setText(waiting ? QStringLiteral("Restart to apply") : RestartBadgeText(row->descriptor.apply));
+        // Only a change that is actually waiting is drawn as a warning; "Applies after restart" on
+        // its own is a quiet fact about the row.
+        if (row->restartBadge->property("pending").toBool() != waiting)
+        {
+            row->restartBadge->setProperty("pending", waiting);
+            Repolish(row->restartBadge);
+        }
     }
     if (pending != restartDismissedAt)
         restartDismissedAt = -1;
@@ -1944,6 +1970,14 @@ void SettingsDialog::showEvent(QShowEvent* event)
     GuardWheel(this);
     Refresh();
     search->setFocus(Qt::OtherFocusReason);
+    // Showing the dialog then hands its first widget the focus with a Tab reason; that is not the
+    // owner pressing Tab, so the search box starts with its quiet border (see eventFilter).
+    search->setProperty("reviaFocusFromShow", true);
+    if (search->property("kbdFocus").toBool())
+    {
+        search->setProperty("kbdFocus", false);
+        Repolish(search);
+    }
     NotifyResize();
 }
 
@@ -1977,6 +2011,35 @@ bool SettingsDialog::eventFilter(QObject* watched, QEvent* event)
         // Ignored, the wheel goes on to the parents and scrolls the section page.
         event->ignore();
         return true;
+    }
+    if (watched == search && (event->type() == QEvent::FocusIn || event->type() == QEvent::FocusOut))
+    {
+        // The search box has focus whenever Settings opens, so focus alone is a quiet border; the
+        // accent ring is for focus that came from the keyboard (theme::KeyboardFocusAfter's rule).
+        const auto* focus = static_cast<QFocusEvent*>(event);
+        const bool before = search->property("kbdFocus").toBool();
+        bool keyboard = focus->gotFocus() && before;
+        switch (focus->reason())
+        {
+        case Qt::TabFocusReason:
+        case Qt::BacktabFocusReason:
+        case Qt::ShortcutFocusReason: keyboard = focus->gotFocus(); break;
+        case Qt::ActiveWindowFocusReason:
+        case Qt::PopupFocusReason:
+        case Qt::MenuBarFocusReason: keyboard = before; break;
+        default: break;
+        }
+        // The first focus after the dialog shows is the window's own, whatever reason it carries.
+        if (focus->gotFocus() && search->property("reviaFocusFromShow").toBool())
+        {
+            search->setProperty("reviaFocusFromShow", false);
+            keyboard = false;
+        }
+        if (before != keyboard || !search->property("kbdFocus").isValid())
+        {
+            search->setProperty("kbdFocus", keyboard);
+            Repolish(search);
+        }
     }
     if (watched == search && event->type() == QEvent::KeyPress && static_cast<QKeyEvent*>(event)->key() == Qt::Key_Down)
     {

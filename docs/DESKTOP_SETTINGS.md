@@ -18,14 +18,15 @@ that every boolean preference and every owner-settings key has a row.
 
 ## How a switch behaves
 
-- **Badges.** "Applies after restart" (it changes to "Restart to apply" once you have changed it),
-  "Partly applies now" for a startup setting that part of Revia already follows while it runs
-  (the rest takes effect at the next start, so a change also reads "Restart to apply"), "All
-  companions" for values shared by every companion, "Privacy", "Risky" and "Autonomy". Badges
-  always pair a word with their colour.
+- **Badges.** "Applies after restart" (a quiet grey badge that turns into an orange "Restart to
+  apply" once you have changed the switch), "Partly applies now" for a startup setting that part
+  of Revia already follows while it runs (the rest takes effect at the next start, so a change also
+  reads "Restart to apply"), "All companions" for values shared by every companion, "Privacy",
+  "Risky" and "Autonomy". Badges always pair a word with their colour.
 - **Confirmation.** Turning on a risky switch, or turning off one whose off state is the risky one
-  (marked "asks when turned off" below), opens a question titled "Turn on ...?" or "Turn off ...?"
-  with the warning. Cancel is the default and changes nothing.
+  (marked "asks when turned off" below), opens a question of its own, such as "Let *{name}* see
+  your screen?", "Let *{name}* control the mouse?" or "Stop requiring the wake word?", with the
+  warning under it. Cancel is the default and changes nothing.
 - **Saving.** Shell settings are written to QSettings at once. Everything else is written in the
   background: the switch shows "Saving..." and is disabled until the write finishes. If the write
   is refused, the switch goes back and the reason is shown under it. After a successful write the
@@ -45,8 +46,8 @@ that every boolean preference and every owner-settings key has a row.
   programs" withdraws "Allow shells and scripts" and "Let tasks run programs" (which cannot be
   turned on while it is off). Turning the outer switch on again never brings an inner one back
   without its own question.
-- **Dependencies.** A switch whose requirement is off is disabled, and its tooltip says which
-  switch to turn on first. Requirements are judged on saved values, so a restart-only parent still
+- **Dependencies.** A switch whose requirement is off is disabled and greyed with its row, and the
+  row says which switch to turn on first (or why else it cannot be used, such as no system tray). Requirements are judged on saved values, so a restart-only parent still
   counts once you have changed it. "Works best with ..." is only a hint.
 - **Inverted rows.** "Let picture generation use the internet" shows the opposite of the stored
   `image.offline` value, so the switch can ask the positive question.
@@ -149,10 +150,10 @@ Settings rows whose row frame is named after the switch plus `Row`.
 
 | Group | Switch | What it does | Key | Stored in | Applies | Risk | Needs |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| Internet & research | Internet lookups | Let *{name}* search the web, read-only and rate-limited, through a fixed set of public sources. **Warning:** Your questions are sent to the configured search providers. | `capabilities.internet.enabled` (`internetCheck`), default off | Capabilities (all companions); CapabilityPanel switch | Live | Privacy, asks when turned on |  |
-| Internet & research | Look things up automatically | Search for facts without being asked. Your questions are sent to the search provider. | `capabilities.internet.automaticLookup` (`automaticLookupCheck`), default on | Capabilities (all companions); CapabilityPanel switch | Live | Privacy | Internet lookups |
-| Internet & research | Search in a visible browser | Run searches in a separate Edge or Chrome window you can watch. **Warning:** A dedicated browser profile opens public pages; your own cookies and passwords are never used. | `capabilities.internet.visibleBrowser` (`visibleBrowserCheck`), default off | Capabilities (all companions); CapabilityPanel switch | Live | asks when turned on | Internet lookups |
-| Internet & research | Research without being asked | Curiosity may start a bounded web search with no request from you. **Warning:** Searches can start from recent conversation or feelings, without a new message from you. | `capabilities.internet.autonomousResearch` (`autonomousResearchCheck`), default off | Capabilities (all companions); CapabilityPanel switch | Live | Privacy, asks when turned on, Autonomy | Internet lookups, Search in a visible browser |
+| Internet and research | Internet lookups | Let *{name}* search the web, read-only and rate-limited, through a fixed set of public sources. **Warning:** Your questions are sent to the configured search providers. | `capabilities.internet.enabled` (`internetCheck`), default off | Capabilities (all companions); CapabilityPanel switch | Live | Privacy, asks when turned on |  |
+| Internet and research | Look things up automatically | Search for facts without being asked. Your questions are sent to the search provider. | `capabilities.internet.automaticLookup` (`automaticLookupCheck`), default on | Capabilities (all companions); CapabilityPanel switch | Live | Privacy | Internet lookups |
+| Internet and research | Search in a visible browser | Run searches in a separate Edge or Chrome window you can watch. **Warning:** A dedicated browser profile opens public pages; your own cookies and passwords are never used. | `capabilities.internet.visibleBrowser` (`visibleBrowserCheck`), default off | Capabilities (all companions); CapabilityPanel switch | Live | asks when turned on | Internet lookups |
+| Internet and research | Research without being asked | Curiosity may start a bounded web search with no request from you. **Warning:** Searches can start from recent conversation or feelings, without a new message from you. | `capabilities.internet.autonomousResearch` (`autonomousResearchCheck`), default off | Capabilities (all companions); CapabilityPanel switch | Live | Privacy, asks when turned on, Autonomy | Internet lookups, Search in a visible browser |
 | Interactive browser | Interactive browser | Let *{name}* use a dedicated browser on the sites you approve below. | `capabilities.browser.enabled` (`browserEnabled`), default off | Capabilities (all companions); CapabilityPanel switch | Live | Privacy |  |
 | Interactive browser | Open pages | Open pages on approved sites. | `capabilities.browser.navigate` (`browserNavigate`), default off | Capabilities (all companions); CapabilityPanel switch | Live | Privacy | Interactive browser |
 | Interactive browser | Click and fill in forms | Click buttons and fill in or submit forms on approved sites. **Warning:** Forms can be submitted for you: whatever an approved site lets you do, *{name}* can do there. | `capabilities.browser.interact` (`browserInteract`), default off | Capabilities (all companions); CapabilityPanel switch | Live | Risky, asks when turned on | Interactive browser |
@@ -190,11 +191,11 @@ Settings rows whose row frame is named after the switch plus `Row`.
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | Camera | Camera snapshots | Take a single still photo from your camera when you ask. No video, no recording. **Warning:** Frames are kept in RuntimeData/Camera on this PC and are never uploaded. | `capabilities.camera.enabled` (`cameraCheck`), default off | Capabilities (all companions); CapabilityPanel switch | Live | Privacy, asks when turned on |  |
 | Camera | Let *{name}* decide when to look | *{name}* may take a camera photo without being asked. **Warning:** Photos can be taken without a request from you, within the same rate limit and audit trail. | `capabilities.camera.autonomousCapture` (`autonomousCameraCheck`), default off | Capabilities (all companions); CapabilityPanel switch | Live | Privacy, asks when turned on, Autonomy | Camera snapshots |
-| Pointer & keyboard | Mouse control | Move and click the pointer, only inside apps you approve. **Warning:** Clicks inside approved apps are indistinguishable from yours. | `capabilities.desktopControl.pointer` (`pointerCheck`), default off | Capabilities (all companions); CapabilityPanel switch | Live | Risky, asks when turned on |  |
-| Pointer & keyboard | Keyboard control | Type and press keys, only inside apps you approve. **Warning:** Typing inside approved apps is indistinguishable from yours. | `capabilities.desktopControl.keyboard` (`keyboardCheck`), default off | Capabilities (all companions); CapabilityPanel switch | Live | Risky, asks when turned on |  |
-| Pointer & keyboard | Open approved apps | Start apps from your approved list. **Warning:** Approved apps can be started without you opening them. | `capabilities.desktopControl.applicationLaunch` (`launchCheck`), default off | Capabilities (all companions); CapabilityPanel switch | Live | Risky, asks when turned on |  |
-| Pointer & keyboard | Click what *{name}* sees | Click things *{name}* can see in games and custom screens that have no normal buttons. Needs Mouse control. **Warning:** Clicks are aimed from a screenshot instead of a control Windows can check. | `capabilities.desktopControl.visualTargeting` (`visualTargetCheck`), default off | Capabilities (all companions); CapabilityPanel switch | Live | Risky, asks when turned on | Mouse control |
-| Pointer & keyboard | Click chosen screen positions | Click screen positions *{name}* picks instead of checked buttons. Needs Mouse control. **Warning:** A click can land on whatever is at that point, with no control behind it to check. | `capabilities.desktopControl.rawCoordinates` (`rawCoordinateCheck`), default off | Capabilities (all companions); CapabilityPanel switch | Live | Risky, asks when turned on | Mouse control |
+| Pointer and keyboard | Mouse control | Move and click the pointer, only inside apps you approve. **Warning:** Clicks inside approved apps are indistinguishable from yours. | `capabilities.desktopControl.pointer` (`pointerCheck`), default off | Capabilities (all companions); CapabilityPanel switch | Live | Risky, asks when turned on |  |
+| Pointer and keyboard | Keyboard control | Type and press keys, only inside apps you approve. **Warning:** Typing inside approved apps is indistinguishable from yours. | `capabilities.desktopControl.keyboard` (`keyboardCheck`), default off | Capabilities (all companions); CapabilityPanel switch | Live | Risky, asks when turned on |  |
+| Pointer and keyboard | Open approved apps | Start apps from your approved list. **Warning:** Approved apps can be started without you opening them. | `capabilities.desktopControl.applicationLaunch` (`launchCheck`), default off | Capabilities (all companions); CapabilityPanel switch | Live | Risky, asks when turned on |  |
+| Pointer and keyboard | Click what *{name}* sees | Click things *{name}* can see in games and custom screens that have no normal buttons. Needs Mouse control. **Warning:** Clicks are aimed from a screenshot instead of a control Windows can check. | `capabilities.desktopControl.visualTargeting` (`visualTargetCheck`), default off | Capabilities (all companions); CapabilityPanel switch | Live | Risky, asks when turned on | Mouse control |
+| Pointer and keyboard | Click chosen screen positions | Click screen positions *{name}* picks instead of checked buttons. Needs Mouse control. **Warning:** A click can land on whatever is at that point, with no control behind it to check. | `capabilities.desktopControl.rawCoordinates` (`rawCoordinateCheck`), default off | Capabilities (all companions); CapabilityPanel switch | Live | Risky, asks when turned on | Mouse control |
 | Gated controls | Allow the whole desktop | Control any window, not only approved apps. Needs Mouse control and Click chosen screen positions. **Warning:** Input is no longer confined to approved apps: the pointer goes anywhere and keys go to whatever has focus. | `capabilities.desktopControl.wholeDesktop` (`wholeDesktopCheck`), default off | Capabilities (all companions); CapabilityPanel switch | Live | Risky, asks when turned on | Mouse control, Click chosen screen positions |
 | Gated controls | Type into terminals | Allow typing into command prompts and script windows, and the shortcuts that open them. **Warning:** Text typed into a terminal runs as a command on this PC. | `capabilities.desktopControl.allowCommandSurfaces` (`commandSurfaceCheck`), default off | Capabilities (all companions); CapabilityPanel switch | Live | Risky, asks when turned on |  |
 | Gated controls | Allow unprompted desktop work | Operate the desktop without being asked. Still refused while you are actively working. **Warning:** Pointer, keyboard and app actions can start without a request from you. | `capabilities.desktopControl.autonomous` (`autonomousDesktopCheck`), default off | Capabilities (all companions); CapabilityPanel switch | Live | Risky, asks when turned on, Autonomy |  |

@@ -87,13 +87,17 @@ void ReviaWindow::ApplyChatMeasure()
 }
 
 // The composer, the conversation strip and the saved-chat banner share the transcript's measure.
+// The composer's shadow host spends its blur on margins around the card; those fall outside the
+// measure, so the card's border lines up with the bubbles and code blocks above it (and the
+// strip, padded by the same amount, keeps its text on that edge).
 void ReviaWindow::ApplyComposerMeasure()
 {
     if (chatColumn == nullptr)
         return;
     const int side = std::max(16, (chatColumn->width() - 760) / 2);
+    const int shadow = composerShadow != nullptr && composerShadow->layout() != nullptr ? composerShadow->layout()->contentsMargins().left() : 0;
     if (composerArea != nullptr && composerArea->layout() != nullptr)
-        composerArea->layout()->setContentsMargins(side, 0, side, 12);
+        composerArea->layout()->setContentsMargins(std::max(0, side - shadow), 0, std::max(0, side - shadow), 12);
     if (archivedBannerHost != nullptr && archivedBannerHost->layout() != nullptr)
         archivedBannerHost->layout()->setContentsMargins(side, 0, side, 0);
 }
