@@ -237,6 +237,8 @@ if(REVIA_BUILD_DESKTOP)
                 "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/profilePanel.cpp"
                 "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/profilePanel.h"
                 # [sources:B1]
+                "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/settingsSessionBackend.cpp"
+                "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/settingsSessionBackend.h"
                 "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/resourcePanel.cpp"
                 "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/resourcePanel.h"
                 # [sources:B2]

@@ -4,6 +4,7 @@
 #include "Improvement/improvementSettings.h"
 #include "Intelligence/intelligenceSettings.h"
 #include "Core/configManager.h"
+#include "Core/settingsFileEditor.h"
 
 #include <algorithm>
 #include <exception>
@@ -111,20 +112,14 @@ configManager::configManager(std::string settingsFile, std::string profileDirect
 
 configManager::~configManager() = default;
 
-bool configManager::LoadSettings(appSettings& outSettings) const
+namespace
 {
-    std::ifstream file(settingsPath);
-
-    if (!file.is_open())
-    {
-        return false;
-    }
-
+// Reads one parsed settings document into outSettings and validates the result. A value of
+// the wrong type, or a combination the runtime cannot use, fails the whole read.
+bool ReadSettings(json& data, appSettings& outSettings)
+{
     try
     {
-        json data;
-        file >> data;
-
         if (data.contains("activeProfile"))
         {
             outSettings.activeProfile = data["activeProfile"].get<std::string>();
@@ -1653,6 +1648,96 @@ bool configManager::LoadSettings(appSettings& outSettings) const
     }
 
     return true;
+}
+}
+
+void configManager::SetOwnerOverlay(std::string path, const bool strict)
+{
+    ownerOverlayPath = std::move(path);
+    ownerOverlayStrict = strict;
+}
+
+bool configManager::LoadSettings(appSettings& outSettings) const
+{
+    std::vector<std::string> warnings;
+    return LoadSettings(outSettings, warnings);
+}
+
+bool configManager::LoadSettings(appSettings& outSettings, std::vector<std::string>& outWarnings) const
+{
+    std::ifstream file(settingsPath);
+
+    if (!file.is_open())
+    {
+        return false;
+    }
+
+    json data;
+    try
+    {
+        file >> data;
+    }
+    catch (const std::exception&)
+    {
+        return false;
+    }
+
+    std::error_code missing;
+    if (ownerOverlayPath.empty() || !std::filesystem::exists(ownerOverlayPath, missing))
+    {
+        return ReadSettings(data, outSettings);
+    }
+
+    json overlay;
+    try
+    {
+        std::ifstream overlayFile(ownerOverlayPath, std::ios::binary);
+        overlayFile >> overlay;
+    }
+    catch (const std::exception&)
+    {
+        outWarnings.push_back("The owner settings file " + ownerOverlayPath + " could not be read, so it was ignored.");
+        return ReadSettings(data, outSettings);
+    }
+
+    // The owner's choices are laid over the file before any field is read, so they pass the
+    // same validation a value written in settings.json does.
+    const appSettings initial = outSettings;
+    json merged = data;
+    if (!revia::core::ApplyOwnerOverrides(merged, overlay, outWarnings))
+    {
+        return ReadSettings(data, outSettings);
+    }
+    if (ReadSettings(merged, outSettings))
+    {
+        return true;
+    }
+    if (ownerOverlayStrict)
+    {
+        return false;
+    }
+
+    // Settings.json may have changed under a stale choice. Rather than drop every owner
+    // choice, which could quietly bring back something the owner turned off, each one is
+    // kept unless adding it is what makes the settings unusable.
+    json accepted = data;
+    for (const auto& [key, value] : overlay["values"].items())
+    {
+        json trial = accepted;
+        std::vector<std::string> ignored;
+        revia::core::ApplyOwnerOverrides(trial, {{"schemaVersion", 1}, {"values", {{key, value}}}}, ignored);
+        appSettings probe = initial;
+        if (ReadSettings(trial, probe))
+        {
+            accepted = std::move(trial);
+        }
+        else
+        {
+            outWarnings.push_back("Owner setting \"" + key + "\" was set aside because Config/settings.json no longer accepts it.");
+        }
+    }
+    outSettings = initial;
+    return ReadSettings(accepted, outSettings);
 }
 
 bool configManager::IsSafeProfileId(const std::string& profileId)

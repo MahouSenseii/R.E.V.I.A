@@ -103,6 +103,8 @@ class ActionRuntime
     [[nodiscard]] bool SetCameraAccess(bool enabled, bool autonomousCapture, std::string& outError);
     [[nodiscard]] bool SetProcessSettings(const process::ProcessSettings& settings, std::string& outError);
     [[nodiscard]] bool SetInteractiveBrowser(const browser::BrowserSettings& settings, std::string& outError);
+    // Only the five guest switches change; limits and approved executables stay as written.
+    [[nodiscard]] bool SetGuestCapabilities(const policy::GuestCapabilitySettings& settings, std::string& outError);
     // pointer/keyboard/applicationLaunch are the hands themselves; rawCoordinates and
     // autonomous are narrower authorities inside them and are dropped when the
     // authority they are a subset of is withdrawn.

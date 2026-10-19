@@ -203,6 +203,37 @@ bool CapabilityEditor::SetProcessSettings(
     }
 }
 
+bool CapabilityEditor::SetGuestCapabilities(
+    const std::filesystem::path& path, const GuestCapabilitySettings& settings, std::string& outError) const
+{
+    try
+    {
+        std::ifstream stream(path, std::ios::binary);
+        json data;
+        stream >> data;
+        stream.close();
+        if (!data.is_object())
+            throw std::invalid_argument("Capability configuration must be an object.");
+        json& guest = data["guest"];
+        if (!guest.is_object())
+            guest = json::object();
+        // A narrower authority must not survive the one it sits inside and quietly return
+        // when that one is granted again.
+        const bool execute = settings.enabled && settings.execute;
+        guest["enabled"] = settings.enabled;
+        guest["read"] = settings.enabled && settings.read;
+        guest["write"] = settings.enabled && settings.write;
+        guest["execute"] = execute;
+        guest["allowTaskExecution"] = execute && settings.allowTaskExecution;
+        return ReplaceValidated(path, data, outError);
+    }
+    catch (const std::exception& error)
+    {
+        outError = std::string("Could not update the Ubuntu workspace permissions: ") + error.what();
+        return false;
+    }
+}
+
 bool CapabilityEditor::SetDesktopControl(const std::filesystem::path& path, const bool pointer, const bool keyboard,
     const bool applicationLaunch, const bool rawCoordinates, const bool visualTargeting, const bool autonomous,
     const actions::CapabilitySettings::DesktopControl::InputScope scope, const bool allowCommandSurfaces, std::string& outError) const

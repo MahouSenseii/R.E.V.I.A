@@ -28,6 +28,7 @@
 #include "Core/exitReporter.h"
 #include "Core/localApiKey.h"
 #include "Core/runtimePath.h"
+#include "Core/settingsFileEditor.h"
 #include "Internet/internetBackend.h"
 #include "Emotion/stimulusBuilder.h"
 #include "Identity/relationshipEvidence.h"
@@ -53,6 +54,7 @@
 #include <memory>
 #include <optional>
 #include <random>
+#include <set>
 #include <sstream>
 #include <system_error>
 #include <thread>
@@ -306,15 +308,17 @@ ReviaSession::ReviaSession(CompanionPaths paths, std::shared_ptr<policy::Compani
           },
           [this]()
           {
+              // Read on the turn's thread while Settings may change the two switches.
+              const conversationSettings conversation = ConversationSnapshot();
               agents::SelfInquiryLimits limits;
-              limits.enabled = settings.conversation.bSelfInquiryEnabled;
-              limits.iterativeEnabled = settings.conversation.bIterativeInvestigationEnabled;
-              limits.maximumRounds = static_cast<std::size_t>(std::max(1, settings.conversation.investigationMaximumRounds));
-              limits.questionsPerRound = static_cast<std::size_t>(std::max(1, settings.conversation.investigationQuestionsPerRound));
-              limits.investigationBudget = std::chrono::milliseconds(std::max(1000, settings.conversation.investigationBudgetMilliseconds));
-              limits.cooldownTurns = static_cast<std::size_t>(std::max(0, settings.conversation.selfInquiryCooldownTurns));
-              limits.includeOrdinaryQuestions = settings.conversation.selfInquiryScope == "questions";
-              limits.nativeDeliberation = settings.conversation.deliberation == "native";
+              limits.enabled = conversation.bSelfInquiryEnabled;
+              limits.iterativeEnabled = conversation.bIterativeInvestigationEnabled;
+              limits.maximumRounds = static_cast<std::size_t>(std::max(1, conversation.investigationMaximumRounds));
+              limits.questionsPerRound = static_cast<std::size_t>(std::max(1, conversation.investigationQuestionsPerRound));
+              limits.investigationBudget = std::chrono::milliseconds(std::max(1000, conversation.investigationBudgetMilliseconds));
+              limits.cooldownTurns = static_cast<std::size_t>(std::max(0, conversation.selfInquiryCooldownTurns));
+              limits.includeOrdinaryQuestions = conversation.selfInquiryScope == "questions";
+              limits.nativeDeliberation = conversation.deliberation == "native";
               return limits;
           },
           [this](const memory::RecallRequest& request, const std::string& currentInput, const memory::MemoryScope& scope)
@@ -348,6 +352,9 @@ ReviaSession::ReviaSession(CompanionPaths paths, std::shared_ptr<policy::Compani
       diagramStore(companionPaths.Resolve("RuntimeData/Diagrams")), documentWorkshop(router, actionRuntime, diagramStore, appLogger),
       sandboxWorkspace(companionPaths.Resolve("RuntimeData/Sandbox"))
 {
+    // The owner's Settings choices for settings.json values. Kept out of Config, which the
+    // build and every update copy from source, and shared by every companion on this install.
+    config.SetOwnerOverlay((companionPaths.InstallRoot() / "RuntimeData/Settings/owner-settings.json").string());
     const RuntimeStamp origin = sessionIdentity.Stamp();
     if (!authority)
     {
@@ -382,7 +389,7 @@ ReviaSession::ReviaSession(CompanionPaths paths, std::shared_ptr<policy::Compani
             // explicit command would: ActionRuntime with its policy, confirmation and audit
             // for files and pictures, the reminder book for reminders.
             ConversationRuntime::ChatToolGrant grant;
-            grant.archiveEnabled = settings.conversation.bArchiveEnabled;
+            grant.archiveEnabled = ConversationSnapshot().bArchiveEnabled;
             grant.remindersAvailable = true;
             grant.executors.setReminder = [this](const std::string& text, const std::string& when, const agents::ToolCallContext& call)
             {
@@ -609,6 +616,11 @@ void ReviaSession::StartVirtualMachine()
     {
         const auto configured = workspace::LoadVirtualMachineSettings(
             companionPaths.Resolve("RuntimeData/VirtualMachine/settings.json"), companionPaths.Descriptor().id);
+        {
+            // Settings shows a later change as waiting for a restart against this.
+            std::lock_guard snapshotLock(preferenceSnapshotMutex);
+            virtualMachineEnabledAtStart = configured.succeeded && configured.settings.enabled;
+        }
         if (!configured.succeeded || !configured.settings.enabled)
         {
             StopVirtualMachine();
@@ -730,8 +742,13 @@ bool ReviaSession::Start()
     }
 
     auto stageStarted = std::chrono::steady_clock::now();
-    const bool settingsLoaded = config.LoadSettings(settings);
+    std::vector<std::string> overlayWarnings;
+    const bool settingsLoaded = config.LoadSettings(settings, overlayWarnings);
     startupTimings.push_back({"settings_load", ElapsedMilliseconds(stageStarted)});
+    for (const std::string& warning : overlayWarnings)
+    {
+        appLogger.Warning(warning);
+    }
     // Applied here and not only in the constructor: at construction the settings are
     // still defaults, so a configured decision mode or learned artifact would never
     // have reached the coordinator. This is the first moment the file has been read.
@@ -784,6 +801,20 @@ bool ReviaSession::Start()
     if (!companionPaths.Descriptor().legacy && preferenceStore.Load().count("activeProfile") == 0)
     {
         settings.activeProfile = companionPaths.Descriptor().profileId;
+    }
+    {
+        // Resource planning rewrites some of these below (speechRecognition.useGpu follows
+        // the planned device), so what the owner configured is kept as it was loaded.
+        std::map<std::string, bool> loadedOwnerSettings;
+        for (const core::OwnerKey& entry : core::kOwnerKeys)
+        {
+            if (entry.type != core::OwnerKeyType::Bool || entry.key.starts_with("mcp."))
+                continue;
+            if (const auto value = core::OwnerSettingValue(settings, entry.key))
+                loadedOwnerSettings[std::string(entry.key)] = value->get<bool>();
+        }
+        std::lock_guard snapshotLock(preferenceSnapshotMutex);
+        startupOwnerSettings = std::move(loadedOwnerSettings);
     }
     responseAiReviewEnabled.store(settings.responseFilter.bAiReviewEnabled);
     responseAiMaxReviewTokens = settings.responseFilter.aiMaxReviewTokens;
@@ -1404,18 +1435,7 @@ bool ReviaSession::Start()
     {
         SetState(RuntimeState::Error, "The language model is unavailable; typed actions remain available.");
     }
-    RuntimeEvent visionEvent;
-    visionEvent.kind = RuntimeEventKind::ComponentStatus;
-    visionEvent.state = state.load();
-    visionEvent.component = "Vision";
-    visionEvent.phase = !settings.vision.bEnabled ? "Disabled" : llmAvailable ? "Ready" : "Unavailable";
-    visionEvent.message = !settings.vision.bEnabled ? "Local screen vision is off."
-                          : llmAvailable            ? settings.vision.bContinuousAwareness
-                                                          ? "Continuous local multi-monitor awareness is watching with temporary captures."
-                                                          : "Local screen vision is ready for approved actions."
-                                                    : "Vision requires the configured multimodal llama.cpp server.";
-    visionEvent.resource = resourcePlan.ChatLabel();
-    eventBus.Publish(std::move(visionEvent));
+    PublishVisionStatus();
     StartInputDrain();
     StartScreenAwareness();
     StartExternalAdapterLoop();
@@ -1557,7 +1577,9 @@ void ReviaSession::StopInputDrain()
 void ReviaSession::StartScreenAwareness()
 {
     StopScreenAwareness();
-    if (!settings.perception.bEnabled || !settings.vision.bEnabled || !settings.vision.bContinuousAwareness)
+    // Settings may switch vision and continuous awareness while Revia runs.
+    const visionSettings vision = VisionSnapshot();
+    if (!settings.perception.bEnabled || !vision.bEnabled || !vision.bContinuousAwareness)
     {
         return;
     }
@@ -1786,7 +1808,8 @@ void ReviaSession::StopScreenAwareness()
 
 void ReviaSession::SignalScreenAwareness(const std::string& reason)
 {
-    if (!settings.perception.bEnabled || !settings.vision.bEnabled || !settings.vision.bContinuousAwareness)
+    const visionSettings vision = VisionSnapshot();
+    if (!settings.perception.bEnabled || !vision.bEnabled || !vision.bContinuousAwareness)
     {
         return;
     }
@@ -1806,7 +1829,12 @@ std::string ReviaSession::CurrentScreenContext() const
 void ReviaSession::StartExternalAdapterLoop()
 {
     StopExternalAdapterLoop();
-    if (!settings.presence.bEnabled || !settings.presence.bExternalAdaptersEnabled)
+    bool adaptersWanted = false;
+    {
+        std::lock_guard snapshotLock(preferenceSnapshotMutex);
+        adaptersWanted = settings.presence.bEnabled && settings.presence.bExternalAdaptersEnabled;
+    }
+    if (!adaptersWanted)
     {
         return;
     }
@@ -1899,7 +1927,12 @@ void ReviaSession::StartExternalAdapterLoop()
                                             "Never reveal or infer private desktop, camera, local-user, file, "
                                             "memory, credential, path, or application details. Do not perform "
                                             "actions, emit commands, or claim that an action or web lookup ran.";
-                                        const bool shouldSpeak = request.source == "stream" && settings.presence.bSpeakStreamReplies;
+                                        bool speakStreamReplies = false;
+                                        {
+                                            std::lock_guard snapshotLock(preferenceSnapshotMutex);
+                                            speakStreamReplies = settings.presence.bSpeakStreamReplies;
+                                        }
+                                        const bool shouldSpeak = request.source == "stream" && speakStreamReplies;
                                         result = conversationRuntime.ReplyPublic(publicInput, channelHistory, publicInstruction,
                                             relationship, profile, llmAvailable, shouldSpeak, operationToken);
                                         if (request.source == "discord" && request.voiceReply && result.succeeded && !result.text.empty() &&
@@ -3249,7 +3282,7 @@ void ReviaSession::ArchiveTurn(
 {
     if (!sessionIdentity.IsCurrent(sessionIdentity.Stamp()))
         return;
-    if (conversationSessionId.empty() || !settings.conversation.bArchiveEnabled)
+    if (conversationSessionId.empty() || !ConversationSnapshot().bArchiveEnabled)
     {
         return;
     }
@@ -3287,7 +3320,7 @@ void ReviaSession::RestoreConversationContext(const memory::MemoryScope& scope, 
 
 std::string ReviaSession::ConversationHistoryStatus() const
 {
-    if (!settings.conversation.bArchiveEnabled)
+    if (!ConversationSnapshot().bArchiveEnabled)
     {
         return "Conversation history is off. /set conversation.archiveEnabled on turns it "
                "back on for the next start.";
@@ -3379,130 +3412,175 @@ std::size_t ReviaSession::ForgetConversations()
 
 core::PreferenceResult ReviaSession::SetPreference(const std::string& name, const std::string& value)
 {
-    std::lock_guard preferenceLock(preferenceUpdateMutex);
-    core::PreferenceResult result = preferenceStore.Set(name, value);
-    if (!result.succeeded)
+    const std::string lowered = ToLowerCopy(Trim(name));
+    core::PreferenceResult result;
+    bool live = false;
     {
-        return result;
+        std::lock_guard preferenceLock(preferenceUpdateMutex);
+        const std::string wanted = ToLowerCopy(Trim(value));
+        const bool turningOn = wanted == "on" || wanted == "true" || wanted == "yes" || wanted == "1";
+        if (lowered == "speechrecognition.requirewakeword" && turningOn && WakeWords().empty())
+        {
+            return {false, "No wake words are set (speechRecognition.wakeWords in Config/settings.json), so no spoken request "
+                           "could ever be answered. Add some before requiring one."};
+        }
+        result = preferenceStore.Set(name, value);
+        if (!result.succeeded)
+        {
+            return result;
+        }
+        // Only the stored preferences, laid over nothing: the one field this key controls is
+        // all that is taken from them.
+        appSettings updated;
+        preferenceStore.Apply(updated);
+        live = CommitPreferenceLocked(lowered, updated, result);
     }
+    if (live)
+    {
+        ApplyPreference(lowered);
+    }
+    PublishComponent("Preferences", "Changed", core::PreferenceStore::Find(name)->name);
+    return result;
+}
 
-    appSettings updated;
-    {
-        std::lock_guard snapshotLock(preferenceSnapshotMutex);
-        updated = settings;
-    }
-    preferenceStore.Apply(updated);
-    return ApplyPreferenceUpdate(name, std::move(updated), std::move(result));
+core::PreferenceResult ReviaSession::ResetPreference(const std::string& name)
+{
+    return ClearPreference(name);
 }
 
 core::PreferenceResult ReviaSession::ClearPreference(const std::string& name)
 {
-    std::lock_guard preferenceLock(preferenceUpdateMutex);
-    if (!core::PreferenceStore::Find(name))
-        return preferenceStore.Clear(name);
-    appSettings defaults;
-    if (!config.LoadSettings(defaults))
-        return {false, "The configured defaults could not be loaded; the preference was kept."};
-    core::PreferenceResult result = preferenceStore.Clear(name);
-    if (!result.succeeded)
-        return result;
-    preferenceStore.Apply(defaults);
-    appSettings updated;
-    {
-        std::lock_guard snapshotLock(preferenceSnapshotMutex);
-        updated = settings;
-    }
     const std::string lowered = ToLowerCopy(Trim(name));
-    // Restore only the requested comfort setting. Runtime hardware placement and
-    // the currently activated profile must not be replaced by fresh configuration.
-    if (lowered == "speech.enabled")
-        updated.speech.bEnabled = defaults.speech.bEnabled;
-    else if (lowered == "speech.volume")
-        updated.speech.volume = defaults.speech.volume;
-    else if (lowered == "speech.rate")
-        updated.speech.rate = defaults.speech.rate;
-    else if (lowered == "speech.speakgreeting")
-        updated.speech.bSpeakGreeting = defaults.speech.bSpeakGreeting;
-    else if (lowered == "speechrecognition.enabled")
-        updated.speechRecognition.bEnabled = defaults.speechRecognition.bEnabled;
-    else if (lowered == "speechrecognition.handsfree")
-        updated.speechRecognition.bHandsFree = defaults.speechRecognition.bHandsFree;
-    else if (lowered == "bargein.enabled")
-        updated.bargeIn.bEnabled = defaults.bargeIn.bEnabled;
-    else if (lowered == "initiative.enabled")
-        updated.initiative.bEnabled = defaults.initiative.bEnabled;
-    else if (lowered == "initiative.curiosityenabled")
-        updated.initiative.bCuriosityEnabled = defaults.initiative.bCuriosityEnabled;
-    else if (lowered == "initiative.spontaneousspeechenabled")
-        updated.initiative.bSpontaneousSpeechEnabled = defaults.initiative.bSpontaneousSpeechEnabled;
-    else if (lowered == "initiative.speakwhenuseraway")
-        updated.initiative.bSpeakWhenUserAway = defaults.initiative.bSpeakWhenUserAway;
-    else if (lowered == "initiative.autonomouslearningenabled")
-        updated.initiative.bAutonomousLearningEnabled = defaults.initiative.bAutonomousLearningEnabled;
-    else if (lowered == "initiative.maxperhour")
-        updated.initiative.maxUtterancesPerHour = defaults.initiative.maxUtterancesPerHour;
-    else if (lowered == "presence.avatarbridgeenabled")
-        updated.presence.bAvatarBridgeEnabled = defaults.presence.bAvatarBridgeEnabled;
-    else if (lowered == "presence.externaladaptersenabled")
-        updated.presence.bExternalAdaptersEnabled = defaults.presence.bExternalAdaptersEnabled;
-    else if (lowered == "llm.temperature")
-        updated.llm.temperature = defaults.llm.temperature;
-    else if (lowered == "resources.usagesampleseconds")
-        updated.resources.usageSampleSeconds = defaults.resources.usageSampleSeconds;
-    else if (lowered == "resources.voicedevice")
-        updated.resources.voice = defaults.resources.voice;
-    else if (lowered == "conversation.archiveenabled")
-        updated.conversation.bArchiveEnabled = defaults.conversation.bArchiveEnabled;
-    else if (lowered == "responsefilter.aireviewenabled")
-        updated.responseFilter.bAiReviewEnabled = defaults.responseFilter.bAiReviewEnabled;
-    else if (lowered == "activeprofile")
-        updated.activeProfile = defaults.activeProfile;
-    return ApplyPreferenceUpdate(name, std::move(updated), std::move(result));
+    core::PreferenceResult result;
+    bool live = false;
+    {
+        std::lock_guard preferenceLock(preferenceUpdateMutex);
+        if (!core::PreferenceStore::Find(name))
+            return preferenceStore.Clear(name);
+        appSettings defaults;
+        if (!config.LoadSettings(defaults))
+            return {false, "The configured defaults could not be loaded; the preference was kept."};
+        result = preferenceStore.Clear(name);
+        if (!result.succeeded)
+            return result;
+        preferenceStore.Apply(defaults);
+        // Restore only the requested comfort setting. Runtime hardware placement and
+        // the currently activated profile must not be replaced by fresh configuration.
+        live = CommitPreferenceLocked(lowered, defaults, result);
+    }
+    if (live)
+    {
+        ApplyPreference(lowered);
+    }
+    PublishComponent("Preferences", "Changed", core::PreferenceStore::Find(name)->name);
+    return result;
 }
 
-core::PreferenceResult ReviaSession::ApplyPreferenceUpdate(const std::string& name, appSettings updated, core::PreferenceResult result)
+bool ReviaSession::CommitPreferenceLocked(const std::string& lowered, const appSettings& updated, core::PreferenceResult& result)
 {
-    initiativeSettings previousInitiative;
+    // Applied to the running session where that is safe to do live, so a preference is not
+    // a promise about the next start. Worker startup settings remain next-start.
+    static const std::set<std::string> appliedNow = {"speech.enabled", "bargein.enabled", "speechrecognition.handsfree",
+        "speechrecognition.requirewakeword", "initiative.enabled", "initiative.maxperhour", "initiative.curiosityenabled",
+        "initiative.spontaneousspeechenabled", "initiative.speakwhenuseraway", "initiative.autonomouslearningenabled",
+        "initiative.suppresswhenfullscreen", "resources.usagesampleseconds", "responsefilter.aireviewenabled",
+        "presence.avatarbridgeenabled", "presence.externaladaptersenabled", "presence.enabled",
+        "presence.requireaddressedstreammessages"};
+    // Read from the running settings each time they are used, so committing is applying.
+    static const std::set<std::string> readAtUse = {
+        "conversation.selfinquiryenabled", "conversation.iterativeinvestigationenabled", "presence.speakstreamreplies"};
+    // Startup settings that something also reads while Revia runs. They are committed so that
+    // reader agrees with what is saved, and the rest follows at the next start.
+    static const std::set<std::string> partlyNow = {
+        "speechrecognition.enabled", "performance.enabled", "performance.interruptsongtospeak"};
+    // Committed only so VoiceDevicePreference reports the choice; the voice moves at the next start.
+    static const std::set<std::string> shownNow = {"resources.voicedevice"};
+
+    // Chats stop being saved as soon as history is turned off; turning it back on needs the
+    // archive opened at startup.
+    const bool archiveOff = lowered == "conversation.archiveenabled" && !updated.conversation.bArchiveEnabled;
+    const bool live = appliedNow.contains(lowered);
+    const bool shown = shownNow.contains(lowered);
+    if (!live && !archiveOff && !shown && !readAtUse.contains(lowered) && !partlyNow.contains(lowered))
+    {
+        result.message += " It takes effect the next time Revia starts.";
+        return false;
+    }
     {
         std::lock_guard snapshotLock(preferenceSnapshotMutex);
-        previousInitiative = settings.initiative;
-        // Commit before synchronous status events. An observer can perform another
-        // preference update, whose newer settings must survive this update's return.
-        // Profile selection remains owned by the canonical activation operation.
-        updated.activeProfile = settings.activeProfile;
-        settings = updated;
+        core::CopySettingField(settings, updated, lowered);
     }
-    // Applied to the running session where that is safe to do live, so a preference is
-    // not a promise about the next start. Worker startup settings remain next-start.
-    const std::string lowered = ToLowerCopy(Trim(name));
+    if (shown)
+    {
+        result.message += " It takes effect the next time Revia starts.";
+    }
+    else if (archiveOff)
+    {
+        result.message += " Chats stop being saved now.";
+    }
+    else if (partlyNow.contains(lowered))
+    {
+        result.message += " Part of it applies now; all of it takes effect the next time Revia starts.";
+    }
+    return live;
+}
+
+void ReviaSession::ApplyPreference(const std::string& lowered)
+{
+    std::lock_guard applyLock(preferenceApplyMutex);
     if (lowered == "speech.enabled")
     {
-        SetSpeechEnabled(updated.speech.bEnabled);
+        bool enabled = false;
+        {
+            std::lock_guard snapshotLock(preferenceSnapshotMutex);
+            enabled = settings.speech.bEnabled;
+        }
+        SetSpeechEnabled(enabled);
     }
     else if (lowered == "bargein.enabled")
     {
-        SetBargeInEnabled(updated.bargeIn.bEnabled);
+        bool enabled = false;
+        {
+            std::lock_guard snapshotLock(preferenceSnapshotMutex);
+            enabled = settings.bargeIn.bEnabled;
+        }
+        SetBargeInEnabled(enabled);
     }
     else if (lowered == "speechrecognition.handsfree")
     {
-        SetHandsFreeEnabled(updated.speechRecognition.bHandsFree);
+        bool enabled = false;
+        {
+            std::lock_guard snapshotLock(preferenceSnapshotMutex);
+            enabled = settings.speechRecognition.bHandsFree;
+        }
+        SetHandsFreeEnabled(enabled);
     }
-    else if (lowered == "initiative.enabled" || lowered == "initiative.maxperhour" || lowered == "initiative.curiosityenabled" ||
-             lowered == "initiative.spontaneousspeechenabled" || lowered == "initiative.speakwhenuseraway" ||
-             lowered == "initiative.autonomouslearningenabled")
+    else if (lowered == "speechrecognition.requirewakeword")
     {
-        const bool enabledChanged = previousInitiative.bEnabled != updated.initiative.bEnabled;
-        const bool curiosityWasRunning = previousInitiative.bEnabled && previousInitiative.bCuriosityEnabled;
-        const bool curiosityShouldRun = updated.initiative.bEnabled && updated.initiative.bCuriosityEnabled;
-        if (started.load() && curiosityWasRunning)
+        speech::AddresseeSettings addressee;
+        {
+            std::lock_guard snapshotLock(preferenceSnapshotMutex);
+            addressee = {settings.speechRecognition.bRequireWakeWord, settings.speechRecognition.wakeWords,
+                settings.speechRecognition.followUpSeconds};
+        }
+        addresseeGate.Configure(std::move(addressee));
+    }
+    else if (lowered.starts_with("initiative."))
+    {
+        initiativeSettings initiative;
+        {
+            std::lock_guard snapshotLock(preferenceSnapshotMutex);
+            initiative = settings.initiative;
+        }
+        if (started.load() && curiosityWorker.joinable())
         {
             StopCuriosityLoop();
         }
-        initiativeController.UpdateSettings(settings.initiative);
-        conversationStarter.UpdateSettings(settings.initiative);
-        if (enabledChanged && started.load())
+        initiativeController.UpdateSettings(initiative);
+        conversationStarter.UpdateSettings(initiative);
+        if (started.load() && initiative.bEnabled != initiativeWorker.joinable())
         {
-            if (settings.initiative.bEnabled)
+            if (initiative.bEnabled)
             {
                 StartInitiativeLoop();
             }
@@ -3511,7 +3589,7 @@ core::PreferenceResult ReviaSession::ApplyPreferenceUpdate(const std::string& na
                 StopInitiativeLoop();
             }
         }
-        if (started.load() && curiosityShouldRun)
+        if (started.load() && initiative.bEnabled && initiative.bCuriosityEnabled)
         {
             StartCuriosityLoop();
         }
@@ -3526,26 +3604,31 @@ core::PreferenceResult ReviaSession::ApplyPreferenceUpdate(const std::string& na
     }
     else if (lowered == "responsefilter.aireviewenabled")
     {
-        responseAiReviewEnabled.store(updated.responseFilter.bAiReviewEnabled);
-        PublishComponent("Response filters", settings.responseFilter.bAiReviewEnabled ? "Ready" : "Hard only",
-            settings.responseFilter.bAiReviewEnabled ? "Hard filtering is on and AI response review is on."
-                                                     : "Hard filtering remains on; AI response review is off.");
+        bool review = false;
+        {
+            std::lock_guard snapshotLock(preferenceSnapshotMutex);
+            review = settings.responseFilter.bAiReviewEnabled;
+        }
+        responseAiReviewEnabled.store(review);
+        PublishComponent("Response filters", review ? "Ready" : "Hard only",
+            review ? "Hard filtering is on and AI response review is on." : "Hard filtering remains on; AI response review is off.");
     }
-    else if (lowered == "presence.avatarbridgeenabled" || lowered == "presence.externaladaptersenabled")
+    else if (lowered.starts_with("presence.") && started.load())
     {
+        // Before startup there is nothing to restart; Start reads the saved value.
+        presenceSettings presence;
+        {
+            std::lock_guard snapshotLock(preferenceSnapshotMutex);
+            presence = settings.presence;
+        }
         StopExternalAdapterLoop();
         presenceRuntime.Start(
-            settings.presence, [this](const presence::PresenceNotice& notice)
+            presence, [this](const presence::PresenceNotice& notice)
             { PublishComponent(notice.component, notice.phase, notice.detail, -1.0, notice.queueDepth); },
             [this](const presence::ExternalAdapterEvent& event) { QueueExternalAdapterEvent(event); });
         if (started.load())
             StartExternalAdapterLoop();
     }
-    else
-    {
-        result.message += " It takes effect the next time Revia starts.";
-    }
-    return result;
 }
 
 std::string ReviaSession::VoiceDevicePreference() const
@@ -4924,8 +5007,8 @@ std::string ReviaSession::PerceptionStatus() const
     }
     const perception::PerceptionCounters counters = windowEventMonitor.Counters();
     stream << "Ambient perception is " << (windowEventMonitor.IsPaused() ? "PAUSED" : "WATCHING") << ". Structured window events are active"
-           << (settings.vision.bContinuousAwareness ? ", with event-driven local multi-monitor vision summaries.\n"
-                                                    : "; continuous pixel awareness is off.\n")
+           << (VisionSnapshot().bContinuousAwareness ? ", with event-driven local multi-monitor vision summaries.\n"
+                                                     : "; continuous pixel awareness is off.\n")
            << "Observed " << counters.observed << ", excluded " << counters.excluded << ", coalesced " << counters.coalesced
            << ", rate limited " << counters.rateLimited << ".\n"
            << settings.perception.excludedApplications.size() << " excluded applications and "
@@ -5044,7 +5127,7 @@ bool ReviaSession::EndListening()
 
 bool ReviaSession::IsVisionAvailable() const
 {
-    return started.load() && llmAvailable && settings.vision.bEnabled;
+    return started.load() && llmAvailable && VisionSnapshot().bEnabled;
 }
 
 bool ReviaSession::IsCameraAvailable() const
@@ -5272,7 +5355,7 @@ SessionResult ReviaSession::ActOnScreenLocked(const std::string& instruction)
         result.text = "Tell me which visible control to use.";
         return result;
     }
-    if (!started.load() || !settings.vision.bEnabled || !actionRuntime.IsInitialized())
+    if (!started.load() || !VisionSnapshot().bEnabled || !actionRuntime.IsInitialized())
     {
         result.reason = "Vision or the action runtime is unavailable.";
         result.text = "I cannot safely operate the visible screen right now.";
@@ -7460,7 +7543,11 @@ void ReviaSession::ApplyProfileLocked(const std::string& profileId, aiProfile lo
 {
     CancelSpeakerEnrollment();
     profile = std::move(loaded);
-    settings.activeProfile = profileId;
+    {
+        // ActiveProfileSummary reads it from the window's thread.
+        std::lock_guard snapshotLock(preferenceSnapshotMutex);
+        settings.activeProfile = profileId;
+    }
     router.ApplyProfile(profile);
     ApplyProfilePersonality();
     // File-stem identity keys assignments, even when a hand-authored JSON id differs.
@@ -9965,7 +10052,16 @@ bool ReviaSession::TryHandleActionInput(const std::string& input, SessionResult&
         const std::string argument = input.size() > 9 ? Trim(input.substr(9)) : std::string();
         if (argument == "on" || argument == "off")
         {
-            SetBargeInEnabled(argument == "on");
+            // Saved like the Settings switch, so the two never disagree.
+            const core::PreferenceResult update = SetPreference("bargeIn.enabled", argument);
+            if (!update.succeeded)
+            {
+                result.succeeded = false;
+                result.text = update.message;
+                result.reason = update.message;
+                SetState(RuntimeState::Blocked, result.reason);
+                return true;
+            }
         }
         else if (!argument.empty())
         {
