@@ -1049,7 +1049,8 @@ std::vector<ContrastPair> ContrastPairs(const Tokens& t)
     add("textSecondary on surfaceHover", t.textSecondary, t.surfaceHover, Text);
     add("textSecondary on selection (palette subtitle)", t.textSecondary, t.selection, Text);
     add("textSecondary on userBubble", t.textSecondary, t.userBubble, Text);
-    add("textSecondary on accentSoft (highlighted row)", t.textSecondary, t.accentSoft, Text);
+    add("textSecondary on accentSoft (banners)", t.textSecondary, t.accentSoft, Text);
+    add("textSecondary on warningSoft (quiet button in a banner)", t.textSecondary, t.warningSoft, Text);
     add("placeholder on inputBackground", t.textSecondary, t.inputBackground, Text);
 
     // Tertiary text: captions, hints and working rows; never on a selected row.
@@ -1085,16 +1086,31 @@ std::vector<ContrastPair> ContrastPairs(const Tokens& t)
     add("danger on background", t.danger, t.background, Text);
     add("danger on surface", t.danger, t.surface, Text);
     add("danger on sidebar", t.danger, t.sidebar, Text);
-    add("danger on dangerSoft (risky badge)", t.danger, t.dangerSoft, Text);
-    add("danger on surfaceHover (menu item)", t.danger, t.surfaceHover, Text);
+    add("danger on dangerSoft (risky badge, attachment remove on hover)", t.danger, t.dangerSoft, Text);
+    add("danger on surfaceHover (menu item, hovered or highlighted setting row)", t.danger, t.surfaceHover, Text);
     add("warning on background", t.warning, t.background, Text);
     add("warning on surface", t.warning, t.surface, Text);
     add("warning on sidebar", t.warning, t.sidebar, Text);
     add("warning on warningSoft (restart badge)", t.warning, t.warningSoft, Text);
+    add("warning on surfaceHover (hovered or highlighted setting row)", t.warning, t.surfaceHover, Text);
     add("success on background", t.success, t.background, Text);
     add("success on surface", t.success, t.surface, Text);
     add("success on sidebar", t.success, t.sidebar, Text);
     add("success on successSoft", t.success, t.successSoft, Text);
+    add("success on surfaceHover (hovered or highlighted setting row)", t.success, t.surfaceHover, Text);
+
+    // The centred percentage of a progress bar sits on the bar and on its translucent fill;
+    // reviaTheme.qss draws every ::chunk at this opacity over inputBackground.
+    const auto fill = [&t](const QColor& colour)
+    {
+        QColor top = colour;
+        top.setAlphaF(ProgressFillPercent / 100.0);
+        return Over(top, t.inputBackground);
+    };
+    add("text on progress fill (accent, elevated)", t.text, fill(t.accent), Text);
+    add("text on progress fill (success, idle)", t.text, fill(t.success), Text);
+    add("text on progress fill (warning, high)", t.text, fill(t.warning), Text);
+    add("text on progress fill (danger, critical or over budget)", t.text, fill(t.danger), Text);
 
     // Inverted and overlaid text.
     add("toast text", t.background, t.text, Text);
@@ -1110,6 +1126,7 @@ std::vector<ContrastPair> ContrastPairs(const Tokens& t)
     add("focusRing on surface", t.focusRing, t.surface, Boundary);
     add("focusRing on sidebar", t.focusRing, t.sidebar, Boundary);
     add("accent switch track on surface", t.accent, t.surface, Boundary);
+    add("accent icon on sidebarSelected (checked tool button)", t.accent, t.sidebarSelected, Boundary);
     add("background inset ring on accent", t.background, t.accent, Boundary);
     add("background inset ring on danger", t.background, t.danger, Boundary);
     return pairs;

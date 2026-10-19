@@ -219,16 +219,18 @@ QGroupBox { color: {{text}}; background: {{surface}}; border-color: {{border}}; 
 QGroupBox::title { color: {{text}}; background: transparent; }
 
 QProgressBar { color: {{text}}; background: {{inputBackground}}; border-color: {{border}}; }
-/* Translucent fills keep the centred percentage readable over the filled part. */
-QProgressBar::chunk { background: {{accent/45}}; border-radius: 5px; }
-QProgressBar[pressure="Idle"]::chunk { background: {{success/45}}; }
-QProgressBar[pressure="Elevated"]::chunk { background: {{accent/45}}; }
+/* Translucent fills keep the centred percentage readable over the filled part. At 40% the
+   text stays at AA over every fill in both schemes (ContrastPairs checks each one, and
+   Revia.Theme checks that every fill here keeps that opacity). */
+QProgressBar::chunk { background: {{accent/40}}; border-radius: 5px; }
+QProgressBar[pressure="Idle"]::chunk { background: {{success/40}}; }
+QProgressBar[pressure="Elevated"]::chunk { background: {{accent/40}}; }
 QProgressBar[pressure="High"] { border-color: {{warning}}; }
-QProgressBar[pressure="High"]::chunk { background: {{warning/45}}; }
+QProgressBar[pressure="High"]::chunk { background: {{warning/40}}; }
 QProgressBar[pressure="Critical"] { border-color: {{danger}}; }
-QProgressBar[pressure="Critical"]::chunk { background: {{danger/45}}; }
+QProgressBar[pressure="Critical"]::chunk { background: {{danger/40}}; }
 QProgressBar[overBudget="true"] { border-color: {{danger}}; }
-QProgressBar[overBudget="true"]::chunk { background: {{danger/45}}; }
+QProgressBar[overBudget="true"]::chunk { background: {{danger/40}}; }
 QProgressBar[unavailable="true"] { color: {{textSecondary}}; }
 QProgressBar[unavailable="true"]::chunk { background: transparent; }
 
@@ -418,7 +420,7 @@ QLabel#voiceCueStatus, QLabel#voiceHealthUpdated { color: {{textTertiary}}; }
 QFrame#attachmentChip { background: {{surfaceAlt}}; border-color: {{border}}; }
 QLabel#attachmentChipLabel { color: {{text}}; }
 QToolButton#attachmentChipRemove { color: {{textSecondary}}; background: transparent; }
-QToolButton#attachmentChipRemove:hover { color: {{danger}}; background: transparent; }
+QToolButton#attachmentChipRemove:hover { color: {{danger}}; background: {{dangerSoft}}; }
 QLabel#attachmentStatus, QLabel#documentsStatus { color: {{textSecondary}}; }
 
 /* ---------------------------------------------------------------- shell: overlays, palette, panels */
@@ -455,7 +457,9 @@ QFrame#settingsDivider { background: {{divider}}; }
 QLabel#settingsRiskyHeader { color: {{danger}}; }
 QFrame[reviaClass="settingRow"] { background: transparent; }
 QFrame[reviaClass="settingRow"]:hover { background: {{surfaceHover}}; }
-QFrame[reviaClass="settingRow"][highlight="true"] { background: {{accentSoft}}; }
+/* The flash after FocusSetting: a hovered row with an accent outline, so the row's danger,
+   warning and success text keeps a background it is checked against. */
+QFrame[reviaClass="settingRow"][highlight="true"] { background: {{surfaceHover}}; border-color: {{accent}}; }
 QLabel#settingTitle { color: {{text}}; }
 QLabel#settingDescription { color: {{textSecondary}}; }
 QLabel#settingBadge { color: {{textSecondary}}; background: {{surfaceAlt}}; }

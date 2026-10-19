@@ -362,8 +362,9 @@ QLabel#settingsGroupTitle { font-size: 13px; font-weight: 600; padding-top: 8px;
 QFrame#settingsGroup { border: 1px solid; border-radius: 10px; }
 QFrame#settingsDivider { border: none; min-height: 1px; max-height: 1px; }
 QLabel#settingsRiskyHeader { font-size: 12px; font-weight: 600; }
-/* Row frames get their 12/16 padding from the dialog's layout, never from here. */
-QFrame[reviaClass="settingRow"] { border: none; border-radius: 6px; }
+/* Row frames get their 12/16 padding from the dialog's layout, never from here. The
+   transparent border is there so the highlight outline does not move the row's content. */
+QFrame[reviaClass="settingRow"] { border: 1px solid transparent; border-radius: 6px; }
 QLabel#settingTitle { font-size: 13px; font-weight: 600; }
 QLabel#settingDescription { font-size: 12px; }
 QLabel#settingBadge { border: none; border-radius: 4px; padding: 1px 6px; font-size: 11px; font-weight: 600; }

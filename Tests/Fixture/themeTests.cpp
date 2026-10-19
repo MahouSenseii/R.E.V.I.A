@@ -221,6 +221,21 @@ void SaveGallery(QWidget* root, const QString& directory, const QString& name)
         rowLayout->addWidget(toggle);
         groupLayout->addWidget(row);
     }
+    {
+        // FocusSetting's flash on a risky row, whose warning must stay readable through it.
+        auto* row = new QFrame(group);
+        row->setProperty("reviaClass", "settingRow");
+        row->setProperty("highlight", true);
+        auto* rowLayout = new QVBoxLayout(row);
+        rowLayout->setContentsMargins(16, 12, 16, 12);
+        auto* title = new QLabel("Let Revia use the desktop", row);
+        title->setObjectName("settingTitle");
+        rowLayout->addWidget(title);
+        auto* warning = new QLabel("Revia can click and type in any window while this is on.", row);
+        warning->setObjectName("settingWarning");
+        rowLayout->addWidget(warning);
+        groupLayout->addWidget(row);
+    }
     auto* check = new QCheckBox("Follow new activity", group);
     check->setChecked(true);
     groupLayout->addWidget(check);
@@ -268,7 +283,7 @@ void SaveGallery(QWidget* root, const QString& directory, const QString& name)
     }
     layout->addLayout(side, 3, 1);
 
-    gallery->resize(980, 720);
+    gallery->resize(980, 840);
     gallery->show();
     Settle();
     gallery->grab().save(QDir(directory).filePath(name));
@@ -295,6 +310,20 @@ int RunThemeSuite(int, char**)
         "the colour template was not filled from the scheme's tokens");
     const QString structure = StructureSheet();
     results.Expect(!structure.isEmpty() && !ColourTemplate().isEmpty(), "revia.qss or reviaTheme.qss is missing from the resources");
+    {
+        // ContrastPairs checks the centred percentage over each progress fill at one opacity, so
+        // every fill in the template must use it.
+        const QRegularExpression chunkFill(QStringLiteral(R"(::chunk\s*\{[^}]*\{\{\s*\w+(?:/(\d+))?\s*\}\})"));
+        int fills = 0;
+        for (auto matches = chunkFill.globalMatch(ColourTemplate()); matches.hasNext();)
+        {
+            const QRegularExpressionMatch fill = matches.next();
+            ++fills;
+            results.Expect(fill.captured(1).toInt() == theme::ProgressFillPercent,
+                "a progress fill is not drawn at the opacity ContrastPairs checks: " + fill.captured(0).simplified().toStdString());
+        }
+        results.Expect(fills >= 5, "reviaTheme.qss lost its progress-bar fills");
+    }
     const QRegularExpression colourLiteral(QStringLiteral(R"(#[0-9A-Fa-f]{6}(?![\w-])|#[0-9A-Fa-f]{3}(?![\w-])|rgba?\()"));
     results.Expect(!structure.contains(colourLiteral), "revia.qss must hold structure only, but it names a colour: " +
         colourLiteral.match(structure).captured(0).toStdString());

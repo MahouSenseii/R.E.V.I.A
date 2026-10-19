@@ -114,6 +114,10 @@ void PolishMenu(QMenu* menu);
 // Dark or light caption, and on Windows 11 caption, text and border colours, for a top-level window.
 void ApplyNativeFrame(QWidget* topLevel);
 
+// The opacity reviaTheme.qss gives every progress-bar fill ({{accent/40}} and the like), so the
+// centred percentage stays at AA over the fill; ContrastPairs checks text over each fill at it.
+inline constexpr int ProgressFillPercent = 40;
+
 [[nodiscard]] double ContrastRatio(const QColor& first, const QColor& second);
 [[nodiscard]] std::vector<ContrastPair> ContrastPairs(const Tokens& tokens);
 
