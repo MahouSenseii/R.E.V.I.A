@@ -185,9 +185,13 @@ if(REVIA_BUILD_DESKTOP)
     # desktop shell still builds from an ordinary install with no extra component.
     find_package(Qt6 6.8 COMPONENTS Core Gui Widgets Svg SvgWidgets)
     if(Qt6_FOUND)
+        # The "# [sources:X]" lines mark where each part of the desktop redesign adds its files.
+        # Unchanged lines sit between them, so the parts merge without touching the same lines.
         add_executable(ReviaDesktop WIN32
                 "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/conversationStatusPanel.cpp"
                 "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/conversationStatusPanel.h"
+                "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/desktopObjectNames.h"
+                "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/settingsTypes.h"
                 "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/answerFeedbackDialog.cpp"
                 "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/answerFeedbackDialog.h"
                 "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/attachmentTray.cpp"
@@ -225,19 +229,23 @@ if(REVIA_BUILD_DESKTOP)
                 "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/tabNavigation.h"
                 "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/navigationSidebar.cpp"
                 "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/navigationSidebar.h"
+                # [sources:C]
                 "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/mindPanel.h"
                 "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/memoryPanel.h"
                 "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/pipelinePanel.cpp"
                 "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/pipelinePanel.h"
                 "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/profilePanel.cpp"
                 "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/profilePanel.h"
+                # [sources:B1]
                 "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/resourcePanel.cpp"
                 "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/resourcePanel.h"
+                # [sources:B2]
                 "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/reviaWindow.cpp"
                 "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/reviaWindow.h"
                 "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/reviaWindow.ui"
                 "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/toggleSwitch.cpp"
                 "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/toggleSwitch.h"
+                # [sources:A]
                 "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/reviaResources.qrc"
         )
         set_target_properties(ReviaDesktop PROPERTIES AUTOUIC ON AUTORCC ON)
@@ -725,9 +733,17 @@ if(BUILD_TESTING)
                 ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QPA_PLATFORM_PLUGIN_PATH=$<TARGET_FILE_DIR:Qt6::QOffscreenIntegrationPlugin>")
         get_target_property(REVIA_DESKTOP_TEST_SOURCES ReviaDesktop SOURCES)
         list(FILTER REVIA_DESKTOP_TEST_SOURCES EXCLUDE REGEX "/Desktop/main\\.cpp$")
-        add_executable(ReviaDesktopStopTests
-                Tests/Fixture/desktopStopTests.cpp
-                ${REVIA_DESKTOP_TEST_SOURCES})
+        # Every desktop Qt suite is a --suite=<name> mode of this one binary, so a suite costs no
+        # extra executable or link. Each suite appends its source under its own marker.
+        set(REVIA_DESKTOP_SUITE_SOURCES Tests/Fixture/desktopStopTests.cpp)
+
+        # [suite:theme]
+
+        # [suite:settings]
+
+        # [suite:shell]
+
+        add_executable(ReviaDesktopStopTests ${REVIA_DESKTOP_SUITE_SOURCES} ${REVIA_DESKTOP_TEST_SOURCES})
         set_target_properties(ReviaDesktopStopTests PROPERTIES AUTOUIC ON AUTORCC ON)
         target_include_directories(ReviaDesktopStopTests PRIVATE
                 "${CMAKE_CURRENT_SOURCE_DIR}/Desktop" "${CMAKE_CURRENT_SOURCE_DIR}/Tests")
@@ -738,9 +754,15 @@ if(BUILD_TESTING)
             target_link_options(ReviaDesktopStopTests PRIVATE -static-libgcc -static-libstdc++)
         endif()
         add_test(NAME Revia.DesktopStopPolicy COMMAND ReviaDesktopStopTests)
-        set_tests_properties(Revia.DesktopStopPolicy PROPERTIES
-                ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QPA_PLATFORM_PLUGIN_PATH=$<TARGET_FILE_DIR:Qt6::QOffscreenIntegrationPlugin>;REVIA_LOG_DIR=${CMAKE_CURRENT_BINARY_DIR}/TestLogs"
-                TIMEOUT 15)
+        add_test(NAME Revia.Theme COMMAND ReviaDesktopStopTests --suite=theme)
+        add_test(NAME Revia.SettingsDialog COMMAND ReviaDesktopStopTests --suite=settings)
+        add_test(NAME Revia.ShellWidgets COMMAND ReviaDesktopStopTests --suite=shell)
+        # REVIA_THEME=light keeps every capture the same whatever the runner's Windows colour setting.
+        set_tests_properties(Revia.DesktopStopPolicy Revia.Theme Revia.SettingsDialog Revia.ShellWidgets PROPERTIES
+                ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QPA_PLATFORM_PLUGIN_PATH=$<TARGET_FILE_DIR:Qt6::QOffscreenIntegrationPlugin>;REVIA_LOG_DIR=${CMAKE_CURRENT_BINARY_DIR}/TestLogs;REVIA_THEME=light"
+                TIMEOUT 30)
+        # A suite whose source is not in REVIA_DESKTOP_SUITE_SOURCES yet exits with 77 and is skipped.
+        set_tests_properties(Revia.Theme Revia.SettingsDialog Revia.ShellWidgets PROPERTIES SKIP_RETURN_CODE 77)
         add_executable(ReviaSvgRendererTests
                 Tests/Fixture/svgRendererTests.cpp
                 Private/Visual/svgCanvas.cpp

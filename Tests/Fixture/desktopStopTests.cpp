@@ -1,4 +1,5 @@
 #include "reviaWindow.h"
+#include "desktopSuites.h"
 #include "tabNavigation.h"
 #include "agentStudioPanel.h"
 #include "audienceStudioPanel.h"
@@ -60,6 +61,7 @@
 #include <condition_variable>
 #include <mutex>
 #include <string>
+#include <string_view>
 #include <thread>
 
 struct ReviaWindowStopTests
@@ -1723,9 +1725,49 @@ struct ReviaWindowStopTests
     }
 };
 
+namespace
+{
+// The suite this binary has always run: one ReviaWindow taken through every regression above.
+int RunPolicySuite(int, char**)
+{
+    int failures = 0;
+    ReviaWindow window(false, false);
+    ReviaWindowStopTests::Run(window, failures);
+    ReviaWindowStopTests::RunChatTranscriptUi(window, failures);
+    ReviaWindowStopTests::RunChatSessionsUi(window, failures);
+    ReviaWindowStopTests::RunRegenerateAndEditUi(window, failures);
+    ReviaWindowStopTests::RunAttachmentUi(window, failures);
+    ReviaWindowStopTests::RunConfirmationAudienceUi(window, failures);
+    ReviaWindowStopTests::RunConversationQualityUi(window, failures);
+    ReviaWindowStopTests::RunMemoryRevisionUi(window, failures);
+    ReviaWindowStopTests::RunHealthUiAndLayout(window, failures);
+    ReviaWindowStopTests::RunCompanionStudio(window, failures);
+    if (failures == 0)
+        std::cout << "Desktop Stop policy regression passed.\n";
+    return failures;
+}
+}
+
+REVIA_DESKTOP_SUITE("policy", RunPolicySuite);
+
 int main(int argc, char** argv)
 {
     QApplication application(argc, argv);
+    // --suite=<name> picks one of the suites linked into this binary. CTest treats 77 as skipped,
+    // which is what a suite whose source is not built in yet reports.
+    std::string suiteName = "policy";
+    for (int index = 1; index < argc; ++index)
+    {
+        const std::string_view argument = argv[index];
+        if (argument.starts_with("--suite="))
+            suiteName = argument.substr(std::string_view("--suite=").size());
+    }
+    const auto suite = revia::tests::DesktopSuites().find(suiteName);
+    if (suite == revia::tests::DesktopSuites().end())
+    {
+        std::cout << "suite " << suiteName << " is not built into this binary\n";
+        return 77;
+    }
     // Offscreen Qt needs an explicit font; its Windows font discovery is unavailable.
     QFontDatabase::addApplicationFont(qEnvironmentVariable("WINDIR", "C:/Windows") + "/Fonts/segoeui.ttf");
     application.setFont(QFont("Segoe UI"));
@@ -1749,19 +1791,5 @@ int main(int argc, char** argv)
     } restore{previousDirectory};
     if (revia::core::RuntimeRoot() != std::filesystem::path(settings.path().toStdWString()))
         return 2;
-    int failures = 0;
-    ReviaWindow window(false, false);
-    ReviaWindowStopTests::Run(window, failures);
-    ReviaWindowStopTests::RunChatTranscriptUi(window, failures);
-    ReviaWindowStopTests::RunChatSessionsUi(window, failures);
-    ReviaWindowStopTests::RunRegenerateAndEditUi(window, failures);
-    ReviaWindowStopTests::RunAttachmentUi(window, failures);
-    ReviaWindowStopTests::RunConfirmationAudienceUi(window, failures);
-    ReviaWindowStopTests::RunConversationQualityUi(window, failures);
-    ReviaWindowStopTests::RunMemoryRevisionUi(window, failures);
-    ReviaWindowStopTests::RunHealthUiAndLayout(window, failures);
-    ReviaWindowStopTests::RunCompanionStudio(window, failures);
-    if (failures == 0)
-        std::cout << "Desktop Stop policy regression passed.\n";
-    return failures == 0 ? 0 : 1;
+    return suite->second(argc, argv) == 0 ? 0 : 1;
 }
