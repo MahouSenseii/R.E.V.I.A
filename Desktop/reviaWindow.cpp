@@ -22,6 +22,7 @@
 #include "chatMarkdown.h"
 #include "chatSessionsPanel.h"
 #include "documentsDialog.h"
+#include "theme.h"
 #include "ui_reviaWindow.h"
 
 #include <QApplication>
@@ -495,7 +496,6 @@ void MakePageScrollable(QWidget* page, const char* scrollName = nullptr)
 void ReviaWindow::BuildInterface()
 {
     ui->setupUi(this);
-    setFont(QFont("Segoe UI"));
 
     titleBar = ui->titleBar;
     maximizeButton = ui->maximizeButton;
@@ -773,15 +773,9 @@ void ReviaWindow::BuildInterface()
     connect(renderVoiceBankButton, &QPushButton::clicked, this, [this]() { RenderVoiceBank(); });
     RefreshVoiceStudio();
 
-    QFile theme(":/revia/revia.qss");
-    if (theme.open(QIODevice::ReadOnly | QIODevice::Text))
-    {
-        setStyleSheet(QString::fromUtf8(theme.readAll()));
-    }
-    else
-    {
-        AppendActivity("The embedded Revia theme could not be loaded.");
-    }
+    // Palette, stylesheet and app font for the light or dark scheme, following Windows unless
+    // the owner chose one; the window and everything parented to it restyle on a change.
+    revia::desktop::theme::Install(this);
 
     MakePageScrollable(ui->settingsPage);
     MakePageScrollable(ui->presencePage);

@@ -1,7 +1,8 @@
 #include "internetActivityPanel.h"
 
+#include "theme.h"
+
 #include <QAbstractItemView>
-#include <QColor>
 #include <QDateTime>
 #include <QHeaderView>
 #include <QLabel>
@@ -19,6 +20,7 @@ namespace
 constexpr int MaximumVisibleLookups = 200;
 constexpr int IdentityRole = Qt::UserRole;
 constexpr int DetailRole = Qt::UserRole + 1;
+constexpr int ToneRole = Qt::UserRole + 7;
 
 std::string ActivityIdentity(const revia::runtime::RuntimeEvent& event)
 {
@@ -33,12 +35,13 @@ QString EventTime(const revia::runtime::RuntimeEvent& event)
     return QDateTime::fromMSecsSinceEpoch(milliseconds).toString("HH:mm:ss.zzz");
 }
 
-QColor PhaseColor(const QString& phase)
+revia::desktop::theme::Role PhaseTone(const QString& phase)
 {
-    if (phase == QStringLiteral("Ready")) return QColor("#69e2c4");
-    if (phase == QStringLiteral("Searching")) return QColor("#79d9ff");
-    if (phase == QStringLiteral("Unavailable")) return QColor("#ff8da1");
-    return QColor("#aab9cd");
+    using revia::desktop::theme::Role;
+    if (phase == QStringLiteral("Ready")) return Role::Success;
+    if (phase == QStringLiteral("Searching")) return Role::Accent;
+    if (phase == QStringLiteral("Unavailable")) return Role::Danger;
+    return Role::TextSecondary;
 }
 
 void SetCell(QTableWidget* table, const int row, const int column, const QString& text)
@@ -110,6 +113,25 @@ InternetActivityPanel::InternetActivityPanel(QWidget* parent)
     });
     connect(table, &QTableWidget::itemSelectionChanged,
         this, [this]() { ShowSelectedDetail(); });
+    themeListener = revia::desktop::theme::AddListener([this]() { ApplyTones(); });
+}
+
+InternetActivityPanel::~InternetActivityPanel()
+{
+    revia::desktop::theme::RemoveListener(themeListener);
+}
+
+void InternetActivityPanel::ApplyTones()
+{
+    for (int row = 0; row < table->rowCount(); ++row)
+    {
+        QTableWidgetItem* state = table->item(row, 1);
+        if (state != nullptr && state->data(ToneRole).isValid())
+        {
+            state->setForeground(revia::desktop::theme::RoleColor(
+                static_cast<revia::desktop::theme::Role>(state->data(ToneRole).toInt())));
+        }
+    }
 }
 
 void InternetActivityPanel::Observe(const revia::runtime::RuntimeEvent& event)
@@ -135,7 +157,9 @@ void InternetActivityPanel::Observe(const revia::runtime::RuntimeEvent& event)
     QTableWidgetItem* identity = table->item(row, 0);
     identity->setData(IdentityRole, QString::fromStdString(ActivityIdentity(event)));
     identity->setData(DetailRole, QString::fromStdString(event.detail));
-    table->item(row, 1)->setForeground(PhaseColor(QString::fromStdString(event.phase)));
+    const revia::desktop::theme::Role tone = PhaseTone(QString::fromStdString(event.phase));
+    table->item(row, 1)->setData(ToneRole, static_cast<int>(tone));
+    table->item(row, 1)->setForeground(revia::desktop::theme::RoleColor(tone));
     for (int column = 0; column < table->columnCount(); ++column)
     {
         table->item(row, column)->setToolTip(QString::fromStdString(event.detail));

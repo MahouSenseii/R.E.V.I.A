@@ -19,6 +19,7 @@ class InternetActivityPanel final : public QWidget
 {
 public:
     explicit InternetActivityPanel(QWidget* parent = nullptr);
+    ~InternetActivityPanel() override;
 
     void Observe(const revia::runtime::RuntimeEvent& event);
 
@@ -26,9 +27,12 @@ private:
     int EnsureRow(const revia::runtime::RuntimeEvent& event);
     void RebuildRowIndex();
     void ShowSelectedDetail();
+    // State cells keep a tone; the colour is re-derived from it after every theme change.
+    void ApplyTones();
 
     QTableWidget* table = nullptr;
     QPlainTextEdit* detail = nullptr;
     QPushButton* clearButton = nullptr;
     std::unordered_map<std::string, int> rows;
+    int themeListener = 0;
 };

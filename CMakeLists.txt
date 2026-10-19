@@ -246,6 +246,8 @@ if(REVIA_BUILD_DESKTOP)
                 "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/toggleSwitch.cpp"
                 "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/toggleSwitch.h"
                 # [sources:A]
+                "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/theme.cpp"
+                "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/theme.h"
                 "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/reviaResources.qrc"
         )
         set_target_properties(ReviaDesktop PROPERTIES AUTOUIC ON AUTORCC ON)
@@ -738,6 +740,7 @@ if(BUILD_TESTING)
         set(REVIA_DESKTOP_SUITE_SOURCES Tests/Fixture/desktopStopTests.cpp)
 
         # [suite:theme]
+        list(APPEND REVIA_DESKTOP_SUITE_SOURCES Tests/Fixture/themeTests.cpp)
 
         # [suite:settings]
 

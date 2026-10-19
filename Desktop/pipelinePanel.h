@@ -1,11 +1,12 @@
 #pragma once
 
 #include "Runtime/runtimeEvents.h"
+#include "theme.h"
 
-#include <QColor>
 #include <QWidget>
 
 #include <map>
+#include <optional>
 
 class QLabel;
 class QTableWidget;
@@ -16,14 +17,18 @@ class PipelinePanel final : public QWidget
 {
 public:
     explicit PipelinePanel(QWidget* parent = nullptr);
+    ~PipelinePanel() override;
 
     void Observe(const revia::runtime::RuntimeEvent& event);
 
 private:
     int EnsureRow(const QString& component);
-    void SetCell(int row, int column, const QString& text, const QColor& color = {});
+    // A tone is stored on the item and turned into a colour now and after every theme change.
+    void SetCell(int row, int column, const QString& text, std::optional<revia::desktop::theme::Role> tone = {});
+    void ApplyTones();
 
     QTableWidget* table = nullptr;
     QLabel* summary = nullptr;
     std::map<QString, int> rows;
+    int themeListener = 0;
 };

@@ -1,0 +1,529 @@
+/* Colours only. theme.cpp appends this to revia.qss after replacing each token name in
+   double braces with its light or dark value (revia::desktop::theme::Tokens), a name
+   followed by /NN with that colour at NN% opacity, and "scheme" with light or dark for the
+   images drawn per scheme. A name the code does not know is left in place, which
+   Revia.Theme reports.
+   Contrast rules (enforced through theme::ContrastPairs): selected rows carry text or
+   selectionText titles and textSecondary subtitles, never textTertiary or accent; status
+   colours appear as text only on background, surface, sidebar or their own soft colour. */
+
+QWidget { color: {{text}}; }
+QMainWindow, QDialog, QMessageBox, QWidget#rootPanel, QWidget#chatColumn, [reviaRole="panelWindow"] {
+    background: {{background}};
+}
+QToolTip { color: {{text}}; background: {{surface}}; border-color: {{borderStrong}}; }
+QStatusBar { color: {{textSecondary}}; background: {{background}}; }
+QLabel:disabled, QCheckBox:disabled, QRadioButton:disabled { color: {{textDisabled}}; }
+
+/* ---------------------------------------------------------------- buttons */
+
+QPushButton { color: {{text}}; background: {{surface}}; border-color: {{borderStrong}}; }
+QPushButton:hover { background: {{surfaceHover}}; }
+QPushButton:pressed, QPushButton:checked { background: {{sidebarSelected}}; }
+QPushButton:focus { border-color: {{focusRing}}; }
+QPushButton:disabled { color: {{textDisabled}}; background: {{surfaceAlt}}; border-color: {{border}}; }
+QPushButton[flat="true"] { background: transparent; border-color: transparent; }
+QPushButton[flat="true"]:hover { background: {{surfaceHover}}; }
+QPushButton[flat="true"]:focus { border-color: {{focusRing}}; }
+
+/* The one accent action in a view. Focus is an inset ring in the page colour, which keeps
+   at least 6:1 against the fill. */
+QPushButton[primary="true"], QPushButton#sendButton, QPushButton#primaryButton, QPushButton#settingsRestartNow,
+QPushButton#microphoneButton[listening="true"] {
+    color: {{textOnAccent}};
+    background: {{accent}};
+    border-color: {{accent}};
+}
+QPushButton[primary="true"]:hover, QPushButton#sendButton:hover, QPushButton#primaryButton:hover,
+QPushButton#settingsRestartNow:hover, QPushButton#microphoneButton[listening="true"]:hover {
+    background: {{accentHover}};
+    border-color: {{accentHover}};
+}
+QPushButton[primary="true"]:pressed, QPushButton#sendButton:pressed, QPushButton#primaryButton:pressed,
+QPushButton#settingsRestartNow:pressed, QPushButton#microphoneButton[listening="true"]:pressed {
+    background: {{accentPressed}};
+    border-color: {{accentPressed}};
+}
+QPushButton[primary="true"]:focus, QPushButton#sendButton:focus, QPushButton#primaryButton:focus,
+QPushButton#settingsRestartNow:focus, QPushButton#microphoneButton[listening="true"]:focus {
+    border-color: {{background}};
+}
+QPushButton[primary="true"]:disabled, QPushButton#sendButton:disabled, QPushButton#primaryButton:disabled,
+QPushButton#settingsRestartNow:disabled {
+    color: {{textDisabled}};
+    background: {{surfaceAlt}};
+    border-color: {{border}};
+}
+
+/* Destructive actions: outlined in danger, filled only for the emergency stops. */
+QPushButton#destructiveButton, QPushButton[destructive="true"] {
+    color: {{danger}};
+    background: {{surface}};
+    border-color: {{danger}};
+}
+QPushButton#destructiveButton:hover, QPushButton[destructive="true"]:hover { background: {{dangerSoft}}; }
+QPushButton#destructiveButton:focus, QPushButton[destructive="true"]:focus { border-color: {{focusRing}}; }
+QPushButton#headerDesktopStop, QFrame#stopBar QPushButton#desktopStopButton, QFrame#stopBar QPushButton {
+    color: {{textOnAccent}};
+    background: {{danger}};
+    border-color: {{danger}};
+}
+QPushButton#headerDesktopStop:hover, QFrame#stopBar QPushButton:hover { border-color: {{text}}; }
+QPushButton#headerDesktopStop:focus, QFrame#stopBar QPushButton:focus { border-color: {{background}}; }
+QFrame#stopBar QPushButton#desktopStopButton:disabled, QFrame#stopBar QPushButton:disabled {
+    color: {{textDisabled}};
+    background: {{surfaceAlt}};
+    border-color: {{border}};
+}
+QPushButton#destructiveButton:disabled { color: {{textDisabled}}; background: {{surfaceAlt}}; border-color: {{border}}; }
+
+/* Quiet utilities: present, but not competing with the action beside them. */
+QPushButton#conversationDetailsButton, QPushButton#reviewAnswerButton, QPushButton#composerContextAction,
+QPushButton#settingsRestartLater, QPushButton#renameChatButton, QPushButton#deleteChatButton,
+QPushButton#exportChatButton, QPushButton#backToChatButton, QPushButton#fallbackVoiceButton,
+QPushButton#openLogsButton, QPushButton#clearActivityButton {
+    color: {{textSecondary}};
+    background: transparent;
+    border-color: transparent;
+}
+QPushButton#conversationDetailsButton:hover, QPushButton#reviewAnswerButton:hover, QPushButton#composerContextAction:hover,
+QPushButton#settingsRestartLater:hover, QPushButton#renameChatButton:hover, QPushButton#deleteChatButton:hover,
+QPushButton#exportChatButton:hover, QPushButton#backToChatButton:hover, QPushButton#fallbackVoiceButton:hover,
+QPushButton#openLogsButton:hover, QPushButton#clearActivityButton:hover {
+    color: {{text}};
+    background: {{surfaceHover}};
+}
+QPushButton#conversationDetailsButton:checked { color: {{text}}; background: {{surfaceHover}}; }
+QPushButton#conversationDetailsButton:focus, QPushButton#reviewAnswerButton:focus, QPushButton#composerContextAction:focus,
+QPushButton#settingsRestartLater:focus, QPushButton#renameChatButton:focus, QPushButton#deleteChatButton:focus,
+QPushButton#exportChatButton:focus, QPushButton#backToChatButton:focus, QPushButton#fallbackVoiceButton:focus,
+QPushButton#openLogsButton:focus, QPushButton#clearActivityButton:focus {
+    border-color: {{focusRing}};
+}
+QPushButton#conversationDetailsButton:disabled, QPushButton#reviewAnswerButton:disabled,
+QPushButton#renameChatButton:disabled, QPushButton#deleteChatButton:disabled, QPushButton#exportChatButton:disabled {
+    color: {{textDisabled}};
+    background: transparent;
+    border-color: transparent;
+}
+QPushButton#composerContextAction { color: {{accent}}; }
+
+/* Flat by default; a checked tool button is the one in use. */
+QToolButton { color: {{textSecondary}}; background: transparent; }
+QToolButton:hover { color: {{text}}; background: {{surfaceHover}}; }
+QToolButton:pressed { background: {{sidebarSelected}}; }
+QToolButton:checked { color: {{text}}; background: {{sidebarSelected}}; }
+QToolButton:focus { border-color: {{focusRing}}; }
+QToolButton:disabled { color: {{textDisabled}}; background: transparent; }
+
+/* ---------------------------------------------------------------- check boxes and radio buttons */
+
+QCheckBox, QRadioButton { color: {{text}}; }
+QCheckBox::indicator, QRadioButton::indicator {
+    width: 16px;
+    height: 16px;
+    background: {{inputBackground}};
+    border: 1px solid {{switchOff}};
+}
+QCheckBox::indicator { border-radius: 4px; }
+QRadioButton::indicator { border-radius: 9px; }
+QCheckBox::indicator:hover, QRadioButton::indicator:hover { border-color: {{accent}}; }
+QCheckBox::indicator:checked {
+    background: {{accent}};
+    border-color: {{accent}};
+    image: url(:/revia/check-on-accent-{{scheme}}.svg);
+}
+QRadioButton::indicator:checked { background: {{inputBackground}}; border: 5px solid {{accent}}; }
+QCheckBox::indicator:focus, QRadioButton::indicator:focus { border-color: {{focusRing}}; }
+QCheckBox::indicator:disabled, QRadioButton::indicator:disabled { background: {{surfaceAlt}}; border-color: {{border}}; }
+QCheckBox::indicator:checked:disabled { background: {{border}}; border-color: {{border}}; }
+
+/* ---------------------------------------------------------------- inputs */
+
+QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox, QPlainTextEdit, QTextEdit {
+    color: {{text}};
+    background: {{inputBackground}};
+    border-color: {{inputBorder}};
+    selection-background-color: {{selection}};
+    selection-color: {{selectionText}};
+}
+QTextBrowser {
+    color: {{text}};
+    background: {{surface}};
+    border-color: {{border}};
+    selection-background-color: {{selection}};
+    selection-color: {{selectionText}};
+}
+QLineEdit:focus, QComboBox:focus, QSpinBox:focus, QDoubleSpinBox:focus, QPlainTextEdit:focus, QTextEdit:focus {
+    border-color: {{focusRing}};
+}
+QLineEdit:disabled, QComboBox:disabled, QSpinBox:disabled, QDoubleSpinBox:disabled, QPlainTextEdit:disabled,
+QTextEdit:disabled {
+    color: {{textDisabled}};
+    background: {{surfaceAlt}};
+    border-color: {{border}};
+}
+QLineEdit:read-only { background: {{surfaceAlt}}; }
+QSpinBox::up-button, QDoubleSpinBox::up-button, QSpinBox::down-button, QDoubleSpinBox::down-button {
+    background: {{surfaceAlt}};
+}
+QSpinBox::up-button:hover, QDoubleSpinBox::up-button:hover, QSpinBox::down-button:hover, QDoubleSpinBox::down-button:hover {
+    background: {{surfaceHover}};
+}
+QSpinBox::up-arrow, QDoubleSpinBox::up-arrow { image: url(:/revia/spin-up-{{scheme}}.svg); }
+QSpinBox::down-arrow, QDoubleSpinBox::down-arrow { image: url(:/revia/spin-down-{{scheme}}.svg); }
+QComboBox::drop-down { subcontrol-origin: padding; subcontrol-position: center right; width: 24px; border: none; }
+QComboBox::down-arrow { image: url(:/revia/chevron-down-{{scheme}}.svg); width: 10px; height: 6px; }
+QComboBox QAbstractItemView {
+    color: {{text}};
+    background: {{surface}};
+    border-color: {{borderStrong}};
+    selection-background-color: {{selection}};
+    selection-color: {{selectionText}};
+}
+
+/* ---------------------------------------------------------------- lists, tables and trees */
+
+QTableWidget, QTreeWidget, QListWidget, QTableView, QTreeView, QListView {
+    color: {{text}};
+    background: {{surface}};
+    alternate-background-color: {{background}};
+    border-color: {{border}};
+    gridline-color: transparent;
+    selection-background-color: {{selection}};
+    selection-color: {{selectionText}};
+}
+QTreeWidget::item:hover, QTableWidget::item:hover, QListWidget::item:hover { background: {{surfaceHover}}; }
+QTreeWidget::item:selected, QTableWidget::item:selected, QListWidget::item:selected {
+    color: {{selectionText}};
+    background: {{selection}};
+}
+QHeaderView { background: {{surface}}; }
+QHeaderView::section { color: {{textSecondary}}; background: {{surface}}; border-color: {{divider}}; }
+QTableCornerButton::section { background: {{surface}}; border: none; }
+
+/* ---------------------------------------------------------------- tabs */
+
+QTabWidget::pane { background: transparent; }
+QTabBar::tab { color: {{textSecondary}}; background: transparent; border: none; border-bottom: 2px solid transparent; }
+QTabBar::tab:hover { color: {{text}}; }
+QTabBar::tab:selected { color: {{text}}; border-bottom-color: {{accent}}; }
+QTabBar::tab:disabled { color: {{textDisabled}}; }
+QTabBar#primaryNavigation::tab:selected { background: {{sidebarSelected}}; border-bottom-color: transparent; }
+QTabBar QToolButton { color: {{textSecondary}}; background: {{surface}}; border-color: {{border}}; }
+QTabBar QToolButton:hover { background: {{surfaceHover}}; }
+
+/* ---------------------------------------------------------------- cards, menus, scroll bars */
+
+QGroupBox { color: {{text}}; background: {{surface}}; border-color: {{border}}; }
+QGroupBox::title { color: {{text}}; background: transparent; }
+
+QProgressBar { color: {{text}}; background: {{inputBackground}}; border-color: {{border}}; }
+/* Translucent fills keep the centred percentage readable over the filled part. */
+QProgressBar::chunk { background: {{accent/45}}; border-radius: 5px; }
+QProgressBar[pressure="Idle"]::chunk { background: {{success/45}}; }
+QProgressBar[pressure="Elevated"]::chunk { background: {{accent/45}}; }
+QProgressBar[pressure="High"] { border-color: {{warning}}; }
+QProgressBar[pressure="High"]::chunk { background: {{warning/45}}; }
+QProgressBar[pressure="Critical"] { border-color: {{danger}}; }
+QProgressBar[pressure="Critical"]::chunk { background: {{danger/45}}; }
+QProgressBar[overBudget="true"] { border-color: {{danger}}; }
+QProgressBar[overBudget="true"]::chunk { background: {{danger/45}}; }
+QProgressBar[unavailable="true"] { color: {{textSecondary}}; }
+QProgressBar[unavailable="true"]::chunk { background: transparent; }
+
+QMenu { color: {{text}}; background: {{surface}}; border-color: {{borderStrong}}; }
+QMenu::item { color: {{text}}; background: transparent; }
+QMenu::item:selected { background: {{surfaceHover}}; }
+QMenu::item:disabled { color: {{textSecondary}}; }
+QMenu::separator { background: {{divider}}; }
+QMenu::indicator { width: 14px; height: 14px; padding-left: 4px; }
+QMenu::indicator:checked { image: url(:/revia/check-{{scheme}}.svg); }
+
+QScrollBar { background: transparent; }
+QScrollBar::handle { background: {{scrollbar}}; }
+QScrollBar::handle:hover, QScrollBar::handle:pressed { background: {{scrollbarHover}}; }
+QScrollBar::add-page, QScrollBar::sub-page { background: transparent; }
+QAbstractScrollArea::corner { background: transparent; }
+QScrollArea { background: transparent; }
+QSplitter::handle { background: {{divider}}; }
+
+/* ---------------------------------------------------------------- window shell (until the redesign replaces it) */
+
+QLabel#windowTitle { color: {{textSecondary}}; }
+QToolButton#minimizeButton, QToolButton#maximizeButton, QToolButton#closeButton { color: {{textSecondary}}; }
+QToolButton#closeButton:hover { color: {{textOnAccent}}; background: {{danger}}; }
+QLabel#reviaTitle { color: {{text}}; }
+QLabel#sidebarHeading { color: {{textSecondary}}; }
+QLabel#affectLabel, QLabel#speechLabel, QLabel#microphoneLabel,
+QLabel#automationLabel, QLabel#visionLabel, QLabel#perceptionLabel {
+    color: {{textSecondary}};
+    background: {{surface}};
+    border-color: {{border}};
+}
+QLabel#perceptionLabel[watching="true"] { color: {{accent}}; background: {{accentSoft}}; border-color: {{accent/40}}; }
+
+/* ---------------------------------------------------------------- shell: sidebar */
+
+QWidget#navigationSidebar { background: {{sidebar}}; border-color: {{border}}; }
+QWidget#sidebarHeader, QWidget#sidebarBody { background: transparent; }
+QWidget#sidebarFooter { background: transparent; border-color: {{divider}}; }
+QLabel#sidebarBrand { color: {{text}}; }
+QLabel#sidebarBrandMark { color: {{accent}}; }
+QWidget#navigationSidebar QToolButton { color: {{text}}; background: transparent; }
+QWidget#navigationSidebar QToolButton:hover { background: {{sidebarHover}}; }
+QWidget#navigationSidebar QToolButton:pressed, QWidget#navigationSidebar QToolButton:checked {
+    color: {{text}};
+    background: {{sidebarSelected}};
+}
+QWidget#navigationSidebar QToolButton:focus { border-color: {{focusRing}}; }
+QWidget#navigationSidebar QToolButton:disabled { color: {{textDisabled}}; background: transparent; }
+QToolButton#sidebarToggle, QToolButton#sidebarRailNewChat, QToolButton#sidebarRailSearch,
+QToolButton#sidebarRailPanels, QToolButton#sidebarSettingsButton {
+    color: {{textSecondary}};
+}
+QToolButton#sidebarMenuButton { color: {{text}}; }
+QLabel#sidebarAvatar { color: {{accent}}; background: {{accentSoft}}; }
+QLabel#sidebarAccountName { color: {{text}}; }
+QLabel#sidebarAccountDetail { color: {{textSecondary}}; }
+QLabel#sidebarAttentionDot { background: transparent; }
+QLabel#sidebarAttentionDot[attention="true"] { background: {{warning}}; }
+QMenu#sidebarMenu, QMenu#chatMoreMenu, QMenu#composerAddMenu, QMenu#composerProfileMenu {
+    background: {{surface}};
+    border-color: {{borderStrong}};
+}
+
+QWidget#chatSessionsPanel { background: transparent; }
+QLabel#chatSessionsHeading { color: {{textSecondary}}; }
+QLabel#chatSessionsStatus { color: {{textSecondary}}; }
+QListWidget#chatSessionList { color: {{text}}; background: transparent; }
+QListWidget#chatSessionList::item:hover { background: {{sidebarHover}}; }
+QListWidget#chatSessionList::item:selected { color: {{text}}; background: {{sidebarSelected}}; }
+QPushButton#newChatButton { color: {{text}}; background: transparent; border-color: transparent; }
+QPushButton#newChatButton:hover { background: {{sidebarHover}}; }
+QPushButton#newChatButton:focus { border-color: {{focusRing}}; }
+QPushButton#chatSidebarToggle, QPushButton#chatSidebarToggle:checked {
+    color: {{textSecondary}};
+    background: transparent;
+    border-color: transparent;
+}
+QPushButton#chatSidebarToggle:hover { color: {{text}}; background: {{sidebarHover}}; }
+QPushButton#chatSidebarToggle:focus { border-color: {{focusRing}}; }
+
+/* ---------------------------------------------------------------- shell: chat column and header */
+
+QWidget#chatHeader { background: {{background}}; border-color: {{divider}}; }
+QLabel#chatTitle { color: {{text}}; }
+QWidget#privacyIndicators { background: transparent; }
+QToolButton#privacyMic, QToolButton#privacyPerception, QToolButton#privacyScreen, QToolButton#privacyCamera {
+    color: {{accent}};
+    background: {{accentSoft}};
+}
+QToolButton#privacyMic:hover, QToolButton#privacyPerception:hover, QToolButton#privacyScreen:hover,
+QToolButton#privacyCamera:hover {
+    border-color: {{accent/40}};
+}
+QToolButton#privacyDesktop { color: {{danger}}; background: {{dangerSoft}}; }
+QToolButton#privacyDesktop:hover { border-color: {{danger/40}}; }
+QToolButton#privacyMic:focus, QToolButton#privacyPerception:focus, QToolButton#privacyScreen:focus,
+QToolButton#privacyCamera:focus, QToolButton#privacyDesktop:focus {
+    border-color: {{focusRing}};
+}
+QToolButton#statePill { color: {{text}}; background: {{surface}}; border-color: {{border}}; }
+QToolButton#statePill:hover { background: {{surfaceHover}}; }
+QToolButton#statePill:focus { border-color: {{focusRing}}; }
+QLabel#stateDot { background: {{textSecondary}}; }
+QLabel#stateDot[state="ready"] { background: {{success}}; }
+QLabel#stateDot[state="starting"], QLabel#stateDot[state="busy"], QLabel#stateDot[state="listening"],
+QLabel#stateDot[state="speaking"] {
+    background: {{accent}};
+}
+QLabel#stateDot[state="waiting"], QLabel#stateDot[state="blocked"] { background: {{warning}}; }
+QLabel#stateDot[state="error"], QLabel#stateDot[state="acting"] { background: {{danger}}; }
+QLabel#stateDot[state="offline"], QLabel#stateDot[state="stopping"] { background: {{textSecondary}}; }
+QLabel#stateLabel { color: {{text}}; }
+QLabel#stateDetailLabel { color: {{textSecondary}}; }
+QToolButton#chatMoreButton { color: {{textSecondary}}; }
+QFrame#statusPopover { background: {{surface}}; border-color: {{borderStrong}}; }
+QFrame#statusPopover QLabel { color: {{text}}; background: transparent; border-color: transparent; }
+
+QTextBrowser#chatHistory { color: {{text}}; background: {{background}}; border-color: transparent; }
+QTextBrowser#chatHistory:focus { border-color: transparent; }
+QTextBrowser#chatHistory[kbdFocus="true"] { border-color: {{focusRing}}; }
+QToolButton#jumpToLatest { color: {{textSecondary}}; background: {{surface}}; border-color: {{borderStrong}}; }
+QToolButton#jumpToLatest:hover { color: {{text}}; background: {{surfaceHover}}; }
+QToolButton#jumpToLatest:focus { border-color: {{focusRing}}; }
+QWidget#archivedChatBanner { background: {{warningSoft}}; border-color: {{warning/35}}; }
+QLabel#archivedChatLabel { color: {{text}}; }
+
+/* ---------------------------------------------------------------- shell: composer */
+
+QWidget#composerArea, QWidget#composerShadowHost, QWidget#composerToolbar { background: transparent; }
+QFrame#composerCard { background: {{surface}}; border-color: {{borderStrong}}; }
+QFrame#composerCard[focused="true"] { border-color: {{focusRing}}; }
+QFrame#composerCard[voice="listening"], QFrame#composerCard[voice="transcribing"] { border-color: {{accent}}; }
+QFrame#composerCard QPlainTextEdit { color: {{text}}; background: transparent; }
+QWidget#composerToolbar QPushButton { color: {{textSecondary}}; background: transparent; border-color: transparent; }
+QWidget#composerToolbar QPushButton:hover { color: {{text}}; background: {{surfaceHover}}; }
+QWidget#composerToolbar QPushButton:focus { border-color: {{focusRing}}; }
+QWidget#composerToolbar QPushButton:disabled { color: {{textDisabled}}; background: transparent; }
+QWidget#composerToolbar QPushButton#sendButton, QWidget#composerToolbar QPushButton[primary="true"],
+QWidget#composerToolbar QPushButton#microphoneButton[listening="true"] {
+    color: {{textOnAccent}};
+    background: {{accent}};
+    border-color: {{accent}};
+}
+QWidget#composerToolbar QPushButton#sendButton:hover, QWidget#composerToolbar QPushButton[primary="true"]:hover,
+QWidget#composerToolbar QPushButton#microphoneButton[listening="true"]:hover {
+    background: {{accentHover}};
+    border-color: {{accentHover}};
+}
+QWidget#composerToolbar QPushButton#sendButton:focus, QWidget#composerToolbar QPushButton[primary="true"]:focus {
+    border-color: {{background}};
+}
+QWidget#composerToolbar QPushButton#sendButton:disabled { color: {{textDisabled}}; background: {{surfaceAlt}}; border-color: {{surfaceAlt}}; }
+QWidget#composerToolbar QPushButton#stopButton[primary="false"] { border-color: {{borderStrong}}; }
+QWidget#composerContext { background: {{surfaceAlt}}; }
+QLabel#composerContextLabel { color: {{textSecondary}}; }
+QToolButton#composerProfileChip { color: {{textSecondary}}; background: transparent; }
+QToolButton#composerProfileChip:hover { color: {{text}}; background: {{surfaceHover}}; }
+QToolButton#composerHandsFreeChip { color: {{accent}}; background: {{accentSoft}}; }
+QToolButton#composerHandsFreeChip:hover { border-color: {{accent/40}}; }
+QToolButton#composerProfileChip:focus, QToolButton#composerHandsFreeChip:focus { border-color: {{focusRing}}; }
+
+QFrame#conversationStatusCard { background: transparent; }
+QLabel#conversationCurrentStatus, QLabel#conversationOwnerOutcome, QLabel#conversationResponseTiming,
+QLabel#conversationResultEvidence {
+    color: {{textSecondary}};
+}
+QLabel#conversationQualityDiagnostic { color: {{warning}}; }
+
+QFrame#chatVoiceHealthCard { background: transparent; border-color: transparent; }
+QFrame#voiceHealthCard { background: {{surface}}; border-color: {{border}}; }
+QLabel#chatVoiceHealthBadge, QLabel#voiceHealthBadge { color: {{textSecondary}}; background: {{surfaceAlt}}; border-color: {{border}}; }
+QLabel#chatVoiceHealthBadge[tone="warning"], QLabel#voiceHealthBadge[tone="warning"] {
+    color: {{warning}};
+    background: {{warningSoft}};
+    border-color: {{warning/35}};
+}
+QLabel#chatVoiceHealthBadge[tone="available"], QLabel#voiceHealthBadge[tone="available"] {
+    color: {{success}};
+    background: {{successSoft}};
+    border-color: {{success/35}};
+}
+QLabel#voiceHealthTitle { color: {{text}}; }
+QLabel#chatVoiceHealthDetail, QLabel#voiceHealthDetail { color: {{textSecondary}}; }
+QLabel#voiceCueStatus, QLabel#voiceHealthUpdated { color: {{textTertiary}}; }
+
+QFrame#attachmentChip { background: {{surfaceAlt}}; border-color: {{border}}; }
+QLabel#attachmentChipLabel { color: {{text}}; }
+QToolButton#attachmentChipRemove { color: {{textSecondary}}; background: transparent; }
+QToolButton#attachmentChipRemove:hover { color: {{danger}}; background: transparent; }
+QLabel#attachmentStatus, QLabel#documentsStatus { color: {{textSecondary}}; }
+
+/* ---------------------------------------------------------------- shell: overlays, palette, panels */
+
+QFrame#toast { background: {{text}}; }
+QLabel#toastLabel { color: {{background}}; background: transparent; }
+QLabel#navigationLockOverlay { color: {{text}}; background: {{scrim}}; }
+QWidget#commandPaletteScrim { background: {{scrim}}; }
+QFrame#commandPalette { background: {{surface}}; border-color: {{borderStrong}}; }
+QLineEdit#commandPaletteInput { color: {{text}}; background: transparent; border-color: {{divider}}; }
+QListWidget#commandPaletteList { color: {{text}}; background: transparent; }
+QListWidget#commandPaletteList::item:selected { color: {{selectionText}}; background: {{selection}}; }
+QLabel#commandPaletteEmpty { color: {{textSecondary}}; }
+QLabel#commandPaletteFooter { color: {{textTertiary}}; border-color: {{divider}}; }
+QWidget#panelHeader { background: transparent; }
+QToolButton#panelPlaceBeside, QToolButton#panelOpenSettings { color: {{textSecondary}}; }
+QDialog#shortcutsDialog { background: {{background}}; }
+QTableWidget#shortcutsTable { background: {{surface}}; }
+QPushButton#presenceOpenSettings { color: {{accent}}; }
+QWidget#microphoneRow { background: transparent; }
+
+/* ---------------------------------------------------------------- settings dialog */
+
+QDialog#settingsDialog, QStackedWidget#settingsStack, [reviaRole="settingsSection"] { background: {{background}}; }
+QWidget#settingsNav { background: {{sidebar}}; border-color: {{border}}; }
+QListWidget#settingsSections { color: {{text}}; background: transparent; }
+QListWidget#settingsSections::item:hover { background: {{sidebarHover}}; }
+QListWidget#settingsSections::item:selected { color: {{text}}; background: {{sidebarSelected}}; }
+QLabel#settingsSectionTitle { color: {{text}}; }
+QLabel#settingsSectionIntro { color: {{textSecondary}}; }
+QLabel#settingsGroupTitle { color: {{text}}; }
+QFrame#settingsGroup { background: {{surface}}; border-color: {{border}}; }
+QFrame#settingsDivider { background: {{divider}}; }
+QLabel#settingsRiskyHeader { color: {{danger}}; }
+QFrame[reviaClass="settingRow"] { background: transparent; }
+QFrame[reviaClass="settingRow"]:hover { background: {{surfaceHover}}; }
+QFrame[reviaClass="settingRow"][highlight="true"] { background: {{accentSoft}}; }
+QLabel#settingTitle { color: {{text}}; }
+QLabel#settingDescription { color: {{textSecondary}}; }
+QLabel#settingBadge { color: {{textSecondary}}; background: {{surfaceAlt}}; }
+QLabel#settingBadge[kind="restart"], QLabel#settingBadge[kind="partial"] { color: {{warning}}; background: {{warningSoft}}; }
+QLabel#settingBadge[kind="global"] { color: {{textSecondary}}; background: {{surfaceAlt}}; }
+QLabel#settingBadge[kind="privacy"], QLabel#settingBadge[kind="autonomy"] { color: {{accent}}; background: {{accentSoft}}; }
+QLabel#settingBadge[kind="danger"] { color: {{danger}}; background: {{dangerSoft}}; }
+QLabel#settingWarning { color: {{danger}}; }
+QLabel#settingStatus, QLabel#settingStatus[tone="info"] { color: {{textSecondary}}; }
+QLabel#settingStatus[tone="success"] { color: {{success}}; }
+QLabel#settingStatus[tone="error"] { color: {{danger}}; }
+QLabel#settingStatus[tone="warning"] { color: {{warning}}; }
+QFrame#settingsRestartBanner { background: {{warningSoft}}; border-color: {{warning/35}}; }
+QFrame#settingsRestartBanner QLabel { color: {{text}}; background: transparent; }
+QLabel#settingsNoResults { color: {{textSecondary}}; }
+QMessageBox#settingConfirmDialog { background: {{background}}; }
+QFrame#themeSegment { background: {{surfaceAlt}}; border-color: {{border}}; }
+QPushButton#themeSystem, QPushButton#themeLight, QPushButton#themeDark {
+    color: {{textSecondary}};
+    background: transparent;
+    border-color: transparent;
+}
+QPushButton#themeSystem:hover, QPushButton#themeLight:hover, QPushButton#themeDark:hover { color: {{text}}; }
+QPushButton#themeSystem:checked, QPushButton#themeLight:checked, QPushButton#themeDark:checked {
+    color: {{text}};
+    background: {{surface}};
+    border-color: {{borderStrong}};
+}
+QPushButton#themeSystem:focus, QPushButton#themeLight:focus, QPushButton#themeDark:focus { border-color: {{focusRing}}; }
+QComboBox#chatTextSizeCombo, QComboBox#cloudUseForCombo { background: {{inputBackground}}; }
+QDoubleSpinBox#profileTemperatureSpin, QSpinBox#profileMaxTokensSpin { background: {{inputBackground}}; }
+QDoubleSpinBox#profileTemperatureSpin:disabled, QSpinBox#profileMaxTokensSpin:disabled { background: {{surfaceAlt}}; }
+
+/* ---------------------------------------------------------------- permissions (CapabilityPanel) */
+
+QFrame#permCard { background: {{surface}}; border-color: {{border}}; }
+QFrame#gatedCard { background: {{surface}}; border-color: {{warning/35}}; }
+QFrame#introBar { background: {{surfaceAlt}}; border-color: {{border}}; border-left-color: {{accent}}; }
+QFrame#iconWell { background: {{accentSoft}}; border-color: {{accent/30}}; }
+QFrame#iconWellGated { background: {{warningSoft}}; border-color: {{warning/30}}; }
+QLabel#cardTitle { color: {{text}}; }
+QLabel#cardSubtitle { color: {{textSecondary}}; }
+QLabel#permLabel { color: {{text}}; }
+QLabel#permLabelNested, QLabel#permHelp, QLabel#permRowHelp { color: {{textSecondary}}; }
+QFrame#permRow, QFrame#permRowNested { background: transparent; }
+QFrame#permRow:hover, QFrame#permRowNested:hover { background: {{surfaceHover}}; }
+QFrame#rowSeparator { background: {{divider}}; }
+QLabel#chipAutonomy { color: {{accent}}; background: {{accentSoft}}; }
+QLabel#chipGated { color: {{warning}}; background: {{warningSoft}}; }
+QLabel#chipCritical { color: {{danger}}; background: {{dangerSoft}}; }
+QLabel#infoDot { color: {{textSecondary}}; border-color: {{inputBorder}}; }
+QLabel#gatedNotice { color: {{text}}; background: {{warningSoft}}; border-color: {{warning/35}}; }
+QFrame#stopBar { background: {{dangerSoft}}; border-color: {{danger/35}}; }
+QLabel#stopState { color: {{text}}; }
+QWidget#capabilityListFooter { background: {{surfaceAlt}}; }
+
+/* ---------------------------------------------------------------- page text */
+
+QLabel#secondaryText, QLabel#voiceIntro, QLabel#settingsHint { color: {{textSecondary}}; }
+QLabel#sectionTitle, QLabel#mindHeadline { color: {{text}}; }
+QLabel#voiceStudioStatus { color: {{text}}; background: {{accentSoft}}; border-color: {{accent/30}}; }
+QLabel#profileActiveBanner { color: {{text}}; background: {{accentSoft}}; border-color: {{accent/30}}; }
+QLabel#profileStatus, QLabel#memoryStatus, QLabel#memoryRevisionOutcome, QLabel#answerFeedbackOutcome { color: {{success}}; }
+QLabel#profileStatus[error="true"], QLabel#memoryRevisionOutcome[error="true"], QLabel#answerFeedbackOutcome[error="true"] {
+    color: {{danger}};
+}
+QLabel#activityIssueSummary, QLabel#preferenceStatus { color: {{success}}; }
+QLabel#activityIssueSummary[level="warning"] { color: {{warning}}; }
+QLabel#activityIssueSummary[level="error"], QLabel#preferenceStatus[error="true"] { color: {{danger}}; }
+QLabel#memoryRevisionProvenance { color: {{textSecondary}}; }
+QDialog#answerFeedbackDialog, QDialog#memoryRevisionDialog, QDialog#documentsDialog { background: {{background}}; }
