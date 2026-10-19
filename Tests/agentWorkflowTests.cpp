@@ -516,6 +516,8 @@ void TestDurableEvidenceAndInvalidCheckpointRejection()
     }
     Check(!restored.Load(path, error), "Corrupt evidence hash was admitted from disk.");
     const auto directory = Checkpoint("occupied-destination");
+    // A run stopped before its cleanup must not break every later one.
+    std::filesystem::remove_all(directory);
     std::filesystem::create_directory(directory);
     Check(!original.Save(directory, error) && std::filesystem::is_directory(directory),
         "Failed atomic publication damaged the existing destination.");
@@ -684,6 +686,7 @@ void TestRetryAtVisiblePausedTeardown()
         std::thread::id secondThread;
         bool workReleased = false;
         bool firstReleased = false;
+        bool dispatchSeen = false;
         bool resultCallbackHeld = false;
         bool resultCallbackReleased = false;
         bool paused = false;
@@ -718,6 +721,17 @@ void TestRetryAtVisiblePausedTeardown()
                   error,
                   [&](const WorkflowSnapshot& snapshot)
                   {
+                      const auto running = [&](const char* id)
+                      {
+                          const auto& node = Node(snapshot, id);
+                          return !node.attempts.empty() && node.attempts.back().state == WorkflowState::Running;
+                      };
+                      if (running("first") && running("second"))
+                      {
+                          std::lock_guard seen(mutex);
+                          dispatchSeen = true;
+                          condition.notify_all();
+                      }
                       const bool hasCompletedAttempt = std::any_of(snapshot.nodes.begin(), snapshot.nodes.end(),
                           [](const auto& node) { return !node.attempts.empty() && node.attempts.back().state != WorkflowState::Running; });
                       if (snapshot.state == WorkflowState::Running && hasCompletedAttempt)
@@ -752,7 +766,14 @@ void TestRetryAtVisiblePausedTeardown()
                   }),
             "Visible paused teardown fixture did not start.");
         {
-            std::lock_guard lock(mutex);
+            // Released only once the dispatcher has delivered both dispatched attempts and moved
+            // on, so that second's own thread, not the dispatcher, drains its result. The pause
+            // grows with each setup, so a setup lost to scheduling is not repeated identically.
+            std::unique_lock lock(mutex);
+            condition.wait_for(lock, 1s, [&] { return dispatchSeen; });
+            lock.unlock();
+            std::this_thread::sleep_for(std::chrono::milliseconds(2 + 3 * setup));
+            lock.lock();
             workReleased = true;
             condition.notify_all();
         }
