@@ -100,6 +100,7 @@ void RunEmotionOwnershipTests();
 void RunStartupWarmupTests();
 void RunPersistenceRecoveryTests();
 void RunPreferenceResetTests();
+void RunSettingsFileEditorTests();
 void RunEmotionOwnershipLive(const std::string& runtimeDirectory, const std::string& reportPath);
 void RunIdentityTests();
 void RunAppraisalTests();

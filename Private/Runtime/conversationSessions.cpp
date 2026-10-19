@@ -17,7 +17,7 @@ bool ReviaSession::ConversationBrowsingAdmitted(std::string& outReason) const
     outReason.clear();
     if (!started.load())
         outReason = "Past chats are available once Revia has started.";
-    else if (!settings.conversation.bArchiveEnabled)
+    else if (!ConversationSnapshot().bArchiveEnabled)
         outReason = "Conversation history is off, so there are no past chats to show.";
     else if (CurrentConversationId().empty())
         outReason = "The conversation archive could not be opened.";
@@ -116,7 +116,7 @@ bool ReviaSession::StartNewConversation(std::string& outError)
         privateContextAudience = configuredAudience.audienceId;
         audienceHistory.clear();
     }
-    if (!settings.conversation.bArchiveEnabled || CurrentConversationId().empty())
+    if (!ConversationSnapshot().bArchiveEnabled || CurrentConversationId().empty())
         return true;
     conversationArchive.EndSession(conversationSessionId);
     const std::string next = actions::NewActionId();

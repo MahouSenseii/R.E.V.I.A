@@ -97,6 +97,7 @@
 #include <cstdint>
 #include <deque>
 #include <functional>
+#include <map>
 #include <mutex>
 #include <optional>
 #include <stop_token>
@@ -109,6 +110,11 @@ namespace revia::speech
 {
 class SpeakerEnrollmentDialogue;
 struct SpeakerEnrollmentContext;
+}
+
+namespace revia::core
+{
+class SettingsFileEditor;
 }
 
 namespace revia::runtime
@@ -165,9 +171,20 @@ struct UserPreferenceSnapshot
     bool curiosityEnabled = false;
     bool spontaneousSpeechEnabled = false;
     bool speakWhenUserAway = false;
-    bool aiResponseReviewEnabled = true;
+    bool aiResponseReviewEnabled = false;
     int initiativeMaxPerHour = 0;
     int resourceSampleSeconds = 0;
+};
+
+// One switch of the desktop's Settings dialog. value is what is persisted (settings.json with
+// the owner overlay, then the preference store, freshly loaded); running is what is in effect
+// now. They differ for a setting that applies at the next start.
+struct BooleanSettingState
+{
+    bool available = false;
+    bool value = false;
+    bool running = false;
+    std::string unavailableReason;
 };
 
 struct ReviaSessionTestAccess;
@@ -319,6 +336,9 @@ class ReviaSession
     // authorities that are dropped when the one they sit inside is withdrawn.
     CapabilityUpdateResult SetDesktopControl(bool pointer, bool keyboard, bool applicationLaunch, bool rawCoordinates, bool visualTargeting,
         bool autonomous, actions::CapabilitySettings::DesktopControl::InputScope scope, bool allowCommandSurfaces);
+    // The Ubuntu workspace's switches, through the same capability editor, validation and
+    // reload as every other permission. Limits and approved executables are left as written.
+    CapabilityUpdateResult SetGuestCapabilities(const policy::GuestCapabilitySettings& settings);
     // How much of Revia's in-scope work stops to ask. It never widens which roots,
     // applications, or controls are in scope.
     CapabilityUpdateResult SetExecutionMode(actions::ExecutionMode mode);
@@ -414,9 +434,46 @@ class ReviaSession
     // Durable non-authority settings. The store cannot reach a capability, so nothing
     // here can widen what Revia is permitted to do.
     core::PreferenceResult SetPreference(const std::string& name, const std::string& value);
+    // Back to the configured value, as /unset does.
+    core::PreferenceResult ResetPreference(const std::string& name);
     [[nodiscard]] std::string DescribePreferences() const;
     [[nodiscard]] std::string VoiceDevicePreference() const;
     [[nodiscard]] UserPreferenceSnapshot UserPreferences() const;
+
+    // The owner's choices for Config/settings.json values, kept in the install-wide overlay
+    // RuntimeData/Settings/owner-settings.json and shared by every companion. Only the keys in
+    // core::kOwnerKeys are accepted; an MCP server is addressed as "mcp.servers[<id>].enabled"
+    // or ".requireConfirmation". Live keys change the running session too; the rest wait for
+    // the next start. These are for the owner's desktop and are reachable from no command.
+    core::PreferenceResult SetOwnerSetting(const std::string& key, bool value);
+    core::PreferenceResult SetOwnerChoice(const std::string& key, const std::string& value);
+    // Removes the overlay key, so settings.json decides again.
+    core::PreferenceResult ResetOwnerSetting(const std::string& key);
+    [[nodiscard]] std::string OwnerChoice(const std::string& key) const;
+    // The ids of the MCP servers in the persisted settings.
+    [[nodiscard]] std::vector<std::string> McpServerNames() const;
+    // The words that address her in hands-free listening, from settings.json.
+    [[nodiscard]] std::vector<std::string> WakeWords() const;
+
+    // Every Boolean the Settings dialog reads from a preference, the owner overlay, the session
+    // or the virtual machine file, keyed by its catalog key: preference and overlay keys as
+    // written, MCP keys as above, "perception.paused", "cloud.session" and
+    // "virtualMachine.enabled". It never waits for a writer.
+    [[nodiscard]] std::map<std::string, BooleanSettingState> BooleanSettings() const;
+
+    // Whether this companion starts its Ubuntu workspace. Persisted, and applied at the next start.
+    core::PreferenceResult SetVirtualMachineEnabled(bool enabled);
+    [[nodiscard]] bool IsVirtualMachineEnabled() const;
+
+    // The /cloud on|off session switch. It can stop cloud use at once but cannot enable what
+    // llm.cloud.enabled leaves off.
+    void SetCloudSessionEnabled(bool enabled);
+    [[nodiscard]] bool IsCloudSessionEnabled() const;
+    // Provider, host, model, and whether the key's environment variable is set. Never the key.
+    [[nodiscard]] std::string CloudStatusText() const;
+
+    // A copy taken under the settings lock, for readers on worker threads.
+    [[nodiscard]] conversationSettings ConversationSnapshot() const;
 
     // Draws an explanatory diagram or interface mockup. The model produces SVG, the
     // sanitizer refuses anything that would run or fetch, and the result is a file.
@@ -481,7 +538,12 @@ class ReviaSession
 
     // Profile edits cannot change capabilities.
     [[nodiscard]] ProfileStudioSnapshot ProfileStudio() const;
+    // The running profile as saved, without waiting for a turn. Voice fields are left empty.
+    [[nodiscard]] std::optional<ProfileSummary> ActiveProfileSummary() const;
     ProfileOperationResult SaveProfile(const ProfileSummary& definition);
+    // SaveProfile that refuses at once, instead of waiting, while a turn holds the session.
+    // For a caller whose queue must not stall behind a reply.
+    ProfileOperationResult TrySaveProfile(const ProfileSummary& definition);
     ProfileOperationResult ActivateProfile(const std::string& profileId);
 
   private:
@@ -493,10 +555,42 @@ class ReviaSession
     // UI and CLI selection additionally require the preference write to succeed first.
     void ApplyProfileLocked(const std::string& profileId, aiProfile loaded);
     ProfileOperationResult ActivateProfileLocked(const std::string& profileId);
+    ProfileOperationResult SaveProfileLocked(const ProfileSummary& definition);
     // Apply authored baselines while preserving earned trait drift and learned preferences.
     void ApplyProfilePersonality();
     core::PreferenceResult ClearPreference(const std::string& name);
-    core::PreferenceResult ApplyPreferenceUpdate(const std::string& name, appSettings updated, core::PreferenceResult result);
+    // Callers hold preferenceUpdateMutex. Copies only the named preference's field from
+    // updated into the running settings when it applies now, and words the result. A setting
+    // that waits for a restart is not committed, so the running settings describe what runs.
+    // Returns whether ApplyPreference has live work to do.
+    bool CommitPreferenceLocked(const std::string& lowered, const appSettings& updated, core::PreferenceResult& result);
+    // The live work for a committed preference, run by DrainLiveAppliers. It may join workers
+    // or restart services, and reads the committed value when it starts, so a newer write
+    // simply runs it again with the newer value.
+    void ApplyPreference(const std::string& lowered);
+    // Callers hold preferenceUpdateMutex. Commits a live owner key's persisted value into the
+    // running session; returns whether ApplyOwnerSetting has work to do.
+    bool CommitOwnerSettingLocked(const std::string& key, const appSettings& persisted);
+    // Callers hold preferenceUpdateMutex. Start's last look at the overlay: commits every live
+    // owner key as saved, because a choice saved while Start ran was not committed. Returns
+    // whether an MCP server changed.
+    bool CommitLiveOwnerSettingsLocked();
+    // The live work for a committed owner key, run like ApplyPreference.
+    void ApplyOwnerSetting(const std::string& key);
+    // Marks a committed key's applier as due and runs whatever is due, unless another thread
+    // is already doing so; that thread then runs this one too. So a caller never waits for an
+    // applier on another thread: a turn changing a preference holds operationMutex, and an
+    // applier may be joining a worker.
+    void RunLiveApplier(const std::string& key, bool owner);
+    void DrainLiveAppliers();
+    // One owner overlay change: the shared admission checks, then write, which edits the
+    // overlay, then the commit and the applier. description words the new value for the log.
+    core::PreferenceResult WriteOwnerSetting(const std::string& key,
+        const std::function<bool(core::SettingsFileEditor&, std::string&)>& write, const std::string& description);
+    [[nodiscard]] visionSettings VisionSnapshot() const;
+    [[nodiscard]] performanceSettings PerformanceSnapshot() const;
+    [[nodiscard]] bool SpeechRecognitionEnabledNow() const;
+    void PublishVisionStatus();
     bool EnsureLLMAvailable(std::stop_token stopToken);
     bool EnsureFastBrainAvailable(std::stop_token stopToken);
     bool EnsureExpertBrainAvailable(std::stop_token stopToken);
@@ -940,6 +1034,27 @@ class ReviaSession
     mutable std::recursive_mutex preferenceUpdateMutex;
     // Held only for preference snapshots and assignments, never worker joins/events.
     mutable std::mutex preferenceSnapshotMutex;
+    // Held by the one thread running live appliers, which run outside preferenceUpdateMutex,
+    // by Start while it launches the workers they start and stop, and by Stop while it closes
+    // them off. Recursive because Start publishes status while holding it, and a synchronous
+    // observer may change a preference from inside.
+    mutable std::recursive_mutex preferenceApplyMutex;
+    // Guarded by preferenceApplyMutex. Whether appliers may start, stop or reconfigure workers
+    // and services: set once Start launches them, cleared when Stop begins.
+    bool liveWorkersOpen = false;
+    struct DueApplier
+    {
+        std::string key;
+        bool owner = false;
+    };
+    // Appliers marked due and not yet run, and whether a thread is running them.
+    mutable std::mutex dueAppliersMutex;
+    std::vector<DueApplier> dueAppliers;
+    std::atomic<bool> drainingAppliers{false};
+    // The overlay's Booleans as Start loaded them, before startup derived anything from them.
+    // A setting that applies at the next start reports this as running.
+    std::map<std::string, bool> startupOwnerSettings;
+    std::optional<bool> virtualMachineEnabledAtStart;
     mutable std::mutex cancellationMutex;
     mutable std::mutex confirmationMutex;
     mutable std::mutex voiceStudioMutex;

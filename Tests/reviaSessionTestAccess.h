@@ -15,6 +15,7 @@
 #include <chrono>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <utility>
 #include <vector>
 
@@ -234,6 +235,19 @@ struct ReviaSessionTestAccess
 
     static void UsePreferences(ReviaSession& session, const std::filesystem::path& root)
     { session.preferenceStore = core::PreferenceStore(root / "preferences.json"); }
+    static void RecordScreenObservation(ReviaSession& session, const std::string& text) { session.screenAwareness.Record(text); }
+    static std::string CachedScreenObservation(const ReviaSession& session) { return session.screenAwareness.LatestObservation().text; }
+    static std::string ScreenContext(const ReviaSession& session) { return session.CurrentScreenContext(); }
+    // In a call only her name counts, so no earlier exchange opens a follow-up window.
+    static bool AcceptsUnnamedSpeech(ReviaSession& session, const std::string& transcript)
+    { return session.addresseeGate.Accept(transcript, speech::AddresseeGate::Clock::now(), true); }
+    static std::string CloudUseFor(const ReviaSession& session) { return session.router.Cloud().Settings().useFor; }
+    static std::optional<bool> McpServerEnabled(const ReviaSession& session, const std::string& id)
+    {
+        for (const auto& server : session.mcpManager.Status())
+            if (server.id == id) return server.enabled;
+        return std::nullopt;
+    }
 
     static void StopIdleReviewFixture(ReviaSession& session) { session.StopCuriosityLoop(); }
     static void RunIdleActivity(ReviaSession& session, const autonomy::ActivityDecision& decision)

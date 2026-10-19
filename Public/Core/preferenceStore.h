@@ -4,7 +4,9 @@
 #include "Core/appSettings.h"
 #include <filesystem>
 #include <map>
+#include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace revia::core
@@ -35,6 +37,13 @@ struct PreferenceResult
     bool succeeded = false;
     std::string message;
 };
+
+// Copies only the settings field that the named preference controls (the name in any case)
+// from source to destination. A live preference change commits through this, so nothing
+// else in the running settings is rewritten. False for a name the store does not accept.
+bool CopySettingField(appSettings& destination, const appSettings& source, std::string_view name);
+// The value a Boolean preference has in settings, or empty for any other name.
+[[nodiscard]] std::optional<bool> BooleanPreference(const appSettings& settings, std::string_view name);
 
 // Persists a fixed allowlist of non-authority preferences under RuntimeData; unknown keys are refused.
 // Capability scope, execution/risk, internet, screen capture and ambient perception cannot be changed here.

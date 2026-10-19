@@ -2,13 +2,16 @@
 #include "Core/preferenceStore.h"
 
 #include <algorithm>
+#include <array>
 #include <cctype>
+#include <chrono>
 #include <cmath>
 #include <fstream>
 #include <mutex>
 #include <nlohmann/json.hpp>
 #include <sstream>
 #include <system_error>
+#include <thread>
 #include <utility>
 
 namespace revia::core
@@ -20,6 +23,8 @@ namespace
 // UI controls and foreground commands can save through different store instances.
 // Keep the complete read-modify-write operation together without changing store moves.
 std::mutex preferenceWriteMutex;
+
+constexpr int ReplaceAttempts = 20;
 
 std::string Lower(std::string value)
 {
@@ -105,7 +110,104 @@ bool IsValidValue(const PreferenceKey& key, const std::string& value)
     return false;
 }
 
+// The settings field each writable preference controls, so one preference can be copied
+// between two settings values without touching anything else.
+template <auto Section, auto Member>
+void CopyMember(appSettings& destination, const appSettings& source)
+{
+    (destination.*Section).*Member = (source.*Section).*Member;
+}
+
+template <auto Section, auto Member>
+bool ReadFlag(const appSettings& settings)
+{
+    return (settings.*Section).*Member;
+}
+
+struct PreferenceField
+{
+    std::string_view name;
+    void (*copy)(appSettings&, const appSettings&);
+    // Boolean preferences only.
+    bool (*flag)(const appSettings&);
+};
+
+template <auto Section, auto Member>
+constexpr PreferenceField Flag(const std::string_view name)
+{
+    return {name, &CopyMember<Section, Member>, &ReadFlag<Section, Member>};
+}
+
+template <auto Section, auto Member>
+constexpr PreferenceField Value(const std::string_view name)
+{
+    return {name, &CopyMember<Section, Member>, nullptr};
+}
+
+const std::array PreferenceFields = {
+    Flag<&appSettings::speech, &speechSettings::bEnabled>("speech.enabled"),
+    Value<&appSettings::speech, &speechSettings::volume>("speech.volume"),
+    Value<&appSettings::speech, &speechSettings::rate>("speech.rate"),
+    Flag<&appSettings::speech, &speechSettings::bSpeakGreeting>("speech.speakGreeting"),
+    Flag<&appSettings::speechRecognition, &speechRecognitionSettings::bEnabled>("speechRecognition.enabled"),
+    Flag<&appSettings::speechRecognition, &speechRecognitionSettings::bHandsFree>("speechRecognition.handsFree"),
+    Flag<&appSettings::speechRecognition, &speechRecognitionSettings::bRequireWakeWord>("speechRecognition.requireWakeWord"),
+    Flag<&appSettings::bargeIn, &bargeInSettings::bEnabled>("bargeIn.enabled"),
+    Flag<&appSettings::initiative, &initiativeSettings::bEnabled>("initiative.enabled"),
+    Flag<&appSettings::initiative, &initiativeSettings::bCuriosityEnabled>("initiative.curiosityEnabled"),
+    Flag<&appSettings::initiative, &initiativeSettings::bSpontaneousSpeechEnabled>("initiative.spontaneousSpeechEnabled"),
+    Flag<&appSettings::initiative, &initiativeSettings::bSpeakWhenUserAway>("initiative.speakWhenUserAway"),
+    Flag<&appSettings::initiative, &initiativeSettings::bAutonomousLearningEnabled>("initiative.autonomousLearningEnabled"),
+    Flag<&appSettings::initiative, &initiativeSettings::bSuppressWhenFullScreen>("initiative.suppressWhenFullScreen"),
+    Value<&appSettings::initiative, &initiativeSettings::maxUtterancesPerHour>("initiative.maxPerHour"),
+    Flag<&appSettings::presence, &presenceSettings::bAvatarBridgeEnabled>("presence.avatarBridgeEnabled"),
+    Flag<&appSettings::presence, &presenceSettings::bExternalAdaptersEnabled>("presence.externalAdaptersEnabled"),
+    Flag<&appSettings::presence, &presenceSettings::bEnabled>("presence.enabled"),
+    Flag<&appSettings::presence, &presenceSettings::bRequireAddressedStreamMessages>("presence.requireAddressedStreamMessages"),
+    Flag<&appSettings::presence, &presenceSettings::bSpeakStreamReplies>("presence.speakStreamReplies"),
+    Value<&appSettings::llm, &llmSettings::temperature>("llm.temperature"),
+    Value<&appSettings::resources, &resourceSettings::usageSampleSeconds>("resources.usageSampleSeconds"),
+    Value<&appSettings::resources, &resourceSettings::voice>("resources.voiceDevice"),
+    Flag<&appSettings::conversation, &conversationSettings::bArchiveEnabled>("conversation.archiveEnabled"),
+    Flag<&appSettings::conversation, &conversationSettings::bSelfInquiryEnabled>("conversation.selfInquiryEnabled"),
+    Flag<&appSettings::conversation, &conversationSettings::bIterativeInvestigationEnabled>("conversation.iterativeInvestigationEnabled"),
+    Flag<&appSettings::performance, &performanceSettings::bEnabled>("performance.enabled"),
+    Flag<&appSettings::performance, &performanceSettings::bInterruptSongToSpeak>("performance.interruptSongToSpeak"),
+    Flag<&appSettings::responseFilter, &responseFilterSettings::bAiReviewEnabled>("responseFilter.aiReviewEnabled"),
+    PreferenceField{"activeProfile", [](appSettings& destination, const appSettings& source)
+        { destination.activeProfile = source.activeProfile; }, nullptr},
+};
+
+const PreferenceField* FindField(const std::string_view name)
+{
+    const std::string wanted = Lower(std::string(name));
+    const auto found = std::find_if(PreferenceFields.begin(), PreferenceFields.end(),
+        [&wanted](const PreferenceField& field) { return Lower(std::string(field.name)) == wanted; });
+    return found == PreferenceFields.end() ? nullptr : &*found;
+}
+
 } // namespace
+
+bool CopySettingField(appSettings& destination, const appSettings& source, const std::string_view name)
+{
+    const PreferenceField* field = FindField(name);
+    if (field == nullptr)
+    {
+        return false;
+    }
+    field->copy(destination, source);
+    return true;
+}
+
+std::optional<bool> BooleanPreference(const appSettings& settings, const std::string_view name)
+{
+    const PreferenceField* field = FindField(name);
+    if (field == nullptr || field->flag == nullptr)
+    {
+        return std::nullopt;
+    }
+    return field->flag(settings);
+}
 
 const std::vector<PreferenceKey>& PreferenceStore::Writable()
 {
@@ -124,6 +226,8 @@ const std::vector<PreferenceKey>& PreferenceStore::Writable()
             "Accept microphone input.", 0, 0, {}},
         {"speechRecognition.handsFree", PreferenceType::Boolean,
             "Use local VAD to listen for complete spoken thoughts without a button.", 0, 0, {}},
+        {"speechRecognition.requireWakeWord", PreferenceType::Boolean,
+            "In hands-free listening, answer only speech that says one of the wake words.", 0, 0, {}},
         {"bargeIn.enabled", PreferenceType::Boolean,
             "Let speaking over Revia interrupt her.", 0, 0, {}},
         {"initiative.enabled", PreferenceType::Boolean,
@@ -136,12 +240,20 @@ const std::vector<PreferenceKey>& PreferenceStore::Writable()
             "Let Revia speak when Windows reports that the user is away.", 0, 0, {}},
         {"initiative.autonomousLearningEnabled", PreferenceType::Boolean,
             "Keep bounded, sourced findings from approved autonomous research.", 0, 0, {}},
+        {"initiative.suppressWhenFullScreen", PreferenceType::Boolean,
+            "Stay quiet while a full-screen application is in front.", 0, 0, {}},
         {"initiative.maxPerHour", PreferenceType::Integer,
             "Ceiling on unprompted openings per hour.", 0, 60, {}},
         {"presence.avatarBridgeEnabled", PreferenceType::Boolean,
             "Publish isolated avatar state and animation events.", 0, 0, {}},
         {"presence.externalAdaptersEnabled", PreferenceType::Boolean,
             "Accept conversation-only events from the bounded local adapter inbox.", 0, 0, {}},
+        {"presence.enabled", PreferenceType::Boolean,
+            "Run the avatar and streaming features.", 0, 0, {}},
+        {"presence.requireAddressedStreamMessages", PreferenceType::Boolean,
+            "Reply to a stream viewer only when the message is addressed to Revia.", 0, 0, {}},
+        {"presence.speakStreamReplies", PreferenceType::Boolean,
+            "Read replies to stream viewers aloud.", 0, 0, {}},
         {"llm.temperature", PreferenceType::Decimal,
             "Sampling temperature for replies.", 0.0, 2.0, {}},
         {"resources.usageSampleSeconds", PreferenceType::Integer,
@@ -151,6 +263,14 @@ const std::vector<PreferenceKey>& PreferenceStore::Writable()
             0, 0, {}},
         {"conversation.archiveEnabled", PreferenceType::Boolean,
             "Keep a durable, searchable record of conversations.", 0, 0, {}},
+        {"conversation.selfInquiryEnabled", PreferenceType::Boolean,
+            "Think a hard question through before answering it.", 0, 0, {}},
+        {"conversation.iterativeInvestigationEnabled", PreferenceType::Boolean,
+            "Check what is still open after thinking a question through, before answering.", 0, 0, {}},
+        {"performance.enabled", PreferenceType::Boolean,
+            "Sing songs from the song library.", 0, 0, {}},
+        {"performance.interruptSongToSpeak", PreferenceType::Boolean,
+            "Stop singing to answer.", 0, 0, {}},
         {"responseFilter.aiReviewEnabled", PreferenceType::Boolean,
             "Run the AI response review after the always-on hard filter.", 0, 0, {}},
         {"activeProfile", PreferenceType::Text,
@@ -260,13 +380,20 @@ bool PreferenceStore::Write(const std::map<std::string, std::string>& values) co
             return false;
         }
     }
-    std::filesystem::rename(temporary, storePath, error);
-    if (error)
+    // Windows refuses to replace a file another thread is reading (the Settings dialog reads
+    // this one from the window's thread), so a refused move is retried briefly.
+    for (int attempt = 0; attempt < ReplaceAttempts; ++attempt)
     {
-        std::filesystem::remove(temporary, error);
-        return false;
+        error.clear();
+        std::filesystem::rename(temporary, storePath, error);
+        if (!error)
+        {
+            return true;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
-    return true;
+    std::filesystem::remove(temporary, error);
+    return false;
 }
 
 PreferenceResult PreferenceStore::Set(const std::string& name, const std::string& value)
@@ -431,6 +558,7 @@ void PreferenceStore::Apply(appSettings& settings) const
     boolean("speech.speakGreeting", settings.speech.bSpeakGreeting);
     boolean("speechRecognition.enabled", settings.speechRecognition.bEnabled);
     boolean("speechRecognition.handsFree", settings.speechRecognition.bHandsFree);
+    boolean("speechRecognition.requireWakeWord", settings.speechRecognition.bRequireWakeWord);
     boolean("bargeIn.enabled", settings.bargeIn.bEnabled);
     boolean("initiative.enabled", settings.initiative.bEnabled);
     boolean("initiative.curiosityEnabled", settings.initiative.bCuriosityEnabled);
@@ -440,10 +568,18 @@ void PreferenceStore::Apply(appSettings& settings) const
     boolean("initiative.autonomousLearningEnabled",
         settings.initiative.bAutonomousLearningEnabled);
     integer("initiative.maxPerHour", settings.initiative.maxUtterancesPerHour);
+    boolean("initiative.suppressWhenFullScreen", settings.initiative.bSuppressWhenFullScreen);
     boolean("presence.avatarBridgeEnabled", settings.presence.bAvatarBridgeEnabled);
     boolean("presence.externalAdaptersEnabled", settings.presence.bExternalAdaptersEnabled);
+    boolean("presence.enabled", settings.presence.bEnabled);
+    boolean("presence.requireAddressedStreamMessages", settings.presence.bRequireAddressedStreamMessages);
+    boolean("presence.speakStreamReplies", settings.presence.bSpeakStreamReplies);
     integer("resources.usageSampleSeconds", settings.resources.usageSampleSeconds);
     boolean("conversation.archiveEnabled", settings.conversation.bArchiveEnabled);
+    boolean("conversation.selfInquiryEnabled", settings.conversation.bSelfInquiryEnabled);
+    boolean("conversation.iterativeInvestigationEnabled", settings.conversation.bIterativeInvestigationEnabled);
+    boolean("performance.enabled", settings.performance.bEnabled);
+    boolean("performance.interruptSongToSpeak", settings.performance.bInterruptSongToSpeak);
     boolean("responseFilter.aiReviewEnabled", settings.responseFilter.bAiReviewEnabled);
 
     const auto voiceDevice = values.find("resources.voiceDevice");

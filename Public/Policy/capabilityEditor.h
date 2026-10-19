@@ -32,6 +32,11 @@ public:
     [[nodiscard]] bool SetInteractiveBrowser(const std::filesystem::path& path, const browser::BrowserSettings& settings, std::string& outError) const;
     [[nodiscard]] bool SetProcessSettings(const std::filesystem::path& path, const process::ProcessSettings& settings,
         std::string& outError) const;
+    // The Ubuntu workspace's five switches. Its limits and approved executables are kept as
+    // written. Turning the guest off withdraws reading, writing and running programs, and
+    // task execution needs program execution, for the reason the camera works that way.
+    [[nodiscard]] bool SetGuestCapabilities(const std::filesystem::path& path, const GuestCapabilitySettings& settings,
+        std::string& outError) const;
     // Withdrawing pointer control withdraws raw coordinates with it, and withdrawing
     // every hand withdraws autonomy, for the same reason the camera works that way:
     // a subset authority must not survive the authority it is a subset of and quietly

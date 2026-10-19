@@ -9658,6 +9658,11 @@ int main(const int argc, char** argv)
             RunPreferenceResetTests();
             return 0;
         }
+        if (argc > 1 && std::string(argv[1]) == "--settings-file-editor")
+        {
+            RunSettingsFileEditorTests();
+            return 0;
+        }
         if (argc > 1 && std::string(argv[1]) == "--emotion-live")
         {
             Check(argc == 4, "Usage: --emotion-live <isolated-runtime-directory> <new-report.jsonl>");
@@ -10173,6 +10178,7 @@ int main(const int argc, char** argv)
         RunStartupWarmupTests();
         RunPersistenceRecoveryTests();
         RunPreferenceResetTests();
+        RunSettingsFileEditorTests();
         RunIdentityTests();
         RunAppraisalTests();
         RunStatePacketTests();

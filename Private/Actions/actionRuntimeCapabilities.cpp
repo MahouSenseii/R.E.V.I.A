@@ -171,6 +171,23 @@ bool ActionRuntime::SetInteractiveBrowser(const browser::BrowserSettings& settin
         [](CapabilitySettings& current) { current.browser.enabled = false; }, "interactive-browser", outError);
 }
 
+bool ActionRuntime::SetGuestCapabilities(const policy::GuestCapabilitySettings& settings, std::string& outError)
+{
+    return EditCapabilities([&](std::string& error) { return capabilityEditor.SetGuestCapabilities(capabilityConfigPath, settings, error); },
+        [settings](CapabilitySettings& current)
+        {
+            // Until the file is replaced and reloaded, the guest may do only what both the old
+            // and the new settings allow.
+            auto& guest = current.guest;
+            guest.enabled = guest.enabled && settings.enabled;
+            guest.read = guest.read && settings.enabled && settings.read;
+            guest.write = guest.write && settings.enabled && settings.write;
+            guest.execute = guest.execute && settings.enabled && settings.execute;
+            guest.allowTaskExecution = guest.allowTaskExecution && guest.execute && settings.allowTaskExecution;
+        },
+        "guest-access", outError);
+}
+
 bool ActionRuntime::SetDesktopControl(const bool pointer, const bool keyboard, const bool applicationLaunch, const bool rawCoordinates,
     const bool visualTargeting, const bool autonomous, const CapabilitySettings::DesktopControl::InputScope scope,
     const bool allowCommandSurfaces, std::string& outError)

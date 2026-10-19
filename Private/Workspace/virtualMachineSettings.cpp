@@ -1,5 +1,7 @@
 #include "Workspace/virtualMachineSettings.h"
 
+#include "Core/atomicFile.h"
+
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
@@ -95,5 +97,43 @@ VirtualMachineSettingsResult LoadVirtualMachineSettings(
     {
         return Invalid();
     }
+}
+
+bool SaveVirtualMachineSettings(const std::filesystem::path& path, const VirtualMachineSettings& settings, std::string& outError)
+{
+    if (!ValidOwner(settings.ownerId) || path.empty() || !path.has_parent_path())
+    {
+        outError = "The virtual machine settings have no valid owner.";
+        return false;
+    }
+    std::error_code error;
+    std::filesystem::create_directories(path.parent_path(), error);
+    if (error || IsRedirected(path))
+    {
+        outError = "The virtual machine settings folder could not be used safely.";
+        return false;
+    }
+    std::filesystem::path pending = path;
+    pending += ".pending";
+    {
+        const nlohmann::json data = {{"schemaVersion", 1}, {"enabled", settings.enabled}, {"ownerId", settings.ownerId}};
+        std::ofstream stream(pending, std::ios::binary | std::ios::trunc);
+        stream << data.dump(2) << '\n';
+        stream.close();
+        if (stream.fail())
+        {
+            std::filesystem::remove(pending, error);
+            outError = "The virtual machine settings could not be written.";
+            return false;
+        }
+    }
+    const auto check = LoadVirtualMachineSettings(pending, settings.ownerId);
+    if (!check.succeeded || check.settings.enabled != settings.enabled)
+    {
+        std::filesystem::remove(pending, error);
+        outError = "The written virtual machine settings did not read back, so nothing was changed.";
+        return false;
+    }
+    return core::ReplaceFileAtomically(path, pending, outError);
 }
 }

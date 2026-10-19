@@ -150,7 +150,7 @@ CloudAvailability CloudChatService::Check(const Snapshot& snapshot, std::string*
     const CloudModelSettings& settings = snapshot.settings;
     if (!settings.bEnabled)
     {
-        availability.reason = "The cloud model is off (llm.cloud.enabled is false in Config/settings.json).";
+        availability.reason = "The cloud model is off (llm.cloud.enabled, in Settings or Config/settings.json).";
         return availability;
     }
     if (ParseCloudUse(settings.useFor) == CloudUse::Never)
