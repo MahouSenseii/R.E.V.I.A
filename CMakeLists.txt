@@ -70,7 +70,9 @@ endif()
 # links the same objects about ten times faster in a fraction of the memory. The objects,
 # and so the code under test, are identical with either linker.
 #
-# Opt-in, because it needs LLVM's ld.lld on PATH (or beside the compiler). CI turns it on.
+# Opt-in, because it needs LLVM's ld.lld on PATH. CI turns it on. On Windows the toolchain,
+# Qt and build paths must be free of spaces: lld reads GCC's response files for long links
+# with Windows quoting, so a spaced path in one fails to open.
 # lld also takes a symbol from any archive whatever the order and ignores --start-group,
 # so a link line can work with lld and fail with GNU ld. CI relinks a few executables
 # with GNU ld to catch that.
