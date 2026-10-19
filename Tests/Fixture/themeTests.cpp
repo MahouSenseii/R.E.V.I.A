@@ -390,6 +390,9 @@ int RunThemeSuite(int, char**)
     rootLayout->addWidget(pipelines);
     auto* internet = new InternetActivityPanel(root.get());
     rootLayout->addWidget(internet);
+    auto* search = new QLineEdit(root.get());
+    search->setPlaceholderText("Search settings");
+    rootLayout->addWidget(search);
     auto* focusList = new QListWidget(root.get());
     focusList->addItems({"Project planning", "Build failures"});
     focusList->setCurrentRow(0);
@@ -418,6 +421,22 @@ int RunThemeSuite(int, char**)
             QApplication::palette().color(QPalette::Highlight) == theme::Light().selection,
         "the light palette was not applied");
     results.Expect(!theme::HighContrastActive(), "high contrast reported active without the system or a test asking");
+#if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
+    {
+        // A stylesheet colour turns the placeholder into that colour at half opacity (3.27:1 at
+        // best on white) unless placeholder-text-color says otherwise, which Qt honours from 6.5.
+        // The darkest placeholder pixel must reach a contrast only textSecondary can give.
+        const QImage field = search->grab().toImage().convertToFormat(QImage::Format_ARGB32);
+        const qreal ratio = field.devicePixelRatio();
+        const QRect inside = QRect(QPoint(0, 0), field.size()).adjusted(qRound(4 * ratio), qRound(4 * ratio), qRound(-4 * ratio), qRound(-4 * ratio));
+        double darkest = 1.0;
+        for (int y = inside.top(); y <= inside.bottom(); ++y)
+            for (int x = inside.left(); x <= inside.right(); ++x)
+                darkest = std::max(darkest, theme::ContrastRatio(field.pixelColor(x, y), theme::Light().inputBackground));
+        results.Expect(darkest >= 3.5, "the placeholder is not drawn in textSecondary: its darkest pixel is " + std::to_string(darkest) +
+            ":1 on the field");
+    }
+#endif
 
     // Toggle switches paint from the tokens: accent track when on, switchOff outline and knob when off.
     results.Expect(onSwitch->sizeHint() == QSize(48, 30), "ToggleSwitch is not a 40x22 track with room for its focus ring");

@@ -888,7 +888,13 @@ QString StyleSheet(const Tokens& tokens)
 {
     LoadSheets();
     const State& state = Get();
-    return state.structureSheet + QLatin1Char('\n') + FillTemplate(state.colourSheet, tokens);
+    QString colours = FillTemplate(state.colourSheet, tokens);
+#if QT_VERSION < QT_VERSION_CHECK(6, 5, 0)
+    // Older Qt (the Linux test harness) does not know this property and warns at every polish.
+    static const QRegularExpression placeholderColour(QStringLiteral(R"(\s*placeholder-text-color:[^;]*;)"));
+    colours.remove(placeholderColour);
+#endif
+    return state.structureSheet + QLatin1Char('\n') + colours;
 }
 
 QString DocumentCss()
