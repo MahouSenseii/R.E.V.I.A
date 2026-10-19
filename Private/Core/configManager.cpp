@@ -1651,10 +1651,9 @@ bool ReadSettings(json& data, appSettings& outSettings)
 }
 }
 
-void configManager::SetOwnerOverlay(std::string path, const bool strict)
+void configManager::SetOwnerOverlay(std::string path)
 {
     ownerOverlayPath = std::move(path);
-    ownerOverlayStrict = strict;
 }
 
 bool configManager::LoadSettings(appSettings& outSettings) const
@@ -1712,10 +1711,6 @@ bool configManager::LoadSettings(appSettings& outSettings, std::vector<std::stri
     {
         return true;
     }
-    if (ownerOverlayStrict)
-    {
-        return false;
-    }
 
     // Settings.json may have changed under a stale choice. Rather than drop every owner
     // choice, which could quietly bring back something the owner turned off, each one is
@@ -1733,7 +1728,7 @@ bool configManager::LoadSettings(appSettings& outSettings, std::vector<std::stri
         }
         else
         {
-            outWarnings.push_back("Owner setting \"" + key + "\" was set aside because Config/settings.json no longer accepts it.");
+            outWarnings.push_back("Owner setting \"" + key + "\" was set aside because Config/settings.json does not accept it.");
         }
     }
     outSettings = initial;

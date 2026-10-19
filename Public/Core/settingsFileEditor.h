@@ -33,9 +33,11 @@ bool ApplyOwnerOverrides(nlohmann::json& data, const nlohmann::json& overlay, st
 
 // The only writer for RuntimeData/Settings/owner-settings.json. Config/settings.json is never
 // written: the build and every update copy it from source, so an owner choice kept there would
-// be lost. Each change is written to a sibling file, loaded together with settings.json by a
-// probe configManager that must accept it and must show the new value, and only then swapped
-// in, keeping the previous overlay as owner-settings.json.bak.
+// be lost. Each change is written to a sibling file and loaded together with settings.json by a
+// probe configManager. The probe must show the new value and must not set aside or ignore any
+// entry that the stored overlay does not already lose; only then is the file swapped in,
+// keeping the previous overlay as owner-settings.json.bak. An overlay that no load can use
+// (not JSON, or not schema 1) is moved aside under a new name before the first change.
 class SettingsFileEditor
 {
 public:
@@ -48,6 +50,9 @@ public:
     // The value the overlay holds for the key, or empty when settings.json decides it.
     [[nodiscard]] std::optional<nlohmann::json> Value(const std::string& key) const;
     [[nodiscard]] const std::filesystem::path& Path() const;
+    // Set by the last write when it found an overlay no load could use and moved it aside
+    // before starting a new one: says where the old file went. Empty otherwise.
+    [[nodiscard]] const std::string& Notice() const;
 
 private:
     bool Write(const std::string& key, const std::optional<nlohmann::json>& value, std::string& outError);
@@ -55,6 +60,7 @@ private:
     std::filesystem::path overlayPath;
     std::string settingsPath;
     std::string profileDirectory;
+    std::string notice;
 };
 
 } // namespace revia::core

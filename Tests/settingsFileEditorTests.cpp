@@ -222,15 +222,79 @@ void TestAnUnusableOverlayIsIgnored()
     loaded = fixture.Load(&warnings);
     Check(!loaded.llm.bVisionEnabled && !loaded.vision.bEnabled && Mentions(warnings, "llm.visionEnabled"),
         "A stale overlay entry was not set aside on its own.");
-    configManager strict(fixture.settings.string(), fixture.profiles.string());
-    strict.SetOwnerOverlay(fixture.overlay.string(), true);
-    appSettings refused;
-    Check(!strict.LoadSettings(refused), "A strict load accepted an overlay the settings cannot use.");
 
     // With the stale entry present, the editor can still return a key to settings.json.
     std::string error;
     Check(fixture.Editor().Remove("llm.visionEnabled", error), "The stale entry could not be removed: " + error);
     fixture.CheckBaseUntouched();
+}
+
+void TestAStaleEntryDoesNotBlockOtherChanges()
+{
+    // Startup sets the stale entry aside and loads, so it must not stop the owner changing,
+    // or resetting, anything else.
+    Fixture fixture;
+    Write(fixture.overlay, R"({"schemaVersion":1,"values":{"llm.visionEnabled":true,"image.keepLoaded":true}})");
+    SettingsFileEditor editor = fixture.Editor();
+    std::string error;
+    Check(editor.SetBool("vision.enabled", false, error), "A stale entry blocked an unrelated change: " + error);
+    Check(editor.Remove("image.keepLoaded", error), "A stale entry blocked resetting an unrelated key: " + error);
+    Check(editor.SetChoice("llm.cloud.useFor", "never", error), "A stale entry blocked an unrelated choice: " + error);
+    Check(editor.SetBool("mcp.servers[files].enabled", false, error), "A stale entry blocked an MCP change: " + error);
+    Check(editor.Value("llm.visionEnabled") == json(true), "An unrelated change dropped the owner's stale choice.");
+    std::vector<std::string> warnings;
+    const appSettings loaded = fixture.Load(&warnings);
+    Check(!loaded.vision.bEnabled && !loaded.image.bKeepLoaded && !loaded.mcp.servers[0].bEnabled && loaded.llm.cloud.useFor == "never" &&
+              !loaded.llm.bVisionEnabled && Mentions(warnings, "llm.visionEnabled"),
+        "The changes made beside a stale entry did not load as written.");
+
+    // Writing the stale entry again as it was still cannot reach its field, and says why.
+    Check(!editor.SetBool("llm.visionEnabled", true, error) && error.find("llm.visionEnabled") != std::string::npos,
+        "Re-saving a choice settings.json cannot accept was not refused by name: " + error);
+    Check(editor.SetBool("llm.visionEnabled", false, error), "The stale entry could not be corrected: " + error);
+    warnings.clear();
+    static_cast<void>(fixture.Load(&warnings));
+    Check(warnings.empty(), "Correcting the stale entry left a warning behind.");
+
+    // A change that would set something aside names it.
+    Fixture fresh;
+    SettingsFileEditor freshEditor = fresh.Editor();
+    Check(!freshEditor.SetBool("llm.visionEnabled", true, error) && error.find("\"llm.visionEnabled\"") != std::string::npos,
+        "A refused change did not name the entry it would set aside: " + error);
+    Check(!std::filesystem::exists(fresh.overlay), "A refused first change created the overlay.");
+    fixture.CheckBaseUntouched();
+    fresh.CheckBaseUntouched();
+}
+
+void TestAnUnreadableOverlayIsMovedAside()
+{
+    // Every load ignores these files. The next change keeps them under a new name instead of
+    // overwriting them, and never brings back a value the load had refused.
+    for (const std::string& unreadable : {std::string("{not json"),
+             std::string(R"({"schemaVersion":2,"values":{"vision.enabled":false,"image.keepLoaded":true}})")})
+    {
+        Fixture fixture;
+        Write(fixture.overlay, unreadable);
+        SettingsFileEditor editor = fixture.Editor();
+        std::string error;
+        Check(editor.SetBool("vision.continuousAwareness", true, error), "A change over an unusable overlay failed: " + error);
+        Check(editor.Notice().find("unreadable-") != std::string::npos, "Moving an unusable overlay aside was not reported.");
+        std::vector<std::filesystem::path> aside;
+        for (const auto& entry : std::filesystem::directory_iterator(fixture.overlay.parent_path()))
+        {
+            if (entry.path().filename().string().starts_with("owner-settings.json.unreadable-"))
+                aside.push_back(entry.path());
+        }
+        Check(aside.size() == 1 && Read(aside.front()) == unreadable, "The unusable overlay was not kept under its own name.");
+        const json saved = json::parse(Read(fixture.overlay));
+        Check(saved["schemaVersion"] == 1 && saved["values"] == json({{"vision.continuousAwareness", true}}),
+            "The new overlay carried over values a load had refused.");
+        const appSettings loaded = fixture.Load();
+        Check(loaded.vision.bEnabled && !loaded.image.bKeepLoaded && loaded.vision.bContinuousAwareness,
+            "Settings from an unusable overlay took effect after the next change.");
+        Check(editor.SetBool("vision.enabled", false, error) && editor.Notice().empty(), "The fresh overlay was not used: " + error);
+        fixture.CheckBaseUntouched();
+    }
 }
 
 void TestRemoveReturnsToSettingsJson()
@@ -324,6 +388,8 @@ void RunSettingsFileEditorTests()
     TestMcpServersAreAddressedById();
     TestAMissingServerIsSkippedWithAWarning();
     TestAnUnusableOverlayIsIgnored();
+    TestAStaleEntryDoesNotBlockOtherChanges();
+    TestAnUnreadableOverlayIsMovedAside();
     TestRemoveReturnsToSettingsJson();
     TestTheReplacedOverlayIsKeptAsBak();
     TestEveryOwnerKeyReachesItsField();

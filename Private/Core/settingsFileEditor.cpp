@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <fstream>
 #include <mutex>
 #include <system_error>
@@ -132,25 +133,62 @@ json EmptyOverlay()
     return {{"schemaVersion", 1}, {"values", json::object()}};
 }
 
-// The stored overlay, or an empty one when it is missing or unusable. An unusable file is
-// ignored by every load too, so replacing it loses nothing that was in effect; the .bak
-// written by the replacement keeps it for the owner.
-json ReadOverlay(const std::filesystem::path& path)
+// The form ApplyOwnerOverrides accepts. Anything else is ignored by every load.
+bool IsUsableOverlay(const json& overlay)
 {
+    return overlay.is_object() && overlay.contains("schemaVersion") && overlay["schemaVersion"].is_number_integer() &&
+           overlay["schemaVersion"].get<int>() == 1 && overlay.contains("values") && overlay["values"].is_object();
+}
+
+enum class OverlayFile
+{
+    Missing,
+    Usable,
+    // Present, but it could not be opened: perhaps only for a moment, while another reader
+    // or a scanner holds it.
+    Unopenable,
+    // Present and readable, but not JSON, or not in the form a load accepts.
+    Unusable,
+};
+
+OverlayFile ReadOverlay(const std::filesystem::path& path, json& outOverlay)
+{
+    outOverlay = EmptyOverlay();
+    std::error_code error;
+    if (!std::filesystem::exists(path, error) && !error)
+        return OverlayFile::Missing;
     std::ifstream stream(path, std::ios::binary);
     if (!stream)
-        return EmptyOverlay();
+        return OverlayFile::Unopenable;
     try
     {
         json overlay;
         stream >> overlay;
-        if (overlay.is_object() && overlay.contains("values") && overlay["values"].is_object())
-            return overlay;
+        if (!IsUsableOverlay(overlay))
+            return OverlayFile::Unusable;
+        outOverlay = std::move(overlay);
+        return OverlayFile::Usable;
     }
     catch (const std::exception&)
     {
+        return OverlayFile::Unusable;
     }
-    return EmptyOverlay();
+}
+
+// A name beside the overlay that nothing uses yet, for keeping an unusable one.
+std::filesystem::path UnusedAsideName(const std::filesystem::path& path)
+{
+    const auto stamp = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+    std::filesystem::path aside;
+    for (int suffix = 0; suffix < 100; ++suffix)
+    {
+        aside = path;
+        aside += ".unreadable-" + std::to_string(stamp) + (suffix == 0 ? std::string() : "-" + std::to_string(suffix));
+        std::error_code error;
+        if (!std::filesystem::exists(aside, error))
+            break;
+    }
+    return aside;
 }
 
 } // namespace
@@ -208,8 +246,7 @@ std::optional<json> OwnerSettingValue(const appSettings& settings, const std::st
 
 bool ApplyOwnerOverrides(json& data, const json& overlay, std::vector<std::string>& warnings)
 {
-    if (!data.is_object() || !overlay.is_object() || !overlay.contains("schemaVersion") || !overlay["schemaVersion"].is_number_integer() ||
-        overlay["schemaVersion"].get<int>() != 1 || !overlay.contains("values") || !overlay["values"].is_object())
+    if (!data.is_object() || !IsUsableOverlay(overlay))
     {
         warnings.push_back("The owner settings file is not in the expected form, so it was ignored.");
         return false;
@@ -284,22 +321,55 @@ bool SettingsFileEditor::Remove(const std::string& key, std::string& outError)
 
 std::optional<json> SettingsFileEditor::Value(const std::string& key) const
 {
-    const json overlay = ReadOverlay(overlayPath);
+    // An overlay that is missing or unusable decides nothing, exactly as a load treats it.
+    json overlay;
+    static_cast<void>(ReadOverlay(overlayPath, overlay));
     const auto found = overlay["values"].find(key);
     if (found == overlay["values"].end())
         return std::nullopt;
     return *found;
 }
 
+const std::string& SettingsFileEditor::Notice() const
+{
+    return notice;
+}
+
 bool SettingsFileEditor::Write(const std::string& key, const std::optional<json>& value, std::string& outError)
 {
     std::lock_guard writeLock(overlayWriteMutex);
-    json overlay = ReadOverlay(overlayPath);
-    overlay["schemaVersion"] = 1;
-    json& values = overlay["values"];
+    notice.clear();
+    json overlay;
+    switch (ReadOverlay(overlayPath, overlay))
+    {
+    case OverlayFile::Missing:
+    case OverlayFile::Usable:
+        break;
+    case OverlayFile::Unopenable:
+        outError = overlayPath.string() + " could not be opened just now, so nothing was saved. Try again in a moment.";
+        return false;
+    case OverlayFile::Unusable:
+    {
+        // Every load already ignores it, so starting from empty takes away no choice that
+        // is in effect. It is kept under its own name rather than overwritten, because the
+        // owner may want what is in it.
+        const std::filesystem::path aside = UnusedAsideName(overlayPath);
+        std::error_code moveError;
+        std::filesystem::rename(overlayPath, aside, moveError);
+        if (moveError)
+        {
+            outError = overlayPath.string() + " is not a file Settings can read, and it could not be moved aside (" + moveError.message() +
+                       "), so nothing was saved.";
+            return false;
+        }
+        notice = overlayPath.filename().string() + " could not be read, so it was moved to " + aside.filename().string() +
+                 " and Settings started a new one.";
+        break;
+    }
+    }
     if (value)
-        values[key] = *value;
-    else if (values.erase(key) == 0)
+        overlay["values"][key] = *value;
+    else if (overlay["values"].erase(key) == 0)
     {
         outError.clear();
         return true;
@@ -326,22 +396,46 @@ bool SettingsFileEditor::Write(const std::string& key, const std::optional<json>
         }
     }
 
-    // Validated on the merged result, exactly as startup will read it. A value that loads
-    // but never reaches its field means the key's path is wrong, so it is refused too.
+    // Validated on the merged result, loaded exactly as startup will load it. A stored entry
+    // that settings.json no longer accepts is set aside there rather than stopping the start,
+    // so it must not stop an unrelated change either: only a change that makes the load set
+    // aside or ignore something it did not before is refused. A value that loads but never
+    // reaches its field means the key's path is wrong, so it is refused too.
+    std::vector<std::string> before;
+    {
+        configManager current(settingsPath, profileDirectory);
+        current.SetOwnerOverlay(overlayPath.string());
+        appSettings ignored;
+        static_cast<void>(current.LoadSettings(ignored, before));
+    }
     configManager probe(settingsPath, profileDirectory);
-    probe.SetOwnerOverlay(pending.string(), true);
+    probe.SetOwnerOverlay(pending.string());
     appSettings candidate;
-    std::vector<std::string> warnings;
-    const bool loaded = probe.LoadSettings(candidate, warnings);
-    if (!loaded || (value && OwnerSettingValue(candidate, key) != *value))
+    std::vector<std::string> after;
+    const bool loaded = probe.LoadSettings(candidate, after);
+    std::vector<std::string> added;
+    for (const std::string& warning : after)
+    {
+        if (std::find(before.begin(), before.end(), warning) == before.end())
+            added.push_back(warning);
+    }
+    const bool reached = !value || OwnerSettingValue(candidate, key) == *value;
+    if (!loaded || !added.empty() || !reached)
     {
         std::filesystem::remove(pending, error);
-        outError = !loaded ? "Config/settings.json does not accept this change together with the other owner settings, so nothing was saved."
-                           : "The change did not reach the loaded settings, so nothing was saved.";
-        const auto reason = std::find_if(warnings.begin(), warnings.end(),
-            [&key](const std::string& warning) { return warning.find("\"" + key + "\"") != std::string::npos; });
-        if (reason != warnings.end())
-            outError += " " + *reason;
+        if (!loaded)
+            outError = "Config/settings.json could not be read, so nothing was saved.";
+        else if (!reached)
+            outError = "The change did not reach the loaded settings, so nothing was saved.";
+        else
+            outError = "Config/settings.json does not accept this change together with the other owner settings, so nothing was saved.";
+        // Names why its own value never arrived, and whatever else the change would set aside.
+        for (const std::string& warning : after)
+        {
+            const bool own = warning.find("\"" + key + "\"") != std::string::npos;
+            if ((own && !reached) || std::find(added.begin(), added.end(), warning) != added.end())
+                outError += " " + warning;
+        }
         return false;
     }
     return ReplaceFileAtomically(overlayPath, pending, outError);

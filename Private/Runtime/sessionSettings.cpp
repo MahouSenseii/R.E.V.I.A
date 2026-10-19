@@ -232,6 +232,7 @@ core::PreferenceResult ReviaSession::WriteOwnerSetting(const std::string& key,
     std::string serverId;
     const core::OwnerKey* entry = core::FindOwnerKey(key, &serverId);
     bool live = false;
+    std::string notice;
     {
         std::lock_guard preferenceLock(preferenceUpdateMutex);
         appSettings persisted;
@@ -246,9 +247,15 @@ core::PreferenceResult ReviaSession::WriteOwnerSetting(const std::string& key,
         core::SettingsFileEditor editor(companionPaths.InstallRoot() / "RuntimeData/Settings/owner-settings.json",
             (companionPaths.InstallRoot() / "Config/settings.json").string(), companionPaths.Resolve("Config/Profiles").string());
         std::string error;
-        if (!write(editor, error))
+        const bool written = write(editor, error);
+        if (!editor.Notice().empty())
         {
-            return {false, error};
+            appLogger.Warning(editor.Notice());
+            notice = " " + editor.Notice();
+        }
+        if (!written)
+        {
+            return {false, error + notice};
         }
         appLogger.Log("Owner changed " + key + " to " + description + " from Settings.");
         // A live key also changes the running session, from the value just saved as the
@@ -265,7 +272,7 @@ core::PreferenceResult ReviaSession::WriteOwnerSetting(const std::string& key,
     PublishComponent("Preferences", "Changed", key);
     const std::string change = description == FollowsSettingsFile ? " follows Config/settings.json again" : " is now " + description;
     return {true, key + change + ", for every companion." +
-                      (entry->live ? std::string() : std::string(" It takes effect the next time Revia starts."))};
+                      (entry->live ? std::string() : std::string(" It takes effect the next time Revia starts.")) + notice};
 }
 
 bool ReviaSession::CommitOwnerSettingLocked(const std::string& key, const appSettings& persisted)

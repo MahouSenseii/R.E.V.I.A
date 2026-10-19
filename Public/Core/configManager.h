@@ -14,9 +14,8 @@ public:
 
     // Lays the owner settings overlay at path over the settings file on every load (see
     // revia::core::ApplyOwnerOverrides). An overlay entry the merged settings cannot accept
-    // is set aside with a warning, so a stale choice never stops a start; with strict, the
-    // load fails instead, which is how the overlay editor validates a change.
-    void SetOwnerOverlay(std::string path, bool strict = false);
+    // is set aside with a warning, so a stale choice never stops a start.
+    void SetOwnerOverlay(std::string path);
 
     bool LoadSettings(appSettings& outSettings) const;
     // outWarnings receives each overlay entry that was ignored or set aside, and why.
@@ -40,5 +39,4 @@ private:
     std::string profilePath = "Config/Profiles";
     std::string neutralProfilePath;
     std::string ownerOverlayPath;
-    bool ownerOverlayStrict = false;
 };
