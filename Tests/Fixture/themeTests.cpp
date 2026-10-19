@@ -619,6 +619,36 @@ int RunThemeSuite(int, char**)
         "high-contrast tokens are not taken from the system palette");
     if (!renderDirectory.isEmpty())
         SaveGallery(root.get(), renderDirectory, "theme-gallery-high-contrast.png");
+    {
+        // Windows can move from one contrast theme to another (Night sky to Desert) while the
+        // high-contrast flag stays set; only the system palette changes. An explicit application
+        // palette stands in for the new system one here.
+        int contrastRuns = 0;
+        const int contrastListener = theme::AddListener([&contrastRuns]() { ++contrastRuns; });
+        QPalette nightSky = QApplication::palette();
+        for (const auto& [role, colour] : {std::pair{QPalette::Window, QColor("#000000")}, std::pair{QPalette::WindowText, QColor("#FFFFFF")},
+                 std::pair{QPalette::Base, QColor("#000000")}, std::pair{QPalette::Text, QColor("#FFFFFF")},
+                 std::pair{QPalette::Button, QColor("#000000")}, std::pair{QPalette::ButtonText, QColor("#FFFF00")},
+                 std::pair{QPalette::Highlight, QColor("#1AEBFF")}, std::pair{QPalette::HighlightedText, QColor("#000000")}})
+            nightSky.setColor(role, colour);
+        QApplication::setPalette(nightSky);
+        QEvent contrastChange(QEvent::ThemeChange);
+        QApplication::sendEvent(root.get(), &contrastChange);
+        Settle();
+        results.Expect(theme::HighContrastActive() && theme::Current().background == QColor("#000000") &&
+                theme::Current().accent == QColor("#1AEBFF") && theme::Current().textSecondary == QColor("#FFFF00"),
+            "a change of contrast theme did not reach the theme's tokens: background " + Describe(theme::Current().background));
+        results.Expect(Near(StrokeColour(iconButton->icon().pixmap(18, 18)), QColor("#FFFF00")) &&
+                Near(StrokeColour(svgLabel->pixmap().copy()), QColor("#FFFFFF")),
+            "a change of contrast theme did not recolour bound icons and labels");
+        results.Expect(contrastRuns == 1, "a change of contrast theme did not run the listeners once");
+        QApplication::setPalette(QPalette());
+        QApplication::sendEvent(root.get(), &contrastChange);
+        Settle();
+        results.Expect(theme::Current().background == QApplication::palette().color(QPalette::Window) && contrastRuns == 2,
+            "returning to the system's contrast palette did not refresh the tokens");
+        theme::RemoveListener(contrastListener);
+    }
     theme::SetHighContrastForTest(std::nullopt);
     Settle();
     results.Expect(!theme::HighContrastActive() && QApplication::palette().color(QPalette::Window) == theme::Light().background &&

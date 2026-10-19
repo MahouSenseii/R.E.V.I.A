@@ -120,6 +120,7 @@ void BindSvgLabel(QLabel* label, const QString& svgPaths, Role role, int size);
 // Native rounding and shadow for menus on Windows 11 (no-op elsewhere).
 void PolishMenu(QMenu* menu);
 // Dark or light caption, and on Windows 11 caption, text and border colours, for a top-level window.
+// Under high contrast it hands those colours back to the system.
 void ApplyNativeFrame(QWidget* topLevel);
 
 // The opacity reviaTheme.qss gives every progress-bar fill ({{accent/40}} and the like), so the

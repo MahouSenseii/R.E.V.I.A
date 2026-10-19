@@ -199,6 +199,12 @@ constexpr TokenField TokenFields[] = {
     {"scrim", &Tokens::scrim}, {"shadow", &Tokens::shadow},
 };
 
+bool SameTokens(const Tokens& first, const Tokens& second)
+{
+    return first.scheme == second.scheme && std::all_of(std::begin(TokenFields), std::end(TokenFields),
+        [&first, &second](const TokenField& field) { return first.*(field.member) == second.*(field.member); });
+}
+
 // Opaque colours as #rrggbb, anything translucent as rgba() with a 0-255 alpha, which both
 // Qt's stylesheet parser and its rich-text CSS accept.
 QString ColourText(const QColor& colour)
@@ -583,14 +589,18 @@ void ApplyNow()
         return;
     state.applying = true;
     UpdateColorSchemeOverride();
+    const bool wasHighContrast = state.applied && state.highContrast;
     state.highContrast = state.highContrastOverride.value_or(SystemHighContrast());
     state.scheme = EffectiveScheme(state.preference);
     state.applied = true;
 
     if (state.highContrast)
     {
-        // An empty palette resolves to the platform's, which carries the high-contrast colours.
-        QApplication::setPalette(QPalette());
+        // An empty palette resolves to the platform's, which carries the high-contrast colours
+        // and keeps following them when Windows moves to another contrast theme, so it is set
+        // once on the way in.
+        if (!wasHighContrast)
+            QApplication::setPalette(QPalette());
         state.contrast = TokensFromPalette(QApplication::palette());
     }
     else
@@ -598,13 +608,18 @@ void ApplyNow()
         QApplication::setPalette(BuildPalette(Current()));
     }
 
+    // Set even when the text is unchanged: colours the sheet takes from the palette (a border
+    // given no colour, a palette() reference) are resolved when a widget is polished.
     const QString sheet = StyleSheet();
     std::erase_if(state.roots, [](const QPointer<QWidget>& root) { return root.isNull(); });
     for (const QPointer<QWidget>& root : state.roots)
         root->setStyleSheet(sheet);
 #ifdef Q_OS_WIN
+    // Every top-level with a native window, shown or not: panel windows and the Settings dialog
+    // are hidden on close, never deleted, and DWM keeps a caption colour on a window across hide
+    // and show. One never shown has no native window yet; its show hook frames it.
     for (QWidget* const window : QApplication::topLevelWidgets())
-        if (window->isVisible() && (window->windowType() == Qt::Window || window->windowType() == Qt::Dialog))
+        if (window->internalWinId() != 0 && (window->windowType() == Qt::Window || window->windowType() == Qt::Dialog))
             ApplyNativeFrame(window);
 #endif
     Reicon();
@@ -612,18 +627,30 @@ void ApplyNow()
     RunListeners();
 }
 
-// Applies only when the scheme or the high-contrast state actually changed: Qt reports our own
-// setColorScheme() back as a change, and a restyle costs a few hundred milliseconds.
+// Whether what is applied no longer matches what should be: the scheme or the high-contrast
+// state changed, or Windows moved from one contrast theme to another (Night sky to Desert, say),
+// where the high-contrast flag stays set and only the system palette changes. Qt reports our
+// own setColorScheme() back as a change and a restyle costs a few hundred milliseconds, so the
+// theme is applied only when this says so.
+bool OutOfDate()
+{
+    const State& state = Get();
+    if (!state.applied)
+        return true;
+    const bool highContrast = state.highContrastOverride.value_or(SystemHighContrast());
+    if (highContrast != state.highContrast || EffectiveScheme(state.preference) != state.scheme)
+        return true;
+    return highContrast && !SameTokens(TokensFromPalette(QApplication::palette()), state.contrast);
+}
+
 void Recompute()
 {
     State& state = Get();
     state.recomputePending = false;
     if (!state.installed || state.applying)
         return;
-    const bool highContrast = state.highContrastOverride.value_or(SystemHighContrast());
-    if (state.applied && highContrast == state.highContrast && EffectiveScheme(state.preference) == state.scheme)
-        return;
-    ApplyNow();
+    if (OutOfDate())
+        ApplyNow();
 }
 
 void ScheduleRecompute()
@@ -745,9 +772,7 @@ void Install(QWidget* const root)
         state.roots.emplace_back(root);
         root->installEventFilter(state.watcher);
     }
-    const bool changed = !state.applied || state.highContrastOverride.value_or(SystemHighContrast()) != state.highContrast ||
-        EffectiveScheme(state.preference) != state.scheme;
-    if (changed)
+    if (OutOfDate())
         ApplyNow();
     else if (added)
         root->setStyleSheet(StyleSheet());
@@ -1039,12 +1064,20 @@ void PolishMenu(QMenu* const menu)
 void ApplyNativeFrame(QWidget* const topLevel)
 {
 #ifdef Q_OS_WIN
-    if (topLevel == nullptr || !topLevel->isWindow() || HighContrastActive())
+    if (topLevel == nullptr || !topLevel->isWindow())
         return;
     const SetWindowAttributeFunction setter = WindowAttributeSetter();
     if (setter == nullptr)
         return;
     const HWND window = reinterpret_cast<HWND>(topLevel->winId());
+    if (HighContrastActive())
+    {
+        // The system's contrast colours, not the ones set before high contrast came on.
+        const COLORREF systemDefault = 0xFFFFFFFF; // DWMWA_COLOR_DEFAULT
+        for (const DWORD attribute : {DWORD(35), DWORD(36), DWORD(34)})
+            setter(window, attribute, &systemDefault, sizeof(systemDefault));
+        return;
+    }
     const BOOL dark = CurrentScheme() == Scheme::Dark ? TRUE : FALSE;
     // 20 is DWMWA_USE_IMMERSIVE_DARK_MODE; Windows 10 builds before 20H1 used 19.
     if (FAILED(setter(window, 20, &dark, sizeof(dark))))
