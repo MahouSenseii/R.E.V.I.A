@@ -389,15 +389,10 @@ bool ReviaWindow::eventFilter(QObject* watched, QEvent* event)
     {
         if (HandleAttachmentDrag(event))
             return true;
-        // The measure follows the viewport without re-rendering the transcript; an empty chat's
-        // greeting is placed by the viewport's height, so that one is drawn again.
+        // The measure, and an empty chat's greeting height, follow the viewport without
+        // re-rendering the transcript.
         if (chatHistory && watched == chatHistory->viewport() && event->type() == QEvent::Resize)
-        {
-            if (chatEntries.empty() && viewingArchivedChat.empty() && !lastTurnError && !renderingTranscript)
-                RenderChat();
-            else
-                ApplyChatMeasure();
-        }
+            ApplyChatMeasure();
     }
     if (watched == chatHistory && (event->type() == QEvent::FocusIn || event->type() == QEvent::FocusOut))
     {
@@ -2402,11 +2397,13 @@ void ReviaWindow::RefreshStateBadge()
         statePill->setToolTip(newState == revia::runtime::RuntimeState::WaitingForConfirmation
                                   ? QStringLiteral("An action is waiting for your OK: click to see it")
                                   : QStringLiteral("Status: click for details"));
-        // The pill is a button holding a dot and a label; it is as wide as they are.
+        // The pill is a button holding a dot and a label; it is as wide as they are, and 28px tall
+        // so its 14px radius draws round ends (Qt squares a radius over half the height).
         if (QLayout* pillLayout = statePill->layout())
         {
             pillLayout->invalidate();
-            statePill->setFixedSize(pillLayout->sizeHint());
+            const QSize hint = pillLayout->sizeHint();
+            statePill->setFixedSize(hint.width(), std::max(28, hint.height()));
         }
     }
     const QString cleanDetail = detail.trimmed().compare(shown.label, Qt::CaseInsensitive) == 0 ? QString() : detail.trimmed();
@@ -2462,9 +2459,11 @@ void ReviaWindow::UpdateSendState()
     // Stop takes the send slot while a turn, a task or a studio operation runs; while only speech
     // or the microphone runs it waits beside Send, so the next message can still go.
     const revia::runtime::RuntimeState state = lastRuntimeState;
+    // Starting is not a turn: there is no reply to stop, and Send stays in its slot (disabled until
+    // Revia has started) beside the outlined Stop that cancels the startup.
     const bool turnRunning = turnBusy || chatTurnInFlight || studioOperationRunning.load() || Session().HasRunningTask() ||
-                             state == revia::runtime::RuntimeState::Starting || state == revia::runtime::RuntimeState::Thinking ||
-                             state == revia::runtime::RuntimeState::Responding || state == revia::runtime::RuntimeState::Acting;
+                             state == revia::runtime::RuntimeState::Thinking || state == revia::runtime::RuntimeState::Responding ||
+                             state == revia::runtime::RuntimeState::Acting;
     const bool stopEnabled = stopButton->isEnabled();
     const bool primary = stopEnabled && turnRunning;
     if (stopButton->property("primary").toBool() != primary || !stopButton->property("primary").isValid())
@@ -2476,6 +2475,8 @@ void ReviaWindow::UpdateSendState()
     QString stopName = QStringLiteral("Stop reply");
     if (studioOperationRunning.load() || Session().HasRunningTask())
         stopName = QStringLiteral("Stop task");
+    else if (!turnRunning && state == revia::runtime::RuntimeState::Starting)
+        stopName = QStringLiteral("Cancel startup");
     else if (!turnRunning && speechActive)
         stopName = QStringLiteral("Stop speaking");
     else if (!turnRunning && microphoneActive)
@@ -2642,9 +2643,8 @@ QString ReviaWindow::EmptyStateHtml() const
 {
     using revia::runtime::RuntimeState;
     const QString name = DisplayName().toHtmlEscaped();
-    // Roughly a third of the way down the transcript, like a greeting rather than a notice.
-    const int top = std::max(24, chatHistory->viewport()->height() / 3 - 48);
-    const QString open = QStringLiteral("<p class=\"emptyState\" align=\"center\" style=\"margin-top:%1px; margin-bottom:8px;\">").arg(top);
+    // ApplyChatMeasure moves it a third of the way down the transcript.
+    const QString open = QStringLiteral("<p class=\"emptyState\" align=\"center\" style=\"margin-bottom:8px;\">");
     const bool modelDown = lastRuntimeState == RuntimeState::Offline ||
                            (lastRuntimeState == RuntimeState::Error && lastRuntimeDetail.contains(QStringLiteral("unavailable"), Qt::CaseInsensitive));
     if (lastRuntimeState == RuntimeState::Starting)

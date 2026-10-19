@@ -73,11 +73,15 @@ void ReviaWindow::ApplyChatMeasure()
     QTextFrame* root = chatHistory->document()->rootFrame();
     QTextFrameFormat format = root->frameFormat();
     const qreal side = std::max(16, (chatHistory->viewport()->width() - 760) / 2);
-    if (format.leftMargin() == side && format.rightMargin() == side && format.topMargin() == 24 && format.bottomMargin() == 24)
+    // An empty chat's greeting sits roughly a third of the way down, like a greeting rather than
+    // a notice. It is the frame that moves: QTextDocument drops the top margin of its first block.
+    const bool greeting = chatEntries.empty() && viewingArchivedChat.empty() && !lastTurnError;
+    const qreal top = greeting ? std::max(24, chatHistory->viewport()->height() / 3 - 48) : 24;
+    if (format.leftMargin() == side && format.rightMargin() == side && format.topMargin() == top && format.bottomMargin() == 24)
         return;
     format.setLeftMargin(side);
     format.setRightMargin(side);
-    format.setTopMargin(24);
+    format.setTopMargin(top);
     format.setBottomMargin(24);
     root->setFrameFormat(format);
 }

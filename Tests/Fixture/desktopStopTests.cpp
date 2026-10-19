@@ -14,6 +14,7 @@
 #include "learningStudioPanel.h"
 #include "answerFeedbackDialog.h"
 #include "attachmentTray.h"
+#include "chatMarkdown.h"
 #include "chatSessionsPanel.h"
 #include "documentsDialog.h"
 #include "Memory/conversationArchive.h"
@@ -63,6 +64,8 @@
 #include <QToolButton>
 #include <QTreeWidget>
 #include <QTreeWidgetItemIterator>
+#include <QTextFrame>
+#include <QWidgetAction>
 
 #include <algorithm>
 #include <atomic>
@@ -1100,6 +1103,29 @@ struct ReviaWindowStopTests
             }
         }
 
+        // The sidebar's chrome is the same on first show as after a collapse and expand: the window's
+        // stylesheet must not size its buttons over what the sidebar sets.
+        {
+            const auto chrome = [&window]()
+            {
+                QList<QRect> geometry;
+                for (const char* name : {"sidebarToggle", "sidebarSettingsButton", "sidebarMenuButton", "sidebarFooter"})
+                {
+                    auto* widget = window.navigationSidebar->findChild<QWidget*>(name);
+                    geometry.push_back(widget != nullptr ? QRect(widget->mapTo(window.navigationSidebar, QPoint(0, 0)), widget->size()) : QRect());
+                }
+                return geometry;
+            };
+            const QList<QRect> before = chrome();
+            expect(before[0].size() == QSize(32, 32) && before[1].size() == QSize(32, 32) && before[2].height() == 44,
+                "the sidebar's header and footer buttons must be 32px and the account button 44px on first show");
+            window.navigationSidebar->ToggleButton()->click();
+            SettleLayouts();
+            window.navigationSidebar->ToggleButton()->click();
+            SettleLayouts();
+            expect(chrome() == before, "a collapse and expand must leave the sidebar's buttons where they were");
+        }
+
         // The palette finds a panel by a few letters and opens it with Enter.
         window.commandPalette->Open("mem");
         SettleLayouts();
@@ -1167,6 +1193,12 @@ struct ReviaWindowStopTests
         window.userStopRequested = false;
         window.lastTurnError.reset();
 
+        // Starting is not a turn: Send keeps its slot, and the outlined Stop beside it cancels the startup.
+        window.UpdateState(RuntimeState::Starting, "Loading models");
+        expect(!window.sendButton->isHidden() && window.stopButton->isEnabled() && !window.stopButton->property("primary").toBool() &&
+                   window.stopButton->accessibleName() == "Cancel startup",
+            "while Revia starts, Send must stay in its slot beside a Cancel startup button");
+
         // Stop takes Send's slot while a turn runs, and Esc stops it.
         window.UpdateState(RuntimeState::Thinking, "Working on the fixture");
         expect(window.stopButton->isEnabled() && window.stopButton->property("primary").toBool() && window.sendButton->isHidden(),
@@ -1231,6 +1263,32 @@ struct ReviaWindowStopTests
         window.HandleRuntimeEvent(automation);
         window.userStopRequested = false;
         SettleLayouts();
+
+        // A fenced block is one framed box, not a strip per line.
+        const QString code = revia::desktop::RenderUntrustedMarkdown("Run:\n\n```\ncmake --preset debug\ncmake --build build/debug\n```\n\nDone.");
+        expect(code.count("<table") == 1 && code.contains(revia::desktop::theme::Current().codeBackground.name(), Qt::CaseInsensitive) &&
+                   code.indexOf("cmake --preset") > code.indexOf("<table") && code.indexOf("cmake --build") < code.indexOf("</table>"),
+            "a fenced code block must render as one box holding all its lines");
+        // An empty chat's greeting sits well below the header, and the state pill is a real pill.
+        window.chatEntries.clear();
+        window.lastTurnError.reset();
+        window.ResetConversationPresentation();
+        window.RenderChat();
+        SettleLayouts();
+        expect(window.chatHistory->document()->rootFrame()->frameFormat().topMargin() > 24,
+            "the empty chat's greeting must sit a third of the way down, not under the header");
+        expect(window.statePill->height() == 28, "the state pill must be 28px tall so its ends draw round");
+        // The sidebar menu names its groups.
+        QStringList headings;
+        for (QAction* action : window.sidebarMenu->actions())
+        {
+            if (auto* section = dynamic_cast<QWidgetAction*>(action);
+                section != nullptr && section->defaultWidget() != nullptr && section->defaultWidget()->objectName() == "sidebarMenuSection")
+                headings.push_back(section->text());
+        }
+        expect(headings == QStringList({"Workspace", "Companion", "Studio", "Runtime"}),
+            "the sidebar menu must head its panel groups with Workspace, Companion, Studio and Runtime");
+
         if (const QString renderDirectory = qEnvironmentVariable("REVIA_UI_RENDER_DIR"); !renderDirectory.isEmpty())
             expect(window.grab().save(QDir(renderDirectory).filePath("shell-1040x720.png")), "the shell must have a fresh Qt capture");
     }

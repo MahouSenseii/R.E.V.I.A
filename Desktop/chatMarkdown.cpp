@@ -2,11 +2,14 @@
 
 #include "theme.h"
 
+#include <QFont>
 #include <QStringList>
 #include <QTextBlock>
 #include <QTextCursor>
 #include <QTextDocument>
 #include <QTextFragment>
+#include <QTextFrame>
+#include <QTextTable>
 
 #include <algorithm>
 #include <vector>
@@ -44,6 +47,132 @@ QString KeepLineBreaks(const QString& text)
             lines[index] += QStringLiteral("  ");
     }
     return lines.join(QLatin1Char('\n'));
+}
+
+// Hairline tables instead of Qt's default double outset borders and cramped cells: one 1px border
+// colour, collapsed, with padding, and a quiet header row.
+void StyleTables(QTextFrame* frame, const theme::Tokens& tokens)
+{
+    for (QTextFrame* child : frame->childFrames())
+    {
+        if (auto* table = dynamic_cast<QTextTable*>(child))
+        {
+            QTextTableFormat format = table->format();
+            format.setBorder(1);
+            format.setBorderBrush(tokens.border);
+            format.setBorderStyle(QTextFrameFormat::BorderStyle_Solid);
+            format.setBorderCollapse(true);
+            format.setCellSpacing(0);
+            format.setCellPadding(6);
+            format.setTopMargin(6);
+            format.setBottomMargin(6);
+            table->setFormat(format);
+            // Cells read as rows of a grid, not as the reply's airy paragraphs.
+            QTextCursor all = table->firstCursorPosition();
+            all.setPosition(table->lastCursorPosition().position(), QTextCursor::KeepAnchor);
+            QTextBlockFormat compact;
+            compact.setLineHeight(120, QTextBlockFormat::ProportionalHeight);
+            all.mergeBlockFormat(compact);
+            // Markdown tables always open with their header row.
+            for (int column = 0; column < table->columns(); ++column)
+            {
+                QTextTableCell cell = table->cellAt(0, column);
+                QTextTableCellFormat cellFormat = cell.format().toTableCellFormat();
+                cellFormat.setBackground(tokens.surfaceAlt);
+                cell.setFormat(cellFormat);
+                QTextCursor contents = cell.firstCursorPosition();
+                contents.setPosition(cell.lastCursorPosition().position(), QTextCursor::KeepAnchor);
+                QTextCharFormat weight;
+                weight.setFontWeight(QFont::DemiBold);
+                contents.mergeCharFormat(weight);
+            }
+        }
+        StyleTables(child, tokens);
+    }
+}
+
+// A fenced block becomes one framed box: a single-cell table with the code background, a hairline
+// border and inner padding, rather than one grey strip per line with gaps between them.
+void BoxCodeBlocks(QTextDocument& document, const theme::Tokens& tokens)
+{
+    struct Run
+    {
+        int start = 0;
+        int end = 0;
+        std::vector<QTextBlock> blocks;
+    };
+    std::vector<Run> runs;
+    for (QTextBlock block = document.begin(); block.isValid(); block = block.next())
+    {
+        if (!IsCodeBlock(block) || QTextCursor(block).currentFrame() != document.rootFrame())
+            continue;
+        if (!runs.empty() && runs.back().blocks.back().next() == block)
+            runs.back().blocks.push_back(block);
+        else
+            runs.push_back({0, 0, {block}});
+    }
+    QTextTableFormat box;
+    box.setBackground(tokens.codeBackground);
+    box.setBorder(1);
+    box.setBorderBrush(tokens.codeBorder);
+    box.setBorderStyle(QTextFrameFormat::BorderStyle_Solid);
+    box.setBorderCollapse(true);
+    box.setCellPadding(10);
+    box.setCellSpacing(0);
+    box.setTopMargin(6);
+    box.setBottomMargin(6);
+    box.setWidth(QTextLength(QTextLength::PercentageLength, 100));
+    // From the end backwards, so the positions of the runs before stay valid.
+    for (auto run = runs.rbegin(); run != runs.rend(); ++run)
+    {
+        std::vector<std::pair<QString, QTextBlockFormat>> lines;
+        QTextCharFormat characters;
+        bool haveCharacters = false;
+        for (const QTextBlock& block : run->blocks)
+        {
+            QTextBlockFormat line = block.blockFormat();
+            line.clearBackground();
+            line.setTopMargin(0);
+            line.setBottomMargin(0);
+            line.setLeftMargin(0);
+            line.setRightMargin(0);
+            line.setLineHeight(130, QTextBlockFormat::ProportionalHeight);
+            lines.emplace_back(block.text(), line);
+            if (!haveCharacters && block.begin() != block.end())
+            {
+                characters = block.begin().fragment().charFormat();
+                haveCharacters = true;
+            }
+        }
+        const QTextBlock first = run->blocks.front();
+        const QTextBlock last = run->blocks.back();
+        QTextCursor cursor(&document);
+        cursor.setPosition(first.position());
+        cursor.setPosition(last.position() + last.length() - 1, QTextCursor::KeepAnchor);
+        cursor.removeSelectedText();
+        // The block left behind holds the box and carries no code styling of its own.
+        const int start = cursor.position();
+        cursor.setBlockFormat(QTextBlockFormat());
+        QTextTable* table = cursor.insertTable(1, 1, box);
+        if (start > 0)
+        {
+            // That block is empty and would add a blank line above the box: fold it into the
+            // paragraph before.
+            QTextCursor fold(&document);
+            fold.setPosition(start - 1);
+            fold.setPosition(start, QTextCursor::KeepAnchor);
+            fold.removeSelectedText();
+        }
+        QTextCursor cell = table->cellAt(0, 0).firstCursorPosition();
+        for (std::size_t index = 0; index < lines.size(); ++index)
+        {
+            if (index == 0)
+                cell.setBlockFormat(lines[index].second);
+            else
+                cell.insertBlock(lines[index].second, characters);
+            cell.insertText(lines[index].first, characters);
+        }
+    }
 }
 
 // One change to the parsed document, applied from the end backwards so earlier
@@ -166,14 +295,10 @@ QString RenderUntrustedMarkdown(const QString& text)
         QTextBlockFormat format = block.blockFormat();
         format.setTopMargin(std::min<qreal>(format.topMargin(), 2));
         format.setBottomMargin(std::min<qreal>(format.bottomMargin(), 2));
-        if (IsCodeBlock(block))
-        {
-            format.setBackground(tokens.codeBackground);
-            format.setLeftMargin(6);
-            format.setRightMargin(6);
-        }
         blockCursor.setBlockFormat(format);
     }
+    StyleTables(document.rootFrame(), tokens);
+    BoxCodeBlocks(document, tokens);
 
     // The body only: the document head carries its own default font and margins, which
     // would override the transcript's.

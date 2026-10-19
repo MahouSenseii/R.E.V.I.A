@@ -1095,6 +1095,9 @@ void CheckDialog(Expect& expect, revia::runtime::ReviaSession& session)
     Settle();
     expect(noResults && !noResults->isHidden() && noResults->text().contains("zzqx") && stack->isHidden(),
         "a query with no hits says so");
+    expect(noResults && noResults->text().contains(QChar(0x201C)) && noResults->text().contains(QChar(0x201D)) &&
+               !noResults->text().contains(QChar(0x00E2)),
+        "the no-results line quotes the query with curly quotes, not mojibake");
     search->setFocus();
     PressKey(search, Qt::Key_Escape);
     expect(search->text().isEmpty() && dialog.isVisible() && micRow && !micRow->isHidden() && speechRow && !speechRow->isHidden() &&

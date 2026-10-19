@@ -356,6 +356,7 @@ QMenu#sidebarMenu, QMenu#chatMoreMenu, QMenu#composerAddMenu, QMenu#composerProf
     background: {{surface}};
     border-color: {{borderStrong}};
 }
+QLabel#sidebarMenuSection, QLabel#sidebarMenuSection:disabled { color: {{textSecondary}}; background: transparent; }
 
 QWidget#chatSessionsPanel { background: transparent; }
 QLabel#chatSessionsHeading { color: {{textSecondary}}; }
@@ -492,7 +493,7 @@ QLabel#toastLabel { color: {{background}}; background: transparent; }
 QLabel#navigationLockOverlay { color: {{text}}; background: {{scrim}}; }
 QWidget#commandPaletteScrim { background: {{scrim}}; }
 QFrame#commandPalette { background: {{surface}}; border-color: {{borderStrong}}; }
-QLineEdit#commandPaletteInput { color: {{text}}; background: transparent; border-color: {{divider}}; }
+QLineEdit#commandPaletteInput, QLineEdit#commandPaletteInput:focus { color: {{text}}; background: transparent; border-color: {{divider}}; }
 QListWidget#commandPaletteList { color: {{text}}; background: transparent; }
 QListWidget#commandPaletteList::item:selected { color: {{selectionText}}; background: {{selection}}; }
 QLabel#commandPaletteEmpty { color: {{textSecondary}}; }
@@ -564,8 +565,8 @@ QFrame#iconWell { background: {{accentSoft}}; border-color: {{accent/30}}; }
 QFrame#iconWellGated { background: {{warningSoft}}; border-color: {{warning/30}}; }
 QLabel#cardTitle { color: {{text}}; }
 QLabel#cardSubtitle { color: {{textSecondary}}; }
-QLabel#permLabel { color: {{text}}; }
-QLabel#permLabelNested, QLabel#permHelp, QLabel#permRowHelp { color: {{textSecondary}}; }
+QLabel#permLabel, QLabel#permLabelNested { color: {{text}}; }
+QLabel#permHelp, QLabel#permRowHelp { color: {{textSecondary}}; }
 QFrame#permRow, QFrame#permRowNested { background: transparent; }
 QFrame#permRow:hover, QFrame#permRowNested:hover { background: {{surfaceHover}}; }
 QFrame#rowSeparator { background: {{divider}}; }

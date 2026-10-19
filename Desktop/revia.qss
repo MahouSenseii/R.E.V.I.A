@@ -146,6 +146,8 @@ QProgressBar { border: 1px solid; border-radius: 6px; text-align: center; font-w
 QMenu { border: 1px solid; padding: 4px; }
 QMenu::item { padding: 6px 28px 6px 12px; border-radius: 6px; }
 QMenu::separator { height: 1px; margin: 4px 8px; }
+/* The sidebar menu's group headings (Workspace, Companion, Studio, Runtime). */
+QLabel#sidebarMenuSection { font-size: 12px; font-weight: 600; padding: 6px 12px 2px 12px; }
 
 QScrollBar:vertical { width: 12px; margin: 2px 2px 2px 0; }
 QScrollBar:horizontal { height: 12px; margin: 0 2px 2px 2px; }
@@ -177,23 +179,21 @@ QWidget#sidebarHeader, QWidget#sidebarBody, QWidget#sidebarFooter { border: none
 QWidget#sidebarFooter { border-top: 1px solid; }
 QLabel#sidebarBrand { font-size: 15px; font-weight: 600; }
 QLabel#sidebarBrandMark { font-size: 15px; font-weight: 600; }
-QWidget#navigationSidebar QToolButton { padding: 6px 8px; min-height: 18px; font-size: 13px; text-align: left; }
-QWidget#navigationSidebar QToolButton:focus { padding: 5px 7px; }
-/* A line edit's search and clear icons are tool buttons too; the sidebar's minimum height would
-   stretch them below the box's centre. */
-QWidget#navigationSidebar QLineEdit QToolButton { padding: 0; min-height: 0; border: none; }
-QToolButton#sidebarToggle, QToolButton#sidebarRailNewChat, QToolButton#sidebarRailSearch,
-QToolButton#sidebarRailPanels, QToolButton#sidebarSettingsButton {
+/* ShellSidebar sets every size here (32px header and footer buttons, 40px rail targets, a 44px
+   account button). No rule may set a minimum size: the polish would put it over those, and the
+   first layout would differ from the one after a collapse and expand. An 18px icon with 6px
+   padding and the 1px border fills 32px exactly. */
+QWidget#navigationSidebar QToolButton { padding: 6px; font-size: 13px; }
+QWidget#navigationSidebar QToolButton:focus { padding: 5px; }
+/* A line edit's search and clear icons are tool buttons too. */
+QWidget#navigationSidebar QLineEdit QToolButton { padding: 0; border: none; }
+QWidget#navigationSidebar QToolButton#sidebarToggle, QWidget#navigationSidebar QToolButton#sidebarRailNewChat,
+QWidget#navigationSidebar QToolButton#sidebarRailSearch, QWidget#navigationSidebar QToolButton#sidebarRailPanels,
+QWidget#navigationSidebar QToolButton#sidebarSettingsButton {
     padding: 6px;
-    min-width: 18px;
-    min-height: 18px;
 }
-QToolButton#sidebarToggle:focus, QToolButton#sidebarRailNewChat:focus, QToolButton#sidebarRailSearch:focus,
-QToolButton#sidebarRailPanels:focus, QToolButton#sidebarSettingsButton:focus {
-    padding: 5px;
-}
-QToolButton#sidebarMenuButton { padding: 6px 8px; text-align: left; }
-QToolButton#sidebarMenuButton:focus { padding: 5px 7px; }
+QWidget#navigationSidebar QToolButton#sidebarMenuButton { padding: 6px 8px; text-align: left; }
+QWidget#navigationSidebar QToolButton#sidebarMenuButton:focus { padding: 5px 7px; }
 QLabel#sidebarAvatar {
     min-width: 28px; max-width: 28px; min-height: 28px; max-height: 28px;
     border-radius: 14px;
@@ -237,6 +237,7 @@ QToolButton#privacyCamera:focus, QToolButton#privacyDesktop:focus {
 }
 QPushButton#headerDesktopStop { padding: 4px 12px; font-size: 12px; }
 QPushButton#headerDesktopStop:focus { padding: 3px 11px; }
+/* Qt draws square corners for a radius over half the height; the window keeps the pill 28px tall. */
 QToolButton#statePill { border-width: 1px; border-radius: 14px; padding: 4px 10px; }
 QToolButton#statePill:focus { border-width: 2px; padding: 3px 9px; }
 QLabel#stateDot { min-width: 8px; max-width: 8px; min-height: 8px; max-height: 8px; border-radius: 4px; }
@@ -275,6 +276,7 @@ QLabel#composerContextLabel { font-size: 12px; }
 QToolButton#composerProfileChip, QToolButton#composerHandsFreeChip {
     border-radius: 14px;
     padding: 4px 10px;
+    min-height: 18px;
     font-size: 12px;
     font-weight: 600;
 }
@@ -320,7 +322,9 @@ QLineEdit#commandPaletteInput {
     padding: 12px 16px;
     font-size: 16px;
 }
-QLineEdit#commandPaletteInput:focus { border: none; border-bottom: 1px solid; padding: 12px 16px; }
+/* Widths and style only: a border shorthand without a colour would reset it to black, over the
+   divider colour the theme gives the input. */
+QLineEdit#commandPaletteInput:focus { border-width: 0px 0px 1px 0px; border-style: solid; padding: 12px 16px; }
 QListWidget#commandPaletteList { border: none; border-radius: 0px; padding: 4px; }
 QListWidget#commandPaletteList[kbdFocus="true"]:focus { border-style: solid; border-width: 2px; padding: 2px; }
 QListWidget#commandPaletteList::item { padding: 0px; border-radius: 6px; }
@@ -380,8 +384,8 @@ QFrame#introBar { border: 1px solid; border-left-width: 2px; border-radius: 10px
 QFrame#iconWell, QFrame#iconWellGated { border: 1px solid; border-radius: 8px; }
 QLabel#cardTitle { font-size: 15px; font-weight: 600; }
 QLabel#cardSubtitle { font-size: 12px; }
-QLabel#permLabel { font-size: 13px; font-weight: 600; }
-QLabel#permLabelNested { font-size: 13px; }
+/* A dependent permission is indented under the one it needs, and titled like every other row. */
+QLabel#permLabel, QLabel#permLabelNested { font-size: 13px; font-weight: 600; }
 QLabel#permHelp, QLabel#permRowHelp { font-size: 12px; }
 QFrame#permRow, QFrame#permRowNested { border: none; border-radius: 6px; }
 QFrame#rowSeparator { border: none; }

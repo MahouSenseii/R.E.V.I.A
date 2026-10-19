@@ -249,25 +249,12 @@ CapabilityPanel::CapabilityPanel(revia::runtime::ReviaSession& inputSession, Dis
     layout->setContentsMargins(0, 10, 0, 0);
     layout->setSpacing(16);
 
-    auto* title = new QLabel("Application, command and internet permissions", this);
-    title->setObjectName("sectionTitle");
-    layout->addWidget(title);
-
-    auto* intro = new QFrame(this);
-    intro->setObjectName("introBar");
-    auto* introLayout = new QVBoxLayout(intro);
-    introLayout->setContentsMargins(14, 11, 14, 11);
-    auto* explanation = new QLabel(
-        QStringLiteral("Applications begin with read-only inspection permission and no mutable controls. "
-                       "Discover a foreground window, then approve only the controls %1 may invoke or edit. "
-                       "Internet access is a separate read-only, rate-limited capability.").arg(CompanionName()), intro);
-    explanation->setWordWrap(true);
-    explanation->setObjectName("secondaryText");
-    introLayout->addWidget(explanation);
-    layout->addWidget(intro);
-
+    // No title or banner of its own: Settings › Permissions names the section and introduces it,
+    // and the internet cards live in Settings › Internet.
     auto* taskApprovals = new QFrame(this);
     auto* taskLayout = new QVBoxLayout(taskApprovals);
+    // Flush with the cards and rows below it.
+    taskLayout->setContentsMargins(0, 0, 0, 0);
     auto* taskTitle = new QLabel("Requested tasks", taskApprovals);
     taskTitle->setObjectName("cardTitle");
     taskLayout->addWidget(taskTitle);
@@ -345,14 +332,12 @@ CapabilityPanel::CapabilityPanel(revia::runtime::ReviaSession& inputSession, Dis
         "2.5 0 0 1 18.5 19h-13A2.5 2.5 0 0 1 3 16.5z'/><circle cx='12' cy='12.5' r='3.4'/>",
         "#55E8F2", "iconWell",
         "Camera",
-        "Opened for a single frame, then closed again immediately.");
+        "Still photos only: never video or a recording.");
     cameraCheck = new ToggleSwitch(ToggleSwitch::Accent::Cyan, this);
     cameraCheck->setObjectName("cameraCheck");
     autonomousCameraCheck = new ToggleSwitch(ToggleSwitch::Accent::Violet, this);
     autonomousCameraCheck->setObjectName("autonomousCameraCheck");
-    AddRow(cameraCard, MakeRow(cameraCheck,
-        "{name} may take a single still frame when you ask about something in view. The camera is opened for that "
-        "frame and closed again immediately."));
+    AddRow(cameraCard, MakeRow(cameraCheck, "The camera is opened for that one photo and closed again at once."));
     AddRow(cameraCard, MakeRow(autonomousCameraCheck,
         "A separate permission. Without it the camera is used only when you ask.", true));
     qobject_cast<QVBoxLayout*>(cameraCard->layout())->addStretch();
@@ -510,7 +495,9 @@ CapabilityPanel::CapabilityPanel(revia::runtime::ReviaSession& inputSession, Dis
     auto* approvedTitle = new QLabel("Approved applications and controls");
     approvedTitle->setObjectName("cardTitle");
     approvedColumn->addWidget(approvedTitle);
-    auto* approvedHelp = new QLabel("Only the controls listed here may be invoked or edited.");
+    auto* approvedHelp = new QLabel(QStringLiteral("An application starts with read-only inspection and no controls. Only the "
+                                                   "controls listed here may be invoked or edited by %1.")
+                                        .arg(CompanionName()));
     approvedHelp->setObjectName("cardSubtitle");
     approvedHelp->setWordWrap(true);
     approvedColumn->addWidget(approvedHelp);
@@ -925,7 +912,10 @@ void CapabilityPanel::AskToConfirm(const QString& question, const QString& conse
     if (!details.isEmpty())
         box->setDetailedText(details);
     QPushButton* accept = box->addButton("Turn on", QMessageBox::AcceptRole);
+    // Added to the button box, the button is already polished: the property needs a repolish.
     accept->setProperty("destructive", true);
+    accept->style()->unpolish(accept);
+    accept->style()->polish(accept);
     QPushButton* cancel = box->addButton(QMessageBox::Cancel);
     box->setDefaultButton(cancel);
     box->setEscapeButton(cancel);

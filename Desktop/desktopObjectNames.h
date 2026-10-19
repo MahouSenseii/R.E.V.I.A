@@ -27,6 +27,7 @@ inline constexpr std::array kStyled = {
     Name{"sidebarRailSearch", true}, Name{"sidebarRailPanels", true}, Name{"sidebarFooter", true}, Name{"sidebarMenuButton", true},
     Name{"sidebarAvatar", true}, Name{"sidebarAccountName", true}, Name{"sidebarAccountDetail", true},
     Name{"sidebarAttentionDot", true}, Name{"sidebarSettingsButton", true}, Name{"sidebarMenu", true},
+    Name{"sidebarMenuSection", false},
     Name{"chatColumn", true}, Name{"chatHeader", true}, Name{"chatTitle", true}, Name{"privacyIndicators", true},
     Name{"privacyMic", true}, Name{"privacyPerception", true}, Name{"privacyScreen", true}, Name{"privacyCamera", false},
     Name{"privacyDesktop", true}, Name{"headerDesktopStop", true}, Name{"statePill", true}, Name{"stateDot", true},

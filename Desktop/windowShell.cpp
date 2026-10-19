@@ -49,6 +49,7 @@
 #include <QSettings>
 #include <QShortcut>
 #include <QSignalBlocker>
+#include <QStyle>
 #include <QSpinBox>
 #include <QStatusBar>
 #include <QSystemTrayIcon>
@@ -57,6 +58,7 @@
 #include <QThread>
 #include <QTimer>
 #include <QToolButton>
+#include <QWidgetAction>
 
 #include <algorithm>
 #include <exception>
@@ -111,7 +113,10 @@ void AskBeforeRiskyChoice(QWidget* parent, const QString& question, const QStrin
     box->setText(question);
     box->setInformativeText(consequence + QStringLiteral(" You can change this back here at any time."));
     QPushButton* accept = box->addButton(QStringLiteral("Turn on"), QMessageBox::AcceptRole);
+    // Added to the button box, the button is already polished: the property needs a repolish.
     accept->setProperty("destructive", true);
+    accept->style()->unpolish(accept);
+    accept->style()->polish(accept);
     QPushButton* cancel = box->addButton(QMessageBox::Cancel);
     box->setDefaultButton(cancel);
     box->setEscapeButton(cancel);
@@ -941,7 +946,16 @@ void ReviaWindow::BuildMenus()
         });
     for (const char* group : {"Workspace", "Companion", "Studio", "Runtime"})
     {
-        sidebarMenu->addSection(QString::fromLatin1(group));
+        // A heading the style cannot drop: Fusion with a stylesheet draws addSection() as a bare
+        // separator, which left fifteen panels in one unlabelled list.
+        sidebarMenu->addSeparator();
+        auto* heading = new QLabel(QString::fromLatin1(group));
+        heading->setObjectName("sidebarMenuSection");
+        auto* section = new QWidgetAction(sidebarMenu);
+        section->setText(QString::fromLatin1(group));
+        section->setDefaultWidget(heading);
+        section->setEnabled(false);
+        sidebarMenu->addAction(section);
         for (const desktop::PanelSpec& spec : desktop::PanelCatalog())
         {
             if (QLatin1String(spec.group) == QLatin1String(group))

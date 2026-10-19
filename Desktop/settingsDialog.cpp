@@ -1066,7 +1066,10 @@ void SettingsDialog::AskToConfirm(const std::string& key, const bool checked)
     box->setText(question);
     box->setInformativeText(text + QStringLiteral(" You can change this back here at any time."));
     QPushButton* accept = box->addButton(checked ? QStringLiteral("Turn on") : QStringLiteral("Turn off"), QMessageBox::AcceptRole);
+    // Added to the button box, the button is already polished: the property needs a repolish.
     accept->setProperty("destructive", true);
+    accept->style()->unpolish(accept);
+    accept->style()->polish(accept);
     QPushButton* cancel = box->addButton(QMessageBox::Cancel);
     box->setDefaultButton(cancel);
     box->setEscapeButton(cancel);
@@ -1899,7 +1902,9 @@ void SettingsDialog::ApplySearch(const QString& query)
             firstWithHits = static_cast<int>(section->id);
         total += hits;
     }
-    noResults->setText(QStringLiteral("No settings match \xE2\x80\x9C%1\xE2\x80\x9D").arg(query.trimmed()));
+    // UTF-8 bytes for the curly quotes: in QStringLiteral (UTF-16) they would be three Latin-1
+    // characters each.
+    noResults->setText(QString::fromUtf8("No settings match \xE2\x80\x9C%1\xE2\x80\x9D").arg(query.trimmed()));
     noResults->setVisible(total == 0);
     stack->setVisible(total > 0);
     const int current = stack->currentIndex();
