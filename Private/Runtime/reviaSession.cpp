@@ -8084,9 +8084,13 @@ ReviaSession::GoalTokenScope::GoalTokenScope(ReviaSession& owner, std::stop_toke
         if (session.activeTask)
             parentTask = session.activeTask->stamp.taskId;
     }
-    admitted = session.companionAuthority->RegisterTask(stamp, parentTask);
+    // A goal only narrows its background task or the session, so registering and ending it
+    // leave the shared revision alone and never revoke a reply in flight. Its own stamps are
+    // still refused once it ends, by the active-subject check.
+    admitted = session.companionAuthority->RegisterTask(stamp, parentTask, policy::AuthorityPermissions::WithinMachineCeiling(), false);
     if (admitted)
     {
+        // Still taken: it picks up a change made by someone else while this registered.
         stamp.policyVersion = session.companionAuthority->Revision();
         {
             std::lock_guard lock(session.taskMutex);
@@ -8150,7 +8154,9 @@ bool ReviaSession::LaunchTask(const std::string& title, std::function<goals::Goa
         std::lock_guard lock(taskMutex);
         taskStopSource = source;
         const RuntimeStamp origin = sessionIdentity.Stamp(actions::NewActionId(), actions::NewActionId(), companionAuthority->Revision());
-        if (!companionAuthority->RegisterTask(origin, {}))
+        // The background task narrows the session as its goal does: starting or finishing it
+        // changes no other subject's authority, so it leaves the revision alone too.
+        if (!companionAuthority->RegisterTask(origin, {}, policy::AuthorityPermissions::WithinMachineCeiling(), false))
         {
             outMessage = "This companion session cannot admit a new task.";
             return false;

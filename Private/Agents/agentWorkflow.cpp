@@ -614,6 +614,10 @@ struct AgentWorkflow::Impl
                                 {
                                 }
                                 Complete(request.node.id, capturedEra, std::move(result));
+                                // A joined thread's id can be given to the next thread created,
+                                // so this one leaves the owned set while it is still alive.
+                                std::lock_guard owned(mutex);
+                                std::erase(jobIds, std::this_thread::get_id());
                             });
                         jobIds.push_back(jobs.back().get_id());
                         ObserveLocked();
@@ -656,6 +660,9 @@ struct AgentWorkflow::Impl
         }
         changed.notify_all();
         Drain();
+        // Likewise the runner's own id, once its last callback has run.
+        std::lock_guard owned(mutex);
+        runnerId = {};
     }
     Json EncodeLocked() const
     {

@@ -135,7 +135,16 @@ struct ReviaSessionTestAccess
         std::lock_guard lock(session.operationMutex);
         return session.context.GetRecentMessages();
     }
-    static void ConfigureStartupBrains(ReviaSession& session, int port, bool fastWarm = true, bool expertWarm = true)
+    // No fixture serves the embedding port. Left enabled, every model step asks it first, and
+    // on Windows a refused loopback connect takes about two seconds.
+    static embeddingSettings NoEmbeddingServer()
+    {
+        embeddingSettings embedding;
+        embedding.bEnabled = false;
+        return embedding;
+    }
+    static void ConfigureStartupBrains(ReviaSession& session, int port, bool fastWarm = true, bool expertWarm = true,
+        const embeddingSettings& embedding = embeddingSettings{})
     {
         session.settings.llm.backend = "LLamaCpp";
         session.settings.llm.host = "127.0.0.1";
@@ -146,16 +155,18 @@ struct ReviaSessionTestAccess
         session.fastLlmSettings = session.expertLlmSettings = session.settings.llm;
         session.settings.intelligence.fast.bWarmAtStartup = fastWarm;
         session.settings.intelligence.expert.bWarmAtStartup = expertWarm;
+        if (!embedding.bEnabled)
+            session.settings.embedding.bEnabled = false;
         session.router.ApplyLLMSettings(session.settings.llm, session.fastLlmSettings,
-            session.expertLlmSettings, embeddingSettings{}, aiProfile{}, true, true);
+            session.expertLlmSettings, embedding, aiProfile{}, true, true);
     }
-    // As the shipped settings run: no Expert, so background reviews share Main's slots with chat.
-    static void ConfigureMainOnly(ReviaSession& session, int port)
+    // As the shipped settings run on one GPU: Expert is not configured, so background reviews go
+    // straight to Main and share its slots with chat.
+    static void ConfigureMainOnly(ReviaSession& session, int port, const embeddingSettings& embedding = embeddingSettings{})
     {
-        ConfigureStartupBrains(session, port);
-        session.expertLlmSettings.port = 1;
+        ConfigureStartupBrains(session, port, true, true, embedding);
         session.router.ApplyLLMSettings(session.settings.llm, session.fastLlmSettings,
-            session.expertLlmSettings, embeddingSettings{}, aiProfile{}, true, true);
+            session.expertLlmSettings, embedding, aiProfile{}, true, false);
     }
     static bool EnsureBrain(ReviaSession& session, intelligence::IntelligenceTier tier, std::stop_token token = {})
     {

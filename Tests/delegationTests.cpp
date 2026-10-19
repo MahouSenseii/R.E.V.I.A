@@ -104,6 +104,12 @@ std::string LastUserText(const Json& wire)
     return text;
 }
 
+// Still on its way to an outcome.
+bool InFlight(const DelegatedTaskStatus status)
+{
+    return status == DelegatedTaskStatus::Working || status == DelegatedTaskStatus::Reviewing || status == DelegatedTaskStatus::Reporting;
+}
+
 bool Offers(const Json& wire, const std::string& name)
 {
     for (const auto& tool : wire.value("tools", Json::array()))
@@ -353,10 +359,11 @@ struct SessionFixture
                                                  events.push_back(event);
                                              })}
     {
+        // Nothing serves embeddings here; see NoEmbeddingServer.
         if (slots == 1)
-            ReviaSessionTestAccess::ConfigureMainOnly(session, backend.port);
+            ReviaSessionTestAccess::ConfigureMainOnly(session, backend.port, ReviaSessionTestAccess::NoEmbeddingServer());
         else
-            ReviaSessionTestAccess::ConfigureStartupBrains(session, backend.port);
+            ReviaSessionTestAccess::ConfigureStartupBrains(session, backend.port, true, true, ReviaSessionTestAccess::NoEmbeddingServer());
         ReviaSessionTestAccess::MarkStudioStarted(session, true);
     }
     ~SessionFixture()
@@ -400,6 +407,29 @@ struct SessionFixture
     {
         const auto task = session.DelegatedTask();
         return task ? task->status : DelegatedTaskStatus::Replaced;
+    }
+    // Waits until the task leaves Working, Reviewing and Reporting, then says whether it ended as
+    // `expected`: a wrong outcome fails at once rather than after the whole wait.
+    bool SettlesAs(const DelegatedTaskStatus expected)
+    {
+        (void)PollUntil(
+            [&]
+            {
+                const auto task = session.DelegatedTask();
+                return !task || !InFlight(task->status);
+            });
+        return Status() == expected;
+    }
+    // The same for an outcome whose report is held back: it must stop at Reporting.
+    bool HeldAtReporting()
+    {
+        (void)PollUntil(
+            [&]
+            {
+                const auto task = session.DelegatedTask();
+                return !task || (task->status != DelegatedTaskStatus::Working && task->status != DelegatedTaskStatus::Reviewing);
+            });
+        return Status() == DelegatedTaskStatus::Reporting;
     }
     std::vector<RuntimeEvent> Reports()
     {
@@ -675,7 +705,7 @@ void TestChatDelegationReportsThroughHerReply()
         "Something was reported, or the work was disturbed, before the workers finished.");
 
     fixture.backend.ReleaseWorkers();
-    const bool settled = fixture.PollUntil([&] { return fixture.Status() == DelegatedTaskStatus::Reported; });
+    const bool settled = fixture.SettlesAs(DelegatedTaskStatus::Reported);
     Check(settled, "The reviewed work was never reported; " + fixture.Describe());
     const auto reports = fixture.Reports();
     Check(reports.size() == 1 && reports[0].phase == task->taskId && reports[0].audienceRevision != 0 &&
@@ -773,7 +803,7 @@ void TestStaleOutcomesAreNeverReported()
         Check(fixture.Say("Use your agents to check the fixture port.").succeeded, "The delegating turn failed.");
         // Her conversation is busy, so the reviewed outcome has to wait for it.
         auto foreground = ReviaSessionTestAccess::HoldForeground(fixture.session);
-        Check(fixture.PollUntil([&] { return fixture.Status() == DelegatedTaskStatus::Reporting; }), "The outcome never became ready.");
+        Check(fixture.HeldAtReporting(), "The outcome never became ready; " + fixture.Describe());
         std::string error;
         // Its parent evaluation may still be tearing down; Agent Studio starts only once idle.
         ReviaSessionTestAccess::JoinWorkflow(fixture.session);
@@ -809,7 +839,7 @@ void TestUnverifiedWorkIsReportedAsNotEstablished()
             return std::vector<Json>{Text("Handed off.")};
         });
     Check(fixture.Say("Use your agents to check the fixture port.").succeeded, "The delegating turn failed.");
-    const bool settled = fixture.PollUntil([&] { return fixture.Status() == DelegatedTaskStatus::NotEstablished; });
+    const bool settled = fixture.SettlesAs(DelegatedTaskStatus::NotEstablished);
     Check(settled, "Unverified work was not reported as not established; " + fixture.Describe());
     const auto report = fixture.backend.Requests(DelegationBackend::Kind::Report);
     Check(fixture.Reports().size() == 1 && report.size() == 1 && report[0].dump().find("did NOT verify") != std::string::npos &&
@@ -872,8 +902,114 @@ void TestToolWorkersAreReadOnlyAndKeepTheReply()
         Check(schema.find("write_text_file") == std::string::npos && schema.find("execute_process") == std::string::npos,
             "A delegated worker was offered a write or a process.");
     }
-    const bool settled = fixture.PollUntil([&] { return fixture.Status() == DelegatedTaskStatus::Reported; });
+    const bool settled = fixture.SettlesAs(DelegatedTaskStatus::Reported);
     Check(settled, "The read-only investigation was not reported; " + fixture.Describe());
+}
+
+// A goal task only narrows what the session may do, so a goal starting or finishing while
+// she answers must not revoke the reply. Its own and its background task's stamps are still
+// refused once it ends, and a real authority change in the middle of a reply still revokes it.
+void TestGoalTasksKeepTheReply()
+{
+    // Shared with the goal's worker thread, so declared before the session that joins it.
+    std::atomic<bool> entered{false};
+    std::atomic<bool> release{false};
+    std::atomic<bool> launched{false};
+    std::mutex stampMutex;
+    RuntimeStamp goalStamp;
+    std::string launchMessage;
+    SessionFixture fixture("delegation-goal-reply");
+    auto& session = fixture.session;
+    // However a check below ends, the goal is let go and finished before anything it uses.
+    struct FinishGoal
+    {
+        ReviaSession& session;
+        std::atomic<bool>& release;
+        ~FinishGoal()
+        {
+            release.store(true);
+            ReviaSessionTestAccess::WaitForTask(session);
+        }
+    } finishGoal{session, release};
+    const auto heldGoal = [&](const std::stop_token stop)
+    {
+        // The real goal scope: it registers the goal's own task under the background task
+        // LaunchTask registered, and ends it on the way out.
+        ReviaSessionTestAccess::WithGoalAdmission(session,
+            [&](const RuntimeStamp& stamp, bool)
+            {
+                {
+                    std::lock_guard lock(stampMutex);
+                    goalStamp = stamp;
+                }
+                entered.store(true);
+                while (!release.load() && !stop.stop_requested())
+                    std::this_thread::sleep_for(2ms);
+            });
+        revia::goals::Goal goal;
+        goal.title = "goal reply fixture";
+        goal.status = revia::goals::GoalStatus::Succeeded;
+        return goal;
+    };
+
+    // A goal starts while she is answering and is still running when the reply is delivered.
+    fixture.backend.SetChat(
+        [&](const Json&)
+        {
+            if (!launched.exchange(true) && ReviaSessionTestAccess::LaunchTask(session, "goal reply fixture", heldGoal, launchMessage))
+            {
+                const auto until = std::chrono::steady_clock::now() + 10s;
+                while (!entered.load() && std::chrono::steady_clock::now() < until)
+                    std::this_thread::sleep_for(2ms);
+            }
+            return std::vector<Json>{Text("Here is my answer while the goal starts.")};
+        });
+    const auto started = fixture.Say("Tell me about the weather while that goal starts.");
+    Check(entered.load() && session.HasRunningTask(), "The goal fixture did not start during the reply: " + launchMessage);
+    Check(started.succeeded && started.text.find("while the goal starts") != std::string::npos,
+        "A goal starting mid-reply revoked the reply: " + started.reason);
+
+    // The same goal finishes, its own task and then the background task, during the next reply.
+    fixture.backend.SetChat(
+        [&](const Json&)
+        {
+            release.store(true);
+            ReviaSessionTestAccess::WaitForTask(session);
+            return std::vector<Json>{Text("Here is my answer while the goal ends.")};
+        });
+    const auto ended = fixture.Say("And now while it finishes.");
+    RuntimeStamp finishedGoal;
+    {
+        std::lock_guard lock(stampMutex);
+        finishedGoal = goalStamp;
+    }
+    std::optional<RuntimeStamp> taskOrigin;
+    {
+        std::lock_guard lock(fixture.mutex);
+        for (const auto& event : fixture.events)
+            if (event.kind == RuntimeEventKind::AssistantMessage && event.component == "Task")
+                taskOrigin = event.stamp;
+    }
+    Check(!session.HasRunningTask() && !finishedGoal.taskId.empty() && !session.Authority()->IsActive(finishedGoal) && taskOrigin &&
+              !taskOrigin->taskId.empty() && !session.Authority()->IsActive(*taskOrigin),
+        "The goal did not end, or its own or its background task's authority outlived it.");
+    // Nothing else changed, so the report's stamp is still current: the owner can give feedback
+    // on it, which its own registration used to make impossible.
+    Check(taskOrigin->policyVersion == session.Authority()->Revision(), "The task report's stamp went stale by itself.");
+    Check(ended.succeeded && ended.text.find("while the goal ends") != std::string::npos,
+        "A goal finishing mid-reply revoked the reply: " + ended.reason);
+
+    // Control: a real authority change in the middle of a reply still revokes it.
+    fixture.backend.SetChat(
+        [&](const Json&)
+        {
+            session.Authority()->SetCompanionDefaults(
+                session.Stamp().companionId, revia::policy::AuthorityPermissions::WithinMachineCeiling());
+            return std::vector<Json>{Text("This reply must not arrive.")};
+        });
+    const auto revoked = fixture.Say("One more question.");
+    Check(!revoked.succeeded && revoked.text.find("must not arrive") == std::string::npos,
+        "A real authority change no longer revokes the reply in flight.");
 }
 
 // On one model slot her own replies preempt the workers. They yield, wait for her turn to
@@ -894,7 +1030,7 @@ void TestWorkersYieldToTheConversation()
     Check(fixture.Say("How is it going?").succeeded && fixture.Status() == DelegatedTaskStatus::Working,
         "Talking during the work failed, or ended it.");
     fixture.backend.ReleaseWorkers();
-    const bool settled = fixture.PollUntil([&] { return fixture.Status() == DelegatedTaskStatus::Reported; });
+    const bool settled = fixture.SettlesAs(DelegatedTaskStatus::Reported);
     Check(settled, "Workers preempted by the conversation did not resume; " + fixture.Describe());
     Check(fixture.backend.MostRepeatedWorker() >= 2, "No worker asked again after yielding to the conversation.");
 }
@@ -914,7 +1050,7 @@ void TestSpentBudgetIsReportedAsNotEstablished()
             return std::vector<Json>{Text("Handed off.")};
         });
     Check(fixture.Say("Use your agents to check the fixture port.").succeeded, "The delegating turn failed.");
-    const bool settled = fixture.PollUntil([&] { return fixture.Status() == DelegatedTaskStatus::NotEstablished; });
+    const bool settled = fixture.SettlesAs(DelegatedTaskStatus::NotEstablished);
     Check(settled, "A run out of budget before its acceptance check was never reported; " + fixture.Describe());
     const auto report = fixture.backend.Requests(DelegationBackend::Kind::Report);
     Check(report.size() == 1 && report[0].dump().find("spent its budget") != std::string::npos &&
@@ -941,7 +1077,7 @@ void TestOutcomeStaysOutOfAnotherChat()
     std::string error;
     Check(fixture.session.StartNewConversation(error), "A new chat could not start: " + error);
     fixture.backend.ReleaseWorkers();
-    const bool settled = fixture.PollUntil([&] { return fixture.Status() == DelegatedTaskStatus::ReportFailed; });
+    const bool settled = fixture.SettlesAs(DelegatedTaskStatus::ReportFailed);
     Check(settled, "An outcome from a closed chat was not left in Agent Studio; " + fixture.Describe());
     (void)fixture.PollUntil([] { return false; }, 1s);
     Check(fixture.Reports().empty() && fixture.backend.Requests(DelegationBackend::Kind::Report).empty() &&
@@ -963,7 +1099,7 @@ void TestTaskCommandCancelsAWaitingReport()
         });
     Check(fixture.Say("Use your agents to check the fixture port.").succeeded, "The delegating turn failed.");
     auto foreground = ReviaSessionTestAccess::HoldForeground(fixture.session);
-    Check(fixture.PollUntil([&] { return fixture.Status() == DelegatedTaskStatus::Reporting; }), "The outcome never became ready.");
+    Check(fixture.HeldAtReporting(), "The outcome never became ready; " + fixture.Describe());
     const auto cancelled = ReviaSessionTestAccess::HandleCommand(fixture.session, "/task cancel");
     Check(cancelled.succeeded && cancelled.text == "Stopping the task." && fixture.Status() == DelegatedTaskStatus::Cancelled,
         "/task cancel did not reach a task waiting to report: " + cancelled.text);
@@ -986,7 +1122,7 @@ void TestStudioRetryReopensTheTask()
             return std::vector<Json>{Text("Handed off.")};
         });
     Check(fixture.Say("Use your agents to check the fixture port.").succeeded, "The delegating turn failed.");
-    bool settled = fixture.PollUntil([&] { return fixture.Status() == DelegatedTaskStatus::NotEstablished; });
+    bool settled = fixture.SettlesAs(DelegatedTaskStatus::NotEstablished);
     Check(settled, "The unverified first run was not reported; " + fixture.Describe());
     ReviaSessionTestAccess::JoinWorkflow(fixture.session);
     fixture.backend.SetWorkersVerified(true);
@@ -994,12 +1130,14 @@ void TestStudioRetryReopensTheTask()
     Check(fixture.session.RetryAgentNode("analysis", "Check fixture/service.conf for the port.", "fixture-retry-evidence", error) &&
               fixture.session.DelegatedTask()->revision == 2,
         "A Studio retry did not reopen the task as a new revision: " + error);
-    settled = fixture.PollUntil(
+    (void)fixture.PollUntil(
         [&]
         {
             const auto task = fixture.session.DelegatedTask();
-            return task && task->status == DelegatedTaskStatus::NotEstablished && task->revision == 2;
+            return !task || (task->revision == 2 && !InFlight(task->status));
         });
+    const auto retried = fixture.session.DelegatedTask();
+    settled = retried && retried->status == DelegatedTaskStatus::NotEstablished && retried->revision == 2;
     // The other worker failed too and was not retried, so revision 2 stops unverified again;
     // what matters is that it was reported afresh, once more, and never as revision 1.
     Check(settled && fixture.Reports().size() == 2, "The retried revision was not reported afresh; " + fixture.Describe());
@@ -1050,6 +1188,7 @@ void RunDelegationTests()
     TestStaleOutcomesAreNeverReported();
     TestUnverifiedWorkIsReportedAsNotEstablished();
     TestToolWorkersAreReadOnlyAndKeepTheReply();
+    TestGoalTasksKeepTheReply();
     TestWorkersYieldToTheConversation();
     TestSpentBudgetIsReportedAsNotEstablished();
     TestOutcomeStaysOutOfAnotherChat();

@@ -71,7 +71,9 @@ The chat card under the delegating reply and Agent Studio read the same `AgentWo
 
 ## The authority revision change
 
-`CompanionAuthority` used to advance its single policy revision whenever any task was registered or ended, and every chat turn's delivery admission compares its captured revision with the current one. A background worker starting or finishing an attempt therefore revoked whatever reply was being written beside it, including the reply announcing the delegation itself. `RegisterTask` now takes `advancesRevision`. The workflow parent and its per-attempt worker tasks pass `false`. A task can only narrow its session or parent, so adding or ending one cannot change what any other subject may do. Its own stamps are still refused once it ends, by the active-subject check. Grants, revocations, defaults, sessions and every other task keep the old behavior. This also fixes Agent Studio's "Local model with permitted tools" mode, which had the same problem.
+`CompanionAuthority` used to advance its single policy revision whenever any task was registered or ended, and every chat turn's delivery admission compares its captured revision with the current one. A background worker starting or finishing an attempt therefore revoked whatever reply was being written beside it, including the reply announcing the delegation itself. `RegisterTask` now takes `advancesRevision`. The workflow parent and its per-attempt worker tasks pass `false`, and so do goal tasks: the background task `LaunchTask` registers and the goal's own task `GoalTokenScope` registers under it. A task can only narrow its session or parent, so adding or ending one cannot change what any other subject may do. Its own stamps are still refused once it ends, by the active-subject check. Grants, revocations, defaults, sessions and the Development Studio proposal task keep the old behavior; that task registers and ends only under the conversation lock, so it never lands inside a reply. This also fixes Agent Studio's "Local model with permitted tools" mode, which had the same problem.
+
+One visible consequence: a background task's report carries the task's origin stamp, which its own registration used to make stale at once. The owner's answer feedback on such a report was therefore always refused. It is now accepted, like feedback on any other current reply.
 
 ## Verification status
 
@@ -84,6 +86,7 @@ The chat card under the delegating reply and Agent Studio read the same `AgentWo
 | Workers yield to her replies on one model slot and ask again | Tested; the check fails if the retry is removed |
 | The spoken report is not cut off once the task is marked reported | Fixed after review; not covered by an automated test (no speech output in the test harness) |
 | Read-only capture with write-capable settings; announcing reply survives tool workers | Tested; the reply check fails if the revision change is reverted |
+| A goal starting or finishing mid-reply keeps the reply; the goal's and its background task's stamps are refused once it ends; a real authority change still revokes the reply | Tested; fails if either goal registration advances the revision |
 | Chat card and Agent Studio origin line | Compiled; checked only with the desktop fixture where noted |
 | Real local model choosing `delegate_task` well, report quality, benefit over a direct answer, latency on the target machine | **Not yet measured** |
 | Auto mode as the default | **Not qualified** |
@@ -94,4 +97,3 @@ The chat card under the delegating reply and Agent Studio read the same `AgentWo
 - Workers get the objective only, not scoped conversation context or memory.
 - After a restart the saved record identifies an earlier chat task, but its outcome is not reported into the new session; it stays in Agent Studio.
 - The report turn is a proactive turn. If its delivery is revoked after the reply was added to working history, that line can stay in history without having been shown (a pre-existing property of proactive turns).
-- Goal tasks (`LaunchTask`) still register advancing authority tasks, so a goal starting or ending mid-reply can still revoke that reply. That is outside this change.
