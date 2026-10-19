@@ -71,6 +71,9 @@ endif()
 # and so the code under test, are identical with either linker.
 #
 # Opt-in, because it needs LLVM's ld.lld on PATH (or beside the compiler). CI turns it on.
+# lld also takes a symbol from any archive whatever the order and ignores --start-group,
+# so a link line can work with lld and fail with GNU ld. CI relinks a few executables
+# with GNU ld to catch that.
 option(REVIA_USE_LLD "Link with LLVM lld instead of GNU ld when the compiler can run it" OFF)
 
 function(revia_use_lld)

@@ -179,7 +179,8 @@ jobs:
           key: deps-${{ runner.os }}-${{ hashFiles('CMakeLists.txt') }}
 
       # Three settings make the links cheap. They are CI-only: a local Debug build keeps
-      # CMake's defaults (-g, GNU ld) unless the developer opts in.
+      # CMake's defaults (-g, GNU ld) unless the developer opts in. lld accepts some link
+      # lines GNU ld rejects, so the last step relinks a few executables with GNU ld.
       # - No debug information (-g0). With it the foundation library was about 1.1 GB and
       #   some executables 1 GB, all read and written by every link, and nobody debugs
       #   these executables. Still -O0 and still no NDEBUG, so asserts stay on, and GCC
@@ -218,6 +219,7 @@ jobs:
           }
 
       - name: Build
+        id: build
         run: |
           ccache --zero-stats
           cmake --build build/ci
@@ -284,6 +286,31 @@ jobs:
           name: ctest-output
           path: build/ci/Testing/
           if-no-files-found: ignore
+
+      # lld takes a symbol from any archive wherever it sits on the command line and
+      # ignores --start-group, so it links some command lines that GNU ld rejects. GNU ld
+      # is what Tools/Build.ps1, setup.bat and CLion link with unless the developer opts
+      # in. Relinking a few executables with it here keeps a link-order mistake from
+      # passing CI and then breaking those builds. Each one covers a different kind of link:
+      # - R_E_V_I_A pulls in the foundation through revia_link_foundation.
+      # - ReviaTests links the most objects. ReviaDesktopFixture, a -municode GUI
+      #   program, comes with it as a dependency.
+      # - ReviaArchiveWriterTests links SQLite by itself and --wraps two of its functions.
+      # - ReviaProcessFixture links fully static.
+      # The objects are already built, and reconfiguring only takes -fuse-ld=lld out of
+      # the link commands, so ninja relinks these and compiles nothing. GNU ld took about
+      # 6 s for R_E_V_I_A and 19 s for ReviaTests locally. This runs after Test, also
+      # when a test failed, so the tests above ran the lld build.
+      - name: Link a few executables with GNU ld too
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: |
+          cmake -S . -B build/ci -DREVIA_USE_LLD=OFF
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if (Select-String -LiteralPath build/ci/build.ninja -SimpleMatch -Pattern '-fuse-ld=lld' -Quiet) {
+            throw 'build.ninja still links with lld after configuring with REVIA_USE_LLD=OFF.'
+          }
+          cmake --build build/ci --target R_E_V_I_A ReviaTests ReviaArchiveWriterTests ReviaProcessFixture
+          exit $LASTEXITCODE
 
   # Cheap, fast, and catches the class of defect that has actually bitten this project:
   # a setup script that only works on the machine it was written on.

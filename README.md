@@ -228,6 +228,9 @@ installed and its `bin` folder on PATH, `-DREVIA_USE_LLD=ON` (for example in
 checks that the compiler really runs lld; if not, it warns and keeps GNU ld. The Windows
 CI job uses lld, compiles without debug information (`-g0`, still `-O0` with asserts on)
 and runs at most three links at once. A local Debug build keeps full debug information.
+lld finds a symbol in any archive whatever the order on the command line and ignores
+`--start-group`, so it links some command lines that GNU ld rejects. The CI job therefore
+relinks `R_E_V_I_A`, `ReviaTests` and two small executables with GNU ld as well.
 
 ### 3. Start Revia
 
