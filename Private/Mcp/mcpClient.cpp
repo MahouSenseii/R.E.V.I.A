@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <optional>
+#include <thread>
 
 namespace revia::mcp
 {
@@ -39,6 +40,26 @@ std::string ErrorText(const Json& error)
         message += " (code " + std::to_string(error["code"].get<long long>()) + ")";
     return "The server returned an error: " + message;
 }
+
+// Why a server that went away did so, or nothing if it is still there. A server that
+// exits at once is often noticed -- as a failed write or as the end of its output -- a
+// moment before it has fully gone and its explanation on stderr has been collected, so
+// both are given a short time to arrive.
+std::optional<std::string> ClosedReason(const McpTransport& transport)
+{
+    const auto deadline = Clock::now() + std::chrono::milliseconds(500);
+    while (!transport.Closed() && Clock::now() < deadline)
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    if (!transport.Closed())
+        return std::nullopt;
+    std::string detail = transport.Diagnostics();
+    while (detail.empty() && Clock::now() < deadline)
+    {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        detail = transport.Diagnostics();
+    }
+    return detail.empty() ? std::string("The server closed the connection.") : "The server closed the connection. " + detail;
+}
 } // namespace
 
 McpClient::McpClient(std::unique_ptr<McpTransport> inputTransport, const std::chrono::milliseconds inputTimeout)
@@ -53,6 +74,7 @@ McpClient::~McpClient()
 
 bool McpClient::Initialize(const std::stop_token stopToken, std::string& error)
 {
+    error.clear();
     {
         std::lock_guard lock(mutex);
         if (!transport || !transport->Open(error))
@@ -223,9 +245,15 @@ bool McpClient::Request(const std::string& method, const Json& params, const std
     bool* timedOut, bool* cancelled, std::size_t* bytes)
 {
     std::lock_guard lock(mutex);
-    if (!transport || transport->Closed())
+    if (!transport)
     {
         error = "The server is not running.";
+        return false;
+    }
+    if (transport->Closed())
+    {
+        connected = false;
+        error = ClosedReason(*transport).value_or("The server is not running.");
         return false;
     }
     const std::int64_t id = nextId++;
@@ -234,7 +262,13 @@ bool McpClient::Request(const std::string& method, const Json& params, const std
         request["params"] = params;
     if (!transport->Send(request.dump(-1, ' ', false, Json::error_handler_t::replace), stopToken, error))
     {
-        if (error.empty())
+        // A write fails when the server has already exited; then say why it did.
+        if (const auto reason = ClosedReason(*transport))
+        {
+            connected = false;
+            error = *reason;
+        }
+        else if (error.empty())
             error = "The request could not be sent to the server.";
         return false;
     }
@@ -263,10 +297,7 @@ bool McpClient::Request(const std::string& method, const Json& params, const std
             if (transport->Closed())
             {
                 connected = false;
-                error = "The server closed the connection.";
-                const std::string detail = transport->Diagnostics();
-                if (!detail.empty())
-                    error += " " + detail;
+                error = ClosedReason(*transport).value_or("The server closed the connection.");
                 return false;
             }
             continue;
