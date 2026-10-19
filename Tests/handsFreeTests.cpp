@@ -113,6 +113,19 @@ void TestVoicesInTheRoomNeitherInterruptNorReachHer()
     Access::Hear(session, Heard("Transcript", "Revia, how is it going?"));
     Check(Access::TakeOfferedInput(session) == "Revia, how is it going?" && operation.stop_requested(),
         "Speech addressed to her did not reach her or supersede the reply in progress.");
+
+    // Turning the microphone off applies at once: what it still hears is dropped, and Listen is
+    // refused until it is turned back on and Revia restarts.
+    Access::UsePreferences(session, directory.root);
+    const auto off = session.SetPreference("speechRecognition.enabled", "off");
+    Check(off.succeeded && off.message.find("stops listening now") != std::string::npos, "Turning the microphone off was not live.");
+    Access::Hear(session, Heard("Transcript", "Revia, are you still listening?"));
+    Check(Access::TakeOfferedInput(session).empty() && !session.BeginListening(),
+        "Speech heard after the microphone was turned off still reached her.");
+    const auto on = session.SetPreference("speechRecognition.enabled", "on");
+    Access::Hear(session, Heard("Transcript", "Revia, can you hear me now?"));
+    Check(on.succeeded && on.message.find("next time") != std::string::npos && Access::TakeOfferedInput(session).empty(),
+        "Turning the microphone back on claimed to apply before a restart.");
     Access::MarkStudioStarted(session, false);
 }
 

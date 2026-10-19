@@ -65,6 +65,14 @@ namespace revia::runtime
 
 namespace
 {
+// Startup settings that something also reads while Revia runs (lowered keys). They are committed
+// so that reader agrees with what is saved; the rest follows at the next start, so Settings reports
+// the value Start read as the one running.
+bool IsPartlyLivePreference(const std::string& lowered)
+{
+    return lowered == "performance.enabled" || lowered == "performance.interruptsongtospeak";
+}
+
 goals::Goal RefusedGoalAuthority(goals::Goal goal)
 {
     goal.status = goals::GoalStatus::Blocked;
@@ -813,8 +821,18 @@ bool ReviaSession::Start()
             if (const auto value = core::OwnerSettingValue(settings, entry.key))
                 loadedOwnerSettings[std::string(entry.key)] = value->get<bool>();
         }
+        // Preferences that are only partly live, as Start read them.
+        std::map<std::string, bool> loadedPartlyLive;
+        for (const core::PreferenceKey& key : core::PreferenceStore::Writable())
+        {
+            if (key.type != core::PreferenceType::Boolean || !IsPartlyLivePreference(ToLowerCopy(key.name)))
+                continue;
+            if (const auto value = core::BooleanPreference(settings, key.name))
+                loadedPartlyLive[key.name] = *value;
+        }
         std::lock_guard snapshotLock(preferenceSnapshotMutex);
         startupOwnerSettings = std::move(loadedOwnerSettings);
+        startupPartlyLivePreferences = std::move(loadedPartlyLive);
     }
     responseAiReviewEnabled.store(settings.responseFilter.bAiReviewEnabled);
     responseAiMaxReviewTokens = settings.responseFilter.aiMaxReviewTokens;
@@ -3567,19 +3585,19 @@ bool ReviaSession::CommitPreferenceLocked(const std::string& lowered, const appS
     // Read from the running settings each time they are used, so committing is applying.
     static const std::set<std::string> readAtUse = {
         "conversation.selfinquiryenabled", "conversation.iterativeinvestigationenabled", "presence.speakstreamreplies"};
-    // Startup settings that something also reads while Revia runs. They are committed so that
-    // reader agrees with what is saved, and the rest follows at the next start.
-    static const std::set<std::string> partlyNow = {
-        "speechrecognition.enabled", "performance.enabled", "performance.interruptsongtospeak"};
+    const bool partlyNow = IsPartlyLivePreference(lowered);
     // Committed only so VoiceDevicePreference reports the choice; the voice moves at the next start.
     static const std::set<std::string> shownNow = {"resources.voicedevice"};
 
     // Chats stop being saved as soon as history is turned off; turning it back on needs the
     // archive opened at startup.
     const bool archiveOff = lowered == "conversation.archiveenabled" && !updated.conversation.bArchiveEnabled;
-    const bool live = appliedNow.contains(lowered);
+    // The microphone stops as soon as it is turned off, a privacy switch that cannot wait for a
+    // restart; turning it back on needs the recognizer Start opens.
+    const bool microphoneOff = lowered == "speechrecognition.enabled" && !updated.speechRecognition.bEnabled;
+    const bool live = appliedNow.contains(lowered) || microphoneOff;
     const bool shown = shownNow.contains(lowered);
-    if (!live && !archiveOff && !shown && !readAtUse.contains(lowered) && !partlyNow.contains(lowered))
+    if (!live && !archiveOff && !shown && !readAtUse.contains(lowered) && !partlyNow)
     {
         result.message += " It takes effect the next time Revia starts.";
         return false;
@@ -3596,7 +3614,11 @@ bool ReviaSession::CommitPreferenceLocked(const std::string& lowered, const appS
     {
         result.message += " Chats stop being saved now.";
     }
-    else if (partlyNow.contains(lowered))
+    else if (microphoneOff)
+    {
+        result.message += " The microphone stops listening now.";
+    }
+    else if (partlyNow)
     {
         result.message += " Part of it applies now; all of it takes effect the next time Revia starts.";
     }
@@ -3633,6 +3655,18 @@ void ReviaSession::ApplyPreference(const std::string& lowered)
             enabled = settings.speechRecognition.bHandsFree;
         }
         SetHandsFreeEnabled(enabled);
+    }
+    else if (lowered == "speechrecognition.enabled")
+    {
+        // Only turning it off is committed; turning it on waits for the next start.
+        if (!liveWorkersOpen || SpeechRecognitionEnabledNow())
+            return;
+        // Hands-free stops, and a capture or transcription already running is dropped rather than
+        // turned into a request. The hands-free preference itself is kept for the next start.
+        speechRecognitionService.SetHandsFreeEnabled(false);
+        speechRecognitionService.Cancel();
+        PublishComponent("Microphone", "Disabled",
+            "The microphone is off. Turning Use the microphone back on takes effect the next time Revia starts.");
     }
     else if (lowered == "speechrecognition.requirewakeword")
     {
@@ -4180,6 +4214,13 @@ SessionResult ReviaSession::Submit(const std::string& input, const agents::Input
 
 void ReviaSession::OnRecognitionEvent(const speech::RecognitionEvent& recognitionEvent)
 {
+    // Once the microphone is turned off nothing it heard is acted on, including a capture that
+    // was already finishing when the switch went off.
+    if ((recognitionEvent.phase == "Transcript" || recognitionEvent.phase == "SpeechDetected") && !SpeechRecognitionEnabledNow())
+    {
+        appLogger.Log("[Microphone] dropped " + recognitionEvent.phase + ": the microphone is turned off");
+        return;
+    }
     if (recognitionEvent.automatic && recognitionEvent.phase == "SpeechDetected")
     {
         // Only her voice yields here. Whether the speech is for her is not known
@@ -5155,6 +5196,11 @@ presence::PresenceSnapshot ReviaSession::Presence() const
 
 bool ReviaSession::BeginListening()
 {
+    if (!SpeechRecognitionEnabledNow())
+    {
+        PublishComponent("Microphone", "Disabled", "The microphone is turned off in Settings.");
+        return false;
+    }
     speechService.StopSpeaking();
     const speech::MicrophoneAttempt attempt = speechRecognitionService.BeginRecordingDiagnosed();
     // Logged on every press, started or not. A press that produced nothing used to
@@ -5999,7 +6045,8 @@ CapabilityUpdateResult ReviaSession::SetInternetBrowser(const bool visibleBrowse
 
 std::string ReviaSession::DisplayName() const
 {
-    return profile.displayName.empty() ? "Revia" : profile.displayName;
+    std::lock_guard nameLock(displayNameMutex);
+    return displayNameSnapshot.empty() ? "Revia" : displayNameSnapshot;
 }
 
 std::string ReviaSession::Greeting() const
@@ -7643,6 +7690,10 @@ void ReviaSession::ApplyProfileLocked(const std::string& profileId, aiProfile lo
 {
     CancelSpeakerEnrollment();
     profile = std::move(loaded);
+    {
+        std::lock_guard nameLock(displayNameMutex);
+        displayNameSnapshot = profile.displayName;
+    }
     {
         // ActiveProfileSummary reads it from the window's thread.
         std::lock_guard snapshotLock(preferenceSnapshotMutex);

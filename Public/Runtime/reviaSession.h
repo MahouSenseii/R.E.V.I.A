@@ -1054,7 +1054,14 @@ class ReviaSession
     // The overlay's Booleans as Start loaded them, before startup derived anything from them.
     // A setting that applies at the next start reports this as running.
     std::map<std::string, bool> startupOwnerSettings;
+    // The partly live preferences (performance.*) as Start read them; reported as running.
+    std::map<std::string, bool> startupPartlyLivePreferences;
     std::optional<bool> virtualMachineEnabledAtStart;
+    // The active profile's name as DisplayName() returns it. The window reads it on its own thread
+    // while a Settings write on the settings worker may be replacing profile, so it is copied here
+    // whenever a profile is applied.
+    mutable std::mutex displayNameMutex;
+    std::string displayNameSnapshot;
     mutable std::mutex cancellationMutex;
     mutable std::mutex confirmationMutex;
     mutable std::mutex voiceStudioMutex;

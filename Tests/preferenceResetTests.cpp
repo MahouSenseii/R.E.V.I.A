@@ -311,6 +311,18 @@ void RunningSessionKeepsRestartValuesUntilRestart()
     Check(history.succeeded && history.message.find("next time") != std::string::npos && states.at("conversation.archiveEnabled").value &&
               !states.at("conversation.archiveEnabled").running,
         "Turning chat history on claimed to apply before a restart.");
+    // Partly live: committed for the reader that runs now, the rest as Start read it.
+    const bool singingAtStart = session.BooleanSettings().at("performance.enabled").running;
+    Check(session.SetPreference("performance.enabled", singingAtStart ? "off" : "on").succeeded, "Could not set singing.");
+    states = session.BooleanSettings();
+    Check(states.at("performance.enabled").value != singingAtStart && states.at("performance.enabled").running == singingAtStart,
+        "A partly live preference claimed to apply in full before a restart.");
+    // The microphone (off at start here): turning it on waits for a restart.
+    const auto microphone = session.SetPreference("speechRecognition.enabled", "on");
+    states = session.BooleanSettings();
+    Check(microphone.succeeded && microphone.message.find("next time") != std::string::npos &&
+              states.at("speechRecognition.enabled").value && !states.at("speechRecognition.enabled").running,
+        "Turning the microphone on claimed to apply before a restart.");
     // Live, read where it is used.
     Check(session.SetPreference("conversation.selfInquiryEnabled", "off").succeeded, "Could not set self-inquiry.");
     states = session.BooleanSettings();

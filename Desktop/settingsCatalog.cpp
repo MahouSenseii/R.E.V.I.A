@@ -229,7 +229,7 @@ std::vector<SettingDescriptor> BuildCatalog()
         .label = "Use the microphone",
         .description = "Let {name} hear you through your microphone. Your speech is turned into text on this PC.",
         .store = Store::Preference,
-        .apply = Apply::Partial,
+        .apply = Apply::LiveWhenOffRestartWhenOn,
         .risk = Risk::Privacy,
         .defaultValue = true,
         .keywords = {"microphone", "mic", "speech recognition", "listening", "whisper", "dictation"}});

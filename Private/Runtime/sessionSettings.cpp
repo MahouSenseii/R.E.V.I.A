@@ -141,6 +141,10 @@ std::map<std::string, BooleanSettingState> ReviaSession::BooleanSettings() const
         // was started with.
         for (const std::string& key : preferenceKeys)
             states[key].running = core::BooleanPreference(settings, key).value_or(states[key].running);
+        // Partly live preferences are committed for their live reader, but the rest of them still
+        // runs with what Start read, so a change waits for a restart.
+        for (const auto& [key, atStart] : startupPartlyLivePreferences)
+            states[key].running = atStart;
         for (const std::string& key : ownerKeys)
         {
             const core::OwnerKey* entry = core::FindOwnerKey(key);

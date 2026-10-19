@@ -256,9 +256,11 @@ struct FakeBackend
             }
             SettingRead& entry = Entry(key.key);
             entry.value = value;
-            // Like the session: Live and Partial keys are committed at once, restart-only ones are not.
+            // Like the session: Live keys are committed at once and an off-live row commits only
+            // turning off. A Partial key reports what Start read as running, like a restart-only
+            // one, because only part of it follows the change before a restart.
             const SettingDescriptor* row = CatalogRow(key.key);
-            if (row == nullptr || row->apply == SettingApply::Live || row->apply == SettingApply::Partial)
+            if (row == nullptr || row->apply == SettingApply::Live || (row->apply == SettingApply::LiveWhenOffRestartWhenOn && !value))
                 entry.running = value;
             if (deferNext)
             {
@@ -488,11 +490,16 @@ void CheckCatalog(Expect& expect)
     // Startup preferences the session commits at once because something reads them while Revia runs
     // (design spec 5.7.5): their running value always follows the saved one, so a restart badge
     // would promise a restart the banner never asks for.
-    for (const char* key : {"speechRecognition.enabled", "performance.enabled", "performance.interruptSongToSpeak"})
+    for (const char* key : {"performance.enabled", "performance.interruptSongToSpeak"})
     {
         const SettingDescriptor* row = FindSetting(key);
         expect(row != nullptr && row->apply == SettingApply::Partial, Q(key) + " applies partly now and must be a Partial row");
     }
+    // The microphone stops at once when it is turned off; turning it on needs the recognizer Start
+    // opens, so only that direction waits for a restart.
+    const SettingDescriptor* microphone = FindSetting("speechRecognition.enabled");
+    expect(microphone != nullptr && microphone->apply == SettingApply::LiveWhenOffRestartWhenOn,
+        "turning the microphone off applies at once and turning it on after a restart");
 
     // Tool-server templates expand per server, with sanitised objectNames.
     const SettingDescriptor* confirmation = FindSetting("mcp.servers[*].requireConfirmation");
@@ -812,17 +819,20 @@ void CheckDialog(Expect& expect, revia::runtime::ReviaSession& session)
         expect(dialog.PendingRestartCount() == 0 && banner->isHidden() && trusted && !trusted->isChecked(),
             "with nothing pending the banner goes away");
     }
-    // A Partial row is committed at once, so changing it never waits for a restart.
+    // Part of a Partial row applies at once and the rest at the next start, so a change is counted
+    // until then and the badge says so; changing it back puts the resting text back.
     if (auto* interrupt = dialog.findChild<QCheckBox*>(QStringLiteral("sw_performance_interruptSongToSpeak")); interrupt && banner)
     {
         const int pending = dialog.PendingRestartCount();
         interrupt->click();
         Settle();
         const QLabel* badge = Badge(dialog.findChild<QFrame*>("sw_performance_interruptSongToSpeakRow"), "partial");
-        expect(!interrupt->isChecked() && dialog.PendingRestartCount() == pending && badge && badge->text() == "Partly applies now",
-            "changing a Partial row keeps its badge and adds nothing to the restart count");
+        expect(!interrupt->isChecked() && dialog.PendingRestartCount() == pending + 1 && badge && badge->text() == "Restart to apply",
+            "changing a Partial row counts it for a restart and says so");
         interrupt->click();
         Settle();
+        expect(dialog.PendingRestartCount() == pending && badge && badge->text() == "Partly applies now",
+            "changing a Partial row back takes it out of the count");
     }
 
     // Dependencies use the saved values.
