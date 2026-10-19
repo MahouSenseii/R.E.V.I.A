@@ -6,9 +6,9 @@ sections sit in a list on the left: General, Appearance, Chat, Voice, Vision, In
 Models, Permissions, Integrations and Advanced.
 
 Every user-facing true/false setting is a labelled switch with a one-line explanation. A switch
-either applies at once or carries the badge "Applies after restart". Risky switches carry a
-"Risky" badge and a warning, and ask before they change. This page lists every switch, where its
-value is kept, and the booleans that deliberately have no switch.
+either applies at once or carries the badge "Applies after restart" or "Partly applies now". Risky
+switches carry a "Risky" badge and a warning, and ask before they change. This page lists every
+switch, where its value is kept, and the booleans that deliberately have no switch.
 
 The list is generated from `Desktop/settingsCatalog.cpp`, the single source the dialog, the
 CapabilityPanel, the command palette and this page share. `Revia.SettingsDialog`
@@ -19,8 +19,10 @@ that every boolean preference and every owner-settings key has a row.
 ## How a switch behaves
 
 - **Badges.** "Applies after restart" (it changes to "Restart to apply" once you have changed it),
-  "All companions" for values shared by every companion, "Privacy", "Risky" and "Autonomy".
-  Badges always pair a word with their colour.
+  "Partly applies now" for a startup setting that part of Revia already follows while it runs
+  (the rest takes effect at the next start, and the restart banner does not count it), "All
+  companions" for values shared by every companion, "Privacy", "Risky" and "Autonomy". Badges
+  always pair a word with their colour.
 - **Confirmation.** Turning on a risky switch, or turning off one whose off state is the risky one
   (marked "asks when turned off" below), opens a question titled "Turn on ...?" or "Turn off ...?"
   with the warning. Cancel is the default and changes nothing.
@@ -110,11 +112,11 @@ Settings rows whose row frame is named after the switch plus `Row`.
 | Spoken replies | Say hello at startup | *{name}* greets you out loud on coming online. | `speech.speakGreeting` (`sw_speech_speakGreeting`), default off | Preference | After restart |  | Speak replies |
 | Spoken replies | Let me interrupt *{name}* | Talking over *{name}* stops the speech. | `bargeIn.enabled` (`bargeInCheck`), default on | Preference | Live |  | Speak replies |
 | Listening | Send what I say automatically | Send your spoken message when you stop talking instead of leaving it in the box to edit. | `input/autoSendVoice` (`autoSendVoiceCheck`), default on | QSettings | Live |  | off while Hands-free listening is on |
-| Listening | Use the microphone | Let *{name}* hear you through your microphone. Your speech is turned into text on this PC. | `speechRecognition.enabled` (`sw_speechRecognition_enabled`), default on | Preference | After restart | Privacy |  |
+| Listening | Use the microphone | Let *{name}* hear you through your microphone. Your speech is turned into text on this PC. | `speechRecognition.enabled` (`sw_speechRecognition_enabled`), default on | Preference | Partly now, fully after restart | Privacy |  |
 | Listening | Hands-free listening | Listen all the time and send what you say when you pause. No button needed. | `speechRecognition.handsFree` (`handsFreeCheck`), default off | Preference | Live | Privacy | Use the microphone |
 | Listening | Require the wake word | In hands-free mode *{name}* answers only when you say the wake word or are already talking together. **Warning:** With hands-free listening on, *{name}* will answer anything the microphone hears. | `speechRecognition.requireWakeWord` (`sw_speechRecognition_requireWakeWord`), default on | Preference | Live | Privacy, asks when turned off | Hands-free listening |
-| Singing | Singing (karaoke) | Let *{name}* sing songs from your song library. | `performance.enabled` (`sw_performance_enabled`), default on | Preference | After restart |  |  |
-| Singing | Stop singing to answer | If you talk during a song, *{name}* stops to reply. Off: the music keeps playing and the reply shows as text. | `performance.interruptSongToSpeak` (`sw_performance_interruptSongToSpeak`), default on | Preference | After restart |  | Singing (karaoke) |
+| Singing | Singing (karaoke) | Let *{name}* sing songs from your song library. | `performance.enabled` (`sw_performance_enabled`), default on | Preference | Partly now, fully after restart |  |  |
+| Singing | Stop singing to answer | If you talk during a song, *{name}* stops to reply. Off: the music keeps playing and the reply shows as text. | `performance.interruptSongToSpeak` (`sw_performance_interruptSongToSpeak`), default on | Preference | Partly now, fully after restart |  | Singing (karaoke) |
 
 ### Vision
 

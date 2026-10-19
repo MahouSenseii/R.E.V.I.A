@@ -180,6 +180,10 @@ std::vector<SettingDescriptor> BuildCatalog()
         .keywords = {"max tokens", "reply length", "limit", "profile"}});
 
     // ------------------------------------------------------------------ Voice
+    // The microphone, singing and stop-to-answer switches are startup settings that something also
+    // reads while Revia runs. The session commits them for that reader at once, so they are Partial
+    // ("Partly applies now", design spec 5.7.5): the value in effect always matches the saved one
+    // and the restart banner never counts them.
     rows.push_back({.key = "speech.enabled",
         .objectName = "speechCheck",
         .section = S::Voice,
@@ -225,7 +229,7 @@ std::vector<SettingDescriptor> BuildCatalog()
         .label = "Use the microphone",
         .description = "Let {name} hear you through your microphone. Your speech is turned into text on this PC.",
         .store = Store::Preference,
-        .apply = Apply::Restart,
+        .apply = Apply::Partial,
         .risk = Risk::Privacy,
         .defaultValue = true,
         .keywords = {"microphone", "mic", "speech recognition", "listening", "whisper", "dictation"}});
@@ -259,7 +263,7 @@ std::vector<SettingDescriptor> BuildCatalog()
         .label = "Singing (karaoke)",
         .description = "Let {name} sing songs from your song library.",
         .store = Store::Preference,
-        .apply = Apply::Restart,
+        .apply = Apply::Partial,
         .defaultValue = true,
         .keywords = {"sing", "karaoke", "songs", "music", "performance"}});
     rows.push_back({.key = "performance.interruptSongToSpeak",
@@ -270,7 +274,7 @@ std::vector<SettingDescriptor> BuildCatalog()
         .description = "If you talk during a song, {name} stops to reply. Off: the music keeps playing and the reply shows as "
                        "text.",
         .store = Store::Preference,
-        .apply = Apply::Restart,
+        .apply = Apply::Partial,
         .requiresAll = {"performance.enabled"},
         .defaultValue = true,
         .keywords = {"interrupt", "song", "music"}});

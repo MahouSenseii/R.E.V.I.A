@@ -252,8 +252,9 @@ struct FakeBackend
             }
             SettingRead& entry = Entry(key.key);
             entry.value = value;
+            // Like the session: Live and Partial keys are committed at once, restart-only ones are not.
             const SettingDescriptor* row = CatalogRow(key.key);
-            if (row == nullptr || row->apply == SettingApply::Live)
+            if (row == nullptr || row->apply == SettingApply::Live || row->apply == SettingApply::Partial)
                 entry.running = value;
             if (deferNext)
             {
@@ -436,6 +437,15 @@ void CheckCatalog(Expect& expect)
             expect((row->apply == SettingApply::Live) == key.live, Q(row->key) + " must apply live exactly when the overlay allowlist says so");
     }
 
+    // Startup preferences the session commits at once because something reads them while Revia runs
+    // (design spec 5.7.5): their running value always follows the saved one, so a restart badge
+    // would promise a restart the banner never asks for.
+    for (const char* key : {"speechRecognition.enabled", "performance.enabled", "performance.interruptSongToSpeak"})
+    {
+        const SettingDescriptor* row = FindSetting(key);
+        expect(row != nullptr && row->apply == SettingApply::Partial, Q(key) + " applies partly now and must be a Partial row");
+    }
+
     // Tool-server templates expand per server, with sanitised objectNames.
     const SettingDescriptor* confirmation = FindSetting("mcp.servers[*].requireConfirmation");
     expect(confirmation != nullptr && IsServerTemplate(*confirmation), "the tool-server confirmation row must be a template");
@@ -554,6 +564,9 @@ void CheckDialog(Expect& expect, revia::runtime::ReviaSession& session)
         expect(!toggle->accessibleName().isEmpty() && !toggle->accessibleDescription().isEmpty(), name + " needs accessible text");
         const bool restart = descriptor.apply == SettingApply::Restart || descriptor.apply == SettingApply::LiveWhenOffRestartWhenOn;
         expect((Badge(row, "restart") != nullptr) == restart, name + " shows Applies after restart exactly when it waits for a restart");
+        const QLabel* partial = Badge(row, "partial");
+        expect((partial != nullptr) == (descriptor.apply == SettingApply::Partial) && (partial == nullptr || partial->text() == "Partly applies now"),
+            name + " shows Partly applies now exactly when part of it applies at once");
         expect((Badge(row, "danger") != nullptr) == (descriptor.risk == SettingRisk::Dangerous), name + " shows Risky exactly when risky");
         expect((Badge(row, "global") != nullptr) == descriptor.allCompanions, name + " shows All companions exactly when global");
     }
@@ -716,6 +729,18 @@ void CheckDialog(Expect& expect, revia::runtime::ReviaSession& session)
         Settle();
         expect(dialog.PendingRestartCount() == 0 && banner->isHidden() && trusted && !trusted->isChecked(),
             "with nothing pending the banner goes away");
+    }
+    // A Partial row is committed at once, so changing it never waits for a restart.
+    if (auto* interrupt = dialog.findChild<QCheckBox*>(QStringLiteral("sw_performance_interruptSongToSpeak")); interrupt && banner)
+    {
+        const int pending = dialog.PendingRestartCount();
+        interrupt->click();
+        Settle();
+        const QLabel* badge = Badge(dialog.findChild<QFrame*>("sw_performance_interruptSongToSpeakRow"), "partial");
+        expect(!interrupt->isChecked() && dialog.PendingRestartCount() == pending && badge && badge->text() == "Partly applies now",
+            "changing a Partial row keeps its badge and adds nothing to the restart count");
+        interrupt->click();
+        Settle();
     }
 
     // Dependencies use the saved values.
