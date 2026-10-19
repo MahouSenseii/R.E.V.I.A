@@ -4,10 +4,14 @@
 #include "profilePanel.h"
 #include "settingsCatalog.h"
 #include "settingsDialog.h"
+#include "reviaSessionTestAccess.h"
 
+#include "Actions/actionTypes.h"
 #include "Core/preferenceStore.h"
 #include "Core/settingsFileKeys.h"
 #include "Runtime/reviaSession.h"
+
+#include <nlohmann/json.hpp>
 
 #include <QApplication>
 #include <QCheckBox>
@@ -36,6 +40,8 @@
 #include <QPixmap>
 
 #include <array>
+#include <filesystem>
+#include <fstream>
 #include <functional>
 #include <iostream>
 #include <map>
@@ -48,8 +54,8 @@
 // Revia.SettingsDialog: the settings catalog against the settings inventory, and the Settings
 // dialog, CapabilityPanel and ProfilePanel behaviour, all through a fake backend whose writes
 // finish synchronously unless told to wait. Nothing here writes a preference, the owner settings
-// overlay, a capability or the virtual machine file: the only real session is never started, and
-// the capability confirmations it shows are answered Cancel.
+// overlay or the virtual machine file. The only real session is never started; the capability
+// switches it backs are saved to a fixture capability file in the temporary root.
 namespace
 {
 using namespace revia::desktop;
@@ -913,20 +919,8 @@ void CheckDialog(Expect& expect, revia::runtime::ReviaSession& session)
     dialog.SetLocked(false);
     expect(dialog.isEnabled(), "SetLocked(false) enables it again");
 
-    // Every section fits 760x540 without horizontal scrolling.
-    dialog.resize(760, 540);
-    Settle();
-    expect(dialog.findChild<QWidget*>(QStringLiteral("settingsNav"))->width() == 168, "the section list narrows below 900px");
-    for (const SettingsSection section : SettingsSections())
-    {
-        dialog.ShowSection(section);
-        Settle();
-        auto* page = dynamic_cast<QScrollArea*>(dialog.SectionPage(section));
-        expect(page && page->horizontalScrollBar()->maximum() == 0, page->objectName() + " must fit 760x540 without horizontal scrolling");
-    }
-    dialog.resize(920, 640);
-
-    // Hosting the real panels: the capability switches become reachable and searchable.
+    // Hosting the real panels the way the window will, reflow hook included: the capability switches
+    // become reachable and searchable.
     auto* panel = new CapabilityPanel(session, {}, nullptr);
     dialog.SetHostedWidget(SettingsSection::Permissions, "permissions", panel, 0);
     QWidget* internetGroup = panel->DetachInternetGroup();
@@ -935,6 +929,8 @@ void CheckDialog(Expect& expect, revia::runtime::ReviaSession& session)
     expect(panel->findChild<QCheckBox*>("internetCheck") == nullptr && panel->DetachInternetGroup() == internetGroup,
         "after detaching, the panel no longer lays the group out and returns the same container");
     dialog.SetHostedWidget(SettingsSection::Internet, "internet", internetGroup, 0);
+    // What the window's ApplySettingsLayout does: reflow the panel for the page's width less its margins.
+    dialog.SetResizeHook([panel](const QSize size) { panel->ApplyContentWidth(size.width() - 80); });
     Settle();
     expect(dialog.Switch("capabilities.desktopControl.pointer") == panel->findChild<QCheckBox*>("pointerCheck") &&
                dialog.Switch("capabilities.internet.enabled") == internetGroup->findChild<QCheckBox*>("internetCheck"),
@@ -953,6 +949,19 @@ void CheckDialog(Expect& expect, revia::runtime::ReviaSession& session)
     expect(stack->currentWidget() == dialog.SectionPage(SettingsSection::Permissions) && pointer &&
                pointer->parentWidget()->property("highlight").toBool(),
         "FocusSetting reaches a hosted switch");
+
+    // Every section fits 760x540 without horizontal scrolling, the hosted panel included.
+    dialog.resize(760, 540);
+    Settle();
+    expect(dialog.findChild<QWidget*>(QStringLiteral("settingsNav"))->width() == 168, "the section list narrows below 900px");
+    for (const SettingsSection section : SettingsSections())
+    {
+        dialog.ShowSection(section);
+        Settle();
+        auto* page = dynamic_cast<QScrollArea*>(dialog.SectionPage(section));
+        expect(page && page->horizontalScrollBar()->maximum() == 0, page->objectName() + " must fit 760x540 without horizontal scrolling");
+    }
+    dialog.resize(920, 640);
 }
 
 // Enter presses nothing that lacks focus. A shown QDialog makes its first auto-default button the
@@ -1036,33 +1045,126 @@ void CheckCapabilityPanel(Expect& expect, revia::runtime::ReviaSession& session)
         expect(origins->toPlainText() == saved && std::all_of(footers.begin(), footers.end(), [](QWidget* footer) { return footer->isHidden(); }),
             "RevertUnsavedLists puts the saved list back and hides the footer");
     }
-    // A risky switch asks before anything is written; answering Cancel keeps it off.
-    if (auto* pointer = panel.findChild<QCheckBox*>("pointerCheck"))
+    // While the session has no capability file (it never started) an accepted switch still commits
+    // at once; the refusal puts it back off and says why.
+    auto* panelStatus = panel.findChild<QLabel*>(QStringLiteral("settingStatus"), Qt::FindDirectChildrenOnly);
+    if (auto* process = panel.findChild<QCheckBox*>("processEnabled"))
     {
-        expect(!pointer->isChecked() && pointer->isEnabled(), "Mouse control starts off");
-        pointer->click();
+        process->click();
         QMessageBox* box = OpenConfirmation(&panel);
-        expect(box && box->windowTitle() == "Turn on Mouse control?" && box->defaultButton() == box->button(QMessageBox::Cancel),
-            "turning on Mouse control asks, with Cancel as the default");
-        expect(!pointer->isChecked(), "the switch stays off while the question is open");
+        if (QAbstractButton* accept = box ? ButtonWithText(box, "Turn on") : nullptr)
+            accept->click();
+        Settle();
+        expect(box && !process->isChecked() && !session.Capabilities().process.enabled && panelStatus &&
+                   panelStatus->property("tone").toString() == "error" && !panelStatus->text().isEmpty(),
+            "a refused commit puts the switch back off and shows the reason");
+    }
+
+    // A capability file in the temporary root, so accepted switches are saved and read back.
+    const std::filesystem::path root = std::filesystem::current_path();
+    const std::filesystem::path configuration = root / "RuntimeData/Capabilities/capabilities.json";
+    std::filesystem::create_directories(configuration.parent_path());
+    std::filesystem::create_directories(root / "Audit");
+    std::ofstream(configuration) << nlohmann::json{{"mode", "supervised"},
+        {"approvedRoots", {revia::actions::PathToUtf8(root)}}, {"createMissingApprovedRoots", false}}.dump();
+    std::string loadError;
+    const bool loaded = revia::runtime::ReviaSessionTestAccess::Actions(session).Initialize(
+        configuration, root / "Audit/settings-fixture.jsonl", loadError);
+    expect(loaded, "the fixture capability file must load: " + Q(loadError));
+    if (!loaded)
+        return;
+    panel.Refresh();
+
+    using Capabilities = revia::actions::CapabilitySettings;
+    using InputScope = Capabilities::DesktopControl::InputScope;
+    // Each risky switch asks before it turns on, with Cancel as the default, and Cancel saves
+    // nothing. One that cannot be reached is a failure rather than a skip, so the switches it
+    // depends on are turned on first.
+    const auto asksFirst = [&](const char* name, const std::function<bool(const Capabilities&)>& saved)
+    {
+        auto* toggle = panel.findChild<QCheckBox*>(name);
+        expect(toggle && toggle->isEnabled() && !toggle->isChecked() && !saved(session.Capabilities()),
+            QString(name) + " must be reachable and off before it is turned on");
+        if (toggle == nullptr || !toggle->isEnabled())
+            return;
+        const SettingDescriptor* descriptor = FindSetting(name);
+        const QString title = descriptor != nullptr
+                                  ? QStringLiteral("Turn on %1?").arg(WithCompanionName(descriptor->label, Q(session.DisplayName())))
+                                  : QString();
+        toggle->click();
+        QMessageBox* box = OpenConfirmation(&panel);
+        expect(box && !title.isEmpty() && box->windowTitle() == title && box->defaultButton() == box->button(QMessageBox::Cancel),
+            QString(name) + " asks \"" + title + "\" before turning on, with Cancel as the default");
+        expect(!toggle->isChecked(), QString(name) + " stays off while the question is open");
         if (box)
             box->button(QMessageBox::Cancel)->click();
         Settle();
-        expect(!pointer->isChecked() && !session.Capabilities().desktopControl.pointer, "Cancel writes nothing");
-    }
-    for (const char* name : {"processEnabled", "browserInteract", "commandSurfaceCheck"})
+        expect(!toggle->isChecked() && !saved(session.Capabilities()), QString(name) + " stays off after Cancel and saves nothing");
+    };
+    // Accepting saves at once, with no Apply: the list footers stay hidden throughout.
+    const auto turnOn = [&](const char* name, const std::function<bool(const Capabilities&)>& saved)
     {
         auto* toggle = panel.findChild<QCheckBox*>(name);
         if (toggle == nullptr || !toggle->isEnabled())
-            continue;
+        {
+            expect(false, QString(name) + " must be reachable to turn it on");
+            return;
+        }
         toggle->click();
-        QMessageBox* box = OpenConfirmation(&panel);
-        expect(box && box->windowTitle().startsWith("Turn on "), QString(name) + " asks before turning on");
-        if (box)
-            box->button(QMessageBox::Cancel)->click();
+        if (QMessageBox* box = OpenConfirmation(&panel))
+        {
+            if (QAbstractButton* accept = ButtonWithText(box, "Turn on"))
+                accept->click();
+        }
         Settle();
-        expect(!toggle->isChecked(), QString(name) + " stays off after Cancel");
+        expect(toggle->isChecked() && saved(session.Capabilities()) &&
+                   std::all_of(footers.begin(), footers.end(), [](QWidget* footer) { return footer->isHidden(); }),
+            QString(name) + " is saved as soon as it is turned on, without Apply");
+    };
+
+    asksFirst("pointerCheck", [](const Capabilities& saved) { return saved.desktopControl.pointer; });
+    asksFirst("keyboardCheck", [](const Capabilities& saved) { return saved.desktopControl.keyboard; });
+    asksFirst("launchCheck", [](const Capabilities& saved) { return saved.desktopControl.applicationLaunch; });
+    asksFirst("processEnabled", [](const Capabilities& saved) { return saved.process.enabled; });
+    asksFirst("processTaskExecution", [](const Capabilities& saved) { return saved.process.allowTaskExecution; });
+    asksFirst("processCommandInterpreters", [](const Capabilities& saved) { return saved.process.allowCommandInterpreters; });
+    // Chosen points, visual targets, command surfaces and unprompted work follow the pointer.
+    turnOn("pointerCheck", [](const Capabilities& saved) { return saved.desktopControl.pointer; });
+    asksFirst("visualTargetCheck", [](const Capabilities& saved) { return saved.desktopControl.visualTargeting; });
+    asksFirst("rawCoordinateCheck", [](const Capabilities& saved) { return saved.desktopControl.rawCoordinates; });
+    asksFirst("commandSurfaceCheck", [](const Capabilities& saved) { return saved.desktopControl.allowCommandSurfaces; });
+    asksFirst("autonomousDesktopCheck", [](const Capabilities& saved) { return saved.desktopControl.autonomous; });
+    // The whole desktop needs chosen points as well.
+    turnOn("rawCoordinateCheck", [](const Capabilities& saved) { return saved.desktopControl.rawCoordinates; });
+    asksFirst("wholeDesktopCheck", [](const Capabilities& saved) { return saved.desktopControl.scope == InputScope::WholeDesktop; });
+    // The browser's risky switches need the interactive browser, which does not ask.
+    turnOn("browserEnabled", [](const Capabilities& saved) { return saved.browser.enabled; });
+    asksFirst("browserInteract", [](const Capabilities& saved) { return saved.browser.interact; });
+    asksFirst("browserTaskInteraction", [](const Capabilities& saved) { return saved.browser.allowTaskInteraction; });
+    asksFirst("browserLoopback", [](const Capabilities& saved) { return saved.browser.allowLoopback; });
+    turnOn("browserInteract", [](const Capabilities& saved) { return saved.browser.interact; });
+    turnOn("processEnabled", [](const Capabilities& saved) { return saved.process.enabled; });
+    // Turning off never asks and saves at once too.
+    for (const char* name : {"browserInteract", "processEnabled"})
+    {
+        if (auto* toggle = panel.findChild<QCheckBox*>(name))
+        {
+            toggle->click();
+            Settle();
+            expect(!toggle->isChecked() && !OpenConfirmation(&panel), QString(name) + " turns off without a question");
+        }
     }
+    const Capabilities afterOff = session.Capabilities();
+    expect(!afterOff.browser.interact && !afterOff.process.enabled, "turning switches off is saved at once");
+
+    // Back to everything off, for the captures that follow.
+    const bool desktopOff = session.SetDesktopControl(false, false, false, false, false, false, InputScope::ApprovedApplications, false).succeeded;
+    revia::browser::BrowserSettings browser = session.Capabilities().browser;
+    browser.enabled = false;
+    const bool browserOff = session.SetInteractiveBrowser(browser).succeeded;
+    panel.Refresh();
+    expect(desktopOff && browserOff && !session.Capabilities().desktopControl.AnyEnabled() && !session.Capabilities().browser.enabled,
+        "the fixture capability file is back to everything off");
 }
 
 void CheckProfilePanel(Expect& expect, revia::runtime::ReviaSession& session)
@@ -1176,7 +1278,8 @@ int RunSettingsSuite(int, char**)
     Expect expect;
     CheckCatalog(expect);
     {
-        // Never started: it only gives the panels something to read.
+        // Never started: it gives the panels something to read, and CheckCapabilityPanel loads a
+        // fixture capability file into it.
         revia::runtime::ReviaSession session;
         CheckDialog(expect, session);
         CheckEnterKey(expect, session);
