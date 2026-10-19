@@ -427,6 +427,75 @@ void LiveOwnerSettingsReachTheirServices()
         "Turning continuous awareness off left its last observation in use.");
 }
 
+void TheScreenIsWithheldOnceVisionIsOffBeforeItsApplierRuns()
+{
+    revia::tests::ScopedTestDirectory directory;
+    WorkingDirectory cwd(directory.root);
+    Configure(directory.root, LiveOwnerFixture());
+    ReviaSession session;
+    Access::UsePreferences(session, directory.root);
+    Check(session.Start(), "Screen withholding session did not start.");
+    Access::RecordScreenObservation(session, "A spreadsheet fills the left monitor.");
+    Check(!Access::ScreenContext(session).empty(), "The screen withholding fixture was not offered.");
+
+    std::atomic<bool> entered{false};
+    bool saved = false;
+    std::string offered = "not looked at";
+    std::string cached;
+    const auto subscription = session.Events().Subscribe([&](const auto& event)
+    {
+        if (event.component != "Response filters" || entered.exchange(true)) return;
+        // This applier is still running, so the vision applier that drops the observation
+        // waits behind it, as it would behind one joining a worker. A turn asking for the
+        // screen meanwhile must still get nothing.
+        auto change = std::async(std::launch::async, [&] { return session.SetOwnerSetting("vision.enabled", false).succeeded; });
+        saved = change.wait_for(2s) == std::future_status::ready && change.get();
+        offered = Access::ScreenContext(session);
+        cached = Access::CachedScreenObservation(session);
+    });
+    static_cast<void>(session.SetPreference("responseFilter.aiReviewEnabled", "off"));
+    session.Events().Unsubscribe(subscription);
+    Check(entered.load() && saved, "The vision fixture was not saved while another applier ran.");
+    Check(!cached.empty(), "The vision applier ran before the fixture could look.");
+    Check(offered.empty(), "The screen was offered after vision was turned off, before its applier ran.");
+    Check(Access::CachedScreenObservation(session).empty(), "The vision applier never dropped the observation.");
+}
+
+void AProfileSaveFromSettingsNeverWaitsForATurn()
+{
+    // The Settings dialog's writes share one serial worker, so a profile switch saved during a
+    // turn is refused at once rather than holding every later switch behind the reply.
+    revia::tests::ScopedTestDirectory directory;
+    WorkingDirectory cwd(directory.root);
+    Configure(directory.root);
+    ReviaSession session;
+    Access::UsePreferences(session, directory.root);
+    Check(session.Start(), "Profile save session did not start.");
+    std::optional<revia::runtime::ProfileSummary> active = session.ActiveProfileSummary();
+    Check(active.has_value() && !active->memoryEnabled, "The profile fixture did not start with memory off.");
+    active->memoryEnabled = true;
+
+    std::promise<void> held;
+    std::promise<void> release;
+    std::thread turn([&]
+    {
+        const auto lock = Access::HoldForeground(session);
+        held.set_value();
+        release.get_future().wait();
+    });
+    held.get_future().wait();
+    auto attempt = std::async(std::launch::async, [&] { return session.TrySaveProfile(*active); });
+    const bool answered = attempt.wait_for(2s) == std::future_status::ready;
+    release.set_value();
+    turn.join();
+    const revia::runtime::ProfileOperationResult refused = attempt.get();
+    Check(answered && !refused.succeeded && refused.message.find("middle of a turn") != std::string::npos,
+        "A profile save from Settings waited for the turn instead of refusing: " + refused.message);
+    Check(!session.ActiveProfileSummary()->memoryEnabled, "A refused profile save changed the profile.");
+    Check(session.TrySaveProfile(*active).succeeded && session.ActiveProfileSummary()->memoryEnabled,
+        "A profile save from Settings failed once the turn was over.");
+}
+
 void LivePreferencesReachTheirServices()
 {
     revia::tests::ScopedTestDirectory directory;
@@ -562,6 +631,8 @@ void RunPreferenceResetTests()
     LivePreferencesReachTheirServices();
     OwnerChoicesSavedDuringStartupApply();
     APreferenceChangeNeverWaitsForAnotherApplier();
+    TheScreenIsWithheldOnceVisionIsOffBeforeItsApplierRuns();
+    AProfileSaveFromSettingsNeverWaitsForATurn();
     ConcurrentWritersAndReadersStayConsistent();
     std::cout << "Preference reset tests passed.\n";
 }
