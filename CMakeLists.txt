@@ -230,6 +230,20 @@ if(REVIA_BUILD_DESKTOP)
                 "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/navigationSidebar.cpp"
                 "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/navigationSidebar.h"
                 # [sources:C]
+                "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/commandPalette.cpp"
+                "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/commandPalette.h"
+                "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/composerCard.cpp"
+                "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/composerCard.h"
+                "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/panelWindow.cpp"
+                "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/panelWindow.h"
+                "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/shellSidebar.cpp"
+                "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/shellSidebar.h"
+                "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/shortcutSheet.cpp"
+                "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/shortcutSheet.h"
+                "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/softShadow.cpp"
+                "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/softShadow.h"
+                "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/toastOverlay.cpp"
+                "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/toastOverlay.h"
                 "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/mindPanel.h"
                 "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/memoryPanel.h"
                 "${CMAKE_CURRENT_SOURCE_DIR}/Desktop/pipelinePanel.cpp"
@@ -742,6 +756,7 @@ if(BUILD_TESTING)
         # [suite:settings]
 
         # [suite:shell]
+        list(APPEND REVIA_DESKTOP_SUITE_SOURCES Tests/Fixture/shellWidgetTests.cpp)
 
         add_executable(ReviaDesktopStopTests ${REVIA_DESKTOP_SUITE_SOURCES} ${REVIA_DESKTOP_TEST_SOURCES})
         set_target_properties(ReviaDesktopStopTests PROPERTIES AUTOUIC ON AUTORCC ON)
